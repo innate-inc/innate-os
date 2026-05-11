@@ -69,6 +69,8 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv pip install --system \
         websockets \
         pydantic \
+        'packaging>=24' \
+        'setuptools==59.6.0' \
         'numpy<2' \
         'opencv-python<4.10' \
         h5py \
@@ -89,7 +91,10 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
             --index-strategy unsafe-best-match \
             torch \
             torchvision; \
-    fi
+    fi && \
+    uv pip install --system \
+        'packaging>=24' \
+        'setuptools==59.6.0'
 
 # 7. Install oh-my-zsh (for root, since containers typically run as root unless changed).
 RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" \
