@@ -39,13 +39,19 @@ RUN curl -fsSL https://innate-inc.github.io/innate-packages/pubkey.gpg | \
     echo "deb [signed-by=/usr/share/keyrings/innate-archive-keyring.gpg] https://innate-inc.github.io/innate-packages/ $(lsb_release -cs) main" | \
         tee /etc/apt/sources.list.d/innate.list > /dev/null
 
-# 3. Copy and install common apt dependencies.
+# 3. Copy and install mode-specific apt dependencies.
 COPY ros2_ws/apt-dependencies.common.txt /tmp/apt-dependencies.common.txt
+COPY ros2_ws/apt-dependencies.simulation.txt /tmp/apt-dependencies.simulation.txt
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
-    grep -v '^#' /tmp/apt-dependencies.common.txt | grep -v '^$' | xargs apt-get install -y --no-install-recommends && \
-    rm /tmp/apt-dependencies.common.txt
+    if [ "$MODE" = "simulation" ]; then \
+        deps_file=/tmp/apt-dependencies.simulation.txt; \
+    else \
+        deps_file=/tmp/apt-dependencies.common.txt; \
+    fi && \
+    grep -v '^#' "$deps_file" | grep -v '^$' | xargs apt-get install -y --no-install-recommends && \
+    rm /tmp/apt-dependencies.common.txt /tmp/apt-dependencies.simulation.txt
 
 # 4. Install hardware-specific dependencies only in hardware mode.
 COPY ros2_ws/apt-dependencies.hardware.txt /tmp/apt-dependencies.hardware.txt
@@ -72,7 +78,6 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
         'packaging>=24' \
         'setuptools==59.6.0' \
         'numpy<2' \
-        'opencv-python<4.10' \
         h5py \
         cartesia \
         einops \
