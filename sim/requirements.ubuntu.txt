@@ -75,7 +75,7 @@ fsspec==2025.7.0
 future==1.0.0
 gast==0.6.0
 gdown==5.2.0
-genesis-world==0.4.3
+genesis-world==0.4.6
 glfw==2.9.0
 google-auth==2.49.1
 google-auth-oauthlib==1.2.2
