@@ -33,6 +33,14 @@ load_dotenv()
 ROSBRIDGE_URI = os.getenv("ROSBRIDGE_URI", "ws://localhost:9090")
 SIMULATOR_PORT = int(os.getenv("SIMULATOR_PORT", "8000"))
 
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 app = FastAPI()
 
 # Enable CORS
@@ -150,11 +158,19 @@ def main():
         default=None,
         help="Path to initial environment JSON (absolute or workspace-relative)",
     )
-    parser.add_argument(
+    robot_collision_group = parser.add_mutually_exclusive_group()
+    robot_collision_group.add_argument(
         "--disable-robot-collision",
         action="store_true",
-        default=False,
+        dest="disable_robot_collision",
+        default=not env_bool("SIM_ENABLE_COLLISION", True),
         help="Disable robot collisions with scene geometry (temporary debug mode).",
+    )
+    robot_collision_group.add_argument(
+        "--enable-robot-collision",
+        action="store_false",
+        dest="disable_robot_collision",
+        help="Enable robot collisions with scene geometry.",
     )
     parser.add_argument(
         "--sim-log-mode",
