@@ -50,6 +50,24 @@ class EnvironmentRebuildRequired(Exception):
     """Raised when applying an environment requires rebuilding the Genesis scene."""
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        print(f"[SimulationNode] Invalid {name}={value!r}; using {default}.")
+        return default
+
+
 def xyzw_to_wxyz(xyzw):
     return (xyzw[3], xyzw[0], xyzw[1], xyzw[2])
 
@@ -151,20 +169,37 @@ class SimulationNode:
             2 * atan(tan(radians(self.robot_camera_vfov) / 2) * 640 / 480)
         )
         self.robot_camera_res = (640, 480)
+        self.physics_collision_enabled = _env_bool("SIM_ENABLE_COLLISION", True)
+        self.camera_mode = os.getenv("SIM_CAMERA_MODE", "all").strip().lower()
+        self.cameras_enabled = self.camera_mode != "none"
+        self.robot_camera = None
+        self.arm_wrist_camera = None
+        self.chase_camera = None
+        self.startup_timings_enabled = _env_bool("SIM_STARTUP_TIMINGS")
+        self._startup_t0 = time.perf_counter()
+        self._startup_last = self._startup_t0
 
         print(
             f"Robot camera FOV (vfov, hfov, res): {self.robot_camera_vfov}, {self.robot_camera_hfov}, {self.robot_camera_res}"
         )
+        self._startup_mark("initial state")
 
         # Initialize core components
         self._init_genesis()
+        self._startup_mark("gs.init")
         self._init_scene()
+        self._startup_mark("scene options/entities")
         self._init_environment()
+        self._startup_mark("static environment")
         self._init_robot()
+        self._startup_mark("robot entity")
         self._init_camera()
+        self._startup_mark("cameras")
         self._init_map_params()
+        self._startup_mark("map params")
 
         self.scene.build()
+        self._startup_mark("scene.build")
         self._init_robot_base_pose_control()
         self._set_robot_base_pose(ROBOT_INIT_POS, xyzw_to_wxyz(ROBOT_INIT_QUAT))
         self.scene_built = True
@@ -184,15 +219,58 @@ class SimulationNode:
             self.current_entity_asset_signature = tuple()
 
         print("SimulationNode initialized.")
+        self._startup_mark("post-build init")
+
+    def _startup_mark(self, label: str):
+        if not self.startup_timings_enabled:
+            return
+        now = time.perf_counter()
+        print(
+            f"[StartupTiming] {label}: +{now - self._startup_last:.3f}s "
+            f"(total {now - self._startup_t0:.3f}s)"
+        )
+        self._startup_last = now
 
     def _init_genesis(self):
         """Initialize Genesis backend"""
-        gs.init(backend=gs.cpu)
+        backend_name = os.getenv("SIM_GENESIS_BACKEND", "cpu").strip().lower()
+        backend = getattr(gs, backend_name, None)
+        if backend is None:
+            print(
+                f"[SimulationNode] Unknown SIM_GENESIS_BACKEND={backend_name!r}; using cpu."
+            )
+            backend = gs.cpu
+
+        log_level = os.getenv("SIM_GENESIS_LOG_LEVEL", "").strip()
+        init_kwargs = {"backend": backend}
+        if log_level:
+            init_kwargs["logging_level"] = log_level
+        print(f"[SimulationNode] Genesis backend: {backend_name}")
+        gs.init(**init_kwargs)
 
     def _init_scene(self):
         """Initialize the main simulation scene"""
+        substeps = _env_int("SIM_SCENE_SUBSTEPS", 4)
+        scene_kwargs = {}
+        if not self.physics_collision_enabled:
+            print("[SimulationNode] Physics collisions disabled.")
+            scene_kwargs["rigid_options"] = gs.options.RigidOptions(
+                enable_collision=False,
+                enable_self_collision=False,
+                max_collision_pairs=8,
+                iterations=5,
+                ls_iterations=1,
+            )
+        elif _env_bool("SIM_LIGHT_RIGID_OPTIONS", True):
+            print("[SimulationNode] Using light rigid solver options.")
+            scene_kwargs["rigid_options"] = gs.options.RigidOptions(
+                enable_self_collision=False,
+                max_collision_pairs=64,
+                iterations=20,
+                ls_iterations=10,
+            )
         self.scene = gs.Scene(
-            sim_options=gs.options.SimOptions(dt=0.05, substeps=4),
+            sim_options=gs.options.SimOptions(dt=0.05, substeps=substeps),
             viewer_options=gs.options.ViewerOptions(
                 camera_pos=(3.5, 0.0, 2.5),
                 camera_lookat=(0.0, 0.0, 0.5),
@@ -204,9 +282,17 @@ class SimulationNode:
             ),
             show_FPS=False,
             show_viewer=self.enable_vis,
+            **scene_kwargs,
         )
         # Add ground plane
-        self.scene.add_entity(gs.morphs.Plane(pos=(0, 0.05, 0)))
+        ground_collision = _env_bool(
+            "SIM_GROUND_COLLISION", self.physics_collision_enabled
+        )
+        self.scene.add_entity(
+            gs.morphs.Plane(pos=(0, 0.05, 0), collision=ground_collision)
+        )
+        if not ground_collision:
+            print("[SimulationNode] Ground plane collision disabled.")
 
     def _resolve_project_path(self, path: str) -> str:
         """Resolve relative paths from project root while preserving absolute paths."""
@@ -281,7 +367,12 @@ class SimulationNode:
 
         # Add separate collision geometry when a stage config is available.
         collision_stage_config = scene_config.get("collision_stage_config")
-        if collision_stage_config:
+        if _env_bool("SIM_SKIP_STATIC_COLLISION", not self.physics_collision_enabled):
+            print(
+                "[SimulationNode] SIM_SKIP_STATIC_COLLISION enabled; "
+                "skipping static collision mesh import."
+            )
+        elif collision_stage_config:
             # ReplicaCAD stage metadata remains in the original Y-up-authored frame
             # even though Genesis 0.4.x now auto-converts the visible GLB to Z-up.
             self._add_collision_from_stage_config(
@@ -800,6 +891,16 @@ class SimulationNode:
 
     def _init_camera(self):
         """Initialize robot camera, arm wrist camera, and chase camera"""
+        if not self.cameras_enabled:
+            print("[SimulationNode] SIM_CAMERA_MODE=none; skipping Genesis cameras.")
+            self.width = 640
+            self.height = 480
+            self.fx = 554.256
+            self.fy = 554.256
+            self.cx = 320.0
+            self.cy = 240.0
+            return
+
         # Main robot camera (will be positioned at arm_camera_link)
         self.robot_camera = self.scene.add_camera(
             res=self.robot_camera_res,
@@ -807,6 +908,21 @@ class SimulationNode:
             lookat=(1, 0, 0),
             fov=self.robot_camera_vfov,
         )
+
+        if self.camera_mode in {"first-person", "first_person", "primary"}:
+            print(
+                "[SimulationNode] SIM_CAMERA_MODE=first-person; "
+                "skipping arm and chase cameras."
+            )
+            self.arm_wrist_camera = None
+            self.chase_camera = None
+            self.width = 640
+            self.height = 480
+            self.fx = 554.256
+            self.fy = 554.256
+            self.cx = 320.0
+            self.cy = 240.0
+            return
 
         # Arm wrist camera (mounted on link5, looking forward along the arm)
         self.arm_wrist_camera = self.scene.add_camera(
@@ -1842,38 +1958,55 @@ class SimulationNode:
                 pass
 
             # Check if enough time has passed since last render
-            if sim_time - self.last_render_time >= self.render_interval:
+            if (
+                self.cameras_enabled
+                and sim_time - self.last_render_time >= self.render_interval
+            ):
                 camera_link = self.robot.get_link("head_camera_link")
                 camera_pos = camera_link.get_pos()
                 camera_quat = camera_link.get_quat()
                 look_dir = rotate_vector(local_forward, camera_quat)
                 lookat = camera_pos.cpu().numpy() + look_dir
-                self.robot_camera.set_pose(pos=camera_pos.cpu().numpy(), lookat=lookat)
+                if self.robot_camera is not None:
+                    self.robot_camera.set_pose(
+                        pos=camera_pos.cpu().numpy(), lookat=lookat
+                    )
 
                 # Update arm wrist camera (mounted on link5, looking forward along the arm)
-                link5 = self.robot.get_link("link5")
-                link5_pos = link5.get_pos()
-                link5_quat = link5.get_quat()
-                arm_forward = np.array([1.0, 0.0, 0.0])  # Arm points along X axis
-                arm_look_dir = rotate_vector(arm_forward, link5_quat)
-                arm_lookat = link5_pos.cpu().numpy() + arm_look_dir
-                self.arm_wrist_camera.set_pose(
-                    pos=link5_pos.cpu().numpy(), lookat=arm_lookat
-                )
+                if self.arm_wrist_camera is not None:
+                    link5 = self.robot.get_link("link5")
+                    link5_pos = link5.get_pos()
+                    link5_quat = link5.get_quat()
+                    arm_forward = np.array([1.0, 0.0, 0.0])  # Arm points along X axis
+                    arm_look_dir = rotate_vector(arm_forward, link5_quat)
+                    arm_lookat = link5_pos.cpu().numpy() + arm_look_dir
+                    self.arm_wrist_camera.set_pose(
+                        pos=link5_pos.cpu().numpy(), lookat=arm_lookat
+                    )
 
                 # Update chase camera to follow robot
-                robot_pos, robot_quat = self._get_robot_base_pose()
-                offset = np.array([-2.0, 0.0, 2.0])  # 2m behind, 2m up
-                rotated_offset = rotate_vector(offset, robot_quat)
-                chase_pos = robot_pos + rotated_offset
-                self.chase_camera.set_pose(
-                    pos=chase_pos, lookat=robot_pos, up=(0, 0, 1)
-                )
+                if self.chase_camera is not None:
+                    robot_pos, robot_quat = self._get_robot_base_pose()
+                    offset = np.array([-2.0, 0.0, 2.0])  # 2m behind, 2m up
+                    rotated_offset = rotate_vector(offset, robot_quat)
+                    chase_pos = robot_pos + rotated_offset
+                    self.chase_camera.set_pose(
+                        pos=chase_pos, lookat=robot_pos, up=(0, 0, 1)
+                    )
 
                 # Render all cameras
-                rgb, depth, seg, normal = self.robot_camera.render(depth=True)
-                arm_rgb, _, _, _ = self.arm_wrist_camera.render()
-                chase_rgb, _, _, _ = self.chase_camera.render()
+                if self.robot_camera is not None:
+                    rgb, depth, seg, normal = self.robot_camera.render(depth=True)
+                else:
+                    rgb, depth = None, None
+                if self.arm_wrist_camera is not None:
+                    arm_rgb, _, _, _ = self.arm_wrist_camera.render()
+                else:
+                    arm_rgb = None
+                if self.chase_camera is not None:
+                    chase_rgb, _, _, _ = self.chase_camera.render()
+                else:
+                    chase_rgb = None
 
                 # Convert RGB to BGR format if needed (or BGR to RGB)
                 if rgb is not None:

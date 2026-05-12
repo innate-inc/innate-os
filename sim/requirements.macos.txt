@@ -39,7 +39,7 @@ fonttools==4.61.1
 fqdn==1.5.1
 freetype-py==2.5.1
 fsspec==2025.12.0
-genesis-world==0.4.3
+genesis-world==0.4.6
 glfw==2.10.0
 google-auth==2.49.1
 google-genai==1.66.0

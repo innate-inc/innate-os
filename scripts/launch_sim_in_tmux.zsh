@@ -12,9 +12,18 @@ fi
 SESSION_NAME="${INNATE_SIM_TMUX_SESSION:-innate}"
 # Use braces in tmux targets so zsh does not interpret ":foo" as a parameter modifier.
 TMUX_TARGET_PREFIX="${SESSION_NAME}"
+STARTUP_SETTLE_SECONDS="${INNATE_SIM_TMUX_SETTLE_SECONDS:-0.5}"
+TMUX_CLEANUP_SETTLE_SECONDS="${INNATE_SIM_TMUX_CLEANUP_SETTLE_SECONDS:-0.25}"
+
+settle_after_launch() {
+  if [[ "$STARTUP_SETTLE_SECONDS" != "0" && "$STARTUP_SETTLE_SECONDS" != "0.0" ]]; then
+    sleep "$STARTUP_SETTLE_SECONDS"
+  fi
+}
 
 # First, ensure we have a clean tmux environment
 tmux kill-session -t "$SESSION_NAME" 2>/dev/null
+sleep "$TMUX_CLEANUP_SETTLE_SECONDS"
 
 # Create a new tmux session for the local Innate runtime
 tmux new-session -d -x 240 -y 72 -s "$SESSION_NAME" -n zenoh
@@ -22,13 +31,13 @@ tmux new-session -d -x 240 -y 72 -s "$SESSION_NAME" -n zenoh
 # === Window 0: Zenoh Router ===
 tmux send-keys -t "${TMUX_TARGET_PREFIX}:zenoh" "ros2 run rmw_zenoh_cpp rmw_zenohd" C-m
 echo "Started Zenoh router..."
-sleep 2  # Give Zenoh router time to start up
+settle_after_launch
 
 # === Window 1: Rosbridge + App ===
 tmux new-window -t "$SESSION_NAME" -n rosbridge-app
 tmux send-keys -t "${TMUX_TARGET_PREFIX}:rosbridge-app" "ros2 launch maurice_sim_bringup sim_rosbridge.launch.py" C-m
 echo "Started rosbridge..."
-sleep 2
+settle_after_launch
 # Split and run app
 tmux split-window -t "${TMUX_TARGET_PREFIX}:rosbridge-app" -h
 tmux send-keys -t "${TMUX_TARGET_PREFIX}:rosbridge-app.1" "ros2 launch maurice_control app.sim.launch.py" C-m
@@ -42,7 +51,7 @@ echo "Started webrtc streamer (sim mode with compressed images)..."
 tmux new-window -t "$SESSION_NAME" -n nav-brain
 tmux send-keys -t "${TMUX_TARGET_PREFIX}:nav-brain" "ros2 launch maurice_nav navigation_sim.launch.py" C-m
 echo "Started navigation system..."
-sleep 2
+settle_after_launch
 # Split and run brain client
 tmux split-window -t "${TMUX_TARGET_PREFIX}:nav-brain" -h
 tmux send-keys -t "${TMUX_TARGET_PREFIX}:nav-brain.1" "ros2 launch brain_client brain_client.sim.launch.py" C-m

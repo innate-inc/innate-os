@@ -5,6 +5,17 @@
 [display]
 # visualization = true
 
+[os]
+# Optional prebuilt Innate OS image. If set, the launcher pulls/uses this image
+# instead of building the local Dockerfile. Images built from Dockerfile.ros-prebuilt
+# can seed ros2_ws/install and skip the first local colcon build when source matches.
+# image = "ghcr.io/innate-inc/innate-os-sim-ros:main"
+# pull_image = true
+
+# Run `colcon build` on every startup. Leave false for incremental startup:
+# the launcher rebuilds only when ros2_ws/src is newer than install/setup.zsh.
+# always_build = false
+
 [cloud_agent]
 # mode = "hosted"
 # image = "ghcr.io/your-org/innate-cloud-agent:latest"
