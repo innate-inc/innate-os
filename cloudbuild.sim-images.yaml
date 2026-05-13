@@ -5,6 +5,7 @@ substitutions:
   _GHCR_TOKEN_SECRET: innate-os-sim-ghcr-token
   _GHCR_USERNAME_SECRET: innate-os-sim-ghcr-username
   _COMMIT_SHA: manual
+  _IMAGE_INPUTS_HASH: manual
   _IMAGE_PREFIX: ghcr.io/innate-inc
   _IMAGE_TAG: manual
   _PUSH_MAIN_TAGS: "false"
@@ -50,6 +51,10 @@ steps:
         deps_image="${_IMAGE_PREFIX}/${_DEPS_IMAGE_NAME}"
         ros_image="${_IMAGE_PREFIX}/${_ROS_IMAGE_NAME}"
         sha_tag="sha-${_SHORT_SHA}"
+        inputs_tag=""
+        if [[ -n "${_IMAGE_INPUTS_HASH}" && "${_IMAGE_INPUTS_HASH}" != "manual" ]]; then
+          inputs_tag="inputs-${_IMAGE_INPUTS_HASH}"
+        fi
 
         docker_login
 
@@ -65,7 +70,7 @@ steps:
           --file Dockerfile \
           .
 
-        deps_tags=("${_IMAGE_TAG}" "$sha_tag" "buildcache")
+        deps_tags=("${_IMAGE_TAG}" "$sha_tag" "$inputs_tag" "buildcache")
         if [[ "${_PUSH_MAIN_TAGS}" == "true" ]]; then
           deps_tags+=("main")
         fi
@@ -84,7 +89,7 @@ steps:
           --file Dockerfile.ros-prebuilt \
           .
 
-        ros_tags=("${_IMAGE_TAG}" "$sha_tag" "buildcache")
+        ros_tags=("${_IMAGE_TAG}" "$sha_tag" "$inputs_tag" "buildcache")
         if [[ "${_PUSH_MAIN_TAGS}" == "true" ]]; then
           ros_tags+=("main")
         fi

@@ -6,9 +6,13 @@
 # visualization = true
 
 [os]
-# Optional prebuilt Innate OS image. If set, the launcher pulls/uses this image
-# instead of building the local Dockerfile. Images built from Dockerfile.ros-prebuilt
-# can seed ros2_ws/install and skip the first local colcon build when source matches.
+# Optional prebuilt Innate OS image. By default, the launcher tries a
+# content-addressed prebuilt image matching this checkout, then falls back to
+# the local Docker build if no matching image is available.
+# image = "auto"
+#
+# Other options:
+# image = "local"
 # image = "ghcr.io/innate-inc/innate-os-sim-ros:main"
 # pull_image = true
 

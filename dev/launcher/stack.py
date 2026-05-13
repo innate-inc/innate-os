@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -67,6 +68,18 @@ HOSTED_MODE = "hosted"
 LOCAL_IMAGE_MODE = "local-image"
 LOCAL_SOURCE_MODE = "local-source"
 LOCAL_MODES = {LOCAL_IMAGE_MODE, LOCAL_SOURCE_MODE}
+AUTO_OS_IMAGE = "auto"
+LOCAL_OS_IMAGE = "local"
+DEFAULT_SIM_OS_IMAGE = "ghcr.io/innate-inc/innate-os-sim-ros"
+SIM_IMAGE_INPUT_FILES = (
+    ".dockerignore",
+    "Dockerfile",
+    "Dockerfile.ros-prebuilt",
+    "Dockerfile.ros-prebuilt.dockerignore",
+    "ros2_ws/apt-dependencies.common.txt",
+    "ros2_ws/apt-dependencies.hardware.txt",
+    "ros2_ws/apt-dependencies.simulation.txt",
+)
 OS_CONTAINER_SERVICE = "innate"
 OS_CONTAINER_TMUX_CMD = "./scripts/launch_sim_in_tmux.zsh --detach"
 ENV_KEYS_MOVED_TO_OS_CONFIG = {
@@ -653,6 +666,48 @@ def require_path(path: Path, label: str) -> Path:
     return path
 
 
+def iter_sim_image_input_files(repo_root: Path) -> list[Path]:
+    relative_paths: list[Path] = []
+    for raw_path in SIM_IMAGE_INPUT_FILES:
+        relative_path = Path(raw_path)
+        if (repo_root / relative_path).is_file():
+            relative_paths.append(relative_path)
+
+    src_root = repo_root / "ros2_ws" / "src"
+    if src_root.exists():
+        for path in sorted(src_root.rglob("*")):
+            if not path.is_file():
+                continue
+            relative_path = path.relative_to(repo_root)
+            if "__pycache__" in relative_path.parts or relative_path.suffix == ".pyc":
+                continue
+            relative_paths.append(relative_path)
+
+    return sorted(relative_paths, key=lambda path: path.as_posix())
+
+
+def compute_sim_image_inputs_hash(repo_root: Path) -> str:
+    digest = hashlib.sha256()
+    for relative_path in iter_sim_image_input_files(repo_root):
+        digest.update(relative_path.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update((repo_root / relative_path).read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def resolve_auto_os_image(repo_root: Path) -> str:
+    return f"{DEFAULT_SIM_OS_IMAGE}:inputs-{compute_sim_image_inputs_hash(repo_root)}"
+
+
+def resolve_os_image_setting(value: str | None, repo_root: Path) -> tuple[str, bool]:
+    if value is None or value == AUTO_OS_IMAGE:
+        return resolve_auto_os_image(repo_root), True
+    if value == LOCAL_OS_IMAGE:
+        return "", False
+    return value, False
+
+
 def get_config() -> dict[str, object]:
     ensure_env_file()
     ensure_config_file(OS_CONFIG_PATH, OS_CONFIG_TEMPLATE_PATH)
@@ -699,6 +754,12 @@ def get_config() -> dict[str, object]:
 
     os_always_build = get_nested_bool(sim_config, "os", "always_build")
     os_pull_image = get_nested_bool(sim_config, "os", "pull_image")
+    configured_os_image = get_nested_str(sim_config, "os", "image")
+    env_os_image = os.environ.get("INNATE_OS_IMAGE", "").strip() or None
+    os_image, os_image_auto = resolve_os_image_setting(
+        configured_os_image or env_os_image,
+        os_repo,
+    )
 
     return {
         "raw_env": merged_env,
@@ -718,8 +779,8 @@ def get_config() -> dict[str, object]:
         else False,
         "sim_log_mode": "quiet",
         "sim_args": "--log-everything",
-        "os_image": get_nested_str(sim_config, "os", "image")
-        or os.environ.get("INNATE_OS_IMAGE", ""),
+        "os_image": os_image,
+        "os_image_auto": os_image_auto,
         "os_pull_image": os_pull_image if os_pull_image is not None else True,
         "os_always_build": os_always_build if os_always_build is not None else False,
         "skip_local_cloud_auth": True,
@@ -889,23 +950,36 @@ def ensure_os_image_available(
 def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     os_image = str(config["os_image"]).strip()
-    compose_values = {"INNATE_OS_ENV_FILE": str(os_env_file)}
-    if os_image:
-        compose_values["INNATE_OS_IMAGE"] = os_image
-    compose_env = docker_compose_env(compose_values)
+    os_image_auto = bool(config["os_image_auto"])
 
     if container_running("innate-dev"):
         log("Innate OS dev container already running.")
     else:
         up_cmd = ["docker", "compose", "-f", "docker-compose.dev.yml", "up", "-d"]
         if os_image:
-            ensure_os_image_available(
-                os_image,
-                cwd=os_repo,
-                env=compose_env,
-                pull_if_missing=bool(config["os_pull_image"]),
-            )
-            up_cmd.append("--no-build")
+            try:
+                ensure_os_image_available(
+                    os_image,
+                    cwd=os_repo,
+                    env=docker_compose_env(),
+                    pull_if_missing=bool(config["os_pull_image"]),
+                )
+            except StackError as exc:
+                if not os_image_auto:
+                    raise
+                warn(
+                    "Matching prebuilt Innate OS image is not available; "
+                    "falling back to the local Docker build.\n"
+                    f"{exc}"
+                )
+                os_image = ""
+            else:
+                up_cmd.append("--no-build")
+
+        compose_values = {"INNATE_OS_ENV_FILE": str(os_env_file)}
+        if os_image:
+            compose_values["INNATE_OS_IMAGE"] = os_image
+        compose_env = docker_compose_env(compose_values)
         log("Starting Innate OS dev container...")
         run_logged_with_heartbeat(
             up_cmd,
@@ -918,6 +992,10 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
                 "First boot or an image rebuild can take a minute."
             ),
         )
+    compose_values = {"INNATE_OS_ENV_FILE": str(os_env_file)}
+    if os_image:
+        compose_values["INNATE_OS_IMAGE"] = os_image
+    compose_env = docker_compose_env(compose_values)
 
     colcon_build_cmd = (
         "colcon build --symlink-install "

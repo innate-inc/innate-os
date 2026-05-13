@@ -45,6 +45,40 @@ jobs:
         run: |
           set -euo pipefail
 
+          image_inputs_hash="$(python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          root = Path(".")
+          static_paths = (
+              ".dockerignore",
+              "Dockerfile",
+              "Dockerfile.ros-prebuilt",
+              "Dockerfile.ros-prebuilt.dockerignore",
+              "ros2_ws/apt-dependencies.common.txt",
+              "ros2_ws/apt-dependencies.hardware.txt",
+              "ros2_ws/apt-dependencies.simulation.txt",
+          )
+          paths = [Path(path) for path in static_paths if (root / path).is_file()]
+          src_root = root / "ros2_ws" / "src"
+          if src_root.exists():
+              for path in sorted(src_root.rglob("*")):
+                  if not path.is_file():
+                      continue
+                  relative_path = path.relative_to(root)
+                  if "__pycache__" in relative_path.parts or relative_path.suffix == ".pyc":
+                      continue
+                  paths.append(relative_path)
+
+          digest = hashlib.sha256()
+          for path in sorted(paths, key=lambda item: item.as_posix()):
+              digest.update(path.as_posix().encode("utf-8"))
+              digest.update(b"\0")
+              digest.update((root / path).read_bytes())
+              digest.update(b"\0")
+          print(digest.hexdigest())
+          PY
+          )"
           short_sha="${GITHUB_SHA::12}"
           push_main_tags="false"
 
@@ -56,6 +90,7 @@ jobs:
           fi
 
           echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
+          echo "image_inputs_hash=${image_inputs_hash}" >> "$GITHUB_OUTPUT"
           echo "push_main_tags=${push_main_tags}" >> "$GITHUB_OUTPUT"
 
       - name: Submit Cloud Build
@@ -69,9 +104,11 @@ jobs:
             --gcs-source-staging-dir="${{ vars.GCP_CLOUD_BUILD_SOURCE_STAGING_DIR }}" \
             --service-account="projects/${{ vars.GCP_PROJECT_ID }}/serviceAccounts/${{ vars.GCP_CLOUD_BUILD_SERVICE_ACCOUNT }}" \
             --config=cloudbuild.sim-images.yaml \
-            --substitutions="_IMAGE_PREFIX=${{ vars.SIM_IMAGE_PREFIX }},_IMAGE_TAG=${{ steps.image_tags.outputs.image_tag }},_PUSH_MAIN_TAGS=${{ steps.image_tags.outputs.push_main_tags }},_GHCR_USERNAME_SECRET=${{ vars.GHCR_USERNAME_SECRET }},_GHCR_TOKEN_SECRET=${{ vars.GHCR_TOKEN_SECRET }},_COMMIT_SHA=${GITHUB_SHA},_SHORT_SHA=${GITHUB_SHA::12}"
+            --substitutions="_IMAGE_PREFIX=${{ vars.SIM_IMAGE_PREFIX }},_IMAGE_TAG=${{ steps.image_tags.outputs.image_tag }},_IMAGE_INPUTS_HASH=${{ steps.image_tags.outputs.image_inputs_hash }},_PUSH_MAIN_TAGS=${{ steps.image_tags.outputs.push_main_tags }},_GHCR_USERNAME_SECRET=${{ vars.GHCR_USERNAME_SECRET }},_GHCR_TOKEN_SECRET=${{ vars.GHCR_TOKEN_SECRET }},_COMMIT_SHA=${GITHUB_SHA},_SHORT_SHA=${GITHUB_SHA::12}"
 
       - name: Published image tags
         run: |
           echo "${{ vars.SIM_IMAGE_PREFIX }}/innate-os-sim-deps:${{ steps.image_tags.outputs.image_tag }}"
+          echo "${{ vars.SIM_IMAGE_PREFIX }}/innate-os-sim-deps:inputs-${{ steps.image_tags.outputs.image_inputs_hash }}"
           echo "${{ vars.SIM_IMAGE_PREFIX }}/innate-os-sim-ros:${{ steps.image_tags.outputs.image_tag }}"
+          echo "${{ vars.SIM_IMAGE_PREFIX }}/innate-os-sim-ros:inputs-${{ steps.image_tags.outputs.image_inputs_hash }}"
