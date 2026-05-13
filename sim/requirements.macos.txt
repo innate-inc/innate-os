@@ -43,7 +43,7 @@ genesis-world==0.4.6
 glfw==2.10.0
 google-auth==2.49.1
 google-genai==1.66.0
-quadrants==0.4.4
+quadrants==0.6.2
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
