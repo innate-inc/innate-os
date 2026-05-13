@@ -22,7 +22,7 @@ WORKDIR ${INNATE_OS_PREBUILT_ROS_ROOT}
 RUN --mount=type=cache,target=/root/.cache/ccache,sharing=locked \
     source /opt/ros/humble/setup.bash && \
     export CCACHE_DIR=/root/.cache/ccache && \
-    colcon build --symlink-install \
+    colcon build \
         --cmake-args \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache && \
