@@ -12,19 +12,6 @@ on:
       - Dockerfile.ros-prebuilt.dockerignore
       - ros2_ws/apt-dependencies*.txt
       - ros2_ws/src/**
-  pull_request:
-    branches:
-      - main
-      - codex/innate-os-sim-monorepo-stack-clean
-    paths:
-      - .github/workflows/publish-sim-images.yml
-      - .gcloudignore
-      - cloudbuild.sim-images.yaml
-      - Dockerfile
-      - Dockerfile.ros-prebuilt
-      - Dockerfile.ros-prebuilt.dockerignore
-      - ros2_ws/apt-dependencies*.txt
-      - ros2_ws/src/**
   workflow_dispatch:
 
 permissions:
@@ -37,7 +24,6 @@ concurrency:
 
 jobs:
   publish:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
 
     steps:
@@ -62,9 +48,7 @@ jobs:
           short_sha="${GITHUB_SHA::12}"
           push_main_tags="false"
 
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            image_tag="pr-${{ github.event.pull_request.number }}-${short_sha}"
-          elif [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
             image_tag="sha-${short_sha}"
             push_main_tags="true"
           else
