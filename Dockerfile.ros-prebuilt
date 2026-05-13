@@ -29,7 +29,11 @@ RUN --mount=type=cache,target=/root/.cache/ccache,sharing=locked \
     find src -type f \
         ! -path '*/__pycache__/*' \
         ! -name '*.pyc' \
-        -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}' > source.sha256
+        -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}' > source.sha256 && \
+    find install -type f \
+        ! -path '*/__pycache__/*' \
+        ! -name '*.pyc' \
+        -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}' > install.sha256
 
 WORKDIR /root/innate-os
 CMD ["zsh", "-l"]
