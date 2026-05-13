@@ -1,0 +1,103 @@
+timeout: 7200s
+
+substitutions:
+  _DEPS_IMAGE_NAME: innate-os-sim-deps
+  _GHCR_TOKEN_SECRET: innate-os-sim-ghcr-token
+  _GHCR_USERNAME_SECRET: innate-os-sim-ghcr-username
+  _COMMIT_SHA: manual
+  _IMAGE_PREFIX: ghcr.io/innate-inc
+  _IMAGE_TAG: manual
+  _PUSH_MAIN_TAGS: "false"
+  _ROS_IMAGE_NAME: innate-os-sim-ros
+  _SHORT_SHA: manual
+
+steps:
+  - id: build-and-push-simulator-images
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    secretEnv:
+      - GHCR_TOKEN
+      - GHCR_USERNAME
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - -ceu
+      - |
+        docker_login() {
+          echo "$$GHCR_TOKEN" | docker login ghcr.io -u "$$GHCR_USERNAME" --password-stdin
+        }
+
+        push_tags() {
+          local image="$1"
+          local source_tag="$2"
+          shift 2
+
+          local pushed=""
+          for tag in "$@"; do
+            if [[ -z "$tag" || "$pushed" == *"|$tag|"* ]]; then
+              continue
+            fi
+
+            if [[ "$tag" != "$source_tag" ]]; then
+              docker tag "$image:$source_tag" "$image:$tag"
+            fi
+
+            docker push "$image:$tag"
+            pushed="$pushed|$tag|"
+          done
+        }
+
+        deps_image="${_IMAGE_PREFIX}/${_DEPS_IMAGE_NAME}"
+        ros_image="${_IMAGE_PREFIX}/${_ROS_IMAGE_NAME}"
+        sha_tag="sha-${_SHORT_SHA}"
+
+        docker_login
+
+        docker pull "$deps_image:buildcache" || true
+        docker build \
+          --progress=plain \
+          --build-arg MODE=simulation \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from "$deps_image:buildcache" \
+          --label "org.opencontainers.image.source=https://github.com/innate-inc/innate-os" \
+          --label "org.opencontainers.image.revision=${_COMMIT_SHA}" \
+          --tag "$deps_image:${_IMAGE_TAG}" \
+          --file Dockerfile \
+          .
+
+        deps_tags=("${_IMAGE_TAG}" "$sha_tag" "buildcache")
+        if [[ "${_PUSH_MAIN_TAGS}" == "true" ]]; then
+          deps_tags+=("main")
+        fi
+        push_tags "$deps_image" "${_IMAGE_TAG}" "${deps_tags[@]}"
+
+        deps_ros_base="$deps_image:buildcache"
+        docker pull "$ros_image:buildcache" || true
+        docker build \
+          --progress=plain \
+          --build-arg "BASE_IMAGE=$deps_ros_base" \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from "$ros_image:buildcache" \
+          --label "org.opencontainers.image.source=https://github.com/innate-inc/innate-os" \
+          --label "org.opencontainers.image.revision=${_COMMIT_SHA}" \
+          --tag "$ros_image:${_IMAGE_TAG}" \
+          --file Dockerfile.ros-prebuilt \
+          .
+
+        ros_tags=("${_IMAGE_TAG}" "$sha_tag" "buildcache")
+        if [[ "${_PUSH_MAIN_TAGS}" == "true" ]]; then
+          ros_tags+=("main")
+        fi
+        push_tags "$ros_image" "${_IMAGE_TAG}" "${ros_tags[@]}"
+
+availableSecrets:
+  secretManager:
+    - env: GHCR_USERNAME
+      versionName: projects/$PROJECT_ID/secrets/${_GHCR_USERNAME_SECRET}/versions/latest
+    - env: GHCR_TOKEN
+      versionName: projects/$PROJECT_ID/secrets/${_GHCR_TOKEN_SECRET}/versions/latest
+
+options:
+  diskSizeGb: "200"
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
