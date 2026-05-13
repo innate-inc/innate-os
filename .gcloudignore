@@ -1,0 +1,24 @@
+# Keep Cloud Build source uploads small and deterministic for simulator images.
+# The dependency image only needs Dockerfile + apt manifests; the ROS-prebuilt
+# image only needs ros2_ws/src.
+
+.git/
+.venv/
+build/
+install/
+log/
+dev/launcher/.state/
+sim/.venv/
+
+**
+!Dockerfile
+!Dockerfile.ros-prebuilt
+!.dockerignore
+!Dockerfile.ros-prebuilt.dockerignore
+!cloudbuild.sim-images.yaml
+!ros2_ws/
+!ros2_ws/apt-dependencies.common.txt
+!ros2_ws/apt-dependencies.hardware.txt
+!ros2_ws/apt-dependencies.simulation.txt
+!ros2_ws/src/
+!ros2_ws/src/**
