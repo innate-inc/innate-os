@@ -33,6 +33,16 @@ from src.shared_queues import ChatMessage, ChatSignal, AgentInfo
 from src.agent.navigation_controller import NavigationController
 
 
+BACKEND_WARMUP_STATES = {
+    "unknown",
+    "starting",
+    "configured",
+    "connecting",
+    "authenticating",
+}
+BACKEND_STATUS_LOG_INTERVAL_SEC = 30.0
+
+
 def np_encoder(obj):
     """JSON serializer that converts numpy.* types to native Python types."""
     if isinstance(obj, np.generic):
@@ -40,6 +50,39 @@ def np_encoder(obj):
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+
+def log_brain_backend_status(shared_queues, status: dict):
+    """Emit low-noise logs matching the frontend brain backend warning state."""
+    state = str(status.get("state", "unknown") or "unknown")
+    connected = bool(status.get("connected", False))
+    message = status.get("message") or ""
+    uri = status.get("uri") or "unknown"
+    now = time.time()
+
+    if connected:
+        key = ("connected", uri)
+        if getattr(shared_queues, "_last_brain_backend_log_key", None) != key:
+            print(f"[ROSBridge] Brain backend connected (uri={uri}).")
+            shared_queues._last_brain_backend_log_key = key
+            shared_queues._last_brain_backend_log_at = now
+        return
+
+    if state in BACKEND_WARMUP_STATES:
+        return
+
+    key = (state, message, uri)
+    last_key = getattr(shared_queues, "_last_brain_backend_log_key", None)
+    last_at = getattr(shared_queues, "_last_brain_backend_log_at", 0.0)
+    if key == last_key and now - last_at < BACKEND_STATUS_LOG_INTERVAL_SEC:
+        return
+
+    print(
+        "[ROSBridge] ERROR: Brain backend unavailable "
+        f"(state={state}, uri={uri}): {message}"
+    )
+    shared_queues._last_brain_backend_log_key = key
+    shared_queues._last_brain_backend_log_at = now
 
 
 #
@@ -145,6 +188,18 @@ async def inbound_data_loop(ws, shared_queues):
                     )
                     # Forward to sim
                     shared_queues.chat_from_bridge.put_nowait(chat_msg)
+
+            elif topic == "/brain/websocket_status":
+                raw_status = msg_data.get("data", "{}")
+                try:
+                    status = json.loads(raw_status)
+                    if isinstance(status, dict):
+                        shared_queues.update_brain_backend_status(status)
+                        log_brain_backend_status(shared_queues, status)
+                except json.JSONDecodeError:
+                    print(
+                        f"[ROSBridge] Failed to parse /brain/websocket_status JSON: {raw_status}"
+                    )
 
             # 3) /sim_navigation/global_plan
             elif topic == "/sim_navigation/global_plan":
@@ -460,6 +515,9 @@ async def outbound_data_loop(ws, shared_queues, service_call_queue):
     # Also subscribe to /cmd_vel, /chat_out, and navigation topics
     sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
     sub_chat_out = rosbridge_subscribe("/brain/chat_out", "std_msgs/msg/String")
+    sub_brain_ws_status = rosbridge_subscribe(
+        "/brain/websocket_status", "std_msgs/msg/String"
+    )
     sub_nav_path = rosbridge_subscribe(
         "/sim_navigation/global_plan", "nav_msgs/msg/Path"
     )
@@ -469,11 +527,12 @@ async def outbound_data_loop(ws, shared_queues, service_call_queue):
     )
     await ws.send(json.dumps(sub_cmd_vel))
     await ws.send(json.dumps(sub_chat_out))
+    await ws.send(json.dumps(sub_brain_ws_status))
     await ws.send(json.dumps(sub_nav_path))
     await ws.send(json.dumps(sub_nav_cancel))
     await ws.send(json.dumps(sub_arm_cmd))
     print(
-        "[ROSBridge] Subscribed to /cmd_vel, /brain/chat_out, /mars/arm/commands, and navigation topics"
+        "[ROSBridge] Subscribed to /cmd_vel, /brain/chat_out, /brain/websocket_status, /mars/arm/commands, and navigation topics"
     )
 
     # Initialize navigation controller
@@ -653,6 +712,8 @@ async def outbound_service_loop(ws, shared_queues, service_call_queue):
     )
     await ws.send(json.dumps(srv_get_agents))
     print("[ROSBridge] [service] Called /brain/get_available_directives")
+    last_agents_refresh_at = time.time()
+    agents_retry_interval = 5.0
 
     # Process queued service calls from the data loop
     while not shared_queues.exit_event.is_set():
@@ -662,6 +723,16 @@ async def outbound_service_loop(ws, shared_queues, service_call_queue):
             service_name = srv_msg.get("service", "unknown")
             print(f"[ROSBridge] [service] Forwarded call_service: {service_name}")
         except asyncio.TimeoutError:
+            agents, _, _ = shared_queues.get_available_agents()
+            now = time.time()
+            if not agents and now - last_agents_refresh_at >= agents_retry_interval:
+                retry_get_agents = rosbridge_call_service(
+                    "/brain/get_available_directives",
+                    "brain_messages/srv/GetAvailableDirectives",
+                )
+                await ws.send(json.dumps(retry_get_agents))
+                last_agents_refresh_at = now
+                print("[ROSBridge] [service] Retrying /brain/get_available_directives")
             continue
         except websockets.exceptions.ConnectionClosed:
             print("[ROSBridge] Service connection closed in outbound_service_loop.")

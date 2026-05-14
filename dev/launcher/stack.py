@@ -465,6 +465,7 @@ def run_logged_with_heartbeat(
     failure_message: str,
     progress_message: str,
     heartbeat_seconds: float = 10.0,
+    include_recent_log_on_failure: bool = True,
 ) -> None:
     ensure_state_dir()
     with log_path.open("a", encoding="utf-8") as log_file:
@@ -493,6 +494,8 @@ def run_logged_with_heartbeat(
             time.sleep(0.5)
 
     if return_code != 0:
+        if not include_recent_log_on_failure:
+            raise StackError(f"{failure_message}\nFull log: {log_path}")
         raise StackError(
             f"{failure_message}\nRecent log output:\n{tail_file(log_path, limit=60)}"
         )
@@ -926,8 +929,22 @@ def docker_compose_env(base_env: dict[str, str] | None = None) -> dict[str, str]
     return env
 
 
+def shorten_docker_image_ref(image: str) -> str:
+    if ":" not in image:
+        return image
+    repo, tag = image.rsplit(":", 1)
+    if tag.startswith("inputs-") and len(tag) > 22:
+        tag = f"{tag[:19]}..."
+    return f"{repo}:{tag}"
+
+
 def ensure_os_image_available(
-    image: str, *, cwd: Path, env: dict[str, str], pull_if_missing: bool
+    image: str,
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    pull_if_missing: bool,
+    include_pull_log_on_failure: bool = True,
 ) -> None:
     if command_succeeds(["docker", "image", "inspect", image], cwd=cwd, env=env):
         return
@@ -936,14 +953,18 @@ def ensure_os_image_available(
             f"Innate OS image is not available locally: {image}\n"
             "Pull or build it, or unset sim/config.toml os.image to use the local Docker build."
         )
-    log(f"Pulling Innate OS image {image}...")
+    log(f"Pulling Innate OS image {shorten_docker_image_ref(image)}...")
     run_logged_with_heartbeat(
         ["docker", "pull", image],
         cwd=cwd,
         env=env,
         log_path=COMPOSE_LOG_PATH,
-        failure_message=f"Failed to pull Innate OS image: {image}",
+        failure_message=(
+            "Could not pull the prebuilt Innate OS image: "
+            f"{shorten_docker_image_ref(image)}"
+        ),
         progress_message="Docker is still pulling the Innate OS image.",
+        include_recent_log_on_failure=include_pull_log_on_failure,
     )
 
 
@@ -963,14 +984,15 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
                     cwd=os_repo,
                     env=docker_compose_env(),
                     pull_if_missing=bool(config["os_pull_image"]),
+                    include_pull_log_on_failure=not os_image_auto,
                 )
-            except StackError as exc:
+            except StackError:
                 if not os_image_auto:
                     raise
                 warn(
-                    "Matching prebuilt Innate OS image is not available; "
-                    "falling back to the local Docker build.\n"
-                    f"{exc}"
+                    "No matching prebuilt Innate OS image is available for this checkout "
+                    f"({shorten_docker_image_ref(os_image)}). Building it locally instead. "
+                    f"Pull details are in {COMPOSE_LOG_PATH}."
                 )
                 os_image = ""
             else:
@@ -2297,6 +2319,42 @@ def fetch_simulator_metrics(port: str) -> dict[str, object]:
         return {}
 
 
+def fetch_brain_backend_status(port: str) -> dict[str, object]:
+    try:
+        with urlopen(f"http://localhost:{port}/get_available_agents", timeout=2) as response:
+            if response.status != 200:
+                return {}
+            payload = json.loads(response.read().decode("utf-8"))
+            status = payload.get("brain_backend_status")
+            return status if isinstance(status, dict) else {}
+    except (URLError, TimeoutError, json.JSONDecodeError):
+        return {}
+
+
+def health_from_brain_backend(
+    status: dict[str, object], mode: str
+) -> tuple[str, str]:
+    if not status:
+        return ("warn", "unknown") if mode == HOSTED_MODE else ("warn", "not reported")
+
+    connected = bool(status.get("connected", False))
+    state = str(status.get("state", "unknown") or "unknown")
+    message = str(status.get("message", "") or "")
+    label = state.replace("_", " ")
+
+    if connected:
+        return "healthy", "connected"
+    if state == "invalid_config" and "KEY" in message.upper():
+        return "error", "missing key"
+    if state == "invalid_config":
+        return "error", "invalid config"
+    if state in {"connection_error", "backend_error", "disconnected", "stopped"}:
+        return "error", label
+    if state in {"unknown", "starting", "configured", "connecting", "authenticating"}:
+        return "warn", label
+    return "warn", label
+
+
 def set_simulator_log_mode(port: str, mode: str) -> bool:
     payload = json.dumps({"mode": mode}).encode("utf-8")
     request = Request(
@@ -2340,6 +2398,10 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
         and tcp_port_open(rosbridge_port)
     )
     metrics = fetch_simulator_metrics(simulator_port) if sim_running else {}
+    backend_status = fetch_brain_backend_status(simulator_port) if sim_running else {}
+    backend_level, backend_label = health_from_brain_backend(
+        backend_status, str(config["mode"])
+    )
     queue_sizes = metrics.get("queue_sizes", {}) if isinstance(metrics, dict) else {}
     sim_log_mode = (
         str(metrics.get("sim_log_mode", config.get("sim_log_mode", "quiet")))
@@ -2366,7 +2428,7 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
         brain_label = "brain booting"
     elif rosbridge_live:
         brain_level = "healthy"
-        brain_label = "connected"
+        brain_label = "ros ready"
     else:
         brain_level = "warn"
         brain_label = "booting"
@@ -2377,9 +2439,9 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
     )
     agent_label = "hosted" if config["mode"] == HOSTED_MODE else ("online" if agent_running else "offline")
 
-    if all(level == "healthy" for level in (video_level, transport_level, brain_level, agent_level)):
+    if all(level == "healthy" for level in (video_level, transport_level, brain_level, backend_level, agent_level)):
         stack_mood = ("healthy", "LIVE")
-    elif any(level == "error" for level in (video_level, transport_level, brain_level)):
+    elif any(level == "error" for level in (video_level, transport_level, brain_level, backend_level)):
         stack_mood = ("error", "DEGRADED")
     else:
         stack_mood = ("warn", "WARMING")
@@ -2403,7 +2465,8 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
     system_summary = (
         f"os {'up' if os_running else 'down'} | "
         f"sim {'up' if sim_running else 'down'} | "
-        f"brain {'ok' if brain_level == 'healthy' else brain_label}"
+        f"brain {'ok' if brain_level == 'healthy' else brain_label} | "
+        f"backend {'ok' if backend_level == 'healthy' else backend_label}"
     )
 
     return {
@@ -2427,6 +2490,9 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
         "queue_load_score": queue_load_score(transport_level, queue_peak),
         "brain_level": brain_level,
         "brain_label": brain_label,
+        "backend_status": backend_status,
+        "backend_level": backend_level,
+        "backend_label": backend_label,
         "agent_level": agent_level,
         "agent_label": agent_label,
         "stack_level": stack_mood[0],
@@ -2481,6 +2547,7 @@ def render_status(
                 f"{BOLD}Video:{NC} {format_level(str(snapshot['video_level']), str(snapshot['video_label']))}",
                 f"{BOLD}Transport:{NC} {format_level(str(snapshot['transport_level']), str(snapshot['transport_label']))}",
                 f"{BOLD}Brain:{NC} {format_level(str(snapshot['brain_level']), str(snapshot['brain_label']))}",
+                f"{BOLD}Backend:{NC} {format_level(str(snapshot['backend_level']), str(snapshot['backend_label']))}",
                 f"{BOLD}Agent:{NC} {format_level(str(snapshot['agent_level']), str(snapshot['agent_label']))}",
             ]
         ),

@@ -6,12 +6,56 @@ import { ImageDisplay } from "./components/ImageDisplay";
 import { Chat } from "./components/Chat";
 import {
   AvailableAgentsResponse,
+  BrainBackendStatus,
   RobotAgent,
   getAvailableAgentsDirect,
   resetBrainDirect,
   setBrainActiveDirect,
   setDirectiveDirect,
 } from "./services/rosbridgeService";
+
+const AGENT_BACKEND_WARNING_DELAY_MS = 15_000;
+const BACKEND_CONNECTED_STABLE_MS = 3_000;
+const BACKEND_WARMUP_STATES = new Set([
+  "unknown",
+  "starting",
+  "configured",
+  "connecting",
+  "authenticating",
+]);
+
+function formatBackendState(state?: string | null) {
+  return (state || "unknown").replace(/_/g, " ");
+}
+
+function isBackendWarningStatus(
+  status: BrainBackendStatus | null,
+  timedOut: boolean,
+) {
+  if (!status) {
+    return false;
+  }
+
+  if (status.connected) {
+    return timedOut && !isBackendConnectedStable(status);
+  }
+
+  const state = status.state || "unknown";
+  return timedOut || !BACKEND_WARMUP_STATES.has(state);
+}
+
+function isBackendConnectedStable(status: BrainBackendStatus | null) {
+  if (!status?.connected) {
+    return false;
+  }
+
+  const timestamp = status.timestamp ?? status.updated_at;
+  if (typeof timestamp !== "number") {
+    return true;
+  }
+
+  return Date.now() - timestamp * 1000 >= BACKEND_CONNECTED_STABLE_MS;
+}
 
 // Main App Container
 const AppContainer = styled.div`
@@ -66,9 +110,10 @@ const Logo = styled.div`
   }
 `;
 
-const StatusBadge = styled.div`
+const StatusBadge = styled.div<{ $isWarning?: boolean }>`
   margin-right: 16px;
-  background: ${({ theme }) => theme.colors.primary};
+  background: ${({ $isWarning, theme }) =>
+    $isWarning ? theme.colors.error : theme.colors.primary};
   color: white;
   padding: 6px 16px;
   border-radius: 20px;
@@ -237,9 +282,41 @@ const AgentItem = styled.div<{ $isActive: boolean }>`
   }
 `;
 
+const AgentStatusItem = styled.div`
+  padding: 12px 16px;
+  border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
+  font-size: 13px;
+  font-weight: 500;
+  opacity: 0.65;
+`;
+
 const AgentName = styled.span`
   font-size: 13px;
   font-weight: 500;
+`;
+
+const AgentNotice = styled.div`
+  margin: 12px 16px;
+  padding: 12px;
+  border: 1px solid ${({ theme }) => theme.colors.error};
+  background: rgba(255, 59, 59, 0.12);
+  color: ${({ theme }) => theme.colors.foreground};
+`;
+
+const AgentNoticeTitle = styled.div`
+  color: ${({ theme }) => theme.colors.error};
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+`;
+
+const AgentNoticeDetail = styled.div`
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.85;
+  word-break: break-word;
 `;
 
 const AgentCheck = styled.div<{ $isActive: boolean }>`
@@ -476,9 +553,17 @@ export default function App() {
   const [activeAgent, setActiveAgent] = useState<string | null>(null);
   const [agents, setAgents] = useState<RobotAgent[]>([]);
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
+  const [agentAvailabilityWarning, setAgentAvailabilityWarning] = useState<
+    string | null
+  >(null);
+  const [brainBackendStatus, setBrainBackendStatus] =
+    useState<BrainBackendStatus | null>(null);
+  const [agentLoadTimedOut, setAgentLoadTimedOut] = useState(false);
+  const [backendWarmupTimedOut, setBackendWarmupTimedOut] = useState(false);
   const hasAgentsRef = useRef(false);
   const isFetchingAgentsRef = useRef(false);
   const blockedAgentsFetchUntilRef = useRef(0);
+  const agentsLoadStartedAtRef = useRef(Date.now());
   const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
   const [viewMode, setViewMode] = useState<"frontFocus" | "map">("frontFocus");
@@ -591,18 +676,50 @@ export default function App() {
           const baseUrl =
             import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
           const response = await fetch(`${baseUrl}/get_available_agents`);
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
           data = (await response.json()) as AvailableAgentsResponse;
         }
+
+        if (data.brain_backend_status) {
+          setBrainBackendStatus(data.brain_backend_status);
+        }
+        const warningDelayElapsed =
+          Date.now() - agentsLoadStartedAtRef.current >=
+          AGENT_BACKEND_WARNING_DELAY_MS;
+        setBackendWarmupTimedOut(warningDelayElapsed);
+        const backendWarnsNow = isBackendWarningStatus(
+          data.brain_backend_status ?? null,
+          warningDelayElapsed,
+        );
 
         if (data.agents && data.agents.length > 0) {
           setAgents(data.agents);
           hasAgentsRef.current = true;
+          setAgentAvailabilityWarning(null);
+          setAgentLoadTimedOut(false);
+          setIsLoadingAgents(false);
           setActiveAgent((previousAgentId) =>
             previousAgentId &&
             data.agents.some((agent) => agent.id === previousAgentId)
               ? previousAgentId
               : null,
           );
+        } else {
+          const timedOut = warningDelayElapsed;
+          setAgentLoadTimedOut(timedOut);
+          if (timedOut || backendWarnsNow) {
+            setIsLoadingAgents(false);
+          }
+          if (timedOut) {
+            setAgentAvailabilityWarning(
+              data.error ||
+                "The brain has not reported any available behavior agents yet.",
+            );
+          } else {
+            setAgentAvailabilityWarning(null);
+          }
         }
       } catch (error) {
         const errorMessage =
@@ -613,18 +730,29 @@ export default function App() {
             "[Agents] /brain/get_available_directives timed out. Pausing retries for 60s.",
           );
         }
+        const timedOut =
+          Date.now() - agentsLoadStartedAtRef.current >=
+            AGENT_BACKEND_WARNING_DELAY_MS ||
+          errorMessage.includes("timed out");
+        setAgentLoadTimedOut(timedOut);
+        if (timedOut) {
+          setIsLoadingAgents(false);
+          setAgentAvailabilityWarning(
+            `Unable to load behavior agents: ${errorMessage}`,
+          );
+        }
         console.error("Error fetching agents:", error);
       } finally {
         isFetchingAgentsRef.current = false;
-        setIsLoadingAgents(false);
       }
     };
 
     fetchAgents();
 
-    // Poll for agents every 5 seconds until we have some
+    // Poll until agents are loaded, and keep polling the sim backend so
+    // brain/cloud-agent connection warnings can recover without a refresh.
     const intervalId = setInterval(async () => {
-      if (!hasAgentsRef.current) {
+      if (!useDirectRobot || !hasAgentsRef.current) {
         await fetchAgents();
       }
     }, 5000);
@@ -958,6 +1086,29 @@ export default function App() {
     }
   }
 
+  const backendStatusIsWarning = isBackendWarningStatus(
+    brainBackendStatus,
+    backendWarmupTimedOut || agentLoadTimedOut,
+  );
+  const backendIsBrieflyConnected =
+    brainBackendStatus?.connected && !isBackendConnectedStable(brainBackendStatus);
+  const agentWarning = backendStatusIsWarning
+    ? {
+        title: backendIsBrieflyConnected
+          ? "Brain backend connecting"
+          : "Brain backend disconnected",
+        detail: backendIsBrieflyConnected
+          ? "The websocket opened briefly; waiting for the backend to stay connected."
+          : brainBackendStatus?.message ||
+            `Status: ${formatBackendState(brainBackendStatus?.state)}`,
+      }
+    : agentAvailabilityWarning
+      ? {
+          title: "Behavior agents unavailable",
+          detail: agentAvailabilityWarning,
+        }
+      : null;
+
   return (
     <AppContainer>
       <Header>
@@ -981,9 +1132,9 @@ export default function App() {
           <Logo>INNATE SIM</Logo>
         </div>
         <div></div>
-        <StatusBadge>
+        <StatusBadge $isWarning={Boolean(agentWarning)}>
           <StatusDot />
-          System Active
+          {agentWarning ? "Agent Offline" : "System Active"}
         </StatusBadge>
       </Header>
 
@@ -1029,14 +1180,18 @@ export default function App() {
           <PanelSection style={{ flex: 1 }}>
             <PanelHeader>Behavior Agents</PanelHeader>
             <div>
-              {isLoadingAgents ? (
-                <AgentItem $isActive={false}>
-                  <AgentName>Loading agents...</AgentName>
-                </AgentItem>
-              ) : agents.length === 0 ? (
-                <AgentItem $isActive={false}>
-                  <AgentName>Waiting for robot connection</AgentName>
-                </AgentItem>
+              {agentWarning && (
+                <AgentNotice role="alert">
+                  <AgentNoticeTitle>{agentWarning.title}</AgentNoticeTitle>
+                  <AgentNoticeDetail>{agentWarning.detail}</AgentNoticeDetail>
+                </AgentNotice>
+              )}
+              {agents.length === 0 ? (
+                isLoadingAgents ? (
+                  <AgentStatusItem>Loading agents...</AgentStatusItem>
+                ) : agentWarning ? null : (
+                  <AgentStatusItem>Waiting for robot connection</AgentStatusItem>
+                )
               ) : (
                 agents.map((agent) => (
                   <AgentItem

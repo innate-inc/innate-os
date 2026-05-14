@@ -20,6 +20,19 @@ from brain_client.message_types import (
 )
 
 
+PLACEHOLDER_SERVICE_KEYS = {
+    "my_hardcoded_token",
+    "your_service_key_here",
+    "your-service-key-here",
+    "replace_me",
+    "changeme",
+    "change_me",
+    "todo",
+}
+
+CONNECTED_GRACE_SECONDS = 2.0
+
+
 ###############################################################################
 # WSClient class – largely unchanged, but now it relies on its node to publish.
 ###############################################################################
@@ -42,7 +55,12 @@ class WSClient:
         max_reconnect_delay = 30  # Max 30 seconds between retries
         
         while rclpy.ok() and not self.node.exit_event.is_set():
+            disconnect_reason = "Connection lost."
+            status_reported = False
             self.node.get_logger().info(f"[WSClient] Connecting to {self.uri} ...")
+            self.node.set_ws_status(
+                "connecting", False, f"Connecting to {self.uri}"
+            )
             try:
                 # Set a longer timeout that works for all operations
                 async with websockets.connect(
@@ -51,7 +69,11 @@ class WSClient:
                     ping_timeout=60,  # Wait up to 60 seconds for a pong response
                 ) as websocket:
                     self.websocket = websocket
-                    self.node.get_logger().info(f"[WSClient] Connected to {self.uri}")
+                    self.node.set_ws_status(
+                        "authenticating",
+                        False,
+                        f"Socket opened to {self.uri}; authenticating.",
+                    )
                     reconnect_delay = 1  # Reset delay on successful connection
 
                     # Send auth message upon connection.
@@ -64,10 +86,17 @@ class WSClient:
                     )
                     await self.send(auth_msg)
                     self.node.get_logger().debug(f"[WSClient] Auth message sent with version: {self.robot_version}")
+                    self.node.set_ws_status(
+                        "authenticating",
+                        False,
+                        "Auth message sent; waiting for backend confirmation.",
+                    )
 
-                    await self.listen()
+                    disconnect_reason = await self.listen()
             except Exception as e:
-                self.node.get_logger().error(f"[WSClient] Connection error: {e}")
+                disconnect_reason = f"Connection error: {e}"
+                self.node.set_ws_status("connection_error", False, disconnect_reason)
+                status_reported = True
             
             self.websocket = None
             
@@ -75,29 +104,64 @@ class WSClient:
             if self.node.exit_event.is_set() or not rclpy.ok():
                 break
                 
-            self.node.get_logger().warn(f"[WSClient] Connection lost. Reconnecting in {reconnect_delay}s...")
+            self.node.get_logger().warn(
+                f"[WSClient] {disconnect_reason} Reconnecting in {reconnect_delay}s..."
+            )
+            if not status_reported:
+                self.node.set_ws_status(
+                    "disconnected",
+                    False,
+                    f"{disconnect_reason} Reconnecting in {reconnect_delay}s.",
+                )
             await asyncio.sleep(reconnect_delay)
             reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)  # Exponential backoff
 
         self.node.get_logger().info("[WSClient] Stopping WSClient.")
         self.websocket = None
+        self.node.set_ws_status("stopped", False, "WebSocket client stopped.")
 
     async def listen(self):
+        connected_started_at = time.time()
+        connected_reported = False
+
         while rclpy.ok() and not self.node.exit_event.is_set():
             try:
                 # Use longer timeout to reduce CPU spin; we'll wake immediately on message
                 incoming = await asyncio.wait_for(self.websocket.recv(), timeout=1.0)
             except asyncio.TimeoutError:
+                if (
+                    not connected_reported
+                    and time.time() - connected_started_at >= CONNECTED_GRACE_SECONDS
+                ):
+                    self.node.get_logger().info(f"[WSClient] Connected to {self.uri}")
+                    self.node.set_ws_status(
+                        "connected", True, f"Connected to {self.uri}"
+                    )
+                    connected_reported = True
                 # No message received, just continue the loop (no extra sleep needed)
                 continue
-            except websockets.exceptions.ConnectionClosed:
-                self.node.get_logger().warn("WebSocket connection closed by server.")
-                break
+            except websockets.exceptions.ConnectionClosed as e:
+                reason = e.reason or "no reason"
+                message = (
+                    f"WebSocket connection closed by server "
+                    f"(code={e.code}, reason={reason})."
+                )
+                if (
+                    reason == "no reason"
+                    and self.node._last_ws_error_message
+                    and time.time() - self.node._last_ws_error_at < 60.0
+                ):
+                    message = f"{message} Last backend error: {self.node._last_ws_error_message}"
+                return message
 
             # Check for error messages (especially version_mismatch)
             try:
                 data = json.loads(incoming)
-                if data.get("type") == "error":
+                msg_type = data.get("type")
+                normalized_type = (
+                    msg_type.rsplit("/", 1)[-1] if isinstance(msg_type, str) else msg_type
+                )
+                if normalized_type == "error":
                     payload = data.get("payload", {})
                     error_type = payload.get("error", "unknown")
                     message = payload.get("message", "Unknown error")
@@ -105,11 +169,21 @@ class WSClient:
             except json.JSONDecodeError:
                 pass  # Not valid JSON, just forward it
 
+            if (
+                not connected_reported
+                and time.time() - connected_started_at >= CONNECTED_GRACE_SECONDS
+            ):
+                self.node.get_logger().info(f"[WSClient] Connected to {self.uri}")
+                self.node.set_ws_status("connected", True, f"Connected to {self.uri}")
+                connected_reported = True
+
             # Forward the raw JSON string from the WS server by publishing it.
             self.node.get_logger().debug(f"Forwarding incoming message: {incoming}")
             ros_msg = String()
             ros_msg.data = incoming
             self.node.ws_pub.publish(ros_msg)
+
+        return "WebSocket listener stopped."
 
     async def send(self, msg):
         if self.websocket is not None:
@@ -130,17 +204,57 @@ class WSClientNode(Node):
             self.get_parameter("websocket_uri").get_parameter_value().string_value
         )
         self.token = self.get_parameter("token").get_parameter_value().string_value
+        self.exit_event = threading.Event()
+
+        self._ws_status_pub = self.create_publisher(
+            String, "/brain/websocket_status", 10
+        )
+        self._ws_status = {
+            "state": "starting",
+            "connected": False,
+            "message": "WebSocket client starting.",
+            "uri": self.ws_uri,
+            "hosted": False,
+            "timestamp": time.time(),
+        }
+        self._ws_status_timer = self.create_timer(2.0, self._publish_ws_status)
+        self._last_backend_unavailable_log_key = None
+        self._last_backend_unavailable_log_at = 0.0
+        self._last_invalid_config_log_at = 0.0
+        self._last_ws_error_message = ""
+        self._last_ws_error_at = 0.0
 
         # Validate websocket URI early
         self._ws_configured = self._validate_ws_uri(self.ws_uri)
         if not self._ws_configured:
-            self.get_logger().error("❌ WebSocket URI not configured or invalid. Set 'websocket_uri' parameter (must start with ws:// or wss://).")
+            self._log_invalid_config_once(
+                "❌ WebSocket URI not configured or invalid. Set 'websocket_uri' "
+                "parameter (must start with ws:// or wss://)."
+            )
         self._hosted_innate_uri = self._is_hosted_innate_uri(self.ws_uri)
         self._token_configured = self._validate_token_for_uri(self.ws_uri, self.token)
         if not self._token_configured:
-            self.get_logger().error(
-                "❌ Missing INNATE_SERVICE_KEY for hosted Innate agent. "
-                "This client cannot authenticate to the hosted agent without a token."
+            self._log_invalid_config_once(
+                "❌ Missing or placeholder INNATE_SERVICE_KEY for hosted Innate agent. "
+                "Set a real service key before connecting to the hosted agent."
+            )
+        if not self._ws_configured:
+            self.set_ws_status(
+                "invalid_config",
+                False,
+                "WebSocket URI is not configured or invalid.",
+            )
+        elif not self._token_configured:
+            self.set_ws_status(
+                "invalid_config",
+                False,
+                "Missing or placeholder INNATE_SERVICE_KEY for hosted Innate agent.",
+            )
+        else:
+            self.set_ws_status(
+                "configured",
+                False,
+                "WebSocket configured; waiting for connection request.",
             )
 
         # Robot version from /robot/info
@@ -160,8 +274,6 @@ class WSClientNode(Node):
             String, "ws_outgoing", self.ws_outgoing_callback, 10
         )
 
-        self.exit_event = threading.Event()
-
         # Set up the WSClient (only if configured).
         if self._ws_configured and self._token_configured:
             self.ws_client = WSClient(self.ws_uri, self.token, self, self._robot_version)
@@ -171,6 +283,55 @@ class WSClientNode(Node):
         # Start the websocket event loop in a separate thread.
         self.ws_thread = None
         self.get_logger().info("WSClientNode initialized.")
+
+    def set_ws_status(self, state: str, connected: bool, message: str):
+        """Update and publish cloud/local-agent websocket status."""
+        self._ws_status = {
+            "state": state,
+            "connected": connected,
+            "message": message,
+            "uri": self.ws_uri,
+            "hosted": self._hosted_innate_uri,
+            "timestamp": time.time(),
+        }
+        self._publish_ws_status()
+        self._log_backend_unavailable_once(state, connected, message)
+
+    def _log_backend_unavailable_once(
+        self, state: str, connected: bool, message: str
+    ):
+        if connected or state in {"starting", "configured", "connecting", "authenticating"}:
+            return
+
+        now = time.time()
+        key = (state, message)
+        if (
+            key == self._last_backend_unavailable_log_key
+            and now - self._last_backend_unavailable_log_at < 30.0
+        ):
+            return
+
+        self._last_backend_unavailable_log_key = key
+        self._last_backend_unavailable_log_at = now
+        self.get_logger().error(
+            "[WSClient] Brain backend unavailable "
+            f"(state={state}, uri={self.ws_uri}): {message}"
+        )
+
+    def _log_invalid_config_once(self, message: str):
+        now = time.time()
+        if now - self._last_invalid_config_log_at < 30.0:
+            return
+        self._last_invalid_config_log_at = now
+        self.get_logger().error(message)
+
+    def _publish_ws_status(self):
+        try:
+            msg = String()
+            msg.data = json.dumps(self._ws_status)
+            self._ws_status_pub.publish(msg)
+        except Exception as e:
+            self.get_logger().debug(f"Failed to publish websocket status: {e}")
 
     def _robot_info_callback(self, msg: String):
         """Callback to extract robot version from /robot/info."""
@@ -198,11 +359,17 @@ class WSClientNode(Node):
 
     def _handle_ws_error(self, error_type: str, message: str):
         """Handle WebSocket error messages."""
+        self._last_ws_error_message = f"{error_type}: {message}"
+        self._last_ws_error_at = time.time()
         if error_type == "version_mismatch":
             self._speak_error(message)
             self.get_logger().error(f"Version mismatch: {message}")
+            self.set_ws_status("backend_error", False, f"Version mismatch: {message}")
         else:
-            self.get_logger().warn(f"WebSocket error: {error_type} - {message}")
+            self.get_logger().error(f"WebSocket error: {error_type} - {message}")
+            self.set_ws_status(
+                "backend_error", False, f"Backend error ({error_type}): {message}"
+            )
 
     def _validate_ws_uri(self, uri: str) -> bool:
         """Check if the websocket URI is valid."""
@@ -218,7 +385,10 @@ class WSClientNode(Node):
     def _validate_token_for_uri(self, uri: str, token: str) -> bool:
         if not self._is_hosted_innate_uri(uri):
             return True
-        return bool(token and token.strip())
+        normalized = (token or "").strip()
+        if not normalized:
+            return False
+        return normalized.lower() not in PLACEHOLDER_SERVICE_KEYS
 
     def ws_outgoing_callback(self, msg: String):
         """
@@ -240,12 +410,24 @@ class WSClientNode(Node):
                 self.get_logger().info(f"Internal message: {internal_message}")
                 if internal_message.type == InternalMessageType.READY_FOR_CONNECTION:
                     if not self._ws_configured:
-                        self.get_logger().error("WebSocket not configured, ignoring connection request.")
+                        self._log_invalid_config_once(
+                            "WebSocket not configured, ignoring connection request."
+                        )
+                        self.set_ws_status(
+                            "invalid_config",
+                            False,
+                            "WebSocket URI is not configured or invalid.",
+                        )
                         return
                     if not self._token_configured:
-                        self.get_logger().error(
-                            "Hosted Innate agent selected but INNATE_SERVICE_KEY is missing. "
+                        self._log_invalid_config_once(
+                            "Hosted Innate agent selected but INNATE_SERVICE_KEY is missing or a placeholder. "
                             "Skipping websocket connection."
+                        )
+                        self.set_ws_status(
+                            "invalid_config",
+                            False,
+                            "Missing or placeholder INNATE_SERVICE_KEY for hosted Innate agent.",
                         )
                         return
                     self.get_logger().debug("Received ready for connection message.")
@@ -260,7 +442,12 @@ class WSClientNode(Node):
                 self.get_logger().debug(f"Outgoing message: {outgoing_message.type}")
 
                 # Check if the loop exists and is running before trying to send
-                if self.ws_client and self.ws_client.loop and self.ws_client.loop.is_running():
+                if not self.ws_client:
+                    self._log_invalid_config_once(
+                        "Cannot send websocket message: hosted Innate agent is not configured "
+                        "(missing or placeholder INNATE_SERVICE_KEY)."
+                    )
+                elif self.ws_client.loop and self.ws_client.loop.is_running():
                     try:
                         asyncio.run_coroutine_threadsafe(
                             self.ws_client.send(outgoing_message), self.ws_client.loop
