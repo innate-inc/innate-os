@@ -75,6 +75,17 @@ class SharedQueues:
         self.startup_agent_id: Optional[str] = None
         self.agents_lock = threading.Lock()  # For thread-safe updates
 
+        # Store the brain client's cloud/local-agent websocket state for the UI.
+        self.brain_backend_status: Dict[str, Any] = {
+            "state": "unknown",
+            "connected": False,
+            "message": "Waiting for brain backend status",
+            "updated_at": None,
+            "uri": None,
+            "hosted": None,
+        }
+        self.brain_backend_status_lock = threading.Lock()
+
         # One-shot status map for /set_environment request/response.
         # Key: request_id, Value: {"success": bool, "error": Optional[str]}
         self.environment_apply_results: Dict[str, Dict[str, Any]] = {}
@@ -164,6 +175,27 @@ class SharedQueues:
                 self.current_agent_id,
                 self.startup_agent_id,
             )
+
+    def update_brain_backend_status(self, status: Dict[str, Any]):
+        """Thread-safe method to update brain/cloud backend connection status."""
+        now = time.time()
+        with self.brain_backend_status_lock:
+            self.brain_backend_status.update(
+                {
+                    "state": str(status.get("state", "unknown") or "unknown"),
+                    "connected": bool(status.get("connected", False)),
+                    "message": status.get("message") or "",
+                    "updated_at": now,
+                    "uri": status.get("uri"),
+                    "hosted": status.get("hosted"),
+                    "timestamp": status.get("timestamp"),
+                }
+            )
+
+    def get_brain_backend_status(self) -> Dict[str, Any]:
+        """Thread-safe method to get brain/cloud backend connection status."""
+        with self.brain_backend_status_lock:
+            return dict(self.brain_backend_status)
 
     def set_environment_apply_result(
         self, request_id: Optional[str], success: bool, error: Optional[str] = None

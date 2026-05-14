@@ -2,7 +2,7 @@
 
 from enum import Enum
 from typing import Dict, Optional, List, Any
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel, field_serializer, field_validator
 
 
 class NavigationToPosition(BaseModel):
@@ -53,6 +53,15 @@ class MessageIn(BaseModel):
 class MessageOut(BaseModel):
     type: MessageOutType
     payload: Dict[str, Any]
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_message_out_type(cls, value):
+        if isinstance(value, str) and "/" in value:
+            suffix = value.rsplit("/", 1)[-1]
+            if suffix in MessageOutType._value2member_map_:
+                return suffix
+        return value
 
     @field_serializer("type")
     def serialize_message_out_type(self, value: MessageOutType) -> str:

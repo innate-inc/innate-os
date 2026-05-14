@@ -202,11 +202,20 @@ def get_available_agents(request: Request):
                 "current_agent_id": None,
                 "startup_agent_id": None,
                 "error": "Simulation not initialized",
+                "brain_backend_status": {
+                    "state": "sim_not_initialized",
+                    "connected": False,
+                    "message": "Simulation not initialized",
+                    "updated_at": time.time(),
+                    "uri": None,
+                    "hosted": None,
+                },
             },
             status_code=200,
         )
 
     agents, current_agent_id, startup_agent_id = shared_queues.get_available_agents()
+    brain_backend_status = shared_queues.get_brain_backend_status()
 
     # Convert AgentInfo namedtuples to dicts for JSON serialization
     agents_data = [
@@ -225,5 +234,6 @@ def get_available_agents(request: Request):
             "agents": agents_data,
             "current_agent_id": current_agent_id,
             "startup_agent_id": startup_agent_id,
+            "brain_backend_status": brain_backend_status,
         }
     )
