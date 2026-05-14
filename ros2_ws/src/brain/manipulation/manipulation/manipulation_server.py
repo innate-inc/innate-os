@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import gc
+import sys
 import time
 import threading
+from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
@@ -20,6 +22,13 @@ import json
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.executors import MultiThreadedExecutor
 import h5py
+
+_script_dir = Path(__file__).resolve().parent
+_package_parent = (
+    _script_dir if (_script_dir / "manipulation").is_dir() else _script_dir.parent
+)
+if str(_package_parent) not in sys.path:
+    sys.path.insert(0, str(_package_parent))
 
 # Enable CUDNN for better performance
 torch.backends.cudnn.enabled = True

@@ -6,10 +6,21 @@ export interface RobotAgent {
   skills: string[];
 }
 
+export interface BrainBackendStatus {
+  state: string;
+  connected: boolean;
+  message?: string | null;
+  updated_at?: number | null;
+  timestamp?: number | null;
+  uri?: string | null;
+  hosted?: boolean | null;
+}
+
 export interface AvailableAgentsResponse {
   agents: RobotAgent[];
   current_agent_id: string | null;
   startup_agent_id: string | null;
+  brain_backend_status?: BrainBackendStatus;
   error?: string;
 }
 

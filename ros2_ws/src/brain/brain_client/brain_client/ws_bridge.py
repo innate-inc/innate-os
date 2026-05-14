@@ -6,6 +6,16 @@ from std_msgs.msg import String
 from brain_client.message_types import MessageOut, MessageOutType
 
 
+def _payload_summary(data):
+    payload = data.get("payload")
+    if isinstance(payload, dict):
+        keys = ", ".join(sorted(str(key) for key in payload.keys())[:8])
+        return f" payload keys=[{keys}]"
+    if payload is None:
+        return " payload=<missing>"
+    return f" payload_type={type(payload).__name__}"
+
+
 class WSBridge:
     """
     WSBridge subscribes to a ROS topic (default "ws_messages") where the WSClient node publishes
@@ -60,7 +70,11 @@ class WSBridge:
         try:
             ws_msg = MessageOut.model_validate(data)
         except Exception as e:
-            self.node.get_logger().error(f"WSBridge: Message validation error: {e}")
+            first_line = str(e).splitlines()[0]
+            self.node.get_logger().error(
+                "WSBridge: Incoming backend message is not supported "
+                f"(type={msg_type_str!r},{_payload_summary(data)}): {first_line}"
+            )
             return
 
         # Dispatch to the registered handler for this message type.
