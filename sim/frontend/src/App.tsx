@@ -597,12 +597,12 @@ export default function App() {
         if (data.agents && data.agents.length > 0) {
           setAgents(data.agents);
           hasAgentsRef.current = true;
-          // Set active agent to current agent from robot, or first agent
-          if (data.current_agent_id) {
-            setActiveAgent(data.current_agent_id);
-          } else if (data.agents.length > 0) {
-            setActiveAgent(data.agents[0].id);
-          }
+          setActiveAgent((previousAgentId) =>
+            previousAgentId &&
+            data.agents.some((agent) => agent.id === previousAgentId)
+              ? previousAgentId
+              : null,
+          );
         }
       } catch (error) {
         const errorMessage =
