@@ -80,6 +80,7 @@ To inspect the current state:
 [`sim/config.toml`](/Users/axelpeytavin/Projects/innate-repos/innate-os/sim/config.toml.template) is for optional non-secret simulator overrides such as:
 
 - native viewer on/off
+- rendered camera FPS and Genesis timestep
 - hosted vs local cloud-agent mode
 - local cloud-agent image or source checkout
 

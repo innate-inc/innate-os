@@ -637,6 +637,22 @@ def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
     return None
 
 
+def get_nested_float(data: dict[str, object], *keys: str) -> float | None:
+    value = get_nested_value(data, *keys)
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        parsed = float(value)
+    elif isinstance(value, str):
+        try:
+            parsed = float(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    return parsed if parsed > 0 else None
+
+
 def build_os_config_env(os_config: dict[str, object]) -> dict[str, str]:
     env: dict[str, str] = {}
     if websocket_uri := get_nested_str(os_config, "brain", "websocket_uri"):
@@ -780,6 +796,8 @@ def get_config() -> dict[str, object]:
         "sim_visualization": get_nested_bool(sim_config, "display", "visualization")
         if get_nested_bool(sim_config, "display", "visualization") is not None
         else False,
+        "sim_render_fps": get_nested_float(sim_config, "display", "render_fps"),
+        "sim_scene_dt": get_nested_float(sim_config, "display", "scene_dt"),
         "sim_log_mode": "quiet",
         "sim_args": "--log-everything",
         "os_image": os_image,
@@ -1313,6 +1331,10 @@ def start_simulator(config: dict[str, object], sim_python: Path) -> None:
     env["ROSBRIDGE_URI"] = raw_env.get("ROSBRIDGE_URI", "ws://localhost:9090")
     env["SIMULATOR_PORT"] = raw_env.get("SIMULATOR_PORT", "8000")
     env["SIM_LOG_MODE"] = str(config.get("sim_log_mode", "quiet"))
+    if config.get("sim_render_fps") is not None:
+        env["SIM_RENDER_FPS"] = str(config["sim_render_fps"])
+    if config.get("sim_scene_dt") is not None:
+        env["SIM_SCENE_DT"] = str(config["sim_scene_dt"])
 
     sim_args = shlex.split(str(config["sim_args"]))
     if config.get("sim_visualization") and "--vis" not in sim_args and "-v" not in sim_args:

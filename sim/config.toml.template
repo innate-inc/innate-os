@@ -4,6 +4,11 @@
 
 [display]
 # visualization = true
+# Target rendered camera FPS for the web feed. Default: 20.
+# This cannot exceed 1 / scene_dt unless scene_dt is lowered too.
+# render_fps = 20
+# Genesis simulation timestep in seconds. Default: 0.05 (20 Hz).
+# scene_dt = 0.05
 
 [os]
 # Optional prebuilt Innate OS image. By default, the launcher tries a
