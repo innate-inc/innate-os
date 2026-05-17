@@ -120,6 +120,8 @@ def generate_launch_description():
                 "send_arm_camera_image": LaunchConfiguration("send_arm_camera_image"),
                 "use_odom_as_amcl_pose": LaunchConfiguration("use_odom_as_amcl_pose"),
                 "simulator_mode": LaunchConfiguration("simulator_mode"),
+                # Sim skips input_manager today; ideally sim and robot use the same input path.
+                "use_input_manager": False,
                 "x_cam": LaunchConfiguration("x_cam"),
                 "height_cam": LaunchConfiguration("height_cam"),
                 "current_nav_mode_topic": LaunchConfiguration("current_nav_mode_topic"),
