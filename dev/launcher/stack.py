@@ -901,6 +901,17 @@ def docker_compose_env(base_env: dict[str, str] | None = None) -> dict[str, str]
     return env
 
 
+def os_compose_env(
+    base_env: dict[str, str] | None = None,
+    *,
+    env_file: Path = GENERATED_OS_ENV_PATH,
+) -> dict[str, str]:
+    values = {"INNATE_OS_ENV_FILE": str(env_file)}
+    if base_env:
+        values.update(base_env)
+    return docker_compose_env(values)
+
+
 def shorten_docker_image_ref(image: str) -> str:
     if ":" not in image:
         return image
@@ -955,7 +966,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
                 ensure_os_image_available(
                     os_image,
                     cwd=os_repo,
-                    env=docker_compose_env(),
+                    env=os_compose_env(env_file=os_env_file),
                     pull_if_missing=bool(config["os_pull_image"]),
                     include_pull_log_on_failure=not os_image_auto,
                 )
@@ -974,7 +985,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
         compose_values = {"INNATE_OS_ENV_FILE": str(os_env_file)}
         if os_image:
             compose_values["INNATE_OS_IMAGE"] = os_image
-        compose_env = docker_compose_env(compose_values)
+        compose_env = os_compose_env(compose_values, env_file=os_env_file)
         log("Starting Innate OS dev container...")
         run_logged_with_heartbeat(
             up_cmd,
@@ -990,7 +1001,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
     compose_values = {"INNATE_OS_ENV_FILE": str(os_env_file)}
     if os_image:
         compose_values["INNATE_OS_IMAGE"] = os_image
-    compose_env = docker_compose_env(compose_values)
+    compose_env = os_compose_env(compose_values, env_file=os_env_file)
 
     colcon_build_cmd = (
         "colcon build --symlink-install "
@@ -1068,14 +1079,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
     ros_install_already_validated = False
     if ros_install_marker_matches and not bool(config["os_always_build"]):
         ros_install_already_validated = container_was_running or command_succeeds(
-            docker_compose_cmd(
-                "exec",
-                "-T",
-                OS_CONTAINER_SERVICE,
-                "zsh",
-                "-lc",
-                "test -f ~/innate-os/ros2_ws/install/setup.zsh",
-            ),
+            os_compose_zsh_cmd("test -f ~/innate-os/ros2_ws/install/setup.zsh"),
             cwd=os_repo,
             env=compose_env,
         )
@@ -1084,18 +1088,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
     else:
         log("Building / validating the ROS workspace inside the container...")
         run_logged(
-            [
-                "docker",
-                "compose",
-                "-f",
-                "docker-compose.dev.yml",
-                "exec",
-                "-T",
-                OS_CONTAINER_SERVICE,
-                "zsh",
-                "-lc",
-                build_cmd,
-            ],
+            os_compose_zsh_cmd(build_cmd),
             cwd=os_repo,
             env=compose_env,
             log_path=OS_BUILD_LOG_PATH,
@@ -1122,18 +1115,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
         "cat /tmp/innate-os-session.log 2>/dev/null || true; "
         "exit 1"
     )
-    launch_cmd = [
-        "docker",
-        "compose",
-        "-f",
-        "docker-compose.dev.yml",
-        "exec",
-        "-T",
-        OS_CONTAINER_SERVICE,
-        "zsh",
-        "-lc",
-        launch_wrapper,
-    ]
+    launch_cmd = os_compose_zsh_cmd(launch_wrapper)
     run_logged(
         launch_cmd,
         cwd=os_repo,
@@ -1145,7 +1127,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
 
 def down_os(config: dict[str, object]) -> None:
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
-    compose_env = docker_compose_env({"INNATE_OS_ENV_FILE": str(GENERATED_OS_ENV_PATH)})
+    compose_env = os_compose_env()
     ensure_state_dir()
     with DOWN_LOG_PATH.open("a", encoding="utf-8") as log_file:
         subprocess.run(
@@ -1358,6 +1340,14 @@ def docker_compose_cmd(*parts: str) -> list[str]:
     return ["docker", "compose", "-f", "docker-compose.dev.yml", *parts]
 
 
+def os_compose_exec_cmd(*parts: str) -> list[str]:
+    return docker_compose_cmd("exec", "-T", OS_CONTAINER_SERVICE, *parts)
+
+
+def os_compose_zsh_cmd(command: str) -> list[str]:
+    return os_compose_exec_cmd("zsh", "-lc", command)
+
+
 def capture_command_output(
     cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None
 ) -> str:
@@ -1407,20 +1397,13 @@ def collect_os_process_status(config: dict[str, object]) -> dict[str, bool]:
         return status
 
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
-    compose_env = docker_compose_env({"INNATE_OS_ENV_FILE": str(GENERATED_OS_ENV_PATH)})
+    compose_env = os_compose_env()
     output = capture_command_output(
-        docker_compose_cmd(
-            "exec",
-            "-T",
-            OS_CONTAINER_SERVICE,
-            "zsh",
-            "-lc",
-            (
-                f"tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1; "
-                "echo tmux=$?; "
-                "pgrep -f rws_server >/dev/null; echo rosbridge=$?; "
-                "pgrep -f brain_client_node.py >/dev/null; echo brain=$?"
-            ),
+        os_compose_zsh_cmd(
+            f"tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1; "
+            "echo tmux=$?; "
+            "pgrep -f rws_server >/dev/null; echo rosbridge=$?; "
+            "pgrep -f brain_client_node.py >/dev/null; echo brain=$?"
         ),
         cwd=os_repo,
         env=compose_env,
@@ -1537,22 +1520,15 @@ def capture_os_brain_logs(config: dict[str, object], lines: int = 18) -> list[st
     if not container_running("innate-dev"):
         return ["OS container offline."]
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
-    compose_env = docker_compose_env({"INNATE_OS_ENV_FILE": str(GENERATED_OS_ENV_PATH)})
+    compose_env = os_compose_env()
     capture_flags = "-e -J -p" if USE_COLOR else "-J -p"
     output = capture_command_output(
-        docker_compose_cmd(
-            "exec",
-            "-T",
-            OS_CONTAINER_SERVICE,
-            "zsh",
-            "-lc",
-            (
-                f"if ! tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1; then "
-                "echo __INNATE_NO_TMUX_SESSION__; "
-                "exit 0; "
-                "fi; "
-                f"tmux capture-pane {capture_flags} -t {shlex.quote(TMUX_SESSION_NAME)}:nav-brain.1 -S -{lines} 2>/dev/null || true"
-            ),
+        os_compose_zsh_cmd(
+            f"if ! tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1; then "
+            "echo __INNATE_NO_TMUX_SESSION__; "
+            "exit 0; "
+            "fi; "
+            f"tmux capture-pane {capture_flags} -t {shlex.quote(TMUX_SESSION_NAME)}:nav-brain.1 -S -{lines} 2>/dev/null || true"
         ),
         cwd=os_repo,
         env=compose_env,
@@ -2296,9 +2272,56 @@ def ensure_sim_data(config: dict[str, object], *, allow_fetch: bool) -> None:
         )
 
 
+def sim_endpoint(port: str, path: str) -> str:
+    return f"http://localhost:{port}/{path.lstrip('/')}"
+
+
+def request_json(
+    url: str,
+    *,
+    timeout: float = 2.0,
+    payload: dict[str, object] | None = None,
+    method: str = "GET",
+) -> dict[str, object]:
+    data = None
+    headers = {}
+    request: str | Request = url
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if method != "GET" or payload is not None:
+        request = Request(url, data=data, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            if response.status != 200:
+                return {}
+            body = json.loads(response.read().decode("utf-8"))
+            return body if isinstance(body, dict) else {}
+    except (URLError, TimeoutError, json.JSONDecodeError):
+        return {}
+
+
+def sim_get_json(port: str, path: str, *, timeout: float = 2.0) -> dict[str, object]:
+    return request_json(sim_endpoint(port, path), timeout=timeout)
+
+
+def sim_post_json(
+    port: str,
+    path: str,
+    payload: dict[str, object],
+    *,
+    timeout: float = 2.0,
+) -> dict[str, object]:
+    return request_json(
+        sim_endpoint(port, path),
+        timeout=timeout,
+        payload=payload,
+        method="POST",
+    )
+
+
 def wait_for_simulator_http(port: str, timeout_seconds: float = 90.0) -> None:
     deadline = time.time() + timeout_seconds
-    url = f"http://localhost:{port}/video_feeds_ready"
     while time.time() < deadline:
         if read_sim_pid() is None:
             tail = tail_file(SIM_LOG_PATH, limit=80)
@@ -2309,18 +2332,14 @@ def wait_for_simulator_http(port: str, timeout_seconds: float = 90.0) -> None:
                 "Simulator backend exited while waiting for the HTTP endpoint.\n"
                 f"Recent log output:\n{tail}{hint}"
             )
-        try:
-            with urlopen(url, timeout=SIM_HTTP_REQUEST_TIMEOUT_SECONDS) as response:
-                if response.status != 200:
-                    time.sleep(SIM_HTTP_POLL_SECONDS)
-                    continue
-                payload = json.loads(response.read().decode("utf-8"))
-                if payload.get("ready"):
-                    return
-        except URLError:
-            time.sleep(SIM_HTTP_POLL_SECONDS)
-        except (TimeoutError, json.JSONDecodeError):
-            time.sleep(SIM_HTTP_POLL_SECONDS)
+        payload = sim_get_json(
+            port,
+            "video_feeds_ready",
+            timeout=SIM_HTTP_REQUEST_TIMEOUT_SECONDS,
+        )
+        if payload.get("ready"):
+            return
+        time.sleep(SIM_HTTP_POLL_SECONDS)
     tail = tail_file(SIM_LOG_PATH, limit=80)
     raise StackError(
         "Timed out waiting for the simulator HTTP endpoint.\n"
@@ -2329,24 +2348,11 @@ def wait_for_simulator_http(port: str, timeout_seconds: float = 90.0) -> None:
 
 
 def simulator_ready(port: str) -> bool:
-    try:
-        with urlopen(f"http://localhost:{port}/video_feeds_ready", timeout=2) as response:
-            if response.status != 200:
-                return False
-            payload = json.loads(response.read().decode("utf-8"))
-            return bool(payload.get("ready"))
-    except (URLError, TimeoutError, json.JSONDecodeError):
-        return False
+    return bool(sim_get_json(port, "video_feeds_ready").get("ready"))
 
 
 def fetch_simulator_metrics(port: str) -> dict[str, object]:
-    try:
-        with urlopen(f"http://localhost:{port}/stack_metrics", timeout=2) as response:
-            if response.status != 200:
-                return {}
-            return json.loads(response.read().decode("utf-8"))
-    except (URLError, TimeoutError, json.JSONDecodeError):
-        return {}
+    return sim_get_json(port, "stack_metrics")
 
 
 def fetch_brain_backend_status(port: str) -> dict[str, object]:
@@ -2356,14 +2362,7 @@ def fetch_brain_backend_status(port: str) -> dict[str, object]:
 
 
 def fetch_available_agents_payload(port: str) -> dict[str, object]:
-    try:
-        with urlopen(f"http://localhost:{port}/get_available_agents", timeout=2) as response:
-            if response.status != 200:
-                return {}
-            payload = json.loads(response.read().decode("utf-8"))
-            return payload if isinstance(payload, dict) else {}
-    except (URLError, TimeoutError, json.JSONDecodeError):
-        return {}
+    return sim_get_json(port, "get_available_agents")
 
 
 def available_agent_count(port: str) -> int:
@@ -2407,21 +2406,7 @@ def health_from_brain_backend(
 
 
 def set_simulator_log_mode(port: str, mode: str) -> bool:
-    payload = json.dumps({"mode": mode}).encode("utf-8")
-    request = Request(
-        f"http://localhost:{port}/sim_log_config",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=2) as response:
-            if response.status != 200:
-                return False
-            body = json.loads(response.read().decode("utf-8"))
-            return body.get("mode") == mode
-    except (URLError, TimeoutError, json.JSONDecodeError):
-        return False
+    return sim_post_json(port, "sim_log_config", {"mode": mode}).get("mode") == mode
 
 def container_running(container_name: str) -> bool:
     result = subprocess.run(
