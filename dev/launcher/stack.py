@@ -283,11 +283,6 @@ def print_banner() -> None:
     divider()
 
 
-def format_state(ok: bool, label: str) -> str:
-    color = GREEN if ok else YELLOW
-    return f"{color}{label}{NC}"
-
-
 def format_level(level: str, label: str) -> str:
     if level == "healthy":
         color = GREEN
@@ -649,12 +644,6 @@ def build_os_config_env(os_config: dict[str, object]) -> dict[str, str]:
     return env
 
 
-def parse_bool(value: str | None, default: bool) -> bool:
-    if value is None or value == "":
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def resolve_repo_path(value: str | None, default_name: str) -> Path:
     if value:
         path = Path(value).expanduser()
@@ -775,9 +764,6 @@ def get_config() -> dict[str, object]:
         "cloud_repo": cloud_repo,
         "cloud_port": "8765",
         "cloud_image": get_nested_str(sim_config, "cloud_agent", "image") or "",
-        "sim_auto_setup": True,
-        "sim_auto_build_frontend": True,
-        "sim_auto_fetch_data": True,
         "sim_visualization": get_nested_bool(sim_config, "display", "visualization")
         if get_nested_bool(sim_config, "display", "visualization") is not None
         else False,
@@ -787,7 +773,6 @@ def get_config() -> dict[str, object]:
         "os_image_auto": os_image_auto,
         "os_pull_image": os_pull_image if os_pull_image is not None else True,
         "os_always_build": os_always_build if os_always_build is not None else False,
-        "skip_local_cloud_auth": True,
     }
 
 
@@ -818,8 +803,7 @@ def build_os_env(config: dict[str, object]) -> Path:
 def build_cloud_env(config: dict[str, object]) -> Path:
     raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
     cloud_env: dict[str, str] = dict(raw_env)
-    if config["skip_local_cloud_auth"]:
-        cloud_env.setdefault("SKIP_AUTH", "true")
+    cloud_env.setdefault("SKIP_AUTH", "true")
     cloud_env.setdefault("ROBOT_TYPE", "sim")
 
     ensure_state_dir()
@@ -859,11 +843,6 @@ def ensure_sim_setup(config: dict[str, object], *, allow_setup: bool) -> Path:
                 "Simulator virtualenv is incomplete.\n"
                 f"Run `{CLI_SIM} setup` to repair {sim_repo / '.venv'}."
             )
-        if not config["sim_auto_setup"]:
-            raise StackError(
-                "Simulator virtualenv is missing required packages. "
-                f"Re-run {sim_repo / 'setup.sh'}. The launcher expects simulator setup to stay enabled."
-            )
         warn("Simulator virtualenv is incomplete. Re-running setup to repair it...")
         needs_setup = True
 
@@ -872,10 +851,6 @@ def ensure_sim_setup(config: dict[str, object], *, allow_setup: bool) -> Path:
             raise StackError(
                 "Simulator Python environment is not ready.\n"
                 f"Run `{CLI_SIM} setup` before `{CLI_SIM} up`."
-            )
-        if not config["sim_auto_setup"]:
-            raise StackError(
-                f"Simulator virtualenv missing at {sim_python}. Run {sim_repo / 'setup.sh'}"
             )
         log("Setting up sim Python environment...")
         run_logged(
@@ -898,10 +873,6 @@ def ensure_sim_setup(config: dict[str, object], *, allow_setup: bool) -> Path:
             raise StackError(
                 "Simulator frontend build is missing.\n"
                 f"Run `{CLI_SIM} setup` before `{CLI_SIM} up`."
-            )
-        if not config["sim_auto_build_frontend"]:
-            raise StackError(
-                f"Simulator frontend build missing at {dist_index}. Run `yarn build` in {frontend_dir}."
             )
         ensure_dependency("yarn")
         if not (frontend_dir / "node_modules").exists():
@@ -1792,44 +1763,6 @@ def health_from_transport(
     return (level, "live", label, max_depth)
 
 
-def dashboard_columns(config: dict[str, object], sim_running: bool) -> list[tuple[str, list[str]]]:
-    return [
-        ("SIMULATOR LOGS", capture_simulator_logs(sim_running)),
-        ("AGENT LOGS", capture_agent_logs(config)),
-        ("OS BRAIN LOGS", capture_os_brain_logs(config)),
-    ]
-
-
-def sparkline(
-    values: list[float],
-    *,
-    width: int,
-    minimum: float = 0.0,
-    maximum: float | None = None,
-) -> str:
-    ticks = "▁▂▃▄▅▆▇█"
-    if width <= 0:
-        return ""
-    if not values:
-        return " " * width
-
-    if len(values) >= width:
-        sampled = values[-width:]
-    else:
-        sampled = [values[0]] * (width - len(values)) + values
-
-    hi = maximum if maximum is not None else max(max(sampled), minimum + 1.0)
-    lo = minimum
-    span = max(hi - lo, 1e-6)
-
-    chars: list[str] = []
-    for value in sampled:
-        normalized = max(0.0, min(1.0, (value - lo) / span))
-        index = min(int(round(normalized * (len(ticks) - 1))), len(ticks) - 1)
-        chars.append(ticks[index])
-    return "".join(chars)
-
-
 def bar_chart_rows(
     values: list[float],
     *,
@@ -2311,14 +2244,6 @@ def ensure_sim_data(config: dict[str, object], *, allow_fetch: bool) -> None:
         raise StackError(
             "Required simulator scene data is missing.\n"
             f"{details}\nRun `{CLI_SIM} setup` to download it.\n"
-            f"See: {sim_repo / 'data' / 'README.md'}"
-        )
-
-    if not config["sim_auto_fetch_data"]:
-        details = "\n".join(f"- {label}: {path}" for label, path in missing_before)
-        raise StackError(
-            "Required simulator scene data is missing.\n"
-            f"{details}\nAutomatic simulator data bootstrap is expected to be enabled.\n"
             f"See: {sim_repo / 'data' / 'README.md'}"
         )
 
