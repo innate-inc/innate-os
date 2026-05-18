@@ -1003,73 +1003,10 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
         compose_values["INNATE_OS_IMAGE"] = os_image
     compose_env = os_compose_env(compose_values, env_file=os_env_file)
 
-    colcon_build_cmd = (
-        "colcon build --symlink-install "
-        "--cmake-args "
-        "-DCMAKE_C_COMPILER_LAUNCHER=ccache "
-        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
-    )
-    prebuilt_seed_cmd = (
-        "current_source_hash() { "
-        "find src -type f "
-        "! -path '*/__pycache__/*' "
-        "! -name '*.pyc' "
-        "-print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}'; "
-        "}; "
-        "seed_prebuilt_install() { "
-        "prebuilt_root=${INNATE_OS_PREBUILT_ROS_ROOT:-/opt/innate-os-prebuilt/ros2_ws}; "
-        "[ -f \"$prebuilt_root/install/setup.zsh\" ] || return 1; "
-        "[ -f \"$prebuilt_root/source.sha256\" ] || return 1; "
-        "[ -f \"$prebuilt_root/install.sha256\" ] || return 1; "
-        "if find \"$prebuilt_root/install\" -xtype l -print -quit | grep -q .; then "
-        "echo 'Prebuilt ROS workspace install has dangling symlinks; running colcon build.'; "
-        "return 1; "
-        "fi; "
-        "prebuilt_hash=$(cat \"$prebuilt_root/source.sha256\"); "
-        "prebuilt_install_hash=$(cat \"$prebuilt_root/install.sha256\"); "
-        "current_hash=$(current_source_hash); "
-        "if [ \"$current_hash\" != \"$prebuilt_hash\" ]; then "
-        "echo 'Local ROS source differs from the prebuilt image; running colcon build.'; "
-        "return 1; "
-        "fi; "
-        "if [ ! -f install/setup.zsh ] || "
-        "[ \"$(cat install/.innate-prebuilt-source.sha256 2>/dev/null)\" != \"$prebuilt_hash\" ] || "
-        "[ \"$(cat install/.innate-prebuilt-install.sha256 2>/dev/null)\" != \"$prebuilt_install_hash\" ]; then "
-        "echo 'Using prebuilt ROS workspace install from image.'; "
-        "mkdir -p install; "
-        "find install -mindepth 1 -maxdepth 1 -exec rm -rf {} +; "
-        "cp -a \"$prebuilt_root/install/.\" install/; "
-        "echo \"$prebuilt_hash\" > install/.innate-prebuilt-source.sha256; "
-        "echo \"$prebuilt_install_hash\" > install/.innate-prebuilt-install.sha256; "
-        "else "
-        "echo 'Prebuilt ROS workspace install is current.'; "
-        "fi; "
-        "echo 'ROS workspace install is current; skipping rebuild.'; "
-        "return 0; "
-        "}; "
-    )
     build_cmd = (
-        "source /opt/ros/humble/setup.zsh && cd ~/innate-os/ros2_ws && "
-        f"{prebuilt_seed_cmd}"
+        f"INNATE_OS_ALWAYS_BUILD={1 if config['os_always_build'] else 0} "
+        "~/innate-os/scripts/validate_sim_ros_install.zsh"
     )
-    if config["os_always_build"]:
-        build_cmd += colcon_build_cmd
-    else:
-        build_cmd += (
-            "if seed_prebuilt_install; then "
-            ":; "
-            "elif [ ! -f install/setup.zsh ] || "
-            "find install -xtype l -print -quit | grep -q . || "
-            "find src -type f -newer install/setup.zsh -print -quit | grep -q .; then "
-            "if [ -d install ] && find install -xtype l -print -quit | grep -q .; then "
-            "echo 'Removing unusable ROS install before rebuild.'; "
-            "rm -rf build install log; "
-            "fi; "
-            f"{colcon_build_cmd}; "
-            "else "
-            "echo 'ROS workspace install is current; skipping rebuild.'; "
-            "fi"
-        )
 
     ros_inputs_hash = compute_sim_image_inputs_hash(os_repo)
     ros_install_marker_matches = (
