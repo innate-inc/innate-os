@@ -19,29 +19,26 @@ Legacy file kept for backwards compatibility. Points to the new mode-specific fi
 
 ## Usage
 
-### Docker (Recommended)
+### Local Simulator
 
-The Dockerfile automatically handles mode selection:
+For simulator development, use the launcher from the repo root:
 
-**Simulation Mode (default):**
 ```bash
-docker compose -f docker-compose.dev.yml build
-# or
-docker build --build-arg MODE=simulation -t innate-os .
+./innate sim setup
+./innate sim up
 ```
+
+The launcher builds or pulls the appropriate simulation image and keeps Docker,
+ROS validation, and runtime readiness checks in one path.
+
+### Docker Image Development
+
+The Dockerfile still supports explicit mode selection when you are working on
+the image itself:
 
 **Hardware Mode (for physical robots):**
 ```bash
 docker build --build-arg MODE=hardware -t innate-os .
-```
-
-You can also change the mode in `docker-compose.dev.yml`:
-```yaml
-services:
-  innate:
-    build:
-      args:
-        MODE: hardware  # or 'simulation'
 ```
 
 ### Manual Installation

@@ -96,6 +96,12 @@ recordings/
 #other werid files
 *.mp4
 
+# Generated simulator/demo artifacts
+sim/pr_screenshots/
+sim/*_exported.stl
+sim/base_occupancy_grid*.png
+sim/occupancy_grid_with_entities*.png
+
 logs
 
 .last_map

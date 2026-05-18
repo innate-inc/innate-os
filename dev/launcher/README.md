@@ -20,7 +20,6 @@ By default, the launcher expects this layout:
 ```text
 innate-os/
 ├── innate
-├── stack                      # deprecated compatibility alias
 ├── .env
 ├── config/os.toml
 ├── dev/launcher/
@@ -67,8 +66,6 @@ To inspect the current state:
 ./innate sim logs brain
 ./innate sim logs simulator
 ```
-
-`./stack ...` still works as a deprecated compatibility alias and forwards into `./innate sim ...`.
 
 ## Config Files
 
