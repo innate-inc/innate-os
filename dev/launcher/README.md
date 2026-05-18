@@ -4,6 +4,7 @@ This directory holds the implementation of the local `innate` CLI. User-facing c
 
 The local workflow uses:
 
+- Python 3.11 or newer for the launcher
 - [`.env`](/Users/axelpeytavin/Projects/innate-repos/innate-os/.env) for secrets only
 - [`config/os.toml`](/Users/axelpeytavin/Projects/innate-repos/innate-os/config/os.toml.template) for optional non-secret OS overrides
 - [`sim/config.toml`](/Users/axelpeytavin/Projects/innate-repos/innate-os/sim/config.toml.template) for optional non-secret simulator overrides
