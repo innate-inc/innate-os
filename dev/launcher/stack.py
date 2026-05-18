@@ -81,6 +81,9 @@ SIM_IMAGE_INPUT_FILES = (
     "ros2_ws/apt-dependencies.hardware.txt",
     "ros2_ws/apt-dependencies.simulation.txt",
 )
+ROS_INSTALL_VALIDATION_INPUT_FILES = (
+    "scripts/validate_sim_ros_install.zsh",
+)
 OS_CONTAINER_SERVICE = "innate"
 OS_CONTAINER_TMUX_CMD = "./scripts/launch_sim_in_tmux.zsh --detach"
 ENV_KEYS_MOVED_TO_OS_CONFIG = {
@@ -689,6 +692,21 @@ def compute_sim_image_inputs_hash(repo_root: Path) -> str:
     return digest.hexdigest()
 
 
+def compute_ros_install_validation_hash(repo_root: Path) -> str:
+    digest = hashlib.sha256()
+    digest.update(compute_sim_image_inputs_hash(repo_root).encode("utf-8"))
+    for raw_path in ROS_INSTALL_VALIDATION_INPUT_FILES:
+        relative_path = Path(raw_path)
+        path = repo_root / relative_path
+        if not path.is_file():
+            continue
+        digest.update(relative_path.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def resolve_auto_os_image(repo_root: Path) -> str:
     return f"{DEFAULT_SIM_OS_IMAGE}:inputs-{compute_sim_image_inputs_hash(repo_root)}"
 
@@ -1008,7 +1026,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
         "~/innate-os/scripts/validate_sim_ros_install.zsh"
     )
 
-    ros_inputs_hash = compute_sim_image_inputs_hash(os_repo)
+    ros_inputs_hash = compute_ros_install_validation_hash(os_repo)
     ros_install_marker_matches = (
         ROS_INSTALL_STATE_PATH.exists()
         and ROS_INSTALL_STATE_PATH.read_text(encoding="utf-8").strip() == ros_inputs_hash
