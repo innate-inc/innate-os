@@ -58,6 +58,7 @@ OS_BUILD_LOG_PATH = LOG_DIR / "os-build.log"
 OS_SESSION_LOG_PATH = LOG_DIR / "os-session.log"
 DOWN_LOG_PATH = LOG_DIR / "down.log"
 SIM_PID_PATH = STATE_DIR / "simulator.pid"
+ROS_INSTALL_STATE_PATH = STATE_DIR / "ros-install.inputs.sha256"
 SIM_STARTUP_CHECK_DELAY_SECONDS = 0.25
 SIM_HTTP_POLL_SECONDS = 0.25
 SIM_HTTP_REQUEST_TIMEOUT_SECONDS = 0.5
@@ -972,8 +973,9 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     os_image = str(config["os_image"]).strip()
     os_image_auto = bool(config["os_image_auto"])
+    container_was_running = container_running("innate-dev")
 
-    if container_running("innate-dev"):
+    if container_was_running:
         log("Innate OS dev container already running.")
     else:
         up_cmd = ["docker", "compose", "-f", "docker-compose.dev.yml", "up", "-d"]
@@ -1087,27 +1089,68 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
             "fi"
         )
 
-    log("Building / validating the ROS workspace inside the container...")
-    run_logged(
-        [
-            "docker",
-            "compose",
-            "-f",
-            "docker-compose.dev.yml",
-            "exec",
-            "-T",
-            OS_CONTAINER_SERVICE,
-            "zsh",
-            "-lc",
-            build_cmd,
-        ],
-        cwd=os_repo,
-        env=compose_env,
-        log_path=OS_BUILD_LOG_PATH,
-        failure_message="Innate OS ROS workspace build failed.",
+    ros_inputs_hash = compute_sim_image_inputs_hash(os_repo)
+    ros_install_marker_matches = (
+        ROS_INSTALL_STATE_PATH.exists()
+        and ROS_INSTALL_STATE_PATH.read_text(encoding="utf-8").strip() == ros_inputs_hash
     )
+    ros_install_already_validated = False
+    if ros_install_marker_matches and not bool(config["os_always_build"]):
+        ros_install_already_validated = container_was_running or command_succeeds(
+            docker_compose_cmd(
+                "exec",
+                "-T",
+                OS_CONTAINER_SERVICE,
+                "zsh",
+                "-lc",
+                "test -f ~/innate-os/ros2_ws/install/setup.zsh",
+            ),
+            cwd=os_repo,
+            env=compose_env,
+        )
+    if ros_install_already_validated:
+        log("ROS workspace install already validated for this checkout.")
+    else:
+        log("Building / validating the ROS workspace inside the container...")
+        run_logged(
+            [
+                "docker",
+                "compose",
+                "-f",
+                "docker-compose.dev.yml",
+                "exec",
+                "-T",
+                OS_CONTAINER_SERVICE,
+                "zsh",
+                "-lc",
+                build_cmd,
+            ],
+            cwd=os_repo,
+            env=compose_env,
+            log_path=OS_BUILD_LOG_PATH,
+            failure_message="Innate OS ROS workspace build failed.",
+        )
+        ensure_state_dir()
+        ROS_INSTALL_STATE_PATH.write_text(f"{ros_inputs_hash}\n", encoding="utf-8")
 
     log("Launching ROS simulation nodes inside the OS container...")
+    launch_script = (
+        "INNATE_SIM_TMUX_SETTLE_SECONDS=${INNATE_SIM_TMUX_SETTLE_SECONDS:-0} "
+        "INNATE_SIM_TMUX_CLEANUP_SETTLE_SECONDS=${INNATE_SIM_TMUX_CLEANUP_SETTLE_SECONDS:-0} "
+        f"{OS_CONTAINER_TMUX_CMD}"
+    )
+    launch_wrapper = (
+        "rm -f /tmp/innate-os-session.log; "
+        f"nohup zsh -lc {shlex.quote(launch_script)} "
+        ">/tmp/innate-os-session.log 2>&1 </dev/null & "
+        f"for _ in {{1..60}}; do "
+        f"tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1 && "
+        "echo 'ROS tmux session launch started.' && exit 0; "
+        "sleep 0.05; "
+        "done; "
+        "cat /tmp/innate-os-session.log 2>/dev/null || true; "
+        "exit 1"
+    )
     launch_cmd = [
         "docker",
         "compose",
@@ -1118,23 +1161,14 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
         OS_CONTAINER_SERVICE,
         "zsh",
         "-lc",
-        OS_CONTAINER_TMUX_CMD,
+        launch_wrapper,
     ]
-    for attempt in range(1, 3):
-        run_logged(
-            launch_cmd,
-            cwd=os_repo,
-            env=compose_env,
-            log_path=OS_SESSION_LOG_PATH,
-            failure_message="Innate OS tmux session launch failed.",
-        )
-        if wait_for_os_session_ready(config):
-            return
-        warn(f"OS session did not come up cleanly after launch attempt {attempt}/2.")
-
-    raise StackError(
-        "Innate OS container is up, but the ROS/tmux session never became ready.\n"
-        f"Recent log output:\n{tail_file(OS_SESSION_LOG_PATH, limit=80)}"
+    run_logged(
+        launch_cmd,
+        cwd=os_repo,
+        env=compose_env,
+        log_path=OS_SESSION_LOG_PATH,
+        failure_message="Innate OS tmux session launch failed.",
     )
 
 
@@ -1390,90 +1424,147 @@ def tcp_port_open(port: int) -> bool:
         return sock.connect_ex(("127.0.0.1", port)) == 0
 
 
-def os_tmux_session_running(config: dict[str, object]) -> bool:
-    if not container_running("innate-dev"):
-        return False
+def collect_os_process_status(config: dict[str, object]) -> dict[str, bool]:
+    os_running = container_running("innate-dev")
+    status = {
+        "os_running": os_running,
+        "os_session_running": False,
+        "rosbridge_process_live": False,
+        "brain_process_live": False,
+    }
+    if not os_running:
+        return status
+
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     compose_env = docker_compose_env({"INNATE_OS_ENV_FILE": str(GENERATED_OS_ENV_PATH)})
-    return command_succeeds(
+    output = capture_command_output(
         docker_compose_cmd(
             "exec",
             "-T",
             OS_CONTAINER_SERVICE,
             "zsh",
             "-lc",
-            f"tmux has-session -t {TMUX_SESSION_NAME}",
+            (
+                f"tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1; "
+                "echo tmux=$?; "
+                "pgrep -f rws_server >/dev/null; echo rosbridge=$?; "
+                "pgrep -f brain_client_node.py >/dev/null; echo brain=$?"
+            ),
         ),
         cwd=os_repo,
         env=compose_env,
     )
+    values: dict[str, str] = {}
+    for line in output.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key.strip()] = value.strip()
+    status["os_session_running"] = values.get("tmux") == "0"
+    status["rosbridge_process_live"] = values.get("rosbridge") == "0"
+    status["brain_process_live"] = values.get("brain") == "0"
+    return status
 
 
-def os_process_running(config: dict[str, object], pattern: str) -> bool:
-    if not container_running("innate-dev"):
-        return False
-    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
-    compose_env = docker_compose_env({"INNATE_OS_ENV_FILE": str(GENERATED_OS_ENV_PATH)})
-    return command_succeeds(
-        docker_compose_cmd(
-            "exec",
-            "-T",
-            OS_CONTAINER_SERVICE,
-            "zsh",
-            "-lc",
-            f"pgrep -f {shlex.quote(pattern)} >/dev/null",
-        ),
-        cwd=os_repo,
-        env=compose_env,
+def os_runtime_ready(config: dict[str, object]) -> bool:
+    os_status = collect_os_process_status(config)
+    return (
+        os_status["os_session_running"]
+        and os_status["rosbridge_process_live"]
+        and os_status["brain_process_live"]
+        and tcp_port_open(9090)
     )
 
 
-def os_session_ready(config: dict[str, object]) -> bool:
-    if not container_running("innate-dev"):
-        return False
-    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
-    compose_env = docker_compose_env({"INNATE_OS_ENV_FILE": str(GENERATED_OS_ENV_PATH)})
-    ready_cmd = (
-        f"tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} && "
-        "pgrep -f rws_server >/dev/null && "
-        "pgrep -f brain_client_node.py >/dev/null"
-    )
-    return command_succeeds(
-        docker_compose_cmd(
-            "exec",
-            "-T",
-            OS_CONTAINER_SERVICE,
-            "zsh",
-            "-lc",
-            ready_cmd,
-        ),
-        cwd=os_repo,
-        env=compose_env,
-    )
-
-
-def wait_for_os_session_ready(
-    config: dict[str, object], *, timeout_seconds: float = 20.0
+def wait_for_os_runtime_ready(
+    config: dict[str, object], *, timeout_seconds: float = 8.0
 ) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        if os_session_ready(config):
+        if os_runtime_ready(config):
             return True
         time.sleep(OS_SESSION_READY_POLL_SECONDS)
     return False
 
 
+def format_startup_check(ok: bool, label: str, detail: str) -> str:
+    icon = "✓" if ok else "✗"
+    color = GREEN if ok else RED
+    return f"  {color}{icon}{NC} {BOLD}{label}:{NC} {detail}"
+
+
+def print_startup_checks(
+    config: dict[str, object],
+    *,
+    simulator_http_ready: bool,
+    brain_directive_count: int,
+) -> None:
+    simulator_port = str(config["raw_env"].get("SIMULATOR_PORT", "8000"))  # type: ignore[index]
+    os_status = collect_os_process_status(config)
+    rosbridge_live = (
+        os_status["os_session_running"]
+        and os_status["rosbridge_process_live"]
+        and tcp_port_open(9090)
+    )
+    agent_running = (
+        True if config["mode"] == HOSTED_MODE else container_running("stack-cloud-agent")
+    )
+    backend_status = fetch_brain_backend_status(simulator_port) if simulator_http_ready else {}
+    backend_level, backend_label = health_from_brain_backend(
+        backend_status, str(config["mode"])
+    )
+    checks = [
+        (
+            agent_running,
+            "Cloud agent",
+            "hosted mode" if config["mode"] == HOSTED_MODE else "local container",
+        ),
+        (
+            os_status["os_running"],
+            "OS container",
+            "running" if os_status["os_running"] else "down",
+        ),
+        (
+            os_status["os_session_running"],
+            "ROS session",
+            "tmux session running" if os_status["os_session_running"] else "missing",
+        ),
+        (
+            rosbridge_live,
+            "ROSBridge",
+            "ws://localhost:9090 live" if rosbridge_live else "not accepting connections",
+        ),
+        (
+            os_status["brain_process_live"],
+            "Brain process",
+            "brain_client_node.py running"
+            if os_status["brain_process_live"]
+            else "brain_client_node.py missing",
+        ),
+        (
+            brain_directive_count > 0,
+            "Brain directives",
+            f"{brain_directive_count} loaded"
+            if brain_directive_count > 0
+            else "not available yet",
+        ),
+        (
+            simulator_http_ready,
+            "Simulator HTTP",
+            f"http://localhost:{simulator_port} ready"
+            if simulator_http_ready
+            else f"http://localhost:{simulator_port} not ready",
+        ),
+        (backend_level == "healthy", "Hosted backend", backend_label),
+    ]
+
+    log("Startup checks:")
+    for ok, label, detail in checks:
+        print(format_startup_check(ok, label, detail))
+
+
 def capture_os_brain_logs(config: dict[str, object], lines: int = 18) -> list[str]:
     if not container_running("innate-dev"):
         return ["OS container offline."]
-    if not os_tmux_session_running(config):
-        recent_launch_output = tail_file(OS_SESSION_LOG_PATH, limit=max(lines - 3, 4))
-        return [
-            "OS tmux session is not running.",
-            "The ROS stack did not finish launching inside the container.",
-            f"Check: {CLI_SIM} logs os-session",
-            *recent_launch_output.splitlines(),
-        ][:lines]
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     compose_env = docker_compose_env({"INNATE_OS_ENV_FILE": str(GENERATED_OS_ENV_PATH)})
     capture_flags = "-e -J -p" if USE_COLOR else "-J -p"
@@ -1484,11 +1575,25 @@ def capture_os_brain_logs(config: dict[str, object], lines: int = 18) -> list[st
             OS_CONTAINER_SERVICE,
             "zsh",
             "-lc",
-            f"tmux capture-pane {capture_flags} -t {TMUX_SESSION_NAME}:nav-brain.1 -S -{lines}",
+            (
+                f"if ! tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1; then "
+                "echo __INNATE_NO_TMUX_SESSION__; "
+                "exit 0; "
+                "fi; "
+                f"tmux capture-pane {capture_flags} -t {shlex.quote(TMUX_SESSION_NAME)}:nav-brain.1 -S -{lines} 2>/dev/null || true"
+            ),
         ),
         cwd=os_repo,
         env=compose_env,
     )
+    if "__INNATE_NO_TMUX_SESSION__" in output:
+        recent_launch_output = tail_file(OS_SESSION_LOG_PATH, limit=max(lines - 3, 4))
+        return [
+            "OS tmux session is not running.",
+            "The ROS stack did not finish launching inside the container.",
+            f"Check: {CLI_SIM} logs os-session",
+            *recent_launch_output.splitlines(),
+        ][:lines]
     if not output:
         return ["No OS brain output yet."]
     return output.splitlines()[-lines:]
@@ -2320,15 +2425,36 @@ def fetch_simulator_metrics(port: str) -> dict[str, object]:
 
 
 def fetch_brain_backend_status(port: str) -> dict[str, object]:
+    payload = fetch_available_agents_payload(port)
+    status = payload.get("brain_backend_status")
+    return status if isinstance(status, dict) else {}
+
+
+def fetch_available_agents_payload(port: str) -> dict[str, object]:
     try:
         with urlopen(f"http://localhost:{port}/get_available_agents", timeout=2) as response:
             if response.status != 200:
                 return {}
             payload = json.loads(response.read().decode("utf-8"))
-            status = payload.get("brain_backend_status")
-            return status if isinstance(status, dict) else {}
+            return payload if isinstance(payload, dict) else {}
     except (URLError, TimeoutError, json.JSONDecodeError):
         return {}
+
+
+def available_agent_count(port: str) -> int:
+    payload = fetch_available_agents_payload(port)
+    agents = payload.get("agents")
+    return len(agents) if isinstance(agents, list) else 0
+
+
+def wait_for_brain_directives(port: str, *, timeout_seconds: float = 30.0) -> int:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        count = available_agent_count(port)
+        if count > 0:
+            return count
+        time.sleep(OS_SESSION_READY_POLL_SECONDS)
+    return 0
 
 
 def health_from_brain_backend(
@@ -2386,12 +2512,15 @@ def container_running(container_name: str) -> bool:
 def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
     simulator_port = str(config["raw_env"].get("SIMULATOR_PORT", "8000"))  # type: ignore[index]
     rosbridge_port = 9090
-    os_running = container_running("innate-dev")
-    os_session_running = os_tmux_session_running(config) if os_running else False
-    agent_running = container_running("stack-cloud-agent")
+    os_status = collect_os_process_status(config)
+    os_running = os_status["os_running"]
+    os_session_running = os_status["os_session_running"]
+    rosbridge_process_live = os_status["rosbridge_process_live"]
+    brain_process_live = os_status["brain_process_live"]
+    agent_running = (
+        False if config["mode"] == HOSTED_MODE else container_running("stack-cloud-agent")
+    )
     sim_running = simulator_ready(simulator_port)
-    rosbridge_process_live = os_process_running(config, "rws_server") if os_running else False
-    brain_process_live = os_process_running(config, "brain_client_node.py") if os_running else False
     rosbridge_live = (
         os_session_running
         and rosbridge_process_live
@@ -2832,6 +2961,29 @@ def cmd_up(
         simulator_port = config["raw_env"].get("SIMULATOR_PORT", "8000")  # type: ignore[index]
         log("Waiting for the simulator HTTP endpoint...")
         wait_for_simulator_http(str(simulator_port))
+        log("Waiting for ROS bridge and brain client...")
+        if not wait_for_os_runtime_ready(config):
+            print_startup_checks(
+                config,
+                simulator_http_ready=True,
+                brain_directive_count=available_agent_count(str(simulator_port)),
+            )
+            raise StackError(
+                "Simulator backend is up, but the OS ROS bridge/brain client did not become ready.\n"
+                f"Recent OS log output:\n{tail_file(OS_SESSION_LOG_PATH, limit=80)}"
+            )
+        log("Waiting for brain directives...")
+        brain_directive_count = wait_for_brain_directives(str(simulator_port))
+        print_startup_checks(
+            config,
+            simulator_http_ready=True,
+            brain_directive_count=brain_directive_count,
+        )
+        if brain_directive_count <= 0:
+            raise StackError(
+                "Simulator backend is up, but brain directives never became available.\n"
+                f"Recent brain log output:\n{os.linesep.join(capture_os_brain_logs(config, lines=40))}"
+            )
         success("Innate sim runtime is up.")
         if watch and sys.stdout.isatty():
             dashboard_result = watch_dashboard(config)
