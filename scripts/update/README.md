@@ -122,9 +122,9 @@ docker buildx version
 
 | Workflow | File | Trigger | Description |
 |----------|------|---------|-------------|
-| Build Release | `build-release.yml` | Push to main, tags, PRs, manual | Builds ROS2 workspace, creates release archives |
-| Docker Build | `docker-build.yml` | Push to main, tags, PRs, manual | Builds Docker image, pushes to ghcr.io |
-| Test Pose Image | `test-pose-image.yml` | Changes to brain_client | Runs Python tests |
+| Publish Simulator Images | `publish-sim-images.yml` | Push to main, manual | Builds and publishes simulator dependency/ROS images |
+| Integration Tests | `integration-test.yml` | Push, PRs, manual | Builds the test image and runs ROS integration tests |
+| Test Build | `test-build.yml` | PRs, manual | Builds the test image and verifies installed packages |
 
 ### Manually Triggering a Workflow
 
@@ -135,8 +135,8 @@ docker buildx version
 
 Or via CLI:
 ```bash
-gh workflow run build-release.yml --ref main
-gh workflow run docker-build.yml --ref main
+gh workflow run publish-sim-images.yml --ref main
+gh workflow run integration-test.yml --ref main
 ```
 
 ### Viewing Workflow Logs

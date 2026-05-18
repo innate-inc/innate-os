@@ -304,7 +304,7 @@ The backend exposes several API endpoints for controlling the simulation and int
 ├── main.py            # Main FastAPI application entry point
 ├── README.md              # This file
 ├── requirements.macos.txt # Python dependencies for macOS
-└── requirements.txt       # Python dependencies (if needed for other OS)
+└── requirements.ubuntu.txt # Python dependencies for Linux
 ```
 
 ## Development Notes
@@ -321,12 +321,6 @@ The backend exposes several API endpoints for controlling the simulation and int
     *   Ensure the backend is running.
     *   Ensure the Innate OS is running in Docker.
     *   Check browser console logs for errors.
-
-## VM Deployment
-
-For specific instructions on deploying this application to the `sim.innate.bot` VM environment (including `nginx` configuration and process management with `tmux`), please refer to the dedicated guide:
-
-[**docs/DEPLOYMENT.md**](docs/DEPLOYMENT.md)
 
 ---
 

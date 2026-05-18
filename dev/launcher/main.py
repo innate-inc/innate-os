@@ -252,32 +252,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def normalize_argv(argv: list[str]) -> list[str]:
-    if not argv:
-        return argv
-
-    legacy_commands = {
-        "init": "setup",
-        "setup": "setup",
-        "up": "up",
-        "down": "down",
-        "status": "status",
-        "logs": "logs",
-    }
-    first = argv[0]
-    if first in legacy_commands:
-        mapped = legacy_commands[first]
-        print(
-            f"[deprecated] Use `{CLI_SIM} {mapped}` instead of `{first}`.",
-            file=sys.stderr,
-        )
-        return ["sim", mapped, *argv[1:]]
-    return argv
-
-
 def main() -> int:
     parser = build_parser()
-    args = parser.parse_args(normalize_argv(sys.argv[1:]))
+    args = parser.parse_args(sys.argv[1:])
 
     try:
         config = get_config()

@@ -1,119 +1,42 @@
-# Simulation Mode Setup
+# Simulation Mode
 
-This document explains how to run Innate OS in simulation mode vs hardware mode.
+Use the local Innate CLI for simulator development:
 
-## Quick Start - Simulation
-
-### 1. Start Docker/OrbStack
-Make sure Docker or OrbStack is running on your Mac.
-
-### 2. Build and Run
 ```bash
-# Build the Docker image (defaults to simulation mode)
-docker compose -f docker-compose.dev.yml build
-
-# Start the containers
-docker compose -f docker-compose.dev.yml up -d
-
-# Enter the container
-docker compose -f docker-compose.dev.yml exec innate zsh -l
+./innate sim setup
+./innate sim up
 ```
 
-### 3. Launch Simulation
-Inside the container:
+The launcher owns the Docker container, ROS workspace validation, simulator
+backend, frontend build, optional cloud-agent mode, and startup dashboard.
+Avoid running the Docker Compose commands directly during normal development;
+that bypasses the launcher's caching and readiness checks.
+
+## Common Commands
+
 ```bash
-./scripts/launch_sim_in_tmux.zsh
+./innate sim up --once        # start, validate readiness, print one status snapshot
+./innate sim up --vis         # start with the native Genesis viewer
+./innate sim status           # show current runtime status
+./innate sim logs startup     # show captured startup logs
+./innate sim logs brain       # show recent brain-client logs
+./innate sim down             # stop the simulator runtime
 ```
 
-This starts all services in a tmux session with organized windows:
-- **Window 0 (zenoh)**: Zenoh router
-- **Window 1 (rosbridge-app)**: Rosbridge + App control
-- **Window 2 (webrtc)**: WebRTC transmitter
-- **Window 3 (nav-brain)**: Navigation + Brain client
-- **Window 4 (behavior)**: Arm manipulation
+## Docker Modes
 
-### 4. View in Browser
-Access RViz2 via noVNC:
-```
-http://localhost:8080/vnc.html
-```
+The default local Docker image is built in simulation mode. Hardware-specific
+packages are only installed for hardware images.
 
-### Tmux Commands
-- Switch windows: `Ctrl+b` then `n`/`p` or `0-4`
-- Detach: `Ctrl+b d`
-- Reattach: `tmux attach-session -t stack`
-
-## Switching Modes
-
-### Simulation Mode (Default)
-The default mode installs only common dependencies, skipping NVIDIA Jetson-specific packages.
-
-**docker-compose.dev.yml:**
-```yaml
-services:
-  innate:
-    build:
-      args:
-        MODE: simulation
-```
-
-### Hardware Mode
-For building images to run on physical robots (NVIDIA Jetson).
-
-**docker-compose.dev.yml:**
-```yaml
-services:
-  innate:
-    build:
-      args:
-        MODE: hardware
-```
-
-Or use command line:
 ```bash
 docker build --build-arg MODE=hardware -t innate-os .
 ```
 
-## What's Different?
-
-### Simulation Mode Includes:
-- All ROS2 packages for navigation, manipulation, vision
-- GStreamer for streaming
-- Common development tools
-- **Excludes**: NVIDIA VPI, NVIDIA L4T GStreamer
-- **Skips**: Git update checks (no credentials needed)
-
-### Hardware Mode Includes:
-- Everything in simulation mode
-- **Plus**: NVIDIA VPI for depth estimation
-- **Plus**: NVIDIA L4T GStreamer for hardware acceleration
-- **Plus**: Git update checks for system updates
-
-## Dependency Files
-
-See `ros2_ws/DEPENDENCIES_GUIDE.md` for details on:
-- `apt-dependencies.common.txt` - Shared dependencies
-- `apt-dependencies.hardware.txt` - Jetson-only dependencies
-
-## Troubleshooting
-
-### Docker daemon not running
-```
-Cannot connect to the Docker daemon at unix:///Users/.../.orbstack/run/docker.sock
-```
-**Solution**: Start OrbStack or Docker Desktop
-
-### Build fails with "Unable to locate package nvidia-*"
-**Solution**: You're trying to build in hardware mode on a non-Jetson system. Use `MODE=simulation` instead.
-
-### Tmux session not found
-```
-error connecting to /tmp/tmux-*/default (No such file or directory)
-```
-**Solution**: The simulation hasn't been launched yet. Run `./scripts/launch_sim_in_tmux.zsh`
+Use direct Docker commands only for image development or hardware packaging.
+For day-to-day simulator work, use `./innate sim ...`.
 
 ## Related Documentation
 
-- [README.md](README.md) - Main project documentation
-- [DEPENDENCIES_GUIDE.md](ros2_ws/DEPENDENCIES_GUIDE.md) - Dependency file details
-- [SYSTEM_SETUP.md](SYSTEM_SETUP.md) - Full system setup guide
+- [dev/launcher/README.md](dev/launcher/README.md) - Local simulator CLI
+- [ros2_ws/DEPENDENCIES_GUIDE.md](ros2_ws/DEPENDENCIES_GUIDE.md) - ROS system dependencies
+- [SYSTEM_SETUP.md](SYSTEM_SETUP.md) - Full robot system setup
