@@ -1419,13 +1419,57 @@ def collect_os_process_status(config: dict[str, object]) -> dict[str, bool]:
     return status
 
 
-def os_runtime_ready(config: dict[str, object]) -> bool:
+def config_simulator_port(config: dict[str, object]) -> str:
+    raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
+    return str(raw_env.get("SIMULATOR_PORT", "8000"))
+
+
+def collect_runtime_probe(
+    config: dict[str, object],
+    *,
+    simulator_http_ready: bool | None = None,
+) -> dict[str, object]:
+    simulator_port = config_simulator_port(config)
     os_status = collect_os_process_status(config)
+    sim_running = (
+        bool(simulator_http_ready)
+        if simulator_http_ready is not None
+        else simulator_ready(simulator_port)
+    )
+    rosbridge_live = (
+        os_status["os_session_running"]
+        and os_status["rosbridge_process_live"]
+        and tcp_port_open(9090)
+    )
+    agent_running = (
+        True if config["mode"] == HOSTED_MODE else container_running("stack-cloud-agent")
+    )
+    metrics = fetch_simulator_metrics(simulator_port) if sim_running else {}
+    backend_status = fetch_brain_backend_status(simulator_port) if sim_running else {}
+    backend_level, backend_label = health_from_brain_backend(
+        backend_status, str(config["mode"])
+    )
+    return {
+        "simulator_port": simulator_port,
+        "os_status": os_status,
+        "sim_running": sim_running,
+        "rosbridge_live": rosbridge_live,
+        "agent_running": agent_running,
+        "metrics": metrics,
+        "backend_status": backend_status,
+        "backend_level": backend_level,
+        "backend_label": backend_label,
+    }
+
+
+def os_runtime_ready(config: dict[str, object]) -> bool:
+    probe = collect_runtime_probe(config, simulator_http_ready=False)
+    os_status: dict[str, bool] = probe["os_status"]  # type: ignore[assignment]
     return (
         os_status["os_session_running"]
         and os_status["rosbridge_process_live"]
         and os_status["brain_process_live"]
-        and tcp_port_open(9090)
+        and bool(probe["rosbridge_live"])
     )
 
 
@@ -1452,23 +1496,12 @@ def print_startup_checks(
     simulator_http_ready: bool,
     brain_directive_count: int,
 ) -> None:
-    simulator_port = str(config["raw_env"].get("SIMULATOR_PORT", "8000"))  # type: ignore[index]
-    os_status = collect_os_process_status(config)
-    rosbridge_live = (
-        os_status["os_session_running"]
-        and os_status["rosbridge_process_live"]
-        and tcp_port_open(9090)
-    )
-    agent_running = (
-        True if config["mode"] == HOSTED_MODE else container_running("stack-cloud-agent")
-    )
-    backend_status = fetch_brain_backend_status(simulator_port) if simulator_http_ready else {}
-    backend_level, backend_label = health_from_brain_backend(
-        backend_status, str(config["mode"])
-    )
+    probe = collect_runtime_probe(config, simulator_http_ready=simulator_http_ready)
+    simulator_port = str(probe["simulator_port"])
+    os_status: dict[str, bool] = probe["os_status"]  # type: ignore[assignment]
     checks = [
         (
-            agent_running,
+            bool(probe["agent_running"]),
             "Cloud agent",
             "hosted mode" if config["mode"] == HOSTED_MODE else "local container",
         ),
@@ -1483,9 +1516,11 @@ def print_startup_checks(
             "tmux session running" if os_status["os_session_running"] else "missing",
         ),
         (
-            rosbridge_live,
+            bool(probe["rosbridge_live"]),
             "ROSBridge",
-            "ws://localhost:9090 live" if rosbridge_live else "not accepting connections",
+            "ws://localhost:9090 live"
+            if probe["rosbridge_live"]
+            else "not accepting connections",
         ),
         (
             os_status["brain_process_live"],
@@ -1508,7 +1543,11 @@ def print_startup_checks(
             if simulator_http_ready
             else f"http://localhost:{simulator_port} not ready",
         ),
-        (backend_level == "healthy", "Hosted backend", backend_label),
+        (
+            probe["backend_level"] == "healthy",
+            "Hosted backend",
+            str(probe["backend_label"]),
+        ),
     ]
 
     log("Startup checks:")
@@ -2420,27 +2459,20 @@ def container_running(container_name: str) -> bool:
 
 
 def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
-    simulator_port = str(config["raw_env"].get("SIMULATOR_PORT", "8000"))  # type: ignore[index]
-    rosbridge_port = 9090
-    os_status = collect_os_process_status(config)
+    probe = collect_runtime_probe(config)
+    simulator_port = str(probe["simulator_port"])
+    os_status: dict[str, bool] = probe["os_status"]  # type: ignore[assignment]
     os_running = os_status["os_running"]
     os_session_running = os_status["os_session_running"]
     rosbridge_process_live = os_status["rosbridge_process_live"]
     brain_process_live = os_status["brain_process_live"]
-    agent_running = (
-        False if config["mode"] == HOSTED_MODE else container_running("stack-cloud-agent")
-    )
-    sim_running = simulator_ready(simulator_port)
-    rosbridge_live = (
-        os_session_running
-        and rosbridge_process_live
-        and tcp_port_open(rosbridge_port)
-    )
-    metrics = fetch_simulator_metrics(simulator_port) if sim_running else {}
-    backend_status = fetch_brain_backend_status(simulator_port) if sim_running else {}
-    backend_level, backend_label = health_from_brain_backend(
-        backend_status, str(config["mode"])
-    )
+    agent_running = bool(probe["agent_running"])
+    sim_running = bool(probe["sim_running"])
+    rosbridge_live = bool(probe["rosbridge_live"])
+    metrics: dict[str, object] = probe["metrics"]  # type: ignore[assignment]
+    backend_status: dict[str, object] = probe["backend_status"]  # type: ignore[assignment]
+    backend_level = str(probe["backend_level"])
+    backend_label = str(probe["backend_label"])
     queue_sizes = metrics.get("queue_sizes", {}) if isinstance(metrics, dict) else {}
     sim_log_mode = (
         str(metrics.get("sim_log_mode", config.get("sim_log_mode", "quiet")))
@@ -2780,7 +2812,7 @@ def watch_dashboard(
 ) -> str:
     redraw = True
     history = DashboardHistory()
-    simulator_port = str(config["raw_env"].get("SIMULATOR_PORT", "8000"))  # type: ignore[index]
+    simulator_port = config_simulator_port(config)
     sim_log_mode = str(config.get("sim_log_mode", "quiet"))
     try:
         with (
@@ -2868,22 +2900,22 @@ def cmd_up(
         ensure_os_container(config, os_env_file)
         start_simulator(config, sim_python)
 
-        simulator_port = config["raw_env"].get("SIMULATOR_PORT", "8000")  # type: ignore[index]
+        simulator_port = config_simulator_port(config)
         log("Waiting for the simulator HTTP endpoint...")
-        wait_for_simulator_http(str(simulator_port))
+        wait_for_simulator_http(simulator_port)
         log("Waiting for ROS bridge and brain client...")
         if not wait_for_os_runtime_ready(config):
             print_startup_checks(
                 config,
                 simulator_http_ready=True,
-                brain_directive_count=available_agent_count(str(simulator_port)),
+                brain_directive_count=available_agent_count(simulator_port),
             )
             raise StackError(
                 "Simulator backend is up, but the OS ROS bridge/brain client did not become ready.\n"
                 f"Recent OS log output:\n{tail_file(OS_SESSION_LOG_PATH, limit=80)}"
             )
         log("Waiting for brain directives...")
-        brain_directive_count = wait_for_brain_directives(str(simulator_port))
+        brain_directive_count = wait_for_brain_directives(simulator_port)
         print_startup_checks(
             config,
             simulator_http_ready=True,
