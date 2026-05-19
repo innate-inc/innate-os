@@ -1,43 +1,77 @@
-# Innate OS convenience targets.
+# Innate OS Makefile
 #
-# The supported local workflow is `./innate sim ...`; keep make as a thin
-# compatibility layer so it cannot bypass launcher caching or startup checks.
+# Usage:
+#   make sim        - Start simulation (builds if needed, launches ROS nodes, attaches to tmux)
+#   make build      - Build Docker image
+#   make up         - Start containers
+#   make down       - Stop containers
+#   make shell      - Open a shell in the container
+#   make logs       - Show container logs
+#   make clean      - Stop containers and remove volumes
+#   make test       - Run integration tests in Docker
+#
 
-.PHONY: help setup sim up once down status logs build clean test
+COMPOSE_FILE := docker-compose.dev.yml
+CONTAINER := innate
+TMUX_SESSION := innate
 
+.PHONY: sim build up down shell logs clean help test
+
+# Default target
 help:
-	@echo "Innate OS - use ./innate sim ..."
-	@echo "  make setup   -> ./innate sim setup"
-	@echo "  make sim     -> ./innate sim up"
-	@echo "  make up      -> ./innate sim up"
-	@echo "  make once    -> ./innate sim up --once"
-	@echo "  make down    -> ./innate sim down"
-	@echo "  make status  -> ./innate sim status"
-	@echo "  make logs    -> ./innate sim logs startup"
-	@echo "  make test    -> Docker integration test"
+	@echo "Innate OS - Available commands:"
+	@echo "  make sim     - Start simulation (one-liner: build + up + launch + attach)"
+	@echo "  make build   - Clear build volumes + rebuild Docker image"
+	@echo "  make up      - Start containers"
+	@echo "  make down    - Stop containers"
+	@echo "  make shell   - Open a shell in the container"
+	@echo "  make logs    - Show container logs"
+	@echo "  make clean   - Stop containers and remove volumes"
+	@echo "  make test    - Run integration tests in Docker"
 
-setup:
-	./innate sim setup
+# One-liner to start simulation
+sim: down
+	@echo "Cleaning host build artifacts..."
+	rm -rf ros2_ws/build ros2_ws/install ros2_ws/log
+	@echo "Starting containers..."
+	docker compose -f $(COMPOSE_FILE) up -d
+	@sleep 2
+	@echo "Building ROS2 workspace..."
+	docker compose -f $(COMPOSE_FILE) exec $(CONTAINER) zsh -lc 'source /opt/ros/humble/setup.zsh && cd ~/innate-os/ros2_ws && colcon build'
+	@echo "Launching simulation nodes..."
+	docker compose -f $(COMPOSE_FILE) exec $(CONTAINER) zsh -lc './scripts/launch_sim_in_tmux.zsh && tmux attach -t $(TMUX_SESSION)'
 
-sim up:
-	./innate sim up
+# Build Docker image (clears build volumes to ensure fresh build)
+build: down
+	@echo "Removing build volumes..."
+	docker volume rm innate-os_ros2_ws_build innate-os_ros2_ws_install innate-os_ros2_ws_log 2>/dev/null || true
+	docker compose -f $(COMPOSE_FILE) build
 
-once:
-	./innate sim up --once
+# Start containers (build if needed)
+up:
+	@if ! docker compose -f $(COMPOSE_FILE) ps --status running 2>/dev/null | grep -q "$(CONTAINER)"; then \
+		echo "Starting containers..."; \
+		docker compose -f $(COMPOSE_FILE) up -d; \
+		sleep 2; \
+	fi
 
+# Stop containers
 down:
-	./innate sim down
+	docker compose -f $(COMPOSE_FILE) down
 
-status:
-	./innate sim status
+# Open a shell in the container
+shell:
+	docker compose -f $(COMPOSE_FILE) exec $(CONTAINER) zsh -l
 
+# Show container logs
 logs:
-	./innate sim logs startup
+	docker compose -f $(COMPOSE_FILE) logs -f
 
-build: once
+# Stop containers and remove volumes
+clean:
+	docker compose -f $(COMPOSE_FILE) down -v
 
-clean: down
-
+# Run integration tests in Docker
 test:
 	@echo "Running integration tests..."
 	docker build --progress=plain -t innate-os-test:latest -f Dockerfile.test . 2>&1
