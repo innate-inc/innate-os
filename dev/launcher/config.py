@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -203,6 +204,31 @@ def resolve_brain_websocket_uri(
     )
 
 
+def resolve_brain_client_version(repo_root: Path) -> str:
+    def git_output(*args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=repo_root,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return ""
+        return result.stdout.strip()
+
+    exact_tag = git_output("describe", "--exact-match", "--tags", "HEAD")
+    if exact_tag:
+        return exact_tag.splitlines()[0].strip()
+
+    tags = git_output("tag", "--list", "--sort=-version:refname")
+    if tags:
+        return f"{tags.splitlines()[0].strip()}-dev"
+
+    return "0.3.0-dev"
+
+
 def resolve_repo_path(value: str | None, default_name: str) -> Path:
     if value:
         path = Path(value).expanduser()
@@ -343,6 +369,7 @@ def get_config() -> dict[str, object]:
             cloud_port,
             os_config,
         ),
+        "brain_client_version": resolve_brain_client_version(os_repo),
         "cloud_image": get_nested_str(sim_config, "cloud_agent", "image") or "",
         "sim_visualization": get_nested_bool(sim_config, "display", "visualization")
         if get_nested_bool(sim_config, "display", "visualization") is not None

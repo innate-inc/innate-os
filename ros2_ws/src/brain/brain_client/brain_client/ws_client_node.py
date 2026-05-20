@@ -200,10 +200,14 @@ class WSClientNode(Node):
         # Declare parameters for websocket configuration.
         self.declare_parameter("websocket_uri", "ws://localhost:8765")
         self.declare_parameter("token", "MY_HARDCODED_TOKEN")
+        self.declare_parameter("client_version", "")
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
         )
         self.token = self.get_parameter("token").get_parameter_value().string_value
+        configured_client_version = (
+            self.get_parameter("client_version").get_parameter_value().string_value
+        ).strip()
         self.exit_event = threading.Event()
 
         self._ws_status_pub = self.create_publisher(
@@ -257,11 +261,13 @@ class WSClientNode(Node):
                 "WebSocket configured; waiting for connection request.",
             )
 
-        # Robot version from /robot/info
-        self._robot_version: Optional[str] = None
+        # Robot version from launch config first, then /robot/info when available.
+        self._robot_version: Optional[str] = configured_client_version or None
         self._robot_info_sub = self.create_subscription(
             String, "/robot/info", self._robot_info_callback, 10
         )
+        if self._robot_version:
+            self.get_logger().info(f"Robot version: {self._robot_version}")
 
         # Publisher for TTS messages
         self._tts_pub = self.create_publisher(String, "/brain/tts", 10)

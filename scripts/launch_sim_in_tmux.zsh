@@ -2,10 +2,11 @@
 
 # launch-sim-in-tmux.zsh
 # Launches simulation environment in organized tmux windows
-# Usage: ./scripts/launch-sim-in-tmux.zsh [--detach] [--brain-websocket-uri URI]
+# Usage: ./scripts/launch-sim-in-tmux.zsh [--detach] [--brain-websocket-uri URI] [--brain-client-version VERSION]
 
 ATTACH=1
 BRAIN_WEBSOCKET_URI=""
+BRAIN_CLIENT_VERSION=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --detach)
@@ -22,6 +23,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --brain-websocket-uri=*)
       BRAIN_WEBSOCKET_URI="${1#*=}"
+      shift
+      ;;
+    --brain-client-version)
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for --brain-client-version" >&2
+        exit 2
+      fi
+      BRAIN_CLIENT_VERSION="$2"
+      shift 2
+      ;;
+    --brain-client-version=*)
+      BRAIN_CLIENT_VERSION="${1#*=}"
       shift
       ;;
     *)
@@ -80,6 +93,10 @@ brain_client_cmd="ros2 launch brain_client brain_client.sim.launch.py"
 if [[ -n "$BRAIN_WEBSOCKET_URI" ]]; then
   brain_websocket_arg="websocket_uri:=$BRAIN_WEBSOCKET_URI"
   brain_client_cmd+=" ${(q)brain_websocket_arg}"
+fi
+if [[ -n "$BRAIN_CLIENT_VERSION" ]]; then
+  brain_client_version_arg="client_version:=$BRAIN_CLIENT_VERSION"
+  brain_client_cmd+=" ${(q)brain_client_version_arg}"
 fi
 tmux send-keys -t "${TMUX_TARGET_PREFIX}:nav-brain.1" "$brain_client_cmd" C-m
 echo "Started brain client..."
