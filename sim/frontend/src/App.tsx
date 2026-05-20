@@ -718,7 +718,7 @@ export default function App() {
             }
             data = (await refreshResponse.json()) as AvailableAgentsResponse;
           } else {
-            const response = await fetch(`${simBaseUrl}/get_available_agents`);
+            const response = await fetch(`${simBaseUrl}/available_agents`);
             if (!response.ok) {
               throw new Error(`HTTP ${response.status}`);
             }

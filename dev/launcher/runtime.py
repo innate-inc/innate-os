@@ -1248,14 +1248,10 @@ def fetch_simulator_metrics(port: str) -> dict[str, object]:
     return sim_get_json(port, "stack_metrics")
 
 
-def fetch_available_agents_payload(port: str) -> dict[str, object]:
-    return sim_get_json(port, "get_available_agents")
-
-
 def available_agent_count(port: str) -> int:
-    payload = fetch_available_agents_payload(port)
-    agents = payload.get("agents")
-    return len(agents) if isinstance(agents, list) else 0
+    metrics = fetch_simulator_metrics(port)
+    count = metrics.get("available_agent_count")
+    return count if isinstance(count, int) else 0
 
 
 def wait_for_brain_directives(port: str, *, timeout_seconds: float = 30.0) -> int:
