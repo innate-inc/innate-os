@@ -2,12 +2,34 @@
 
 # launch-sim-in-tmux.zsh
 # Launches simulation environment in organized tmux windows
-# Usage: ./scripts/launch-sim-in-tmux.zsh [--detach]
+# Usage: ./scripts/launch-sim-in-tmux.zsh [--detach] [--brain-websocket-uri URI]
 
 ATTACH=1
-if [[ "$1" == "--detach" ]]; then
-  ATTACH=0
-fi
+BRAIN_WEBSOCKET_URI=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --detach)
+      ATTACH=0
+      shift
+      ;;
+    --brain-websocket-uri)
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for --brain-websocket-uri" >&2
+        exit 2
+      fi
+      BRAIN_WEBSOCKET_URI="$2"
+      shift 2
+      ;;
+    --brain-websocket-uri=*)
+      BRAIN_WEBSOCKET_URI="${1#*=}"
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      exit 2
+      ;;
+  esac
+done
 
 SESSION_NAME="${INNATE_SIM_TMUX_SESSION:-innate}"
 # Use braces in tmux targets so zsh does not interpret ":foo" as a parameter modifier.
@@ -54,7 +76,12 @@ echo "Started navigation system..."
 settle_after_launch
 # Split and run brain client
 tmux split-window -t "${TMUX_TARGET_PREFIX}:nav-brain" -h
-tmux send-keys -t "${TMUX_TARGET_PREFIX}:nav-brain.1" "ros2 launch brain_client brain_client.sim.launch.py" C-m
+brain_client_cmd="ros2 launch brain_client brain_client.sim.launch.py"
+if [[ -n "$BRAIN_WEBSOCKET_URI" ]]; then
+  brain_websocket_arg="websocket_uri:=$BRAIN_WEBSOCKET_URI"
+  brain_client_cmd+=" ${(q)brain_websocket_arg}"
+fi
+tmux send-keys -t "${TMUX_TARGET_PREFIX}:nav-brain.1" "$brain_client_cmd" C-m
 echo "Started brain client..."
 
 # === Window 4: Behavior Server ===
