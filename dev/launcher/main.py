@@ -51,6 +51,7 @@ from runtime import (
     ensure_sim_data,
     ensure_sim_setup,
     print_startup_checks,
+    runtime_already_running,
     set_simulator_log_mode,
     start_cloud_agent,
     start_simulator,
@@ -82,6 +83,19 @@ def dashboard_callbacks() -> DashboardCallbacks:
     )
 
 
+def show_runtime_dashboard(config: dict[str, object], *, watch: bool) -> None:
+    if watch and sys.stdout.isatty():
+        dashboard_result = watch_dashboard(
+            config, dashboard_callbacks(), DASHBOARD_OPTIONS
+        )
+        if dashboard_result == "shutdown":
+            print()
+            log("Ctrl+C received. Stopping the Innate runtime...")
+            cmd_down(config)
+    else:
+        print_status(config, dashboard_callbacks(), DASHBOARD_OPTIONS)
+
+
 def cmd_up(
     config: dict[str, object],
     *,
@@ -94,6 +108,11 @@ def cmd_up(
             config = {**config, "sim_visualization": sim_visualization_override}
         print_banner()
         ensure_dependency("docker")
+        if runtime_already_running(config):
+            log("Innate sim runtime is already running. Opening dashboard...")
+            show_runtime_dashboard(config, watch=watch)
+            return
+
         os_env_file = build_os_env(config)
         cloud_env_file = build_cloud_env(config)
         sim_python = ensure_sim_setup(config, allow_setup=False)
@@ -131,16 +150,7 @@ def cmd_up(
                 f"Recent brain log output:\n{os.linesep.join(capture_os_brain_logs(config, lines=40))}"
             )
         success("Innate sim runtime is up.")
-        if watch and sys.stdout.isatty():
-            dashboard_result = watch_dashboard(
-                config, dashboard_callbacks(), DASHBOARD_OPTIONS
-            )
-            if dashboard_result == "shutdown":
-                print()
-                log("Ctrl+C received. Stopping the Innate runtime...")
-                cmd_down(config)
-        else:
-            print_status(config, dashboard_callbacks(), DASHBOARD_OPTIONS)
+        show_runtime_dashboard(config, watch=watch)
     except KeyboardInterrupt:
         print()
         if started:
