@@ -707,7 +707,6 @@ export default function App() {
     backendOverrideAppliedRef.current = true;
     stripBackendParamsFromUrl();
     agentsLoadStartedAtRef.current = Date.now();
-    hasAgentsRef.current = false;
     setAgents([]);
     setActiveAgent(null);
     setIsLoadingAgents(true);
