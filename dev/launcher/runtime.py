@@ -751,6 +751,17 @@ def wait_for_os_runtime_ready(
     return False
 
 
+def runtime_already_running(config: dict[str, object]) -> bool:
+    simulator_port = config_simulator_port(config)
+    if not simulator_ready(simulator_port):
+        return False
+    if not os_runtime_ready(config):
+        return False
+    if config["mode"] in LOCAL_MODES and not container_running("stack-cloud-agent"):
+        return False
+    return available_agent_count(simulator_port) > 0
+
+
 def format_startup_check(ok: bool, label: str, detail: str) -> str:
     icon = "✓" if ok else "✗"
     color = GREEN if ok else RED
