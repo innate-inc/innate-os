@@ -884,6 +884,27 @@ def print_log_columns(
         print("  ".join(column[row_index] for column in rendered_columns))
 
 
+def runtime_is_down(
+    config: dict[str, object],
+    options: DashboardOptions,
+    snapshot: dict[str, object],
+) -> bool:
+    local_agent_running = (
+        config["mode"] != options.hosted_mode and bool(snapshot["agent_running"])
+    )
+    return (
+        not bool(snapshot["os_running"])
+        and not bool(snapshot["sim_running"])
+        and not local_agent_running
+    )
+
+
+def print_down_status(options: DashboardOptions) -> None:
+    print("Innate sim runtime is down.")
+    print(f"Start it with: {options.cli_sim} up")
+    print(f"Historical logs: {options.cli_sim} logs startup")
+
+
 def render_status(
     config: dict[str, object],
     callbacks: DashboardCallbacks,
@@ -984,15 +1005,7 @@ def render_status(
     )
     used_lines += 1
 
-    local_agent_running = (
-        config["mode"] != options.hosted_mode and bool(snapshot["agent_running"])
-    )
-    runtime_down = (
-        not bool(snapshot["os_running"])
-        and not bool(snapshot["sim_running"])
-        and not local_agent_running
-    )
-    if runtime_down:
+    if runtime_is_down(config, options, snapshot):
         print()
         used_lines += 1
         print_dashboard_line(
@@ -1114,7 +1127,17 @@ def print_status(
     *,
     verbose: bool = False,
 ) -> None:
-    render_status(config, callbacks, options, verbose=verbose)
+    snapshot = callbacks.collect_status_snapshot(config)
+    if runtime_is_down(config, options, snapshot):
+        print_down_status(options)
+        if verbose:
+            print(f"Innate OS repo: {config['os_repo']}")
+            print(f"Innate sim repo: {config['sim_repo']}")
+            if config["cloud_repo"] is not None:
+                print(f"Local cloud-agent repo: {config['cloud_repo']}")
+            print(f"State dir: {options.state_dir}")
+        return
+    render_status(config, callbacks, options, verbose=verbose, snapshot=snapshot)
 
 
 @contextlib.contextmanager
