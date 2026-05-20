@@ -713,7 +713,11 @@ def collect_runtime_probe(
         True if config["mode"] == HOSTED_MODE else container_running("stack-cloud-agent")
     )
     metrics = fetch_simulator_metrics(simulator_port) if sim_running else {}
-    backend_status = fetch_brain_backend_status(simulator_port) if sim_running else {}
+    backend_status = {}
+    if isinstance(metrics, dict):
+        raw_backend_status = metrics.get("brain_backend_status")
+        if isinstance(raw_backend_status, dict):
+            backend_status = raw_backend_status
     backend_level, backend_label = health_from_brain_backend(
         backend_status, str(config["mode"])
     )
@@ -1139,12 +1143,6 @@ def simulator_ready(port: str) -> bool:
 
 def fetch_simulator_metrics(port: str) -> dict[str, object]:
     return sim_get_json(port, "stack_metrics")
-
-
-def fetch_brain_backend_status(port: str) -> dict[str, object]:
-    payload = fetch_available_agents_payload(port)
-    status = payload.get("brain_backend_status")
-    return status if isinstance(status, dict) else {}
 
 
 def fetch_available_agents_payload(port: str) -> dict[str, object]:
