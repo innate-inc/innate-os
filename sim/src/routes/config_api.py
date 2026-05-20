@@ -11,7 +11,12 @@ import uuid
 # ResetRobotCmd is used by the reset routes
 # SetEnvironmentCmd is used to send the config to the simulation node
 # BrainActiveCmd is used to activate/deactivate the brain via rosbridge
-from src.agent.types import ResetRobotCmd, SetEnvironmentCmd, BrainActiveCmd
+from src.agent.types import (
+    ResetRobotCmd,
+    SetEnvironmentCmd,
+    BrainActiveCmd,
+    BrainBackendConfigCmd,
+)
 from src.runtime_logging import SIM_LOG_MODES
 
 router = APIRouter()
@@ -52,6 +57,19 @@ class SetEnvironmentRequest(BaseModel):
 
 class SetSimLogConfigRequest(BaseModel):
     mode: str
+
+
+class BrainBackendConfigRequest(BaseModel):
+    websocket_uri: Optional[str] = None
+    service_key: Optional[str] = None
+
+    @root_validator(pre=True)
+    def check_backend_config_provided(cls, values):
+        websocket_uri = (values.get("websocket_uri") or "").strip()
+        service_key = (values.get("service_key") or "").strip()
+        if not websocket_uri and not service_key:
+            raise ValueError("Provide websocket_uri and/or service_key.")
+        return values
 
 
 def build_reset_pose(
@@ -177,6 +195,61 @@ async def set_environment(request: Request, body: SetEnvironmentRequest):
                 if body.config_name
                 else "direct config"
             ),
+        }
+    )
+
+
+@router.post("/brain_backend_config")
+def set_brain_backend_config(request: Request, body: BrainBackendConfigRequest):
+    """
+    Update the OS brain backend config for this running simulator session.
+    Secrets are forwarded in-memory only and are intentionally not logged.
+    """
+    shared_queues = request.app.state.SHARED_QUEUES
+    if shared_queues is None:
+        return JSONResponse(
+            {"status": "error", "message": "Simulation not initialized"},
+            status_code=503,
+        )
+
+    websocket_uri = (body.websocket_uri or "").strip() or None
+    service_key = (body.service_key or "").strip() or None
+    if websocket_uri and not (
+        websocket_uri.startswith("ws://") or websocket_uri.startswith("wss://")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="websocket_uri must start with ws:// or wss://",
+        )
+
+    try:
+        shared_queues.sim_to_agent.put_nowait(
+            BrainBackendConfigCmd(
+                websocket_uri=websocket_uri,
+                service_key=service_key,
+            )
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=503, detail=f"Failed to queue brain backend update: {e}"
+        )
+
+    status_message = "Brain backend config update queued."
+    if websocket_uri:
+        status_message = f"{status_message} URI will be updated."
+    if service_key:
+        status_message = f"{status_message} Service key provided."
+    print(
+        "[ConfigAPI] Brain backend config update queued "
+        f"(uri={'provided' if websocket_uri else 'unchanged'}, "
+        f"service_key={'provided' if service_key else 'unchanged'})"
+    )
+    return JSONResponse(
+        {
+            "status": "brain_backend_config_enqueued",
+            "message": status_message,
+            "websocket_uri": websocket_uri,
+            "service_key_configured": service_key is not None,
         }
     )
 

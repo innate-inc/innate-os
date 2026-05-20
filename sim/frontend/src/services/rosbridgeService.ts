@@ -247,6 +247,15 @@ export async function setBrainActiveDirect(
   await callRosbridgeService(wsUrl, "/brain/set_brain_active", { data: active });
 }
 
+export async function setBrainBackendConfigDirect(
+  wsUrl: string,
+  config: { websocket_uri?: string; service_key?: string },
+): Promise<void> {
+  await publishRosbridgeTopic(wsUrl, "/brain/backend_config", {
+    data: JSON.stringify(config),
+  });
+}
+
 export async function resetBrainDirect(
   wsUrl: string,
   memoryState?: string,
