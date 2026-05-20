@@ -375,6 +375,7 @@ def build_cloud_env(config: dict[str, object]) -> Path:
     cloud_env: dict[str, str] = dict(raw_env)
     cloud_env.setdefault("SKIP_AUTH", "true")
     cloud_env.setdefault("ROBOT_TYPE", "sim")
+    cloud_env.setdefault("PORT", str(config["cloud_port"]))
 
     ensure_state_dir()
     write_env_file(GENERATED_CLOUD_ENV_PATH, cloud_env)
