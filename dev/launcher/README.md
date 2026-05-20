@@ -31,12 +31,12 @@ innate-os/
 
 ```bash
 cd innate-os
-./innate sim setup
+./innate setup
 ./innate sim up
 ```
 
 If any local config file does not exist yet, the CLI creates it from its template automatically.
-`./innate sim setup` prepares the Python environment, builds the simulator frontend, and downloads the required ReplicaCAD scene datasets into `sim/data/` when needed. This requires Git LFS (`brew install git-lfs && git lfs install` on macOS).
+`./innate setup` prepares the Python environment, builds the simulator frontend, and downloads the required ReplicaCAD scene datasets into `sim/data/` when needed. In hosted brain mode, it also asks for an Innate service key and stores it in `.env`. This requires Git LFS (`brew install git-lfs && git lfs install` on macOS).
 On interactive terminals, `./innate sim up` drops into a live dashboard after startup. It keeps the simulator, agent, and brain logs visible together and adds a `btop`-style metrics band at the top. Use `d` to toggle the simulator's real runtime log mode between `quiet` and `debug` without restarting, `q` to leave the dashboard while keeping the runtime running, and `Ctrl+C` to stop the full runtime.
 
 If you want the native simulator viewer window for a run:
@@ -86,7 +86,7 @@ Everything else uses built-in defaults.
 ## Notes
 
 - The CLI uses the `sim/` frontend build instead of a separate Vite dev server so the runtime stays self-contained.
-- `./innate sim setup` always bootstraps the simulator environment, frontend build, and required scene data when needed.
+- `./innate setup` and `./innate sim setup` both bootstrap the simulator environment, frontend build, required scene data, and hosted brain credentials when needed.
 - `sim/config.toml` can make the simulator start with its native viewer window by default, while `./innate sim up --vis` is the one-run override.
 - The simulator starts in quiet log mode by default. Press `d` in the dashboard to switch between `quiet` and `debug` live.
 - `status` opens as a dashboard panel with simulator logs, local agent logs, and the OS brain pane side by side when your terminal is wide enough.
