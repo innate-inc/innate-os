@@ -813,7 +813,7 @@ def print_startup_checks(
         ),
         (
             probe["backend_level"] == "healthy",
-            "Hosted backend",
+            "Brain backend",
             str(probe["backend_label"]),
         ),
     ]
