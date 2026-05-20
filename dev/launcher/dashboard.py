@@ -730,6 +730,30 @@ def print_dashboard_line(text: str, width: int) -> None:
     print(truncate_ansi_line(text, width))
 
 
+def paint_terminal_frame(text: str) -> None:
+    term_size = shutil.get_terminal_size((150, 40))
+    width = term_size.columns
+    height = term_size.lines
+    if width <= 0 or height <= 0:
+        return
+
+    lines = text.splitlines()
+    visible_rows = min(len(lines), height)
+    output = ["\033[H"]
+
+    for row, line in enumerate(lines[:height], start=1):
+        output.append(f"\033[{row};1H")
+        output.append(truncate_ansi_line(line, width))
+        if USE_COLOR:
+            output.append(NC)
+        output.append("\033[K")
+
+    if visible_rows < height:
+        output.append(f"\033[{visible_rows + 1};1H\033[J")
+
+    sys.stdout.write("".join(output))
+
+
 def bounce_position(distance: int, tick: int) -> tuple[int, bool]:
     if distance <= 0:
         return (0, True)
@@ -1220,8 +1244,7 @@ def watch_dashboard(
                     last_log_rev = log_rev
                     redraw = True
                 if redraw or now >= next_refresh:
-                    sys.stdout.write("\033[H\033[J")
-                    sys.stdout.write(
+                    paint_terminal_frame(
                         render_status_text(
                             config,
                             callbacks,
