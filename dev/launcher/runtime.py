@@ -858,13 +858,17 @@ def capture_simulator_logs(
     *,
     lines: int = 18,
 ) -> list[str]:
+    if not simulator_live:
+        return [
+            "Simulator is down.",
+            f"Start it with: {CLI_SIM} up",
+            f"Historical logs: {CLI_SIM} logs simulator",
+        ][:lines]
     if not SIM_LOG_PATH.exists():
-        if simulator_live:
-            return [
-                "Simulator is healthy.",
-                "No launcher-owned simulator log exists for this run yet.",
-            ]
-        return ["Simulator log not created yet."]
+        return [
+            "Simulator is healthy.",
+            "No launcher-owned simulator log exists for this run yet.",
+        ]
     raw_lines = SIM_LOG_PATH.read_text(errors="replace").splitlines()
     selected = raw_lines[-lines:]
     return selected or ["Simulator log is empty."]
