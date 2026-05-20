@@ -208,7 +208,7 @@ def frontend_dependencies_are_stale(frontend_dir: Path) -> bool:
 
     install_marker = node_modules / ".yarn-integrity"
     if not install_marker.exists():
-        return False
+        return True
 
     dependency_inputs = [
         frontend_dir / rel_path
@@ -247,6 +247,11 @@ def ensure_frontend_build(frontend_dir: Path, *, allow_setup: bool) -> None:
             failure_message="Simulator frontend dependency install failed.",
         )
     elif frontend_dependencies_are_stale(frontend_dir):
+        if not allow_setup:
+            raise StackError(
+                "Simulator frontend dependencies are stale.\n"
+                f"Run `{CLI_SIM} setup` before `{CLI_SIM} up`."
+            )
         log("Updating simulator frontend dependencies...")
         run_logged(
             ["yarn", "install"],
