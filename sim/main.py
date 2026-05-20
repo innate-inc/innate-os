@@ -52,6 +52,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def disable_frontend_cache(request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 # Mount the React build directory
 frontend_build_path = os.path.join(os.path.dirname(__file__), "frontend", "dist")
 app.mount("/static", StaticFiles(directory=frontend_build_path), name="static")
