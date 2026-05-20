@@ -1,0 +1,118 @@
+name: Cleanup Simulator Images
+
+on:
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print what would be deleted without deleting package versions"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  packages: write
+
+concurrency:
+  group: cleanup-sim-images
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      ORG: innate-inc
+      KEEP_SHA_TAGS: "20"
+      KEEP_INPUTS_TAGS: "20"
+      KEEP_MANUAL_TAGS: "5"
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - innate-os-sim-deps
+          - innate-os-sim-ros
+
+    steps:
+      - name: Cleanup old GHCR versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package="${{ matrix.package }}"
+          keep_file="$(mktemp)"
+          versions_file="$(mktemp)"
+
+          gh api --paginate "/orgs/${ORG}/packages/container/${package}/versions" > "${versions_file}"
+
+          jq -r '
+            .[]
+            | select((.metadata.container.tags // []) | any(. == "main" or . == "buildcache"))
+            | .id
+          ' "${versions_file}" >> "${keep_file}"
+
+          jq -r --argjson keep "${KEEP_SHA_TAGS}" '
+            [
+              .[]
+              | select((.metadata.container.tags // []) | any(startswith("sha-")))
+              | {id, updated_at}
+            ]
+            | sort_by(.updated_at)
+            | reverse
+            | .[:$keep][]
+            | .id
+          ' "${versions_file}" >> "${keep_file}"
+
+          jq -r --argjson keep "${KEEP_INPUTS_TAGS}" '
+            [
+              .[]
+              | select((.metadata.container.tags // []) | any(startswith("inputs-")))
+              | {id, updated_at}
+            ]
+            | sort_by(.updated_at)
+            | reverse
+            | .[:$keep][]
+            | .id
+          ' "${versions_file}" >> "${keep_file}"
+
+          jq -r --argjson keep "${KEEP_MANUAL_TAGS}" '
+            [
+              .[]
+              | select((.metadata.container.tags // []) | any(startswith("manual-")))
+              | {id, updated_at}
+            ]
+            | sort_by(.updated_at)
+            | reverse
+            | .[:$keep][]
+            | .id
+          ' "${versions_file}" >> "${keep_file}"
+
+          sort -u -o "${keep_file}" "${keep_file}"
+
+          delete_file="$(mktemp)"
+          jq -r '.[] | .id' "${versions_file}" \
+            | grep -Fvx -f "${keep_file}" \
+            > "${delete_file}" || true
+
+          echo "Package: ${package}"
+          echo "Keeping $(wc -l < "${keep_file}" | xargs) package versions."
+          echo "Deleting $(wc -l < "${delete_file}" | xargs) package versions."
+
+          while IFS= read -r version_id; do
+            [ -n "${version_id}" ] || continue
+            tags="$(jq -r --argjson id "${version_id}" '
+              .[] | select(.id == $id) | (.metadata.container.tags // []) | join(",")
+            ' "${versions_file}")"
+            if [[ "${DRY_RUN}" == "true" ]]; then
+              echo "dry-run delete ${package} version ${version_id}: ${tags}"
+            else
+              echo "delete ${package} version ${version_id}: ${tags}"
+              gh api --method DELETE "/orgs/${ORG}/packages/container/${package}/versions/${version_id}"
+            fi
+          done < "${delete_file}"

@@ -1,0 +1,47 @@
+{
+    "environment_name": "Baked_sc0_staging_00",
+    "entities": [
+        {
+            "name": "casualty_1",
+            "asset_path": "data/assets/lying_man/Lying_man_0127.obj",
+            "poses": [
+                {
+                    "time": 0.0,
+                    "position": [
+                        -1.5,
+                        1.5,
+                        0.20
+                    ],
+                    "orientation": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                    ]
+                },
+                {
+                    "time": 1.0,
+                    "position": [
+                        -1.5,
+                        1.5,
+                        0.20
+                    ],
+                    "orientation": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                    ]
+                }
+            ],
+            "scale": [
+                0.010,
+                0.010,
+                0.010
+            ],
+            "fixed": true,
+            "collision": false,
+            "convexify": false
+        }
+    ]
+}

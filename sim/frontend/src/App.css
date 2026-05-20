@@ -1,0 +1,18 @@
+/* App-specific styles - most styling is handled by styled-components */
+
+/* Loading animation */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Voice button pulse animation */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(64, 31, 251, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(64, 31, 251, 0.8), 0 0 30px rgba(64, 31, 251, 0.4);
+  }
+}

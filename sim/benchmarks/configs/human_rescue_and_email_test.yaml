@@ -1,0 +1,38 @@
+# Environment section - defines the simulation environment
+environment:
+  name: "laying_man_corner"  # Using a default environment since original doesn't specify
+  initial_parameters:
+    - robot_position: [2.5, -5, 0.05]  # Ground-safe spawn height near the TV
+      robot_orientation: [0, 0, 0, 1]  #  Oriented towards the furniture beige
+    - robot_position: [0, 0, 0.05]  # Ground-safe spawn height at the origin
+      robot_orientation: [0, 0, -0.7, 0.7]  # Oriented towards the TV far away
+
+# Input section - based on the original example
+name: "human_rescue_and_email_test"
+description: "Test if the robot can get to a human and send an email"
+goal: "Robot should rescue a human and send an email"
+directive: "elder_safety_directive"
+duration: 300  # seconds
+
+# Initial memory state to load
+init_memory: "init_mem_human_rescue_and_email_test"
+
+# Message with updated format
+messages: []
+
+# Expectations section
+expectations:
+  checks:
+    - id: "email_sent"
+      type: "primitive"
+      description: "Check if robot sent an email using the send_email primitive"
+      primitive_name: "send_email"
+      verification_prompt: "Did the robot send an email using the send_email primitive?"
+
+  use_frames: true
+
+  # Success criterion - what the robot needs to achieve to succeed
+  success_criterion: "Did the robot successfully complete the human rescue task? The robot should have: 1) navigated to find a human in distress, 2) sent an email notification about the human's condition, and 3) demonstrated appropriate rescue behavior."
+
+  # Early stop criterion - conditions that should end the benchmark early
+  early_stop_criterion: "Should this benchmark be stopped early? Stop if the robot appears to be stuck or wandering aimlessly for more than 60 seconds without making progress toward finding the human or sending the email."

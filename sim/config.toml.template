@@ -1,0 +1,26 @@
+# Optional non-secret simulator overrides for `./innate sim`.
+# Copy to sim/config.toml or let `./innate sim setup` create it automatically.
+# Leave values commented to use the built-in defaults.
+
+[display]
+# visualization = true
+
+[os]
+# Optional prebuilt Innate OS image. By default, the launcher tries a
+# content-addressed prebuilt image matching this checkout, then falls back to
+# the local Docker build if no matching image is available.
+# image = "auto"
+#
+# Other options:
+# image = "local"
+# image = "ghcr.io/innate-inc/innate-os-sim-ros:main"
+# pull_image = true
+
+# Run `colcon build` on every startup. Leave false for incremental startup:
+# the launcher rebuilds only when ros2_ws/src is newer than install/setup.zsh.
+# always_build = false
+
+[cloud_agent]
+# mode = "hosted"
+# image = "ghcr.io/your-org/innate-cloud-agent:latest"
+# source_dir = "../innate-cloud-agent"

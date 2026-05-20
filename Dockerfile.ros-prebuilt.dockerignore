@@ -1,0 +1,6 @@
+# Keep the ROS-prebuilt image context scoped to workspace source only.
+**
+
+!ros2_ws/
+!ros2_ws/src/
+!ros2_ws/src/**

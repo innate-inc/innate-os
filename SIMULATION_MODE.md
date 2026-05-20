@@ -41,7 +41,7 @@ http://localhost:8080/vnc.html
 ### Tmux Commands
 - Switch windows: `Ctrl+b` then `n`/`p` or `0-4`
 - Detach: `Ctrl+b d`
-- Reattach: `tmux attach-session -t mars`
+- Reattach: `tmux attach-session -t stack`
 
 ## Switching Modes
 

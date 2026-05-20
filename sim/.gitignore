@@ -1,0 +1,12 @@
+venv*/
+.venv/
+*.pyc
+
+data/Replica*
+
+.DS_Store
+
+/*.png
+/*_exported.stl
+/pr_screenshots/
+.env

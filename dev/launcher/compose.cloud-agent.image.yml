@@ -1,0 +1,9 @@
+services:
+  cloud-agent:
+    container_name: stack-cloud-agent
+    image: ${STACK_CLOUD_AGENT_IMAGE}
+    env_file:
+      - ${STACK_CLOUD_AGENT_ENV_FILE}
+    ports:
+      - "${STACK_CLOUD_AGENT_PORT:-8765}:8765"
+    restart: unless-stopped

@@ -1,0 +1,12 @@
+# Blender 4.4.0 Beta MTL File: 'man.blend'
+# www.blender.org
+
+newmtl rp_nathan_animated_003_mat
+Ns 20.000006
+Ka 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd man.jpg
