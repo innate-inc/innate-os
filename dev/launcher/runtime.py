@@ -353,10 +353,16 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
         ROS_INSTALL_STATE_PATH.write_text(f"{ros_inputs_hash}\n", encoding="utf-8")
 
     log("Launching ROS simulation nodes inside the OS container...")
+    brain_websocket_uri = str(config.get("brain_websocket_uri", "")).strip()
+    brain_websocket_arg = ""
+    if brain_websocket_uri:
+        brain_websocket_arg = (
+            f" --brain-websocket-uri {shlex.quote(brain_websocket_uri)}"
+        )
     launch_script = (
         "INNATE_SIM_TMUX_SETTLE_SECONDS=${INNATE_SIM_TMUX_SETTLE_SECONDS:-0} "
         "INNATE_SIM_TMUX_CLEANUP_SETTLE_SECONDS=${INNATE_SIM_TMUX_CLEANUP_SETTLE_SECONDS:-0} "
-        f"{OS_CONTAINER_TMUX_CMD}"
+        f"{OS_CONTAINER_TMUX_CMD}{brain_websocket_arg}"
     )
     launch_wrapper = (
         "rm -f /tmp/innate-os-session.log; "

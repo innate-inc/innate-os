@@ -42,6 +42,7 @@ HOSTED_MODE = "hosted"
 LOCAL_IMAGE_MODE = "local-image"
 LOCAL_SOURCE_MODE = "local-source"
 LOCAL_MODES = {LOCAL_IMAGE_MODE, LOCAL_SOURCE_MODE}
+DEFAULT_HOSTED_BRAIN_WEBSOCKET_URI = "wss://agent-v1.innate.bot"
 AUTO_OS_IMAGE = "auto"
 LOCAL_OS_IMAGE = "local"
 DEFAULT_SIM_OS_IMAGE = "ghcr.io/innate-inc/innate-os-sim-ros"
@@ -182,13 +183,24 @@ def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
 
 def build_os_config_env(os_config: dict[str, object]) -> dict[str, str]:
     env: dict[str, str] = {}
-    if websocket_uri := get_nested_str(os_config, "brain", "websocket_uri"):
-        env["BRAIN_WEBSOCKET_URI"] = websocket_uri
     if telemetry_url := get_nested_str(os_config, "telemetry", "url"):
         env["TELEMETRY_URL"] = telemetry_url
     if cartesia_voice_id := get_nested_str(os_config, "voice", "cartesia_voice_id"):
         env["CARTESIA_VOICE_ID"] = cartesia_voice_id
     return env
+
+
+def resolve_brain_websocket_uri(
+    mode: str,
+    cloud_port: str,
+    os_config: dict[str, object],
+) -> str:
+    if mode in LOCAL_MODES:
+        return f"ws://host.docker.internal:{cloud_port}"
+    return (
+        get_nested_str(os_config, "brain", "websocket_uri")
+        or DEFAULT_HOSTED_BRAIN_WEBSOCKET_URI
+    )
 
 
 def resolve_repo_path(value: str | None, default_name: str) -> Path:
@@ -284,6 +296,7 @@ def get_config() -> dict[str, object]:
         )
     os_config = parse_toml_file(OS_CONFIG_PATH)
     sim_config = parse_toml_file(SIM_CONFIG_PATH)
+    cloud_port = "8765"
     os_config_env = build_os_config_env(os_config)
 
     merged_env = dict(raw_env)
@@ -324,7 +337,12 @@ def get_config() -> dict[str, object]:
         "os_repo": os_repo,
         "sim_repo": sim_repo,
         "cloud_repo": cloud_repo,
-        "cloud_port": "8765",
+        "cloud_port": cloud_port,
+        "brain_websocket_uri": resolve_brain_websocket_uri(
+            mode,
+            cloud_port,
+            os_config,
+        ),
         "cloud_image": get_nested_str(sim_config, "cloud_agent", "image") or "",
         "sim_visualization": get_nested_bool(sim_config, "display", "visualization")
         if get_nested_bool(sim_config, "display", "visualization") is not None
@@ -345,17 +363,7 @@ def write_env_file(path: Path, values: dict[str, str]) -> None:
 
 def build_os_env(config: dict[str, object]) -> Path:
     raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
-    mode = config["mode"]
-    cloud_port = config["cloud_port"]
-
     os_env: dict[str, str] = dict(raw_env)
-
-    if mode in LOCAL_MODES:
-        os_env["BRAIN_WEBSOCKET_URI"] = f"ws://host.docker.internal:{cloud_port}"
-    elif raw_env.get("BRAIN_WEBSOCKET_URI"):
-        os_env["BRAIN_WEBSOCKET_URI"] = raw_env["BRAIN_WEBSOCKET_URI"]
-    else:
-        os_env.pop("BRAIN_WEBSOCKET_URI", None)
 
     ensure_state_dir()
     write_env_file(GENERATED_OS_ENV_PATH, os_env)
@@ -371,4 +379,3 @@ def build_cloud_env(config: dict[str, object]) -> Path:
     ensure_state_dir()
     write_env_file(GENERATED_CLOUD_ENV_PATH, cloud_env)
     return GENERATED_CLOUD_ENV_PATH
-
