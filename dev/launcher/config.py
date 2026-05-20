@@ -74,6 +74,9 @@ ENV_KEYS_MOVED_TO_OS_CONFIG = {
     "TELEMETRY_URL",
     "CARTESIA_VOICE_ID",
 }
+SECRET_ENV_KEYS = (
+    "INNATE_SERVICE_KEY",
+)
 LOG_TARGETS = {
     "bootstrap": BOOTSTRAP_LOG_PATH,
     "frontend": FRONTEND_LOG_PATH,
@@ -128,7 +131,7 @@ def ensure_env_file() -> None:
     if ENV_PATH.exists():
         return
     shutil.copyfile(ENV_TEMPLATE_PATH, ENV_PATH)
-    warn(f"Created {ENV_PATH} from template. Add your Innate service key there if needed.")
+    warn(f"Created {ENV_PATH} from template.")
 
 
 def ensure_config_file(path: Path, template_path: Path) -> None:
@@ -408,6 +411,9 @@ def get_config() -> dict[str, object]:
         for key, value in user_env.items()
         if key not in ENV_KEYS_MOVED_TO_OS_CONFIG
     }
+    for key in SECRET_ENV_KEYS:
+        if value := os.environ.get(key, "").strip():
+            raw_env[key] = value
     if ignored_os_env_keys:
         warn(
             f"Ignoring deprecated OS config keys in {ENV_PATH.name}: "

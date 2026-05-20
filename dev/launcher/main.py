@@ -63,6 +63,7 @@ from runtime import (
     wait_for_os_runtime_ready,
     wait_for_simulator_http,
 )
+from setup_wizard import configure_hosted_service_key
 
 DASHBOARD_OPTIONS = DashboardOptions(
     hosted_mode=HOSTED_MODE,
@@ -197,6 +198,7 @@ def cmd_logs(target: str) -> None:
 
 def cmd_setup(config: dict[str, object]) -> None:
     print_banner()
+    configure_hosted_service_key(config)
     sim_python = ensure_sim_setup(config, allow_setup=True)
     ensure_sim_data(config, allow_fetch=True)
     success("Simulator setup is ready.")
@@ -212,6 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="Innate local development CLI."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser(
+        "setup",
+        prog=f"{CLI_ROOT} setup",
+        help="Prepare the simulator environment and first-run credentials",
+    )
     sim_parser = subparsers.add_parser(
         "sim",
         prog=f"{CLI_ROOT} sim",
@@ -221,7 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
     sim_subparsers.add_parser(
         "setup",
         prog=f"{CLI_SIM} setup",
-        help="Prepare the simulator environment, frontend build, and required scene data",
+        help="Prepare the simulator environment, frontend build, scene data, and credentials",
     )
     up_parser = sim_subparsers.add_parser(
         "up",
@@ -276,6 +283,10 @@ def main() -> int:
 
     try:
         config = get_config()
+
+        if args.command == "setup":
+            cmd_setup(config)
+            return 0
 
         if args.command != "sim":
             parser.error(f"Unknown command group: {args.command}")
