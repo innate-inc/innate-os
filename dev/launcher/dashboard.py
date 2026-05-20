@@ -56,6 +56,8 @@ ASCII_MIRROR_MAP = str.maketrans(
         "}": "{",
         "<": ">",
         ">": "<",
+        "C": "Ɔ",
+        "Ɔ": "C",
     }
 )
 
