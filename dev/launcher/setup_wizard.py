@@ -9,6 +9,7 @@ from config import ENV_PATH, HOSTED_MODE, warn, success
 from dashboard import BOLD, CYAN, DIM, GREEN, NC, YELLOW
 
 INNATE_SERVICE_KEY = "INNATE_SERVICE_KEY"
+MIN_SERVICE_KEY_LENGTH = 16
 SERVICE_KEY_PLACEHOLDERS = {
     "",
     "your_service_key_here",
@@ -28,7 +29,18 @@ def is_configured_secret(value: str | None) -> bool:
     if value is None:
         return False
     stripped = value.strip()
-    return stripped not in SERVICE_KEY_PLACEHOLDERS
+    return (
+        stripped not in SERVICE_KEY_PLACEHOLDERS
+        and len(stripped) >= MIN_SERVICE_KEY_LENGTH
+    )
+
+
+def _is_active_env_assignment(line: str, key: str) -> bool:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return False
+    assignment_key, _ = stripped.split("=", 1)
+    return assignment_key.strip() == key
 
 
 def _prompt_yes_no(question: str, *, default: bool = False) -> bool:
@@ -66,14 +78,10 @@ def write_env_value(path: Path, key: str, value: str) -> None:
     output: list[str] = []
 
     for line in lines:
-        stripped = line.strip()
-        uncommented = stripped[1:].strip() if stripped.startswith("#") else stripped
-        if uncommented.startswith(f"{key}="):
+        if _is_active_env_assignment(line, key):
             if not updated:
                 output.append(replacement)
                 updated = True
-            else:
-                output.append(line)
         else:
             output.append(line)
 
@@ -87,11 +95,15 @@ def write_env_value(path: Path, key: str, value: str) -> None:
 
 def _save_service_key(config: dict[str, object], service_key: str) -> None:
     write_env_value(ENV_PATH, INNATE_SERVICE_KEY, service_key)
+    _use_service_key_for_run(config, service_key)
+    success(f"Saved {INNATE_SERVICE_KEY} to {ENV_PATH}.")
+
+
+def _use_service_key_for_run(config: dict[str, object], service_key: str) -> None:
     raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
     user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
     raw_env[INNATE_SERVICE_KEY] = service_key
     user_env[INNATE_SERVICE_KEY] = service_key
-    success(f"Saved {INNATE_SERVICE_KEY} to {ENV_PATH}.")
 
 
 def configure_hosted_service_key(config: dict[str, object]) -> None:
@@ -105,6 +117,7 @@ def configure_hosted_service_key(config: dict[str, object]) -> None:
     shell_value = os.environ.get(INNATE_SERVICE_KEY, "").strip()
     if is_configured_secret(shell_value):
         if not is_interactive_terminal():
+            _use_service_key_for_run(config, shell_value)
             success(f"Using {INNATE_SERVICE_KEY} from the current shell.")
             return
         if _prompt_yes_no(
@@ -113,6 +126,7 @@ def configure_hosted_service_key(config: dict[str, object]) -> None:
         ):
             _save_service_key(config, shell_value)
         else:
+            _use_service_key_for_run(config, shell_value)
             success(f"Using {INNATE_SERVICE_KEY} from the current shell for this run.")
         return
 
