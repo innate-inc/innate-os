@@ -983,6 +983,42 @@ def render_status(
         term_width,
     )
     used_lines += 1
+
+    local_agent_running = (
+        config["mode"] != options.hosted_mode and bool(snapshot["agent_running"])
+    )
+    runtime_down = (
+        not bool(snapshot["os_running"])
+        and not bool(snapshot["sim_running"])
+        and not local_agent_running
+    )
+    if runtime_down:
+        print()
+        used_lines += 1
+        print_dashboard_line(
+            "  ".join(
+                [
+                    f"{BOLD}Runtime:{NC} {format_level('error', 'down')}",
+                    f"{BOLD}Start:{NC} {options.cli_sim} up",
+                    f"{BOLD}Historical logs:{NC} {options.cli_sim} logs startup",
+                ]
+            ),
+            term_width,
+        )
+        used_lines += 1
+        if verbose:
+            print()
+            print(divider_line(term_width))
+            print_dashboard_line(f"{BOLD}Innate OS repo:{NC} {config['os_repo']}", term_width)
+            print_dashboard_line(f"{BOLD}Innate sim repo:{NC} {config['sim_repo']}", term_width)
+            if config["cloud_repo"] is not None:
+                print_dashboard_line(
+                    f"{BOLD}Local cloud-agent repo:{NC} {config['cloud_repo']}",
+                    term_width,
+                )
+            print_dashboard_line(f"{BOLD}State dir:{NC} {options.state_dir}", term_width)
+        return
+
     if term_height - used_lines >= 12:
         marquee_lines = render_robot_marquee(term_width)
         for marquee_line in marquee_lines:
