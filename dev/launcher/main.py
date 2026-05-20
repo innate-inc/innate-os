@@ -148,6 +148,11 @@ def cmd_up(
             cmd_down(config)
         else:
             warn("Interrupted before the Innate runtime finished starting.")
+    except StackError:
+        if started:
+            warn("Startup failed. Stopping the partially-started Innate runtime...")
+            cmd_down(config)
+        raise
 
 
 def cmd_down(config: dict[str, object]) -> None:

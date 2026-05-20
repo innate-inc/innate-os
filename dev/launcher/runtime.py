@@ -731,13 +731,12 @@ def collect_runtime_probe(
 
 
 def os_runtime_ready(config: dict[str, object]) -> bool:
-    probe = collect_runtime_probe(config, simulator_http_ready=False)
-    os_status: dict[str, bool] = probe["os_status"]  # type: ignore[assignment]
+    os_status = collect_os_process_status(config)
     return (
         os_status["os_session_running"]
         and os_status["rosbridge_process_live"]
         and os_status["brain_process_live"]
-        and bool(probe["rosbridge_live"])
+        and tcp_port_open(9090)
     )
 
 

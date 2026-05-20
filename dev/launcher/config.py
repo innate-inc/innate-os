@@ -281,7 +281,7 @@ def compute_ros_install_validation_hash(repo_root: Path) -> str:
         relative_path = Path(raw_path)
         path = repo_root / relative_path
         if not path.is_file():
-            continue
+            raise StackError(f"ROS install validation script is missing: {relative_path}")
         digest.update(relative_path.as_posix().encode("utf-8"))
         digest.update(b"\0")
         digest.update(path.read_bytes())
