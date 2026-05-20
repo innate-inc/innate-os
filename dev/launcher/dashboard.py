@@ -730,26 +730,31 @@ def print_dashboard_line(text: str, width: int) -> None:
     print(truncate_ansi_line(text, width))
 
 
-def paint_terminal_frame(text: str) -> None:
+def paint_terminal_frame(text: str, *, top_padding_rows: int = 0) -> None:
     term_size = shutil.get_terminal_size((150, 40))
     width = term_size.columns
     height = term_size.lines
     if width <= 0 or height <= 0:
         return
 
+    top_padding_rows = max(0, min(top_padding_rows, max(height - 1, 0)))
+    render_height = max(height - top_padding_rows, 0)
     lines = text.splitlines()
-    visible_rows = min(len(lines), height)
+    visible_rows = min(len(lines), render_height)
     output = ["\033[H"]
 
-    for row, line in enumerate(lines[:height], start=1):
+    for row in range(1, top_padding_rows + 1):
+        output.append(f"\033[{row};1H\033[K")
+
+    for row, line in enumerate(lines[:render_height], start=top_padding_rows + 1):
         output.append(f"\033[{row};1H")
         output.append(truncate_ansi_line(line, width))
         if USE_COLOR:
             output.append(NC)
         output.append("\033[K")
 
-    if visible_rows < height:
-        output.append(f"\033[{visible_rows + 1};1H\033[J")
+    if visible_rows < render_height:
+        output.append(f"\033[{top_padding_rows + visible_rows + 1};1H\033[J")
 
     sys.stdout.write("".join(output))
 
@@ -939,6 +944,7 @@ def render_status(
     clear: bool = True,
     snapshot: dict[str, object] | None = None,
     cached_logs: dict[str, list[str]] | None = None,
+    reserved_top_rows: int = 0,
 ) -> None:
     if clear:
         clear_screen()
@@ -950,7 +956,7 @@ def render_status(
 
     term_size = shutil.get_terminal_size((150, 40))
     term_width = term_size.columns
-    term_height = term_size.lines
+    term_height = max(term_size.lines - reserved_top_rows, 1)
     used_lines = 0
 
     show_banner = term_height >= 48 and term_width >= 170
@@ -1128,6 +1134,7 @@ def render_status_text(
     history: DashboardHistory | None = None,
     snapshot: dict[str, object] | None = None,
     cached_logs: dict[str, list[str]] | None = None,
+    reserved_top_rows: int = 0,
 ) -> str:
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
@@ -1140,6 +1147,7 @@ def render_status_text(
             clear=False,
             snapshot=snapshot,
             cached_logs=cached_logs,
+            reserved_top_rows=reserved_top_rows,
         )
     return buffer.getvalue()
 
@@ -1221,6 +1229,7 @@ def watch_dashboard(
     history = DashboardHistory()
     simulator_port = config_simulator_port(config)
     sim_log_mode = str(config.get("sim_log_mode", "quiet"))
+    top_padding_rows = 1
     try:
         with (
             dashboard_runtime(config, callbacks, options) as runtime,
@@ -1253,7 +1262,9 @@ def watch_dashboard(
                             history=history,
                             snapshot=snapshot,
                             cached_logs=cached_logs,
-                        )
+                            reserved_top_rows=top_padding_rows,
+                        ),
+                        top_padding_rows=top_padding_rows,
                     )
                     sys.stdout.flush()
                     next_refresh = now + refresh_seconds
