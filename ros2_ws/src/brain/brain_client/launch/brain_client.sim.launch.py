@@ -24,6 +24,11 @@ def generate_launch_description():
         default_value=get_env("INNATE_SERVICE_KEY", ""),
         description="Token for authentication",
     )
+    client_version_arg = DeclareLaunchArgument(
+        "client_version",
+        default_value=get_env("INNATE_OS_CLIENT_VERSION", ""),
+        description="Robot OS client version for backend compatibility checks",
+    )
     image_topic_arg = DeclareLaunchArgument(
         "image_topic",
         default_value="/mars/main_camera/left/image_raw/compressed",
@@ -135,6 +140,7 @@ def generate_launch_description():
         + [
             websocket_uri_arg,
             token_arg,
+            client_version_arg,
             image_topic_arg,
             cmd_vel_topic_arg,
             depth_image_topic_arg,
@@ -163,6 +169,7 @@ def generate_launch_description():
                     {
                         "websocket_uri": LaunchConfiguration("websocket_uri"),
                         "token": LaunchConfiguration("token"),
+                        "client_version": LaunchConfiguration("client_version"),
                     }
                 ],
             ),

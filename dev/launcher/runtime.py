@@ -360,10 +360,16 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
         brain_websocket_arg = (
             f" --brain-websocket-uri {shlex.quote(brain_websocket_uri)}"
         )
+    brain_client_version = str(config.get("brain_client_version", "")).strip()
+    brain_client_version_arg = ""
+    if brain_client_version:
+        brain_client_version_arg = (
+            f" --brain-client-version {shlex.quote(brain_client_version)}"
+        )
     launch_script = (
         "INNATE_SIM_TMUX_SETTLE_SECONDS=${INNATE_SIM_TMUX_SETTLE_SECONDS:-0} "
         "INNATE_SIM_TMUX_CLEANUP_SETTLE_SECONDS=${INNATE_SIM_TMUX_CLEANUP_SETTLE_SECONDS:-0} "
-        f"{OS_CONTAINER_TMUX_CMD}{brain_websocket_arg}"
+        f"{OS_CONTAINER_TMUX_CMD}{brain_websocket_arg}{brain_client_version_arg}"
     )
     launch_wrapper = (
         "rm -f /tmp/innate-os-session.log; "
