@@ -10,7 +10,7 @@ SIM_LOG_MODES = (SIM_LOG_MODE_DEBUG, SIM_LOG_MODE_QUIET)
 DEFAULT_SIM_LOG_MODE = SIM_LOG_MODE_DEBUG
 
 NOISY_PATTERNS = [
-    re.compile(r'^INFO:\s+\d+\.\d+\.\d+\.\d+:\d+\s+-\s+"GET /(video_feeds_ready|stack_metrics)\b'),
+    re.compile(r'^INFO:\s+\d+\.\d+\.\d+\.\d+:\d+\s+-\s+"GET /(video_feeds_ready|stack_metrics|available_agents)\b'),
     re.compile(r"^\[ROSBridge\] Received navigation path with \d+ waypoints"),
     re.compile(r"^\[ROSBridge\] Target final orientation: "),
     re.compile(r"^\[NavController\] Received navigation path with \d+ waypoints"),

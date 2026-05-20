@@ -48,6 +48,24 @@ from config import (
     warn,
 )
 
+FRONTEND_BUILD_INPUT_FILES = (
+    ".env",
+    ".env.development",
+    ".env.local",
+    ".env.production",
+    "index.html",
+    "package.json",
+    "tsconfig.app.json",
+    "tsconfig.json",
+    "tsconfig.node.json",
+    "vite.config.js",
+    "vite.config.mjs",
+    "vite.config.ts",
+    "yarn.lock",
+)
+FRONTEND_BUILD_INPUT_DIRS = ("public", "src")
+FRONTEND_DEPENDENCY_INPUT_FILES = ("package.json", "yarn.lock")
+
 
 def run_logged(
     cmd: list[str],
@@ -147,10 +165,116 @@ def python_import_succeeds(python_path: Path, module: str) -> bool:
     return result.returncode == 0
 
 
+def frontend_build_inputs(frontend_dir: Path) -> list[Path]:
+    inputs: list[Path] = []
+    for rel_path in FRONTEND_BUILD_INPUT_FILES:
+        path = frontend_dir / rel_path
+        if path.is_file():
+            inputs.append(path)
+
+    for rel_dir in FRONTEND_BUILD_INPUT_DIRS:
+        path = frontend_dir / rel_dir
+        if not path.is_dir():
+            continue
+        inputs.extend(child for child in path.rglob("*") if child.is_file())
+
+    return inputs
+
+
+def newest_mtime(paths: list[Path]) -> float:
+    newest = 0.0
+    for path in paths:
+        try:
+            newest = max(newest, path.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def frontend_build_is_stale(frontend_dir: Path, dist_index: Path) -> bool:
+    if not dist_index.exists():
+        return True
+    try:
+        dist_mtime = dist_index.stat().st_mtime
+    except OSError:
+        return True
+    return newest_mtime(frontend_build_inputs(frontend_dir)) > dist_mtime
+
+
+def frontend_dependencies_are_stale(frontend_dir: Path) -> bool:
+    node_modules = frontend_dir / "node_modules"
+    if not node_modules.exists():
+        return True
+
+    install_marker = node_modules / ".yarn-integrity"
+    if not install_marker.exists():
+        return True
+
+    dependency_inputs = [
+        frontend_dir / rel_path
+        for rel_path in FRONTEND_DEPENDENCY_INPUT_FILES
+        if (frontend_dir / rel_path).is_file()
+    ]
+    return newest_mtime(dependency_inputs) > newest_mtime([install_marker])
+
+
+def ensure_frontend_build(frontend_dir: Path, *, allow_setup: bool) -> None:
+    dist_index = frontend_dir / "dist" / "index.html"
+    build_exists = dist_index.exists()
+    build_stale = frontend_build_is_stale(frontend_dir, dist_index)
+    if not build_stale:
+        return
+
+    if not build_exists and not allow_setup:
+        raise StackError(
+            "Simulator frontend build is missing.\n"
+            f"Run `{CLI_SIM} setup` before `{CLI_SIM} up`."
+        )
+
+    ensure_dependency("yarn")
+    node_modules = frontend_dir / "node_modules"
+    if not node_modules.exists():
+        if not allow_setup:
+            raise StackError(
+                "Simulator frontend dependencies are missing.\n"
+                f"Run `{CLI_SIM} setup` before `{CLI_SIM} up`."
+            )
+        log("Installing simulator frontend dependencies...")
+        run_logged(
+            ["yarn", "install"],
+            cwd=frontend_dir,
+            log_path=FRONTEND_LOG_PATH,
+            failure_message="Simulator frontend dependency install failed.",
+        )
+    elif frontend_dependencies_are_stale(frontend_dir):
+        if not allow_setup:
+            raise StackError(
+                "Simulator frontend dependencies are stale.\n"
+                f"Run `{CLI_SIM} setup` before `{CLI_SIM} up`."
+            )
+        log("Updating simulator frontend dependencies...")
+        run_logged(
+            ["yarn", "install"],
+            cwd=frontend_dir,
+            log_path=FRONTEND_LOG_PATH,
+            failure_message="Simulator frontend dependency install failed.",
+        )
+
+    if build_exists:
+        log("Simulator frontend build is stale. Rebuilding...")
+    else:
+        log("Building simulator frontend...")
+    run_logged(
+        ["yarn", "build"],
+        cwd=frontend_dir,
+        log_path=FRONTEND_LOG_PATH,
+        failure_message="Simulator frontend build failed.",
+    )
+
+
 def ensure_sim_setup(config: dict[str, object], *, allow_setup: bool) -> Path:
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
     frontend_dir = sim_repo / "frontend"
-    dist_index = frontend_dir / "dist" / "index.html"
     sim_python = sim_repo / ".venv" / "bin" / "python"
 
     ensure_dependency("python3")
@@ -187,28 +311,7 @@ def ensure_sim_setup(config: dict[str, object], *, allow_setup: bool) -> Path:
             f"Check: {BOOTSTRAP_LOG_PATH}"
         )
 
-    if not dist_index.exists():
-        if not allow_setup:
-            raise StackError(
-                "Simulator frontend build is missing.\n"
-                f"Run `{CLI_SIM} setup` before `{CLI_SIM} up`."
-            )
-        ensure_dependency("yarn")
-        if not (frontend_dir / "node_modules").exists():
-            log("Installing simulator frontend dependencies...")
-            run_logged(
-                ["yarn", "install"],
-                cwd=frontend_dir,
-                log_path=FRONTEND_LOG_PATH,
-                failure_message="Simulator frontend dependency install failed.",
-            )
-        log("Building simulator frontend...")
-        run_logged(
-            ["yarn", "build"],
-            cwd=frontend_dir,
-            log_path=FRONTEND_LOG_PATH,
-            failure_message="Simulator frontend build failed.",
-        )
+    ensure_frontend_build(frontend_dir, allow_setup=allow_setup)
 
     return sim_python
 
@@ -713,7 +816,11 @@ def collect_runtime_probe(
         True if config["mode"] == HOSTED_MODE else container_running("stack-cloud-agent")
     )
     metrics = fetch_simulator_metrics(simulator_port) if sim_running else {}
-    backend_status = fetch_brain_backend_status(simulator_port) if sim_running else {}
+    backend_status = {}
+    if isinstance(metrics, dict):
+        raw_backend_status = metrics.get("brain_backend_status")
+        if isinstance(raw_backend_status, dict):
+            backend_status = raw_backend_status
     backend_level, backend_label = health_from_brain_backend(
         backend_status, str(config["mode"])
     )
@@ -1141,20 +1248,10 @@ def fetch_simulator_metrics(port: str) -> dict[str, object]:
     return sim_get_json(port, "stack_metrics")
 
 
-def fetch_brain_backend_status(port: str) -> dict[str, object]:
-    payload = fetch_available_agents_payload(port)
-    status = payload.get("brain_backend_status")
-    return status if isinstance(status, dict) else {}
-
-
-def fetch_available_agents_payload(port: str) -> dict[str, object]:
-    return sim_get_json(port, "get_available_agents")
-
-
 def available_agent_count(port: str) -> int:
-    payload = fetch_available_agents_payload(port)
-    agents = payload.get("agents")
-    return len(agents) if isinstance(agents, list) else 0
+    metrics = fetch_simulator_metrics(port)
+    count = metrics.get("available_agent_count")
+    return count if isinstance(count, int) else 0
 
 
 def wait_for_brain_directives(port: str, *, timeout_seconds: float = 30.0) -> int:

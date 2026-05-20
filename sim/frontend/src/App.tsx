@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { IoMic, IoMicOff } from "react-icons/io5";
+import { IoMic, IoMicOff, IoRefresh } from "react-icons/io5";
 import styled from "styled-components";
 import "./App.css";
 import { ImageDisplay } from "./components/ImageDisplay";
@@ -243,6 +243,42 @@ const PanelHeader = styled.div`
   border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
   font-weight: 700;
   opacity: 0.7;
+`;
+
+const PanelHeaderRow = styled(PanelHeader)`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+`;
+
+const AgentReloadButton = styled.button<{ $isLoading?: boolean }>`
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: ${({ theme }) => theme.colors.foreground};
+  border: 1px solid ${({ theme }) => theme.colors.foreground};
+  cursor: pointer;
+  opacity: ${({ disabled }) => (disabled ? 0.35 : 0.85)};
+  transition:
+    background 0.1s,
+    color 0.1s,
+    opacity 0.1s;
+
+  svg {
+    animation: ${({ $isLoading }) =>
+      $isLoading ? "spin 0.8s linear infinite" : "none"};
+  }
+
+  &:hover:not(:disabled) {
+    background: ${({ theme }) => theme.colors.foreground};
+    color: ${({ theme }) => theme.colors.background};
+    opacity: 1;
+  }
 `;
 
 const BigStat = styled.div`
@@ -560,12 +596,11 @@ export default function App() {
     useState<BrainBackendStatus | null>(null);
   const [agentLoadTimedOut, setAgentLoadTimedOut] = useState(false);
   const [backendWarmupTimedOut, setBackendWarmupTimedOut] = useState(false);
-  const hasAgentsRef = useRef(false);
   const isFetchingAgentsRef = useRef(false);
-  const blockedAgentsFetchUntilRef = useRef(0);
   const agentsLoadStartedAtRef = useRef(Date.now());
   const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
+  const simBaseUrl = import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
   const [viewMode, setViewMode] = useState<"frontFocus" | "map">("frontFocus");
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
@@ -655,31 +690,40 @@ export default function App() {
     };
   }, [isVoiceActive]);
 
-  // Fetch available agents from the robot on mount
-  useEffect(() => {
-    const fetchAgents = async () => {
-      const now = Date.now();
-      if (
-        isFetchingAgentsRef.current ||
-        now < blockedAgentsFetchUntilRef.current
-      ) {
+  const fetchAgents = useCallback(
+    async ({ requestRefresh = false }: { requestRefresh?: boolean } = {}) => {
+      if (isFetchingAgentsRef.current) {
         return;
       }
 
+      agentsLoadStartedAtRef.current = Date.now();
       isFetchingAgentsRef.current = true;
+      setIsLoadingAgents(true);
+      setAgentLoadTimedOut(false);
+      setBackendWarmupTimedOut(false);
+
       try {
         let data: AvailableAgentsResponse;
 
         if (useDirectRobot) {
           data = await getAvailableAgentsDirect(robotWsUrl);
         } else {
-          const baseUrl =
-            import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
-          const response = await fetch(`${baseUrl}/get_available_agents`);
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+          if (requestRefresh) {
+            const refreshResponse = await fetch(
+              `${simBaseUrl}/reload_available_agents`,
+              { method: "POST" },
+            );
+            if (!refreshResponse.ok) {
+              throw new Error(`Reload failed: HTTP ${refreshResponse.status}`);
+            }
+            data = (await refreshResponse.json()) as AvailableAgentsResponse;
+          } else {
+            const response = await fetch(`${simBaseUrl}/available_agents`);
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+            data = (await response.json()) as AvailableAgentsResponse;
           }
-          data = (await response.json()) as AvailableAgentsResponse;
         }
 
         if (data.brain_backend_status) {
@@ -696,10 +740,8 @@ export default function App() {
 
         if (data.agents && data.agents.length > 0) {
           setAgents(data.agents);
-          hasAgentsRef.current = true;
           setAgentAvailabilityWarning(null);
           setAgentLoadTimedOut(false);
-          setIsLoadingAgents(false);
           setActiveAgent((previousAgentId) =>
             previousAgentId &&
             data.agents.some((agent) => agent.id === previousAgentId)
@@ -707,12 +749,9 @@ export default function App() {
               : null,
           );
         } else {
-          const timedOut = warningDelayElapsed;
-          setAgentLoadTimedOut(timedOut);
-          if (timedOut || backendWarnsNow) {
-            setIsLoadingAgents(false);
-          }
-          if (timedOut) {
+          setAgents([]);
+          setAgentLoadTimedOut(backendWarnsNow);
+          if (backendWarnsNow) {
             setAgentAvailabilityWarning(
               data.error ||
                 "The brain has not reported any available behavior agents yet.",
@@ -724,41 +763,26 @@ export default function App() {
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
-        if (useDirectRobot && errorMessage.includes("timed out")) {
-          blockedAgentsFetchUntilRef.current = Date.now() + 60_000;
-          console.warn(
-            "[Agents] /brain/get_available_directives timed out. Pausing retries for 60s.",
-          );
-        }
-        const timedOut =
-          Date.now() - agentsLoadStartedAtRef.current >=
-            AGENT_BACKEND_WARNING_DELAY_MS ||
-          errorMessage.includes("timed out");
-        setAgentLoadTimedOut(timedOut);
-        if (timedOut) {
-          setIsLoadingAgents(false);
-          setAgentAvailabilityWarning(
-            `Unable to load behavior agents: ${errorMessage}`,
-          );
-        }
+        setAgentLoadTimedOut(true);
+        setAgentAvailabilityWarning(
+          `Unable to load behavior agents: ${errorMessage}`,
+        );
         console.error("Error fetching agents:", error);
       } finally {
+        setIsLoadingAgents(false);
         isFetchingAgentsRef.current = false;
       }
-    };
+    },
+    [robotWsUrl, simBaseUrl, useDirectRobot],
+  );
 
-    fetchAgents();
+  useEffect(() => {
+    void fetchAgents();
+  }, [fetchAgents]);
 
-    // Poll until agents are loaded, and keep polling the sim backend so
-    // brain/cloud-agent connection warnings can recover without a refresh.
-    const intervalId = setInterval(async () => {
-      if (!useDirectRobot || !hasAgentsRef.current) {
-        await fetchAgents();
-      }
-    }, 5000);
-
-    return () => clearInterval(intervalId);
-  }, [useDirectRobot, robotWsUrl]);
+  const handleReloadAgents = useCallback(() => {
+    void fetchAgents({ requestRefresh: true });
+  }, [fetchAgents]);
 
   // Voice recognition functions
   const SILENCE_DURATION = 1500; // ms of silence before processing speech
@@ -1178,7 +1202,19 @@ export default function App() {
           </PanelSection>
 
           <PanelSection style={{ flex: 1 }}>
-            <PanelHeader>Behavior Agents</PanelHeader>
+            <PanelHeaderRow>
+              <span>Behavior Agents</span>
+              <AgentReloadButton
+                type="button"
+                onClick={handleReloadAgents}
+                disabled={isLoadingAgents}
+                $isLoading={isLoadingAgents}
+                aria-label="Reload behavior agents"
+                title="Reload behavior agents"
+              >
+                <IoRefresh size={15} />
+              </AgentReloadButton>
+            </PanelHeaderRow>
             <div>
               {agentWarning && (
                 <AgentNotice role="alert">

@@ -144,6 +144,14 @@ class DirectiveCmd(NamedTuple):
     directive: str
 
 
+class RefreshAgentsCmd(NamedTuple):
+    """
+    A command to refresh available robot directives from the brain.
+    """
+
+    pass
+
+
 class SetEnvironmentCmd(NamedTuple):
     """Command to set the simulation environment from a configuration dict."""
 

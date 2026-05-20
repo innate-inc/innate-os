@@ -1,13 +1,16 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse, JSONResponse
+import asyncio
 import time
 import cv2
 from typing import Optional
 from pydantic import BaseModel
 
-from src.agent.types import DirectiveCmd, BrainActiveCmd
+from src.agent.types import DirectiveCmd, BrainActiveCmd, RefreshAgentsCmd
 
 router = APIRouter()
+AGENT_REFRESH_TIMEOUT_SECONDS = 5.0
+AGENT_REFRESH_POLL_SECONDS = 0.05
 
 
 # Create a model for the reset robot request
@@ -20,6 +23,41 @@ class ResetRobotRequest(BaseModel):
 # Create a model for the brain activation request
 class SetBrainActiveRequest(BaseModel):
     active: bool
+
+
+def available_agents_payload(shared_queues, error: str | None = None) -> dict:
+    agents, current_agent_id, startup_agent_id = shared_queues.get_available_agents()
+    brain_backend_status = shared_queues.get_brain_backend_status()
+
+    agents_data = [
+        {
+            "id": agent.id,
+            "display_name": agent.display_name,
+            "display_icon": agent.display_icon,
+            "prompt": agent.prompt,
+            "skills": agent.skills,
+        }
+        for agent in agents
+    ]
+
+    payload = {
+        "agents": agents_data,
+        "current_agent_id": current_agent_id,
+        "startup_agent_id": startup_agent_id,
+        "brain_backend_status": brain_backend_status,
+    }
+    if error:
+        payload["error"] = error
+    return payload
+
+
+async def wait_for_available_agents_update(shared_queues, previous_updated_at: float):
+    deadline = time.time() + AGENT_REFRESH_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        await asyncio.sleep(AGENT_REFRESH_POLL_SECONDS)
+        if shared_queues.get_available_agents_updated_at() > previous_updated_at:
+            return True
+    return False
 
 
 def mjpeg_generator(shared_queues, camera_name="first_person"):
@@ -81,11 +119,52 @@ def stack_metrics(request: Request):
                 "queue_sizes": {},
                 "fps_by_camera": {},
                 "latest_frame_age_by_camera": {},
+                "brain_backend_status": {
+                    "state": "sim_not_initialized",
+                    "connected": False,
+                    "message": "Simulation not initialized",
+                    "updated_at": time.time(),
+                    "uri": None,
+                    "hosted": None,
+                },
             }
         )
 
     metrics = shared_queues.get_runtime_metrics()
-    return JSONResponse({"ready": True, **metrics})
+    return JSONResponse(
+        {
+            "ready": True,
+            **metrics,
+            "brain_backend_status": shared_queues.get_brain_backend_status(),
+        }
+    )
+
+
+@router.get("/available_agents")
+def available_agents(request: Request):
+    """Return the cached available directives list without asking ROS to refresh."""
+    shared_queues = request.app.state.SHARED_QUEUES
+
+    if shared_queues is None:
+        return JSONResponse(
+            {
+                "agents": [],
+                "current_agent_id": None,
+                "startup_agent_id": None,
+                "error": "Simulation not initialized",
+                "brain_backend_status": {
+                    "state": "sim_not_initialized",
+                    "connected": False,
+                    "message": "Simulation not initialized",
+                    "updated_at": time.time(),
+                    "uri": None,
+                    "hosted": None,
+                },
+            },
+            status_code=200,
+        )
+
+    return JSONResponse(available_agents_payload(shared_queues))
 
 
 @router.get("/video_feed", include_in_schema=False)
@@ -189,51 +268,41 @@ async def set_brain_active(request: Request, brain_request: SetBrainActiveReques
 @router.get("/get_available_agents")
 def get_available_agents(request: Request):
     """
-    Returns the list of available agents/directives from the robot brain.
+    Backwards-compatible alias for the cached available directives list.
     Each agent includes: id, display_name, display_icon, prompt, skills.
     Also returns the current and startup agent IDs.
     """
-    shared_queues = request.app.state.SHARED_QUEUES
+    return available_agents(request)
 
+
+@router.post("/reload_available_agents")
+async def reload_available_agents(request: Request):
+    """Ask the robot brain to refresh its available directives list."""
+    shared_queues = request.app.state.SHARED_QUEUES
     if shared_queues is None:
         return JSONResponse(
-            {
-                "agents": [],
-                "current_agent_id": None,
-                "startup_agent_id": None,
-                "error": "Simulation not initialized",
-                "brain_backend_status": {
-                    "state": "sim_not_initialized",
-                    "connected": False,
-                    "message": "Simulation not initialized",
-                    "updated_at": time.time(),
-                    "uri": None,
-                    "hosted": None,
-                },
-            },
-            status_code=200,
+            {"status": "no_shared_queues", "error": "Simulation not initialized"},
+            status_code=503,
         )
 
-    agents, current_agent_id, startup_agent_id = shared_queues.get_available_agents()
-    brain_backend_status = shared_queues.get_brain_backend_status()
-
-    # Convert AgentInfo namedtuples to dicts for JSON serialization
-    agents_data = [
-        {
-            "id": agent.id,
-            "display_name": agent.display_name,
-            "display_icon": agent.display_icon,
-            "prompt": agent.prompt,
-            "skills": agent.skills,
-        }
-        for agent in agents
-    ]
-
-    return JSONResponse(
-        {
-            "agents": agents_data,
-            "current_agent_id": current_agent_id,
-            "startup_agent_id": startup_agent_id,
-            "brain_backend_status": brain_backend_status,
-        }
-    )
+    try:
+        previous_updated_at = shared_queues.get_available_agents_updated_at()
+        shared_queues.sim_to_agent.put_nowait(RefreshAgentsCmd())
+        refreshed = await wait_for_available_agents_update(
+            shared_queues, previous_updated_at
+        )
+        payload = available_agents_payload(shared_queues)
+        payload["status"] = (
+            "agent_refresh_completed" if refreshed else "agent_refresh_pending"
+        )
+        payload["refresh_pending"] = not refreshed
+        if not refreshed:
+            payload["error"] = (
+                "Agent refresh was queued, but no updated directives arrived yet."
+            )
+        return JSONResponse(payload)
+    except Exception:
+        return JSONResponse(
+            {"status": "queue_full", "error": "Could not enqueue agent refresh"},
+            status_code=503,
+        )

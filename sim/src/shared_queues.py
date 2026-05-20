@@ -73,6 +73,7 @@ class SharedQueues:
         self.available_agents: List[AgentInfo] = []
         self.current_agent_id: Optional[str] = None
         self.startup_agent_id: Optional[str] = None
+        self.available_agents_updated_at: float = 0.0
         self.agents_lock = threading.Lock()  # For thread-safe updates
 
         # Store the brain client's cloud/local-agent websocket state for the UI.
@@ -164,6 +165,7 @@ class SharedQueues:
             self.available_agents = agents
             self.current_agent_id = current_agent_id
             self.startup_agent_id = startup_agent_id
+            self.available_agents_updated_at = time.time()
 
     def get_available_agents(
         self,
@@ -175,6 +177,11 @@ class SharedQueues:
                 self.current_agent_id,
                 self.startup_agent_id,
             )
+
+    def get_available_agents_updated_at(self) -> float:
+        """Thread-safe method to get the latest available-agents update time."""
+        with self.agents_lock:
+            return self.available_agents_updated_at
 
     def update_brain_backend_status(self, status: Dict[str, Any]):
         """Thread-safe method to update brain/cloud backend connection status."""
@@ -247,6 +254,10 @@ class SharedQueues:
                     now - timestamps[-1], 3
                 ) if timestamps else None
 
+        with self.agents_lock:
+            available_agent_count = len(self.available_agents)
+            available_agents_updated_at = self.available_agents_updated_at
+
         return {
             "queue_sizes": {
                 "sim_to_agent": self.sim_to_agent.qsize(),
@@ -258,5 +269,7 @@ class SharedQueues:
             },
             "fps_by_camera": fps_by_camera,
             "latest_frame_age_by_camera": latest_frame_age_by_camera,
+            "available_agent_count": available_agent_count,
+            "available_agents_updated_at": available_agents_updated_at,
             "sim_log_mode": self.get_sim_log_mode(),
         }
