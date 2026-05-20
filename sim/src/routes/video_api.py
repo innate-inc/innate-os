@@ -5,7 +5,7 @@ import cv2
 from typing import Optional
 from pydantic import BaseModel
 
-from src.agent.types import DirectiveCmd, BrainActiveCmd
+from src.agent.types import DirectiveCmd, BrainActiveCmd, RefreshAgentsCmd
 
 router = APIRouter()
 
@@ -81,11 +81,25 @@ def stack_metrics(request: Request):
                 "queue_sizes": {},
                 "fps_by_camera": {},
                 "latest_frame_age_by_camera": {},
+                "brain_backend_status": {
+                    "state": "sim_not_initialized",
+                    "connected": False,
+                    "message": "Simulation not initialized",
+                    "updated_at": time.time(),
+                    "uri": None,
+                    "hosted": None,
+                },
             }
         )
 
     metrics = shared_queues.get_runtime_metrics()
-    return JSONResponse({"ready": True, **metrics})
+    return JSONResponse(
+        {
+            "ready": True,
+            **metrics,
+            "brain_backend_status": shared_queues.get_brain_backend_status(),
+        }
+    )
 
 
 @router.get("/video_feed", include_in_schema=False)
@@ -237,3 +251,23 @@ def get_available_agents(request: Request):
             "brain_backend_status": brain_backend_status,
         }
     )
+
+
+@router.post("/reload_available_agents")
+def reload_available_agents(request: Request):
+    """Ask the robot brain to refresh its available directives list."""
+    shared_queues = request.app.state.SHARED_QUEUES
+    if shared_queues is None:
+        return JSONResponse(
+            {"status": "no_shared_queues", "error": "Simulation not initialized"},
+            status_code=503,
+        )
+
+    try:
+        shared_queues.sim_to_agent.put_nowait(RefreshAgentsCmd())
+        return {"status": "agent_refresh_enqueued"}
+    except Exception:
+        return JSONResponse(
+            {"status": "queue_full", "error": "Could not enqueue agent refresh"},
+            status_code=503,
+        )

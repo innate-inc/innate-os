@@ -23,6 +23,7 @@ from src.agent.types import (
     DirectiveCmd,
     ResetRobotCmd,
     BrainActiveCmd,
+    RefreshAgentsCmd,
     NavigationPathMsg,
     NavigationWaypoint,
     NavigationCancelMsg,
@@ -658,6 +659,14 @@ async def outbound_data_loop(ws, shared_queues, service_call_queue):
 
                 print(f"[ROSBridge] Setting brain active: {msg.active}")
                 await service_call_queue.put(brain_active_srv)
+
+            elif isinstance(msg, RefreshAgentsCmd):
+                refresh_agents_srv = rosbridge_call_service(
+                    "/brain/get_available_directives",
+                    "brain_messages/srv/GetAvailableDirectives",
+                )
+                print("[ROSBridge] Refreshing available brain directives")
+                await service_call_queue.put(refresh_agents_srv)
 
             elif isinstance(msg, dict) and "clock" in msg:
                 outbound = rosbridge_publish("/clock", msg)
