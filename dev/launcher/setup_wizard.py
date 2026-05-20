@@ -5,17 +5,10 @@ import os
 import sys
 from pathlib import Path
 
-from config import ENV_PATH, HOSTED_MODE, warn, success
+from config import ENV_PATH, HOSTED_MODE, is_configured_secret_value, warn, success
 from dashboard import BOLD, CYAN, DIM, GREEN, NC, YELLOW
 
 INNATE_SERVICE_KEY = "INNATE_SERVICE_KEY"
-MIN_SERVICE_KEY_LENGTH = 16
-SERVICE_KEY_PLACEHOLDERS = {
-    "",
-    "your_service_key_here",
-    "your-innate-service-key",
-    "your-generated-token-here",
-}
 
 
 def is_interactive_terminal() -> bool:
@@ -26,13 +19,7 @@ def is_interactive_terminal() -> bool:
 
 
 def is_configured_secret(value: str | None) -> bool:
-    if value is None:
-        return False
-    stripped = value.strip()
-    return (
-        stripped not in SERVICE_KEY_PLACEHOLDERS
-        and len(stripped) >= MIN_SERVICE_KEY_LENGTH
-    )
+    return is_configured_secret_value(INNATE_SERVICE_KEY, value)
 
 
 def _is_active_env_assignment(line: str, key: str) -> bool:

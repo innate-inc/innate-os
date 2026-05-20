@@ -69,6 +69,17 @@ ENV_KEYS_MOVED_TO_OS_CONFIG = {
 SECRET_ENV_KEYS = (
     "INNATE_SERVICE_KEY",
 )
+SECRET_ENV_PLACEHOLDERS = {
+    "INNATE_SERVICE_KEY": {
+        "",
+        "your_service_key_here",
+        "your-innate-service-key",
+        "your-generated-token-here",
+    },
+}
+SECRET_ENV_MIN_LENGTHS = {
+    "INNATE_SERVICE_KEY": 16,
+}
 LOG_TARGETS = {
     "bootstrap": BOOTSTRAP_LOG_PATH,
     "frontend": FRONTEND_LOG_PATH,
@@ -151,6 +162,16 @@ def parse_env_file(path: Path) -> dict[str, str]:
             value = value[1:-1]
         env[key.strip()] = value
     return env
+
+
+def is_configured_secret_value(key: str, value: str | None) -> bool:
+    if value is None:
+        return False
+    stripped = value.strip()
+    if stripped in SECRET_ENV_PLACEHOLDERS.get(key, {""}):
+        return False
+    minimum_length = SECRET_ENV_MIN_LENGTHS.get(key, 1)
+    return len(stripped) >= minimum_length
 
 
 def parse_toml_file(path: Path) -> dict[str, object]:
@@ -319,7 +340,8 @@ def get_config() -> dict[str, object]:
         if key not in ENV_KEYS_MOVED_TO_OS_CONFIG
     }
     for key in SECRET_ENV_KEYS:
-        if value := os.environ.get(key, "").strip():
+        value = os.environ.get(key, "").strip()
+        if is_configured_secret_value(key, value):
             raw_env[key] = value
     if ignored_os_env_keys:
         warn(
