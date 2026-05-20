@@ -403,6 +403,9 @@ def build_cloud_env(config: dict[str, object]) -> Path:
     cloud_env.setdefault("SKIP_AUTH", "true")
     cloud_env.setdefault("ROBOT_TYPE", "sim")
     cloud_env.setdefault("PORT", str(config["cloud_port"]))
+    cloud_env.setdefault("DEFAULT_ROBOT_TOKEN", "local-dev-robot-token")
+    cloud_env.setdefault("DEFAULT_USER_ID", "local-dev-user")
+    cloud_env.setdefault("DEFAULT_SERVICE_KEY", "local-dev-service-key")
 
     ensure_state_dir()
     write_env_file(GENERATED_CLOUD_ENV_PATH, cloud_env)
