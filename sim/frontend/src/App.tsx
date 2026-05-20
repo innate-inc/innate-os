@@ -716,14 +716,14 @@ export default function App() {
             if (!refreshResponse.ok) {
               throw new Error(`Reload failed: HTTP ${refreshResponse.status}`);
             }
-            await new Promise((resolve) => setTimeout(resolve, 300));
+            data = (await refreshResponse.json()) as AvailableAgentsResponse;
+          } else {
+            const response = await fetch(`${simBaseUrl}/get_available_agents`);
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+            data = (await response.json()) as AvailableAgentsResponse;
           }
-
-          const response = await fetch(`${simBaseUrl}/get_available_agents`);
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-          data = (await response.json()) as AvailableAgentsResponse;
         }
 
         if (data.brain_backend_status) {
