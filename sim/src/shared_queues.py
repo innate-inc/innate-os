@@ -254,6 +254,10 @@ class SharedQueues:
                     now - timestamps[-1], 3
                 ) if timestamps else None
 
+        with self.agents_lock:
+            available_agent_count = len(self.available_agents)
+            available_agents_updated_at = self.available_agents_updated_at
+
         return {
             "queue_sizes": {
                 "sim_to_agent": self.sim_to_agent.qsize(),
@@ -265,5 +269,7 @@ class SharedQueues:
             },
             "fps_by_camera": fps_by_camera,
             "latest_frame_age_by_camera": latest_frame_age_by_camera,
+            "available_agent_count": available_agent_count,
+            "available_agents_updated_at": available_agents_updated_at,
             "sim_log_mode": self.get_sim_log_mode(),
         }

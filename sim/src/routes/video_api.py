@@ -140,6 +140,33 @@ def stack_metrics(request: Request):
     )
 
 
+@router.get("/available_agents")
+def available_agents(request: Request):
+    """Return the cached available directives list without asking ROS to refresh."""
+    shared_queues = request.app.state.SHARED_QUEUES
+
+    if shared_queues is None:
+        return JSONResponse(
+            {
+                "agents": [],
+                "current_agent_id": None,
+                "startup_agent_id": None,
+                "error": "Simulation not initialized",
+                "brain_backend_status": {
+                    "state": "sim_not_initialized",
+                    "connected": False,
+                    "message": "Simulation not initialized",
+                    "updated_at": time.time(),
+                    "uri": None,
+                    "hosted": None,
+                },
+            },
+            status_code=200,
+        )
+
+    return JSONResponse(available_agents_payload(shared_queues))
+
+
 @router.get("/video_feed", include_in_schema=False)
 def video_feed(request: Request):
     """
@@ -241,32 +268,11 @@ async def set_brain_active(request: Request, brain_request: SetBrainActiveReques
 @router.get("/get_available_agents")
 def get_available_agents(request: Request):
     """
-    Returns the list of available agents/directives from the robot brain.
+    Backwards-compatible alias for the cached available directives list.
     Each agent includes: id, display_name, display_icon, prompt, skills.
     Also returns the current and startup agent IDs.
     """
-    shared_queues = request.app.state.SHARED_QUEUES
-
-    if shared_queues is None:
-        return JSONResponse(
-            {
-                "agents": [],
-                "current_agent_id": None,
-                "startup_agent_id": None,
-                "error": "Simulation not initialized",
-                "brain_backend_status": {
-                    "state": "sim_not_initialized",
-                    "connected": False,
-                    "message": "Simulation not initialized",
-                    "updated_at": time.time(),
-                    "uri": None,
-                    "hosted": None,
-                },
-            },
-            status_code=200,
-        )
-
-    return JSONResponse(available_agents_payload(shared_queues))
+    return available_agents(request)
 
 
 @router.post("/reload_available_agents")
