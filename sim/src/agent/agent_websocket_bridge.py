@@ -24,6 +24,7 @@ from src.agent.types import (
     ResetRobotCmd,
     BrainActiveCmd,
     RefreshAgentsCmd,
+    BrainBackendConfigCmd,
     NavigationPathMsg,
     NavigationWaypoint,
     NavigationCancelMsg,
@@ -469,6 +470,9 @@ async def outbound_data_loop(ws, shared_queues, service_call_queue):
     adv_set_directive = rosbridge_advertise(
         "/brain/set_directive", "std_msgs/msg/String"
     )
+    adv_brain_backend_config = rosbridge_advertise(
+        "/brain/backend_config", "std_msgs/msg/String"
+    )
     # Add a new topic for logging configuration
     adv_logging_config = rosbridge_advertise("/logging_config", "std_msgs/msg/Bool")
     adv_clock = rosbridge_advertise("/clock", "rosgraph_msgs/Clock")
@@ -495,6 +499,7 @@ async def outbound_data_loop(ws, shared_queues, service_call_queue):
     await ws.send(json.dumps(adv_map))
     await ws.send(json.dumps(adv_chat_in))
     await ws.send(json.dumps(adv_set_directive))
+    await ws.send(json.dumps(adv_brain_backend_config))
     await ws.send(json.dumps(adv_logging_config))
     await ws.send(json.dumps(adv_clock))
     await ws.send(json.dumps(adv_nav_status))
@@ -504,7 +509,7 @@ async def outbound_data_loop(ws, shared_queues, service_call_queue):
     await ws.send(json.dumps(adv_arm_camera))
     # await ws.send(json.dumps(adv_arm_goto_service))
     print(
-        "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, /logging_config, navigation topics, and arm interfaces"
+        "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, /brain/backend_config, /logging_config, navigation topics, and arm interfaces"
     )
 
     # Publish initial navigation mode (simulator always uses mapfree)
@@ -667,6 +672,21 @@ async def outbound_data_loop(ws, shared_queues, service_call_queue):
                 )
                 print("[ROSBridge] Refreshing available brain directives")
                 await service_call_queue.put(refresh_agents_srv)
+
+            elif isinstance(msg, BrainBackendConfigCmd):
+                config_payload = {}
+                if msg.websocket_uri:
+                    config_payload["websocket_uri"] = msg.websocket_uri
+                if msg.service_key:
+                    config_payload["service_key"] = msg.service_key
+                backend_config_msg = {"data": json.dumps(config_payload)}
+                outbound = rosbridge_publish("/brain/backend_config", backend_config_msg)
+                await ws.send(json.dumps(outbound))
+                print(
+                    "[ROSBridge] Published brain backend config update "
+                    f"(uri={'provided' if msg.websocket_uri else 'unchanged'}, "
+                    f"service_key={'provided' if msg.service_key else 'unchanged'})"
+                )
 
             elif isinstance(msg, dict) and "clock" in msg:
                 outbound = rosbridge_publish("/clock", msg)

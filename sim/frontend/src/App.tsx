@@ -11,11 +11,18 @@ import {
   getAvailableAgentsDirect,
   resetBrainDirect,
   setBrainActiveDirect,
+  setBrainBackendConfigDirect,
   setDirectiveDirect,
 } from "./services/rosbridgeService";
 
 const AGENT_BACKEND_WARNING_DELAY_MS = 15_000;
 const BACKEND_CONNECTED_STABLE_MS = 3_000;
+const BRAIN_URI_URL_PARAMS = ["brain_uri", "brain_websocket_uri", "websocket_uri"];
+const SERVICE_KEY_URL_PARAMS = ["innate_service_key", "service_key"];
+const BACKEND_OVERRIDE_URL_PARAMS = [
+  ...BRAIN_URI_URL_PARAMS,
+  ...SERVICE_KEY_URL_PARAMS,
+];
 const BACKEND_WARMUP_STATES = new Set([
   "unknown",
   "starting",
@@ -55,6 +62,63 @@ function isBackendConnectedStable(status: BrainBackendStatus | null) {
   }
 
   return Date.now() - timestamp * 1000 >= BACKEND_CONNECTED_STABLE_MS;
+}
+
+function firstUrlParam(params: URLSearchParams, names: string[]) {
+  for (const name of names) {
+    const value = params.get(name);
+    if (value?.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function backendParamsFromUrl() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const rawHash = window.location.hash.replace(/^#\??/, "");
+  const hashParams = rawHash.includes("=")
+    ? new URLSearchParams(rawHash)
+    : new URLSearchParams();
+  const websocket_uri =
+    firstUrlParam(searchParams, BRAIN_URI_URL_PARAMS) ||
+    firstUrlParam(hashParams, BRAIN_URI_URL_PARAMS);
+  const service_key =
+    firstUrlParam(searchParams, SERVICE_KEY_URL_PARAMS) ||
+    firstUrlParam(hashParams, SERVICE_KEY_URL_PARAMS);
+
+  if (!websocket_uri && !service_key) {
+    return null;
+  }
+  return { websocket_uri, service_key };
+}
+
+function stripBackendParamsFromUrl() {
+  const url = new URL(window.location.href);
+  let changed = false;
+  for (const name of BACKEND_OVERRIDE_URL_PARAMS) {
+    if (url.searchParams.has(name)) {
+      url.searchParams.delete(name);
+      changed = true;
+    }
+  }
+
+  const rawHash = url.hash.replace(/^#\??/, "");
+  if (rawHash.includes("=")) {
+    const hashParams = new URLSearchParams(rawHash);
+    for (const name of BACKEND_OVERRIDE_URL_PARAMS) {
+      if (hashParams.has(name)) {
+        hashParams.delete(name);
+        changed = true;
+      }
+    }
+    const nextHash = hashParams.toString();
+    url.hash = nextHash ? `#${nextHash}` : "";
+  }
+
+  if (changed) {
+    window.history.replaceState({}, document.title, url.toString());
+  }
 }
 
 // Main App Container
@@ -598,6 +662,7 @@ export default function App() {
   const [backendWarmupTimedOut, setBackendWarmupTimedOut] = useState(false);
   const isFetchingAgentsRef = useRef(false);
   const agentsLoadStartedAtRef = useRef(Date.now());
+  const backendOverrideAppliedRef = useRef(false);
   const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
   const simBaseUrl = import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
@@ -629,6 +694,65 @@ export default function App() {
   useEffect(() => {
     sensitivityRef.current = sensitivity;
   }, [sensitivity]);
+
+  useEffect(() => {
+    if (backendOverrideAppliedRef.current) {
+      return;
+    }
+    const backendOverride = backendParamsFromUrl();
+    if (!backendOverride) {
+      return;
+    }
+
+    backendOverrideAppliedRef.current = true;
+    stripBackendParamsFromUrl();
+    agentsLoadStartedAtRef.current = Date.now();
+    hasAgentsRef.current = false;
+    setAgents([]);
+    setActiveAgent(null);
+    setIsLoadingAgents(true);
+    setAgentAvailabilityWarning(null);
+    setBackendWarmupTimedOut(false);
+    setAgentLoadTimedOut(false);
+    setBrainBackendStatus({
+      state: "connecting",
+      connected: false,
+      message: "Applying brain backend override from URL.",
+      uri: backendOverride.websocket_uri ?? null,
+      hosted: backendOverride.websocket_uri
+        ? backendOverride.websocket_uri.startsWith("wss://agent-v1.innate.bot") ||
+          backendOverride.websocket_uri.startsWith("wss://brain.innate.bot")
+        : null,
+      timestamp: Date.now() / 1000,
+    });
+
+    const applyBackendOverride = async () => {
+      try {
+        if (useDirectRobot) {
+          await setBrainBackendConfigDirect(robotWsUrl, backendOverride);
+          return;
+        }
+
+        const response = await fetch(`${simBaseUrl}/brain_backend_config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(backendOverride),
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setIsLoadingAgents(false);
+        setAgentLoadTimedOut(true);
+        setAgentAvailabilityWarning(
+          `Unable to apply brain backend URL override: ${message}`,
+        );
+      }
+    };
+
+    void applyBackendOverride();
+  }, [robotWsUrl, simBaseUrl, useDirectRobot]);
 
   // Real-time audio visualization loop
   useEffect(() => {
