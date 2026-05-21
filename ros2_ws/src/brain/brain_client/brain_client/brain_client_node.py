@@ -508,6 +508,7 @@ class BrainClientNode(Node):
             MessageOutType.MEMORY_POSITIONS, self._handle_memory_positions
         )
 
+        self._ready_for_connection_timer = None
         self._start_ready_for_connection_broadcast()
 
         # Initialise early — _on_available_skills reads this during the spin wait below
@@ -604,6 +605,8 @@ class BrainClientNode(Node):
         )
 
     def _start_ready_for_connection_broadcast(self):
+        if self._ready_for_connection_timer is not None:
+            self._ready_for_connection_timer.cancel()
         self._ready_for_connection_remaining = READY_FOR_CONNECTION_COUNT
         self._ready_for_connection_timer = self.create_timer(
             READY_FOR_CONNECTION_INTERVAL_SEC,
@@ -616,6 +619,7 @@ class BrainClientNode(Node):
             timer = getattr(self, "_ready_for_connection_timer", None)
             if timer is not None:
                 timer.cancel()
+                self._ready_for_connection_timer = None
             return
         self.ws_bridge.send_message(
             InternalMessage(type=InternalMessageType.READY_FOR_CONNECTION)
