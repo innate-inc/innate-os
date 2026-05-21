@@ -83,6 +83,17 @@ To inspect the current state:
 
 Everything else uses built-in defaults.
 
+You can override the brain backend for a single running sim session from the
+frontend URL. The hash form keeps secrets out of the HTTP request line:
+
+```text
+http://localhost:8000/static/#innate_service_key=<key>&brain_uri=wss://agent-v1.innate.bot
+```
+
+The frontend also accepts query params with the same names, plus
+`brain_websocket_uri` and `websocket_uri` aliases, then removes them from the
+visible URL after applying them.
+
 ## Notes
 
 - The CLI uses the `sim/` frontend build instead of a separate Vite dev server so the runtime stays self-contained.

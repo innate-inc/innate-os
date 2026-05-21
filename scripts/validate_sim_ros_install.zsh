@@ -70,7 +70,8 @@ elif seed_prebuilt_install; then
 elif install_is_stale; then
     if [[ -d install ]] && find install -xtype l -print -quit | grep -q .; then
         echo "Removing unusable ROS install before rebuild."
-        rm -rf build install log
+        mkdir -p build install log
+        find build install log -mindepth 1 -maxdepth 1 -exec rm -rf {} +
     fi
     colcon_build
 else

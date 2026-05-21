@@ -136,6 +136,15 @@ class BrainActiveCmd(NamedTuple):
     active: bool
 
 
+class BrainBackendConfigCmd(NamedTuple):
+    """
+    A command to update the brain backend websocket config at runtime.
+    """
+
+    websocket_uri: str | None = None
+    service_key: str | None = None
+
+
 class DirectiveCmd(NamedTuple):
     """
     A command to update the robot's directive/behavior.

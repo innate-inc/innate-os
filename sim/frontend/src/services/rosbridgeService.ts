@@ -24,6 +24,10 @@ export interface AvailableAgentsResponse {
   error?: string;
 }
 
+export interface StackMetricsResponse {
+  brain_backend_status?: BrainBackendStatus;
+}
+
 interface GetAvailableDirectivesValues {
   directives?: unknown;
   current_directive?: string | null;
@@ -245,6 +249,15 @@ export async function setBrainActiveDirect(
   active: boolean,
 ): Promise<void> {
   await callRosbridgeService(wsUrl, "/brain/set_brain_active", { data: active });
+}
+
+export async function setBrainBackendConfigDirect(
+  wsUrl: string,
+  config: { websocket_uri?: string; service_key?: string },
+): Promise<void> {
+  await publishRosbridgeTopic(wsUrl, "/brain/backend_config", {
+    data: JSON.stringify(config),
+  });
 }
 
 export async function resetBrainDirect(

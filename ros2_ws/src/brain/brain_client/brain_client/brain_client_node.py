@@ -508,6 +508,7 @@ class BrainClientNode(Node):
             MessageOutType.MEMORY_POSITIONS, self._handle_memory_positions
         )
 
+        self._ready_for_connection_timer = None
         self._start_ready_for_connection_broadcast()
 
         # Initialise early — _on_available_skills reads this during the spin wait below
@@ -558,6 +559,9 @@ class BrainClientNode(Node):
         self.directive_sub = self.create_subscription(
             String, "/brain/set_directive", self.set_directive_callback, 10
         )
+        self.backend_config_sub = self.create_subscription(
+            String, "/brain/backend_config", self.backend_config_callback, 10
+        )
 
         # Create service to get available directives
         self.get_directives_srv = self.create_service(
@@ -593,12 +597,16 @@ class BrainClientNode(Node):
         )
         self._hot_reload_watcher.start()
         self._hot_reload_timer = self.create_timer(0.5, self._process_hot_reload_queue)
+        self._backend_reregister_timer = None
+        self._backend_reregister_remaining = 0
 
         self.get_logger().info(
             "\033[1;92m[BrainClient] BrainClientNode initialized\033[0m"
         )
 
     def _start_ready_for_connection_broadcast(self):
+        if self._ready_for_connection_timer is not None:
+            self._ready_for_connection_timer.cancel()
         self._ready_for_connection_remaining = READY_FOR_CONNECTION_COUNT
         self._ready_for_connection_timer = self.create_timer(
             READY_FOR_CONNECTION_INTERVAL_SEC,
@@ -611,11 +619,59 @@ class BrainClientNode(Node):
             timer = getattr(self, "_ready_for_connection_timer", None)
             if timer is not None:
                 timer.cancel()
+                self._ready_for_connection_timer = None
             return
         self.ws_bridge.send_message(
             InternalMessage(type=InternalMessageType.READY_FOR_CONNECTION)
         )
         self._ready_for_connection_remaining -= 1
+
+    def _start_backend_reregistration(self):
+        self.primitives_registered = False
+        self._start_ready_for_connection_broadcast()
+        self._backend_reregister_remaining = READY_FOR_CONNECTION_COUNT
+        if self._backend_reregister_timer is not None:
+            self._backend_reregister_timer.cancel()
+        self._backend_reregister_timer = self.create_timer(
+            READY_FOR_CONNECTION_INTERVAL_SEC,
+            self._try_backend_reregistration,
+        )
+        self._try_backend_reregistration()
+
+    def _try_backend_reregistration(self):
+        if self._backend_reregister_remaining <= 0:
+            if self._backend_reregister_timer is not None:
+                self._backend_reregister_timer.cancel()
+                self._backend_reregister_timer = None
+            return
+        self._backend_reregister_remaining -= 1
+        self.register_primitives_and_directive()
+
+    def backend_config_callback(self, msg: String):
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().error("Invalid /brain/backend_config payload JSON.")
+            return
+        if not isinstance(payload, dict):
+            self.get_logger().error("/brain/backend_config payload must be an object.")
+            return
+
+        new_uri = str(payload.get("websocket_uri") or self.ws_uri).strip()
+        new_token = str(
+            payload.get("service_key") or payload.get("token") or self.token
+        ).strip()
+        if new_uri == self.ws_uri and new_token == self.token:
+            self.get_logger().info("[BrainClient] Backend config unchanged.")
+            return
+
+        self.ws_uri = new_uri
+        self.token = new_token
+        self.get_logger().info(
+            "[BrainClient] Applied backend config update "
+            f"(uri={self.ws_uri}, service_key={'provided' if self.token else 'empty'})."
+        )
+        self._start_backend_reregistration()
 
     def _on_available_skills(self, msg: AvailableSkills):
         """Callback for /brain/available_skills topic (latched, transient_local)."""

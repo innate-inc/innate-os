@@ -8,14 +8,23 @@ import {
   AvailableAgentsResponse,
   BrainBackendStatus,
   RobotAgent,
+  StackMetricsResponse,
   getAvailableAgentsDirect,
   resetBrainDirect,
   setBrainActiveDirect,
+  setBrainBackendConfigDirect,
   setDirectiveDirect,
 } from "./services/rosbridgeService";
 
 const AGENT_BACKEND_WARNING_DELAY_MS = 15_000;
 const BACKEND_CONNECTED_STABLE_MS = 3_000;
+const BACKEND_STATUS_POLL_MS = 1_000;
+const BRAIN_URI_URL_PARAMS = ["brain_uri", "brain_websocket_uri", "websocket_uri"];
+const SERVICE_KEY_URL_PARAMS = ["innate_service_key", "service_key"];
+const BACKEND_OVERRIDE_URL_PARAMS = [
+  ...BRAIN_URI_URL_PARAMS,
+  ...SERVICE_KEY_URL_PARAMS,
+];
 const BACKEND_WARMUP_STATES = new Set([
   "unknown",
   "starting",
@@ -55,6 +64,97 @@ function isBackendConnectedStable(status: BrainBackendStatus | null) {
   }
 
   return Date.now() - timestamp * 1000 >= BACKEND_CONNECTED_STABLE_MS;
+}
+
+type BackendDisplayLevel = "healthy" | "warning" | "error";
+
+function backendDisplayLevel(status: BrainBackendStatus | null): BackendDisplayLevel {
+  if (status?.connected) {
+    return "healthy";
+  }
+
+  const state = status?.state || "unknown";
+  if (state === "invalid_config" || state === "connection_error") {
+    return "error";
+  }
+  if (state === "backend_error" || state === "disconnected" || state === "stopped") {
+    return "error";
+  }
+  return "warning";
+}
+
+function backendDisplayLabel(status: BrainBackendStatus | null) {
+  if (status?.connected) {
+    return "connected";
+  }
+
+  const state = status?.state || "unknown";
+  const message = status?.message || "";
+  if (state === "invalid_config" && message.toUpperCase().includes("KEY")) {
+    return "missing key";
+  }
+  if (BACKEND_WARMUP_STATES.has(state)) {
+    return "connecting";
+  }
+  return formatBackendState(state);
+}
+
+function firstUrlParam(params: URLSearchParams, names: string[]) {
+  for (const name of names) {
+    const value = params.get(name);
+    if (value?.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function backendParamsFromUrl() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const rawHash = window.location.hash.replace(/^#\??/, "");
+  const hashParams = rawHash.includes("=")
+    ? new URLSearchParams(rawHash)
+    : new URLSearchParams();
+  const websocket_uri =
+    firstUrlParam(searchParams, BRAIN_URI_URL_PARAMS) ||
+    firstUrlParam(hashParams, BRAIN_URI_URL_PARAMS);
+  // Prefer hash params for secrets so they stay out of HTTP request lines.
+  const service_key =
+    firstUrlParam(hashParams, SERVICE_KEY_URL_PARAMS) ||
+    firstUrlParam(searchParams, SERVICE_KEY_URL_PARAMS);
+
+  if (!websocket_uri && !service_key) {
+    return null;
+  }
+  return { websocket_uri, service_key };
+}
+
+function stripBackendParamsFromUrl() {
+  const url = new URL(window.location.href);
+  let changed = false;
+  for (const name of BACKEND_OVERRIDE_URL_PARAMS) {
+    if (url.searchParams.has(name)) {
+      url.searchParams.delete(name);
+      changed = true;
+    }
+  }
+
+  const rawHash = url.hash.replace(/^#\??/, "");
+  if (rawHash.includes("=")) {
+    const hashParams = new URLSearchParams(rawHash);
+    for (const name of BACKEND_OVERRIDE_URL_PARAMS) {
+      if (hashParams.has(name)) {
+        hashParams.delete(name);
+        changed = true;
+      }
+    }
+    const nextHash = hashParams.toString();
+    url.hash = nextHash ? `#${nextHash}` : "";
+  }
+
+  if (changed) {
+    window.history.replaceState({}, document.title, url.toString());
+  }
 }
 
 // Main App Container
@@ -110,10 +210,17 @@ const Logo = styled.div`
   }
 `;
 
-const StatusBadge = styled.div<{ $isWarning?: boolean }>`
+const StatusBadge = styled.div<{ $level: BackendDisplayLevel }>`
   margin-right: 16px;
-  background: ${({ $isWarning, theme }) =>
-    $isWarning ? theme.colors.error : theme.colors.primary};
+  background: ${({ $level, theme }) => {
+    if ($level === "healthy") {
+      return theme.colors.success;
+    }
+    if ($level === "error") {
+      return theme.colors.error;
+    }
+    return theme.colors.primary;
+  }};
   color: white;
   padding: 6px 16px;
   border-radius: 20px;
@@ -324,6 +431,34 @@ const AgentStatusItem = styled.div`
   font-size: 13px;
   font-weight: 500;
   opacity: 0.65;
+`;
+
+const BackendStatusItem = styled.div<{ $level: BackendDisplayLevel }>`
+  padding: 12px 16px;
+  border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+`;
+
+const BackendStatusLabel = styled.span`
+  opacity: 0.6;
+`;
+
+const BackendStatusValue = styled.span<{ $level: BackendDisplayLevel }>`
+  color: ${({ $level, theme }) => {
+    if ($level === "healthy") {
+      return theme.colors.success;
+    }
+    if ($level === "error") {
+      return theme.colors.error;
+    }
+    return theme.colors.primaryHover;
+  }};
+  font-weight: 700;
+  text-transform: uppercase;
 `;
 
 const AgentName = styled.span`
@@ -598,6 +733,7 @@ export default function App() {
   const [backendWarmupTimedOut, setBackendWarmupTimedOut] = useState(false);
   const isFetchingAgentsRef = useRef(false);
   const agentsLoadStartedAtRef = useRef(Date.now());
+  const backendOverrideAppliedRef = useRef(false);
   const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
   const simBaseUrl = import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
@@ -629,6 +765,64 @@ export default function App() {
   useEffect(() => {
     sensitivityRef.current = sensitivity;
   }, [sensitivity]);
+
+  useEffect(() => {
+    if (backendOverrideAppliedRef.current) {
+      return;
+    }
+    const backendOverride = backendParamsFromUrl();
+    if (!backendOverride) {
+      return;
+    }
+
+    backendOverrideAppliedRef.current = true;
+    stripBackendParamsFromUrl();
+    agentsLoadStartedAtRef.current = Date.now();
+    setAgents([]);
+    setActiveAgent(null);
+    setIsLoadingAgents(true);
+    setAgentAvailabilityWarning(null);
+    setBackendWarmupTimedOut(false);
+    setAgentLoadTimedOut(false);
+    setBrainBackendStatus({
+      state: "connecting",
+      connected: false,
+      message: "Applying brain backend override from URL.",
+      uri: backendOverride.websocket_uri ?? null,
+      hosted: backendOverride.websocket_uri
+        ? backendOverride.websocket_uri.startsWith("wss://agent-v1.innate.bot") ||
+          backendOverride.websocket_uri.startsWith("wss://brain.innate.bot")
+        : null,
+      timestamp: Date.now() / 1000,
+    });
+
+    const applyBackendOverride = async () => {
+      try {
+        if (useDirectRobot) {
+          await setBrainBackendConfigDirect(robotWsUrl, backendOverride);
+          return;
+        }
+
+        const response = await fetch(`${simBaseUrl}/brain_backend_config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(backendOverride),
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setIsLoadingAgents(false);
+        setAgentLoadTimedOut(true);
+        setAgentAvailabilityWarning(
+          `Unable to apply brain backend URL override: ${message}`,
+        );
+      }
+    };
+
+    void applyBackendOverride();
+  }, [robotWsUrl, simBaseUrl, useDirectRobot]);
 
   // Real-time audio visualization loop
   useEffect(() => {
@@ -779,6 +973,50 @@ export default function App() {
   useEffect(() => {
     void fetchAgents();
   }, [fetchAgents]);
+
+  useEffect(() => {
+    if (useDirectRobot) {
+      return;
+    }
+
+    let stopped = false;
+    const pollBackendStatus = async () => {
+      try {
+        const response = await fetch(`${simBaseUrl}/stack_metrics`);
+        if (!response.ok) {
+          return;
+        }
+        const data = (await response.json()) as StackMetricsResponse;
+        if (stopped || !data.brain_backend_status) {
+          return;
+        }
+
+        setBrainBackendStatus(data.brain_backend_status);
+        if (data.brain_backend_status.connected) {
+          setBackendWarmupTimedOut(false);
+          setAgentLoadTimedOut(false);
+        } else if (
+          Date.now() - agentsLoadStartedAtRef.current >=
+          AGENT_BACKEND_WARNING_DELAY_MS
+        ) {
+          setBackendWarmupTimedOut(true);
+        }
+      } catch {
+        // The video panel already handles simulator connectivity; keep this poll quiet.
+      }
+    };
+
+    void pollBackendStatus();
+    const intervalId = window.setInterval(
+      () => void pollBackendStatus(),
+      BACKEND_STATUS_POLL_MS,
+    );
+
+    return () => {
+      stopped = true;
+      window.clearInterval(intervalId);
+    };
+  }, [simBaseUrl, useDirectRobot]);
 
   const handleReloadAgents = useCallback(() => {
     void fetchAgents({ requestRefresh: true });
@@ -1116,6 +1354,8 @@ export default function App() {
   );
   const backendIsBrieflyConnected =
     brainBackendStatus?.connected && !isBackendConnectedStable(brainBackendStatus);
+  const backendLevel = backendDisplayLevel(brainBackendStatus);
+  const backendLabel = backendDisplayLabel(brainBackendStatus);
   const agentWarning = backendStatusIsWarning
     ? {
         title: backendIsBrieflyConnected
@@ -1156,9 +1396,9 @@ export default function App() {
           <Logo>INNATE SIM</Logo>
         </div>
         <div></div>
-        <StatusBadge $isWarning={Boolean(agentWarning)}>
+        <StatusBadge $level={backendLevel}>
           <StatusDot />
-          {agentWarning ? "Agent Offline" : "System Active"}
+          Backend: {backendLabel}
         </StatusBadge>
       </Header>
 
@@ -1199,6 +1439,12 @@ export default function App() {
               <StatValue>MARS</StatValue>
               <StatLabel>Model Type: R7</StatLabel>
             </BigStat>
+            <BackendStatusItem $level={backendLevel}>
+              <BackendStatusLabel>Brain backend</BackendStatusLabel>
+              <BackendStatusValue $level={backendLevel}>
+                {backendLabel}
+              </BackendStatusValue>
+            </BackendStatusItem>
           </PanelSection>
 
           <PanelSection style={{ flex: 1 }}>
