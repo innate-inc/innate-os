@@ -24,6 +24,10 @@ export interface AvailableAgentsResponse {
   error?: string;
 }
 
+export interface StackMetricsResponse {
+  brain_backend_status?: BrainBackendStatus;
+}
+
 interface GetAvailableDirectivesValues {
   directives?: unknown;
   current_directive?: string | null;

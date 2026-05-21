@@ -8,6 +8,7 @@ import {
   AvailableAgentsResponse,
   BrainBackendStatus,
   RobotAgent,
+  StackMetricsResponse,
   getAvailableAgentsDirect,
   resetBrainDirect,
   setBrainActiveDirect,
@@ -17,6 +18,7 @@ import {
 
 const AGENT_BACKEND_WARNING_DELAY_MS = 15_000;
 const BACKEND_CONNECTED_STABLE_MS = 3_000;
+const BACKEND_STATUS_POLL_MS = 1_000;
 const BRAIN_URI_URL_PARAMS = ["brain_uri", "brain_websocket_uri", "websocket_uri"];
 const SERVICE_KEY_URL_PARAMS = ["innate_service_key", "service_key"];
 const BACKEND_OVERRIDE_URL_PARAMS = [
@@ -62,6 +64,39 @@ function isBackendConnectedStable(status: BrainBackendStatus | null) {
   }
 
   return Date.now() - timestamp * 1000 >= BACKEND_CONNECTED_STABLE_MS;
+}
+
+type BackendDisplayLevel = "healthy" | "warning" | "error";
+
+function backendDisplayLevel(status: BrainBackendStatus | null): BackendDisplayLevel {
+  if (status?.connected) {
+    return "healthy";
+  }
+
+  const state = status?.state || "unknown";
+  if (state === "invalid_config" || state === "connection_error") {
+    return "error";
+  }
+  if (state === "backend_error" || state === "disconnected" || state === "stopped") {
+    return "error";
+  }
+  return "warning";
+}
+
+function backendDisplayLabel(status: BrainBackendStatus | null) {
+  if (status?.connected) {
+    return "connected";
+  }
+
+  const state = status?.state || "unknown";
+  const message = status?.message || "";
+  if (state === "invalid_config" && message.toUpperCase().includes("KEY")) {
+    return "missing key";
+  }
+  if (BACKEND_WARMUP_STATES.has(state)) {
+    return "connecting";
+  }
+  return formatBackendState(state);
 }
 
 function firstUrlParam(params: URLSearchParams, names: string[]) {
@@ -174,10 +209,17 @@ const Logo = styled.div`
   }
 `;
 
-const StatusBadge = styled.div<{ $isWarning?: boolean }>`
+const StatusBadge = styled.div<{ $level: BackendDisplayLevel }>`
   margin-right: 16px;
-  background: ${({ $isWarning, theme }) =>
-    $isWarning ? theme.colors.error : theme.colors.primary};
+  background: ${({ $level, theme }) => {
+    if ($level === "healthy") {
+      return theme.colors.success;
+    }
+    if ($level === "error") {
+      return theme.colors.error;
+    }
+    return theme.colors.primary;
+  }};
   color: white;
   padding: 6px 16px;
   border-radius: 20px;
@@ -388,6 +430,34 @@ const AgentStatusItem = styled.div`
   font-size: 13px;
   font-weight: 500;
   opacity: 0.65;
+`;
+
+const BackendStatusItem = styled.div<{ $level: BackendDisplayLevel }>`
+  padding: 12px 16px;
+  border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+`;
+
+const BackendStatusLabel = styled.span`
+  opacity: 0.6;
+`;
+
+const BackendStatusValue = styled.span<{ $level: BackendDisplayLevel }>`
+  color: ${({ $level, theme }) => {
+    if ($level === "healthy") {
+      return theme.colors.success;
+    }
+    if ($level === "error") {
+      return theme.colors.error;
+    }
+    return theme.colors.primaryHover;
+  }};
+  font-weight: 700;
+  text-transform: uppercase;
 `;
 
 const AgentName = styled.span`
@@ -903,6 +973,50 @@ export default function App() {
     void fetchAgents();
   }, [fetchAgents]);
 
+  useEffect(() => {
+    if (useDirectRobot) {
+      return;
+    }
+
+    let stopped = false;
+    const pollBackendStatus = async () => {
+      try {
+        const response = await fetch(`${simBaseUrl}/stack_metrics`);
+        if (!response.ok) {
+          return;
+        }
+        const data = (await response.json()) as StackMetricsResponse;
+        if (stopped || !data.brain_backend_status) {
+          return;
+        }
+
+        setBrainBackendStatus(data.brain_backend_status);
+        if (data.brain_backend_status.connected) {
+          setBackendWarmupTimedOut(false);
+          setAgentLoadTimedOut(false);
+        } else if (
+          Date.now() - agentsLoadStartedAtRef.current >=
+          AGENT_BACKEND_WARNING_DELAY_MS
+        ) {
+          setBackendWarmupTimedOut(true);
+        }
+      } catch {
+        // The video panel already handles simulator connectivity; keep this poll quiet.
+      }
+    };
+
+    void pollBackendStatus();
+    const intervalId = window.setInterval(
+      () => void pollBackendStatus(),
+      BACKEND_STATUS_POLL_MS,
+    );
+
+    return () => {
+      stopped = true;
+      window.clearInterval(intervalId);
+    };
+  }, [simBaseUrl, useDirectRobot]);
+
   const handleReloadAgents = useCallback(() => {
     void fetchAgents({ requestRefresh: true });
   }, [fetchAgents]);
@@ -1239,6 +1353,8 @@ export default function App() {
   );
   const backendIsBrieflyConnected =
     brainBackendStatus?.connected && !isBackendConnectedStable(brainBackendStatus);
+  const backendLevel = backendDisplayLevel(brainBackendStatus);
+  const backendLabel = backendDisplayLabel(brainBackendStatus);
   const agentWarning = backendStatusIsWarning
     ? {
         title: backendIsBrieflyConnected
@@ -1279,9 +1395,9 @@ export default function App() {
           <Logo>INNATE SIM</Logo>
         </div>
         <div></div>
-        <StatusBadge $isWarning={Boolean(agentWarning)}>
+        <StatusBadge $level={backendLevel}>
           <StatusDot />
-          {agentWarning ? "Agent Offline" : "System Active"}
+          Backend: {backendLabel}
         </StatusBadge>
       </Header>
 
@@ -1322,6 +1438,12 @@ export default function App() {
               <StatValue>MARS</StatValue>
               <StatLabel>Model Type: R7</StatLabel>
             </BigStat>
+            <BackendStatusItem $level={backendLevel}>
+              <BackendStatusLabel>Brain backend</BackendStatusLabel>
+              <BackendStatusValue $level={backendLevel}>
+                {backendLabel}
+              </BackendStatusValue>
+            </BackendStatusItem>
           </PanelSection>
 
           <PanelSection style={{ flex: 1 }}>
