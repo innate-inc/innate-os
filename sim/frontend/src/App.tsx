@@ -118,9 +118,10 @@ function backendParamsFromUrl() {
   const websocket_uri =
     firstUrlParam(searchParams, BRAIN_URI_URL_PARAMS) ||
     firstUrlParam(hashParams, BRAIN_URI_URL_PARAMS);
+  // Prefer hash params for secrets so they stay out of HTTP request lines.
   const service_key =
-    firstUrlParam(searchParams, SERVICE_KEY_URL_PARAMS) ||
-    firstUrlParam(hashParams, SERVICE_KEY_URL_PARAMS);
+    firstUrlParam(hashParams, SERVICE_KEY_URL_PARAMS) ||
+    firstUrlParam(searchParams, SERVICE_KEY_URL_PARAMS);
 
   if (!websocket_uri && !service_key) {
     return null;
