@@ -209,6 +209,11 @@ class WSClient:
                 connected_reported = True
 
             # Forward the raw JSON string from the WS server by publishing it.
+            if not self.is_current_client():
+                self.node.get_logger().debug(
+                    "Dropping incoming message from stale WebSocket client."
+                )
+                continue
             self.node.get_logger().debug(f"Forwarding incoming message: {incoming}")
             ros_msg = String()
             ros_msg.data = incoming
@@ -285,8 +290,6 @@ class WSClientNode(Node):
         # Start the websocket event loop in a separate thread.
         self.ws_client = None
         self.ws_thread = None
-        self._ws_restart_lock = threading.Lock()
-        self._ws_restart_in_progress = False
         self._configure_ws_client(log_invalid=True)
         self.get_logger().info("WSClientNode initialized.")
 
@@ -352,18 +355,13 @@ class WSClientNode(Node):
             except RuntimeError as e:
                 self.get_logger().debug(f"Could not close websocket cleanly: {e}")
         if self.ws_thread and self.ws_thread.is_alive():
-            self.ws_thread.join(timeout=2.0)
-            if self.ws_thread.is_alive():
-                self.get_logger().warn(
-                    "[WSClient] Old WebSocket thread did not stop within 2 s; proceeding."
-                )
+            self.get_logger().debug(
+                "[WSClient] Requested old WebSocket thread stop; continuing."
+            )
         self.ws_thread = None
         self._ws_stop_event = threading.Event()
 
     def _start_ws_thread(self):
-        if self._ws_restart_in_progress:
-            self.get_logger().debug("WebSocket restart is in progress.")
-            return
         if self.ws_client is None:
             return
         if self.ws_thread is None or not self.ws_thread.is_alive():
@@ -372,34 +370,6 @@ class WSClientNode(Node):
                 args=(self.ws_client,),
             )
             self.ws_thread.start()
-
-    def _restart_ws_thread(self, new_uri: str, new_token: str):
-        with self._ws_restart_lock:
-            try:
-                if new_uri == self.ws_uri and new_token == self.token:
-                    self.get_logger().info("[WSClient] Backend config unchanged.")
-                    return
-
-                self.get_logger().info(
-                    f"[WSClient] Applying backend config update (uri={new_uri}, "
-                    f"service_key={'provided' if new_token else 'empty'})."
-                )
-                self._stop_ws_thread()
-                self.ws_uri = new_uri
-                self.token = new_token
-                self._last_ws_error_message = ""
-                self._last_ws_error_at = 0.0
-                self._configure_ws_client(log_invalid=True)
-                if self.ws_client is not None:
-                    self.set_ws_status(
-                        "connecting",
-                        False,
-                        "Backend config updated; reconnecting.",
-                    )
-            finally:
-                self._ws_restart_in_progress = False
-
-        self._start_ws_thread()
 
     def backend_config_callback(self, msg: String):
         try:
@@ -415,20 +385,27 @@ class WSClientNode(Node):
         new_token = str(
             payload.get("service_key") or payload.get("token") or self.token
         ).strip()
-        if (
-            not self._ws_restart_in_progress
-            and new_uri == self.ws_uri
-            and new_token == self.token
-        ):
+        if new_uri == self.ws_uri and new_token == self.token:
             self.get_logger().info("[WSClient] Backend config unchanged.")
             return
 
-        self._ws_restart_in_progress = True
-        threading.Thread(
-            target=self._restart_ws_thread,
-            args=(new_uri, new_token),
-            daemon=True,
-        ).start()
+        self.get_logger().info(
+            f"[WSClient] Applying backend config update (uri={new_uri}, "
+            f"service_key={'provided' if new_token else 'empty'})."
+        )
+        self._stop_ws_thread()
+        self.ws_uri = new_uri
+        self.token = new_token
+        self._last_ws_error_message = ""
+        self._last_ws_error_at = 0.0
+        self._configure_ws_client(log_invalid=True)
+        if self.ws_client is not None:
+            self.set_ws_status(
+                "connecting",
+                False,
+                "Backend config updated; reconnecting.",
+            )
+            self._start_ws_thread()
 
     def set_ws_status(self, state: str, connected: bool, message: str):
         """Update and publish cloud/local-agent websocket status."""
