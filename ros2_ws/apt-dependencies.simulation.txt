@@ -1,0 +1,9 @@
+# Simulation-specific dependencies for innate-os
+# These are only required when running in simulation mode
+# Install with: xargs -a apt-dependencies.simulation.txt sudo apt-get install -y
+
+# Stage simulator build dependencies (tuw-robotics/Stage)
+libfltk1.3-dev
+libpng-dev
+libgl1-mesa-dev
+libglu1-mesa-dev

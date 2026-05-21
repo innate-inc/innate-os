@@ -10,13 +10,26 @@ global_costmap:
       global_frame: "map"
       robot_base_frame: "base_link"
       use_sim_time: True
-      robot_radius: 0.105
+      footprint: "[[0.25, 0.165], [0.25, -0.165], [-0.20, -0.165], [-0.20, 0.165]]"
       resolution: 0.05
-      track_unknown_space: true
-      plugins: ["static_layer", "inflation_layer"]
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: true
+      rolling_window: true
+      width: 10
+      height: 10
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.2
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.2
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.0
@@ -34,12 +47,22 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.105
-      track_unknown_space: true
-      plugins: ["static_layer", "inflation_layer"]
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: true
+      footprint: "[[0.25, 0.165], [0.25, -0.165], [-0.20, -0.165], [-0.20, 0.165]]"
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.2
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.2
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.0
@@ -62,7 +85,7 @@ controller_server:
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       min_vel_x: 0.0
-      max_vel_x: 0.45
+      max_vel_x: 0.3
       min_vel_y: 0.0
       max_vel_y: 0.0
       min_vel_theta: -1.5
@@ -111,6 +134,104 @@ controller_server:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.5
       movement_time_allowance: 10.0
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.16
+      stateful: True
+    goal_checker_precise:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.05
+      yaw_goal_tolerance: 0.08
+      stateful: True
+    InnateFollowPath:
+      plugin: "nav2_mppi_controller::MPPIController"
+      motion_model: "DiffDrive"
+      time_steps: 50
+      model_dt: 0.05
+      batch_size: 2000
+      iteration_count: 1
+      vx_min: -0.2
+      vx_max: 0.3
+      vy_max: 0.0
+      wz_max: 0.8
+      ax_min: -2.5
+      ax_max: 2.5
+      ay_min: 0.0
+      ay_max: 0.0
+      az_max: 3.2
+      vx_std: 0.2
+      vy_std: 0.0
+      wz_std: 0.4
+      transform_tolerance: 0.2
+      prune_distance: 1.5
+      max_robot_pose_search_dist: 10.0
+      temperature: 0.3
+      gamma: 0.015
+      visualize: false
+      regenerate_noises: false
+      xy_goal_tolerance: 0.25
+      critics: [
+        "ConstraintCritic",
+        "CostCritic",
+        "GoalCritic",
+        "GoalAngleCritic",
+        "PathAlignCritic",
+        "PathFollowCritic",
+        "PathAngleCritic",
+        "PreferForwardCritic"
+      ]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.8
+        critical_cost: 300.0
+        consider_footprint: true
+        collision_cost: 1000000.0
+        near_goal_distance: 0.5
+        trajectory_point_step: 2
+      GoalCritic:
+        enabled: true
+        cost_power: 2
+        cost_weight: 15.0
+        threshold_to_consider: 1.2
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 10.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.3
+        offset_from_furthest: 20
+        use_path_orientations: true
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 6
+        threshold_to_consider: 1.2
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.2
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        mode: 0
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
 
 behavior_server:
   ros__parameters:

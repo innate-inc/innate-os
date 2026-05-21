@@ -37,6 +37,7 @@ services:
       - ./scripts:/root/innate-os/scripts:rw
       - ./agents:/root/innate-os/agents:rw
       - ./skills:/root/innate-os/skills:rw
+      - ./maps:/root/innate-os/maps:rw
       - ./.env:/root/innate-os/.env:ro
 
       # 2) Keep build/install/log folders as Docker named volumes, so they won't pollute your host

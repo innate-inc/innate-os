@@ -63,7 +63,9 @@
       # Algorithm parameters
       temperature: 0.3                  # Trajectory selection temperature
       gamma: 0.015                      # Smoothness vs energy trade-off
-      visualize: false                    # Set to true for debugging (slows performance)
+      visualize: true                    # Set to true for debugging (slows performance)
+      trajectory_step: 200
+      time_step: 20
       regenerate_noises: false
       
       # Goal tolerances
