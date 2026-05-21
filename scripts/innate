@@ -38,6 +38,8 @@ def _fast_read_skill_cache():
     except (FileNotFoundError, PermissionError, json.JSONDecodeError):
         return None
 
+    if not isinstance(data, dict):
+        return None
     return data if isinstance(data.get("skills"), list) else None
 
 
@@ -136,6 +138,24 @@ def _fast_parse_skill_type_args(args):
         i += 1
 
     return (skill_ref, json_output) if skill_ref else None
+
+
+def _fast_parse_skill_ids_args(args):
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--help":
+            return None
+        if arg == "--timeout":
+            i += 1
+            if i >= len(args):
+                return None
+        elif arg.startswith("--timeout="):
+            pass
+        else:
+            return None
+        i += 1
+    return True
 
 
 def _fast_parse_skill_run_args(args):
@@ -295,7 +315,12 @@ def _try_fast_skill_cli():
     command_args = args[2:]
 
     if command == "_ids":
-        for contract in _fast_cached_skill_contracts():
+        if _fast_parse_skill_ids_args(command_args) is None:
+            return None
+        contracts = _fast_cached_skill_contracts()
+        if not contracts:
+            return None
+        for contract in contracts:
             print(contract["id"])
         return 0
 
@@ -988,6 +1013,8 @@ def _read_skill_cache():
     except (FileNotFoundError, PermissionError, json.JSONDecodeError):
         return None
 
+    if not isinstance(data, dict):
+        return None
     skills = data.get("skills")
     if not isinstance(skills, list):
         return None
@@ -1132,6 +1159,19 @@ def _skill_list(timeout: float):
 
 def _skill_ids(timeout: float):
     skill_ids = [contract["id"] for contract in _cached_skill_contracts()]
+    if not skill_ids:
+        if not _ensure_skill_ros_nodes_running():
+            return 1
+
+        modules = _load_skill_ros_modules()
+        with _suppress_process_output():
+            node = _create_skill_node(modules)
+            try:
+                skills = _wait_for_available_skills(modules, node, timeout)
+                skill_ids = [skill_info.id for skill_info in skills]
+            finally:
+                _shutdown_skill_node(modules, node)
+
     for skill_id in skill_ids:
         print(skill_id)
     return 0 if skill_ids else 1

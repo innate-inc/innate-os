@@ -367,7 +367,7 @@ class SkillsActionServer(Node):
         msg.skills = filtered_skills
         self._skills_publisher.publish(msg)
         self._write_skill_cache(filtered_skills)
-        self.get_logger().info(f"Published {len(skills)} skills on /brain/available_skills")
+        self.get_logger().info(f"Published {len(filtered_skills)} skills on /brain/available_skills")
 
     def _reload_skills(self):
         """Reload all skills from disk."""

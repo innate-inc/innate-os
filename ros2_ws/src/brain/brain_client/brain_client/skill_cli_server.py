@@ -14,7 +14,6 @@ from brain_messages.action import ExecuteSkill
 from rclpy.action import ActionClient
 from rclpy.node import Node
 
-
 DEFAULT_SOCKET_PATH = "/tmp/innate_skill_cli.sock"
 
 
@@ -47,7 +46,7 @@ class SkillCliServer(Node):
         while not self._stop_event.is_set():
             try:
                 conn, _addr = server_socket.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break
@@ -120,8 +119,9 @@ class SkillCliServer(Node):
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Expected a number, got {value!r}") from exc
 
-    def _run_skill(self, conn: socket.socket, skill_type: str, inputs_json: str,
-                   timeout: float | None, server_timeout: float):
+    def _run_skill(
+        self, conn: socket.socket, skill_type: str, inputs_json: str, timeout: float | None, server_timeout: float
+    ):
         if not self._action_client.wait_for_server(timeout_sec=server_timeout):
             self._send_event(conn, "error", message="ExecuteSkill action server not available")
             return
@@ -208,20 +208,21 @@ class SkillCliServer(Node):
         except OSError:
             return False
 
-    def destroy(self):
+    def destroy_node(self):
         self._stop_event.set()
         if self._server_socket is not None:
             try:
                 self._server_socket.close()
             except OSError:
                 pass
+            self._server_socket = None
         self._server_thread.join(timeout=1.0)
         try:
             self._socket_path.unlink(missing_ok=True)
         except OSError:
             pass
         self._action_client.destroy()
-        super().destroy_node()
+        return super().destroy_node()
 
 
 def main(args=None):
@@ -232,7 +233,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy()
+        node.destroy_node()
         rclpy.shutdown()
 
 
