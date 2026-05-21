@@ -636,7 +636,6 @@ class BrainClientNode(Node):
             READY_FOR_CONNECTION_INTERVAL_SEC,
             self._try_backend_reregistration,
         )
-        self._try_backend_reregistration()
 
     def _try_backend_reregistration(self):
         if self._backend_reregister_remaining <= 0:

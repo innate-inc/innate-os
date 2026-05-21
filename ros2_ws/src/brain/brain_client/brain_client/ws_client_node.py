@@ -298,7 +298,9 @@ class WSClientNode(Node):
         self._hosted_innate_uri = self._is_hosted_innate_uri(self.ws_uri)
         self._token_configured = self._validate_token_for_uri(self.ws_uri, self.token)
 
-    def _configure_ws_client(self, log_invalid: bool = False):
+    def _configure_ws_client(
+        self, log_invalid: bool = False, publish_configured_status: bool = True
+    ):
         self._refresh_config_flags()
         if not self._ws_configured:
             if log_invalid:
@@ -335,11 +337,12 @@ class WSClientNode(Node):
             self._ws_stop_event,
             self._robot_version,
         )
-        self.set_ws_status(
-            "configured",
-            False,
-            "WebSocket configured; waiting for connection request.",
-        )
+        if publish_configured_status:
+            self.set_ws_status(
+                "configured",
+                False,
+                "WebSocket configured; waiting for connection request.",
+            )
 
     def _stop_ws_thread(self):
         self._ws_stop_event.set()
@@ -398,7 +401,10 @@ class WSClientNode(Node):
         self.token = new_token
         self._last_ws_error_message = ""
         self._last_ws_error_at = 0.0
-        self._configure_ws_client(log_invalid=True)
+        self._configure_ws_client(
+            log_invalid=True,
+            publish_configured_status=False,
+        )
         if self.ws_client is not None:
             self.set_ws_status(
                 "connecting",
