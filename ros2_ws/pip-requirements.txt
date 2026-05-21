@@ -1,6 +1,6 @@
 # Python dependencies for innate-os ROS2 workspace
 # Install with: pip3 install -r pip-requirements.txt
-# See DEPENDENCIES.md for full analysis of where each package is used
+# See ../docs/DEPENDENCIES.md for full analysis of where each package is used
 
 # Use NVIDIA Jetson AI Lab PyPI for optimized PyTorch wheels
 # Available indexes: jp6/cu126, jp6/cu128, jp6/cu129
