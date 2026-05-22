@@ -4,7 +4,7 @@ This directory holds the implementation of the local `innate` CLI. User-facing c
 
 The local workflow uses:
 
-- Python 3.11 or newer for the launcher
+- Python 3.10 or newer for the launcher
 - [`.env`](/Users/axelpeytavin/Projects/innate-repos/innate-os/.env) for secrets only
 - [`config/os.toml`](/Users/axelpeytavin/Projects/innate-repos/innate-os/config/os.toml.template) for optional non-secret OS overrides
 - [`sim/config.toml`](/Users/axelpeytavin/Projects/innate-repos/innate-os/sim/config.toml.template) for optional non-secret simulator overrides
@@ -82,6 +82,17 @@ To inspect the current state:
 - local cloud-agent image or source checkout
 
 Everything else uses built-in defaults.
+
+You can override the brain backend for a single running sim session from the
+frontend URL. The hash form keeps secrets out of the HTTP request line:
+
+```text
+http://localhost:8000/static/#innate_service_key=<key>&brain_uri=wss://agent-v1.innate.bot
+```
+
+The frontend also accepts query params with the same names, plus
+`brain_websocket_uri` and `websocket_uri` aliases, then removes them from the
+visible URL after applying them.
 
 ## Notes
 
