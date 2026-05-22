@@ -31,6 +31,7 @@ PLACEHOLDER_SERVICE_KEYS = {
 }
 
 CONNECTED_GRACE_SECONDS = 2.0
+WS_THREAD_STOP_JOIN_SECONDS = 0.25
 
 
 ###############################################################################
@@ -345,22 +346,29 @@ class WSClientNode(Node):
             )
 
     def _stop_ws_thread(self):
+        old_client = self.ws_client
+        old_thread = self.ws_thread
         self._ws_stop_event.set()
         if (
-            self.ws_client
-            and self.ws_client.loop
-            and self.ws_client.loop.is_running()
+            old_client
+            and old_client.loop
+            and old_client.loop.is_running()
         ):
             try:
                 asyncio.run_coroutine_threadsafe(
-                    self.ws_client.close(), self.ws_client.loop
+                    old_client.close(), old_client.loop
                 )
             except RuntimeError as e:
                 self.get_logger().debug(f"Could not close websocket cleanly: {e}")
-        if self.ws_thread and self.ws_thread.is_alive():
-            self.get_logger().debug(
-                "[WSClient] Requested old WebSocket thread stop; continuing."
-            )
+        if old_thread and old_thread.is_alive():
+            old_thread.join(timeout=WS_THREAD_STOP_JOIN_SECONDS)
+            if old_thread.is_alive():
+                self.get_logger().warn(
+                    "[WSClient] Old WebSocket thread did not stop within "
+                    f"{WS_THREAD_STOP_JOIN_SECONDS:.2f}s; proceeding with reconnect."
+                )
+            else:
+                self.get_logger().debug("[WSClient] Old WebSocket thread stopped.")
         self.ws_thread = None
         self._ws_stop_event = threading.Event()
 
