@@ -6,8 +6,8 @@ import os
 import subprocess
 import sys
 
-if sys.version_info < (3, 11):
-    print("Error: the Innate launcher requires Python 3.11 or newer.", file=sys.stderr)
+if sys.version_info < (3, 10):
+    print("Error: the Innate launcher requires Python 3.10 or newer.", file=sys.stderr)
     raise SystemExit(1)
 
 from dashboard import (

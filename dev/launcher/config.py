@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import os
 import shutil
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 from dashboard import CYAN, GREEN, NC, YELLOW
+
+try:
+    import tomllib as toml_parser
+except ModuleNotFoundError:
+    try:
+        import tomli as toml_parser  # type: ignore[no-redef]
+    except ModuleNotFoundError:
+        toml_parser = None  # type: ignore[assignment]
 
 SCRIPT_PATH = Path(__file__).resolve()
 LAUNCHER_DIR = SCRIPT_PATH.parent
@@ -153,9 +161,83 @@ def parse_env_file(path: Path) -> dict[str, str]:
 def parse_toml_file(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
-    with path.open("rb") as f:
-        data = tomllib.load(f)
+    if toml_parser is not None:
+        with path.open("rb") as f:
+            data = toml_parser.load(f)
+        return data if isinstance(data, dict) else {}
+
+    data = parse_simple_toml(path.read_text())
     return data if isinstance(data, dict) else {}
+
+
+def strip_toml_comment(line: str) -> str:
+    quote = ""
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote == '"':
+            escaped = True
+            continue
+        if char in {"'", '"'}:
+            if quote == char:
+                quote = ""
+            elif not quote:
+                quote = char
+            continue
+        if char == "#" and not quote:
+            return line[:index]
+    return line
+
+
+def parse_simple_toml_value(raw_value: str) -> object:
+    value = raw_value.strip()
+    if value in {"true", "false"}:
+        return value == "true"
+    if value.startswith(("'", '"')) and value.endswith(("'", '"')):
+        return ast.literal_eval(value)
+    try:
+        return int(value, 10)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise StackError(
+            "Unsupported TOML value in launcher config. Use strings, booleans, "
+            "or run with Python 3.11+/install tomli for full TOML support."
+        ) from exc
+
+
+def parse_simple_toml(contents: str) -> dict[str, object]:
+    data: dict[str, object] = {}
+    section: dict[str, object] = data
+
+    for line_number, raw_line in enumerate(contents.splitlines(), start=1):
+        line = strip_toml_comment(raw_line).strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = data
+            for part in line[1:-1].split("."):
+                part = part.strip()
+                if not part:
+                    raise StackError(f"Invalid TOML section on line {line_number}.")
+                nested = section.setdefault(part, {})
+                if not isinstance(nested, dict):
+                    raise StackError(f"Invalid TOML section on line {line_number}.")
+                section = nested
+            continue
+        if "=" not in line:
+            raise StackError(f"Invalid TOML assignment on line {line_number}.")
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise StackError(f"Invalid TOML key on line {line_number}.")
+        section[key] = parse_simple_toml_value(raw_value)
+
+    return data
 
 
 def get_nested_value(data: dict[str, object], *keys: str) -> object | None:
