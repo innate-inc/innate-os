@@ -49,17 +49,23 @@ def _prompt_yes_no(question: str, *, default: bool = False) -> bool:
 
 def _prompt_secret(question: str) -> str:
     try:
-        return getpass.getpass(f"{YELLOW}{question}: {NC}").strip()
+        return getpass.getpass(f"{YELLOW}{question}: {NC}", stream=sys.stdout).strip()
     except (KeyboardInterrupt, EOFError):
         print()
         raise SystemExit(1)
+
+
+def _quote_env_value(value: str) -> str:
+    if "'" in value:
+        raise ValueError("secret values saved to .env cannot contain single quotes")
+    return f"'{value}'"
 
 
 def write_env_value(path: Path, key: str, value: str) -> None:
     if "\n" in value or "\r" in value:
         raise ValueError(f"{key} cannot contain newlines")
 
-    replacement = f"{key}={value}"
+    replacement = f"{key}={_quote_env_value(value)}"
     lines = path.read_text().splitlines() if path.exists() else []
     updated = False
     output: list[str] = []
