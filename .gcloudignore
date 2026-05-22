@@ -15,7 +15,8 @@ sim/.venv/
 !Dockerfile.ros-prebuilt
 !.dockerignore
 !Dockerfile.ros-prebuilt.dockerignore
-!cloudbuild.sim-images.yaml
+!.github/
+!.github/cloudbuild.sim-images.yaml
 !ros2_ws/
 !ros2_ws/apt-dependencies.common.txt
 !ros2_ws/apt-dependencies.hardware.txt

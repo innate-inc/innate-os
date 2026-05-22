@@ -6,7 +6,7 @@ on:
     paths:
       - .github/workflows/publish-sim-images.yml
       - .gcloudignore
-      - cloudbuild.sim-images.yaml
+      - .github/cloudbuild.sim-images.yaml
       - Dockerfile
       - Dockerfile.ros-prebuilt
       - Dockerfile.ros-prebuilt.dockerignore
@@ -103,7 +103,7 @@ jobs:
             --region="${{ vars.GCP_REGION }}" \
             --gcs-source-staging-dir="${{ vars.GCP_CLOUD_BUILD_SOURCE_STAGING_DIR }}" \
             --service-account="projects/${{ vars.GCP_PROJECT_ID }}/serviceAccounts/${{ vars.GCP_CLOUD_BUILD_SERVICE_ACCOUNT }}" \
-            --config=cloudbuild.sim-images.yaml \
+            --config=.github/cloudbuild.sim-images.yaml \
             --substitutions="_IMAGE_PREFIX=${{ vars.SIM_IMAGE_PREFIX }},_IMAGE_TAG=${{ steps.image_tags.outputs.image_tag }},_IMAGE_INPUTS_HASH=${{ steps.image_tags.outputs.image_inputs_hash }},_PUSH_MAIN_TAGS=${{ steps.image_tags.outputs.push_main_tags }},_GHCR_USERNAME_SECRET=${{ vars.GHCR_USERNAME_SECRET }},_GHCR_TOKEN_SECRET=${{ vars.GHCR_TOKEN_SECRET }},_COMMIT_SHA=${GITHUB_SHA},_SHORT_SHA=${GITHUB_SHA::12}"
 
       - name: Published image tags
