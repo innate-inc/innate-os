@@ -195,8 +195,19 @@ def parse_simple_toml_value(raw_value: str) -> object:
     value = raw_value.strip()
     if value in {"true", "false"}:
         return value == "true"
-    if value.startswith(("'", '"')) and value.endswith(("'", '"')):
-        return ast.literal_eval(value)
+    if value.startswith(("'", '"')):
+        if not value.endswith(value[0]):
+            raise StackError(
+                "Invalid quoted TOML value in launcher config. Check that strings "
+                "use matching quotes and valid escapes."
+            )
+        try:
+            return ast.literal_eval(value)
+        except (SyntaxError, ValueError) as exc:
+            raise StackError(
+                "Invalid quoted TOML value in launcher config. Check that strings "
+                "use matching quotes and valid escapes."
+            ) from exc
     try:
         return int(value, 10)
     except ValueError:
