@@ -1,15 +1,15 @@
 from brain_client.agents.types import Agent
 
 
-class BasicAgent(Agent):
+class DefaultAgent(Agent):
     """
     Default directive for the robot.
-    Provides a basic professional personality and enables navigation primitives.
+    Provides a simple professional personality and enables navigation primitives.
     """
 
     @property
     def id(self) -> str:
-        return "basic_agent"
+        return "default_agent"
 
     @property
     def display_name(self) -> str:
