@@ -234,8 +234,9 @@ fi
 # shipped files; this step preserves any user-created *untracked* content
 # (custom skills/agents/inputs, trained models, SLAM maps, last mode/map).
 # Idempotent, never overwrites, only rmdir's empty dirs.
-# Home-dir ~/agents and ~/skills are migrated separately at brain startup
-# (brain_client.script_paths.migrate_legacy_home_directories).
+# Legacy home-dir ~/agents and ~/skills are folded into workspace/custom_* here
+# too (run_user_data_migrations), so the dataset media server and encoder — which
+# only serve workspace/custom_skills — can reach datasets recorded under ~/skills.
 # -----------------------------------------------------------------------------
 # shellcheck source=scripts/update/migrate_user_data.sh
 source "$SCRIPT_DIR/migrate_user_data.sh"

@@ -18,10 +18,14 @@
 #   <repo>/maps/*                          -> <repo>/data/maps/
 #   <repo>/.last_mode                      -> <repo>/data/.last_mode
 #   <repo>/.last_map                       -> <repo>/data/.last_map
+#   ~/agents/*                             -> <repo>/workspace/custom_agents/
+#   ~/skills/*                             -> <repo>/workspace/custom_skills/
 #
-# Home-directory skills/agents (~/skills, ~/agents) are NOT handled here; they
-# are migrated at brain startup by
-# brain_client.script_paths.migrate_legacy_home_directories().
+# The home-directory skills/agents (~/skills, ~/agents) are folded in here too.
+# The brain still scans them in place for backwards compatibility, but the
+# dataset media server and encoder only serve workspace/custom_skills, so a
+# ~/skills dataset would otherwise list but be unplayable (no thumbnails/video/
+# joints). Moving them into the workspace keeps both pipelines consistent.
 #
 # Optional env: MIGRATE_CHOWN_USER — when set and running as root, moved files
 # are chowned to this user (best-effort). Unset (e.g. in CI) => no chown.
@@ -100,6 +104,50 @@ _migrate_dir_into_workspace() {
     rmdir "$old_path" 2>/dev/null && _mig_log "Removed empty $old_rel/" || true
 }
 
+# The robot user's home directory — not root's. post_update.sh runs the
+# migration as root, but the legacy ~/skills and ~/agents belong to the login
+# user (MIGRATE_CHOWN_USER), so resolve their home rather than using $HOME.
+_mig_home_dir() {
+    local user="${MIGRATE_CHOWN_USER:-}"
+    local home=""
+    if [ -n "$user" ]; then
+        home=$(getent passwd "$user" 2>/dev/null | cut -d: -f6)
+    fi
+    [ -n "$home" ] || home="$HOME"
+    echo "$home"
+}
+
+# Move every child of an absolute legacy home dir (~/skills, ~/agents) into
+# <repo>/workspace/$new_rel. Same never-clobber/empty-only contract as
+# _migrate_dir_into_workspace; the source just lives outside the repo.
+_migrate_home_dir_into_workspace() {
+    local repo="$1" home_src="$2" new_rel="$3"
+    local new_path="$repo/workspace/$new_rel"
+    [ -d "$home_src" ] || return 0
+    # Never touch a ~/skills that is actually a symlink into the workspace.
+    [ -L "$home_src" ] && return 0
+
+    shopt -s dotglob nullglob
+    local items=("$home_src"/*)
+    shopt -u dotglob nullglob
+
+    if [ ${#items[@]} -gt 0 ]; then
+        _mig_log "Migrating $home_src/ -> workspace/$new_rel/"
+        _mig_mkdir "$new_path"
+        local item name
+        for item in "${items[@]}"; do
+            name=$(basename "$item")
+            if [ "$name" = "__pycache__" ]; then
+                rm -rf "$item"
+                continue
+            fi
+            _mig_move "$item" "$new_path/$name" "$home_src/$name -> workspace/$new_rel/$name"
+        done
+    fi
+
+    rmdir "$home_src" 2>/dev/null && _mig_log "Removed empty $home_src/" || true
+}
+
 # Move trained-model files out of the legacy primitives/ tree into innate_skills,
 # preserving the relative sub-path (e.g. primitives/wave/x.h5 -> innate_skills/wave/x.h5).
 _migrate_primitives_models() {
@@ -167,6 +215,15 @@ run_user_data_migrations() {
     _migrate_dir_into_workspace "$repo" inputs     inputs
     _migrate_primitives_models  "$repo"
     _migrate_nav_state          "$repo"
+
+    # Legacy home-directory locations (~/skills, ~/agents) the brain still scans
+    # in place but the dataset media/encoder pipeline can't serve.
+    local home_dir
+    home_dir="$(_mig_home_dir)"
+    if [ -n "$home_dir" ]; then
+        _migrate_home_dir_into_workspace "$repo" "$home_dir/agents" custom_agents
+        _migrate_home_dir_into_workspace "$repo" "$home_dir/skills" custom_skills
+    fi
 }
 
 # Execute when run directly (not when sourced).
