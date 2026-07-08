@@ -7,7 +7,7 @@
 // is all a 2D map needs.
 
 import { ros } from "../rosClient.js";
-import { MAP_TOPIC, ODOM_TOPIC, PLAN_TOPIC, GOAL_POSE_TOPIC, CANCEL_NAVIGATION_SERVICE } from "../constants.js";
+import { MAP_TOPIC, ODOM_TOPIC, PLAN_TOPICS, GOAL_POSE_TOPIC, CANCEL_NAVIGATION_SERVICE } from "../constants.js";
 
 // Wheel-zoom bounds (metres of real-world width shown).
 const MIN_ZOOM_M = 1;
@@ -376,7 +376,8 @@ export function createMap(root, opts = {}) {
 
   const unsubMap = ros.subscribe(MAP_TOPIC, onMap, 250);
   const unsubOdom = ros.subscribe(ODOM_TOPIC, onOdom, 100);
-  const unsubPlan = ros.subscribe(PLAN_TOPIC, onPlan, 250, "nav_msgs/msg/Path");
+  // Only the active planner publishes, so both feeds can share one handler.
+  const unsubPlans = PLAN_TOPICS.map((topic) => ros.subscribe(topic, onPlan, 250, "nav_msgs/msg/Path"));
 
   return {
     /** Swap to a saved zoom (e.g. when this widget reparents between thumbnail and full stage). */
@@ -391,7 +392,7 @@ export function createMap(root, opts = {}) {
       ro.disconnect();
       unsubMap();
       unsubOdom();
-      unsubPlan();
+      for (const unsub of unsubPlans) unsub();
       canvas.remove();
       controls.remove();
     },

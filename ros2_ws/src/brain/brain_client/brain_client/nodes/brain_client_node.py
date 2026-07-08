@@ -381,6 +381,7 @@ class BrainClientNode(Node):
         primitive_name = payload.get("skill_name") or self._skill_name_for_id(skill_id)
         primitive_id = payload.get("primitive_id") or f"manual_{skill_id}_{int(time.time() * 1000)}"
         reason = payload.get("reason")
+        inputs = payload.get("inputs")
 
         self.get_logger().info(f"Manual skill event: {status} {primitive_name} ({skill_id})")
         if self.state.is_brain_active:
@@ -398,6 +399,7 @@ class BrainClientNode(Node):
             status=status,
             skill_id=skill_id,
             reason=reason,
+            inputs=inputs,
         )
         self.chat.history.append(
             {
@@ -408,6 +410,7 @@ class BrainClientNode(Node):
                 "primitiveId": primitive_id,
                 "skillId": skill_id,
                 **({"failureReason": reason} if reason else {}),
+                **({"inputs": inputs} if inputs else {}),
             }
         )
 

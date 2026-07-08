@@ -52,9 +52,14 @@ export const WEBSOCKET_STATUS_TOPIC = "/brain/websocket_status";
 // Navigation map + odometry for the 2D map page.
 export const MAP_TOPIC = "/map"; // nav_msgs/OccupancyGrid
 export const ODOM_TOPIC = "/odom"; // nav_msgs/Odometry
-export const PLAN_TOPIC = "/plan"; // nav_msgs/Path — the planner's route to the goal
+// nav_msgs/Path — the planner's route to the goal. Both Nav2 planner servers
+// are namespaced (mars_nav launch), so the route arrives on one of these
+// depending on the active planner; there is no root /plan publisher. Kept in
+// sync by hand with PLAN_TOPICS in sim/viewer/src/physics/rosbridgeController.ts
+// (the sim viewer is a separately built bundle).
+export const PLAN_TOPICS = ["/navigation/plan", "/mapfree/plan"];
 // Click-to-navigate goal. Publishing a geometry_msgs/PoseStamped here kicks off
-// planning; the resulting route streams back on PLAN_TOPIC. Same topic the sim
+// planning; the resulting route streams back on PLAN_TOPICS. Same topic the sim
 // console's map view publishes to.
 export const GOAL_POSE_TOPIC = "/goal_pose";
 // Stop all active navigation (std_srvs/Trigger) — cancels every NavigateToPose

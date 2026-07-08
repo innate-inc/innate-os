@@ -4856,6 +4856,15 @@ button {
   opacity: 0.6;
 }
 
+/* The skill's call parameters (compact k=v line under the status row). */
+.chat-skill-params {
+  padding: 0 10px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--muted);
+  word-break: break-word;
+}
+
 /* Collapsible failure reason / error trace. */
 .chat-skill-detail {
   max-height: 0;

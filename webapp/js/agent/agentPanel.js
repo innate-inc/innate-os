@@ -273,11 +273,20 @@ export function createAgentPanel(root, rosClient, agentState) {
     snapIfAtBottom(wasAtBottom);
   }
 
-  /** @type {Map<string, { wrap: HTMLElement, head: HTMLElement, status: HTMLElement, hasDetail: boolean }>} */
+  /** @type {Map<string, { wrap: HTMLElement, head: HTMLElement, status: HTMLElement, hasDetail: boolean, hasParams: boolean }>} */
   const skillRuns = new Map();
 
-  /** @param {string} key @param {string} name @param {string} status @param {number} ts @param {string} [reason] */
-  function addSkillRun(key, name, status, ts, reason) {
+  /** Compact one-line "k=v" rendering of a skill's call inputs.
+   *  @param {any} inputs */
+  function formatInputs(inputs) {
+    if (!inputs || typeof inputs !== "object" || Array.isArray(inputs)) return "";
+    return Object.entries(inputs)
+      .map(([k, v]) => `${k}=${v !== null && typeof v === "object" ? JSON.stringify(v) : String(v)}`)
+      .join("  ");
+  }
+
+  /** @param {string} key @param {string} name @param {string} status @param {number} ts @param {string} [reason] @param {string} [params] */
+  function addSkillRun(key, name, status, ts, reason, params) {
     const wasAtBottom = atBottom();
     const cls = ["running", "completed", "failed", "interrupted"].includes(status) ? status : "running";
     // Reflect the running primitive in the Active Skill readout.
@@ -307,12 +316,21 @@ export function createAgentPanel(root, rosClient, agentState) {
       head.append(tag, nameEl, statusEl);
       wrap.append(head);
       stream.appendChild(wrap);
-      run = { wrap, head, status: statusEl, hasDetail: false };
+      run = { wrap, head, status: statusEl, hasDetail: false, hasParams: false };
       skillRuns.set(key, run);
     }
     run.wrap.className = `chat-skill ${cls}`;
     if (run.hasDetail) run.wrap.classList.add("has-detail");
     run.status.textContent = cls;
+
+    // The call parameters, shown from the "running" update onwards.
+    if (params && !run.hasParams) {
+      run.hasParams = true;
+      const paramsEl = document.createElement("div");
+      paramsEl.className = "chat-skill-params mono";
+      paramsEl.textContent = roundNums(params);
+      run.head.insertAdjacentElement("afterend", paramsEl);
+    }
 
     // A failed run carries the failure reason / error — show it expanded
     // in-place (collapsible so a long trace can be tucked away).
@@ -413,7 +431,14 @@ export function createAgentPanel(root, rosClient, agentState) {
       const status = String(e?.taskStatus ?? "");
       if (!name || !status) return;
       const key = String(e?.primitiveId ?? e?.skillId ?? name);
-      addSkillRun(key, name, status, ts, typeof e?.failureReason === "string" ? e.failureReason : "");
+      addSkillRun(
+        key,
+        name,
+        status,
+        ts,
+        typeof e?.failureReason === "string" ? e.failureReason : "",
+        formatInputs(e?.inputs),
+      );
       return;
     }
     const text = String(e?.text ?? "");
@@ -485,7 +510,8 @@ export function createAgentPanel(root, rosClient, agentState) {
     if (!name || !status) return;
     const key = String(payload?.primitive_id ?? payload?.skill_id ?? name);
     const reason = typeof payload?.reason === "string" ? payload.reason : "";
-    addSkillRun(key, name, status, Number(payload?.timestamp) || Date.now() / 1000, reason);
+    const params = formatInputs(payload?.inputs);
+    addSkillRun(key, name, status, Number(payload?.timestamp) || Date.now() / 1000, reason, params);
   });
 
   return {

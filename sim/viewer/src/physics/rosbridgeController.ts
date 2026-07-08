@@ -1,19 +1,29 @@
-// /scan overlay source for the webapp's SimSession: subscribe to the robot's
-// lidar over rosbridge and emit world-frame hit points. Pose/joints for the
-// 3D view come from the world server's observer stream (worldStateController)
-// -- lidar stays here deliberately: it is a robot sensor, so the robot's own
-// pipeline is the honest source for the debug overlay. Read-only --
+// Robot-telemetry overlay source for the webapp's SimSession: subscribe to
+// the robot's lidar and Nav2's planned path over rosbridge and emit
+// world-frame points. Pose/joints for the 3D view come from the world
+// server's observer stream (worldStateController) -- these stay here
+// deliberately: they are robot software outputs, so the robot's own
+// pipeline is the honest source for the overlays. Read-only --
 // teleop/commands go through the webapp's own rosbridge client.
 //
 // Speaks the rosbridge JSON protocol directly (subscribe/publish) -- no
-// roslib dependency for two message types.
+// roslib dependency for a few message types.
 
 // base_laser mount relative to base_link (mars.urdf base_laser_joint).
 const LASER_OFFSET = { x: -0.0764, z: 0.17165 };
 
+// Both Nav2 planner servers are namespaced (mars_nav launch); only the
+// active one publishes, so both feed the same handler. Kept in sync by hand
+// with PLAN_TOPICS in webapp/js/constants.js -- the viewer is a separately
+// built bundle, so the constant can't be imported across that boundary.
+const PLAN_TOPICS = ["/navigation/plan", "/mapfree/plan"];
+
 export class RosbridgePhysicsController {
   /** World-frame lidar hit points [x0,y0,z0, x1,...], null-range rays skipped. */
   onScan?: (points: Float32Array) => void;
+  /** Planned-path ground points [x0,y0, x1,y1, ...]; empty = plan cleared. */
+  onPlan?: (points: Float32Array) => void;
+  #scanEnabled = false;
 
   #url: string;
   #ws!: WebSocket;
@@ -44,12 +54,12 @@ export class RosbridgePhysicsController {
     ws.onopen = () => {
       this.#everOpened = true;
       this.#retryMs = 500;
-      // /odom only anchors the scan overlay, so a mild throttle is fine here
-      // (the 3D view's pose comes from the world state stream, not rosbridge).
-      // queue_length 1: latest-wins -- a hop buffering more than the newest
-      // sample converts load hiccups into permanent lag.
-      this.#send({ op: "subscribe", topic: "/odom", type: "nav_msgs/msg/Odometry", throttle_rate: 100, queue_length: 1 });
-      this.#send({ op: "subscribe", topic: "/scan", type: "sensor_msgs/msg/LaserScan", throttle_rate: 150, queue_length: 1 });
+      // The planner republishes ~1Hz while driving; queue_length 1 keeps it
+      // latest-wins like the other feeds.
+      for (const topic of PLAN_TOPICS) {
+        this.#send({ op: "subscribe", topic, type: "nav_msgs/msg/Path", throttle_rate: 250, queue_length: 1 });
+      }
+      if (this.#scanEnabled) this.#subscribeScan();
       this.#resolveOpen();
     };
     ws.onerror = () => {
@@ -69,6 +79,23 @@ export class RosbridgePhysicsController {
     await this.#open;
   }
 
+  /** Start the /scan + /odom feeds (the lidar overlay is opt-in; the plan
+   * overlay is always on). Idempotent; survives reconnects via #connect. */
+  enableScan(): void {
+    if (this.#scanEnabled) return;
+    this.#scanEnabled = true;
+    this.#subscribeScan();
+  }
+
+  #subscribeScan(): void {
+    // /odom only anchors the scan overlay, so a mild throttle is fine here
+    // (the 3D view's pose comes from the world state stream, not rosbridge).
+    // queue_length 1: latest-wins -- a hop buffering more than the newest
+    // sample converts load hiccups into permanent lag.
+    this.#send({ op: "subscribe", topic: "/odom", type: "nav_msgs/msg/Odometry", throttle_rate: 100, queue_length: 1 });
+    this.#send({ op: "subscribe", topic: "/scan", type: "sensor_msgs/msg/LaserScan", throttle_rate: 150, queue_length: 1 });
+  }
+
   dispose(): void {
     this.#disposed = true;
     this.#ws.close();
@@ -82,6 +109,18 @@ export class RosbridgePhysicsController {
       };
       const { position, orientation } = odom.pose.pose;
       this.#pose = { x: position.x, y: position.y, yaw: 2 * Math.atan2(orientation.z, orientation.w) };
+    } else if (msg.topic !== undefined && PLAN_TOPICS.includes(msg.topic) && this.onPlan) {
+      // Plan poses arrive in the map/odom frame; the sim's world frame is the
+      // map frame (ground-truth-seeded localization), so use them directly --
+      // the same assumption the webapp's 2D map widget makes.
+      const path = msg.msg as { poses?: Array<{ pose: { position: { x: number; y: number } } }> };
+      if (!Array.isArray(path.poses)) return;
+      const points = new Float32Array(path.poses.length * 2);
+      path.poses.forEach((p, i) => {
+        points[i * 2] = p.pose.position.x;
+        points[i * 2 + 1] = p.pose.position.y;
+      });
+      this.onPlan(points);
     } else if (msg.topic === "/scan" && this.onScan) {
       const scan = msg.msg as { angle_min: number; angle_increment: number; range_max: number; ranges: number[] };
       const { x, y, yaw } = this.#pose;

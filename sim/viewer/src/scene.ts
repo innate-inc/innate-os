@@ -62,6 +62,7 @@ export class SimScene {
   private robotCameras = new Map<CameraView, THREE.PerspectiveCamera>();
   private activeView: CameraView = "orbit";
   private lidarPoints?: THREE.Points;
+  private planRibbon?: THREE.Mesh;
   private hullsGroup?: THREE.Group;
   private hullsPromise?: Promise<void>;
   private hullsVisible = false;
@@ -160,6 +161,68 @@ export class SimScene {
 
   setLidarVisible(visible: boolean): void {
     if (this.lidarPoints) this.lidarPoints.visible = visible;
+  }
+
+  // Planned-path ribbon: width in meters and lift above the floor mesh
+  // (enough to clear z-fighting, low enough to read as painted on it).
+  private static readonly PLAN_WIDTH = 0.06;
+  private static readonly PLAN_Z = 0.02;
+
+  /** Show the Nav2 planned path as a flat ribbon on the floor. `points` is
+   * ground-frame [x0,y0, x1,y1, ...]; fewer than 2 points hides it. */
+  setPlanPoints(points: Float32Array): void {
+    const n = points.length / 2;
+    if (n < 2) {
+      if (this.planRibbon) this.planRibbon.visible = false;
+      return;
+    }
+    if (!this.planRibbon) {
+      const material = new THREE.MeshBasicMaterial({
+        color: 0x00b7ff, // matches the 2D map widget's route color
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      this.planRibbon = new THREE.Mesh(new THREE.BufferGeometry(), material);
+      this.planRibbon.frustumCulled = false;
+      this.scene.add(this.planRibbon);
+    }
+    // Two vertices per path point, offset ±half-width along the averaged
+    // perpendicular of the adjacent segments -- a miter-less triangle strip.
+    const half = SimScene.PLAN_WIDTH / 2;
+    const vertices = new Float32Array(n * 2 * 3);
+    for (let i = 0; i < n; i++) {
+      const x = points[i * 2];
+      const y = points[i * 2 + 1];
+      const px = points[Math.max(0, i - 1) * 2];
+      const py = points[Math.max(0, i - 1) * 2 + 1];
+      const nx = points[Math.min(n - 1, i + 1) * 2];
+      const ny = points[Math.min(n - 1, i + 1) * 2 + 1];
+      const len = Math.hypot(nx - px, ny - py) || 1;
+      const perpX = -(ny - py) / len;
+      const perpY = (nx - px) / len;
+      vertices.set([x + perpX * half, y + perpY * half, SimScene.PLAN_Z], i * 6);
+      vertices.set([x - perpX * half, y - perpY * half, SimScene.PLAN_Z], i * 6 + 3);
+    }
+    const indices: number[] = [];
+    for (let i = 0; i < n - 1; i++) {
+      const a = i * 2;
+      indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+    // Swap in a fresh geometry and dispose the old one: replacing attributes
+    // on a live geometry leaves the previous GPU buffers allocated until a
+    // dispose, and the planner republishes ~1Hz for a whole navigation.
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
+    geometry.setIndex(indices);
+    this.planRibbon.geometry.dispose();
+    this.planRibbon.geometry = geometry;
+    this.planRibbon.visible = true;
+  }
+
+  setPlanVisible(visible: boolean): void {
+    if (this.planRibbon) this.planRibbon.visible = visible;
   }
 
   /**

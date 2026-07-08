@@ -54,6 +54,7 @@ class ChatManager:
         status: str,
         skill_id: str | None = None,
         reason: str | None = None,
+        inputs: dict | None = None,
     ) -> None:
         """Publish a local task-status update for the controller-app UI."""
         payload = {
@@ -66,6 +67,8 @@ class ChatManager:
         }
         if reason:
             payload["reason"] = reason
+        if inputs:
+            payload["inputs"] = inputs
         self._task_status_pub.publish(String(data=json.dumps(payload)))
 
     def history_json(self) -> str:

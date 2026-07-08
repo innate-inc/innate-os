@@ -2,7 +2,8 @@
 // simulated: same state shape and methods, no video pipeline. State comes
 // from the world server's ground-truth observer stream (~75Hz pose+joints),
 // played back with a short clamped interpolation; rosbridge remains only
-// for the /scan debug overlay. Architecture: sim/README.md.
+// for the Nav2 plan overlay and the /scan debug overlay.
+// Architecture: sim/README.md.
 
 import type { SimScene } from "./scene";
 import { RosbridgePhysicsController } from "./physics/rosbridgeController";
@@ -86,6 +87,14 @@ export class SimSession {
   #hullsOn = false;
   #overlaysDirty = false;
 
+  // Nav2 planned path (always-on overlay, shown while navigating). The
+  // planner republishes ~1Hz the whole time it's driving, so a lull means
+  // navigation ended -- same staleness rule as the webapp's 2D map.
+  #plan: Float32Array | null = null;
+  #planDirty = false;
+  #planStaleAt = 0;
+  static readonly #PLAN_STALE_S = 4;
+
   #stateUrls: string[];
   #rosUrl: string;
 
@@ -135,6 +144,20 @@ export class SimSession {
     // directly (thumbnailCanvas below).
 
     this.#connectState(0);
+    this.#connectRosFeed();
+  }
+
+  /** Open the rosbridge feed for the always-on plan overlay; the scan feed
+   * piggybacks on the same connection when the lidar chip enables it. */
+  #connectRosFeed(): void {
+    this.#scanFeed = new RosbridgePhysicsController(this.#rosUrl);
+    this.#scanFeed.onPlan = (points) => {
+      this.#plan = points;
+      this.#planDirty = true;
+      this.#planStaleAt = performance.now() / 1000 + SimSession.#PLAN_STALE_S;
+    };
+    this.#scanFeed.init().catch((err) => console.warn("[sim-session] rosbridge overlays unavailable:", err));
+    if (this.#lidarOn) this.setLidarVisible(true); // chip toggled before start()
   }
 
   /** Connect the state feed, falling through the URL candidates (direct
@@ -187,6 +210,11 @@ export class SimSession {
     this.#controller = null;
     this.#scanFeed?.dispose();
     this.#scanFeed = null;
+    // Drop buffered overlay data so a restart doesn't redraw a stale route/scan.
+    this.#plan = null;
+    this.#planDirty = false;
+    this.#scan = null;
+    this.#scanDirty = false;
     this.#started = false;
     this.#gotPose = false;
     this.#patch({ status: "idle", videoStream: null });
@@ -197,19 +225,17 @@ export class SimSession {
     this.#listeners.clear();
   }
 
-  /** Toggle the /scan hit-point overlay (stage "lidar" chip). The rosbridge
-   * connection is opened on first use -- the 3D view itself never consumes
-   * robot telemetry. */
+  /** Toggle the /scan hit-point overlay (stage "lidar" chip). The scan
+   * subscription starts on first use, on the plan overlay's connection. */
   setLidarVisible(on: boolean): void {
     this.#lidarOn = on;
     this.#overlaysDirty = true;
-    if (on && this.#scanFeed === null) {
-      this.#scanFeed = new RosbridgePhysicsController(this.#rosUrl);
+    if (on && this.#scanFeed !== null && !this.#scanFeed.onScan) {
       this.#scanFeed.onScan = (points) => {
         this.#scan = points;
         this.#scanDirty = true;
       };
-      this.#scanFeed.init().catch((err) => console.warn("[sim-session] scan overlay unavailable:", err));
+      this.#scanFeed.enableScan();
     }
   }
 
@@ -303,6 +329,14 @@ export class SimSession {
       this.#scanDirty = false;
       scene.setLidarPoints(this.#scan);
       scene.setLidarVisible(true); // first points may arrive after the toggle
+    }
+
+    if (this.#planDirty && this.#plan) {
+      this.#planDirty = false;
+      scene.setPlanPoints(this.#plan);
+    } else if (this.#plan && performance.now() / 1000 > this.#planStaleAt) {
+      this.#plan = null; // planner went quiet: navigation ended
+      scene.setPlanVisible(false);
     }
   }
 

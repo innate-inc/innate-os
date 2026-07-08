@@ -322,7 +322,7 @@ class SkillsActionServer(Node):
 
         name = self._skill_display_name(skill_type)
         run_id = uuid.uuid4().hex
-        self._publish_skill_status(run_id, skill_type, name, "running")
+        self._publish_skill_status(run_id, skill_type, name, "running", inputs=inputs)
         try:
             if self.catalog.get_code_skill(skill_type) is not None:
                 result = self._execute_code_skill(goal_handle, skill_type, inputs)
@@ -341,12 +341,12 @@ class SkillsActionServer(Node):
         except Exception as e:
             # A 'running' broadcast went out above — a terminal status MUST
             # follow or every client shows this skill as active forever.
-            self._publish_skill_status(run_id, skill_type, name, "failed", str(e) or "internal error")
+            self._publish_skill_status(run_id, skill_type, name, "failed", str(e) or "internal error", inputs=inputs)
             raise
         finally:
             self._release_skill_slot()
         status, reason = self._terminal_skill_status(result)
-        self._publish_skill_status(run_id, skill_type, name, status, reason)
+        self._publish_skill_status(run_id, skill_type, name, status, reason, inputs=inputs)
         return result
 
     @staticmethod
@@ -377,7 +377,7 @@ class SkillsActionServer(Node):
         return "failed", result.message or None
 
     def _publish_skill_status(
-        self, run_id: str, skill_type: str, name: str, status: str, reason: str | None = None
+        self, run_id: str, skill_type: str, name: str, status: str, reason: str | None = None, inputs: dict | None = None
     ) -> None:
         payload = {
             "primitive_name": name,
@@ -389,6 +389,8 @@ class SkillsActionServer(Node):
         }
         if reason:
             payload["reason"] = reason
+        if inputs:
+            payload["inputs"] = inputs
         self._skill_status_pub.publish(String(data=json.dumps(payload)))
 
     # ================= execution =================
