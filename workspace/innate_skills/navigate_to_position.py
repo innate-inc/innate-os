@@ -8,6 +8,7 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from rclpy.duration import Duration
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.time import Time
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
@@ -51,6 +52,13 @@ class Nav2Controller:
         # TF listener used to resolve local goals into LOCAL_GOAL_FIXED_FRAME
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self.navigator)
+
+        # The exact goal this skill commands, resolved to its fixed frame
+        # (map, or odom for local goals) -- lets UIs render the true target
+        # rather than inferring it from the replanned path's endpoint.
+        # Latched so a viewer that connects mid-navigation still sees it.
+        latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self._commanded_goal_pub = self.navigator.create_publisher(PoseStamped, "/nav/commanded_goal", latched)
 
         self.logger.info("Nav2 position primitive node created")
 
@@ -132,6 +140,8 @@ class Nav2Controller:
         goal_pose.pose.orientation.y = 0.0
         goal_pose.pose.orientation.z = math.sin(goal_yaw / 2.0)
         goal_pose.pose.orientation.w = math.cos(goal_yaw / 2.0)
+
+        self._commanded_goal_pub.publish(goal_pose)
 
         self.logger.debug(f"Sending goal pose ... behavior_tree: {behavior_tree}")
         path_navigator = self.navigator_mapfree if local_frame else self.navigator_navigation

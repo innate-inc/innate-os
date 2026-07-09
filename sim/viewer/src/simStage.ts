@@ -49,18 +49,57 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
       `padding:4px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.25);background:${OFF_BG};` +
       "color:rgba(255,255,255,.75);font:500 11px system-ui;cursor:pointer;";
     let on = false;
-    b.onclick = () => {
-      on = !on;
+    const apply = () => {
       b.style.background = on ? ON_BG : OFF_BG;
       b.style.color = on ? "#7dffc4" : "rgba(255,255,255,.75)";
+    };
+    b.onclick = () => {
+      on = !on;
+      apply();
       onToggle(on);
     };
     chips.appendChild(b);
+    // Programmatic toggle (e.g. set-goal auto-exits after placing one goal).
+    return {
+      set(v: boolean) {
+        if (on === v) return;
+        on = v;
+        apply();
+        onToggle(on);
+      },
+    };
   };
   addChip("lidar", (on) => session.setLidarVisible(on));
   addChip("collisions", (on) => session.setCollisionHullsVisible(on));
-  addChip("follower", (on) => session.setFollowerVisible(on));
+  // Set-goal placement mode ("set goal" chip): click the floor to pick the
+  // position, drag to choose the heading, release to send. Auto-exits after
+  // one goal; while active the orbit drag is suspended (see the render loop).
+  let goalMode = false;
+  let goalChip: { set(v: boolean): void } | null = null;
+  if (session.navDebug) {
+    addChip("follower", (on) => session.setFollowerVisible(on));
+    // Freeze pauses the simulated world in place (physics stops, the robot
+    // stack keeps running); unfreezing continues the navigation mid-flight.
+    addChip("freeze", (on) => session.setFrozen(on));
+    goalChip = addChip("set goal", (on) => {
+      goalMode = on;
+      canvas.style.cursor = on ? "crosshair" : "";
+    });
+  }
   debugStack.appendChild(chips);
+
+  // ?navdebug: why is the follower doing that? Reports the state MPPI's
+  // critics are gated on, since it never publishes the costs themselves.
+  let navEl: HTMLElement | null = null;
+  let navNextAt = 0;
+  if (session.navDebug) {
+    navEl = document.createElement("div");
+    navEl.style.cssText =
+      "align-self:flex-start;max-width:340px;padding:6px 9px;border-radius:6px;" +
+      "background:rgba(0,0,0,.72);color:#cfe;font:11px/1.5 ui-monospace,monospace;" +
+      "pointer-events:none;white-space:pre;";
+    debugStack.prepend(navEl);
+  }
 
   // Loading overlay: spinner + staged label instead of a black canvas until
   // assets and the first world state arrive.
@@ -128,8 +167,100 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
     debugStack.prepend(perfEl);
   }
 
+  /** Render one frame of the nav-debug HUD. Kept text-only + monospace so the
+   * numbers line up and it never costs a layout reflow worth measuring. */
+  const renderNavHud = (el: HTMLElement) => {
+    const s = session.navDebugSnapshot;
+    if (!s) return;
+    const n = (v: number | null, digits = 2, unit = "") => (v === null ? "—" : `${v.toFixed(digits)}${unit}`);
+    const lines: string[] = [];
+
+    // Make a paused world unmistakable -- the numbers below are live but static.
+    if (session.frozen) lines.push("❚❚ WORLD FROZEN — physics paused, unfreeze to continue");
+
+    if (s.cmd === null) {
+      lines.push("COMMAND    idle (controller not running)");
+    } else {
+      const badge = s.stalled ? "  ⚠ STALLED" : s.wzFlips >= 4 ? `  ⚠ OSCILLATING (${s.wzFlips} flips/4s)` : "";
+      lines.push(`COMMAND    vx ${n(s.cmd.vx)} m/s   wz ${n(s.cmd.wz)} rad/s${badge}`);
+      if (s.finalCmd) lines.push(`  ->wheels vx ${n(s.finalCmd.vx)}      wz ${n(s.finalCmd.wz)}`);
+    }
+
+    const goalAt = s.goal
+      ? `(${s.goal.x.toFixed(2)}, ${s.goal.y.toFixed(2)}, ${((s.goal.yaw * 180) / Math.PI).toFixed(0)}°) ` +
+        (s.goal.commanded ? `[${s.goal.frame ?? "?"} frame, commanded]` : "[plan end]")
+      : "none";
+    lines.push(`GOAL       ${goalAt}`);
+    lines.push(
+      `           ${n(s.distanceRemaining, 2, " m")} away   recoveries ${s.recoveries ?? "—"}   t ${n(s.navTimeS, 0, "s")}`,
+    );
+    lines.push(
+      `BLOCKING   under robot: ${s.costUnderRobot}   0.5m ahead: ${s.maxCostAhead}` +
+        (s.pathOccupancy === null ? "" : `\n           path blocked ${(s.pathOccupancy * 100).toFixed(0)}%`) +
+        (s.headingErrDeg === null ? "" : `   heading err ${s.headingErrDeg.toFixed(0)}°`),
+    );
+    lines.push("CRITICS");
+    for (const c of s.critics) {
+      lines.push(`  ${c.active ? "●" : "○"} ${c.name.padEnd(11)}${c.note}`);
+    }
+    el.textContent = lines.join("\n");
+  };
+
   const scene = new SimScene(canvas, { fixedSize: { width: parent.clientWidth || 1280, height: parent.clientHeight || 720 } });
   scene.followCamera = true;
+
+  // Set-goal placement: hover shows a ghost ring on the floor; press picks
+  // the position; dragging picks the heading; release publishes /goal_pose.
+  // A sub-15cm drag means "no heading preference" -> face the goal from the
+  // robot's side, the direction it will arrive from.
+  let goalDrag: { x: number; y: number } | null = null;
+  const finishGoal = (e: PointerEvent) => {
+    if (!goalDrag) return;
+    const start = goalDrag;
+    goalDrag = null;
+    const cur = scene.groundPoint(e.clientX, e.clientY);
+    const dx = cur ? cur.x - start.x : 0;
+    const dy = cur ? cur.y - start.y : 0;
+    let yaw: number;
+    if (Math.hypot(dx, dy) > 0.15) {
+      yaw = Math.atan2(dy, dx);
+    } else {
+      const robot = session.robotPose;
+      yaw = robot ? Math.atan2(start.y - robot.y, start.x - robot.x) : 0;
+    }
+    session.publishGoalPose(start.x, start.y, yaw);
+    scene.clearGoalPreview();
+    goalChip?.set(false); // one goal per activation, like the map widget
+  };
+  canvas.addEventListener("pointerdown", (e) => {
+    if (!goalMode) return;
+    e.preventDefault();
+    const p = scene.groundPoint(e.clientX, e.clientY);
+    if (!p) return;
+    goalDrag = p;
+    canvas.setPointerCapture(e.pointerId);
+    scene.setGoalPreview(p.x, p.y, null);
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!goalMode) {
+      scene.clearGoalPreview();
+      return;
+    }
+    const cur = scene.groundPoint(e.clientX, e.clientY);
+    if (!cur) return;
+    if (goalDrag) {
+      const dx = cur.x - goalDrag.x;
+      const dy = cur.y - goalDrag.y;
+      scene.setGoalPreview(goalDrag.x, goalDrag.y, Math.hypot(dx, dy) > 0.15 ? Math.atan2(dy, dx) : null);
+    } else {
+      scene.setGoalPreview(cur.x, cur.y, null); // hover ghost while aiming
+    }
+  });
+  canvas.addEventListener("pointerup", finishGoal);
+  canvas.addEventListener("pointercancel", () => {
+    goalDrag = null;
+    scene.clearGoalPreview();
+  });
 
   const resize = () => {
     const w = wrap.clientWidth;
@@ -171,8 +302,18 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
     }
     // ...then the primary view full-frame on top.
     scene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
+    // setView re-enables orbit every frame; goal placement must keep the drag
+    // for itself, so re-suspend it here rather than fighting setView's state.
+    if (goalMode) scene.controls.enabled = false;
     scene.render();
     frame++;
+
+    // 5Hz: the snapshot walks the costmap along the path, and nothing here
+    // changes faster than the eye can read.
+    if (navEl && now >= navNextAt) {
+      navNextAt = now + 200;
+      renderNavHud(navEl);
+    }
 
     if (perfEl) {
       frameTimes.push(performance.now() - now);

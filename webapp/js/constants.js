@@ -62,6 +62,10 @@ export const PLAN_TOPICS = ["/navigation/plan", "/mapfree/plan"];
 // smoothing and the teleop/skills/nav mux. Shown as a velocity arrow so a
 // stalled/oscillating follower is visible against the plan.
 export const CMD_VEL_RAW_TOPIC = "/cmd_vel_raw";
+// The exact goal navigate_to_position commanded (geometry_msgs/PoseStamped,
+// latched; frame_id is "map", or "odom" for local goals) — the true target,
+// unlike the plan endpoint which wiggles with every replan.
+export const COMMANDED_GOAL_TOPIC = "/nav/commanded_goal";
 // Click-to-navigate goal. Publishing a geometry_msgs/PoseStamped here kicks off
 // planning; the resulting route streams back on PLAN_TOPICS. Same topic the sim
 // console's map view publishes to.

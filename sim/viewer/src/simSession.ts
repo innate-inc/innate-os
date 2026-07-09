@@ -6,8 +6,45 @@
 // Architecture: sim/README.md.
 
 import type { SimScene } from "./scene";
-import { RosbridgePhysicsController } from "./physics/rosbridgeController";
+import { RosbridgePhysicsController, type RawCostmap } from "./physics/rosbridgeController";
 import { WorldStateController } from "./physics/worldStateController";
+import {
+  OscillationDetector,
+  costAt,
+  costLabel,
+  criticStates,
+  headingErrorToCarrot,
+  maxCostAhead,
+  pathOccupancyRatio,
+  STALL_VX,
+  STALL_WZ,
+  type CriticState,
+} from "./navDebug";
+
+/** Nav debugging (planner route, follower overlay, HUD) is opt-in per URL so
+ * the normal sim view stays uncluttered and pays no rosbridge cost. */
+export function navDebugEnabled(): boolean {
+  return new URLSearchParams(location.search).has("navdebug");
+}
+
+/** One frame of derived MPPI decision state for the ?navdebug HUD. */
+export interface NavDebugSnapshot {
+  cmd: { vx: number; wz: number } | null;
+  finalCmd: { vx: number; wz: number } | null;
+  stalled: boolean;
+  wzFlips: number;
+  /** The navigation target: the skill's commanded goal when available
+   * (frame + commanded=true), else the plan endpoint as a fallback. */
+  goal: { x: number; y: number; yaw: number; frame?: string; commanded: boolean } | null;
+  distanceRemaining: number | null;
+  recoveries: number | null;
+  navTimeS: number | null;
+  costUnderRobot: string;
+  maxCostAhead: string;
+  pathOccupancy: number | null;
+  headingErrDeg: number | null;
+  critics: CriticState[];
+}
 
 /** PiP tile render size; square to match the webapp's .cam-tile. */
 export const THUMB_W = 240;
@@ -87,16 +124,26 @@ export class SimSession {
   #hullsOn = false;
   #overlaysDirty = false;
 
-  // Nav2 planned path (always-on overlay, shown while navigating). The
-  // planner republishes ~1Hz the whole time it's driving, so a lull means
-  // navigation ended -- same staleness rule as the webapp's 2D map.
+  // --- ?navdebug only (see navDebugEnabled) ---
+  #navDebug = navDebugEnabled();
+
+  // Nav2 planned path, shown while navigating. The planner republishes ~1Hz
+  // the whole time it's driving, so a lull means navigation ended -- same
+  // staleness rule as the webapp's 2D map.
   #plan: Float32Array | null = null;
   #planDirty = false;
   #planStaleAt = 0;
   static readonly #PLAN_STALE_S = 4;
+  /** Fallback navigation target: the plan's final pose. Cleared with the plan. */
+  #goal: { x: number; y: number; yaw: number } | null = null;
+  #goalDirty = false;
+  /** The exact goal navigate_to_position commanded (preferred over #goal --
+   * the plan endpoint wiggles with every replan, this is the true target).
+   * Cleared with the plan: the planner going quiet means navigation ended. */
+  #commandedGoal: { x: number; y: number; yaw: number; frame: string } | null = null;
 
-  // Follower overlay (opt-in "follower" chip): the MPPI command arrow + the
-  // path it's tracking. Both go stale quickly once the controller stops.
+  // Follower overlay ("follower" chip): the MPPI command arrow + the path it's
+  // tracking. Both go stale quickly once the controller stops.
   #followerOn = false;
   #followerDirty = false;
   #cmd: { vx: number; wz: number } | null = null;
@@ -105,6 +152,19 @@ export class SimSession {
   #followerPathDirty = false;
   #followerStaleAt = 0;
   static readonly #FOLLOWER_STALE_S = 1;
+
+  // HUD inputs: everything else MPPI's decision is gated on.
+  #finalCmd: { vx: number; wz: number } | null = null;
+  #navFeedback: { distanceRemaining: number; recoveries: number; navTimeS: number } | null = null;
+  #costmap: RawCostmap | null = null;
+  #oscillation = new OscillationDetector();
+  #lastPose: { x: number; y: number; yaw: number } | null = null;
+
+  // Freeze chip: pauses the simulated world in place. The robot stack (Nav2,
+  // MPPI) keeps running against a world that stops advancing, so the planner
+  // and controller keep publishing and the overlays stay live -- just static.
+  // Unfreezing resumes exactly where it left off.
+  #frozen = false;
 
   #stateUrls: string[];
   #rosUrl: string;
@@ -155,31 +215,61 @@ export class SimSession {
     // directly (thumbnailCanvas below).
 
     this.#connectState(0);
-    this.#connectRosFeed();
+    if (this.#navDebug) this.#ensureRosFeed().enableNavDebug();
   }
 
-  /** Open the rosbridge feed for the always-on plan overlay; the scan feed
-   * piggybacks on the same connection when the lidar chip enables it. */
-  #connectRosFeed(): void {
-    this.#scanFeed = new RosbridgePhysicsController(this.#rosUrl);
-    this.#scanFeed.onPlan = (points) => {
+  /** The rosbridge connection is shared by the lidar overlay and the nav-debug
+   * feeds, and opened by whichever needs it first -- a plain sim view never
+   * opens it at all. */
+  #ensureRosFeed(): RosbridgePhysicsController {
+    if (this.#scanFeed) return this.#scanFeed;
+    const feed = new RosbridgePhysicsController(this.#rosUrl);
+    this.#scanFeed = feed;
+    feed.onScan = (points) => {
+      this.#scan = points;
+      this.#scanDirty = true;
+    };
+    feed.onPlan = (points, goal) => {
       this.#plan = points;
       this.#planDirty = true;
       this.#planStaleAt = performance.now() / 1000 + SimSession.#PLAN_STALE_S;
+      if (goal) {
+        this.#goal = goal;
+        this.#goalDirty = true;
+      }
     };
-    this.#scanFeed.onCommand = (vx, wz) => {
+    feed.onCommand = (vx, wz) => {
       this.#cmd = { vx, wz };
       this.#cmdDirty = true;
+      this.#oscillation.push(wz);
       this.#followerStaleAt = performance.now() / 1000 + SimSession.#FOLLOWER_STALE_S;
     };
-    this.#scanFeed.onFollowerPath = (points) => {
+    feed.onFinalCommand = (vx, wz) => {
+      this.#finalCmd = { vx, wz };
+    };
+    feed.onFollowerPath = (points) => {
       this.#followerPath = points;
       this.#followerPathDirty = true;
       this.#followerStaleAt = performance.now() / 1000 + SimSession.#FOLLOWER_STALE_S;
     };
-    this.#scanFeed.init().catch((err) => console.warn("[sim-session] rosbridge overlays unavailable:", err));
-    if (this.#lidarOn) this.setLidarVisible(true); // chip toggled before start()
-    if (this.#followerOn) this.setFollowerVisible(true);
+    feed.onNavFeedback = (fb) => {
+      this.#navFeedback = fb;
+    };
+    feed.onCommandedGoal = (goal) => {
+      this.#commandedGoal = goal;
+      this.#goalDirty = true;
+    };
+    feed.onCostmap = (cm) => {
+      this.#costmap = cm;
+    };
+    feed.init().catch((err) => console.warn("[sim-session] rosbridge overlays unavailable:", err));
+    return feed;
+  }
+
+  /** True when the ?navdebug flag is set: the stage shows the follower chip
+   * and the decision HUD. */
+  get navDebug(): boolean {
+    return this.#navDebug;
   }
 
   /** Connect the state feed, falling through the URL candidates (direct
@@ -235,12 +325,18 @@ export class SimSession {
     // Drop buffered overlay data so a restart doesn't redraw a stale route/scan.
     this.#plan = null;
     this.#planDirty = false;
+    this.#goal = null;
+    this.#goalDirty = false;
+    this.#commandedGoal = null;
     this.#scan = null;
     this.#scanDirty = false;
     this.#cmd = null;
     this.#cmdDirty = false;
     this.#followerPath = null;
     this.#followerPathDirty = false;
+    this.#finalCmd = null;
+    this.#navFeedback = null;
+    this.#costmap = null;
     this.#started = false;
     this.#gotPose = false;
     this.#patch({ status: "idle", videoStream: null });
@@ -251,18 +347,12 @@ export class SimSession {
     this.#listeners.clear();
   }
 
-  /** Toggle the /scan hit-point overlay (stage "lidar" chip). The scan
-   * subscription starts on first use, on the plan overlay's connection. */
+  /** Toggle the /scan hit-point overlay (stage "lidar" chip); opens the
+   * rosbridge connection on first use. */
   setLidarVisible(on: boolean): void {
     this.#lidarOn = on;
     this.#overlaysDirty = true;
-    if (on && this.#scanFeed !== null && !this.#scanFeed.onScan) {
-      this.#scanFeed.onScan = (points) => {
-        this.#scan = points;
-        this.#scanDirty = true;
-      };
-      this.#scanFeed.enableScan();
-    }
+    if (on) this.#ensureRosFeed().enableScan();
   }
 
   /** Toggle the collision-hull wireframe overlay (stage "collisions" chip). */
@@ -272,12 +362,33 @@ export class SimSession {
   }
 
   /** Toggle the follower overlay (stage "follower" chip): MPPI's command arrow
-   * + the path it's tracking. Subscribes on first enable; needs the
-   * controller's `visualize` param on for the tracked-path feed. */
+   * + the path it's tracking. The feeds are already subscribed under ?navdebug;
+   * this only governs rendering. */
   setFollowerVisible(on: boolean): void {
     this.#followerOn = on;
     this.#followerDirty = true;
-    if (on && this.#scanFeed !== null) this.#scanFeed.enableFollower();
+  }
+
+  /** Freeze/unfreeze the simulated world (stage "freeze" chip). Pauses physics
+   * in place: the robot halts, navigation stays exactly where it was, and the
+   * overlays hold. Unfreezing continues from that point. */
+  setFrozen(on: boolean): void {
+    this.#frozen = on;
+    this.#ensureRosFeed().setWorldPaused(on);
+  }
+
+  get frozen(): boolean {
+    return this.#frozen;
+  }
+
+  /** Send a map-frame navigation goal (set-goal chip). */
+  publishGoalPose(x: number, y: number, yaw: number): void {
+    this.#ensureRosFeed().publishGoalPose(x, y, yaw);
+  }
+
+  /** Latest interpolated robot pose the scene is showing (world frame). */
+  get robotPose(): { x: number; y: number; yaw: number } | null {
+    return this.#lastPose;
   }
 
   // WebRTC-specific surface: harmless no-ops in sim.
@@ -346,7 +457,9 @@ export class SimSession {
     const x = a.x + (b.x - a.x) * u;
     const y = a.y + (b.y - a.y) * u;
     const dyaw = Math.atan2(Math.sin(b.yaw - a.yaw), Math.cos(b.yaw - a.yaw));
-    scene.setPose(x, y, a.yaw + dyaw * u);
+    const yaw = a.yaw + dyaw * u;
+    scene.setPose(x, y, yaw);
+    this.#lastPose = { x, y, yaw };
 
     const joints: Record<string, number> = {};
     for (const [name, va] of Object.entries(a.joints)) {
@@ -366,12 +479,30 @@ export class SimSession {
       scene.setLidarVisible(true); // first points may arrive after the toggle
     }
 
+    if (!this.#navDebug) return; // plan + follower overlays are ?navdebug only
+
+    // While the world is frozen, ROS time is stopped, so the planner and
+    // controller legitimately go quiet -- suspend staleness expiry (and let
+    // the timers re-arm on the first message after unfreeze).
+    if (this.#frozen) {
+      this.#planStaleAt = performance.now() / 1000 + SimSession.#PLAN_STALE_S;
+      this.#followerStaleAt = performance.now() / 1000 + SimSession.#FOLLOWER_STALE_S;
+    }
+
     if (this.#planDirty && this.#plan) {
       this.#planDirty = false;
       scene.setPlanPoints(this.#plan);
     } else if (this.#plan && performance.now() / 1000 > this.#planStaleAt) {
       this.#plan = null; // planner went quiet: navigation ended
+      this.#goal = null;
+      this.#commandedGoal = null;
       scene.setPlanVisible(false);
+      scene.setGoalVisible(false);
+    }
+    const goal = this.#commandedGoal ?? this.#goal;
+    if (this.#goalDirty && goal) {
+      this.#goalDirty = false;
+      scene.setGoalMarker(goal.x, goal.y, goal.yaw);
     }
 
     if (this.#followerDirty) {
@@ -399,6 +530,46 @@ export class SimSession {
         }
       }
     }
+  }
+
+  /** Derived MPPI decision state for the ?navdebug HUD. MPPI never publishes
+   * its per-critic costs, so instead we report what those critics are gated
+   * on -- distance to goal, heading error, and costmap occupancy -- which is
+   * what actually decides whether it drives, turns, or sits still.
+   *
+   * Stays live while the world is frozen: the robot stack keeps publishing
+   * against the paused world, so the numbers simply stop changing. */
+  get navDebugSnapshot(): NavDebugSnapshot | null {
+    if (!this.#navDebug) return null;
+    const stale = performance.now() / 1000 > this.#followerStaleAt;
+    const cmd = stale ? null : this.#cmd;
+    const path = stale ? null : this.#followerPath;
+    const cm = this.#costmap;
+    const pose = this.#lastPose;
+
+    const occupancy = cm && path ? pathOccupancyRatio(cm, path) : null;
+    const headingErr = pose && path ? headingErrorToCarrot(pose, path) : null;
+    const distance = stale ? null : (this.#navFeedback?.distanceRemaining ?? null);
+
+    return {
+      cmd,
+      finalCmd: stale ? null : this.#finalCmd,
+      stalled: cmd !== null && Math.abs(cmd.vx) < STALL_VX && Math.abs(cmd.wz) < STALL_WZ,
+      wzFlips: this.#oscillation.flipsInWindow,
+      goal: this.#commandedGoal
+        ? { ...this.#commandedGoal, commanded: true }
+        : this.#goal
+          ? { ...this.#goal, commanded: false }
+          : null,
+      distanceRemaining: distance,
+      recoveries: stale ? null : (this.#navFeedback?.recoveries ?? null),
+      navTimeS: stale ? null : (this.#navFeedback?.navTimeS ?? null),
+      costUnderRobot: cm && pose ? costLabel(costAt(cm, pose.x, pose.y)) : "—",
+      maxCostAhead: cm && path ? costLabel(maxCostAhead(cm, path, 0.5)) : "—",
+      pathOccupancy: occupancy,
+      headingErrDeg: headingErr === null ? null : (headingErr * 180) / Math.PI,
+      critics: criticStates(distance, headingErr, occupancy),
+    };
   }
 
   /** Active, non-primary views whose PiP tiles need frames. */

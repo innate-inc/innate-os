@@ -66,6 +66,8 @@ export class SimScene {
   private followerRibbon?: THREE.Mesh;
   private cmdLinearArrow?: THREE.ArrowHelper;
   private cmdTurnArrow?: THREE.ArrowHelper;
+  private goalMarker?: THREE.Group;
+  private goalPreview?: THREE.Group;
   private hullsGroup?: THREE.Group;
   private hullsPromise?: Promise<void>;
   private hullsVisible = false;
@@ -293,6 +295,75 @@ export class SimScene {
       turn.setDirection(new THREE.Vector3(0, Math.sign(wz), 0)); // wz>0 = CCW = left
       turn.setLength(turnLen, Math.min(0.07, turnLen * 0.4), Math.min(0.05, turnLen * 0.3));
     }
+  }
+
+  /** Ring + heading arrow on the floor, used for both the live goal marker
+   * and the set-goal placement preview. */
+  private static makeGoalGroup(opacity: number): THREE.Group {
+    const group = new THREE.Group();
+    const color = 0x00ff88; // matches the 2D map widget's goal dot
+    const ring = new THREE.Mesh(
+      // RingGeometry already lies in the XY plane -- our ground plane.
+      new THREE.RingGeometry(0.11, 0.15, 32),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    const heading = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), 0.3, color, 0.08, 0.05);
+    heading.name = "heading";
+    group.add(ring, heading);
+    group.frustumCulled = false;
+    return group;
+  }
+
+  /** Mark the navigation target on the floor: a ring at the goal position with
+   * an arrow for the goal heading (what GoalAngleCritic settles onto). */
+  setGoalMarker(x: number, y: number, yaw: number): void {
+    if (!this.goalMarker) {
+      this.goalMarker = SimScene.makeGoalGroup(0.9);
+      this.scene.add(this.goalMarker);
+    }
+    // Just above the ribbons so it stays legible where the path ends on it.
+    this.goalMarker.position.set(x, y, SimScene.FOLLOWER_Z + 0.005);
+    this.goalMarker.rotation.set(0, 0, yaw);
+    this.goalMarker.visible = true;
+  }
+
+  setGoalVisible(visible: boolean): void {
+    if (this.goalMarker) this.goalMarker.visible = visible;
+  }
+
+  /** Ghost marker following the cursor while placing a goal (set-goal chip).
+   * `yaw` null hides the heading arrow (position picked, heading not yet). */
+  setGoalPreview(x: number, y: number, yaw: number | null): void {
+    if (!this.goalPreview) {
+      this.goalPreview = SimScene.makeGoalGroup(0.5);
+      this.scene.add(this.goalPreview);
+    }
+    this.goalPreview.position.set(x, y, SimScene.FOLLOWER_Z + 0.005);
+    this.goalPreview.rotation.set(0, 0, yaw ?? 0);
+    const heading = this.goalPreview.getObjectByName("heading");
+    if (heading) heading.visible = yaw !== null;
+    this.goalPreview.visible = true;
+  }
+
+  clearGoalPreview(): void {
+    if (this.goalPreview) this.goalPreview.visible = false;
+  }
+
+  /** World-frame ground point (z=0 plane) under a pointer event, or null when
+   * the ray misses the ground (e.g. pointing at the sky). Uses the active
+   * render camera, so it works in orbit and robot views alike. */
+  groundPoint(clientX: number, clientY: number): { x: number; y: number } | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const cam = (this.activeView !== "orbit" ? this.robotCameras.get(this.activeView) : undefined) ?? this.camera;
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, cam);
+    const hit = new THREE.Vector3();
+    const ground = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0); // z = 0
+    return raycaster.ray.intersectPlane(ground, hit) ? { x: hit.x, y: hit.y } : null;
   }
 
   setFollowerVisible(visible: boolean): void {

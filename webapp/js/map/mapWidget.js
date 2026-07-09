@@ -7,7 +7,15 @@
 // is all a 2D map needs.
 
 import { ros } from "../rosClient.js";
-import { MAP_TOPIC, ODOM_TOPIC, PLAN_TOPICS, CMD_VEL_RAW_TOPIC, GOAL_POSE_TOPIC, CANCEL_NAVIGATION_SERVICE } from "../constants.js";
+import {
+  MAP_TOPIC,
+  ODOM_TOPIC,
+  PLAN_TOPICS,
+  CMD_VEL_RAW_TOPIC,
+  COMMANDED_GOAL_TOPIC,
+  GOAL_POSE_TOPIC,
+  CANCEL_NAVIGATION_SERVICE,
+} from "../constants.js";
 
 // Wheel-zoom bounds (metres of real-world width shown).
 const MIN_ZOOM_M = 1;
@@ -50,6 +58,9 @@ export function createMap(root, opts = {}) {
   let pose = null;
   /** @type {Array<{ x: number, y: number }> | null} world-frame plan points */
   let plan = null;
+  // The follower's command arrow is a debugging overlay: opt in with ?navdebug,
+  // the same flag the sim viewer's nav overlays use.
+  const navDebug = new URLSearchParams(location.search).has("navdebug");
   /** @type {{ vx: number, wz: number } | null} latest follower command (body frame) */
   let cmd = null;
   /** @type {ReturnType<typeof setTimeout> | undefined} clears the arrow when the controller goes quiet */
@@ -65,6 +76,9 @@ export function createMap(root, opts = {}) {
   let goalDrag = null;
   /** @type {{ x: number, y: number, yaw: number } | null} the active goal */
   let goalMarker = null;
+  // True once /nav/commanded_goal set the marker for this navigation: the
+  // skill's exact target then wins over the per-replan plan endpoint.
+  let goalIsCommanded = false;
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let navStaleTimer;
 
@@ -167,9 +181,21 @@ export function createMap(root, opts = {}) {
     clearTimeout(navStaleTimer);
     navStaleTimer = setTimeout(() => {
       goalMarker = null;
+      goalIsCommanded = false;
       plan = null;
       draw();
     }, NAV_STALE_MS);
+  }
+
+  /** @param {any} msg geometry_msgs/PoseStamped — the skill's exact target */
+  function onCommandedGoal(msg) {
+    const pos = msg?.pose?.position;
+    const q = msg?.pose?.orientation;
+    if (typeof pos?.x !== "number" || typeof pos?.y !== "number" || !q) return;
+    goalMarker = { x: pos.x, y: pos.y, yaw: Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)) };
+    goalIsCommanded = true;
+    armNavStale(); // the goal marks an active navigation; expire it like the route
+    draw();
   }
 
   /** @param {any} msg nav_msgs/Path */
@@ -183,10 +209,24 @@ export function createMap(root, opts = {}) {
     }
     if (pts.length) {
       plan = pts;
+      // Fallback goal marker: the route's end. Only used until the skill's
+      // exact target arrives on /nav/commanded_goal (goalIsCommanded) — the
+      // endpoint wiggles with every replan, the commanded goal doesn't. Still
+      // needed for navigations that bypass the skill (e.g. map clicks routed
+      // straight to bt_navigator).
+      if (!goalIsCommanded) {
+        const end = poses[poses.length - 1]?.pose;
+        const q = end?.orientation;
+        if (q) {
+          const yaw = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
+          goalMarker = { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y, yaw };
+        }
+      }
       armNavStale(); // route still streaming → keep the goal visible
     } else {
       plan = null; // empty path = navigation finished/aborted
       goalMarker = null;
+      goalIsCommanded = false;
       clearTimeout(navStaleTimer);
     }
     draw();
@@ -333,13 +373,15 @@ export function createMap(root, opts = {}) {
   function publishGoal(x, y, yaw) {
     const qz = Math.sin(yaw / 2);
     const qw = Math.cos(yaw / 2);
-    const now = Date.now();
+    // Zero stamp = "latest" to TF. Never wall time: the sim runs on ROS sim
+    // time, where a Date.now() stamp is decades in the future.
     ros.publish(GOAL_POSE_TOPIC, {
-      header: { stamp: { sec: Math.floor(now / 1000), nanosec: (now % 1000) * 1_000_000 }, frame_id: "map" },
+      header: { stamp: { sec: 0, nanosec: 0 }, frame_id: "map" },
       pose: { position: { x, y, z: 0 }, orientation: { x: 0, y: 0, z: qz, w: qw } },
     });
     plan = null; // drop the stale route; the new one streams in on /plan
     goalMarker = { x, y, yaw };
+    goalIsCommanded = false; // a fresh click supersedes any previous skill goal
     armNavStale(); // hold the goal until the route starts, then while it runs
   }
 
@@ -397,6 +439,7 @@ export function createMap(root, opts = {}) {
     try {
       await ros.callService(CANCEL_NAVIGATION_SERVICE, {});
       goalMarker = null;
+      goalIsCommanded = false;
       plan = null;
       setGoalMode(false);
       draw();
@@ -426,7 +469,8 @@ export function createMap(root, opts = {}) {
   const unsubOdom = ros.subscribe(ODOM_TOPIC, onOdom, 100);
   // Only the active planner publishes, so both feeds can share one handler.
   const unsubPlans = PLAN_TOPICS.map((topic) => ros.subscribe(topic, onPlan, 250, "nav_msgs/msg/Path"));
-  const unsubCmd = ros.subscribe(CMD_VEL_RAW_TOPIC, onCmd, 100, "geometry_msgs/msg/Twist");
+  const unsubCmd = navDebug ? ros.subscribe(CMD_VEL_RAW_TOPIC, onCmd, 100, "geometry_msgs/msg/Twist") : null;
+  const unsubGoal = ros.subscribe(COMMANDED_GOAL_TOPIC, onCommandedGoal, 0, "geometry_msgs/msg/PoseStamped");
 
   return {
     /** Swap to a saved zoom (e.g. when this widget reparents between thumbnail and full stage). */
@@ -443,7 +487,8 @@ export function createMap(root, opts = {}) {
       unsubMap();
       unsubOdom();
       for (const unsub of unsubPlans) unsub();
-      unsubCmd();
+      unsubCmd?.();
+      unsubGoal();
       canvas.remove();
       controls.remove();
     },
