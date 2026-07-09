@@ -85,6 +85,9 @@ class WorldServer:
         self.state_payload = "{}"
         self.state_seq = 0
         self.state_cond = threading.Condition()
+        # Freeze physics in place (sim-only debugging: /virtual_mars/pause).
+        # Robot software keeps running against a world that stops advancing.
+        self.paused = False
 
     # --- physics (side thread; MuJoCo stepping is pure CPU) ---
 
@@ -96,6 +99,13 @@ class WorldServer:
         start_wall = time.perf_counter()
         start_sim = self.sim.data.time
         while True:
+            if self.paused:
+                # Rebase the wall<->sim offset every tick while held, so
+                # resuming doesn't look like a huge backlog to catch up on.
+                start_wall = time.perf_counter()
+                start_sim = self.sim.data.time
+                time.sleep(0.01)
+                continue
             target = start_sim + (time.perf_counter() - start_wall)
             stepped = False
             with self.lock:
@@ -220,6 +230,7 @@ class WorldServer:
             return {
                 "ok": True,
                 "time": sim_time,
+                "paused": self.paused,
                 "pose": [x, y, yaw],
                 "vel": [vx, vy, wz],
                 "joints": joints,
@@ -238,6 +249,11 @@ class WorldServer:
             with self.lock:
                 self.sim.reset()
             return {"ok": True}, None
+        if op == "pause":
+            # Plain bool assignment: physics_loop reads it every tick, and a
+            # one-tick delay either way is invisible.
+            self.paused = bool(req.get("on", True))
+            return {"ok": True, "paused": self.paused}, None
         if op == "lidar":
             with self.lock:
                 ranges = self.sim.lidar_scan(int(req["n_rays"]), float(req["max_range"]))

@@ -20,6 +20,8 @@ def generate_launch_description():
             {
                 "data_directory": data_directory,
                 "default_hardware_revision": default_hardware_revision,
+                # Sim runs on /clock (mars_sim_driver publishes it).
+                "use_sim_time": True,
             },
             *settings_params(),
         ],

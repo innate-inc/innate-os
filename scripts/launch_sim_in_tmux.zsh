@@ -120,7 +120,7 @@ settle_after_launch
 mkdir -p ~/innate-os/data/maps
 cp ~/innate-os/sim/assets/map/sim_apartment.* ~/innate-os/data/maps/ 2>/dev/null || true
 tmux new-window -t "$SESSION_NAME" -n nav-brain
-tmux send-keys -t "${TMUX_TARGET_PREFIX}:nav-brain" "ros2 launch mars_nav mode_manager.launch.py" C-m
+tmux send-keys -t "${TMUX_TARGET_PREFIX}:nav-brain" "ros2 launch mars_nav mode_manager.launch.py use_sim_time:=true" C-m
 echo "Started navigation system..."
 settle_after_launch
 # Split and run brain client
@@ -139,17 +139,17 @@ echo "Started brain client..."
 
 # === Window 4: Behavior Server ===
 tmux new-window -t "$SESSION_NAME" -n behavior
-tmux send-keys -t "${TMUX_TARGET_PREFIX}:behavior" "ros2 launch manipulation behavior.launch.py" C-m
+tmux send-keys -t "${TMUX_TARGET_PREFIX}:behavior" "ros2 launch manipulation behavior.launch.py use_sim_time:=true" C-m
 echo "Started behavior server..."
 
 # === Window 5: Arm IK ===
 tmux new-window -t "$SESSION_NAME" -n arm-ik
-tmux send-keys -t "${TMUX_TARGET_PREFIX}:arm-ik" "ros2 run mars_arm ik.py" C-m
+tmux send-keys -t "${TMUX_TARGET_PREFIX}:arm-ik" "ros2 run mars_arm ik.py --ros-args -p use_sim_time:=true" C-m
 echo "Started arm IK..."
 
 # === Window 6: Vision Navigation Inference Client ===
 tmux new-window -t "$SESSION_NAME" -n vision-nav
-tmux send-keys -t "${TMUX_TARGET_PREFIX}:vision-nav" "ros2 launch innate_uninavid uninavid.launch.py cmd_vel_topic:=/cmd_vel" C-m
+tmux send-keys -t "${TMUX_TARGET_PREFIX}:vision-nav" "ros2 launch innate_uninavid uninavid.launch.py cmd_vel_topic:=/cmd_vel use_sim_time:=true" C-m
 echo "Started vision navigation inference client..."
 settle_after_launch
 
@@ -158,7 +158,7 @@ settle_after_launch
 # front door binds 443 (https) + 80 (http) inside the container — both exposed by
 # docker-compose.dev.yml — and proxies /ws to the sim rosbridge on 9090.
 tmux new-window -t "$SESSION_NAME" -n console-webapp
-tmux send-keys -t "${TMUX_TARGET_PREFIX}:console-webapp" "ros2 launch innate_console console.launch.py" C-m
+tmux send-keys -t "${TMUX_TARGET_PREFIX}:console-webapp" "ros2 launch innate_console console.launch.py use_sim_time:=true" C-m
 echo "Started console..."
 settle_after_launch
 tmux split-window -t "${TMUX_TARGET_PREFIX}:console-webapp" -h

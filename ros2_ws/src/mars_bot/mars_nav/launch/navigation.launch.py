@@ -28,6 +28,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from mars_bringup.config_loader import (
     load_costmap_rewrites,
     load_motion_limit_overrides,
@@ -75,13 +76,20 @@ def generate_launch_description():
         "amcl_params_file", default_value=amcl_params_file, description="Full path to the AMCL parameters file"
     )
 
+    # ROS time source: false on the real robot (no /clock); the sim launcher
+    # passes true (via mode_manager.launch.py) so the nav stack follows the
+    # sim driver's /clock and freezes with the world. Layered last so it
+    # overrides the yamls' hardcoded use_sim_time: false.
+    use_sim_time_arg = DeclareLaunchArgument("use_sim_time", default_value="false")
+    use_sim_time = {"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)}
+
     # Create the map server node
     map_server_node = Node(
         package="nav2_map_server",
         executable="map_server",
         name="navigation_map_server",
         output="screen",
-        parameters=[{"yaml_filename": ""}],
+        parameters=[{"yaml_filename": ""}, use_sim_time],
         # nav2 boot chatter at WARN to keep `innate view` readable.
         arguments=["--ros-args", "--log-level", "warn"],
     )
@@ -92,7 +100,7 @@ def generate_launch_description():
         executable="amcl",
         name="navigation_amcl",
         output="screen",
-        parameters=[LaunchConfiguration("amcl_params_file")],
+        parameters=[LaunchConfiguration("amcl_params_file"), use_sim_time],
         arguments=["--ros-args", "--log-level", "warn"],
     )
 
@@ -110,6 +118,7 @@ def generate_launch_description():
                 "auto_localize_timeout": 30.0,
                 "max_score_threshold": 0.3,
             },
+            use_sim_time,
             *settings_params(),
         ],
     )
@@ -121,7 +130,7 @@ def generate_launch_description():
         name="planner_server",
         namespace="navigation",
         output="screen",
-        parameters=[planner_params_file, costmap_params_file],
+        parameters=[planner_params_file, costmap_params_file, use_sim_time],
         remappings=[
             # TF remappings - critical for namespaced nodes
             ("tf", "/tf"),
@@ -142,6 +151,7 @@ def generate_launch_description():
             controller_params_file,
             costmap_params_file,
             load_motion_limit_overrides("mppi", defaults=load_yaml_param_defaults(controller_params_file)),
+            use_sim_time,
         ],
         remappings=[
             ("cmd_vel", "cmd_vel_raw"),
@@ -155,6 +165,7 @@ def generate_launch_description():
     return LaunchDescription(
         [
             amcl_params_arg,
+            use_sim_time_arg,
             # Nav2 lifecycle-managed nodes
             map_server_node,
             grid_localizer_node,

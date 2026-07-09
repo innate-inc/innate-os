@@ -121,6 +121,13 @@ class RemoteWorld:
     def time(self) -> float:
         return float(self._fresh_state()["time"])
 
+    def clock_sample(self) -> tuple[float, bool, float]:
+        """(sim_time, paused, monotonic_at_receipt) -- the driver's /clock
+        extrapolates from this between polls (sim runs at wall rate)."""
+        state = self._fresh_state()
+        with self._state_lock:
+            return float(state["time"]), bool(state.get("paused", False)), self._state_at
+
     def pose(self) -> tuple[float, float, float]:
         return tuple(self._fresh_state()["pose"])
 
@@ -153,6 +160,12 @@ class RemoteWorld:
         self._state_ch.call({"op": "reset"})
         with self._state_lock:
             self._state_at = 0.0
+
+    def set_paused(self, on: bool) -> None:
+        """Freeze/unfreeze physics stepping (sim-only debugging)."""
+        self._state_ch.call({"op": "pause", "on": bool(on)})
+        with self._state_lock:
+            self._state_at = 0.0  # pick up the new paused flag immediately
 
     # --- sensors ---
 

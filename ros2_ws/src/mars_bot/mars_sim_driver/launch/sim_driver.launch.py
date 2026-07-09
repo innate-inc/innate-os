@@ -44,8 +44,11 @@ def generate_launch_description():
                 executable="robot_state_publisher",
                 name="robot_state_publisher",
                 output="screen",
-                parameters=[{"robot_description": urdf.read_text()}],
+                parameters=[{"robot_description": urdf.read_text(), "use_sim_time": True}],
             ),
+            # The driver is the /clock source and deliberately stays on wall
+            # time: its timers must keep ticking while the world is paused to
+            # publish the frozen clock and accept the unpause.
             Node(
                 package="mars_sim_driver",
                 executable="sim_driver",
@@ -59,6 +62,7 @@ def generate_launch_description():
                 package="mars_sim_driver",
                 executable="grid_localizer_sim",
                 output="screen",
+                parameters=[{"use_sim_time": True}],
             ),
         ]
     )

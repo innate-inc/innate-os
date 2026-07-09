@@ -16,6 +16,8 @@ def generate_launch_description():
             {
                 "port": 9090,
                 "rosbridge_compatible": True,
+                # Sim runs on /clock (mars_sim_driver publishes it).
+                "use_sim_time": True,
             }
         ],
         # Disable Zenoh SHM for rws_server to prevent __pthread_tpp_change_priority

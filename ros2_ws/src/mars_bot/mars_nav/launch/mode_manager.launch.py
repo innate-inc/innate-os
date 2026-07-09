@@ -6,9 +6,11 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from mars_bringup.config_loader import load_motion_limit_overrides, load_yaml_param_defaults
 
 
@@ -62,14 +64,24 @@ def generate_launch_description():
     nav_through_poses_bt_xml = os.path.join(share_dir, "config", "nav_through_poses.xml")
     nav_to_pose_mapfree_bt_xml = os.path.join(share_dir, "config", "nav_to_pose_mapfree.xml")  # noqa: F841
 
+    # ROS time source: false on the real robot (no /clock); the sim launcher
+    # passes true so the whole nav stack follows the sim driver's /clock and
+    # freezes with the world. Layered last in each node's parameters so it
+    # overrides the yamls' hardcoded use_sim_time: false.
+    use_sim_time_arg = DeclareLaunchArgument("use_sim_time", default_value="false")
+    use_sim_time = {"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)}
+
     navigation_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([mars_nav_launch_dir, "/navigation.launch.py"])
+        PythonLaunchDescriptionSource([mars_nav_launch_dir, "/navigation.launch.py"]),
+        launch_arguments={"use_sim_time": LaunchConfiguration("use_sim_time")}.items(),
     )
 
     # mapfree_launch = IncludeLaunchDescription(
     #     PythonLaunchDescriptionSource([mars_nav_launch_dir, '/mapfree_local_nav.launch.py'])
     # )
 
+    # mapping.launch.py keeps its own use_sim_time default (true) -- threading
+    # ours through would change slam_toolbox's existing real-robot behavior.
     mapping_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([mars_nav_launch_dir, "/mapping.launch.py"])
     )
@@ -84,7 +96,8 @@ def generate_launch_description():
             {
                 "slowdown_radius": 1.0,
                 "min_speed_fraction": 0.3,
-            }
+            },
+            use_sim_time,
         ],
         remappings=[
             ("cmd_vel_in", "/cmd_vel_raw"),
@@ -101,7 +114,7 @@ def generate_launch_description():
         executable="velocity_smoother",
         name="velocity_smoother",
         output="screen",
-        parameters=[smoother_params_file, smoother_limit_overrides],
+        parameters=[smoother_params_file, smoother_limit_overrides, use_sim_time],
         # Nav2 output feeds the priority mux, not the base directly.
         remappings=[("cmd_vel", "/cmd_vel_scaled"), ("cmd_vel_smoothed", "/cmd_vel_nav")],
         arguments=["--ros-args", "--log-level", "warn"],
@@ -114,6 +127,7 @@ def generate_launch_description():
         executable="cmd_vel_mux.py",
         name="cmd_vel_mux",
         output="screen",
+        parameters=[use_sim_time],
     )
 
     # Shared BT navigator node
@@ -126,6 +140,7 @@ def generate_launch_description():
             bt_navigator_params_file,
             {"default_nav_to_pose_bt_xml": nav_to_pose_bt_xml},
             {"default_nav_through_poses_bt_xml": nav_through_poses_bt_xml},
+            use_sim_time,
         ],
         remappings=expand_action_remappings(
             [
@@ -143,7 +158,7 @@ def generate_launch_description():
         executable="behavior_server",
         name="behavior_server",
         output="screen",
-        parameters=[behavior_params_file],
+        parameters=[behavior_params_file, use_sim_time],
         arguments=["--ros-args", "--log-level", "warn"],
         remappings=[("cmd_vel", "cmd_vel_raw")],
     )
@@ -153,6 +168,7 @@ def generate_launch_description():
         executable="dynamic_footprint",
         name="dynamic_footprint",
         output="screen",
+        parameters=[use_sim_time],
     )
 
     # Mapfree planner node (runs in mapfree namespace)
@@ -162,7 +178,7 @@ def generate_launch_description():
         name="planner_server",
         namespace="mapfree",
         output="screen",
-        parameters=[planner_params_file, costmap_params_file],
+        parameters=[planner_params_file, costmap_params_file, use_sim_time],
         remappings=[
             # TF remappings - critical for namespaced nodes
             ("tf", "/tf"),
@@ -174,10 +190,13 @@ def generate_launch_description():
     )
 
     # Null map node for identity map->odom transform
-    null_map_node = Node(package="mars_nav", executable="null_map_node", name="null_map_node", output="screen")
+    null_map_node = Node(
+        package="mars_nav", executable="null_map_node", name="null_map_node", output="screen", parameters=[use_sim_time]
+    )
 
     return LaunchDescription(
         [
+            use_sim_time_arg,
             null_map_node,
             navigation_launch,
             # mapfree_launch,
@@ -194,7 +213,7 @@ def generate_launch_description():
                 executable="mode_manager.py",
                 name="mode_manager",
                 output="screen",
-                parameters=[],
+                parameters=[use_sim_time],
                 # nav2's BasicNavigator creates internal nodes that can share a
                 # name; mute the benign "Publisher already registered" warning.
                 arguments=["--ros-args", "--log-level", "rcl.logging_rosout:=ERROR"],

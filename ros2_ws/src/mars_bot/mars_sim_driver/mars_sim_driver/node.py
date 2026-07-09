@@ -50,7 +50,8 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, JointState, LaserScan, PointCloud2, PointField
-from std_msgs.msg import Empty, Float64MultiArray, Int32, String
+from rosgraph_msgs.msg import Clock
+from std_msgs.msg import Bool, Empty, Float64MultiArray, Int32, String
 from std_srvs.srv import Trigger
 from tf2_ros import TransformBroadcaster
 
@@ -65,6 +66,7 @@ except ImportError:  # ros2_ws not sourced/built -- topic interface still works
 MAIN_CAMERA_FPS = 7.5  # main_camera_driver: 15fps capture, JPEG every 2nd frame
 WRIST_CAMERA_FPS = 5.0  # arm_camera_driver: 30fps capture, JPEG every 6th frame
 DEPTH_FPS = 8.0  # stereo_depth_estimator max_fps
+CLOCK_HZ = 100.0  # /clock rate: sim-time timers quantize to this
 ODOM_HZ = 30.0  # bringup.py odom_frequency
 SCAN_HZ = 6.0  # lidar.launch.py throttle
 JOINT_STATE_HZ = 30.0
@@ -118,6 +120,18 @@ class VirtualMarsNode(Node):
         self._stream_interval = 0.1  # EMA of the stream's cadence (see _on_arm_commands)
 
         self._tf = TransformBroadcaster(self)
+
+        # ROS sim time (sim-only): this node is the /clock source, so the rest
+        # of the stack can run use_sim_time and freeze cleanly with the world
+        # (paused world -> frozen /clock -> Nav2 timers/progress checks stop).
+        # This node itself stays on wall time -- its timers must keep ticking
+        # while paused to publish the frozen clock and accept the unpause.
+        self._clock_lock = threading.Lock()
+        self._clock_prev = 0.0
+        self._clock_paused = False
+        self._pub_seen: dict[str, float] = {}  # last stamp per paused publisher
+        self._clock_pub = self.create_publisher(Clock, "/clock", 10)
+        self.create_timer(1.0 / CLOCK_HZ, self._publish_clock)
         # State topics publish KEEP_LAST(1): a hop that buffers more than the
         # newest sample turns a slow consumer into permanent display lag.
         self._odom_pub = self.create_publisher(Odometry, "/odom", 1)
@@ -164,6 +178,10 @@ class VirtualMarsNode(Node):
         # Sim-only convenience (no real-robot equivalent): respawn at the
         # spawn pose, used by sim/viewer's Reset button in connected mode.
         self.create_subscription(Empty, "/virtual_mars/reset", self._on_reset, 10)
+        # Sim-only: freeze physics in place so an operator can inspect a
+        # navigation mid-flight (sim/viewer's ?navdebug "freeze" chip). The
+        # robot stack keeps running -- only the world stops advancing.
+        self.create_subscription(Bool, "/virtual_mars/pause", self._on_pause, 10)
 
         services = ReentrantCallbackGroup()  # goto services block; don't starve timers
         if GotoJS is not None:
@@ -257,6 +275,9 @@ class VirtualMarsNode(Node):
         with self._lock:
             self._fail_active_traj()
             self.sim.reset()
+
+    def _on_pause(self, msg: Bool) -> None:
+        self.sim.set_paused(bool(msg.data))
 
     def _on_head_position(self, msg: Int32) -> None:
         deg = max(HEAD_MIN_DEG, min(HEAD_MAX_DEG, float(msg.data)))
@@ -364,13 +385,47 @@ class VirtualMarsNode(Node):
 
     # --- outputs ---
 
+    def _sim_time_pair(self) -> tuple[float, bool]:
+        """Current sim time + paused flag. Extrapolates from the last world
+        state at wall rate (physics steps against the wall clock), holds while
+        paused, and never steps backwards -- /clock must be monotonic."""
+        sim_t, paused, at = self.sim.clock_sample()
+        t = sim_t if paused else sim_t + (time.monotonic() - at)
+        with self._clock_lock:
+            t = max(t, self._clock_prev)
+            self._clock_prev = t
+            self._clock_paused = paused
+        return t, paused
+
+    def _publish_clock(self) -> None:
+        t, _paused = self._sim_time_pair()
+        self._clock_pub.publish(Clock(clock=rclpy.time.Time(seconds=t).to_msg()))
+
+    def _paused_repeat(self, key: str, t: float, paused: bool) -> bool:
+        """True when paused and `key` already published at this frozen time --
+        TF consumers log TF_REPEATED_DATA for every identically-stamped
+        retransmit, so the TF-bearing publishers hold instead."""
+        if not paused:
+            self._pub_seen.pop(key, None)
+            return False
+        if self._pub_seen.get(key) == t:
+            return True
+        self._pub_seen[key] = t
+        return False
+
     def _stamp(self):
-        return self.get_clock().now().to_msg()
+        # Sim time, matching /clock -- NOT this node's (wall) clock: every
+        # other node runs use_sim_time, so stamps must live on that timeline.
+        t, _ = self._sim_time_pair()
+        return rclpy.time.Time(seconds=t).to_msg()
 
     def _publish_odom(self) -> None:
         with self._lock:
             x, y, yaw = self.sim.pose()
-        stamp = self._stamp()
+        t, paused = self._sim_time_pair()
+        if self._paused_repeat("odom", t, paused):
+            return
+        stamp = rclpy.time.Time(seconds=t).to_msg()
 
         # Like bringup.py: pose only, zero twist/covariance.
         odom = Odometry()
@@ -394,13 +449,16 @@ class VirtualMarsNode(Node):
         self._tf.sendTransform(tf)
 
     def _publish_scan(self) -> None:
+        t, paused = self._sim_time_pair()
+        if self._paused_repeat("scan", t, paused):
+            return
         try:
             with self._lock:
                 ranges = self.sim.lidar_scan(LIDAR_N_RAYS, LIDAR_RANGE_MAX)
         except (OSError, RuntimeError):
             return  # server briefly away; skip this scan
         msg = LaserScan()
-        msg.header.stamp = self._stamp()
+        msg.header.stamp = rclpy.time.Time(seconds=t).to_msg()
         msg.header.frame_id = "base_laser"
         msg.angle_min = -math.pi
         msg.angle_max = math.pi - 2 * math.pi / LIDAR_N_RAYS
@@ -561,10 +619,13 @@ class VirtualMarsNode(Node):
         self._caminfo_pub.publish(msg)
 
     def _publish_joint_states(self) -> None:
+        t, paused = self._sim_time_pair()
+        if self._paused_repeat("joints", t, paused):
+            return  # robot_state_publisher TF: no identically-stamped repeats
         with self._lock:
             positions = self.sim.joint_positions()
         msg = JointState()
-        msg.header.stamp = self._stamp()
+        msg.header.stamp = rclpy.time.Time(seconds=t).to_msg()
         msg.name = [*ARM_JOINTS, "joint_head"]  # same 7 as the real arm node
         msg.position = [positions[n] for n in msg.name]
         self._joint_states_pub.publish(msg)

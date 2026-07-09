@@ -108,6 +108,12 @@ def generate_launch_description():
         package="brain_client",
         executable="brain_client_node.py",
         name="brain_client_node",
+        # Sim runs on /clock (mars_sim_driver publishes it). A process-level
+        # --ros-args override, NOT a node parameter: these processes create
+        # extra nodes at runtime (BasicNavigator instances in skills and
+        # mobility) that a per-node parameters dict would never reach -- the
+        # global override applies to every node in the process.
+        arguments=["--ros-args", "-p", "use_sim_time:=true"],
         parameters=[
             {
                 "websocket_uri": LaunchConfiguration("websocket_uri"),
@@ -166,6 +172,9 @@ def generate_launch_description():
                 executable="skills_server.py",
                 name="skills_action_server",
                 output="screen",
+                # Same process-level sim-time override as brain_client_node:
+                # skills create BasicNavigator nodes at runtime.
+                arguments=["--ros-args", "-p", "use_sim_time:=true"],
                 parameters=[
                     {
                         "image_topic": LaunchConfiguration("image_topic"),

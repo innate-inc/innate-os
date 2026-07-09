@@ -17,6 +17,7 @@
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>rosgraph_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>mars_msgs</depend>
   <exec_depend>robot_state_publisher</exec_depend>
