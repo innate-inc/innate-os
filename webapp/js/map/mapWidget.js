@@ -7,7 +7,7 @@
 // is all a 2D map needs.
 
 import { ros } from "../rosClient.js";
-import { MAP_TOPIC, ODOM_TOPIC, PLAN_TOPICS, GOAL_POSE_TOPIC, CANCEL_NAVIGATION_SERVICE } from "../constants.js";
+import { MAP_TOPIC, ODOM_TOPIC, PLAN_TOPICS, CMD_VEL_RAW_TOPIC, GOAL_POSE_TOPIC, CANCEL_NAVIGATION_SERVICE } from "../constants.js";
 
 // Wheel-zoom bounds (metres of real-world width shown).
 const MIN_ZOOM_M = 1;
@@ -50,6 +50,10 @@ export function createMap(root, opts = {}) {
   let pose = null;
   /** @type {Array<{ x: number, y: number }> | null} world-frame plan points */
   let plan = null;
+  /** @type {{ vx: number, wz: number } | null} latest follower command (body frame) */
+  let cmd = null;
+  /** @type {ReturnType<typeof setTimeout> | undefined} clears the arrow when the controller goes quiet */
+  let cmdStaleTimer;
 
   // Last draw's grid→canvas placement, so pointer handlers can invert it.
   /** @type {{ ox: number, oy: number, scale: number } | null} */
@@ -188,6 +192,22 @@ export function createMap(root, opts = {}) {
     draw();
   }
 
+  /** @param {any} msg geometry_msgs/Twist — the follower's commanded velocity */
+  function onCmd(msg) {
+    const vx = msg?.linear?.x;
+    const wz = msg?.angular?.z;
+    if (typeof vx !== "number" || typeof wz !== "number") return;
+    cmd = { vx, wz };
+    // /cmd_vel_raw is published only while a controller is active; a lull means
+    // it stopped, so drop the arrow after a short quiet period.
+    clearTimeout(cmdStaleTimer);
+    cmdStaleTimer = setTimeout(() => {
+      cmd = null;
+      draw();
+    }, 500);
+    draw();
+  }
+
   function draw() {
     if (!ctx) return;
     ctx.fillStyle = "#0a0a0c";
@@ -269,6 +289,34 @@ export function createMap(root, opts = {}) {
       ctx.moveTo(px, py);
       ctx.lineTo(px + Math.cos(pose.yaw) * rad * 2.4, py - Math.sin(pose.yaw) * rad * 2.4);
       ctx.stroke();
+
+      // Follower command: an arrow from the robot showing the commanded linear
+      // velocity (green forward, red reverse), length ~1.5 s of travel. A
+      // near-zero or flipping arrow is the visible signature of a stuck
+      // controller. Canvas y is flipped vs world y, hence -sin.
+      if (cmd && Math.abs(cmd.vx) > 0.01) {
+        const pxPerM = view.scale / grid.resolution;
+        const len = Math.max(-1.2, Math.min(1.2, cmd.vx * 1.5)) * pxPerM;
+        const dir = cmd.vx >= 0 ? pose.yaw : pose.yaw + Math.PI;
+        const ex = px + Math.cos(dir) * Math.abs(len);
+        const ey = py - Math.sin(dir) * Math.abs(len);
+        ctx.strokeStyle = cmd.vx >= 0 ? "#33ff88" : "#ff5544";
+        ctx.lineWidth = 3 * dpr();
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        // Arrowhead.
+        const head = 6 * dpr();
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - Math.cos(dir - 0.4) * head, ey + Math.sin(dir - 0.4) * head);
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - Math.cos(dir + 0.4) * head, ey + Math.sin(dir + 0.4) * head);
+        ctx.stroke();
+        ctx.lineCap = "butt";
+      }
     }
   }
 
@@ -378,6 +426,7 @@ export function createMap(root, opts = {}) {
   const unsubOdom = ros.subscribe(ODOM_TOPIC, onOdom, 100);
   // Only the active planner publishes, so both feeds can share one handler.
   const unsubPlans = PLAN_TOPICS.map((topic) => ros.subscribe(topic, onPlan, 250, "nav_msgs/msg/Path"));
+  const unsubCmd = ros.subscribe(CMD_VEL_RAW_TOPIC, onCmd, 100, "geometry_msgs/msg/Twist");
 
   return {
     /** Swap to a saved zoom (e.g. when this widget reparents between thumbnail and full stage). */
@@ -389,10 +438,12 @@ export function createMap(root, opts = {}) {
     },
     destroy() {
       clearTimeout(navStaleTimer);
+      clearTimeout(cmdStaleTimer);
       ro.disconnect();
       unsubMap();
       unsubOdom();
       for (const unsub of unsubPlans) unsub();
+      unsubCmd();
       canvas.remove();
       controls.remove();
     },

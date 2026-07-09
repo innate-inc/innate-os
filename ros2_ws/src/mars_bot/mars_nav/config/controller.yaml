@@ -63,7 +63,7 @@
       # Algorithm parameters
       temperature: 0.3                  # Trajectory selection temperature
       gamma: 0.015                      # Smoothness vs energy trade-off
-      visualize: false                    # Set to true for debugging (slows performance)
+      visualize: true                     # publishes /trajectories + /transformed_global_plan for the sim follower overlay (costs controller CPU)
       regenerate_noises: false
       
       # Goal tolerances

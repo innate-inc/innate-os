@@ -1,10 +1,11 @@
-// Robot-telemetry overlay source for the webapp's SimSession: subscribe to
-// the robot's lidar and Nav2's planned path over rosbridge and emit
-// world-frame points. Pose/joints for the 3D view come from the world
-// server's observer stream (worldStateController) -- these stay here
-// deliberately: they are robot software outputs, so the robot's own
-// pipeline is the honest source for the overlays. Read-only --
-// teleop/commands go through the webapp's own rosbridge client.
+// Robot-telemetry overlay source for the webapp's SimSession: subscribe over
+// rosbridge to the robot's lidar, Nav2's planned path, and the MPPI
+// controller's command + tracked path, and emit world-frame points. Pose/
+// joints for the 3D view come from the world server's observer stream
+// (worldStateController) -- these stay here deliberately: they are robot
+// software outputs, so the robot's own pipeline is the honest source for the
+// overlays. Read-only -- teleop/commands go through the webapp's own
+// rosbridge client.
 //
 // Speaks the rosbridge JSON protocol directly (subscribe/publish) -- no
 // roslib dependency for a few message types.
@@ -23,7 +24,12 @@ export class RosbridgePhysicsController {
   onScan?: (points: Float32Array) => void;
   /** Planned-path ground points [x0,y0, x1,y1, ...]; empty = plan cleared. */
   onPlan?: (points: Float32Array) => void;
+  /** MPPI's commanded body velocity (m/s, rad/s) from /cmd_vel_raw. */
+  onCommand?: (vx: number, wz: number) => void;
+  /** Ground points of the path MPPI is tracking (transformed_global_plan). */
+  onFollowerPath?: (points: Float32Array) => void;
   #scanEnabled = false;
+  #followerEnabled = false;
 
   #url: string;
   #ws!: WebSocket;
@@ -60,6 +66,7 @@ export class RosbridgePhysicsController {
         this.#send({ op: "subscribe", topic, type: "nav_msgs/msg/Path", throttle_rate: 250, queue_length: 1 });
       }
       if (this.#scanEnabled) this.#subscribeScan();
+      if (this.#followerEnabled) this.#subscribeFollower();
       this.#resolveOpen();
     };
     ws.onerror = () => {
@@ -96,6 +103,23 @@ export class RosbridgePhysicsController {
     this.#send({ op: "subscribe", topic: "/scan", type: "sensor_msgs/msg/LaserScan", throttle_rate: 150, queue_length: 1 });
   }
 
+  /** Start the follower overlay feeds (opt-in): the MPPI command and the path
+   * it's tracking. transformed_global_plan only publishes when the controller's
+   * `visualize` param is on (mars_nav controller.yaml). */
+  enableFollower(): void {
+    if (this.#followerEnabled) return;
+    this.#followerEnabled = true;
+    this.#subscribeFollower();
+  }
+
+  #subscribeFollower(): void {
+    // /cmd_vel_raw is the controller's own output, pre-smoothing/mux -- the
+    // honest "what the follower commands". 20Hz raw; throttle to keep the
+    // arrow lively without flooding.
+    this.#send({ op: "subscribe", topic: "/cmd_vel_raw", type: "geometry_msgs/msg/Twist", throttle_rate: 100, queue_length: 1 });
+    this.#send({ op: "subscribe", topic: "/transformed_global_plan", type: "nav_msgs/msg/Path", throttle_rate: 100, queue_length: 1 });
+  }
+
   dispose(): void {
     this.#disposed = true;
     this.#ws.close();
@@ -121,6 +145,18 @@ export class RosbridgePhysicsController {
         points[i * 2 + 1] = p.pose.position.y;
       });
       this.onPlan(points);
+    } else if (msg.topic === "/cmd_vel_raw" && this.onCommand) {
+      const twist = msg.msg as { linear: { x: number }; angular: { z: number } };
+      this.onCommand(twist.linear.x, twist.angular.z);
+    } else if (msg.topic === "/transformed_global_plan" && this.onFollowerPath) {
+      const path = msg.msg as { poses?: Array<{ pose: { position: { x: number; y: number } } }> };
+      if (!Array.isArray(path.poses)) return;
+      const points = new Float32Array(path.poses.length * 2);
+      path.poses.forEach((p, i) => {
+        points[i * 2] = p.pose.position.x;
+        points[i * 2 + 1] = p.pose.position.y;
+      });
+      this.onFollowerPath(points);
     } else if (msg.topic === "/scan" && this.onScan) {
       const scan = msg.msg as { angle_min: number; angle_increment: number; range_max: number; ranges: number[] };
       const { x, y, yaw } = this.#pose;

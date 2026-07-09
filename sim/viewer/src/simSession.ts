@@ -95,6 +95,17 @@ export class SimSession {
   #planStaleAt = 0;
   static readonly #PLAN_STALE_S = 4;
 
+  // Follower overlay (opt-in "follower" chip): the MPPI command arrow + the
+  // path it's tracking. Both go stale quickly once the controller stops.
+  #followerOn = false;
+  #followerDirty = false;
+  #cmd: { vx: number; wz: number } | null = null;
+  #cmdDirty = false;
+  #followerPath: Float32Array | null = null;
+  #followerPathDirty = false;
+  #followerStaleAt = 0;
+  static readonly #FOLLOWER_STALE_S = 1;
+
   #stateUrls: string[];
   #rosUrl: string;
 
@@ -156,8 +167,19 @@ export class SimSession {
       this.#planDirty = true;
       this.#planStaleAt = performance.now() / 1000 + SimSession.#PLAN_STALE_S;
     };
+    this.#scanFeed.onCommand = (vx, wz) => {
+      this.#cmd = { vx, wz };
+      this.#cmdDirty = true;
+      this.#followerStaleAt = performance.now() / 1000 + SimSession.#FOLLOWER_STALE_S;
+    };
+    this.#scanFeed.onFollowerPath = (points) => {
+      this.#followerPath = points;
+      this.#followerPathDirty = true;
+      this.#followerStaleAt = performance.now() / 1000 + SimSession.#FOLLOWER_STALE_S;
+    };
     this.#scanFeed.init().catch((err) => console.warn("[sim-session] rosbridge overlays unavailable:", err));
     if (this.#lidarOn) this.setLidarVisible(true); // chip toggled before start()
+    if (this.#followerOn) this.setFollowerVisible(true);
   }
 
   /** Connect the state feed, falling through the URL candidates (direct
@@ -215,6 +237,10 @@ export class SimSession {
     this.#planDirty = false;
     this.#scan = null;
     this.#scanDirty = false;
+    this.#cmd = null;
+    this.#cmdDirty = false;
+    this.#followerPath = null;
+    this.#followerPathDirty = false;
     this.#started = false;
     this.#gotPose = false;
     this.#patch({ status: "idle", videoStream: null });
@@ -243,6 +269,15 @@ export class SimSession {
   setCollisionHullsVisible(on: boolean): void {
     this.#hullsOn = on;
     this.#overlaysDirty = true;
+  }
+
+  /** Toggle the follower overlay (stage "follower" chip): MPPI's command arrow
+   * + the path it's tracking. Subscribes on first enable; needs the
+   * controller's `visualize` param on for the tracked-path feed. */
+  setFollowerVisible(on: boolean): void {
+    this.#followerOn = on;
+    this.#followerDirty = true;
+    if (on && this.#scanFeed !== null) this.#scanFeed.enableFollower();
   }
 
   // WebRTC-specific surface: harmless no-ops in sim.
@@ -337,6 +372,32 @@ export class SimSession {
     } else if (this.#plan && performance.now() / 1000 > this.#planStaleAt) {
       this.#plan = null; // planner went quiet: navigation ended
       scene.setPlanVisible(false);
+    }
+
+    if (this.#followerDirty) {
+      this.#followerDirty = false;
+      scene.setFollowerVisible(this.#followerOn);
+    }
+    if (this.#followerOn) {
+      const stale = performance.now() / 1000 > this.#followerStaleAt;
+      if (stale) {
+        // Controller stopped commanding: clear the arrow and tracked path.
+        if (this.#cmd || this.#followerPath) {
+          this.#cmd = null;
+          this.#followerPath = null;
+          scene.setCommandVelocity(0, 0);
+          scene.setFollowerPathPoints(new Float32Array(0));
+        }
+      } else {
+        if (this.#cmdDirty && this.#cmd) {
+          this.#cmdDirty = false;
+          scene.setCommandVelocity(this.#cmd.vx, this.#cmd.wz);
+        }
+        if (this.#followerPathDirty && this.#followerPath) {
+          this.#followerPathDirty = false;
+          scene.setFollowerPathPoints(this.#followerPath);
+        }
+      }
     }
   }
 

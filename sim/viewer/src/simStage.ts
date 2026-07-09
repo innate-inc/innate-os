@@ -59,6 +59,7 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
   };
   addChip("lidar", (on) => session.setLidarVisible(on));
   addChip("collisions", (on) => session.setCollisionHullsVisible(on));
+  addChip("follower", (on) => session.setFollowerVisible(on));
   debugStack.appendChild(chips);
 
   // Loading overlay: spinner + staged label instead of a black canvas until

@@ -63,6 +63,9 @@ export class SimScene {
   private activeView: CameraView = "orbit";
   private lidarPoints?: THREE.Points;
   private planRibbon?: THREE.Mesh;
+  private followerRibbon?: THREE.Mesh;
+  private cmdLinearArrow?: THREE.ArrowHelper;
+  private cmdTurnArrow?: THREE.ArrowHelper;
   private hullsGroup?: THREE.Group;
   private hullsPromise?: Promise<void>;
   private hullsVisible = false;
@@ -163,19 +166,64 @@ export class SimScene {
     if (this.lidarPoints) this.lidarPoints.visible = visible;
   }
 
-  // Planned-path ribbon: width in meters and lift above the floor mesh
-  // (enough to clear z-fighting, low enough to read as painted on it).
+  // Ribbon widths (meters) and lift above the floor mesh (enough to clear
+  // z-fighting, low enough to read as painted on it). The follower ribbon
+  // sits a hair higher so it draws on top where it overlaps the plan.
   private static readonly PLAN_WIDTH = 0.06;
   private static readonly PLAN_Z = 0.02;
+  private static readonly FOLLOWER_WIDTH = 0.05;
+  private static readonly FOLLOWER_Z = 0.025;
+
+  /** Build a flat miter-less triangle-strip ribbon from ground-frame points
+   * [x0,y0, x1,y1, ...] at height `z`, or null for fewer than 2 points. */
+  private static ribbonGeometry(points: Float32Array, width: number, z: number): THREE.BufferGeometry | null {
+    const n = points.length / 2;
+    if (n < 2) return null;
+    // Two vertices per point, offset ±half-width along the averaged
+    // perpendicular of the adjacent segments.
+    const half = width / 2;
+    const vertices = new Float32Array(n * 2 * 3);
+    for (let i = 0; i < n; i++) {
+      const x = points[i * 2];
+      const y = points[i * 2 + 1];
+      const px = points[Math.max(0, i - 1) * 2];
+      const py = points[Math.max(0, i - 1) * 2 + 1];
+      const nx = points[Math.min(n - 1, i + 1) * 2];
+      const ny = points[Math.min(n - 1, i + 1) * 2 + 1];
+      const len = Math.hypot(nx - px, ny - py) || 1;
+      const perpX = -(ny - py) / len;
+      const perpY = (nx - px) / len;
+      vertices.set([x + perpX * half, y + perpY * half, z], i * 6);
+      vertices.set([x - perpX * half, y - perpY * half, z], i * 6 + 3);
+    }
+    const indices: number[] = [];
+    for (let i = 0; i < n - 1; i++) {
+      const a = i * 2;
+      indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
+    geometry.setIndex(indices);
+    return geometry;
+  }
+
+  /** Point `mesh` at a freshly built ribbon and dispose the old geometry
+   * (swapping attributes on a live geometry leaks GPU buffers, and these
+   * republish ~1Hz). Hides the mesh when there aren't enough points. */
+  private updateRibbon(mesh: THREE.Mesh, points: Float32Array, width: number, z: number): void {
+    const geometry = SimScene.ribbonGeometry(points, width, z);
+    if (!geometry) {
+      mesh.visible = false;
+      return;
+    }
+    mesh.geometry.dispose();
+    mesh.geometry = geometry;
+    mesh.visible = true;
+  }
 
   /** Show the Nav2 planned path as a flat ribbon on the floor. `points` is
    * ground-frame [x0,y0, x1,y1, ...]; fewer than 2 points hides it. */
   setPlanPoints(points: Float32Array): void {
-    const n = points.length / 2;
-    if (n < 2) {
-      if (this.planRibbon) this.planRibbon.visible = false;
-      return;
-    }
     if (!this.planRibbon) {
       const material = new THREE.MeshBasicMaterial({
         color: 0x00b7ff, // matches the 2D map widget's route color
@@ -188,41 +236,73 @@ export class SimScene {
       this.planRibbon.frustumCulled = false;
       this.scene.add(this.planRibbon);
     }
-    // Two vertices per path point, offset ±half-width along the averaged
-    // perpendicular of the adjacent segments -- a miter-less triangle strip.
-    const half = SimScene.PLAN_WIDTH / 2;
-    const vertices = new Float32Array(n * 2 * 3);
-    for (let i = 0; i < n; i++) {
-      const x = points[i * 2];
-      const y = points[i * 2 + 1];
-      const px = points[Math.max(0, i - 1) * 2];
-      const py = points[Math.max(0, i - 1) * 2 + 1];
-      const nx = points[Math.min(n - 1, i + 1) * 2];
-      const ny = points[Math.min(n - 1, i + 1) * 2 + 1];
-      const len = Math.hypot(nx - px, ny - py) || 1;
-      const perpX = -(ny - py) / len;
-      const perpY = (nx - px) / len;
-      vertices.set([x + perpX * half, y + perpY * half, SimScene.PLAN_Z], i * 6);
-      vertices.set([x - perpX * half, y - perpY * half, SimScene.PLAN_Z], i * 6 + 3);
-    }
-    const indices: number[] = [];
-    for (let i = 0; i < n - 1; i++) {
-      const a = i * 2;
-      indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
-    }
-    // Swap in a fresh geometry and dispose the old one: replacing attributes
-    // on a live geometry leaves the previous GPU buffers allocated until a
-    // dispose, and the planner republishes ~1Hz for a whole navigation.
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
-    geometry.setIndex(indices);
-    this.planRibbon.geometry.dispose();
-    this.planRibbon.geometry = geometry;
-    this.planRibbon.visible = true;
+    this.updateRibbon(this.planRibbon, points, SimScene.PLAN_WIDTH, SimScene.PLAN_Z);
   }
 
   setPlanVisible(visible: boolean): void {
     if (this.planRibbon) this.planRibbon.visible = visible;
+  }
+
+  /** Show the path the MPPI controller is actively tracking (Nav2's
+   * transformed_global_plan) as an amber ribbon over the blue plan -- the gap
+   * between the two is what the follower is struggling to close. */
+  setFollowerPathPoints(points: Float32Array): void {
+    if (!this.followerRibbon) {
+      const material = new THREE.MeshBasicMaterial({
+        color: 0xffb020, // amber -- distinct from the cyan global plan
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      this.followerRibbon = new THREE.Mesh(new THREE.BufferGeometry(), material);
+      this.followerRibbon.frustumCulled = false;
+      this.scene.add(this.followerRibbon);
+    }
+    this.updateRibbon(this.followerRibbon, points, SimScene.FOLLOWER_WIDTH, SimScene.FOLLOWER_Z);
+  }
+
+  /** Draw the controller's commanded velocity as arrows anchored to the robot:
+   * a forward/back arrow (green forward, red reverse) scaled by linear speed,
+   * and a side arrow marking turn direction scaled by yaw rate. Both are
+   * children of the robot root, so they inherit its live pose. */
+  setCommandVelocity(vx: number, wz: number): void {
+    if (!this.cmdLinearArrow) {
+      // +X is forward, +Y is left in the robot frame (REP-103).
+      this.cmdLinearArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0.12), 0.3, 0x33ff88, 0.09, 0.06);
+      this.cmdTurnArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0.12), 0.2, 0xffd24a, 0.07, 0.05);
+      this.robotRoot.add(this.cmdLinearArrow, this.cmdTurnArrow);
+    }
+    const turn = this.cmdTurnArrow!;
+    // 1 m/s -> ~0.6 m arrow; hidden below a small deadband so a stalled
+    // controller reads as "no arrow", not a stub.
+    const linLen = Math.min(Math.abs(vx) * 0.6, 0.9);
+    if (linLen < 0.02) {
+      this.cmdLinearArrow.visible = false;
+    } else {
+      this.cmdLinearArrow.visible = true;
+      this.cmdLinearArrow.setDirection(new THREE.Vector3(Math.sign(vx), 0, 0));
+      this.cmdLinearArrow.setLength(linLen, Math.min(0.09, linLen * 0.4), Math.min(0.06, linLen * 0.3));
+      this.cmdLinearArrow.setColor(vx >= 0 ? 0x33ff88 : 0xff5544);
+    }
+    const turnLen = Math.min(Math.abs(wz) * 0.35, 0.5);
+    if (turnLen < 0.02) {
+      turn.visible = false;
+    } else {
+      turn.visible = true;
+      turn.setDirection(new THREE.Vector3(0, Math.sign(wz), 0)); // wz>0 = CCW = left
+      turn.setLength(turnLen, Math.min(0.07, turnLen * 0.4), Math.min(0.05, turnLen * 0.3));
+    }
+  }
+
+  setFollowerVisible(visible: boolean): void {
+    if (this.followerRibbon) this.followerRibbon.visible = visible;
+    // Arrows are re-driven by setCommandVelocity each tick while on; here we
+    // only need to force them off when the overlay is hidden.
+    if (!visible) {
+      if (this.cmdLinearArrow) this.cmdLinearArrow.visible = false;
+      if (this.cmdTurnArrow) this.cmdTurnArrow.visible = false;
+    }
   }
 
   /**
