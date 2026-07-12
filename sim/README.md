@@ -199,7 +199,10 @@ GLB, robot meshes, and the prebuilt viewer bundle) is not in git:
 `sim/tools/` (see [`sandbox/README.md`](sandbox/README.md)), then
 `uv run tools/publish_assets.py --publish` to publish + repin the lock.
 Publishing rebuilds the viewer bundle first, so Node.js is only needed when
-editing `sim/viewer` or publishing — never to run the sim.
+editing `sim/viewer` or publishing — never to run the sim. While iterating
+on `sim/viewer`, set `INNATE_SIM_VIEWER_DEV=1` so `up` rebuilds the bundle
+from source when it is stale; without it the prebuilt bundle is always used
+as-is.
 
 ### Credits
 

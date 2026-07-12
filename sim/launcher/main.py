@@ -106,8 +106,10 @@ def cmd_up(
 ) -> None:
     started = False
     try:
-        ensure_docker_available(command_hint=f"{CLI_SIM} up")
+        # Banner before any probe: a wedged Docker daemon must never leave
+        # the user staring at a blank terminal.
         print_banner()
+        ensure_docker_available(command_hint=f"{CLI_SIM} up")
         report_configured_keys(config)
         # Before anything containerized runs: claims the container-written
         # workspace dirs for the invoking user (root-owned bind-mount dirs on
@@ -188,10 +190,14 @@ def cmd_up(
             cmd_down(config)
         else:
             warn("Interrupted before the Innate runtime finished starting.")
-    except StackError:
+    except StackError as exc:
         if started:
+            # Show the real failure before cleanup: `docker compose down` can
+            # take a while (or misbehave), and the error must not wait on it.
+            print(f"Error: {exc}", file=sys.stderr)
             warn("Startup failed. Stopping the partially-started Innate runtime...")
             cmd_down(config)
+            raise SystemExit(1) from exc
         raise
 
 
@@ -261,8 +267,8 @@ def cmd_logs(target: str, lines: int | None = None) -> None:
 
 
 def cmd_setup(config: dict[str, object]) -> None:
-    ensure_docker_available(command_hint=f"{CLI_SIM} setup")
     print_banner()
+    ensure_docker_available(command_hint=f"{CLI_SIM} setup")
     configure_brain_backend(config)
     success("Simulator setup is ready.")
     print(f"OS secrets: {ENV_PATH}")

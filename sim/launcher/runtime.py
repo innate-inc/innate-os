@@ -56,6 +56,13 @@ from dashboard import BOLD, GREEN, NC, RED, USE_COLOR
 DOCKER_INSTALL_URL = "https://docs.docker.com/get-started/get-docker/"
 COMPOSE_INSTALL_URL = "https://docs.docker.com/compose/install/linux/"
 
+# A healthy daemon answers these in milliseconds; only a wedged one blocks.
+# Every probe-style docker/git call carries a timeout so a hung daemon turns
+# into a named error (or a degraded status) instead of silent forever-hangs.
+DOCKER_PROBE_TIMEOUT_S = 15.0
+PROBE_TIMEOUT_S = 30.0  # compose-exec probes: zsh -ic + ros2 daemon can take ~15s
+COMPOSE_DOWN_TIMEOUT_S = 180.0
+
 
 def run_logged(
     cmd: list[str],
@@ -147,14 +154,23 @@ def ensure_docker_available(*, command_hint: str = CLI_SIM, require_compose: boo
             f"Start Docker, then rerun `{command_hint}`."
         )
 
-    result = subprocess.run(  # noqa: UP022
-        ["docker", "info", "--format", "{{.ServerVersion}}"],
-        text=True,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    try:
+        result = subprocess.run(  # noqa: UP022
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            text=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=DOCKER_PROBE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        raise StackError(
+            f"Docker did not answer `docker info` within {DOCKER_PROBE_TIMEOUT_S:.0f}s.\n"
+            "The daemon looks wedged -- a stuck Docker Desktop shows exactly this (also check for a\n"
+            "second Docker engine, e.g. Docker Desktop AND docker-engine inside WSL).\n"
+            f"Wait for Docker to finish starting or restart it, then rerun `{command_hint}`."
+        ) from None
     if result.returncode != 0:
         detail = " ".join((result.stderr or result.stdout or "").split())
         detail_lower = detail.lower()
@@ -179,13 +195,20 @@ def ensure_docker_available(*, command_hint: str = CLI_SIM, require_compose: boo
     # `docker` can work while `docker compose` is missing -- the whole startup
     # runs through `docker compose`, so without this it dies deep in with a
     # cryptic bare-`docker` usage error instead of a clear diagnosis.
-    compose = subprocess.run(
-        ["docker", "compose", "version"],
-        text=True,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        compose = subprocess.run(
+            ["docker", "compose", "version"],
+            text=True,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+            timeout=DOCKER_PROBE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        raise StackError(
+            f"Docker did not answer `docker compose version` within {DOCKER_PROBE_TIMEOUT_S:.0f}s.\n"
+            f"The daemon looks wedged. Restart Docker, then rerun `{command_hint}`."
+        ) from None
     if compose.returncode != 0:
         # The package name follows the Docker install, not the distro version.
         raise StackError(
@@ -259,15 +282,19 @@ def prune_stale_local_os_images(current_image: str, *, cwd: Path, env: dict[str,
     accumulate in `docker images` forever. Best-effort: an image still used by
     a container simply fails to untag and is left alone.
     """
-    listing = subprocess.run(
-        ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}", LOCAL_OS_IMAGE_REPO],
-        cwd=cwd,
-        env=env,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        listing = subprocess.run(
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}", LOCAL_OS_IMAGE_REPO],
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+            timeout=DOCKER_PROBE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return
     if listing.returncode != 0:
         return
     stale = [
@@ -317,9 +344,22 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
     else:
         up_cmd = ["docker", "compose", "-f", "sim/docker-compose.dev.yml", "up", "-d"]
         if offline:
-            # Reuse the locally-built OS image; never pull or build, which would
-            # reach for the prebuilt tag and base images over the network.
-            os_image = ""
+            # Reuse an image that is already local; never pull or build, which
+            # would reach for the prebuilt tag and base images over the network.
+            # Local builds are content-tagged (inputs-<hash>), so the compose
+            # default (:latest) never exists -- resolve the real tag here.
+            probe_env = os_compose_env(env_file=os_env_file)
+            local_image = resolve_local_os_image(os_repo)
+            if command_succeeds(["docker", "image", "inspect", local_image], cwd=os_repo, env=probe_env):
+                os_image = local_image
+            elif not (
+                os_image and command_succeeds(["docker", "image", "inspect", os_image], cwd=os_repo, env=probe_env)
+            ):
+                raise StackError(
+                    "Offline, but no Innate OS image is available locally (neither the local build "
+                    f"{shorten_docker_image_ref(local_image)} nor a pinned prebuilt).\n"
+                    f"Run `{CLI_SIM} up` online once first."
+                )
             up_cmd.append("--no-build")
         elif os_image:
             compose_probe_env = os_compose_env(env_file=os_env_file)
@@ -408,12 +448,13 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
         log("ROS workspace install already validated for this checkout.")
     else:
         log("Building / validating the ROS workspace inside the container...")
-        run_logged(
+        run_logged_with_heartbeat(
             os_compose_zsh_cmd(build_cmd),
             cwd=os_repo,
             env=compose_env,
             log_path=OS_BUILD_LOG_PATH,
             failure_message="Innate OS ROS workspace build failed.",
+            progress_message="Still building the ROS workspace (the first build takes a few minutes).",
         )
         ensure_state_dir()
         ROS_INSTALL_STATE_PATH.write_text(f"{ros_inputs_hash}\n", encoding="utf-8")
@@ -462,16 +503,25 @@ def down_os(config: dict[str, object], *, remove_volumes: bool = False) -> None:
     if remove_volumes:
         down_args += ["-v", "--remove-orphans"]
     with DOWN_LOG_PATH.open("a", encoding="utf-8") as log_file:
-        subprocess.run(
-            down_args,
-            cwd=os_repo,
-            env=compose_env,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
+        try:
+            subprocess.run(
+                down_args,
+                cwd=os_repo,
+                env=compose_env,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=COMPOSE_DOWN_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            # Bounded so a wedged daemon can't swallow the shutdown (or the
+            # startup error that triggered a cleanup) in a silent hang.
+            warn(
+                f"`docker compose down` did not finish within {COMPOSE_DOWN_TIMEOUT_S:.0f}s -- "
+                "containers may still be stopping; check `docker ps`."
+            )
 
 
 def clean_runtime(config: dict[str, object]) -> None:
@@ -536,13 +586,17 @@ def cloud_agent_checkout_pinned(repo: Path, commit: str) -> bool:
     """Fetch + detach onto the pinned revision. Callers must ensure the
     worktree is clean first."""
     for args in (["fetch", "--quiet", "origin"], ["checkout", "--quiet", "--detach", commit]):
-        result = subprocess.run(
-            ["git", "-C", str(repo), *args],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(repo), *args],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=120.0,
+            )
+        except subprocess.TimeoutExpired:
+            return False
         if result.returncode != 0:
             return False
     return True
@@ -668,30 +722,52 @@ def open_os_container_shell() -> int:
     return subprocess.run(["docker", "exec", "-it", "innate-dev", "zsh"]).returncode
 
 
-def capture_command_output(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> str:
-    result = subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=env,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        check=False,
-    )
+def capture_command_output(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: float = PROBE_TIMEOUT_S,
+) -> str:
+    """Probe helper: a command that outlives `timeout` (wedged Docker daemon)
+    reads as no output, so status views degrade instead of freezing."""
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return ""
     return (result.stdout or result.stderr or "").strip()
 
 
-def command_succeeds(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> bool:
-    result = subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=env,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+def command_succeeds(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: float = PROBE_TIMEOUT_S,
+) -> bool:
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return result.returncode == 0
 
 
@@ -852,9 +928,13 @@ def os_runtime_ready(config: dict[str, object]) -> bool:
 
 def wait_for_os_runtime_ready(config: dict[str, object], *, timeout_seconds: float = 8.0) -> bool:
     deadline = time.time() + timeout_seconds
+    next_report = time.time() + 15.0
     while time.time() < deadline:
         if os_runtime_ready(config):
             return True
+        if time.time() >= next_report:  # long waits must not read as a hang
+            log(f"Still waiting for the ROS bridge and brain client... ({int(deadline - time.time())}s remaining)")
+            next_report = time.time() + 15.0
         time.sleep(OS_SESSION_READY_POLL_SECONDS)
     return False
 
@@ -1023,7 +1103,15 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
     tarball = sim_repo / ".sim-assets.tmp.tar.gz"
     try:
         with urlopen(Request(lock["url"]), timeout=600) as resp, open(tarball, "wb") as out:
-            shutil.copyfileobj(resp, out)
+            total_mb = int(resp.headers.get("Content-Length") or 0) >> 20
+            done = 0
+            next_report = time.monotonic() + 5.0
+            while chunk := resp.read(1 << 20):
+                out.write(chunk)
+                done += len(chunk)
+                if time.monotonic() >= next_report:  # slow networks: progress, not silence
+                    log(f"Downloading sim assets... {done >> 20} MB" + (f" of {total_mb} MB" if total_mb else ""))
+                    next_report = time.monotonic() + 5.0
     except (URLError, OSError) as exc:
         tarball.unlink(missing_ok=True)
         raise StackError(f"Failed to download sim assets from {lock['url']}: {exc}") from exc
@@ -1067,24 +1155,49 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
 
 
 def ensure_sim_viewer_bundle(config: dict[str, object], *, offline: bool = False) -> None:
-    """Rebuild sim/viewer's SimSession bundle (dist-lib) when a developer's
-    viewer sources are newer than it.
+    """Make sure the webapp's 3D-view bundle (viewer/dist-lib) is usable.
 
-    The webapp loads /sim-viewer/sim-session.js for the 3D sim view. Users
-    never build it: the asset bundle ships it prebuilt (publish_assets.py),
-    so Node.js is only needed when EDITING sim/viewer -- with npm absent the
-    fetched bundle is used as-is. Never runs on robots.
+    The webapp loads /sim-viewer/sim-session.js for the 3D sim view. The
+    asset bundle ships it prebuilt (publish_assets.py), so running the sim
+    never needs Node.js. A missing/empty bundle means a broken asset state
+    (e.g. an interrupted first run), and the fix is re-fetching the pinned
+    assets -- never a local npm build. Viewer developers opt in to
+    build-from-source with INNATE_SIM_VIEWER_DEV=1. Never runs on robots.
     """
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
     viewer = sim_repo / "viewer"
     bundle = viewer / "dist-lib" / "sim-session.js"
-    npm = shutil.which("npm")
-    manual_hint = "build it manually with: cd sim/viewer && npm install && npm run build:lib"
-    if npm is None:
-        if not bundle.exists():
-            # Only reachable with a pre-dist-lib asset bundle pinned.
-            warn(f"No prebuilt sim viewer bundle and no npm (no 3D webapp view). Install Node.js, or {manual_hint}")
+
+    if os.environ.get("INNATE_SIM_VIEWER_DEV", "").strip() == "1":
+        _build_viewer_bundle_from_source(viewer, bundle, offline=offline)
         return
+
+    if bundle.is_file() and bundle.stat().st_size > 0:
+        return
+
+    if offline:
+        warn("The prebuilt sim viewer bundle is missing and this run is offline -- no 3D webapp view.")
+        return
+    warn("The prebuilt sim viewer bundle is missing or empty -- re-fetching the sim assets...")
+    (sim_repo / "assets" / ".assets-tag").unlink(missing_ok=True)
+    ensure_sim_assets(config)
+    if not (bundle.is_file() and bundle.stat().st_size > 0):
+        # Only reachable with a pre-dist-lib asset bundle pinned.
+        warn(
+            "The pinned asset bundle does not include a prebuilt viewer (no 3D webapp view). "
+            "Viewer developers can build one from source with INNATE_SIM_VIEWER_DEV=1 (needs Node.js)."
+        )
+
+
+def _build_viewer_bundle_from_source(viewer: Path, bundle: Path, *, offline: bool) -> None:
+    """INNATE_SIM_VIEWER_DEV=1: rebuild dist-lib when viewer sources are
+    newer than it (the edit-run loop for sim/viewer developers)."""
+    npm = shutil.which("npm")
+    if npm is None:
+        raise StackError(
+            "INNATE_SIM_VIEWER_DEV=1 needs npm on PATH (install Node.js), "
+            "or unset it to use the prebuilt viewer bundle."
+        )
     sources = [viewer / "package.json", viewer / "vite.lib.config.ts", viewer / "tsconfig.json"]
     sources += sorted((viewer / "src").rglob("*.ts"))
     if bundle.exists():
@@ -1093,7 +1206,7 @@ def ensure_sim_viewer_bundle(config: dict[str, object], *, offline: bool = False
             return
     if not (viewer / "node_modules").is_dir():
         if offline:
-            warn(f"Offline and sim/viewer/node_modules is missing -- skipping the viewer bundle build; {manual_hint}")
+            warn("Offline and sim/viewer/node_modules is missing -- skipping the viewer bundle build.")
             return
         log("Installing sim viewer npm dependencies (one-time)...")
         run_logged(
@@ -1103,11 +1216,12 @@ def ensure_sim_viewer_bundle(config: dict[str, object], *, offline: bool = False
             failure_message="npm ci failed for sim/viewer.",
         )
     log("Building the sim viewer bundle (dist-lib)...")
-    run_logged(
+    run_logged_with_heartbeat(
         [npm, "run", "build:lib"],
         cwd=viewer,
         log_path=VIEWER_BUILD_LOG_PATH,
         failure_message="Sim viewer bundle build failed (npm run build:lib).",
+        progress_message="Still building the sim viewer bundle.",
     )
 
 
@@ -1271,13 +1385,17 @@ def ensure_skill_assets(config: dict[str, object]) -> None:
 
 
 def container_running(container_name: str) -> bool:
-    result = subprocess.run(
-        ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
-        text=True,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+            text=True,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+            timeout=DOCKER_PROBE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return False  # wedged daemon: report down rather than hang the caller
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
