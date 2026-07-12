@@ -8,17 +8,19 @@ sim/README.md "world_server.py"):
   truth ({t, wall, pose, joints}) after every physics slice. View-only;
   robot software must never consume it.
 
-Placement is the launcher's call (host = native GL, container = software GL
-at --render-scale 2); the node can't tell the difference. No ROS; beyond
+Always runs on the host (the launcher starts it via uv): in-container
+software GL was slow enough to starve the whole ROS stack. No ROS; beyond
 VirtualMars' deps only `websockets`, and without it the stream is disabled.
-Binds 127.0.0.1 only. macOS GL is main-thread-sensitive, so all render work
-runs on the main thread; state reads take the physics lock directly.
+Binds 127.0.0.1 unless --bind says otherwise (see its help). macOS GL is
+main-thread-sensitive, so all render work runs on the main thread; state
+reads take the physics lock directly.
 """
 
 import argparse
 import json
 import socket
 import struct
+import sys
 import threading
 import time
 
@@ -169,10 +171,12 @@ class WorldServer:
             if not active:
                 # macOS parks idle offscreen GL contexts and re-acquiring can
                 # stall for minutes; a 5Hz heartbeat prevents the parking.
-                try:
-                    self._render_product("jpeg:main")
-                except Exception:  # noqa: BLE001,S110 -- heartbeat is best-effort
-                    pass
+                # Only macOS needs it -- elsewhere it's 5 renders/s of waste.
+                if sys.platform == "darwin":
+                    try:
+                        self._render_product("jpeg:main")
+                    except Exception:  # noqa: BLE001,S110 -- heartbeat is best-effort
+                        pass
                 time.sleep(0.2)
                 continue
             todo = [p for p in active if p in self.wanted]
@@ -286,6 +290,13 @@ def main() -> None:
         default=1,
         help="Divide the RGB render resolution by N (software-GL mitigation; the wire stays 640x480)",
     )
+    parser.add_argument(
+        "--bind",
+        default="127.0.0.1",
+        help="Comma-separated addresses to listen on. Docker Desktop reaches the host loopback via "
+        "host.docker.internal, but a native Linux/WSL Docker engine resolves it to the bridge "
+        "gateway -- there the launcher passes '127.0.0.1,<gateway>' (host-owned, not LAN-routable).",
+    )
     args = parser.parse_args()
 
     print(f"[world-server] loading VirtualMars (render scale {args.render_scale})...", flush=True)
@@ -303,26 +314,29 @@ def main() -> None:
     steady_ms = (time.perf_counter() - t1) * 1000
     print(f"[world-server] GL self-test: {steady_ms:.0f} ms/frame (first frame {first_ms:.0f} ms)", flush=True)
 
-    listener = socket.create_server(("127.0.0.1", args.port))
-    print(f"[world-server] ready on 127.0.0.1:{args.port}", flush=True)
+    binds = [b.strip() for b in args.bind.split(",") if b.strip()]
+    listeners = [socket.create_server((bind, args.port)) for bind in binds]
+    print(f"[world-server] ready on {', '.join(f'{b}:{args.port}' for b in binds)}", flush=True)
 
     server.publish_state()  # observers get a frame before the first physics slice
     if ws_serve is None:
         print("[world-server] `websockets` not installed -- observer state stream disabled", flush=True)
     else:
-        state_server = ws_serve(server.serve_state, "127.0.0.1", args.state_port)
-        threading.Thread(target=state_server.serve_forever, daemon=True).start()
+        for bind in binds:
+            state_server = ws_serve(server.serve_state, bind, args.state_port)
+            threading.Thread(target=state_server.serve_forever, daemon=True).start()
         server.state_port = args.state_port
-        print(f"[world-server] observer state stream on ws://127.0.0.1:{args.state_port}", flush=True)
+        print(f"[world-server] observer state stream on port {args.state_port} ({', '.join(binds)})", flush=True)
 
     threading.Thread(target=server.physics_loop, daemon=True).start()
 
-    def accept_loop() -> None:
+    def accept_loop(listener: socket.socket) -> None:
         while True:
             conn, _addr = listener.accept()
             threading.Thread(target=server.serve_connection, args=(conn,), daemon=True).start()
 
-    threading.Thread(target=accept_loop, daemon=True).start()
+    for listener in listeners:
+        threading.Thread(target=accept_loop, args=(listener,), daemon=True).start()
     server.render_loop()  # main thread owns the GL context
 
 

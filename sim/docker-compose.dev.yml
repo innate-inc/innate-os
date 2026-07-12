@@ -46,7 +46,7 @@ services:
       - INNATE_ZENOH_DISABLE_SHM=1
       # Set by the launcher when the host world server runs (native GL
       # rendering outside Docker, see mars_sim_driver/world_server.py);
-      # empty = simulate in-container on software GL.
+      # required -- the sim world always runs outside the container.
       - VIRTUAL_MARS_REMOTE=${VIRTUAL_MARS_REMOTE:-}
       # Brain ("agent") websocket the robot connects to. With
       # COMPOSE_PROFILES=local-brain the in-compose cloud-agent service starts and

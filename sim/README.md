@@ -6,7 +6,7 @@ what you need:
 | | You get | You need |
 |---|---|---|
 | **[1. VirtualMars](#1--virtualmars-the-sim-as-a-python-object)** | the whole simulated world as one Python object — scripts, notebooks, RL loops | `uv` |
-| **[2. The digital twin](#2--the-digital-twin-full-robot-stack)** | the complete innate-os stack (Nav2, AMCL, brain, skills, webapp) running against the sim | Docker |
+| **[2. The digital twin](#2--the-digital-twin-full-robot-stack)** | the complete innate-os stack (Nav2, AMCL, brain, skills, webapp) running against the sim | Docker + `uv` |
 
 Use VirtualMars to experiment with the robot's sensors and physics directly;
 use the digital twin to build and test skills, agents, and input devices
@@ -66,12 +66,14 @@ Docker against the simulated robot. Only the hardware drivers are swapped for
 a simulated equivalent; nothing above them can tell the difference.
 
 ```bash
-./innate-sim setup     # one-time: keys + brain backend
-./innate-sim up        # container + ROS stack + virtual robot
+./innate-sim setup     # one-time: prerequisites (installs uv if missing) + keys + brain backend
+./innate-sim up        # host world server + container + ROS stack
 ```
 
 The first `up` provisions everything (assets, Docker image, ROS build) and
-later runs start in seconds. No Node.js required — the 3D viewer ships
+later runs start in seconds. The world itself (physics + rendering) always
+runs on the host via `uv` — never in the container, where software GL is
+slow enough to break teleop. No Node.js required — the 3D viewer ships
 prebuilt with the assets.
 
 **Then open [https://localhost](https://localhost)** — the operator webapp
@@ -157,11 +159,12 @@ robot adapter; humans and tools see it only through the observer stream):
 
 Physics steps against the wall clock in <=25ms slices (a stall replays as
 several smooth slices, never one teleport), with all GL work on the main
-thread — macOS GL is main-thread-sensitive. Placement is the launcher's
-call: native on macOS hosts (native GL renders ~7x faster than software GL
-in Docker), in-container for CI; the node can't tell the difference.
-`INNATE_SIM_HOST_WORLD=1/0` forces host placement on/off, and
-`./innate-sim logs world-server` shows the host server log.
+thread — macOS GL is main-thread-sensitive. The world always runs on the
+host, started by the launcher via `uv` (which is why `uv` is a
+prerequisite): native/WSLg GL renders ~7x faster than software GL in
+Docker, and physics never competes with the ROS stack for the container's
+CPU. The container ships no MuJoCo at all — the driver node is a pure RPC
+client. `./innate-sim logs world-server` shows the host server log.
 
 ### node.py — mars_sim_driver (the digital twin's hardware)
 

@@ -21,7 +21,9 @@
   <depend>mars_msgs</depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>mars_sim</exec_depend>
-  <!-- python3-mujoco/pillow come from pip in the sim image, not rosdep -->
+  <!-- pillow comes from pip in the sim image, not rosdep. MuJoCo is NOT in
+       the image: the world always runs on the host (world_server.py via uv);
+       node.py is a pure RPC client of it. -->
 
   <export>
     <build_type>ament_python</build_type>

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from config import (
+    CLI_SIM,
     CLOUD_AGENT_DIR_NAME,
     CLOUD_AGENT_GIT_URL,
     ENV_PATH,
@@ -22,9 +23,11 @@ from config import (
 )
 from dashboard import BOLD, CYAN, DIM, GREEN, NC, YELLOW
 from runtime import (
+    UV_INSTALL_COMMAND,
     cloud_agent_checkout_pinned,
     cloud_agent_git_status,
     cloud_agent_lock,
+    find_uv,
 )
 
 INNATE_SERVICE_KEY = "INNATE_SERVICE_KEY"
@@ -265,6 +268,29 @@ def _configure_service_key(config: dict[str, object]) -> None:
             print(f"{GREEN}Hosted brain credentials are ready.{NC}")
             return
         warn("Service key cannot be empty. Press Ctrl+C to cancel.")
+
+
+def ensure_uv_prerequisite() -> None:
+    """uv runs the sim world (MuJoCo physics + rendering) on the host --
+    `up` requires it. Offer the official installer interactively;
+    non-interactive runs just report the command."""
+    if find_uv() is not None:
+        success("uv is installed.")
+        return
+    if not is_interactive_terminal():
+        warn(f"uv is not installed (required by `{CLI_SIM} up`). Install it with: {UV_INSTALL_COMMAND}")
+        return
+    print(f"{DIM}uv runs the sim world (physics + rendering) on the host; `{CLI_SIM} up` requires it.{NC}")
+    if not _prompt_yes_no(
+        "uv is not installed. Install it now (official installer, user-local, no sudo)?", default=True
+    ):
+        warn(f"Skipped. Install it before `{CLI_SIM} up`: {UV_INSTALL_COMMAND}")
+        return
+    result = subprocess.run(UV_INSTALL_COMMAND, shell=True, stdin=subprocess.DEVNULL)  # noqa: S602 -- official installer, shown to the user verbatim
+    if result.returncode == 0 and find_uv() is not None:
+        success("uv installed.")
+    else:
+        warn(f"uv installation did not complete. Install it manually: {UV_INSTALL_COMMAND}")
 
 
 def ensure_cloud_agent_repo(config: dict[str, object]) -> None:

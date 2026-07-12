@@ -17,6 +17,7 @@ import numpy as np
 from PIL import Image
 
 from . import world
+from .constants import CAMERA_FOVY, CAMERA_HEIGHT, CAMERA_WIDTH
 from .world import ARM_HOME, SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG
 
 # Stop the base if the last Twist is stale, like a real base watchdog.
@@ -28,8 +29,6 @@ CAMERAS = {
     "main": ("robot_camera_optical_frame", (0, 0, 1), (0, -1, 0)),
     "wrist": ("robot_arm_camera_link", (1, 0, 0), (0, 0, 1)),
 }
-CAMERA_WIDTH, CAMERA_HEIGHT = 640, 480
-CAMERA_FOVY = 80  # vertical FOV; keep in sync with sim/viewer's ROBOT_CAMERA_VFOV
 JPEG_QUALITY = 80  # matches main_camera_driver.cpp
 # Post-render ACES tone map approximating sim/viewer's Three.js output
 # (ACESFilmicToneMapping); exposure calibrated visually against it.

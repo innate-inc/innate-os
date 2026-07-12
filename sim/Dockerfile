@@ -66,9 +66,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
         python-dotenv \
         urdf-parser-py \
         websocket-client \
-        'mujoco>=3.2' \
-        pillow \
-        trimesh && \
+        pillow && \
     uv pip install --system \
         --index-url https://download.pytorch.org/whl/cpu \
         --extra-index-url https://pypi.org/simple \

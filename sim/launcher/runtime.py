@@ -1017,13 +1017,17 @@ def capture_os_brain_logs(config: dict[str, object], lines: int = 18) -> list[st
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     compose_env = os_compose_env()
     capture_flags = "-e -J -p" if USE_COLOR else "-J -p"
+    # Plain sh: tmux needs no ROS env, and this runs every dashboard tick --
+    # a login zsh would re-source the whole profile each time.
     output = capture_command_output(
-        os_compose_zsh_cmd(
+        os_compose_exec_cmd(
+            "sh",
+            "-c",
             f"if ! tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1; then "
             "echo __INNATE_NO_TMUX_SESSION__; "
             "exit 0; "
             "fi; "
-            f"tmux capture-pane {capture_flags} -t {shlex.quote(TMUX_SESSION_NAME)}:nav-brain.1 -S -{lines} 2>/dev/null || true"
+            f"tmux capture-pane {capture_flags} -t {shlex.quote(TMUX_SESSION_NAME)}:nav-brain.1 -S -{lines} 2>/dev/null || true",
         ),
         cwd=os_repo,
         env=compose_env,
@@ -1274,24 +1278,74 @@ def _stop_stale_world_server() -> None:
     warn("A previous world server is still holding the port; the new one may fail to bind.")
 
 
-def ensure_world_server(config: dict[str, object]) -> str:
-    """Start the host world server (physics + native-GL rendering outside
-    Docker -- see mars_sim_driver/world_server.py) and return the endpoint
-    the container should use, or "" for in-container rendering.
+UV_INSTALL_COMMAND = "curl -LsSf https://astral.sh/uv/install.sh | sh"
+_UV_MISSING_MESSAGE = (
+    "uv is required: it runs the sim world (MuJoCo physics + rendering) on the host, where it is "
+    "~7x faster than in Docker.\n"
+    f"Install it (user-local, no sudo):  {UV_INSTALL_COMMAND}\n"
+    f"or rerun `{CLI_SIM} setup`, which offers to install it for you."
+)
 
-    Docker has no GPU on macOS/Windows, so in-container renders run on
-    software GL at ~105ms/frame; the host renders the same frame in ~15ms.
-    Default: on for macOS, off elsewhere; INNATE_SIM_HOST_WORLD=1/0 overrides.
-    Requires uv on the host (for the mujoco environment); falls back to
-    in-container rendering with a warning when unavailable.
+
+def find_uv() -> str | None:
+    """Path to uv, checking PATH plus the official installer's default
+    locations (a just-installed uv is often not on PATH yet)."""
+    found = shutil.which("uv")
+    if found:
+        return found
+    for candidate in (Path.home() / ".local" / "bin" / "uv", Path.home() / ".cargo" / "bin" / "uv"):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def ensure_uv_available() -> None:
+    """Prerequisite gate for commands that need the host world server."""
+    if find_uv() is None:
+        raise StackError(_UV_MISSING_MESSAGE)
+
+
+def _world_server_bind_addresses() -> str:
+    """Addresses the host world server should listen on (comma-separated),
+    or "" when no host-only bind can be determined (callers fail closed to
+    in-container rendering -- the unauthenticated sim ports must never be
+    opened to the LAN by default).
+
+    Docker Desktop (macOS) reaches the host loopback via host.docker.internal,
+    so loopback alone suffices. A native Linux/WSL engine resolves it to the
+    default bridge gateway instead -- bind that too. The gateway IP is owned
+    by the host and not routable from the LAN, so nothing is exposed beyond
+    the host and its containers.
     """
-    override = os.environ.get("INNATE_SIM_HOST_WORLD", "").strip()
-    enabled = override == "1" if override else sys.platform == "darwin"
-    if not enabled:
-        return ""
-    if shutil.which("uv") is None:
-        warn("uv not found -- running the sim world in-container (software GL). Install uv for native-speed rendering.")
-        return ""
+    if sys.platform == "darwin":
+        return "127.0.0.1"
+    gateway = capture_command_output(
+        ["docker", "network", "inspect", "bridge", "--format", "{{(index .IPAM.Config 0).Gateway}}"],
+        timeout=DOCKER_PROBE_TIMEOUT_S,
+    )
+    parts = gateway.split(".")
+    if len(parts) == 4 and all(p.isdigit() and int(p) <= 255 for p in parts):
+        return f"127.0.0.1,{gateway}"
+    return ""
+
+
+def ensure_world_server(config: dict[str, object]) -> str:
+    """Start the host world server (physics + rendering, outside Docker --
+    see mars_sim_driver/world_server.py) and return the endpoint the
+    container must use.
+
+    The world ALWAYS runs on the host: in-container software GL measured
+    ~105ms/frame with physics starving the ROS stack (multi-second teleop
+    stalls on laptop-class machines), so there is no in-container fallback
+    -- every failure here is a hard error naming its fix.
+
+    On a native Linux/WSL Docker engine, host.docker.internal resolves to
+    the Docker bridge gateway rather than the host loopback, so there the
+    server also binds that gateway IP (host-owned, not LAN-routable).
+    """
+    uv = find_uv()
+    if uv is None:
+        raise StackError(_UV_MISSING_MESSAGE)
 
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
     endpoint = f"host.docker.internal:{WORLD_SERVER_PORT}"
@@ -1304,6 +1358,15 @@ def ensure_world_server(config: dict[str, object]) -> str:
         log("Host world server is outdated (no observer state stream) -- restarting it...")
         _stop_stale_world_server()
 
+    bind = os.environ.get("INNATE_SIM_WORLD_BIND", "").strip() or _world_server_bind_addresses()
+    if not bind:
+        # Fail closed: no host-only bind must never widen to 0.0.0.0.
+        raise StackError(
+            "Could not determine the Docker bridge gateway (the address containers use to reach "
+            "the host world server). This usually means a nonstandard Docker setup (podman, "
+            "`bridge: none`).\nSet INNATE_SIM_WORLD_BIND to the address the server should listen on."
+        )
+
     log("Starting host world server (native GL rendering)...")
     ensure_state_dir()
     bootstrap = (
@@ -1314,7 +1377,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
     env["VIRTUAL_MARS_ASSETS"] = str(sim_repo / "assets")
     with WORLD_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:
         proc = subprocess.Popen(
-            ["uv", "run", "--project", str(sim_repo), "python", "-c", bootstrap],
+            [uv, "run", "--project", str(sim_repo), "python", "-c", bootstrap, "--bind", bind],
             cwd=sim_repo.parent,
             env=env,
             stdin=subprocess.DEVNULL,
@@ -1329,14 +1392,15 @@ def ensure_world_server(config: dict[str, object]) -> str:
         if proc.poll() is not None:
             break
         time.sleep(0.5)
-    warn(
-        "Host world server failed to start -- running the sim world in-container instead. "
-        f"Details: {WORLD_SERVER_LOG_PATH}"
-    )
     with contextlib.suppress(ProcessLookupError, OSError):
         proc.kill()
     WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
-    return ""
+    raise StackError(
+        "The host world server failed to start (the sim world always runs on the host).\n"
+        "Common causes: no usable GL -- on a headless Linux host set MUJOCO_GL=egl (GPU) or "
+        "MUJOCO_GL=osmesa (CPU, slow); on WSL make sure WSLg is available (`wsl --update`).\n"
+        f"Recent log output:\n{tail_file(WORLD_SERVER_LOG_PATH, limit=30)}"
+    )
 
 
 def stop_world_server() -> None:

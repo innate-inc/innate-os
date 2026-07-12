@@ -54,7 +54,7 @@ from std_msgs.msg import Empty, Float64MultiArray, Int32, String
 from std_srvs.srv import Trigger
 from tf2_ros import TransformBroadcaster
 
-from .core import CAMERA_FOVY, CAMERA_HEIGHT, CAMERA_WIDTH
+from .constants import CAMERA_FOVY, CAMERA_HEIGHT, CAMERA_WIDTH
 from .remote_world import RemoteWorld
 
 try:

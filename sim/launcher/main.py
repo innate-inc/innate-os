@@ -52,6 +52,7 @@ from runtime import (
     ensure_sim_assets,
     ensure_sim_viewer_bundle,
     ensure_skill_assets,
+    ensure_uv_available,
     ensure_workspace_dirs,
     ensure_world_server,
     open_os_container_shell,
@@ -66,6 +67,7 @@ from runtime import (
 from setup_wizard import (
     _prompt_yes_no,
     configure_brain_backend,
+    ensure_uv_prerequisite,
     is_interactive_terminal,
     report_configured_keys,
 )
@@ -110,6 +112,7 @@ def cmd_up(
         # the user staring at a blank terminal.
         print_banner()
         ensure_docker_available(command_hint=f"{CLI_SIM} up")
+        ensure_uv_available()  # the sim world always runs on the host via uv
         report_configured_keys(config)
         # Before anything containerized runs: claims the container-written
         # workspace dirs for the invoking user (root-owned bind-mount dirs on
@@ -269,6 +272,7 @@ def cmd_logs(target: str, lines: int | None = None) -> None:
 def cmd_setup(config: dict[str, object]) -> None:
     print_banner()
     ensure_docker_available(command_hint=f"{CLI_SIM} setup")
+    ensure_uv_prerequisite()
     configure_brain_backend(config)
     success("Simulator setup is ready.")
     print(f"OS secrets: {ENV_PATH}")
