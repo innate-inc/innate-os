@@ -18,6 +18,7 @@ reads take the physics lock directly.
 
 import argparse
 import json
+import os
 import socket
 import struct
 import sys
@@ -304,15 +305,32 @@ def main() -> None:
     server = WorldServer(VirtualMars(render_wh=render_wh, depth_render_wh=DEPTH_WH))
     server.sim.step(0.5)  # settle from the spawn drop before clients look
 
-    # Boot self-test: prove GL works before accepting clients, and report the
-    # per-frame cost so placement decisions are visible in the log.
+    # Boot self-test: prove GL works before accepting clients, and report
+    # backend + per-frame cost -- the launcher parses this line into the
+    # startup health checks.
     t0 = time.perf_counter()
     server.sim.render_rgb("main")
     first_ms = (time.perf_counter() - t0) * 1000
     t1 = time.perf_counter()
-    server.sim.render_rgb("main")
+    frame = server.sim.render_rgb("main")
     steady_ms = (time.perf_counter() - t1) * 1000
-    print(f"[world-server] GL self-test: {steady_ms:.0f} ms/frame (first frame {first_ms:.0f} ms)", flush=True)
+    # A context can be created "successfully" yet render nothing (seen on a
+    # Raspberry Pi: EGL came up with GL_OUT_OF_MEMORY warnings and produced
+    # blank frames). A real render of the spawn view always has texture;
+    # refuse to serve garbage so the launcher's ladder falls to the next
+    # backend instead.
+    if float(frame.std()) < 1.0:
+        print(
+            "[world-server] GL self-test produced a blank image -- the GL context is not actually "
+            "rendering (GPU out of memory?). Refusing to serve broken frames.",
+            flush=True,
+        )
+        raise SystemExit(1)
+    backend = os.environ.get("MUJOCO_GL", "").strip() or "native"
+    print(
+        f"[world-server] GL self-test ({backend}): {steady_ms:.0f} ms/frame (first frame {first_ms:.0f} ms)",
+        flush=True,
+    )
 
     binds = [b.strip() for b in args.bind.split(",") if b.strip()]
     listeners = [socket.create_server((bind, args.port)) for bind in binds]

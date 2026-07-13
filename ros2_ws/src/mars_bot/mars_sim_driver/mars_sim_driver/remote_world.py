@@ -18,6 +18,7 @@ import time
 import numpy as np
 
 STATE_CACHE_S = 0.015  # coalesce the 30/30/20/10Hz state publishers into one RPC
+STATE_STALE_LIMIT_S = 5.0  # ride out a server restart; a dead server must surface
 
 
 class _Channel:
@@ -60,16 +61,26 @@ class _Channel:
         blob = self._read_frame() if meta.get("blob") is not None else None
         return meta, blob
 
+    def _reset(self) -> None:
+        if self._sock is not None:
+            self._sock.close()
+        self._sock = None
+
     def call(self, req: dict, timeout: float = 10.0) -> tuple[dict, bytes | None]:
         with self._lock:
             try:
                 meta, blob = self._call_once(req, timeout)
             except (OSError, ConnectionError):
                 # Dropped/never-up connection: reconnect and retry once.
-                if self._sock is not None:
-                    self._sock.close()
-                self._sock = None
-                meta, blob = self._call_once(req, timeout)
+                self._reset()
+                try:
+                    meta, blob = self._call_once(req, timeout)
+                except (OSError, ConnectionError):
+                    # A failed exchange can leave the server's reply in flight;
+                    # reusing the socket would pair the NEXT request with THIS
+                    # reply (a depth call reading a jpeg reply, forever offset).
+                    self._reset()
+                    raise
         if not meta.get("ok"):
             raise RuntimeError(f"world server error for {req.get('op')}: {meta.get('error')}")
         return meta, blob
@@ -111,10 +122,12 @@ class RemoteWorld:
                     self._state, _ = self._state_ch.call({"op": "state"})
                     self._state_at = now
                 except (OSError, RuntimeError):
-                    if self._state is None:
-                        raise
                     # Server briefly away (restart): a stale snapshot beats
-                    # crashing the publishers; reconnect happens per call.
+                    # crashing the publishers -- but only briefly. A DEAD
+                    # server (e.g. OOM-killed) must stop /odom, or every
+                    # health check keeps reporting a frozen robot as 'ok'.
+                    if self._state is None or now - self._state_at > STATE_STALE_LIMIT_S:
+                        raise
             return self._state
 
     @property
@@ -162,9 +175,13 @@ class RemoteWorld:
 
     def render_jpeg(self, camera: str) -> bytes:
         _meta, blob = self._render_ch.call({"op": "render_jpeg", "camera": camera})
+        if blob is None:
+            raise RuntimeError("malformed render_jpeg reply (no blob)")
         return blob
 
     def render_depth(self, camera: str) -> np.ndarray:
         meta, blob = self._render_ch.call({"op": "render_depth", "camera": camera})
+        if "shape" not in meta or blob is None:
+            raise RuntimeError(f"malformed render_depth reply (keys: {sorted(meta)})")
         h, w = meta["shape"]
         return np.frombuffer(blob, dtype=np.float32).reshape(h, w)

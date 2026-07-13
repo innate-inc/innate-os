@@ -168,7 +168,15 @@ def cmd_up(
             )
         log("Waiting for the sim driver (/odom)...")
         sim_driver_ready = wait_for_virtual_mars(config)
-        print_startup_checks(config, sim_driver_ready=sim_driver_ready)
+        world_alive = print_startup_checks(config, sim_driver_ready=sim_driver_ready)
+        if not world_alive:
+            # It passed the startup gate and died during boot -- on small
+            # machines that is almost always the OOM killer's work.
+            warn("The world server died during startup. On low-memory machines this is usually")
+            warn("the OOM killer (check: sudo dmesg | grep -i oom). Free up memory or add swap,")
+            warn(f"then restart: {CLI_SIM} down && {CLI_SIM} up. Log: {CLI_SIM} logs world-server")
+            warn(f"The runtime is left running for inspection; stop it with `{CLI_SIM} down`.")
+            return
         if not sim_driver_ready:
             # Leave the runtime up so the failure can be inspected.
             warn("The sim driver (MuJoCo) never started publishing /odom.")
@@ -242,7 +250,7 @@ def cmd_clean(config: dict[str, object], *, assume_yes: bool = False) -> None:
 def cmd_logs(target: str, lines: int | None = None) -> None:
     if target == "startup":
         found_logs = False
-        for name in ("bootstrap", "compose", "cloud-agent", "os-build", "viewer-build", "os-session"):
+        for name in ("bootstrap", "world-server", "compose", "cloud-agent", "os-build", "viewer-build", "os-session"):
             path = LOG_TARGETS[name]
             if path.exists():
                 found_logs = True
@@ -347,17 +355,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     logs_parser.add_argument(
         "target",
-        choices=[
-            "startup",
-            "bootstrap",
-            "compose",
-            "cloud-agent",
-            "os-build",
-            "viewer-build",
-            "os-session",
-            "brain",
-            "down",
-        ],
+        # Derived from LOG_TARGETS so a new log stream can't be forgotten
+        # here again (world-server was documented but missing).
+        choices=["startup", "brain", *sorted(LOG_TARGETS)],
         help="Which log stream to show",
     )
     logs_parser.add_argument(
@@ -415,6 +415,16 @@ def main() -> int:
             parser.error(f"Unknown sim command: {args.sim_command}")
     except StackError as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # e.g. a full disk that flipped the filesystem read-only (seen in a
+        # user test): one actionable line, not a traceback.
+        print(
+            f"Error: {exc}\n"
+            "This is a filesystem problem, not an Innate one -- check free disk space "
+            "(a full disk can leave the filesystem mounted read-only until a reboot).",
+            file=sys.stderr,
+        )
         return 1
     except subprocess.CalledProcessError as exc:
         print(f"Command failed: {' '.join(exc.cmd)}", file=sys.stderr)

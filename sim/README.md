@@ -112,6 +112,10 @@ TF, `/scan`, `/mars/main_camera/points`, camera topics and `/cmd_vel` teleop.
   tested against: setup clones/aligns to it (and asks before touching an
   existing checkout); `up` only warns on mismatch, so forks and pinned
   experiments are never modified.
+- `INNATE_SIM_RENDER_SCALE=N` — render the robot cameras at 1/N resolution
+  (the wire format stays 640×480). On machines stuck with software rendering
+  (`software-speed` in the dashboard's World field), `2` makes each frame
+  ~4× cheaper and noticeably lowers end-to-end latency.
 
 ---
 

@@ -65,7 +65,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
       const p = JSON.parse(localStorage.getItem(storeKey) || "{}");
       enabledCams = new Set(Array.isArray(p.enabled) ? p.enabled : []);
       mapOn = p.mapOn === true;
-      primary = typeof p.primary === "string" ? p.primary : MAP_ID;
+      primary = typeof p.primary === "string" ? p.primary : ""; // "" = no saved choice; reconcile picks
     } catch {
       /* defaults: nothing enabled, reconcile picks the first camera */
     }
@@ -98,10 +98,14 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
     const validPrimary =
       primary === MAP_ID || (roster.includes(primary) && enabledCams.has(primary));
     if (!validPrimary) {
-      // Phones default to the sim's orbit view: the robot itself reads best
-      // when sheets/joystick cover half the screen.
-      const phone = matchMedia("(max-width: 640px)").matches && roster.includes("orbit") ? "orbit" : null;
-      primary = phone ?? [...enabledCams][0] ?? (mapOn ? MAP_ID : roster[0]) ?? MAP_ID;
+      // No saved choice (or a stale one): default to the view that shows the
+      // robot best -- the sim's orbit "top view" (only simulated robots have
+      // it), or the head camera on real robots. A saved choice always wins.
+      primary =
+        (roster.includes("orbit") ? "orbit" : null) ??
+        (roster.includes("main") ? "main" : null) ??
+        [...enabledCams][0] ??
+        MAP_ID;
     }
     if (primary === MAP_ID) mapOn = true;
     else enabledCams.add(primary);

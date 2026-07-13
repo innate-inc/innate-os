@@ -109,6 +109,10 @@ class StackError(RuntimeError):
     pass
 
 
+class DockerUnresponsiveError(StackError):
+    """Docker did not answer a probe; availability is unknown, not "no"."""
+
+
 def log(message: str) -> None:
     print(f"{CYAN}[innate]{NC} {message}")
 

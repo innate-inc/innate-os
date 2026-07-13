@@ -6,6 +6,8 @@ import contextlib
 import hashlib
 import json
 import os
+import platform
+import re
 import shlex
 import shutil
 import signal
@@ -43,6 +45,7 @@ from config import (
     WORLD_SERVER_LOG_PATH,
     WORLD_SERVER_PID_PATH,
     WORLD_SERVER_PORT,
+    DockerUnresponsiveError,
     StackError,
     compute_ros_install_validation_hash,
     ensure_state_dir,
@@ -110,6 +113,11 @@ def run_logged_with_heartbeat(
     include_recent_log_on_failure: bool = True,
 ) -> None:
     ensure_state_dir()
+    # Heartbeats must describe THIS command: reading the whole shared log
+    # would parrot stale lines from the previous command (a failed pull's
+    # 'unauthorized' haunted the subsequent build's heartbeats).
+    log_offset = log_path.stat().st_size if log_path.exists() else 0
+    started = time.monotonic()
     with log_path.open("a", encoding="utf-8") as log_file:
         proc = subprocess.Popen(
             cmd,
@@ -127,11 +135,16 @@ def run_logged_with_heartbeat(
                 break
             now = time.monotonic()
             if now >= next_heartbeat:
-                latest = latest_log_line(log_path)
+                latest = ""
+                with contextlib.suppress(OSError):
+                    appended = log_path.read_text(errors="replace")[log_offset:]
+                    latest = next((line.strip() for line in reversed(appended.splitlines()) if line.strip()), "")
+                elapsed = int(now - started)
+                stamp = f"{elapsed // 60}m{elapsed % 60:02d}s" if elapsed >= 60 else f"{elapsed}s"
                 if latest:
-                    log(f"{progress_message} Latest Docker activity: {latest}")
+                    log(f"{progress_message} ({stamp}) Latest: {latest}")
                 else:
-                    log(progress_message)
+                    log(f"{progress_message} ({stamp}, no output yet)")
                 next_heartbeat = now + heartbeat_seconds
             time.sleep(0.5)
 
@@ -148,10 +161,19 @@ def ensure_docker_available(*, command_hint: str = CLI_SIM, require_compose: boo
     container via plain `docker` (e.g. `sh` -> `docker exec`).
     """
     if shutil.which("docker") is None:
+        if sys.platform == "darwin":
+            install_help = (
+                f"Install Docker Desktop:  brew install --cask docker\n(or download it: {DOCKER_INSTALL_URL})"
+            )
+        else:
+            install_help = (
+                "On Ubuntu/Debian (including WSL):\n"
+                "  sudo apt install docker.io docker-compose-v2\n"
+                "  sudo usermod -aG docker $USER && newgrp docker    # newgrp applies it to this shell\n"
+                f"Other platforms: {DOCKER_INSTALL_URL}"
+            )
         raise StackError(
-            "Docker is not installed or is not available on PATH.\n"
-            f"Install Docker Desktop or Docker Engine: {DOCKER_INSTALL_URL}\n"
-            f"Start Docker, then rerun `{command_hint}`."
+            f"Docker is not installed or is not available on PATH.\n{install_help}\nThen rerun `{command_hint}`."
         )
 
     try:
@@ -174,6 +196,15 @@ def ensure_docker_available(*, command_hint: str = CLI_SIM, require_compose: boo
     if result.returncode != 0:
         detail = " ".join((result.stderr or result.stdout or "").split())
         detail_lower = detail.lower()
+        if "permission denied" in detail_lower:
+            # The daemon runs fine; this user just isn't in the docker group
+            # yet (the usual state right after `apt install docker.io`).
+            raise StackError(
+                "Docker is running, but your user is not allowed to talk to it (permission denied "
+                "on the Docker socket).\n"
+                "  sudo usermod -aG docker $USER && newgrp docker    # newgrp applies it to this shell\n"
+                f"Then rerun `{command_hint}` in that shell (new logins have it everywhere)."
+            )
         daemon_unreachable = (
             "daemon" in detail_lower or "docker desktop" in detail_lower or "failed to connect" in detail_lower
         )
@@ -182,11 +213,12 @@ def ensure_docker_available(*, command_hint: str = CLI_SIM, require_compose: boo
             if daemon_unreachable
             else "Docker is installed, but the Docker daemon check failed."
         )
-        raise StackError(
-            f"{message}\n"
-            f"Start Docker Desktop or your Docker daemon, wait until it finishes starting, then rerun `{command_hint}`.\n"
-            f"Install/start guide: {DOCKER_INSTALL_URL}"
+        start_help = (
+            "Open Docker Desktop and wait until it finishes starting"
+            if sys.platform == "darwin"
+            else "Start it with `sudo systemctl start docker` (or open Docker Desktop if you use it)"
         )
+        raise StackError(f"{message}\n{start_help}, then rerun `{command_hint}`.")
 
     if not require_compose:
         return
@@ -248,6 +280,54 @@ def shorten_docker_image_ref(image: str) -> str:
     return f"{repo}:{tag}"
 
 
+def _docker_platform() -> str | None:
+    """The host's linux/<arch> platform for docker pulls, so a wrong-arch
+    prebuilt fails in milliseconds instead of downloading gigabytes it can
+    never run (classic-store docker happily pulls cross-arch and only fails
+    at container start with 'exec format error' -- seen on a Raspberry Pi
+    pulling the amd64-only prebuilt)."""
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        return "linux/amd64"
+    if machine in ("aarch64", "arm64"):
+        return "linux/arm64"
+    return None
+
+
+IMAGE_PROBE_RETRY_TIMEOUT_S = 60.0
+
+
+def docker_image_present(image: str, *, cwd: Path, env: dict[str, str]) -> bool:
+    """Strict image-presence probe for pull/build decisions.
+
+    Unlike `command_succeeds`, an unanswered probe is an error rather than a
+    "no": misreading a merely-slow daemon as a missing image escalates into a
+    multi-gigabyte pull or a full local rebuild (seen on a loaded Raspberry Pi
+    right after a `docker load`)."""
+    timeout_s = DOCKER_PROBE_TIMEOUT_S
+    for timeout_s in (DOCKER_PROBE_TIMEOUT_S, IMAGE_PROBE_RETRY_TIMEOUT_S):
+        try:
+            result = subprocess.run(
+                ["docker", "image", "inspect", image],
+                cwd=cwd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            continue
+        return result.returncode == 0
+    raise DockerUnresponsiveError(
+        f"Docker did not answer `docker image inspect` within {timeout_s:.0f}s.\n"
+        "The daemon looks wedged or overloaded, so image availability is unknown -- "
+        "not pulling or rebuilding on a guess.\n"
+        f"Wait for Docker to settle (or restart it), then rerun `{CLI_SIM} up`."
+    )
+
+
 def ensure_os_image_available(
     image: str,
     *,
@@ -256,7 +336,7 @@ def ensure_os_image_available(
     pull_if_missing: bool,
     include_pull_log_on_failure: bool = True,
 ) -> None:
-    if command_succeeds(["docker", "image", "inspect", image], cwd=cwd, env=env):
+    if docker_image_present(image, cwd=cwd, env=env):
         return
     if not pull_if_missing:
         raise StackError(
@@ -264,8 +344,9 @@ def ensure_os_image_available(
             "Pull or build it, or unset sim/config.toml os.image to use the local Docker build."
         )
     log(f"Pulling Innate OS image {shorten_docker_image_ref(image)}...")
+    plat = _docker_platform()
     run_logged_with_heartbeat(
-        ["docker", "pull", image],
+        ["docker", "pull", *(["--platform", plat] if plat else []), image],
         cwd=cwd,
         env=env,
         log_path=COMPOSE_LOG_PATH,
@@ -331,6 +412,29 @@ def ensure_workspace_dirs(config: dict[str, object]) -> None:
                 f"{path} is not writable -- likely created as root by an earlier run. "
                 f"Fix with: sudo chown -R $(id -un):$(id -gn) {path}"
             )
+    ensure_home_mount_sources()
+
+
+def ensure_home_mount_sources() -> None:
+    """Pre-create the compose file's home bind-mount sources (~/.gitconfig,
+    ~/.ssh). Docker creates a missing bind source as a root-owned DIRECTORY,
+    which for ~/.gitconfig breaks git on the host itself ("unable to access
+    '~/.gitconfig': Is a directory" -- seen on a fresh machine)."""
+    gitconfig = Path.home() / ".gitconfig"
+    if gitconfig.is_dir():
+        try:
+            gitconfig.rmdir()  # only succeeds when empty, i.e. Docker-made
+            warn(f"Removed the empty directory Docker created at {gitconfig} (it broke `git` on this machine).")
+        except OSError:
+            warn(f"{gitconfig} is a non-empty directory -- git expects a file there; please fix it manually.")
+            return
+    if not gitconfig.exists():
+        with contextlib.suppress(OSError):
+            gitconfig.touch()
+    ssh_dir = Path.home() / ".ssh"
+    if not ssh_dir.exists():
+        with contextlib.suppress(OSError):
+            ssh_dir.mkdir(mode=0o700)
 
 
 def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline: bool = False) -> None:
@@ -350,11 +454,9 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
             # default (:latest) never exists -- resolve the real tag here.
             probe_env = os_compose_env(env_file=os_env_file)
             local_image = resolve_local_os_image(os_repo)
-            if command_succeeds(["docker", "image", "inspect", local_image], cwd=os_repo, env=probe_env):
+            if docker_image_present(local_image, cwd=os_repo, env=probe_env):
                 os_image = local_image
-            elif not (
-                os_image and command_succeeds(["docker", "image", "inspect", os_image], cwd=os_repo, env=probe_env)
-            ):
+            elif not (os_image and docker_image_present(os_image, cwd=os_repo, env=probe_env)):
                 raise StackError(
                     "Offline, but no Innate OS image is available locally (neither the local build "
                     f"{shorten_docker_image_ref(local_image)} nor a pinned prebuilt).\n"
@@ -366,8 +468,8 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
             local_image = resolve_local_os_image(os_repo)
             if (
                 os_image_auto
-                and not command_succeeds(["docker", "image", "inspect", os_image], cwd=os_repo, env=compose_probe_env)
-                and command_succeeds(["docker", "image", "inspect", local_image], cwd=os_repo, env=compose_probe_env)
+                and not docker_image_present(os_image, cwd=os_repo, env=compose_probe_env)
+                and docker_image_present(local_image, cwd=os_repo, env=compose_probe_env)
             ):
                 # No prebuilt for this exact source tree, but the deps-only local
                 # image is content-current (source is bind-mounted, not baked) --
@@ -384,6 +486,8 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
                         pull_if_missing=bool(config["os_pull_image"]),
                         include_pull_log_on_failure=not os_image_auto,
                     )
+                except DockerUnresponsiveError:
+                    raise  # unknown availability must not trigger a local rebuild
                 except StackError:
                     if not os_image_auto:
                         raise
@@ -498,30 +602,40 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
 def down_os(config: dict[str, object], *, remove_volumes: bool = False) -> None:
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     compose_env = os_compose_env()
-    ensure_state_dir()
+    with contextlib.suppress(OSError):  # read-only fs: keep tearing down
+        ensure_state_dir()
     down_args = ["docker", "compose", "-f", "sim/docker-compose.dev.yml", "down"]
     if remove_volumes:
         down_args += ["-v", "--remove-orphans"]
-    with DOWN_LOG_PATH.open("a", encoding="utf-8") as log_file:
-        try:
-            subprocess.run(
-                down_args,
-                cwd=os_repo,
-                env=compose_env,
-                text=True,
-                stdin=subprocess.DEVNULL,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                check=False,
-                timeout=COMPOSE_DOWN_TIMEOUT_S,
-            )
-        except subprocess.TimeoutExpired:
-            # Bounded so a wedged daemon can't swallow the shutdown (or the
-            # startup error that triggered a cleanup) in a silent hang.
-            warn(
-                f"`docker compose down` did not finish within {COMPOSE_DOWN_TIMEOUT_S:.0f}s -- "
-                "containers may still be stopping; check `docker ps`."
-            )
+    try:
+        log_file = DOWN_LOG_PATH.open("a", encoding="utf-8")
+    except OSError:
+        # Cleanup must survive an unwritable disk (seen live: a full disk
+        # flipped the filesystem read-only mid-startup) -- losing the down
+        # log beats crashing while tearing down.
+        log_file = None
+    try:
+        subprocess.run(
+            down_args,
+            cwd=os_repo,
+            env=compose_env,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            stdout=log_file if log_file is not None else subprocess.DEVNULL,
+            stderr=subprocess.STDOUT if log_file is not None else subprocess.DEVNULL,
+            check=False,
+            timeout=COMPOSE_DOWN_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        # Bounded so a wedged daemon can't swallow the shutdown (or the
+        # startup error that triggered a cleanup) in a silent hang.
+        warn(
+            f"`docker compose down` did not finish within {COMPOSE_DOWN_TIMEOUT_S:.0f}s -- "
+            "containers may still be stopping; check `docker ps`."
+        )
+    finally:
+        if log_file is not None:
+            log_file.close()
 
 
 def clean_runtime(config: dict[str, object]) -> None:
@@ -966,19 +1080,49 @@ def format_startup_check(ok: bool, label: str, detail: str) -> str:
     return f"  {color}{icon}{NC} {BOLD}{label}:{NC} {detail}"
 
 
+def world_server_health(*, timeout: float = 2.0) -> tuple[bool, str]:
+    """(ok, detail) for the host world server: is it answering, and what is
+    the measured render cost. The server logs one parseable line at boot --
+    "GL self-test (<backend>): <N> ms/frame ..." -- which is the ground
+    truth for render speed (an EGL backend on a GPU-less machine is just as
+    software-slow as OSMesa, so report the measurement, not the backend)."""
+    if not _world_server_ping(WORLD_SERVER_PORT, timeout=timeout):
+        return False, f"not answering on 127.0.0.1:{WORLD_SERVER_PORT}"
+    detail = "ready"
+    try:
+        matches = re.findall(
+            r"GL self-test(?: \((\w+)\))?: (\d+) ms/frame", WORLD_SERVER_LOG_PATH.read_text(errors="replace")
+        )
+    except OSError:
+        matches = []
+    if matches:
+        backend, ms = matches[-1]
+        detail = f"ready -- {backend or 'native'} GL, {ms} ms/frame"
+        if int(ms) > 60:
+            detail += " (software-speed rendering)"
+    return True, detail
+
+
 def print_startup_checks(
     config: dict[str, object],
     *,
     sim_driver_ready: bool,
-) -> None:
+) -> bool:
+    """Print the checks panel; returns whether the world server answered
+    (its death during boot must end `up` loudly, not as a quiet dashboard)."""
     probe = collect_runtime_probe(config, sim_driver_ready=sim_driver_ready)
     os_status: dict[str, bool] = probe["os_status"]  # type: ignore[assignment]
+    world_ok, world_detail = world_server_health()
+    if not world_ok:
+        time.sleep(2.0)  # a saturated box can miss one ping; don't cry wolf
+        world_ok, world_detail = world_server_health()
     checks = [
         (
             bool(probe["agent_running"]),
             "Cloud agent",
             "hosted mode" if config["mode"] == HOSTED_MODE else "local container",
         ),
+        (world_ok, "World server", world_detail),
         (
             os_status["os_running"],
             "OS container",
@@ -1001,7 +1145,7 @@ def print_startup_checks(
         ),
         (
             sim_driver_ready,
-            "Sim driver (MuJoCo)",
+            "Sim driver",
             "/odom publishing" if sim_driver_ready else "/odom not publishing",
         ),
     ]
@@ -1009,6 +1153,7 @@ def print_startup_checks(
     log("Startup checks:")
     for ok, label, detail in checks:
         print(format_startup_check(ok, label, detail))
+    return world_ok
 
 
 def capture_os_brain_logs(config: dict[str, object], lines: int = 18) -> list[str]:
@@ -1367,17 +1512,116 @@ def ensure_world_server(config: dict[str, object]) -> str:
             "`bridge: none`).\nSet INNATE_SIM_WORLD_BIND to the address the server should listen on."
         )
 
-    log("Starting host world server (native GL rendering)...")
     ensure_state_dir()
+    attempts: list[tuple[str, str, str]] = []  # (backend label, backend, that attempt's log output)
+    user_gl = os.environ.get("MUJOCO_GL", "").strip()
+    backends = _world_server_gl_backends()
+    healed_venv = False
+    index = 0
+    while index < len(backends):
+        backend = backends[index]
+        labels = {"egl": "EGL offscreen", "osmesa": "software (OSMesa)"}
+        label = labels.get(backend or user_gl, f"MUJOCO_GL={user_gl}" if user_gl else "native GL")
+        if backend == "osmesa":
+            warn("Falling back to software rendering (OSMesa) -- works on any machine, but renders are slow.")
+        log(f"Starting host world server ({label} rendering)...")
+        log_offset = WORLD_SERVER_LOG_PATH.stat().st_size if WORLD_SERVER_LOG_PATH.exists() else 0
+        if _start_world_server(uv, sim_repo, bind=bind, mujoco_gl=backend):
+            log("Host world server ready.")
+            return endpoint
+        attempt_log = ""
+        with contextlib.suppress(OSError):
+            attempt_log = WORLD_SERVER_LOG_PATH.read_text(errors="replace")[log_offset:]
+        if "modulenotfounderror" in attempt_log.lower() and not healed_venv:
+            # Not a GL problem: the sim venv is half-installed (an interrupted
+            # first install). The launcher owns that directory -- rebuild it
+            # and retry the same backend instead of blaming the renderer.
+            healed_venv = True
+            warn("The sim Python environment is incomplete (an interrupted install) -- rebuilding it...")
+            shutil.rmtree(sim_repo / ".venv", ignore_errors=True)
+            continue
+        attempts.append((label, backend, attempt_log))
+        if index < len(backends) - 1:
+            # Say WHY the faster rung failed before falling to the next one:
+            # a GPU owner one apt package away from fast rendering must not
+            # silently end up on the software floor.
+            warn(f"{label} rendering failed: {_gl_failure_hint(attempt_log, backend)}")
+        index += 1
+
+    hint_list = [_gl_failure_hint(text, backend) for _, backend, text in attempts]
+    if any("sim/.venv" in hint for hint in hint_list):
+        # Even a fresh rebuild missed a dependency: an environment problem,
+        # not a rendering one -- do not dress it up as a GL error.
+        raise StackError(
+            "The sim Python environment failed to build cleanly (a dependency did not import even "
+            "after a fresh install).\n"
+            f"Try `rm -rf sim/.venv` and rerun `{CLI_SIM} up`; if it persists, share the log on Discord.\n"
+            f"Full log: {WORLD_SERVER_LOG_PATH}"
+        )
+    hints = "\n".join(f"  - {label}: {hint}" for (label, _, _), hint in zip(attempts, hint_list, strict=True))
+    fix = ""
+    if sys.platform != "darwin":
+        # One action, no backend to choose: install everything the render
+        # rungs need and the ladder picks the best one by itself.
+        fix = (
+            f"Run the following, then rerun `{CLI_SIM} up`:\n  sudo apt install libegl1 libgl1 libopengl0 libosmesa6\n"
+        )
+    raise StackError(
+        f"No working rendering backend for the sim world (tried {', '.join(label for label, _, _ in attempts)}).\n"
+        f"{fix}"
+        f"Details:\n{hints}\n"
+        f"Full log: {WORLD_SERVER_LOG_PATH}"
+    )
+
+
+def _world_server_gl_backends() -> list[str | None]:
+    """MUJOCO_GL values to try, in order (None = leave the environment
+    alone: native GL on macOS, GLFW where a display exists).
+
+    A user-set MUJOCO_GL is respected verbatim. On headless Linux GLFW
+    cannot work (it needs a display server), so the ladder goes straight to
+    EGL (GPU) and then OSMesa (CPU) -- each attempt is logged, so a slow
+    software fallback is always a loud, visible choice."""
+    if os.environ.get("MUJOCO_GL", "").strip():
+        return [None]  # user's explicit choice, already in the environment
+    if sys.platform == "darwin":
+        return [None]
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return [None, "egl", "osmesa"]  # desktop/WSLg first, headless routes as backup
+    return ["egl", "osmesa"]
+
+
+def _render_scale_args() -> list[str]:
+    """INNATE_SIM_RENDER_SCALE=N renders cameras at 1/N resolution -- an N^2
+    cheaper software frame on machines where the render cost starves the rest
+    of the stack (a Pi at scale 1 spends ~420 ms/frame). The wire format stays
+    640x480, so nothing downstream changes."""
+    raw = os.environ.get("INNATE_SIM_RENDER_SCALE", "").strip()
+    if not raw:
+        return []
+    try:
+        scale = int(raw)
+    except ValueError:
+        scale = 0
+    if scale < 1:
+        warn(f"Ignoring INNATE_SIM_RENDER_SCALE={raw!r} (expected an integer >= 1).")
+        return []
+    return ["--render-scale", str(scale)]
+
+
+def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | None) -> bool:
+    """One world-server start attempt; True once it answers pings."""
     bootstrap = (
         "import sys; sys.path.insert(0, 'ros2_ws/src/mars_bot/mars_sim_driver'); "
         "from mars_sim_driver.world_server import main; main()"
     )
     env = os.environ.copy()
     env["VIRTUAL_MARS_ASSETS"] = str(sim_repo / "assets")
+    if mujoco_gl:
+        env["MUJOCO_GL"] = mujoco_gl
     with WORLD_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:
         proc = subprocess.Popen(
-            [uv, "run", "--project", str(sim_repo), "python", "-c", bootstrap, "--bind", bind],
+            [uv, "run", "--project", str(sim_repo), "python", "-c", bootstrap, "--bind", bind] + _render_scale_args(),
             cwd=sim_repo.parent,
             env=env,
             stdin=subprocess.DEVNULL,
@@ -1385,22 +1629,66 @@ def ensure_world_server(config: dict[str, object]) -> str:
             stderr=subprocess.STDOUT,
         )
     WORLD_SERVER_PID_PATH.write_text(f"{proc.pid}\n", encoding="utf-8")
-    for _ in range(60):  # model build takes a few seconds
+    # Patient while alive: the first run downloads the Python env (uv sync)
+    # and builds the MuJoCo model, which takes minutes on slow machines --
+    # killing a live process on a stopwatch misdiagnosed a Raspberry Pi's
+    # env download as a GL failure. Heartbeats keep the wait visible.
+    deadline = time.monotonic() + 900.0
+    next_note = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
         if _world_server_ping(WORLD_SERVER_PORT):
-            log("Host world server ready.")
-            return endpoint
+            return True
         if proc.poll() is not None:
-            break
+            return False  # exited on its own: a real failure, log captured
+        if time.monotonic() >= next_note:
+            latest = latest_log_line(WORLD_SERVER_LOG_PATH)
+            log(f"World server still starting... ({latest or 'no output yet'})")
+            next_note = time.monotonic() + 15.0
         time.sleep(0.5)
     with contextlib.suppress(ProcessLookupError, OSError):
         proc.kill()
     WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
-    raise StackError(
-        "The host world server failed to start (the sim world always runs on the host).\n"
-        "Common causes: no usable GL -- on a headless Linux host set MUJOCO_GL=egl (GPU) or "
-        "MUJOCO_GL=osmesa (CPU, slow); on WSL make sure WSLg is available (`wsl --update`).\n"
-        f"Recent log output:\n{tail_file(WORLD_SERVER_LOG_PATH, limit=30)}"
-    )
+    return False
+
+
+def _gl_failure_hint(attempt_log: str, backend: str | None) -> str:
+    """One targeted line per failed GL backend -- a fresh user must see the
+    fix, not a Python traceback. Signatures are matched case-insensitively:
+    the telltale often only appears in lowercase module paths.
+
+    The most common minimal-system failure is PyOpenGL holding no GL
+    library at all ("'NoneType' object has no attribute 'glGetError'"):
+    under EGL the GL symbols come from libGL/libOpenGL (apt: libgl1,
+    libopengl0 -- libegl1 alone is just the dispatch layer), under OSMesa
+    they come from libOSMesa itself (apt: libosmesa6)."""
+    lowered = attempt_log.lower()
+    if "blank image" in lowered:
+        return (
+            "the GPU created a context but renders nothing usable (out of GPU memory) -- "
+            "software rendering is the correct backend on this machine"
+        )
+    if "modulenotfounderror" in lowered:
+        # A dependency missing from the sim venv itself: the signature of an
+        # interrupted first install (seen live on a Pi whose early attempts
+        # were cut short mid `uv sync`). Not a GL problem.
+        return "the sim Python environment is incomplete -- delete sim/.venv and rerun (it rebuilds automatically)"
+    no_gl_library = "glgeterror" in lowered and "nonetype" in lowered
+    if backend == "osmesa" or (backend is None and "osmesa" in lowered):
+        if no_gl_library or "osmesa" in lowered:
+            return "the OSMesa system library is missing -- install it with `sudo apt install libosmesa6`"
+    if backend == "egl" or "egl" in lowered:
+        if no_gl_library:
+            return (
+                "EGL loads but there is no OpenGL library behind it -- "
+                "install it with `sudo apt install libgl1 libopengl0`"
+            )
+        return "EGL is unavailable -- `sudo apt install libegl1` provides it (a GPU driver makes it fast)"
+    if "DISPLAY" in attempt_log:
+        return "no display server is running (on WSL, `wsl --update` enables WSLg)"
+    for line in reversed(attempt_log.splitlines()):
+        if line.strip():
+            return line.strip()
+    return "no output -- see the full log"
 
 
 def stop_world_server() -> None:
@@ -1410,9 +1698,10 @@ def stop_world_server() -> None:
         pid = int(WORLD_SERVER_PID_PATH.read_text().strip())
         os.kill(pid, signal.SIGTERM)
         log("Stopped host world server.")
-    except (ValueError, ProcessLookupError, PermissionError):
+    except (ValueError, OSError):
         pass
-    WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
+    with contextlib.suppress(OSError):  # read-only fs: the kill still counts
+        WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
 
 
 def ensure_skill_assets(config: dict[str, object]) -> None:
@@ -1474,6 +1763,16 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
     sim_running = bool(probe["sim_running"])
     rosbridge_live = bool(probe["rosbridge_live"])
 
+    world_ok, world_detail = world_server_health(timeout=0.5)
+    world_level = "healthy" if world_ok else "error"
+    if world_ok:
+        world_label = (
+            world_detail.removeprefix("ready").strip(" -").replace(" (software-speed rendering)", ", software-speed")
+            or "ready"
+        )
+    else:
+        world_label = "down"
+
     sim_level, sim_label = ("healthy", "ok") if sim_running else ("error", "down")
     transport_level, transport_label = ("healthy", "live") if rosbridge_live else ("error", "down")
     if not os_running:
@@ -1502,15 +1801,16 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
         agent_level = "healthy" if agent_running else "warn"
         agent_label = "online" if agent_running else "offline"
 
-    if all(level == "healthy" for level in (sim_level, transport_level, brain_level, agent_level)):
+    if all(level == "healthy" for level in (world_level, sim_level, transport_level, brain_level, agent_level)):
         stack_mood = ("healthy", "LIVE")
-    elif any(level == "error" for level in (sim_level, transport_level, brain_level)):
+    elif any(level == "error" for level in (world_level, sim_level, transport_level, brain_level)):
         stack_mood = ("error", "DEGRADED")
     else:
         stack_mood = ("warn", "WARMING")
 
     system_summary = (
         f"os {'up' if os_running else 'down'} | "
+        f"world {'up' if world_ok else 'down'} | "
         f"sim {'up' if sim_running else 'down'} | "
         f"brain {'ok' if brain_level == 'healthy' else brain_label}"
     )
@@ -1523,6 +1823,8 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
         "rosbridge_live": rosbridge_live,
         "rosbridge_process_live": rosbridge_process_live,
         "brain_process_live": brain_process_live,
+        "world_level": world_level,
+        "world_label": world_label,
         "sim_level": sim_level,
         "sim_label": sim_label,
         "transport_level": transport_level,
