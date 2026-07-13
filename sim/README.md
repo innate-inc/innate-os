@@ -1,24 +1,167 @@
-# innate sim
+# The Innate Simulator
 
-Simulate the MARS robot on your laptop. There are two ways in, depending on
-what you need:
+<p align="center">
+  <img src="../docs/assets/readme/sim.png" alt="Driving the simulated MARS robot through its apartment in the browser" width="85%">
+</p>
 
-| | You get | You need |
-|---|---|---|
-| **[1. VirtualMars](#1--virtualmars-the-sim-as-a-python-object)** | the whole simulated world as one Python object — scripts, notebooks, RL loops | `uv` |
-| **[2. The digital twin](#2--the-digital-twin-full-robot-stack)** | the complete innate-os stack (Nav2, AMCL, brain, skills, webapp) running against the sim | Docker + `uv` |
+A complete simulation of the [MARS](https://innate.bot) home robot that runs
+on your laptop — **no robot required**. It is a true digital twin: the same
+software that runs on a physical MARS (navigation, skills, the AI agent, the
+web app) runs here against a physics simulation of the robot in a furnished
+apartment. You drive it, run skills on it, and talk to its agent from your
+browser, exactly as you would with the real thing — which also means
+anything you build against the simulator works unchanged on a real MARS.
 
-Use VirtualMars to experiment with the robot's sensors and physics directly;
-use the digital twin to build and test skills, agents, and input devices
-exactly as they run on a real robot.
+## Setup
+
+You need two tools installed; everything else (world geometry, the Docker
+image, the ROS build) is provisioned automatically on first start:
+
+- **Docker** — runs the robot's software stack in a container.
+- **uv** — runs the physics world natively on your machine
+  (`./innate-sim setup` offers to install this one for you).
+
+A machine with 4 CPU cores and 8 GB of RAM is comfortable. The first start
+downloads and builds a few GB, so it takes a while; later starts take
+seconds.
+
+<details>
+<summary><b>macOS</b></summary>
+
+Install Docker Desktop and start it:
+
+```bash
+brew install --cask docker
+```
+
+(or download it from [docker.com](https://docs.docker.com/get-started/get-docker/)).
+
+</details>
+
+<details>
+<summary><b>Linux (Ubuntu / Debian / Raspberry Pi OS)</b></summary>
+
+On Ubuntu:
+
+```bash
+sudo apt install docker.io docker-compose-v2
+```
+
+On Debian / Raspberry Pi OS (whose `docker-compose` package is the old v1
+tool), use Docker's own install script instead:
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+```
+
+Then let your user talk to Docker:
+
+```bash
+sudo usermod -aG docker $USER && newgrp docker
+```
+
+Desktop installs already have working OpenGL. On a headless server or VM,
+also install the offscreen rendering libraries:
+
+```bash
+sudo apt install libegl1 libgl1 libopengl0 libosmesa6
+```
+
+</details>
+
+<details>
+<summary><b>Windows (WSL2)</b></summary>
+
+The sim runs inside WSL2. In PowerShell:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+then open the Ubuntu terminal and follow the **Linux** steps above. WSLg
+(included in current WSL) gives the sim GPU-accelerated rendering
+automatically.
+
+One caution: use exactly **one** Docker — either Docker Desktop (with WSL
+integration enabled) or `docker.io` installed inside WSL. Having both
+installed makes the `docker` command hang in confusing ways.
+
+</details>
+
+Then, from the repository root:
+
+```bash
+./innate-sim setup     # checks prerequisites (offers to install uv) + configures your agent keys
+./innate-sim up        # starts everything; leave the live dashboard open
+```
+
+`setup` asks which brain the robot's AI agent should use:
+
+- **Hosted Innate brain** — uses your Innate service key (it comes with a
+  MARS robot). The full experience, including voice — the robot speaks.
+- **Local brain (Gemini)** — runs the open-source agent on your machine
+  against a [Gemini API key](https://aistudio.google.com/api-keys).
+  Everything works except voice: the web app's speak bar is disabled
+  without a service key.
+- **None** — no agent; you can still drive, navigate, and trigger skills
+  manually.
+
+Rerun `./innate-sim setup` anytime to switch.
+
+**Open [https://localhost](https://localhost)** (accept the self-signed
+certificate) — you are looking at the robot's web app. Drive with the
+joystick or WASD, switch between the 3D view, the robot's cameras, and the
+map, trigger skills, and chat with the agent. Add `?simperf` to the URL for
+a frame-time / latency HUD.
+
+Every error along the way is written to tell you exactly what to do next.
+If something stops you anyway, we want to hear about it —
+[join our Discord](https://discord.gg/innate).
+
+### Everyday commands
+
+```bash
+./innate-sim status      # startup checks + health snapshot
+./innate-sim logs        # startup logs; `logs os` / `logs agent` follow live
+./innate-sim sh          # shell into the container; `innate build` rebuilds ros2_ws
+./innate-sim down        # stop
+./innate-sim clean       # remove containers/volumes (keeps .env + config)
+```
+
+## Build skills and agents
+
+The simulator shares the repository's [`workspace/`](../workspace/) with the
+container, so the skills and agents you write for the sim are the ones a
+real robot runs — develop here, deploy there. Start with the docs:
+
+- [Skills](https://docs.innate.bot/software/skills) — teach the robot new
+  abilities in Python (or by demonstration on a real robot).
+- [Agents](https://docs.innate.bot/software/agents) — give the AI brain
+  goals, personality, and access to your skills.
+
+### When do changes take effect?
+
+| You edited | What to do |
+|---|---|
+| skills or agents in `workspace/` | **nothing** — they hot-reload on save (fallback: `ros2 service call /brain/reload std_srvs/srv/Trigger` in the container) |
+| ROS code in `ros2_ws/src/` | inside the container: `innate build` then `innate restart` |
+| the simulated world (`mars_sim_driver/` world/server) | `./innate-sim down && ./innate-sim up` — this part runs on the host |
+| launcher / webapp files | just rerun `./innate-sim up` / reload the browser |
+
+The container's ROS session lives in tmux (`./innate-sim sh`, then
+`tmux attach -t innate`): one window per subsystem (zenoh, rosbridge,
+sim-driver, nav-brain, behavior, arm-ik, vision-nav, console-webapp).
 
 ---
 
-## 1 — VirtualMars: the sim as a Python object
+## Advanced
 
-No ROS, no Docker. The apartment, the robot, its cameras, lidar and arm live
-in a single object you can import anywhere — and instantiate several of in
-one process for parallel rollouts.
+### VirtualMars: the sim as a Python object
+
+For scripts, notebooks, and RL loops there is a second way in that needs no
+ROS and no Docker: the apartment, the robot, its cameras, lidar and arm as a
+single Python object — instantiate several in one process for parallel
+rollouts.
 
 ▶ **Start with the walkthrough notebook:
 [`sandbox/virtual_mars_demo.ipynb`](sandbox/virtual_mars_demo.ipynb)** —
@@ -57,48 +200,11 @@ cd sim && uv run sandbox/drive_mars.py
 More dev tooling (physics stress gate, asset pipeline) is documented in
 [`sandbox/README.md`](sandbox/README.md).
 
----
+### ROS access
 
-## 2 — The digital twin: full robot stack
-
-The real innate-os ROS 2 graph — brain, Nav2, AMCL, skills, webapp — runs in
-Docker against the simulated robot. Only the hardware drivers are swapped for
-a simulated equivalent; nothing above them can tell the difference.
-
-```bash
-./innate-sim setup     # one-time: prerequisites (installs uv if missing) + keys + brain backend
-./innate-sim up        # host world server + container + ROS stack
-```
-
-The first `up` provisions everything (assets, Docker image, ROS build) and
-later runs start in seconds. The world itself (physics + rendering) always
-runs on the host via `uv` — never in the container, where software GL is
-slow enough to break teleop. No Node.js required — the 3D viewer ships
-prebuilt with the assets.
-
-**Then open [https://localhost](https://localhost)** — the operator webapp
-is the sim UI: drive with the joystick or WASD, watch the live 3D view
-(main/arm cameras + orbit view + map), run skills, and talk to the agent,
-exactly like on a real robot. Add `?simperf` to the URL for a frame-time /
-latency HUD.
-
-### Everyday commands
-
-```bash
-./innate-sim status      # startup checks + health snapshot
-./innate-sim logs        # startup logs; `logs os` / `logs agent` follow live
-./innate-sim sh          # shell into the container; `innate build` rebuilds ros2_ws
-./innate-sim down        # stop
-./innate-sim clean       # remove containers/volumes (keeps .env + config)
-```
-
-Local code edits + `innate build` (inside the container) behave exactly like
-on a real robot. The container's ROS session lives in tmux
-(`tmux attach -t innate`): one window per subsystem (zenoh, rosbridge,
-sim-driver, nav-brain, behavior, arm-ik, vision-nav, console-webapp).
-
-Prefer Foxglove? Open a Rosbridge connection to `ws://localhost:9090` for
-TF, `/scan`, `/mars/main_camera/points`, camera topics and `/cmd_vel` teleop.
+Prefer Foxglove or your own ROS tooling? Open a Rosbridge connection to
+`ws://localhost:9090` for TF, `/scan`, `/mars/main_camera/points`, camera
+topics and `/cmd_vel` teleop.
 
 ### Configuration
 
@@ -142,10 +248,10 @@ future GPU/batched backend (e.g. MuJoCo Warp) would consume the same spec.
 
 ### core.py — VirtualMars
 
-The layer you use directly in option 1 (see above). `update_camera()` /
-`read_rgb()` are split (same for depth) so callers can update the scene under
-a lock but render outside it — that's what keeps physics from stalling in the
-world server.
+The layer you use directly in the VirtualMars section above.
+`update_camera()` / `read_rgb()` are split (same for depth) so callers can
+update the scene under a lock but render outside it — that's what keeps
+physics from stalling in the world server.
 
 ### world_server.py — the world host
 

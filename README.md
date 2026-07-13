@@ -282,6 +282,10 @@ Use the [simulator](#simulator) to test custom agents before running them on a p
 
 Innate OS includes a MuJoCo digital twin of MARS that runs the **real robot software** -- the same navigation stack, skills, brain client, and webapp as the physical robot, with only the hardware drivers swapped for a simulated equivalent. Use it to build and test skills, agents, and input devices before you have a robot on your desk.
 
+<p align="center">
+  <img src="docs/assets/readme/sim.png" alt="Driving the simulated MARS robot through its apartment in the browser" width="85%">
+</p>
+
 ```bash
 ./innate-sim setup
 ./innate-sim up

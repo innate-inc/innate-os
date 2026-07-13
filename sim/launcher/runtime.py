@@ -167,8 +167,9 @@ def ensure_docker_available(*, command_hint: str = CLI_SIM, require_compose: boo
             )
         else:
             install_help = (
-                "On Ubuntu/Debian (including WSL):\n"
-                "  sudo apt install docker.io docker-compose-v2\n"
+                "On Ubuntu (including WSL):    sudo apt install docker.io docker-compose-v2\n"
+                "On Debian / Raspberry Pi OS:  curl -fsSL https://get.docker.com | sudo sh\n"
+                "then let your user talk to Docker:\n"
                 "  sudo usermod -aG docker $USER && newgrp docker    # newgrp applies it to this shell\n"
                 f"Other platforms: {DOCKER_INSTALL_URL}"
             )
@@ -246,8 +247,10 @@ def ensure_docker_available(*, command_hint: str = CLI_SIM, require_compose: boo
         raise StackError(
             "Docker is running, but Docker Compose v2 is not available (`docker compose` failed).\n"
             "Install the Compose plugin matching your Docker:\n"
-            "  distro engine (docker.io): `sudo apt install docker-compose-v2` (Debian: `docker-compose`)\n"
+            "  Ubuntu's engine (docker.io): `sudo apt install docker-compose-v2`\n"
             "  Docker's own repo (docker-ce): `sudo apt install docker-compose-plugin` (dnf/yum: same name)\n"
+            "  Debian / Raspberry Pi OS: switch to Docker's repo: `curl -fsSL https://get.docker.com | sudo sh`\n"
+            "    (Debian's `docker-compose` package is the old v1 tool, not the plugin)\n"
             "  Docker Desktop already bundles it.\n"
             f"Then rerun `{command_hint}`. Guide: {COMPOSE_INSTALL_URL}"
         )

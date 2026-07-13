@@ -161,6 +161,9 @@ class BrainClientNode(Node):
                         "brain_active": self.state.is_brain_active,
                         "current_directive": self.state.current_directive.id if self.state.current_directive else "",
                         "active_skills": list(self.state.active_skill_ids or []),
+                        # Speech needs the hosted proxy (an Innate service
+                        # key); clients gray out their TTS input without it.
+                        "tts_available": bool(self._tts_handler is not None and self._tts_handler.is_available()),
                     }
                 )
             )

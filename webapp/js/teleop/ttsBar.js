@@ -5,9 +5,10 @@
 // suppressed (the typing-context guard in keyboardDrive). Esc returns focus
 // to the page so WASD works again.
 
-import { TTS_TOPIC } from "../constants.js";
+import { AGENT_STATUS_TOPIC, TTS_TOPIC } from "../constants.js";
 
 const SENT_FLASH_MS = 600;
+const TTS_UNAVAILABLE_PLACEHOLDER = "Speech needs an Innate service key";
 
 /**
  * @param {HTMLElement} parent
@@ -60,8 +61,27 @@ export function createTtsBar(parent, rosClient) {
     if (e.key === "Enter") send();
   });
 
+  // Speech runs through Innate's hosted brain; with a local (Gemini-only)
+  // backend the brain broadcasts tts_available=false and the bar grays out
+  // instead of swallowing text. Absent field (older brains) = available.
+  const unsubStatus = rosClient.subscribe(AGENT_STATUS_TOPIC, (msg) => {
+    let payload;
+    try {
+      payload = JSON.parse(msg?.data ?? "");
+    } catch {
+      return;
+    }
+    if (typeof payload?.tts_available !== "boolean") return;
+    const available = payload.tts_available;
+    input.disabled = !available;
+    sendBtn.disabled = !available;
+    input.placeholder = available ? "Make the robot speak…" : TTS_UNAVAILABLE_PLACEHOLDER;
+    input.title = available ? "" : "The speak bar needs the hosted Innate brain (INNATE_SERVICE_KEY).";
+  });
+
   return {
     destroy() {
+      unsubStatus();
       if (flashTimer !== null) clearTimeout(flashTimer);
       wrap.remove();
     },

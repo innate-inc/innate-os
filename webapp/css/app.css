@@ -5081,6 +5081,18 @@ button {
   right: calc(360px + 34px);
 }
 
+/* The sim debug chips' default offset clears Teleop's keyboard/joystick
+   block; the agent page has nothing bottom-left, so anchor them to the
+   bottom edge instead of floating at Teleop's height. */
+.agent-cockpit .sim-debug-stack {
+  bottom: 18px !important; /* the stage sets the position inline */
+}
+
+/* ...and step above the AGENT ACTIVE chip while it occupies that corner. */
+.agent-cockpit:has(.agent-active-chip:not([hidden])) .sim-debug-stack {
+  bottom: 84px !important;
+}
+
 /* Agent page keeps every camera live (no off pill), so any off tile here is the
    optional map — give it the same square footprint as the live feeds. */
 .agent-cockpit .cam-tile.off {
