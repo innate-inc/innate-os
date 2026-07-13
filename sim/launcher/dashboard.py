@@ -299,13 +299,13 @@ def gradient_text(
     return "".join(out)
 
 
-def dashboard_snapshot_worker(runtime: DashboardRuntime, interval_seconds: float = 0.5) -> None:
+def dashboard_snapshot_worker(runtime: DashboardRuntime, interval_seconds: float = 1.0) -> None:
     while not runtime.stop_event.is_set():
         runtime.refresh_snapshot()
         runtime.stop_event.wait(interval_seconds)
 
 
-def dashboard_brain_log_worker(runtime: DashboardRuntime, interval_seconds: float = 0.35) -> None:
+def dashboard_brain_log_worker(runtime: DashboardRuntime, interval_seconds: float = 0.75) -> None:
     while not runtime.stop_event.is_set():
         runtime.set_log(
             "brain",
@@ -314,7 +314,7 @@ def dashboard_brain_log_worker(runtime: DashboardRuntime, interval_seconds: floa
         runtime.stop_event.wait(interval_seconds)
 
 
-def dashboard_agent_log_worker(runtime: DashboardRuntime, interval_seconds: float = 0.5) -> None:
+def dashboard_agent_log_worker(runtime: DashboardRuntime, interval_seconds: float = 1.5) -> None:
     while not runtime.stop_event.is_set():
         runtime.set_log(
             "agent",

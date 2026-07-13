@@ -1,8 +1,11 @@
 name: innate-os
 
 services:
+  # Optional X display for GUI debugging inside the container; the sim runs
+  # headless and never draws to it. Start it with COMPOSE_PROFILES=x11.
   novnc:
     image: theasp/novnc:latest
+    profiles: ["x11"]
     environment:
       # Adjust to your desired screen resolution:
       - DISPLAY_WIDTH=1600
@@ -30,9 +33,9 @@ services:
       network: host
     container_name: innate-dev
     # Use host networking if you need direct access to hardware, or use your own approach
-    depends_on:
-      - novnc
     environment:
+      # Points at the optional novnc X display (COMPOSE_PROFILES=x11);
+      # harmless when that profile is off -- the sim renders headless.
       - DISPLAY=novnc:0.0
       - VIRTUAL_MARS_ASSETS=/root/innate-os/sim/assets
       - INNATE_OS_ROOT=/root/innate-os
