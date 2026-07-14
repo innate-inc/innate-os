@@ -9,6 +9,7 @@ servos) lives in world.py, shared with the sim/sandbox dev tools.
 """
 
 import contextlib
+import hashlib
 import io
 import math
 import os
@@ -97,6 +98,25 @@ def _texture_cap(render_w: int) -> int | None:
     return 2048 if render_w > CAMERA_WIDTH // 2 else 1024
 
 
+def _model_cache_path(xml: str, asset_files: list[Path]) -> Path:
+    """Cache location for the compiled model, keyed by everything that shapes
+    it: the generated MJCF (which embeds resolved mesh/texture paths, so the
+    texture cap and asset locations are covered), the referenced files'
+    mtime+size, and the MuJoCo version. Compiling 1300+ convex hulls costs
+    minutes on weak machines and leaves ~0.4GB of heap debris; loading the
+    saved binary takes ~50ms and only the model's real ~120MB."""
+    digest = hashlib.sha256()
+    digest.update(mujoco.__version__.encode())
+    digest.update(xml.encode())
+    for path in sorted(set(asset_files)):
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        digest.update(f"{path}:{st.st_mtime_ns}:{st.st_size}\n".encode())
+    return ASSETS_DIR / ".model_cache" / f"world-{digest.hexdigest()[:16]}.mjb"
+
+
 def release_freed_heap() -> None:
     """Hand freed heap pages back to the OS (Linux/glibc only, no-op
     elsewhere). MjSpec.compile churns through ~0.5-1GB of scratch (qhull,
@@ -134,13 +154,11 @@ class VirtualMars:
         visual_dir = ASSETS_DIR / "apartment_visual"
         visual_rooms = world.find_visual_rooms(visual_dir) if visual_dir.is_dir() else {}
 
-        world_spec = mujoco.MjSpec.from_string(
-            world.build_world_xml(
-                rooms,
-                include_placeholder_robot=False,
-                visual_rooms=visual_rooms,
-                texture_max=_texture_cap(self._render_w),
-            )
+        xml = world.build_world_xml(
+            rooms,
+            include_placeholder_robot=False,
+            visual_rooms=visual_rooms,
+            texture_max=_texture_cap(self._render_w),
         )
         # Lidar rays hit only the textured visual meshes (true surfaces, like
         # a real lidar) when available -- without them, fall back to all
@@ -149,17 +167,39 @@ class VirtualMars:
         if visual_rooms:
             self._lidar_groups = np.zeros(6, dtype=np.uint8)
             self._lidar_groups[world.VISUAL_GROUP] = 1
-        robot_spec = world.load_robot_spec(world.default_urdf_path())
-        world.add_planar_base(robot_spec)
-        world_spec.attach(robot_spec, frame=world_spec.worldbody.add_frame(), prefix="robot_")
 
-        for cam_name, (body_name, forward, up) in CAMERAS.items():
-            cam = world_spec.body(body_name).add_camera()
-            cam.name = cam_name
-            cam.fovy = CAMERA_FOVY
-            cam.quat = _camera_quat(forward, up)
+        urdf_path = world.default_urdf_path()
+        asset_files = [
+            urdf_path,
+            *(f for pieces in rooms.values() for f in pieces),
+            *(p for obj in visual_rooms.values() for p in (obj, obj.with_suffix(".png"))),
+            *(f for f in urdf_path.parent.rglob("*") if f.suffix in (".stl", ".dae", ".obj", ".png", ".urdf")),
+        ]
+        cache_path = _model_cache_path(xml, asset_files)
+        self.model = None
+        if cache_path.exists():
+            with contextlib.suppress(Exception):  # noqa: BLE001 -- corrupt cache falls back to compiling
+                self.model = mujoco.MjModel.from_binary_path(str(cache_path))
+        if self.model is None:
+            world_spec = mujoco.MjSpec.from_string(xml)
+            robot_spec = world.load_robot_spec(urdf_path)
+            world.add_planar_base(robot_spec)
+            world_spec.attach(robot_spec, frame=world_spec.worldbody.add_frame(), prefix="robot_")
 
-        self.model = world_spec.compile()
+            for cam_name, (body_name, forward, up) in CAMERAS.items():
+                cam = world_spec.body(body_name).add_camera()
+                cam.name = cam_name
+                cam.fovy = CAMERA_FOVY
+                cam.quat = _camera_quat(forward, up)
+
+            self.model = world_spec.compile()
+            del world_spec, robot_spec  # spec copies of every mesh/texture
+            with contextlib.suppress(OSError):
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                for stale in cache_path.parent.glob("world-*.mjb"):
+                    if stale != cache_path:
+                        stale.unlink(missing_ok=True)
+                mujoco.mj_saveModel(self.model, str(cache_path), None)
         world.style_robot_geoms(self.model)
         # The planar base pins z at the plane, so the ground's 7mm contact
         # margin reads as permanent penetration -- huge normal force whose
@@ -195,7 +235,6 @@ class VirtualMars:
         self._cmd_wz = 0.0
         self._cmd_sim_time = -math.inf
         self.reset()
-        del world_spec, robot_spec  # spec copies of every mesh/texture
         release_freed_heap()
 
     def reset(self) -> None:
