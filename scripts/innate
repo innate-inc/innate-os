@@ -1006,10 +1006,7 @@ def _foxglove_start():
         print(f"  Connect Foxglove to {C.BOLD}{_foxglove_uri()}{C.NC}")
         return 0
 
-    env_cmd = (
-        f"source {INNATE_OS_ROOT}/config/dds/setup_dds.zsh && "
-        f"source {ROS_WS}/install/setup.zsh"
-    )
+    env_cmd = f"source {INNATE_OS_ROOT}/config/dds/setup_dds.zsh && source {ROS_WS}/install/setup.zsh"
     r = run(["tmux", "new-session", "-d", "-s", FOXGLOVE_TMUX_SESSION, "-n", "foxglove"])
     if r.returncode != 0:
         fail("Failed to create tmux session for the Foxglove bridge")
