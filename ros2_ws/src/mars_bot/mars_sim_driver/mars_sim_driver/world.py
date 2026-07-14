@@ -130,13 +130,41 @@ def spawn_camera_view(x: float, y: float, yaw_deg: float) -> tuple[float, float,
     return lookat[0], lookat[1], lookat[2], azimuth_deg, elevation_deg, distance / 1.5
 
 
+def capped_texture_path(png_path: Path, texture_max: int) -> Path:
+    """Path to a cached downscaled copy of png_path (longest side <=
+    texture_max), generated next to the original on first use.
+
+    The baked-lighting atlases ship at 4096x4096 (~50MB decoded); the model
+    keeps that in RAM and every GL renderer context uploads it AGAIN -- under
+    software GL that is process memory too, so each atlas is paid up to three
+    times for cameras that output 640x480 at most. Falls back to the original
+    when the cache can't be written (read-only assets dir)."""
+    from PIL import Image  # deferred: keep `import world` light for the sandbox tools
+
+    with Image.open(png_path) as im:
+        if max(im.size) <= texture_max:
+            return png_path
+        scale = texture_max / max(im.size)
+        new_size = (max(1, round(im.width * scale)), max(1, round(im.height * scale)))
+        cached = png_path.with_name(f"{png_path.stem}.cap{texture_max}{png_path.suffix}")
+        if cached.exists() and cached.stat().st_mtime >= png_path.stat().st_mtime:
+            return cached
+        try:
+            im.resize(new_size, Image.LANCZOS).save(cached)
+        except OSError:
+            return png_path
+    return cached
+
+
 def build_world_xml(
     rooms: dict[str, list[Path]],
     include_placeholder_robot: bool = True,
     visual_rooms: dict[str, Path] | None = None,
+    texture_max: int | None = None,
 ) -> str:
     """The apartment environment MJCF (floor plane + decomposed room hulls,
-    optionally the textured visual rooms in their own geom group)."""
+    optionally the textured visual rooms in their own geom group).
+    texture_max caps the visual textures' resolution (see capped_texture_path)."""
     collision_group = COLLISION_GROUP if visual_rooms else 0
 
     mesh_lines = []
@@ -158,6 +186,8 @@ def build_world_xml(
     visual_geom_lines = []
     for room, obj_path in (visual_rooms or {}).items():
         png_path = obj_path.with_suffix(".png")
+        if texture_max:
+            png_path = capped_texture_path(png_path, texture_max)
         visual_mesh_lines.append(f'    <mesh name="vis_{room}" file="{obj_path.resolve()}"/>')
         visual_mesh_lines.append(f'    <texture name="tex_{room}" type="2d" file="{png_path.resolve()}"/>')
         visual_mesh_lines.append(f'    <material name="mat_{room}" texture="tex_{room}" specular="0" shininess="0"/>')

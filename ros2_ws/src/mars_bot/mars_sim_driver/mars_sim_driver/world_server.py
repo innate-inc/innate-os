@@ -33,7 +33,7 @@ try:
 except ImportError:  # view-only feature; the sim must not die without it
     ws_serve = None
 
-from .core import CAMERA_HEIGHT, CAMERA_WIDTH, VirtualMars, encode_jpeg
+from .core import CAMERA_HEIGHT, CAMERA_WIDTH, VirtualMars, encode_jpeg, release_freed_heap
 
 # Depth renders at the pointcloud grid: identical published cloud, 16x less fill.
 DEPTH_WH = (CAMERA_WIDTH // 4, CAMERA_HEIGHT // 4)
@@ -331,6 +331,7 @@ def main() -> None:
         f"[world-server] GL self-test ({backend}): {steady_ms:.0f} ms/frame (first frame {first_ms:.0f} ms)",
         flush=True,
     )
+    release_freed_heap()  # model-compile + GL-context scratch, ~1GB on glibc
 
     binds = [b.strip() for b in args.bind.split(",") if b.strip()]
     listeners = [socket.create_server((bind, args.port)) for bind in binds]

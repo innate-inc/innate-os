@@ -8,8 +8,11 @@ Model building (URDF attach with visual meshes, planar base, drive/joint
 servos) lives in world.py, shared with the sim/sandbox dev tools.
 """
 
+import contextlib
 import io
 import math
+import os
+import sys
 from pathlib import Path
 
 import mujoco
@@ -76,6 +79,38 @@ def _camera_quat(forward, up) -> np.ndarray:
 ASSETS_DIR = world.default_assets_dir()
 
 
+def _texture_cap(render_w: int) -> int | None:
+    """Resolution cap for the visual-room texture atlases. 2048 is visually
+    indistinguishable from the source 4096 on a full-res 640x480 camera (the
+    parquet grain survives); half-res renders can't see past 1024. Each 4096
+    atlas costs ~50MB in the model plus ~50MB per GL renderer context, so the
+    cap is most of the world server's memory diet.
+    VIRTUAL_MARS_TEXTURE_MAX overrides (0 = keep original resolution)."""
+    raw = os.environ.get("VIRTUAL_MARS_TEXTURE_MAX", "").strip()
+    if raw:
+        with contextlib.suppress(ValueError):
+            value = int(raw)
+            if value == 0:
+                return None
+            if value > 0:
+                return value
+    return 2048 if render_w > CAMERA_WIDTH // 2 else 1024
+
+
+def release_freed_heap() -> None:
+    """Hand freed heap pages back to the OS (Linux/glibc only, no-op
+    elsewhere). MjSpec.compile churns through ~0.5-1GB of scratch (qhull,
+    texture decode) that glibc keeps after free -- on a 4GB machine that
+    phantom gigabyte is the difference between the stack fitting in RAM and
+    the physics thread living in swap."""
+    if sys.platform != "linux":
+        return
+    import ctypes
+
+    with contextlib.suppress(OSError, AttributeError):
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+
+
 class VirtualMars:
     def __init__(
         self,
@@ -100,7 +135,12 @@ class VirtualMars:
         visual_rooms = world.find_visual_rooms(visual_dir) if visual_dir.is_dir() else {}
 
         world_spec = mujoco.MjSpec.from_string(
-            world.build_world_xml(rooms, include_placeholder_robot=False, visual_rooms=visual_rooms)
+            world.build_world_xml(
+                rooms,
+                include_placeholder_robot=False,
+                visual_rooms=visual_rooms,
+                texture_max=_texture_cap(self._render_w),
+            )
         )
         # Lidar rays hit only the textured visual meshes (true surfaces, like
         # a real lidar) when available -- without them, fall back to all
@@ -155,6 +195,8 @@ class VirtualMars:
         self._cmd_wz = 0.0
         self._cmd_sim_time = -math.inf
         self.reset()
+        del world_spec, robot_spec  # spec copies of every mesh/texture
+        release_freed_heap()
 
     def reset(self) -> None:
         mujoco.mj_resetData(self.model, self.data)
