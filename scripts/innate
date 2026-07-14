@@ -985,9 +985,10 @@ def _foxglove_sim_window_exists():
 
 def _foxglove_uri():
     if is_sim_mode():
-        # Host side is published by sim/docker-compose.dev.yml (8766 when the
-        # local brain owns 8765 — the launcher prints the actual port).
-        return f"ws://localhost:{FOXGLOVE_PORT}"
+        # The published host port is baked into the container env by
+        # docker-compose.dev.yml (8766 when the local brain owns 8765).
+        host_port = os.environ.get("SIM_FOXGLOVE_PORT", "").strip() or FOXGLOVE_PORT
+        return f"ws://localhost:{host_port}"
     try:
         out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=2).stdout.strip()
         ip = out.split()[0] if out else None
@@ -1028,16 +1029,19 @@ def _foxglove_start():
 
 
 def _foxglove_stop():
+    stopped = False
+    # Both can exist at once (standalone session + sim-stack window) — stop all.
     if tmux_session_exists(FOXGLOVE_TMUX_SESSION):
         run(["tmux", "kill-session", "-t", FOXGLOVE_TMUX_SESSION])
         ok("Foxglove bridge stopped")
-        return 0
+        stopped = True
     if is_sim_mode() and _foxglove_sim_window_exists():
         run(["tmux", "kill-window", "-t", f"{TMUX_SESSION_SIM}:foxglove"])
         ok("Foxglove bridge stopped (sim stack window)")
         print(f"  It restarts with the sim; use {C.BOLD}innate foxglove start{C.NC} to bring it back now")
-        return 0
-    warn("Foxglove bridge is not running")
+        stopped = True
+    if not stopped:
+        warn("Foxglove bridge is not running")
     return 0
 
 

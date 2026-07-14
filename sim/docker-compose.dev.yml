@@ -48,6 +48,10 @@ services:
       # rendering outside Docker, see mars_sim_driver/world_server.py);
       # required -- the sim world always runs outside the container.
       - VIRTUAL_MARS_REMOTE=${VIRTUAL_MARS_REMOTE:-}
+      # The Foxglove bridge's published host port, so in-container tooling
+      # (innate foxglove status) can print the address that actually works
+      # from the host. Must match the ports entry below.
+      - SIM_FOXGLOVE_PORT=${SIM_FOXGLOVE_PORT:-8765}
       # Brain ("agent") websocket the robot connects to. With
       # COMPOSE_PROFILES=local-brain the in-compose cloud-agent service starts and
       # the brain client is pointed at it over the shared x11 network. With no
