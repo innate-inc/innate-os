@@ -651,7 +651,8 @@ SKILL_SOCKET_PATH = Path(os.environ.get("INNATE_SKILL_SOCKET", "/tmp/innate_skil
 TMUX_SESSION_HW = "ros_nodes"
 # Must match the session created by launch_sim_in_tmux.zsh (default "innate")
 # and tracked by the host sim launcher (sim/launcher TMUX_SESSION_NAME).
-TMUX_SESSION_SIM = "innate"
+# launch_sim_in_tmux.zsh honors INNATE_SIM_TMUX_SESSION, so follow it here.
+TMUX_SESSION_SIM = os.environ.get("INNATE_SIM_TMUX_SESSION", "").strip() or "innate"
 
 SYSTEMD_SERVICE_HW = "ros-app.service"
 
