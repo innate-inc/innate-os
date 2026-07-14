@@ -202,9 +202,13 @@ More dev tooling (physics stress gate, asset pipeline) is documented in
 
 ### ROS access
 
-Prefer Foxglove or your own ROS tooling? Open a Rosbridge connection to
-`ws://localhost:9090` for TF, `/scan`, `/mars/main_camera/points`, camera
-topics and `/cmd_vel` teleop.
+A Foxglove bridge runs as part of the sim stack: connect Foxglove Studio to
+`ws://localhost:8765` for TF, `/scan`, `/mars/main_camera/points`, camera
+topics and `/cmd_vel` teleop. (With the local brain active the bridge is
+published on `ws://localhost:8766` instead — the cloud-agent owns 8765; the
+launcher prints the port. `SIM_FOXGLOVE_PORT`/`SIM_FOXGLOVE_BIND` override.)
+
+Rosbridge is also available for your own ROS tooling at `ws://localhost:9090`.
 
 ### Configuration
 

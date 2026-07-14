@@ -68,6 +68,12 @@ services:
       # publish on a non-privileged port; the container always binds 443/80.
       - "${SIM_HTTPS_PORT:-443}:443"
       - "${SIM_HTTP_PORT:-80}:80"
+      # Foxglove bridge websocket (auto-started by launch_sim_in_tmux.zsh).
+      # Loopback by default, like rosbridge; SIM_FOXGLOVE_BIND=0.0.0.0 opens it
+      # to the LAN. The launcher publishes 8766 instead when the local brain is
+      # active (cloud-agent owns host 8765) — set SIM_FOXGLOVE_PORT yourself for
+      # raw `docker compose --profile local-brain` runs.
+      - "${SIM_FOXGLOVE_BIND:-127.0.0.1}:${SIM_FOXGLOVE_PORT:-8765}:8765"
 
     volumes:
       # 1) Mount your local code (paths are relative to this file's directory)

@@ -519,6 +519,12 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
         # argless and must inherit the same backend (compose's own default
         # only fires when COMPOSE_PROFILES is set, which it isn't here).
         compose_values["BRAIN_WEBSOCKET_URI"] = str(config.get("brain_websocket_uri", "") or "")
+        # Foxglove bridge publishes on host 8765 (Foxglove Studio's default) —
+        # but a local brain's cloud-agent owns that host port, so shift the
+        # bridge to 8766 unless the user pinned a port themselves.
+        if not os.environ.get("SIM_FOXGLOVE_PORT", "").strip() and config["mode"] not in (HOSTED_MODE, NONE_MODE):
+            compose_values["SIM_FOXGLOVE_PORT"] = "8766"
+            log("Local brain owns port 8765; Foxglove bridge published on ws://localhost:8766.")
         compose_env = os_compose_env(compose_values, env_file=os_env_file)
         log("Starting Innate OS dev container...")
         run_logged_with_heartbeat(

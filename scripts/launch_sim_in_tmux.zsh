@@ -167,6 +167,14 @@ tmux split-window -t "${TMUX_TARGET_PREFIX}:console-webapp" -h
 tmux send-keys -t "${TMUX_TARGET_PREFIX}:console-webapp.1" "cd ~/innate-os/webapp && while true; do WEBAPP_SIM_CONTROLS=1 python3 proxy/https_server.py; sleep 2; done" C-m
 echo "Started webapp (https :443 + http :80)..."
 
+# === Window 8: Foxglove Bridge ===
+# Always on in the sim: connect Foxglove Studio to ws://localhost:8765 (host
+# side published by sim/docker-compose.dev.yml; SIM_FOXGLOVE_PORT/BIND
+# override, and the launcher shifts it to 8766 when the local brain owns 8765).
+tmux new-window -t "$SESSION_NAME" -n foxglove
+tmux send-keys -t "${TMUX_TARGET_PREFIX}:foxglove" "ros2 launch foxglove_bridge foxglove_bridge_launch.xml" C-m
+echo "Started Foxglove bridge (ws :8765)..."
+
 # Select the rosbridge-app window
 tmux select-window -t "${TMUX_TARGET_PREFIX}:rosbridge-app"
 
