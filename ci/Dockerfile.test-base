@@ -112,8 +112,16 @@ RUN cd /root/innate-os/ros2_ws/src && \
 # mars_cam/nav/control build fine on non-Jetson: cam's VPI stereo component is
 # guarded by if(VPI_FOUND), nav's only Jetson dep (python3-cupy) is runtime-only.
 WORKDIR /root/innate-os/ros2_ws
-RUN . /opt/ros/humble/setup.sh && \
-    rosdep install --from-paths src --ignore-src -r -y || true && \
+# apt cache mounts + apt-get update: rosdep shells out to `apt-get install`,
+# and the apt lists populated by earlier layers live in BuildKit cache mounts,
+# not the image — without refreshed lists here every rosdep-resolved dep fails
+# with "Unable to locate package" (silently, via the -r/|| true guards) and
+# colcon then breaks on the packages that needed them.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && \
+    . /opt/ros/humble/setup.sh && \
+    { rosdep install --from-paths src --ignore-src -r -y || true; } && \
     colcon build --parallel-workers "$(( $(nproc) < 3 ? $(nproc) : 3 ))" --cmake-args \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \

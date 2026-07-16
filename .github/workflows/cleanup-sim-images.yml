@@ -51,11 +51,30 @@ jobs:
           keep_file="$(mktemp)"
           versions_file="$(mktemp)"
 
-          gh api --paginate "/orgs/${ORG}/packages/container/${package}/versions" > "${versions_file}"
+          # A package that has never been published is nothing to clean, not an
+          # error — every scheduled run used to die here on the 404. Anything
+          # else (permissions, rate limit, transient API failure) still fails
+          # the job rather than silently skipping cleanup.
+          api_error_file="$(mktemp)"
+          if ! gh api --paginate "/orgs/${ORG}/packages/container/${package}/versions" \
+              > "${versions_file}" 2> "${api_error_file}"; then
+            # 404 can also mean a broken token/visibility, not just a
+            # never-published package — only treat it as nothing-to-clean when
+            # the org's package listing works, i.e. our access is generally
+            # intact. Anything else fails the job rather than silently
+            # disabling cleanup.
+            if grep -q "HTTP 404" "${api_error_file}" \
+                && gh api "/orgs/${ORG}/packages?package_type=container" > /dev/null; then
+              echo "Package ${package} not found on ghcr; nothing to clean up."
+              exit 0
+            fi
+            cat "${api_error_file}" >&2
+            exit 1
+          fi
 
           jq -r '
             .[]
-            | select((.metadata.container.tags // []) | any(. == "main" or . == "buildcache"))
+            | select((.metadata.container.tags // []) | any(. == "main" or startswith("buildcache")))
             | .id
           ' "${versions_file}" >> "${keep_file}"
 
@@ -123,6 +142,16 @@ jobs:
             tags="$(jq -r --argjson id "${version_id}" '
               .[] | select(.id == $id) | (.metadata.container.tags // []) | join(",")
             ' "${versions_file}")"
+            # Belt-and-braces (INN-710): whatever the keep-selection above
+            # computed, never delete a version carrying a protected tag —
+            # CI depends on main/buildcache existing (including the per-arch
+            # buildcache-amd64/-arm64 tags ci/build_sim_images.sh pushes).
+            case ",${tags}," in
+              *,main,*|*,buildcache,*|*,buildcache-*)
+                echo "SKIP protected ${package} version ${version_id}: ${tags}"
+                continue
+                ;;
+            esac
             if [[ "${DRY_RUN}" == "true" ]]; then
               echo "dry-run delete ${package} version ${version_id}: ${tags}"
             else

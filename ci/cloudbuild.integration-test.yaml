@@ -93,9 +93,20 @@ steps:
           docker push "$base_image:buildcache"
         else
           # PR: reuse the published warm base; only the thin layer rebuilds.
-          # Fall back to an inline base build if it has never been published yet
-          # (e.g. before the first main build after this change).
-          if ! docker pull "$base_image:main"; then
+          # Retry the pull before giving up: a transient ghcr "manifest unknown"
+          # blip should cost seconds, not the ~30 min inline rebuild (INN-710).
+          # Fall back to an inline base build if it really isn't there (e.g.
+          # never published yet, or deleted between main builds).
+          pulled="false"
+          for attempt in 1 2 3; do
+            if docker pull "$base_image:main"; then
+              pulled="true"
+              break
+            fi
+            echo "Pull of $base_image:main failed (attempt $attempt/3); retrying in 15s."
+            sleep 15
+          done
+          if [[ "$pulled" != "true" ]]; then
             echo "Base image $base_image:main unavailable; building it inline."
             build_base
           fi
