@@ -378,9 +378,10 @@ export const PANE_LAUNCH_LABELS = {
 // goal {mode: MODE_MANUAL(0), num_images, min_corners, save_calibration},
 // feedback streams after each capture attempt ({phase, images_captured,
 // capture_attempts, corners_found, image_names, images: CompressedImage[]}),
-// result lands once enough images are captured / the goal is cancelled / the
-// server's capture watchdog times out ({success, message, images_captured,
-// left_rms, right_rms, stereo_rms}).
+// result lands once enough images are captured AND the server's coverage grid
+// is complete in both cameras (num_images is a floor, not a cap) / the goal is
+// cancelled / the server's capture watchdog times out ({success, message,
+// images_captured, left_rms, right_rms, stereo_rms}).
 export const RUN_STEREO_CALIBRATION_ACTION = "/mars/main_camera/run_stereo_calibration";
 export const RUN_STEREO_CALIBRATION_ACTION_TYPE = "mars_msgs/action/RunStereoCalibration";
 // Publishing a std_msgs/Bool here (while a goal is running) triggers one

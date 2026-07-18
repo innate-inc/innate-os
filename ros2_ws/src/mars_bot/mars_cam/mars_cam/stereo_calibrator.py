@@ -45,7 +45,12 @@ from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 
-from mars_cam.calibration_debug_vis import generate_coverage_images, generate_debug_mosaic, generate_visualizations
+from mars_cam.calibration_debug_vis import (
+    compute_coverage,
+    generate_coverage_images,
+    generate_debug_mosaic,
+    generate_visualizations,
+)
 from mars_cam.calibration_utils import (
     find_calibration_dir,
     prompt_save,
@@ -442,6 +447,15 @@ class StereoCalibrator(Node):
 
         return response
 
+    def _coverage_progress(self):
+        """(left covered, right covered, total) coverage-grid cell counts."""
+        left_covered, right_covered, total = compute_coverage(self)
+        return len(left_covered), len(right_covered), total
+
+    def _coverage_complete(self):
+        left_cov, right_cov, total = self._coverage_progress()
+        return left_cov >= total and right_cov >= total
+
     def _execute_run_calibration(self, goal_handle):
         """Execute a managed stereo calibration run for app/API clients (manual capture only)."""
         with self._active_goal_lock:
@@ -519,7 +533,11 @@ class StereoCalibrator(Node):
                     goal_handle.abort()
                     return _make_result(False, msg, timed_out=True)
 
-                if self.images_captured >= self.num_images_required:
+                # Image count is a floor, not the finish line: the run only
+                # completes once every coverage-grid cell has seen a corner in
+                # BOTH cameras, so captures keep being accepted past the target
+                # until coverage is complete.
+                if self.images_captured >= self.num_images_required and self._coverage_complete():
                     break
 
                 time.sleep(0.1)
@@ -633,11 +651,16 @@ class StereoCalibrator(Node):
             goal_handle = self._active_goal
         if goal_handle is not None:
             left_coverage, right_coverage = generate_coverage_images(self)
-            feedback_message = (
-                f"Captured {self.images_captured}/{self.num_images_required}"
-                if result.success
-                else "No board detected in this capture"
-            )
+            if result.success:
+                left_cov, right_cov, total_cells = self._coverage_progress()
+                feedback_message = (
+                    f"Captured {self.images_captured}/{self.num_images_required} · "
+                    f"coverage L {left_cov}/{total_cells} R {right_cov}/{total_cells}"
+                )
+                if self.images_captured >= self.num_images_required and not self._coverage_complete():
+                    feedback_message += " — aim the board at the red regions to finish"
+            else:
+                feedback_message = "No board detected in this capture"
             self._publish_action_feedback(
                 goal_handle,
                 "CAPTURE",

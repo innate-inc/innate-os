@@ -7,9 +7,12 @@
 // the live feed and clicks Capture / presses Space (one enter_events publish
 // per trigger) or enables auto-capture (one publish per second); live
 // feedback after each capture shows progress + whether the board was seen, plus
-// the two coverage-dot debug images. The goal resolves (RMS errors) once enough
-// images are captured, Stop cancels it, or the server's capture watchdog times
-// out. Only MODE_MANUAL exists today, so the goal always sends mode: 0.
+// the two coverage-dot debug images (red-tinted cells = not yet covered). The
+// goal resolves (RMS errors) once enough images are captured AND every
+// coverage-grid cell has seen a corner in both cameras (the image count is a
+// floor, so captures keep counting past the target until coverage completes),
+// Stop cancels it, or the server's capture watchdog times out. Only
+// MODE_MANUAL exists today, so the goal always sends mode: 0.
 
 import { ros } from "../rosClient.js";
 import { mountPage } from "../pageMount.js";
@@ -98,7 +101,9 @@ function buildView(root) {
   const controls = document.createElement("div");
   controls.className = "calib-panel";
 
-  const numField = fieldRow("Images to capture", String(STEREO_CALIB_DEFAULT_NUM_IMAGES));
+  // A minimum, not a cap: the server keeps accepting captures past this count
+  // until the coverage grid is complete in both cameras.
+  const numField = fieldRow("Images to capture (min)", String(STEREO_CALIB_DEFAULT_NUM_IMAGES));
   const minField = fieldRow("Min corners per capture", String(STEREO_CALIB_DEFAULT_MIN_CORNERS));
 
   const saveRow = document.createElement("label");
