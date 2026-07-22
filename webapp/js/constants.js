@@ -192,6 +192,13 @@ export const SET_VOLUME_SERVICE = "/set_volume";
 // service the mobile app's power-off calls.
 export const SHUTDOWN_SERVICE = "/shutdown";
 
+// Teleop video recorder (mars_bringup video_recorder.py): std_srvs/Trigger
+// start/stop bracket an MP4 capture of the camera topics into the robot's
+// data/recordings/ folder. STATUS is a latched std_msgs/Bool (true while recording).
+export const VIDEO_RECORD_START_SERVICE = "/video_recorder/start";
+export const VIDEO_RECORD_STOP_SERVICE = "/video_recorder/stop";
+export const VIDEO_RECORD_STATUS_TOPIC = "/video_recorder/status";
+
 // WebRTC signaling over rosbridge. START is a std_msgs/String JSON payload that
 // carries our client_id: {"source":"live","audio":bool,"client_id":"...","video":[...]}.
 // The robot routes offer/answer/ICE on the *_id topics, each enveloped as {client_id, ...}
