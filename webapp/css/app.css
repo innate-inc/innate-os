@@ -1387,6 +1387,19 @@ button {
   opacity: 0.2;
 }
 
+.record-toggle.active {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgb(217 106 90 / 12%);
+  animation: rec-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+  50% {
+    color: rgb(217 106 90 / 45%);
+  }
+}
+
 /* ---- TTS bar ---------------------------------------------------------------- */
 
 .tts-bar {
