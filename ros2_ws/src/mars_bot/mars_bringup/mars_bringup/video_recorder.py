@@ -7,7 +7,9 @@
 H.264 MP4 capture of the camera topics into <INNATE_OS_ROOT>/data/recordings/.
 Frames are written on a fixed-rate timer (latest frame per tick, duplicated on
 stalls) so the file plays back in real time regardless of camera or subscriber
-drops. Each recording also gets a recording_metadata.json (streams, timing,
+drops. Each recording also gets everything a 3D reconstruction needs later:
+a rosbag of odometry / TF / joints / lidar, per-frame ROS timestamps tying
+video frames to those poses, a recording_metadata.json (streams, timing,
 camera intrinsics when calibration is loaded) and a robot.urdf snapshot.
 """
 
@@ -24,11 +26,15 @@ from datetime import datetime
 import cv2
 import numpy as np
 import rclpy
+import rosbag2_py
+from geometry_msgs.msg import PoseWithCovarianceStamped
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, qos_profile_sensor_data
-from sensor_msgs.msg import CameraInfo, Image
+from sensor_msgs.msg import CameraInfo, Image, JointState, LaserScan
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
+from tf2_msgs.msg import TFMessage
 
 CAMERA_TOPICS = {
     # Full-res left eye (subscriber-gated in the driver, so it only flows
@@ -43,6 +49,20 @@ CAMERA_INFO_TOPICS = [
     "/mars/main_camera/left/camera_info",
     "/mars/main_camera/right/camera_info",
 ]
+# Pose/sensor topics bagged alongside the videos for 3D reconstruction:
+# odometry + TF give the camera trajectory (tf_static carries the camera
+# extrinsics chain, joint_states the head tilt), /scan adds lidar geometry.
+# Topics without a live publisher just record zero messages.
+BAG_TOPICS = {
+    "/odom": ("nav_msgs/msg/Odometry", Odometry),
+    "/mapping_pose": ("nav_msgs/msg/Odometry", Odometry),
+    "/amcl_pose": ("geometry_msgs/msg/PoseWithCovarianceStamped", PoseWithCovarianceStamped),
+    "/tf": ("tf2_msgs/msg/TFMessage", TFMessage),
+    "/tf_static": ("tf2_msgs/msg/TFMessage", TFMessage),
+    "/joint_states": ("sensor_msgs/msg/JointState", JointState),
+    "/scan": ("sensor_msgs/msg/LaserScan", LaserScan),
+}
+
 # Write-timer rate. Streams whose camera publishes slower record at their own
 # rate below — encoding duplicated frames buys nothing.
 FPS = 30.0
@@ -143,6 +163,9 @@ class VideoRecorder(Node):
         self.frame_counts: dict[str, int] = {}
         self.camera_infos: dict[str, dict] = {}
         self.robot_description: str | None = None
+        self.bag_writer: rosbag2_py.SequentialWriter | None = None
+        self.bag_counts: dict[str, int] = {}
+        self.frame_stamps: dict[str, list] = {}
 
         self.create_service(Trigger, "/video_recorder/start", self.handle_start)
         self.create_service(Trigger, "/video_recorder/stop", self.handle_stop)
@@ -197,6 +220,29 @@ class VideoRecorder(Node):
                     qos_profile_sensor_data,
                 )
             )
+        self.bag_writer = rosbag2_py.SequentialWriter()
+        self.bag_writer.open(
+            rosbag2_py.StorageOptions(uri=os.path.join(self.output_dir, "sensors"), storage_id="sqlite3"),
+            rosbag2_py.ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr"),
+        )
+        for topic, (type_name, msg_cls) in BAG_TOPICS.items():
+            self.bag_writer.create_topic(
+                rosbag2_py.TopicMetadata(name=topic, type=type_name, serialization_format="cdr")
+            )
+            self.bag_counts[topic] = 0
+            # tf_static is latched; a volatile sub would miss the transforms
+            # published before recording started.
+            qos = (
+                QoSProfile(depth=10, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+                if topic == "/tf_static"
+                else qos_profile_sensor_data
+            )
+            self.subs.append(
+                self.create_subscription(
+                    msg_cls, topic, lambda msg, topic=topic: self.on_bag_msg(topic, msg), qos, raw=True
+                )
+            )
+
         # Writes drain on their own thread: a pipe stall (encoder hiccup) must
         # never stall the executor, or message intake halves along with it.
         self.write_q = queue.Queue(maxsize=8)
@@ -224,6 +270,7 @@ class VideoRecorder(Node):
         for sub in self.subs:
             self.destroy_subscription(sub)
         self.subs.clear()
+        self.bag_writer = None  # destructor flushes and closes the bag
         self.write_q.put(None)
         self.writer_thread.join(timeout=15)
         saved = sorted(self.writers)
@@ -231,8 +278,8 @@ class VideoRecorder(Node):
             name: {
                 "file": f"{name}.mp4",
                 "topic": CAMERA_TOPICS[name],
-                "width": self.latest[name].shape[1],
-                "height": self.latest[name].shape[0],
+                "width": self.latest[name][0].shape[1],
+                "height": self.latest[name][0].shape[0],
                 "fps": RECORD_FPS.get(name, FPS),
                 "codec": STREAM_CODEC.get(name, "h264"),
                 "frames": self.frame_counts.get(name, 0),
@@ -255,6 +302,8 @@ class VideoRecorder(Node):
             response.success = True
             response.message = f"Saved {', '.join(f'{name}.mp4' for name in saved)} in {output_dir}"
         self.camera_infos.clear()
+        self.bag_counts = {}
+        self.frame_stamps = {}
         self.get_logger().info(response.message)
         return response
 
@@ -270,28 +319,41 @@ class VideoRecorder(Node):
             # resolution — scale fx, fy, cx, cy by width ratio to apply them.
             "camera_info": self.camera_infos
             or "unavailable: no stereo calibration loaded, camera_info topics were silent",
+            # Rosbag with the pose/sensor topics; <name>_frames.csv maps each
+            # video frame index to the ROS stamp of the image it came from.
+            "bag": {"path": "sensors", "message_counts": self.bag_counts},
         }
         with open(os.path.join(output_dir, "recording_metadata.json"), "w") as f:
             json.dump(metadata, f, indent=2)
+        for name, stamps in self.frame_stamps.items():
+            with open(os.path.join(output_dir, f"{name}_frames.csv"), "w") as f:
+                f.write("frame,stamp_ns\n")
+                f.writelines(f"{i},{ns}\n" for i, ns in enumerate(stamps))
         if self.robot_description:
             with open(os.path.join(output_dir, "robot.urdf"), "w") as f:
                 f.write(self.robot_description)
+
+    def on_bag_msg(self, topic: str, raw: bytes) -> None:
+        if self.bag_writer is None:
+            return
+        self.bag_writer.write(topic, raw, self.get_clock().now().nanoseconds)
+        self.bag_counts[topic] += 1
 
     def on_frame(self, name: str, msg: Image) -> None:
         frame = image_to_bgr(msg)
         if frame is None:
             return
-        self.latest[name] = frame
+        self.latest[name] = (frame, msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec)
 
     def write_tick(self) -> None:
         self.tick += 1
         output_dir = self.output_dir
-        for name, frame in list(self.latest.items()):
+        for name, (frame, stamp_ns) in list(self.latest.items()):
             step = max(1, round(FPS / RECORD_FPS.get(name, FPS)))
             if self.tick % step:
                 continue
             try:
-                self.write_q.put_nowait((name, frame, output_dir))
+                self.write_q.put_nowait((name, frame, stamp_ns, output_dir))
             except queue.Full:
                 self.get_logger().warning(f"{name}: write queue full, dropping a frame", throttle_duration_sec=5.0)
 
@@ -300,7 +362,7 @@ class VideoRecorder(Node):
             item = self.write_q.get()
             if item is None:
                 return
-            name, frame, output_dir = item
+            name, frame, stamp_ns, output_dir = item
             writer = self.writers.get(name)
             if writer is None:
                 height, width = frame.shape[:2]
@@ -310,6 +372,7 @@ class VideoRecorder(Node):
             try:
                 writer.write(frame)
                 self.frame_counts[name] = self.frame_counts.get(name, 0) + 1
+                self.frame_stamps.setdefault(name, []).append(stamp_ns)
             except OSError:
                 self.get_logger().error(f"{name} encoder pipeline died; dropping stream")
                 self.writers.pop(name).release()
