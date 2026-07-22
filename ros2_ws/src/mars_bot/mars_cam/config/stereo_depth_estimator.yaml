@@ -4,18 +4,23 @@
 main_camera_driver:
   ros__parameters:
     camera_symlink: "3D"
-    width: 2560
-    height: 720
+    # Capture at the sensor max so /mars/main_camera/stereo carries full-res
+    # frames for the video recorder. Decode/rotate stay on NVDEC/VIC; left and
+    # right are still downscaled to 640x480 for every existing consumer.
+    width: 3840
+    height: 1080
     publish_left_width: 640
     publish_left_height: 480
-    publish_stereo_width: 1280
-    publish_stereo_height: 480
+    publish_stereo_width: 3840
+    publish_stereo_height: 1080
     fps: 15.0
     frame_id: "camera_optical_frame"
     jpeg_quality: 80
     publish_compressed: true
     compressed_frame_interval: 2
-    publish_stereo: false
+    # Stereo publishes only while something subscribes (the video recorder),
+    # so the full-res topic is free when idle.
+    publish_stereo: true
     exposure: -1
     gain: -1
     default_gain: 110
