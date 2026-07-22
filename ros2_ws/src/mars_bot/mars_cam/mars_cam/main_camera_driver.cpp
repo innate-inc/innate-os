@@ -160,6 +160,12 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
             "/mars/main_camera/stereo", rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort));
     }
 
+    // Full-resolution left eye for the video recorder. Only serialized out
+    // while subscribed (see processAndPublishFrame), so idle cost is zero.
+    left_full_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+        "/mars/main_camera/left/image_full",
+        rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort));
+
     RCLCPP_DEBUG(this->get_logger(), "Publishers created:");
     RCLCPP_DEBUG(this->get_logger(), "  - /mars/main_camera/left/image_raw (%dx%d)", left_width_, left_height_);
     RCLCPP_DEBUG(this->get_logger(), "  - /mars/main_camera/right/image_raw (%dx%d)", left_width_, left_height_);
@@ -615,9 +621,23 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
     // Publish with std::move() for zero-copy intra-process communication
     // Inter-process subscribers (via DDS) still receive serialized copies automatically
     // -------------------------
-    // Gated on demand: at full capture resolution the stereo frame is large
-    // (12 MB at 3840x1080), so only serialize it out when someone (the video
-    // recorder) is actually subscribed.
+    // Gated on demand: at full capture resolution these frames are large
+    // (12 MB stereo / 6 MB left at 3840x1080), so only serialize them out
+    // when someone (the video recorder) is actually subscribed.
+    if (left_full_pub_->get_subscription_count() > 0) {
+        auto left_full_msg = std::make_unique<sensor_msgs::msg::Image>();
+        left_full_msg->header.stamp = current_time;
+        left_full_msg->header.frame_id = frame_id_;
+        left_full_msg->height = left_height_;
+        left_full_msg->width = left_width_;
+        left_full_msg->encoding = "bgr8";
+        left_full_msg->is_bigendian = false;
+        left_full_msg->step = left_width_ * 3;
+        left_full_msg->data.resize(left_full_msg->height * left_full_msg->step);
+        cv::Mat left_full_out(left_height_, left_width_, CV_8UC3, left_full_msg->data.data(), left_full_msg->step);
+        left_view.copyTo(left_full_out);
+        left_full_pub_->publish(std::move(left_full_msg));
+    }
     if (publish_stereo_ && stereo_pub_->get_subscription_count() > 0) {
         stereo_pub_->publish(std::move(stereo_msg));
     }

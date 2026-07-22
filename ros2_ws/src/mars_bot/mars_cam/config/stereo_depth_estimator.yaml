@@ -18,9 +18,7 @@ main_camera_driver:
     jpeg_quality: 80
     publish_compressed: true
     compressed_frame_interval: 2
-    # Stereo publishes only while something subscribes (the video recorder),
-    # so the full-res topic is free when idle.
-    publish_stereo: true
+    publish_stereo: false
     exposure: -1
     gain: -1
     default_gain: 110
