@@ -23,9 +23,14 @@ from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 
 CAMERA_TOPICS = {
-    "main": "/mars/main_camera/left/image_raw",
+    # Full-res side-by-side stereo (subscriber-gated in the driver, so it only
+    # flows while recording); the left eye is cropped out below. The 640x480
+    # /left topic stays untouched for policies, datasets and teleop.
+    "main": "/mars/main_camera/stereo",
     "arm": "/mars/arm/image_raw",
 }
+# Topics carrying a side-by-side stereo frame: record the left half only.
+CROP_LEFT_HALF = {"main"}
 FPS = 30.0
 
 
@@ -124,8 +129,12 @@ class VideoRecorder(Node):
 
     def on_frame(self, name: str, msg: Image) -> None:
         frame = image_to_bgr(msg)
-        if frame is not None:
-            self.latest[name] = frame
+        if frame is None:
+            return
+        if name in CROP_LEFT_HALF:
+            # Copy: the half-width view is non-contiguous, which VideoWriter rejects.
+            frame = np.ascontiguousarray(frame[:, : frame.shape[1] // 2])
+        self.latest[name] = frame
 
     def write_tick(self) -> None:
         for name, frame in self.latest.items():
