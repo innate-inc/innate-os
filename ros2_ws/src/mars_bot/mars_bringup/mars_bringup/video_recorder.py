@@ -37,10 +37,10 @@ from std_srvs.srv import Trigger
 from tf2_msgs.msg import TFMessage
 
 CAMERA_TOPICS = {
-    # Full-res left eye (subscriber-gated in the driver, so it only flows
-    # while recording). The 640x480 /left topic stays untouched for policies,
-    # datasets and teleop.
-    "main": "/mars/main_camera/left/image_full",
+    # Full-res side-by-side stereo pair, left eye in the left half
+    # (subscriber-gated in the driver, so it only flows while recording).
+    # The 640x480 /left topic stays untouched for policies, datasets, teleop.
+    "main": "/mars/main_camera/stereo",
     "arm": "/mars/arm/image_raw",
 }
 # Intrinsics published only while a stereo calibration is loaded; captured
@@ -66,7 +66,10 @@ BAG_TOPICS = {
 # Write-timer rate. Streams whose camera publishes slower record at their own
 # rate below — encoding duplicated frames buys nothing.
 FPS = 30.0
-RECORD_FPS = {"main": 15.0}  # main camera fps in stereo_depth_estimator.yaml
+# Main records below its 15 fps camera rate: the raw-BGR pipe + NVJPG chain
+# sustains ~12 fps at 3840x1080 under full robot load, so 15 silently drops
+# frames (measured 81% realtime); 10 holds with real margin.
+RECORD_FPS = {"main": 10.0}
 # 1080p records via the NVJPG hardware encoder (browsers can't play MJPEG-in-MP4,
 # but VLC/QuickTime/editors can); everything else via x264, which plays anywhere.
 STREAM_CODEC = {"main": "mjpeg"}
@@ -126,7 +129,9 @@ class GstMp4Writer:
         self._proc = subprocess.Popen(args, stdin=subprocess.PIPE)
 
     def write(self, frame: np.ndarray) -> None:
-        self._proc.stdin.write(frame.tobytes())
+        # Contiguous frames go straight from the numpy buffer; 12 MB stereo
+        # frames make a tobytes() copy measurable.
+        self._proc.stdin.write(frame.data if frame.flags.c_contiguous else frame.tobytes())
 
     def release(self) -> None:
         try:
@@ -243,11 +248,15 @@ class VideoRecorder(Node):
                 )
             )
 
-        # Writes drain on their own thread: a pipe stall (encoder hiccup) must
-        # never stall the executor, or message intake halves along with it.
-        self.write_q = queue.Queue(maxsize=8)
-        self.writer_thread = threading.Thread(target=self.drain_writes, daemon=True)
-        self.writer_thread.start()
+        # Writes drain on their own thread per stream: a pipe stall (encoder
+        # hiccup) must never stall the executor, and a 12 MB stereo write must
+        # never queue the arm camera's frames behind it.
+        self.write_qs = {name: queue.Queue(maxsize=8) for name in CAMERA_TOPICS}
+        self.writer_threads = {
+            name: threading.Thread(target=self.drain_writes, args=(name,), daemon=True) for name in CAMERA_TOPICS
+        }
+        for t in self.writer_threads.values():
+            t.start()
         self.timer = self.create_timer(1.0 / FPS, self.write_tick)
         self.publish_status()
         self.get_logger().info(f"Recording to {self.output_dir}")
@@ -271,8 +280,10 @@ class VideoRecorder(Node):
             self.destroy_subscription(sub)
         self.subs.clear()
         self.bag_writer = None  # destructor flushes and closes the bag
-        self.write_q.put(None)
-        self.writer_thread.join(timeout=15)
+        for q in self.write_qs.values():
+            q.put(None)
+        for t in self.writer_threads.values():
+            t.join(timeout=15)
         saved = sorted(self.writers)
         streams = {
             name: {
@@ -315,8 +326,9 @@ class VideoRecorder(Node):
             "duration_s": round(duration, 3),
             "streams": streams,
             # Intrinsics are for the published left/right topics at their
-            # native resolution; main.mp4 is the left eye at full stereo
-            # resolution — scale fx, fy, cx, cy by width ratio to apply them.
+            # native resolution; main.mp4 is the side-by-side stereo pair
+            # (left eye = left half) — scale fx, fy, cx, cy by the per-eye
+            # resolution ratio to apply them.
             "camera_info": self.camera_infos
             or "unavailable: no stereo calibration loaded, camera_info topics were silent",
             # Rosbag with the pose/sensor topics; <name>_frames.csv maps each
@@ -353,16 +365,16 @@ class VideoRecorder(Node):
             if self.tick % step:
                 continue
             try:
-                self.write_q.put_nowait((name, frame, stamp_ns, output_dir))
+                self.write_qs[name].put_nowait((frame, stamp_ns, output_dir))
             except queue.Full:
                 self.get_logger().warning(f"{name}: write queue full, dropping a frame", throttle_duration_sec=5.0)
 
-    def drain_writes(self) -> None:
+    def drain_writes(self, name: str) -> None:
         while True:
-            item = self.write_q.get()
+            item = self.write_qs[name].get()
             if item is None:
                 return
-            name, frame, stamp_ns, output_dir = item
+            frame, stamp_ns, output_dir = item
             writer = self.writers.get(name)
             if writer is None:
                 height, width = frame.shape[:2]

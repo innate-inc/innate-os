@@ -18,7 +18,9 @@ main_camera_driver:
     jpeg_quality: 80
     publish_compressed: true
     compressed_frame_interval: 2
-    publish_stereo: false
+    # Full side-by-side stereo for the video recorder; subscriber-gated in the
+    # driver so it only serializes out while a recording runs.
+    publish_stereo: true
     exposure: -1
     gain: -1
     default_gain: 110
