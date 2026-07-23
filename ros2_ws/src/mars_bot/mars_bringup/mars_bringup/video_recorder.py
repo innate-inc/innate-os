@@ -66,10 +66,7 @@ BAG_TOPICS = {
 # Write-timer rate. Streams whose camera publishes slower record at their own
 # rate below — encoding duplicated frames buys nothing.
 FPS = 30.0
-# Main records below its 15 fps camera rate: the raw-BGR pipe + NVJPG chain
-# sustains ~12 fps at 3840x1080 under full robot load, so 15 silently drops
-# frames (measured 81% realtime); 10 holds with real margin.
-RECORD_FPS = {"main": 10.0}
+RECORD_FPS = {"main": 15.0}  # main camera fps in stereo_depth_estimator.yaml
 # 1080p records via the NVJPG hardware encoder (browsers can't play MJPEG-in-MP4,
 # but VLC/QuickTime/editors can); everything else via x264, which plays anywhere.
 STREAM_CODEC = {"main": "mjpeg"}
@@ -110,6 +107,11 @@ class GstMp4Writer:
     """
 
     def __init__(self, path: str, fps: float, width: int, height: int, codec: str) -> None:
+        # mjpeg streams are fed I420 (converted in write() via SIMD cv2, which
+        # releases the GIL): half the pipe bytes of BGR and no videoconvert
+        # element — measured 36 fps capacity at 3840x1080 vs 18 for the BGR
+        # chain. h264 streams are small; they keep the plain BGR feed.
+        self._i420 = codec == "mjpeg"
         if codec == "mjpeg":
             encode = ["nvjpegenc", "quality=85", "!", "qtmux"]
         else:
@@ -118,11 +120,14 @@ class GstMp4Writer:
                 "x264enc", "speed-preset=ultrafast", f"bitrate={kbps}", f"key-int-max={int(fps * 4)}",
                 "!", "h264parse", "!", "mp4mux",
             ]
+        fmt = "i420" if self._i420 else "bgr"
+        convert = [] if self._i420 else ["videoconvert", "n-threads=4", "!", "video/x-raw,format=I420", "!"]
         args = (
             ["gst-launch-1.0", "-q", "fdsrc", "fd=0", "!"]
-            + ["rawvideoparse", "format=bgr", f"width={width}", f"height={height}", f"framerate={int(fps)}/1", "!"]
-            + ["queue", "max-size-buffers=8", "!", "videoconvert", "n-threads=4", "!"]
-            + ["video/x-raw,format=I420", "!", "queue", "max-size-buffers=8", "!"]
+            + ["rawvideoparse", f"format={fmt}", f"width={width}", f"height={height}", f"framerate={int(fps)}/1", "!"]
+            + ["queue", "max-size-buffers=8", "!"]
+            + convert
+            + ["queue", "max-size-buffers=8", "!"]
             + encode
             + ["!", "filesink", f"location={path}"]
         )
@@ -131,6 +136,8 @@ class GstMp4Writer:
     def write(self, frame: np.ndarray) -> None:
         # Contiguous frames go straight from the numpy buffer; 12 MB stereo
         # frames make a tobytes() copy measurable.
+        if self._i420:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV_I420)
         self._proc.stdin.write(frame.data if frame.flags.c_contiguous else frame.tobytes())
 
     def release(self) -> None:
