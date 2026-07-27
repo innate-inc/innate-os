@@ -40,10 +40,15 @@ export function createRecordButton(parent, rosClient) {
   }
   render();
 
-  const unsub = rosClient.subscribe(VIDEO_RECORD_STATUS_TOPIC, (msg) => {
-    recording = Boolean(msg?.data);
-    render();
-  });
+  const unsub = rosClient.subscribe(
+    VIDEO_RECORD_STATUS_TOPIC,
+    (msg) => {
+      recording = Boolean(msg?.data);
+      render();
+    },
+    undefined,
+    "std_msgs/msg/Bool",
+  );
 
   button.addEventListener("click", async () => {
     if (busy) return;

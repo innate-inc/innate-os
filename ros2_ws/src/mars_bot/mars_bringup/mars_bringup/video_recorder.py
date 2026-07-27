@@ -208,8 +208,17 @@ class VideoRecorder(Node):
             return response
 
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.output_dir = os.path.join(self.recordings_root, f"video_{stamp}")
-        os.makedirs(self.output_dir, exist_ok=True)
+        output_dir = os.path.join(self.recordings_root, f"video_{stamp}")
+        # Claim output_dir (the "recording" flag) only once the directory
+        # exists: a failure here (disk full, permissions) must leave the
+        # node idle and startable, not wedged in a half-started state.
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except OSError as exc:
+            response.success = False
+            response.message = f"Cannot create {output_dir}: {exc}"
+            return response
+        self.output_dir = output_dir
         self.started_at = datetime.now().astimezone().isoformat(timespec="seconds")
         self.start_monotonic = time.monotonic()
         self.tick = 0
@@ -289,8 +298,10 @@ class VideoRecorder(Node):
         self.bag_writer = None  # destructor flushes and closes the bag
         for q in self.write_qs.values():
             q.put(None)
-        for t in self.writer_threads.values():
+        for name, t in self.writer_threads.items():
             t.join(timeout=15)
+            if t.is_alive():
+                self.get_logger().error(f"{name} writer thread did not exit in time; file may be truncated")
         saved = sorted(self.writers)
         streams = {
             name: {
@@ -377,16 +388,29 @@ class VideoRecorder(Node):
                 self.get_logger().warning(f"{name}: write queue full, dropping a frame", throttle_duration_sec=5.0)
 
     def drain_writes(self, name: str) -> None:
+        # A failed stream stays failed but keeps draining its queue: recreating
+        # the writer would truncate the file, and returning early would leave
+        # handle_stop's blocking put(None) with no consumer.
+        failed = False
         while True:
             item = self.write_qs[name].get()
             if item is None:
                 return
+            if failed:
+                continue
             frame, stamp_ns, output_dir = item
             writer = self.writers.get(name)
             if writer is None:
                 height, width = frame.shape[:2]
                 path = os.path.join(output_dir, f"{name}.mp4")
-                writer = GstMp4Writer(path, RECORD_FPS.get(name, FPS), width, height, STREAM_CODEC.get(name, "h264"))
+                try:
+                    writer = GstMp4Writer(
+                        path, RECORD_FPS.get(name, FPS), width, height, STREAM_CODEC.get(name, "h264")
+                    )
+                except OSError as exc:
+                    self.get_logger().error(f"{name} encoder pipeline failed to start: {exc}; dropping stream")
+                    failed = True
+                    continue
                 self.writers[name] = writer
             try:
                 writer.write(frame)
@@ -395,6 +419,7 @@ class VideoRecorder(Node):
             except OSError:
                 self.get_logger().error(f"{name} encoder pipeline died; dropping stream")
                 self.writers.pop(name).release()
+                failed = True
 
 
 def main() -> None:
@@ -406,6 +431,7 @@ def main() -> None:
         pass
     finally:
         node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":
