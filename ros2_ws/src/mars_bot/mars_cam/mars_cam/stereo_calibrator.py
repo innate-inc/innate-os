@@ -128,6 +128,11 @@ class StereoCalibrator(Node):
         # How long to wait for a capture_trigger before timing out a managed run
         # (guards against an orphaned goal if the requesting client disconnects).
         self.declare_parameter("capture_timeout_sec", 60.0)
+        # Grace window after the image floor is met during which the run keeps
+        # accepting captures to finish the coverage grid. When it expires the
+        # run calibrates with the coverage it has, so an unreachable cell can
+        # never strand the operator (see _execute_run_calibration).
+        self.declare_parameter("coverage_grace_sec", 90.0)
 
         # Get parameters
         self.left_topic = self.get_parameter("left_topic").value
@@ -193,6 +198,8 @@ class StereoCalibrator(Node):
         self._last_capture_time = 0.0
         self._watchdog_active = False
         self._watchdog_timed_out = False
+        # When images_captured first reached the floor (None until it does).
+        self._floor_reached_at = None
 
         # Re-entrant callback group so services/cancel callbacks can run while
         # the long-running action execute callback is active.
@@ -456,6 +463,42 @@ class StereoCalibrator(Node):
         left_cov, right_cov, total = self._coverage_progress()
         return left_cov >= total and right_cov >= total
 
+    def _coverage_grace_sec(self):
+        """How long past the image floor to keep pushing for full coverage."""
+        return float(self.get_parameter("coverage_grace_sec").value)
+
+    def _should_finish_capturing(self):
+        """True once the run should stop capturing and calibrate.
+
+        Image count is a floor, not the finish line: captures keep being
+        accepted past the target until every coverage-grid cell has a corner in
+        BOTH cameras. But coverage is a target, not a trap — a capture only
+        counts when the board is seen in both cameras at once, and the outer
+        grid columns are exactly where the two views stop overlapping, so on a
+        given baseline some cells can be unreachable. Without a deadline such a
+        run would never end (the capture watchdog re-arms on every *attempt*,
+        so auto-capture keeps it alive indefinitely) and the operator's only
+        exit would be Stop, which discards every image they just captured.
+        """
+        if self.images_captured < self.num_images_required:
+            return False
+        if self._coverage_complete():
+            return True
+
+        if self._floor_reached_at is None:
+            self._floor_reached_at = time.time()
+            return False
+        if time.time() - self._floor_reached_at < self._coverage_grace_sec():
+            return False
+
+        left_cov, right_cov, total_cells = self._coverage_progress()
+        self.get_logger().warn(
+            f"Coverage still incomplete after {self._coverage_grace_sec():.0f}s past the image "
+            f"target (L {left_cov}/{total_cells} R {right_cov}/{total_cells}) — "
+            f"calibrating with what was captured"
+        )
+        return True
+
     def _execute_run_calibration(self, goal_handle):
         """Execute a managed stereo calibration run for app/API clients (manual capture only)."""
         with self._active_goal_lock:
@@ -496,6 +539,7 @@ class StereoCalibrator(Node):
             self._last_capture_time = time.time()
             self._watchdog_timed_out = False
             self._watchdog_active = True
+            self._floor_reached_at = None
 
             # One-shot "goal started" tick so the frontend can anchor a countdown
             # from goal-acceptance, not just after the first capture — otherwise a
@@ -533,11 +577,7 @@ class StereoCalibrator(Node):
                     goal_handle.abort()
                     return _make_result(False, msg, timed_out=True)
 
-                # Image count is a floor, not the finish line: the run only
-                # completes once every coverage-grid cell has seen a corner in
-                # BOTH cameras, so captures keep being accepted past the target
-                # until coverage is complete.
-                if self.images_captured >= self.num_images_required and self._coverage_complete():
+                if self._should_finish_capturing():
                     break
 
                 time.sleep(0.1)
@@ -658,7 +698,12 @@ class StereoCalibrator(Node):
                     f"coverage L {left_cov}/{total_cells} R {right_cov}/{total_cells}"
                 )
                 if self.images_captured >= self.num_images_required and not self._coverage_complete():
-                    feedback_message += " — aim the board at the red regions to finish"
+                    feedback_message += " — aim the board at the red regions"
+                    # Tell the operator this is bounded, so an unreachable cell
+                    # reads as "finishing soon", not "stuck forever".
+                    if self._floor_reached_at is not None:
+                        left_s = self._coverage_grace_sec() - (time.time() - self._floor_reached_at)
+                        feedback_message += f" ({max(0, int(left_s))}s left, then it calibrates as-is)"
             else:
                 feedback_message = "No board detected in this capture"
             self._publish_action_feedback(
