@@ -36,6 +36,8 @@ jobs:
 
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v3
+        with:
+          install_components: beta
 
       - name: Submit integration tests to Cloud Build
         run: |
