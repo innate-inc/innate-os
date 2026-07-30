@@ -386,6 +386,10 @@ export function createSkillsMenu(parent, rosClient) {
       if (expandable) {
         expandedId = isExpanded ? null : skill.id;
         render();
+        const expandedRow = listEl.querySelector(".skills-pop-row.expanded");
+        if (!expandedRow) return;
+        const expandedRowOverflow = expandedRow.getBoundingClientRect().bottom - scrollEl.getBoundingClientRect().bottom;
+        if (expandedRowOverflow > 0) scrollEl.scrollTop += expandedRowOverflow;
         return;
       }
       // Same ANY-run guard as the form Run button/Enter key: launching while
