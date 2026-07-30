@@ -54,7 +54,7 @@ jobs:
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then
             publish_base="true"
           fi
-          gcloud builds submit \
+          gcloud beta builds submit \
             --project="${{ vars.GCP_PROJECT_ID }}" \
             --region="${{ vars.GCP_REGION }}" \
             --gcs-source-staging-dir="${{ vars.GCP_CLOUD_BUILD_SOURCE_STAGING_DIR }}" \
