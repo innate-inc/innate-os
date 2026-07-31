@@ -117,9 +117,9 @@ const STYLE = `
 .set-status.err { color: #ff6b6b; }
 .set-status.muted { color: var(--muted, #8a90a0); }
 .set-ctl :is(input, select).set-text { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--hairline, #2a2f3a);
-  background: var(--panel, #111114); color: inherit; font: inherit; }
+  background-color: var(--panel, #111114); color: inherit; font: inherit; }
 .set-ctl > input.set-text { width: 200px; }
-.set-ctl > select.set-text { width: 216px; cursor: pointer; }
+.set-ctl > select.set-text { width: 216px; padding: 6px 30px 6px 10px; cursor: pointer; }
 .set-default { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-row-list { flex-direction: column; align-items: stretch; }
 .set-row-list .set-ctl { flex-direction: column; align-items: stretch; gap: 8px; margin-top: 10px; }
