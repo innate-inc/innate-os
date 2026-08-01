@@ -102,7 +102,7 @@ button {
 select.episodes-tool {
   -webkit-appearance: none;
   appearance: none;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23e7e7ea' stroke-width='1.4'/></svg>");
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%238a8a93' stroke-width='1.4'/></svg>");
   background-repeat: no-repeat;
   background-position: right 10px center;
   overflow: hidden;
