@@ -97,7 +97,9 @@ button {
 .agent-directive,
 .record-skill,
 .log-select,
-.set-ctl > select.set-text {
+.set-ctl > select.set-text,
+select.episodes-tool,
+.modal-select {
   -webkit-appearance: none;
   appearance: none;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23e7e7ea' stroke-width='1.4'/></svg>");
@@ -2384,11 +2386,16 @@ button {
 .episodes-tool {
   height: 32px;
   padding: 0 12px;
-  background: var(--panel);
+  background-color: var(--panel);
   border: 1px solid var(--hairline);
   border-radius: 8px;
   font-size: 12px;
   color: var(--muted);
+}
+
+/* Select variant (Training filter): room for the inset custom chevron. */
+select.episodes-tool {
+  padding: 0 30px 0 10px;
 }
 
 .episodes-tool:hover {
@@ -3859,13 +3866,17 @@ button {
 
 .modal-select,
 .modal-input {
-  background: var(--bg);
+  background-color: var(--bg);
   border: 1px solid var(--hairline-strong);
   border-radius: 8px;
   padding: 8px 10px;
   font: inherit;
   font-size: 13px;
   color: var(--text);
+}
+
+.modal-select {
+  padding: 8px 30px 8px 10px;
 }
 
 .modal-select:focus,
