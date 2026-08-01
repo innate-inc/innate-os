@@ -2395,7 +2395,7 @@ select.skill-input {
   color: var(--muted);
 }
 
-/* Select variant (Training filter): room for the inset custom chevron. */
+/* .episodes-tool is also used on buttons — only selects need chevron clearance. */
 select.episodes-tool {
   padding: 0 30px 0 10px;
 }
@@ -4632,7 +4632,7 @@ select.episodes-tool {
   transition: border-color 150ms ease;
 }
 
-/* Select variant (enum skill params): room for the inset custom chevron. */
+/* .skill-input is also used on text fields — only selects need chevron clearance. */
 select.skill-input {
   padding: 0 30px 0 10px;
 }
