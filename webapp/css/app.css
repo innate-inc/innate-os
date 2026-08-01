@@ -97,9 +97,11 @@ button {
 .agent-directive,
 .log-select,
 .modal-select,
+.prof-select,
 .record-skill,
 .set-ctl > select.set-text,
-select.episodes-tool {
+select.episodes-tool,
+select.skill-input {
   -webkit-appearance: none;
   appearance: none;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%238a8a93' stroke-width='1.4'/></svg>");
@@ -4048,10 +4050,10 @@ select.episodes-tool {
   color: var(--danger);
 }
 .prof-select {
-  background: transparent;
+  background-color: transparent;
   border: 1px solid var(--hairline-strong);
   border-radius: 8px;
-  padding: 6px 8px;
+  padding: 6px 30px 6px 10px;
   font: inherit;
   font-size: 12px;
   color: var(--text);
@@ -4624,10 +4626,15 @@ select.episodes-tool {
   padding: 0 9px;
   font-size: 12px;
   color: var(--text);
-  background: rgb(0 0 0 / 45%);
+  background-color: rgb(0 0 0 / 45%);
   border: 1px solid var(--hairline-strong);
   border-radius: 7px;
   transition: border-color 150ms ease;
+}
+
+/* Select variant (enum skill params): room for the inset custom chevron. */
+select.skill-input {
+  padding: 0 30px 0 10px;
 }
 
 .skill-input:focus {
