@@ -42,6 +42,7 @@ import posixpath
 import re
 import shutil
 import ssl
+import struct
 import subprocess
 import sys
 import threading
@@ -85,6 +86,8 @@ ROSBRIDGE_URL = "ws://127.0.0.1:9090"
 _WORLD_HOST = os.environ.get("VIRTUAL_MARS_REMOTE", "").strip().partition(":")[0] or "127.0.0.1"
 WORLD_STATE_PORT = int(os.environ.get("INNATE_WORLD_STATE_PORT", "").strip() or "8800")
 WORLD_STATE_URL = f"ws://{_WORLD_HOST}:{WORLD_STATE_PORT}"
+# /sim/reset -> the world server's driver RPC (its --port, default 8799).
+WORLD_RPC_PORT = 8799
 
 # Ping both legs of every relay so a peer that vanishes without a FIN (a robot's
 # WiFi dropping mid-teleop) is reaped in ~heartbeat seconds instead of lingering
@@ -456,6 +459,32 @@ async def _keepalive(ws: web.WebSocketResponse) -> None:
         await ws.send_str(_KEEPALIVE_FRAME)
 
 
+async def sim_reset(request: web.Request) -> web.Response:
+    """Respawn the simulated robot at its spawn pose (sim "reset position").
+
+    Talks the world server's driver RPC (4-byte big-endian length | JSON)
+    directly rather than publishing /virtual_mars/reset. Respawning is
+    simulator control, not a robot command, and the ROS route is a trap: the
+    driver's handler holds its node-wide lock across the very same RPC, so
+    every timer and subscription in it stalls until the call returns.
+    """
+    try:
+        reader, writer = await asyncio.open_connection(_WORLD_HOST, WORLD_RPC_PORT)
+    except OSError as err:
+        return web.json_response({"ok": False, "error": str(err)}, status=503)
+    try:
+        payload = json.dumps({"op": "reset"}).encode()
+        writer.write(struct.pack(">I", len(payload)) + payload)
+        await writer.drain()
+        (length,) = struct.unpack(">I", await reader.readexactly(4))
+        reply = json.loads(await reader.readexactly(length))
+    except (OSError, asyncio.IncompleteReadError, ValueError) as err:
+        return web.json_response({"ok": False, "error": str(err)}, status=502)
+    finally:
+        writer.close()
+    return web.json_response(reply)
+
+
 async def ws_proxy(request: web.Request) -> web.WebSocketResponse:
     """Bidirectional relay: /ws <-> rosbridge, /worldstate <-> the sim world
     server's observer stream. max_msg_size=0 lifts aiohttp's default cap for the
@@ -498,6 +527,7 @@ async def _on_cleanup(app: web.Application) -> None:
 
 def build_app() -> web.Application:
     app = web.Application()
+    app.router.add_post("/sim/reset", sim_reset)
     app.router.add_get("/ws", ws_proxy)
     app.router.add_get("/worldstate", ws_proxy)
     app.router.add_get("/config.json", config_handler)

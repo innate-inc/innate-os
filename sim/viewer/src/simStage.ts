@@ -153,15 +153,34 @@ export function createSimStage(
     return b;
   };
 
-  const addToggle = (parent: HTMLElement, label: string, onToggle: (on: boolean) => void) => {
+  const addToggle = (
+    parent: HTMLElement,
+    label: string,
+    onToggle: (on: boolean) => void,
+    initial = false,
+  ) => {
     const b = makeChip(label);
-    setChipOn(b, false);
+    setChipOn(b, initial);
     parent.appendChild(b);
-    let on = false;
+    let on = initial;
+    // A chip that starts lit must also START its overlay, or the page reads
+    // "Waypoints" while drawing none.
+    if (on) onToggle(true);
     b.onclick = () => {
       on = !on;
       setChipOn(b, on);
       onToggle(on);
+    };
+  };
+
+  const addAction = (parent: HTMLElement, label: string, onPress: () => void) => {
+    const b = makeChip(label);
+    parent.appendChild(b);
+    b.onclick = () => {
+      onPress();
+      // Flash: a momentary press must still read as having done something.
+      setChipOn(b, true);
+      setTimeout(() => setChipOn(b, false), 220);
     };
   };
 
@@ -263,6 +282,9 @@ export function createSimStage(
   viewAids.appendChild(viewAidsLabel);
   addToggle(viewAids, "Lidar", (on) => session.setLidarVisible(on));
   addToggle(viewAids, "Collisions", (on) => session.setCollisionHullsVisible(on));
+  addToggle(viewAids, "Waypoints", (on) => session.setNavPathVisible(on));
+  // Respawn (main) replaces this branch's "Reset position": same intent, and
+  // it also homes the arm and parks the props.
   const robotRow = document.createElement("div");
   robotRow.className = "sim-view-aids";
   const robotRowLabel = document.createElement("span");

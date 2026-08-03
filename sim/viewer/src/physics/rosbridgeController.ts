@@ -5,15 +5,21 @@
 // pipeline is the honest source for the debug overlay. Read-only --
 // teleop/commands go through the webapp's own rosbridge client.
 //
-// Speaks the rosbridge JSON protocol directly (subscribe/publish) -- no
-// roslib dependency for two message types.
+// Speaks the rosbridge JSON protocol directly (subscribe) -- no roslib
+// dependency for a handful of message types. Read-only, as before: commands go
+// through the webapp's own rosbridge client, and the sim's "reset position"
+// goes through the proxy's /sim/reset (see simSession.resetRobot).
 
 // base_laser mount relative to base_link (mars.urdf base_laser_joint).
 const LASER_OFFSET = { x: -0.0764, z: 0.17165 };
+// The nav policy's floor path, lifted clear of the floor mesh at z=0.
+const NAV_PATH_Z = 0.01;
 
 export class RosbridgePhysicsController {
   /** World-frame lidar hit points [x0,y0,z0, x1,...], null-range rays skipped. */
   onScan?: (points: Float32Array) => void;
+  /** World-frame nav-policy waypoints [x0,y0,z0, ...] from /nav_policy/path. */
+  onNavPath?: (points: Float32Array) => void;
 
   #url: string;
   #ws!: WebSocket;
@@ -50,6 +56,8 @@ export class RosbridgePhysicsController {
       // sample converts load hiccups into permanent lag.
       this.#send({ op: "subscribe", topic: "/odom", type: "nav_msgs/msg/Odometry", throttle_rate: 100, queue_length: 1 });
       this.#send({ op: "subscribe", topic: "/scan", type: "sensor_msgs/msg/LaserScan", throttle_rate: 150, queue_length: 1 });
+      // Plans arrive at ~2-4Hz, so no throttle is needed; latest-wins as above.
+      this.#send({ op: "subscribe", topic: "/nav_policy/path", type: "nav_msgs/msg/Path", queue_length: 1 });
       this.#resolveOpen();
     };
     ws.onerror = () => {
@@ -96,8 +104,14 @@ export class RosbridgePhysicsController {
         points.push(originX + r * Math.cos(a), originY + r * Math.sin(a), LASER_OFFSET.z);
       });
       this.onScan(new Float32Array(points));
+    } else if (msg.topic === "/nav_policy/path" && this.onNavPath) {
+      const path = msg.msg as { poses: { pose: { position: { x: number; y: number } } }[] };
+      const points: number[] = [];
+      path.poses.forEach(({ pose }) => points.push(pose.position.x, pose.position.y, NAV_PATH_Z));
+      this.onNavPath(new Float32Array(points));
     }
   }
+
 
   #send(payload: object): void {
     if (this.#ws.readyState === WebSocket.OPEN) this.#ws.send(JSON.stringify(payload));

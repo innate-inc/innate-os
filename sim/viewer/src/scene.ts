@@ -185,6 +185,9 @@ export class SimScene {
   private shadowCatcher?: THREE.Mesh;
   private shadowBoxM = SHADOW_BOX_MIN_M;
   private robotXY: [number, number] = [0, 0];
+  private navPathDots?: THREE.Points;
+  private navPathLine?: THREE.Line;
+  private navPathVisible = false;
   private hullsGroup?: THREE.Group;
   private hullsPromise?: Promise<void>;
   private hullsVisible = false;
@@ -417,6 +420,35 @@ export class SimScene {
 
   setLidarVisible(visible: boolean): void {
     if (this.lidarPoints) this.lidarPoints.visible = visible;
+  }
+
+  /** Update the nav-policy waypoint overlay: the 8 predicted waypoints as
+   * world-frame floor points [x0,y0,z0, ...], drawn as dots plus the path
+   * connecting them. Lifted a centimetre off the floor so it does not z-fight
+   * with the apartment floor mesh at z=0. */
+  setNavPath(points: Float32Array): void {
+    if (!this.navPathDots) {
+      const dotGeom = new THREE.BufferGeometry();
+      this.navPathDots = new THREE.Points(dotGeom, new THREE.PointsMaterial({ color: 0x00ff88, size: 0.09 }));
+      this.navPathDots.frustumCulled = false;
+      this.navPathDots.visible = this.navPathVisible;
+      this.scene.add(this.navPathDots);
+
+      const lineGeom = new THREE.BufferGeometry();
+      this.navPathLine = new THREE.Line(lineGeom, new THREE.LineBasicMaterial({ color: 0xffd700 }));
+      this.navPathLine.frustumCulled = false;
+      this.navPathLine.visible = this.navPathVisible;
+      this.scene.add(this.navPathLine);
+    }
+    const attr = new THREE.BufferAttribute(points, 3);
+    this.navPathDots!.geometry.setAttribute("position", attr);
+    this.navPathLine!.geometry.setAttribute("position", attr);
+  }
+
+  setNavPathVisible(visible: boolean): void {
+    this.navPathVisible = visible;
+    if (this.navPathDots) this.navPathDots.visible = visible;
+    if (this.navPathLine) this.navPathLine.visible = visible;
   }
 
   /**

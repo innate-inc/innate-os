@@ -104,7 +104,10 @@ export class SimSession {
   // Debug overlays (stage toggle chips); applied to the scene in tick().
   #scan: Float32Array | null = null;
   #scanDirty = false;
+  #navPath: Float32Array | null = null;
+  #navPathDirty = false;
   #lidarOn = false;
+  #navPathOn = false;
   #hullsOn = false;
   #overlaysDirty = false;
 
@@ -256,14 +259,43 @@ export class SimSession {
   setLidarVisible(on: boolean): void {
     this.#lidarOn = on;
     this.#overlaysDirty = true;
-    if (on && this.#scanFeed === null) {
+    if (on) this.#ensureRosFeed();
+  }
+
+  /** Toggle the nav-policy waypoint overlay (stage "waypoints" chip): the 8
+   * predicted floor waypoints from /nav_policy/path. */
+  setNavPathVisible(on: boolean): void {
+    this.#navPathOn = on;
+    this.#overlaysDirty = true;
+    if (on) this.#ensureRosFeed();
+  }
+
+  /** Respawn the robot at the spawn pose (stage "reset position" chip).
+   *
+   * Goes to the webapp proxy, which speaks the world server's own RPC. The
+   * obvious alternative -- publishing /virtual_mars/reset -- wedges the whole
+   * sim driver: its handler holds the node-wide lock across that same RPC, so
+   * odom, cmd_vel and rendering all stop until the call returns. */
+  resetRobot(): void {
+    fetch("/sim/reset", { method: "POST" }).catch((err) => console.warn("[sim-session] reset failed:", err));
+  }
+
+  /** The rosbridge feed backing every overlay that reads robot topics. Opened
+   * on first use -- the 3D view itself never consumes robot telemetry. */
+  #ensureRosFeed(): RosbridgePhysicsController {
+    if (this.#scanFeed === null) {
       this.#scanFeed = new RosbridgePhysicsController(this.#rosUrl);
       this.#scanFeed.onScan = (points) => {
         this.#scan = points;
         this.#scanDirty = true;
       };
-      this.#scanFeed.init().catch((err) => console.warn("[sim-session] scan overlay unavailable:", err));
+      this.#scanFeed.onNavPath = (points) => {
+        this.#navPath = points;
+        this.#navPathDirty = true;
+      };
+      this.#scanFeed.init().catch((err) => console.warn("[sim-session] rosbridge overlay unavailable:", err));
     }
+    return this.#scanFeed;
   }
 
   /** Toggle the collision-hull wireframe overlay (stage "collisions" chip). */
@@ -455,11 +487,16 @@ export class SimSession {
     if (this.#overlaysDirty) {
       this.#overlaysDirty = false;
       scene.setLidarVisible(this.#lidarOn);
+      scene.setNavPathVisible(this.#navPathOn);
       scene.setCollisionHullsVisible(this.#hullsOn);
     }
     if (this.#lidarOn && this.#scanDirty && this.#scan) {
       this.#scanDirty = false;
       scene.setLidarPoints(this.#scan);
+    }
+    if (this.#navPathOn && this.#navPathDirty && this.#navPath) {
+      this.#navPathDirty = false;
+      scene.setNavPath(this.#navPath);
       scene.setLidarVisible(true); // first points may arrive after the toggle
     }
   }
