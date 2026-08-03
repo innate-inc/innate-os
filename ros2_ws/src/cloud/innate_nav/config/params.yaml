@@ -1,0 +1,21 @@
+innate_nav_node:
+  ros__parameters:
+    # The policy server runs on the GPU box, outside the container.
+    server_url: "http://host.docker.internal:8900"
+    # The 110-degree-hfov camera the policy was trained on. The main camera is
+    # 96 degrees, a 28% longer focal length, which the model reads as every
+    # floor distance being ~22% nearer than it is.
+    camera_topic: "/mars/nav_camera/image_raw/compressed"
+    # r2r/rxr take free-form English; objectnav and pointnav are templated
+    # server-side. Also selects the history window mode.
+    task_family: "r2r"
+    # One of the discrete budgets training randomized over (2048/3072/4096).
+    token_budget: 3072
+    max_linear_speed: 0.4
+    max_angular_speed: 1.0
+    publish_path: true
+    # Clip and nudge the policy's path with Nav2's local costmap (scan + depth
+    # via STVL, inflated against the live footprint). The policy plans for the
+    # 0.1 m-radius agent it was trained on, so its line shaves corners this
+    # body cannot take. false = plain pursuit, no obstacle awareness.
+    use_costmap: true

@@ -125,6 +125,18 @@ tmux send-keys -t "${TMUX_TARGET_PREFIX}:vision-nav" "ros2 launch innate_uninavi
 echo "Started vision navigation inference client..."
 settle_after_launch
 
+# === Window 6b: Innate Nav Policy Client ===
+# Drives from our own waypoint policy (innate-nav-inference on the GPU box).
+# Idle until a /innate_nav/navigate goal arrives, so it costs nothing to run.
+# NOTE: the window name must not start with "$SESSION_NAME" ("innate"). Every
+# `new-window -t innate` below resolves its target as a window name before a
+# session name, so a window called e.g. "innate-nav" swallows them all:
+# "create window failed: index N in use", and console-webapp never launches.
+tmux new-window -t "$SESSION_NAME" -n nav-policy
+tmux send-keys -t "${TMUX_TARGET_PREFIX}:nav-policy" "ros2 launch innate_nav innate_nav.launch.py" C-m
+echo "Started innate nav policy client..."
+settle_after_launch
+
 # === Window 7: Console + Webapp UI ===
 # The robot webapp serves the sim UI too (replacing sim/frontend). Its python
 # front door binds 443 (https) + 80 (http) inside the container — both exposed by
