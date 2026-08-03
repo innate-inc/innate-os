@@ -71,6 +71,31 @@ export function createArmPanel(parent, rosClient, opts = {}) {
   wrap.appendChild(label);
   parent.appendChild(wrap);
 
+  // Live robot-arm joint angles from /mars/arm/state. Independent of the
+  // leader-arm USB link, so it also reads out in sim where WebSerial is absent
+  // -- pose the arm, read the numbers, paste them into a config.
+  const readout = document.createElement("p");
+  readout.className = "arm-status mono";
+  readout.style.cssText = "white-space:pre-line;line-height:1.5;";
+  readout.textContent = "arm: waiting for /mars/arm/state …";
+  wrap.appendChild(readout);
+  const stopReadout = rosClient.subscribe(
+    "/mars/arm/state",
+    (msg) => {
+      const names = msg?.name ?? [];
+      const pos = msg?.position ?? [];
+      if (!pos.length) return;
+      readout.textContent = pos
+        .map((rad, i) => {
+          const name = names[i] ?? `joint${i + 1}`;
+          return `${name.padEnd(10)} ${rad >= 0 ? " " : ""}${rad.toFixed(4)} rad  ${((rad * 180) / Math.PI).toFixed(1)}°`;
+        })
+        .join("\n");
+    },
+    200,
+    "sensor_msgs/msg/JointState",
+  );
+
   // Robot-arm services (reboot + torque toggle) — rosbridge calls independent
   // of the leader-arm USB link, so they're available even where WebSerial is not.
   const armSvc = opts.hideServices ? null : buildArmServices(rosClient);
@@ -107,6 +132,7 @@ export function createArmPanel(parent, rosClient, opts = {}) {
     opts.onState?.({ engaged: false, reading: false, rate: 0 });
     return {
       destroy() {
+        stopReadout();
         armSvc?.destroy();
         wrap.remove();
       },
@@ -299,6 +325,7 @@ export function createArmPanel(parent, rosClient, opts = {}) {
     destroy() {
       destroyed = true;
       setEngaged(false);
+      stopReadout();
       unsubLeader();
       unsubRos();
       document.removeEventListener("visibilitychange", onVisibility);
