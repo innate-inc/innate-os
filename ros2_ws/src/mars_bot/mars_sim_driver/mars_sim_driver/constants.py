@@ -27,3 +27,11 @@ CAMERA_FOVY = math.degrees(2 * math.atan(CAMERA_HEIGHT / (2 * CAMERA_FY)))  # ~8
 # constants are tuned on it and converge in sim at 80, so it keeps 80 until
 # someone measures the real module.
 WRIST_CAMERA_FOVY = 80
+
+# The nav policy only ever saw the mars preset's front_rect view: a 640x480
+# pinhole at 110 deg HORIZONTAL fov. main is 84.5 deg horizontal -- a 1.57x
+# longer focal length, which the policy reads as floor distances 36% nearer.
+NAV_CAMERA_HFOV = 110.0
+NAV_CAMERA_FOVY = math.degrees(
+    2 * math.atan(math.tan(math.radians(NAV_CAMERA_HFOV / 2)) * CAMERA_HEIGHT / CAMERA_WIDTH)
+)

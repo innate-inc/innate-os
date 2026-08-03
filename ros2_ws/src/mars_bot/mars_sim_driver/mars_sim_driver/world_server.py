@@ -65,7 +65,7 @@ def _send_frame(conn: socket.socket, payload: bytes) -> None:
 
 # A product stays active this long after its last request (unwatched = free).
 PRODUCT_TTL_S = 3.0
-PRODUCTS = ("jpeg:main", "jpeg:wrist", "depth:main")
+PRODUCTS = ("jpeg:main", "jpeg:wrist", "jpeg:nav", "depth:main")
 
 
 class WorldServer:

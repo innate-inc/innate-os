@@ -8,6 +8,7 @@ run unchanged -- see README "Virtual MARS driver".
   pub /scan                                       sensor_msgs/LaserScan @6Hz, frame base_laser
   pub /mars/main_camera/left/image_raw/compressed sensor_msgs/CompressedImage @10Hz (lazy)
   pub /mars/arm/image_raw/compressed              sensor_msgs/CompressedImage @6Hz (lazy)
+  pub /mars/nav_camera/image_raw/compressed       sensor_msgs/CompressedImage @5Hz (lazy)
   pub /mars/main_camera/depth/image_rect_raw      sensor_msgs/Image 16UC1 mm @8Hz (lazy)
   pub /mars/main_camera/points                    sensor_msgs/PointCloud2 xyz @8Hz (lazy)
   pub /mars/main_camera/left/camera_info          sensor_msgs/CameraInfo @8Hz
@@ -66,6 +67,9 @@ except ImportError:  # ros2_ws not sourced/built -- topic interface still works
 # skills that servo off frames pace their cmd_vel by the frame rate.
 MAIN_CAMERA_FPS = 10.0  # main_camera_driver: compressed_frame_interval=3
 WRIST_CAMERA_FPS = 6.0  # arm_camera_driver: compressed_frame_interval=5
+# Frames only enter the policy's history on its 0.25m/15deg motion lattice, so
+# supplying faster than this buys nothing but render cost.
+NAV_CAMERA_FPS = 5.0
 DEPTH_FPS = 8.0  # stereo_depth_estimator max_fps
 ODOM_HZ = 30.0  # bringup.py odom_frequency
 SCAN_HZ = 6.0  # lidar.launch.py throttle
@@ -136,6 +140,9 @@ class VirtualMarsNode(Node):
             CompressedImage, "/mars/arm/image_raw/compressed", qos_profile_sensor_data
         )
         # Raw variants: what webrtc_streamer (webapp video) encodes.
+        self._nav_pub = self.create_publisher(
+            CompressedImage, "/mars/nav_camera/image_raw/compressed", qos_profile_sensor_data
+        )
         self._main_raw_pub = self.create_publisher(Image, "/mars/main_camera/left/image_raw", qos_profile_sensor_data)
         self._wrist_raw_pub = self.create_publisher(Image, "/mars/arm/image_raw", qos_profile_sensor_data)
         self._depth_pub = self.create_publisher(
@@ -453,9 +460,14 @@ class VirtualMarsNode(Node):
         """Paced render pulls off the executor, with adaptive shedding: when
         demand oversubscribes the thread, camera periods stretch while depth
         keeps its rate -- nav stays healthy, cameras degrade gracefully."""
-        last = {"main": 0.0, "wrist": 0.0, "depth": 0.0}
-        period = {"main": 1.0 / MAIN_CAMERA_FPS, "wrist": 1.0 / WRIST_CAMERA_FPS, "depth": 1.0 / DEPTH_FPS}
-        cost = {"main": 0.0, "wrist": 0.0, "depth": 0.0}  # EMA seconds per render
+        last = {"main": 0.0, "wrist": 0.0, "nav": 0.0, "depth": 0.0}
+        period = {
+            "main": 1.0 / MAIN_CAMERA_FPS,
+            "wrist": 1.0 / WRIST_CAMERA_FPS,
+            "nav": 1.0 / NAV_CAMERA_FPS,
+            "depth": 1.0 / DEPTH_FPS,
+        }
+        cost = {"main": 0.0, "wrist": 0.0, "nav": 0.0, "depth": 0.0}  # EMA seconds per render
         target_util = 0.85  # leave headroom for physics/publishing on the other threads
         stretch = 1.0
         saturated = False
@@ -465,6 +477,7 @@ class VirtualMarsNode(Node):
                 "main": self._main_pub.get_subscription_count() > 0 or self._main_raw_pub.get_subscription_count() > 0,
                 "wrist": self._wrist_pub.get_subscription_count() > 0
                 or self._wrist_raw_pub.get_subscription_count() > 0,
+                "nav": self._nav_pub.get_subscription_count() > 0,
                 "depth": self._depth_pub.get_subscription_count() > 0 or self._points_pub.get_subscription_count() > 0,
             }
             demand = sum(cost[s] / period[s] for s in wanted if wanted[s])
@@ -494,6 +507,7 @@ class VirtualMarsNode(Node):
             for camera, pub, raw_pub in (
                 ("main", self._main_pub, self._main_raw_pub),
                 ("wrist", self._wrist_pub, self._wrist_raw_pub),
+                ("nav", self._nav_pub, None),
             ):
                 if not wanted[camera] or now - last[camera] < period[camera] * stretch:
                     continue  # lazy, like the real drivers; stretched under load
@@ -513,7 +527,8 @@ class VirtualMarsNode(Node):
     def _publish_camera_frames(self, pub, raw_pub, camera: str, jpeg: bytes) -> None:
         """Publish one camera frame; the server hands us a wire-res JPEG."""
         stamp = self._stamp()
-        frame_id = "camera_optical_frame" if camera == "main" else "arm_camera_link"
+        # nav shares main's mount, so it shares its optical frame.
+        frame_id = "arm_camera_link" if camera == "wrist" else "camera_optical_frame"
 
         if pub.get_subscription_count() > 0:
             msg = CompressedImage()
@@ -523,7 +538,7 @@ class VirtualMarsNode(Node):
             msg.data = jpeg
             pub.publish(msg)
 
-        if raw_pub.get_subscription_count() > 0:
+        if raw_pub is not None and raw_pub.get_subscription_count() > 0:
             rgb = np.asarray(PILImage.open(io.BytesIO(jpeg)).convert("RGB"))
             msg = Image()
             msg.header.stamp = stamp
