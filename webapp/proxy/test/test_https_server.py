@@ -1,12 +1,56 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 """Front-door behaviour: static caching, SPA fallback, path guards, the config
-overlay, the restart guard, the /ws + /worldstate proxy, and /settings.
+overlay, sim-environment routing, the restart guard, the /ws + /worldstate
+proxy, and /settings.
 
 Pins the contract the aiohttp rewrite must keep. Part of the fast (no-ROS)
 pytest bucket."""
 
+import json
+import os
+from urllib.parse import parse_qs, urlsplit
+
 from conftest import fake_ws_upstream, make_app_root, serve, sync
+
+
+def make_sim_viewer(tmp_path):
+    """Canonical static routes plus monolith and split environment assets."""
+    viewer = tmp_path / "sim" / "viewer"
+    public = viewer / "public"
+    models = public / "models"
+    collisions = public / "physics" / "apartment_collisions_v2"
+    active = public / "environments" / "gallery"
+    active_collisions = active / "collisions"
+    split_rooms = active / "rooms"
+    for directory in (models, collisions, active_collisions, split_rooms):
+        directory.mkdir(parents=True)
+    (models / "unchanged.glb").write_bytes(b"UNCHANGED MODEL")
+    (collisions / "hulls.f32").write_bytes(b"CANONICAL HULLS")
+    (active / "gallery.glb").write_bytes(b"ACTIVE GALLERY")
+    (active_collisions / "hulls.f32").write_bytes(b"ACTIVE HULLS")
+    (split_rooms / "manifest.json").write_text(json.dumps({"rooms": [], "padding": "x" * 2000}))
+    (split_rooms / "room.glb").write_bytes(b"ACTIVE ROOM")
+    descriptor_path = tmp_path / "sim" / "assets" / ".active-environment.json"
+    descriptor_path.parent.mkdir(parents=True)
+    descriptor = {
+        "schema_version": 1,
+        "id": "gallery",
+        "display_name": "Gallery",
+        "fingerprint": "gallery-test-fingerprint",
+        "viewer": {
+            "type": "glb",
+            "model": "environments/gallery/gallery.glb",
+            "collision_dir": "environments/gallery/collisions",
+        },
+    }
+    routes = {
+        "/sim-viewer/": viewer / "dist-lib",
+        "/models/": public / "models",
+        "/robot/": public / "robot",
+        "/physics/": public / "physics",
+    }
+    return viewer, descriptor_path, descriptor, routes
 
 
 @sync
@@ -153,6 +197,198 @@ async def test_config_env_overlay(tmp_path):
     async with serve(ROOT=root, WEBAPP_SIM_CONTROLS=False) as (s, base):
         cfg = await (await s.get(base + "/config.json")).json()
         assert "simControls" not in cfg
+
+
+@sync
+async def test_active_monolith_environment_uses_generic_routes(tmp_path):
+    root = make_app_root(tmp_path)
+    viewer, descriptor_path, descriptor, routes = make_sim_viewer(tmp_path)
+    descriptor_path.write_text(json.dumps(descriptor))
+    async with serve(
+        ROOT=root,
+        SIM_VIEWER_ROOT=viewer,
+        ACTIVE_ENVIRONMENT_PATH=descriptor_path,
+        SIM_VIEWER_ROUTES=routes,
+    ) as (s, base):
+        manifest = await s.get(base + "/sim-environment/manifest.json")
+        assert manifest.status == 200
+        assert manifest.headers["Cache-Control"] == "no-store, max-age=0"
+        assert await manifest.json() == descriptor
+
+        scene_redirect = await s.get(base + "/sim-environment/scene.glb", allow_redirects=False)
+        assert scene_redirect.status == 307
+        assert scene_redirect.headers["Cache-Control"] == "no-store, max-age=0"
+        assert parse_qs(urlsplit(scene_redirect.headers["Location"]).query)["fingerprint"] == [
+            descriptor["fingerprint"]
+        ]
+        scene = await s.get(base + scene_redirect.headers["Location"])
+        assert scene.status == 200
+        assert scene.headers["Content-Type"] == "model/gltf-binary"
+        assert await scene.read() == b"ACTIVE GALLERY"
+        assert await (await s.get(base + "/sim-environment/collisions/hulls.f32")).read() == b"ACTIVE HULLS"
+
+        ranged = await s.get(base + scene_redirect.headers["Location"], headers={"Range": "bytes=0-5"})
+        assert ranged.status == 206
+        assert await ranged.read() == b"ACTIVE"
+
+        # Canonical static routes are not aliases for the active pack. The
+        # viewer exclusively uses /sim-environment/* once a descriptor exists.
+        assert await (await s.get(base + "/models/unchanged.glb")).read() == b"UNCHANGED MODEL"
+        assert await (await s.get(base + "/physics/apartment_collisions_v2/hulls.f32")).read() == b"CANONICAL HULLS"
+
+
+@sync
+async def test_active_split_environment_serves_layout_rooms_and_gzip(tmp_path):
+    root = make_app_root(tmp_path)
+    viewer, descriptor_path, descriptor, routes = make_sim_viewer(tmp_path)
+    descriptor["viewer"] = {
+        "type": "split-glb",
+        "manifest": "environments/gallery/rooms/manifest.json",
+        "base_dir": "environments/gallery/rooms",
+        "collision_dir": "environments/gallery/collisions",
+    }
+    descriptor_path.write_text(json.dumps(descriptor))
+    async with serve(
+        ROOT=root,
+        SIM_VIEWER_ROOT=viewer,
+        ACTIVE_ENVIRONMENT_PATH=descriptor_path,
+        SIM_VIEWER_ROUTES=routes,
+    ) as (s, base):
+        assert (await s.get(base + "/sim-environment/scene.glb")).status == 404
+
+        layout_redirect = await s.get(base + "/sim-environment/layout.json", allow_redirects=False)
+        assert layout_redirect.status == 307
+        layout = await s.get(
+            base + layout_redirect.headers["Location"],
+            headers={"Accept-Encoding": "gzip"},
+        )
+        assert layout.status == 200
+        assert layout.headers["Content-Encoding"] == "gzip"
+        assert (await layout.json())["rooms"] == []
+        assert await (await s.get(base + "/sim-environment/rooms/room.glb")).read() == b"ACTIVE ROOM"
+
+        # Every split-asset route binds an unversioned request to this pack,
+        # while an already-bound stale request fails instead of crossing into
+        # whichever pack is active now.
+        for path in (
+            "/sim-environment/layout.json",
+            "/sim-environment/rooms/room.glb",
+            "/sim-environment/collisions/hulls.f32",
+        ):
+            bound = await s.get(base + path, allow_redirects=False)
+            assert bound.status == 307
+            assert parse_qs(urlsplit(bound.headers["Location"]).query)["fingerprint"] == [descriptor["fingerprint"]]
+            stale = await s.get(base + path + "?fingerprint=old-pack", allow_redirects=False)
+            assert stale.status == 412
+            assert stale.headers["Cache-Control"] == "no-store, max-age=0"
+
+
+@sync
+async def test_environment_fingerprint_changes_asset_cache_key(tmp_path):
+    root = make_app_root(tmp_path)
+    viewer, descriptor_path, descriptor, routes = make_sim_viewer(tmp_path)
+    first_model = viewer / "public" / descriptor["viewer"]["model"]
+    second_model = first_model.with_name("second.glb")
+    first_model.write_bytes(b"SCENE-ONE")
+    second_model.write_bytes(b"SCENE-TWO")  # deliberately the same byte size
+    same_mtime = 1_700_000_000
+    os.utime(first_model, (same_mtime, same_mtime))
+    os.utime(second_model, (same_mtime, same_mtime))
+    descriptor["fingerprint"] = "first-fingerprint"
+    descriptor_path.write_text(json.dumps(descriptor))
+
+    async with serve(
+        ROOT=root,
+        SIM_VIEWER_ROOT=viewer,
+        ACTIVE_ENVIRONMENT_PATH=descriptor_path,
+        SIM_VIEWER_ROUTES=routes,
+    ) as (s, base):
+        first = await s.get(base + "/sim-environment/scene.glb", allow_redirects=False)
+        assert first.status == 307
+        first_location = first.headers["Location"]
+        first_asset = await s.get(base + first_location)
+        first_etag = first_asset.headers["ETag"]
+        assert await first_asset.read() == b"SCENE-ONE"
+
+        descriptor["fingerprint"] = "second-fingerprint"
+        descriptor["viewer"]["model"] = "environments/gallery/second.glb"
+        descriptor_path.write_text(json.dumps(descriptor))
+
+        # A request bound to the old pack must not be retargeted to the new
+        # model: its caller may already have loaded the old pack's layout.
+        switched = await s.get(
+            base + first_location,
+            headers={"If-None-Match": first_etag},
+            allow_redirects=False,
+        )
+        assert switched.status == 412
+        assert switched.headers["Cache-Control"] == "no-store, max-age=0"
+
+        current = await s.get(base + "/sim-environment/scene.glb", allow_redirects=False)
+        assert current.status == 307
+        second_location = current.headers["Location"]
+        assert second_location != first_location
+        assert parse_qs(urlsplit(second_location).query)["fingerprint"] == ["second-fingerprint"]
+        second_asset = await s.get(base + second_location)
+        assert await second_asset.read() == b"SCENE-TWO"
+
+
+@sync
+async def test_missing_sim_environment_descriptor_keeps_canonical_static_routes(tmp_path):
+    root = make_app_root(tmp_path)
+    viewer, descriptor_path, _descriptor, routes = make_sim_viewer(tmp_path)
+    async with serve(
+        ROOT=root,
+        SIM_VIEWER_ROOT=viewer,
+        ACTIVE_ENVIRONMENT_PATH=descriptor_path,
+        SIM_VIEWER_ROUTES=routes,
+    ) as (s, base):
+        assert (await s.get(base + "/sim-environment/manifest.json")).status == 404
+        assert (await s.get(base + "/sim-environment/scene.glb")).status == 404
+        assert await (await s.get(base + "/models/unchanged.glb")).read() == b"UNCHANGED MODEL"
+        assert await (await s.get(base + "/physics/apartment_collisions_v2/hulls.f32")).read() == b"CANONICAL HULLS"
+
+
+@sync
+async def test_sim_environment_descriptor_and_collision_paths_fail_closed(tmp_path):
+    root = make_app_root(tmp_path)
+    viewer, descriptor_path, descriptor, routes = make_sim_viewer(tmp_path)
+    outside = tmp_path / "outside.glb"
+    outside.write_bytes(b"SECRET OUTSIDE")
+
+    # A present descriptor with an escaping model path is invalid.
+    descriptor["viewer"]["model"] = "../outside.glb"
+    descriptor_path.write_text(json.dumps(descriptor))
+    async with serve(
+        ROOT=root,
+        SIM_VIEWER_ROOT=viewer,
+        ACTIVE_ENVIRONMENT_PATH=descriptor_path,
+        SIM_VIEWER_ROUTES=routes,
+    ) as (s, base):
+        for path in (
+            "/sim-environment/manifest.json",
+            "/sim-environment/scene.glb",
+        ):
+            response = await s.get(base + path)
+            assert response.status == 404
+            assert b"SECRET OUTSIDE" not in await response.read()
+
+    # Even with a valid descriptor, a symlink inside the collision directory
+    # may not escape sim/viewer/public.
+    descriptor["viewer"]["model"] = "environments/gallery/gallery.glb"
+    descriptor_path.write_text(json.dumps(descriptor))
+    collision_link = viewer / "public" / "environments" / "gallery" / "collisions" / "leak.obj"
+    collision_link.symlink_to(outside)
+    async with serve(
+        ROOT=root,
+        SIM_VIEWER_ROOT=viewer,
+        ACTIVE_ENVIRONMENT_PATH=descriptor_path,
+        SIM_VIEWER_ROUTES=routes,
+    ) as (s, base):
+        for path in ("/sim-environment/collisions/leak.obj",):
+            response = await s.get(base + path)
+            assert response.status == 404
+            assert b"SECRET OUTSIDE" not in await response.read()
 
 
 @sync

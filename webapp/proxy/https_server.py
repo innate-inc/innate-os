@@ -45,7 +45,7 @@ import ssl
 import subprocess
 import sys
 import threading
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import aiohttp
 from aiohttp import web
@@ -183,6 +183,7 @@ CONTENT_TYPES = {
 # /robot is the exception: a robot does have the tracked ROS package, so it
 # answers there too, with that robot's own description.
 SIM_VIEWER_ROOT = ROOT.parent / "sim" / "viewer"
+ACTIVE_ENVIRONMENT_PATH = ROOT.parent / "sim" / "assets" / ".active-environment.json"
 SIM_VIEWER_ROUTES = {
     "/sim-viewer/": SIM_VIEWER_ROOT / "dist-lib",
     "/models/": SIM_VIEWER_ROOT / "public" / "models",
@@ -192,6 +193,8 @@ SIM_VIEWER_ROUTES = {
     # Collision hulls for the SimSession's "collisions" debug overlay.
     "/physics/": SIM_VIEWER_ROOT / "public" / "physics",
 }
+
+ENVIRONMENT_NO_STORE = {"Cache-Control": "no-store, max-age=0"}
 
 
 def _content_type(path: Path) -> str:
@@ -354,6 +357,119 @@ async def sim_viewer_handler(request: web.Request) -> web.StreamResponse:
     raise web.HTTPNotFound(text="not found")
 
 
+def _environment_asset_path(value: object, *, expect_directory: bool) -> "Path | None":
+    """Resolve one descriptor path inside sim/viewer/public, fail closed."""
+    if not isinstance(value, str) or not value.strip() or "\\" in value:
+        return None
+    relative = PurePosixPath(value)
+    if relative.is_absolute() or any(part in ("", ".", "..") for part in relative.parts):
+        return None
+    public = _safe_resolve(SIM_VIEWER_ROOT / "public")
+    target = _safe_resolve(SIM_VIEWER_ROOT / "public" / Path(*relative.parts))
+    if public is None or target is None or not target.is_relative_to(public):
+        return None
+    exists = target.is_dir() if expect_directory else target.is_file()
+    return target if exists else None
+
+
+def _load_active_environment() -> "tuple[dict[str, object], dict[str, Path]] | None":
+    """Validated public descriptor plus its resolved viewer assets."""
+    try:
+        descriptor = json.loads(ACTIVE_ENVIRONMENT_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(descriptor, dict) or descriptor.get("schema_version") != 1:
+        return None
+    if not isinstance(descriptor.get("id"), str) or not isinstance(descriptor.get("fingerprint"), str):
+        return None
+    viewer = descriptor.get("viewer")
+    if not isinstance(viewer, dict):
+        return None
+    collision_dir = _environment_asset_path(viewer.get("collision_dir"), expect_directory=True)
+    if collision_dir is None:
+        return None
+
+    resolved = {"collision_dir": collision_dir}
+    viewer_type = viewer.get("type")
+    if viewer_type == "glb":
+        model = _environment_asset_path(viewer.get("model"), expect_directory=False)
+        if model is None:
+            return None
+        resolved["model"] = model
+    elif viewer_type == "split-glb":
+        manifest = _environment_asset_path(viewer.get("manifest"), expect_directory=False)
+        base_dir = _environment_asset_path(viewer.get("base_dir"), expect_directory=True)
+        if manifest is None or base_dir is None:
+            return None
+        resolved["manifest"] = manifest
+        resolved["base_dir"] = base_dir
+    else:
+        return None
+    return descriptor, resolved
+
+
+def _bind_environment_fingerprint(request: web.Request, fingerprint: str) -> None:
+    """Bind an unversioned URL once; reject a URL bound to an old pack.
+
+    Redirecting a stale URL to the latest descriptor would let a page that
+    already loaded pack A's room layout attach pack B's meshes mid-stream.
+    """
+    requested = request.query.get("fingerprint")
+    if requested == fingerprint:
+        return
+    if requested is not None:
+        raise web.HTTPPreconditionFailed(text="simulator environment changed", headers=ENVIRONMENT_NO_STORE)
+    query = dict(request.query)
+    query["fingerprint"] = fingerprint
+    raise web.HTTPTemporaryRedirect(
+        location=str(request.rel_url.with_query(query)),
+        headers=ENVIRONMENT_NO_STORE,
+    )
+
+
+async def sim_environment_manifest(request: web.Request) -> web.Response:
+    loaded = _load_active_environment()
+    if loaded is None:
+        raise web.HTTPNotFound(text="not found")
+    descriptor, _resolved = loaded
+    return web.json_response(descriptor, headers=ENVIRONMENT_NO_STORE)
+
+
+async def sim_environment_asset(request: web.Request) -> web.StreamResponse:
+    loaded = _load_active_environment()
+    if loaded is None:
+        raise web.HTTPNotFound(text="not found")
+    descriptor, resolved = loaded
+    fingerprint = descriptor.get("fingerprint")
+    if not isinstance(fingerprint, str) or not fingerprint:
+        raise web.HTTPNotFound(text="not found")
+
+    clean = request.path
+    target: Path | None = None
+    if clean == "/sim-environment/scene.glb":
+        target = resolved.get("model")
+    elif clean == "/sim-environment/layout.json":
+        target = resolved.get("manifest")
+    else:
+        for prefix, root_key in (
+            ("/sim-environment/rooms/", "base_dir"),
+            ("/sim-environment/collisions/", "collision_dir"),
+        ):
+            if not clean.startswith(prefix):
+                continue
+            base = resolved.get(root_key)
+            if base is None:
+                break
+            target = _safe_resolve(base / clean[len(prefix) :])
+            if target is None or not target.is_file() or not target.is_relative_to(base):
+                target = None
+            break
+    if target is None or not target.is_file():
+        raise web.HTTPNotFound(text="not found")
+    _bind_environment_fingerprint(request, fingerprint)
+    return await _serve_static(target, request)
+
+
 async def config_handler(request: web.Request) -> web.Response:
     """Serve config.json with env-driven feature flags overlaid, so a deployment
     can flip flags without editing the committed file (the sim sets
@@ -514,6 +630,11 @@ def build_app() -> web.Application:
     app.router.add_get("/restart", restart_handler)
     # Before the catch-all; the bare /armsdk page route stays on the SPA shell.
     app.router.add_get("/armsdk/model/{tail:.*}", armsdk_model)
+    app.router.add_get("/sim-environment/manifest.json", sim_environment_manifest)
+    app.router.add_get("/sim-environment/scene.glb", sim_environment_asset)
+    app.router.add_get("/sim-environment/layout.json", sim_environment_asset)
+    app.router.add_get("/sim-environment/rooms/{tail:.*}", sim_environment_asset)
+    app.router.add_get("/sim-environment/collisions/{tail:.*}", sim_environment_asset)
     # Prefix routes must precede the catch-all so /models/foo.glb doesn't fall to
     # the SPA shell — first matching resource wins in add order.
     for prefix in SIM_VIEWER_ROUTES:

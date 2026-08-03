@@ -26,6 +26,7 @@ import struct
 import sys
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 from PIL import Image as PILImage
@@ -37,6 +38,7 @@ except ImportError:  # view-only feature; the sim must not die without it
 
 from .challenges import ChallengeChatBridge, ChallengeEngine, SkillEventBridge
 from .core import CAMERA_HEIGHT, CAMERA_WIDTH, VirtualMars, encode_jpeg, release_freed_heap
+from .world import SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG
 
 # Depth renders at the pointcloud grid: identical published cloud, 16x less fill.
 DEPTH_WH = (CAMERA_WIDTH // 4, CAMERA_HEIGHT // 4)
@@ -69,8 +71,16 @@ PRODUCTS = ("jpeg:main", "jpeg:wrist", "depth:main")
 
 
 class WorldServer:
-    def __init__(self, sim: VirtualMars):
+    def __init__(
+        self,
+        sim: VirtualMars,
+        *,
+        environment_id: str = "apartment",
+        environment_fingerprint: str = "",
+    ):
         self.sim = sim
+        self.environment_id = environment_id
+        self.environment_fingerprint = environment_fingerprint
         self.lock = threading.Lock()
         # Advertised in ping replies so the launcher can tell a current
         # server from a stale pre-stream one (which it must restart).
@@ -317,7 +327,13 @@ class WorldServer:
     def handle(self, req: dict) -> tuple[dict, bytes | None]:
         op = req.get("op")
         if op == "ping":
-            return {"ok": True, "state_port": self.state_port, "binds": self.binds}, None
+            return {
+                "ok": True,
+                "state_port": self.state_port,
+                "binds": self.binds,
+                "environment_id": self.environment_id,
+                "environment_fingerprint": self.environment_fingerprint,
+            }, None
         if op == "state":
             with self.lock:
                 x, y, yaw = self.sim.pose()
@@ -407,11 +423,28 @@ def main() -> None:
         "host.docker.internal, but a native Linux/WSL Docker engine resolves it to the bridge "
         "gateway -- there the launcher passes '127.0.0.1,<gateway>' (host-owned, not LAN-routable).",
     )
+    parser.add_argument("--collision-dir", type=Path, default=None)
+    parser.add_argument("--visual-dir", type=Path, default=None)
+    parser.add_argument("--spawn-x", type=float, default=SPAWN_X)
+    parser.add_argument("--spawn-y", type=float, default=SPAWN_Y)
+    parser.add_argument("--spawn-yaw-degrees", type=float, default=SPAWN_YAW_DEG)
+    parser.add_argument("--environment-id", default="apartment")
+    parser.add_argument("--environment-fingerprint", default="")
     args = parser.parse_args()
 
     print(f"[world-server] loading VirtualMars (render scale {args.render_scale})...", flush=True)
     render_wh = (CAMERA_WIDTH // args.render_scale, CAMERA_HEIGHT // args.render_scale)
-    server = WorldServer(VirtualMars(render_wh=render_wh, depth_render_wh=DEPTH_WH))
+    server = WorldServer(
+        VirtualMars(
+            split_dir=args.collision_dir,
+            render_wh=render_wh,
+            depth_render_wh=DEPTH_WH,
+            visual_dir=args.visual_dir,
+            spawn_pose=(args.spawn_x, args.spawn_y, args.spawn_yaw_degrees),
+        ),
+        environment_id=args.environment_id,
+        environment_fingerprint=args.environment_fingerprint,
+    )
     server.sim.step(0.5)  # settle from the spawn drop before clients look
 
     # Boot self-test: prove GL works before accepting clients, and report

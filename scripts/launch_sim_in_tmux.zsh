@@ -5,6 +5,7 @@
 # Usage: ./scripts/launch-sim-in-tmux.zsh [--detach] [--brain-websocket-uri URI] [--brain-client-version VERSION]
 
 ATTACH=1
+SIM_OS_ROOT="${INNATE_OS_ROOT:-$HOME/innate-os}"
 # The brain now runs in-process inside brain_client (local Gemini agent loop);
 # there is no brain websocket. The legacy --brain-websocket-uri and
 # --brain-client-version flags are still accepted (and ignored) so older host
@@ -50,6 +51,14 @@ settle_after_launch() {
 tmux kill-session -t "$SESSION_NAME" 2>/dev/null
 sleep "$TMUX_CLEANUP_SETTLE_SECONDS"
 
+# Resolve and validate the selected pack's Nav2 map before starting any new
+# process. The host launcher writes the shared descriptor into sim/assets,
+# which is mounted at the same path in this container.
+if ! python3 "$SIM_OS_ROOT/scripts/seed_sim_environment.py"; then
+  echo "Failed to seed navigation from the active simulator environment." >&2
+  exit 1
+fi
+
 # Create a new tmux session for the local Innate runtime
 tmux new-session -d -x 240 -y 72 -s "$SESSION_NAME" -n zenoh
 
@@ -90,10 +99,8 @@ echo "Started UDP leader receiver (:9999/udp)..."
 # === Window 3: Nav + Brain ===
 # The REAL navigation stack (mode manager, router, namespaced planners, AMCL,
 # velocity smoother) -- the sim substitutes only the CUDA grid_localizer (see
-# mars_sim_driver) and seeds the maps dir with the generated apartment map so
-# the mode manager boots straight into navigation mode.
-mkdir -p ~/innate-os/data/maps
-cp ~/innate-os/sim/assets/map/sim_apartment.* ~/innate-os/data/maps/ 2>/dev/null || true
+# mars_sim_driver). seed_sim_environment.py has already installed and selected
+# the active environment pack's map for mode manager.
 tmux new-window -t "$SESSION_NAME" -n nav-brain
 tmux send-keys -t "${TMUX_TARGET_PREFIX}:nav-brain" "ros2 launch mars_nav mode_manager.launch.py" C-m
 echo "Started navigation system..."

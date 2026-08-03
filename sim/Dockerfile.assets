@@ -5,8 +5,8 @@
 # HTTPS, with no Docker. An overwrite (partial diff) or a delete (whiteout)
 # breaks that silently. Sizes compressed; uncompressed ~131 / ~63 MB:
 #
-#   /work    ~75 MB   apartment_split{,_v2}, apartment_visual, map, humans,
-#                     objects -- what VirtualMars loads (config.SIM_ASSET_UNITS)
+#   /work    ~75 MB   every host-side geometry/map root; the apartment
+#                     compatibility roots plus any environment-pack roots
 #   /viewer  ~38 MB   models, physics -- the 3D assets the webapp serves
 #
 # Two layers, in that order: sim/launcher/runtime.py reads them by position

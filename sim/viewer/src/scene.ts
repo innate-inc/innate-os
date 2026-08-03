@@ -13,11 +13,17 @@ import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
+import {
+  environmentAssetUrl,
+  isValidManifestRoom,
+  resolveEnvironmentSource,
+  type EnvironmentSource,
+  type ManifestRoom,
+} from "./environmentSource";
 import { LoadQueue, queuedGLB } from "./loadQueue";
 import { PropLibrary, type PropInfo } from "./props";
 
-const APARTMENT_URL = "/models/appartement.glb";
-const APARTMENT_MANIFEST_URL = "/models/apartment/manifest.json";
+const APARTMENT_ROOM_BASE_URL = "/models/apartment/";
 // /robot is the mars_sim ROS package itself (served straight from ros2_ws, see
 // webapp/proxy/https_server.py), so the URDF sits at its real path inside it.
 const ROBOT_URDF_URL = "/robot/urdf/mars.urdf";
@@ -28,12 +34,6 @@ interface ApartmentManifest {
   rooms: ManifestRoom[];
   total: number;
 }
-interface ManifestRoom {
-  file: string;
-  name: string;
-  bytes: number;
-  bbox: { min: number[]; max: number[] };
-}
 
 /** The apartment's wireframe skeleton: parent group (already in the scene,
  * carrying the Y-up -> Z-up rotation) plus one placeholder box per room, drawn
@@ -43,6 +43,9 @@ export interface ApartmentLayout {
   rooms: { room: ManifestRoom; box: LineSegments2 }[];
   /** No manifest: streamApartment falls back to the monolith glb. */
   monolith: boolean;
+  sceneUrl?: string;
+  roomBaseUrl?: string;
+  fingerprint?: string;
 }
 // These URDF links carry no real body geometry — just small marker spheres
 // used to visualize the end-effector / camera optical frames (e.g. in
@@ -187,6 +190,7 @@ export class SimScene {
   private robotXY: [number, number] = [0, 0];
   private hullsGroup?: THREE.Group;
   private hullsPromise?: Promise<void>;
+  private environmentSourcePromise?: Promise<EnvironmentSource>;
   private hullsVisible = false;
   // Shared fat-line material for placeholder boxes (LineBasicMaterial's
   // linewidth is ignored by WebGL). resolution is refreshed each render().
@@ -445,12 +449,14 @@ export class SimScene {
   private async loadCollisionHulls(): Promise<void> {
     const group = new THREE.Group();
     group.rotation.x = Math.PI / 2;
-    const baseUrl = "/physics/apartment_collisions_v2/";
+    const source = await this.environmentSource();
+    const baseUrl = source.collisionBaseUrl;
+    const assetUrl = (relative: string) => environmentAssetUrl(`${baseUrl}${relative}`, source.fingerprint);
     const material = this.hullMaterial;
 
     // Fast path: one binary triangle soup (float32 xyz), one fetch, no
     // parsing -- build_viewer_physics.py writes it next to the per-hull OBJs.
-    const bin = await fetch(`${baseUrl}hulls.f32`);
+    const bin = await fetch(assetUrl("hulls.f32"));
     if (bin.ok) {
       const positions = new Float32Array(await bin.arrayBuffer());
       const geometry = new THREE.BufferGeometry();
@@ -458,11 +464,11 @@ export class SimScene {
       group.add(new THREE.Mesh(geometry, material));
     } else {
       // Older bundles: fetch + parse every hull OBJ individually (slow).
-      const manifest: string[] = await (await fetch(`${baseUrl}manifest.json`)).json();
+      const manifest: string[] = await (await fetch(assetUrl("manifest.json"))).json();
       const loader = new OBJLoader();
       await Promise.all(
         manifest.map(async (filename) => {
-          const obj = await loader.loadAsync(`${baseUrl}${filename}`);
+          const obj = await loader.loadAsync(assetUrl(filename));
           obj.traverse((child) => {
             if (child instanceof THREE.Mesh) child.material = material;
           });
@@ -473,6 +479,36 @@ export class SimScene {
     group.visible = this.hullsVisible; // honor toggles made while loading
     this.hullsGroup = group;
     this.scene.add(group);
+  }
+
+  private environmentSource(): Promise<EnvironmentSource> {
+    if (!this.environmentSourcePromise) {
+      const pending = resolveEnvironmentSource().then((source) => {
+        if (source.fingerprint) {
+          const shared = globalThis as typeof globalThis & {
+            __innateSimLoadedEnvironmentFingerprint?: string;
+          };
+          shared.__innateSimLoadedEnvironmentFingerprint = source.fingerprint;
+        }
+        return source;
+      });
+      this.environmentSourcePromise = pending;
+      // A legacy fallback is deliberately not sticky: if a descriptor was only
+      // briefly absent, the next consumer probes again instead of pinning this
+      // SimScene to the apartment for its entire lifetime. Errors are likewise
+      // retryable by a later consumer (for example the collision overlay).
+      void pending.then(
+        (source) => {
+          if (!source.fingerprint && this.environmentSourcePromise === pending) {
+            this.environmentSourcePromise = undefined;
+          }
+        },
+        () => {
+          if (this.environmentSourcePromise === pending) this.environmentSourcePromise = undefined;
+        },
+      );
+    }
+    return this.environmentSourcePromise;
   }
 
   /**
@@ -488,20 +524,25 @@ export class SimScene {
     group.rotation.x = Math.PI / 2;
     this.scene.add(group);
 
+    const source = await this.environmentSource();
     let manifest: ApartmentManifest | null = null;
-    try {
-      const res = await fetch(APARTMENT_MANIFEST_URL);
-      if (res.ok) manifest = (await res.json()) as ApartmentManifest;
-    } catch {
-      /* no manifest -- fall through to the monolith */
+    if (source.mode === "split-glb" && source.manifestUrl) {
+      try {
+        const res = await fetch(environmentAssetUrl(source.manifestUrl, source.fingerprint));
+        if (res.ok) manifest = (await res.json()) as ApartmentManifest;
+      } catch {
+        /* no manifest -- fall through to the optional monolith */
+      }
     }
-    if (!manifest || !Array.isArray(manifest.rooms)) return { group, rooms: [], monolith: true };
+    if (!manifest || !Array.isArray(manifest.rooms)) {
+      return { group, rooms: [], monolith: true, sceneUrl: source.sceneUrl, fingerprint: source.fingerprint };
+    }
 
     // Skip a malformed room rather than throwing -- a bad bbox would build a
     // Box3 from Vector3(undefined) and error the whole (visual-only) session.
     const rooms = manifest.rooms
       .filter((room) => {
-        if (isValidRoom(room)) return true;
+        if (isValidManifestRoom(room)) return true;
         console.warn("[sim-viewer] skipping malformed manifest room:", room);
         return false;
       })
@@ -516,7 +557,13 @@ export class SimScene {
         group.add(box);
         return { room, box };
       });
-    return { group, rooms, monolith: false };
+    return {
+      group,
+      rooms,
+      monolith: false,
+      roomBaseUrl: source.roomBaseUrl,
+      fingerprint: source.fingerprint,
+    };
   }
 
   /**
@@ -534,8 +581,12 @@ export class SimScene {
       // bundle always ships the manifest and never the monolith, so in prod
       // this path only runs if the manifest fetch itself failed -- non-fatal,
       // the sim just runs without the visual environment (robot still works).
+      if (!layout.sceneUrl) {
+        console.error("[sim-viewer] environment unavailable (no split manifest or monolith)");
+        return;
+      }
       try {
-        const root = await queuedGLB(queue, loader, APARTMENT_URL);
+        const root = await queuedGLB(queue, loader, environmentAssetUrl(layout.sceneUrl, layout.fingerprint));
         this.dressRoom(root);
         group.add(root);
       } catch (err) {
@@ -544,8 +595,9 @@ export class SimScene {
       return;
     }
 
+    const roomBaseUrl = layout.roomBaseUrl ?? APARTMENT_ROOM_BASE_URL;
     const loadRoom = ({ room, box }: ApartmentLayout["rooms"][number]) =>
-      queuedGLB(queue, loader, `/models/apartment/${room.file}`)
+      queuedGLB(queue, loader, environmentAssetUrl(`${roomBaseUrl}${room.file}`, layout.fingerprint))
         .then((root) => {
           this.dressRoom(root);
           group.add(root);

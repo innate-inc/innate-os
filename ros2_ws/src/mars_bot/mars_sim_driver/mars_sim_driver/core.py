@@ -68,6 +68,9 @@ KD_GRIPPER = 0.0
 # still overlap ~9mm there where the real parts clear, so the sim ducks
 # to -0.25, the shallowest pose that clears.
 JOINT2_GUARD_MIN = -0.25
+# Switching environments should reuse their compiled MuJoCo worlds, while a
+# hard bound keeps apartment-sized (~168 MB) MJBs from consuming the disk.
+MODEL_CACHE_LIMIT = 3
 
 
 def joint2_min_target(joint1_target: float, full_min: float) -> float:
@@ -173,6 +176,25 @@ def _model_cache_path(xml: str, asset_files: list[Path]) -> Path:
     return ASSETS_DIR / ".model_cache" / f"world-{digest.hexdigest()[:16]}.mjb"
 
 
+def _prune_model_cache(cache_dir: Path, current: Path) -> None:
+    """Keep `current` plus the most recently used compiled worlds."""
+
+    def mtime(path: Path) -> int:
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return -1
+
+    try:
+        others = [path for path in cache_dir.glob("world-*.mjb") if path != current]
+    except OSError:
+        return
+    others.sort(key=lambda path: (mtime(path), path.name), reverse=True)
+    for stale in others[max(0, MODEL_CACHE_LIMIT - 1) :]:
+        with contextlib.suppress(OSError):
+            stale.unlink()
+
+
 def release_freed_heap() -> None:
     """Hand freed heap pages back to the OS (Linux/glibc only, no-op
     elsewhere). MjSpec.compile churns through ~0.5-1GB of scratch (qhull,
@@ -193,6 +215,8 @@ class VirtualMars:
         split_dir: Path | None = None,
         render_wh: tuple[int, int] | None = None,
         depth_render_wh: tuple[int, int] | None = None,
+        visual_dir: Path | None = None,
+        spawn_pose: tuple[float, float, float] | None = None,
     ):
         # render_wh / depth_render_wh override the offscreen render
         # resolutions (default: the camera-native CAMERA_WIDTH x
@@ -201,14 +225,19 @@ class VirtualMars:
         # rate -- and upscales at the wire; direct/notebook users keep full res.
         self._render_w, self._render_h = render_wh or (CAMERA_WIDTH, CAMERA_HEIGHT)
         self._depth_w, self._depth_h = depth_render_wh or (self._render_w, self._render_h)
-        rooms = world.find_decomposed_rooms(split_dir or ASSETS_DIR / "apartment_split_v2")
+        collision_dir = split_dir or ASSETS_DIR / "apartment_split_v2"
+        rooms = world.find_decomposed_rooms(collision_dir)
         if not rooms:
             raise RuntimeError(
-                f"no decomposed rooms under {split_dir or ASSETS_DIR} -- "
-                "run decompose_rooms.py or set VIRTUAL_MARS_ASSETS"
+                f"no decomposed rooms under {collision_dir} -- run decompose_rooms.py or set VIRTUAL_MARS_ASSETS"
             )
-        visual_dir = ASSETS_DIR / "apartment_visual"
+        visual_dir = visual_dir or ASSETS_DIR / "apartment_visual"
         visual_rooms = world.find_visual_rooms(visual_dir) if visual_dir.is_dir() else {}
+        self._spawn_x, self._spawn_y, self._spawn_yaw_degrees = spawn_pose or (
+            SPAWN_X,
+            SPAWN_Y,
+            SPAWN_YAW_DEG,
+        )
 
         # Droppable props: sidecars from the tracked source dir plus any the
         # asset bundle shipped, each parked off-map until something places it.
@@ -219,6 +248,7 @@ class VirtualMars:
             visual_rooms=visual_rooms,
             texture_max=_texture_cap(self._render_w),
             props=self.props,
+            spawn_pose=(self._spawn_x, self._spawn_y, self._spawn_yaw_degrees),
         )
         # Lidar rays hit only the textured visual meshes (true surfaces, like
         # a real lidar) when available -- without them, fall back to all
@@ -249,6 +279,9 @@ class VirtualMars:
         if cache_path.exists():
             with contextlib.suppress(Exception):  # noqa: BLE001 -- corrupt cache falls back to compiling
                 self.model = mujoco.MjModel.from_binary_path(str(cache_path))
+                # LRU: returning to an environment makes it the hottest entry.
+                with contextlib.suppress(OSError):
+                    os.utime(cache_path, None)
         if self.model is None:
             world_spec = mujoco.MjSpec.from_string(xml)
             robot_spec = world.load_robot_spec(urdf_path)
@@ -275,10 +308,8 @@ class VirtualMars:
             del world_spec, robot_spec  # spec copies of every mesh/texture
             with contextlib.suppress(OSError):
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
-                for stale in cache_path.parent.glob("world-*.mjb"):
-                    if stale != cache_path:
-                        stale.unlink(missing_ok=True)
                 mujoco.mj_saveModel(self.model, str(cache_path), None)
+                _prune_model_cache(cache_path.parent, cache_path)
         world.style_robot_geoms(self.model)
         # The planar base pins z at the plane, so the ground's 7mm contact
         # margin reads as permanent penetration -- huge normal force whose
@@ -334,9 +365,9 @@ class VirtualMars:
     def reset(self) -> None:
         self.world_epoch += 1
         mujoco.mj_resetData(self.model, self.data)
-        self.data.qpos[self._base["x"][0]] = SPAWN_X
-        self.data.qpos[self._base["y"][0]] = SPAWN_Y
-        self.data.qpos[self._base["yaw"][0]] = math.radians(SPAWN_YAW_DEG)
+        self.data.qpos[self._base["x"][0]] = self._spawn_x
+        self.data.qpos[self._base["y"][0]] = self._spawn_y
+        self.data.qpos[self._base["yaw"][0]] = math.radians(self._spawn_yaw_degrees)
         for qadr, _dadr, home in self._joints.values():
             self.data.qpos[qadr] = home
         mq, _md, source, mult = self._mimic

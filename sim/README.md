@@ -173,6 +173,47 @@ If something stops you anyway, we want to hear about it —
 ./innate-sim clean       # remove containers/volumes (keeps .env + config)
 ```
 
+### Environment packs
+
+The apartment is the default **environment pack**. Select a pack when the
+simulator starts:
+
+```bash
+./innate-sim up --environment apartment
+```
+
+For a persistent default, set it in `sim/config.toml`:
+
+```toml
+[simulation]
+environment = "apartment"
+```
+
+Each tracked manifest in `sim/environments/<name>.json` binds one coherent
+world across all four consumers:
+
+- MuJoCo collision and visual meshes under `sim/assets/`
+- either a self-contained browser GLB or a progressively loaded room manifest,
+  plus its collision overlay, under `sim/viewer/public/`
+- the Nav2 map YAML and image under `sim/assets/`
+- the robot's initial x/y/yaw pose
+
+At launch, the selected manifest and the installed OCI work/viewer layer
+digests are fingerprinted and written to
+`sim/assets/.active-environment.json`. The host world server, browser proxy,
+and in-container Nav2 startup all use that same descriptor. If the selection
+or its assets change while the stack is running, `up` restarts the world and
+ROS session together instead of mixing two environments.
+
+To add a pack, export its scene in meters with glTF's Y-up convention, produce
+the MuJoCo geometry and Nav2 map, add those outputs to the layered asset-image
+pipeline, and add one manifest. The launcher, browser routing, and ROS startup
+need no pack-specific branch. Use `viewer.type = "glb"` with `model` for a
+self-contained GLB, or `viewer.type = "split-glb"` with `manifest` and
+`base_dir` for progressive room loading. External textures or custom runtime
+scene code must be baked into those assets. Preserve the source environment's
+license and attribution in the manifest.
+
 ## Build skills and agents
 
 The simulator shares the repository's [`workspace/`](../workspace/) with the

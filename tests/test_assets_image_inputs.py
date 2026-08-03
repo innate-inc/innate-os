@@ -12,6 +12,7 @@ config.compute_assets_image_inputs_hash, so there is no second copy.)
 
 import fnmatch
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -28,10 +29,11 @@ DOCKERIGNORE = REPO_ROOT / "sim" / "Dockerfile.assets.dockerignore"
 
 @pytest.mark.skipif(not DOCKERIGNORE.is_file(), reason="asset dockerignore not present")
 def test_dockerignore_admits_exactly_the_work_subtrees():
-    """EQUALITY with SIM_ASSET_UNITS, not coverage -- load-bearing: config.py is
-    not itself a hashed input, so this test is what forces every unit-list
-    change through the dockerignore, which IS hashed. A subset check would let
-    a removal shrink /work while the content-addressed tag stayed put.
+    """Every compatibility unit and manifest-selected pack root reaches /work.
+
+    Runtime installs work roots generically, so a new environment must not also
+    need a launcher constant edit. The tracked manifest supplies its roots;
+    this equality check still rejects stale/unaccounted dockerignore entries.
     """
     import config
 
@@ -41,8 +43,19 @@ def test_dockerignore_admits_exactly_the_work_subtrees():
         if line.startswith("!sim/assets/")
     }
     expected = set(config.SIM_ASSET_UNITS)
+    for manifest_path in (REPO_ROOT / "sim/environments").glob("*.json"):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for section, keys in (
+            ("physics", ("collision_dir", "visual_dir")),
+            ("navigation", ("map_yaml", "map_image")),
+        ):
+            values = manifest.get(section, {})
+            for key in keys:
+                value = values.get(key) if isinstance(values, dict) else None
+                if isinstance(value, str) and value:
+                    expected.add(value.split("/", 1)[0])
     assert admitted == expected, (
-        f"{DOCKERIGNORE.name} admits {sorted(admitted)} but config.SIM_ASSET_UNITS is "
+        f"{DOCKERIGNORE.name} admits {sorted(admitted)} but the compatibility and environment roots are "
         f"{sorted(expected)}.\n"
         f"  missing (seeded but invisible to docker): {sorted(expected - admitted) or 'none'}\n"
         f"  stale (admitted but no longer seeded):    {sorted(admitted - expected) or 'none'}"

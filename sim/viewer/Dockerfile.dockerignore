@@ -17,6 +17,7 @@
 !sim/viewer/tsconfig.json
 !sim/viewer/vite.lib.config.ts
 !sim/viewer/src/**
+!sim/viewer/test/**
 
 **/__pycache__/**
 **/.DS_Store

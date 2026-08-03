@@ -4,8 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import subprocess
 import sys
+import time
+from pathlib import Path
 
 if sys.version_info < (3, 10):  # noqa: UP036
     print("Error: the Innate launcher requires Python 3.10 or newer.", file=sys.stderr)
@@ -38,9 +42,12 @@ from dashboard import (
     print_status,
     watch_dashboard,
 )
+from environment import ACTIVE_ENVIRONMENT_FILENAME, EnvironmentPack, activate_environment, select_environment
 from runtime import (
+    assets_image_ref,
     capture_os_brain_logs,
     clean_runtime,
+    collect_os_process_status,
     collect_status_snapshot,
     down_os,
     ensure_docker_available,
@@ -57,7 +64,10 @@ from runtime import (
     print_startup_checks,
     refuse_if_ports_taken,
     remove_superseded_containers,
+    ros_environment_is_current,
     runtime_already_running,
+    sim_assets_install_is_current,
+    stop_os_session,
     stop_world_server,
     tail_file,
     wait_for_os_runtime_ready,
@@ -99,17 +109,86 @@ def show_runtime_dashboard(config: dict[str, object], *, watch: bool) -> None:
         print_status(config, dashboard_callbacks(), DASHBOARD_OPTIONS)
 
 
+def _active_environment_identity(config: dict[str, object]) -> tuple[str, str] | None:
+    """The pack currently shared by physics, the viewer, and Nav2, if known."""
+    sim_repo = Path(config["sim_repo"])  # type: ignore[arg-type]
+    descriptor_path = sim_repo / "assets" / ACTIVE_ENVIRONMENT_FILENAME
+    try:
+        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(descriptor, dict) or descriptor.get("schema_version") != 1:
+        return None
+    environment_id = descriptor.get("id")
+    fingerprint = descriptor.get("fingerprint")
+    if not isinstance(environment_id, str) or not environment_id.strip():
+        return None
+    if not isinstance(fingerprint, str) or not fingerprint.strip():
+        return None
+    return environment_id, fingerprint
+
+
+def _environment_assets_are_current(
+    config: dict[str, object],
+    pack: EnvironmentPack,
+    active_identity: tuple[str, str] | None,
+) -> bool:
+    """Whether an asset install can take the no-mutation warm path safely."""
+    if active_identity != (pack.id, pack.fingerprint):
+        return False
+    # A content-addressed ref change may name a different layer even though the
+    # descriptor still matches what is installed. The mutable override is
+    # deliberately probed on every run, so it can never promise a warm path.
+    if os.environ.get("INNATE_SIM_ASSETS_IMAGE", "").strip():
+        return False
+    expected_ref = assets_image_ref(config)
+    if not sim_assets_install_is_current(config):
+        return False
+    try:
+        viewer_marker = (pack.viewer_public_root / ".installed-tag").read_text(encoding="utf-8").split()
+    except (OSError, UnicodeError):
+        return False
+    if viewer_marker[1:2] != [expected_ref]:
+        return False
+    try:
+        pack.validate_assets()
+    except StackError:
+        return False
+    return True
+
+
+def _stop_local_world_before_asset_refresh() -> None:
+    """Stop only this checkout's world, and prove it released the shared port."""
+    stop_world_server()
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if not world_server_running():
+            return
+        time.sleep(0.1)
+    raise StackError(
+        "A host world server is still running after this checkout asked it to stop. "
+        "Refusing to replace simulator assets underneath a live physics process."
+    )
+
+
 def cmd_up(
     config: dict[str, object],
     *,
     watch: bool = SHOW_LIVE_DASHBOARD_DEFAULT,
     offline: bool = False,
+    environment: str | None = None,
 ) -> None:
     started = False
     try:
+        # Parse the manifest before touching Docker or downloading anything, so
+        # an unknown/malformed selection fails quickly. It is reloaded after
+        # asset installation because the installed layer digests participate
+        # in the runtime fingerprint.
+        pack = select_environment(config, environment)
         # Banner before any probe: a wedged Docker daemon must never leave
         # the user staring at a blank terminal.
         print_banner()
+        log(f"Environment: {pack.display_name} ({pack.id})")
         ensure_docker_available(command_hint=f"{CLI_SIM} up")
         ensure_uv_available()  # the sim world always runs on the host via uv
         report_configured_keys(config)
@@ -121,24 +200,33 @@ def cmd_up(
         # exactly what an upgrade from a still-running older stack leaves
         # behind -- and one of them holds the ports this stack needs.
         remove_superseded_containers()
-        if runtime_already_running(config):
-            # A code update can leave a stale world server running (frozen
-            # 3D view); ensure_world_server restarts it.
-            ensure_world_server(config)
-            log("Innate sim runtime is already running. Opening dashboard...")
-            show_runtime_dashboard(config, watch=watch)
-            return
         refuse_if_ports_taken()
 
-        os_env_file = build_os_env(config)
+        # Replacing installed layer subtrees while ROS or MuJoCo is reading
+        # them can briefly mix the previous world with the next one. Preserve
+        # the healthy warm path, but quiesce a partial session or any stack
+        # whose selected pack/assets no longer match before touching the tree.
+        active_identity = _active_environment_identity(config)
+        os_status = collect_os_process_status(config)
+        os_session_running = bool(os_status["os_session_running"])
+        reusable_runtime = runtime_already_running(config) if os_session_running else False
+        asset_refresh_needed = not _environment_assets_are_current(config, pack, active_identity)
+        quiesce_consumers = asset_refresh_needed or (os_session_running and not reusable_runtime)
+        if quiesce_consumers:
+            started = True  # any later failure tears down the now-partial stack
+            if os_session_running:
+                log("Stopping the current ROS session before reconciling environment assets...")
+                stop_os_session(config)
+            if world_server_running():
+                log("Stopping the physics world before reconciling environment assets...")
+                _stop_local_world_before_asset_refresh()
+
         if offline:
-            log("Offline: skipping sim/skill asset downloads.")
+            log("Offline: skipping sim asset downloads.")
         else:
             try:
                 with live_step("assets", "Downloading the world geometry", "world geometry"):
                     ensure_sim_assets(config)
-                with live_step("skills", "Downloading the skill assets", "skill assets"):
-                    ensure_skill_assets(config)
             except StackError as exc:
                 raise StackError(
                     f"{exc}\n\n"
@@ -149,10 +237,69 @@ def cmd_up(
             ensure_viewer_public_assets(config)
         with live_step("bundle", "Fetching the 3D viewer bundle", "3D viewer bundle"):
             ensure_sim_viewer_bundle(config, offline=offline)
-        with live_step("world", "Starting the physics world", "physics world"):
-            config["world_endpoint"] = ensure_world_server(config)
 
+        # Layer markers may have changed in the calls above. Reload before
+        # activating so every consumer receives the fingerprint of the bytes
+        # that are actually installed, not the pre-download snapshot.
+        pack = select_environment(config, pack.id)
+        environment_changed = activate_environment(pack)
+        # From here on an error fails closed: do not leave an old ROS session
+        # connected to a replaced world or a newly selected Nav2 map.
         started = True
+
+        if runtime_already_running(config):
+            ros_needs_refresh = environment_changed or not ros_environment_is_current(config)
+            if ros_needs_refresh:
+                if environment_changed:
+                    log(f"Switching the running simulator to {pack.display_name}...")
+                else:
+                    log("Refreshing the ROS sim session to match the selected environment...")
+                stop_os_session(config)
+
+            with live_step("world", "Reconciling the physics world", "physics world"):
+                endpoint, world_restarted = ensure_world_server(config)
+            config["world_endpoint"] = endpoint
+            if ros_needs_refresh or world_restarted:
+                if world_restarted and not ros_needs_refresh:
+                    log("Refreshing the ROS sim session to match the physics world...")
+                    stop_os_session(config)
+                os_env_file = build_os_env(config)
+                with live_step("os", "Refreshing the Innate OS session", "Innate OS session"):
+                    ensure_os_container(config, os_env_file, offline=offline)
+                with live_step(
+                    "brain", "Waiting for the refreshed ROS bridge and brain client", "ROS bridge and brain client"
+                ) as step:
+                    step.ok = wait_for_os_runtime_ready(config, timeout_seconds=120.0)
+                if not step.ok:
+                    raise StackError(
+                        "The ROS session did not become ready after switching environments.\n"
+                        f"Recent OS log output:\n{tail_file(OS_SESSION_LOG_PATH, limit=80)}"
+                    )
+                with live_step("sim", "Waiting for the refreshed sim driver (/odom)", "sim driver (/odom)") as step:
+                    step.ok = wait_for_virtual_mars(config)
+                if not step.ok:
+                    raise StackError(
+                        "The sim driver did not publish /odom after switching environments.\n"
+                        f"Recent OS log output:\n{tail_file(OS_SESSION_LOG_PATH, limit=80)}"
+                    )
+            log("Innate sim runtime is already running. Opening dashboard...")
+            show_runtime_dashboard(config, watch=watch)
+            return
+
+        os_env_file = build_os_env(config)
+        if not offline:
+            try:
+                with live_step("skills", "Downloading the skill assets", "skill assets"):
+                    ensure_skill_assets(config)
+            except StackError as exc:
+                raise StackError(
+                    f"{exc}\n\n"
+                    "This step needs internet access. Re-run with a connection, or re-run "
+                    f"`{CLI_SIM} up --offline` to start with whatever is already downloaded."
+                ) from exc
+        with live_step("world", "Starting the physics world", "physics world"):
+            config["world_endpoint"], _world_restarted = ensure_world_server(config)
+
         try:
             with live_step("os", "Starting the Innate OS container", "Innate OS container"):
                 ensure_os_container(config, os_env_file, offline=offline)
@@ -350,6 +497,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run without network: skip skill asset downloads, and reuse already-built Docker images instead of pulling/building",
     )
+    up_parser.add_argument(
+        "--environment",
+        metavar="NAME",
+        default=None,
+        help="Select a named environment pack for this launch (default: config or apartment)",
+    )
     sim_subparsers.add_parser(
         "down",
         prog=f"{CLI_SIM} down",
@@ -358,7 +511,7 @@ def build_parser() -> argparse.ArgumentParser:
     sim_subparsers.add_parser(
         "assets",
         prog=f"{CLI_SIM} assets",
-        help="Download/refresh the sim asset bundle only (no Docker) -- for VirtualMars/notebook use",
+        help="Download/refresh simulator environment assets (no Docker unless reconciling a running stack)",
     )
     clean_parser = sim_subparsers.add_parser(
         "clean",
@@ -429,6 +582,7 @@ def main() -> int:
                 config,
                 watch=not args.once,
                 offline=args.offline,
+                environment=args.environment,
             )
         elif args.sim_command == "down":
             ensure_docker_available(command_hint=f"{CLI_SIM} down")
@@ -439,12 +593,46 @@ def main() -> int:
             # world server IS running, reconcile it like `up` would -- its
             # MuJoCo model was compiled from the previous bundle, and leaving
             # it serving stale collision physics is worse than a restart.
+            # The command has no --environment flag: while a stack is live,
+            # refresh the pack it is actually using (including a one-launch
+            # CLI override), never the configured/default pack by accident.
+            refuse_if_another_checkout_is_running()
+            active_identity = _active_environment_identity(config)
+            os_status = collect_os_process_status(config)
+            os_session_was_running = bool(os_status["os_session_running"])
+            world_was_running = world_server_running()
+            active_environment_id = (
+                active_identity[0] if active_identity and (os_session_was_running or world_was_running) else None
+            )
+            pack = select_environment(config, active_environment_id)
+
+            # `assets` explicitly refreshes install trees. Stop every local
+            # consumer first, even if the ROS session is only partially healthy.
+            if os_session_was_running:
+                stop_os_session(config)
+            if world_was_running:
+                _stop_local_world_before_asset_refresh()
+
             ensure_sim_assets(config)
-            # A refresh replaces the geometry under a running world server, so
-            # reconcile it.
-            if world_server_running():
-                ensure_world_server(config)
-            success("Sim assets are in place (sim/assets).")
+            ensure_viewer_public_assets(config)
+            pack = select_environment(config, pack.id)
+            activate_environment(pack)
+
+            # Restore exactly the consumers that were live before the refresh.
+            # A ROS session always needs its matching world endpoint and reseeds
+            # Nav2 from the newly activated descriptor during launch.
+            if world_was_running or os_session_was_running:
+                config["world_endpoint"], _world_restarted = ensure_world_server(config)
+                if os_session_was_running:
+                    ensure_os_container(config, build_os_env(config))
+                    if not wait_for_os_runtime_ready(config, timeout_seconds=120.0) or not wait_for_virtual_mars(
+                        config
+                    ):
+                        raise StackError(
+                            "The ROS session did not become ready after refreshing simulator environment assets.\n"
+                            f"Recent OS log output:\n{tail_file(OS_SESSION_LOG_PATH, limit=80)}"
+                        )
+            success("Simulator environment assets are in place.")
         elif args.sim_command == "clean":
             ensure_docker_available(command_hint=f"{CLI_SIM} clean")
             cmd_clean(config, assume_yes=args.yes)

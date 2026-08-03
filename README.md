@@ -281,6 +281,11 @@ cd innate-os && ./innate-sim up
 
 The terminal opens a live dashboard, and the robot webapp at [https://localhost](https://localhost) is the sim UI -- drive and operate the simulated MARS exactly like a real one, with a live 3D view instead of camera streams.
 
+The world is selected at launch through an environment pack. The apartment is
+the default; use `./innate-sim up --environment <name>` to switch to another
+installed pack. See [`sim/README.md`](sim/README.md#environment-packs) for the
+pack contract and how to add one without changing simulator code.
+
 ```bash
 ./innate-sim status         # show current runtime state
 ./innate-sim sh             # open a shell inside the ROS container

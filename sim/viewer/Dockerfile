@@ -28,7 +28,8 @@ COPY sim/viewer/package.json sim/viewer/package-lock.json ./
 RUN npm ci
 COPY sim/viewer/tsconfig.json sim/viewer/vite.lib.config.ts ./
 COPY sim/viewer/src ./src
-RUN npm run build:lib
+COPY sim/viewer/test ./test
+RUN npm run typecheck && npm run test:environment && npm run build:lib
 
 FROM scratch
 COPY --from=bundle /viewer/dist-lib /bundle
