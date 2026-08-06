@@ -67,6 +67,9 @@ class BrainClientNode(Node):
         # speech plays through the robot's own speaker and nothing is published
         # here — a client playing it too would double the voice.
         self.tts_audio_pub = self.create_publisher(String, "/tts/audio", 10)
+        # Echo reference for barge-in detection: the PCM being piped to the
+        # speaker, published chunk-by-chunk as it plays (hardware mode only).
+        self.tts_ref_pub = self.create_publisher(String, "/tts/ref_audio", 50)
         self.memory_positions_pub = self.create_publisher(String, "/brain/memory_positions", 10)
         # Live agent state, so clients see a stop/start/directive change made
         # from another device without polling get_available_directives (see
@@ -132,6 +135,7 @@ class BrainClientNode(Node):
             proxy=self._proxy,
             tts_status_pub=self.tts_status_pub,
             tts_audio_pub=self.tts_audio_pub,
+            tts_ref_pub=self.tts_ref_pub,
             simulator_mode=self.config.simulator_mode,
         )
         if handler.is_available():
@@ -259,6 +263,7 @@ class BrainClientNode(Node):
         self.create_subscription(String, "/brain/chat_in", self._on_chat_in, 10)
         self.create_subscription(String, "/input_manager/custom", self._on_custom_input, 10)
         self.create_subscription(String, "/brain/tts", self._on_tts, 10)
+        self.create_subscription(String, "/barge_in", self._on_barge_in, 10)
         self.create_subscription(String, "/brain/set_directive", lambda m: self.lifecycle.set_directive(m.data), 10)
         self.create_subscription(String, "/brain/set_active_skills", self._on_set_active_skills, 10)
         self.create_subscription(String, "/brain/manual_skill_event", self._on_manual_skill_event, 10)
@@ -310,6 +315,10 @@ class BrainClientNode(Node):
 
     # ================= always-on subscription callbacks =================
     def _on_chat_in(self, msg: String) -> None:
+        # the user spoke: release a post-barge-in TTS hold so the reply to
+        # their words is voiced
+        if self._tts_handler is not None:
+            self._tts_handler.clear_hold()
         try:
             data = json.loads(msg.data)
         except (json.JSONDecodeError, TypeError):
@@ -355,6 +364,12 @@ class BrainClientNode(Node):
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
             self.chat.speak(text)
+
+    def _on_barge_in(self, msg: String) -> None:
+        """A human spoke over the robot: cut the current utterance short."""
+        if self._tts_handler is not None:
+            self.get_logger().info(f"🙋 Barge-in: {msg.data[:120]}")
+            self._tts_handler.stop_current(reason="barge_in")
 
     def _on_set_active_skills(self, msg: String) -> None:
         """Update which primitives are registered for the current directive."""

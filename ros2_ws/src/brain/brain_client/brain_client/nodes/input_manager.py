@@ -13,6 +13,7 @@ from __future__ import annotations
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
+from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, String
 from std_srvs.srv import SetBool
 
@@ -31,10 +32,21 @@ class InputManagerNode(Node):
 
         self.chat_in_pub = self.create_publisher(String, "/brain/chat_in", 10)
         self.custom_pub = self.create_publisher(String, "/input_manager/custom", 10)
-        self.manager = InputDeviceManager(self, proxy, chat_in_pub=self.chat_in_pub, custom_pub=self.custom_pub)
+        self.barge_in_pub = self.create_publisher(String, "/barge_in", 10)
+        self.manager = InputDeviceManager(
+            self,
+            proxy,
+            chat_in_pub=self.chat_in_pub,
+            custom_pub=self.custom_pub,
+            barge_in_pub=self.barge_in_pub,
+        )
 
         self.create_subscription(String, "/input_manager/active_inputs", self._on_active_inputs, 10)
         self.create_subscription(String, "/tts/is_playing", self._on_tts_status, 10)
+        self.create_subscription(String, "/tts/ref_audio", self._on_tts_ref, 50)
+        # Servo motion is loud at the gripper mic (measured -23 dBFS vs -50
+        # floor) and is not in the TTS reference; barge-in must ignore it.
+        self.create_subscription(JointState, "/joint_states", self._on_joint_state, 10)
         self.create_service(SetBool, "/input_manager/set_input_active", self._svc_set_input_active)
 
         mic_state_qos = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
@@ -48,11 +60,25 @@ class InputManagerNode(Node):
         self.declare_parameter("openai_realtime_url", "wss://api.openai.com/v1/realtime")
         self.declare_parameter("openai_transcribe_model", "gpt-4o-mini-transcribe")
         self.declare_parameter("cartesia_voice_id", "9fdaae0b-f885-4813-b589-3c07cf9d5fea")
+        self.declare_parameter("barge_in_enabled", True)
+        self.declare_parameter("barge_in_threshold_db", 6.0)
+        self.declare_parameter("barge_in_min_ms", 150)
+        self.declare_parameter("barge_in_flush_tail", False)
+        self.declare_parameter("barge_in_model_path", "")
+        self.declare_parameter("barge_in_reverb_decay", 0.87)
+        self.declare_parameter("barge_in_debug_dir", "")
         proxy_config = {
             "openai_realtime_model": self.get_parameter("openai_realtime_model").value,
             "openai_realtime_url": self.get_parameter("openai_realtime_url").value,
             "openai_transcribe_model": self.get_parameter("openai_transcribe_model").value,
             "cartesia_voice_id": self.get_parameter("cartesia_voice_id").value,
+            "barge_in_enabled": self.get_parameter("barge_in_enabled").value,
+            "barge_in_threshold_db": self.get_parameter("barge_in_threshold_db").value,
+            "barge_in_min_ms": self.get_parameter("barge_in_min_ms").value,
+            "barge_in_flush_tail": self.get_parameter("barge_in_flush_tail").value,
+            "barge_in_model_path": self.get_parameter("barge_in_model_path").value,
+            "barge_in_reverb_decay": self.get_parameter("barge_in_reverb_decay").value,
+            "barge_in_debug_dir": self.get_parameter("barge_in_debug_dir").value,
         }
         try:
             proxy = ProxyClient(config=proxy_config)
@@ -69,6 +95,12 @@ class InputManagerNode(Node):
 
     def _on_tts_status(self, msg: String) -> None:
         self.manager.handle_tts_status(msg.data)
+
+    def _on_tts_ref(self, msg: String) -> None:
+        self.manager.handle_tts_ref(msg.data)
+
+    def _on_joint_state(self, msg: JointState) -> None:
+        self.manager.handle_joint_state(msg.position)
 
     def _on_mic_enabled(self, msg: Bool) -> None:
         self.manager.set_mic_enabled(msg.data)

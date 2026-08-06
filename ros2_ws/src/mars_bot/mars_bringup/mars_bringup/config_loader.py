@@ -188,6 +188,9 @@ _SETTINGS_DOUBLE_KEYS = frozenset(
         "vertical_fov",
         "pose_image_interval",
         "scan_stale_after_sec",
+        # input_manager_node (barge-in)
+        "barge_in_threshold_db",
+        "barge_in_reverb_decay",
         # uninavid_node
         "forward_speed",
         "turn_speed",

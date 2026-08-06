@@ -84,6 +84,11 @@ done
 amixer -c "$ARDUCAM_CARD" sset Capture 100% cap unmute 2>/dev/null && \
     echo "  ✓ Set Capture to 100% and enabled" || true
 
+# Note: the mic clips at 100% while the robot speaks (speaker-to-mic coupling
+# puts TTS peaks past full scale). The voice input ducks the capture gain to
+# 50% during TTS and restores it after (micro_input._set_capture_gain), so the
+# boot default stays 100% for STT sensitivity.
+
 # -----------------------------------------------------------------------------
 # Step 3: Save ALSA settings
 # -----------------------------------------------------------------------------

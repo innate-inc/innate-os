@@ -219,6 +219,18 @@
 #   ros__parameters:
 #     openai_realtime_model: "gpt-4o-realtime-preview"
 #     openai_transcribe_model: "gpt-4o-mini-transcribe"
+#     Barge-in — stop speaking when a human talks over the robot. Defaults are
+#     measured on MARS; retune per robot/room from the traces barge_in_debug_dir
+#     writes (one npz per utterance). Raise threshold/min_ms if the robot cuts
+#     itself off, lower them if it ignores you.
+#     barge_in_enabled: true        # false disables detection entirely
+#     barge_in_threshold_db: 6.0    # residual-over-predicted-echo (top-5 bands) to count a frame as speech
+#     barge_in_min_ms: 150          # cumulative speech evidence before triggering
+#     barge_in_reverb_decay: 0.87   # per-frame echo decay; measure from room tails (higher = longer tail)
+#     barge_in_tts_mic_percent: 50  # capture gain while speaking, to stop the mic clipping (100 = never duck)
+#     barge_in_model_path: ""       # npz from scripts/audio/train_echo_model.py; empty = adaptive gains only
+#     barge_in_debug_dir: ""        # write per-utterance detector traces here for tuning
+#     barge_in_flush_tail: false    # replay post-trigger mic audio to STT (experimental, unvalidated)
 
 # ── Vision-language navigation (UniNavid) ─────────────────────────────
 # (The cloud endpoint URL is connectivity and lives in .env as UNINAVID_WS_URL.)

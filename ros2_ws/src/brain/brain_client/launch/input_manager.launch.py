@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from mars_bringup.config_loader import get_env, load_env_file, settings_params
@@ -41,8 +41,18 @@ def generate_launch_description():
         description="Cartesia Alfred voice id",
     )
 
+    # Barge-in detection runs many tiny matrix ops per audio frame. Multi-threaded
+    # BLAS spends far more on thread hand-off than on the arithmetic (measured
+    # 6.0ms vs 0.47ms per call on the Orin) and grabs every core while doing it.
+    # This node has no large linear algebra, so pin BLAS to one thread.
+    blas_single_thread = [
+        SetEnvironmentVariable(name=var, value="1")
+        for var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
+    ]
+
     return LaunchDescription(
         env_vars
+        + blas_single_thread
         + [
             openai_realtime_model_arg,
             openai_realtime_url_arg,

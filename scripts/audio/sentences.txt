@@ -1,0 +1,63 @@
+# Training corpus for the barge-in echo model. One sentence per line.
+# Mix of lengths, phonetics, questions/statements — spoken by the robot's own
+# TTS voice during collection, so the model learns the deployed voice.
+Hello there, I am MARS, your household robot assistant.
+The kitchen counter is clear and the dishwasher has finished its cycle.
+Would you like me to check the front door camera for you?
+I found three objects on the living room floor that were not there this morning.
+Navigation to the charging dock will take approximately forty five seconds.
+My battery is at sixty two percent and holding steady.
+The quick brown fox jumps over the lazy dog while the zebra watches quietly.
+She sells seashells by the seashore on sunny summer Saturdays.
+Peter Piper picked a peck of pickled peppers from the pantry shelf.
+I can bring you the remote control if you tell me where you left it.
+Warning, my arm is currently holding a fragile object, please do not bump me.
+The weather forecast predicts light rain this afternoon with clearing skies by evening.
+Once upon a time, in a small apartment, there lived a curious little robot.
+Seventeen, twenty three, forty one, sixty eight, ninety nine, one hundred twelve.
+Could you please repeat that? I did not quite catch what you said.
+Initializing systems check: cameras online, lidar spinning, arm calibrated, wheels ready.
+I noticed the plant by the window looks dry; shall I remind you to water it?
+That song you were humming earlier has been stuck in my processor all day.
+Autonomous mode engaged. I will patrol the hallway and report anything unusual.
+The recipe calls for two cups of flour, one egg, and a pinch of salt.
+My apologies, I bumped the chair while turning; no damage detected.
+Absolutely! Right away! No problem at all! Consider it done!
+Hmm, let me think about that for a moment before I answer.
+Zero point five meters forward, then a ninety degree turn to the left.
+The umbrella is in the closet, behind the vacuum cleaner, next to the boots.
+Charging complete. All systems nominal. Ready for the day ahead.
+Did you know that octopuses have three hearts and blue blood?
+I will wait here quietly until you need me again.
+Error code four oh four: the snack you requested could not be found.
+Good morning! You have two reminders today: dentist at noon and groceries at five.
+The living room lights are now dimmed to thirty percent brightness.
+Please stand clear while I rotate my base to face the doorway.
+Whispering quietly now, because the baby is sleeping in the next room.
+THIS IS MY LOUD ANNOUNCEMENT VOICE FOR IMPORTANT ALERTS AND WARNINGS.
+Bananas, apples, oranges, grapes, strawberries, blueberries, and one very ripe mango.
+The thermostat reads twenty one degrees celsius, which is within your preferred range.
+Somebody rang the doorbell while you were out; I saved the camera footage.
+Rain drums softly on the window as the afternoon fades into evening.
+Twelve times twelve is one hundred and forty four, an easy one.
+I am backing up slowly, beep, beep, beep, just like a delivery truck.
+Your package was delivered at three fifteen and I watched the courier leave.
+Let us play a game: I spy with my little camera something that is red.
+Systems report: motor temperatures normal, network latency low, all services healthy.
+The novel on your nightstand has a bookmark at chapter seventeen.
+Shhh, I heard a strange noise coming from the laundry room just now.
+Congratulations on finishing your project! Shall we celebrate with some music?
+My vocabulary includes over fifty thousand words, though I rarely use xylophone.
+Turning left in three, two, one, and we have arrived at the kitchen.
+A gentle reminder that your video call starts in fifteen minutes.
+The floor near the sink is wet; please be careful where you step.
+Quantum computing, photosynthesis, archaeology, bureaucracy, onomatopoeia, and rhythm.
+I have finished tidying the toys into the basket by the bookshelf.
+Is there anything else you would like me to do before I dock for the night?
+The sunset today painted the wall a remarkable shade of orange.
+Breaking news from the hallway: the cat has claimed my charging dock again.
+One, two, three, four, five, six, seven, eight, nine, ten.
+My favorite color is the exact blue of a clear October sky.
+Recalibrating my arm joints now; this will take about thirty seconds.
+Thank you for your patience while I processed that rather long request.
+Every good boy deserves fudge, and every good robot deserves a firmware update.
