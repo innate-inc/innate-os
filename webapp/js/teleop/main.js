@@ -17,6 +17,7 @@ import { WebRtcSession } from "../webrtcSession.js";
 import { robotSessionFactory } from "../robotSession.js";
 import { mountPage } from "../pageMount.js";
 import { createVideoStage, createAudioToggle } from "./videoStage.js";
+import { createTrajectoryOverlay } from "./trajectoryOverlay.js";
 import { createJoystick } from "./joystick.js";
 import { createKeyboardDrive, createWasdChips } from "./keyboardDrive.js";
 import { createHeadTilt } from "./headTilt.js";
@@ -62,7 +63,10 @@ function buildCockpit(root) {
   const session = createSession();
   dbg.session = session;
 
-  const videoStage = createStage ? createStage(root, session) : createVideoStage(root, session);
+  // realVideo is the WebRTC stage on physical robots, null when the sim's
+  // Three.js stage takes over — parts that need the head camera key off it.
+  const realVideo = createStage ? null : createVideoStage(root, session);
+  const videoStage = realVideo ?? /** @type {NonNullable<typeof createStage>} */ (createStage)(root, session);
 
   const telemetryOverlay = config.simControls ? null : overlay("overlay-top-left telemetry-overlay");
   const rightRail = overlay("overlay-right");
@@ -101,6 +105,11 @@ function buildCockpit(root) {
     createCameraSwitch(root, session, ros),
     keyboard,
   );
+  // Real video stage only: the sim's Three.js stage isn't the head camera, so
+  // the calibrated ground-ribbon projection would land nowhere meaningful.
+  if (realVideo) {
+    parts.push(createTrajectoryOverlay(realVideo.el, realVideo.videoEl, rightRail, ros, session));
+  }
 
   session.start();
 
