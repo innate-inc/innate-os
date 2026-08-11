@@ -48,9 +48,10 @@ export function mountPage(stage, viewClass, buildView) {
     ros.connect(target);
   }
 
-  // Keep the view up through connecting / connected / reconnecting — the header
-  // badge carries the link status. Only a fail-fast "disconnected" (a first
-  // connect that never opened, or the idle laptop-dev state) shows the card.
+  // Keep the view up through connecting / connected / reconnecting — transient
+  // drops self-heal via rosClient while each panel shows its own loading state.
+  // Only a fail-fast "disconnected" (a first connect that never opened, or the
+  // idle laptop-dev state) shows the card.
   const unsubState = ros.onStateChange((state) => {
     const failed = state === "disconnected";
     connectLayer.hidden = !failed;

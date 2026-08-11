@@ -48,4 +48,21 @@ test("settings is footer-only and survives the sim filter", () => {
   assert.ok(SIM_SECTIONS.has("settings"));
 });
 
+// Synthetic roster: today's GROUPS ends with its labeled groups, so only this
+// fixture reaches the labeled→unlabeled boundary (a plain divider) and the
+// unlabeled→unlabeled one (none).
+test("divider rules hold on boundaries the real roster never hits", () => {
+  /** @param {string} key */
+  const sec = (key) => ({ key, label: key, icon: "" });
+  const groups = [
+    { label: "A", sections: [sec("a")] },
+    { label: null, sections: [sec("b")] },
+    { label: null, sections: [sec("c")] },
+    { label: "D", sections: [] },
+    { label: "E", sections: [sec("e")] },
+  ];
+  assert.equal(fingerprint(railRows(groups, null)), "a | b c |E e");
+  assert.equal(fingerprint(railRows(groups, new Set(["b", "c"]))), "b c");
+});
+
 console.log(`\n${passed} passed`);

@@ -131,7 +131,9 @@ function dismissBootSplash() {
 function navigate(href) {
   const url = new URL(href, location.origin);
   const route = routeFor(url.pathname);
-  if (route.key === currentKey && url.search === location.search) return;
+  // Dedupe on the path, not the route key: /brain shares Agent's key, but a
+  // /brain link clicked from /agent must still render so the monitor opens.
+  if (normalize(url.pathname) === normalize(location.pathname) && url.search === location.search) return;
   history.pushState({}, "", url.pathname + url.search);
   void render(route);
 }
@@ -171,8 +173,8 @@ if (connectTarget) {
   // pages with no connect card (settings, profiling) on a refresh or deep link
   // while the robot is momentarily unreachable. So retry the initial-connect-failed
   // case here, debounced so a refused connection can't spin, and only until we've
-  // connected once: after that, drops self-heal via rosClient, and an explicit
-  // disconnect (header badge) or a manual connect from teleop's panel is respected.
+  // connected once: after that, drops self-heal via rosClient, and a manual
+  // connect from teleop's panel is respected.
   let everConnected = false;
   /** @type {number | null} */
   let connectRetry = null;

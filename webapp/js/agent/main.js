@@ -26,7 +26,6 @@ import { createCameraSwitch } from "../teleop/cameraSwitch.js";
 import { createAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
-import { createBrainMonitor } from "../brain/main.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
 // marks a sim deployment — used here to drop the (absent) battery readout. Fetched
@@ -78,17 +77,33 @@ function buildAgentView(root) {
   brainLayer.hidden = true;
   root.append(brainLayer);
 
-  /** @type {{ destroy: () => void } | null} */
+  /** @type {{ destroy: () => void, setVisible: (visible: boolean) => void } | null} */
   let monitor = null;
+  let monitorLoading = false;
+  let unmounted = false;
   /** @type {"live" | "brain"} */
   let view = "live";
   /** @param {"live" | "brain"} next */
   function setView(next) {
     if (next === view) return;
     view = next;
-    if (next === "brain" && !monitor) {
-      monitor = createBrainMonitor(brainLayer, { onRequestClose: () => setView("live") });
+    if (next === "brain" && !monitor && !monitorLoading) {
+      // The monitor is its own sizeable module, fetched on first open so Agent
+      // mounts that never look inside don't pay for it. Kept once built (its
+      // turn history survives flips); hidden, it pauses its animation loop and
+      // camera fallback via setVisible.
+      monitorLoading = true;
+      void import("../brain/main.js")
+        .then((m) => {
+          if (unmounted) return;
+          monitor = m.createBrainMonitor(brainLayer, { onRequestClose: () => setView("live") });
+          monitor.setVisible(view === "brain");
+        })
+        .catch(() => {
+          monitorLoading = false; // a failed fetch can retry on the next flip
+        });
     }
+    monitor?.setVisible(next === "brain");
     brainLayer.hidden = next !== "brain";
     root.classList.toggle("brain-open", next === "brain");
     panel.setView(next);
@@ -105,7 +120,12 @@ function buildAgentView(root) {
     panel,
     createActiveChip(root, agentState, () => setView("brain")),
     { destroy: () => agentState.destroy() },
-    { destroy: () => monitor?.destroy() },
+    {
+      destroy: () => {
+        unmounted = true; // a monitor import still in flight must not build into the dead layer
+        monitor?.destroy();
+      },
+    },
   ];
 
   session.start();
@@ -114,7 +134,7 @@ function buildAgentView(root) {
   // on /agent so the address bar matches the one-page model.
   if (location.pathname.replace(/\/+$/, "") === "/brain") {
     setView("brain");
-    history.replaceState({}, "", "/agent" + location.search);
+    history.replaceState({}, "", "/agent" + location.search + location.hash);
   }
 
   return {

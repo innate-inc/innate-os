@@ -6020,12 +6020,17 @@ select.skill-input {
   }
 }
 
-/* The monitor owns the stage: the camera overlays stand down while it's open
-   (the panel carries the running state; the monitor shows pose and frames). */
+/* The monitor owns the stage: the camera overlays and the sim debug chips
+   stand down while it's open (the panel carries the running state; the
+   monitor shows pose and frames). */
 .agent-cockpit.brain-open .overlay-stack-top-left,
 .agent-cockpit.brain-open .cam-strip,
 .agent-cockpit.brain-open .agent-active-chip {
   display: none;
+}
+
+.agent-cockpit.brain-open .sim-debug-stack {
+  display: none !important; /* the sim stage sets its display inline */
 }
 
 .agent-controls {

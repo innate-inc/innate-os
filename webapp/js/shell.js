@@ -22,7 +22,7 @@ function pathForKey(key) {
 }
 
 /** True when focus is in a text field, so global key shortcuts must stand down. */
-function isTypingContext() {
+export function isTypingContext() {
   const el = document.activeElement;
   return (
     el instanceof HTMLElement &&
@@ -31,8 +31,8 @@ function isTypingContext() {
 }
 
 /**
- * Build the persistent app chrome once — the icon rail + connection badge, robot
- * speech playback, and the "agent running" indicator — and return a controller
+ * Build the persistent app chrome once — the icon rail, robot speech playback,
+ * and the "agent running" indicator — and return a controller
  * the router uses to reflect the active section on each navigation. Called once
  * by the router, not per page (navigation is client-side now).
  * @param {(path: string) => void} navigate Router navigation, for key shortcuts.
@@ -155,7 +155,7 @@ export function initShell(navigate) {
   // rail without them once the (env-driven) config says we're in sim mode.
   void getConfig().then((config) => {
     // {} on any failure → assume real robot, keep every section.
-    if (/** @type {any} */ (config)?.simControls) renderNav(SIM_SECTIONS);
+    if (config?.simControls) renderNav(SIM_SECTIONS);
   });
 
   // Play robot speech (/tts/audio) regardless of which page is open; idempotent.

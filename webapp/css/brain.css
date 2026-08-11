@@ -122,7 +122,10 @@
   grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr) auto;
   grid-template-areas: "loop vision" "actions queue" "vitals vitals";
 }
-@media (max-width: 1100px) {
+/* Breakpoints are viewport-keyed but the monitor only gets the viewport minus
+   the 64px rail and its own 420px of padding (the docked panel) — so the
+   single-column flip lands ~484px above where the grid actually runs out. */
+@media (max-width: 1280px) {
   .brain-page {
     overflow-y: auto;
   }
@@ -174,9 +177,6 @@
 }
 .br-panel-loop { grid-area: loop; align-items: center; }
 .br-panel-vision { grid-area: vision; }
-/* Hidden here, after .br-panel — an earlier display:none loses that rule's
-   display:flex on source order and the panel lands in an implicit grid track. */
-.br-panel-mind { display: none; }
 .br-panel-actions { grid-area: actions; }
 .br-panel-queue { grid-area: queue; }
 
@@ -211,7 +211,7 @@
   width: 220px;
   margin-top: 0;
 }
-@media (max-width: 1100px) {
+@media (max-width: 1280px) {
   .br-panel-vitals {
     flex-direction: column;
     align-items: stretch;
@@ -534,48 +534,13 @@
   transform-origin: 8px 8px;
 }
 
-/* ---------- mind stream ---------- */
-.br-msg {
-  border-left: 3px solid var(--br-grid);
-  padding: 7px 10px;
-  margin-bottom: 8px;
-  border-radius: 0 8px 8px 0;
-  background: rgb(255 255 255 / 3%);
-  animation: br-slidein 0.35s ease-out;
-  overflow-wrap: break-word;
-}
+/* ---------- turns & actions ---------- */
 @keyframes br-slidein {
   from {
     opacity: 0;
     transform: translateY(-8px);
   }
 }
-.br-msg .who {
-  font: 600 10px var(--font-mono);
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  margin-bottom: 3px;
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-.br-msg .when {
-  margin-left: auto;
-  color: var(--muted);
-  font-weight: 400;
-  letter-spacing: 0;
-}
-.br-msg.thought { border-color: var(--br-violet); }
-.br-msg.thought .who { color: var(--br-violet); }
-.br-msg.thought .txt { color: var(--muted); font-style: italic; }
-.br-msg.speech { border-color: var(--br-blue); }
-.br-msg.speech .who { color: var(--br-blue); }
-.br-msg.user { border-color: var(--br-aqua); }
-.br-msg.user .who { color: var(--br-aqua); }
-.br-msg.system .who { color: var(--muted); }
-.br-msg.system .txt { color: var(--muted); font-size: 13px; }
-
-/* ---------- turns & actions ---------- */
 .br-turn-row {
   padding: 8px 10px;
   border: 1px solid var(--br-grid);

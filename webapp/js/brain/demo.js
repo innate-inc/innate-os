@@ -19,7 +19,7 @@ Your directive:
 explore`;
 
 /**
- * @param {{ onTrace: (d: any) => void, onChat: (d: any) => void, onSkill: (d: any) => void,
+ * @param {{ onTrace: (d: any) => void, onSkill: (d: any) => void,
  *   onAgentStatus: (d: any) => void, onBrainStatus: (d: any) => void,
  *   setPose: (x: number, y: number, yaw: number) => void, setSpeaking: (on: boolean) => void }} h
  * @returns {() => void} stop
@@ -124,9 +124,7 @@ export function startDemo(h) {
       ev: "turn_end", turn: D.turn, latency: think / 1000, thoughts, speech,
       calls: theCalls, history: D.history, next_in: D.nextIn,
     });
-    if (thoughts) h.onChat({ sender: "robot_thoughts", text: thoughts, timestamp: Date.now() / 1000 });
     if (speech) {
-      h.onChat({ sender: "robot", text: speech, timestamp: Date.now() / 1000 });
       h.setSpeaking(true);
       timers.push(window.setTimeout(() => h.setSpeaking(false), 2200));
     }
@@ -187,10 +185,8 @@ export function startDemo(h) {
       D.inFlight = false;
       D.streak = 1;
       h.onTrace({ ev: "turn_error", turn: D.turn, error: "gemini via proxy: HTTP 503: overloaded", streak: 1, backoff: 5 });
-      h.onChat({ sender: "system", text: "⚠️ Brain inference failed: HTTP 503 — retrying.", timestamp: Date.now() / 1000 });
       await sleep(5100); if (!on) return;
       D.streak = 0;
-      h.onChat({ sender: "system", text: "✅ Brain inference recovered.", timestamp: Date.now() / 1000 });
       await turn({ withSock: true, think: 1500, thoughts: "Back online. Scene unchanged." });
       await sleep(3000);
     }

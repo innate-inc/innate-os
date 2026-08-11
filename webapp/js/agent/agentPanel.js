@@ -52,9 +52,10 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   // behind it — the robot's eyes, or its loop instrumented turn by turn.
   const viewSwitch = document.createElement("div");
   viewSwitch.className = "agent-views";
+  viewSwitch.setAttribute("role", "group");
+  viewSwitch.setAttribute("aria-label", "Stage view");
   const liveBtn = viewButton("Live", "The robot's live camera view");
   const brainBtn = viewButton("Brain", "Brain monitor — the agent loop, turn by turn (Esc returns)");
-  liveBtn.classList.add("active");
   viewSwitch.append(liveBtn, brainBtn);
   liveBtn.addEventListener("click", () => opts.onView("live"));
   brainBtn.addEventListener("click", () => opts.onView("brain"));
@@ -62,7 +63,10 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   function setView(view) {
     liveBtn.classList.toggle("active", view === "live");
     brainBtn.classList.toggle("active", view === "brain");
+    liveBtn.setAttribute("aria-pressed", String(view === "live"));
+    brainBtn.setAttribute("aria-pressed", String(view === "brain"));
   }
+  setView("live");
   // Phones dock the panel as a bottom sheet (CSS); this expands it upward.
   const expandBtn = document.createElement("button");
   expandBtn.type = "button";
