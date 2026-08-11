@@ -800,7 +800,7 @@ function template() {
   return `
   <div class="br-head">
     <h1 class="page-title">Brain</h1>
-    <span class="br-esc-hint">esc closes</span>
+    <span class="br-esc-hint"><kbd>esc</kbd> closes</span>
     <div class="br-chips">
       <div class="br-chip br-chip-active" title="/brain/agent_status"><span class="led"></span><span>brain <b>—</b></span></div>
       <div class="br-chip br-chip-directive" title="current directive — /brain/agent_status"><span>directive</span><b>—</b></div>

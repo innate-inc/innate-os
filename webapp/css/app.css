@@ -299,64 +299,10 @@ select.skill-input {
   opacity: 0.85;
 }
 
-/* Bottom-pinned utility links (Settings), above the connection badge. */
+/* Bottom-pinned utility links (Settings), at the rail's very bottom. */
 .rail-foot {
   margin-top: auto;
   padding-top: 12px;
-}
-
-/* connection badge pinned at rail bottom */
-
-.badge {
-  margin-top: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 6px;
-  border-radius: 9px;
-  cursor: default;
-}
-
-.badge:not(:disabled) {
-  cursor: pointer;
-}
-
-.badge:not(:disabled):hover .badge-label {
-  color: var(--text);
-}
-
-.badge-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #5a5a63;
-}
-
-.badge[data-state="connecting"] .badge-dot,
-.badge[data-state="reconnecting"] .badge-dot {
-  background: var(--accent);
-  animation: pulse 1.4s ease-in-out infinite;
-}
-
-.badge[data-state="connected"] .badge-dot {
-  background: var(--ok);
-}
-
-.badge-label {
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  color: var(--muted);
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  max-height: 110px;
-  overflow: hidden;
-  letter-spacing: 0.06em;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.25; }
 }
 
 /* ---- boot splash -------------------------------------------------------- */

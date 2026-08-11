@@ -113,7 +113,7 @@ export const GROUPS = [
   },
 ];
 
-// Pinned at the rail's bottom, above the connection badge.
+// Pinned at the rail's very bottom.
 /** @type {Section[]} */
 export const FOOTER_SECTIONS = [
   {

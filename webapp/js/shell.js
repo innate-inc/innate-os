@@ -1,8 +1,8 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// Shell — the 64px icon rail + connection badge rendered into every page,
-// and the placeholder renderer for not-yet-built sections.
+// Shell — the 64px icon rail rendered into every page, and the placeholder
+// renderer for not-yet-built sections.
 
 import { ros } from "./rosClient.js";
 import { initTtsAudio } from "./ttsAudio.js";
@@ -67,8 +67,7 @@ export function initShell(navigate) {
   const nav = document.createElement("nav");
   nav.className = "rail-nav";
   nav.setAttribute("aria-label", "Sections");
-  // Settings (and any future utility page) pins to the rail's bottom, above
-  // the connection badge.
+  // Settings (and any future utility page) pins to the rail's very bottom.
   const footNav = document.createElement("nav");
   footNav.className = "rail-nav rail-foot";
   footNav.setAttribute("aria-label", "Utility");
@@ -94,18 +93,21 @@ export function initShell(navigate) {
 
   /** @param {Section} section */
   function buildLink(section) {
-    const shortcut = SECTIONS.indexOf(section) + 1; // 1..N, the number-key shortcut for this section
+    // Only single digits exist as key shortcuts, so sections past the ninth
+    // advertise none — a keycap that can't be pressed is a small lie.
+    const index = SECTIONS.indexOf(section);
+    const shortcut = index < 9 ? index + 1 : null;
     const a = document.createElement("a");
     a.className = "rail-link";
     a.dataset.section = section.key;
     a.href = pathForKey(section.key);
-    a.title = `${section.label} (${shortcut})`;
+    a.title = shortcut ? `${section.label} (${shortcut})` : section.label;
     a.setAttribute("aria-label", section.label);
-    a.setAttribute("aria-keyshortcuts", String(shortcut));
+    if (shortcut) a.setAttribute("aria-keyshortcuts", String(shortcut));
     a.innerHTML =
       `<span class="rail-ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${section.icon}</svg></span>` +
       `<span class="rail-label">${section.label}</span>` +
-      `<span class="rail-key" aria-hidden="true">${shortcut}</span>`;
+      (shortcut ? `<span class="rail-key" aria-hidden="true">${shortcut}</span>` : "");
     return a;
   }
 
@@ -147,7 +149,6 @@ export function initShell(navigate) {
     if (link) navigate(pathForKey(section.key));
   });
 
-  rail.appendChild(createBadge());
   document.body.prepend(rail);
 
   // Sim deployments hide robot-data workflows (SIM_SECTIONS) — rebuild the
@@ -191,38 +192,3 @@ export function initShell(navigate) {
   return { setActive };
 }
 
-/**
- * Connection badge pinned at the rail bottom: pulsing state dot + mono IP.
- * Click disconnects when connected.
- * @returns {HTMLElement}
- */
-function createBadge() {
-  const badge = document.createElement("button");
-  badge.className = "badge";
-  badge.type = "button";
-
-  const dot = document.createElement("span");
-  dot.className = "badge-dot";
-  const label = document.createElement("span");
-  label.className = "badge-label";
-  badge.append(dot, label);
-
-  ros.onStateChange((state, ip) => {
-    badge.dataset.state = state;
-    /** @type {Record<ConnState, string>} */
-    const text = {
-      disconnected: "offline",
-      connecting: "linking",
-      connected: ip ?? "linked",
-      reconnecting: "relink",
-    };
-    label.textContent = text[state];
-    badge.title = state === "connected" ? `Connected to ${ip} — click to disconnect` : state;
-    badge.disabled = state !== "connected";
-  });
-
-  badge.addEventListener("click", () => {
-    if (ros.state === "connected") ros.disconnect();
-  });
-  return badge;
-}
