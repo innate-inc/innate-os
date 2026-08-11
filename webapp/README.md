@@ -65,6 +65,7 @@ js/
   webrtcSession.js      camera + mic over WebRTC, signaled through rosbridge
   dynamixel.js          leader-arm WebSerial reader (Protocol 2.0)
   shell.js              icon rail + connection badge on every page
+  railLayout.js         the rail's grouped roster (pure — tests/railLayout.test.js)
   teleop/               teleop modules (joystick, keyboard, head tilt, TTS, arm)
   nav/ collect/ datasets/ training/ logging/      per-page modules
 ```

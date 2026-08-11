@@ -12,89 +12,9 @@ import { createAgentIndicator } from "./agentIndicator.js";
 import { createArmAlert } from "./armAlert.js";
 import { maybeShowAppPromo } from "./appPromo.js";
 import { installPressActivate } from "./pressActivate.js";
+import { FOOTER_SECTIONS, GROUPS, SECTIONS, SIM_SECTIONS, railRows } from "./railLayout.js";
 
-/** @typedef {{ key: string, label: string, icon: string }} Section */
-
-// In sim mode (config.simControls) only these sections make sense — the rest
-// (Datasets/Collect/Training/Profiling/Calibration) are robot-data workflows
-// with no sim backing — the sim has no real stereo camera or ChArUco board to
-// calibrate against — so they're hidden from the rail. Arm SDK stays: the sim
-// runs the same IK node and answers the goto services, so the page exercises
-// the real Manipulation SDK against the simulated arm.
-const SIM_SECTIONS = new Set(["teleop", "agent", "brain", "nav", "logging", "armsdk", "settings"]);
-
-/** @type {Section[]} */
-const SECTIONS = [
-  {
-    key: "teleop",
-    label: "Teleop",
-    // The joystick motif: rim, cardinal ticks, knob.
-    icon: '<circle cx="12" cy="12" r="8.5"/><line x1="12" y1="3.5" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="20.5"/><line x1="3.5" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="20.5" y2="12"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/>',
-  },
-  {
-    key: "agent",
-    label: "Agent",
-    // Sparkle motif: a four-point star for the autonomous brain.
-    icon: '<path d="M12 3.5l1.7 6.8 6.8 1.7-6.8 1.7L12 20.5l-1.7-6.8L3.5 12l6.8-1.7z"/>',
-  },
-  {
-    key: "brain",
-    label: "Brain",
-    // Monitor motif: an EKG pulse line, for the live agent-loop monitor.
-    icon: '<polyline points="3.5,12 7.5,12 10,6.5 13,17.5 15.5,12 20.5,12"/>',
-  },
-  {
-    key: "nav",
-    label: "Nav",
-    // Radar motif: sweep arcs and a contact dot, for the live sensor view.
-    icon: '<path d="M12 12L18.4 5.6"/><path d="M15.2 8.8a4.5 4.5 0 1 0 1.3 3.2"/><path d="M18.4 5.6A9 9 0 1 0 21 12"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
-  },
-  {
-    key: "logging",
-    label: "Logging",
-    icon: '<polyline points="4.5,7 10,12 4.5,17"/><line x1="12.5" y1="17" x2="19.5" y2="17"/>',
-  },
-  {
-    key: "datasets",
-    label: "Datasets",
-    icon: '<ellipse cx="12" cy="6" rx="7.5" ry="3"/><path d="M4.5 6v12c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3V6"/><path d="M4.5 12c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3"/>',
-  },
-  {
-    key: "collect",
-    label: "Collect",
-    icon: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none"/>',
-  },
-  {
-    key: "training",
-    label: "Training",
-    icon: '<polyline points="4,17.5 9.5,11.5 13.5,15 20,7"/><polyline points="15.5,7 20,7 20,11.5"/>',
-  },
-  {
-    key: "profiling",
-    label: "Profiling",
-    // Stopwatch motif: dial, crown, and a sweeping hand.
-    icon: '<circle cx="12" cy="13" r="7.5"/><line x1="12" y1="13" x2="15" y2="10"/><line x1="12" y1="2.5" x2="12" y2="5" /><line x1="9.5" y1="2.5" x2="14.5" y2="2.5"/>',
-  },
-  {
-    key: "calibration",
-    label: "Calibration",
-    // Camera motif: body with a viewfinder bump, and a lens. The body spans
-    // x 4–19, y 6–19, so its centre lands on the half unit.
-    icon: '<path d="M4 8a2 2 0 0 1 2-2h2l1.2-1.8a1 1 0 0 1 .8-.4h3a1 1 0 0 1 .8.4L15 6h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8z"/><circle cx="11.5" cy="12.5" r="3.4"/>',
-  },
-  {
-    key: "armsdk",
-    label: "Arm SDK",
-    // Articulated-arm motif: base, two links with a joint, and a claw.
-    icon: '<circle cx="6" cy="19" r="2"/><path d="M7.5 17.5L10.5 10"/><circle cx="11" cy="8.8" r="1.4"/><path d="M12.3 8L17 5.5"/><path d="M17 5.5l2.5 1M17 5.5l.5 2.7"/>',
-  },
-  {
-    key: "settings",
-    label: "Settings",
-    // Sliders motif: two tracks, each with a knob.
-    icon: '<line x1="4" y1="8.5" x2="20" y2="8.5"/><circle cx="10" cy="8.5" r="2.3" fill="currentColor" stroke="none"/><line x1="4" y1="15.5" x2="20" y2="15.5"/><circle cx="15" cy="15.5" r="2.3" fill="currentColor" stroke="none"/>',
-  },
-];
+/** @typedef {import("./railLayout.js").Section} Section */
 
 /** Path for a section key: teleop is the site root, the rest are /<key>. @param {string} key */
 function pathForKey(key) {
@@ -147,8 +67,34 @@ export function initShell(navigate) {
   const nav = document.createElement("nav");
   nav.className = "rail-nav";
   nav.setAttribute("aria-label", "Sections");
-  SECTIONS.forEach((section, i) => {
-    const shortcut = i + 1; // 1..N, the number-key shortcut for this section
+  // Settings (and any future utility page) pins to the rail's bottom, above
+  // the connection badge.
+  const footNav = document.createElement("nav");
+  footNav.className = "rail-nav rail-foot";
+  footNav.setAttribute("aria-label", "Utility");
+  let activeKey = "";
+
+  /**
+   * (Re)build the rail from railRows — links in group order, a divider at each
+   * labeled-group boundary, footer sections pinned at the bottom. `visible`
+   * filters sections (the sim rebuild).
+   * @param {Set<string> | null} visible
+   */
+  function renderNav(visible) {
+    nav.innerHTML = "";
+    for (const row of railRows(GROUPS, visible)) {
+      nav.appendChild(row.kind === "divider" ? buildDivider(row.label) : buildLink(row.section));
+    }
+    footNav.innerHTML = "";
+    for (const section of FOOTER_SECTIONS) {
+      if (!visible || visible.has(section.key)) footNav.appendChild(buildLink(section));
+    }
+    applyActive();
+  }
+
+  /** @param {Section} section */
+  function buildLink(section) {
+    const shortcut = SECTIONS.indexOf(section) + 1; // 1..N, the number-key shortcut for this section
     const a = document.createElement("a");
     a.className = "rail-link";
     a.dataset.section = section.key;
@@ -160,9 +106,34 @@ export function initShell(navigate) {
       `<span class="rail-ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${section.icon}</svg></span>` +
       `<span class="rail-label">${section.label}</span>` +
       `<span class="rail-key" aria-hidden="true">${shortcut}</span>`;
-    nav.appendChild(a);
-  });
-  rail.appendChild(nav);
+    return a;
+  }
+
+  /** @param {string | null} label */
+  function buildDivider(label) {
+    const div = document.createElement("div");
+    div.className = "rail-div";
+    if (!label) return div;
+    div.classList.add("has-label");
+    const span = document.createElement("span");
+    span.className = "rail-div-label";
+    span.textContent = label;
+    div.appendChild(span);
+    return div;
+  }
+
+  function applyActive() {
+    for (const link of rail.querySelectorAll(".rail-link")) {
+      const el = /** @type {HTMLElement} */ (link);
+      const active = el.dataset.section === activeKey;
+      el.classList.toggle("active", active);
+      if (active) el.setAttribute("aria-current", "page");
+      else el.removeAttribute("aria-current");
+    }
+  }
+
+  renderNav(null);
+  rail.append(nav, footNav);
 
   // Number keys 1..N jump between sections (the number shows in each tooltip).
   // Guarded so it never fires while typing in a field or as part of a
@@ -172,17 +143,19 @@ export function initShell(navigate) {
     if (e.altKey || e.ctrlKey || e.metaKey || e.repeat || isTypingContext()) return;
     const section = SECTIONS[Number(e.key) - 1];
     if (!section) return;
-    // A removed link (sim-mode filter) has no match, so its number stays inert.
-    const link = nav.querySelector(`.rail-link[data-section="${section.key}"]`);
+    const link = rail.querySelector(`.rail-link[data-section="${section.key}"]`);
     if (link) navigate(pathForKey(section.key));
   });
 
   rail.appendChild(createBadge());
   document.body.prepend(rail);
 
-  // Sim deployments only expose Teleop/Agent/Logging/Settings — drop the rest
-  // from the rail once the (env-driven) config says we're in sim mode.
-  void applySimSectionFilter(nav);
+  // Sim deployments hide robot-data workflows (SIM_SECTIONS) — rebuild the
+  // rail without them once the (env-driven) config says we're in sim mode.
+  void getConfig().then((config) => {
+    // {} on any failure → assume real robot, keep every section.
+    if (/** @type {any} */ (config)?.simControls) renderNav(SIM_SECTIONS);
+  });
 
   // Play robot speech (/tts/audio) regardless of which page is open; idempotent.
   initTtsAudio();
@@ -208,34 +181,14 @@ export function initShell(navigate) {
    * @param {string} key
    */
   function setActive(key) {
-    for (const link of nav.querySelectorAll(".rail-link")) {
-      const el = /** @type {HTMLElement} */ (link);
-      const active = el.dataset.section === key;
-      el.classList.toggle("active", active);
-      if (active) el.setAttribute("aria-current", "page");
-      else el.removeAttribute("aria-current");
-    }
+    activeKey = key;
+    applyActive();
     agentIndicator.el.style.display = key === "agent" ? "none" : "";
     const section = SECTIONS.find((s) => s.key === key);
     document.title = section ? `Innate · ${section.label}` : "Innate";
   }
 
   return { setActive };
-}
-
-/**
- * Hide robot-only sections from the rail when running in sim mode.
- * @param {HTMLElement} nav
- */
-async function applySimSectionFilter(nav) {
-  /** @type {any} */
-  let config;
-  config = await getConfig(); // {} on any failure → assume real robot, keep every section
-  if (!config?.simControls) return;
-  for (const link of nav.querySelectorAll(".rail-link")) {
-    const key = /** @type {HTMLElement} */ (link).dataset.section ?? "";
-    if (!SIM_SECTIONS.has(key)) link.remove();
-  }
 }
 
 /**

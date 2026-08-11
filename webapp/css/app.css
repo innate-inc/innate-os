@@ -243,6 +243,68 @@ select.skill-input {
   background: var(--accent);
 }
 
+/* Group boundaries in the rail. Collapsed, a hairline tick under the icon
+   column marks the break; on hover-expand, labeled dividers trade the tick
+   for the group's header — label plus a hairline running to the right edge
+   (unlabeled ones keep the tick). */
+.rail-div {
+  position: relative;
+  flex: none;
+  height: 17px;
+  margin: 4px 0 1px;
+}
+
+.rail-div::before {
+  content: "";
+  position: absolute;
+  left: 22px;             /* 20px tick centered under the icon column (x = 32) */
+  top: 50%;
+  width: 20px;
+  height: 1px;
+  background: var(--hairline);
+  transition: opacity 120ms ease;
+}
+
+.rail:hover .rail-div.has-label::before {
+  opacity: 0;
+}
+
+.rail-div-label {
+  position: absolute;
+  left: 13px;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--text);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.rail-div-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
+}
+
+.rail:hover .rail-div-label {
+  opacity: 0.85;
+}
+
+/* Bottom-pinned utility links (Settings), above the connection badge. */
+.rail-foot {
+  margin-top: auto;
+  padding-top: 12px;
+}
+
 /* connection badge pinned at rail bottom */
 
 .badge {
@@ -5915,11 +5977,109 @@ select.skill-input {
   transition: background 200ms ease, opacity 200ms ease;
 }
 
+/* Live/Brain stage switch in the panel header: the panel is the agent, these
+   pick which stage shows behind it. */
+.agent-views {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--ctl-field);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: var(--ctl-sheen);
+}
+
+.agent-view-btn {
+  position: relative;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ctl-text-off);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.agent-view-btn:hover {
+  color: var(--ctl-text);
+}
+
+.agent-view-btn.active {
+  color: var(--text);
+  background: var(--ctl-glass);
+}
+
+/* While the loop runs, the Brain segment carries a small live dot — an
+   invitation to look inside. */
+.agent-view-btn.pulse::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: breathe 2.2s ease-in-out infinite;
+}
+
 .agent-state-dot.on {
   background: var(--accent);
   opacity: 1;
   box-shadow: 0 0 9px var(--accent);
   animation: breathe 2.2s ease-in-out infinite;
+}
+
+/* The Brain monitor layer: an opaque stage that flips in over the camera view
+   (video keeps streaming beneath — closing it is instant). Sits above the
+   stage overlays but below the panel, which stays docked in both views; the
+   monitor's own layout (incl. clearing the panel) lives in brain.css. */
+.agent-brain {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: var(--bg);
+  animation: brain-in 220ms ease-out;
+}
+
+/* The turn inspector is a fixed full-viewport modal, but this layer's z-index
+   traps it in a stacking context below the docked panel (z 12). While it's
+   open, lift the whole layer to the inspector's own level so the modal truly
+   covers the page — panel and rail included. */
+.agent-brain:has(.br-inspect:not([hidden])) {
+  z-index: 60;
+}
+
+.agent-cockpit .agent-panel {
+  z-index: 12; /* above the brain layer; overlays sit at ≤8 */
+}
+
+@keyframes brain-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-brain {
+    animation: none;
+  }
+}
+
+/* The monitor owns the stage: the camera overlays stand down while it's open
+   (the panel carries the running state; the monitor shows pose and frames). */
+.agent-cockpit.brain-open .overlay-stack-top-left,
+.agent-cockpit.brain-open .cam-strip,
+.agent-cockpit.brain-open .agent-active-chip {
+  display: none;
 }
 
 .agent-controls {
@@ -6168,12 +6328,29 @@ select.skill-input {
   align-items: center;
   gap: 11px;
   padding: 10px 14px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   background: var(--ctl-glass);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--ctl-edge-accent);
   border-radius: 12px;
   box-shadow: var(--ctl-sheen);
+  transition: border-color 120ms ease;
+}
+
+.agent-active-chip:hover {
+  border-color: var(--ctl-edge-accent-hover);
+}
+
+.agent-active-arrow {
+  display: inline-block;
+  transition: transform 120ms ease;
+}
+
+.agent-active-chip:hover .agent-active-arrow {
+  transform: translateX(3px);
 }
 
 .agent-active-dot {

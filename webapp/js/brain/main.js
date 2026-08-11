@@ -1,7 +1,9 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// Brain page — a live window into the local Gemini agent loop.
+// Brain monitor — a live window into the local Gemini agent loop. Not a page:
+// the Agent page embeds it as its deep view (createBrainMonitor), flipped in
+// over the camera stage while the agent panel stays docked alongside.
 //
 // Deep telemetry rides /brain/trace (JSON on std_msgs/String, published by
 // brain_client's BrainAgent): turn lifecycle with every image the model was
@@ -9,16 +11,15 @@
 // system instruction, tool calls with args + outcomes, think latencies, the
 // event queue, and a 1 Hz snapshot heartbeat. Recent turns are kept so any
 // turn row can be opened in the inspector overlay — the complete model input
-// and output for that turn. Everything else (mind stream, skill runs, pose,
-// live camera fallback) comes from the public topics, so the page degrades
-// gracefully on robots without the trace publisher — the deep panels just
-// stay quiet.
+// and output for that turn. Everything else (skill runs, pose, live camera
+// fallback) comes from the public topics, so the monitor degrades gracefully
+// on robots without the trace publisher — the deep panels just stay quiet.
+// The mind stream lives in the agent panel next door, not here.
 //
-// ?demo drives the whole page from a scripted synthetic brain (demo.js) —
+// ?demo drives the whole monitor from a scripted synthetic brain (demo.js) —
 // useful for UI work with no robot.
 
 import { ros } from "../rosClient.js";
-import { mountPage } from "../pageMount.js";
 
 const CAM_TOPIC = "/mars/main_camera/left/image_raw/compressed";
 const HIST_MAX = 60; // brain_client default history_max_entries
@@ -39,16 +40,15 @@ const NODE_ANGLE = { look: -90, think: 30, act: 150 };
 const RING_R = 112;
 const RING_C = 2 * Math.PI * RING_R;
 
-/** @param {HTMLElement} stage */
-export function mount(stage) {
-  return mountPage(stage, "brain-page", buildView);
-}
-
 /**
+ * Build the monitor into `root` (the Agent page's brain layer) and start its
+ * feeds. `onRequestClose` is the monitor asking to flip back to the live view
+ * (Escape with no inspector open).
  * @param {HTMLElement} root
+ * @param {{ onRequestClose?: () => void }} [opts]
  * @returns {{ destroy: () => void }}
  */
-function buildView(root) {
+export function createBrainMonitor(root, opts = {}) {
   root.innerHTML = template();
   /** @param {string} sel */
   const $ = (sel) => /** @type {HTMLElement} */ (root.querySelector(sel));
@@ -614,7 +614,9 @@ function buildView(root) {
   $(".br-inspect-back").addEventListener("click", closeInspector);
   /** @param {KeyboardEvent} e */
   const onKey = (e) => {
-    if (e.key === "Escape" && inspecting) closeInspector();
+    if (e.key !== "Escape") return;
+    if (inspecting) closeInspector();
+    else opts.onRequestClose?.();
   };
   window.addEventListener("keydown", onKey);
 
@@ -746,7 +748,7 @@ function buildView(root) {
   if (new URLSearchParams(location.search).has("demo")) {
     // No robot in the picture: the socket's connect card would just sit over
     // the synthetic show.
-    root.parentElement?.querySelector(".connect-layer")?.classList.add("br-hidden");
+    document.querySelector(".connect-layer")?.classList.add("br-hidden");
     void import("./demo.js").then((m) => {
       if (destroyed) return; // the page unmounted before the chunk loaded
       demoStop = m.startDemo(handlers);
@@ -798,6 +800,7 @@ function template() {
   return `
   <div class="br-head">
     <h1 class="page-title">Brain</h1>
+    <span class="br-esc-hint">esc closes</span>
     <div class="br-chips">
       <div class="br-chip br-chip-active" title="/brain/agent_status"><span class="led"></span><span>brain <b>—</b></span></div>
       <div class="br-chip br-chip-directive" title="current directive — /brain/agent_status"><span>directive</span><b>—</b></div>

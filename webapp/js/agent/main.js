@@ -4,6 +4,13 @@
 // one liquid-glass Agent panel: directive selection, a Start/Stop toggle, the
 // agent's live thinking traces + active skill + chat, and a message composer.
 //
+// The page has two stages behind that one panel: the live camera view, and the
+// Brain monitor (the agent loop instrumented turn by turn) which flips in over
+// it via the panel's Live/Brain switch — controls and chat stay docked in both.
+// The monitor is built on first open and kept until the page unmounts, so its
+// turn history survives flipping back and forth. /brain deep-links here with
+// the monitor open.
+//
 // Connect/disconnect lifecycle and optimistic mount mirror teleop (see
 // pageMount.js): the view builds immediately and panels fill in once the socket
 // is up. No mic toggle here — robot speech already plays in-browser via the
@@ -19,6 +26,7 @@ import { createCameraSwitch } from "../teleop/cameraSwitch.js";
 import { createAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
+import { createBrainMonitor } from "../brain/main.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
 // marks a sim deployment — used here to drop the (absent) battery readout. Fetched
@@ -61,18 +69,53 @@ function buildAgentView(root) {
   cornerStack.append(telemetryOverlay);
   const agentState = createAgentState(ros);
 
+  const cameraSwitch = createCameraSwitch(root, session, ros, { storeKey: "innate.cameras.agent" });
+
+  // The Brain monitor's layer sits between the camera overlays and the panel
+  // (DOM order + z-index): opening it covers the stage but never the controls.
+  const brainLayer = document.createElement("div");
+  brainLayer.className = "agent-brain brain-page";
+  brainLayer.hidden = true;
+  root.append(brainLayer);
+
+  /** @type {{ destroy: () => void } | null} */
+  let monitor = null;
+  /** @type {"live" | "brain"} */
+  let view = "live";
+  /** @param {"live" | "brain"} next */
+  function setView(next) {
+    if (next === view) return;
+    view = next;
+    if (next === "brain" && !monitor) {
+      monitor = createBrainMonitor(brainLayer, { onRequestClose: () => setView("live") });
+    }
+    brainLayer.hidden = next !== "brain";
+    root.classList.toggle("brain-open", next === "brain");
+    panel.setView(next);
+  }
+
+  const panel = createAgentPanel(root, ros, agentState, { onView: setView });
+
   const parts = [
     videoStage,
     ...(challengePanel ? [challengePanel] : []),
     createTelemetry(telemetryOverlay, ros, { showBattery: !config.simControls }),
     // Square, always-live camera tiles (own prefs key so teleop's defaults stay put).
-    createCameraSwitch(root, session, ros, { storeKey: "innate.cameras.agent" }),
-    createAgentPanel(root, ros, agentState),
-    createActiveChip(root, agentState),
+    cameraSwitch,
+    panel,
+    createActiveChip(root, agentState, () => setView("brain")),
     { destroy: () => agentState.destroy() },
+    { destroy: () => monitor?.destroy() },
   ];
 
   session.start();
+
+  // /brain is this page with the monitor open; land there, then settle the URL
+  // on /agent so the address bar matches the one-page model.
+  if (location.pathname.replace(/\/+$/, "") === "/brain") {
+    setView("brain");
+    history.replaceState({}, "", "/agent" + location.search);
+  }
 
   return {
     destroy() {
@@ -85,14 +128,19 @@ function buildAgentView(root) {
 
 /**
  * Bottom-left "AGENT ACTIVE" chip — shown only while the brain is running.
+ * Clicking it opens the Brain monitor: the moment the robot is acting on its
+ * own is exactly when you want to see inside.
  * @param {HTMLElement} root
  * @param {ReturnType<typeof import("../teleop/agentState.js").createAgentState>} agentState
+ * @param {() => void} onWatch
  * @returns {{ destroy: () => void }}
  */
-function createActiveChip(root, agentState) {
-  const chip = document.createElement("div");
+function createActiveChip(root, agentState, onWatch) {
+  const chip = document.createElement("button");
+  chip.type = "button";
   chip.className = "agent-active-chip";
   chip.hidden = true;
+  chip.title = "Open the Brain monitor";
 
   const dot = document.createElement("span");
   dot.className = "agent-active-dot";
@@ -103,11 +151,12 @@ function createActiveChip(root, agentState) {
   title.textContent = "Agent active";
   const sub = document.createElement("span");
   sub.className = "agent-active-sub";
-  sub.textContent = "Autonomous execution in progress.";
+  sub.innerHTML = 'Watch its brain <span class="agent-active-arrow">→</span>';
   label.append(title, sub);
   chip.append(dot, label);
   root.append(chip);
 
+  chip.addEventListener("click", onWatch);
   const unsub = agentState.subscribe((s) => {
     chip.hidden = !s.brainActive;
   });

@@ -29,9 +29,11 @@ import {
  * @param {HTMLElement} root cockpit root — the panel mounts as a right-edge overlay.
  * @param {import("../rosClient.js").RosClient} rosClient
  * @param {ReturnType<typeof import("../teleop/agentState.js").createAgentState>} agentState
- * @returns {{ destroy: () => void }}
+ * @param {{ onView: (view: "live" | "brain") => void }} opts stage-view switch,
+ *   owned by the page; setView reflects a flip the page made itself (chip, Esc).
+ * @returns {{ destroy: () => void, setView: (view: "live" | "brain") => void }}
  */
-export function createAgentPanel(root, rosClient, agentState) {
+export function createAgentPanel(root, rosClient, agentState, opts) {
   const selfOrigin = crypto.randomUUID?.() ?? `web-${Date.now()}-${Math.random()}`;
 
   const panel = document.createElement("section");
@@ -46,6 +48,21 @@ export function createAgentPanel(root, rosClient, agentState) {
   const stateDot = document.createElement("span");
   stateDot.className = "agent-state-dot";
   stateDot.title = `green while the brain is active — ${AGENT_STATUS_TOPIC}`;
+  // Live/Brain switch: the panel is the agent; these pick which stage shows
+  // behind it — the robot's eyes, or its loop instrumented turn by turn.
+  const viewSwitch = document.createElement("div");
+  viewSwitch.className = "agent-views";
+  const liveBtn = viewButton("Live", "The robot's live camera view");
+  const brainBtn = viewButton("Brain", "Brain monitor — the agent loop, turn by turn (Esc returns)");
+  liveBtn.classList.add("active");
+  viewSwitch.append(liveBtn, brainBtn);
+  liveBtn.addEventListener("click", () => opts.onView("live"));
+  brainBtn.addEventListener("click", () => opts.onView("brain"));
+  /** @param {"live" | "brain"} view */
+  function setView(view) {
+    liveBtn.classList.toggle("active", view === "live");
+    brainBtn.classList.toggle("active", view === "brain");
+  }
   // Phones dock the panel as a bottom sheet (CSS); this expands it upward.
   const expandBtn = document.createElement("button");
   expandBtn.type = "button";
@@ -57,7 +74,7 @@ export function createAgentPanel(root, rosClient, agentState) {
     expandBtn.textContent = expanded ? "\u25be" : "\u25b4";
     expandBtn.setAttribute("aria-label", expanded ? "Collapse panel" : "Expand panel");
   };
-  head.append(titleEl, stateDot, expandBtn);
+  head.append(titleEl, stateDot, viewSwitch, expandBtn);
 
   // ---- directive + start/stop --------------------------------------------
   const controls = document.createElement("div");
@@ -158,6 +175,8 @@ export function createAgentPanel(root, rosClient, agentState) {
 
     panel.classList.toggle("active", brainActive);
     stateDot.classList.toggle("on", brainActive);
+    // A running loop makes the Brain segment glow — an invitation to look inside.
+    brainBtn.classList.toggle("pulse", brainActive);
 
     toggleBtn.textContent = applying ? "…" : brainActive ? "Stop" : "Start";
     toggleBtn.classList.toggle("stop", brainActive);
@@ -554,6 +573,7 @@ export function createAgentPanel(root, rosClient, agentState) {
   }, undefined, "std_msgs/msg/String");
 
   return {
+    setView,
     destroy() {
       if (flashTimer) clearTimeout(flashTimer);
       unsubAgents();
@@ -564,6 +584,20 @@ export function createAgentPanel(root, rosClient, agentState) {
       panel.remove();
     },
   };
+}
+
+/**
+ * A segment of the panel's Live/Brain stage switch.
+ * @param {string} label
+ * @param {string} title
+ */
+function viewButton(label, title) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "agent-view-btn";
+  btn.textContent = label;
+  btn.title = title;
+  return btn;
 }
 
 /**

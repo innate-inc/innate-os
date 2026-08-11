@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: Apache-2.0
    Copyright (c) 2026 Innate Inc
 
-   Brain page — the agent-loop monitor. Structural chrome rides the app tokens
-   (--panel, --hairline, --text, --muted); the functional colors below are the
-   page's own: phase identities for the loop (look/think/act), a series blue
-   for data marks, and a fixed status set — all steps validated for the dark
-   surface. */
+   Brain monitor — the agent-loop deep view, embedded in the Agent page (the
+   .agent-brain layer carries positioning; this file owns the monitor's own
+   layout, including clearing the docked agent panel). Structural chrome rides
+   the app tokens (--panel, --hairline, --text, --muted); the functional colors
+   below are the monitor's own: phase identities for the loop (look/think/act),
+   a series blue for data marks, and a fixed status set — all steps validated
+   for the dark surface. */
 
 /* ?demo hides the connect card — there is deliberately no robot behind it. */
 .connect-layer.br-hidden {
@@ -27,7 +29,7 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 14px 18px 16px;
+  padding: 14px 402px 16px 18px; /* right clears the docked 360px agent panel + insets */
   gap: 12px;
   overflow: hidden;
 }
@@ -39,6 +41,15 @@
   gap: 14px;
   flex: none;
 }
+.br-esc-hint {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0.65;
+  white-space: nowrap;
+}
+
 .br-chips {
   display: flex;
   gap: 8px;
@@ -87,32 +98,42 @@
 }
 
 /* ---------- grid ---------- */
+/* Five panels: the mind stream is deliberately absent — the agent panel docked
+   beside the monitor is the canonical thoughts/chat stream, so showing it here
+   too would be the same words twice. Vitals ride as a bottom status strip. */
 .br-grid {
   flex: 1;
   min-height: 0;
   display: grid;
   gap: 12px;
-  grid-template-columns: 360px 1fr 360px;
-  grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr);
-  grid-template-areas: "loop vision mind" "actions queue vitals";
+  grid-template-columns: minmax(320px, 380px) 1fr;
+  grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr) auto;
+  grid-template-areas: "loop vision" "actions queue" "vitals vitals";
 }
-@media (max-width: 1280px) {
+.br-panel-mind {
+  display: none;
+}
+@media (max-width: 1100px) {
   .brain-page {
     overflow-y: auto;
   }
   .br-grid {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
     grid-template-rows: none;
-    grid-template-areas: "loop vision" "mind actions" "queue vitals";
+    grid-template-areas: "loop" "vision" "actions" "queue" "vitals";
   }
   .br-panel {
     height: 420px;
   }
 }
-@media (max-width: 820px) {
-  .br-grid {
-    grid-template-columns: 1fr;
-    grid-template-areas: "loop" "vision" "mind" "actions" "queue" "vitals";
+@media (max-width: 640px) {
+  /* The agent panel docks as a bottom sheet here — full width, scroll above
+     it; no hardware Esc to hint at. */
+  .brain-page {
+    padding: 14px 18px 48vh;
+  }
+  .br-esc-hint {
+    display: none;
   }
 }
 .br-panel {
@@ -147,7 +168,57 @@
 .br-panel-mind { grid-area: mind; }
 .br-panel-actions { grid-area: actions; }
 .br-panel-queue { grid-area: queue; }
-.br-panel-vitals { grid-area: vitals; }
+
+/* Vitals as a bottom status strip: label, tiles, sparkline, history gauge in
+   one row (back to a stacked card when the grid goes single-column). */
+.br-panel-vitals {
+  grid-area: vitals;
+  flex-direction: row;
+  align-items: center;
+  gap: 18px;
+}
+.br-panel-vitals h2 {
+  margin: 0;
+  white-space: nowrap;
+}
+.br-panel-vitals .br-tiles {
+  flex: none;
+  margin-bottom: 0;
+  grid-template-columns: repeat(4, minmax(84px, 108px));
+}
+.br-panel-vitals .br-spark-wrap {
+  flex: 1 1 auto;
+  min-width: 120px;
+}
+.br-panel-vitals .br-spark {
+  height: 52px;
+}
+.br-panel-vitals .br-gauge {
+  flex: none;
+  width: 220px;
+  margin-top: 0;
+}
+@media (max-width: 1100px) {
+  .br-panel-vitals {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+  .br-panel-vitals h2 {
+    margin: 0 0 10px;
+  }
+  .br-panel-vitals .br-tiles {
+    margin-bottom: 12px;
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .br-panel-vitals .br-spark {
+    height: 88px;
+  }
+  .br-panel-vitals .br-gauge {
+    width: auto;
+    margin-top: 12px;
+  }
+}
 .br-feed {
   overflow-y: auto;
   flex: 1;

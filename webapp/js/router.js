@@ -18,6 +18,7 @@
 import { ros } from "./rosClient.js";
 import { initShell } from "./shell.js";
 import { getConfig } from "./config.js";
+import { SIM_SECTIONS } from "./railLayout.js";
 
 /**
  * @typedef {{ destroy: () => void }} PageView
@@ -26,11 +27,14 @@ import { getConfig } from "./config.js";
 
 // Teleop is the site root; every other section lives at /<key>. `key` matches
 // the shell's section keys so setActive can highlight the right rail link.
+// /brain is an alias into the Agent page (which opens its Brain monitor when
+// mounted at that path, then settles the URL on /agent) — old bookmarks keep
+// working and the rail highlights Agent.
 /** @type {Route[]} */
 const ROUTES = [
   { path: "/", key: "teleop", load: () => import("./teleop/main.js") },
   { path: "/agent", key: "agent", load: () => import("./agent/main.js") },
-  { path: "/brain", key: "brain", load: () => import("./brain/main.js") },
+  { path: "/brain", key: "agent", load: () => import("./agent/main.js") },
   { path: "/nav", key: "nav", load: () => import("./nav/main.js") },
   { path: "/logging", key: "logging", load: () => import("./logging/main.js") },
   { path: "/datasets", key: "datasets", load: () => import("./datasets/main.js") },
@@ -65,10 +69,9 @@ function routeFor(pathname) {
 
 const shell = initShell(navigate);
 
-// Sim deployments hide robot-data workflows from the rail (shell.js's
-// SIM_SECTIONS); gate the routes too, so a deep link or refresh can't mount
-// a page whose services have no sim backing.
-const SIM_ROUTE_KEYS = new Set(["teleop", "agent", "brain", "nav", "logging", "armsdk", "settings"]);
+// Sim deployments hide robot-data workflows from the rail (SIM_SECTIONS);
+// gate the routes too, so a deep link or refresh can't mount a page whose
+// services have no sim backing.
 /** @type {Promise<{simControls?: boolean}>} */
 const configPromise = getConfig();
 
@@ -80,7 +83,7 @@ const configPromise = getConfig();
  */
 async function render(route) {
   const seq = ++navSeq;
-  if ((await configPromise)?.simControls && !SIM_ROUTE_KEYS.has(route.key)) route = ROUTES[0];
+  if ((await configPromise)?.simControls && !SIM_SECTIONS.has(route.key)) route = ROUTES[0];
   if (seq !== navSeq) return; // superseded while awaiting config
   // Destroy BEFORE building the next page: the outgoing destroy() stops running
   // skills/drive and frees socket-bound panels, and clears the stage.
