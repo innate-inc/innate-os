@@ -249,7 +249,17 @@ class NavigateAgent(Agent):
 
     def get_prompt(self):
         return "You are a helpful robot. When asked, navigate to the requested location using the navigate_to_position skill."
+
+    def uses_map(self):
+        return True
 ```
+
+Override `uses_map()` to include the latest navigation occupancy map in every
+local-brain turn. The brain reads the latched `nav_msgs/OccupancyGrid` on
+`/map`, renders it as a labeled JPEG, and keeps only the current map in model
+history. If no valid map is available (including map-free mode's placeholder),
+the turn continues without a map image. Agents that do not override
+`uses_map()` keep the default `False` behavior.
 
 ### Testing agents in sim
 

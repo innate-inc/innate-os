@@ -9,6 +9,7 @@ touches the network in generate(), so everything else is exercised directly
 with a None or capturing transport.
 """
 
+import base64
 import json
 
 import pytest
@@ -252,6 +253,50 @@ def test_generate_keeps_the_old_wrist_frame_when_this_turn_has_none():
     assert images_in(captured["contents"][0]) == 2  # arm camera stale: last wrist frame still shown
 
 
+def test_navigation_map_is_current_only_and_retires_when_absent():
+    captured = {}
+
+    def transport(model, body):
+        captured.update(body)
+        return [model_response({"text": "ok"})]
+
+    context = make_context(transport, max_image_turns=3)
+    first = GeminiContext.user_message("head and map", [b"head-1", b"map-1"])
+    context.absorb(first, model_response({"text": "ok"}), current_map_images=[1])
+
+    second = GeminiContext.user_message("new head and map", [b"head-2", b"map-2"])
+    context.generate(second, [], "S", current_map_images=[1])
+    assert images_in(captured["contents"][0]) == 1
+    assert any("older navigation map removed" in p.get("text", "") for p in captured["contents"][0]["parts"])
+    context.absorb(second, model_response({"text": "ok"}), current_map_images=[1])
+
+    third = GeminiContext.user_message("head only", [b"head-3"])
+    context.generate(third, [], "S", current_map_images=[])
+    assert images_in(captured["contents"][2]) == 1
+    context.absorb(third, model_response({"text": "ok"}), current_map_images=[])
+    assert context._current_map_turn is None
+
+
+def test_generate_masks_prior_wrist_and_map_from_the_same_turn():
+    captured = {}
+
+    def transport(model, body):
+        captured.update(body)
+        return [model_response({"text": "ok"})]
+
+    context = make_context(transport, max_image_turns=3)
+    first = GeminiContext.user_message("head, wrist, and map", [b"head-1", b"wrist-1", b"map-1"])
+    context.absorb(first, model_response({"text": "ok"}), latest_only_images=[1], current_map_images=[2])
+
+    second = GeminiContext.user_message("new frames", [b"head-2", b"wrist-2", b"map-2"])
+    context.generate(second, [], "S", latest_only_images=[1], current_map_images=[2])
+
+    prior_parts = captured["contents"][0]["parts"]
+    assert images_in(captured["contents"][0]) == 1
+    assert any("older wrist camera frame removed" in p.get("text", "") for p in prior_parts)
+    assert any("older navigation map removed" in p.get("text", "") for p in prior_parts)
+
+
 def test_generate_taps_the_exact_request_body():
     # The on_request hook must see the request verbatim: system, full history
     # (images and all), and the new message — it feeds the /brain/trace monitor.
@@ -451,8 +496,9 @@ import time  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
 from brain_client.brain.agent import BrainAgent  # noqa: E402
-from brain_client.brain.utils import Event, EventKind  # noqa: E402
+from brain_client.brain.utils import Event, EventKind, FrameLabel  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
+from brain_client.perception.map_image import NavigationMapImage  # noqa: E402
 from brain_client.transport.chat import SpeechStreamer  # noqa: E402
 
 
@@ -498,6 +544,7 @@ def agent_factory(monkeypatch):
             state,
             config,
             camera=camera,
+            map_capture=SimpleNamespace(latest_image=lambda: None),
             pose_tracker=pose,
             runner=SimpleNamespace(),
             roster=SimpleNamespace(active_skill_ids=lambda: []),
@@ -1012,6 +1059,73 @@ def test_running_skill_guidance_reads_registry_metadata(agent_factory):
     state.primitive_running = RunningSkill(primitive_name="wave", skill_id="local/wave", primitive_id="p1")
     text, images = agent._look([])
     assert "(guidance while this skill runs: do not block the arm)" in text
+
+
+def test_navigation_map_is_opt_in_and_appended_after_event_images(agent_factory):
+    agent, state = agent_factory()
+    map_image = NavigationMapImage(
+        jpeg=b"map-jpeg",
+        resolution=0.05,
+        width=200,
+        height=100,
+        origin_x=-5.0,
+        origin_y=-2.5,
+        origin_yaw=0.0,
+        frame_id="map",
+    )
+    agent._map.latest_image = lambda: map_image
+    event = Event("inspection result", image=b"event-jpeg")
+
+    state.current_directive = SimpleNamespace(uses_map=lambda: False)
+    text, frames = agent._look([event])
+    assert [label for label, _jpeg in frames] == [FrameLabel.HEAD, FrameLabel.EVENT]
+    assert "navigation occupancy map" not in text
+
+    state.current_directive = SimpleNamespace(uses_map=lambda: True)
+    text, frames = agent._look([event])
+    assert [label for label, _jpeg in frames] == [FrameLabel.HEAD, FrameLabel.EVENT, FrameLabel.MAP]
+    assert frames[-1][1] == b"map-jpeg"
+    assert "image 3 is the navigation occupancy map" in text
+    assert "white is free, darker means more occupied" in text
+    assert "lower-left=(-5.00,-2.50), lower-right=(5.00,-2.50)" in text
+
+
+def test_opted_in_navigation_map_reaches_gemini_as_labeled_jpeg(agent_factory):
+    agent, state = agent_factory()
+    agent._map.latest_image = lambda: NavigationMapImage(
+        jpeg=b"map-jpeg",
+        resolution=0.05,
+        width=200,
+        height=100,
+        origin_x=-5.0,
+        origin_y=-2.5,
+        origin_yaw=0.0,
+        frame_id="map",
+    )
+    state.current_directive = SimpleNamespace(uses_map=lambda: True, get_prompt=lambda: "")
+    captured = {}
+
+    def transport(model, body):
+        captured["body"] = body
+        return [model_response(call_part("wait", {}))]
+
+    agent._context._transport = transport
+    run_turn(agent)
+
+    parts = captured["body"]["contents"][-1]["parts"]
+    assert "image 2 is the navigation occupancy map" in parts[0]["text"]
+    assert parts[-1]["inlineData"]["mimeType"] == "image/jpeg"
+    assert base64.b64decode(parts[-1]["inlineData"]["data"]) == b"map-jpeg"
+
+
+def test_opted_in_agent_gracefully_omits_an_unavailable_map(agent_factory):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(uses_map=lambda: True)
+
+    text, frames = agent._look([])
+
+    assert [label for label, _jpeg in frames] == [FrameLabel.HEAD]
+    assert "navigation occupancy map" not in text
 
 
 def test_a_turn_bug_backs_off_instead_of_killing_the_loop(agent_factory, monkeypatch):

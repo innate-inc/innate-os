@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from brain_client.core.state import BrainState, RunningSkill
     from brain_client.perception.camera import CameraCapture
     from brain_client.perception.gaze_control import GazeController
+    from brain_client.perception.map_capture import MapCapture
     from brain_client.perception.pose import Pose
     from brain_client.perception.pose_tracking import PoseTracker
     from brain_client.perception.scan_health import ScanHealthMonitor
@@ -82,6 +83,7 @@ class BrainAgent:
         config: BrainConfig,
         *,
         camera: CameraCapture,
+        map_capture: MapCapture,
         pose_tracker: PoseTracker,
         runner: PrimitiveRunner,
         roster: SkillRoster,
@@ -95,6 +97,7 @@ class BrainAgent:
         self._state = state
         self._config = config
         self._camera = camera
+        self._map = map_capture
         self._pose = pose_tracker
         self._runner = runner
         self._roster = roster
@@ -273,6 +276,7 @@ class BrainAgent:
         if self._frame_at_capture is None:
             return  # the feed died between the loop's freshness check and the look
         wrist_frames = [i for i, (label, _) in enumerate(frames) if label == FrameLabel.WRIST]
+        map_frames = [i for i, (label, _) in enumerate(frames) if label == FrameLabel.MAP]
         message = GeminiContext.user_message(text, [jpeg for _, jpeg in frames])
         tools = self._build_tools(events)
         directive = self._state.current_directive
@@ -281,7 +285,7 @@ class BrainAgent:
             self._logger.info(f"[Brain] Turn input:\n{text}")
         self._trace_turn_start(text, frames, tools, system, context)
 
-        response = await self._generate(context, message, tools, system, speaker, wrist_frames)
+        response = await self._generate(context, message, tools, system, speaker, wrist_frames, map_frames)
         latency = self._elapsed()
         self._report_recovered()
         if not self._state.is_brain_active:
@@ -289,7 +293,12 @@ class BrainAgent:
             self._trace(TraceEvent.TURN_DROPPED, turn=self._turn_count, latency=latency)
             return
 
-        decision = context.absorb(message, response, latest_only_images=wrist_frames)
+        decision = context.absorb(
+            message,
+            response,
+            latest_only_images=wrist_frames,
+            current_map_images=map_frames,
+        )
         del self._events[: len(events)]
         events.clear()  # committed: a failure below backs off against an empty peek
         outcomes = self._act(decision, speaker, context)
@@ -312,13 +321,20 @@ class BrainAgent:
         system: str,
         speaker: SpeechStreamer,
         wrist_frames: list[int],
+        map_frames: list[int],
     ) -> dict:
         """The only blocking call, on a worker thread. Cancellation unwinds HERE —
         the orphaned HTTP call finishes and its result is dropped."""
         self._turn_in_flight = True
         try:
             return await asyncio.to_thread(
-                context.generate, message, tools, system, speaker.feed, latest_only_images=wrist_frames
+                context.generate,
+                message,
+                tools,
+                system,
+                speaker.feed,
+                latest_only_images=wrist_frames,
+                current_map_images=map_frames,
             )
         finally:
             self._turn_in_flight = False
@@ -410,6 +426,11 @@ class BrainAgent:
             frames.append((FrameLabel.WRIST, arm_jpeg))
         frames += [(FrameLabel.EVENT, event.image) for event in events if event.image][-_MAX_EVENT_IMAGES:]
 
+        directive = self._state.current_directive
+        map_image = self._map.latest_image() if directive is not None and directive.uses_map() else None
+        if map_image is not None:
+            frames.append((FrameLabel.MAP, map_image.jpeg))
+
         running = self._state.primitive_running
         text = observation_text(
             uptime_s=int(time.monotonic() - self._activated_at),
@@ -418,6 +439,7 @@ class BrainAgent:
             guidance=self._running_guidance(running),
             events=events,
             has_wrist_frame=arm_jpeg is not None,
+            map_note=map_image.observation_note(len(frames)) if map_image is not None else None,
         )
         return text, frames
 

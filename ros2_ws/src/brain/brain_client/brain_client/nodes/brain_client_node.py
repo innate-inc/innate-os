@@ -37,6 +37,7 @@ from brain_client.memory.recorder import MemoryRecorder
 from brain_client.memory.store import MemoryStore
 from brain_client.perception.camera import CameraCapture
 from brain_client.perception.gaze_control import GazeController
+from brain_client.perception.map_capture import MapCapture
 from brain_client.perception.pose_tracking import PoseTracker
 from brain_client.perception.scan_health import ScanHealthMonitor
 from brain_client.robot.arm_recovery import ArmRecovery
@@ -138,6 +139,7 @@ class BrainClientNode(Node):
         cfg, state = self.config, self.state
         self.chat = ChatManager(self.get_logger(), self.chat_out_pub, self.task_status_pub, self._tts_handler)
         self.camera = CameraCapture(self, cfg)
+        self.map_capture = MapCapture(self, cfg.agent_map_topic)
         self.pose_tracker = PoseTracker(self, odom_topic=cfg.odom_topic, nav_mode_topic=cfg.current_nav_mode_topic)
         self.scan_health = ScanHealthMonitor(self, scan_topic=cfg.scan_topic, stale_after_sec=cfg.scan_stale_after_sec)
         # Spatial memory: the recorder builds it whenever the robot drives well-
@@ -184,6 +186,7 @@ class BrainClientNode(Node):
             state,
             cfg,
             camera=self.camera,
+            map_capture=self.map_capture,
             pose_tracker=self.pose_tracker,
             runner=self.runner,
             roster=self.roster,

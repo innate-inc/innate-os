@@ -73,7 +73,7 @@ def build_agent_instances(
     """Instantiate discovered agent classes; returns ``(agents by id, broken)``.
 
     Construction probes every surface the brain reads later (id, display
-    name, prompt, skill and input refs, gaze flag, icon) so a bad agent fails here — as
+    name, prompt, skill and input refs, perception flags, icon) so a bad agent fails here — as
     a broken roster entry with its error — rather than inside the directives
     service or at activation, where one bad agent would take the whole
     response down.
@@ -90,6 +90,7 @@ def build_agent_instances(
             agent.get_prompt()
             agent.input_names()
             agent.uses_gaze()
+            agent.uses_map()
             skill_ids = agent.skill_ids()
         except Exception as e:  # noqa: BLE001 — one bad agent must not stop the roster
             name = class_name_to_snake_case(cls.__name__)

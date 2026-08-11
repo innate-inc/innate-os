@@ -25,6 +25,7 @@ class BrainConfig:
     odom_topic: str
     current_nav_mode_topic: str
     current_map_topic: str
+    agent_map_topic: str
     amcl_pose_topic: str
     scan_topic: str
 
@@ -85,6 +86,7 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     "odom_topic": "/odom",
     "current_nav_mode_topic": "/nav/current_mode",
     "current_map_topic": "/nav/current_map",
+    "agent_map_topic": "/map",
     "amcl_pose_topic": "/amcl_pose",
     "scan_topic": "/scan",
     # --- Feature flags ---

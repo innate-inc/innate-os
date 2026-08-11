@@ -190,3 +190,8 @@ class Agent(ABC):
         Default: False.
         """
         return False
+
+    def uses_map(self) -> bool:
+        """Whether each local-brain turn includes the latest navigation map
+        as an image. Subclasses can opt in; the default is False."""
+        return False

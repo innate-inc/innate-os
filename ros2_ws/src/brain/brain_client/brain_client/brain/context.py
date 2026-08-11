@@ -27,6 +27,7 @@ from brain_client.brain.transport import Transport
 
 _FRAME_REMOVED = {"text": "[older camera frame removed]"}
 _WRIST_FRAME_REMOVED = {"text": "[older wrist camera frame removed]"}
+_MAP_FRAME_REMOVED = {"text": "[older navigation map removed]"}
 
 
 @dataclass
@@ -60,6 +61,9 @@ class GeminiContext:
         # The one history turn still carrying latest-only frames (wrist camera),
         # as (content, part indexes) — absorbing a newer set prunes these.
         self._latest_only_turn: tuple[dict, list[int]] | None = None
+        # Unlike the wrist camera, a navigation map is only meaningful for the
+        # current turn. An empty current-map set also retires the previous one.
+        self._current_map_turn: tuple[dict, list[int]] | None = None
         # Observability tap: called with the exact request body just before it
         # goes on the wire (from generate's thread). The body must be treated
         # as read-only — it shares structure with the live history.
@@ -68,6 +72,7 @@ class GeminiContext:
     def clear(self) -> None:
         self._history = []
         self._latest_only_turn = None
+        self._current_map_turn = None
 
     @property
     def history_len(self) -> int:
@@ -95,6 +100,7 @@ class GeminiContext:
         on_speech: Callable[[str], None] | None = None,
         *,
         latest_only_images: list[int] | None = None,
+        current_map_images: list[int] | None = None,
     ) -> dict:
         """Blocking network call — safe on a worker thread (history is only read).
 
@@ -108,18 +114,27 @@ class GeminiContext:
         without this every request would ship two wrist frames. History is
         masked via shallow copies, never mutated (an abandoned turn's orphaned
         request may still be reading it).
+
+        ``current_map_images`` differs intentionally: passing an empty list
+        also masks the prior map, because a map is only valid for the current
+        turn and must disappear when an agent opts out or no map is available.
         """
         contents = [*self._history, user_message]
+        masks: list[tuple[dict, list[int], dict[str, str]]] = []
         if latest_only_images and self._latest_only_turn is not None:
             stale, indexes = self._latest_only_turn
-            masked = {
-                **stale,
-                "parts": [
-                    dict(_WRIST_FRAME_REMOVED) if i in indexes and "inlineData" in p else p
-                    for i, p in enumerate(stale["parts"])
-                ],
-            }
-            contents = [masked if content is stale else content for content in contents]
+            masks.append((stale, indexes, _WRIST_FRAME_REMOVED))
+        if current_map_images is not None and self._current_map_turn is not None:
+            stale, indexes = self._current_map_turn
+            masks.append((stale, indexes, _MAP_FRAME_REMOVED))
+        for content_index, content in enumerate(contents):
+            content_masks = [(indexes, replacement) for stale, indexes, replacement in masks if content is stale]
+            if not content_masks:
+                continue
+            parts = list(content["parts"])
+            for indexes, replacement in content_masks:
+                parts = [dict(replacement) if i in indexes and "inlineData" in p else p for i, p in enumerate(parts)]
+            contents[content_index] = {**content, "parts": parts}
         thinking: dict = {"includeThoughts": True}
         if self._thinking_level:
             thinking["thinkingLevel"] = self._thinking_level
@@ -149,7 +164,14 @@ class GeminiContext:
             raise RuntimeError(f"gemini returned no content: {_empty_stream_reason(last_chunk)}")
         return {"candidates": [{"content": {"role": "model", "parts": _merged(parts)}}]}
 
-    def absorb(self, user_message: dict, response: dict, *, latest_only_images: list[int] | None = None) -> Decision:
+    def absorb(
+        self,
+        user_message: dict,
+        response: dict,
+        *,
+        latest_only_images: list[int] | None = None,
+        current_map_images: list[int] | None = None,
+    ) -> Decision:
         """Commit the exchange to history and distill the model's Decision.
 
         Thought-summary parts are dropped from the stored model turn (they are
@@ -161,6 +183,9 @@ class GeminiContext:
         newest turn — the wrist camera: a stale gripper close-up reads as
         current grasp state and misleads the model, so absorbing a new one
         prunes the previous turn's copy on the spot.
+
+        ``current_map_images`` names the current navigation map positions. A
+        supplied empty list permanently retires the previous map.
         """
         decision = _decision_from(response)
         self._history.append(user_message)
@@ -175,6 +200,19 @@ class GeminiContext:
             self._latest_only_turn = (
                 user_message,
                 [image_parts[i] for i in latest_only_images if i < len(image_parts)],
+            )
+        if current_map_images is not None:
+            if self._current_map_turn is not None:
+                content, indexes = self._current_map_turn
+                content["parts"] = [
+                    dict(_MAP_FRAME_REMOVED) if i in indexes and "inlineData" in p else p
+                    for i, p in enumerate(content["parts"])
+                ]
+            image_parts = [i for i, p in enumerate(user_message["parts"]) if "inlineData" in p]
+            self._current_map_turn = (
+                (user_message, [image_parts[i] for i in current_map_images if i < len(image_parts)])
+                if current_map_images
+                else None
             )
         model_content = _model_content(response)
         if model_content is not None:
@@ -210,6 +248,8 @@ class GeminiContext:
         # keep its base64 wrist frame alive for as long as the arm feed is stale.
         if self._latest_only_turn is not None and not any(c is self._latest_only_turn[0] for c in history):
             self._latest_only_turn = None
+        if self._current_map_turn is not None and not any(c is self._current_map_turn[0] for c in history):
+            self._current_map_turn = None
         # Keep camera frames only in the newest few user turns (none at all if
         # the configured keep-count is zero or nonsensical).
         keep = max(self._max_image_turns, 0)

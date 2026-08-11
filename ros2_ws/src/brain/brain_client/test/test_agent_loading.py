@@ -101,6 +101,21 @@ def test_agents_load_with_source_stamping(workspace):
     assert default_agent is agents["alpha"]  # no empty_directive -> first loaded
 
 
+def test_agents_opt_in_to_map_images(workspace):
+    write(workspace, "innate_agents/alpha.py", agent_src("Alpha"))
+    write(
+        workspace,
+        "innate_agents/mapper.py",
+        agent_src("Mapper", body="def uses_map(self):\n    return True"),
+    )
+
+    agents, _default_agent, broken = initialize_agents(LOGGER)
+
+    assert broken == {}
+    assert agents["alpha"].uses_map() is False
+    assert agents["mapper"].uses_map() is True
+
+
 def test_empty_directive_is_default(workspace):
     write(workspace, "innate_agents/alpha.py", agent_src("Alpha"))
     write(workspace, "innate_agents/empty_directive.py", agent_src("EmptyDirective", "empty_directive"))
@@ -216,6 +231,20 @@ def test_probe_failure_rosters_broken(workspace):
     assert set(agents) == {"alpha"}
     assert list(broken) == ["lazy"]
     assert "ValueError: no input device" in broken["lazy"]
+
+
+def test_uses_map_probe_failure_rosters_broken(workspace):
+    write(
+        workspace,
+        "innate_agents/lazy_map.py",
+        agent_src("LazyMap", body='def uses_map(self):\n    raise ValueError("no map")'),
+    )
+
+    agents, _default, broken = initialize_agents(LOGGER)
+
+    assert agents == {}
+    assert list(broken) == ["lazy_map"]
+    assert "ValueError: no map" in broken["lazy_map"]
 
 
 def test_function_local_agent_rosters_broken(workspace):

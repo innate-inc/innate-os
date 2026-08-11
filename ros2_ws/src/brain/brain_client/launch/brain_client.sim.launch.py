@@ -26,6 +26,11 @@ def generate_launch_description():
         "cmd_vel_topic", default_value="/cmd_vel", description="Command velocity topic"
     )
     map_topic_arg = DeclareLaunchArgument("map_topic", default_value="/map", description="Map topic (skills server)")
+    agent_map_topic_arg = DeclareLaunchArgument(
+        "agent_map_topic",
+        default_value="/map",
+        description="Navigation occupancy map shown to opted-in local agents",
+    )
     send_arm_camera_image_arg = DeclareLaunchArgument(
         "send_arm_camera_image",
         default_value="False",
@@ -63,6 +68,7 @@ def generate_launch_description():
                 "send_arm_camera_image": LaunchConfiguration("send_arm_camera_image"),
                 "simulator_mode": LaunchConfiguration("simulator_mode"),
                 "current_nav_mode_topic": LaunchConfiguration("current_nav_mode_topic"),
+                "agent_map_topic": LaunchConfiguration("agent_map_topic"),
                 "log_everything": LaunchConfiguration("log_everything"),
                 "gemini_model": LaunchConfiguration("gemini_model"),
                 # Sim camera mount (the config.py defaults are the hardware's).
@@ -80,6 +86,7 @@ def generate_launch_description():
             image_topic_arg,
             cmd_vel_topic_arg,
             map_topic_arg,
+            agent_map_topic_arg,
             send_arm_camera_image_arg,
             simulator_mode_arg,
             current_nav_mode_topic_arg,

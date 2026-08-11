@@ -36,6 +36,7 @@ class FrameLabel(StrEnum):
     HEAD = "head camera"
     WRIST = "wrist camera"
     EVENT = "event image"
+    MAP = "navigation map"
 
 
 Frame = tuple[FrameLabel, bytes]
@@ -64,6 +65,7 @@ def observation_text(
     guidance: str,
     events: list[Event],
     has_wrist_frame: bool,
+    map_note: str | None,
 ) -> str:
     """The text half of a turn input: robot status, guidance, and new events."""
     status = f"[t+{uptime_s}s]"
@@ -77,6 +79,8 @@ def observation_text(
     lines += [f"- {event.text}" for event in events]
     if has_wrist_frame:
         lines.append("(second image is the arm wrist camera)")
+    if map_note:
+        lines.append(map_note)
     return "\n".join(lines)
 
 
