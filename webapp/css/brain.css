@@ -110,9 +110,6 @@
   grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr) auto;
   grid-template-areas: "loop vision" "actions queue" "vitals vitals";
 }
-.br-panel-mind {
-  display: none;
-}
 @media (max-width: 1100px) {
   .brain-page {
     overflow-y: auto;
@@ -165,17 +162,21 @@
 }
 .br-panel-loop { grid-area: loop; align-items: center; }
 .br-panel-vision { grid-area: vision; }
-.br-panel-mind { grid-area: mind; }
+/* Hidden here, after .br-panel — an earlier display:none loses that rule's
+   display:flex on source order and the panel lands in an implicit grid track. */
+.br-panel-mind { display: none; }
 .br-panel-actions { grid-area: actions; }
 .br-panel-queue { grid-area: queue; }
 
 /* Vitals as a bottom status strip: label, tiles, sparkline, history gauge in
-   one row (back to a stacked card when the grid goes single-column). */
+   one row, wrapping rather than clipping when the row runs out of width
+   (back to a stacked card when the grid goes single-column). */
 .br-panel-vitals {
   grid-area: vitals;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 18px;
+  gap: 12px 18px;
 }
 .br-panel-vitals h2 {
   margin: 0;
@@ -187,8 +188,8 @@
   grid-template-columns: repeat(4, minmax(84px, 108px));
 }
 .br-panel-vitals .br-spark-wrap {
-  flex: 1 1 auto;
-  min-width: 120px;
+  flex: 1 1 240px;
+  min-width: 160px;
 }
 .br-panel-vitals .br-spark {
   height: 52px;
