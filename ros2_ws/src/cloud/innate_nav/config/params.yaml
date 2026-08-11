@@ -19,3 +19,27 @@ innate_nav_node:
     # 0.1 m-radius agent it was trained on, so its line shaves corners this
     # body cannot take. false = plain pursuit, no obstacle awareness.
     use_costmap: true
+    camera_info_topic: "/mars/nav_camera/camera_info"
+    # 110 deg over 640px -- what the checkpoint was trained at. Startup
+    # compares the camera's advertised K against this and says so if it differs.
+    expected_fx: 224.07
+
+nav_camera_rectifier:
+  ros__parameters:
+    source_topic: "/mars/main_camera/left/image_raw/compressed"
+    output_topic: "/mars/nav_camera/image_raw/compressed"
+    # The view the policy was trained on. Lower it only if coverage() says the
+    # lens cannot reach it -- blank corners are worse than a narrower view.
+    hfov_deg: 110.0
+    width: 640
+    height: 480
+    jpeg_quality: 80
+    # MUST come from a real fisheye calibration. mars_cam's stereo calibration
+    # is plumb_bob, which does not fit a lens this wide. 0 = derive from the
+    # source frame, which only gets the node started.
+    source_fx: 0.0
+    source_fy: 0.0
+    source_cx: 0.0
+    source_cy: 0.0
+    source_xi: -0.27
+    source_alpha: 0.57

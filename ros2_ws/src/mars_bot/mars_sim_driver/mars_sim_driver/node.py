@@ -9,6 +9,7 @@ run unchanged -- see README "Virtual MARS driver".
   pub /mars/main_camera/left/image_raw/compressed sensor_msgs/CompressedImage @10Hz (lazy)
   pub /mars/arm/image_raw/compressed              sensor_msgs/CompressedImage @6Hz (lazy)
   pub /mars/nav_camera/image_raw/compressed       sensor_msgs/CompressedImage @5Hz (lazy)
+  pub /mars/nav_camera/camera_info                sensor_msgs/CameraInfo @8Hz
   pub /mars/main_camera/depth/image_rect_raw      sensor_msgs/Image 16UC1 mm @8Hz (lazy)
   pub /mars/main_camera/points                    sensor_msgs/PointCloud2 xyz @8Hz (lazy)
   pub /mars/main_camera/left/camera_info          sensor_msgs/CameraInfo @8Hz
@@ -55,7 +56,15 @@ from std_msgs.msg import Bool, Float64MultiArray, Int32, Int64, String
 from std_srvs.srv import Trigger
 from tf2_ros import TransformBroadcaster
 
-from .constants import CAMERA_CX, CAMERA_CY, CAMERA_FX, CAMERA_FY, CAMERA_HEIGHT, CAMERA_WIDTH
+from .constants import (
+    CAMERA_CX,
+    CAMERA_CY,
+    CAMERA_FX,
+    CAMERA_FY,
+    CAMERA_HEIGHT,
+    CAMERA_WIDTH,
+    NAV_CAMERA_FOVY,
+)
 from .remote_world import RemoteWorld
 
 try:
@@ -94,6 +103,11 @@ ARM_JOINTS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
 # pixels, not a centred principal point, and camera_info must say so.
 FX, FY = CAMERA_FX, CAMERA_FY
 CX, CY = CAMERA_CX, CAMERA_CY
+# The nav camera is a different lens on the same mount: the 110 deg pinhole the
+# policy trained on, so square pixels and a CENTRED principal point. It must not
+# inherit the head's measured offsets -- the render it describes has none.
+NAV_FOCAL = CAMERA_HEIGHT / (2 * math.tan(math.radians(NAV_CAMERA_FOVY) / 2))
+NAV_CX, NAV_CY = CAMERA_WIDTH / 2, CAMERA_HEIGHT / 2
 
 WORLD_DEFAULT_ENDPOINT = "127.0.0.1:8799"
 
@@ -150,6 +164,10 @@ class VirtualMarsNode(Node):
         )
         self._points_pub = self.create_publisher(PointCloud2, "/mars/main_camera/points", qos_profile_sensor_data)
         self._caminfo_pub = self.create_publisher(CameraInfo, "/mars/main_camera/left/camera_info", 10)
+        # The nav camera's intrinsics are the policy's input contract: a
+        # consumer can check K against what its checkpoint was trained on
+        # instead of trusting that a topic name means the right geometry.
+        self._nav_caminfo_pub = self.create_publisher(CameraInfo, "/mars/nav_camera/camera_info", 10)
         self._arm_state_pub = self.create_publisher(JointState, "/mars/arm/state", 1)
         self._joint_states_pub = self.create_publisher(JointState, "/joint_states", 1)
         self._head_pub = self.create_publisher(String, "/mars/head/current_position", 1)
@@ -611,6 +629,17 @@ class VirtualMarsNode(Node):
         msg.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
         msg.p = [FX, 0.0, CX, 0.0, 0.0, FY, CY, 0.0, 0.0, 0.0, 1.0, 0.0]
         self._caminfo_pub.publish(msg)
+
+        nav = CameraInfo()
+        nav.header.stamp = msg.header.stamp
+        nav.header.frame_id = "camera_optical_frame"
+        nav.width, nav.height = CAMERA_WIDTH, CAMERA_HEIGHT
+        nav.distortion_model = "plumb_bob"
+        nav.d = [0.0] * 5  # rendered rectilinear; on hardware the rectifier makes it so
+        nav.k = [NAV_FOCAL, 0.0, NAV_CX, 0.0, NAV_FOCAL, NAV_CY, 0.0, 0.0, 1.0]
+        nav.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        nav.p = [NAV_FOCAL, 0.0, NAV_CX, 0.0, 0.0, NAV_FOCAL, NAV_CY, 0.0, 0.0, 0.0, 1.0, 0.0]
+        self._nav_caminfo_pub.publish(nav)
 
     def _publish_joint_states(self) -> None:
         try:

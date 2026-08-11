@@ -43,7 +43,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallb
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CameraInfo, CompressedImage
 
 from innate_nav_inference.client.costmap import Costmap
 from innate_nav_inference.client.pursuit import (
@@ -90,6 +90,9 @@ class InnateNavNode(Node):
         self.declare_parameter("max_angular_speed", PursuitCfg().w_max)
         self.declare_parameter("publish_path", True)
         self.declare_parameter("use_costmap", True)
+        self.declare_parameter("camera_info_topic", "/mars/nav_camera/camera_info")
+        # The focal length the checkpoint was trained at (110 deg over 640px).
+        self.declare_parameter("expected_fx", 224.07)
 
         self._server_url = str(self.get_parameter("server_url").value)
         self._cfg = PursuitCfg(
@@ -100,6 +103,7 @@ class InnateNavNode(Node):
         self._client: NavClient | None = None
         self._costmap: Costmap | None = None
         self._warned_no_costmap = False
+        self._checked_intrinsics = False
         self._pose: Pose | None = None
         self._goal_handle = None
         self._cancel_requested = threading.Event()
@@ -122,6 +126,13 @@ class InnateNavNode(Node):
         )
         self.create_subscription(
             Odometry, "/odom", self._on_odom, 1, callback_group=MutuallyExclusiveCallbackGroup()
+        )
+        self.create_subscription(
+            CameraInfo,
+            str(self.get_parameter("camera_info_topic").value),
+            self._on_camera_info,
+            10,
+            callback_group=MutuallyExclusiveCallbackGroup(),
         )
         # Nav2's local costmap: /scan fused with the depth cloud via STVL, then
         # inflated against the live footprint. Latched (TRANSIENT_LOCAL) because
@@ -173,6 +184,24 @@ class InnateNavNode(Node):
             self.get_logger().info(
                 f"local costmap up: {cm.grid.shape[1]}x{cm.grid.shape[0]} @ "
                 f"{cm.resolution:.3f}m — clearance checks active")
+
+    def _on_camera_info(self, msg: CameraInfo) -> None:
+        """The geometry is the contract, so check it rather than trusting the
+        topic name. A camera whose focal length is not the one the policy was
+        trained at makes it misjudge every distance, silently and plausibly."""
+        if self._checked_intrinsics:
+            return
+        self._checked_intrinsics = True
+        want = float(self.get_parameter("expected_fx").value)
+        fx, fy = msg.k[0], msg.k[4]
+        if abs(fx - want) > 1.0 or abs(fy - want) > 1.0:
+            self.get_logger().error(
+                f"camera fx={fx:.1f} fy={fy:.1f} but the checkpoint was trained at "
+                f"{want:.1f} -- the policy will read distances off by {want / max(fx, 1e-6):.2f}x. "
+                f"Wrong camera, or the rectifier's hfov_deg does not match training."
+            )
+        else:
+            self.get_logger().info(f"camera intrinsics match training (fx={fx:.2f})")
 
     def _on_image(self, msg: CompressedImage) -> None:
         """Every frame goes up as-is. The server owns keyframe selection, so

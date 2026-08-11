@@ -7,6 +7,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -26,6 +27,21 @@ def generate_launch_description() -> LaunchDescription:
         description="Velocity topic the policy commands should publish to",
     )
 
+    # Sim renders the policy's view natively, so the rectifier is hardware-only.
+    rectify_arg = DeclareLaunchArgument(
+        "rectify",
+        default_value="false",
+        description="Remap the fisheye into the policy's pinhole view (hardware; sim renders it)",
+    )
+    rectifier = Node(
+        package="innate_nav",
+        executable="nav_camera_rectifier",
+        name="nav_camera_rectifier",
+        output="screen",
+        parameters=[LaunchConfiguration("params_file")],
+        condition=IfCondition(LaunchConfiguration("rectify")),
+    )
+
     node = Node(
         package="innate_nav",
         executable="innate_nav_node",
@@ -37,4 +53,4 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
-    return LaunchDescription([params_arg, cmd_vel_topic_arg, node])
+    return LaunchDescription([params_arg, cmd_vel_topic_arg, rectify_arg, rectifier, node])
