@@ -26,6 +26,9 @@ const NO_PROGRESS: ChallengeProgress = { passed: false, best_time_s: null, attem
 export const THUMB_W = 240;
 export const THUMB_H = 240;
 
+// Silence on /nav_policy/path that means the run is over, not merely between
+// plans (they arrive at 2-4Hz).
+const NAV_PATH_STALE_MS = 5000;
 /** Playback delay bounds (see #delayS): one stream interval up to a
  * still-watchable worst case. */
 const DELAY_MIN_S = 0.025;
@@ -106,6 +109,7 @@ export class SimSession {
   #scanDirty = false;
   #navPath: Float32Array | null = null;
   #navPathDirty = false;
+  #navPathAt = 0;
   #lidarOn = false;
   #navPathOn = false;
   #hullsOn = false;
@@ -292,6 +296,7 @@ export class SimSession {
       this.#scanFeed.onNavPath = (points) => {
         this.#navPath = points;
         this.#navPathDirty = true;
+        this.#navPathAt = performance.now();
       };
       this.#scanFeed.init().catch((err) => console.warn("[sim-session] rosbridge overlay unavailable:", err));
     }
@@ -498,6 +503,13 @@ export class SimSession {
       this.#navPathDirty = false;
       scene.setNavPath(this.#navPath);
       scene.setLidarVisible(true); // first points may arrive after the toggle
+    } else if (this.#navPathOn && this.#navPath?.length && performance.now() - this.#navPathAt > NAV_PATH_STALE_MS) {
+      // The node clears the overlay when a run ends, but that is one message on
+      // a bridge that can go silent -- and a reconnect re-subscribes without
+      // replaying it. Plans arrive at 2-4Hz, so this only fires once they have
+      // genuinely stopped, never between two of them.
+      this.#navPath = new Float32Array(0);
+      scene.setNavPath(this.#navPath);
     }
   }
 

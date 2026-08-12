@@ -314,6 +314,17 @@ class InnateNavNode(Node):
         scale = speed_scale(costmap.worst_cost(odom_path_from(near, pose)), self._cfg)
         return self._cfg.v_max * max(0.0, math.cos(bearing)) * scale, w
 
+    def _clear_path(self) -> None:
+        """Retire the overlay when the run ends. The topic only ever carries new
+        plans, so the last one drawn otherwise stays on the floor of the 3D view
+        until some later run happens to replace it."""
+        if not bool(self.get_parameter("publish_path").value):
+            return
+        msg = Path()
+        msg.header.frame_id = "odom"
+        msg.header.stamp = self.get_clock().now().to_msg()
+        self._path.publish(msg)
+
     def _publish_path(self, wp_m, at: Pose) -> None:
         """The plan as an odom-frame floor path, for the webapp's 3D view."""
         msg = Path()
@@ -399,6 +410,7 @@ class InnateNavNode(Node):
             if self._client is client:
                 self._client = None
                 self._cmd.publish(_STOP)
+                self._clear_path()
             client.close()
 
     @staticmethod
