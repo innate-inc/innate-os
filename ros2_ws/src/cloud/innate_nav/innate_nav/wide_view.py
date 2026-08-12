@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Publishes the policy's virtual camera by resampling the already-rectified
-left image.
+"""Publishes the policy's virtual camera: main_camera/left, undistorted and
+re-projected to the 110-degree pinhole the checkpoint was trained on.
 
-There is no lens model here on purpose. mars_cam's stereo pipeline already
-undistorts main_camera/left with THAT ROBOT's calibration (a 14-coefficient
-rational fit) and publishes the result as image_rect_color. Both that image and
-the policy's view are pinholes sharing an optical axis, so going from one to
-the other is a crop and a scale -- no distortion coefficients, and nothing here
-to calibrate.
+Not image_rect. That stream is stereo-rectified with alpha=0, which crops to
+pixels valid in BOTH cameras -- right for depth, but it spends about 20 degrees
+of field doing it, leaving ~100 where the policy needs 110. This undistorts the
+raw image itself, monocular, with R = identity, and leaves the depth pipeline
+untouched.
 
-The source geometry is read from the rectified CameraInfo (P, not K -- P is
-what image_rect was projected with), so a unit whose calibration differs
-slightly is handled without configuration. The OUTPUT is fixed by the
-checkpoint, identical on every robot: that is the point, since the policy reads
-metric distance out of pixels and cannot absorb per-unit variation.
+The lens comes from camera_info when the robot has a calibration and from
+nominal parameters when it does not: every unit ships the same camera, so the
+nominal is close, and per-unit spread costs a fraction of a degree at the
+edges. A calibrated robot is still better, and is used automatically.
 
-A view the camera cannot cover is published BLANK in the uncovered region and
-logged as an error, rather than stretched to fit -- the policy has never seen a
-black band, and it has never seen a rescaled one either.
+The OUTPUT is fixed by the checkpoint and identical on every robot -- the
+policy reads metric distance out of pixel positions and cannot absorb per-unit
+variation. Anything the lens cannot cover is published BLANK and logged as an
+error, never stretched to fit.
 """
 
 from __future__ import annotations
@@ -33,29 +32,35 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, CompressedImage
 
-from .wide_view_maps import Pinhole, resample_maps
+from .wide_view_maps import Lens, Pinhole, undistort_maps
 
 SENSOR_QOS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1
 )
+
+# Measured on a MARS left camera at 640x480 (fx != fy because the driver
+# squashes 1280x720 into 4:3). Used only when the robot has no calibration.
+NOMINAL_K = [198.0389, 0.0, 326.8270, 0.0, 264.6403, 229.3660, 0.0, 0.0, 1.0]
+NOMINAL_D = [0.0128943, -0.0305921, -0.000264048, -0.000176999, 0.00519322]
+NOMINAL_SIZE = (640, 480)
 
 
 class WideView(Node):
     def __init__(self) -> None:
         super().__init__("wide_view")
 
-        self.declare_parameter("source_topic", "/mars/main_camera/left/image_rect_color/compressed")
+        self.declare_parameter("source_topic", "/mars/main_camera/left/image_raw/compressed")
         self.declare_parameter("source_info_topic", "/mars/main_camera/left/camera_info")
         self.declare_parameter("output_topic", "/mars/main_camera/left/wide/image_rect/compressed")
         self.declare_parameter("hfov_deg", 110.0)
         self.declare_parameter("width", 640)
-        # 370, not the 480 training rendered: this sensor is 16:9, so a 4:3
-        # frame at 110 deg would need 93.9 deg vertically and it has ~81. The
-        # rows dropped are the nearest ~7cm of floor, at the robot's feet.
-        # 370 rather than the 380 that just fits, so ~10px of per-unit
-        # principal-point spread cannot push a robot below full coverage.
+        # 370, not the 480 training rendered: a 4:3 frame at 110 deg wants 93.9
+        # degrees vertically and this sensor has ~84. The rows dropped are the
+        # nearest ~7cm of floor, at the robot's feet. The training crop must
+        # match whatever this is.
         self.declare_parameter("height", 370)
         self.declare_parameter("jpeg_quality", 80)
+        self.declare_parameter("use_camera_info", True)
 
         self._dst = Pinhole.from_hfov(
             float(self.get_parameter("hfov_deg").value),
@@ -63,9 +68,12 @@ class WideView(Node):
             int(self.get_parameter("height").value),
         )
         self._quality = int(self.get_parameter("jpeg_quality").value)
+        self._info: Lens | None = None
         self._maps: tuple[np.ndarray, np.ndarray] | None = None
-        self._src: Pinhole | None = None
+        self._built_for: tuple[int, int] | None = None
+        self._warned_nominal = False
         self._sub = None
+        self._started = time.monotonic()
 
         self._pub = self.create_publisher(
             CompressedImage, str(self.get_parameter("output_topic").value), SENSOR_QOS
@@ -75,68 +83,74 @@ class WideView(Node):
             str(self.get_parameter("output_topic").value).rsplit("/", 2)[0] + "/camera_info",
             10,
         )
-        self.create_subscription(
-            CameraInfo, str(self.get_parameter("source_info_topic").value), self._on_info, 10
-        )
+        if bool(self.get_parameter("use_camera_info").value):
+            self.create_subscription(
+                CameraInfo, str(self.get_parameter("source_info_topic").value), self._on_info, 10
+            )
         self.create_timer(1.0, self._follow_demand)
-        self._started = time.monotonic()
-        self._warned_no_info = False
         self.get_logger().info(
             f"wide view {self._dst.width}x{self._dst.height} @ "
-            f"{float(self.get_parameter('hfov_deg').value):.1f} deg, fx={self._dst.fx:.2f}; "
-            f"waiting for {self.get_parameter('source_info_topic').value}"
+            f"{float(self.get_parameter('hfov_deg').value):.1f} deg, fx={self._dst.fx:.2f}"
         )
 
     def _on_info(self, msg: CameraInfo) -> None:
-        """P carries the rectified projection; K still describes the raw lens.
+        """K and D describe the raw lens; P and R belong to the stereo pipeline
+        and are deliberately ignored. K[0]=0 is how the driver reports a unit
+        with no calibration on disk."""
+        if self._info is not None or not msg.k[0]:
+            return
+        self._info = Lens.from_camera_info(msg.k, msg.d, msg.width, msg.height)
+        self._built_for = None
+        self.get_logger().info(
+            f"using this robot's calibration: {msg.distortion_model}, {len(msg.d)} coeffs, "
+            f"fx={msg.k[0]:.1f} fy={msg.k[4]:.1f} at {msg.width}x{msg.height}"
+        )
 
-        main_camera_driver publishes P zeroed when the unit has no calibration
-        on disk, and a zero focal length would silently build a garbage map.
-        """
-        if self._src is not None:
-            return
-        if not msg.p[0]:
-            if not self._warned_no_info:
-                self._warned_no_info = True
-                self.get_logger().error(
-                    "camera_info says this unit is uncalibrated (P[0]=0): mars_cam has no "
-                    "stereo_calib.yaml for it, so image_rect is not a known projection and "
-                    "there is nothing to resample from. Calibrate the camera first."
-                )
-            return
-        self._src = Pinhole(fx=msg.p[0], fy=msg.p[5], cx=msg.p[2], cy=msg.p[6],
-                            width=msg.width, height=msg.height)
-        map_x, map_y, valid = resample_maps(self._src, self._dst)
+    def _lens_for(self, width: int, height: int) -> Lens:
+        if self._info is not None:
+            return self._info.scaled_to(width, height)
+        return Lens.from_camera_info(NOMINAL_K, NOMINAL_D, *NOMINAL_SIZE).scaled_to(width, height)
+
+    def _build(self, width: int, height: int) -> None:
+        lens = self._lens_for(width, height)
+        map_x, map_y, valid = undistort_maps(lens, self._dst)
         self._maps = (map_x, map_y)
+        self._built_for = (width, height)
         covered = float(valid.mean())
+        h, v = lens.half_angles_deg()
+        need_h, need_v = self._dst.half_angles_deg()
+        source = "camera_info" if self._info is not None else "NOMINAL, uncalibrated robot"
         if covered < 0.999:
             self.get_logger().error(
-                f"this camera covers {100 * covered:.1f}% of the requested view "
-                f"(source fx={self._src.fx:.1f} {self._src.width}x{self._src.height}); "
-                f"the rest is published BLANK. Lower hfov_deg or height until it reaches 100%."
+                f"lens covers {100 * covered:.1f}% of the requested view -- the rest is published "
+                f"BLANK. From {width}x{height} [{source}] it reaches {h:.1f}/{v:.1f} deg "
+                f"(horizontal/vertical) and the view needs {need_h:.1f}/{need_v:.1f}. "
+                f"Lower hfov_deg or height until this reads 100%."
             )
         else:
             self.get_logger().info(
-                f"resampling from {self._src.width}x{self._src.height} fx={self._src.fx:.1f}, "
-                f"full coverage"
+                f"full coverage from {width}x{height} [{source}]: lens reaches {h:.1f}/{v:.1f} deg, "
+                f"view needs {need_h:.1f}/{need_v:.1f}"
             )
 
     def _follow_demand(self) -> None:
         """Subscribe only while something is listening: the decode and the
-        resample are the cost, and an idle robot should pay neither."""
-        if self._maps is None and not self._warned_no_info and time.monotonic() - self._started > 15.0:
-            self._warned_no_info = True
-            self.get_logger().error(
-                f"no camera_info on {self.get_parameter('source_info_topic').value} after 15s -- "
-                f"is main_camera_driver up? Nothing will be published until it arrives."
+        remap are the cost, and an idle robot should pay neither."""
+        if (self._info is None and not self._warned_nominal
+                and bool(self.get_parameter("use_camera_info").value)
+                and time.monotonic() - self._started > 15.0):
+            self._warned_nominal = True
+            self.get_logger().warning(
+                f"no calibration on {self.get_parameter('source_info_topic').value} after 15s; "
+                f"using nominal lens parameters for this camera model"
             )
-        wanted = self._pub.get_subscription_count() > 0 and self._maps is not None
+        wanted = self._pub.get_subscription_count() > 0
         if wanted and self._sub is None:
             self._sub = self.create_subscription(
                 CompressedImage, str(self.get_parameter("source_topic").value),
                 self._on_frame, SENSOR_QOS,
             )
-            self.get_logger().info("subscriber appeared; resampling")
+            self.get_logger().info("subscriber appeared; rectifying")
         elif not wanted and self._sub is not None:
             self.destroy_subscription(self._sub)
             self._sub = None
@@ -144,8 +158,13 @@ class WideView(Node):
 
     def _on_frame(self, msg: CompressedImage) -> None:
         src = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_COLOR)
-        if src is None or self._maps is None:
+        if src is None:
             return
+        # Built against the frame's own size, not camera_info's: the driver can
+        # publish at a resolution it was not calibrated at.
+        size = (src.shape[1], src.shape[0])
+        if self._built_for != size:
+            self._build(*size)
         map_x, map_y = self._maps
         out = cv2.remap(src, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
 

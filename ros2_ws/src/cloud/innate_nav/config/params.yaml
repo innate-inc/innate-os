@@ -29,20 +29,21 @@ innate_nav_node:
 
 wide_view:
   ros__parameters:
-    # Already undistorted by mars_cam with THIS robot's calibration -- the
-    # source geometry is read from its CameraInfo (P), so nothing here is
-    # per-unit and no calibration file is needed on this side.
-    source_topic: "/mars/main_camera/left/image_rect_color/compressed"
+    # image_raw, NOT image_rect: the stereo pipeline rectifies with alpha=0
+    # (crop to pixels valid in both cameras), which is right for depth but
+    # leaves ~100 deg where the policy needs 110. Undistorting the raw image
+    # ourselves is monocular and leaves that pipeline alone.
+    source_topic: "/mars/main_camera/left/image_raw/compressed"
     source_info_topic: "/mars/main_camera/left/camera_info"
     output_topic: "/mars/main_camera/left/wide/image_rect/compressed"
+    # false pins the nominal lens even on a calibrated robot (A/B only).
+    use_camera_info: true
     # Fixed by the checkpoint, identical on every robot: the policy reads
     # metric distance out of pixels and cannot absorb per-unit variation.
     hfov_deg: 110.0
     width: 640
-    # 370 rather than the 480 training rendered: a 4:3 frame at 110 deg needs
-    # 93.9 deg vertically and this 16:9 sensor has ~81. The dropped rows are
-    # the nearest ~7 cm of floor, at the robot's feet. 380 would just fit THIS
-    # unit; 370 leaves ~10px of principal-point spread before a robot falls
-    # short. Whatever is chosen here, the training crop must match it.
+    # 370, not the 480 training rendered: 4:3 at 110 deg wants 93.9 deg
+    # vertically and the sensor has ~82. The rows dropped are the nearest
+    # ~7 cm of floor. The training crop must match whatever this is.
     height: 370
     jpeg_quality: 80
