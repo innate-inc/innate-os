@@ -24,6 +24,8 @@ black band, and it has never seen a rescaled one either.
 
 from __future__ import annotations
 
+import time
+
 import cv2
 import numpy as np
 import rclpy
@@ -77,6 +79,8 @@ class WideView(Node):
             CameraInfo, str(self.get_parameter("source_info_topic").value), self._on_info, 10
         )
         self.create_timer(1.0, self._follow_demand)
+        self._started = time.monotonic()
+        self._warned_no_info = False
         self.get_logger().info(
             f"wide view {self._dst.width}x{self._dst.height} @ "
             f"{float(self.get_parameter('hfov_deg').value):.1f} deg, fx={self._dst.fx:.2f}; "
@@ -84,8 +88,21 @@ class WideView(Node):
         )
 
     def _on_info(self, msg: CameraInfo) -> None:
-        """P carries the rectified projection; K still describes the raw lens."""
+        """P carries the rectified projection; K still describes the raw lens.
+
+        main_camera_driver publishes P zeroed when the unit has no calibration
+        on disk, and a zero focal length would silently build a garbage map.
+        """
         if self._src is not None:
+            return
+        if not msg.p[0]:
+            if not self._warned_no_info:
+                self._warned_no_info = True
+                self.get_logger().error(
+                    "camera_info says this unit is uncalibrated (P[0]=0): mars_cam has no "
+                    "stereo_calib.yaml for it, so image_rect is not a known projection and "
+                    "there is nothing to resample from. Calibrate the camera first."
+                )
             return
         self._src = Pinhole(fx=msg.p[0], fy=msg.p[5], cx=msg.p[2], cy=msg.p[6],
                             width=msg.width, height=msg.height)
@@ -107,6 +124,12 @@ class WideView(Node):
     def _follow_demand(self) -> None:
         """Subscribe only while something is listening: the decode and the
         resample are the cost, and an idle robot should pay neither."""
+        if self._maps is None and not self._warned_no_info and time.monotonic() - self._started > 15.0:
+            self._warned_no_info = True
+            self.get_logger().error(
+                f"no camera_info on {self.get_parameter('source_info_topic').value} after 15s -- "
+                f"is main_camera_driver up? Nothing will be published until it arrives."
+            )
         wanted = self._pub.get_subscription_count() > 0 and self._maps is not None
         if wanted and self._sub is None:
             self._sub = self.create_subscription(
