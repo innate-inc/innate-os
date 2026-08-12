@@ -17,11 +17,11 @@ setup(
         ("share/" + package_name + "/launch", ["launch/innate_nav.launch.py"]),
         ("share/" + package_name + "/config", ["config/params.yaml"]),
     ],
-    install_requires=["setuptools", "innate-nav-inference"],
+    install_requires=["setuptools", "websockets", "numpy"],
     zip_safe=True,
     maintainer="Innate Engineering",
     maintainer_email="eng@innate.bot",
-    description="ROS 2 node bridging the nav camera to the Innate navigation policy server and tracking its waypoint plans.",
+    description="ROS 2 node that drives the base from the Innate navigation policy service: streams the nav camera to it and tracks the waypoint plans it returns.",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [

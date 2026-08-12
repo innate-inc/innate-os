@@ -8,7 +8,7 @@ In sim the world server renders that view natively, so this node is the
 hardware half of the same contract: same topic, same intrinsics, different
 producer. The policy client cannot tell which one it is talking to.
 
-The remap is a fixed table (innate_nav_inference.client.rectify), built once
+The remap is a fixed table (innate_nav.rectify), built once
 from the two camera models and applied per frame. Idle unless something
 subscribes -- the input subscription is dropped when the output has no
 listeners, so a robot that is not navigating pays nothing.
@@ -24,10 +24,11 @@ from __future__ import annotations
 import cv2
 import numpy as np
 import rclpy
-from innate_nav_inference.client.rectify import DoubleSphere, Pinhole, build_maps
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, CompressedImage
+
+from .rectify import DoubleSphere, Pinhole, build_maps
 
 SENSOR_QOS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1

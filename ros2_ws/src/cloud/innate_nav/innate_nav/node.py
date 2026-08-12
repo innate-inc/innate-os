@@ -39,8 +39,17 @@ import time
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from innate_cloud_msgs.action import NavigateInstruction
-from innate_nav_inference.client.costmap import Costmap
-from innate_nav_inference.client.pursuit import (
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import CameraInfo, CompressedImage
+
+from .costmap import Costmap
+from .policy_client import PolicyClient, Pose
+from .pursuit import (
     BlockedDetector,
     PursuitCfg,
     avoid,
@@ -54,16 +63,6 @@ from innate_nav_inference.client.pursuit import (
     truncate_to,
     velocity,
 )
-from innate_nav_inference.client.session import NavClient
-from innate_nav_inference.schema import Pose
-from nav_msgs.msg import OccupancyGrid, Odometry, Path
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
-from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import CameraInfo, CompressedImage
-
 from .utils import server_url
 
 _STOP = Twist()
@@ -108,7 +107,7 @@ class InnateNavNode(Node):
             w_max=float(self.get_parameter("max_angular_speed").value),
         )
 
-        self._client: NavClient | None = None
+        self._client: PolicyClient | None = None
         self._costmap: Costmap | None = None
         self._warned_no_costmap = False
         self._checked_intrinsics = False
@@ -142,9 +141,9 @@ class InnateNavNode(Node):
             10,
             callback_group=MutuallyExclusiveCallbackGroup(),
         )
-        # Nav2's local costmap: /scan fused with the depth cloud via STVL, then
-        # inflated against the live footprint. Latched (TRANSIENT_LOCAL) because
-        # it republishes on change, not on a timer.
+        # Nav2's local costmap: /scan inflated against the live footprint (the
+        # depth-cloud STVL layer is disabled, so this is the lidar plane only).
+        # Latched (TRANSIENT_LOCAL): it republishes on change, not on a timer.
         if bool(self.get_parameter("use_costmap").value):
             self.create_subscription(
                 OccupancyGrid,
@@ -353,7 +352,7 @@ class InnateNavNode(Node):
         self._recovering_until = 0.0
         self._last_seq = 0
 
-        client = NavClient(server, token=self._server_token)
+        client = PolicyClient(server, token=self._server_token)
         try:
             handle = client.start(
                 instruction=instruction,
