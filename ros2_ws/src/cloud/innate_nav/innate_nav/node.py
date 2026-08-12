@@ -71,6 +71,10 @@ CONTROL_HZ = 50.0
 # direction is latched for the whole window: re-deciding per tick makes the
 # robot dither, because each new plan flips it.
 RECOVERY_S = 1.5
+# How long a goal waits for its first plan before giving up. Long enough for a
+# cold server and a slow link, short enough that a misconfigured robot says so
+# instead of sitting still until someone reloads the page.
+FIRST_PLAN_S = 20.0
 
 
 def _yaw_of(odom: Odometry) -> float:
@@ -119,6 +123,8 @@ class InnateNavNode(Node):
         self._recovering_until = 0.0
         self._recovery_w = 0.0
         self._last_seq = 0
+        self._frames_seen = 0
+        self._frames_sent = 0
         self._t0 = time.monotonic()
 
         sensor_qos = QoSProfile(
@@ -214,11 +220,13 @@ class InnateNavNode(Node):
         """Every frame goes up as-is. The server owns keyframe selection, so
         this must not thin the stream on its own -- it would be deciding a
         training-distribution question it cannot see."""
+        self._frames_seen += 1
         client, pose = self._client, self._pose
         if client is None or pose is None:
             return
         try:
             client.send_frame(bytes(msg.data), pose, time.monotonic() - self._t0)
+            self._frames_sent += 1
         except Exception as exc:  # noqa: BLE001 -- a dead socket ends the goal, not the node
             self.get_logger().warning(f"frame upload failed ({exc!r}); ending goal")
             self._cancel_requested.set()
@@ -340,6 +348,23 @@ class InnateNavNode(Node):
             msg.poses.append(ps)
         self._path.publish(msg)
 
+    def _stall_reason(self, server: str) -> str:
+        """Why no plan arrived. Each branch is a different thing to go and fix,
+        and without them the goal just sits: frames are dropped silently when
+        there is no pose, so a robot missing /odom looks identical to a dead
+        server."""
+        topic = str(self.get_parameter("camera_topic").value)
+        if self._frames_seen == 0:
+            return f"no camera frames on {topic} in {FIRST_PLAN_S:.0f}s -- is the nav camera publishing?"
+        if self._pose is None:
+            return f"no /odom in {FIRST_PLAN_S:.0f}s -- frames carry a pose, so none could be sent"
+        if self._frames_sent == 0:
+            return f"{self._frames_seen} camera frames seen but none sent to {server}"
+        return (
+            f"sent {self._frames_sent} frames to {server} but no plan came back in "
+            f"{FIRST_PLAN_S:.0f}s -- the server accepted the episode but is not planning"
+        )
+
     # ── goal lifecycle ────────────────────────────────────────────────────
 
     def _on_accepted(self, goal_handle) -> None:
@@ -362,6 +387,8 @@ class InnateNavNode(Node):
         self._blocked.reset()
         self._recovering_until = 0.0
         self._last_seq = 0
+        self._frames_seen = 0
+        self._frames_sent = 0
 
         client = PolicyClient(server, token=self._server_token)
         try:
@@ -375,6 +402,7 @@ class InnateNavNode(Node):
             goal_handle.abort()
             return self._result(result, False, f"no policy server at {server}: {exc}")
 
+        opened = time.monotonic()
         self.get_logger().info(
             f"episode {handle.episode_id} [{handle.task_family}/{handle.history_mode}"
             f"/{handle.token_budget}]"
@@ -392,6 +420,10 @@ class InnateNavNode(Node):
                     return self._result(result, True, "arrived (waypoint collapse)")
 
                 plan = client.plan
+                if plan is None and time.monotonic() - opened > FIRST_PLAN_S:
+                    self._cmd.publish(_STOP)
+                    goal_handle.abort()
+                    return self._result(result, False, self._stall_reason(server))
                 if plan is not None:
                     feedback.latest_action = 0 if plan.stop else 1
                     feedback.consecutive_stops = int(plan.stop)
