@@ -39,6 +39,9 @@ function shortcutKbd(label) {
   kbd.textContent = label;
   return kbd;
 }
+// Grace before a Stop that produced no terminal state escalates to the cancel
+// service. Long enough that a normally-tearing-down skill reports first.
+const STOP_ESCALATE_MS = 6000;
 
 /**
  * @param {HTMLElement} parent The bottom-bar overlay (shared with the TTS bar).
@@ -126,7 +129,10 @@ export function createSkillsMenu(parent, rosClient) {
   const expandedGroups = new Set();
   /** Per-skill, per-param string values, kept across re-renders. @type {Map<string, Record<string, string>>} */
   const inputValues = new Map();
-  /** Last/in-flight run. `done` marks the terminal state. @type {{ skillId: string, cancel: () => void, text: string, error: boolean, canceling: boolean, done: boolean } | null} */
+  /** Last/in-flight run. `done` marks the terminal state. `sawRunning` records
+   *  that the robot confirmed this run started, which is what makes a later
+   *  terminal status safe to attribute to it.
+   *  @type {{ skillId: string, cancel: () => void, text: string, error: boolean, canceling: boolean, done: boolean, sawRunning?: boolean } | null} */
   let run = null;
   /** Skill the robot reports running via /brain/skill_status_update (covers
    *  agent-driven runs too, not just ones launched from this menu). */
@@ -269,7 +275,7 @@ export function createSkillsMenu(parent, rosClient) {
         },
       },
     );
-    run = { skillId: skill.id, cancel, text: "Running…", error: false, canceling: false, done: false };
+    run = { skillId: skill.id, cancel, text: "Running…", error: false, canceling: false, done: false, sawRunning: false };
     render();
     // Touch has no keyboard to hand back to, and focusing the search box there
     // just raises the on-screen one over the stage you came to watch.
@@ -314,6 +320,19 @@ export function createSkillsMenu(parent, rosClient) {
     run.text = "Stopping…";
     run.cancel();
     render();
+    // Last resort, for when the terminal status is missed too: the cancel
+    // service answers success=false only when nothing is running, which is
+    // proof the run is over. Without it "Stopping" is a dead end -- the button
+    // disables itself on `canceling`, so a reload is the only way out.
+    const stopping = run;
+    setTimeout(() => {
+      if (run !== stopping || stopping.done) return;
+      rosClient.callService(CANCEL_SKILL_SERVICE).then((res) => {
+        if (run !== stopping || stopping.done || res?.success !== false) return;
+        run = { skillId: stopping.skillId, cancel: () => {}, text: "Stopped", error: false, canceling: false, done: true };
+        render();
+      }, () => {});
+    }, STOP_ESCALATE_MS);
   }
 
   /** Stop a run this tab didn't start: no goal handle to cancel, so ask the
@@ -1022,9 +1041,37 @@ export function createSkillsMenu(parent, rosClient) {
     const prevActive = topicActiveName;
     topicActiveName = status === "running" ? prettify(name) : "";
     if (topicActiveName === "") externCanceling = false;
+    // The robot's own verdict on a run this tab launched. The action result is
+    // the usual path, but it travels the same socket as everything else and a
+    // silently stalled bridge loses it -- leaving the card on "Running…" and,
+    // once Stop is pressed, on a disabled "Stopping" that only a reload clears.
+    // The server publishes this terminal status before it frees the skill slot
+    // precisely so clients need not depend on the result arriving.
+    //
+    // Only after a "running" for the same skill: a terminal status from the
+    // PREVIOUS run of the same skill can land just after a relaunch, and
+    // attributing it to the new run would clear a card that is still driving.
+    const statusSkillId = String(payload?.skill_id ?? "");
+    let finalized = false;
+    if (run && !run.done && run.skillId === statusSkillId) {
+      if (status === "running") {
+        run.sawRunning = true;
+      } else if (run.sawRunning) {
+        // skills_server._terminal_skill_status: completed | interrupted | failed.
+        run = {
+          skillId: run.skillId,
+          cancel: () => {},
+          text: String(payload?.reason || "") || (status === "interrupted" ? "Cancelled" : status === "failed" ? "Failed" : "Done"),
+          error: status === "failed",
+          canceling: false,
+          done: true,
+        };
+        finalized = true;
+      }
+    }
     syncActive();
     // The extern-run banner tracks this topic; repaint it while the popup is up.
-    if (open && topicActiveName !== prevActive) render();
+    if (open && (finalized || topicActiveName !== prevActive)) render();
   }, undefined, "std_msgs/msg/String");
 
   const unsubState = rosClient.onStateChange(() => {
