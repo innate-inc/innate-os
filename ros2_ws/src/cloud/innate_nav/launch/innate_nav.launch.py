@@ -27,19 +27,19 @@ def generate_launch_description() -> LaunchDescription:
         description="Velocity topic the policy commands should publish to",
     )
 
-    # Sim renders the policy's view natively, so the rectifier is hardware-only.
-    rectify_arg = DeclareLaunchArgument(
-        "rectify",
+    # Sim renders the policy's view natively, so this is hardware-only.
+    wide_view_arg = DeclareLaunchArgument(
+        "wide_view",
         default_value="false",
         description="Remap the fisheye into the policy's pinhole view (hardware; sim renders it)",
     )
-    rectifier = Node(
+    wide_view = Node(
         package="innate_nav",
-        executable="wide_camera_rectifier",
-        name="wide_camera_rectifier",
+        executable="wide_view",
+        name="wide_view",
         output="screen",
         parameters=[LaunchConfiguration("params_file")],
-        condition=IfCondition(LaunchConfiguration("rectify")),
+        condition=IfCondition(LaunchConfiguration("wide_view")),
     )
 
     node = Node(
@@ -53,4 +53,4 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
-    return LaunchDescription([params_arg, cmd_vel_topic_arg, rectify_arg, rectifier, node])
+    return LaunchDescription([params_arg, cmd_vel_topic_arg, wide_view_arg, wide_view, node])

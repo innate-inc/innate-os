@@ -27,22 +27,22 @@ innate_nav_node:
     # compares the camera's advertised K against this and says so if it differs.
     expected_fx: 224.07
 
-wide_camera_rectifier:
+wide_view:
   ros__parameters:
-    source_topic: "/mars/main_camera/left/image_raw/compressed"
+    # Already undistorted by mars_cam with THIS robot's calibration -- the
+    # source geometry is read from its CameraInfo (P), so nothing here is
+    # per-unit and no calibration file is needed on this side.
+    source_topic: "/mars/main_camera/left/image_rect_color/compressed"
+    source_info_topic: "/mars/main_camera/left/camera_info"
     output_topic: "/mars/main_camera/left/wide/image_rect/compressed"
-    # The view the policy was trained on. Lower it only if coverage() says the
-    # lens cannot reach it -- blank corners are worse than a narrower view.
+    # Fixed by the checkpoint, identical on every robot: the policy reads
+    # metric distance out of pixels and cannot absorb per-unit variation.
     hfov_deg: 110.0
     width: 640
-    height: 480
+    # 370 rather than the 480 training rendered: a 4:3 frame at 110 deg needs
+    # 93.9 deg vertically and this 16:9 sensor has ~81. The dropped rows are
+    # the nearest ~7 cm of floor, at the robot's feet. 380 would just fit THIS
+    # unit; 370 leaves ~10px of principal-point spread before a robot falls
+    # short. Whatever is chosen here, the training crop must match it.
+    height: 370
     jpeg_quality: 80
-    # MUST come from a real fisheye calibration. mars_cam's stereo calibration
-    # is plumb_bob, which does not fit a lens this wide. 0 = derive from the
-    # source frame, which only gets the node started.
-    source_fx: 0.0
-    source_fy: 0.0
-    source_cx: 0.0
-    source_cy: 0.0
-    source_xi: -0.27
-    source_alpha: 0.57

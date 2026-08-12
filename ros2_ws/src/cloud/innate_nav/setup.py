@@ -26,7 +26,7 @@ setup(
     entry_points={
         "console_scripts": [
             "innate_nav_node = innate_nav.node:main",
-            "wide_camera_rectifier = innate_nav.rectifier:main",
+            "wide_view = innate_nav.wide_view:main",
         ],
     },
 )
