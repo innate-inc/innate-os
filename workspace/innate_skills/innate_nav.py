@@ -42,20 +42,21 @@ class InnateNav(Skill):
             "dining area'). The robot follows the instruction visually and stops "
             "on its own when it judges it has arrived. "
             "Requires param 'instruction' (str). "
+            "Optional param 'server' (str) points this run at a specific policy "
+            "server — '10.0.0.4', '10.0.0.4:8900' or a full URL; empty uses the "
+            "one the robot is configured with. "
             "Examples: 'go through the doorway and stop by the table', "
             "'find the nearest sofa and stop next to it'."
         )
 
     # ── Execution ─────────────────────────────────────────────────────────────
 
-    def execute(self, instruction: str):
+    def execute(self, instruction: str, server: str = ""):
         """Send *instruction* to the navigation policy and block until done.
 
-        Args:
-            instruction: A natural-language navigation command.
-
-        Returns:
-            tuple: ``(result_message, SkillResult)``
+        The policy runs on a server, not on the robot. *server* addresses one
+        for this run — a bare IP, an IP with a port, or a full URL — and empty
+        keeps whatever the ``innate_nav`` node was configured with.
         """
         if not self.node:
             msg = "Navigation skill has no ROS node and cannot execute."
@@ -68,8 +69,9 @@ class InnateNav(Skill):
         if self._action_client is None:
             self._action_client = ActionClient(self.node, NavigateInstruction, "/innate_nav/navigate")
 
-        self.logger.info(f"[InnateNav] Instruction: {instruction!r}")
-        self._send_feedback(f"Navigating: {instruction}")
+        where = f" via {server}" if server else ""
+        self.logger.info(f"[InnateNav] Instruction: {instruction!r}{where}")
+        self._send_feedback(f"Navigating: {instruction}{where}")
 
         if not self._action_client.wait_for_server(timeout_sec=10.0):
             msg = "Navigation policy is not available. Is the innate_nav node running?"
@@ -79,6 +81,7 @@ class InnateNav(Skill):
 
         goal_msg = NavigateInstruction.Goal()
         goal_msg.instruction = instruction
+        goal_msg.server = server
         goal_future = self._action_client.send_goal_async(goal_msg)
 
         if not self._wait_for_future(goal_future, timeout_sec=10.0):
@@ -105,20 +108,18 @@ class InnateNav(Skill):
         # the shared wait set.)
         result_ready = threading.Event()
         result_future.add_done_callback(lambda _future: result_ready.set())
+        cancel_sent = False
         while not result_ready.wait(timeout=0.25):
-            if self._cancel_requested.is_set():
+            if self._cancel_requested.is_set() and not cancel_sent:
                 self.logger.info("Cancel requested — forwarding to the action server")
                 self._goal_handle.cancel_goal_async()
-                result_ready.wait(timeout=10.0)
-                break
+                cancel_sent = True
 
-        if not result_future.done():
-            msg = "Navigation timed out."
-            self.logger.error(msg)
-            self._send_feedback(msg)
-            self._goal_handle = None
-            return msg, SkillResult.FAILURE
-
+        # No give-up branch: returning while the goal is still active abandons a
+        # driving robot. The node brakes in its own teardown and only then sends
+        # the result, so the terminal state is the one signal that the base has
+        # actually stopped -- and releasing the skill slot before it arrives
+        # leaves the next Stop with nothing to cancel ("No skill is running").
         response = result_future.result()
         status, result = response.status, response.result
         self._goal_handle = None
