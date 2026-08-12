@@ -62,7 +62,7 @@ services:
       # Where the innate_nav node imports its client SDK from (mounted above).
       - PYTHONPATH=/opt/innate-nav-inference
       # The navigation policy server, reachable from inside the container.
-      - INNATE_NAV_SERVER_URL=${INNATE_NAV_SERVER_URL:-http://host.docker.internal:8900}
+      - INNATE_NAV_SERVER_URL=${INNATE_NAV_SERVER_URL:-http://192.168.0.156:8900}
     ports:
       # The launcher fills every published side in from INNATE_SIM_PORT_BASE
       # (sim/README.md "Running two checkouts at once").

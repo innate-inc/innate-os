@@ -24,7 +24,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 import rclpy
-from innate_nav_inference.client.rectify import DoubleSphere, Pinhole, build_maps, coverage
+from innate_nav_inference.client.rectify import DoubleSphere, Pinhole, build_maps
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, CompressedImage

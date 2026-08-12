@@ -1,10 +1,13 @@
 innate_nav_node:
   ros__parameters:
-    # The policy server runs on the GPU box, outside the container.
-    server_url: "http://host.docker.internal:8900"
+    # The policy runs on a server, never on the robot. https:// here upgrades
+    # the stream to wss:// on its own.
+    server_url: "http://192.168.0.156:8900"
+    # Empty = the server requires no token. INNATE_NAV_SERVER_TOKEN overrides.
+    server_token: ""
     # The 110-degree-hfov camera the policy was trained on. The main camera is
-    # 96 degrees, a 28% longer focal length, which the model reads as every
-    # floor distance being ~22% nearer than it is.
+    # 84.5 degrees, a 1.57x longer focal length, which the model reads as every
+    # floor distance being ~36% nearer than it is.
     camera_topic: "/mars/nav_camera/image_raw/compressed"
     # r2r/rxr take free-form English; objectnav and pointnav are templated
     # server-side. Also selects the history window mode.

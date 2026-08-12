@@ -24,7 +24,9 @@ Manual test::
 
     ros2 action send_goal /innate_nav/navigate \
         innate_cloud_msgs/action/NavigateInstruction \
-        '{instruction: "drive into the dining area"}' --feedback
+        '{instruction: "drive into the dining area", server: "10.0.0.4"}' --feedback
+
+An empty `server` uses the node's configured one.
 """
 
 from __future__ import annotations
@@ -37,14 +39,6 @@ import time
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from innate_cloud_msgs.action import NavigateInstruction
-from nav_msgs.msg import OccupancyGrid, Odometry, Path
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
-from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import CameraInfo, CompressedImage
-
 from innate_nav_inference.client.costmap import Costmap
 from innate_nav_inference.client.pursuit import (
     BlockedDetector,
@@ -62,6 +56,15 @@ from innate_nav_inference.client.pursuit import (
 )
 from innate_nav_inference.client.session import NavClient
 from innate_nav_inference.schema import Pose
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import CameraInfo, CompressedImage
+
+from .utils import server_url
 
 _STOP = Twist()
 CONTROL_HZ = 50.0
@@ -81,8 +84,12 @@ class InnateNavNode(Node):
         super().__init__("innate_nav_node")
 
         self.declare_parameter(
-            "server_url", os.getenv("INNATE_NAV_SERVER_URL", "http://host.docker.internal:8900")
+            "server_url", os.getenv("INNATE_NAV_SERVER_URL", "http://192.168.0.156:8900")
         )
+        # The policy runs on a server, not on the robot; today that is an IP on
+        # the LAN and later it will be a proxy hostname. Either way the robot
+        # holds a bearer token, and the URL scheme decides ws vs wss on its own.
+        self.declare_parameter("server_token", os.getenv("INNATE_NAV_SERVER_TOKEN", ""))
         self.declare_parameter("camera_topic", "/mars/nav_camera/image_raw/compressed")
         self.declare_parameter("task_family", "r2r")
         self.declare_parameter("token_budget", 3072)
@@ -95,6 +102,7 @@ class InnateNavNode(Node):
         self.declare_parameter("expected_fx", 224.07)
 
         self._server_url = str(self.get_parameter("server_url").value)
+        self._server_token = str(self.get_parameter("server_token").value) or None
         self._cfg = PursuitCfg(
             v_max=float(self.get_parameter("max_linear_speed").value),
             w_max=float(self.get_parameter("max_angular_speed").value),
@@ -334,7 +342,8 @@ class InnateNavNode(Node):
 
     def _execute(self, goal_handle):
         instruction = goal_handle.request.instruction
-        self.get_logger().info(f"executing: {instruction!r}")
+        server = server_url(goal_handle.request.server, self._server_url)
+        self.get_logger().info(f"executing: {instruction!r} via {server}")
         result = NavigateInstruction.Result()
         feedback = NavigateInstruction.Feedback()
 
@@ -344,7 +353,7 @@ class InnateNavNode(Node):
         self._recovering_until = 0.0
         self._last_seq = 0
 
-        client = NavClient(self._server_url)
+        client = NavClient(server, token=self._server_token)
         try:
             handle = client.start(
                 instruction=instruction,
@@ -354,7 +363,7 @@ class InnateNavNode(Node):
         except Exception as exc:  # noqa: BLE001 -- server down is a goal failure
             self._cmd.publish(_STOP)
             goal_handle.abort()
-            return self._result(result, False, f"policy server unavailable: {exc}")
+            return self._result(result, False, f"no policy server at {server}: {exc}")
 
         self.get_logger().info(
             f"episode {handle.episode_id} [{handle.task_family}/{handle.history_mode}"
