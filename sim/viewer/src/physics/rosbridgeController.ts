@@ -14,6 +14,9 @@
 const LASER_OFFSET = { x: -0.0764, z: 0.17165 };
 // The nav policy's floor path, lifted clear of the floor mesh at z=0.
 const NAV_PATH_Z = 0.01;
+// Silence on an open socket that means the bridge has stopped delivering.
+const SILENCE_LIMIT_MS = 5000;
+const WATCHDOG_PERIOD_MS = 1000;
 
 export class RosbridgePhysicsController {
   /** World-frame lidar hit points [x0,y0,z0, x1,...], null-range rays skipped. */
@@ -29,6 +32,8 @@ export class RosbridgePhysicsController {
   #everOpened = false;
   #disposed = false;
   #retryMs = 500;
+  #lastRx = 0;
+  #watchdogTimer: ReturnType<typeof setInterval>;
   // Latest driver pose -- only anchors scan points in the world frame.
   #pose = { x: 0, y: 0, yaw: 0 };
 
@@ -39,6 +44,7 @@ export class RosbridgePhysicsController {
       this.#rejectOpen = reject;
     });
     this.#connect();
+    this.#watchdogTimer = setInterval(() => this.#watchdog(), WATCHDOG_PERIOD_MS);
   }
 
   /** (Re)open the socket. A rosbridge session is stateless per connection, so
@@ -58,6 +64,7 @@ export class RosbridgePhysicsController {
       this.#send({ op: "subscribe", topic: "/scan", type: "sensor_msgs/msg/LaserScan", throttle_rate: 150, queue_length: 1 });
       // Plans arrive at ~2-4Hz, so no throttle is needed; latest-wins as above.
       this.#send({ op: "subscribe", topic: "/nav_policy/path", type: "nav_msgs/msg/Path", queue_length: 1 });
+      this.#lastRx = performance.now();
       this.#resolveOpen();
     };
     ws.onerror = () => {
@@ -70,7 +77,24 @@ export class RosbridgePhysicsController {
       setTimeout(() => this.#connect(), this.#retryMs);
       this.#retryMs = Math.min(this.#retryMs * 2, 5000);
     };
-    ws.onmessage = (ev) => this.#onMessage(JSON.parse(ev.data as string));
+    ws.onmessage = (ev) => {
+      this.#lastRx = performance.now();
+      this.#onMessage(JSON.parse(ev.data as string));
+    };
+  }
+
+  /** Reconnect when the socket is open but silent.
+   *
+   * The bridge can stop delivering without ever closing, and onclose is the
+   * only thing that triggers a resubscribe -- so the overlays it feeds (the
+   * nav waypoints above all) freeze for the rest of the session while the 3D
+   * view, fed by the world-state stream, keeps running and hides it. /odom
+   * alone is >20Hz, so silence this long is never quiet traffic. */
+  #watchdog(): void {
+    if (this.#disposed || this.#ws.readyState !== WebSocket.OPEN) return;
+    if (performance.now() - this.#lastRx < SILENCE_LIMIT_MS) return;
+    this.#lastRx = performance.now();
+    this.#ws.close();
   }
 
   async init(): Promise<void> {
@@ -79,6 +103,7 @@ export class RosbridgePhysicsController {
 
   dispose(): void {
     this.#disposed = true;
+    clearInterval(this.#watchdogTimer);
     this.#ws.close();
   }
 
