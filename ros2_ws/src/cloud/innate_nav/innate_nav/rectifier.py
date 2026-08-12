@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Publishes the nav policy's camera view on hardware, by remapping the head
-camera's fisheye into the virtual pinhole the policy was trained on.
+"""Publishes the wide view on hardware, by remapping main_camera/left's
+fisheye into the virtual pinhole the policy was trained on.
+
+Same physical sensor as main_camera/left, which is why it lives in that
+namespace rather than pretending to be a camera of its own.
 
 In sim the world server renders that view natively, so this node is the
 hardware half of the same contract: same topic, same intrinsics, different
@@ -37,10 +40,10 @@ SENSOR_QOS = QoSProfile(
 
 class NavCameraRectifier(Node):
     def __init__(self) -> None:
-        super().__init__("nav_camera_rectifier")
+        super().__init__("wide_camera_rectifier")
 
         self.declare_parameter("source_topic", "/mars/main_camera/left/image_raw/compressed")
-        self.declare_parameter("output_topic", "/mars/nav_camera/image_raw/compressed")
+        self.declare_parameter("output_topic", "/mars/main_camera/left/wide/image_rect/compressed")
         self.declare_parameter("hfov_deg", 110.0)
         self.declare_parameter("width", 640)
         self.declare_parameter("height", 480)

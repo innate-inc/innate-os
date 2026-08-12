@@ -28,7 +28,7 @@ from .constants import (
     CAMERA_HEIGHT,
     CAMERA_PRINCIPAL_PIXEL,
     CAMERA_WIDTH,
-    NAV_CAMERA_FOVY,
+    WIDE_CAMERA_FOVY,
     WRIST_CAMERA_FOVY,
 )
 from .drive_limits import clamp_cmd_vel
@@ -44,7 +44,7 @@ CAMERAS = {
     "main": ("robot_camera_optical_frame", (0, 0, 1), (0, -1, 0), CAMERA_FOVY),
     "wrist": ("robot_arm_camera_link", (1, 0, 0), (0, 0, 1), WRIST_CAMERA_FOVY),
     # Identical mount and orientation to main -- fov is the only difference.
-    "nav": ("robot_camera_optical_frame", (0, 0, 1), (0, -1, 0), NAV_CAMERA_FOVY),
+    "wide": ("robot_camera_optical_frame", (0, 0, 1), (0, -1, 0), WIDE_CAMERA_FOVY),
 }
 JPEG_QUALITY = 80  # matches main_camera_driver.cpp
 # Post-render ACES tone map approximating sim/viewer's Three.js output
@@ -273,7 +273,7 @@ class VirtualMars:
                 # So does nav: the policy trained on a 110 deg PINHOLE, and
                 # rendering it through the real lens would hand the checkpoint
                 # a geometry it never saw.
-                if cam_name in ("wrist", "nav"):
+                if cam_name in ("wrist", "wide"):
                     cam.fovy = fovy
                 else:
                     cam.resolution = [CAMERA_WIDTH, CAMERA_HEIGHT]

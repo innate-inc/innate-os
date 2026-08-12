@@ -8,8 +8,8 @@ run unchanged -- see README "Virtual MARS driver".
   pub /scan                                       sensor_msgs/LaserScan @6Hz, frame base_laser
   pub /mars/main_camera/left/image_raw/compressed sensor_msgs/CompressedImage @10Hz (lazy)
   pub /mars/arm/image_raw/compressed              sensor_msgs/CompressedImage @6Hz (lazy)
-  pub /mars/nav_camera/image_raw/compressed       sensor_msgs/CompressedImage @5Hz (lazy)
-  pub /mars/nav_camera/camera_info                sensor_msgs/CameraInfo @8Hz
+  pub /mars/main_camera/left/wide/image_rect/compressed       sensor_msgs/CompressedImage @5Hz (lazy)
+  pub /mars/main_camera/left/wide/camera_info                sensor_msgs/CameraInfo @8Hz
   pub /mars/main_camera/depth/image_rect_raw      sensor_msgs/Image 16UC1 mm @8Hz (lazy)
   pub /mars/main_camera/points                    sensor_msgs/PointCloud2 xyz @8Hz (lazy)
   pub /mars/main_camera/left/camera_info          sensor_msgs/CameraInfo @8Hz
@@ -63,7 +63,7 @@ from .constants import (
     CAMERA_FY,
     CAMERA_HEIGHT,
     CAMERA_WIDTH,
-    NAV_CAMERA_FOVY,
+    WIDE_CAMERA_FOVY,
 )
 from .remote_world import RemoteWorld
 
@@ -78,7 +78,7 @@ MAIN_CAMERA_FPS = 10.0  # main_camera_driver: compressed_frame_interval=3
 WRIST_CAMERA_FPS = 6.0  # arm_camera_driver: compressed_frame_interval=5
 # Frames only enter the policy's history on its 0.25m/15deg motion lattice, so
 # supplying faster than this buys nothing but render cost.
-NAV_CAMERA_FPS = 5.0
+WIDE_CAMERA_FPS = 5.0
 DEPTH_FPS = 8.0  # stereo_depth_estimator max_fps
 ODOM_HZ = 30.0  # bringup.py odom_frequency
 SCAN_HZ = 6.0  # lidar.launch.py throttle
@@ -103,11 +103,11 @@ ARM_JOINTS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
 # pixels, not a centred principal point, and camera_info must say so.
 FX, FY = CAMERA_FX, CAMERA_FY
 CX, CY = CAMERA_CX, CAMERA_CY
-# The nav camera is a different lens on the same mount: the 110 deg pinhole the
+# The wide camera is a different lens on the same mount: the 110 deg pinhole the
 # policy trained on, so square pixels and a CENTRED principal point. It must not
 # inherit the head's measured offsets -- the render it describes has none.
-NAV_FOCAL = CAMERA_HEIGHT / (2 * math.tan(math.radians(NAV_CAMERA_FOVY) / 2))
-NAV_CX, NAV_CY = CAMERA_WIDTH / 2, CAMERA_HEIGHT / 2
+WIDE_FOCAL = CAMERA_HEIGHT / (2 * math.tan(math.radians(WIDE_CAMERA_FOVY) / 2))
+WIDE_CX, WIDE_CY = CAMERA_WIDTH / 2, CAMERA_HEIGHT / 2
 
 WORLD_DEFAULT_ENDPOINT = "127.0.0.1:8799"
 
@@ -154,8 +154,8 @@ class VirtualMarsNode(Node):
             CompressedImage, "/mars/arm/image_raw/compressed", qos_profile_sensor_data
         )
         # Raw variants: what webrtc_streamer (webapp video) encodes.
-        self._nav_pub = self.create_publisher(
-            CompressedImage, "/mars/nav_camera/image_raw/compressed", qos_profile_sensor_data
+        self._wide_pub = self.create_publisher(
+            CompressedImage, "/mars/main_camera/left/wide/image_rect/compressed", qos_profile_sensor_data
         )
         self._main_raw_pub = self.create_publisher(Image, "/mars/main_camera/left/image_raw", qos_profile_sensor_data)
         self._wrist_raw_pub = self.create_publisher(Image, "/mars/arm/image_raw", qos_profile_sensor_data)
@@ -164,10 +164,10 @@ class VirtualMarsNode(Node):
         )
         self._points_pub = self.create_publisher(PointCloud2, "/mars/main_camera/points", qos_profile_sensor_data)
         self._caminfo_pub = self.create_publisher(CameraInfo, "/mars/main_camera/left/camera_info", 10)
-        # The nav camera's intrinsics are the policy's input contract: a
+        # The wide view's intrinsics are the policy's input contract: a
         # consumer can check K against what its checkpoint was trained on
         # instead of trusting that a topic name means the right geometry.
-        self._nav_caminfo_pub = self.create_publisher(CameraInfo, "/mars/nav_camera/camera_info", 10)
+        self._wide_caminfo_pub = self.create_publisher(CameraInfo, "/mars/main_camera/left/wide/camera_info", 10)
         self._arm_state_pub = self.create_publisher(JointState, "/mars/arm/state", 1)
         self._joint_states_pub = self.create_publisher(JointState, "/joint_states", 1)
         self._head_pub = self.create_publisher(String, "/mars/head/current_position", 1)
@@ -477,15 +477,15 @@ class VirtualMarsNode(Node):
     def _render_loop(self) -> None:
         """Paced render pulls off the executor, with adaptive shedding: when
         demand oversubscribes the thread, camera periods stretch while depth
-        keeps its rate -- nav stays healthy, cameras degrade gracefully."""
-        last = {"main": 0.0, "wrist": 0.0, "nav": 0.0, "depth": 0.0}
+        keeps its rate -- the wide view stays healthy, cameras degrade gracefully."""
+        last = {"main": 0.0, "wrist": 0.0, "wide": 0.0, "depth": 0.0}
         period = {
             "main": 1.0 / MAIN_CAMERA_FPS,
             "wrist": 1.0 / WRIST_CAMERA_FPS,
-            "nav": 1.0 / NAV_CAMERA_FPS,
+            "wide": 1.0 / WIDE_CAMERA_FPS,
             "depth": 1.0 / DEPTH_FPS,
         }
-        cost = {"main": 0.0, "wrist": 0.0, "nav": 0.0, "depth": 0.0}  # EMA seconds per render
+        cost = {"main": 0.0, "wrist": 0.0, "wide": 0.0, "depth": 0.0}  # EMA seconds per render
         target_util = 0.85  # leave headroom for physics/publishing on the other threads
         stretch = 1.0
         saturated = False
@@ -495,7 +495,7 @@ class VirtualMarsNode(Node):
                 "main": self._main_pub.get_subscription_count() > 0 or self._main_raw_pub.get_subscription_count() > 0,
                 "wrist": self._wrist_pub.get_subscription_count() > 0
                 or self._wrist_raw_pub.get_subscription_count() > 0,
-                "nav": self._nav_pub.get_subscription_count() > 0,
+                "wide": self._wide_pub.get_subscription_count() > 0,
                 "depth": self._depth_pub.get_subscription_count() > 0 or self._points_pub.get_subscription_count() > 0,
             }
             demand = sum(cost[s] / period[s] for s in wanted if wanted[s])
@@ -525,7 +525,7 @@ class VirtualMarsNode(Node):
             for camera, pub, raw_pub in (
                 ("main", self._main_pub, self._main_raw_pub),
                 ("wrist", self._wrist_pub, self._wrist_raw_pub),
-                ("nav", self._nav_pub, None),
+                ("wide", self._wide_pub, None),
             ):
                 if not wanted[camera] or now - last[camera] < period[camera] * stretch:
                     continue  # lazy, like the real drivers; stretched under load
@@ -636,10 +636,10 @@ class VirtualMarsNode(Node):
         nav.width, nav.height = CAMERA_WIDTH, CAMERA_HEIGHT
         nav.distortion_model = "plumb_bob"
         nav.d = [0.0] * 5  # rendered rectilinear; on hardware the rectifier makes it so
-        nav.k = [NAV_FOCAL, 0.0, NAV_CX, 0.0, NAV_FOCAL, NAV_CY, 0.0, 0.0, 1.0]
+        nav.k = [WIDE_FOCAL, 0.0, WIDE_CX, 0.0, WIDE_FOCAL, WIDE_CY, 0.0, 0.0, 1.0]
         nav.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-        nav.p = [NAV_FOCAL, 0.0, NAV_CX, 0.0, 0.0, NAV_FOCAL, NAV_CY, 0.0, 0.0, 0.0, 1.0, 0.0]
-        self._nav_caminfo_pub.publish(nav)
+        nav.p = [WIDE_FOCAL, 0.0, WIDE_CX, 0.0, 0.0, WIDE_FOCAL, WIDE_CY, 0.0, 0.0, 0.0, 1.0, 0.0]
+        self._wide_caminfo_pub.publish(nav)
 
     def _publish_joint_states(self) -> None:
         try:

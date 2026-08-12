@@ -5,10 +5,10 @@ innate_nav_node:
     server_url: "http://192.168.0.156:8900"
     # Empty = the server requires no token. INNATE_NAV_SERVER_TOKEN overrides.
     server_token: ""
-    # The 110-degree-hfov camera the policy was trained on. The main camera is
-    # 84.5 degrees, a 1.57x longer focal length, which the model reads as every
-    # floor distance being ~36% nearer than it is.
-    camera_topic: "/mars/nav_camera/image_raw/compressed"
+    # The same physical sensor as main_camera/left, re-projected to the 110-deg
+    # view the policy trained on. left/image_raw is 84.5 deg -- a 1.57x longer
+    # focal length, which the model reads as floor distances ~36% nearer.
+    camera_topic: "/mars/main_camera/left/wide/image_rect/compressed"
     # r2r/rxr take free-form English; objectnav and pointnav are templated
     # server-side. Also selects the history window mode.
     task_family: "r2r"
@@ -17,20 +17,20 @@ innate_nav_node:
     max_linear_speed: 0.4
     max_angular_speed: 1.0
     publish_path: true
-    # Clip and nudge the policy's path with Nav2's local costmap (scan + depth
-    # via STVL, inflated against the live footprint). The policy plans for the
-    # 0.1 m-radius agent it was trained on, so its line shaves corners this
-    # body cannot take. false = plain pursuit, no obstacle awareness.
+    # Clip and nudge the policy's path with Nav2's local costmap (/scan only --
+    # the depth STVL layer is disabled -- inflated against the live footprint).
+    # The policy plans for the 0.1 m-radius agent it was trained on, so its line
+    # shaves corners this body cannot take. false = plain pursuit, no clearance.
     use_costmap: true
-    camera_info_topic: "/mars/nav_camera/camera_info"
+    camera_info_topic: "/mars/main_camera/left/wide/camera_info"
     # 110 deg over 640px -- what the checkpoint was trained at. Startup
     # compares the camera's advertised K against this and says so if it differs.
     expected_fx: 224.07
 
-nav_camera_rectifier:
+wide_camera_rectifier:
   ros__parameters:
     source_topic: "/mars/main_camera/left/image_raw/compressed"
-    output_topic: "/mars/nav_camera/image_raw/compressed"
+    output_topic: "/mars/main_camera/left/wide/image_rect/compressed"
     # The view the policy was trained on. Lower it only if coverage() says the
     # lens cannot reach it -- blank corners are worse than a narrower view.
     hfov_deg: 110.0

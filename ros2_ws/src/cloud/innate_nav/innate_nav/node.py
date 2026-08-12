@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Innate Inc
 """ROS 2 node for the Innate navigation policy (innate-nav-inference).
 
-Streams the nav camera to the policy server, tracks the plans it sends back,
+Streams the wide camera view to the policy server, tracks the plans it sends back,
 and drives the base. Structurally the sibling of innate_uninavid: an action
 server the skill calls, a camera subscription feeding a websocket, and a
 cmd_vel publisher -- the difference is what comes back. UniNavid returns
@@ -93,14 +93,14 @@ class InnateNavNode(Node):
         # the LAN and later it will be a proxy hostname. Either way the robot
         # holds a bearer token, and the URL scheme decides ws vs wss on its own.
         self.declare_parameter("server_token", os.getenv("INNATE_NAV_SERVER_TOKEN", ""))
-        self.declare_parameter("camera_topic", "/mars/nav_camera/image_raw/compressed")
+        self.declare_parameter("camera_topic", "/mars/main_camera/left/wide/image_rect/compressed")
         self.declare_parameter("task_family", "r2r")
         self.declare_parameter("token_budget", 3072)
         self.declare_parameter("max_linear_speed", PursuitCfg().v_max)
         self.declare_parameter("max_angular_speed", PursuitCfg().w_max)
         self.declare_parameter("publish_path", True)
         self.declare_parameter("use_costmap", True)
-        self.declare_parameter("camera_info_topic", "/mars/nav_camera/camera_info")
+        self.declare_parameter("camera_info_topic", "/mars/main_camera/left/wide/camera_info")
         # The focal length the checkpoint was trained at (110 deg over 640px).
         self.declare_parameter("expected_fx", 224.07)
 

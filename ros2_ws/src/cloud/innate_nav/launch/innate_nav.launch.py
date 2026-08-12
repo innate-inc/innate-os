@@ -35,8 +35,8 @@ def generate_launch_description() -> LaunchDescription:
     )
     rectifier = Node(
         package="innate_nav",
-        executable="nav_camera_rectifier",
-        name="nav_camera_rectifier",
+        executable="wide_camera_rectifier",
+        name="wide_camera_rectifier",
         output="screen",
         parameters=[LaunchConfiguration("params_file")],
         condition=IfCondition(LaunchConfiguration("rectify")),
