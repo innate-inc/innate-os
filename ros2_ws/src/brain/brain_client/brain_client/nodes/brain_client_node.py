@@ -271,8 +271,7 @@ class BrainClientNode(Node):
         self.publish_agent_status()
         self._agent_status_heartbeat = self.create_timer(3.0, self.publish_agent_status)
 
-        directive = self.state.current_directive
-        if self.config.simulator_mode and directive is not None and directive.id != "empty_directive":
+        if self.config.simulator_mode and self.state.current_directive is not None:
             self.get_logger().info("[BrainClient] Auto-activating brain in simulator mode")
             self.lifecycle.activate_brain()
 

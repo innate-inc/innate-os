@@ -98,16 +98,16 @@ def test_agents_load_with_source_stamping(workspace):
     assert set(agents) == {"alpha", "beta"}
     assert agents["alpha"].source == "shipped"
     assert agents["beta"].source == "user"
-    assert default_agent is agents["alpha"]  # no empty_directive -> first loaded
+    assert default_agent is agents["alpha"]  # no demo_agent -> first loaded
 
 
-def test_empty_directive_is_default(workspace):
+def test_demo_agent_is_default(workspace):
     write(workspace, "innate_agents/alpha.py", agent_src("Alpha"))
-    write(workspace, "innate_agents/empty_directive.py", agent_src("EmptyDirective", "empty_directive"))
+    write(workspace, "innate_agents/demo_agent.py", agent_src("DemoAgent", "demo_agent"))
 
     _agents, default_agent, _broken = initialize_agents(LOGGER)
 
-    assert default_agent.id == "empty_directive"
+    assert default_agent.id == "demo_agent"
 
 
 def test_ordinary_python_works(workspace):

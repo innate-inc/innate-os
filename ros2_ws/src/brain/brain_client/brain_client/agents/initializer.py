@@ -109,12 +109,12 @@ def initialize_agents(
     if broken:
         logger.warning(f"{len(broken)} agents failed to load: {list(broken)}")
 
-    # Set default agent (fallback to first available if empty_directive not found)
+    # Set default agent (fallback to first available if demo_agent not found)
     # Note: This doesn't mean the agent runs - is_brain_active controls that
     default_agent = None
-    if "empty_directive" in agents:
-        default_agent = agents["empty_directive"]
-        logger.debug("Using empty_directive as default")
+    if "demo_agent" in agents:
+        default_agent = agents["demo_agent"]
+        logger.debug("Using demo_agent as default")
     elif agents:
         first_agent_name = next(iter(agents))
         default_agent = agents[first_agent_name]
