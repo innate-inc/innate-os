@@ -235,4 +235,27 @@ test("a plan with no pose yet draws nothing rather than guessing the origin", ()
   overlay.destroy();
 });
 
+test("blocked storage (Safari 'Block all cookies') must not kill the mount", () => {
+  const prior = g.localStorage;
+  g.localStorage = {
+    getItem() {
+      throw new Error("SecurityError");
+    },
+    setItem() {
+      throw new Error("SecurityError");
+    },
+  };
+  try {
+    const { ros, overlay } = mount();
+    assert.ok(ros.handlers.size > 0, "overlay must default enabled when storage throws");
+    ros.emit("/odom", AT_ORIGIN);
+    ros.emit("/navigation/plan", STRAIGHT_PLAN);
+    flush();
+    assert.equal(ctx.filled, 1, "still draws with storage blocked");
+    overlay.destroy();
+  } finally {
+    g.localStorage = prior;
+  }
+});
+
 console.log(`\n${passed} tests passed`);

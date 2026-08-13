@@ -68,11 +68,14 @@ export function robotRelative(points, pose) {
  * Pinhole-project robot-relative floor points into image pixels. Points behind
  * the camera or outside the frame are culled, and each cull splits the route:
  * joining the survivors into one run would draw a fabricated route across the
- * parts of the image the plan never crosses.
+ * parts of the image the plan never crosses. Segments are runs of
+ * consecutively visible points; startVisible reports whether the route's
+ * first point survived as segments[0][0] — only such a leading segment truly
+ * starts at the robot's feet and may be anchored to the bottom edge.
  * @param {Array<{ fwd: number, right: number }>} points
  * @param {number} pitchDeg head pitch, positive up
  * @param {number} vw @param {number} vh video frame size in pixels
- * @returns {Array<Array<{ x: number, y: number, depth: number }>>} runs of consecutively visible points
+ * @returns {{ segments: Array<Array<{ x: number, y: number, depth: number }>>, startVisible: boolean }}
  */
 export function projectToImage(points, pitchDeg, vw, vh) {
   const sx = vw / CAMERA.CALIB_W;
@@ -89,7 +92,9 @@ export function projectToImage(points, pitchDeg, vw, vh) {
   const segments = [];
   /** @type {Array<{ x: number, y: number, depth: number }> | null} */
   let seg = null;
-  for (const p of points) {
+  let startVisible = false;
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
     const rotY = -h * cp - p.fwd * sp;
     const rotZ = -h * sp + p.fwd * cp;
     if (rotZ <= 0.1) {
@@ -104,22 +109,25 @@ export function projectToImage(points, pitchDeg, vw, vh) {
     }
     if (!seg) segments.push((seg = []));
     seg.push({ x: u, y: v, depth: rotZ });
+    if (i === 0) startVisible = true;
   }
-  return segments;
+  return { segments, startVisible };
 }
 
 /**
  * Build one segment's ribbon polygon: the projected centreline widened
  * perpendicular to its direction, tapering with depth. With anchorBottom the
  * start is extended down to the bottom edge so the leading segment begins at
- * the robot's feet; a segment re-entering the frame further along must not be
- * anchored, or the extension fabricates route below its entry point.
+ * the robot's feet; only a segment whose first point is the route's true
+ * start (projectToImage's startVisible) may be anchored, or the extension
+ * fabricates route below a mid-frame entry point.
  * @param {Array<{ x: number, y: number, depth: number }>} pts
+ * @param {number} vw frame width, bounds the anchor extrapolation
  * @param {number} bottomY
  * @param {boolean} [anchorBottom]
  * @returns {Array<{ x: number, y: number }> | null}
  */
-export function ribbon(pts, bottomY, anchorBottom = true) {
+export function ribbon(pts, vw, bottomY, anchorBottom = true) {
   if (pts.length < 2) return null;
 
   /** @param {number} depth */
@@ -160,7 +168,9 @@ export function ribbon(pts, bottomY, anchorBottom = true) {
     const dy0 = p1.y - p0.y;
     if (dy0 !== 0 && p0.y < bottomY) {
       const t = (bottomY - p0.y) / dy0;
-      startX = p0.x + t * (p1.x - p0.x);
+      // A near-horizontal first link makes t explode; no real anchor lands
+      // far outside the frame.
+      startX = Math.min(2 * vw, Math.max(-vw, p0.x + t * (p1.x - p0.x)));
       startY = bottomY;
     }
     const start = { x: startX, y: startY };
@@ -252,7 +262,9 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     const y = p?.position?.y;
     const q = p?.orientation;
     if (typeof x !== "number" || typeof y !== "number" || !q) return null;
-    return { x, y, yaw: Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)) };
+    const yaw = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
+    if (!Number.isFinite(yaw)) return null; // NaN poisons every point, and NaN compares defeat culling
+    return { x, y, yaw };
   }
 
   let raf = 0;
@@ -339,11 +351,11 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     const pose = planFrame === "odom" ? odomPose : mapPose();
     if (!pose) return;
 
-    const segments = projectToImage(robotRelative(plan, pose), pitchDeg, vw, vh);
+    const { segments, startVisible } = projectToImage(robotRelative(plan, pose), pitchDeg, vw, vh);
     /** @type {Array<Array<{ x: number, y: number }>>} */
     const polys = [];
     for (let i = 0; i < segments.length; i++) {
-      const poly = ribbon(segments[i], vh, i === 0);
+      const poly = ribbon(segments[i], vw, vh, i === 0 && startVisible);
       if (poly) polys.push(poly);
     }
     if (!polys.length) return;
@@ -352,7 +364,11 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     // object-fit: contain rectangle inside the stage.
     const cw = stage.clientWidth;
     const ch = stage.clientHeight;
-    const dpr = window.devicePixelRatio || 1;
+    if (!cw || !ch) return;
+    // The backing store keeps the dpr captured at the last ResizeObserver
+    // fire; deriving the scale from it (not live devicePixelRatio) keeps the
+    // transform and the store agreed across a monitor move.
+    const dpr = canvas.width / cw;
     const fit = Math.min(cw / vw, ch / vh);
     const offX = (cw - vw * fit) / 2;
     const offY = (ch - vh * fit) / 2;
@@ -380,7 +396,12 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
 
   /** @type {Array<() => void>} */
   let unsubs = [];
-  let enabled = localStorage.getItem(STORE_KEY) !== "0";
+  let enabled = true;
+  try {
+    enabled = localStorage.getItem(STORE_KEY) !== "0";
+  } catch {
+    // Storage can be unavailable (private mode); overlay defaults on.
+  }
 
   function apply() {
     button.classList.toggle("active", enabled);
@@ -406,7 +427,11 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
 
   button.addEventListener("click", () => {
     enabled = !enabled;
-    localStorage.setItem(STORE_KEY, enabled ? "1" : "0");
+    try {
+      localStorage.setItem(STORE_KEY, enabled ? "1" : "0");
+    } catch {
+      // Storage can be unavailable (private mode); the toggle still applies.
+    }
     apply();
   });
 

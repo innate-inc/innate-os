@@ -56,7 +56,7 @@ test("robotRelative: translation and yaw are both removed", () => {
 });
 
 test("projectToImage: a point dead ahead lands on the optical axis column, below the horizon", () => {
-  const [[p]] = projectToImage([{ fwd: 1, right: 0 }], 0, 640, 480);
+  const [[p]] = projectToImage([{ fwd: 1, right: 0 }], 0, 640, 480).segments;
   const scale = 640 / CAMERA.CALIB_W;
   close(p.x, CAMERA.CX * scale, "u is the principal-point column");
   const fy = CAMERA.FY * scale * CAMERA.FY_SCALE;
@@ -65,7 +65,7 @@ test("projectToImage: a point dead ahead lands on the optical axis column, below
 });
 
 test("projectToImage culls behind-camera and out-of-frame points", () => {
-  const projected = projectToImage(
+  const { segments, startVisible } = projectToImage(
     [
       { fwd: -1, right: 0 }, // behind
       { fwd: 0.2, right: 5 }, // far off to the side
@@ -75,12 +75,13 @@ test("projectToImage culls behind-camera and out-of-frame points", () => {
     640,
     480,
   );
-  assert.equal(projected.length, 1);
-  assert.equal(projected[0].length, 1);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].length, 1);
+  assert.equal(startVisible, false, "a culled first point must not report a visible start");
 });
 
 test("a route that leaves the frame and re-enters draws two disjoint ribbons, not a bridge", () => {
-  const segments = projectToImage(
+  const { segments, startVisible } = projectToImage(
     [
       { fwd: 1, right: -0.4 },
       { fwd: 1.5, right: -0.4 },
@@ -93,7 +94,8 @@ test("a route that leaves the frame and re-enters draws two disjoint ribbons, no
     480,
   );
   assert.equal(segments.length, 2, "the culled point must split the route");
-  const polys = segments.map((seg, i) => ribbon(seg, 480, i === 0));
+  assert.equal(startVisible, true);
+  const polys = segments.map((seg, i) => ribbon(seg, 640, 480, i === 0 && startVisible));
   assert.ok(polys[0] && polys[1]);
   const maxX0 = Math.max(...polys[0].map((p) => p.x));
   const minX1 = Math.min(...polys[1].map((p) => p.x));
@@ -105,9 +107,39 @@ test("a route that leaves the frame and re-enters draws two disjoint ribbons, no
   );
 });
 
+test("a route entering mid-frame from a side edge is never anchored into a wedge", () => {
+  // First point culled off a side edge, so the re-entering run IS segments[0]
+  // and its first link is nearly horizontal in the image: anchoring it would
+  // extrapolate the start thousands of pixels off-frame (x ~ -3700 here).
+  const { segments, startVisible } = projectToImage(
+    [
+      { fwd: 0.2, right: 5 }, // off the side edge
+      { fwd: 1, right: -0.2 },
+      { fwd: 1.05, right: 0.2 },
+    ],
+    0,
+    640,
+    480,
+  );
+  assert.equal(startVisible, false, "a side-culled first point must not report a visible start");
+  const polys = segments.map((seg, i) => ribbon(seg, 640, 480, i === 0 && startVisible));
+  for (const poly of polys) {
+    assert.ok(poly);
+    assert.ok(Math.max(...poly.map((p) => p.y)) < 480, "no ribbon may touch the bottom edge");
+    for (const p of poly) assert.ok(p.x >= -640 && p.x <= 2 * 640, `vertex escaped the clamp: ${p.x}`);
+  }
+  // Defence in depth: even a wrongly anchored ribbon stays within the clamp
+  // (half-width can push a vertex a couple of pixels past the startX bound).
+  const forced = ribbon(segments[0], 640, 480, true);
+  assert.ok(forced);
+  for (const p of forced) {
+    assert.ok(p.x >= -640 - 2 && p.x <= 2 * 640 + 2, `clamp failed: ${p.x}`);
+  }
+});
+
 test("projectToImage: pitching up pushes the ground lower in the image", () => {
-  const [[level]] = projectToImage([{ fwd: 1, right: 0 }], 0, 640, 480);
-  const [[up]] = projectToImage([{ fwd: 1, right: 0 }], 15, 640, 480);
+  const [[level]] = projectToImage([{ fwd: 1, right: 0 }], 0, 640, 480).segments;
+  const [[up]] = projectToImage([{ fwd: 1, right: 0 }], 15, 640, 480).segments;
   assert.ok(up.y > level.y, `pitch up should increase v (${up.y} vs ${level.y})`);
 });
 
@@ -118,6 +150,7 @@ test("ribbon: straight-ahead path yields a symmetric polygon anchored at the bot
       { x: 320, y: 300, depth: 2 },
       { x: 320, y: 250, depth: 3 },
     ],
+    640,
     480,
   );
   assert.ok(poly);
@@ -137,8 +170,8 @@ test("ribbon: straight-ahead path yields a symmetric polygon anchored at the bot
 });
 
 test("ribbon needs at least two projected points", () => {
-  assert.equal(ribbon([], 480), null);
-  assert.equal(ribbon([{ x: 1, y: 1, depth: 1 }], 480), null);
+  assert.equal(ribbon([], 640, 480), null);
+  assert.equal(ribbon([{ x: 1, y: 1, depth: 1 }], 640, 480), null);
 });
 
 console.log(`\n${passed} tests passed`);
