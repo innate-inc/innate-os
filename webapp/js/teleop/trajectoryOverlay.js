@@ -65,12 +65,14 @@ export function robotRelative(points, pose) {
 }
 
 /**
- * Pinhole-project robot-relative floor points into image pixels, culling
- * anything behind the camera or outside the frame.
+ * Pinhole-project robot-relative floor points into image pixels. Points behind
+ * the camera or outside the frame are culled, and each cull splits the route:
+ * joining the survivors into one run would draw a fabricated route across the
+ * parts of the image the plan never crosses.
  * @param {Array<{ fwd: number, right: number }>} points
  * @param {number} pitchDeg head pitch, positive up
  * @param {number} vw @param {number} vh video frame size in pixels
- * @returns {Array<{ x: number, y: number, depth: number }>}
+ * @returns {Array<Array<{ x: number, y: number, depth: number }>>} runs of consecutively visible points
  */
 export function projectToImage(points, pitchDeg, vw, vh) {
   const sx = vw / CAMERA.CALIB_W;
@@ -83,28 +85,41 @@ export function projectToImage(points, pitchDeg, vw, vh) {
   const pitch = (pitchDeg * Math.PI) / 180;
   const cp = Math.cos(pitch);
   const sp = Math.sin(pitch);
-  const out = [];
+  /** @type {Array<Array<{ x: number, y: number, depth: number }>>} */
+  const segments = [];
+  /** @type {Array<{ x: number, y: number, depth: number }> | null} */
+  let seg = null;
   for (const p of points) {
     const rotY = -h * cp - p.fwd * sp;
     const rotZ = -h * sp + p.fwd * cp;
-    if (rotZ <= 0.1) continue;
+    if (rotZ <= 0.1) {
+      seg = null;
+      continue;
+    }
     const u = fx * (p.right / rotZ) + cx;
     const v = fy * (-rotY / rotZ) + cy;
-    if (u < 0 || u > vw || v < 0 || v > vh) continue;
-    out.push({ x: u, y: v, depth: rotZ });
+    if (u < 0 || u > vw || v < 0 || v > vh) {
+      seg = null;
+      continue;
+    }
+    if (!seg) segments.push((seg = []));
+    seg.push({ x: u, y: v, depth: rotZ });
   }
-  return out;
+  return segments;
 }
 
 /**
- * Build the ribbon polygon: the projected centreline extended down to the
- * bottom edge (so it starts at the robot's feet), widened perpendicular to
- * its direction, tapering with depth.
+ * Build one segment's ribbon polygon: the projected centreline widened
+ * perpendicular to its direction, tapering with depth. With anchorBottom the
+ * start is extended down to the bottom edge so the leading segment begins at
+ * the robot's feet; a segment re-entering the frame further along must not be
+ * anchored, or the extension fabricates route below its entry point.
  * @param {Array<{ x: number, y: number, depth: number }>} pts
  * @param {number} bottomY
+ * @param {boolean} [anchorBottom]
  * @returns {Array<{ x: number, y: number }> | null}
  */
-export function ribbon(pts, bottomY) {
+export function ribbon(pts, bottomY, anchorBottom = true) {
   if (pts.length < 2) return null;
 
   /** @param {number} depth */
@@ -137,21 +152,23 @@ export function ribbon(pts, bottomY) {
   /** @type {Array<{ x: number, y: number }>} */
   const right = [];
 
-  const p0 = pts[0];
-  const p1 = pts[1];
-  let startX = p0.x;
-  let startY = p0.y;
-  const dy0 = p1.y - p0.y;
-  if (dy0 !== 0 && p0.y < bottomY) {
-    const t = (bottomY - p0.y) / dy0;
-    startX = p0.x + t * (p1.x - p0.x);
-    startY = bottomY;
+  if (anchorBottom) {
+    const p0 = pts[0];
+    const p1 = pts[1];
+    let startX = p0.x;
+    let startY = p0.y;
+    const dy0 = p1.y - p0.y;
+    if (dy0 !== 0 && p0.y < bottomY) {
+      const t = (bottomY - p0.y) / dy0;
+      startX = p0.x + t * (p1.x - p0.x);
+      startY = bottomY;
+    }
+    const start = { x: startX, y: startY };
+    const sp = perp(null, start, p0);
+    const shw = halfWidth(p0.depth);
+    left.push({ x: startX + sp.nx * shw, y: startY + sp.ny * shw });
+    right.push({ x: startX - sp.nx * shw, y: startY - sp.ny * shw });
   }
-  const start = { x: startX, y: startY };
-  const sp = perp(null, start, p0);
-  const shw = halfWidth(p0.depth);
-  left.push({ x: startX + sp.nx * shw, y: startY + sp.ny * shw });
-  right.push({ x: startX - sp.nx * shw, y: startY - sp.ny * shw });
 
   for (let i = 0; i < pts.length; i++) {
     const prev = i > 0 ? pts[i - 1] : null;
@@ -322,9 +339,14 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     const pose = planFrame === "odom" ? odomPose : mapPose();
     if (!pose) return;
 
-    const projected = projectToImage(robotRelative(plan, pose), pitchDeg, vw, vh);
-    const poly = ribbon(projected, vh);
-    if (!poly) return;
+    const segments = projectToImage(robotRelative(plan, pose), pitchDeg, vw, vh);
+    /** @type {Array<Array<{ x: number, y: number }>>} */
+    const polys = [];
+    for (let i = 0; i < segments.length; i++) {
+      const poly = ribbon(segments[i], vh, i === 0);
+      if (poly) polys.push(poly);
+    }
+    if (!polys.length) return;
 
     // Draw in image pixels; the transform maps them onto the video's
     // object-fit: contain rectangle inside the stage.
@@ -336,12 +358,14 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     const offY = (ch - vh * fit) / 2;
     ctx.setTransform(dpr * fit, 0, 0, dpr * fit, dpr * offX, dpr * offY);
 
-    ctx.beginPath();
-    ctx.moveTo(poly[0].x, poly[0].y);
-    for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
-    ctx.closePath();
     ctx.fillStyle = RIBBON_FILL;
-    ctx.fill();
+    for (const poly of polys) {
+      ctx.beginPath();
+      ctx.moveTo(poly[0].x, poly[0].y);
+      for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 
   const resize = new ResizeObserver(() => {

@@ -5,8 +5,8 @@
 // The projection is a port of the controller app's TrajectoryOverlay; these
 // pin the geometry that would silently drift on a bad edit: the world->robot
 // frame change (yaw + the ROS-left to camera-right flip), behind-camera and
-// out-of-frame culling, the pitch-dependent camera height, and the ribbon
-// polygon's shape.
+// out-of-frame culling (each cull splits the route into segments), the
+// pitch-dependent camera height, and the ribbon polygon's shape.
 
 import assert from "node:assert/strict";
 
@@ -56,7 +56,7 @@ test("robotRelative: translation and yaw are both removed", () => {
 });
 
 test("projectToImage: a point dead ahead lands on the optical axis column, below the horizon", () => {
-  const [p] = projectToImage([{ fwd: 1, right: 0 }], 0, 640, 480);
+  const [[p]] = projectToImage([{ fwd: 1, right: 0 }], 0, 640, 480);
   const scale = 640 / CAMERA.CALIB_W;
   close(p.x, CAMERA.CX * scale, "u is the principal-point column");
   const fy = CAMERA.FY * scale * CAMERA.FY_SCALE;
@@ -76,11 +76,38 @@ test("projectToImage culls behind-camera and out-of-frame points", () => {
     480,
   );
   assert.equal(projected.length, 1);
+  assert.equal(projected[0].length, 1);
+});
+
+test("a route that leaves the frame and re-enters draws two disjoint ribbons, not a bridge", () => {
+  const segments = projectToImage(
+    [
+      { fwd: 1, right: -0.4 },
+      { fwd: 1.5, right: -0.4 },
+      { fwd: 0.2, right: 5 }, // swings out of frame
+      { fwd: 2, right: 0.5 },
+      { fwd: 2.5, right: 0.5 },
+    ],
+    0,
+    640,
+    480,
+  );
+  assert.equal(segments.length, 2, "the culled point must split the route");
+  const polys = segments.map((seg, i) => ribbon(seg, 480, i === 0));
+  assert.ok(polys[0] && polys[1]);
+  const maxX0 = Math.max(...polys[0].map((p) => p.x));
+  const minX1 = Math.min(...polys[1].map((p) => p.x));
+  assert.ok(maxX0 < minX1, `ribbons must not bridge the culled gap (${maxX0} vs ${minX1})`);
+  assert.ok(Math.max(...polys[0].map((p) => p.y)) >= 480, "leading ribbon still anchors at the robot's feet");
+  assert.ok(
+    Math.max(...polys[1].map((p) => p.y)) < 480,
+    "re-entering ribbon must not be extended down to the bottom edge",
+  );
 });
 
 test("projectToImage: pitching up pushes the ground lower in the image", () => {
-  const [level] = projectToImage([{ fwd: 1, right: 0 }], 0, 640, 480);
-  const [up] = projectToImage([{ fwd: 1, right: 0 }], 15, 640, 480);
+  const [[level]] = projectToImage([{ fwd: 1, right: 0 }], 0, 640, 480);
+  const [[up]] = projectToImage([{ fwd: 1, right: 0 }], 15, 640, 480);
   assert.ok(up.y > level.y, `pitch up should increase v (${up.y} vs ${level.y})`);
 });
 
