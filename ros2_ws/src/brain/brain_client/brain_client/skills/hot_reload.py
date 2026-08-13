@@ -218,8 +218,8 @@ class ReloadCoordinator:
         The current directive survives by id: its new instance is rebound and
         the active skill set intersected, so a mid-activation edit doesn't widen
         the skills the user had narrowed. If it no longer loads (now broken),
-        fall back to the default idle agent rather than keep running a stale
-        instance whose file no longer says what it does.
+        fall back to the default agent (demo_agent) rather than keep running a
+        stale instance whose file no longer says what it does.
         """
         agents, default_agent, broken = initialize_agents(self._logger, self._state.registry.primitives or None)
         current_id = self._state.current_directive.id if self._state.current_directive else None
