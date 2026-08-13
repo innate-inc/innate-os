@@ -43,6 +43,7 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import web
+from benchmark_routes import benchmark_url, make_benchmark_proxy
 from media_routes import (
     episode_response,
     joints_response,
@@ -78,6 +79,8 @@ ROSBRIDGE_URL = "ws://127.0.0.1:9090"
 # VIRTUAL_MARS_REMOTE (else in-container), always port 8800 (its default).
 _WORLD_HOST = os.environ.get("VIRTUAL_MARS_REMOTE", "").strip().partition(":")[0] or "127.0.0.1"
 WORLD_STATE_URL = f"ws://{_WORLD_HOST}:8800"
+# /benchmark -> the sim launcher's host benchmark service, same host resolution.
+BENCHMARK_URL = benchmark_url(_WORLD_HOST)
 
 # Ping both legs of every relay so a peer that vanishes without a FIN (a robot's
 # WiFi dropping mid-teleop) is reaped in ~heartbeat seconds instead of lingering
@@ -370,6 +373,8 @@ def build_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/ws", ws_proxy)
     app.router.add_get("/worldstate", ws_proxy)
+    if WEBAPP_SIM_CONTROLS:  # the benchmark service exists only beside a sim
+        app.router.add_route("*", "/benchmark/{tail:.*}", make_benchmark_proxy(BENCHMARK_URL, CLIENT))
     app.router.add_get("/config.json", config_handler)
     app.router.add_get("/episode", episode_response)
     app.router.add_get("/episode/joints", joints_response)

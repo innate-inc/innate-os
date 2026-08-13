@@ -45,6 +45,9 @@ WORLD_SERVER_PID_PATH = STATE_DIR / "world-server.pid"
 # (see runtime._world_model_sources_digest); written next to the pid.
 WORLD_SERVER_MODEL_DIGEST_PATH = STATE_DIR / "world-server.model-digest"
 WORLD_SERVER_PORT = 8799
+BENCHMARK_LOG_PATH = LOG_DIR / "benchmark.log"
+BENCHMARK_PID_PATH = STATE_DIR / "benchmark.pid"
+BENCHMARK_PORT = 8801
 OS_SESSION_LOG_PATH = LOG_DIR / "os-session.log"
 DOWN_LOG_PATH = LOG_DIR / "down.log"
 ROS_INSTALL_STATE_PATH = STATE_DIR / "ros-install.inputs.sha256"
@@ -168,6 +171,7 @@ OS_CONTAINER_TMUX_CMD = "./scripts/launch_sim_in_tmux.zsh --detach"
 SECRET_ENV_KEYS = ("INNATE_SERVICE_KEY", "GEMINI_API_KEY")
 LOG_TARGETS = {
     "bootstrap": BOOTSTRAP_LOG_PATH,
+    "benchmark": BENCHMARK_LOG_PATH,
     "cloud-agent": CLOUD_AGENT_LOG_PATH,
     "compose": COMPOSE_LOG_PATH,
     "os-build": OS_BUILD_LOG_PATH,

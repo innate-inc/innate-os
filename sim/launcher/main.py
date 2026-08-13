@@ -47,6 +47,7 @@ from runtime import (
     collect_status_snapshot,
     down_cloud_agent,
     down_os,
+    ensure_benchmark_service,
     ensure_docker_available,
     ensure_os_container,
     ensure_sim_assets,
@@ -59,6 +60,7 @@ from runtime import (
     print_startup_checks,
     runtime_already_running,
     start_cloud_agent,
+    stop_benchmark_service,
     stop_world_server,
     tail_file,
     wait_for_os_runtime_ready,
@@ -123,6 +125,7 @@ def cmd_up(
             # A code update can leave a stale world server running (frozen
             # 3D view); ensure_world_server restarts it.
             ensure_world_server(config)
+            ensure_benchmark_service(config)
             log("Innate sim runtime is already running. Opening dashboard...")
             show_runtime_dashboard(config, watch=watch)
             return
@@ -143,6 +146,7 @@ def cmd_up(
                 ) from exc
         ensure_sim_viewer_bundle(config, offline=offline)
         config["world_endpoint"] = ensure_world_server(config)
+        ensure_benchmark_service(config)
 
         started = True
         try:
@@ -217,6 +221,7 @@ def cmd_down(config: dict[str, object]) -> None:
     down_cloud_agent()
     down_os(config)
     stop_world_server()
+    stop_benchmark_service()
     log("Innate sim runtime is down.")
 
 
@@ -237,6 +242,7 @@ def cmd_clean(config: dict[str, object], *, assume_yes: bool = False) -> None:
         return
 
     stop_world_server()
+    stop_benchmark_service()
     clean_runtime(config)
     success("Innate sim runtime cleaned (containers and volumes removed).")
 

@@ -18,6 +18,13 @@ notebook = [
     "matplotlib>=3.8",
     "ipykernel>=6.29",
 ]
+# For benchmarks/spatial_memory: `uv sync --group benchmark`. httpx is what
+# brain_client's Gemini transport uses, opencv what its coverage paint uses --
+# the benchmark runs the production retrieval code, not a reimplementation.
+benchmark = [
+    "httpx>=0.27",
+    "opencv-python-headless>=4.9",
+]
 
 [tool.uv]
 package = false

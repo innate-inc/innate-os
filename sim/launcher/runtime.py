@@ -22,6 +22,9 @@ from urllib.request import Request, urlopen
 import oci
 from config import (
     ASSETS_IMAGE_LAYERS,
+    BENCHMARK_LOG_PATH,
+    BENCHMARK_PID_PATH,
+    BENCHMARK_PORT,
     CLI_SIM,
     CLOUD_AGENT_DIR_NAME,
     CLOUD_AGENT_LOG_PATH,
@@ -2035,6 +2038,68 @@ def stop_world_server() -> None:
     with contextlib.suppress(OSError):  # read-only fs: the kill still counts
         WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
         WORLD_SERVER_MODEL_DIGEST_PATH.unlink(missing_ok=True)
+
+
+def benchmark_service_running() -> bool:
+    try:
+        with urlopen(Request(f"http://127.0.0.1:{BENCHMARK_PORT}/health"), timeout=1.0) as resp:
+            return resp.status == 200
+    except (URLError, OSError):
+        return False
+
+
+def ensure_benchmark_service(config: dict[str, object]) -> None:
+    """Host API behind the webapp's sim-only Benchmark panel. Best-effort:
+    a failure warns and the sim comes up without the panel's backend."""
+    if benchmark_service_running():
+        return
+    uv = find_uv()
+    bind = os.environ.get("INNATE_SIM_WORLD_BIND", "").strip() or _world_server_bind_addresses()
+    if uv is None or not bind:
+        warn("Benchmark service skipped (needs uv and a host-only bind address).")
+        return
+    sim_repo = REPO_ROOT / "sim"
+    env = os.environ.copy()
+    raw_env = config.get("raw_env")
+    # .env secrets are launcher-side; a host process only sees them injected.
+    key = (raw_env or {}).get("GEMINI_API_KEY", "") if isinstance(raw_env, dict) else ""
+    if key:
+        env["GEMINI_API_KEY"] = key
+    script = sim_repo / "benchmarks" / "spatial_memory" / "service.py"
+    with BENCHMARK_LOG_PATH.open("a", encoding="utf-8") as log_file:
+        proc = subprocess.Popen(
+            [uv, "run", "--project", str(sim_repo), "--group", "benchmark", "python", str(script)]
+            + ["--bind", bind, "--port", str(BENCHMARK_PORT)],
+            cwd=sim_repo.parent,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+    BENCHMARK_PID_PATH.write_text(f"{proc.pid}\n", encoding="utf-8")
+    deadline = time.monotonic() + 60.0
+    while time.monotonic() < deadline:
+        if benchmark_service_running():
+            log("Benchmark service ready (webapp Benchmark panel).")
+            return
+        if proc.poll() is not None:
+            warn(f"Benchmark service exited at start; see `{CLI_SIM} logs benchmark`.")
+            return
+        time.sleep(0.5)
+    warn(f"Benchmark service not answering yet; see `{CLI_SIM} logs benchmark`.")
+
+
+def stop_benchmark_service() -> None:
+    if not BENCHMARK_PID_PATH.exists():
+        return
+    try:
+        pid = int(BENCHMARK_PID_PATH.read_text().strip())
+        os.kill(pid, signal.SIGTERM)
+        log("Stopped benchmark service.")
+    except (ValueError, OSError):
+        pass
+    with contextlib.suppress(OSError):  # read-only fs: the kill still counts
+        BENCHMARK_PID_PATH.unlink(missing_ok=True)
 
 
 def ensure_skill_assets(config: dict[str, object]) -> None:

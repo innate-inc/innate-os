@@ -39,6 +39,7 @@ const ROUTES = [
   { path: "/profiling", key: "profiling", load: () => import("./profiling/main.js") },
   { path: "/calibration", key: "calibration", load: () => import("./calibration/main.js") },
   { path: "/armsdk", key: "armsdk", load: () => import("./armsdk/main.js") },
+  { path: "/benchmark", key: "benchmark", load: () => import("./benchmark/main.js") },
   { path: "/settings", key: "settings", load: () => import("./settings/main.js") },
 ];
 
@@ -68,7 +69,10 @@ const shell = initShell(navigate);
 // Sim deployments hide robot-data workflows from the rail (shell.js's
 // SIM_SECTIONS); gate the routes too, so a deep link or refresh can't mount
 // a page whose services have no sim backing.
-const SIM_ROUTE_KEYS = new Set(["teleop", "agent", "brain", "nav", "logging", "armsdk", "settings"]);
+const SIM_ROUTE_KEYS = new Set(["teleop", "agent", "brain", "nav", "logging", "armsdk", "benchmark", "settings"]);
+// And the inverse: pages whose backend exists only beside a sim (the host
+// benchmark service) never mount on a real robot.
+const SIM_ONLY_ROUTE_KEYS = new Set(["benchmark"]);
 /** @type {Promise<{simControls?: boolean}>} */
 const configPromise = getConfig();
 
@@ -80,7 +84,8 @@ const configPromise = getConfig();
  */
 async function render(route) {
   const seq = ++navSeq;
-  if ((await configPromise)?.simControls && !SIM_ROUTE_KEYS.has(route.key)) route = ROUTES[0];
+  const sim = (await configPromise)?.simControls;
+  if (sim ? !SIM_ROUTE_KEYS.has(route.key) : SIM_ONLY_ROUTE_KEYS.has(route.key)) route = ROUTES[0];
   if (seq !== navSeq) return; // superseded while awaiting config
   // Destroy BEFORE building the next page: the outgoing destroy() stops running
   // skills/drive and frees socket-bound panels, and clears the stage.

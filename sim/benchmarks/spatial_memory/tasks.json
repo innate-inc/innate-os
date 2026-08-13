@@ -1,0 +1,205 @@
+{
+  "description": "Retrieval benchmark tasks for the spatial-memory system. Each task sends `query` (falling back to `prompt`) to the production MemorySearch and scores the returned frame. gold.props: full credit when the retrieved frame shows one of these props (visibility.json), half credit when it lands in the prop's room. gold.rooms: credit when the retrieved memory pose is inside one of these rooms. gold.region: credit within r meters of (x, y). gold.none: credit only for an honest found=false.",
+  "tasks": [
+    {
+      "id": "find_airpods",
+      "category": "find_object",
+      "prompt": "Find my airpods",
+      "gold": { "props": ["airpods"], "rooms": ["master_bedroom"] }
+    },
+    {
+      "id": "find_banana",
+      "category": "find_object",
+      "prompt": "Where did you last see a banana?",
+      "gold": { "props": ["banana"], "rooms": ["kitchen"] }
+    },
+    {
+      "id": "find_mug",
+      "category": "find_object",
+      "prompt": "Find the red mug",
+      "gold": { "props": ["mug"], "rooms": ["living_room"] }
+    },
+    {
+      "id": "find_backpack",
+      "category": "find_object",
+      "prompt": "Where is my green backpack?",
+      "gold": { "props": ["backpack"], "rooms": ["living_room"] }
+    },
+    {
+      "id": "find_book",
+      "category": "find_object",
+      "prompt": "Find the blue book I was reading",
+      "gold": { "props": ["book"], "rooms": ["office"] }
+    },
+    {
+      "id": "find_sock",
+      "category": "find_object",
+      "prompt": "There is a sock somewhere on the floor, find it",
+      "gold": { "props": ["sock"], "rooms": ["corridor"] }
+    },
+    {
+      "id": "find_can",
+      "category": "find_object",
+      "prompt": "Find the blue soda can",
+      "gold": { "props": ["can"], "rooms": ["kitchen"] }
+    },
+    {
+      "id": "find_ball",
+      "category": "find_object",
+      "prompt": "Where is the ball?",
+      "gold": { "props": ["ball"], "rooms": ["dining_area"] }
+    },
+    {
+      "id": "goto_kitchen",
+      "category": "find_location",
+      "prompt": "Go to the kitchen",
+      "gold": { "rooms": ["kitchen"] }
+    },
+    {
+      "id": "goto_bathroom",
+      "category": "find_location",
+      "prompt": "Go to the bathroom",
+      "gold": { "rooms": ["bathroom"] }
+    },
+    {
+      "id": "goto_bedroom",
+      "category": "find_location",
+      "prompt": "Go to the master bedroom",
+      "gold": { "rooms": ["master_bedroom"] }
+    },
+    {
+      "id": "goto_office_desk",
+      "category": "find_location",
+      "prompt": "Take me to the office",
+      "gold": { "rooms": ["office"] }
+    },
+    {
+      "id": "goto_dining_table",
+      "category": "find_location",
+      "prompt": "Go to the dining table",
+      "gold": { "rooms": ["dining_area"] }
+    },
+    {
+      "id": "goto_sofa",
+      "category": "find_location",
+      "prompt": "Go wait by the sofa in the living room",
+      "gold": { "rooms": ["living_room"] }
+    },
+    {
+      "id": "goto_fridge",
+      "category": "find_location",
+      "prompt": "Go stand in front of the fridge",
+      "gold": { "region": { "x": -0.85, "y": -0.55, "r": 1.5 }, "rooms": ["kitchen"] }
+    },
+    {
+      "id": "exit_bedroom",
+      "category": "instruction",
+      "prompt": "Exit the room",
+      "context": "The robot is currently in the master bedroom, at map position x=-1.2 y=2.75.",
+      "query": "The robot is in the master bedroom and must exit the room: the doorway leading out of the bedroom",
+      "gold": { "rooms": ["corridor"], "region": { "x": -3.6, "y": 2.7, "r": 1.6 } }
+    },
+    {
+      "id": "leave_apartment_farthest",
+      "category": "instruction",
+      "prompt": "Patrol the far end of the home, as far from the kitchen as you can get",
+      "gold": { "rooms": ["north_hallway", "office", "bathroom"] }
+    },
+    {
+      "id": "check_dining_table",
+      "category": "instruction",
+      "prompt": "Check whether anything was left on the dining room floor",
+      "gold": { "props": ["ball"], "rooms": ["dining_area"] }
+    },
+    {
+      "id": "towels",
+      "category": "instruction",
+      "prompt": "Bring me a towel",
+      "gold": { "rooms": ["bathroom"] }
+    },
+    {
+      "id": "watch_tv_spot",
+      "category": "instruction",
+      "prompt": "Go to where people usually watch TV in this home",
+      "gold": { "rooms": ["living_room"] }
+    },
+    {
+      "id": "hungry",
+      "category": "open_ended",
+      "prompt": "I am hungry",
+      "gold": { "props": ["banana"], "rooms": ["kitchen"] }
+    },
+    {
+      "id": "thirsty",
+      "category": "open_ended",
+      "prompt": "I'm thirsty, find me something to drink",
+      "gold": { "props": ["can", "mug"], "rooms": ["kitchen", "living_room"] }
+    },
+    {
+      "id": "read_something",
+      "category": "open_ended",
+      "prompt": "I want something to read",
+      "gold": { "props": ["book"], "rooms": ["office"] }
+    },
+    {
+      "id": "wash_hands",
+      "category": "open_ended",
+      "prompt": "I need to wash my hands",
+      "gold": { "rooms": ["bathroom"] }
+    },
+    {
+      "id": "going_out",
+      "category": "open_ended",
+      "prompt": "I'm heading out, where did I drop my bag?",
+      "gold": { "props": ["backpack"], "rooms": ["living_room"] }
+    },
+    {
+      "id": "bedtime",
+      "category": "open_ended",
+      "prompt": "It's bedtime, where should I go?",
+      "gold": { "rooms": ["master_bedroom"] }
+    },
+    {
+      "id": "lost_earbuds",
+      "category": "open_ended",
+      "prompt": "I lost my earbuds somewhere this morning",
+      "gold": { "props": ["airpods"], "rooms": ["master_bedroom"] }
+    },
+    {
+      "id": "play",
+      "category": "open_ended",
+      "prompt": "Find me something to play with",
+      "gold": { "props": ["ball", "cube"], "rooms": ["dining_area", "office"] }
+    },
+    {
+      "id": "laundry",
+      "category": "open_ended",
+      "prompt": "I'm doing laundry, are there any clothes lying around?",
+      "gold": { "props": ["sock"], "rooms": ["corridor"] }
+    },
+    {
+      "id": "quiet_call",
+      "category": "open_ended",
+      "prompt": "Where could I take a quiet video call?",
+      "gold": { "rooms": ["office"] }
+    },
+    {
+      "id": "no_cat",
+      "category": "honesty",
+      "prompt": "Find the cat",
+      "gold": { "none": true }
+    },
+    {
+      "id": "no_garage",
+      "category": "honesty",
+      "prompt": "Go to the garage",
+      "gold": { "none": true }
+    },
+    {
+      "id": "no_car_keys",
+      "category": "honesty",
+      "prompt": "Find my car keys",
+      "gold": { "none": true }
+    }
+  ]
+}

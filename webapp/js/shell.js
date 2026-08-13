@@ -21,7 +21,10 @@ import { installPressActivate } from "./pressActivate.js";
 // calibrate against — so they're hidden from the rail. Arm SDK stays: the sim
 // runs the same IK node and answers the goto services, so the page exercises
 // the real Manipulation SDK against the simulated arm.
-const SIM_SECTIONS = new Set(["teleop", "agent", "brain", "nav", "logging", "armsdk", "settings"]);
+const SIM_SECTIONS = new Set(["teleop", "agent", "brain", "nav", "logging", "armsdk", "benchmark", "settings"]);
+// The inverse set: sections whose backend exists only beside a sim, hidden
+// from the rail on a real robot (router.js gates the routes to match).
+const SIM_ONLY_SECTIONS = new Set(["benchmark"]);
 
 /** @type {Section[]} */
 const SECTIONS = [
@@ -87,6 +90,12 @@ const SECTIONS = [
     label: "Arm SDK",
     // Articulated-arm motif: base, two links with a joint, and a claw.
     icon: '<circle cx="6" cy="19" r="2"/><path d="M7.5 17.5L10.5 10"/><circle cx="11" cy="8.8" r="1.4"/><path d="M12.3 8L17 5.5"/><path d="M17 5.5l2.5 1M17 5.5l.5 2.7"/>',
+  },
+  {
+    key: "benchmark",
+    label: "Benchmark",
+    // Podium motif: baseline with three rising bars, for the eval scoreboard.
+    icon: '<line x1="4" y1="20" x2="20" y2="20"/><line x1="7" y1="20" x2="7" y2="13.5"/><line x1="12" y1="20" x2="12" y2="8.5"/><line x1="17" y1="20" x2="17" y2="4.5"/>',
   },
   {
     key: "settings",
@@ -224,17 +233,18 @@ export function initShell(navigate) {
 }
 
 /**
- * Hide robot-only sections from the rail when running in sim mode.
+ * Hide robot-only sections from the rail in sim mode, and sim-only sections
+ * on a real robot ({} on config failure → assume real robot).
  * @param {HTMLElement} nav
  */
 async function applySimSectionFilter(nav) {
   /** @type {any} */
   let config;
-  config = await getConfig(); // {} on any failure → assume real robot, keep every section
-  if (!config?.simControls) return;
+  config = await getConfig();
+  const sim = !!config?.simControls;
   for (const link of nav.querySelectorAll(".rail-link")) {
     const key = /** @type {HTMLElement} */ (link).dataset.section ?? "";
-    if (!SIM_SECTIONS.has(key)) link.remove();
+    if (sim ? !SIM_SECTIONS.has(key) : SIM_ONLY_SECTIONS.has(key)) link.remove();
   }
 }
 
