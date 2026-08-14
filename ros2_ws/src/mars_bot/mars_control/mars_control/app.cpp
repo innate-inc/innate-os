@@ -9,6 +9,7 @@
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 
 #include "drive_smoother.hpp"
+#include "hostname_utils.hpp"
 #include <geometry_msgs/msg/vector3.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -248,42 +249,12 @@ std::string nmcli_get_active_wifi_ssid() {
 }
 
 /**
- * Sanitize hostname to follow DNS rules:
- * - Only letters (a-z), numbers (0-9), and hyphens (-)
- * - Cannot start or end with hyphens
- * - Max 63 characters
+ * Value of an environment variable, or `fallback` when it is unset or empty.
+ * The identity vars come from /etc/innate.env via print_runtime_env.py.
  */
-std::string sanitize_hostname(const std::string& hostname) {
-    if (hostname.empty())
-        return "mars";
-
-    std::string result;
-    result.reserve(hostname.length());
-
-    // Convert to lowercase and replace invalid chars with hyphens
-    for (char c : hostname) {
-        if (std::isalnum(c)) {
-            result += std::tolower(c);
-        } else {
-            result += '-';
-        }
-    }
-
-    // Remove consecutive hyphens
-    result.erase(std::unique(result.begin(), result.end(), [](char a, char b) { return a == '-' && b == '-'; }),
-                 result.end());
-
-    // Trim leading/trailing hyphens
-    size_t start = result.find_first_not_of('-');
-    size_t end = result.find_last_not_of('-');
-    if (start == std::string::npos)
-        return "mars";
-
-    result = result.substr(start, std::min(end - start + 1, size_t(63)));
-    if (result.back() == '-')
-        result.pop_back();
-
-    return result.empty() ? "mars" : result;
+std::string env_or(const char* name, const std::string& fallback) {
+    const char* value = std::getenv(name);
+    return (value && *value) ? std::string(value) : fallback;
 }
 
 /**
@@ -597,6 +568,10 @@ class AppControl : public rclcpp::Node {
      * Get robot_info.json contents, creating file with defaults if it doesn't exist.
      * Ensures all default keys exist in the file.
      * Returns the parsed JSON object.
+     *
+     * The identity half of those defaults is whatever /etc/innate.env holds — seeded or
+     * provisioned — so robot_info.json is derived state and is never synced back. The
+     * built-in literals only survive off-robot, where nothing injects the env.
      */
     json get_robot_info() {
         std::string robot_info_file_path = get_robot_info_path();
@@ -606,10 +581,19 @@ class AppControl : public rclcpp::Node {
         std::filesystem::create_directories(file_path.parent_path());
 
         // Define default robot info values
-        std::string default_hw_rev = this->get_parameter("default_hardware_revision").as_string();
+        std::string default_hw_rev =
+            env_or("HARDWARE_REVISION", this->get_parameter("default_hardware_revision").as_string());
         json default_robot_info = {
-            {"robot_name", "MARS"},     {"robot_id", nullptr},  {"hardware_revision", default_hw_rev},
-            {"color_variant", "black"}, {"volume_percent", 80}, {"microphone_enabled", true}};
+            {"robot_name", env_or("ROBOT_NAME", "MARS")},
+            {"robot_id", nullptr},
+            {"hardware_revision", default_hw_rev},
+            {"color_variant", env_or("COLOR_VARIANT", "black")},
+            {"volume_percent", 80},
+            {"microphone_enabled", true}};
+        const std::string env_robot_id = env_or("ROBOT_ID", "");
+        if (!env_robot_id.empty()) {
+            default_robot_info["robot_id"] = env_robot_id;
+        }
 
         json robot_info;
 
@@ -637,7 +621,9 @@ class AppControl : public rclcpp::Node {
         // Ensure all default keys exist in the JSON, save if any were missing
         bool updated = false;
         for (auto& [key, default_value] : default_robot_info.items()) {
-            if (!robot_info.contains(key)) {
+            // An explicit null reads as present to contains(), so a robot_info.json written
+            // before ROBOT_ID reached the environment would never pick the value up.
+            if (!robot_info.contains(key) || (robot_info[key].is_null() && !default_value.is_null())) {
                 robot_info[key] = default_value;
                 updated = true;
             }

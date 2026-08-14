@@ -5,7 +5,6 @@ Wants=network-online.target
 
 [Service]
 User=jetson1
-Group=jetson1
 
 ExecStart=/home/jetson1/innate-os/config/dds/start_zenoh_router.zsh
 

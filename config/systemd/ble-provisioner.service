@@ -3,6 +3,11 @@ Description=BLE WiFi Provisioning Service
 # Start after the network stack is ready, but doesn't require full network connection
 After=network.target bluetooth.service
 Wants=bluetooth.service
+# The advertised name is read from /etc/innate.env once, at start — so on a factory
+# robot the seed has to land before this service, not whenever ros-app gets there.
+# Wants=, never Requires=: the seed exits 1 on anything without a device-tree serial.
+Wants=innate-seed.service
+After=innate-seed.service
 
 [Service]
 # Run service manager as root, but execute command as jetson1 via sudo

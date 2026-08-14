@@ -5,12 +5,20 @@ Requires=zenoh-router.service
 # Start after the network, discovery server, and speaker keep-alive are up
 Wants=speaker-keepalive.service
 After=zenoh-router.service speaker-keepalive.service network-online.target
+# robot_info.json is built from the runtime env, so the defaults must exist before the
+# launch script evaluates it. Wants=, never Requires=: the seed exits 1 on anything
+# without a device-tree serial, and that must not fail the launch.
+Wants=innate-seed.service
+After=innate-seed.service
 
 [Service]
 # The launch script handles sourcing, tmux management, and running ros2 launch
 # Ensure this script is executable (chmod +x)
 # Preserve common/ROS environment variables including INNATE_OS_ROOT
-Environment="INNATE_OS_ROOT=/home/jetson1/innate-os" "XDG_RUNTIME_DIR=/run/user/1000"
+# XDG_RUNTIME_DIR is not set here: this unit runs as root and drops to the login user
+# through sudo, so the uid systemd could name is the wrong one. The launch script
+# exports it from the account it actually runs as.
+Environment="INNATE_OS_ROOT=/home/jetson1/innate-os"
 ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,ROS_DISTRO,XDG_RUNTIME_DIR,AMENT_PREFIX_PATH,PYTHONPATH,LD_LIBRARY_PATH,INNATE_OS_ROOT -- /bin/bash -c '${INNATE_OS_ROOT}/scripts/launch_ros_in_tmux.sh'
 # Stop the tmux session (kills all ROS processes in it)
 ExecStop=/usr/bin/sudo -u jetson1 -- /bin/bash -c 'tmux kill-session -t ros_nodes 2>/dev/null || true'

@@ -11,6 +11,7 @@ without needing Bluetooth or a live NetworkManager.
 import json
 import os
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 # Ensure the package is importable
@@ -26,12 +27,9 @@ sys.modules["bluezero.adapter"] = MagicMock()
 sys.modules["bluezero.peripheral"] = MagicMock()
 
 import nmcli_utils  # noqa: E402
-
-# Mock robot_info.json read before importing simple_bt_service since
-# load_robot_name() runs at module level and the file won't exist in CI.
-with patch("builtins.open", MagicMock(return_value=__import__("io").StringIO('{"robot_name": "TEST"}'))):
-    import simple_bt_service
-    from simple_bt_service import BleProvisionerServer
+import simple_bt_service  # noqa: E402
+from conftest import SERVICE_KEY, VALID_ENV  # noqa: E402
+from simple_bt_service import BleProvisionerServer  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -53,6 +51,16 @@ def _send_command(server, payload: dict) -> dict:
     raw = bytes(json.dumps(payload), "utf-8")
     result_bytes = server.write_callback(list(raw))
     return json.loads(bytes(result_bytes).decode("utf-8"))
+
+
+def _wait_for(predicate, timeout: float = 2.0) -> bool:
+    """Poll until a background handler thread has done its work."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +339,7 @@ class TestUpdateNetwork:
     @patch.object(simple_bt_service, "time")
     @patch.object(nmcli_utils, "_run_nmcli")
     def test_add_new_network_with_password(self, mock_run, mock_time):
-        """Adding a brand-new office network should use 'device wifi connect'."""
+        """Adding a brand-new office network should save a profile carrying the PSK."""
         captured_cmds = []
 
         def side_effect(cmd_list, **kwargs):
@@ -361,13 +369,15 @@ class TestUpdateNetwork:
             {"command": "update_network", "data": {"ssid": "OfficeNet", "password": "secret123", "priority": 20}},
         )
 
-        assert resp["status"] == "success"
+        # The connect runs in a background thread, so the write returns immediately.
+        assert resp["status"] == "in_progress"
 
-        # Should have called 'nmcli device wifi connect OfficeNet ...'
-        connect_cmds = [c for c, kw in captured_cmds if "device wifi connect" in c and "OfficeNet" in c]
-        assert len(connect_cmds) >= 1
-        assert "password" in connect_cmds[0]
-        assert "secret123" in connect_cmds[0]
+        add_cmds = [c for c, _ in captured_cmds if "connection add" in c and "OfficeNet" in c]
+        assert len(add_cmds) == 1
+        assert "wifi-sec.psk secret123" in add_cmds[0]
+
+        # …then activated from the background thread.
+        assert _wait_for(lambda: any("connection up" in c and "OfficeNet" in c for c, _ in captured_cmds))
 
     @patch.object(simple_bt_service, "time")
     @patch.object(nmcli_utils, "_run_nmcli")
@@ -395,7 +405,8 @@ class TestUpdateNetwork:
 
         resp = _send_command(server, {"command": "update_network", "data": {"ssid": "FBI_VAN_6", "priority": 50}})
 
-        assert resp["status"] == "success"
+        assert resp["status"] == "in_progress"
+        assert _wait_for(lambda: any("connection up" in c for c, _ in captured_cmds))
 
         # Should NOT have called 'device wifi connect' — just modify + up
         connect_cmds = [c for c, _ in captured_cmds if "device wifi connect" in c]
@@ -480,12 +491,247 @@ class TestConnectNetwork:
 
         resp = _send_command(server, {"command": "connect_network", "data": {"ssid": "FBI_VAN_6"}})
 
-        assert resp["status"] == "success"
+        assert resp["status"] == "in_progress"
+        assert _wait_for(lambda: any("connection up" in c for c, _ in captured_cmds))
 
         # Should have called connection up with sudo
         up_calls = [kw for c, kw in captured_cmds if "connection up" in c]
         assert len(up_calls) >= 1
         assert up_calls[0].get("use_sudo") is True
+
+
+# ---------------------------------------------------------------------------
+# identify
+# ---------------------------------------------------------------------------
+
+VALID_PAYLOAD = {"env": VALID_ENV, "password": "goodbot41"}
+
+
+class TestIdentify:
+    """The tune plays from a background thread and reports both phases."""
+
+    @patch.object(simple_bt_service.subprocess, "run")
+    def test_identify_returns_in_progress_then_success(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        server = _make_server()
+        server._send_notification_threadsafe = MagicMock()
+
+        resp = _send_command(server, {"command": "identify"})
+
+        assert resp["status"] == "in_progress"
+        assert _wait_for(lambda: server._send_notification_threadsafe.called)
+        assert server._send_notification_threadsafe.call_args[0][0]["status"] == "success"
+        play = [c for c in mock_run.call_args_list if "gst-play-1.0" in c.args[0]][0]
+        # The unit does not preserve it, and without it there is no audio session.
+        assert play.kwargs["env"]["XDG_RUNTIME_DIR"] == f"/run/user/{os.getuid()}"
+
+    @patch.object(simple_bt_service.subprocess, "run")
+    def test_player_failure_is_distinguishable(self, mock_run):
+        """A nonzero player exit must not read as 'played it and you heard nothing'."""
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="No such element\n")
+        server = _make_server()
+        server._send_notification_threadsafe = MagicMock()
+
+        server._play_identify("identify")
+
+        final = server._send_notification_threadsafe.call_args[0][0]
+        assert final["status"] == "error"
+        assert "No such element" in final["message"]
+
+
+# ---------------------------------------------------------------------------
+# get_identity
+# ---------------------------------------------------------------------------
+
+
+class TestGetIdentity:
+    """The env file goes back for the client to parse — every key in it but the one
+    that is a secret."""
+
+    @patch.object(simple_bt_service, "system_env", return_value={})
+    def test_unprovisioned_robot(self, mock_env):
+        server = _make_server()
+
+        resp = _send_command(server, {"command": "get_identity"})
+
+        assert resp["status"] == "success"
+        assert resp["provisioned"] is False
+        assert resp["env"] == {}
+
+    @patch.object(
+        simple_bt_service,
+        "system_env",
+        return_value={"INNATE_SERVICE_KEY": SERVICE_KEY, "ROBOT_ID": "R7-41", "MODULE_SERIAL": "1424523016164"},
+    )
+    def test_provisioned_robot_never_echoes_the_key(self, mock_env):
+        server = _make_server()
+
+        resp = _send_command(server, {"command": "get_identity"})
+
+        assert resp["provisioned"] is True
+        assert resp["env"] == {"ROBOT_ID": "R7-41", "MODULE_SERIAL": "1424523016164"}
+        assert SERVICE_KEY not in json.dumps(resp)
+
+    @patch.object(
+        simple_bt_service,
+        "system_env",
+        return_value={"COLOR_VARIANT": "blue", "SOME_KEY_ADDED_LATER": "1"},
+    )
+    def test_echoes_keys_it_has_never_heard_of(self, mock_env):
+        """A denylist of one: a key added to the env file reaches the client without a
+        robot-side change, which is the whole point of returning the env."""
+        server = _make_server()
+
+        resp = _send_command(server, {"command": "get_identity"})
+
+        assert resp["env"] == {"COLOR_VARIANT": "blue", "SOME_KEY_ADDED_LATER": "1"}
+
+    @patch.object(simple_bt_service, "system_env", return_value={})
+    @patch.object(simple_bt_service.socket, "gethostname", return_value="mars-a1b2")
+    def test_hostname_is_the_mdns_name(self, mock_hostname, mock_env):
+        server = _make_server()
+
+        resp = _send_command(server, {"command": "get_identity"})
+
+        assert resp["hostname"] == "mars-a1b2.local"
+
+
+# ---------------------------------------------------------------------------
+# set_identity
+# ---------------------------------------------------------------------------
+
+
+class TestSetIdentity:
+    """Accepted only while unprovisioned, validated before it reaches root, and
+    forwarded to the helper unparsed."""
+
+    def _server_unprovisioned(self):
+        server = _make_server()
+        server._send_notification_threadsafe = MagicMock()
+        return server
+
+    @patch.object(simple_bt_service, "is_provisioned", return_value=False)
+    @patch.object(simple_bt_service.subprocess, "run")
+    def test_blob_is_forwarded_on_stdin_never_argv(self, mock_run, mock_provisioned):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout='{"robot_id": "R7-41", "robot_name": "MARS the 41st"}\n', stderr=""
+        )
+        server = self._server_unprovisioned()
+        order = []
+        server._send_notification_threadsafe = MagicMock(side_effect=lambda r: order.append("reply"))
+        with patch.object(simple_bt_service.subprocess, "Popen") as mock_popen:
+            mock_popen.side_effect = lambda *a, **kw: order.append("reboot") or MagicMock()
+            resp = _send_command(server, {"command": "set_identity", "data": VALID_PAYLOAD})
+
+            assert resp["status"] == "in_progress"
+            assert _wait_for(lambda: mock_popen.called)
+
+        write_call = [c for c in mock_run.call_args_list if "--write" in c.args[0]][0]
+        assert write_call.args[0][:2] == ["sudo", simple_bt_service.IDENTITY_TOOL_PATH]
+        assert SERVICE_KEY not in " ".join(write_call.args[0])
+        assert json.loads(write_call.kwargs["input"]) == VALID_PAYLOAD
+
+        final = server._send_notification_threadsafe.call_args[0][0]
+        assert final["status"] == "success"
+        assert final["robot_id"] == "R7-41"
+        assert SERVICE_KEY not in json.dumps(final)
+        assert "goodbot41" not in json.dumps(final)
+
+        # The reply has to be on the wire first: a reboot racing systemd's teardown of
+        # this unit against GLib.idle_add drops it silently.
+        assert order == ["reply", "reboot"]
+
+        # ros-app recreates robot_info.json from its launch-time env within a second, so
+        # resetting it before the stop would be undone before the reboot lands.
+        teardown = " ".join(mock_popen.call_args[0][0])
+        assert teardown.index("systemctl stop ros-app") < teardown.index("--reset-info")
+        assert teardown.index("--reset-info") < teardown.index("reboot")
+        assert "--wipe-data" not in teardown
+
+    @patch.object(simple_bt_service, "is_provisioned", return_value=False)
+    @patch.object(simple_bt_service.subprocess, "run")
+    def test_wipe_data_rides_along_as_its_own_call(self, mock_run, mock_provisioned):
+        mock_run.return_value = MagicMock(returncode=0, stdout='{"robot_id": "R7-41"}\n', stderr="")
+        server = self._server_unprovisioned()
+
+        with patch.object(simple_bt_service.subprocess, "Popen") as mock_popen:
+            _send_command(server, {"command": "set_identity", "data": {**VALID_PAYLOAD, "wipe_data": True}})
+            assert _wait_for(lambda: mock_popen.called)
+
+        assert "--wipe-data" in " ".join(mock_popen.call_args[0][0])
+
+    @patch.object(simple_bt_service, "is_provisioned", return_value=True)
+    def test_refused_once_provisioned(self, mock_provisioned):
+        server = self._server_unprovisioned()
+
+        resp = _send_command(server, {"command": "set_identity", "data": VALID_PAYLOAD})
+
+        assert resp["status"] == "error"
+        assert "provisioned" in resp["message"].lower()
+
+    @patch.object(simple_bt_service, "is_provisioned", return_value=False)
+    @patch.object(simple_bt_service.subprocess, "run")
+    def test_helper_refusal_maps_to_its_own_error(self, mock_run, mock_provisioned):
+        """The root helper is the gate that counts: it re-reads the file itself."""
+        mock_run.return_value = MagicMock(returncode=3, stdout="", stderr="already provisioned\n")
+        server = self._server_unprovisioned()
+
+        _send_command(server, {"command": "set_identity", "data": VALID_PAYLOAD})
+
+        assert _wait_for(lambda: server._send_notification_threadsafe.called)
+        final = server._send_notification_threadsafe.call_args[0][0]
+        assert final["status"] == "error"
+        assert "provisioned" in final["message"].lower()
+
+    @patch.object(simple_bt_service, "is_provisioned", return_value=False)
+    @patch.object(simple_bt_service.subprocess, "run")
+    def test_malformed_blobs_never_reach_root(self, mock_run, mock_provisioned):
+        server = self._server_unprovisioned()
+        bad_envs = {
+            "control character": f"INNATE_SERVICE_KEY={SERVICE_KEY}\nROBOT_ID=R7-41\x07\n",
+            "malformed line": f"INNATE_SERVICE_KEY={SERVICE_KEY}\nrobot id: R7-41\n",
+            "loader steering": f"INNATE_SERVICE_KEY={SERVICE_KEY}\nLD_PRELOAD=/tmp/evil.so\n",
+        }
+
+        for label, env in bad_envs.items():
+            resp = _send_command(server, {"command": "set_identity", "data": {"env": env, "password": "goodbot41"}})
+            assert resp["status"] == "error", label
+
+        assert mock_run.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Advertised name
+# ---------------------------------------------------------------------------
+
+
+class TestLoadRobotName:
+    """The advertised name must resolve on a robot that has never booted the ROS app —
+    that is the robot which most needs BLE."""
+
+    def test_prefers_robot_info(self, tmp_path):
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "robot_info.json").write_text('{"robot_name": "MARS the 41st"}')
+
+        with patch.object(simple_bt_service, "INNATE_OS_ROOT", str(tmp_path)):
+            assert simple_bt_service.load_robot_name() == "MARS the 41st"
+
+    def test_falls_back_to_system_env(self, tmp_path):
+        env_file = tmp_path / "innate.env"
+        env_file.write_text("ROBOT_NAME=MARS the 41st\n")
+
+        with (
+            patch.object(simple_bt_service, "INNATE_OS_ROOT", str(tmp_path)),
+            patch.object(simple_bt_service, "SYSTEM_ENV_PATH", str(env_file)),
+        ):
+            assert simple_bt_service.load_robot_name() == "MARS the 41st"
+
+    def test_survives_an_unreadable_everything(self, tmp_path):
+        with (
+            patch.object(simple_bt_service, "INNATE_OS_ROOT", str(tmp_path)),
+            patch.object(simple_bt_service, "SYSTEM_ENV_PATH", str(tmp_path / "missing.env")),
+        ):
+            assert simple_bt_service.load_robot_name() == "MARS"
 
 
 # ---------------------------------------------------------------------------

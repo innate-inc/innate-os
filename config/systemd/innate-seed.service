@@ -1,0 +1,13 @@
+[Unit]
+Description=Seed serial-derived identity defaults for an unprovisioned robot
+
+[Service]
+Type=oneshot
+# RemainAfterExit stays off so that `sudo rm /etc/innate.env` regrows the defaults on
+# the next ros-app restart, with no reboot. Ordering lives in the two consumers, which
+# pull this in with Wants= — hence no [Install] section.
+RemainAfterExit=no
+ExecStart=/home/jetson1/innate-os/scripts/identity/innate-identity --seed
+
+StandardOutput=journal
+StandardError=journal

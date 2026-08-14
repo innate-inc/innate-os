@@ -28,6 +28,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_command_layer test/test_command_layer.py
     APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/mars_bt_provisioner
   )
+  ament_add_pytest_test(test_identity_applier test/test_identity_applier.py)
 endif()
 
 ament_package()

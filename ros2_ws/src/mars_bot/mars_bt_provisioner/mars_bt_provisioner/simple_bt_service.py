@@ -4,13 +4,17 @@
 import json
 import logging
 import os
+import re
+import shlex
 import signal
+import socket
 import subprocess
 import sys
 import threading
 import time
 
 from bluezero import adapter, peripheral
+from dotenv import dotenv_values
 from gi.repository import GLib
 from nmcli_utils import (
     nmcli_add_or_modify_connection,
@@ -40,17 +44,70 @@ CHARACTERISTIC_UUID = "abcdef01-1234-5678-1234-56789abcdef0"
 
 # Path to the helper script for restarting services (adjust if moved)
 RESTART_SCRIPT_PATH = "/usr/local/bin/restart_robot_networking.sh"
+SYSTEM_ENV_PATH = "/etc/innate.env"
+
+INNATE_OS_ROOT = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
+IDENTITY_TOOL_PATH = os.path.join(INNATE_OS_ROOT, "scripts", "identity", "innate-identity")
+IDENTIFY_SOUND = os.path.join(INNATE_OS_ROOT, "config", "sounds", "turnon.mp3")
+
+# The identity blob is validated here and again by the root helper. No size check: a
+# payload this layer can see already crossed the air, and the bound that matters is the
+# helper's, enforced by root.
+ENV_LINE_RE = re.compile(r"^[A-Z][A-Z0-9_]*=")
+# /etc/innate.env is injected into every ROS process's environment, so a blob is env
+# injection by construction. The unprovisioned-only rule is the real gate; this narrows
+# what the open window buys an attacker.
+FORBIDDEN_ENV_PREFIXES = ("LD_", "DYLD_")
+
+# The root helper's exit codes and refusal wording; scripts/identity/innate-identity is
+# authoritative for both.
+EXIT_ALREADY_PROVISIONED = 3
+EXIT_BAD_PAYLOAD = 4
+ALREADY_PROVISIONED_MSG = "Already provisioned — delete /etc/innate.env to de-provision"
 
 
-# Load robot name from robot_info.json
-def load_robot_name():
-    """Load robot name from robot_info.json file."""
-    mars_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
-    robot_info_path = os.path.join(mars_root, "data", "robot_info.json")
+def _stderr_summary(result: subprocess.CompletedProcess, default: str) -> str:
+    """The last line a failed helper wrote, or a default when it said nothing."""
+    lines = (result.stderr or "").strip().splitlines()
+    return lines[-1] if lines else default
 
-    with open(robot_info_path) as f:
-        data = json.load(f)
-        return data.get("robot_name", "MARS")
+
+def system_env() -> dict[str, str | None]:
+    """/etc/innate.env as a dict. Absent or unreadable reads as empty: this service has
+    to start on a robot whose env file post_update.sh has not fixed the mode on yet."""
+    try:
+        return dotenv_values(SYSTEM_ENV_PATH)
+    except OSError:
+        return {}
+
+
+def has_service_key(env: dict[str, str | None]) -> bool:
+    """A robot is provisioned exactly when /etc/innate.env holds a service key."""
+    return bool((env.get("INNATE_SERVICE_KEY") or "").strip())
+
+
+def is_provisioned() -> bool:
+    return has_service_key(system_env())
+
+
+def load_robot_name() -> str:
+    """The advertised name, provisioned or not — and it must never raise.
+
+    robot_info.json is created by the ROS app, so on a never-booted robot it does not
+    exist yet; with Restart=on-failure that used to crash-loop this service on exactly
+    the robot that needs BLE most. Behind it, innate-seed.service is ordered before this
+    one, so the env file holds a name by the time we read it — bare "MARS" is only what
+    is left when the seed refused for want of a device-tree serial.
+    """
+    try:
+        with open(os.path.join(INNATE_OS_ROOT, "data", "robot_info.json")) as f:
+            name = json.load(f).get("robot_name")
+        if name:
+            return name
+    except (OSError, ValueError):
+        pass
+
+    return (system_env().get("ROBOT_NAME") or "").strip() or "MARS"
 
 
 ROBOT_NAME = load_robot_name()
@@ -302,6 +359,169 @@ class BleProvisionerServer:
 
         return {"command": command, "status": "in_progress", "message": f"Connecting to {ssid}…"}
 
+    # --- Identity ---
+    def handle_identify(self, data):
+        """Handle identify command: play the boot tune so an operator can tell which
+        physical robot this is. Must work with ros-app down, so it plays the file
+        directly rather than asking the ROS stack."""
+        command = data.get("command")
+        logger.info(f"Handling {command} command")
+        threading.Thread(target=self._play_identify, args=(command,), daemon=True).start()
+        return {"command": command, "status": "in_progress", "message": "Playing identify tune…"}
+
+    def _play_identify(self, command):
+        # XDG_RUNTIME_DIR has to be set explicitly: this unit does not preserve it, and
+        # without it the player cannot reach the audio session.
+        try:
+            result = subprocess.run(
+                ["gst-play-1.0", IDENTIFY_SOUND],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=dict(os.environ, XDG_RUNTIME_DIR=f"/run/user/{os.getuid()}"),
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            self._send_notification_threadsafe(
+                {"command": command, "status": "error", "message": f"Playback failed: {e}"}
+            )
+            return
+
+        if result.returncode != 0:
+            # A nonzero exit is what separates "couldn't play it" from "played it and
+            # you heard nothing" — the operator needs to know which.
+            message = f"Playback failed: {_stderr_summary(result, 'unknown error')}"
+            self._send_notification_threadsafe({"command": command, "status": "error", "message": message})
+            return
+
+        self._send_notification_threadsafe({"command": command, "status": "success", "message": "Played identify tune"})
+
+    def handle_get_identity(self, data):
+        """Handle get_identity command. /etc/innate.env goes back as-is for the client to
+        parse, minus the one value in it that is a secret."""
+        command = data.get("command")
+        logger.info(f"Handling {command} command")
+        env = system_env()
+
+        return {
+            "command": command,
+            "status": "success",
+            "env": {key: value for key, value in env.items() if key != "INNATE_SERVICE_KEY"},
+            # The mDNS name, not the system one: every other robot URL is <robot>.local.
+            "hostname": f"{socket.gethostname()}.local",
+            "provisioned": has_service_key(env),
+        }
+
+    def handle_set_identity(self, data):
+        """Handle set_identity command.
+
+        The payload is forwarded to the root helper unparsed: this layer validates its
+        shape and refuses when already provisioned, but it never reads the identity
+        apart from that. The helper re-checks both as root — the caller's word for
+        "unprovisioned" is not what gates the write.
+        """
+        command = data.get("command")
+        logger.info(f"Handling {command} command")
+        payload = data.get("data", {})
+
+        error = self._reject_identity_payload(payload)
+        if error:
+            logger.warning(f"Rejecting set_identity payload: {error}")
+            return {"command": command, "status": "error", "message": error}
+
+        threading.Thread(target=self._apply_identity, args=(command, payload), daemon=True).start()
+        return {"command": command, "status": "in_progress", "message": "Applying identity…"}
+
+    def _reject_identity_payload(self, payload):
+        """Reason to refuse the blob, or None. Never quotes a value back at the client."""
+        if is_provisioned():
+            return ALREADY_PROVISIONED_MSG
+        if not isinstance(payload, dict):
+            return "data must be an object"
+
+        env_text = payload.get("env")
+        password = payload.get("password", "")
+        if not isinstance(env_text, str) or not isinstance(password, str):
+            return "expected {env, password, wipe_data?}"
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in password):
+            return "password contains control characters"
+
+        for raw_line in env_text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if not ENV_LINE_RE.match(line):
+                return "malformed env line"
+            key, value = line.split("=", 1)
+            if key.startswith(FORBIDDEN_ENV_PREFIXES):
+                return f"refusing loader-steering variable {key}"
+            if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+                return f"value of {key} contains control characters"
+        return None
+
+    def _teardown_and_reboot(self, wipe_data):
+        """Stop ros-app, clean up after the new identity, then reboot — one detached
+        child, so the reply is already on the wire.
+
+        The stop has to come first. A running ros-app recreates robot_info.json from its
+        launch-time environment within a second, so a --reset-info ahead of it is undone
+        before the reboot and the robot comes back under its old name.
+        """
+        tool = shlex.quote(IDENTITY_TOOL_PATH)
+        steps = ["/usr/bin/systemctl stop ros-app.service", f"{tool} --reset-info"]
+        if wipe_data:
+            steps.append(f"{tool} --wipe-data")
+        steps.append("reboot")
+        script = "; ".join(f"sudo {step}" for step in steps)
+        subprocess.Popen(["setsid", "sh", "-c", f"sleep 2; {script}"], start_new_session=True)
+
+    def _apply_identity(self, command, payload):
+        """Run the root helper, reply, then hand the rest to a detached child.
+
+        The reply has to be on the wire before the reboot: rebooting inline would race
+        systemd's teardown of this unit against GLib.idle_add and silently drop it.
+        """
+        try:
+            result = subprocess.run(
+                ["sudo", IDENTITY_TOOL_PATH, "--write"],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            self._send_notification_threadsafe(
+                {"command": command, "status": "error", "message": f"Identity helper failed: {e}"}
+            )
+            return
+
+        if result.returncode != 0:
+            message = {
+                EXIT_ALREADY_PROVISIONED: ALREADY_PROVISIONED_MSG,
+                EXIT_BAD_PAYLOAD: "Bad identity payload",
+            }.get(result.returncode, _stderr_summary(result, "Identity helper failed"))
+            logger.error(f"Identity helper exited {result.returncode}: {message}")
+            self._send_notification_threadsafe({"command": command, "status": "error", "message": message})
+            return
+
+        applied = {}
+        stdout_lines = (result.stdout or "").strip().splitlines()
+        if stdout_lines:
+            try:
+                applied = json.loads(stdout_lines[-1])
+            except ValueError:
+                logger.warning("Identity helper did not print an identity on stdout")
+
+        self._send_notification_threadsafe(
+            {
+                "command": command,
+                "status": "success",
+                "robot_id": applied.get("robot_id"),
+                "robot_name": applied.get("robot_name"),
+                "message": "Identity applied, rebooting",
+            }
+        )
+        self._teardown_and_reboot(bool(payload.get("wipe_data")))
+
     # --- BLE Callbacks ---
     def write_callback(self, value, options=None):
         """Handle write requests from BLE clients."""
@@ -310,9 +530,11 @@ class BleProvisionerServer:
         response = None
         try:
             value_str = bytes(value).decode("utf-8")
-            logger.info(f"Received write: {value_str}")
             data = json.loads(value_str)
             command = data.get("command")
+            # Never log the raw write: a set_identity payload carries the service key
+            # and the login password.
+            logger.info(f"Received write: {value_str if command != 'set_identity' else 'set_identity (redacted)'}")
 
             if command == "get_status":
                 response = self.handle_get_status(data)
@@ -324,11 +546,18 @@ class BleProvisionerServer:
                 response = self.handle_connect_network(data)
             elif command == "scan_wifi":
                 response = self.handle_scan_wifi(data)
+            elif command == "identify":
+                response = self.handle_identify(data)
+            elif command == "get_identity":
+                response = self.handle_get_identity(data)
+            elif command == "set_identity":
+                response = self.handle_set_identity(data)
             else:
                 response = self.handle_unknown_command(command)
 
         except json.JSONDecodeError:
-            logger.error(f"Failed to decode JSON: {value_str}")
+            # Length only: a truncated set_identity write is still full of secrets.
+            logger.error(f"Failed to decode JSON in a {len(value)}-byte write")
             response = {"command": "unknown", "status": "error", "message": "Invalid JSON format"}
         except Exception as e:
             # Try to get command from data if available, otherwise use 'unknown'

@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Innate Inc
+"""Print the robot's four-character short id, derived from the compute module serial.
+
+The single implementation of that derivation: the BLE advertised name, the seeded
+ROBOT_NAME and the operator's `provision.py list` row have to agree, and they only can
+if they all come from here.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import sys
+from pathlib import Path
+
+# /proc/device-tree is a symlink to this same file; the value carries a trailing NUL.
+SERIAL_PATH = Path("/sys/firmware/devicetree/base/serial-number")
+
+
+def module_serial() -> str | None:
+    """The compute module serial, or None where the device tree has none (dev boxes)."""
+    try:
+        raw = SERIAL_PATH.read_bytes()
+    except OSError:
+        return None
+    serial = raw.decode("utf-8", "replace").strip("\x00").strip()
+    return serial or None
+
+
+def short_id(serial: str | None = None) -> str:
+    """Four lowercase hex characters identifying this robot.
+
+    The serial names the compute module, so the id survives an M.2 Wi-Fi/BT card swap.
+    """
+    serial = serial or module_serial()
+    if serial is None:
+        raise SystemExit("no device-tree serial")
+    return hashlib.sha256(serial.encode()).hexdigest()[:4]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Print this robot's four-hex short id.")
+    parser.add_argument("--module-serial", action="store_true", help="Print the raw module serial instead")
+    parser.add_argument("--from-serial", help="Derive from this serial instead of the device tree")
+    args = parser.parse_args()
+
+    if args.module_serial:
+        serial = args.from_serial or module_serial()
+        if serial is None:
+            print("no device-tree serial", file=sys.stderr)
+            return 1
+        print(serial)
+        return 0
+
+    print(short_id(args.from_serial))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

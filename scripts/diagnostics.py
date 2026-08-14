@@ -15,10 +15,16 @@ Checks:
 """
 
 import glob
+import json
 import os
 import subprocess
 import sys
 import time
+import urllib.error
+from pathlib import Path
+
+import me
+import print_runtime_env
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -37,6 +43,13 @@ SPEAKER_SOUND = "/usr/share/sounds/sound-icons/electric-piano-3.wav"
 
 TMUX_SESSION = "ros_nodes"
 SYSTEMD_SERVICE = "ros-app.service"
+
+SYSTEM_ENV_PATH = print_runtime_env.SYSTEM_ENV_PATH
+# Fall back to this checkout rather than ~/innate-os: with the variable unset, guessing
+# the home directory reads another checkout's env and reports on the wrong robot config.
+INNATE_OS_ROOT = os.environ.get("INNATE_OS_ROOT") or str(Path(__file__).resolve().parent.parent)
+ROBOT_INFO_PATH = os.path.join(INNATE_OS_ROOT, "data", "robot_info.json")
+REPO_ENV_PATH = os.path.join(INNATE_OS_ROOT, ".env")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # OUTPUT FORMATTING
@@ -461,6 +474,84 @@ def check_speaker():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# IDENTITY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _local_identity():
+    """(robot_id, robot_id from robot_info.json, service key) as the nodes see them.
+
+    The merge — /etc/innate.env as fallback, repo .env on top — belongs to
+    print_runtime_env.py, which is what the ROS processes are actually launched with.
+    """
+    env = print_runtime_env.build_runtime_env(Path(INNATE_OS_ROOT))
+
+    robot_info_id = None
+    try:
+        with open(ROBOT_INFO_PATH) as f:
+            robot_info_id = json.load(f).get("robot_id")
+    except (OSError, ValueError):
+        pass
+
+    return env.get("ROBOT_ID"), robot_info_id, env.get("INNATE_SERVICE_KEY", "").strip()
+
+
+def check_identity():
+    """Compare the robot's stored identity against what its service key resolves to.
+
+    Provisioning writes the identity as one blob composed on a laptop, so the robot
+    never proves key↔identity agreement itself. This is the only on-robot detector of a
+    mis-composed blob — loud, never fatal.
+    """
+    header("IDENTITY")
+
+    env_id, info_id, service_key = _local_identity()
+
+    if not service_key:
+        # An unreadable file parses as an empty one, so a provisioned robot whose
+        # /etc/innate.env lost its group would otherwise report a clean "Unprovisioned"
+        # — the same state that silently drops the key out of the runtime env.
+        if SYSTEM_ENV_PATH.exists() and not os.access(SYSTEM_ENV_PATH, os.R_OK):
+            fail(f"{SYSTEM_ENV_PATH} exists but this account cannot read it — the nodes lose the key too")
+            warn(f"  sudo chown root:$(id -gn) {SYSTEM_ENV_PATH} && sudo chmod 640 {SYSTEM_ENV_PATH}")
+            return False
+        warn(
+            f"Unprovisioned: no INNATE_SERVICE_KEY in {SYSTEM_ENV_PATH} or the repo .env (robot_id {env_id or 'unset'})"
+        )
+        return True
+
+    ok(f"Service key present, robot_id {env_id or 'unset'}")
+
+    if info_id and env_id and info_id != env_id:
+        fail(f"robot_info.json says {info_id}, the merged env says {env_id}")
+        warn(f"  ROBOT_ID is read from {SYSTEM_ENV_PATH} with {REPO_ENV_PATH} layered on top — check both")
+        warn(f"  Delete robot_info.json and restart ros-app, or restore {SYSTEM_ENV_PATH}.bak")
+
+    try:
+        cloud = me.fetch_identity(service_key)
+    except urllib.error.HTTPError as e:
+        # The service answered and said no — a revoked or mistyped key, not a network.
+        fail(f"The auth service rejected this key (HTTP {e.code})")
+        return False
+    except (urllib.error.URLError, TimeoutError, ValueError) as e:
+        warn(f"Offline, using cached identity (could not reach auth service: {e})")
+        return True
+
+    cloud_id = me.robot_id(cloud)
+    if not cloud_id:
+        warn(f"Auth service returned no robot id (keys: {sorted(cloud)})")
+        return True
+
+    if env_id != cloud_id:
+        fail(f"This key belongs to {cloud_id}, but this robot calls itself {env_id or 'unset'}")
+        warn(f"  Re-provision: sudo rm {SYSTEM_ENV_PATH}, then provision.py from the laptop")
+        return False
+
+    ok(f"Key and stored identity agree: {cloud_id}")
+    return True
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -496,6 +587,7 @@ def main():
     results["lidar"] = check_lidar()
     results["cameras"] = check_cameras()
     results["speaker"] = check_speaker()
+    results["identity"] = check_identity()
 
     # Summary
     header("SUMMARY")

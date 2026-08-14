@@ -58,6 +58,7 @@ LOG_FILE="$REPO_DIR/logs/post_update.log"
 # Get the actual user (not root)
 ACTUAL_USER=${SUDO_USER:-$USER}
 ACTUAL_HOME=$(eval echo ~$ACTUAL_USER)
+ACTUAL_UID=$(id -u "$ACTUAL_USER")
 
 # Create logs directory if it doesn't exist
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -459,11 +460,21 @@ if [ -d "$REPO_DIR/config/systemd" ]; then
             service_name=$(basename "$service_file")
             log "  Installing $service_name"
 
-            # Update User= directive in service files to match actual user
+            # The repo units are written against the reference install and templated
+            # here. The tokens a new unit must spell exactly to be rewritten: `jetson1`
+            # as the user, `/home/jetson1/innate-os` as the checkout, `/home/jetson1` as
+            # the home, `/run/user/1000` as the runtime dir. A unit that invents its own
+            # spelling silently ships the reference values.
+            # The checkout rule has to run before the bare-home rule, or the checkout
+            # becomes $ACTUAL_HOME/innate-os and stops matching the paths the sudoers
+            # file pins to $REPO_DIR.
             # Remove any existing symlink to avoid truncating source file
             rm -f /etc/systemd/system/"$service_name"
-            sed -e "s/User=jetson1/User=$ACTUAL_USER/g" \
+            sed -e "s|/home/jetson1/innate-os|$REPO_DIR|g" \
                 -e "s|/home/jetson1|$ACTUAL_HOME|g" \
+                -e "s/User=jetson1/User=$ACTUAL_USER/g" \
+                -e "s/sudo -u jetson1/sudo -u $ACTUAL_USER/g" \
+                -e "s|/run/user/1000|/run/user/$ACTUAL_UID|g" \
                 "$service_file" > /etc/systemd/system/"$service_name"
         fi
     done
@@ -889,6 +900,13 @@ cat > "$SUDOERS_FILE" << EOF
 
 # Restart robot networking (called by BLE provisioner)
 $ACTUAL_USER ALL=(ALL) NOPASSWD: /usr/local/bin/restart_robot_networking.sh
+
+# Identity applier: --write from the BLE provisioner (--seed runs as root, from its unit).
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $REPO_DIR/scripts/identity/innate-identity
+
+# Reboot after BLE provisioning writes an identity (the reply goes out first).
+$ACTUAL_USER ALL=(ALL) NOPASSWD: /usr/sbin/reboot
+$ACTUAL_USER ALL=(ALL) NOPASSWD: /sbin/reboot
 
 # Post-update script (called by innate-update)
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $REPO_DIR/scripts/update/post_update.sh
