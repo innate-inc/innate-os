@@ -51,8 +51,9 @@ CAMERA_INFO_TOPICS = [
 ]
 # Pose/sensor topics bagged alongside the videos for 3D reconstruction:
 # odometry + TF give the camera trajectory (tf_static carries the camera
-# extrinsics chain, joint_states the head tilt), /scan adds lidar geometry.
-# Topics without a live publisher just record zero messages.
+# extrinsics chain, joint_states the head tilt); /scan_fast is the lidar at
+# full sensor rate — /scan is the same stream throttled to 6 Hz, so it isn't
+# bagged. Topics without a live publisher just record zero messages.
 BAG_TOPICS = {
     "/odom": ("nav_msgs/msg/Odometry", Odometry),
     "/mapping_pose": ("nav_msgs/msg/Odometry", Odometry),
@@ -60,7 +61,7 @@ BAG_TOPICS = {
     "/tf": ("tf2_msgs/msg/TFMessage", TFMessage),
     "/tf_static": ("tf2_msgs/msg/TFMessage", TFMessage),
     "/joint_states": ("sensor_msgs/msg/JointState", JointState),
-    "/scan": ("sensor_msgs/msg/LaserScan", LaserScan),
+    "/scan_fast": ("sensor_msgs/msg/LaserScan", LaserScan),
 }
 
 # Write-timer rate. Streams whose camera publishes slower record at their own
@@ -117,8 +118,14 @@ class GstMp4Writer:
         else:
             kbps = max(1500, int(width * height * fps * 0.25 / 1000))  # ~0.25 bit/px
             encode = [
-                "x264enc", "speed-preset=ultrafast", f"bitrate={kbps}", f"key-int-max={int(fps * 4)}",
-                "!", "h264parse", "!", "mp4mux",
+                "x264enc",
+                "speed-preset=ultrafast",
+                f"bitrate={kbps}",
+                f"key-int-max={int(fps * 4)}",
+                "!",
+                "h264parse",
+                "!",
+                "mp4mux",
             ]
         fmt = "i420" if self._i420 else "bgr"
         convert = [] if self._i420 else ["videoconvert", "n-threads=4", "!", "video/x-raw,format=I420", "!"]
