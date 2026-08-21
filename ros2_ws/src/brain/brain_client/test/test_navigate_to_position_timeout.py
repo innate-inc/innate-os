@@ -23,7 +23,7 @@ install_if_ros_is_missing()
 from action_msgs.msg import GoalStatus  # noqa: E402
 from geometry_msgs.msg import PoseStamped  # noqa: E402
 from innate_skills import navigate_to_position as navigate_module  # noqa: E402
-from innate_skills.navigate_to_position import Nav2Controller, NavigateToPosition  # noqa: E402
+from innate_skills.navigate_to_position import Nav2Controller, NavigateToPosition, NavigationBlocked  # noqa: E402
 
 from innate import SkillCancelled, SkillFailed  # noqa: E402
 
@@ -351,6 +351,17 @@ def test_external_navigation_cancel_stops_skill_instead_of_retrying(monkeypatch)
         controller.go_to_position(1.0, 2.0, 0.25, False)
 
     assert goal_handle.cancel_calls == 0
+
+
+def test_aborted_navigation_is_a_recoverable_blocked_route(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(navigate_module.time, "monotonic", clock.now)
+    goal_handle = _GoalHandle(result_future=_Future(_result(GoalStatus.STATUS_ABORTED), done=True))
+    client = _ActionClient(_Future(goal_handle, done=True))
+    controller, _skill = _controller(client, clock)
+
+    with pytest.raises(NavigationBlocked, match="route may be blocked"):
+        controller.go_to_position(1.0, 2.0, 0.25, False)
 
 
 def test_public_skill_schema_no_longer_exposes_timeout_string_union():

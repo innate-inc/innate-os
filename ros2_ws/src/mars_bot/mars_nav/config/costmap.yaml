@@ -21,7 +21,7 @@ navigation:
         obstacle_layer:
           plugin: "nav2_costmap_2d::ObstacleLayer"
           enabled: True
-          observation_sources: scan
+          observation_sources: scan mapping_recovery
           scan:
             topic: /scan
             max_obstacle_height: 2.0
@@ -32,6 +32,14 @@ navigation:
             raytrace_min_range: 0.2
             obstacle_max_range: 2.5
             obstacle_min_range: 0.2
+          mapping_recovery:
+            topic: /mapping/recovery_scan
+            clearing: False
+            marking: True
+            data_type: "LaserScan"
+            obstacle_max_range: 1.0
+            obstacle_min_range: 0.05
+            observation_persistence: 8.0
         inflation_layer:
           plugin: "nav2_costmap_2d::InflationLayer"
           cost_scaling_factor: 10.0
@@ -74,7 +82,7 @@ local_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
-        observation_sources: scan
+        observation_sources: scan mapping_recovery
         scan:
           topic: /scan
           max_obstacle_height: 2.0
@@ -85,6 +93,14 @@ local_costmap:
           raytrace_min_range: 0.2
           obstacle_max_range: 2.5
           obstacle_min_range: 0.2
+        mapping_recovery:
+          topic: /mapping/recovery_scan
+          clearing: False
+          marking: True
+          data_type: "LaserScan"
+          obstacle_max_range: 1.0
+          obstacle_min_range: 0.05
+          observation_persistence: 8.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0

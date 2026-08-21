@@ -28,6 +28,7 @@ from geometry_msgs.msg import Twist  # noqa: E402
 from innate_skills import explore_map as explore_module  # noqa: E402
 from innate_skills._frontier_planner import FrontierGoal  # noqa: E402
 from innate_skills.explore_map import AUTONOMOUS_MAPPING_MODE, ExploreMap, _TeleopTakeover  # noqa: E402
+from innate_skills.navigate_to_position import NavigationBlocked  # noqa: E402
 
 from innate import NavMode, Pose, SkillCancelled, SkillFailed  # noqa: E402
 
@@ -74,7 +75,17 @@ class _Navigator:
         self.calls.append((x, y, yaw, local_frame, timeout_s, safety_check))
         safety_check()
         if self.failure:
+            if isinstance(self.failure, SkillFailed):
+                raise self.failure
             raise SkillFailed(self.failure)
+
+
+class _RecoveryHint:
+    def __init__(self):
+        self.hints = 0
+
+    def mark_front_obstacle(self):
+        self.hints += 1
 
 
 class _ModeController:
@@ -101,6 +112,7 @@ def _skill(*, mode: str = AUTONOMOUS_MAPPING_MODE, map_state=None) -> ExploreMap
     skill.lidar = SimpleNamespace(frame_id="laser")
     skill.__dict__["teleop"] = _Teleop()
     skill.__dict__["navigator"] = _Navigator()
+    skill.__dict__["recovery_hint"] = _RecoveryHint()
     skill.__dict__["mode_controller"] = _ModeController(skill)
     skill.feedback = lambda _message: None
     skill.sleep = lambda _seconds: skill.check_cancelled()
@@ -217,7 +229,7 @@ def test_human_takeover_during_planning_cancels_before_navigation(monkeypatch):
 
 def test_three_navigation_failures_end_the_run(monkeypatch):
     skill = _skill()
-    navigator = _Navigator(failure="route blocked")
+    navigator = _Navigator(failure=NavigationBlocked("route blocked"))
     skill.__dict__["navigator"] = navigator
 
     def planner(*args, excluded_world, **kwargs):
@@ -228,6 +240,7 @@ def test_three_navigation_failures_end_the_run(monkeypatch):
     with pytest.raises(SkillFailed, match="3 navigation failures"):
         skill.execute(max_frontiers=10)
     assert len(navigator.calls) == 3
+    assert skill.recovery_hint.hints == 2
 
 
 def test_no_frontier_completes_only_after_two_fresh_map_updates(monkeypatch):

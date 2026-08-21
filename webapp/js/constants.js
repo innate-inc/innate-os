@@ -124,6 +124,8 @@ export const NAV_CURRENT_MAP_TOPIC = "/nav/current_map";
 export const NAV_MAPPING_MODES = Object.freeze(["mapping", "autonomous_mapping"]);
 /** @param {unknown} mode */
 export const isMappingNavMode = (mode) => typeof mode === "string" && NAV_MAPPING_MODES.includes(mode);
+/** Keep the live-map view through a mapping-to-mapping transition. */
+export const mappingViewActive = (mode, wasMapping) => (mode === "switching" ? wasMapping : isMappingNavMode(mode));
 // std_msgs/String carrying JSON {"available_maps": ["home.yaml", ...]}.
 export const NAV_AVAILABLE_MAPS_TOPIC = "/nav/available_maps";
 // mode_manager services (brain_messages srvs, all → {success, message}):

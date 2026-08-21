@@ -22,7 +22,8 @@ from innate_skills._frontier_planner import (
     find_frontier_goals,
     known_area_m2,
 )
-from innate_skills.navigate_to_position import Nav2Controller
+from innate_skills.navigate_to_position import Nav2Controller, NavigationBlocked
+from sensor_msgs.msg import LaserScan
 
 from innate import Lidar, Map, NavMode, Pose, Skill, SkillCancelled, SkillFailed, SkillOutput, SkillReturn, resource
 
@@ -34,6 +35,8 @@ POSE_STALE_TIMEOUT_S = 2.0
 LIDAR_STALE_TIMEOUT_S = 1.5
 MAX_CONSECUTIVE_FAILURES = 3
 STABLE_EMPTY_MAPS = 2
+RECOVERY_HINT_TOPIC = "/mapping/recovery_scan"
+RECOVERY_HINT_DISTANCE_M = 0.32
 
 
 def _sample_marker(sample: object) -> tuple[str, object]:
@@ -107,6 +110,29 @@ class _TeleopTakeover:
         self._node.destroy_subscription(self._sub)
 
 
+class _RecoveryHintPublisher:
+    """Mark one inferred contact in Nav2's costmaps, never in the SLAM map."""
+
+    def __init__(self, skill: ExploreMap):
+        self._node = skill.node
+        self._hint_pub = skill.node.create_publisher(LaserScan, RECOVERY_HINT_TOPIC, 10)
+
+    def mark_front_obstacle(self) -> None:
+        scan = LaserScan()
+        scan.header.stamp = self._node.get_clock().now().to_msg()
+        scan.header.frame_id = "base_link"
+        scan.angle_min = 0.0
+        scan.angle_max = 0.0
+        scan.angle_increment = 1.0
+        scan.range_min = 0.05
+        scan.range_max = 1.0
+        scan.ranges = [RECOVERY_HINT_DISTANCE_M]
+        self._hint_pub.publish(scan)
+
+    def destroy(self) -> None:
+        self._node.destroy_publisher(self._hint_pub)
+
+
 class ExploreMap(Skill):
     nav_mode: NavMode
     map: Map | None = None
@@ -130,6 +156,12 @@ class ExploreMap(Skill):
         controller = Nav2Controller(self)
         yield controller
         controller.destroy()
+
+    @resource
+    def recovery_hint(self) -> Iterator[_RecoveryHintPublisher]:
+        publisher = _RecoveryHintPublisher(self)
+        yield publisher
+        publisher.destroy()
 
     def guidelines(self) -> str:
         return (
@@ -365,6 +397,9 @@ class ExploreMap(Skill):
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                     stop_reason = "navigation failed repeatedly"
                     break
+                if isinstance(exc, NavigationBlocked):
+                    self.feedback("Nav2 exhausted its recoveries; adding a short-lived obstacle hint before replanning")
+                    self.recovery_hint.mark_front_obstacle()
                 self.sleep(0.5)
                 continue
 

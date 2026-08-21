@@ -60,6 +60,7 @@ const {
   PINNED_SKILLS,
   NAV_SAVE_MAP_SERVICE,
   isMappingNavMode,
+  mappingViewActive,
 } = await import("../js/constants.js");
 const { createNavStore } = await import("../js/nav/navStore.js");
 const { createMappingSession, quiesceForMapNaming } = await import("../js/nav/mappingSession.js");
@@ -92,6 +93,13 @@ await test("manual and autonomous mapping share the mapping UI policy", () => {
   assert.equal(isMappingNavMode("navigation"), false);
   assert.equal(isMappingNavMode("mapfree"), false);
   assert.equal(isMappingNavMode(null), false);
+});
+
+await test("mapping view holds its map-frame pose source through switching", () => {
+  assert.equal(mappingViewActive("switching", true), true);
+  assert.equal(mappingViewActive("switching", false), false);
+  assert.equal(mappingViewActive("autonomous_mapping", false), true);
+  assert.equal(mappingViewActive("navigation", true), false);
 });
 
 await test("Explore Map is pinned and takeover preserves the robot teleop pipeline", () => {

@@ -29,7 +29,7 @@ import {
   ODOM_TOPIC,
   PLAN_TOPICS,
   SCAN_TOPIC,
-  isMappingNavMode,
+  mappingViewActive,
 } from "../constants.js";
 import { createMap, MAP_COLORS } from "../map/mapWidget.js";
 import { createNavStore } from "./navStore.js";
@@ -242,7 +242,7 @@ function buildView(root) {
     const noMap = !s.currentMap || s.mode === "mapfree";
     mapPill.classList.toggle("is-empty", noMap);
     mapPillName.textContent = noMap ? "no map" : s.currentMap;
-    const mapping = isMappingNavMode(s.mode);
+    const mapping = mappingViewActive(s.mode, wasMapping);
     if (mapping !== wasMapping) {
       wasMapping = mapping;
       onMappingChange(mapping);
