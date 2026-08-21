@@ -179,6 +179,12 @@ def generate_launch_description():
     return LaunchDescription(
         [
             null_map_node,
+            Node(
+                package="mars_nav",
+                executable="keepout_mask_server.py",
+                name="keepout_mask_server",
+                output="screen",
+            ),
             navigation_launch,
             # mapfree_launch,
             mapping_launch,

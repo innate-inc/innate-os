@@ -41,6 +41,8 @@ class Map(LegacyMapping):
     raw_source: Any = field(default=None, repr=False, compare=False)
     """The nav_msgs/OccupancyGrid message this was built from; provenance
     for the lazy ``grid``/legacy views. Excluded from ==/hash."""
+    keepout_source: Any = field(default=None, repr=False, compare=False)
+    """Optional matching keepout OccupancyGrid, composited only for skill reads."""
 
     @cached_property
     def grid(self) -> "np.ndarray | None":
@@ -49,7 +51,37 @@ class Map(LegacyMapping):
         actually looks at the cells."""
         if self.raw_source is None:
             return None
-        return np.array(self.raw_source.data, dtype=np.int8).reshape((self.height, self.width))
+        grid = np.array(self.raw_source.data, dtype=np.int8).reshape((self.height, self.width))
+        keepout = self.keepout_grid
+        if keepout is None:
+            return grid
+        return np.where(keepout >= 50, 100, grid).astype(np.int8)
+
+    @cached_property
+    def keepout_grid(self) -> "np.ndarray | None":
+        """Matching keepout cells alone, for direct-motion safety checks."""
+        mask = self.keepout_source
+        if mask is None or not self._matches(mask):
+            return None
+        return np.array(mask.data, dtype=np.int8).reshape((self.height, self.width))
+
+    def _matches(self, mask: Any) -> bool:
+        """A retained mask from another map must never contaminate this map."""
+        try:
+            source = self.raw_source
+            return (
+                mask.header.frame_id == source.header.frame_id
+                and mask.info.width == source.info.width
+                and mask.info.height == source.info.height
+                and math.isclose(mask.info.resolution, source.info.resolution, abs_tol=1e-9)
+                and math.isclose(mask.info.origin.position.x, source.info.origin.position.x, abs_tol=1e-6)
+                and math.isclose(mask.info.origin.position.y, source.info.origin.position.y, abs_tol=1e-6)
+                and mask.info.map_load_time.sec == source.info.map_load_time.sec
+                and mask.info.map_load_time.nanosec == source.info.map_load_time.nanosec
+                and len(mask.data) == self.width * self.height
+            )
+        except (AttributeError, TypeError):
+            return False
 
     # --- legacy dict compatibility ---------------------------------------
     # LAST_MAP injected a header/info/data_b64 dict before ambient state.

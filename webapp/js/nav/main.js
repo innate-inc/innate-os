@@ -21,6 +21,7 @@ import {
   AMCL_POSE_TOPIC,
   COMMANDED_GOAL_TOPIC,
   GLOBAL_COSTMAP_TOPIC,
+  KEEPOUT_MASK_TOPIC,
   LOCAL_COSTMAP_TOPIC,
   MEMORY_POSITIONS_TOPIC,
   MEMORY_SEARCH_TOPIC,
@@ -52,6 +53,7 @@ const PIN_ICON =
 
 /** @type {Array<{ key: import("../map/mapWidget.js").LayerName, label: string, on: boolean, topic: string }>} */
 const LAYERS = [
+  { key: "keepout", label: "Keepout zones", on: true, topic: KEEPOUT_MASK_TOPIC },
   { key: "scan", label: "LIDAR", on: true, topic: SCAN_TOPIC },
   { key: "costmap", label: "Global costmap", on: false, topic: GLOBAL_COSTMAP_TOPIC },
   { key: "local", label: "Local costmap", on: false, topic: LOCAL_COSTMAP_TOPIC },
@@ -125,6 +127,7 @@ function buildView(root) {
     zoom: savedZoom > 0 ? savedZoom : DEFAULT_ZOOM_M,
     onZoomChange: (m) => localStorage.setItem(ZOOM_KEY, String(m)),
     layers: Object.fromEntries(LAYERS.map(({ key, on }) => [key, on])),
+    keepoutEditing: true,
   });
 
   // ---- layer chips -----------------------------------------------------------
@@ -299,6 +302,7 @@ function createLegend(scene, chipEls) {
   row(["scan"], dot(MAP_COLORS.scan), "lidar", SCAN_TOPIC);
   row(["trail"], line(MAP_COLORS.trail), "path traveled", ODOM_TOPIC);
   row(["memories"], dot(MAP_COLORS.memory), "remembered view", `${MEMORY_POSITIONS_TOPIC} · ${MEMORY_SEARCH_TOPIC}`);
+  row(["keepout"], dot(MAP_COLORS.keepout), "keepout zone", KEEPOUT_MASK_TOPIC);
   row(["costmap", "local"], '<span class="legend-swatch legend-cost"></span>', "cost low → lethal", `${GLOBAL_COSTMAP_TOPIC} · ${LOCAL_COSTMAP_TOPIC}`);
 
   function sync() {

@@ -13,6 +13,7 @@ navigation:
         unknown_cost_value: 255          # 255 = NO_INFORMATION (not lethal); planner treats it per allow_unknown
         rolling_window: false
         plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+        filters: ["keepout_filter", "keepout_inflation"]
         static_layer:
           plugin: "nav2_costmap_2d::StaticLayer"
           map_subscribe_transient_local: True
@@ -32,6 +33,14 @@ navigation:
             obstacle_max_range: 2.5
             obstacle_min_range: 0.2
         inflation_layer:
+          plugin: "nav2_costmap_2d::InflationLayer"
+          cost_scaling_factor: 10.0
+          inflation_radius: 0.3
+        keepout_filter:
+          plugin: "nav2_costmap_2d::KeepoutFilter"
+          enabled: True
+          filter_info_topic: "/nav/keepout_filter_info"
+        keepout_inflation:
           plugin: "nav2_costmap_2d::InflationLayer"
           cost_scaling_factor: 10.0
           inflation_radius: 0.3
@@ -61,6 +70,7 @@ local_costmap:
         "obstacle_layer",
         "inflation_layer",
         ]
+      filters: ["keepout_filter", "keepout_inflation"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -76,6 +86,14 @@ local_costmap:
           obstacle_max_range: 2.5
           obstacle_min_range: 0.2
       inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 10.0
+        inflation_radius: 0.25
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        filter_info_topic: "/nav/keepout_filter_info"
+      keepout_inflation:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0
         inflation_radius: 0.25

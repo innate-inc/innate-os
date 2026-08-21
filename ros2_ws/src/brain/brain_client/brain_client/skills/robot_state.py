@@ -15,7 +15,13 @@ from typing import TYPE_CHECKING
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import OccupancyGrid
 from nav_msgs.msg import Odometry as OdometryMsg
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSHistoryPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import BatteryState, JointState, LaserScan
 from std_msgs.msg import String
 
@@ -58,13 +64,14 @@ class RobotStateProvider:
 
         self.last_odom = None
         self.last_map = None
+        self.last_keepout_map = None
         self.last_head_position = None
         self.last_joint_states = None
         self.last_battery = None
         self.last_amcl_pose = None
         self.last_scan = None
         self._lidar_cache = None  # (msg, Lidar) of the last converted scan
-        # (msg, Map) of the last converted map — a fresh Map per 50 Hz tick
+        # ((map msg, keepout msg), Map) of the last converted map — a fresh Map per 50 Hz tick
         # would discard Map.grid's cached_property and re-decode the whole
         # grid on every skill read
         self._map_cache = None
@@ -75,6 +82,7 @@ class RobotStateProvider:
 
         self._odom_sub = None
         self._map_sub = None
+        self._keepout_map_sub = None
         self._head_position_sub = None
         self._joint_states_sub = None
         self._battery_sub = None
@@ -138,6 +146,15 @@ class RobotStateProvider:
         feed_node = self._manipulation.node
         self._odom_sub = feed_node.create_subscription(OdometryMsg, "/odom", self._on_odom, 10)
         self._map_sub = feed_node.create_subscription(OccupancyGrid, "/map", self._on_map, 1)
+        keepout_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._keepout_map_sub = feed_node.create_subscription(
+            OccupancyGrid, "/nav/keepout_filter_mask", self._on_keepout_map, keepout_qos
+        )
         self._head_position_sub = feed_node.create_subscription(
             String, self._head_current_position_topic, self._on_head_position, 10
         )
@@ -157,6 +174,7 @@ class RobotStateProvider:
         self._manipulation.stop()
         self.last_odom = None
         self.last_map = None
+        self.last_keepout_map = None
         self.last_head_position = None
         self.last_joint_states = None
         self.last_battery = None
@@ -174,6 +192,10 @@ class RobotStateProvider:
     def _on_map(self, msg: OccupancyGrid) -> None:
         if self._active:
             self.last_map = msg
+
+    def _on_keepout_map(self, msg: OccupancyGrid) -> None:
+        if self._active:
+            self.last_keepout_map = msg
 
     def _on_joint_states(self, msg: JointState) -> None:
         if self._active:
@@ -343,8 +365,9 @@ class RobotStateProvider:
         # memoized per message, like lidar: a fresh Map every 50 Hz tick would
         # throw away Map.grid's cached_property, making every skill read of
         # .grid re-decode the whole grid
+        keepout = self.last_keepout_map
         cached = self._map_cache
-        if cached is not None and cached[0] is msg:
+        if cached is not None and cached[0][0] is msg and cached[0][1] is keepout:
             return cached[1]
         # cheap: the grid itself decodes lazily on Map.grid access
         current = Map(
@@ -357,8 +380,9 @@ class RobotStateProvider:
             stamp=msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
             frame_id=msg.header.frame_id,
             raw_source=msg,
+            keepout_source=keepout,
         )
-        self._map_cache = (msg, current)
+        self._map_cache = ((msg, keepout), current)
         return current
 
     def current_joint_states(self) -> JointStates | None:

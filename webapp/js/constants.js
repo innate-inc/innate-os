@@ -76,6 +76,10 @@ export const WEBSOCKET_STATUS_TOPIC = "/brain/websocket_status";
 
 // Navigation map + odometry for the 2D map page.
 export const MAP_TOPIC = "/map"; // nav_msgs/OccupancyGrid
+// Operator-authored Nav2 keepout mask. This remains separate from /map so
+// localization continues to use the original occupancy map.
+export const KEEPOUT_MASK_TOPIC = "/nav/keepout_filter_mask"; // nav_msgs/OccupancyGrid
+export const KEEPOUT_EDIT_TOPIC = "/nav/keepout_mask_edit"; // nav_msgs/OccupancyGrid
 export const ODOM_TOPIC = "/odom"; // nav_msgs/Odometry
 // nav_msgs/Path — the planner's route. Both planner servers are namespaced;
 // there is no root /plan publisher.
