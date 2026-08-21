@@ -48,6 +48,13 @@ map_server_node = "navigation_map_server"
 bt_node = "bt_navigator"
 
 NAV_CANCEL_SERVICE = "/internal_navigate_to_pose/_action/cancel_goal"
+MAPPING_AUTHORITY_CONFLICTS = frozenset(
+    {
+        "navigation_map_server",
+        "navigation_amcl",
+        "null_map_node",
+    }
+)
 
 
 class ModeManager(Node):
@@ -697,6 +704,7 @@ class ModeManager(Node):
                 return False, msg
 
             node_names = nodes
+            authority_failures = []
 
             for node_name in all_nodes_except_target:
                 # Check if this node should skip cleanup (only deactivate to INACTIVE)
@@ -715,6 +723,15 @@ class ModeManager(Node):
 
                 if not success:
                     self.get_logger().warning(f"Failed to shutdown non-target node {node_name} (continuing)")
+                    if mode.value in MAPPING_MODES and node_name in MAPPING_AUTHORITY_CONFLICTS:
+                        authority_failures.append(node_name)
+
+            if authority_failures:
+                message = (
+                    f"Refusing to start mapping while competing map/TF authorities remain active: {authority_failures}"
+                )
+                self.get_logger().error(message)
+                return False, message
 
             # Get nodes that should only be configured (not activated) for this mode
             configure_only = configure_only_nodes.get(mode.value, set())

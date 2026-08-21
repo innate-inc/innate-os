@@ -111,6 +111,16 @@ def test_autonomous_mapping_activates_only_live_map_navigation_nodes():
     }.isdisjoint(modes_nodes[AUTONOMOUS_MAPPING])
 
 
+def test_mapping_startup_fails_closed_on_competing_map_or_tf_authority():
+    tree = ast.parse(MODE_MANAGER.read_text())
+    method = next(
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "request_mode_startup"
+    )
+    source = ast.unparse(method)
+    assert "mode.value in MAPPING_MODES and node_name in MAPPING_AUTHORITY_CONFLICTS" in source
+    assert source.index("if authority_failures") < source.index("self._startup_pass")
+
+
 def test_autonomous_mapping_orders_every_bt_dependency_before_navigator():
     nodes = modes_nodes[AUTONOMOUS_MAPPING]
     assert nodes[0] == "slam_toolbox"
