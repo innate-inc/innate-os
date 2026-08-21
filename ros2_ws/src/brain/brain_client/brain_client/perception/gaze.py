@@ -172,7 +172,8 @@ class ROSPersonTracker:
 
         # Hardware interfaces
         self._head = Head(node, node.get_logger())
-        self._mobility = Mobility(node, node.get_logger(), "/cmd_vel")
+        cmd_vel_topic = str(node.get_parameter("cmd_vel_topic").value)
+        self._mobility = Mobility(node, node.get_logger(), cmd_vel_topic)
 
         # Gaze controller
         self._gaze = GazeController(

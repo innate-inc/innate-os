@@ -11,9 +11,10 @@ class Pose:
     """The robot's pose on the map, read via ``self.pose`` in skills.
 
     Unlike ``self.odom`` (odom frame: smooth but drifts and resets every
-    boot), this is the localizer's estimate in the persistent map frame —
-    the coordinates ``navigate_to_position`` targets live in. ``self.pose``
-    reads None until the robot is localized.
+    boot), this is the active map authority's estimate: AMCL in navigation or
+    slam_toolbox's TF-derived ``/mapping_pose`` in either mapping mode. These
+    are the coordinates ``navigate_to_position`` targets. ``self.pose`` reads
+    None until the active authority has produced a map-frame sample.
     """
 
     x: float

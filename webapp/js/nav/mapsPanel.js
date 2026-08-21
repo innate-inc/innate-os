@@ -8,7 +8,7 @@
 // navigation). Any map can be deleted, including the one in use — the store
 // drops to map-free first. The roster locks while a recording is in progress.
 
-import { NAV_AVAILABLE_MAPS_TOPIC } from "../constants.js";
+import { NAV_AVAILABLE_MAPS_TOPIC, isMappingNavMode } from "../constants.js";
 import { confirmDialog } from "./confirm.js";
 
 /**
@@ -76,7 +76,7 @@ export function createMapsPanel(host, store) {
 
   /** @param {import("./navStore.js").NavState} s */
   function render(s) {
-    const mapping = s.mode === "mapping";
+    const mapping = isMappingNavMode(s.mode);
     newBtn.disabled = !!s.busy || mapping;
     mapfreeToggle.checked = s.mode === "mapfree";
     mapfreeToggle.disabled = !!s.busy || mapping || (s.mode !== "mapfree" && s.maps.length === 0);
@@ -91,7 +91,7 @@ export function createMapsPanel(host, store) {
     if (mapping) {
       const note = document.createElement("div");
       note.className = "maps-empty";
-      note.textContent = "Recording — finish or discard on the map.";
+      note.textContent = "Mapping in progress — finish or discard on the map.";
       list.appendChild(note);
       return;
     }

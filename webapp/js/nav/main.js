@@ -29,6 +29,7 @@ import {
   ODOM_TOPIC,
   PLAN_TOPICS,
   SCAN_TOPIC,
+  isMappingNavMode,
 } from "../constants.js";
 import { createMap, MAP_COLORS } from "../map/mapWidget.js";
 import { createNavStore } from "./navStore.js";
@@ -189,10 +190,11 @@ function buildView(root) {
   }
 
   // ---- mapping reaction --------------------------------------------------------
-  // Mapping reshapes the page: the scene shows only the growing map + live
-  // scan (the costmap belongs to the previous map; chips lock so the view
-  // can't drift mid-recording), the widget swaps to /mapping_pose, and the
-  // teleop drive kit mounts — you drive the robot to build the map.
+  // Either mapping mode reshapes the page: the scene shows only the growing
+  // map + live scan (the costmap belongs to the previous map; chips lock so
+  // the view can't drift mid-recording), the widget swaps to /mapping_pose,
+  // and the teleop drive kit mounts. In autonomous mode, its first nonzero
+  // command follows the normal /joystick pipeline and takes over from Explore Map.
   /** @type {Record<string, boolean> | null} chip states to restore after mapping */
   let savedLayers = null;
   /** @type {{ destroy: () => void } | null} */
@@ -240,7 +242,7 @@ function buildView(root) {
     const noMap = !s.currentMap || s.mode === "mapfree";
     mapPill.classList.toggle("is-empty", noMap);
     mapPillName.textContent = noMap ? "no map" : s.currentMap;
-    const mapping = s.mode === "mapping";
+    const mapping = isMappingNavMode(s.mode);
     if (mapping !== wasMapping) {
       wasMapping = mapping;
       onMappingChange(mapping);

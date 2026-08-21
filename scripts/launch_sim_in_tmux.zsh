@@ -121,7 +121,7 @@ echo "Started arm IK..."
 
 # === Window 6: Vision Navigation Inference Client ===
 tmux new-window -t "$SESSION_NAME" -n vision-nav
-tmux send-keys -t "${TMUX_TARGET_PREFIX}:vision-nav" "ros2 launch innate_uninavid uninavid.launch.py cmd_vel_topic:=/cmd_vel" C-m
+tmux send-keys -t "${TMUX_TARGET_PREFIX}:vision-nav" "ros2 launch innate_uninavid uninavid.launch.py cmd_vel_topic:=/cmd_vel_scaled" C-m
 echo "Started vision navigation inference client..."
 settle_after_launch
 

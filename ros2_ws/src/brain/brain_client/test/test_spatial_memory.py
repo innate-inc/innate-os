@@ -1066,11 +1066,11 @@ def test_bad_frames_never_overwrite_a_view(data_dir, clock):
 # ================= recording while mapping =================
 
 
-def see_mapping_world(recorder, started: float = 1000.0):
+def see_mapping_world(recorder, started: float = 1000.0, mode: str = "mapping"):
     """Feed the recorder everything a mapping-mode record needs: SLAM's live
     grid stands in for AMCL confidence, mode_manager's latched session stamp
     names the frame."""
-    recorder._on_nav_mode(SimpleNamespace(data="mapping"))
+    recorder._on_nav_mode(SimpleNamespace(data=mode))
     recorder._on_mapping_session(SimpleNamespace(data=json.dumps({"started": started})))
     recorder._on_map(grid_msg(open_room(40)))
     recorder._on_head(SimpleNamespace(data=json.dumps({"current_position": -10.0})))
@@ -1101,6 +1101,15 @@ def test_mapping_records_into_the_session_stage(data_dir, clock):
     see_mapping_world(recorder)
     recorder.tick()  # starts the hold
     assert store.snapshot().memories == ()
+    mapping_observe(recorder, clock, GOOD_JPEG, advance=3.1)
+    snapshot = store.snapshot()
+    assert snapshot.map_name == MAPPING_SESSION and len(snapshot.memories) == 1
+
+
+def test_autonomous_mapping_records_into_the_same_session_stage(data_dir, clock):
+    recorder, store = make_recorder(data_dir)
+    see_mapping_world(recorder, mode="autonomous_mapping")
+    recorder.tick()
     mapping_observe(recorder, clock, GOOD_JPEG, advance=3.1)
     snapshot = store.snapshot()
     assert snapshot.map_name == MAPPING_SESSION and len(snapshot.memories) == 1

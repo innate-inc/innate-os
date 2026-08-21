@@ -18,6 +18,7 @@ import {
   NAV_AVAILABLE_MAPS_TOPIC,
   NAV_CHANGE_MAP_SERVICE,
   NAV_CHANGE_MODE_SERVICE,
+  CANCEL_SKILL_SERVICE,
   NAV_CURRENT_MAP_TOPIC,
   NAV_CURRENT_MODE_TOPIC,
   NAV_DELETE_MAP_SERVICE,
@@ -25,6 +26,9 @@ import {
 } from "../constants.js";
 
 const MODE_CHANGE_TIMEOUT_MS = 60_000;
+// Older robot images may not expose the cross-client skill-cancel service.
+// Keep this short and best-effort so a missing brain never blocks nav controls.
+const SKILL_CANCEL_TIMEOUT_MS = 2_000;
 // mode_manager's own save_map validation, mirrored for inline feedback: it
 // strips _ and - then requires isalnum(), so at least one alphanumeric is
 // needed — "___" is rejected server-side.
@@ -51,8 +55,9 @@ export const MAP_NAME_RE = /^[A-Za-z0-9_-]*[A-Za-z0-9][A-Za-z0-9_-]*$/;
  *   saveAndActivate: (name: string, overwrite: boolean) => Promise<boolean>,
  *   destroy: () => void,
  * }}
+ * @param {import("../rosClient.js").RosClient} [rosClient]
  */
-export function createNavStore() {
+export function createNavStore(rosClient = ros) {
   /** @type {NavState} */
   const state = { mode: "", maps: [], currentMap: "", busy: null, status: null };
   /** @type {Set<(state: NavState) => void>} */
@@ -69,20 +74,35 @@ export function createNavStore() {
     emit();
   }
 
+  async function cancelActiveSkillBestEffort() {
+    try {
+      // Trigger success=false simply means there was no active skill. Either
+      // way it is safe to continue with the requested nav operation.
+      await rosClient.callService(CANCEL_SKILL_SERVICE, {}, SKILL_CANCEL_TIMEOUT_MS);
+    } catch (err) {
+      console.warn("Could not cancel the active brain skill before nav change:", err);
+    }
+  }
+
   /**
    * One serialized service call: publishes its label via `busy`, its outcome
    * via `status` (failures keep mode_manager's message — e.g. "A mode or map
    * change is in progress").
-   * @param {string} service @param {object} args @param {string} doing
+   * @param {string} service
+   * @param {object} args
+   * @param {string} doing
+   * @param {{ cancelSkill?: boolean }} [options]
    * @returns {Promise<boolean>}
    */
-  async function call(service, args, doing) {
+  async function call(service, args, doing, { cancelSkill = false } = {}) {
     // destroyed: the page is gone, but a caller may still resolve later (a
     // confirm dialog orphaned by navigation) — never command the robot then.
     if (destroyed || state.busy) return false;
     set({ busy: doing, status: null });
     try {
-      const res = await ros.callService(service, args, MODE_CHANGE_TIMEOUT_MS);
+      if (cancelSkill) await cancelActiveSkillBestEffort();
+      if (destroyed) return false;
+      const res = await rosClient.callService(service, args, MODE_CHANGE_TIMEOUT_MS);
       if (destroyed) return false;
       const ok = !!res?.success;
       if (!ok) set({ status: { kind: "fail", text: res?.message || `${doing} failed` } });
@@ -98,7 +118,7 @@ export function createNavStore() {
   }
 
   const unsubs = [
-    ros.subscribe(NAV_AVAILABLE_MAPS_TOPIC, (msg) => {
+    rosClient.subscribe(NAV_AVAILABLE_MAPS_TOPIC, (msg) => {
       if (typeof msg?.data !== "string") return;
       try {
         const parsed = JSON.parse(msg.data);
@@ -113,10 +133,10 @@ export function createNavStore() {
         // torn payload — keep the last good roster
       }
     }, 0, "std_msgs/msg/String"),
-    ros.subscribe(NAV_CURRENT_MAP_TOPIC, (msg) => {
+    rosClient.subscribe(NAV_CURRENT_MAP_TOPIC, (msg) => {
       if (typeof msg?.data === "string" && msg.data !== state.currentMap) set({ currentMap: msg.data });
     }, 0, "std_msgs/msg/String"),
-    ros.subscribe(NAV_CURRENT_MODE_TOPIC, (msg) => {
+    rosClient.subscribe(NAV_CURRENT_MODE_TOPIC, (msg) => {
       if (typeof msg?.data === "string" && msg.data && msg.data !== state.mode) set({ mode: msg.data });
     }, 0, "std_msgs/msg/String"),
   ];
@@ -135,19 +155,28 @@ export function createNavStore() {
     // /nav/current_mode, so it covers the runs no client asked for (a mapless
     // boot, mode_manager redirecting a navigation request) and restores the
     // operator's preset on the way out.
-    async startMapping() {
-      return call(NAV_CHANGE_MODE_SERVICE, { mode: "mapping" }, "Starting mapping");
+    startMapping() {
+      return call(NAV_CHANGE_MODE_SERVICE, { mode: "mapping" }, "Starting mapping", {
+        cancelSkill: true,
+      });
     },
 
-    /** @param {string} mode "navigation" | "mapfree" */
+    /** @param {string} mode "navigation" | "mapping" | "autonomous_mapping" | "mapfree" */
     changeMode(mode) {
-      const doing = mode === "mapfree" ? "Switching to map-free" : "Returning to navigation";
-      return call(NAV_CHANGE_MODE_SERVICE, { mode }, doing);
+      const doing =
+        mode === "mapfree"
+          ? "Switching to map-free"
+          : mode === "mapping"
+            ? "Starting mapping"
+            : mode === "autonomous_mapping"
+              ? "Starting autonomous mapping"
+              : "Returning to navigation";
+      return call(NAV_CHANGE_MODE_SERVICE, { mode }, doing, { cancelSkill: true });
     },
 
     /** @param {string} name map filename, e.g. "home.yaml" */
     changeMap(name) {
-      return call(NAV_CHANGE_MAP_SERVICE, { map_name: name }, `Switching to ${name}`);
+      return call(NAV_CHANGE_MAP_SERVICE, { map_name: name }, `Switching to ${name}`, { cancelSkill: true });
     },
 
     /**
@@ -158,7 +187,9 @@ export function createNavStore() {
      */
     async deleteMap(name) {
       if (name === state.currentMap && state.mode === "navigation") {
-        if (!(await call(NAV_CHANGE_MODE_SERVICE, { mode: "mapfree" }, "Switching to map-free"))) return false;
+        if (!(await call(NAV_CHANGE_MODE_SERVICE, { mode: "mapfree" }, "Switching to map-free", { cancelSkill: true }))) {
+          return false;
+        }
       }
       return call(NAV_DELETE_MAP_SERVICE, { map_name: name }, `Deleting ${name}`);
     },
@@ -170,7 +201,9 @@ export function createNavStore() {
      * @param {string} name base name (no .yaml) @param {boolean} overwrite
      */
     async saveAndActivate(name, overwrite) {
-      if (!(await call(NAV_SAVE_MAP_SERVICE, { map_name: name, overwrite }, `Saving ${name}`))) return false;
+      if (!(await call(NAV_SAVE_MAP_SERVICE, { map_name: name, overwrite }, `Saving ${name}`, { cancelSkill: true }))) {
+        return false;
+      }
       if (!(await call(NAV_CHANGE_MODE_SERVICE, { mode: "navigation" }, "Returning to navigation"))) return false;
       if (!(await call(NAV_CHANGE_MAP_SERVICE, { map_name: `${name}.yaml` }, `Loading ${name}`))) return false;
       set({ status: { kind: "ok", text: `Saved ${name}.yaml — use Locate if the robot isn't where the map thinks` } });

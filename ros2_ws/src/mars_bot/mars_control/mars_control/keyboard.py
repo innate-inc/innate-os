@@ -9,6 +9,8 @@ from pynput import keyboard
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 
+from mars_control.teleop_publish_gate import TeleopPublishGate
+
 
 class KeyboardController(Node):
     def __init__(self):
@@ -26,8 +28,11 @@ class KeyboardController(Node):
         self.max_speed = self.get_parameter("motion_control.max_speed").value
         self.max_turn = self.get_parameter("motion_control.max_angular_speed").value
 
-        # Publisher for velocity commands
-        self.twist_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        # Route human commands through the priority mux. Publishing directly
+        # to /cmd_vel would compete with Nav2 and bypass autonomous-skill
+        # takeover monitoring.
+        self.twist_pub = self.create_publisher(Twist, "/cmd_vel_teleop", 10)
+        self._publish_gate = TeleopPublishGate()
 
         # Create timer for publishing commands
         self.create_timer(0.1, self.timer_callback)
@@ -73,10 +78,13 @@ Control Instructions:
         return True
 
     def timer_callback(self):
-        # Create and publish Twist message
+        # Teleop is the mux's top-priority input. After an explicit stop,
+        # publish one zero and go silent so Nav2 can regain ownership.
+        command = self._publish_gate.next_command(self.current_speed, self.current_turn)
+        if command is None:
+            return
         msg = Twist()
-        msg.linear.x = self.current_speed
-        msg.angular.z = self.current_turn
+        msg.linear.x, msg.angular.z = command
         self.twist_pub.publish(msg)
 
 

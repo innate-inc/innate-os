@@ -23,7 +23,9 @@ def generate_launch_description():
         description="Image topic",
     )
     cmd_vel_topic_arg = DeclareLaunchArgument(
-        "cmd_vel_topic", default_value="/cmd_vel", description="Command velocity topic"
+        "cmd_vel_topic",
+        default_value="/cmd_vel_skills",
+        description="Command velocity topic — skills-priority input of the cmd_vel mux",
     )
     map_topic_arg = DeclareLaunchArgument("map_topic", default_value="/map", description="Map topic (skills server)")
     send_arm_camera_image_arg = DeclareLaunchArgument(
@@ -39,7 +41,7 @@ def generate_launch_description():
     current_nav_mode_topic_arg = DeclareLaunchArgument(
         "current_nav_mode_topic",
         default_value="/nav/current_mode",
-        description="Topic for current navigation mode (mapfree, mapping, navigation)",
+        description="Topic for current navigation mode (mapfree, mapping, autonomous_mapping, navigation)",
     )
     log_everything_arg = DeclareLaunchArgument(
         "log_everything",
@@ -95,6 +97,7 @@ def generate_launch_description():
                     {
                         "image_topic": LaunchConfiguration("image_topic"),
                         "map_topic": LaunchConfiguration("map_topic"),
+                        "cmd_vel_topic": LaunchConfiguration("cmd_vel_topic"),
                     }
                 ],
             ),

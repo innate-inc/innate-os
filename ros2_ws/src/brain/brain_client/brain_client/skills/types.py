@@ -178,6 +178,7 @@ class RobotStateType(Enum):
     LAST_JOINT_STATES = "last_joint_states"
     LAST_BATTERY = "last_battery"
     LAST_POSE = "last_pose"
+    LAST_NAV_MODE = "last_nav_mode"
     LAST_LIDAR = "last_lidar"
     LAST_ARM = "last_arm"
 
@@ -516,6 +517,7 @@ def _feed_specs() -> "tuple[_FeedSpec, ...]":
     from brain_client.state.joint_states import JointStates
     from brain_client.state.lidar import Lidar
     from brain_client.state.map import Map
+    from brain_client.state.nav_mode import NavMode
     from brain_client.state.odometry import Odometry
     from brain_client.state.pose import Pose
 
@@ -540,6 +542,14 @@ def _feed_specs() -> "tuple[_FeedSpec, ...]":
         ),
         _FeedSpec(Odometry, RobotState, RobotStateType.LAST_ODOM, "Odometry", ("odom",), "odometry"),
         _FeedSpec(Pose, RobotState, RobotStateType.LAST_POSE, "Pose", ("pose",), "map pose"),
+        _FeedSpec(
+            NavMode,
+            RobotState,
+            RobotStateType.LAST_NAV_MODE,
+            "NavMode",
+            ("nav_mode",),
+            "navigation mode",
+        ),
         # battery publishes at ~0.2 Hz — the default grace would always miss it
         _FeedSpec(Battery, RobotState, RobotStateType.LAST_BATTERY, "Battery", ("battery",), "battery", grace_s=6.0),
         _FeedSpec(Lidar, RobotState, RobotStateType.LAST_LIDAR, "Lidar", ("lidar",), "lidar"),
