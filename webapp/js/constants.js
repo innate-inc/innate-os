@@ -169,6 +169,12 @@ export const ROBOT_INFO_TOPIC = "/robot/info";
 // mobile app's volume slider calls; current value rides on /robot/info.
 export const SET_VOLUME_SERVICE = "/set_volume";
 
+// Rename the robot (mars_msgs/srv/SetRobotName): request {robot_name}, response
+// {success, message}. Persists in robot_info.json on the robot; mars_app also
+// syncs the system hostname to a sanitized form of the name within ~30s, so
+// the robot's .local address follows. Current value rides on /robot/info.
+export const SET_ROBOT_NAME_SERVICE = "/set_robot_name";
+
 // Power off the Jetson (mars_msgs/srv/Shutdown): request {delay_seconds},
 // response {success, message}. mars_control runs `sudo shutdown` — the same
 // service the mobile app's power-off calls.

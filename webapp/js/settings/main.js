@@ -12,7 +12,7 @@
 // *unsaved* edit (differs from what's saved) shows blue. Save is enabled only
 // while there are unsaved changes.
 
-import { ROBOT_INFO_TOPIC, SET_VOLUME_SERVICE, SHUTDOWN_SERVICE } from "../constants.js";
+import { ROBOT_INFO_TOPIC, SET_ROBOT_NAME_SERVICE, SET_VOLUME_SERVICE, SHUTDOWN_SERVICE } from "../constants.js";
 import { ros } from "../rosClient.js";
 import { SETTINGS_PAGES } from "./catalog.js";
 import { GROUP_EXPAND_MS, SETTINGS_STYLE } from "./styles.js";
@@ -415,6 +415,120 @@ function buildVolumeSection() {
   return { section, row, label: labelText, description: descriptionText };
 }
 
+/**
+ * Live robot-name control. Like the volume slider this bypasses the yaml flow:
+ * it reads the current name from /robot/info and writes via /set_robot_name,
+ * which persists on the robot immediately — no restart. The robot also syncs
+ * its system hostname to the new name within ~30s, so its .local address moves.
+ * @returns {{section: HTMLElement, row: HTMLElement, label: string, description: string}}
+ */
+function buildRobotNameSection() {
+  const labelText = "Robot name";
+  const descriptionText =
+    "What the robot is called. It knows itself by this name, and the name also becomes " +
+    "the robot's network hostname — its .local address follows a rename.";
+  const section = textEl("section", "set-card-volume");
+
+  const row = textEl("div", "set-row");
+  const controlContainer = textEl("div", "set-ctl");
+  const controlGroup = textEl("div", "set-ctl-main is-wide");
+
+  const input = inputEl("text", "set-text");
+  input.placeholder = "—"; // nothing until /robot/info reports the live name
+  input.maxLength = 40;
+  input.title = `${SET_ROBOT_NAME_SERVICE} — live value from ${ROBOT_INFO_TOPIC}`;
+  input.disabled = true;
+
+  const saveButton = buttonEl("set-save", "Rename");
+  saveButton.disabled = true;
+
+  const nameWrap = textEl("div", "set-name-wrap");
+  nameWrap.append(input, saveButton);
+
+  const status = textEl("span", "set-card-volume-status set-status muted");
+  controlGroup.append(textEl("span", "set-validation-slot"), nameWrap, status);
+  controlContainer.appendChild(controlGroup);
+
+  row.append(buildRowText(labelText, descriptionText), controlContainer);
+  enableRowClick(row);
+  section.appendChild(row);
+
+  // Last name known to be applied on the robot; the anti-clobber reference for
+  // the 1 Hz /robot/info feed while the operator is editing.
+  let robotName = "";
+  let hasValue = false; // false until /robot/info reports the live name
+  let dirty = false;
+  let saving = false;
+
+  const setLiveStatus = (/** @type {string} */ msg, /** @type {string} */ cls) => {
+    status.textContent = msg;
+    status.className = "set-card-volume-status set-status " + cls;
+  };
+
+  const refreshEnabled = () => {
+    input.disabled = ros.state !== "connected" || saving || !hasValue;
+    const next = input.value.trim();
+    saveButton.disabled = input.disabled || !next || next === robotName;
+  };
+
+  cleanups.push(
+    ros.onStateChange((state) => {
+      refreshEnabled();
+      if (state !== "connected") setLiveStatus("Connect to the robot to rename it.", "muted");
+      else if (status.classList.contains("muted")) setLiveStatus("", "muted");
+    }),
+  );
+
+  const unsubInfo = ros.subscribe(ROBOT_INFO_TOPIC, (/** @type {StringMsg} */ payload) => {
+    /** @type {RobotInfo} */
+    let infoData;
+    try {
+      infoData = JSON.parse(payload.data);
+    } catch {
+      return;
+    }
+    if (typeof infoData.robot_name !== "string" || !infoData.robot_name) return;
+    robotName = infoData.robot_name;
+    hasValue = true;
+    // Don't clobber a name the operator is editing or saving.
+    if (!dirty && !saving) input.value = robotName;
+    refreshEnabled();
+  }, undefined, "std_msgs/msg/String");
+  cleanups.push(unsubInfo);
+
+  input.addEventListener("input", () => {
+    dirty = input.value.trim() !== robotName;
+    refreshEnabled();
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !saveButton.disabled) saveButton.click();
+  });
+
+  saveButton.addEventListener("click", async () => {
+    const next = input.value.trim();
+    if (!next || next === robotName || saving) return;
+    saving = true;
+    refreshEnabled();
+    setLiveStatus("Renaming…", "muted");
+    try {
+      /** @type {{ success: boolean, message?: string }} */
+      const res = await ros.callService(SET_ROBOT_NAME_SERVICE, { robot_name: next });
+      if (!res.success) throw new Error(res.message || "Failed to rename.");
+      robotName = next;
+      dirty = false;
+      input.value = next;
+      setLiveStatus("Renamed. The hostname follows within ~30 seconds.", "ok");
+    } catch {
+      setLiveStatus("Couldn't rename the robot. Try again.", "err");
+    } finally {
+      saving = false;
+      refreshEnabled();
+    }
+  });
+
+  return { section, row, label: labelText, description: descriptionText };
+}
+
 const GROUP_CHEV =
   '<svg class="set-group-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9,6 15,12 9,18"/></svg>';
 
@@ -505,6 +619,12 @@ function buildSettingsPage() {
       speaker.append(textEl("h2", "set-section-title", "Speaker"), volumeControl.section);
       groupInner.appendChild(speaker);
     }
+    const nameControl = settingsPage.hasRobotName ? buildRobotNameSection() : null;
+    if (nameControl) {
+      const identity = textEl("section", "set-page-section");
+      identity.append(textEl("h2", "set-section-title", "Identity"), nameControl.section);
+      groupInner.appendChild(identity);
+    }
 
     /** @type {GroupUI} */
     const ui = { section, dot, entries: [] };
@@ -518,6 +638,16 @@ function buildSettingsPage() {
         row: volumeControl.row,
         group: ui,
         breadcrumb: `${settingsPage.title} · Speaker`,
+        extraSearchSources: [pageSearchSource],
+      });
+    }
+    if (nameControl) {
+      addSearchTarget({
+        label: nameControl.label,
+        description: nameControl.description,
+        row: nameControl.row,
+        group: ui,
+        breadcrumb: `${settingsPage.title} · Identity`,
         extraSearchSources: [pageSearchSource],
       });
     }

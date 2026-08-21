@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from brain_client.perception.battery import BatteryMonitor
     from brain_client.perception.camera import CameraCapture
     from brain_client.perception.gaze_control import GazeController
+    from brain_client.perception.identity import IdentityMonitor
     from brain_client.perception.pose import Pose
     from brain_client.perception.pose_tracking import PoseTracker
     from brain_client.perception.scan_health import ScanHealthMonitor
@@ -93,6 +94,7 @@ class BrainAgent:
         proxy: ProxyClient | None = None,
         scan_health: ScanHealthMonitor | None = None,
         battery: BatteryMonitor | None = None,
+        identity: IdentityMonitor | None = None,
         trace: Callable[[str], None] | None = None,
     ):
         self._logger = node.get_logger()
@@ -101,6 +103,7 @@ class BrainAgent:
         self._camera = camera
         self._pose = pose_tracker
         self._battery = battery
+        self._identity = identity
         self._runner = runner
         self._roster = roster
         self._chat = chat
@@ -293,7 +296,10 @@ class BrainAgent:
         message = GeminiContext.user_message(text, [jpeg for _, jpeg in frames])
         tools = self._build_tools(events)
         directive = self._state.current_directive
-        system = build_system_prompt(directive.get_prompt() if directive else None)
+        system = build_system_prompt(
+            directive.get_prompt() if directive else None,
+            identity=self._identity.current if self._identity is not None else None,
+        )
         if self._state.log_everything:
             self._logger.info(f"[Brain] Turn input:\n{text}")
         self._trace_turn_start(text, frames, tools, system, context)

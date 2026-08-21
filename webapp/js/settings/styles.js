@@ -194,6 +194,8 @@ export const SETTINGS_STYLE = `
 .set-slider:focus-visible:not(.is-pointer) { outline: 1px solid rgba(117,105,253,.75);
   outline-offset: 3px; border-radius: 2px; }
 .set-slider:disabled { opacity: .4; cursor: default; }
+.set-name-wrap { display: flex; gap: 8px; width: 100%; }
+.set-name-wrap .set-text { flex: 1 1 auto; min-width: 0; }
 .set-slider-wrap { display: flex; flex-direction: column; gap: 5px; width: 100%; }
 .set-slider-read { color: var(--text, #e7e7ea); font-size: 13px; font-weight: 600;
   font-variant-numeric: tabular-nums; line-height: 1.2; text-align: center; }

@@ -2,10 +2,17 @@
 # Copyright (c) 2026 Innate Inc
 """System instruction for the local brain."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from brain_client.perception.identity import RobotIdentity
+
 _SYSTEM_PROMPT = """\
 You are the brain of an Innate home robot: a small wheeled base with a camera, a robotic arm, \
 and a speaker. You run on the robot itself.
-
+{identity}
 Each update you receive contains the latest camera frame, the robot's state, and any new events \
 (user speech, skill results, sensor input). You act by calling tools — the robot's skills. \
 Anything you write as plain text is spoken aloud through the robot's speaker and shown in the \
@@ -45,6 +52,25 @@ Your directive:
 """
 
 
-def build_system_prompt(directive_prompt: str | None) -> str:
+def build_system_prompt(directive_prompt: str | None, identity: RobotIdentity | None = None) -> str:
     directive = (directive_prompt or "").strip() or "Be a helpful home robot."
-    return _SYSTEM_PROMPT.format(directive=directive)
+    return _SYSTEM_PROMPT.format(directive=directive, identity=_identity_block(identity))
+
+
+def _identity_block(identity: RobotIdentity | None) -> str:
+    if identity is None:
+        return ""
+    sentences = [f"Your name is {identity.name} — that is you; answer to it, and speak of yourself by it."]
+    if identity.color:
+        sentences.append(f"Your body is {identity.color}.")
+    if identity.hardware_revision:
+        sentences.append(f"Your hardware revision is {identity.hardware_revision}.")
+    if identity.version:
+        sentences.append(f"Your software version is {identity.version}.")
+    if identity.wifi_ssid:
+        sentences.append(f'You are on the Wi-Fi network "{identity.wifi_ssid}".')
+    if identity.hostname:
+        host = identity.hostname if identity.hostname.endswith(".local") else f"{identity.hostname}.local"
+        sentences.append(f'On the local network you are reachable as "{host}".')
+    sentences.append("The user can rename you from the app's Settings page.")
+    return "\nAbout you: " + " ".join(sentences) + "\n"
