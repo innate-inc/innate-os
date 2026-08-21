@@ -113,6 +113,12 @@ class ModeManager(Node):
             self.cancel_navigation_callback,
             callback_group=self._internal_callbacks_group,
         )
+        self.reset_mapping_service = self.create_service(
+            Trigger,
+            "/nav/reset_mapping",
+            self.reset_mapping_callback,
+            callback_group=self._internal_callbacks_group,
+        )
 
         # Service to change maps in navigation mode. Same reentrant group as
         # the mode service: both drive lifecycle transitions on the same nodes
@@ -562,6 +568,82 @@ class ModeManager(Node):
 
             except Exception as e:
                 self.get_logger().debug(f"Error shutting down {node_name}: {e}")
+
+    def reset_mapping_callback(self, _request, response):
+        """Discard the unsaved SLAM graph and restart the current mapping stack."""
+
+        if not self._mode_change_lock.acquire(blocking=False):
+            response.success = False
+            response.message = "Navigation mode change already in progress"
+            return response
+
+        previous_mode = self.current_mode
+        try:
+            if previous_mode not in MAPPING_MODES:
+                response.success = False
+                response.message = "A map can only be reset while mapping is active"
+                return response
+
+            limit_ok, limit_message = self._set_mapping_speed_limit(True)
+            if not limit_ok:
+                response.success = False
+                response.message = f"Map reset aborted before transition: {limit_message}"
+                return response
+
+            self.current_mode = "switching"
+            self.publish_status()
+            cancelled_ok, cancel_message = self._cancel_active_navigation()
+            if not cancelled_ok:
+                self.current_mode = previous_mode
+                self.publish_status()
+                response.success = False
+                response.message = f"Map reset aborted: could not stop active navigation ({cancel_message})"
+                return response
+
+            # A same-mode startup deliberately preserves slam_toolbox.  Reset
+            # instead tears the complete mapping stack down, with SLAM last,
+            # so its next configure creates a genuinely empty pose graph.
+            for node_name in reversed(modes_nodes[previous_mode]):
+                target_state = (
+                    State.PRIMARY_STATE_INACTIVE
+                    if node_name in skip_cleanup_nodes
+                    else State.PRIMARY_STATE_UNCONFIGURED
+                )
+                if not transition_node(self._service_clients, self.get_logger(), node_name, target_state):
+                    rollback_ok, rollback_message = self.request_mode_startup(NavigationMode(previous_mode))
+                    self.current_mode = previous_mode if rollback_ok else "none"
+                    self.publish_status()
+                    response.success = False
+                    response.message = f"Map reset failed while stopping {node_name}"
+                    if not rollback_ok:
+                        response.message += f"; failed to restore mapping: {rollback_message}"
+                    return response
+
+            success, message = self.request_mode_startup(NavigationMode(previous_mode))
+            if not success:
+                self.current_mode = "none"
+                self.publish_status()
+                response.success = False
+                response.message = f"Map reset failed while restarting mapping: {message}"
+                return response
+
+            self._mapping_session_started = time.time()
+            self.mapping_session_publisher.publish(String(data=json.dumps({"started": self._mapping_session_started})))
+            self.current_mode = previous_mode
+            self.save_last_mode(previous_mode)
+            self.publish_status()
+            response.success = True
+            response.message = "Discarded the old map and started a fresh SLAM session"
+            return response
+        except Exception as exc:
+            self.current_mode = "none"
+            self.publish_status()
+            response.success = False
+            response.message = f"Error resetting map: {exc}"
+            self.get_logger().error(response.message)
+            return response
+        finally:
+            self._mode_change_lock.release()
 
     def request_mode_startup(self, mode: NavigationMode) -> tuple[bool, str]:
         """

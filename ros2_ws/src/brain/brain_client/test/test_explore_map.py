@@ -94,6 +94,14 @@ class _ModeController:
         self.new_map = new_map
         self.new_pose = new_pose
         self.calls = 0
+        self.reset_calls = 0
+
+    def reset_mapping(self):
+        self.reset_calls += 1
+        if self.new_map is not None:
+            self.skill.map = self.new_map
+        if self.new_pose is not None:
+            self.skill.pose = self.new_pose
 
     def switch_to_autonomous_mapping(self):
         self.calls += 1
@@ -140,6 +148,21 @@ def test_switches_from_manual_mapping_then_sends_exact_map_frame_goal(monkeypatc
     assert callable(safety_check)
     assert result.data["reached_frontiers"] == 1
     assert result.data["mode"] == AUTONOMOUS_MAPPING_MODE
+
+
+def test_reset_discards_current_session_before_restarting_exploration(monkeypatch):
+    skill = _skill()
+    fresh_map = _map_state()
+    fresh_pose = Pose(x=0.6, y=0.6, theta=0.0, stamp=2.0)
+    controller = _ModeController(skill, fresh_map, fresh_pose)
+    skill.__dict__["mode_controller"] = controller
+    monkeypatch.setattr(explore_module, "find_frontier_goals", lambda *args, **kwargs: [_goal()])
+
+    result = skill.execute(max_frontiers=1, reset_map=True)
+
+    assert controller.reset_calls == 1
+    assert controller.calls == 0
+    assert result.data["reached_frontiers"] == 1
 
 
 def test_mode_switch_requires_a_genuinely_new_mapping_pose():

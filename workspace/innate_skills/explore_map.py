@@ -24,6 +24,7 @@ from innate_skills._frontier_planner import (
 )
 from innate_skills.navigate_to_position import Nav2Controller, NavigationBlocked
 from sensor_msgs.msg import LaserScan
+from std_srvs.srv import Trigger
 
 from innate import Lidar, Map, NavMode, Pose, Skill, SkillCancelled, SkillFailed, SkillOutput, SkillReturn, resource
 
@@ -56,35 +57,43 @@ class _MappingModeController:
     def __init__(self, skill: ExploreMap):
         self.skill = skill
         self.client = skill.node.create_client(ChangeNavigationMode, "/nav/change_mode")
+        self.reset_client = skill.node.create_client(Trigger, "/nav/reset_mapping")
 
-    def switch_to_autonomous_mapping(self) -> None:
+    def _call(self, client, request, action: str) -> None:
         deadline = time.monotonic() + MODE_CHANGE_TIMEOUT_S
-        while not self.client.service_is_ready():
+        while not client.service_is_ready():
             if time.monotonic() >= deadline:
-                raise SkillFailed("navigation mode service is unavailable")
+                raise SkillFailed(f"{action} service is unavailable")
             self.skill.sleep(0.1)
 
-        request = ChangeNavigationMode.Request()
-        request.mode = AUTONOMOUS_MAPPING_MODE
-        future = self.client.call_async(request)
+        future = client.call_async(request)
         try:
             while not future.done():
                 if time.monotonic() >= deadline:
                     future.cancel()
-                    raise SkillFailed("timed out starting autonomous mapping mode")
+                    raise SkillFailed(f"timed out {action}")
                 self.skill.sleep(0.1)
             response = future.result()
         except (SkillCancelled, SkillFailed):
             future.cancel()
             raise
         except Exception as exc:
-            raise SkillFailed(f"navigation mode service failed: {exc}") from exc
+            raise SkillFailed(f"{action} service failed: {exc}") from exc
         if response is None or not response.success:
             detail = response.message if response is not None else "no response"
-            raise SkillFailed(f"could not start autonomous mapping mode: {detail}")
+            raise SkillFailed(f"could not {action}: {detail}")
+
+    def reset_mapping(self) -> None:
+        self._call(self.reset_client, Trigger.Request(), "reset the map")
+
+    def switch_to_autonomous_mapping(self) -> None:
+        request = ChangeNavigationMode.Request()
+        request.mode = AUTONOMOUS_MAPPING_MODE
+        self._call(self.client, request, "start autonomous mapping mode")
 
     def destroy(self) -> None:
         self.skill.node.destroy_client(self.client)
+        self.skill.node.destroy_client(self.reset_client)
 
 
 class _TeleopTakeover:
@@ -268,6 +277,7 @@ class ExploreMap(Skill):
         max_duration_minutes: float = 10.0,
         max_frontiers: int = 30,
         goal_timeout_seconds: float = 90.0,
+        reset_map: bool = False,
     ) -> SkillReturn:
         if not 1.0 <= float(max_duration_minutes) <= 60.0:
             self.fail("max_duration_minutes must be between 1 and 60")
@@ -288,6 +298,13 @@ class ExploreMap(Skill):
         previous_pose = self.pose
         changed_mode = self.nav_mode.value != AUTONOMOUS_MAPPING_MODE
 
+        if reset_map and self.nav_mode.value in {"mapping", AUTONOMOUS_MAPPING_MODE}:
+            self.feedback("Discarding the current map and starting a fresh SLAM session")
+            try:
+                self.mode_controller.reset_mapping()
+            except SkillFailed as exc:
+                self.fail(str(exc))
+
         self.feedback("Starting SLAM and collision-aware navigation for autonomous mapping")
         if changed_mode:
             try:
@@ -299,7 +316,7 @@ class ExploreMap(Skill):
             initial_map, initial_pose, initial_lidar = self._wait_for_mapping_state(
                 previous_map,
                 previous_pose,
-                changed_mode,
+                changed_mode or reset_map,
             )
         except SkillFailed as exc:
             self.fail(str(exc))

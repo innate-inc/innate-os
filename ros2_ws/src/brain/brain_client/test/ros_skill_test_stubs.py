@@ -52,6 +52,7 @@ def install_if_ros_is_missing() -> None:
     geometry_msgs_msg = module("geometry_msgs.msg")
     nav_msgs_msg = module("nav_msgs.msg")
     sensor_msgs_msg = module("sensor_msgs.msg")
+    std_srvs_srv = module("std_srvs.srv")
     brain_messages_srv = module("brain_messages.srv")
     nav2_msgs_action = module("nav2_msgs.action")
     navigator_module = module("nav2_simple_commander.robot_navigator")
@@ -102,6 +103,10 @@ def install_if_ros_is_missing() -> None:
             def __init__(self):
                 self.mode = ""
 
+    class Trigger:
+        class Request:
+            pass
+
     class NavigateToPose:
         class Goal:
             def __init__(self):
@@ -142,6 +147,7 @@ def install_if_ros_is_missing() -> None:
     sensor_msgs_msg.CompressedImage = type("CompressedImage", (), {})
     sensor_msgs_msg.JointState = type("JointState", (), {})
     sensor_msgs_msg.LaserScan = type("LaserScan", (), {})
+    std_srvs_srv.Trigger = Trigger
     brain_messages_srv.ChangeNavigationMode = ChangeNavigationMode
     nav2_msgs_action.NavigateToPose = NavigateToPose
     navigator_module.BasicNavigator = type("BasicNavigator", (), {})
