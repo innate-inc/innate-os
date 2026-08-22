@@ -39,7 +39,8 @@ from brain_client.memory.recorder import MemoryRecorder
 from brain_client.memory.store import MemoryStore
 from brain_client.perception.battery import BatteryMonitor
 from brain_client.perception.camera import CameraCapture
-from brain_client.perception.gaze_control import GazeController
+from brain_client.perception.gaze_control import GazeLifecycle
+from brain_client.perception.gaze_debug import GazeDebug, GazeStatus
 from brain_client.perception.pose_tracking import PoseTracker
 from brain_client.perception.scan_health import ScanHealthMonitor
 from brain_client.robot.arm_recovery import ArmRecovery
@@ -56,6 +57,7 @@ LATCHED_QOS = QoSProfile(
     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
     reliability=QoSReliabilityPolicy.RELIABLE,
 )
+_PERSON_COMPLIMENT_COOLDOWN_SEC = 30.0
 
 
 class BrainClientNode(Node):
@@ -88,6 +90,10 @@ class BrainClientNode(Node):
         # Deep agent-loop telemetry (JSON) for the webapp's Brain page
         # (webapp/js/brain/): turn lifecycle, tool calls, queue snapshots.
         self.brain_trace_pub = self.create_publisher(String, "/brain/trace", 10)
+        self.gaze_debug_pub = self.create_publisher(String, "/brain/gaze", 10)
+        self._latest_gaze_debug: GazeDebug | None = None
+        self._last_person_compliment = float("-inf")
+        self._gaze_debug_heartbeat = self.create_timer(1.0, self._publish_gaze_debug_heartbeat)
         self._agent_status_heartbeat = None
 
         self._proxy = self._init_proxy()
@@ -195,7 +201,7 @@ class BrainClientNode(Node):
             # Recall as a capability: skills reach the same cache-backed search
             # through /brain/search_memory (see brain/search_server.py).
             self.memory_search_server = MemorySearchServer(self.memory_search)
-        self.gaze = GazeController(self, state)
+        self.gaze = GazeLifecycle(self, state, on_debug=self._publish_gaze_debug)
         self.runner = PrimitiveRunner(
             self,
             self.chat,
@@ -231,6 +237,7 @@ class BrainClientNode(Node):
         # directly (joystick teleop): ego-motion changes every pixel.
         self.camera.motion_suppressed = lambda: self.state.primitive_running is not None or self.camera.recently_driven
         self.camera.on_motion = self._on_camera_motion
+        self.gaze.on_person_locked = self._on_person_locked
         self.arm_recovery = ArmRecovery(self, state, runner=self.runner, chat=self.chat, brain=self.brain)
         self.rest_pose = ArmRestPose(self, state)
         self.lifecycle = BrainLifecycle(
@@ -353,6 +360,27 @@ class BrainClientNode(Node):
         self.brain.add_event(
             "Motion detected in the camera view — something or someone is moving nearby.", kind=EventKind.MOTION
         )
+
+    def _on_person_locked(self) -> None:
+        if not self.state.is_brain_active:
+            return
+        now = time.monotonic()
+        if now - self._last_person_compliment < _PERSON_COMPLIMENT_COOLDOWN_SEC:
+            return
+        self._last_person_compliment = now
+        self.brain.add_event(
+            "A person has stayed centered in your view. Give them one brief, friendly compliment, then wait.",
+            kind=EventKind.PERSON,
+        )
+
+    def _publish_gaze_debug(self, debug: GazeDebug) -> None:
+        self._latest_gaze_debug = debug
+        self.gaze_debug_pub.publish(String(data=json.dumps(debug, separators=(",", ":"))))
+
+    def _publish_gaze_debug_heartbeat(self) -> None:
+        debug = self._latest_gaze_debug
+        if debug is not None and debug["status"] in (GazeStatus.OFF, GazeStatus.PAUSED):
+            self.gaze_debug_pub.publish(String(data=json.dumps(debug, separators=(",", ":"))))
 
     # ================= always-on subscription callbacks =================
     def _on_chat_in(self, msg: String) -> None:

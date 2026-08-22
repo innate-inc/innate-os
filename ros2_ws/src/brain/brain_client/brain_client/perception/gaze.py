@@ -20,9 +20,13 @@ from collections.abc import Callable
 import cv2
 import inspireface as isf
 import numpy as np
+import numpy.typing as npt
+from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
+from brain_client.perception.face_lock import FaceBox, FaceLock, FaceLockResult
+from brain_client.perception.gaze_debug import GazeDebug, GazeStatus, gaze_debug
 from brain_client.robot.head import Head
 from brain_client.robot.mobility import Mobility
 
@@ -30,7 +34,7 @@ from brain_client.robot.mobility import Mobility
 class FaceDetector:
     """Face detector using InspireFace SDK."""
 
-    def __init__(self, min_confidence: float = 0.5):
+    def __init__(self, min_confidence: float = 0.5) -> None:
         param = isf.SessionCustomParameter()
         self._session = isf.InspireFaceSession(
             param=param,
@@ -39,24 +43,23 @@ class FaceDetector:
         )
         self._session.set_detection_confidence_threshold(min_confidence)
 
-    def detect(self, frame) -> list[dict]:
-        """Detect faces, return list of {center_x, center_y, width, height}."""
+    def detect(self, frame: npt.NDArray[np.uint8]) -> list[FaceBox]:
         h, w = frame.shape[:2]
-        faces = []
+        faces: list[FaceBox] = []
         for face in self._session.face_detection(frame):
             x1, y1, x2, y2 = face.location
             faces.append(
-                {
-                    "center_x": (x1 + x2) / 2 / w,
-                    "center_y": (y1 + y2) / 2 / h,
-                    "width": (x2 - x1) / w,
-                    "height": (y2 - y1) / h,
-                }
+                FaceBox(
+                    center_x=(x1 + x2) / 2 / w,
+                    center_y=(y1 + y2) / 2 / h,
+                    width=(x2 - x1) / w,
+                    height=(y2 - y1) / h,
+                )
             )
         return faces
 
 
-class GazeController:
+class FaceFollower:
     """Controls head tilt and wheel pan to track faces."""
 
     # Hardware limits
@@ -76,7 +79,7 @@ class GazeController:
         self,
         head_command_fn: Callable[[int], None],
         wheel_rotate_fn: Callable[[float, float], None] | None = None,
-    ):
+    ) -> None:
         self._head_command = head_command_fn
         self._wheel_rotate = wheel_rotate_fn
 
@@ -90,26 +93,26 @@ class GazeController:
 
         self._last_pan_time = 0.0
 
-    def start(self):
+    def start(self) -> None:
         if self._running:
             return
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
         if self._thread:
             self._thread.join(timeout=1.0)
             self._thread = None
 
-    def track_face(self, face: dict, frame_shape: tuple[int, int]):
+    def track_face(self, face: FaceBox) -> None:
         """Track a detected face by pointing at its center."""
         # Pan error (positive = face is on right = turn right)
-        pan_error = (face["center_x"] - 0.5) * self.CAMERA_HFOV
+        pan_error = (face.center_x - 0.5) * self.CAMERA_HFOV
 
         # Tilt: proportional control
-        error_normalized = 0.5 - face["center_y"]
+        error_normalized = 0.5 - face.center_y
         tilt_error_degrees = error_normalized * self.CAMERA_VFOV
         Kp = 0.3
         tilt_correction = tilt_error_degrees * Kp
@@ -122,7 +125,7 @@ class GazeController:
         if abs(pan_error) > self.PAN_THRESHOLD:
             self._execute_pan(pan_error)
 
-    def _execute_pan(self, pan_degrees: float):
+    def _execute_pan(self, pan_degrees: float) -> None:
         """Execute pan via wheel rotation (rate limited)."""
         if not self._wheel_rotate:
             return
@@ -139,7 +142,7 @@ class GazeController:
             self._wheel_rotate(angular_speed, duration)
             self._last_pan_time = now
 
-    def _loop(self):
+    def _loop(self) -> None:
         """Main tilt control loop at ~30Hz."""
         dt = 1.0 / 30.0
 
@@ -162,12 +165,22 @@ class GazeController:
                 time.sleep(dt - elapsed)
 
 
-class ROSPersonTracker:
-    """ROS2 person tracker - simple interface for agents."""
+class ROSFaceTracker:
+    """Detect, lock, and follow faces from a ROS camera stream."""
 
-    def __init__(self, node, camera_topic: str = "/mars/main_camera/left/image_raw"):
+    def __init__(
+        self,
+        node: Node,
+        camera_topic: str = "/mars/main_camera/left/image_raw",
+        on_person_locked: Callable[[], None] | None = None,
+        on_debug: Callable[[GazeDebug], None] | None = None,
+    ) -> None:
         self._node = node
-        self._frame = None
+        self._on_person_locked = on_person_locked
+        self._on_debug = on_debug
+        self._frame: tuple[int, npt.NDArray[np.uint8]] | None = None
+        self._frame_number = 0
+        self._processed_frame_number = 0
         self._frame_lock = threading.Lock()
 
         # Hardware interfaces
@@ -175,11 +188,14 @@ class ROSPersonTracker:
         self._mobility = Mobility(node, node.get_logger(), "/cmd_vel")
 
         # Gaze controller
-        self._gaze = GazeController(
+        self._follower = FaceFollower(
             head_command_fn=self._head.set_position,
             wheel_rotate_fn=self._mobility.rotate_in_place,
         )
         self._detector: FaceDetector | None = None
+        self._detector_starting = False
+        self._detector_lock = threading.Lock()
+        self._face_lock = FaceLock()
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -195,77 +211,123 @@ class ROSPersonTracker:
         )
         self._sub = node.create_subscription(Image, camera_topic, self._on_image, qos)
 
-    def _on_image(self, msg):
+    def _on_image(self, msg: Image) -> None:
         """Store latest camera frame."""
         try:
             frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, -1)
             if msg.encoding == "rgb8":
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             with self._frame_lock:
-                self._frame = frame
+                self._frame_number += 1
+                self._frame = (self._frame_number, frame)
         except Exception:
             pass
 
-    def start(self):
-        """Start person tracking."""
+    def start(self) -> None:
         if self._running:
             return
         self._running = True
-        self._gaze.start()
+        detector = self._detector_snapshot()
+        self._emit_debug(gaze_debug(GazeStatus.STARTING if detector is None else GazeStatus.SEARCHING))
+        self._follower.start()
         self._thread = threading.Thread(target=self._track_loop, daemon=True)
         self._thread.start()
-        # Lazy init detector in background
-        if self._detector is None:
-            threading.Thread(target=self._init_detector, daemon=True).start()
+        self._ensure_detector()
 
-    def _init_detector(self):
+    def _ensure_detector(self) -> None:
+        with self._detector_lock:
+            if self._detector is not None or self._detector_starting:
+                return
+            self._detector_starting = True
+        threading.Thread(target=self._init_detector, daemon=True).start()
+
+    def _init_detector(self) -> None:
+        detector: FaceDetector | None = None
         try:
-            self._detector = FaceDetector(min_confidence=0.3)
+            detector = FaceDetector(min_confidence=0.3)
             self._node.get_logger().info("👁️ Face detector initialized")
         except Exception as e:
             self._node.get_logger().error(f"Failed to init face detector: {e}")
+        finally:
+            with self._detector_lock:
+                self._detector = detector
+                self._detector_starting = False
+        if detector is not None and self._running:
+            self._emit_debug(gaze_debug(GazeStatus.SEARCHING))
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop person tracking."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=1.0)
             self._thread = None
-        self._gaze.stop()
+        self._follower.stop()
 
     @property
     def is_running(self) -> bool:
         return self._running
 
-    def _track_loop(self):
-        """Perception loop at ~5Hz."""
+    def _track_loop(self) -> None:
         dt = 1.0 / 5.0
 
         while self._running:
             loop_start = time.time()
 
-            if self._detector is None:
-                time.sleep(0.1)
+            detector = self._detector_snapshot()
+            if detector is None:
+                self._emit_debug(gaze_debug(GazeStatus.STARTING))
+                time.sleep(0.5)
                 continue
 
             with self._frame_lock:
-                frame = self._frame
+                sample = self._frame
 
-            if frame is not None:
-                shape = (frame.shape[0], frame.shape[1])
-                faces = self._detector.detect(frame)
+            if sample is not None and sample[0] != self._processed_frame_number:
+                self._processed_frame_number, frame = sample
+                now = time.monotonic()
+                faces = detector.detect(frame)
+                result = self._face_lock.observe(faces, now)
+                self._emit_debug(
+                    gaze_debug(
+                        self._status(result),
+                        faces=faces,
+                        target=result.face,
+                        progress=result.progress,
+                        image_width=frame.shape[1],
+                        image_height=frame.shape[0],
+                        frame=self._processed_frame_number,
+                    )
+                )
+                if result.face is not None:
+                    self._follower.track_face(result.face)
+                    self._last_face_time = time.time()
+                    if result.just_locked and self._on_person_locked is not None:
+                        self._on_person_locked()
 
-                if faces:
-                    # Track largest face
-                    best = max(faces, key=lambda f: f["width"] * f["height"])
-                    self._gaze.track_face(best, shape)
-                    self._last_face_time = time.time()
-                elif time.time() - self._last_face_time > self._face_timeout:
-                    # Return to neutral after timeout
-                    with self._gaze._lock:
-                        self._gaze._target_tilt = 0.0
-                    self._last_face_time = time.time()
+            if time.time() - self._last_face_time > self._face_timeout:
+                # Return to neutral after timeout
+                with self._follower._lock:
+                    self._follower._target_tilt = 0.0
+                self._last_face_time = time.time()
 
             elapsed = time.time() - loop_start
             if elapsed < dt:
                 time.sleep(dt - elapsed)
+
+    def _emit_debug(self, debug: GazeDebug) -> None:
+        if self._on_debug is not None:
+            self._on_debug(debug)
+
+    def _detector_snapshot(self) -> FaceDetector | None:
+        with self._detector_lock:
+            return self._detector
+
+    @staticmethod
+    def _status(result: FaceLockResult) -> GazeStatus:
+        if result.face is None:
+            return GazeStatus.SEARCHING
+        if not result.face.centered:
+            return GazeStatus.FOLLOWING
+        if not result.face.large_enough:
+            return GazeStatus.TOO_FAR
+        return GazeStatus.LOCKED if result.locked else GazeStatus.CENTERING

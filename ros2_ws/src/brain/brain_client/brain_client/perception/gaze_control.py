@@ -1,33 +1,50 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Gaze-tracker lifecycle wrapper.
+"""Gaze lifecycle.
 
-Starts/stops the (lazily imported) ``ROSPersonTracker`` based on brain-active state
+Starts/stops the lazily imported face tracker based on brain-active state
 and whether the current directive opts into gaze, and pauses/resumes it around
-skill execution. The heavy tracker import is deferred so directives that don't use
-gaze never pay for it.
+skill execution.
 """
 
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+from rclpy.node import Node
+
+from brain_client.perception.gaze_debug import GazeDebug, GazeStatus, gaze_debug
+
+if TYPE_CHECKING:
+    from brain_client.core.state import BrainState
+    from brain_client.perception.gaze import ROSFaceTracker
 
 
-def _tracker_class():
-    from brain_client.perception.gaze import ROSPersonTracker
+def _tracker_class() -> type[ROSFaceTracker]:
+    from brain_client.perception.gaze import ROSFaceTracker
 
-    return ROSPersonTracker
+    return ROSFaceTracker
 
 
-class GazeController:
-    def __init__(self, node, state):
+class GazeLifecycle:
+    def __init__(
+        self,
+        node: Node,
+        state: BrainState,
+        on_debug: Callable[[GazeDebug], None] | None = None,
+    ) -> None:
         self._node = node
         self._logger = node.get_logger()
         self._state = state
-        self._tracker = None
+        self._tracker: ROSFaceTracker | None = None
+        self._on_debug = on_debug
+        self.on_person_locked: Callable[[], None] | None = None
         # pause() runs on the agent's loop thread; everything else on the ROS
         # executor. RLock because update() calls stop().
         self._lock = threading.RLock()
+        self._emit_debug(GazeStatus.OFF)
 
     def update(self) -> None:
         """Start or stop the tracker to match brain state + directive preference."""
@@ -37,7 +54,11 @@ class GazeController:
                 directive = None
             if directive is not None and self._tracker is None:
                 try:
-                    self._tracker = _tracker_class()(self._node)
+                    self._tracker = _tracker_class()(
+                        self._node,
+                        on_person_locked=self.on_person_locked,
+                        on_debug=self._on_debug,
+                    )
                     self._tracker.start()
                     self._logger.info(f"👁️ Gaze tracker started for directive '{directive.id}'")
                 except Exception as e:
@@ -55,11 +76,13 @@ class GazeController:
                 except Exception as e:
                     self._logger.error(f"Error stopping gaze tracker: {e}")
                 self._tracker = None
+            self._emit_debug(GazeStatus.OFF)
 
     def pause(self) -> None:
         with self._lock:
             if self._tracker is not None and self._tracker.is_running:
                 self._tracker.stop()
+                self._emit_debug(GazeStatus.PAUSED)
                 self._logger.debug("👁️ Gaze paused for skill execution")
 
     def resume(self) -> None:
@@ -67,3 +90,7 @@ class GazeController:
             if self._tracker is not None and not self._tracker.is_running:
                 self._tracker.start()
                 self._logger.debug("👁️ Gaze resumed after skill execution")
+
+    def _emit_debug(self, status: GazeStatus) -> None:
+        if self._on_debug is not None:
+            self._on_debug(gaze_debug(status))

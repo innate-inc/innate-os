@@ -19,6 +19,7 @@ class EventKind(StrEnum):
     INFO = "info"
     USER = "user"
     MOTION = "motion"
+    PERSON = "person"
 
 
 @dataclass(frozen=True)

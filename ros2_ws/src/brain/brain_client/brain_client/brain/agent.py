@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     from brain_client.core.state import BrainState, RunningSkill
     from brain_client.perception.battery import BatteryMonitor
     from brain_client.perception.camera import CameraCapture
-    from brain_client.perception.gaze_control import GazeController
+    from brain_client.perception.gaze_control import GazeLifecycle
     from brain_client.perception.pose import Pose
     from brain_client.perception.pose_tracking import PoseTracker
     from brain_client.perception.scan_health import ScanHealthMonitor
@@ -87,7 +87,7 @@ class BrainAgent:
         runner: PrimitiveRunner,
         roster: SkillRoster,
         chat: ChatManager,
-        gaze: GazeController,
+        gaze: GazeLifecycle,
         proxy: ProxyClient | None = None,
         scan_health: ScanHealthMonitor | None = None,
         battery: BatteryMonitor | None = None,
