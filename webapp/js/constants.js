@@ -79,6 +79,8 @@ export const MAP_TOPIC = "/map"; // nav_msgs/OccupancyGrid
 // Operator-authored Nav2 keepout mask. This remains separate from /map so
 // localization continues to use the original occupancy map.
 export const KEEPOUT_MASK_TOPIC = "/nav/keepout_filter_mask"; // nav_msgs/OccupancyGrid
+// Editor-facing copy whose private frame suffix binds edits to one exact /map.
+export const KEEPOUT_STATE_TOPIC = "/nav/keepout_mask_state"; // nav_msgs/OccupancyGrid
 export const KEEPOUT_EDIT_TOPIC = "/nav/keepout_mask_edit"; // nav_msgs/OccupancyGrid
 export const ODOM_TOPIC = "/odom"; // nav_msgs/Odometry
 // nav_msgs/Path — the planner's route. Both planner servers are namespaced;

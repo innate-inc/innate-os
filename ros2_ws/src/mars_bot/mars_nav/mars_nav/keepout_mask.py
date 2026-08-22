@@ -9,6 +9,8 @@ import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+EDIT_FRAME_SEPARATOR = "#keepout-map="
+
 
 @dataclass(frozen=True)
 class GridSpec:
@@ -44,6 +46,25 @@ def map_fingerprint(spec: GridSpec, cells: list[int]) -> str:
     digest.update(spec.frame_id.encode("utf-8"))
     digest.update(bytes((int(value) + 1) & 0xFF for value in cells))
     return digest.hexdigest()
+
+
+def encode_edit_frame(frame_id: str, map_hash: str) -> str:
+    """Bind an editor-facing mask to the exact navigation map it represents."""
+    if not frame_id or EDIT_FRAME_SEPARATOR in frame_id:
+        raise ValueError("invalid map frame")
+    if len(map_hash) != 64 or any(char not in "0123456789abcdef" for char in map_hash):
+        raise ValueError("invalid map fingerprint")
+    return f"{frame_id}{EDIT_FRAME_SEPARATOR}{map_hash}"
+
+
+def decode_edit_frame(value: str) -> tuple[str, str]:
+    """Return the real frame and map fingerprint from the private edit protocol."""
+    frame_id, separator, map_hash = value.rpartition(EDIT_FRAME_SEPARATOR)
+    if not separator:
+        raise ValueError("keepout edit is missing its map fingerprint")
+    # Reuse the encoder's strict validation so malformed or nested values fail.
+    encode_edit_frame(frame_id, map_hash)
+    return frame_id, map_hash
 
 
 def compatible(actual: GridSpec, expected: GridSpec, tolerance: float = 1e-6) -> bool:

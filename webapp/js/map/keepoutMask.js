@@ -1,36 +1,63 @@
 // @ts-check
 
-/** @typedef {{ width: number, height: number, resolution: number, originX: number, originY: number, frameId: string, data: number[] }} KeepoutGrid */
+const EDIT_FRAME_SEPARATOR = "#keepout-map=";
+
+/** @typedef {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number, frameId: string, mapHash: string, data: number[] }} KeepoutGrid */
+
+/** @param {any} orientation */
+function yawOf(orientation) {
+  const q = orientation ?? {};
+  const x = Number(q.x ?? 0);
+  const y = Number(q.y ?? 0);
+  const z = Number(q.z ?? 0);
+  const w = Number(q.w ?? 1);
+  return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+}
+
+/** @param {string} value */
+function editFrame(value) {
+  const index = value.lastIndexOf(EDIT_FRAME_SEPARATOR);
+  if (index <= 0) return null;
+  const frameId = value.slice(0, index);
+  const mapHash = value.slice(index + EDIT_FRAME_SEPARATOR.length);
+  if (!/^[0-9a-f]{64}$/.test(mapHash) || frameId.includes(EDIT_FRAME_SEPARATOR)) return null;
+  return { frameId, mapHash };
+}
+
+/** @param {KeepoutGrid} grid @param {number} x @param {number} y */
+function worldToGrid(grid, x, y) {
+  const dx = x - grid.originX;
+  const dy = y - grid.originY;
+  const c = Math.cos(grid.originYaw);
+  const s = Math.sin(grid.originYaw);
+  return { x: c * dx + s * dy, y: -s * dx + c * dy };
+}
 
 /** @param {any} msg @returns {KeepoutGrid | null} */
 export function keepoutGridFromMessage(msg) {
   const width = msg?.info?.width | 0;
   const height = msg?.info?.height | 0;
   const resolution = Number(msg?.info?.resolution);
-  if (width <= 0 || height <= 0 || !(resolution > 0) || !Array.isArray(msg?.data) || msg.data.length < width * height) return null;
+  const frame = editFrame(msg?.header?.frame_id || "");
+  if (width <= 0 || height <= 0 || !(resolution > 0) || !frame || !Array.isArray(msg?.data) || msg.data.length < width * height) return null;
   return {
     width,
     height,
     resolution,
     originX: Number(msg.info.origin?.position?.x ?? 0),
     originY: Number(msg.info.origin?.position?.y ?? 0),
-    frameId: msg.header?.frame_id || "map",
+    originYaw: yawOf(msg.info.origin?.orientation),
+    frameId: frame.frameId,
+    mapHash: frame.mapHash,
     data: msg.data.slice(0, width * height).map((/** @type {number} */ value) => (value >= 50 ? 100 : 0)),
   };
 }
 
-/** @param {any} mapMsg @returns {KeepoutGrid | null} */
-export function blankKeepoutGrid(mapMsg) {
-  const parsed = keepoutGridFromMessage(mapMsg);
-  if (!parsed) return null;
-  parsed.data.fill(0);
-  return parsed;
-}
-
 /** @param {KeepoutGrid} grid @param {number} x @param {number} y */
 export function isKeepout(grid, x, y) {
-  const col = Math.floor((x - grid.originX) / grid.resolution);
-  const row = Math.floor((y - grid.originY) / grid.resolution);
+  const local = worldToGrid(grid, x, y);
+  const col = Math.floor(local.x / grid.resolution);
+  const row = Math.floor(local.y / grid.resolution);
   if (col < 0 || row < 0 || col >= grid.width || row >= grid.height) return false;
   return grid.data[row * grid.width + col] >= 50;
 }
@@ -46,8 +73,9 @@ export function paintKeepout(grid, x0, y0, x1, y1, radiusM, blocked) {
   let changed = false;
   for (let step = 0; step <= steps; step++) {
     const t = step / steps;
-    const cx = Math.floor((x0 + (x1 - x0) * t - grid.originX) / grid.resolution);
-    const cy = Math.floor((y0 + (y1 - y0) * t - grid.originY) / grid.resolution);
+    const local = worldToGrid(grid, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+    const cx = Math.floor(local.x / grid.resolution);
+    const cy = Math.floor(local.y / grid.resolution);
     for (let dy = -radiusCells; dy <= radiusCells; dy++) {
       for (let dx = -radiusCells; dx <= radiusCells; dx++) {
         if (dx * dx + dy * dy > radiusCells * radiusCells) continue;
@@ -66,8 +94,10 @@ export function paintKeepout(grid, x0, y0, x1, y1, radiusM, blocked) {
 
 /** @param {KeepoutGrid} grid */
 export function keepoutMessage(grid) {
+  if (!/^[0-9a-f]{64}$/.test(grid.mapHash)) throw new Error("keepout grid is not bound to an active map");
+  const halfYaw = grid.originYaw / 2;
   return {
-    header: { stamp: { sec: 0, nanosec: 0 }, frame_id: grid.frameId },
+    header: { stamp: { sec: 0, nanosec: 0 }, frame_id: `${grid.frameId}${EDIT_FRAME_SEPARATOR}${grid.mapHash}` },
     info: {
       map_load_time: { sec: 0, nanosec: 0 },
       resolution: grid.resolution,
@@ -75,7 +105,7 @@ export function keepoutMessage(grid) {
       height: grid.height,
       origin: {
         position: { x: grid.originX, y: grid.originY, z: 0 },
-        orientation: { x: 0, y: 0, z: 0, w: 1 },
+        orientation: { x: 0, y: 0, z: Math.sin(halfYaw), w: Math.cos(halfYaw) },
       },
     },
     data: grid.data,

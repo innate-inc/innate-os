@@ -26,12 +26,12 @@ import {
   MEMORY_POSITIONS_TOPIC,
   MEMORY_SEARCH_TOPIC,
   FORGET_MEMORY_SERVICE,
-  KEEPOUT_MASK_TOPIC,
+  KEEPOUT_STATE_TOPIC,
   KEEPOUT_EDIT_TOPIC,
 } from "../constants.js";
 import { MEMORY_COLOR, SEARCH_REPLAY_FRESH_S, ageAlpha, ageText, headerSkew, memoryImageUrl, parseMemories, parseSearch, withAlpha } from "./memories.js";
 import { goalCellError } from "./goalValidation.js";
-import { blankKeepoutGrid, isKeepout, keepoutGridFromMessage, keepoutMessage, paintKeepout } from "./keepoutMask.js";
+import { isKeepout, keepoutGridFromMessage, keepoutMessage, paintKeepout } from "./keepoutMask.js";
 
 // The /map grid rides ONE session-lived subscription instead of one per mount.
 // The topic is latched, and rws replays the full grid — hundreds of KB of JSON
@@ -160,7 +160,7 @@ const MEM_SEARCH_CARD_MS = 14_000; // the verdict card auto-dismisses
  * @param {HTMLCanvasElement} canvas 1px-per-cell offscreen buffer, resized to fit.
  * @param {CanvasRenderingContext2D | null} ctx the canvas's 2d context.
  * @param {(v: number, px: Uint8ClampedArray, di: number) => void} paint
- * @returns {{ width: number, height: number, resolution: number, originX: number, originY: number } | null}
+ * @returns {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null}
  *   the grid's world placement, or null if the message isn't a usable grid.
  */
 function rasterizeGrid(msg, canvas, ctx, paint) {
@@ -179,12 +179,18 @@ function rasterizeGrid(msg, canvas, ctx, paint) {
     }
   }
   ctx.putImageData(img, 0, 0);
+  const q = info.origin?.orientation ?? {};
+  const qx = Number(q.x ?? 0);
+  const qy = Number(q.y ?? 0);
+  const qz = Number(q.z ?? 0);
+  const qw = Number(q.w ?? 1);
   return {
     width,
     height,
     resolution: info.resolution || 0.05,
     originX: info.origin?.position?.x ?? 0,
     originY: info.origin?.position?.y ?? 0,
+    originYaw: Math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz)),
   };
 }
 
@@ -295,10 +301,8 @@ export function createMap(root, opts = {}) {
   const off = document.createElement("canvas");
   const offCtx = off.getContext("2d");
 
-  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number } | null} */
+  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null} */
   let grid = null;
-  /** @type {any} latest map message, used only to seed a same-geometry blank keepout grid */
-  let mapMsg = null;
   /** @type {number[] | null} raw occupancy cells (row-major from the origin) for line-of-sight tests */
   let gridCells = null;
   let gridRev = 0; // bumped per /map message — invalidates cached sight shapes
@@ -352,18 +356,18 @@ export function createMap(root, opts = {}) {
   // Costmaps rendered like the map: 1px-per-cell offscreen + world placement.
   const costOff = document.createElement("canvas");
   const costOffCtx = costOff.getContext("2d");
-  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number } | null} */
+  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null} */
   let costGrid = null;
   // The controller's rolling local costmap — same rendering, odom frame.
   const localOff = document.createElement("canvas");
   const localOffCtx = localOff.getContext("2d");
-  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number } | null} */
+  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null} */
   let localGrid = null;
   const keepoutOff = document.createElement("canvas");
   const keepoutOffCtx = keepoutOff.getContext("2d");
   /** @type {import("./keepoutMask.js").KeepoutGrid | null} */
   let keepoutGrid = null;
-  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number } | null} */
+  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null} */
   let keepoutPlacement = null;
   /** @type {{ x: number, y: number } | null} */
   let keepoutStroke = null;
@@ -857,7 +861,7 @@ export function createMap(root, opts = {}) {
       localGrid = null;
     }
     if (layers.keepout && !layerUnsubs.keepout) {
-      layerUnsubs.keepout = ros.subscribe(KEEPOUT_MASK_TOPIC, onKeepout, 250, "nav_msgs/msg/OccupancyGrid");
+      layerUnsubs.keepout = ros.subscribe(KEEPOUT_STATE_TOPIC, onKeepout, 250, "nav_msgs/msg/OccupancyGrid");
     } else if (!layers.keepout && layerUnsubs.keepout) {
       layerUnsubs.keepout();
       delete layerUnsubs.keepout;
@@ -914,6 +918,22 @@ export function createMap(root, opts = {}) {
 
   const dpr = () => window.devicePixelRatio || 1;
 
+  /** @param {{ originX: number, originY: number, originYaw: number }} g @param {number} x @param {number} y */
+  function gridCoordinates(g, x, y) {
+    const dx = x - g.originX;
+    const dy = y - g.originY;
+    const c = Math.cos(g.originYaw);
+    const s = Math.sin(g.originYaw);
+    return { x: c * dx + s * dy, y: -s * dx + c * dy };
+  }
+
+  /** @param {{ originX: number, originY: number, originYaw: number }} g @param {number} x @param {number} y */
+  function gridPoint(g, x, y) {
+    const c = Math.cos(g.originYaw);
+    const s = Math.sin(g.originYaw);
+    return { x: g.originX + c * x - s * y, y: g.originY + s * x + c * y };
+  }
+
   function fit() {
     const r = root.getBoundingClientRect();
     const d = dpr();
@@ -928,8 +948,9 @@ export function createMap(root, opts = {}) {
   function worldToCanvas(x, y) {
     const g = /** @type {NonNullable<typeof grid>} */ (grid);
     const v = /** @type {NonNullable<typeof view>} */ (view);
-    const col = (x - g.originX) / g.resolution;
-    const rowFromBottom = (y - g.originY) / g.resolution;
+    const local = gridCoordinates(g, x, y);
+    const col = local.x / g.resolution;
+    const rowFromBottom = local.y / g.resolution;
     return { px: v.ox + col * v.scale, py: v.oy + (g.height - rowFromBottom) * v.scale };
   }
 
@@ -939,7 +960,7 @@ export function createMap(root, opts = {}) {
     const v = /** @type {NonNullable<typeof view>} */ (view);
     const col = (px - v.ox) / v.scale;
     const rowFromBottom = g.height - (py - v.oy) / v.scale;
-    return { x: g.originX + col * g.resolution, y: g.originY + rowFromBottom * g.resolution };
+    return gridPoint(g, col * g.resolution, rowFromBottom * g.resolution);
   }
 
   /** @param {PointerEvent} e → canvas-pixel coords */
@@ -960,7 +981,6 @@ export function createMap(root, opts = {}) {
       px[di + 3] = 255;
     });
     if (!g) return;
-    mapMsg = msg;
     grid = g;
     gridCells = msg.data;
     gridRev++;
@@ -1189,8 +1209,9 @@ export function createMap(root, opts = {}) {
       return;
     }
     if (center) {
-      const col = (center.x - grid.originX) / grid.resolution;
-      const rowFromBottom = (center.y - grid.originY) / grid.resolution;
+      const local = gridCoordinates(grid, center.x, center.y);
+      const col = local.x / grid.resolution;
+      const rowFromBottom = local.y / grid.resolution;
       ox = canvas.width / 2 - col * scale;
       oy = canvas.height / 2 - (grid.height - rowFromBottom) * scale;
     } else {
@@ -1205,20 +1226,27 @@ export function createMap(root, opts = {}) {
     // immutable localization map. Red means the planner and controller may
     // not enter; the browser paints this exact grid through the edit topic.
     if (layers.keepout && keepoutPlacement) {
-      const topLeft = worldToCanvas(
-        keepoutPlacement.originX,
-        keepoutPlacement.originY + keepoutPlacement.height * keepoutPlacement.resolution,
-      );
+      const topLeftWorld = gridPoint(keepoutPlacement, 0, keepoutPlacement.height * keepoutPlacement.resolution);
+      const topLeft = worldToCanvas(topLeftWorld.x, topLeftWorld.y);
       const cellPx = (keepoutPlacement.resolution / grid.resolution) * scale;
-      ctx.drawImage(keepoutOff, topLeft.px, topLeft.py, keepoutPlacement.width * cellPx, keepoutPlacement.height * cellPx);
+      ctx.save();
+      ctx.translate(topLeft.px, topLeft.py);
+      ctx.rotate(-(keepoutPlacement.originYaw - grid.originYaw));
+      ctx.drawImage(keepoutOff, 0, 0, keepoutPlacement.width * cellPx, keepoutPlacement.height * cellPx);
+      ctx.restore();
     }
 
     // Costmap overlay, aligned by world coords (its origin/size differ from the
     // map's). scale is px per map cell, so convert via the resolution ratio.
     if (layers.costmap && costGrid) {
-      const topLeft = worldToCanvas(costGrid.originX, costGrid.originY + costGrid.height * costGrid.resolution);
+      const topLeftWorld = gridPoint(costGrid, 0, costGrid.height * costGrid.resolution);
+      const topLeft = worldToCanvas(topLeftWorld.x, topLeftWorld.y);
       const cellPx = (costGrid.resolution / grid.resolution) * scale;
-      ctx.drawImage(costOff, topLeft.px, topLeft.py, costGrid.width * cellPx, costGrid.height * cellPx);
+      ctx.save();
+      ctx.translate(topLeft.px, topLeft.py);
+      ctx.rotate(-(costGrid.originYaw - grid.originYaw));
+      ctx.drawImage(costOff, 0, 0, costGrid.width * cellPx, costGrid.height * cellPx);
+      ctx.restore();
     }
 
     // Local costmap: its coordinates are in the ODOM frame.
@@ -1227,15 +1255,17 @@ export function createMap(root, opts = {}) {
       const c = Math.cos(theta);
       const s = Math.sin(theta);
       // The image's top-left corner (max-y edge, matching the row flip) in
-      // odom, carried into the map frame, then a canvas rotation of -theta
-      // (canvas y points down, so world CCW is canvas CW).
-      const tlx = localGrid.originX;
-      const tly = localGrid.originY + localGrid.height * localGrid.resolution;
-      const { px, py } = worldToCanvas(tx + tlx * c - tly * s, ty + tlx * s + tly * c);
+      // odom, carried into the map frame, then rotated relative to the map
+      // grid axes (canvas y points down, so world CCW is canvas clockwise).
+      const topLeftOdom = gridPoint(localGrid, 0, localGrid.height * localGrid.resolution);
+      const { px, py } = worldToCanvas(
+        tx + topLeftOdom.x * c - topLeftOdom.y * s,
+        ty + topLeftOdom.x * s + topLeftOdom.y * c,
+      );
       const cellPx = (localGrid.resolution / grid.resolution) * scale;
       ctx.save();
       ctx.translate(px, py);
-      ctx.rotate(-theta);
+      ctx.rotate(-(theta + localGrid.originYaw - grid.originYaw));
       ctx.drawImage(localOff, 0, 0, localGrid.width * cellPx, localGrid.height * cellPx);
       ctx.restore();
     }
@@ -1403,8 +1433,9 @@ export function createMap(root, opts = {}) {
   function occAt(x, y) {
     const g = grid;
     if (!g || !gridCells) return 0;
-    const col = Math.floor((x - g.originX) / g.resolution);
-    const row = Math.floor((y - g.originY) / g.resolution);
+    const local = gridCoordinates(g, x, y);
+    const col = Math.floor(local.x / g.resolution);
+    const row = Math.floor(local.y / g.resolution);
     if (col < 0 || col >= g.width || row < 0 || row >= g.height) return 0;
     const v = gridCells[row * g.width + col];
     return v > 0 ? v : 0;
@@ -1711,9 +1742,8 @@ export function createMap(root, opts = {}) {
     const { px, py } = eventToCanvas(e);
     canvas.setPointerCapture(e.pointerId);
     if (ui === "keepout" || ui === "keepout-erase") {
-      if (!keepoutGrid) keepoutGrid = blankKeepoutGrid(mapMsg);
       if (!keepoutGrid) {
-        setStatus("fail", "Wait for the map before editing keepout zones");
+        setStatus("fail", "Wait for the keepout layer before editing zones");
         return;
       }
       const point = canvasToWorld(px, py);
@@ -1889,7 +1919,6 @@ export function createMap(root, opts = {}) {
     setUi(ui === "keepout-erase" ? "keepout" : "keepout-erase");
   });
   clearKeepoutBtn.addEventListener("click", () => {
-    if (!keepoutGrid) keepoutGrid = blankKeepoutGrid(mapMsg);
     if (!keepoutGrid) return;
     keepoutGrid.data.fill(0);
     rasterizeKeepout();
@@ -1987,7 +2016,6 @@ export function createMap(root, opts = {}) {
     gridIp = ip;
     if (!switched) return;
     grid = null;
-    mapMsg = null;
     gridCells = null;
     gridRev++;
     costGrid = null;

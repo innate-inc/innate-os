@@ -13,9 +13,19 @@ from nav_msgs.msg import OccupancyGrid
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
-from mars_nav.keepout_mask import GridSpec, binary_mask, compatible, load_mask, map_fingerprint, save_mask
+from mars_nav.keepout_mask import (
+    GridSpec,
+    binary_mask,
+    compatible,
+    decode_edit_frame,
+    encode_edit_frame,
+    load_mask,
+    map_fingerprint,
+    save_mask,
+)
 
 MASK_TOPIC = "/nav/keepout_filter_mask"
+STATE_TOPIC = "/nav/keepout_mask_state"
 EDIT_TOPIC = "/nav/keepout_mask_edit"
 INFO_TOPIC = "/nav/keepout_filter_info"
 
@@ -43,6 +53,7 @@ class KeepoutMaskServer(Node):
             depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL
         )
         self._mask_pub = self.create_publisher(OccupancyGrid, MASK_TOPIC, latched)
+        self._state_pub = self.create_publisher(OccupancyGrid, STATE_TOPIC, latched)
         self._info_pub = self.create_publisher(CostmapFilterInfo, INFO_TOPIC, latched)
         self.create_subscription(OccupancyGrid, "/map", self._on_map, latched)
         self.create_subscription(OccupancyGrid, EDIT_TOPIC, self._on_edit, 5)
@@ -74,12 +85,15 @@ class KeepoutMaskServer(Node):
         self._info_pub.publish(info)
 
     def _publish_mask(self) -> None:
-        if self._map is None:
+        if self._map is None or self._spec is None:
             return
         msg = copy.deepcopy(self._map)
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.data = self._cells
         self._mask_pub.publish(msg)
+        state = copy.deepcopy(msg)
+        state.header.frame_id = encode_edit_frame(self._spec.frame_id, self._map_hash)
+        self._state_pub.publish(state)
         self._publish_info()
 
     def _on_map(self, msg: OccupancyGrid) -> None:
@@ -103,7 +117,19 @@ class KeepoutMaskServer(Node):
             self.get_logger().warning("Ignoring keepout edit before /map is available")
             return
         try:
+            frame_id, map_hash = decode_edit_frame(msg.header.frame_id)
+            if map_hash != self._map_hash:
+                raise ValueError("edit belongs to a different navigation map")
             incoming = _spec(msg)
+            incoming = GridSpec(
+                width=incoming.width,
+                height=incoming.height,
+                resolution=incoming.resolution,
+                origin_x=incoming.origin_x,
+                origin_y=incoming.origin_y,
+                origin_yaw=incoming.origin_yaw,
+                frame_id=frame_id,
+            )
             if not compatible(incoming, self._spec):
                 raise ValueError("edit geometry does not match the active navigation map")
             cells = binary_mask(msg.data, self._spec.cells)
