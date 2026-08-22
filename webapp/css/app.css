@@ -6544,6 +6544,103 @@ select.skill-input {
   background: transparent;
 }
 
+.gaze-debug {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.gaze-debug[hidden] {
+  display: none;
+}
+
+.gaze-debug-content {
+  position: absolute;
+  overflow: hidden;
+}
+
+.gaze-zone,
+.gaze-face {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.gaze-zone {
+  --gaze-progress: 0%;
+  border: 1px dashed rgb(255 255 255 / 32%);
+  background:
+    linear-gradient(90deg, rgb(93 230 169 / 9%) var(--gaze-progress), transparent var(--gaze-progress)),
+    rgb(255 255 255 / 2%);
+  border-radius: 12px;
+}
+
+.gaze-face {
+  border: 1px solid rgb(255 255 255 / 48%);
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 28%);
+}
+
+.gaze-target {
+  border: 2px solid var(--accent);
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 38%),
+    0 0 18px color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
+.gaze-target::before {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: -2px;
+  padding: 3px 6px;
+  background: var(--accent);
+  border-radius: 5px;
+  color: #111;
+  content: "TARGET";
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.gaze-status {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  padding: 7px 10px;
+  background: rgb(8 8 10 / 62%);
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
+  color: rgb(255 255 255 / 78%);
+  line-height: 1;
+  transform: translateX(-50%);
+  backdrop-filter: blur(16px) saturate(1.15);
+}
+
+.gaze-debug[data-status="centering"] .gaze-status,
+.gaze-debug[data-status="following"] .gaze-status,
+.gaze-debug[data-status="too_far"] .gaze-status {
+  border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+  color: var(--accent);
+}
+
+.gaze-debug[data-status="locked"] .gaze-status,
+.gaze-debug[data-status="locked"] .gaze-target {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.gaze-debug[data-status="locked"] .gaze-target::before {
+  background: var(--ok);
+}
+
+.gaze-debug[data-status="stale"] .gaze-status {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+
 .agent-cockpit .cam-strip {
   position: relative;
   top: auto;
@@ -7877,7 +7974,8 @@ select.skill-input {
    monitor shows pose and frames). */
 .agent-cockpit.brain-open .overlay-stack-top-left,
 .agent-cockpit.brain-open .cam-strip,
-.agent-cockpit.brain-open .agent-telemetry-overlay {
+.agent-cockpit.brain-open .agent-telemetry-overlay,
+.agent-cockpit.brain-open .gaze-debug {
   display: none;
 }
 

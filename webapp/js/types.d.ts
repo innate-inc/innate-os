@@ -271,3 +271,35 @@ interface WebRtcState {
   /** True once we've fallen back to a public STUN server after the local-only config failed. */
   stunFallback: boolean;
 }
+
+type GazeStatus =
+  | "off"
+  | "paused"
+  | "starting"
+  | "searching"
+  | "following"
+  | "too_far"
+  | "centering"
+  | "locked";
+
+interface GazeBox {
+  center_x: number;
+  center_y: number;
+  width: number;
+  height: number;
+}
+
+interface GazeDebug {
+  status: GazeStatus;
+  progress: number;
+  faces: GazeBox[];
+  target: GazeBox | null;
+  zone: { left: number; top: number; right: number; bottom: number };
+  image: { width: number; height: number };
+  frame: number;
+}
+
+interface GazeOverlaySession {
+  readonly primaryCamera: string | { name: string };
+  onChange(callback: (state: unknown) => void): () => void;
+}

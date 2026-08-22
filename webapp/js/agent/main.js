@@ -27,6 +27,7 @@ import { sharedAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
 import { createAgentMicControl } from "./agentMicControl.js";
+import { createGazeOverlay } from "./gazeOverlay.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
 // marks a sim deployment — used here to drop the (absent) battery readout. Fetched
@@ -68,6 +69,8 @@ function buildAgentView(root) {
     : createVideoStage(feedFrame, session);
   const sceneSetup = feedFrame.querySelector(".sim-debug-stack");
   if (sceneSetup) root.append(sceneSetup);
+  const gazeStage = /** @type {HTMLElement | null} */ (feedFrame.querySelector(".video-stage"));
+  const gazeOverlay = gazeStage ? createGazeOverlay(gazeStage, ros, session) : null;
 
   const cornerStack = document.createElement("div");
   cornerStack.className = "overlay-stack-top-left";
@@ -184,6 +187,7 @@ function buildAgentView(root) {
   }
 
   const parts = [
+    ...(gazeOverlay ? [gazeOverlay] : []),
     videoStage,
     widthGuard,
     ...(challengePanel ? [challengePanel] : []),
