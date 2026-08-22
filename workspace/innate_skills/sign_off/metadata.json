@@ -1,0 +1,29 @@
+{
+    "name": "sign_off",
+    "type": "replay",
+    "guidelines": "Perform the sign-off arm gesture only as part of a spoken goodbye. Intro Agent invokes this through the Goodbye skill so turning, speech, and motion stay ordered.",
+    "guidelines_when_running": "",
+    "inputs": {},
+    "wheeled": false,
+    "execution": {
+        "model_type": "replay",
+        "replay_file": "episode_0.h5",
+        "replay_frequency": 30.0,
+        "start_pose": [
+            1.586136134673753,
+            -1.4327380558851888,
+            1.4434759214003883,
+            0.6059224112148283,
+            -0.31139809994078516,
+            -0.34514567727426926
+        ],
+        "end_pose": [
+            1.4542137869155878,
+            -1.4296700943094176,
+            1.4726215563702154,
+            0.47093210188089185,
+            -0.3328738309711841,
+            -0.3436116964863836
+        ]
+    }
+}

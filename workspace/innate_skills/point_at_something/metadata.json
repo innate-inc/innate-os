@@ -1,0 +1,29 @@
+{
+    "name": "point_at_something",
+    "type": "replay",
+    "guidelines": "Point forward when the user asks Mars to point at a visible person or object. Use only after gaze has faced the intended target.",
+    "guidelines_when_running": "",
+    "inputs": {},
+    "wheeled": false,
+    "execution": {
+        "model_type": "replay",
+        "replay_file": "episode_0.h5",
+        "replay_frequency": 30.0,
+        "start_pose": [
+            1.5508545765523831,
+            -1.4250681519457606,
+            1.4649516524307873,
+            0.5123495831538042,
+            -0.3236699462438703,
+            -0.3436116964863836
+        ],
+        "end_pose": [
+            1.7195924632198039,
+            -1.4312040750973032,
+            1.4772234987338724,
+            0.44945637085049284,
+            -0.25310683000113077,
+            -0.3466796580621549
+        ]
+    }
+}

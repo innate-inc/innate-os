@@ -1,0 +1,29 @@
+{
+    "name": "short_clap",
+    "type": "replay",
+    "guidelines": "Perform a short clap when the user asks Mars to clap, applaud, or briefly celebrate.",
+    "guidelines_when_running": "",
+    "inputs": {},
+    "wheeled": false,
+    "execution": {
+        "model_type": "replay",
+        "replay_file": "episode_0.h5",
+        "replay_frequency": 30.0,
+        "start_pose": [
+            1.4818254410975293,
+            -1.423534171157875,
+            1.4480778637640452,
+            0.5890486225480862,
+            -0.2807184841830723,
+            -0.34514567727426926
+        ],
+        "end_pose": [
+            1.556990499703926,
+            -1.3775147475213059,
+            1.4756895179459868,
+            0.47093210188089185,
+            -0.14266021327336462,
+            -0.3466796580621549
+        ]
+    }
+}

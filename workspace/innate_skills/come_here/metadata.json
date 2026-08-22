@@ -1,0 +1,29 @@
+{
+    "name": "come_here",
+    "type": "replay",
+    "guidelines": "Point and beckon toward a person directly in front of Mars. Use only after the intended person's face is visible and person-tracking gaze has turned Mars toward them.",
+    "guidelines_when_running": "",
+    "inputs": {},
+    "wheeled": false,
+    "execution": {
+        "model_type": "replay",
+        "replay_file": "episode_0.h5",
+        "replay_frequency": 30.0,
+        "start_pose": [
+            1.5615924420675826,
+            -1.428136113521532,
+            1.4695535947944443,
+            0.48013598660820567,
+            -0.11504855909142309,
+            -0.34514567727426926
+        ],
+        "end_pose": [
+            1.5447186534008406,
+            -1.4296700943094176,
+            1.4756895179459868,
+            0.45099035163837853,
+            0.0030679615757712823,
+            -0.3436116964863836
+        ]
+    }
+}
