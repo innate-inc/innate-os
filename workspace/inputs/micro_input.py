@@ -44,10 +44,12 @@ from brain_client.inputs.batch_stt import (
     VoicedDetector,
     elevenlabs_proxy_transcriber,
     gemini_transcriber,
+    keyterms_with_name,
     sanitize_keyterms,
 )
 from brain_client.inputs.types import InputDevice
 from brain_client.inputs.vad import silero_detector
+from brain_client.perception.identity import IdentityMonitor
 
 DEFAULT_SAMPLE_RATE = 24_000
 DEFAULT_CHANNELS = 1
@@ -116,6 +118,8 @@ class MicroInput(InputDevice):
         self._is_connected = False
         self._reconnect_delay = 1  # Start with 1 second
         self._max_reconnect_delay = 30  # Max 30 seconds between retries
+        self._identity = None  # IdentityMonitor, created on first open (needs the node)
+        self._warned_dropped_keyterms = False
         # Initialize logger wrapper (will be updated when set_logger is called)
         self.logger = UniversalLogger(enabled=False)
 
@@ -148,6 +152,8 @@ class MicroInput(InputDevice):
         """
         if not self.proxy:
             raise RuntimeError("no STT configuration (the proxy client was never created)")
+        if self._identity is None and self.node is not None:
+            self._identity = IdentityMonitor(self.node)
 
         try:
             self.mic = self._start_audio_source()
@@ -291,12 +297,18 @@ class MicroInput(InputDevice):
         return str(self.proxy.config.get("stt_language") or "en")
 
     def _stt_keyterms(self) -> list[str]:
-        """Vocabulary the batch backends bias toward; an empty list disables biasing."""
+        """Vocabulary the batch backends bias toward; an empty list disables biasing.
+
+        Passed to the transcribers as a supplier and re-read per utterance, so a
+        renamed robot hears its new name without an STT restart.
+        """
         configured = self.proxy.config.get("stt_keyterms", DEFAULT_KEYTERMS)
         terms = sanitize_keyterms(configured)
-        if len(terms) != len(configured):
+        if len(terms) != len(configured) and not self._warned_dropped_keyterms:
+            self._warned_dropped_keyterms = True
             self.logger.warning(f"⚠️ Dropped {len(configured) - len(terms)} stt_keyterms ElevenLabs would reject")
-        return terms
+        identity = self._identity.current if self._identity is not None else None
+        return keyterms_with_name(terms, identity.name if identity else None)
 
     def _connect_via_proxy(self):
         """Connect to the configured STT backend via proxy."""
@@ -335,7 +347,7 @@ class MicroInput(InputDevice):
     def _connect_elevenlabs_batch(self) -> str:
         """Start a batch-transcription session on ElevenLabs Scribe. Returns the model id."""
         model = self.proxy.config.get("elevenlabs_batch_stt_model", "scribe_v2")
-        transcriber = elevenlabs_proxy_transcriber(self.proxy, model, self._stt_language(), self._stt_keyterms())
+        transcriber = elevenlabs_proxy_transcriber(self.proxy, model, self._stt_language(), self._stt_keyterms)
         self._start_batch_session(transcriber, model)
         return model
 
@@ -347,7 +359,7 @@ class MicroInput(InputDevice):
         if rest is None:
             raise RuntimeError("no Gemini access: proxy unavailable and GEMINI_API_KEY unset")
 
-        self._start_batch_session(gemini_transcriber(rest, model, self._stt_language(), self._stt_keyterms()), model)
+        self._start_batch_session(gemini_transcriber(rest, model, self._stt_language(), self._stt_keyterms), model)
         return model
 
     def _start_batch_session(self, transcriber: Transcriber, model: str) -> None:
