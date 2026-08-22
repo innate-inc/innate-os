@@ -35,7 +35,7 @@ let simHolders = 0;
 /** @type {number | null} */ let simLinger = null;
 
 /**
- * @returns {Promise<{ createSession: () => WebRtcSession, releaseSession: (session: WebRtcSession) => void, createStage: ((root: HTMLElement, session: WebRtcSession) => { audioEl: HTMLAudioElement | null, destroy: () => void }) | null }>}
+ * @returns {Promise<{ createSession: () => WebRtcSession, releaseSession: (session: WebRtcSession) => void, createStage: ((root: HTMLElement, session: WebRtcSession, opts?: { chipsOn?: string[] }) => { audioEl: HTMLAudioElement | null, destroy: () => void }) | null }>}
  * createStage is null for real robots (pages use createVideoStage); in sim it
  * mounts the live Three.js canvas (full resolution, drag-to-orbit).
  */
@@ -53,7 +53,7 @@ export async function robotSessionFactory() {
       return {
         createSession: () => acquireSimSession(mod, config),
         releaseSession: () => releaseSimSession(),
-        createStage: (root, session) => acquireSimStage(mod, root, session),
+        createStage: (root, session, opts) => acquireSimStage(mod, root, session, opts),
       };
     } catch (err) {
       console.error("[robotSession] sim viewer bundle unavailable, falling back to WebRTC:", err);
@@ -95,11 +95,13 @@ function releaseSimSession() {
  * @param {HTMLElement} root
  * @param {any} session
  */
-function acquireSimStage(mod, root, session) {
+function acquireSimStage(mod, root, session, opts) {
+  // opts only apply to the stage that gets BUILT: one stage is shared across
+  // pages, so a page opening later inherits the chips the first one set.
   if (simStage) simStage.attach(root);
   else {
     const respawn = () => ros.publish(SIM_RESPAWN_TOPIC, { data: true });
-    simStage = /** @type {SimStage} */ (mod.createSimStage(root, session, respawn));
+    simStage = /** @type {SimStage} */ (mod.createSimStage(root, session, respawn, opts));
   }
   const stage = simStage;
   return { ...stage, destroy: () => stage.detach() };

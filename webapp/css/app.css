@@ -11038,7 +11038,12 @@ select.skill-input {
   background: rgba(0, 0, 0, 0.28);
   overflow: hidden;
 }
-.policy-canvas { display: block; width: 100%; height: 100%; }
+/* The stage is the teleop one (sim canvas or WebRTC video); it sizes itself
+   from its parent, so the parent has to actually have a height. */
+.policy-scene > .video-stage { width: 100%; height: 100%; }
+/* The debug chips sit above the WASD overlay on teleop; this page has no
+   joystick, so they come back down to the corner. */
+.policy-scene .sim-debug-stack { bottom: 14px; }
 .policy-status { font-size: 12px; opacity: 0.75; min-height: 1.2em; }
 
 .policy-side { min-height: 0; overflow-y: auto; }

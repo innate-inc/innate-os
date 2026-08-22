@@ -3,31 +3,29 @@
 // Copyright (c) 2026 Innate Inc
 // Policy page — drive the nav policy from a sentence and watch it think.
 //
-// Composition:
-//   waypointView.js  the model's 8 waypoints, top-down and robot-up
-//   statusPanel.js   the inference readout and the observation window
+// The scene is the same one teleop renders (SimSession in sim, WebRTC video on
+// a robot), opened with the waypoints overlay already lit: a page about the
+// policy that hides the policy's output would be asking every visitor to go
+// find a chip first.
 //
 // The goal goes straight to /innate_nav/navigate rather than through the
 // skills server. That is the same action the innate_nav skill calls, so
-// behaviour is identical, and it keeps Stop on this page wired to THIS run's
-// goal handle instead of "whatever skill is running".
+// behaviour is identical, and it keeps Stop wired to THIS run's goal handle
+// instead of "whatever skill is running".
 
 import { mountPage } from "../pageMount.js";
 import { ros } from "../rosClient.js";
+import { robotSessionFactory } from "../robotSession.js";
+import { createVideoStage } from "../teleop/videoStage.js";
 import {
   NAV_POLICY_ACTION,
   NAV_POLICY_ACTION_TYPE,
   NAV_POLICY_OBSERVATIONS_TOPIC,
-  NAV_POLICY_PATH_TOPIC,
   NAV_POLICY_STATUS_TOPIC,
-  ODOM_TOPIC,
 } from "../constants.js";
-import { createWaypointView } from "./waypointView.js";
 import { createStatusPanel } from "./statusPanel.js";
 
-// A path that stops being republished is dimmed rather than left looking live.
-// Plans arrive at 2-4Hz, so this only fires once they have genuinely stopped.
-const PATH_STALE_MS = 2500;
+const { createSession, createStage } = await robotSessionFactory();
 
 /** @param {HTMLElement} stage */
 export function mount(stage) {
@@ -53,13 +51,16 @@ export function mount(stage) {
     const go = /** @type {HTMLButtonElement} */ (root.querySelector(".policy-go"));
     const stop = /** @type {HTMLButtonElement} */ (root.querySelector(".policy-stop"));
     const line = /** @type {HTMLElement} */ (root.querySelector(".policy-status"));
+    const sceneRoot = /** @type {HTMLElement} */ (root.querySelector(".policy-scene"));
 
-    const scene = createWaypointView(/** @type {HTMLElement} */ (root.querySelector(".policy-scene")));
+    const session = createSession();
+    const scene = createStage
+      ? createStage(sceneRoot, session, { chipsOn: ["waypoints"] })
+      : createVideoStage(sceneRoot, session);
     const panel = createStatusPanel(/** @type {HTMLElement} */ (root.querySelector(".policy-side")));
 
     /** @type {{ cancel: () => void } | null} */
     let run = null;
-    let lastPathAt = 0;
 
     function setRunning(on, text) {
       go.disabled = on;
@@ -80,15 +81,14 @@ export function mount(stage) {
         {},
       );
       run = { cancel };
+      const finish = (text) => {
+        run = null;
+        setRunning(false, text);
+        panel.clear();
+      };
       promise.then(
-        (values) => {
-          run = null;
-          setRunning(false, values?.message || "done");
-        },
-        (err) => {
-          run = null;
-          setRunning(false, err?.message || "failed");
-        },
+        (values) => finish(values?.message || "done"),
+        (err) => finish(err?.message || "failed"),
       );
     });
 
@@ -97,23 +97,6 @@ export function mount(stage) {
       line.textContent = "stopping…";
       run.cancel();
     });
-
-    const unsubPath = ros.subscribe(NAV_POLICY_PATH_TOPIC, (msg) => {
-      const poses = msg?.poses || [];
-      lastPathAt = performance.now();
-      scene.setWaypoints(poses.map((p) => ({
-        x: p?.pose?.position?.x ?? 0, y: p?.pose?.position?.y ?? 0,
-      })));
-    }, undefined, "nav_msgs/msg/Path");
-
-    const unsubOdom = ros.subscribe(ODOM_TOPIC, (msg) => {
-      const p = msg?.pose?.pose;
-      if (!p) return;
-      scene.setPose({
-        x: p.position.x, y: p.position.y,
-        yaw: 2 * Math.atan2(p.orientation.z, p.orientation.w),
-      });
-    }, 100, "nav_msgs/msg/Odometry");
 
     const unsubStatus = ros.subscribe(NAV_POLICY_STATUS_TOPIC, (msg) => {
       if (typeof msg?.data !== "string") return;
@@ -128,20 +111,14 @@ export function mount(stage) {
       if (typeof msg?.data === "string") panel.setStrip(msg.data);
     }, undefined, "sensor_msgs/msg/CompressedImage");
 
-    const staleTimer = setInterval(() => {
-      scene.setStale(performance.now() - lastPathAt > PATH_STALE_MS);
-    }, 500);
-
     return {
       destroy() {
-        clearInterval(staleTimer);
         // Leaving the page must not leave the robot driving.
         if (run) run.cancel();
-        unsubPath();
-        unsubOdom();
         unsubStatus();
         unsubObs();
         scene.destroy();
+        session.destroy?.();
         panel.destroy();
       },
     };

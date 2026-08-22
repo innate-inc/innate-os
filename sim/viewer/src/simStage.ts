@@ -68,6 +68,7 @@ export function createSimStage(
   session: SimSession,
   // Via the ROS node, not the world server: it fails the in-flight arm trajectory.
   onRespawn: () => void,
+  opts: { chipsOn?: string[] } = {},
 ): {
   audioEl: null;
   setSafeInsets: (insets: { right?: number }) => void;
@@ -75,6 +76,10 @@ export function createSimStage(
   detach: () => void;
   destroy: () => void;
 } {
+  // Overlays a page wants lit from the start -- the policy page opens with
+  // waypoints on, because a page about the policy that hides its output is
+  // asking every visitor to find a chip first.
+  const chipsOn = new Set(opts.chipsOn ?? []);
   const wrap = document.createElement("div");
   // The class's position:absolute+inset:0 must survive: overriding it once had
   // the wrap size itself off the canvas buffer, ignoring window resizes.
@@ -282,7 +287,7 @@ export function createSimStage(
   viewAids.appendChild(viewAidsLabel);
   addToggle(viewAids, "Lidar", (on) => session.setLidarVisible(on));
   addToggle(viewAids, "Collisions", (on) => session.setCollisionHullsVisible(on));
-  addToggle(viewAids, "Waypoints", (on) => session.setNavPathVisible(on));
+  addToggle(viewAids, "Waypoints", (on) => session.setNavPathVisible(on), chipsOn.has("waypoints"));
   // Respawn (main) replaces this branch's "Reset position": same intent, and
   // it also homes the arm and parks the props.
   const robotRow = document.createElement("div");
