@@ -86,6 +86,15 @@ export const ODOM_TOPIC = "/odom"; // nav_msgs/Odometry
 // nav_msgs/Path — the planner's route. Both planner servers are namespaced;
 // there is no root /plan publisher.
 export const PLAN_TOPICS = ["/navigation/plan", "/mapfree/plan"];
+
+// The nav policy (innate_nav). The path is the model's own output — 8 metric
+// waypoints in odom — and status/observations exist for the Policy page: what
+// the model is looking at, and when it last looked.
+export const NAV_POLICY_PATH_TOPIC = "/nav_policy/path"; // nav_msgs/Path
+export const NAV_POLICY_STATUS_TOPIC = "/nav_policy/status"; // std_msgs/String, JSON
+export const NAV_POLICY_OBSERVATIONS_TOPIC = "/nav_policy/observations/compressed";
+export const NAV_POLICY_ACTION = "/innate_nav/navigate";
+export const NAV_POLICY_ACTION_TYPE = "innate_cloud_msgs/action/NavigateInstruction";
 // AMCL's map-frame pose estimate (geometry_msgs/PoseWithCovarianceStamped).
 export const AMCL_POSE_TOPIC = "/amcl_pose";
 // The exact goal navigate_to_position commanded (geometry_msgs/PoseStamped, latched).

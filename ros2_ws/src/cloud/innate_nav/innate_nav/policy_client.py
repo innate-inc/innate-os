@@ -36,7 +36,7 @@ import struct
 import threading
 import urllib.error
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 
 from websockets.sync.client import connect
 
@@ -84,15 +84,27 @@ class Plan:
     stop: bool
     p_stop: float | None
     keyframes: int
+    # Which observations the plan was made from: ordinals into the server's
+    # keyframe list, and the robot's own stamps for the same frames. Only the
+    # robot still has those frames, so this is what lets it show them.
+    history_indices: list[int]
+    history_stamps: list[float]
     seq: int
     compute_ms: float
     model: str
 
     @staticmethod
     def from_json(text: str) -> Plan:
+        """Unknown fields are DROPPED rather than passed to the constructor: a
+        server that grows a field must not kill this client's receive thread,
+        which is exactly what a strict Plan(**d) did the first time one did."""
         d = json.loads(text)
         d["capture_pose"] = Pose(**d["capture_pose"])
-        return Plan(**d)
+        known = {f.name for f in fields(Plan)}
+        missing = known - set(d)
+        if missing:
+            raise ValueError(f"plan is missing {sorted(missing)}; server too old?")
+        return Plan(**{k: v for k, v in d.items() if k in known})
 
 
 def encode_frame(jpeg: bytes, pose: Pose, stamp: float) -> bytes:

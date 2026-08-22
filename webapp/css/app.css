@@ -10993,4 +10993,94 @@ select.skill-input {
   .training-tools .episodes-search {
     flex-basis: 100%;
   }
+/* ── Policy page ─────────────────────────────────────────────────────────
+   Scene left, inference readout right. The readout is the point of the page,
+   so it holds a fixed column rather than collapsing under the scene. */
+.policy-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 14px;
+  padding: 14px;
+  height: 100%;
+  min-height: 0;
+}
+.policy-main {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  min-height: 0;
+}
+.policy-bar { display: flex; gap: 8px; }
+.policy-instruction { flex: 1 1 auto; min-width: 0; }
+.policy-server { flex: 0 0 190px; }
+.policy-bar input {
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font: inherit;
+}
+.policy-bar button {
+  padding: 9px 18px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  cursor: pointer;
+}
+.policy-bar button:disabled { opacity: 0.4; cursor: default; }
+.policy-stop:not(:disabled) { border-color: rgba(255, 120, 120, 0.55); color: #ff9a9a; }
+.policy-scene {
+  position: relative;
+  min-height: 0;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+.policy-canvas { display: block; width: 100%; height: 100%; }
+.policy-status { font-size: 12px; opacity: 0.75; min-height: 1.2em; }
+
+.policy-side { min-height: 0; overflow-y: auto; }
+.policy-panel { display: flex; flex-direction: column; gap: 8px; }
+.policy-panel-head {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.55;
+  margin-top: 6px;
+}
+.policy-meta { display: grid; gap: 3px; font-size: 12px; }
+.policy-meta > div { display: flex; justify-content: space-between; gap: 8px; }
+.policy-meta span { opacity: 0.55; }
+.policy-meta code { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.policy-clocks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.policy-clock {
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.policy-clock b { display: block; font-size: 15px; font-variant-numeric: tabular-nums; }
+.policy-clock span { font-size: 10.5px; opacity: 0.55; }
+.policy-window-note { font-size: 11.5px; opacity: 0.7; }
+/* The strip is 16 thumbnails wide; letting it scale to the column keeps every
+   frame visible at once, which is the whole point of showing it. */
+.policy-strip {
+  width: 100%;
+  border-radius: 6px;
+  image-rendering: auto;
+  background: rgba(255, 255, 255, 0.03);
+  min-height: 34px;
+}
+.policy-strip:not(.has-image) { opacity: 0.25; }
+.policy-ages { font-size: 11px; opacity: 0.6; font-variant-numeric: tabular-nums; }
+.policy-flags { display: flex; flex-wrap: wrap; gap: 5px; }
+.policy-flag {
+  font-size: 10.5px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+}
+@media (max-width: 900px) {
+  .policy-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
 }

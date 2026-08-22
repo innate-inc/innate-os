@@ -31,11 +31,14 @@ An empty `server` uses the node's configured one.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import threading
 import time
+from collections import deque
 
+import cv2
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from innate_cloud_msgs.action import NavigateInstruction
@@ -46,8 +49,10 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, CompressedImage
+from std_msgs.msg import String
 
 from .costmap import Costmap
+from .introspect import ObservationStrip
 from .policy_client import PolicyClient, Pose
 from .pursuit import (
     BlockedDetector,
@@ -75,6 +80,9 @@ RECOVERY_S = 1.5
 # cold server and a slow link, short enough that a misconfigured robot says so
 # instead of sitting still until someone reloads the page.
 FIRST_PLAN_S = 20.0
+# Operator status rate. Fast enough that "a new observation went up" reads as
+# live, slow enough to stay off the control thread's back.
+STATUS_HZ = 5.0
 
 
 def _yaw_of(odom: Odometry) -> float:
@@ -125,6 +133,10 @@ class InnateNavNode(Node):
         self._last_seq = 0
         self._frames_seen = 0
         self._frames_sent = 0
+        self._last_sent_at = 0.0
+        self._instruction = ""
+        self._episode_id = ""
+        self._server = ""
         self._t0 = time.monotonic()
 
         sensor_qos = QoSProfile(
@@ -167,6 +179,16 @@ class InnateNavNode(Node):
         # always wins and a dead node stops the base within the mux's window.
         self._cmd = self.create_publisher(Twist, "/cmd_vel_nav", 10)
         self._path = self.create_publisher(Path, "/nav_policy/path", 1)
+        # Operator view. Both are lazy: the strip costs a decode + resize per
+        # frame, which an unwatched robot should not pay.
+        self._status_pub = self.create_publisher(String, "/nav_policy/status", 1)
+        self._obs_pub = self.create_publisher(
+            CompressedImage, "/nav_policy/observations/compressed", 1)
+        self._obs = ObservationStrip()
+        self._obs_seq = -1
+        self._plan_times: deque[float] = deque(maxlen=16)
+        self.create_timer(1.0 / STATUS_HZ, self._publish_status,
+                          callback_group=MutuallyExclusiveCallbackGroup())
         self.create_timer(
             1.0 / CONTROL_HZ, self._control_tick, callback_group=MutuallyExclusiveCallbackGroup()
         )
@@ -224,9 +246,13 @@ class InnateNavNode(Node):
         client, pose = self._client, self._pose
         if client is None or pose is None:
             return
+        stamp = time.monotonic() - self._t0
         try:
-            client.send_frame(bytes(msg.data), pose, time.monotonic() - self._t0)
+            client.send_frame(bytes(msg.data), pose, stamp)
             self._frames_sent += 1
+            self._last_sent_at = stamp
+            if self._obs_pub.get_subscription_count() > 0:
+                self._obs.remember(bytes(msg.data), stamp)
         except Exception as exc:  # noqa: BLE001 -- a dead socket ends the goal, not the node
             self.get_logger().warning(f"frame upload failed ({exc!r}); ending goal")
             self._cancel_requested.set()
@@ -270,6 +296,10 @@ class InnateNavNode(Node):
         twist.linear.x, twist.angular.z = v, w
         self._cmd.publish(twist)
 
+        if plan.seq > self._obs_seq:
+            self._obs_seq = plan.seq
+            self._plan_times.append(time.monotonic())
+            self._publish_observations(plan)
         if plan.seq > self._last_seq:
             self._last_seq = plan.seq
             if bool(self.get_parameter("publish_path").value):
@@ -321,6 +351,69 @@ class InnateNavNode(Node):
         near = truncate_to(kept, self._cfg.lookahead_m)
         scale = speed_scale(costmap.worst_cost(odom_path_from(near, pose)), self._cfg)
         return self._cfg.v_max * max(0.0, math.cos(bearing)) * scale, w
+
+    def _publish_observations(self, plan) -> None:
+        """The window this plan was made from, as the strip of frames the model
+        saw. Only the robot still has them; the server names them by the stamp
+        the robot assigned."""
+        if self._obs_pub.get_subscription_count() <= 0:
+            return
+        strip = self._obs.strip(list(plan.history_stamps))
+        if strip is None:
+            return
+        msg = CompressedImage()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.format = "jpeg"
+        msg.data = cv2.imencode(".jpg", strip, [cv2.IMWRITE_JPEG_QUALITY, 70])[1].tobytes()
+        self._obs_pub.publish(msg)
+
+    def _plan_rate_hz(self) -> float:
+        if len(self._plan_times) < 2:
+            return 0.0
+        span = self._plan_times[-1] - self._plan_times[0]
+        return (len(self._plan_times) - 1) / span if span > 0 else 0.0
+
+    def _publish_status(self) -> None:
+        """One JSON snapshot for the operator view. Cheap, and skipped entirely
+        while nobody subscribes."""
+        if self._status_pub.get_subscription_count() <= 0:
+            return
+        client = self._client
+        plan = client.plan if client is not None else None
+        now = time.monotonic()
+        state = {
+            "running": client is not None,
+            "instruction": self._instruction,
+            "episode_id": self._episode_id,
+            "server": self._server,
+            "frames_seen": self._frames_seen,
+            "frames_sent": self._frames_sent,
+            # How long ago the newest observation went up: this is the
+            # streaming clock, and it is independent of the plan rate.
+            "last_frame_age_s": max(0.0, now - self._t0 - self._last_sent_at),
+            "plan_rate_hz": self._plan_rate_hz(),
+            "costmap": self._costmap is not None,
+            "blocked_recovery": now < self._recovering_until,
+            "arrived": self._arrived.is_set(),
+        }
+        if plan is not None:
+            state["plan"] = {
+                "seq": plan.seq,
+                "age_s": max(0.0, now - self._t0 - plan.capture_stamp),
+                "compute_ms": plan.compute_ms,
+                "max_reach_m": plan.max_reach_m,
+                "stop": plan.stop,
+                "p_stop": plan.p_stop,
+                "keyframes": plan.keyframes,
+                "model": plan.model,
+                "history_indices": list(plan.history_indices),
+                # Age of each observation in the window, oldest first: the
+                # spread is what shows uniform-vs-latest at a glance.
+                "history_ages_s": [max(0.0, now - self._t0 - t) for t in plan.history_stamps],
+            }
+        msg = String()
+        msg.data = json.dumps(state)
+        self._status_pub.publish(msg)
 
     def _clear_path(self) -> None:
         """Retire the overlay when the run ends. The topic only ever carries new
@@ -403,6 +496,9 @@ class InnateNavNode(Node):
             return self._result(result, False, f"no policy server at {server}: {exc}")
 
         opened = time.monotonic()
+        self._instruction, self._episode_id, self._server = instruction, handle.episode_id, server
+        self._obs.clear()
+        self._plan_times.clear()
         self.get_logger().info(
             f"episode {handle.episode_id} [{handle.task_family}/{handle.history_mode}"
             f"/{handle.token_budget}]"

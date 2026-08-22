@@ -9,6 +9,12 @@ from __future__ import annotations
 import math
 
 import pytest
+
+# The geometry goes through OpenCV's own distortion model rather than a
+# reimplementation of it, so these run where cv2 does: the robot, the sim
+# container, CI. A bare host without it skips rather than fails.
+pytest.importorskip("cv2")
+
 from innate_nav.wide_view_maps import Lens, Pinhole, coverage, undistort_maps
 
 # /mars/main_camera/left/camera_info from a real robot. fx != fy because the

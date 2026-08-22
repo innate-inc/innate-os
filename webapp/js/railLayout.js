@@ -16,7 +16,7 @@
 // runs the same IK node and answers the goto services, so the page exercises
 // the real Manipulation SDK against the simulated arm. The router gates its
 // routes on this set too (route keys are section keys).
-export const SIM_SECTIONS = new Set(["teleop", "agent", "nav", "logging", "armsdk", "settings"]);
+export const SIM_SECTIONS = new Set(["teleop", "agent", "nav", "policy", "logging", "armsdk", "settings"]);
 
 // The rail is grouped: standalone pages ride alone; multi-page workflows carry
 // an eyebrow label (visible while the rail is hover-expanded; collapsed, a
@@ -43,6 +43,17 @@ export const GROUPS = [
         label: "Agent",
         // Sparkle motif: a four-point star for the autonomous brain.
         icon: '<path d="M12 3.5l1.7 6.8 6.8 1.7-6.8 1.7L12 20.5l-1.7-6.8L3.5 12l6.8-1.7z"/>',
+      },
+    ],
+  },
+  {
+    label: null,
+    sections: [
+      {
+        key: "policy",
+        label: "Policy",
+        // Waypoint motif: a path of dots leading away from the robot.
+        icon: '<circle cx="6" cy="18" r="1.6" fill="currentColor" stroke="none"/><circle cx="11" cy="13.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="15.5" cy="9.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="19" cy="6" r="0.9" fill="currentColor" stroke="none"/><path d="M6 18C9 15 13 11 19 6"/>',
       },
     ],
   },

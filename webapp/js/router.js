@@ -42,6 +42,7 @@ const ROUTES = [
   { path: "/brain", key: "agent", warm: true, load: () => import("./agent/main.js") },
   { path: "/teleop", key: "teleop", warm: true, load: () => import("./teleop/main.js") },
   { path: "/nav", key: "nav", warm: true, load: () => import("./nav/main.js") },
+  { path: "/policy", key: "policy", load: () => import("./policy/main.js") },
   { path: "/logging", key: "logging", load: () => import("./logging/main.js") },
   { path: "/datasets", key: "datasets", load: () => import("./datasets/main.js") },
   { path: "/collect", key: "collect", load: () => import("./collect/main.js") },
