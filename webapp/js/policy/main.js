@@ -58,6 +58,9 @@ export function mount(stage) {
       ? createStage(sceneRoot, session, { chipsOn: ["waypoints"] })
       : createVideoStage(sceneRoot, session);
     const panel = createStatusPanel(/** @type {HTMLElement} */ (root.querySelector(".policy-side")));
+    // The stage only draws what the session streams it; without this the scene
+    // mounts empty and the orbit camera has nothing to orbit.
+    session.start();
 
     /** @type {{ cancel: () => void } | null} */
     let run = null;
@@ -118,7 +121,7 @@ export function mount(stage) {
         unsubStatus();
         unsubObs();
         scene.destroy();
-        session.destroy?.();
+        session.destroy();
         panel.destroy();
       },
     };
