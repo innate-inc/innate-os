@@ -25,4 +25,11 @@ for (const [x, y] of [
 assert.match(goalCellError(null, null, 0, 0, 65) ?? "", /No navigation map/);
 assert.match(goalCellError(grid, cells, Number.NaN, 0, 65) ?? "", /valid destination/);
 
-console.log("9 passed");
+// A +90° origin rotates the bottom row so its cell centers run up the world-y
+// axis; validation must index in grid-local coordinates, not world axes.
+const rotated = { ...grid, originX: 10, originY: 20, originYaw: Math.PI / 2 };
+assert.equal(goalCellError(rotated, cells, 9.75, 20.25, 65), null);
+assert.match(goalCellError(rotated, cells, 9.75, 20.75, 65) ?? "", /explored floor/);
+assert.match(goalCellError(rotated, cells, 9.75, 21.25, 65) ?? "", /free floor/);
+
+console.log("12 passed");
