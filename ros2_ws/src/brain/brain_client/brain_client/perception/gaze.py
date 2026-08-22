@@ -8,7 +8,7 @@ Features:
 - Wheel-based panning (robot turns to face people)
 
 Hardware: MARS robot
-- Head tilt: -25° to +15° (single axis)
+- Head tilt: -25° to +35° (single axis)
 - Pan: Uses differential drive wheels to rotate body
 """
 
@@ -64,7 +64,7 @@ class FaceFollower:
 
     # Hardware limits
     MIN_TILT = -25  # degrees (looking down)
-    MAX_TILT = 15  # degrees (looking up)
+    MAX_TILT = 35  # degrees (looking up)
 
     # Camera parameters
     CAMERA_HFOV = 100.0  # horizontal FOV degrees

@@ -76,7 +76,7 @@ HEAD_POSITION_HZ = 10.0
 LIDAR_N_RAYS = 360
 LIDAR_RANGE_MIN = 0.15  # rplidar A-series
 LIDAR_RANGE_MAX = 12.0
-HEAD_MIN_DEG, HEAD_MAX_DEG = -25.0, 25.0  # arm_config.yaml joint_7 limits
+HEAD_MIN_DEG, HEAD_MAX_DEG = -25.0, 35.0  # arm_config.yaml joint_7 limits
 POINTS_SUBSAMPLE = 4  # 640x480 -> 160x120 cloud; costmap voxel-filters anyway
 # The real stereo pipeline clamps depth to [0.25, 2.0]m (depth_clamp filter in
 # stereo_depth_estimator.yaml) -- without the near clamp the sim camera sees

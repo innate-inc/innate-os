@@ -572,7 +572,7 @@
     <origin xyz="-0.040751 -0.0002 0.25882" rpy="0 0 0"/>
     <axis xyz="0 -1 0"/>
     <dynamics damping="5"/>
-    <limit lower="-0.3491" upper="0.3491" effort="2.0" velocity="2.0"/>
+    <limit lower="-0.3491" upper="0.6109" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="head">
     <inertial>

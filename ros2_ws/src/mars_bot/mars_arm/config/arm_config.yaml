@@ -129,7 +129,7 @@
     joint_7:
       servo_id: 7
       motor_type: "XC330-M288"
-      position_limits: [-0.4363, 0.4363]
+      position_limits: [-0.4363, 0.6109]  # 35° upward; verify shell and cable clearance on hardware
       pwm_limit: 885
       current_limit: 500
       control_mode: 3
