@@ -18,6 +18,7 @@ import {
   CHAT_IN_TOPIC,
   CHAT_OUT_TOPIC,
   GET_CHAT_HISTORY_SERVICE,
+  INPUT_TELEMETRY_TOPIC,
   SKILL_STATUS_UPDATE_TOPIC,
 } from "../constants.js";
 import { createChatStream } from "./chatStream.js";
@@ -303,6 +304,17 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     chat.addSkillRun(key, name, status, Number(payload?.timestamp) || Date.now() / 1000, reason, payload?.args);
   }, undefined, "std_msgs/msg/String");
 
+  const unsubTelemetry = rosClient.subscribe(INPUT_TELEMETRY_TOPIC, (m) => {
+    if (typeof m?.data !== "string") return;
+    let payload;
+    try {
+      payload = JSON.parse(m.data);
+    } catch {
+      return;
+    }
+    if (payload?.kind === "speech_debug") chat.addDebugEvent(payload);
+  }, undefined, "std_msgs/msg/String");
+
   return {
     startMic,
     stopMic,
@@ -317,6 +329,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       unsubIn();
       unsubOut();
       unsubSkill();
+      unsubTelemetry();
       panel.remove();
     },
   };

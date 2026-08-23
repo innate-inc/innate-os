@@ -27,6 +27,7 @@ import { sharedAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
 import { createAgentMicControl } from "./agentMicControl.js";
+import { createAudioOverlay } from "./audioOverlay.js";
 import { createGazeOverlay } from "./gazeOverlay.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
@@ -71,6 +72,7 @@ function buildAgentView(root) {
   if (sceneSetup) root.append(sceneSetup);
   const gazeStage = /** @type {HTMLElement | null} */ (feedFrame.querySelector(".video-stage"));
   const gazeOverlay = gazeStage ? createGazeOverlay(gazeStage, ros, session) : null;
+  const audioOverlay = gazeStage ? createAudioOverlay(gazeStage, ros) : null;
 
   const cornerStack = document.createElement("div");
   cornerStack.className = "overlay-stack-top-left";
@@ -108,6 +110,29 @@ function buildAgentView(root) {
   );
   stageViewToggle.addEventListener("click", () => setView(view === "live" ? "brain" : "live"));
   root.append(stageViewToggle);
+
+  const audioDebugToggle = document.createElement("button");
+  audioDebugToggle.type = "button";
+  audioDebugToggle.className = "agent-audio-debug-toggle active";
+  audioDebugToggle.hidden = audioOverlay === null;
+  audioDebugToggle.innerHTML = '<span class="agent-audio-debug-icon" aria-hidden="true"></span>';
+  let audioDebugVisible = true;
+  function renderAudioDebug() {
+    audioOverlay?.setVisible(audioDebugVisible);
+    audioDebugToggle.classList.toggle("active", audioDebugVisible);
+    audioDebugToggle.setAttribute("aria-pressed", String(audioDebugVisible));
+    audioDebugToggle.setAttribute(
+      "aria-label",
+      audioDebugVisible ? "Hide audio debug overlay" : "Show audio debug overlay",
+    );
+    audioDebugToggle.title = audioDebugToggle.getAttribute("aria-label") ?? "";
+  }
+  audioDebugToggle.addEventListener("click", () => {
+    audioDebugVisible = !audioDebugVisible;
+    renderAudioDebug();
+  });
+  renderAudioDebug();
+  root.append(audioDebugToggle);
 
   /** @param {"live" | "brain"} next */
   function renderStageView(next) {
@@ -188,6 +213,7 @@ function buildAgentView(root) {
 
   const parts = [
     ...(gazeOverlay ? [gazeOverlay] : []),
+    ...(audioOverlay ? [audioOverlay] : []),
     videoStage,
     widthGuard,
     ...(challengePanel ? [challengePanel] : []),
@@ -202,6 +228,7 @@ function buildAgentView(root) {
       },
     },
     { destroy: () => stageViewToggle.remove() },
+    { destroy: () => audioDebugToggle.remove() },
     {
       destroy: () => {
         unmounted = true; // a monitor import still in flight must not build into the dead layer

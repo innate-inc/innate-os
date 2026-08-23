@@ -77,6 +77,7 @@ class BrainClientNode(Node):
         self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.task_status_pub = self.create_publisher(String, "/brain/skill_status_update", 10)
         self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
+        self.speech_telemetry_pub = self.create_publisher(String, "/input_manager/telemetry", 10)
         # Identified WAV playback requests. Sim-only: the browser is the speaker
         # and reports actual playback timing on /tts/playback.
         self.tts_audio_pub = self.create_publisher(String, "/tts/audio", 10)
@@ -137,6 +138,7 @@ class BrainClientNode(Node):
             proxy=self._proxy,
             tts_status_pub=self.tts_status_pub,
             tts_audio_pub=self.tts_audio_pub,
+            speech_debug_pub=self.speech_telemetry_pub,
             simulator_mode=self.config.simulator_mode,
         )
         if handler.is_available():

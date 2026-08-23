@@ -21,9 +21,11 @@ import json
 import math
 import queue
 import threading
+import time
 import wave
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from brain_client.brain.transport import GENERATE_PATH
@@ -310,6 +312,14 @@ def gemini_transcriber(rest: GeminiRest, model: str, language: str, keyterms: Se
 MAX_PENDING_UTTERANCES = 4
 
 
+@dataclass(frozen=True)
+class PendingUtterance:
+    pcm: bytes
+    utterance_id: int
+    audio_seconds: float
+    closed_at: float
+
+
 class BatchSttSession:
     """Feeds mic chunks to the endpointer and transcribes closed utterances.
 
@@ -328,13 +338,15 @@ class BatchSttSession:
         silence_secs: float,
         on_transcript: Callable[[str], None],
         logger: UniversalLogger,
+        on_debug: Callable[[dict[str, Any]], None] | None = None,
     ):
         self._transcriber = transcriber
         self._sample_rate = sample_rate
         self._on_transcript = on_transcript
+        self._on_debug = on_debug
         self._logger = logger
         self._endpointer = Endpointer(sample_rate=sample_rate, is_voiced=is_voiced, silence_secs=silence_secs)
-        self._utterances: queue.Queue[bytes | None] = queue.Queue(maxsize=MAX_PENDING_UTTERANCES)
+        self._utterances: queue.Queue[PendingUtterance | None] = queue.Queue(maxsize=MAX_PENDING_UTTERANCES)
         self._worker: threading.Thread | None = None
         self._stopped = False
         self.utterance_count = 0
@@ -348,21 +360,50 @@ class BatchSttSession:
         return True
 
     def feed(self, chunk: bytes) -> None:
+        was_in_speech = self._endpointer.in_speech
+        open_seconds = self._endpointer.utterance_secs
         utterance = self._endpointer.feed(chunk)
-        if utterance is not None:
-            self._logger.info(f"🎤 Utterance closed ({len(utterance) / (self._sample_rate * 2):.1f}s), transcribing...")
-            self.utterance_count += 1
-            self._enqueue(utterance)
+        if not was_in_speech and self._endpointer.in_speech:
+            self._emit_debug("speech_started")
+        if was_in_speech and not self._endpointer.in_speech and utterance is None:
+            self._emit_debug(
+                "utterance_rejected",
+                audio_seconds=round(open_seconds + len(chunk) / (self._sample_rate * 2), 2),
+            )
+        if utterance is None:
+            return
+        audio_seconds = len(utterance) / (self._sample_rate * 2)
+        self.utterance_count += 1
+        pending = PendingUtterance(
+            pcm=utterance,
+            utterance_id=self.utterance_count,
+            audio_seconds=audio_seconds,
+            closed_at=time.monotonic(),
+        )
+        self._logger.info(f"🎤 Utterance closed ({audio_seconds:.1f}s), transcribing...")
+        self._emit_debug(
+            "utterance_closed",
+            utterance_id=pending.utterance_id,
+            audio_seconds=round(audio_seconds, 2),
+            pending=self._utterances.qsize(),
+        )
+        self._enqueue(pending)
 
-    def _enqueue(self, item: bytes | None) -> None:
+    def _enqueue(self, item: PendingUtterance | None) -> None:
         while True:
             try:
                 self._utterances.put_nowait(item)
                 return
             except queue.Full:
                 try:
-                    self._utterances.get_nowait()
+                    dropped = self._utterances.get_nowait()
                     self._logger.error("❌ Transcription backlog full — dropping oldest utterance")
+                    if dropped is not None:
+                        self._emit_debug(
+                            "utterance_dropped",
+                            utterance_id=dropped.utterance_id,
+                            audio_seconds=round(dropped.audio_seconds, 2),
+                        )
                 except queue.Empty:
                     pass
 
@@ -383,15 +424,40 @@ class BatchSttSession:
 
     def _transcribe_loop(self) -> None:
         while True:
-            utterance = self._utterances.get()
-            if utterance is None:
+            pending = self._utterances.get()
+            if pending is None:
                 return
+            started_at = time.monotonic()
+            queue_ms = (started_at - pending.closed_at) * 1000
             try:
-                text = self._transcriber(pcm_to_wav(utterance, self._sample_rate))
+                text = self._transcriber(pcm_to_wav(pending.pcm, self._sample_rate))
+                transcribe_ms = (time.monotonic() - started_at) * 1000
+                self._emit_debug(
+                    "transcript_ready" if text else "no_speech",
+                    utterance_id=pending.utterance_id,
+                    audio_seconds=round(pending.audio_seconds, 2),
+                    queue_ms=round(queue_ms),
+                    transcribe_ms=round(transcribe_ms),
+                    total_ms=round(queue_ms + transcribe_ms),
+                    characters=len(text),
+                )
                 # A call that outlives stop() must not publish: by the time it
                 # returns, the mic may be active again under a newer session.
                 if text and not self._stopped:
                     self._on_transcript(text)
             except Exception as e:  # noqa: BLE001 — one failed call must not kill the mic
                 self.failure_count += 1
+                self._emit_debug(
+                    "transcription_failed",
+                    utterance_id=pending.utterance_id,
+                    audio_seconds=round(pending.audio_seconds, 2),
+                    queue_ms=round(queue_ms),
+                    transcribe_ms=round((time.monotonic() - started_at) * 1000),
+                    error=str(e),
+                )
                 self._logger.error(f"❌ Batch transcription failed: {e}")
+
+    def _emit_debug(self, phase: str, **details: Any) -> None:
+        if self._on_debug is None:
+            return
+        self._on_debug({"kind": "speech_debug", "source": "stt", "phase": phase, "timestamp": time.time(), **details})

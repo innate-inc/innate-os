@@ -112,10 +112,12 @@ class MicroInput(InputDevice):
         self._stop_evt = threading.Event()
         self._audio_thread = None
         self._is_robot_talking = False  # For ducking (mic-specific)
+        self._ducking_started_at = None
         self._reconnect_thread = None
         self._is_connected = False
         self._reconnect_delay = 1  # Start with 1 second
         self._max_reconnect_delay = 30  # Max 30 seconds between retries
+        self._realtime_speech_started_at = None
         # Initialize logger wrapper (will be updated when set_logger is called)
         self.logger = UniversalLogger(enabled=False)
 
@@ -138,7 +140,20 @@ class MicroInput(InputDevice):
         Args:
             is_playing: True if robot is speaking, False otherwise
         """
+        if is_playing == self._is_robot_talking:
+            return
         self._is_robot_talking = is_playing
+        if is_playing:
+            self._ducking_started_at = time.monotonic()
+            self._emit_speech_debug("ducking_started")
+            return
+        duration_ms = (
+            round((time.monotonic() - self._ducking_started_at) * 1000)
+            if self._ducking_started_at is not None
+            else None
+        )
+        self._ducking_started_at = None
+        self._emit_speech_debug("ducking_ended", duration_ms=duration_ms)
 
     def on_open(self):
         """Start the audio source and connect to the STT backend.
@@ -186,9 +201,10 @@ class MicroInput(InputDevice):
         if etype == "committed_transcript":
             text = event.get("text", "")
             if text and self.is_active():
+                self._emit_realtime_transcript_debug(text)
                 self._on_transcript(text)
         elif etype == "partial_transcript":
-            pass  # interim result — only the committed transcript reaches chat
+            self._mark_realtime_speech_started()
         elif etype == "session_started":
             self.logger.info(f"📋 Scribe session started: {event.get('config', {})}")
         elif etype == "insufficient_audio_activity":
@@ -218,10 +234,12 @@ class MicroInput(InputDevice):
                 f"📋 Session updated - transcription: {e.get('session', {}).get('input_audio_transcription', {})}, "
                 f"turn_detection: {e.get('session', {}).get('turn_detection', {})}"
             ),
-            "input_audio_buffer.speech_started": lambda e: self.logger.info("🎤 Speech detected"),
-            "input_audio_buffer.speech_stopped": lambda e: self.logger.info("🔇 Speech stopped"),
+            "input_audio_buffer.speech_started": lambda e: self._mark_realtime_speech_started(),
+            "input_audio_buffer.speech_stopped": lambda e: self._emit_speech_debug("utterance_closed"),
             "conversation.item.input_audio_transcription.completed": lambda e: (
-                self._on_transcript(e.get("transcript", "")) if e.get("transcript") and self.is_active() else None
+                self._on_realtime_transcript(e.get("transcript", ""))
+                if e.get("transcript") and self.is_active()
+                else None
             ),
             "error": lambda e: (
                 self.logger.error(
@@ -362,6 +380,7 @@ class MicroInput(InputDevice):
             silence_secs=silence_secs,
             on_transcript=self._on_transcript_if_active,
             logger=self.logger,
+            on_debug=self._on_batch_debug,
         )
 
     def _make_vad(self, cfg: dict) -> tuple[VoicedDetector, str]:
@@ -502,6 +521,53 @@ class MicroInput(InputDevice):
     def _on_transcript_if_active(self, text: str):
         if self.is_active():
             self._on_transcript(text)
+
+    def _on_batch_debug(self, event: dict) -> None:
+        audio_queue = getattr(self.mic, "queue", None)
+        self.send_data(
+            {
+                **event,
+                "backend": self._backend,
+                "engine": self._vad_engine,
+                "audio_queue_chunks": audio_queue.qsize() if audio_queue is not None else None,
+                "dropped_audio_chunks": getattr(self.mic, "dropped_chunks", 0),
+            },
+            data_type="telemetry",
+        )
+
+    def _emit_speech_debug(self, phase: str, **details) -> None:
+        self.send_data(
+            {
+                "kind": "speech_debug",
+                "source": "stt",
+                "phase": phase,
+                "timestamp": time.time(),
+                "backend": self._backend,
+                "engine": self._vad_engine if self._backend in BATCH_BACKENDS else VENDOR_VAD_ENGINE,
+                **details,
+            },
+            data_type="telemetry",
+        )
+
+    def _mark_realtime_speech_started(self) -> None:
+        if self._realtime_speech_started_at is not None:
+            return
+        self._realtime_speech_started_at = time.monotonic()
+        self.logger.info("🎤 Speech detected")
+        self._emit_speech_debug("speech_started")
+
+    def _on_realtime_transcript(self, text: str) -> None:
+        self._emit_realtime_transcript_debug(text)
+        self._on_transcript(text)
+
+    def _emit_realtime_transcript_debug(self, text: str) -> None:
+        elapsed_ms = (
+            round((time.monotonic() - self._realtime_speech_started_at) * 1000)
+            if self._realtime_speech_started_at is not None
+            else None
+        )
+        self._realtime_speech_started_at = None
+        self._emit_speech_debug("transcript_ready", total_ms=elapsed_ms, characters=len(text))
 
     def _send_chunk(self, chunk: bytes):
         """Hand one PCM chunk to the backend: fed locally (batch) or framed onto the wire."""
@@ -685,6 +751,7 @@ class RosPcmStreamer:
         self.queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self.sample_rate = DEFAULT_SAMPLE_RATE
         self.channels = DEFAULT_CHANNELS
+        self.dropped_chunks = 0
         self._node = node
         self.logger = logger
         self._sub = None
@@ -704,7 +771,7 @@ class RosPcmStreamer:
         try:
             self.queue.put_nowait(chunk)
         except queue.Full:
-            pass
+            self.dropped_chunks += 1
 
     def stop(self):
         if self._sub is not None:
@@ -721,6 +788,7 @@ class ArecordStreamer:
         self.logger = logger
         self.sample_rate = DEFAULT_SAMPLE_RATE
         self.channels = DEFAULT_CHANNELS
+        self.dropped_chunks = 0
         self._reader_thread: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -779,7 +847,7 @@ class ArecordStreamer:
                     try:
                         self.queue.put_nowait(chunk)
                     except queue.Full:
-                        pass
+                        self.dropped_chunks += 1
             except Exception as e:
                 self.logger.error(f"arecord reader error: {e}")
 

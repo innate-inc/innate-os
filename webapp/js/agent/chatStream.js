@@ -35,6 +35,7 @@ const SKILL_GROUP_MIN = 3;
  *   wrap: HTMLElement,
  *   addThought: (kind: string, text: string, ts: number) => void,
  *   addMessage: (kind: string, text: string, ts: number, label?: string) => void,
+ *   addDebugEvent: (event: any) => void,
  *   addSkillRun: (key: string, name: string, status: string, ts: number, reason: string, args: any) => void,
  *   routeChatOut: (sender: string, text: string, ts: number) => void,
  *   replay: (entries: any[]) => void,
@@ -341,6 +342,34 @@ export function createChatStream(opts = {}) {
     }
   }
 
+  /** @param {any} event */
+  function addDebugEvent(event) {
+    const description = describeDebugEvent(event);
+    if (!description) return;
+    const wasAtBottom = atBottom();
+    skillStreak = null;
+    const el = document.createElement("div");
+    el.className = `chat-debug ${description.level}`;
+    const source = document.createElement("span");
+    source.className = "chat-debug-source mono";
+    source.textContent = String(event?.source ?? "speech").toUpperCase();
+    const copy = document.createElement("span");
+    copy.className = "chat-debug-copy";
+    const title = document.createElement("span");
+    title.className = "chat-debug-title";
+    title.textContent = description.title;
+    copy.append(title);
+    if (description.detail) {
+      const detail = document.createElement("span");
+      detail.className = "chat-debug-detail mono";
+      detail.textContent = description.detail;
+      copy.append(detail);
+    }
+    el.append(source, copy);
+    appendStreamItem(el);
+    settleStreamAfterAppend(wasAtBottom);
+  }
+
   /** @param {string} name */
   function startSkillStreak(name) {
     const streak = {
@@ -595,6 +624,7 @@ export function createChatStream(opts = {}) {
     wrap: streamWrap,
     addThought,
     addMessage,
+    addDebugEvent,
     addSkillRun,
     routeChatOut,
     replay,
@@ -604,4 +634,126 @@ export function createChatStream(opts = {}) {
       streamResize.disconnect();
     },
   };
+}
+
+/** @param {any} event @returns {{ title: string, detail: string, level: string } | null} */
+function describeDebugEvent(event) {
+  const source = String(event?.source ?? "");
+  const phase = String(event?.phase ?? "");
+  const backend = [event?.backend, event?.engine].filter(Boolean).join(" / ");
+  if (source === "stt" && phase === "speech_started") {
+    return { title: "Speech detected", detail: backend, level: "active" };
+  }
+  if (source === "stt" && phase === "ducking_started") {
+    return {
+      title: "Microphone muted while MARS speaks",
+      detail: "Speech during this window is discarded",
+      level: "warning",
+    };
+  }
+  if (source === "stt" && phase === "ducking_ended") {
+    return {
+      title: `Microphone resumed after ${duration(event?.duration_ms)}`,
+      detail: backend,
+      level: "active",
+    };
+  }
+  if (source === "stt" && phase === "utterance_closed") {
+    return {
+      title: `Utterance closed after ${seconds(event?.audio_seconds)}`,
+      detail: joinDetails(backend, event?.pending ? `${event.pending} waiting` : ""),
+      level: "active",
+    };
+  }
+  if (source === "stt" && phase === "transcript_ready") {
+    return {
+      title: `Transcribed in ${duration(event?.total_ms)}`,
+      detail: joinDetails(
+        event?.audio_seconds != null ? `${seconds(event.audio_seconds)} audio` : "",
+        event?.queue_ms != null ? `${duration(event.queue_ms)} queued` : "",
+        event?.transcribe_ms != null ? `${duration(event.transcribe_ms)} API` : "",
+        event?.audio_queue_chunks ? `${event.audio_queue_chunks} audio chunks buffered` : "",
+        event?.dropped_audio_chunks ? `${event.dropped_audio_chunks} audio chunks dropped` : "",
+        backend,
+      ),
+      level: "success",
+    };
+  }
+  if (source === "stt" && phase === "no_speech") {
+    return {
+      title: `No speech recognized after ${duration(event?.total_ms)}`,
+      detail: joinDetails(event?.audio_seconds != null ? `${seconds(event.audio_seconds)} audio` : "", backend),
+      level: "warning",
+    };
+  }
+  if (source === "stt" && phase === "utterance_rejected") {
+    return {
+      title: "Not enough voiced audio to transcribe",
+      detail: joinDetails(event?.audio_seconds != null ? `${seconds(event.audio_seconds)} audio` : "", backend),
+      level: "warning",
+    };
+  }
+  if (source === "stt" && phase === "utterance_dropped") {
+    return {
+      title: "Dropped an utterance because transcription was backlogged",
+      detail: event?.audio_seconds != null ? `${seconds(event.audio_seconds)} audio` : backend,
+      level: "error",
+    };
+  }
+  if (source === "stt" && phase === "transcription_failed") {
+    return {
+      title: `Transcription failed after ${duration(event?.transcribe_ms)}`,
+      detail: joinDetails(String(event?.error ?? ""), backend),
+      level: "error",
+    };
+  }
+  if (source === "tts" && phase === "speech_started") {
+    return {
+      title: "MARS speech requested",
+      detail: joinDetails(
+        event?.characters != null ? `${event.characters} characters` : "",
+        event?.queue_ms ? `${duration(event.queue_ms)} queued` : "",
+      ),
+      level: "active",
+    };
+  }
+  if (source === "tts" && phase === "speech_completed") {
+    return {
+      title: `MARS finished ${seconds(event?.playback_seconds)} of speech`,
+      detail: joinDetails(
+        event?.ttfb_ms != null ? `${duration(event.ttfb_ms)} to first audio` : "",
+        event?.stream_ms != null ? `${duration(event.stream_ms)} generation` : "",
+        event?.total_ms != null ? `${duration(event.total_ms)} total` : "",
+        String(event?.output ?? ""),
+      ),
+      level: "success",
+    };
+  }
+  if (source === "tts" && phase === "speech_failed") {
+    return {
+      title: `MARS speech failed after ${duration(event?.total_ms)}`,
+      detail: event?.characters != null ? `${event.characters} characters` : "",
+      level: "error",
+    };
+  }
+  return null;
+}
+
+/** @param {unknown} value */
+function duration(value) {
+  const ms = Number(value);
+  if (!Number.isFinite(ms)) return "unknown time";
+  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)}s`;
+}
+
+/** @param {unknown} value */
+function seconds(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return "an unknown duration";
+  return `${seconds.toFixed(seconds < 10 ? 2 : 1)}s`;
+}
+
+/** @param {...string} values */
+function joinDetails(...values) {
+  return values.filter(Boolean).join(" · ");
 }

@@ -50,6 +50,9 @@ export const MIC_AUDIO_TOPIC = "/mic/audio";
 // the agent's reply. Same topics the sim console + mobile app use.
 export const CHAT_IN_TOPIC = "/brain/chat_in";
 export const CHAT_OUT_TOPIC = "/brain/chat_out";
+// UI-only VAD and speech pipeline diagnostics. Detailed chat renders
+// speech_debug frames; the Brain page also consumes live vad_status frames.
+export const INPUT_TELEMETRY_TOPIC = "/input_manager/telemetry";
 // Full chat history snapshot (brain_messages/srv/GetChatHistory → {history}, a
 // JSON string of {sender, text, timestamp, ...} entries). Fetched on connect so
 // the panel shows the conversation from before this page load, not just live.
