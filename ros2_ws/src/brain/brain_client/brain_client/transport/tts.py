@@ -39,6 +39,8 @@ class QueuedSpeech:
 class BrowserPlayback:
     clip_id: str
     observer: PlaybackObserver | None
+    first_byte_ms: int | None = None
+    started_reported: bool = False
     done: threading.Event = field(default_factory=threading.Event)
     success: bool = False
 
@@ -312,6 +314,11 @@ class TTSHandler:
                 if t_first_chunk is None:
                     t_first_chunk = time.perf_counter()
                     self.logger.info(f"⏱️ TTS first byte in {(t_first_chunk - t_api) * 1000:.0f}ms")
+                    self._publish_speech_debug(
+                        "audio_started",
+                        ttfb_ms=round((t_first_chunk - t_api) * 1000),
+                        output="speaker",
+                    )
                     self._emit_playback(playback_observer, PlaybackEvent.STARTED)
                 q.put(chunk)
 
@@ -407,7 +414,11 @@ class TTSHandler:
             return False
 
         duration_seconds = _pcm_duration_seconds(len(buf))
-        playback = BrowserPlayback(uuid.uuid4().hex, playback_observer)
+        playback = BrowserPlayback(
+            uuid.uuid4().hex,
+            playback_observer,
+            first_byte_ms=round((t_first_chunk - t_api) * 1000) if t_first_chunk else None,
+        )
         with self._browser_playback_lock:
             self._browser_playback = playback
         self._publish_audio(bytes(buf), playback.clip_id, lead_seconds)
@@ -463,7 +474,10 @@ class TTSHandler:
             playback = self._browser_playback
         if playback is None or clip_id != playback.clip_id or playback.done.is_set():
             return
-        if event == PlaybackEvent.ENDED:
+        if event == PlaybackEvent.STARTED and not playback.started_reported:
+            playback.started_reported = True
+            self._publish_speech_debug("audio_started", ttfb_ms=playback.first_byte_ms, output="browser")
+        elif event == PlaybackEvent.ENDED:
             playback.success = True
             playback.done.set()
         elif event == PlaybackEvent.ABORTED:

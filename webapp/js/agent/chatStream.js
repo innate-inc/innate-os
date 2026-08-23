@@ -182,6 +182,12 @@ export function createChatStream(opts = {}) {
   /** @type {{ wrap: HTMLElement, status: HTMLElement, list: HTMLElement, lastByKind: Record<string, string>, startTs: number, latestTs: number } | null} */
   let thoughts = null;
   let lastTs = 0;
+  let latestSpeechStopAt = 0;
+  let latestTranscriptAt = 0;
+  let pendingTranscripts = 0;
+  let responseTranscriptCount = 0;
+  let replyReportedForTranscriptAt = 0;
+  let voiceStartedForTranscriptAt = 0;
   let replayingHistory = false;
   /** @type {Set<ReturnType<typeof setTimeout>>} */
   const compactEnterTimers = new Set();
@@ -342,8 +348,10 @@ export function createChatStream(opts = {}) {
     }
   }
 
-  /** @param {any} event */
-  function addDebugEvent(event) {
+  /** @param {any} rawEvent */
+  function addDebugEvent(rawEvent) {
+    const event = enrichDebugTiming(rawEvent);
+    if (event.suppressed) return;
     const description = describeDebugEvent(event);
     if (!description) return;
     const wasAtBottom = atBottom();
@@ -368,6 +376,42 @@ export function createChatStream(opts = {}) {
     el.append(source, copy);
     appendStreamItem(el);
     settleStreamAfterAppend(wasAtBottom);
+  }
+
+  /** @param {any} rawEvent */
+  function enrichDebugTiming(rawEvent) {
+    const event = { ...rawEvent };
+    const at = timestampMs(event.timestamp);
+    if (event.source === "stt" && event.phase === "speech_started") {
+      latestSpeechStopAt = 0;
+    } else if (event.source === "stt" && event.phase === "utterance_closed") {
+      latestSpeechStopAt = at;
+    } else if (event.source === "stt" && event.phase === "transcript_ready") {
+      event.stop_to_transcript_ms =
+        Number(event.stop_to_transcript_ms) ||
+        (latestSpeechStopAt ? Math.max(0, at - latestSpeechStopAt) : null);
+      latestTranscriptAt = at;
+      pendingTranscripts += 1;
+    } else if (event.source === "tts" && event.phase === "audio_started") {
+      if (latestTranscriptAt && voiceStartedForTranscriptAt === latestTranscriptAt) {
+        event.suppressed = true;
+        return event;
+      }
+      voiceStartedForTranscriptAt = latestTranscriptAt;
+      responseTranscriptCount = claimResponseTranscripts(
+        pendingTranscripts,
+        responseTranscriptCount,
+      );
+      pendingTranscripts = 0;
+      event.transcript_to_voice_ms = latestTranscriptAt
+        ? Math.max(0, at - latestTranscriptAt)
+        : 0;
+      event.stop_to_voice_ms = latestSpeechStopAt
+        ? Math.max(0, at - latestSpeechStopAt)
+        : 0;
+      event.bundled_transcripts = responseTranscriptCount;
+    }
+    return event;
   }
 
   /** @param {string} name */
@@ -568,6 +612,29 @@ export function createChatStream(opts = {}) {
       return; // raw vision dumps — noisy, drop
     } else if (sender === "user" || sender === "robot") {
       addMessage(sender, text, ts);
+      if (
+        sender === "robot" &&
+        !replayingHistory &&
+        latestTranscriptAt &&
+        replyReportedForTranscriptAt !== latestTranscriptAt
+      ) {
+        replyReportedForTranscriptAt = latestTranscriptAt;
+        responseTranscriptCount = claimResponseTranscripts(
+          pendingTranscripts,
+          responseTranscriptCount,
+        );
+        pendingTranscripts = 0;
+        addDebugEvent({
+          source: "agent",
+          phase: "response_ready",
+          timestamp: ts,
+          transcript_to_response_ms: Math.max(0, ts * 1000 - latestTranscriptAt),
+          stop_to_response_ms: latestSpeechStopAt
+            ? Math.max(0, ts * 1000 - latestSpeechStopAt)
+            : 0,
+          bundled_transcripts: responseTranscriptCount,
+        });
+      }
     } else {
       addMessage("system", text, ts, sender || undefined);
     }
@@ -604,6 +671,12 @@ export function createChatStream(opts = {}) {
     skillRuns.clear();
     skillStreak = null;
     lastTs = 0;
+    latestSpeechStopAt = 0;
+    latestTranscriptAt = 0;
+    pendingTranscripts = 0;
+    responseTranscriptCount = 0;
+    replyReportedForTranscriptAt = 0;
+    voiceStartedForTranscriptAt = 0;
     replayingHistory = true;
     stream.classList.add("replaying");
     try {
@@ -642,7 +715,7 @@ function describeDebugEvent(event) {
   const phase = String(event?.phase ?? "");
   const backend = [event?.backend, event?.engine].filter(Boolean).join(" / ");
   if (source === "stt" && phase === "speech_started") {
-    return { title: "Speech detected", detail: backend, level: "active" };
+    return { title: "You are talking", detail: joinDetails("speech detected", backend), level: "active" };
   }
   if (source === "stt" && phase === "ducking_started") {
     return {
@@ -660,14 +733,17 @@ function describeDebugEvent(event) {
   }
   if (source === "stt" && phase === "utterance_closed") {
     return {
-      title: `Utterance closed after ${seconds(event?.audio_seconds)}`,
+      title: `You stopped talking · ${seconds(event?.audio_seconds)} captured`,
       detail: joinDetails(backend, event?.pending ? `${event.pending} waiting` : ""),
       level: "active",
     };
   }
   if (source === "stt" && phase === "transcript_ready") {
+    const stopped = event?.stop_to_transcript_ms != null;
     return {
-      title: `Transcribed in ${duration(event?.total_ms)}`,
+      title: stopped
+        ? `Transcript ready ${duration(event.stop_to_transcript_ms)} after you stopped`
+        : `Transcript ready ${duration(event?.total_ms)} after speech detection`,
       detail: joinDetails(
         event?.audio_seconds != null ? `${seconds(event.audio_seconds)} audio` : "",
         event?.queue_ms != null ? `${duration(event.queue_ms)} queued` : "",
@@ -717,6 +793,18 @@ function describeDebugEvent(event) {
       level: "active",
     };
   }
+  if (source === "tts" && phase === "audio_started") {
+    return {
+      title: `MARS started talking ${duration(event?.transcript_to_voice_ms)} after transcript`,
+      detail: joinDetails(
+        event?.stop_to_voice_ms ? `${duration(event.stop_to_voice_ms)} stop → voice` : "",
+        event?.ttfb_ms != null ? `${duration(event.ttfb_ms)} TTS first byte` : "",
+        event?.bundled_transcripts > 1 ? `${event.bundled_transcripts} transcripts bundled` : "",
+        String(event?.output ?? ""),
+      ),
+      level: "success",
+    };
+  }
   if (source === "tts" && phase === "speech_completed") {
     return {
       title: `MARS finished ${seconds(event?.playback_seconds)} of speech`,
@@ -734,6 +822,16 @@ function describeDebugEvent(event) {
       title: `MARS speech failed after ${duration(event?.total_ms)}`,
       detail: event?.characters != null ? `${event.characters} characters` : "",
       level: "error",
+    };
+  }
+  if (source === "agent" && phase === "response_ready") {
+    return {
+      title: `MARS response ready ${duration(event?.transcript_to_response_ms)} after transcript`,
+      detail: joinDetails(
+        event?.stop_to_response_ms ? `${duration(event.stop_to_response_ms)} stop → response` : "",
+        event?.bundled_transcripts > 1 ? `${event.bundled_transcripts} transcripts bundled` : "",
+      ),
+      level: "success",
     };
   }
   return null;
@@ -756,4 +854,15 @@ function seconds(value) {
 /** @param {...string} values */
 function joinDetails(...values) {
   return values.filter(Boolean).join(" · ");
+}
+
+/** @param {unknown} value */
+function timestampMs(value) {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : Date.now();
+}
+
+/** @param {number} pending @param {number} current */
+function claimResponseTranscripts(pending, current) {
+  return pending > 0 ? pending : current;
 }

@@ -1,6 +1,6 @@
 // @ts-check
 
-import { INPUT_TELEMETRY_TOPIC } from "../constants.js";
+import { CHAT_OUT_TOPIC, INPUT_TELEMETRY_TOPIC } from "../constants.js";
 
 const STALE_AFTER_MS = 2_500;
 
@@ -55,6 +55,15 @@ export function createAudioOverlay(stage, ros) {
   let vendorVad = false;
   let transcribing = false;
   let lastTranscribeMs = 0;
+  let transcriptToReplyMs = 0;
+  let transcriptToVoiceMs = 0;
+  let stopToVoiceMs = 0;
+  let lastStoppedAt = 0;
+  let lastTranscriptAt = 0;
+  let pendingTranscripts = 0;
+  let responseTranscriptCount = 0;
+  let replyReportedForTranscriptAt = 0;
+  let voiceStartedForTranscriptAt = 0;
   let audioQueueChunks = 0;
   let droppedAudioChunks = 0;
 
@@ -81,7 +90,11 @@ export function createAudioOverlay(stage, ros) {
   function refreshStats() {
     const values = [];
     if (utteranceOpen) values.push(`CLIP ${utteranceSeconds.toFixed(1)}s`);
-    if (lastTranscribeMs) values.push(`LAST STT ${formatDuration(lastTranscribeMs)}`);
+    if (lastTranscribeMs) values.push(`STOP→TEXT ${formatDuration(lastTranscribeMs)}`);
+    if (transcriptToReplyMs) values.push(`TEXT→REPLY ${formatDuration(transcriptToReplyMs)}`);
+    if (transcriptToVoiceMs) values.push(`TEXT→VOICE ${formatDuration(transcriptToVoiceMs)}`);
+    if (stopToVoiceMs) values.push(`STOP→VOICE ${formatDuration(stopToVoiceMs)}`);
+    if (responseTranscriptCount > 1) values.push(`BUNDLED ${responseTranscriptCount}`);
     if (audioQueueChunks) values.push(`BUFFER ${audioQueueChunks}`);
     if (droppedAudioChunks) values.push(`DROPPED ${droppedAudioChunks}`);
     stats.textContent = values.join("  ·  ");
@@ -131,16 +144,36 @@ export function createAudioOverlay(stage, ros) {
     if (data.audio_queue_chunks != null) audioQueueChunks = Number(data.audio_queue_chunks) || 0;
     if (data.dropped_audio_chunks != null) droppedAudioChunks = Number(data.dropped_audio_chunks) || 0;
     const phase = String(data.phase ?? "");
-    if (phase === "speech_started") {
+    const eventAt = eventTime(data);
+    if (phase === "speech_started" && data.source === "stt") {
+      if (pendingTranscripts === 0) {
+        lastTranscribeMs = 0;
+        transcriptToReplyMs = 0;
+        transcriptToVoiceMs = 0;
+        stopToVoiceMs = 0;
+        responseTranscriptCount = 0;
+      }
       transcribing = false;
-      showEvent(data.source === "tts" ? "MARS is generating speech" : "Speech detected");
+      voiced = true;
+      lastStoppedAt = 0;
+      showEvent("You are talking");
     } else if (phase === "utterance_closed") {
       transcribing = true;
-      showEvent(`Utterance closed · ${formatSeconds(data.audio_seconds)} audio`);
+      voiced = false;
+      utteranceOpen = false;
+      lastStoppedAt = eventAt;
+      showEvent(`You stopped talking · ${formatSeconds(data.audio_seconds)} captured`);
     } else if (phase === "transcript_ready") {
       transcribing = false;
-      lastTranscribeMs = Number(data.total_ms) || 0;
-      showEvent(`Transcript ready in ${formatDuration(data.total_ms)}`);
+      lastTranscriptAt = eventAt;
+      pendingTranscripts += 1;
+      lastTranscribeMs =
+        Number(data.stop_to_transcript_ms) || (lastStoppedAt ? Math.max(0, eventAt - lastStoppedAt) : 0);
+      showEvent(
+        lastTranscribeMs
+          ? `Transcript ready · ${formatDuration(lastTranscribeMs)} after stop`
+          : `Transcript ready · stop timing unavailable`,
+      );
     } else if (phase === "no_speech" || phase === "utterance_rejected") {
       transcribing = false;
       showEvent(phase === "no_speech" ? "No speech recognized" : "Not enough voiced audio");
@@ -156,6 +189,19 @@ export function createAudioOverlay(stage, ros) {
     } else if (phase === "ducking_ended") {
       ducking = false;
       showEvent(`Mic resumed after ${formatDuration(data.duration_ms)}`);
+    } else if (phase === "speech_started" && data.source === "tts") {
+      showEvent("MARS is generating speech");
+    } else if (phase === "audio_started" && data.source === "tts") {
+      if (lastTranscriptAt && voiceStartedForTranscriptAt === lastTranscriptAt) return;
+      voiceStartedForTranscriptAt = lastTranscriptAt;
+      responseTranscriptCount = claimResponseTranscripts(
+        pendingTranscripts,
+        responseTranscriptCount,
+      );
+      pendingTranscripts = 0;
+      transcriptToVoiceMs = lastTranscriptAt ? Math.max(0, eventAt - lastTranscriptAt) : 0;
+      stopToVoiceMs = lastStoppedAt ? Math.max(0, eventAt - lastStoppedAt) : 0;
+      showEvent(`MARS started talking · ${formatDuration(transcriptToVoiceMs)} after transcript`);
     } else if (phase === "speech_completed" && data.source === "tts") {
       showEvent(`MARS spoke for ${formatSeconds(data.playback_seconds)}`);
     } else if (phase === "speech_failed" && data.source === "tts") {
@@ -181,6 +227,36 @@ export function createAudioOverlay(stage, ros) {
     0,
     "std_msgs/msg/String",
   );
+  const unsubscribeChat = ros.subscribe(
+    CHAT_OUT_TOPIC,
+    (/** @type {any} */ msg) => {
+      if (typeof msg?.data !== "string") return;
+      try {
+        const data = JSON.parse(msg.data);
+        if (
+          data?.sender !== "robot" ||
+          !lastTranscriptAt ||
+          replyReportedForTranscriptAt === lastTranscriptAt
+        ) {
+          return;
+        }
+        replyReportedForTranscriptAt = lastTranscriptAt;
+        const responseAt = eventTime(data);
+        transcriptToReplyMs = Math.max(0, responseAt - lastTranscriptAt);
+        responseTranscriptCount = claimResponseTranscripts(
+          pendingTranscripts,
+          responseTranscriptCount,
+        );
+        pendingTranscripts = 0;
+        showEvent(`MARS response ready · ${formatDuration(transcriptToReplyMs)} after transcript`);
+        refreshStats();
+      } catch {
+        return;
+      }
+    },
+    0,
+    "std_msgs/msg/String",
+  );
 
   refreshState();
   refreshMeter();
@@ -192,6 +268,7 @@ export function createAudioOverlay(stage, ros) {
     },
     destroy() {
       unsubscribe();
+      unsubscribeChat();
       if (staleTimer !== null) clearTimeout(staleTimer);
       root.remove();
     },
@@ -209,4 +286,15 @@ function formatDuration(value) {
 function formatSeconds(value) {
   const seconds = Number(value);
   return Number.isFinite(seconds) ? `${seconds.toFixed(seconds < 10 ? 2 : 1)}s` : "unknown";
+}
+
+/** @param {any} value */
+function eventTime(value) {
+  const timestamp = Number(value?.timestamp);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp * 1_000 : Date.now();
+}
+
+/** @param {number} pending @param {number} current */
+function claimResponseTranscripts(pending, current) {
+  return pending > 0 ? pending : current;
 }

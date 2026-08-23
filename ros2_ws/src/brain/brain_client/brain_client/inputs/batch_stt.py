@@ -439,6 +439,7 @@ class BatchSttSession:
                     queue_ms=round(queue_ms),
                     transcribe_ms=round(transcribe_ms),
                     total_ms=round(queue_ms + transcribe_ms),
+                    stop_to_transcript_ms=round(queue_ms + transcribe_ms),
                     characters=len(text),
                 )
                 # A call that outlives stop() must not publish: by the time it

@@ -118,6 +118,7 @@ class MicroInput(InputDevice):
         self._reconnect_delay = 1  # Start with 1 second
         self._max_reconnect_delay = 30  # Max 30 seconds between retries
         self._realtime_speech_started_at = None
+        self._realtime_speech_stopped_at = None
         # Initialize logger wrapper (will be updated when set_logger is called)
         self.logger = UniversalLogger(enabled=False)
 
@@ -235,7 +236,7 @@ class MicroInput(InputDevice):
                 f"turn_detection: {e.get('session', {}).get('turn_detection', {})}"
             ),
             "input_audio_buffer.speech_started": lambda e: self._mark_realtime_speech_started(),
-            "input_audio_buffer.speech_stopped": lambda e: self._emit_speech_debug("utterance_closed"),
+            "input_audio_buffer.speech_stopped": lambda e: self._mark_realtime_speech_stopped(),
             "conversation.item.input_audio_transcription.completed": lambda e: (
                 self._on_realtime_transcript(e.get("transcript", ""))
                 if e.get("transcript") and self.is_active()
@@ -553,21 +554,46 @@ class MicroInput(InputDevice):
         if self._realtime_speech_started_at is not None:
             return
         self._realtime_speech_started_at = time.monotonic()
+        self._realtime_speech_stopped_at = None
         self.logger.info("🎤 Speech detected")
         self._emit_speech_debug("speech_started")
+
+    def _mark_realtime_speech_stopped(self) -> None:
+        stopped_at = time.monotonic()
+        audio_seconds = (
+            stopped_at - self._realtime_speech_started_at if self._realtime_speech_started_at is not None else None
+        )
+        self._realtime_speech_stopped_at = stopped_at
+        self.logger.info("🔇 Speech stopped")
+        self._emit_speech_debug(
+            "utterance_closed",
+            audio_seconds=round(audio_seconds, 2) if audio_seconds is not None else None,
+        )
 
     def _on_realtime_transcript(self, text: str) -> None:
         self._emit_realtime_transcript_debug(text)
         self._on_transcript(text)
 
     def _emit_realtime_transcript_debug(self, text: str) -> None:
+        now = time.monotonic()
         elapsed_ms = (
-            round((time.monotonic() - self._realtime_speech_started_at) * 1000)
+            round((now - self._realtime_speech_started_at) * 1000)
             if self._realtime_speech_started_at is not None
             else None
         )
+        stop_to_transcript_ms = (
+            round((now - self._realtime_speech_stopped_at) * 1000)
+            if self._realtime_speech_stopped_at is not None
+            else None
+        )
         self._realtime_speech_started_at = None
-        self._emit_speech_debug("transcript_ready", total_ms=elapsed_ms, characters=len(text))
+        self._realtime_speech_stopped_at = None
+        self._emit_speech_debug(
+            "transcript_ready",
+            total_ms=elapsed_ms,
+            stop_to_transcript_ms=stop_to_transcript_ms,
+            characters=len(text),
+        )
 
     def _send_chunk(self, chunk: bytes):
         """Hand one PCM chunk to the backend: fed locally (batch) or framed onto the wire."""
