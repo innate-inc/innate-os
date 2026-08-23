@@ -112,7 +112,7 @@ class BrainLifecycle:
         self._state.active_skill_ids = list(self._state.current_directive.skill_ids())
         self._logger.info(f"Activated directive: {name}")
         self._chat.clear()
-        self._brain.reset()
+        self._brain.reset("directive changed")
         self.activate_directive_inputs()
         self._gaze.update()
         self._publish_status()

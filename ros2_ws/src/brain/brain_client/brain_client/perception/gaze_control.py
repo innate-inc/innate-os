@@ -16,10 +16,12 @@ from typing import TYPE_CHECKING
 from rclpy.node import Node
 
 from brain_client.perception.gaze_debug import GazeDebug, GazeStatus, gaze_debug
+from brain_client.perception.person_follow import FollowStartResult
 
 if TYPE_CHECKING:
     from brain_client.core.state import BrainState
     from brain_client.perception.gaze import ROSFaceTracker
+    from brain_client.perception.pose_tracking import PoseTracker
 
 
 def _tracker_class() -> type[ROSFaceTracker]:
@@ -33,12 +35,14 @@ class GazeLifecycle:
         self,
         node: Node,
         state: BrainState,
+        pose_tracker: PoseTracker,
         cmd_vel_topic: str,
         on_debug: Callable[[GazeDebug], None] | None = None,
     ) -> None:
         self._node = node
         self._logger = node.get_logger()
         self._state = state
+        self._pose_tracker = pose_tracker
         self._cmd_vel_topic = cmd_vel_topic
         self._tracker: ROSFaceTracker | None = None
         self._on_debug = on_debug
@@ -60,6 +64,8 @@ class GazeLifecycle:
                     tracker = _tracker_class()(
                         self._node,
                         cmd_vel_topic=self._cmd_vel_topic,
+                        get_odom_pose=self._pose_tracker.odom_pose_xyt,
+                        get_navigation_mode=lambda: self._pose_tracker.cur_nav_mode,
                         on_person_locked=self.on_person_locked,
                         on_debug=self._on_debug,
                     )
@@ -100,6 +106,22 @@ class GazeLifecycle:
             if self._tracker is not None and not self._tracker.is_running:
                 self._tracker.start()
                 self._logger.debug("👁️ Gaze resumed after skill execution")
+
+    @property
+    def is_following(self) -> bool:
+        with self._lock:
+            return self._tracker is not None and self._tracker.is_following
+
+    def start_follow(self) -> FollowStartResult:
+        with self._lock:
+            if self._tracker is None:
+                return FollowStartResult.NOT_RUNNING
+            return self._tracker.start_follow()
+
+    def stop_follow(self, reason: str = "") -> None:
+        with self._lock:
+            if self._tracker is not None:
+                self._tracker.stop_follow(reason)
 
     def _emit_debug(self, status: GazeStatus) -> None:
         if self._on_debug is not None:

@@ -9,6 +9,9 @@ It listens on /navigate_to_pose and forwards all requests to /internal_navigate_
 This allows for interception, logging, or future middleware functionality.
 """
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
@@ -30,6 +33,11 @@ class NavigateToPoseRouter(Node):
 
         # Track current navigation mode
         self._current_mode = "mapfree"  # Default mode
+        self._person_follow_tree = os.path.join(
+            get_package_share_directory("mars_nav"),
+            "config",
+            "nav_to_person.xml",
+        )
 
         # QoS profile for persistent/latched topic
         latched_qos = QoSProfile(
@@ -134,23 +142,20 @@ class NavigateToPoseRouter(Node):
         # Create the goal to forward
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose = goal_handle.request.pose
-        # Leave behavior_tree empty, publish frame to /nav/current_frame instead
 
-        # Determine the frame to use
-        requested_frame = goal_handle.request.behavior_tree
-        if not requested_frame:
-            # If no frame specified, use the current mode
-            requested_frame = self._current_mode
+        route = goal_handle.request.behavior_tree or self._current_mode
 
-        # If in mapping mode, reject the navigation request
-        if requested_frame == "mapping":
+        if route == "mapping" or (route == "person_follow" and self._current_mode == "mapping"):
             self.get_logger().warn("Navigation rejected: currently in mapping mode")
             goal_handle.abort()
             result = NavigateToPose.Result()
             return result
 
-        # Determine planner and goal checker based on frame
-        if requested_frame == "navigation":
+        if route == "person_follow":
+            planner = "mapfree"
+            goal_checker = "goal_checker_precise"
+            goal_msg.behavior_tree = self._person_follow_tree
+        elif route == "navigation":
             planner = "navigation"
             goal_checker = "goal_checker"
         else:  # mapfree or any other

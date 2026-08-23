@@ -11,6 +11,8 @@ from brain_client.skills.registry import SkillMeta
 STOP_SKILL = "stop_current_skill"
 WAIT = "wait"
 GO_TO_POINT_IN_VIEW = "go_to_point_in_view"
+FOLLOW_ME = "follow_me"
+STOP_FOLLOWING = "stop_following"
 
 # An explicit no-op keeps idle turns clean: without it, models tend to emit
 # placeholder text ("[]", "Empty response") rather than returning nothing.
@@ -41,6 +43,19 @@ _GO_TO_POINT_IN_VIEW_DECLARATION = {
     },
 }
 
+_FOLLOW_ME_DECLARATION = {
+    "name": FOLLOW_ME,
+    "description": (
+        "Follow the person already locked in the center of view. Use only when that person asks "
+        "you to follow them. This keeps their apparent distance and stops if the lock is lost."
+    ),
+}
+
+_STOP_FOLLOWING_DECLARATION = {
+    "name": STOP_FOLLOWING,
+    "description": "Stop following the person now. Use whenever the user asks you to stop or wait.",
+}
+
 # Skill input "type" strings (python annotation names from skill introspection)
 # -> Gemini schema types. Anything else is passed as a string with the expected
 # type noted in the description.
@@ -66,7 +81,7 @@ def assign_tool_names(skills: list[SkillMeta]) -> list[tuple[str, SkillMeta]]:
     shadow a built-in tool); colliding names get a numeric suffix so a call
     never silently dispatches to the wrong skill.
     """
-    taken = {STOP_SKILL, WAIT, GO_TO_POINT_IN_VIEW}
+    taken = {STOP_SKILL, WAIT, GO_TO_POINT_IN_VIEW, FOLLOW_ME, STOP_FOLLOWING}
     named: list[tuple[str, SkillMeta]] = []
     for meta in skills:
         base = name = tool_name(meta["name"])
@@ -85,6 +100,8 @@ def build_tools(
     running_skill_name: str | None,
     *,
     can_go_to_point_in_view: bool = False,
+    can_follow_person: bool = False,
+    is_following_person: bool = False,
     user_spoke: bool = False,
 ) -> list[dict]:
     """One function declaration per available skill, in a native tools block.
@@ -115,6 +132,8 @@ def build_tools(
     declarations = [_declaration(name, meta) for name, meta in named_skills]
     if can_go_to_point_in_view:
         declarations.append(_GO_TO_POINT_IN_VIEW_DECLARATION)
+    if can_follow_person:
+        declarations.append(_STOP_FOLLOWING_DECLARATION if is_following_person else _FOLLOW_ME_DECLARATION)
     declarations.append(_WAIT_DECLARATION)
     return [{"functionDeclarations": declarations}]
 

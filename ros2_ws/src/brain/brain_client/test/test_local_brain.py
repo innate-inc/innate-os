@@ -16,12 +16,15 @@ import pytest
 from brain_client.brain.context import GeminiContext, _decision_from
 from brain_client.brain.prompt import build_system_prompt
 from brain_client.brain.tools import (
+    FOLLOW_ME,
+    STOP_FOLLOWING,
     STOP_SKILL,
     WAIT,
     assign_tool_names,
     build_tools,
     tool_name,
 )
+from brain_client.perception.person_follow import FollowStartResult
 
 JPEG = b"\xff\xd8\xff\xe0fakejpegbytes"
 
@@ -128,6 +131,14 @@ def test_build_tools_while_running_with_user_speech_offers_stop_alone():
 def test_build_tools_with_no_skills_still_offers_wait():
     declarations = build_tools([], None)[0]["functionDeclarations"]
     assert [d["name"] for d in declarations] == ["wait"]
+
+
+def test_build_tools_exposes_only_the_applicable_follow_command():
+    idle = build_tools([], None, can_follow_person=True)[0]["functionDeclarations"]
+    active = build_tools([], None, can_follow_person=True, is_following_person=True)[0]["functionDeclarations"]
+
+    assert [declaration["name"] for declaration in idle] == [FOLLOW_ME, WAIT]
+    assert [declaration["name"] for declaration in active] == [STOP_FOLLOWING, WAIT]
 
 
 def test_unknown_param_type_falls_back_to_annotated_string():
@@ -498,6 +509,12 @@ def agent_factory(monkeypatch):
             spoken=spoken,
         )
         chat.stream_speech = lambda **kwargs: SpeechStreamer(chat, **kwargs)
+        gaze = SimpleNamespace(
+            pause=lambda: None,
+            is_following=False,
+            start_follow=lambda: FollowStartResult.STARTED,
+            stop_follow=lambda reason="": setattr(gaze, "is_following", False),
+        )
         agent = BrainAgent(
             node,
             state,
@@ -507,7 +524,7 @@ def agent_factory(monkeypatch):
             runner=SimpleNamespace(),
             roster=SimpleNamespace(active_skill_ids=lambda: []),
             chat=chat,
-            gaze=SimpleNamespace(pause=lambda: None),
+            gaze=gaze,
             trace=trace,
         )
         created.append(agent)
@@ -661,6 +678,54 @@ def test_go_to_point_outside_the_active_skill_set_is_rejected(agent_factory):
     assert started == []
     outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
     assert outcome == "rejected — navigate_to_position is not available"
+
+
+def test_follow_me_dispatches_directly_to_gaze(agent_factory):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(uses_gaze=lambda: True)
+    agent._follow_tool_declared = True
+    starts = []
+    agent._gaze.start_follow = lambda: starts.append(True) or FollowStartResult.STARTED
+
+    outcome = agent._dispatch(SimpleNamespace(name=FOLLOW_ME, args={}))
+
+    assert outcome.startswith("following started")
+    assert starts == [True]
+
+
+def test_follow_me_requires_a_live_lock(agent_factory):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(uses_gaze=lambda: True)
+    agent._follow_tool_declared = True
+    agent._gaze.start_follow = lambda: FollowStartResult.NO_LOCK
+
+    outcome = agent._dispatch(SimpleNamespace(name=FOLLOW_ME, args={}))
+
+    assert outcome == "rejected — no person is currently locked in view"
+
+
+def test_hidden_follow_tool_cannot_start_motion(agent_factory):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(uses_gaze=lambda: True)
+    starts = []
+    agent._gaze.start_follow = lambda: starts.append(True) or FollowStartResult.STARTED
+
+    outcome = agent._dispatch(SimpleNamespace(name=FOLLOW_ME, args={}))
+
+    assert outcome == "unknown skill 'follow_me'"
+    assert starts == []
+
+
+def test_stop_following_cancels_gaze_navigation(agent_factory):
+    agent, _state = agent_factory()
+    reasons = []
+    agent._gaze.is_following = True
+    agent._gaze.stop_follow = lambda reason="": reasons.append(reason)
+
+    outcome = agent._dispatch(SimpleNamespace(name=STOP_FOLLOWING, args={}))
+
+    assert outcome == "following stopped"
+    assert reasons == ["user requested stop"]
 
 
 def test_go_to_point_rejects_out_of_range_coordinates(agent_factory):

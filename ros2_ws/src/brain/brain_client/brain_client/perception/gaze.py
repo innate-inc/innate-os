@@ -15,10 +15,15 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
 from brain_client.perception.face_lock import FaceBox, FaceLock, FaceLockResult
-from brain_client.perception.gaze_debug import GazeDebug, GazeStatus, gaze_debug
-from brain_client.perception.yolo_pose import YoloPoseDetector
+from brain_client.perception.gaze_debug import DebugFollow, GazeDebug, GazeStatus, gaze_debug
+from brain_client.perception.gaze_nav import GazeNavigator
+from brain_client.perception.person_follow import FollowStartResult, PersonFollowController
+from brain_client.perception.pose import Pose
+from brain_client.perception.yolo_pose import PersonPose, YoloPoseDetector
 from brain_client.robot.head import Head
 from brain_client.robot.mobility import Mobility
+
+_FOLLOW_STALE_SECONDS = 0.75
 
 
 class FaceFollower:
@@ -68,12 +73,8 @@ class FaceFollower:
             self._thread.join(timeout=1.0)
             self._thread = None
 
-    def track_face(self, face: FaceBox) -> None:
-        """Track a detected face by pointing at its center."""
-        # Pan error (positive = face is on right = turn right)
-        pan_error = (face.center_x - 0.5) * self.CAMERA_HFOV
-
-        # Tilt: proportional control
+    def look_at(self, face: FaceBox) -> None:
+        """Point the head at a detected face."""
         error_normalized = 0.5 - face.center_y
         tilt_error_degrees = error_normalized * self.CAMERA_VFOV
         Kp = 0.3
@@ -83,7 +84,9 @@ class FaceFollower:
             new_tilt = self._current_tilt + tilt_correction
             self._target_tilt = max(self.MIN_TILT, min(self.MAX_TILT, new_tilt))
 
-        # Execute pan if significant
+    def pan_toward(self, face: FaceBox) -> None:
+        """Turn the base toward a face when Nav2 does not own the base."""
+        pan_error = (face.center_x - 0.5) * self.CAMERA_HFOV
         if abs(pan_error) > self.PAN_THRESHOLD:
             self._execute_pan(pan_error)
 
@@ -135,6 +138,9 @@ class ROSFaceTracker:
         node: Node,
         camera_topic: str = "/mars/main_camera/left/image_raw",
         cmd_vel_topic: str = "/cmd_vel",
+        *,
+        get_odom_pose: Callable[[], Pose | None],
+        get_navigation_mode: Callable[[], str | None],
         on_person_locked: Callable[[], None] | None = None,
         on_debug: Callable[[GazeDebug], None] | None = None,
     ) -> None:
@@ -162,6 +168,17 @@ class ROSFaceTracker:
         self._detector_thread: threading.Thread | None = None
         self._detector_lock = threading.Lock()
         self._face_lock = FaceLock()
+        self._person_follow = PersonFollowController()
+        self._gaze_navigator = GazeNavigator(
+            node,
+            node.get_logger(),
+            get_odom_pose=get_odom_pose,
+            get_navigation_mode=get_navigation_mode,
+        )
+        self._follow_lock = threading.Lock()
+        self._locked_person: PersonPose | None = None
+        self._follow_stop_reason = ""
+        self._last_detection_at = 0.0
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -176,6 +193,7 @@ class ROSFaceTracker:
             depth=1,
         )
         self._sub = node.create_subscription(Image, camera_topic, self._on_image, qos)
+        self._follow_watchdog = node.create_timer(0.1, self._check_follow_watchdog)
 
     def _on_image(self, msg: Image) -> None:
         """Store latest camera frame."""
@@ -197,6 +215,8 @@ class ROSFaceTracker:
         if self._closed:
             raise RuntimeError("cannot restart a closed gaze tracker")
         self._running = True
+        with self._follow_lock:
+            self._follow_stop_reason = ""
         self._face_lock.resume(time.monotonic())
         detector = self._detector_snapshot()
         self._emit_debug(
@@ -244,13 +264,14 @@ class ROSFaceTracker:
             )
 
     def pause(self) -> None:
+        self.stop_follow("gaze paused")
         self._face_lock.pause(time.monotonic())
         self._running = False
         if self._thread:
             self._thread.join()
             self._thread = None
         self._follower.stop()
-        self._mobility.send_cmd_vel()
+        self._mobility.stop()
 
     def close(self) -> None:
         if self._closed:
@@ -261,6 +282,8 @@ class ROSFaceTracker:
         if detector_thread is not None and detector_thread.is_alive():
             detector_thread.join()
         self._node.destroy_subscription(self._sub)
+        self._node.destroy_timer(self._follow_watchdog)
+        self._gaze_navigator.close()
         self._head.close()
         self._mobility.close()
         with self._frame_lock:
@@ -271,6 +294,39 @@ class ROSFaceTracker:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def is_following(self) -> bool:
+        with self._follow_lock:
+            return self._person_follow.is_following
+
+    def start_follow(self) -> FollowStartResult:
+        if not self._running:
+            return FollowStartResult.NOT_RUNNING
+        with self._follow_lock:
+            if self._person_follow.is_following:
+                return FollowStartResult.ALREADY_FOLLOWING
+            if self._locked_person is None or time.monotonic() - self._last_detection_at > _FOLLOW_STALE_SECONDS:
+                return FollowStartResult.NO_LOCK
+            self._person_follow.start(self._locked_person.body)
+            self._follow_stop_reason = ""
+        self._mobility.stop()
+        return FollowStartResult.STARTED
+
+    def stop_follow(self, reason: str = "") -> None:
+        with self._follow_lock:
+            self._person_follow.stop()
+            self._follow_stop_reason = reason
+        self._cancel_follow_motion(reason)
+
+    def _stop_for_target_loss(self) -> None:
+        with self._follow_lock:
+            self._follow_stop_reason = "target lost"
+        self._cancel_follow_motion("target lost")
+
+    def _cancel_follow_motion(self, reason: str) -> None:
+        self._gaze_navigator.cancel(reason)
+        self._mobility.stop()
 
     def _track_loop(self) -> None:
         dt = 1.0 / 5.0
@@ -298,6 +354,7 @@ class ROSFaceTracker:
                     if error != self._detector_error:
                         self._node.get_logger().error(f"YOLO pose inference failed: {e}")
                         self._detector_error = error
+                    self.stop_follow("pose inference failed")
                     self._emit_debug(
                         gaze_debug(
                             GazeStatus.ERROR,
@@ -305,14 +362,31 @@ class ROSFaceTracker:
                             image_width=frame.shape[1],
                             image_height=frame.shape[0],
                             frame=self._processed_frame_number,
+                            follow=self._follow_debug(),
                         )
                     )
                     continue
                 if not self._running:
                     break
+                self._last_detection_at = now
                 self._detector_error = ""
                 faces = [person.head for person in detection.people]
                 result = self._face_lock.observe(faces, now)
+                locked_person = self._locked_person_for(detection.people, result)
+                with self._follow_lock:
+                    self._locked_person = locked_person
+                    follow_was_active = self._person_follow.is_following
+                    follow_target = self._person_follow.observe(
+                        locked_person.body if locked_person is not None else None
+                    )
+
+                if follow_was_active and follow_target is None:
+                    self._stop_for_target_loss()
+                elif follow_target is not None:
+                    self._gaze_navigator.update_target(follow_target)
+                    if self._gaze_navigator.failed:
+                        self.stop_follow(self._gaze_navigator.reason)
+
                 self._emit_debug(
                     gaze_debug(
                         self._status(result),
@@ -324,10 +398,13 @@ class ROSFaceTracker:
                         image_width=frame.shape[1],
                         image_height=frame.shape[0],
                         frame=self._processed_frame_number,
+                        follow=self._follow_debug(),
                     )
                 )
                 if result.face is not None:
-                    self._follower.track_face(result.face)
+                    self._follower.look_at(result.face)
+                    if not self.is_following:
+                        self._follower.pan_toward(result.face)
                     self._last_face_time = time.time()
                     if result.just_locked and self._on_person_locked is not None:
                         self._on_person_locked()
@@ -346,9 +423,33 @@ class ROSFaceTracker:
         if self._on_debug is not None:
             self._on_debug(debug)
 
+    def _check_follow_watchdog(self) -> None:
+        if not self._running or not self.is_following:
+            return
+        if time.monotonic() - self._last_detection_at <= _FOLLOW_STALE_SECONDS:
+            return
+        self.stop_follow("camera frame stale")
+
     def _detector_snapshot(self) -> YoloPoseDetector | None:
         with self._detector_lock:
             return self._detector
+
+    def _follow_debug(self) -> DebugFollow:
+        with self._follow_lock:
+            return {
+                "enabled": self._person_follow.is_following,
+                "state": str(self._person_follow.state),
+                "reference_height": round(self._person_follow.reference_height, 4),
+                "observed_height": round(self._person_follow.observed_height, 4),
+                "nav_state": str(self._gaze_navigator.state),
+                "reason": self._follow_stop_reason or self._gaze_navigator.reason,
+            }
+
+    @staticmethod
+    def _locked_person_for(people: tuple[PersonPose, ...], result: FaceLockResult) -> PersonPose | None:
+        if not result.locked or result.face is None:
+            return None
+        return next((person for person in people if person.head is result.face), None)
 
     @staticmethod
     def _status(result: FaceLockResult) -> GazeStatus:

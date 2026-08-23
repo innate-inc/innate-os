@@ -314,6 +314,15 @@ interface GazeDetector {
   error: string;
 }
 
+interface GazeFollow {
+  enabled: boolean;
+  state: string;
+  reference_height: number;
+  observed_height: number;
+  nav_state: string;
+  reason: string;
+}
+
 interface GazeDebug {
   status: GazeStatus;
   progress: number;
@@ -324,6 +333,7 @@ interface GazeDebug {
   zone: { left: number; top: number; right: number; bottom: number };
   image: { width: number; height: number };
   frame: number;
+  follow?: GazeFollow;
 }
 
 interface GazeOverlaySession {

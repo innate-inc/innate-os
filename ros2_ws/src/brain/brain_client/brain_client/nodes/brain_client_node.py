@@ -203,7 +203,13 @@ class BrainClientNode(Node):
             # Recall as a capability: skills reach the same cache-backed search
             # through /brain/search_memory (see brain/search_server.py).
             self.memory_search_server = MemorySearchServer(self.memory_search)
-        self.gaze = GazeLifecycle(self, state, cfg.cmd_vel_topic, on_debug=self._publish_gaze_debug)
+        self.gaze = GazeLifecycle(
+            self,
+            state,
+            self.pose_tracker,
+            cfg.cmd_vel_topic,
+            on_debug=self._publish_gaze_debug,
+        )
         self.runner = PrimitiveRunner(
             self,
             self.chat,
@@ -485,6 +491,10 @@ class BrainClientNode(Node):
         self.runner.mirror_manual_event(
             status, primitive_name=primitive_name, primitive_id=payload.get("primitive_id"), skill_id=skill_id
         )
+        if status == "running":
+            self.gaze.pause()
+        elif status in {"completed", "failed", "interrupted"}:
+            self.gaze.resume()
         if self.state.is_brain_active:
             detail = reason or "triggered manually from the app"
             self.brain.add_event(f"The user manually ran skill '{primitive_name}' ({status}): {detail}")

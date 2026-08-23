@@ -38,9 +38,8 @@ class Mobility:
         self._cmd_vel_pub = self.node.create_publisher(Twist, self.cmd_vel_topic, 10)
         self._stop_timer: Timer | None = None
 
-        # Nav2 navigator for precise movements
-        self._navigator = BasicNavigator(namespace="")
-        self._navigator_mapfree = BasicNavigator(namespace="mapfree")
+        self._navigator: BasicNavigator | None = None
+        self._navigator_mapfree: BasicNavigator | None = None
 
         self.logger.info(f"Mobility initialized with cmd_vel topic: {self.cmd_vel_topic}")
 
@@ -104,13 +103,21 @@ class Mobility:
         self.send_cmd_vel(linear_x=0.0, angular_z=angular_speed, duration=duration)
 
     def close(self) -> None:
-        self.send_cmd_vel()
+        self.stop()
         if self._stop_timer is not None:
             self.node.destroy_timer(self._stop_timer)
             self._stop_timer = None
         self.node.destroy_publisher(self._cmd_vel_pub)
-        self._navigator.destroy_node()
-        self._navigator_mapfree.destroy_node()
+        for navigator in (self._navigator, self._navigator_mapfree):
+            if navigator is None:
+                continue
+            try:
+                navigator.assisted_teleop_client.destroy()
+            except Exception as error:  # noqa: BLE001 — Humble cleanup APIs can raise backend-specific errors
+                self.logger.warning(f"Error destroying assisted teleop client: {error}")
+            navigator.destroy_node()
+        self._navigator = None
+        self._navigator_mapfree = None
 
     def rotate(self, angle_radians: float) -> bool:
         """Rotate in place by a specific angle using Nav2 (blocking).
@@ -121,9 +128,10 @@ class Mobility:
         Returns:
             bool: True if rotation succeeded, False otherwise.
         """
+        navigator, navigator_mapfree = self._navigation_helpers()
         goal_pose = PoseStamped()
         goal_pose.header.frame_id = "base_link"
-        goal_pose.header.stamp = self._navigator.get_clock().now().to_msg()
+        goal_pose.header.stamp = navigator.get_clock().now().to_msg()
         goal_pose.pose.position.x = 0.0
         goal_pose.pose.position.y = 0.0
         goal_pose.pose.position.z = 0.0
@@ -135,28 +143,35 @@ class Mobility:
         self.logger.info(f"Mobility: rotating {math.degrees(angle_radians):.1f}° via Nav2")
 
         # Get path to verify it's possible
-        path = self._navigator_mapfree.getPath(goal_pose, goal_pose, use_start=False)
+        path = navigator_mapfree.getPath(goal_pose, goal_pose, use_start=False)
         if path is None:
             self.logger.error("Mobility: failed to get rotation path")
             return False
 
         # Execute rotation (blocking)
-        self._navigator.goToPose(goal_pose, behavior_tree="mapfree")
+        navigator.goToPose(goal_pose, behavior_tree="mapfree")
 
-        while not self._navigator.isTaskComplete():
+        while not navigator.isTaskComplete():
             try:
                 cancellable_sleep(0.1)
             except SkillCancelled:
-                self._navigator.cancelTask()
+                navigator.cancelTask()
                 raise
 
-        result = self._navigator.getResult()
+        result = navigator.getResult()
         if result == TaskResult.SUCCEEDED:
             self.logger.info("Mobility: rotation complete")
             return True
         else:
             self.logger.error(f"Mobility: rotation failed with {result}")
             return False
+
+    def _navigation_helpers(self) -> tuple[BasicNavigator, BasicNavigator]:
+        if self._navigator is None:
+            self._navigator = BasicNavigator(namespace="")
+        if self._navigator_mapfree is None:
+            self._navigator_mapfree = BasicNavigator(namespace="mapfree")
+        return self._navigator, self._navigator_mapfree
 
     # --- base primitives ---
     # Skills call these as methods: self.mobility.rotate_by(...), .drive(...).

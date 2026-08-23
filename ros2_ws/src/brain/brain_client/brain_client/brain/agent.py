@@ -33,7 +33,15 @@ from brain_client.brain.context import Decision, GeminiContext, ToolCall
 from brain_client.brain.loop import LoopThread
 from brain_client.brain.prompt import build_system_prompt
 from brain_client.brain.speech_sequence import SkillCue, SpeechSequence, SpeechSequenceRunner
-from brain_client.brain.tools import GO_TO_POINT_IN_VIEW, STOP_SKILL, WAIT, assign_tool_names, build_tools
+from brain_client.brain.tools import (
+    FOLLOW_ME,
+    GO_TO_POINT_IN_VIEW,
+    STOP_FOLLOWING,
+    STOP_SKILL,
+    WAIT,
+    assign_tool_names,
+    build_tools,
+)
 from brain_client.brain.transport import pick_transport
 from brain_client.brain.utils import (
     Event,
@@ -46,6 +54,7 @@ from brain_client.brain.utils import (
     observation_text,
     parse_view_point,
 )
+from brain_client.perception.person_follow import FollowStartResult
 from brain_client.perception.scan_health import ScanHealthReporter
 from brain_client.transport.chat import Sender
 
@@ -132,6 +141,7 @@ class BrainAgent:
         self._frame_at_capture: bytes | None = None
         self._pitch_at_capture = 0.0
         self._tool_map: dict[str, str] = {}  # gemini function name -> skill id
+        self._follow_tool_declared = False
         self._error_streak = 0
         self._activated_at = 0.0
         self._turn_count = 0
@@ -188,8 +198,9 @@ class BrainAgent:
         self._runtime.spawn(self._loop())
         return True
 
-    def stop(self) -> bool:
+    def stop(self, follow_reason: str = "brain stopped") -> bool:
         """Synchronous: when this returns True, no turn is thinking and none will act."""
+        self._gaze.stop_follow(follow_reason)
         self._speech_sequences.cancel()
         unwound = self._runtime.cancel()
         if not unwound:
@@ -197,10 +208,10 @@ class BrainAgent:
         self._events.clear()
         return unwound
 
-    def reset(self) -> None:
+    def reset(self, follow_reason: str = "brain reset") -> None:
         """Forget the conversation; a turn thinking under the old one dies with it."""
         was_running = self._runtime.running
-        if not self.stop():
+        if not self.stop(follow_reason):
             self._chat.emit_system("⚠️ Brain loop is stuck — stop and start the brain to recover.")
             return
         if self._context is not None:
@@ -451,6 +462,7 @@ class BrainAgent:
         return (meta.get("guidelines_when_running") or "").strip()
 
     def _build_tools(self, events: list[Event]) -> list[dict]:
+        self._follow_tool_declared = False
         running = self._state.primitive_running
         user_spoke = any(event.kind == EventKind.USER for event in events)
         if self._speech_sequence(events) is not None:
@@ -464,7 +476,16 @@ class BrainAgent:
         self._tool_map = {name: meta["id"] for name, meta in named}
         if running is not None:
             return build_tools([], running.primitive_name, user_spoke=user_spoke)
-        return build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids)
+        directive = self._state.current_directive
+        can_follow = directive is not None and directive.uses_gaze()
+        self._follow_tool_declared = can_follow and not self._gaze.is_following
+        return build_tools(
+            named,
+            None,
+            can_go_to_point_in_view=_NAV_TO_POSITION in active_ids,
+            can_follow_person=can_follow,
+            is_following_person=self._gaze.is_following,
+        )
 
     @staticmethod
     def _is_compliment_turn(events: list[Event]) -> bool:
@@ -525,11 +546,15 @@ class BrainAgent:
             return "ok"
         if call.name == STOP_SKILL:
             return self._stop_skill()
+        if call.name == STOP_FOLLOWING:
+            return self._stop_following()
         if not self._state.is_brain_active:
             # Deactivation raced this turn's _act: don't start anything new
             # (a goal that slips through anyway is cancelled by the runner's
             # generation bump, but this keeps the robot from twitching first).
             return "rejected — the brain is deactivating"
+        if call.name == FOLLOW_ME and not self._follow_tool_declared:
+            return f"unknown skill '{call.name}'"
         # Only names declared this turn resolve: falling back to the full
         # registry would let a hallucinated call bypass the active-skill allowlist.
         # The map is a turn old by now and the roster can change under it, so
@@ -539,6 +564,8 @@ class BrainAgent:
             return "rejected — another skill is already running; stop it first"
         if call.name == GO_TO_POINT_IN_VIEW:
             return self._go_to_point_in_view(call.args)
+        if call.name == FOLLOW_ME:
+            return self._follow_me()
         if skill_id is None:
             return f"unknown skill '{call.name}'"
         if skill_id not in self._roster.active_skill_ids():
@@ -557,6 +584,25 @@ class BrainAgent:
         if self._runner.cancel_external():
             return "stopping — you will get an event when it has stopped"
         return "could not stop it — the skills server is unreachable"
+
+    def _follow_me(self) -> str:
+        directive = self._state.current_directive
+        if directive is None or not directive.uses_gaze():
+            return "rejected — person following is not available"
+        result = self._gaze.start_follow()
+        if result is FollowStartResult.STARTED:
+            return "following started — I will stop if I lose the person lock"
+        if result is FollowStartResult.ALREADY_FOLLOWING:
+            return "already following"
+        if result is FollowStartResult.NO_LOCK:
+            return "rejected — no person is currently locked in view"
+        return "rejected — gaze tracking is not running"
+
+    def _stop_following(self) -> str:
+        if not self._gaze.is_following:
+            return "not following"
+        self._gaze.stop_follow("user requested stop")
+        return "following stopped"
 
     def _go_to_point_in_view(self, args: dict) -> str:
         """Project the pointed-at floor pixel into a local navigate_to_position goal."""

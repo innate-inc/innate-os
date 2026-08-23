@@ -19,6 +19,15 @@ Pose = tuple[float, float, float]
 Delta = tuple[float, float, float]
 
 
+def resolve_local_goal(base_pose: Pose, local_goal: Pose) -> Pose:
+    """Compose a base-relative goal with the base pose in a fixed frame."""
+    base_x, base_y, base_yaw = base_pose
+    local_x, local_y, local_yaw = local_goal
+    goal_x = base_x + local_x * math.cos(base_yaw) - local_y * math.sin(base_yaw)
+    goal_y = base_y + local_x * math.sin(base_yaw) + local_y * math.cos(base_yaw)
+    return (goal_x, goal_y, base_yaw + local_yaw)
+
+
 def compute_pose_delta(old_pose: Pose, new_pose: Pose) -> Delta:
     """Motion from ``old_pose`` to ``new_pose`` in the robot frame at ``old_pose``.
 

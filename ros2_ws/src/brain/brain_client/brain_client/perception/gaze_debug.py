@@ -72,6 +72,15 @@ class DebugDetector(TypedDict):
     error: str
 
 
+class DebugFollow(TypedDict):
+    enabled: bool
+    state: str
+    reference_height: float
+    observed_height: float
+    nav_state: str
+    reason: str
+
+
 class GazeDebug(TypedDict):
     status: GazeStatus
     progress: float
@@ -82,6 +91,7 @@ class GazeDebug(TypedDict):
     zone: DebugZone
     image: DebugImage
     frame: int
+    follow: DebugFollow
 
 
 def gaze_debug(
@@ -96,6 +106,7 @@ def gaze_debug(
     image_width: int = 0,
     image_height: int = 0,
     frame: int = 0,
+    follow: DebugFollow | None = None,
 ) -> GazeDebug:
     return {
         "status": status,
@@ -118,6 +129,15 @@ def gaze_debug(
         },
         "image": {"width": image_width, "height": image_height},
         "frame": frame,
+        "follow": follow
+        or {
+            "enabled": False,
+            "state": "idle",
+            "reference_height": 0.0,
+            "observed_height": 0.0,
+            "nav_state": "idle",
+            "reason": "",
+        },
     }
 
 

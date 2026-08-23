@@ -6970,6 +6970,12 @@ select.skill-input {
   stroke: var(--ok);
 }
 
+.gaze-debug[data-following="true"] .gaze-status,
+.gaze-debug[data-following="true"] .gaze-person-target {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
 .gaze-debug[data-status="stale"] .gaze-status,
 .gaze-debug[data-status="error"] .gaze-status {
   border-color: color-mix(in srgb, var(--danger) 45%, transparent);

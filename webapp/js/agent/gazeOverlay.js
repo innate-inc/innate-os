@@ -85,6 +85,7 @@ export function createGazeOverlay(stage, ros, session) {
     if (root.hidden || !debug) return;
 
     root.dataset.status = stale ? "stale" : debug.detector?.error ? "error" : debug.status;
+    root.dataset.following = debug.follow?.enabled ? "true" : "false";
     status.textContent = stale ? "GAZE STALE" : statusText(debug);
     content.hidden =
       stale ||
@@ -231,6 +232,16 @@ function statusText(debug) {
   if (!detector) return legacyStatusText(debug);
   const prefix = detector.model === "yolov8n-pose" ? "YOLO POSE" : detector.model.toUpperCase();
   if (detector.error) return `${prefix} · ERROR: ${detector.error.slice(0, 80).toUpperCase()}`;
+  if (debug.follow?.enabled) {
+    const size =
+      debug.follow.reference_height > 0
+        ? Math.round((debug.follow.observed_height / debug.follow.reference_height) * 100)
+        : 100;
+    return `${prefix} · PERSON FOLLOW · ${debug.follow.nav_state.toUpperCase()} · SIZE ${size}%`;
+  }
+  if (debug.follow?.reason) {
+    return `${prefix} · FOLLOW STOPPED: ${debug.follow.reason.slice(0, 64).toUpperCase()}`;
+  }
   if (debug.status === "centering") return `${prefix} · CENTERING ${Math.round(debug.progress * 100)}%`;
   if (debug.status === "locked") return `${prefix} · PERSON LOCKED`;
   if (debug.status === "too_far") {

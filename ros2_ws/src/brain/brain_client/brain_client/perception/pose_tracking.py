@@ -70,12 +70,18 @@ class PoseTracker:
         self._logger.debug(f"Current Navigation Mode is {self.cur_nav_mode}")
 
     # --- pose queries ---
+    def odom_pose_xyt(self) -> Pose | None:
+        """Current base pose in odom, the fixed frame for mapfree goals."""
+        if self.last_odom is None:
+            return None
+        pos = self.last_odom.pose.pose.position
+        ori = self.last_odom.pose.pose.orientation
+        return (pos.x, pos.y, quaternion_to_yaw(ori))
+
     def current_pose_xyt(self) -> Pose | None:
         """Current robot pose as (x, y, theta); None if unavailable."""
-        if self.is_mapfree and self.last_odom is not None:
-            pos = self.last_odom.pose.pose.position
-            ori = self.last_odom.pose.pose.orientation
-            return (pos.x, pos.y, quaternion_to_yaw(ori))
+        if self.is_mapfree:
+            return self.odom_pose_xyt()
         return self.map_pose_xyt()
 
     def map_pose_xyt(self) -> Pose | None:

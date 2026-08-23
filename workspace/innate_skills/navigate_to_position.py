@@ -8,20 +8,13 @@ from geometry_msgs.msg import PoseStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from rclpy.qos import DurabilityPolicy, QoSProfile
 
+from brain_client.perception.pose import resolve_local_goal
 from innate import Odometry, Skill, SkillCancelled, SkillFailed, SkillReturn, resource
 
 # Frame local (robot-relative) goals are resolved into before being sent to
 # Nav2. Must match the mapfree costmap's global_frame (mars_nav costmap.yaml)
 # and Odometry.frame_id, which is what resolves them.
 LOCAL_GOAL_FIXED_FRAME = "odom"
-
-
-def resolve_local_goal(base_x, base_y, base_yaw, x, y, theta):
-    """Compose a base_link-relative (x, y, theta) goal with the robot's pose in
-    the fixed frame, returning (gx, gy, gyaw) expressed in that fixed frame."""
-    gx = base_x + x * math.cos(base_yaw) - y * math.sin(base_yaw)
-    gy = base_y + x * math.sin(base_yaw) + y * math.cos(base_yaw)
-    return gx, gy, base_yaw + theta
 
 
 class Nav2Controller:
@@ -45,7 +38,7 @@ class Nav2Controller:
         # to warm up here, which is what made a freshly built controller's
         # first local goal racy.
         base = self.skill.odom
-        gx, gy, gyaw = resolve_local_goal(base.x, base.y, base.theta, x, y, theta)
+        gx, gy, gyaw = resolve_local_goal((base.x, base.y, base.theta), (x, y, theta))
         self.logger.info(f"Resolved local goal ({x}, {y}, {theta}) to ({gx:.3f}, {gy:.3f}, {gyaw:.3f})")
         return gx, gy, gyaw, LOCAL_GOAL_FIXED_FRAME
 
