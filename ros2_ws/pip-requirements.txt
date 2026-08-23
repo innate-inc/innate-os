@@ -55,9 +55,6 @@ zstandard
 fastapi
 uvicorn[standard]
 
-# Other AI
-inspireface
-
 # Gemini (Google GenAI)
 google-genai
 

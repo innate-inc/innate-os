@@ -276,6 +276,7 @@ type GazeStatus =
   | "off"
   | "paused"
   | "starting"
+  | "error"
   | "searching"
   | "following"
   | "too_far"
@@ -289,11 +290,37 @@ interface GazeBox {
   height: number;
 }
 
+interface GazeKeypoint {
+  name: string;
+  x: number;
+  y: number;
+  confidence: number;
+}
+
+interface GazePerson {
+  confidence: number;
+  target: boolean;
+  head_visible: boolean;
+  body: GazeBox;
+  head: GazeBox;
+  keypoints: GazeKeypoint[];
+}
+
+interface GazeDetector {
+  model: string;
+  runtime: string;
+  input_size: number;
+  inference_ms: number;
+  error: string;
+}
+
 interface GazeDebug {
   status: GazeStatus;
   progress: number;
+  detector?: GazeDetector;
   faces: GazeBox[];
   target: GazeBox | null;
+  people?: GazePerson[];
   zone: { left: number; top: number; right: number; bottom: number };
   image: { width: number; height: number };
   frame: number;

@@ -33,11 +33,13 @@ class GazeLifecycle:
         self,
         node: Node,
         state: BrainState,
+        cmd_vel_topic: str,
         on_debug: Callable[[GazeDebug], None] | None = None,
     ) -> None:
         self._node = node
         self._logger = node.get_logger()
         self._state = state
+        self._cmd_vel_topic = cmd_vel_topic
         self._tracker: ROSFaceTracker | None = None
         self._on_debug = on_debug
         self.on_person_locked: Callable[[], None] | None = None
@@ -53,16 +55,24 @@ class GazeLifecycle:
             if not self._state.is_brain_active or directive is None or not directive.uses_gaze():
                 directive = None
             if directive is not None and self._tracker is None:
+                tracker: ROSFaceTracker | None = None
                 try:
-                    self._tracker = _tracker_class()(
+                    tracker = _tracker_class()(
                         self._node,
+                        cmd_vel_topic=self._cmd_vel_topic,
                         on_person_locked=self.on_person_locked,
                         on_debug=self._on_debug,
                     )
-                    self._tracker.start()
+                    tracker.start()
+                    self._tracker = tracker
                     self._logger.info(f"👁️ Gaze tracker started for directive '{directive.id}'")
                 except Exception as e:
                     self._logger.error(f"Failed to start gaze tracker: {e}")
+                    if tracker is not None:
+                        try:
+                            tracker.close()
+                        except Exception as close_error:
+                            self._logger.error(f"Error cleaning up gaze tracker: {close_error}")
                     self._tracker = None
             elif directive is None and self._tracker is not None:
                 self.stop()
@@ -71,7 +81,7 @@ class GazeLifecycle:
         with self._lock:
             if self._tracker is not None:
                 try:
-                    self._tracker.stop()
+                    self._tracker.close()
                     self._logger.info("👁️ Gaze tracker stopped")
                 except Exception as e:
                     self._logger.error(f"Error stopping gaze tracker: {e}")
@@ -81,7 +91,7 @@ class GazeLifecycle:
     def pause(self) -> None:
         with self._lock:
             if self._tracker is not None and self._tracker.is_running:
-                self._tracker.stop()
+                self._tracker.pause()
                 self._emit_debug(GazeStatus.PAUSED)
                 self._logger.debug("👁️ Gaze paused for skill execution")
 

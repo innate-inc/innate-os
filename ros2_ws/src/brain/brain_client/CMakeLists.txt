@@ -15,6 +15,11 @@ ament_python_install_package(${PROJECT_NAME}
   PACKAGE_DIR brain_client
 )
 
+install(FILES
+  brain_client/perception/yolov8n-pose.onnx
+  DESTINATION "${PYTHON_INSTALL_DIR}/${PROJECT_NAME}/perception"
+)
+
 # Public authoring namespace for skill files (`from innate import Skill, Mobility, ...`)
 ament_python_install_package(innate
   PACKAGE_DIR innate

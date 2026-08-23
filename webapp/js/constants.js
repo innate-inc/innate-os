@@ -73,7 +73,7 @@ export const SET_ACTIVE_SKILLS_TOPIC = "/brain/set_active_skills";
 // current_directive, active_skills:[id,...]}). Latched + ~3s heartbeat; this is
 // how a stop/start/directive change made from another client reaches this UI.
 export const AGENT_STATUS_TOPIC = "/brain/agent_status";
-// Lightweight 0–1 face geometry and lock state for the Agent camera overlay.
+// Lightweight 0–1 person pose geometry and lock state for the Agent camera overlay.
 export const GAZE_TOPIC = "/brain/gaze";
 // Reset the agent's brain/memory (brain_messages/srv/ResetBrain → {success}).
 export const RESET_BRAIN_SERVICE = "/brain/reset_brain";

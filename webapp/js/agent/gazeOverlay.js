@@ -1,10 +1,32 @@
 // @ts-check
-// Gaze debugger — projects the brain's normalized face geometry onto the
+// Gaze debugger — projects the brain's normalized person geometry onto the
 // already-streaming main camera. No images cross rosbridge.
 
 import { GAZE_TOPIC } from "../constants.js";
 
 const STALE_AFTER_MS = 1_200;
+const SVG_NS = "http://www.w3.org/2000/svg";
+const POSE_EDGES = [
+  ["left_eye", "right_eye"],
+  ["left_eye", "nose"],
+  ["right_eye", "nose"],
+  ["left_eye", "left_ear"],
+  ["right_eye", "right_ear"],
+  ["left_ear", "left_shoulder"],
+  ["right_ear", "right_shoulder"],
+  ["left_shoulder", "right_shoulder"],
+  ["left_shoulder", "left_elbow"],
+  ["left_elbow", "left_wrist"],
+  ["right_shoulder", "right_elbow"],
+  ["right_elbow", "right_wrist"],
+  ["left_shoulder", "left_hip"],
+  ["right_shoulder", "right_hip"],
+  ["left_hip", "right_hip"],
+  ["left_hip", "left_knee"],
+  ["left_knee", "left_ankle"],
+  ["right_hip", "right_knee"],
+  ["right_knee", "right_ankle"],
+];
 
 /**
  * @param {HTMLElement} stage
@@ -21,9 +43,13 @@ export function createGazeOverlay(stage, ros, session) {
   content.className = "gaze-debug-content";
   const zone = document.createElement("div");
   zone.className = "gaze-zone";
+  const pose = document.createElementNS(SVG_NS, "svg");
+  pose.classList.add("gaze-pose");
+  pose.setAttribute("viewBox", "0 0 1 1");
+  pose.setAttribute("preserveAspectRatio", "none");
   const boxes = document.createElement("div");
   boxes.className = "gaze-boxes";
-  content.append(zone, boxes);
+  content.append(zone, pose, boxes);
 
   const status = document.createElement("div");
   status.className = "gaze-status microlabel";
@@ -58,9 +84,15 @@ export function createGazeOverlay(stage, ros, session) {
     root.hidden = !visible();
     if (root.hidden || !debug) return;
 
-    root.dataset.status = stale ? "stale" : debug.status;
+    root.dataset.status = stale ? "stale" : debug.detector?.error ? "error" : debug.status;
     status.textContent = stale ? "GAZE STALE" : statusText(debug);
-    content.hidden = stale || debug.status === "off" || debug.status === "paused" || debug.status === "starting";
+    content.hidden =
+      stale ||
+      debug.status === "off" ||
+      debug.status === "paused" ||
+      debug.status === "starting" ||
+      debug.status === "error";
+    pose.replaceChildren();
     boxes.replaceChildren();
 
     if (!content.hidden) {
@@ -71,6 +103,7 @@ export function createGazeOverlay(stage, ros, session) {
         height: debug.zone.bottom - debug.zone.top,
       });
       zone.style.setProperty("--gaze-progress", `${Math.max(0, Math.min(1, debug.progress)) * 100}%`);
+      for (const person of debug.people ?? []) addPerson(person);
       let targetDrawn = false;
       for (const face of debug.faces) {
         const target = debug.target !== null && sameBox(face, debug.target);
@@ -82,10 +115,67 @@ export function createGazeOverlay(stage, ros, session) {
     }
   };
 
-  /** @param {GazeBox} face @param {string} className */
-  const addBox = (face, className) => {
+  /** @param {GazePerson} person */
+  const addPerson = (person) => {
+    addBox(
+      person.body,
+      person.target ? "gaze-person gaze-person-target" : "gaze-person",
+      person.confidence.toFixed(2),
+    );
+    const points = new Map(person.keypoints.map((point) => [point.name, point]));
+    for (const [fromName, toName] of POSE_EDGES) {
+      const from = points.get(fromName);
+      const to = points.get(toName);
+      if (from && to) addPoseLine(from, to, person.target ? "gaze-bone gaze-bone-target" : "gaze-bone");
+    }
+    for (const point of points.values()) addPosePoint(point, person.target ? "gaze-kp gaze-kp-target" : "gaze-kp");
+    if (person.target) addAim(person.head);
+  };
+
+  /** @param {GazeKeypoint} from @param {GazeKeypoint} to @param {string} className */
+  const addPoseLine = (from, to, className) => {
+    const line = document.createElementNS(SVG_NS, "line");
+    line.setAttribute("x1", `${from.x}`);
+    line.setAttribute("y1", `${from.y}`);
+    line.setAttribute("x2", `${to.x}`);
+    line.setAttribute("y2", `${to.y}`);
+    line.setAttribute("class", className);
+    pose.append(line);
+  };
+
+  /** @param {GazeKeypoint} point @param {string} className */
+  const addPosePoint = (point, className) => {
+    const marker = document.createElementNS(SVG_NS, "line");
+    marker.setAttribute("x1", `${point.x}`);
+    marker.setAttribute("x2", `${point.x}`);
+    marker.setAttribute("y1", `${point.y}`);
+    marker.setAttribute("y2", `${point.y}`);
+    marker.setAttribute("class", className);
+    pose.append(marker);
+  };
+
+  /** @param {GazeBox} head */
+  const addAim = (head) => {
+    const horizontal = document.createElementNS(SVG_NS, "line");
+    horizontal.setAttribute("x1", `${head.center_x - 0.015}`);
+    horizontal.setAttribute("x2", `${head.center_x + 0.015}`);
+    horizontal.setAttribute("y1", `${head.center_y}`);
+    horizontal.setAttribute("y2", `${head.center_y}`);
+    horizontal.setAttribute("class", "gaze-aim");
+    const vertical = document.createElementNS(SVG_NS, "line");
+    vertical.setAttribute("x1", `${head.center_x}`);
+    vertical.setAttribute("x2", `${head.center_x}`);
+    vertical.setAttribute("y1", `${head.center_y - 0.015}`);
+    vertical.setAttribute("y2", `${head.center_y + 0.015}`);
+    vertical.setAttribute("class", "gaze-aim");
+    pose.append(horizontal, vertical);
+  };
+
+  /** @param {GazeBox} face @param {string} className @param {string} [score] */
+  const addBox = (face, className, score) => {
     const box = document.createElement("div");
     box.className = className;
+    if (score) box.dataset.score = score;
     place(box, face);
     boxes.append(box);
   };
@@ -137,6 +227,29 @@ export function createGazeOverlay(stage, ros, session) {
 
 /** @param {GazeDebug} debug */
 function statusText(debug) {
+  const detector = debug.detector;
+  if (!detector) return legacyStatusText(debug);
+  const prefix = detector.model === "yolov8n-pose" ? "YOLO POSE" : detector.model.toUpperCase();
+  if (detector.error) return `${prefix} · ERROR: ${detector.error.slice(0, 80).toUpperCase()}`;
+  if (debug.status === "centering") return `${prefix} · CENTERING ${Math.round(debug.progress * 100)}%`;
+  if (debug.status === "locked") return `${prefix} · PERSON LOCKED`;
+  if (debug.status === "too_far") {
+    const target = debug.people?.find((person) => person.target);
+    return target?.head_visible === false ? `${prefix} · LOOKING UP FOR A HEAD` : `${prefix} · PERSON TOO SMALL`;
+  }
+  if (debug.status === "following") {
+    const count = debug.people?.length ?? debug.faces.length;
+    const latency = detector.inference_ms ? ` · ${Math.round(detector.inference_ms)} MS` : "";
+    return `${prefix} · FOLLOWING · ${count} ${count === 1 ? "PERSON" : "PEOPLE"}${latency}`;
+  }
+  if (debug.status === "searching") return `${prefix} · SEARCHING FOR A PERSON`;
+  if (debug.status === "starting") return `STARTING ${prefix}`;
+  if (debug.status === "paused") return "GAZE PAUSED";
+  return "GAZE OFF";
+}
+
+/** @param {GazeDebug} debug */
+function legacyStatusText(debug) {
   if (debug.status === "centering") return `CENTERING ${Math.round(debug.progress * 100)}%`;
   if (debug.status === "locked") return "PERSON LOCKED";
   if (debug.status === "too_far") return "FACE TOO SMALL";

@@ -1,16 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""
-Gaze System - Person tracking for MARS robot.
-
-Features:
-- InspireFace detection for autonomous person tracking
-- Wheel-based panning (robot turns to face people)
-
-Hardware: MARS robot
-- Head tilt: -25° to +35° (single axis)
-- Pan: Uses differential drive wheels to rotate body
-"""
+"""Pose-driven person tracking for the MARS head and mobile base."""
 
 import math
 import threading
@@ -18,7 +8,6 @@ import time
 from collections.abc import Callable
 
 import cv2
-import inspireface as isf
 import numpy as np
 import numpy.typing as npt
 from rclpy.node import Node
@@ -27,36 +16,9 @@ from sensor_msgs.msg import Image
 
 from brain_client.perception.face_lock import FaceBox, FaceLock, FaceLockResult
 from brain_client.perception.gaze_debug import GazeDebug, GazeStatus, gaze_debug
+from brain_client.perception.yolo_pose import YoloPoseDetector
 from brain_client.robot.head import Head
 from brain_client.robot.mobility import Mobility
-
-
-class FaceDetector:
-    """Face detector using InspireFace SDK."""
-
-    def __init__(self, min_confidence: float = 0.5) -> None:
-        param = isf.SessionCustomParameter()
-        self._session = isf.InspireFaceSession(
-            param=param,
-            detect_mode=isf.HF_DETECT_MODE_ALWAYS_DETECT,
-            max_detect_num=3,
-        )
-        self._session.set_detection_confidence_threshold(min_confidence)
-
-    def detect(self, frame: npt.NDArray[np.uint8]) -> list[FaceBox]:
-        h, w = frame.shape[:2]
-        faces: list[FaceBox] = []
-        for face in self._session.face_detection(frame):
-            x1, y1, x2, y2 = face.location
-            faces.append(
-                FaceBox(
-                    center_x=(x1 + x2) / 2 / w,
-                    center_y=(y1 + y2) / 2 / h,
-                    width=(x2 - x1) / w,
-                    height=(y2 - y1) / h,
-                )
-            )
-        return faces
 
 
 class FaceFollower:
@@ -172,6 +134,7 @@ class ROSFaceTracker:
         self,
         node: Node,
         camera_topic: str = "/mars/main_camera/left/image_raw",
+        cmd_vel_topic: str = "/cmd_vel",
         on_person_locked: Callable[[], None] | None = None,
         on_debug: Callable[[GazeDebug], None] | None = None,
     ) -> None:
@@ -182,18 +145,21 @@ class ROSFaceTracker:
         self._frame_number = 0
         self._processed_frame_number = 0
         self._frame_lock = threading.Lock()
+        self._closed = False
 
         # Hardware interfaces
         self._head = Head(node, node.get_logger())
-        self._mobility = Mobility(node, node.get_logger(), "/cmd_vel")
+        self._mobility = Mobility(node, node.get_logger(), cmd_vel_topic)
 
         # Gaze controller
         self._follower = FaceFollower(
             head_command_fn=self._head.set_position,
             wheel_rotate_fn=self._mobility.rotate_in_place,
         )
-        self._detector: FaceDetector | None = None
+        self._detector: YoloPoseDetector | None = None
+        self._detector_error = ""
         self._detector_starting = False
+        self._detector_thread: threading.Thread | None = None
         self._detector_lock = threading.Lock()
         self._face_lock = FaceLock()
 
@@ -216,7 +182,9 @@ class ROSFaceTracker:
         try:
             frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, -1)
             if msg.encoding == "rgb8":
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                frame = np.asarray(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), dtype=np.uint8)
+            else:
+                frame = frame.copy()
             with self._frame_lock:
                 self._frame_number += 1
                 self._frame = (self._frame_number, frame)
@@ -226,9 +194,19 @@ class ROSFaceTracker:
     def start(self) -> None:
         if self._running:
             return
+        if self._closed:
+            raise RuntimeError("cannot restart a closed gaze tracker")
         self._running = True
+        self._face_lock.resume(time.monotonic())
         detector = self._detector_snapshot()
-        self._emit_debug(gaze_debug(GazeStatus.STARTING if detector is None else GazeStatus.SEARCHING))
+        self._emit_debug(
+            gaze_debug(
+                GazeStatus.ERROR
+                if detector is None and self._detector_error
+                else (GazeStatus.STARTING if detector is None else GazeStatus.SEARCHING),
+                error=self._detector_error,
+            )
+        )
         self._follower.start()
         self._thread = threading.Thread(target=self._track_loop, daemon=True)
         self._thread.start()
@@ -236,32 +214,59 @@ class ROSFaceTracker:
 
     def _ensure_detector(self) -> None:
         with self._detector_lock:
-            if self._detector is not None or self._detector_starting:
+            if self._detector is not None or self._detector_starting or self._detector_error:
                 return
             self._detector_starting = True
-        threading.Thread(target=self._init_detector, daemon=True).start()
+            self._detector_thread = threading.Thread(target=self._init_detector, daemon=True)
+            detector_thread = self._detector_thread
+        detector_thread.start()
 
     def _init_detector(self) -> None:
-        detector: FaceDetector | None = None
+        detector: YoloPoseDetector | None = None
+        error = ""
         try:
-            detector = FaceDetector(min_confidence=0.3)
-            self._node.get_logger().info("👁️ Face detector initialized")
+            detector = YoloPoseDetector()
+            self._node.get_logger().info("👁️ YOLO pose detector initialized")
         except Exception as e:
-            self._node.get_logger().error(f"Failed to init face detector: {e}")
+            error = str(e)
+            self._node.get_logger().error(f"Failed to init YOLO pose detector: {e}")
         finally:
             with self._detector_lock:
-                self._detector = detector
+                self._detector = None if self._closed else detector
+                self._detector_error = error
                 self._detector_starting = False
-        if detector is not None and self._running:
-            self._emit_debug(gaze_debug(GazeStatus.SEARCHING))
+        if self._running:
+            self._emit_debug(
+                gaze_debug(
+                    GazeStatus.SEARCHING if detector is not None else GazeStatus.ERROR,
+                    error=error,
+                )
+            )
 
-    def stop(self) -> None:
-        """Stop person tracking."""
+    def pause(self) -> None:
+        self._face_lock.pause(time.monotonic())
         self._running = False
         if self._thread:
-            self._thread.join(timeout=1.0)
+            self._thread.join()
             self._thread = None
         self._follower.stop()
+        self._mobility.send_cmd_vel()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self.pause()
+        self._closed = True
+        detector_thread = self._detector_thread
+        if detector_thread is not None and detector_thread.is_alive():
+            detector_thread.join()
+        self._node.destroy_subscription(self._sub)
+        self._head.close()
+        self._mobility.close()
+        with self._frame_lock:
+            self._frame = None
+        with self._detector_lock:
+            self._detector = None
 
     @property
     def is_running(self) -> bool:
@@ -275,7 +280,8 @@ class ROSFaceTracker:
 
             detector = self._detector_snapshot()
             if detector is None:
-                self._emit_debug(gaze_debug(GazeStatus.STARTING))
+                status = GazeStatus.ERROR if self._detector_error else GazeStatus.STARTING
+                self._emit_debug(gaze_debug(status, error=self._detector_error))
                 time.sleep(0.5)
                 continue
 
@@ -285,14 +291,36 @@ class ROSFaceTracker:
             if sample is not None and sample[0] != self._processed_frame_number:
                 self._processed_frame_number, frame = sample
                 now = time.monotonic()
-                faces = detector.detect(frame)
+                try:
+                    detection = detector.detect(frame)
+                except Exception as e:  # noqa: BLE001 — one bad frame must not kill long-lived gaze
+                    error = str(e)
+                    if error != self._detector_error:
+                        self._node.get_logger().error(f"YOLO pose inference failed: {e}")
+                        self._detector_error = error
+                    self._emit_debug(
+                        gaze_debug(
+                            GazeStatus.ERROR,
+                            error=error,
+                            image_width=frame.shape[1],
+                            image_height=frame.shape[0],
+                            frame=self._processed_frame_number,
+                        )
+                    )
+                    continue
+                if not self._running:
+                    break
+                self._detector_error = ""
+                faces = [person.head for person in detection.people]
                 result = self._face_lock.observe(faces, now)
                 self._emit_debug(
                     gaze_debug(
                         self._status(result),
                         faces=faces,
                         target=result.face,
+                        people=detection.people,
                         progress=result.progress,
+                        inference_ms=detection.inference_ms,
                         image_width=frame.shape[1],
                         image_height=frame.shape[0],
                         frame=self._processed_frame_number,
@@ -318,7 +346,7 @@ class ROSFaceTracker:
         if self._on_debug is not None:
             self._on_debug(debug)
 
-    def _detector_snapshot(self) -> FaceDetector | None:
+    def _detector_snapshot(self) -> YoloPoseDetector | None:
         with self._detector_lock:
             return self._detector
 

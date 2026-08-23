@@ -51,3 +51,6 @@ class Head:
         self._head_position_pub.publish(msg)
 
         self.logger.debug(f"Head: set head position to {angle_degrees} degrees")
+
+    def close(self) -> None:
+        self.node.destroy_publisher(self._head_position_pub)

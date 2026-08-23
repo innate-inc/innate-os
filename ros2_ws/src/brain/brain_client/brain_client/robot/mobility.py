@@ -103,6 +103,15 @@ class Mobility:
         """
         self.send_cmd_vel(linear_x=0.0, angular_z=angular_speed, duration=duration)
 
+    def close(self) -> None:
+        self.send_cmd_vel()
+        if self._stop_timer is not None:
+            self.node.destroy_timer(self._stop_timer)
+            self._stop_timer = None
+        self.node.destroy_publisher(self._cmd_vel_pub)
+        self._navigator.destroy_node()
+        self._navigator_mapfree.destroy_node()
+
     def rotate(self, angle_radians: float) -> bool:
         """Rotate in place by a specific angle using Nav2 (blocking).
 

@@ -134,6 +134,7 @@ def make_runner(events: list):
     runner._goal_handle = SimpleNamespace()
     runner._generation = 0
     runner._slot_lock = threading.Lock()
+    runner._system_claim = None
     runner._logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
     runner._stop_robot = lambda: None
     runner._on_task_finished = lambda: None

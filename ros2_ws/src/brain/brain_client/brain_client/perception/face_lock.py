@@ -29,6 +29,9 @@ class FaceBox:
     center_y: float
     width: float
     height: float
+    lockable: bool = True
+    subject_center_x: float | None = None
+    subject_center_y: float | None = None
 
     @property
     def area(self) -> float:
@@ -43,7 +46,13 @@ class FaceBox:
 
     @property
     def large_enough(self) -> bool:
-        return self.height >= _MIN_FACE_HEIGHT
+        return self.lockable and self.height >= _MIN_FACE_HEIGHT
+
+    @property
+    def subject_distance_squared(self) -> float:
+        center_x = self.subject_center_x if self.subject_center_x is not None else self.center_x
+        center_y = self.subject_center_y if self.subject_center_y is not None else self.center_y
+        return (center_x - 0.5) ** 2 + (center_y - 0.5) ** 2
 
     def iou(self, other: FaceBox) -> float:
         left = max(self.center_x - self.width / 2, other.center_x - other.width / 2)
@@ -70,6 +79,23 @@ class FaceLock:
         self._last_observed: float | None = None
         self._centered_since: float | None = None
         self._locked = False
+        self._paused_at: float | None = None
+
+    def pause(self, now: float) -> None:
+        if self._paused_at is None:
+            self._paused_at = now
+
+    def resume(self, now: float) -> None:
+        if self._paused_at is None:
+            return
+        elapsed = max(0.0, now - self._paused_at)
+        if self._last_seen is not None:
+            self._last_seen += elapsed
+        if self._last_observed is not None:
+            self._last_observed += elapsed
+        if self._centered_since is not None:
+            self._centered_since += elapsed
+        self._paused_at = None
 
     def observe(self, faces: list[FaceBox], now: float) -> FaceLockResult:
         if self._last_observed is not None and now - self._last_observed >= _LOST_SECONDS:
@@ -95,7 +121,7 @@ class FaceLock:
 
     def _match(self, faces: list[FaceBox], now: float) -> FaceBox | None:
         if self._face is None:
-            return max(faces, key=lambda face: face.area, default=None)
+            return self._select(faces)
 
         match = max(faces, key=self._face.iou, default=None)
         if match is not None and self._face.iou(match) >= _MATCH_IOU:
@@ -105,7 +131,15 @@ class FaceLock:
             return None
 
         self._reset()
-        return max(faces, key=lambda face: face.area, default=None)
+        return self._select(faces)
+
+    @staticmethod
+    def _select(faces: list[FaceBox]) -> FaceBox | None:
+        return min(
+            faces,
+            key=lambda face: (face.subject_distance_squared, -face.area),
+            default=None,
+        )
 
     def _reset(self) -> None:
         self._face = None

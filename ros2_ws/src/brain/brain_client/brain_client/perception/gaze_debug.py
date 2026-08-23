@@ -9,12 +9,19 @@ from typing import TypedDict
 
 from brain_client.common.enums import StrEnum
 from brain_client.perception.face_lock import CENTER_ZONE, FaceBox
+from brain_client.perception.yolo_pose import (
+    MODEL_INPUT_SIZE,
+    MODEL_NAME,
+    MODEL_RUNTIME,
+    PersonPose,
+)
 
 
 class GazeStatus(StrEnum):
     OFF = "off"
     PAUSED = "paused"
     STARTING = "starting"
+    ERROR = "error"
     SEARCHING = "searching"
     FOLLOWING = "following"
     TOO_FAR = "too_far"
@@ -41,11 +48,37 @@ class DebugImage(TypedDict):
     height: int
 
 
+class DebugKeypoint(TypedDict):
+    name: str
+    x: float
+    y: float
+    confidence: float
+
+
+class DebugPerson(TypedDict):
+    confidence: float
+    target: bool
+    head_visible: bool
+    body: DebugBox
+    head: DebugBox
+    keypoints: list[DebugKeypoint]
+
+
+class DebugDetector(TypedDict):
+    model: str
+    runtime: str
+    input_size: int
+    inference_ms: float
+    error: str
+
+
 class GazeDebug(TypedDict):
     status: GazeStatus
     progress: float
+    detector: DebugDetector
     faces: list[DebugBox]
     target: DebugBox | None
+    people: list[DebugPerson]
     zone: DebugZone
     image: DebugImage
     frame: int
@@ -56,7 +89,10 @@ def gaze_debug(
     *,
     faces: Sequence[FaceBox] = (),
     target: FaceBox | None = None,
+    people: Sequence[PersonPose] = (),
     progress: float = 0.0,
+    inference_ms: float = 0.0,
+    error: str = "",
     image_width: int = 0,
     image_height: int = 0,
     frame: int = 0,
@@ -64,8 +100,16 @@ def gaze_debug(
     return {
         "status": status,
         "progress": progress,
+        "detector": {
+            "model": MODEL_NAME,
+            "runtime": MODEL_RUNTIME,
+            "input_size": MODEL_INPUT_SIZE,
+            "inference_ms": round(inference_ms, 1),
+            "error": error,
+        },
         "faces": [_box(face) for face in faces],
         "target": _box(target) if target is not None else None,
+        "people": [_person(person, target) for person in people],
         "zone": {
             "left": CENTER_ZONE.left,
             "top": CENTER_ZONE.top,
@@ -83,4 +127,24 @@ def _box(face: FaceBox) -> DebugBox:
         "center_y": face.center_y,
         "width": face.width,
         "height": face.height,
+    }
+
+
+def _person(person: PersonPose, target: FaceBox | None) -> DebugPerson:
+    return {
+        "confidence": round(person.confidence, 3),
+        "target": person.head is target,
+        "head_visible": person.head.lockable,
+        "body": _box(person.body),
+        "head": _box(person.head),
+        "keypoints": [
+            {
+                "name": str(point.name),
+                "x": point.x,
+                "y": point.y,
+                "confidence": round(point.confidence, 3),
+            }
+            for point in person.keypoints
+            if point.visible
+        ],
     }

@@ -203,7 +203,7 @@ class BrainClientNode(Node):
             # Recall as a capability: skills reach the same cache-backed search
             # through /brain/search_memory (see brain/search_server.py).
             self.memory_search_server = MemorySearchServer(self.memory_search)
-        self.gaze = GazeLifecycle(self, state, on_debug=self._publish_gaze_debug)
+        self.gaze = GazeLifecycle(self, state, cfg.cmd_vel_topic, on_debug=self._publish_gaze_debug)
         self.runner = PrimitiveRunner(
             self,
             self.chat,
