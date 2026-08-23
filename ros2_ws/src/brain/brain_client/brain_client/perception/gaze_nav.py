@@ -55,6 +55,7 @@ class FollowGoalSnapshot:
     goal: Pose | None
     pending: int
     active: int
+    canceling: int
 
 
 class GazeNavigator:
@@ -106,6 +107,7 @@ class GazeNavigator:
                 goal=self._last_goal,
                 pending=self._pending,
                 active=len(self._handles),
+                canceling=self._canceling,
             )
 
     def update_target(self, target: FollowTarget) -> None:
@@ -115,7 +117,7 @@ class GazeNavigator:
         if self.failed:
             return
         if not target.needs_goal:
-            self.cancel("holding distance")
+            self.cancel()
             return
         if self._get_navigation_mode() == "mapping":
             self._fail(FollowGoalState.UNAVAILABLE, "navigation unavailable while mapping")
@@ -135,10 +137,14 @@ class GazeNavigator:
         )
         goal = resolve_local_goal(base_pose, local_goal)
         now = time.monotonic()
+        old_handles: list[_GoalHandle]
         with self._lock:
             if now - self._last_sent_at < _MIN_REFRESH_SECONDS or not self._goal_changed(goal):
                 return
+            self._epoch += 1
             epoch = self._epoch
+            old_handles = self._handles
+            self._handles = []
             self._pending += 1
             self._state = FollowGoalState.SENDING
             self._reason = ""
@@ -148,19 +154,37 @@ class GazeNavigator:
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose = self._pose_stamped(goal)
         goal_msg.behavior_tree = _PERSON_FOLLOW_SELECTOR
-        self._client.send_goal_async(goal_msg).add_done_callback(lambda future: self._on_goal(future, epoch))
+        self._cancel_handles(old_handles, epoch - 1)
+        try:
+            self._client.send_goal_async(goal_msg).add_done_callback(lambda future: self._on_goal(future, epoch))
+        except Exception as error:  # noqa: BLE001 — action transport failure must terminate follow motion
+            with self._lock:
+                self._pending = max(0, self._pending - 1)
+                stale = epoch != self._epoch
+            if not stale:
+                self._fail(FollowGoalState.FAILED, f"navigation goal failed: {error}")
 
     def cancel(self, reason: str = "") -> None:
         with self._lock:
-            already_idle = not self._handles and self._pending == 0
+            no_goals = not self._handles and self._pending == 0
+            if no_goals and self._state is FollowGoalState.IDLE:
+                self._reason = reason
+                self._last_goal = None
+                return
+            if no_goals and self._state is FollowGoalState.CANCELING:
+                if reason:
+                    self._reason = reason
+                return
+            already_idle = no_goals and self._canceling == 0
             self._epoch += 1
+            epoch = self._epoch
             handles = self._handles
             self._handles = []
             self._last_goal = None
             self._last_sent_at = 0.0
             self._reason = reason
             self._state = FollowGoalState.IDLE if already_idle else FollowGoalState.CANCELING
-        self._cancel_handles(handles)
+        self._cancel_handles(handles, epoch)
         self._settle()
 
     def close(self) -> None:
@@ -226,7 +250,7 @@ class GazeNavigator:
             self._settle()
             return
         if stale:
-            self._cancel_handles([handle])
+            self._cancel_handles([handle], epoch)
             self._settle()
             return
         handle.get_result_async().add_done_callback(lambda result_future: self._on_result(result_future, handle, epoch))
@@ -250,6 +274,7 @@ class GazeNavigator:
                 return
             if status == GoalStatus.STATUS_SUCCEEDED:
                 self._state = FollowGoalState.IDLE
+                self._last_goal = None
                 return
             if status == GoalStatus.STATUS_CANCELED:
                 self._state = FollowGoalState.FAILED
@@ -262,30 +287,39 @@ class GazeNavigator:
         with self._lock:
             self._handles = [candidate for candidate in self._handles if candidate is not handle]
 
-    def _cancel_handles(self, handles: list[_GoalHandle]) -> None:
+    def _cancel_handles(self, handles: list[_GoalHandle], epoch: int) -> None:
         with self._lock:
             self._canceling += len(handles)
         for handle in handles:
-            self._send_cancel(handle)
+            self._send_cancel(handle, epoch)
 
-    def _send_cancel(self, handle: _GoalHandle) -> None:
+    def _send_cancel(self, handle: _GoalHandle, epoch: int) -> None:
         try:
-            handle.cancel_goal_async().add_done_callback(self._on_cancel)
+            handle.cancel_goal_async().add_done_callback(lambda future: self._on_cancel(future, epoch))
         except Exception as error:  # noqa: BLE001 — log a rejected transport-level cancel
             self._logger.error(f"Failed to cancel person-follow goal: {error}")
             with self._lock:
                 self._canceling = max(0, self._canceling - 1)
+                if epoch == self._epoch:
+                    self._state = FollowGoalState.FAILED
+                    self._reason = f"navigation cancellation failed: {error}"
             self._settle()
 
-    def _on_cancel(self, future: Future) -> None:
+    def _on_cancel(self, future: Future, epoch: int) -> None:
+        rejected = False
         try:
             response = future.result()
             if response is not None and not response.goals_canceling:
                 self._logger.error("Nav2 rejected person-follow cancellation")
+                rejected = True
         except Exception as error:  # noqa: BLE001 — cancellation failures must remain visible
             self._logger.error(f"Person-follow cancellation failed: {error}")
+            rejected = True
         with self._lock:
             self._canceling = max(0, self._canceling - 1)
+            if rejected and epoch == self._epoch:
+                self._state = FollowGoalState.FAILED
+                self._reason = "navigation cancellation rejected"
         self._settle()
 
     def _settle(self) -> None:

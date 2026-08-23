@@ -22,7 +22,6 @@ TURN_IN_PLACE_THRESHOLD_RAD = math.radians(15.0)
 class FollowState(StrEnum):
     IDLE = "idle"
     TRACKING = "tracking"
-    LOST = "lost"
 
 
 class FollowStartResult(StrEnum):
@@ -80,11 +79,8 @@ class PersonFollowController:
         self._reference_height = 0.0
         self._observed_height = 0.0
 
-    def observe(self, body: FaceBox | None) -> FollowTarget | None:
+    def target_for(self, body: FaceBox) -> FollowTarget | None:
         if not self.is_following:
-            return None
-        if body is None:
-            self._state = FollowState.LOST
             return None
 
         self._observed_height = body.height

@@ -87,11 +87,15 @@ class DebugFollow(TypedDict):
     forward_m: float
     bearing_degrees: float
     perception_age_ms: float
+    target_age_ms: float
+    reacquiring: bool
     nav_state: str
     nav_pending: int
     nav_active: int
+    nav_canceling: int
     goal: DebugFollowGoal | None
-    reason: str
+    stop_reason: str
+    nav_reason: str
 
 
 class GazeDebug(TypedDict):
@@ -152,11 +156,15 @@ def gaze_debug(
             "forward_m": 0.0,
             "bearing_degrees": 0.0,
             "perception_age_ms": 0.0,
+            "target_age_ms": 0.0,
+            "reacquiring": False,
             "nav_state": "idle",
             "nav_pending": 0,
             "nav_active": 0,
+            "nav_canceling": 0,
             "goal": None,
-            "reason": "",
+            "stop_reason": "",
+            "nav_reason": "",
         },
     }
 

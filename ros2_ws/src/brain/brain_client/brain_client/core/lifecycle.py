@@ -96,6 +96,7 @@ class BrainLifecycle:
         # one observation — harmless, its tools collapse to stop/wait once.)
         self._brain.reset()
         self._runner.abort_running()
+        self._gaze.update()
         self._chat.clear()
         self._chat.emit_system("Brain has been reset.")
 

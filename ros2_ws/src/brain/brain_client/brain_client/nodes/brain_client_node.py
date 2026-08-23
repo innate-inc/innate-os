@@ -247,6 +247,7 @@ class BrainClientNode(Node):
         self.camera.motion_suppressed = lambda: self.state.primitive_running is not None or self.camera.recently_driven
         self.camera.on_motion = self._on_camera_motion
         self.gaze.on_person_locked = self._on_person_locked
+        self.gaze.on_follow_stopped = self._on_follow_stopped
         self.arm_recovery = ArmRecovery(self, state, runner=self.runner, chat=self.chat, brain=self.brain)
         self.rest_pose = ArmRestPose(self, state)
         self.lifecycle = BrainLifecycle(
@@ -384,6 +385,10 @@ class BrainClientNode(Node):
             kind=EventKind.PERSON,
         )
 
+    def _on_follow_stopped(self, reason: str) -> None:
+        if self.state.is_brain_active:
+            self.brain.add_event(f"Person following stopped: {reason}.")
+
     def _publish_gaze_debug(self, debug: GazeDebug) -> None:
         self._latest_gaze_debug = debug
         self.gaze_debug_pub.publish(String(data=json.dumps(debug, separators=(",", ":"))))
@@ -490,12 +495,12 @@ class BrainClientNode(Node):
         # The RAW payload id goes to the mirror, not the synthesized fallback:
         # a per-message synthesized id would make the terminal's id "mismatch"
         # the running one and wedge the slot shut for id-less publishers.
-        self.runner.mirror_manual_event(
+        owns_gaze_transition = self.runner.mirror_manual_event(
             status, primitive_name=primitive_name, primitive_id=payload.get("primitive_id"), skill_id=skill_id
         )
-        if status == "running":
+        if status == "running" and owns_gaze_transition:
             self.gaze.pause()
-        elif status in {"completed", "failed", "interrupted"}:
+        elif status in {"completed", "failed", "interrupted"} and owns_gaze_transition:
             self.gaze.resume()
         if self.state.is_brain_active:
             detail = reason or "triggered manually from the app"

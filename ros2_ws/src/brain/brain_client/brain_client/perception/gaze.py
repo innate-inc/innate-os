@@ -24,6 +24,7 @@ from brain_client.robot.head import Head
 from brain_client.robot.mobility import Mobility
 
 _FOLLOW_STALE_SECONDS = 0.75
+_FOLLOW_TARGET_LOST_SECONDS = 1.0
 
 
 class FaceFollower:
@@ -142,10 +143,12 @@ class ROSFaceTracker:
         get_odom_pose: Callable[[], Pose | None],
         get_navigation_mode: Callable[[], str | None],
         on_person_locked: Callable[[], None] | None = None,
+        on_follow_stopped: Callable[[str], None] | None = None,
         on_debug: Callable[[GazeDebug], None] | None = None,
     ) -> None:
         self._node = node
         self._on_person_locked = on_person_locked
+        self._on_follow_stopped = on_follow_stopped
         self._on_debug = on_debug
         self._last_debug: GazeDebug | None = None
         self._frame: tuple[int, npt.NDArray[np.uint8]] | None = None
@@ -181,6 +184,8 @@ class ROSFaceTracker:
         self._follow_target: FollowTarget | None = None
         self._follow_stop_reason = ""
         self._last_detection_at = 0.0
+        self._last_follow_target_at = 0.0
+        self._last_frame_at = 0.0
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -208,6 +213,7 @@ class ROSFaceTracker:
             with self._frame_lock:
                 self._frame_number += 1
                 self._frame = (self._frame_number, frame)
+                self._last_frame_at = time.monotonic()
         except Exception:
             pass
 
@@ -216,10 +222,14 @@ class ROSFaceTracker:
             return
         if self._closed:
             raise RuntimeError("cannot restart a closed gaze tracker")
-        self._running = True
+        now = time.monotonic()
         with self._follow_lock:
             self._follow_stop_reason = ""
-        self._face_lock.resume(time.monotonic())
+            if self._person_follow.is_following:
+                self._last_detection_at = now
+                self._last_follow_target_at = now
+            self._running = True
+        self._face_lock.resume(now)
         detector = self._detector_snapshot()
         self._emit_debug(
             gaze_debug(
@@ -227,6 +237,7 @@ class ROSFaceTracker:
                 if detector is None and self._detector_error
                 else (GazeStatus.STARTING if detector is None else GazeStatus.SEARCHING),
                 error=self._detector_error,
+                follow=self._follow_debug(),
             )
         )
         self._follower.start()
@@ -266,14 +277,16 @@ class ROSFaceTracker:
             )
 
     def pause(self) -> None:
-        self.stop_follow("gaze paused")
-        self._face_lock.pause(time.monotonic())
         self._running = False
+        self._cancel_follow_motion("")
         if self._thread:
             self._thread.join()
             self._thread = None
+        self._face_lock.pause(time.monotonic())
         self._follower.stop()
         self._mobility.stop()
+        if self._last_debug is not None:
+            self._emit_debug({**self._last_debug, "status": GazeStatus.PAUSED, "follow": self._follow_debug()})
 
     def close(self) -> None:
         if self._closed:
@@ -313,23 +326,25 @@ class ROSFaceTracker:
             self._person_follow.start(self._locked_person.body)
             self._follow_target = None
             self._follow_stop_reason = ""
+            self._last_follow_target_at = time.monotonic()
         self._mobility.stop()
         self._emit_follow_state()
         return FollowStartResult.STARTED
 
     def stop_follow(self, reason: str = "") -> None:
         with self._follow_lock:
+            was_following = self._person_follow.is_following
             self._person_follow.stop()
             self._follow_target = None
             self._follow_stop_reason = reason
+            self._last_follow_target_at = 0.0
         self._cancel_follow_motion(reason)
         self._emit_follow_state()
+        if was_following and reason and self._on_follow_stopped is not None:
+            self._on_follow_stopped(reason)
 
     def _stop_for_target_loss(self) -> None:
-        with self._follow_lock:
-            self._follow_stop_reason = "target lost"
-        self._cancel_follow_motion("target lost")
-        self._emit_follow_state()
+        self.stop_follow("target lost")
 
     def _cancel_follow_motion(self, reason: str) -> None:
         self._gaze_navigator.cancel(reason)
@@ -380,17 +395,20 @@ class ROSFaceTracker:
                 faces = [person.head for person in detection.people]
                 result = self._face_lock.observe(faces, now)
                 locked_person = self._locked_person_for(detection.people, result)
+                target_lost = False
                 with self._follow_lock:
                     self._locked_person = locked_person
                     follow_was_active = self._person_follow.is_following
-                    follow_target = self._person_follow.observe(
-                        locked_person.body if locked_person is not None else None
-                    )
-                    self._follow_target = follow_target
+                    if locked_person is not None:
+                        self._last_follow_target_at = now
+                        self._follow_target = self._person_follow.target_for(locked_person.body)
+                    elif follow_was_active and now - self._last_follow_target_at > _FOLLOW_TARGET_LOST_SECONDS:
+                        target_lost = True
+                    follow_target = self._follow_target
 
-                if follow_was_active and follow_target is None:
+                if target_lost:
                     self._stop_for_target_loss()
-                elif follow_target is not None:
+                elif locked_person is not None and follow_target is not None:
                     self._gaze_navigator.update_target(follow_target)
                     if self._gaze_navigator.failed:
                         self.stop_follow(self._gaze_navigator.reason)
@@ -440,7 +458,9 @@ class ROSFaceTracker:
     def _check_follow_watchdog(self) -> None:
         if not self._running or not self.is_following:
             return
-        if time.monotonic() - self._last_detection_at <= _FOLLOW_STALE_SECONDS:
+        with self._frame_lock:
+            last_frame_at = self._last_frame_at
+        if time.monotonic() - last_frame_at <= _FOLLOW_STALE_SECONDS:
             return
         self.stop_follow("camera frame stale")
 
@@ -455,6 +475,11 @@ class ROSFaceTracker:
             perception_age_ms = (
                 max(0.0, time.monotonic() - self._last_detection_at) * 1000.0 if self._last_detection_at > 0.0 else 0.0
             )
+            target_age_ms = (
+                max(0.0, time.monotonic() - self._last_follow_target_at) * 1000.0
+                if self._last_follow_target_at > 0.0
+                else 0.0
+            )
             return {
                 "enabled": self._person_follow.is_following,
                 "state": str(self._person_follow.state),
@@ -466,9 +491,12 @@ class ROSFaceTracker:
                     round(math.degrees(self._follow_target.bearing_rad), 1) if self._follow_target else 0.0
                 ),
                 "perception_age_ms": round(perception_age_ms),
+                "target_age_ms": round(target_age_ms),
+                "reacquiring": self._person_follow.is_following and self._locked_person is None,
                 "nav_state": str(navigation.state),
                 "nav_pending": navigation.pending,
                 "nav_active": navigation.active,
+                "nav_canceling": navigation.canceling,
                 "goal": (
                     {
                         "x": round(goal[0], 3),
@@ -478,7 +506,8 @@ class ROSFaceTracker:
                     if goal
                     else None
                 ),
-                "reason": self._follow_stop_reason or navigation.reason,
+                "stop_reason": self._follow_stop_reason,
+                "nav_reason": navigation.reason,
             }
 
     @staticmethod

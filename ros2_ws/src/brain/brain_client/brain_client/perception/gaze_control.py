@@ -47,6 +47,7 @@ class GazeLifecycle:
         self._tracker: ROSFaceTracker | None = None
         self._on_debug = on_debug
         self.on_person_locked: Callable[[], None] | None = None
+        self.on_follow_stopped: Callable[[str], None] | None = None
         # pause() runs on the agent's loop thread; everything else on the ROS
         # executor. RLock because update() calls stop().
         self._lock = threading.RLock()
@@ -67,6 +68,7 @@ class GazeLifecycle:
                         get_odom_pose=self._pose_tracker.odom_pose_xyt,
                         get_navigation_mode=lambda: self._pose_tracker.cur_nav_mode,
                         on_person_locked=self.on_person_locked,
+                        on_follow_stopped=self.on_follow_stopped,
                         on_debug=self._on_debug,
                     )
                     tracker.start()
@@ -80,6 +82,8 @@ class GazeLifecycle:
                         except Exception as close_error:
                             self._logger.error(f"Error cleaning up gaze tracker: {close_error}")
                     self._tracker = None
+            elif directive is not None and self._tracker is not None and not self._tracker.is_running:
+                self._tracker.start()
             elif directive is None and self._tracker is not None:
                 self.stop()
 
@@ -98,7 +102,6 @@ class GazeLifecycle:
         with self._lock:
             if self._tracker is not None and self._tracker.is_running:
                 self._tracker.pause()
-                self._emit_debug(GazeStatus.PAUSED)
                 self._logger.debug("👁️ Gaze paused for skill execution")
 
     def resume(self) -> None:

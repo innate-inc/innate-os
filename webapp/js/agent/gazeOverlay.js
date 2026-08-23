@@ -84,7 +84,7 @@ export function createGazeOverlay(stage, ros, session, panelHost) {
     <div class="gaze-follow-metrics">
       <div><span>BEARING</span><strong data-follow-bearing>—</strong></div>
       <div><span>NEXT STEP</span><strong data-follow-step>—</strong></div>
-      <div><span>VISION AGE</span><strong data-follow-age>—</strong></div>
+      <div><span>TARGET AGE</span><strong data-follow-age>—</strong></div>
       <div><span>NAV GOALS</span><strong data-follow-goals>—</strong></div>
     </div>
     <div class="gaze-follow-details"></div>
@@ -177,8 +177,9 @@ export function createGazeOverlay(stage, ros, session, panelHost) {
         ? "Cancel person following"
         : "Follow the currently locked person";
     renderFollowTelemetry(debug);
-    followCommand.textContent = followCommandText;
-    followCommand.dataset.kind = followCommandFailed ? "error" : "ok";
+    const stoppedText = follow?.stop_reason ? `Following stopped: ${follow.stop_reason}.` : "";
+    followCommand.textContent = stoppedText || followCommandText;
+    followCommand.dataset.kind = followCommandFailed || stoppedText ? "error" : "ok";
 
     if (!content.hidden) {
       place(zone, {
@@ -212,9 +213,10 @@ export function createGazeOverlay(stage, ros, session, panelHost) {
     const ratio = reference > 0 ? observed / reference : 1;
     const sizeError = (1 - ratio) * 100;
     const center = typeof follow.body_center_x === "number" ? follow.body_center_x : 0.5;
-    const age = follow.perception_age_ms ?? 0;
+    const age = follow.target_age_ms ?? follow.perception_age_ms ?? 0;
     const goal = follow.goal;
-    const reason = follow.reason || "—";
+    const stopReason = follow.stop_reason || "";
+    const navReason = follow.nav_reason || "";
     const followMode = follow.state || "idle";
     const navigationMode = follow.nav_state || "idle";
 
@@ -223,10 +225,12 @@ export function createGazeOverlay(stage, ros, session, panelHost) {
         ? "error"
         : follow.enabled
           ? "active"
-          : follow.reason
+          : stopReason
             ? "stopped"
             : "idle";
-    followState.textContent = `${followMode.toUpperCase()} · ${navigationMode.toUpperCase()}`;
+    followState.textContent = follow.reacquiring
+      ? `REACQUIRING · ${navigationMode.toUpperCase()}`
+      : `${followMode.toUpperCase()} · ${navigationMode.toUpperCase()}`;
     followSize.textContent =
       reference > 0
         ? `${(observed * 100).toFixed(1)}% / ${(reference * 100).toFixed(1)}% · ${Math.abs(sizeError).toFixed(1)}% ${sizeError >= 0 ? "FAR" : "CLOSE"}`
@@ -236,12 +240,17 @@ export function createGazeOverlay(stage, ros, session, panelHost) {
     followCenterDot.style.left = `${clamp(center * 100, 0, 100)}%`;
     followBearing.textContent = `${(follow.bearing_degrees ?? 0).toFixed(1)}°`;
     followStep.textContent = `${(follow.forward_m ?? 0).toFixed(2)} m`;
-    followAge.textContent = `${age.toFixed(0)} ms`;
-    followAge.dataset.fresh = age <= 300 ? "true" : "false";
-    followGoals.textContent = `${follow.nav_active ?? 0} active · ${follow.nav_pending ?? 0} pending`;
+    followAge.textContent = follow.reacquiring ? `${age.toFixed(0)} ms · REACQUIRING` : `${age.toFixed(0)} ms`;
+    followAge.dataset.fresh = age <= 300 && !follow.reacquiring ? "true" : "false";
+    followGoals.textContent = [
+      `${follow.nav_active ?? 0} active`,
+      `${follow.nav_pending ?? 0} pending`,
+      ...(follow.nav_canceling ? [`${follow.nav_canceling} canceling`] : []),
+    ].join(" · ");
     followDetails.textContent = [
       `ODOM GOAL  ${goal ? `${goal.x.toFixed(2)}, ${goal.y.toFixed(2)}, ${goal.yaw_degrees.toFixed(0)}°` : "—"}`,
-      `STOP REASON  ${reason}`,
+      `STOP REASON  ${stopReason || "—"}`,
+      `NAV DETAIL  ${navReason || "—"}`,
       `FRAME ${current.frame}  ·  INFERENCE ${(current.detector?.inference_ms ?? 0).toFixed(1)} ms`,
     ].join("\n");
   }
@@ -389,15 +398,19 @@ function statusText(debug) {
   if (!detector) return legacyStatusText(debug);
   const prefix = detector.model === "yolov8n-pose" ? "YOLO POSE" : detector.model.toUpperCase();
   if (detector.error) return `${prefix} · ERROR: ${detector.error.slice(0, 80).toUpperCase()}`;
+  if (debug.status === "paused" && debug.follow?.enabled) return `${prefix} · PERSON FOLLOW PAUSED`;
   if (debug.follow?.enabled) {
+    if (debug.follow.reacquiring) {
+      return `${prefix} · PERSON FOLLOW · REACQUIRING ${Math.round(debug.follow.target_age_ms)} MS`;
+    }
     const size =
       debug.follow.reference_height > 0
         ? Math.round((debug.follow.observed_height / debug.follow.reference_height) * 100)
         : 100;
     return `${prefix} · PERSON FOLLOW · ${debug.follow.nav_state.toUpperCase()} · SIZE ${size}%`;
   }
-  if (debug.follow?.reason) {
-    return `${prefix} · FOLLOW STOPPED: ${debug.follow.reason.slice(0, 64).toUpperCase()}`;
+  if (debug.follow?.stop_reason) {
+    return `${prefix} · FOLLOW STOPPED: ${debug.follow.stop_reason.slice(0, 64).toUpperCase()}`;
   }
   if (debug.status === "centering") return `${prefix} · CENTERING ${Math.round(debug.progress * 100)}%`;
   if (debug.status === "locked") return `${prefix} · PERSON LOCKED`;

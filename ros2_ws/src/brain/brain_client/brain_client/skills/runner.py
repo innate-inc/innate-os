@@ -87,9 +87,6 @@ class PrimitiveRunner:
                 skill_id=skill_id,
                 reason=f"another skill ({occupant.primitive_name}) is already running",
             )
-            # This start paused the gaze, and the occupant (a manual run — the
-            # only writer that can win the claim race) never manages it: resume.
-            self._on_task_finished()
             return
         if not self._send_goal(skill_id, inputs, generation):
             self._release(claim)
@@ -125,14 +122,15 @@ class PrimitiveRunner:
                 self._state.primitive_running = None
         return False
 
-    def mirror_manual_event(self, status: str, *, primitive_name, primitive_id, skill_id) -> None:
+    def mirror_manual_event(self, status: str, *, primitive_name, primitive_id, skill_id) -> bool:
         """Mirror a manual (webapp/CLI) run into the skill slot.
 
         Keeps the brain honoring one-skill-at-a-time for runs it didn't start:
         a mirrored "running" collapses the next turn's tools to stop/wait, and
         the run's own terminal event clears it. Runs under the slot lock so a
         concurrent brain claim can neither be clobbered by the mirror nor
-        cleared by a manual run's terminal event.
+        cleared by a manual run's terminal event. Returns whether this event
+        changed the slot and therefore owns the gaze pause/resume transition.
         """
         with self._slot_lock:
             if status == "running":
@@ -140,17 +138,20 @@ class PrimitiveRunner:
                     self._state.primitive_running = RunningSkill(
                         primitive_name=primitive_name, skill_id=skill_id, primitive_id=primitive_id, manual=True
                     )
+                    return True
             elif status in ("completed", "failed", "interrupted"):
                 running = self._state.primitive_running
                 if running is None or not running.manual:
-                    return
+                    return False
                 # Match ids when both sides carry one: a delayed terminal from
                 # an older manual run must not clear a newer run's mirror. A
                 # publisher that omits ids falls back to any-manual — requiring
                 # a match there would wedge the slot shut forever.
                 if primitive_id and running.primitive_id and primitive_id != running.primitive_id:
-                    return
+                    return False
                 self._state.primitive_running = None
+                return True
+        return False
 
     def _release(self, claim: RunningSkill) -> None:
         """Free the slot iff it still holds ``claim`` (identity, not equality)."""

@@ -323,11 +323,15 @@ interface GazeFollow {
   forward_m: number;
   bearing_degrees: number;
   perception_age_ms: number;
+  target_age_ms: number;
+  reacquiring: boolean;
   nav_state: string;
   nav_pending: number;
   nav_active: number;
+  nav_canceling: number;
   goal: { x: number; y: number; yaw_degrees: number } | null;
-  reason: string;
+  stop_reason: string;
+  nav_reason: string;
 }
 
 interface GazeDebug {
