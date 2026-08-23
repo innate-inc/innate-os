@@ -27,6 +27,13 @@ export function createAudioOverlay(stage, ros) {
       <span class="audio-debug-engine">NO TELEMETRY</span>
       <span class="audio-debug-reading">LEVEL —</span>
     </div>
+    <div class="audio-debug-flow mono" aria-label="Speech pipeline">
+      <span data-step="heard">HEARD</span>
+      <span data-step="stopped">STOP</span>
+      <span data-step="text">TEXT</span>
+      <span data-step="reply">REPLY</span>
+      <span data-step="voice">VOICE</span>
+    </div>
     <div class="audio-debug-event">Waiting for microphone telemetry…</div>
     <div class="audio-debug-stats mono"></div>
   `;
@@ -40,6 +47,12 @@ export function createAudioOverlay(stage, ros) {
   const reading = /** @type {HTMLElement} */ (root.querySelector(".audio-debug-reading"));
   const event = /** @type {HTMLElement} */ (root.querySelector(".audio-debug-event"));
   const stats = /** @type {HTMLElement} */ (root.querySelector(".audio-debug-stats"));
+  const flowSteps = new Map(
+    [...root.querySelectorAll(".audio-debug-flow [data-step]")].map((step) => [
+      String(step.getAttribute("data-step")),
+      /** @type {HTMLElement} */ (step),
+    ]),
+  );
 
   /** @type {number | null} */
   let staleTimer = null;
@@ -52,6 +65,7 @@ export function createAudioOverlay(stage, ros) {
   let utteranceOpen = false;
   let utteranceSeconds = 0;
   let ducking = false;
+  let fault = "";
   let vendorVad = false;
   let transcribing = false;
   let lastTranscribeMs = 0;
@@ -70,10 +84,11 @@ export function createAudioOverlay(stage, ros) {
   function refreshState() {
     let name = "LISTENING";
     if (stale) name = "STALE";
+    else if (fault) name = fault;
     else if (ducking) name = "MUTED";
     else if (transcribing) name = "TRANSCRIBING";
     else if (voiced || utteranceOpen) name = "HEARING";
-    root.dataset.state = name.toLowerCase();
+    root.dataset.state = fault && !stale ? "error" : name.toLowerCase();
     state.textContent = name;
   }
 
@@ -97,8 +112,30 @@ export function createAudioOverlay(stage, ros) {
     if (responseTranscriptCount > 1) values.push(`BUNDLED ${responseTranscriptCount}`);
     if (audioQueueChunks) values.push(`BUFFER ${audioQueueChunks}`);
     if (droppedAudioChunks) values.push(`DROPPED ${droppedAudioChunks}`);
-    stats.textContent = values.join("  ·  ");
+    stats.replaceChildren(
+      ...values.map((value) => {
+        const chip = document.createElement("span");
+        chip.textContent = value;
+        return chip;
+      }),
+    );
     stats.hidden = values.length === 0;
+  }
+
+  function resetFlow() {
+    for (const step of flowSteps.values()) step.className = "";
+  }
+
+  /** @param {string} name @param {"active" | "done" | "error"} status */
+  function setFlowStep(name, status) {
+    const step = flowSteps.get(name);
+    if (step) step.className = status;
+  }
+
+  /** @param {string} name */
+  function clearFlowError(name) {
+    const step = flowSteps.get(name);
+    if (step?.classList.contains("error")) step.className = "";
   }
 
   /** @param {string} text */
@@ -156,17 +193,23 @@ export function createAudioOverlay(stage, ros) {
       transcribing = false;
       voiced = true;
       lastStoppedAt = 0;
+      resetFlow();
+      setFlowStep("heard", "active");
       showEvent("You are talking");
     } else if (phase === "utterance_closed") {
       transcribing = true;
       voiced = false;
       utteranceOpen = false;
       lastStoppedAt = eventAt;
+      setFlowStep("heard", "done");
+      setFlowStep("stopped", "active");
       showEvent(`You stopped talking · ${formatSeconds(data.audio_seconds)} captured`);
     } else if (phase === "transcript_ready") {
       transcribing = false;
       lastTranscriptAt = eventAt;
       pendingTranscripts += 1;
+      setFlowStep("stopped", "done");
+      setFlowStep("text", "active");
       lastTranscribeMs =
         Number(data.stop_to_transcript_ms) || (lastStoppedAt ? Math.max(0, eventAt - lastStoppedAt) : 0);
       showEvent(
@@ -176,13 +219,33 @@ export function createAudioOverlay(stage, ros) {
       );
     } else if (phase === "no_speech" || phase === "utterance_rejected") {
       transcribing = false;
+      setFlowStep("stopped", "done");
+      setFlowStep("text", "error");
       showEvent(phase === "no_speech" ? "No speech recognized" : "Not enough voiced audio");
     } else if (phase === "utterance_dropped") {
       transcribing = false;
+      setFlowStep("text", "error");
       showEvent("STT backlog dropped an utterance");
     } else if (phase === "transcription_failed") {
       transcribing = false;
+      setFlowStep("text", "error");
       showEvent("Transcription failed");
+    } else if (phase === "audio_stalled") {
+      fault = "NO AUDIO";
+      setFlowStep("heard", "error");
+      showEvent(`Hardware mic produced no audio for ${formatSeconds(data.empty_seconds)}`);
+    } else if (phase === "audio_resumed") {
+      fault = "";
+      clearFlowError("heard");
+      showEvent(`Hardware mic resumed after ${formatDuration(data.stalled_ms)}`);
+    } else if (phase === "connection_lost") {
+      fault = "STT OFFLINE";
+      setFlowStep("text", "error");
+      showEvent("Transcription connection lost");
+    } else if (phase === "connection_restored") {
+      fault = "";
+      clearFlowError("text");
+      showEvent("Transcription connection restored");
     } else if (phase === "ducking_started") {
       ducking = true;
       showEvent("Mic muted while MARS speaks");
@@ -201,10 +264,15 @@ export function createAudioOverlay(stage, ros) {
       pendingTranscripts = 0;
       transcriptToVoiceMs = lastTranscriptAt ? Math.max(0, eventAt - lastTranscriptAt) : 0;
       stopToVoiceMs = lastStoppedAt ? Math.max(0, eventAt - lastStoppedAt) : 0;
+      setFlowStep("text", "done");
+      setFlowStep("reply", "done");
+      setFlowStep("voice", "active");
       showEvent(`MARS started talking · ${formatDuration(transcriptToVoiceMs)} after transcript`);
     } else if (phase === "speech_completed" && data.source === "tts") {
+      setFlowStep("voice", "done");
       showEvent(`MARS spoke for ${formatSeconds(data.playback_seconds)}`);
     } else if (phase === "speech_failed" && data.source === "tts") {
+      setFlowStep("voice", "error");
       showEvent("MARS speech failed");
     }
     refreshState();
@@ -248,6 +316,11 @@ export function createAudioOverlay(stage, ros) {
           responseTranscriptCount,
         );
         pendingTranscripts = 0;
+        setFlowStep("text", "done");
+        setFlowStep(
+          "reply",
+          lastTranscriptAt && voiceStartedForTranscriptAt === lastTranscriptAt ? "done" : "active",
+        );
         showEvent(`MARS response ready · ${formatDuration(transcriptToReplyMs)} after transcript`);
         refreshStats();
       } catch {

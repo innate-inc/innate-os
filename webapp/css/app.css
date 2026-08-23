@@ -6549,13 +6549,15 @@ select.skill-input {
   z-index: 3;
   top: 14px;
   left: 14px;
-  width: min(272px, calc(100% - 28px));
-  padding: 10px 11px;
-  border: 1px solid rgb(255 255 255 / 15%);
-  border-radius: 12px;
-  color: rgb(237 237 242 / 78%);
-  background: rgb(7 7 10 / 68%);
-  box-shadow: 0 8px 28px rgb(0 0 0 / 26%);
+  width: min(326px, calc(100% - 28px));
+  padding: 13px;
+  border: 1px solid rgb(255 255 255 / 24%);
+  border-radius: 14px;
+  color: rgb(247 247 250 / 88%);
+  background: rgb(6 7 10 / 84%);
+  box-shadow:
+    0 12px 36px rgb(0 0 0 / 42%),
+    inset 0 1px rgb(255 255 255 / 5%);
   pointer-events: none;
   backdrop-filter: blur(18px) saturate(1.15);
 }
@@ -6563,12 +6565,12 @@ select.skill-input {
 .audio-debug-head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
 }
 
 .audio-debug-dot {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   flex: none;
   border-radius: 50%;
   background: rgb(255 255 255 / 34%);
@@ -6577,23 +6579,29 @@ select.skill-input {
 
 .audio-debug-title,
 .audio-debug-state {
-  font-size: 9px;
-  font-weight: 650;
+  font-size: 10px;
+  font-weight: 700;
   letter-spacing: 0.1em;
 }
 
 .audio-debug-state {
   margin-left: auto;
-  color: rgb(237 237 242 / 48%);
+  padding: 3px 6px;
+  border-radius: 5px;
+  color: rgb(247 247 250 / 66%);
+  background: rgb(255 255 255 / 7%);
 }
 
 .audio-debug-meter {
   position: relative;
-  height: 5px;
-  margin-top: 9px;
+  height: 9px;
+  margin-top: 11px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgb(255 255 255 / 10%);
+  background:
+    repeating-linear-gradient(90deg, transparent 0 9%, rgb(255 255 255 / 6%) 9% 10%),
+    rgb(255 255 255 / 9%);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 42%);
 }
 
 .audio-debug-level {
@@ -6610,9 +6618,11 @@ select.skill-input {
   top: -2px;
   bottom: -2px;
   left: 0;
-  width: 1px;
-  background: rgb(255 255 255 / 88%);
-  box-shadow: 0 0 0 1px rgb(0 0 0 / 42%);
+  width: 2px;
+  background: white;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 54%),
+    0 0 6px rgb(255 255 255 / 42%);
 }
 
 .audio-debug-values {
@@ -6620,23 +6630,73 @@ select.skill-input {
   justify-content: space-between;
   gap: 8px;
   margin-top: 6px;
-  color: rgb(237 237 242 / 44%);
+  color: rgb(247 247 250 / 58%);
   font-size: 8px;
   letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.audio-debug-engine {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .audio-debug-reading {
+  flex: none;
   text-align: right;
 }
 
+.audio-debug-flow {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  margin-top: 11px;
+}
+
+.audio-debug-flow span {
+  padding: 5px 2px;
+  border: 1px solid rgb(255 255 255 / 9%);
+  border-radius: 5px;
+  color: rgb(247 247 250 / 33%);
+  background: rgb(255 255 255 / 3%);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: center;
+  transition:
+    color 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.audio-debug-flow span.done {
+  border-color: rgb(98 222 173 / 32%);
+  color: rgb(133 235 195 / 78%);
+  background: rgb(98 222 173 / 9%);
+}
+
+.audio-debug-flow span.active {
+  border-color: rgb(151 135 255 / 68%);
+  color: white;
+  background: rgb(116 105 255 / 32%);
+  box-shadow: 0 0 10px rgb(116 105 255 / 22%);
+}
+
+.audio-debug-flow span.error {
+  border-color: color-mix(in srgb, var(--danger) 58%, transparent);
+  color: color-mix(in srgb, var(--danger) 82%, white);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+}
+
 .audio-debug-event {
-  margin-top: 8px;
+  min-height: 30px;
+  margin-top: 10px;
   overflow: hidden;
-  color: rgb(255 255 255 / 88%);
-  font-size: 11px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: rgb(255 255 255 / 94%);
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1.3;
 }
 
 .audio-debug-event.flash {
@@ -6644,14 +6704,33 @@ select.skill-input {
 }
 
 .audio-debug-stats {
-  margin-top: 4px;
-  color: rgb(237 237 242 / 48%);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 7px;
+  color: rgb(247 247 250 / 64%);
   font-size: 8px;
   letter-spacing: 0.04em;
 }
 
+.audio-debug-stats span {
+  padding: 3px 5px;
+  border: 1px solid rgb(255 255 255 / 9%);
+  border-radius: 4px;
+  background: rgb(255 255 255 / 5%);
+}
+
+.audio-debug-stats[hidden] {
+  display: none;
+}
+
 .audio-debug[data-state="listening"] .audio-debug-dot {
   background: rgb(98 222 173 / 92%);
+}
+
+.audio-debug[data-state="listening"] .audio-debug-state {
+  color: rgb(133 235 195);
+  background: rgb(98 222 173 / 11%);
 }
 
 .audio-debug[data-state="hearing"] {
@@ -6663,9 +6742,19 @@ select.skill-input {
   box-shadow: 0 0 12px rgb(98 222 173 / 72%);
 }
 
+.audio-debug[data-state="hearing"] .audio-debug-state {
+  color: rgb(133 235 195);
+  background: rgb(98 222 173 / 11%);
+}
+
 .audio-debug[data-state="transcribing"] .audio-debug-dot {
   background: rgb(151 135 255);
   box-shadow: 0 0 12px rgb(151 135 255 / 62%);
+}
+
+.audio-debug[data-state="transcribing"] .audio-debug-state {
+  color: rgb(190 181 255);
+  background: rgb(151 135 255 / 13%);
 }
 
 .audio-debug[data-state="muted"] {
@@ -6678,6 +6767,7 @@ select.skill-input {
 
 .audio-debug[data-state="muted"] .audio-debug-state {
   color: rgb(255 190 92);
+  background: rgb(255 190 92 / 12%);
 }
 
 .audio-debug[data-state="stale"] .audio-debug-dot {
@@ -6686,6 +6776,21 @@ select.skill-input {
 
 .audio-debug[data-state="stale"] .audio-debug-state {
   color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.audio-debug[data-state="error"] {
+  border-color: color-mix(in srgb, var(--danger) 48%, transparent);
+}
+
+.audio-debug[data-state="error"] .audio-debug-dot {
+  background: var(--danger);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--danger) 58%, transparent);
+}
+
+.audio-debug[data-state="error"] .audio-debug-state {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
 @keyframes audio-debug-flash {
@@ -6697,6 +6802,10 @@ select.skill-input {
 
 @media (prefers-reduced-motion: reduce) {
   .audio-debug-level {
+    transition: none;
+  }
+
+  .audio-debug-flow span {
     transition: none;
   }
 
@@ -8746,10 +8855,24 @@ select.skill-input {
   gap: 2px;
 }
 
+.chat-debug-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .chat-debug-title {
   color: rgb(231 231 234 / 88%);
   font-size: 11px;
   line-height: 1.35;
+}
+
+.chat-debug-time {
+  flex: none;
+  color: rgb(231 231 234 / 34%);
+  font-size: 8px;
+  letter-spacing: 0.03em;
 }
 
 .chat-debug-detail {

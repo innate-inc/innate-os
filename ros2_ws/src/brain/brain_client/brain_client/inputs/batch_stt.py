@@ -114,6 +114,9 @@ class Endpointer:
         self._in_speech = False
         self._silence_bytes = 0
         self._voiced_bytes = 0
+        self._peak_level = 0.0
+        self._last_peak_level = 0.0
+        self._last_close_reason: str | None = None
 
     @property
     def in_speech(self) -> bool:
@@ -122,6 +125,14 @@ class Endpointer:
     @property
     def utterance_secs(self) -> float:
         return len(self._utterance) / self._bytes_per_sec
+
+    @property
+    def last_close_reason(self) -> str | None:
+        return self._last_close_reason
+
+    @property
+    def last_peak_level(self) -> float:
+        return self._last_peak_level
 
     def feed(self, chunk: bytes) -> bytes | None:
         """Consume one chunk; returns the finished utterance's PCM when one closes."""
@@ -135,9 +146,12 @@ class Endpointer:
             self._utterance = bytearray(b"".join(self._pre_roll))
             self._silence_bytes = 0
             self._voiced_bytes = len(chunk)
+            self._peak_level = self._is_voiced.level
+            self._last_close_reason = None
             return None
 
         self._utterance.extend(chunk)
+        self._peak_level = max(self._peak_level, self._is_voiced.level)
         if voiced:
             self._silence_bytes = 0
             self._voiced_bytes += len(chunk)
@@ -148,6 +162,7 @@ class Endpointer:
         utterance_secs = len(self._utterance) / self._bytes_per_sec
         if trailing_silence < self._silence_secs and utterance_secs < MAX_UTTERANCE_SECS:
             return None
+        self._last_close_reason = "silence" if trailing_silence >= self._silence_secs else "max_duration"
         return self._close()
 
     def _buffer_pre_roll(self, chunk: bytes) -> None:
@@ -165,6 +180,8 @@ class Endpointer:
         self._pre_roll_bytes = 0
         self._voiced_bytes = 0
         self._silence_bytes = 0
+        self._last_peak_level = self._peak_level
+        self._peak_level = 0.0
         return utterance if long_enough else None
 
 
@@ -318,6 +335,7 @@ class PendingUtterance:
     utterance_id: int
     audio_seconds: float
     closed_at: float
+    peak_level: float
 
 
 class BatchSttSession:
@@ -345,6 +363,7 @@ class BatchSttSession:
         self._on_transcript = on_transcript
         self._on_debug = on_debug
         self._logger = logger
+        self._silence_secs = silence_secs
         self._endpointer = Endpointer(sample_rate=sample_rate, is_voiced=is_voiced, silence_secs=silence_secs)
         self._utterances: queue.Queue[PendingUtterance | None] = queue.Queue(maxsize=MAX_PENDING_UTTERANCES)
         self._worker: threading.Thread | None = None
@@ -369,6 +388,8 @@ class BatchSttSession:
             self._emit_debug(
                 "utterance_rejected",
                 audio_seconds=round(open_seconds + len(chunk) / (self._sample_rate * 2), 2),
+                close_reason=self._endpointer.last_close_reason,
+                peak_level=round(self._endpointer.last_peak_level, 4),
             )
         if utterance is None:
             return
@@ -379,6 +400,7 @@ class BatchSttSession:
             utterance_id=self.utterance_count,
             audio_seconds=audio_seconds,
             closed_at=time.monotonic(),
+            peak_level=self._endpointer.last_peak_level,
         )
         self._logger.info(f"🎤 Utterance closed ({audio_seconds:.1f}s), transcribing...")
         self._emit_debug(
@@ -386,6 +408,9 @@ class BatchSttSession:
             utterance_id=pending.utterance_id,
             audio_seconds=round(audio_seconds, 2),
             pending=self._utterances.qsize(),
+            close_reason=self._endpointer.last_close_reason,
+            silence_seconds=self._silence_secs,
+            peak_level=round(pending.peak_level, 4),
         )
         self._enqueue(pending)
 
@@ -403,6 +428,7 @@ class BatchSttSession:
                             "utterance_dropped",
                             utterance_id=dropped.utterance_id,
                             audio_seconds=round(dropped.audio_seconds, 2),
+                            peak_level=round(dropped.peak_level, 4),
                         )
                 except queue.Empty:
                     pass
@@ -441,6 +467,7 @@ class BatchSttSession:
                     total_ms=round(queue_ms + transcribe_ms),
                     stop_to_transcript_ms=round(queue_ms + transcribe_ms),
                     characters=len(text),
+                    peak_level=round(pending.peak_level, 4),
                 )
                 # A call that outlives stop() must not publish: by the time it
                 # returns, the mic may be active again under a newer session.
@@ -455,6 +482,7 @@ class BatchSttSession:
                     queue_ms=round(queue_ms),
                     transcribe_ms=round((time.monotonic() - started_at) * 1000),
                     error=str(e),
+                    peak_level=round(pending.peak_level, 4),
                 )
                 self._logger.error(f"❌ Batch transcription failed: {e}")
 

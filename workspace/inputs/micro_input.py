@@ -300,6 +300,7 @@ class MicroInput(InputDevice):
         # Don't reconnect if we're shutting down
         if self._stop_evt.is_set():
             return
+        self._emit_speech_debug("connection_lost")
 
         # Start reconnection in background thread
         self._schedule_reconnect()
@@ -509,6 +510,7 @@ class MicroInput(InputDevice):
 
                     if self._is_connected:
                         self.logger.info("✅ Reconnection successful!")
+                        self._emit_speech_debug("connection_restored")
                         break
 
                 except Exception as e:
@@ -528,13 +530,33 @@ class MicroInput(InputDevice):
         self.send_data(
             {
                 **event,
-                "backend": self._backend,
-                "engine": self._vad_engine,
+                **self._speech_debug_context(),
                 "audio_queue_chunks": audio_queue.qsize() if audio_queue is not None else None,
                 "dropped_audio_chunks": getattr(self.mic, "dropped_chunks", 0),
             },
             data_type="telemetry",
         )
+
+    def _speech_debug_context(self) -> dict:
+        detector = self._vad_detector
+        cfg = self.proxy.config if self.proxy is not None else {}
+        context = {
+            "backend": self._backend,
+            "engine": self._vad_engine if self._backend in BATCH_BACKENDS else VENDOR_VAD_ENGINE,
+            "capture": "browser" if isinstance(self.mic, RosPcmStreamer) else "hardware",
+        }
+        if self._backend in BATCH_BACKENDS and detector is not None:
+            return {
+                **context,
+                "vad_threshold": detector.threshold,
+                "vad_level": round(detector.level, 4),
+                "silence_seconds": float(cfg.get("stt_vad_silence_secs", 0.5)),
+            }
+        return {
+            **context,
+            "vad_threshold": float(cfg.get("stt_realtime_vad_threshold", 0.3)),
+            "silence_seconds": float(cfg.get("stt_realtime_vad_silence_secs", 0.7)),
+        }
 
     def _emit_speech_debug(self, phase: str, **details) -> None:
         self.send_data(
@@ -543,8 +565,7 @@ class MicroInput(InputDevice):
                 "source": "stt",
                 "phase": phase,
                 "timestamp": time.time(),
-                "backend": self._backend,
-                "engine": self._vad_engine if self._backend in BATCH_BACKENDS else VENDOR_VAD_ENGINE,
+                **self._speech_debug_context(),
                 **details,
             },
             data_type="telemetry",
@@ -622,14 +643,23 @@ class MicroInput(InputDevice):
             chunks_seen = 0
             empty_count = 0
             ducking_logged = False
+            stalled_at = None
             while not self._stop_evt.is_set():
                 try:
                     chunk = self.mic.queue.get(timeout=0.1)
                     empty_count = 0  # Reset on successful get
+                    if stalled_at is not None:
+                        self._emit_speech_debug(
+                            "audio_resumed",
+                            stalled_ms=round((time.monotonic() - stalled_at) * 1000),
+                        )
+                        stalled_at = None
                 except queue.Empty:
                     empty_count += 1
-                    if empty_count == 50:
+                    if empty_count == 50 and not isinstance(self.mic, RosPcmStreamer):
                         self.logger.warning("⚠️ No audio chunks received (queue empty for 5s)")
+                        stalled_at = time.monotonic()
+                        self._emit_speech_debug("audio_stalled", empty_seconds=5)
                     continue
 
                 try:

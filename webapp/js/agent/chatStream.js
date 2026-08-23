@@ -360,13 +360,21 @@ export function createChatStream(opts = {}) {
     el.className = `chat-debug ${description.level}`;
     const source = document.createElement("span");
     source.className = "chat-debug-source mono";
-    source.textContent = String(event?.source ?? "speech").toUpperCase();
+    const sourceName = String(event?.source ?? "speech").toUpperCase();
+    source.textContent = event?.utterance_id ? `${sourceName} #${event.utterance_id}` : sourceName;
     const copy = document.createElement("span");
     copy.className = "chat-debug-copy";
+    const titleRow = document.createElement("span");
+    titleRow.className = "chat-debug-title-row";
     const title = document.createElement("span");
     title.className = "chat-debug-title";
     title.textContent = description.title;
-    copy.append(title);
+    const time = document.createElement("time");
+    time.className = "chat-debug-time mono";
+    time.dateTime = new Date(timestampMs(event?.timestamp)).toISOString();
+    time.textContent = clockTime(event?.timestamp);
+    titleRow.append(title, time);
+    copy.append(titleRow);
     if (description.detail) {
       const detail = document.createElement("span");
       detail.className = "chat-debug-detail mono";
@@ -715,7 +723,11 @@ function describeDebugEvent(event) {
   const phase = String(event?.phase ?? "");
   const backend = [event?.backend, event?.engine].filter(Boolean).join(" / ");
   if (source === "stt" && phase === "speech_started") {
-    return { title: "You are talking", detail: joinDetails("speech detected", backend), level: "active" };
+    return {
+      title: "You are talking",
+      detail: joinDetails("speech detected", vadDetail(event), endpointDetail(event), event?.capture, backend),
+      level: "active",
+    };
   }
   if (source === "stt" && phase === "ducking_started") {
     return {
@@ -734,7 +746,13 @@ function describeDebugEvent(event) {
   if (source === "stt" && phase === "utterance_closed") {
     return {
       title: `You stopped talking · ${seconds(event?.audio_seconds)} captured`,
-      detail: joinDetails(backend, event?.pending ? `${event.pending} waiting` : ""),
+      detail: joinDetails(
+        closeReason(event),
+        vadDetail(event),
+        event?.pending ? `${event.pending} transcripts waiting` : "no STT backlog",
+        event?.capture,
+        backend,
+      ),
       level: "active",
     };
   }
@@ -748,8 +766,11 @@ function describeDebugEvent(event) {
         event?.audio_seconds != null ? `${seconds(event.audio_seconds)} audio` : "",
         event?.queue_ms != null ? `${duration(event.queue_ms)} queued` : "",
         event?.transcribe_ms != null ? `${duration(event.transcribe_ms)} API` : "",
+        event?.characters != null ? `${event.characters} characters` : "",
+        vadDetail(event),
         event?.audio_queue_chunks ? `${event.audio_queue_chunks} audio chunks buffered` : "",
         event?.dropped_audio_chunks ? `${event.dropped_audio_chunks} audio chunks dropped` : "",
+        event?.capture,
         backend,
       ),
       level: "success",
@@ -758,14 +779,25 @@ function describeDebugEvent(event) {
   if (source === "stt" && phase === "no_speech") {
     return {
       title: `No speech recognized after ${duration(event?.total_ms)}`,
-      detail: joinDetails(event?.audio_seconds != null ? `${seconds(event.audio_seconds)} audio` : "", backend),
+      detail: joinDetails(
+        event?.audio_seconds != null ? `${seconds(event.audio_seconds)} audio` : "",
+        vadDetail(event),
+        event?.capture,
+        backend,
+      ),
       level: "warning",
     };
   }
   if (source === "stt" && phase === "utterance_rejected") {
     return {
       title: "Not enough voiced audio to transcribe",
-      detail: joinDetails(event?.audio_seconds != null ? `${seconds(event.audio_seconds)} audio` : "", backend),
+      detail: joinDetails(
+        event?.audio_seconds != null ? `${seconds(event.audio_seconds)} audio` : "",
+        closeReason(event),
+        vadDetail(event),
+        event?.capture,
+        backend,
+      ),
       level: "warning",
     };
   }
@@ -781,6 +813,34 @@ function describeDebugEvent(event) {
       title: `Transcription failed after ${duration(event?.transcribe_ms)}`,
       detail: joinDetails(String(event?.error ?? ""), backend),
       level: "error",
+    };
+  }
+  if (source === "stt" && phase === "audio_stalled") {
+    return {
+      title: `Microphone capture produced no audio for ${seconds(event?.empty_seconds)}`,
+      detail: joinDetails(event?.capture, backend),
+      level: "error",
+    };
+  }
+  if (source === "stt" && phase === "audio_resumed") {
+    return {
+      title: `Microphone audio resumed after ${duration(event?.stalled_ms)}`,
+      detail: joinDetails(event?.capture, backend),
+      level: "success",
+    };
+  }
+  if (source === "stt" && phase === "connection_lost") {
+    return {
+      title: "Realtime transcription connection lost",
+      detail: joinDetails("reconnecting automatically", backend),
+      level: "error",
+    };
+  }
+  if (source === "stt" && phase === "connection_restored") {
+    return {
+      title: "Realtime transcription connection restored",
+      detail: backend,
+      level: "success",
     };
   }
   if (source === "tts" && phase === "speech_started") {
@@ -865,4 +925,41 @@ function timestampMs(value) {
 /** @param {number} pending @param {number} current */
 function claimResponseTranscripts(pending, current) {
   return pending > 0 ? pending : current;
+}
+
+/** @param {any} event */
+function vadDetail(event) {
+  const peak = Number(event?.peak_level);
+  const current = Number(event?.vad_level);
+  const threshold = Number(event?.vad_threshold);
+  const level = Number.isFinite(peak) ? peak : current;
+  if (!Number.isFinite(level) || !Number.isFinite(threshold)) return "";
+  const label = Number.isFinite(peak) ? "VAD peak" : "VAD";
+  return `${label} ${level.toFixed(3)} / ${threshold.toFixed(3)} trigger`;
+}
+
+/** @param {any} event */
+function endpointDetail(event) {
+  const silence = Number(event?.silence_seconds);
+  return Number.isFinite(silence) ? `${silence.toFixed(2)}s silence endpoint` : "";
+}
+
+/** @param {any} event */
+function closeReason(event) {
+  if (event?.close_reason === "max_duration") return "ended by 30s safety limit";
+  if (event?.close_reason === "silence") return joinDetails("ended by silence", endpointDetail(event));
+  return endpointDetail(event);
+}
+
+/** @param {unknown} value */
+function clockTime(value) {
+  const date = new Date(timestampMs(value));
+  const millis = String(date.getMilliseconds()).padStart(3, "0");
+  const time = date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  return `${time}.${millis}`;
 }
