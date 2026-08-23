@@ -6665,6 +6665,120 @@ select.skill-input {
   text-align: right;
 }
 
+.audio-debug-signals {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  margin-top: 10px;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 9%);
+  border-radius: 7px;
+  background: rgb(255 255 255 / 9%);
+}
+
+.audio-debug-signals > div {
+  min-width: 0;
+  padding: 7px;
+  background: rgb(8 9 13 / 92%);
+}
+
+.audio-debug-signals span,
+.audio-debug-signals strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-debug-signals span {
+  color: rgb(247 247 250 / 42%);
+  font-size: 7px;
+  letter-spacing: 0.09em;
+}
+
+.audio-debug-signals strong {
+  margin-top: 3px;
+  color: rgb(247 247 250 / 88%);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.audio-debug-ducking[data-active="true"] {
+  color: rgb(255 190 92);
+}
+
+.audio-debug-trace {
+  margin-top: 9px;
+}
+
+.audio-debug-trace-head {
+  display: flex;
+  justify-content: space-between;
+  color: rgb(247 247 250 / 42%);
+  font-size: 7px;
+  letter-spacing: 0.07em;
+}
+
+.audio-debug-trace-key {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.audio-debug-trace-key i {
+  width: 10px;
+  height: 2px;
+  margin-left: 3px;
+  border-radius: 999px;
+}
+
+.audio-debug-trace-key i[data-signal="rms"] {
+  background: rgb(98 222 173);
+}
+
+.audio-debug-trace-key i[data-signal="silero"] {
+  background: rgb(151 135 255);
+}
+
+.audio-debug-trace svg {
+  display: block;
+  width: 100%;
+  height: 64px;
+  margin-top: 5px;
+  overflow: hidden;
+  border-radius: 6px;
+  background:
+    linear-gradient(rgb(255 255 255 / 3%), transparent 50%),
+    repeating-linear-gradient(90deg, transparent 0 19.5%, rgb(255 255 255 / 5%) 19.5% 20%);
+}
+
+.audio-debug-trace polyline {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+
+.audio-debug-trace-rms {
+  stroke: rgb(98 222 173);
+}
+
+.audio-debug-trace-silero {
+  stroke: rgb(151 135 255);
+}
+
+.audio-debug-trace-mid {
+  stroke: rgb(255 255 255 / 10%);
+  vector-effect: non-scaling-stroke;
+}
+
+.audio-debug-trace-trigger {
+  stroke: rgb(255 255 255 / 34%);
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
 .audio-debug-flow {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -6719,6 +6833,37 @@ select.skill-input {
 
 .audio-debug-event.flash {
   animation: audio-debug-flash 220ms ease-out;
+}
+
+.audio-debug-failure {
+  margin-top: 7px;
+  padding: 7px;
+  border: 1px solid rgb(255 190 92 / 28%);
+  border-radius: 6px;
+  background: rgb(255 190 92 / 8%);
+}
+
+.audio-debug-failure > span,
+.audio-debug-failure > strong {
+  display: block;
+}
+
+.audio-debug-failure > span {
+  color: rgb(255 190 92 / 72%);
+  font-size: 7px;
+  letter-spacing: 0.09em;
+}
+
+.audio-debug-failure > strong {
+  margin-top: 4px;
+  color: rgb(255 229 190 / 88%);
+  font-size: 8px;
+  font-weight: 550;
+  line-height: 1.45;
+}
+
+.audio-debug-failure[hidden] {
+  display: none;
 }
 
 .audio-debug-stats {

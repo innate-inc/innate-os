@@ -782,7 +782,8 @@ function describeDebugEvent(event) {
       detail: joinDetails(
         event?.audio_seconds != null ? `${seconds(event.audio_seconds)} audio` : "",
         vadDetail(event),
-        event?.capture,
+        audioDiagnosticDetail(event),
+        captureDetail(event),
         backend,
       ),
       level: "warning",
@@ -795,7 +796,8 @@ function describeDebugEvent(event) {
         event?.audio_seconds != null ? `${seconds(event.audio_seconds)} audio` : "",
         closeReason(event),
         vadDetail(event),
-        event?.capture,
+        audioDiagnosticDetail(event),
+        captureDetail(event),
         backend,
       ),
       level: "warning",
@@ -936,6 +938,26 @@ function vadDetail(event) {
   if (!Number.isFinite(level) || !Number.isFinite(threshold)) return "";
   const label = Number.isFinite(peak) ? "VAD peak" : "VAD";
   return `${label} ${level.toFixed(3)} / ${threshold.toFixed(3)} trigger`;
+}
+
+/** @param {any} event */
+function audioDiagnosticDetail(event) {
+  const rms = Number(event?.rms);
+  const silero = Number(event?.silero_score);
+  const values = [];
+  if (event?.rms != null && Number.isFinite(rms)) values.push(`rolling RMS ${rms.toFixed(4)}`);
+  if (event?.silero_score != null && Number.isFinite(silero)) {
+    values.push(`Silero ${silero.toFixed(3)}${event?.silero_paused ? " (paused)" : ""}`);
+  }
+  values.push(event?.ducking ? "ducking active; audio discarded" : "ducking off");
+  return values.join(" · ");
+}
+
+/** @param {any} event */
+function captureDetail(event) {
+  const device = String(event?.audio_device_id ?? "");
+  const name = String(event?.audio_device_name ?? "");
+  return joinDetails(event?.capture, name, device);
 }
 
 /** @param {any} event */

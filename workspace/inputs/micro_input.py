@@ -25,14 +25,17 @@ shared.
 Uses proxy services via self.proxy (injected by InputManager).
 """
 
+import array
 import base64
 import json
+import math
 import queue
 import re
 import shutil
 import subprocess
 import threading
 import time
+from collections import deque
 
 from brain_client.brain.transport import pick_rest
 from brain_client.common.logging import UniversalLogger
@@ -71,6 +74,7 @@ VENDOR_VAD_ENGINE = "vendor"
 
 # One vad_status frame per this many mic chunks (20 ms each) — 5 Hz on the wire.
 VAD_STATUS_EVERY_CHUNKS = 10
+RMS_WINDOW_SECS = 0.5
 
 ELEVENLABS_ERROR_TYPES = frozenset(
     {
@@ -88,6 +92,29 @@ ELEVENLABS_ERROR_TYPES = frozenset(
         "transcriber_error",
     }
 )
+
+
+class RollingRms:
+    def __init__(self, sample_rate: int, window_secs: float):
+        self._target_samples = round(sample_rate * window_secs)
+        self._chunks: deque[tuple[int, int]] = deque()
+        self._square_sum = 0
+        self._sample_count = 0
+
+    def add(self, chunk: bytes) -> float:
+        samples = array.array("h", chunk[: len(chunk) - len(chunk) % 2])
+        square_sum = sum(sample * sample for sample in samples)
+        sample_count = len(samples)
+        self._chunks.append((square_sum, sample_count))
+        self._square_sum += square_sum
+        self._sample_count += sample_count
+        while self._chunks and self._sample_count - self._chunks[0][1] >= self._target_samples:
+            old_square_sum, old_sample_count = self._chunks.popleft()
+            self._square_sum -= old_square_sum
+            self._sample_count -= old_sample_count
+        if not self._sample_count:
+            return 0.0
+        return math.sqrt(self._square_sum / self._sample_count) / 32768.0
 
 
 class MicroInput(InputDevice):
@@ -119,6 +146,10 @@ class MicroInput(InputDevice):
         self._max_reconnect_delay = 30  # Max 30 seconds between retries
         self._realtime_speech_started_at = None
         self._realtime_speech_stopped_at = None
+        self._rolling_rms = RollingRms(DEFAULT_SAMPLE_RATE, RMS_WINDOW_SECS)
+        self._rms_level = 0.0
+        self._audio_device_id = "unavailable"
+        self._audio_device_name = "No capture source"
         # Initialize logger wrapper (will be updated when set_logger is called)
         self.logger = UniversalLogger(enabled=False)
 
@@ -166,6 +197,8 @@ class MicroInput(InputDevice):
             raise RuntimeError("no STT configuration (the proxy client was never created)")
 
         try:
+            self._rolling_rms = RollingRms(DEFAULT_SAMPLE_RATE, RMS_WINDOW_SECS)
+            self._rms_level = 0.0
             self.mic = self._start_audio_source()
             self.logger.info(f"🎙️ Microphone started (rate: {DEFAULT_SAMPLE_RATE}, channels: {DEFAULT_CHANNELS})")
             self._connect_via_proxy()
@@ -180,13 +213,18 @@ class MicroInput(InputDevice):
         # No arecord at all, rather than arecord listing no cards: a robot whose
         # microphone did not enumerate still has a working `default` to reach for.
         if shutil.which("arecord") is None and self.node is not None:
+            self._audio_device_id = MIC_AUDIO_TOPIC
+            self._audio_device_name = "Browser microphone"
             mic = RosPcmStreamer(self.node, self.logger)
             mic.start()
             return mic
 
-        self.logger.info(f"🎙️ Using audio device: {device or 'default'}")
+        self._audio_device_id = device or "default"
+        if device is None:
+            self._audio_device_name = "ALSA default"
+        self.logger.info(f"🎙️ Using audio device: {self._audio_device_id}")
         mic = ArecordStreamer(self.logger)
-        mic.start(device=device or "default", sample_rate=DEFAULT_SAMPLE_RATE, channels=DEFAULT_CHANNELS)
+        mic.start(device=self._audio_device_id, sample_rate=DEFAULT_SAMPLE_RATE, channels=DEFAULT_CHANNELS)
         return mic
 
     def _on_elevenlabs_message(self, ws, message: str):
@@ -419,6 +457,11 @@ class MicroInput(InputDevice):
             "backend": self._backend,
             "engine": self._vad_engine,
             "last_transcript": self._last_transcript,
+            "capture": "browser" if isinstance(self.mic, RosPcmStreamer) else "hardware",
+            "audio_device_id": self._audio_device_id,
+            "audio_device_name": self._audio_device_name,
+            "rms": round(self._rms_level, 4),
+            "ducking": self._is_robot_talking,
         }
         if self._backend not in BATCH_BACKENDS or detector is None:
             self.send_data({**frame, "engine": VENDOR_VAD_ENGINE}, data_type="telemetry")
@@ -428,8 +471,9 @@ class MicroInput(InputDevice):
                 **frame,
                 "threshold": detector.threshold,
                 "level": round(detector.level, 4),
+                "silero_score": round(detector.level, 4) if self._vad_engine == "silero" else None,
+                "silero_paused": self._vad_engine == "silero" and self._is_robot_talking,
                 "voiced": detector.voiced,
-                "ducking": self._is_robot_talking,
                 **client.status(),
             },
             data_type="telemetry",
@@ -544,12 +588,18 @@ class MicroInput(InputDevice):
             "backend": self._backend,
             "engine": self._vad_engine if self._backend in BATCH_BACKENDS else VENDOR_VAD_ENGINE,
             "capture": "browser" if isinstance(self.mic, RosPcmStreamer) else "hardware",
+            "audio_device_id": self._audio_device_id,
+            "audio_device_name": self._audio_device_name,
+            "rms": round(self._rms_level, 4),
+            "ducking": self._is_robot_talking,
         }
         if self._backend in BATCH_BACKENDS and detector is not None:
             return {
                 **context,
                 "vad_threshold": detector.threshold,
                 "vad_level": round(detector.level, 4),
+                "silero_score": round(detector.level, 4) if self._vad_engine == "silero" else None,
+                "silero_paused": self._vad_engine == "silero" and self._is_robot_talking,
                 "silence_seconds": float(cfg.get("stt_vad_silence_secs", 0.5)),
             }
         return {
@@ -647,6 +697,7 @@ class MicroInput(InputDevice):
             while not self._stop_evt.is_set():
                 try:
                     chunk = self.mic.queue.get(timeout=0.1)
+                    self._rms_level = self._rolling_rms.add(chunk)
                     empty_count = 0  # Reset on successful get
                     if stalled_at is not None:
                         self._emit_speech_debug(
@@ -783,6 +834,7 @@ class MicroInput(InputDevice):
             preferred_device = devices[0]
 
         if preferred_device:
+            self._audio_device_name = preferred_device["name"]
             self.logger.info(f"🎙️ Selected audio device: {preferred_device['name']} ({preferred_device['id']})")
 
         return preferred_device["id"] if preferred_device else None
