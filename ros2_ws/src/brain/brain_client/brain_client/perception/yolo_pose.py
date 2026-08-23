@@ -106,7 +106,12 @@ class YoloPoseDetector:
     """One fixed-shape ONNX session mapping a BGR frame to visible head targets."""
 
     def __init__(self, model_path: Path = MODEL_PATH) -> None:
-        import onnxruntime  # deferred: gaze-disabled agents must not load the runtime
+        try:
+            import onnxruntime  # deferred: gaze-disabled agents must not load the runtime
+        except ModuleNotFoundError as error:
+            if error.name == "onnxruntime":
+                raise RuntimeError("onnxruntime is not installed") from error
+            raise
 
         if not model_path.is_file():
             raise FileNotFoundError(f"pose model not found: {model_path}")

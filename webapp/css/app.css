@@ -6826,6 +6826,10 @@ select.skill-input {
   display: none;
 }
 
+.gaze-debug[data-status="error"] {
+  z-index: 14;
+}
+
 .gaze-debug-content {
   position: absolute;
   overflow: hidden;

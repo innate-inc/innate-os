@@ -27,7 +27,7 @@ einops
 dotenv
 # onnx: exports the ACT graph when building the TensorRT engine (manipulation/act_trt.py)
 onnx
-# onnxruntime: runs the vendored Silero VAD (brain_client/inputs/vad.py)
+# onnxruntime: runs vendored Silero VAD and YOLO pose models
 onnxruntime
 # torch/torchvision/torchaudio are installed separately in post_update.sh
 # to ensure CUDA wheels from Jetson AI Lab (pip prefers CPU manylinux wheels otherwise)
