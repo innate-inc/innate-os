@@ -72,12 +72,25 @@ class DebugDetector(TypedDict):
     error: str
 
 
+class DebugFollowGoal(TypedDict):
+    x: float
+    y: float
+    yaw_degrees: float
+
+
 class DebugFollow(TypedDict):
     enabled: bool
     state: str
     reference_height: float
     observed_height: float
+    body_center_x: float | None
+    forward_m: float
+    bearing_degrees: float
+    perception_age_ms: float
     nav_state: str
+    nav_pending: int
+    nav_active: int
+    goal: DebugFollowGoal | None
     reason: str
 
 
@@ -135,7 +148,14 @@ def gaze_debug(
             "state": "idle",
             "reference_height": 0.0,
             "observed_height": 0.0,
+            "body_center_x": None,
+            "forward_m": 0.0,
+            "bearing_degrees": 0.0,
+            "perception_age_ms": 0.0,
             "nav_state": "idle",
+            "nav_pending": 0,
+            "nav_active": 0,
+            "goal": None,
             "reason": "",
         },
     }

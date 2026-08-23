@@ -41,6 +41,7 @@ from brain_client.perception.battery import BatteryMonitor
 from brain_client.perception.camera import CameraCapture
 from brain_client.perception.gaze_control import GazeLifecycle
 from brain_client.perception.gaze_debug import GazeDebug, GazeStatus
+from brain_client.perception.person_follow import FollowStartResult
 from brain_client.perception.pose_tracking import PoseTracker
 from brain_client.perception.scan_health import ScanHealthMonitor
 from brain_client.robot.arm_recovery import ArmRecovery
@@ -285,6 +286,7 @@ class BrainClientNode(Node):
         self.create_service(SetBool, "/brain/set_logging_config", self._svc_set_logging_config)
         self.create_service(ResetBrain, "/brain/reset_brain", self._svc_reset_brain)
         self.create_service(SetBool, "/brain/set_brain_active", self._svc_set_brain_active)
+        self.create_service(SetBool, "/brain/set_following", self._svc_set_following)
         self.create_service(Trigger, "/brain/reload", self._svc_reload)
         self.create_service(Trigger, "/brain/clear_memories", self._svc_clear_memories)
         self.create_service(ForgetMemory, "/brain/forget_memory", self._svc_forget_memory)
@@ -548,6 +550,26 @@ class BrainClientNode(Node):
                 self.lifecycle.deactivate_brain()
                 response.message = "Brain deactivated."
         response.success = True
+        return response
+
+    def _svc_set_following(self, request: SetBool.Request, response: SetBool.Response) -> SetBool.Response:
+        if not request.data:
+            was_following = self.gaze.is_following
+            self.gaze.stop_follow("UI requested stop")
+            response.success = True
+            response.message = "Following stopped." if was_following else "Following was already stopped."
+            return response
+
+        result = self.gaze.start_follow()
+        response.success = result in {FollowStartResult.STARTED, FollowStartResult.ALREADY_FOLLOWING}
+        if result is FollowStartResult.STARTED:
+            response.message = "Following started."
+        elif result is FollowStartResult.ALREADY_FOLLOWING:
+            response.message = "Already following."
+        elif result is FollowStartResult.NO_LOCK:
+            response.message = "No stable person lock. Stand centered until the overlay says PERSON LOCKED."
+        else:
+            response.message = "Gaze tracking is not running for the active agent."
         return response
 
     def _svc_clear_memories(self, request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:

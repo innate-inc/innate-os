@@ -2,7 +2,7 @@
 // Gaze debugger — projects the brain's normalized person geometry onto the
 // already-streaming main camera. No images cross rosbridge.
 
-import { GAZE_TOPIC } from "../constants.js";
+import { GAZE_TOPIC, SET_FOLLOWING_SERVICE } from "../constants.js";
 
 const STALE_AFTER_MS = 1_200;
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -32,15 +32,16 @@ const POSE_EDGES = [
  * @param {HTMLElement} stage
  * @param {import("../rosClient.js").RosClient} ros
  * @param {GazeOverlaySession} session
- * @returns {{ destroy: () => void }}
+ * @param {HTMLElement} panelHost
+ * @returns {{ setFollowDebugVisible: (visible: boolean) => void, destroy: () => void }}
  */
-export function createGazeOverlay(stage, ros, session) {
+export function createGazeOverlay(stage, ros, session, panelHost) {
   const root = document.createElement("div");
   root.className = "gaze-debug";
-  root.setAttribute("aria-hidden", "true");
 
   const content = document.createElement("div");
   content.className = "gaze-debug-content";
+  content.setAttribute("aria-hidden", "true");
   const zone = document.createElement("div");
   zone.className = "gaze-zone";
   const pose = document.createElementNS(SVG_NS, "svg");
@@ -53,12 +54,65 @@ export function createGazeOverlay(stage, ros, session) {
 
   const status = document.createElement("div");
   status.className = "gaze-status microlabel";
+  status.setAttribute("aria-live", "polite");
+  const followPanel = document.createElement("div");
+  followPanel.className = "gaze-follow-panel";
+  const followToggle = document.createElement("button");
+  followToggle.type = "button";
+  followToggle.className = "gaze-follow-toggle";
+  const followTelemetry = document.createElement("div");
+  followTelemetry.className = "gaze-follow-telemetry";
+  followTelemetry.innerHTML = `
+    <div class="gaze-follow-head">
+      <span class="gaze-follow-title">FOLLOW DEBUG</span>
+      <span class="gaze-follow-state">IDLE · IDLE</span>
+    </div>
+    <div class="gaze-follow-gauge">
+      <div class="gaze-follow-gauge-label"><span>BODY SIZE</span><span data-follow-size>—</span></div>
+      <div class="gaze-follow-track gaze-follow-size-track">
+        <span class="gaze-follow-target-band"></span><span class="gaze-follow-size-dot"></span>
+      </div>
+      <div class="gaze-follow-axis"><span>TOO FAR</span><span>TARGET</span><span>TOO CLOSE</span></div>
+    </div>
+    <div class="gaze-follow-gauge">
+      <div class="gaze-follow-gauge-label"><span>PERSON CENTER</span><span data-follow-center>—</span></div>
+      <div class="gaze-follow-track gaze-follow-center-track">
+        <span class="gaze-follow-target-band"></span><span class="gaze-follow-center-dot"></span>
+      </div>
+      <div class="gaze-follow-axis"><span>LEFT</span><span>CENTER</span><span>RIGHT</span></div>
+    </div>
+    <div class="gaze-follow-metrics">
+      <div><span>BEARING</span><strong data-follow-bearing>—</strong></div>
+      <div><span>NEXT STEP</span><strong data-follow-step>—</strong></div>
+      <div><span>VISION AGE</span><strong data-follow-age>—</strong></div>
+      <div><span>NAV GOALS</span><strong data-follow-goals>—</strong></div>
+    </div>
+    <div class="gaze-follow-details"></div>
+  `;
+  const followState = /** @type {HTMLElement} */ (followTelemetry.querySelector(".gaze-follow-state"));
+  const followSize = /** @type {HTMLElement} */ (followTelemetry.querySelector("[data-follow-size]"));
+  const followSizeDot = /** @type {HTMLElement} */ (followTelemetry.querySelector(".gaze-follow-size-dot"));
+  const followCenter = /** @type {HTMLElement} */ (followTelemetry.querySelector("[data-follow-center]"));
+  const followCenterDot = /** @type {HTMLElement} */ (followTelemetry.querySelector(".gaze-follow-center-dot"));
+  const followBearing = /** @type {HTMLElement} */ (followTelemetry.querySelector("[data-follow-bearing]"));
+  const followStep = /** @type {HTMLElement} */ (followTelemetry.querySelector("[data-follow-step]"));
+  const followAge = /** @type {HTMLElement} */ (followTelemetry.querySelector("[data-follow-age]"));
+  const followGoals = /** @type {HTMLElement} */ (followTelemetry.querySelector("[data-follow-goals]"));
+  const followDetails = /** @type {HTMLElement} */ (followTelemetry.querySelector(".gaze-follow-details"));
+  const followCommand = document.createElement("div");
+  followCommand.className = "gaze-follow-command";
+  followPanel.append(followToggle, followTelemetry, followCommand);
   root.append(content, status);
   stage.append(root);
+  panelHost.append(followPanel);
 
   /** @type {GazeDebug | null} */
   let debug = null;
   let stale = false;
+  let followBusy = false;
+  let followDebugVisible = true;
+  let followCommandText = "";
+  let followCommandFailed = false;
   /** @type {number | null} */
   let staleTimer = null;
 
@@ -81,7 +135,9 @@ export function createGazeOverlay(stage, ros, session) {
   };
 
   const render = () => {
-    root.hidden = !visible();
+    const isVisible = visible();
+    root.hidden = !isVisible;
+    followPanel.hidden = !isVisible || !followDebugVisible;
     if (root.hidden || !debug) return;
 
     root.dataset.status = stale ? "stale" : debug.detector?.error ? "error" : debug.status;
@@ -95,6 +151,34 @@ export function createGazeOverlay(stage, ros, session) {
       debug.status === "error";
     pose.replaceChildren();
     boxes.replaceChildren();
+    const follow = debug.follow;
+    const canStartFollowing = debug.status === "locked";
+    followToggle.textContent = followBusy
+      ? "WORKING…"
+      : follow?.enabled
+        ? "STOP FOLLOWING"
+        : canStartFollowing
+          ? "START FOLLOWING"
+          : "WAIT FOR PERSON LOCK";
+    followToggle.classList.toggle("active", follow?.enabled === true);
+    followToggle.setAttribute("aria-pressed", String(follow?.enabled === true));
+    followToggle.disabled =
+      followBusy ||
+      stale ||
+      ros.state !== "connected" ||
+      debug.status === "off" ||
+      debug.status === "paused" ||
+      debug.status === "starting" ||
+      debug.status === "error" ||
+      (!follow?.enabled && !canStartFollowing);
+    followToggle.title = followToggle.disabled
+      ? "Activate a gaze-enabled agent and wait for PERSON LOCKED"
+      : follow?.enabled
+        ? "Cancel person following"
+        : "Follow the currently locked person";
+    renderFollowTelemetry(debug);
+    followCommand.textContent = followCommandText;
+    followCommand.dataset.kind = followCommandFailed ? "error" : "ok";
 
     if (!content.hidden) {
       place(zone, {
@@ -115,6 +199,72 @@ export function createGazeOverlay(stage, ros, session) {
       positionContent();
     }
   };
+
+  /** @param {GazeDebug} current */
+  function renderFollowTelemetry(current) {
+    const follow = current.follow;
+    if (!follow) {
+      followState.textContent = "WAITING FOR TELEMETRY";
+      return;
+    }
+    const reference = follow.reference_height ?? 0;
+    const observed = follow.observed_height ?? 0;
+    const ratio = reference > 0 ? observed / reference : 1;
+    const sizeError = (1 - ratio) * 100;
+    const center = typeof follow.body_center_x === "number" ? follow.body_center_x : 0.5;
+    const age = follow.perception_age_ms ?? 0;
+    const goal = follow.goal;
+    const reason = follow.reason || "—";
+    const followMode = follow.state || "idle";
+    const navigationMode = follow.nav_state || "idle";
+
+    followPanel.dataset.state =
+      navigationMode === "failed" || navigationMode === "unavailable"
+        ? "error"
+        : follow.enabled
+          ? "active"
+          : follow.reason
+            ? "stopped"
+            : "idle";
+    followState.textContent = `${followMode.toUpperCase()} · ${navigationMode.toUpperCase()}`;
+    followSize.textContent =
+      reference > 0
+        ? `${(observed * 100).toFixed(1)}% / ${(reference * 100).toFixed(1)}% · ${Math.abs(sizeError).toFixed(1)}% ${sizeError >= 0 ? "FAR" : "CLOSE"}`
+        : "WAITING FOR REFERENCE";
+    followSizeDot.style.left = `${clamp((ratio - 0.5) * 100, 0, 100)}%`;
+    followCenter.textContent = `X ${center.toFixed(3)} · ${Math.abs((center - 0.5) * 200).toFixed(1)}% OFF`;
+    followCenterDot.style.left = `${clamp(center * 100, 0, 100)}%`;
+    followBearing.textContent = `${(follow.bearing_degrees ?? 0).toFixed(1)}°`;
+    followStep.textContent = `${(follow.forward_m ?? 0).toFixed(2)} m`;
+    followAge.textContent = `${age.toFixed(0)} ms`;
+    followAge.dataset.fresh = age <= 300 ? "true" : "false";
+    followGoals.textContent = `${follow.nav_active ?? 0} active · ${follow.nav_pending ?? 0} pending`;
+    followDetails.textContent = [
+      `ODOM GOAL  ${goal ? `${goal.x.toFixed(2)}, ${goal.y.toFixed(2)}, ${goal.yaw_degrees.toFixed(0)}°` : "—"}`,
+      `STOP REASON  ${reason}`,
+      `FRAME ${current.frame}  ·  INFERENCE ${(current.detector?.inference_ms ?? 0).toFixed(1)} ms`,
+    ].join("\n");
+  }
+
+  followToggle.addEventListener("click", async () => {
+    if (!debug || followBusy) return;
+    const enable = !debug.follow?.enabled;
+    followBusy = true;
+    followCommandText = enable ? "Requesting follow…" : "Stopping follow…";
+    followCommandFailed = false;
+    render();
+    try {
+      const response = await ros.callService(SET_FOLLOWING_SERVICE, { data: enable });
+      followCommandText = String(response?.message || (enable ? "Follow request sent." : "Stop request sent."));
+      followCommandFailed = response?.success === false;
+    } catch (error) {
+      followCommandText = error instanceof Error ? error.message : String(error);
+      followCommandFailed = true;
+    } finally {
+      followBusy = false;
+      render();
+    }
+  });
 
   /** @param {GazePerson} person */
   const addPerson = (person) => {
@@ -208,6 +358,7 @@ export function createGazeOverlay(stage, ros, session) {
   };
 
   const unsubscribeGaze = ros.subscribe(GAZE_TOPIC, onMessage, 0, "std_msgs/msg/String");
+  const unsubscribeConnection = ros.onStateChange(() => render());
   const unsubscribeSession = session.onChange(() => render());
   const resizeObserver = new ResizeObserver(() => positionContent());
   resizeObserver.observe(stage);
@@ -215,13 +366,19 @@ export function createGazeOverlay(stage, ros, session) {
   video?.addEventListener("loadedmetadata", positionContent);
 
   return {
+    setFollowDebugVisible(visible) {
+      followDebugVisible = visible;
+      render();
+    },
     destroy() {
       unsubscribeGaze();
+      unsubscribeConnection();
       unsubscribeSession();
       resizeObserver.disconnect();
       video?.removeEventListener("loadedmetadata", positionContent);
       if (staleTimer !== null) clearTimeout(staleTimer);
       root.remove();
+      followPanel.remove();
     },
   };
 }
@@ -257,6 +414,11 @@ function statusText(debug) {
   if (debug.status === "starting") return `STARTING ${prefix}`;
   if (debug.status === "paused") return "GAZE PAUSED";
   return "GAZE OFF";
+}
+
+/** @param {number} value @param {number} minimum @param {number} maximum */
+function clamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
 }
 
 /** @param {GazeDebug} debug */

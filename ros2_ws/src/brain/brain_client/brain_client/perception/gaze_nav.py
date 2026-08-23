@@ -8,6 +8,7 @@ import math
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
 
 from action_msgs.msg import GoalStatus
@@ -45,6 +46,15 @@ class FollowGoalState(StrEnum):
     CANCELING = "canceling"
     UNAVAILABLE = "unavailable"
     FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class FollowGoalSnapshot:
+    state: FollowGoalState
+    reason: str
+    goal: Pose | None
+    pending: int
+    active: int
 
 
 class GazeNavigator:
@@ -87,6 +97,16 @@ class GazeNavigator:
     @property
     def failed(self) -> bool:
         return self.state in {FollowGoalState.UNAVAILABLE, FollowGoalState.FAILED}
+
+    def snapshot(self) -> FollowGoalSnapshot:
+        with self._lock:
+            return FollowGoalSnapshot(
+                state=self._state,
+                reason=self._reason,
+                goal=self._last_goal,
+                pending=self._pending,
+                active=len(self._handles),
+            )
 
     def update_target(self, target: FollowTarget) -> None:
         with self._lock:

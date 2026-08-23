@@ -75,6 +75,8 @@ export const SET_ACTIVE_SKILLS_TOPIC = "/brain/set_active_skills";
 export const AGENT_STATUS_TOPIC = "/brain/agent_status";
 // Lightweight 0–1 person pose geometry and lock state for the Agent camera overlay.
 export const GAZE_TOPIC = "/brain/gaze";
+// Deterministically start/stop the currently locked person follow (std_srvs/SetBool).
+export const SET_FOLLOWING_SERVICE = "/brain/set_following";
 // Reset the agent's brain/memory (brain_messages/srv/ResetBrain → {success}).
 export const RESET_BRAIN_SERVICE = "/brain/reset_brain";
 // Cloud/local agent backend connection (std_msgs/String JSON: {state, connected,

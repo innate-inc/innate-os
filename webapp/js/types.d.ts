@@ -319,7 +319,14 @@ interface GazeFollow {
   state: string;
   reference_height: number;
   observed_height: number;
+  body_center_x: number | null;
+  forward_m: number;
+  bearing_degrees: number;
+  perception_age_ms: number;
   nav_state: string;
+  nav_pending: number;
+  nav_active: number;
+  goal: { x: number; y: number; yaw_degrees: number } | null;
   reason: string;
 }
 

@@ -71,8 +71,13 @@ function buildAgentView(root) {
   const sceneSetup = feedFrame.querySelector(".sim-debug-stack");
   if (sceneSetup) root.append(sceneSetup);
   const gazeStage = /** @type {HTMLElement | null} */ (feedFrame.querySelector(".video-stage"));
-  const gazeOverlay = gazeStage ? createGazeOverlay(gazeStage, ros, session) : null;
-  const audioOverlay = gazeStage ? createAudioOverlay(gazeStage, ros) : null;
+  const debugStack = gazeStage ? document.createElement("div") : null;
+  if (debugStack) {
+    debugStack.className = "agent-debug-stack";
+    gazeStage?.append(debugStack);
+  }
+  const audioOverlay = debugStack ? createAudioOverlay(debugStack, ros) : null;
+  const gazeOverlay = gazeStage && debugStack ? createGazeOverlay(gazeStage, ros, session, debugStack) : null;
 
   const cornerStack = document.createElement("div");
   cornerStack.className = "overlay-stack-top-left";
@@ -133,6 +138,29 @@ function buildAgentView(root) {
   });
   renderAudioDebug();
   root.append(audioDebugToggle);
+
+  const followDebugToggle = document.createElement("button");
+  followDebugToggle.type = "button";
+  followDebugToggle.className = "agent-follow-debug-toggle active";
+  followDebugToggle.hidden = gazeOverlay === null;
+  followDebugToggle.innerHTML = '<span class="agent-follow-debug-icon" aria-hidden="true"></span>';
+  let followDebugVisible = true;
+  function renderFollowDebug() {
+    gazeOverlay?.setFollowDebugVisible(followDebugVisible);
+    followDebugToggle.classList.toggle("active", followDebugVisible);
+    followDebugToggle.setAttribute("aria-pressed", String(followDebugVisible));
+    followDebugToggle.setAttribute(
+      "aria-label",
+      followDebugVisible ? "Hide person follow debug panel" : "Show person follow debug panel",
+    );
+    followDebugToggle.title = followDebugToggle.getAttribute("aria-label") ?? "";
+  }
+  followDebugToggle.addEventListener("click", () => {
+    followDebugVisible = !followDebugVisible;
+    renderFollowDebug();
+  });
+  renderFollowDebug();
+  root.append(followDebugToggle);
 
   /** @param {"live" | "brain"} next */
   function renderStageView(next) {
@@ -229,6 +257,7 @@ function buildAgentView(root) {
     },
     { destroy: () => stageViewToggle.remove() },
     { destroy: () => audioDebugToggle.remove() },
+    { destroy: () => followDebugToggle.remove() },
     {
       destroy: () => {
         unmounted = true; // a monitor import still in flight must not build into the dead layer

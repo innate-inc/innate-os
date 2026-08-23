@@ -17,7 +17,7 @@ from sensor_msgs.msg import Image
 from brain_client.perception.face_lock import FaceBox, FaceLock, FaceLockResult
 from brain_client.perception.gaze_debug import DebugFollow, GazeDebug, GazeStatus, gaze_debug
 from brain_client.perception.gaze_nav import GazeNavigator
-from brain_client.perception.person_follow import FollowStartResult, PersonFollowController
+from brain_client.perception.person_follow import FollowStartResult, FollowTarget, PersonFollowController
 from brain_client.perception.pose import Pose
 from brain_client.perception.yolo_pose import PersonPose, YoloPoseDetector
 from brain_client.robot.head import Head
@@ -147,6 +147,7 @@ class ROSFaceTracker:
         self._node = node
         self._on_person_locked = on_person_locked
         self._on_debug = on_debug
+        self._last_debug: GazeDebug | None = None
         self._frame: tuple[int, npt.NDArray[np.uint8]] | None = None
         self._frame_number = 0
         self._processed_frame_number = 0
@@ -177,6 +178,7 @@ class ROSFaceTracker:
         )
         self._follow_lock = threading.Lock()
         self._locked_person: PersonPose | None = None
+        self._follow_target: FollowTarget | None = None
         self._follow_stop_reason = ""
         self._last_detection_at = 0.0
 
@@ -309,20 +311,25 @@ class ROSFaceTracker:
             if self._locked_person is None or time.monotonic() - self._last_detection_at > _FOLLOW_STALE_SECONDS:
                 return FollowStartResult.NO_LOCK
             self._person_follow.start(self._locked_person.body)
+            self._follow_target = None
             self._follow_stop_reason = ""
         self._mobility.stop()
+        self._emit_follow_state()
         return FollowStartResult.STARTED
 
     def stop_follow(self, reason: str = "") -> None:
         with self._follow_lock:
             self._person_follow.stop()
+            self._follow_target = None
             self._follow_stop_reason = reason
         self._cancel_follow_motion(reason)
+        self._emit_follow_state()
 
     def _stop_for_target_loss(self) -> None:
         with self._follow_lock:
             self._follow_stop_reason = "target lost"
         self._cancel_follow_motion("target lost")
+        self._emit_follow_state()
 
     def _cancel_follow_motion(self, reason: str) -> None:
         self._gaze_navigator.cancel(reason)
@@ -379,6 +386,7 @@ class ROSFaceTracker:
                     follow_target = self._person_follow.observe(
                         locked_person.body if locked_person is not None else None
                     )
+                    self._follow_target = follow_target
 
                 if follow_was_active and follow_target is None:
                     self._stop_for_target_loss()
@@ -420,8 +428,14 @@ class ROSFaceTracker:
                 time.sleep(dt - elapsed)
 
     def _emit_debug(self, debug: GazeDebug) -> None:
+        self._last_debug = debug
         if self._on_debug is not None:
             self._on_debug(debug)
+
+    def _emit_follow_state(self) -> None:
+        if self._last_debug is None:
+            return
+        self._emit_debug({**self._last_debug, "follow": self._follow_debug()})
 
     def _check_follow_watchdog(self) -> None:
         if not self._running or not self.is_following:
@@ -435,14 +449,36 @@ class ROSFaceTracker:
             return self._detector
 
     def _follow_debug(self) -> DebugFollow:
+        navigation = self._gaze_navigator.snapshot()
         with self._follow_lock:
+            goal = navigation.goal
+            perception_age_ms = (
+                max(0.0, time.monotonic() - self._last_detection_at) * 1000.0 if self._last_detection_at > 0.0 else 0.0
+            )
             return {
                 "enabled": self._person_follow.is_following,
                 "state": str(self._person_follow.state),
                 "reference_height": round(self._person_follow.reference_height, 4),
                 "observed_height": round(self._person_follow.observed_height, 4),
-                "nav_state": str(self._gaze_navigator.state),
-                "reason": self._follow_stop_reason or self._gaze_navigator.reason,
+                "body_center_x": round(self._locked_person.body.center_x, 4) if self._locked_person else None,
+                "forward_m": round(self._follow_target.forward_m, 3) if self._follow_target else 0.0,
+                "bearing_degrees": (
+                    round(math.degrees(self._follow_target.bearing_rad), 1) if self._follow_target else 0.0
+                ),
+                "perception_age_ms": round(perception_age_ms),
+                "nav_state": str(navigation.state),
+                "nav_pending": navigation.pending,
+                "nav_active": navigation.active,
+                "goal": (
+                    {
+                        "x": round(goal[0], 3),
+                        "y": round(goal[1], 3),
+                        "yaw_degrees": round(math.degrees(goal[2]), 1),
+                    }
+                    if goal
+                    else None
+                ),
+                "reason": self._follow_stop_reason or navigation.reason,
             }
 
     @staticmethod
