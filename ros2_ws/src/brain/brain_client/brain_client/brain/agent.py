@@ -32,6 +32,7 @@ from brain_client.brain import grounding
 from brain_client.brain.context import Decision, GeminiContext, ToolCall
 from brain_client.brain.loop import LoopThread
 from brain_client.brain.prompt import build_system_prompt
+from brain_client.brain.speech_sequence import SkillCue, SpeechSequence, SpeechSequenceRunner
 from brain_client.brain.tools import GO_TO_POINT_IN_VIEW, STOP_SKILL, WAIT, assign_tool_names, build_tools
 from brain_client.brain.transport import pick_transport
 from brain_client.brain.utils import (
@@ -67,6 +68,11 @@ if TYPE_CHECKING:
     from innate_proxy import ProxyClient
 
 _NAV_TO_POSITION = "innate-os/navigate_to_position"
+_COMPLIMENT_SEQUENCE = SpeechSequence(
+    at_start=SkillCue("innate-os/head_emotion", {"emotion": "happy"}),
+    near_end=SkillCue("innate-os/short_clap"),
+    near_end_lead_seconds=0.5,
+)
 _FRESH_FRAME_SEC = 3.0  # an older camera frame means the feed is broken; don't think blind
 _MAX_EVENTS_QUEUED = 30  # the oldest beyond this are dropped as stale stimuli
 _MAX_EVENT_IMAGES = 4  # newest event images sent per turn; older ones arrive as text only
@@ -135,6 +141,12 @@ class BrainAgent:
         self._pause_until = 0.0  # monotonic deadline of the current between-turns pause
 
         self._runtime = LoopThread("brain-agent")
+        self._speech_sequences = SpeechSequenceRunner(
+            self._runtime,
+            state,
+            self._start_system_skill,
+            self._logger,
+        )
         self._new_event = asyncio.Event()  # something was queued (loop thread; set via runtime.post)
         self._user_spoke = asyncio.Event()  # like _new_event, but only user speech sets it
 
@@ -178,6 +190,7 @@ class BrainAgent:
 
     def stop(self) -> bool:
         """Synchronous: when this returns True, no turn is thinking and none will act."""
+        self._speech_sequences.cancel()
         unwound = self._runtime.cancel()
         if not unwound:
             self._logger.error("[Brain] Agent loop did not unwind within 5s")
@@ -262,7 +275,13 @@ class BrainAgent:
         events = list(self._events)
         self._turn_count += 1
         self._turn_started_at = time.monotonic()
-        speaker = self._speaker = self._chat.stream_speech()  # published before the first await, for the racing loop
+        sequence = self._speech_sequence(events)
+        sequence_session = self._speech_sequences.open(sequence) if sequence is not None else None
+        speaker = self._speaker = self._chat.stream_speech(
+            buffered=sequence_session is not None,
+            playback_observer=sequence_session.on_playback if sequence_session is not None else None,
+            lead_seconds=sequence.near_end_lead_seconds if sequence is not None else 0.0,
+        )  # published before the first await, for the racing loop
         try:
             await self._think(context, events, speaker)
         except asyncio.CancelledError:
@@ -434,6 +453,9 @@ class BrainAgent:
     def _build_tools(self, events: list[Event]) -> list[dict]:
         running = self._state.primitive_running
         user_spoke = any(event.kind == EventKind.USER for event in events)
+        if self._speech_sequence(events) is not None:
+            self._tool_map = {}
+            return build_tools([], running.primitive_name if running is not None else None, user_spoke=False)
         active_ids = set(self._roster.active_skill_ids())
         skills = [meta for meta in self._state.registry.metadata if meta["id"] in active_ids]
         # One naming pass feeds both the declarations and the dispatch map, so
@@ -443,6 +465,15 @@ class BrainAgent:
         if running is not None:
             return build_tools([], running.primitive_name, user_spoke=user_spoke)
         return build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids)
+
+    @staticmethod
+    def _is_compliment_turn(events: list[Event]) -> bool:
+        kinds = {event.kind for event in events}
+        return EventKind.PERSON in kinds and EventKind.USER not in kinds
+
+    @classmethod
+    def _speech_sequence(cls, events: list[Event]) -> SpeechSequence | None:
+        return _COMPLIMENT_SEQUENCE if cls._is_compliment_turn(events) else None
 
     # ================= act =================
     def _act(self, decision: Decision, speaker: SpeechStreamer, context: GeminiContext) -> list[tuple[ToolCall, str]]:
@@ -568,6 +599,23 @@ class BrainAgent:
         self._gaze.pause()
         self._runner.start_task(skill_id, f"local-{uuid.uuid4().hex[:8]}", inputs)
 
+    def _start_system_skill(
+        self,
+        skill_id: str,
+        inputs: dict[str, object],
+        on_finished: Callable[[], None],
+    ) -> bool:
+        self._gaze.pause()
+        started = self._runner.start_system_task(
+            skill_id,
+            f"system-{uuid.uuid4().hex[:8]}",
+            inputs,
+            on_finished,
+        )
+        if not started:
+            self._gaze.resume()
+        return started
+
     def _adjust_nav_goal(self, skill_id: str, inputs: dict) -> dict:
         if skill_id != _NAV_TO_POSITION:
             return inputs
@@ -597,6 +645,7 @@ class BrainAgent:
             self._user_spoke.set()
 
     def on_user_message(self, text: str) -> None:
+        self._speech_sequences.cancel()
         self.add_event(f'The user says: "{text}"', kind=EventKind.USER)
 
     def on_custom_input(self, data: dict) -> None:

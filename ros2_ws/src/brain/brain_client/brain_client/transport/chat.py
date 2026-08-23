@@ -13,9 +13,13 @@ import json
 import re
 import threading
 import time
+from typing import TYPE_CHECKING
 
 from brain_client.brain.context import split_tool_narration
 from brain_client.common.enums import StrEnum
+
+if TYPE_CHECKING:
+    from brain_client.transport.playback import PlaybackObserver
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 
@@ -98,12 +102,35 @@ class ChatManager:
     def clear(self) -> None:
         self.history = []
 
-    def speak(self, text: str, replace_pending: bool = False) -> None:
+    def speak(
+        self,
+        text: str,
+        replace_pending: bool = False,
+        *,
+        playback_observer: PlaybackObserver | None = None,
+        lead_seconds: float = 0.0,
+    ) -> None:
         if self._tts_handler is not None:
-            self._tts_handler.speak_text_async(text, replace_pending=replace_pending)
+            self._tts_handler.speak_text_async(
+                text,
+                replace_pending=replace_pending,
+                playback_observer=playback_observer,
+                lead_seconds=lead_seconds,
+            )
 
-    def stream_speech(self) -> SpeechStreamer:
-        return SpeechStreamer(self)
+    def stream_speech(
+        self,
+        *,
+        buffered: bool = False,
+        playback_observer: PlaybackObserver | None = None,
+        lead_seconds: float = 0.0,
+    ) -> SpeechStreamer:
+        return SpeechStreamer(
+            self,
+            buffered=buffered,
+            playback_observer=playback_observer,
+            lead_seconds=lead_seconds,
+        )
 
 
 class SpeechStreamer:
@@ -117,15 +144,27 @@ class SpeechStreamer:
     decided to abandon it.
     """
 
-    def __init__(self, chat: ChatManager):
+    def __init__(
+        self,
+        chat: ChatManager,
+        *,
+        buffered: bool = False,
+        playback_observer: PlaybackObserver | None = None,
+        lead_seconds: float = 0.0,
+    ):
         self._chat = chat
         self._buffer = ""
+        self._buffered = buffered
+        self._playback_observer = playback_observer
+        self._lead_seconds = lead_seconds
         self._muted = False
         self._lock = threading.Lock()
         self.spoke = False
 
     def feed(self, text: str) -> None:
         self._buffer += text
+        if self._buffered:
+            return
         *sentences, self._buffer = _SENTENCE_END.split(self._buffer)
         for sentence in sentences:
             self._say(sentence)
@@ -172,5 +211,13 @@ class SpeechStreamer:
             return
         # The first sentence supersedes any stale queued utterances; the rest
         # of the reply queues in order behind it.
-        self._chat.speak(sentence, replace_pending=not self.spoke)
+        if self._buffered:
+            self._chat.speak(
+                sentence,
+                replace_pending=not self.spoke,
+                playback_observer=self._playback_observer,
+                lead_seconds=self._lead_seconds,
+            )
+        else:
+            self._chat.speak(sentence, replace_pending=not self.spoke)
         self.spoke = True

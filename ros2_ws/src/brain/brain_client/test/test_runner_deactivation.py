@@ -19,6 +19,8 @@ def make_runner(running: RunningSkill | None, goal_handle=None):
     state.primitive_running = running
     runner._state = state
     runner._goal_handle = goal_handle
+    runner._system_claim = None
+    runner._system_finished = None
     runner._generation = 0
     runner._slot_lock = threading.Lock()
     runner._logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)

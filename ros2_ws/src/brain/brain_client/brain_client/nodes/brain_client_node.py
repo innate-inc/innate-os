@@ -77,8 +77,8 @@ class BrainClientNode(Node):
         self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.task_status_pub = self.create_publisher(String, "/brain/skill_status_update", 10)
         self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
-        # Synthesized speech (base64 WAV) for clients to play. Sim-only: the sim
-        # has no audio device, so the webapp is the speaker.
+        # Identified WAV playback requests. Sim-only: the browser is the speaker
+        # and reports actual playback timing on /tts/playback.
         self.tts_audio_pub = self.create_publisher(String, "/tts/audio", 10)
         # Live agent state, so clients see a stop/start/directive change made
         # from another device without polling. Latched + heartbeat because
@@ -267,6 +267,7 @@ class BrainClientNode(Node):
         self.create_subscription(String, "/brain/chat_in", self._on_chat_in, 10)
         self.create_subscription(String, "/input_manager/custom", self._on_custom_input, 10)
         self.create_subscription(String, "/brain/tts", self._on_tts, 10)
+        self.create_subscription(String, "/tts/playback", self._on_tts_playback, 10)
         self.create_subscription(String, "/brain/set_directive", self._on_set_directive, 10)
         self.create_subscription(String, "/brain/set_active_skills", self._on_set_active_skills, 10)
         self.create_subscription(String, "/brain/manual_skill_event", self._on_manual_skill_event, 10)
@@ -369,7 +370,7 @@ class BrainClientNode(Node):
             return
         self._last_person_compliment = now
         self.brain.add_event(
-            "A person has stayed centered in your view. Give them one brief, friendly compliment, then wait.",
+            "A person has stayed centered in your view. Give them one specific, unique, one-sentence friendly compliment, then wait.",
             kind=EventKind.PERSON,
         )
 
@@ -418,6 +419,10 @@ class BrainClientNode(Node):
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
             self.chat.speak(text)
+
+    def _on_tts_playback(self, msg: String) -> None:
+        if self._tts_handler is not None and self.config.simulator_mode:
+            self._tts_handler.on_browser_playback(msg.data)
 
     def _on_set_directive(self, msg: String) -> None:
         self.lifecycle.set_directive(msg.data)

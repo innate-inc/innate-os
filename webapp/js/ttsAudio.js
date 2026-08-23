@@ -1,7 +1,7 @@
 // @ts-check
 // Robot speech playback. In SIM mode the brain publishes synthesized speech
-// (base64 WAV) on /tts/audio whenever it speaks — "make the robot speak", agent
-// replies, skill narration — because the sim has no audio device, so the
+// identified WAV clips on /tts/audio whenever it speaks — "make the robot
+// speak", agent replies, skill narration. The sim has no audio device, so the
 // browser is the speaker. The real robot plays speech out its own physical
 // speaker and publishes nothing here (a browser playing it too would double
 // the voice), so against a robot this module simply never fires.
@@ -9,9 +9,8 @@
 // which page is open.
 
 import { ros } from "./rosClient.js";
+import { TTS_AUDIO_TOPIC, TTS_PLAYBACK_TOPIC } from "./constants.js";
 import { isMicAudioActive, setTtsPlaying } from "./micAudioState.js";
-
-const TTS_AUDIO_TOPIC = "/tts/audio";
 
 let started = false;
 
@@ -28,23 +27,26 @@ navigator.locks?.request("innate-tts-speaker", () => {
 export function initTtsAudio() {
   if (started) return;
   started = true;
+  ros.advertise(TTS_PLAYBACK_TOPIC, "std_msgs/msg/String");
 
   ros.subscribe(TTS_AUDIO_TOPIC, (msg) => {
     if (!speaker) return; // another tab is the elected speaker
-    const b64 = msg?.data;
-    if (typeof b64 !== "string" || !b64) return;
+    const clip = parseClip(msg?.data);
+    if (clip === null) return;
     // Defensive: if a clip does arrive while the operator has the robot mic
     // open, skip it — the speaker would be heard through the mic as well.
-    if (isMicAudioActive()) return;
-    enqueue(b64);
+    if (isMicAudioActive()) {
+      report(clip, "aborted");
+      return;
+    }
+    enqueue(clip);
   }, undefined, "std_msgs/msg/String");
 }
 
-// The robot speaks one utterance at a time, because speak_text blocks until
-// aplay finishes. In sim a clip is "done" once published, so the robot half can
-// only serialize synthesis — played on arrival, a two-sentence reply talks over
-// itself. This queue is what puts that behavior back.
-/** @type {string[]} */
+// The brain waits for this speaker's ended/aborted event before publishing the
+// next clip. The local queue still absorbs reconnect and legacy-client bursts.
+/** @typedef {{ id: string | null, audio: string, nearEndLeadSeconds: number }} TtsClip */
+/** @type {TtsClip[]} */
 const pending = [];
 let playing = false;
 
@@ -52,54 +54,96 @@ let playing = false;
 // reason speak_text_async drops superseded speech).
 const MAX_PENDING = 4;
 
-/** @param {string} b64 */
-function enqueue(b64) {
-  pending.push(b64);
+/** @param {TtsClip} clip */
+function enqueue(clip) {
+  pending.push(clip);
   while (pending.length > MAX_PENDING) {
-    pending.shift();
+    const dropped = pending.shift();
+    if (dropped) report(dropped, "aborted");
     console.warn("[tts] playback backlog full — dropping the oldest clip");
   }
   if (!playing) playNext();
 }
 
 function playNext() {
-  const b64 = pending.shift();
-  if (b64 === undefined) {
+  const clip = pending.shift();
+  if (clip === undefined) {
     playing = false;
     return;
   }
   playing = true;
   try {
-    play(b64);
+    play(clip);
   } catch (err) {
     console.warn("[tts] failed to play audio:", err);
+    report(clip, "aborted");
     playNext(); // one bad clip must not strand the rest of the reply
   }
 }
 
-/** @param {string} b64 base64-encoded WAV */
-function play(b64) {
-  const blob = new Blob([/** @type {BlobPart} */ (base64ToBytes(b64))], { type: "audio/wav" });
+/** @param {TtsClip} clip */
+function play(clip) {
+  const blob = new Blob([/** @type {BlobPart} */ (base64ToBytes(clip.audio))], { type: "audio/wav" });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
   // The mic stream stops publishing while this is set, so every path must
   // release it — one that never finishes mutes the microphone for the session.
   setTtsPlaying(true);
   let released = false;
-  const done = () => {
+  let nearEndSent = false;
+  const nearEnd = () => {
+    if (nearEndSent || clip.nearEndLeadSeconds <= 0) return;
+    if (!Number.isFinite(audio.duration)) return;
+    if (audio.duration - audio.currentTime > clip.nearEndLeadSeconds) return;
+    nearEndSent = true;
+    report(clip, "near_end");
+  };
+  /** @param {"ended" | "aborted"} event */
+  const done = (event) => {
     if (released) return;
     released = true;
+    if (event === "ended" && !nearEndSent && clip.nearEndLeadSeconds > 0) {
+      nearEndSent = true;
+      report(clip, "near_end");
+    }
+    report(clip, event);
     setTtsPlaying(false);
     URL.revokeObjectURL(url);
     playNext();
   };
-  audio.addEventListener("ended", done, { once: true });
-  audio.addEventListener("error", done, { once: true });
+  audio.addEventListener("playing", () => report(clip, "started"), { once: true });
+  audio.addEventListener("timeupdate", nearEnd);
+  audio.addEventListener("ended", () => done("ended"), { once: true });
+  audio.addEventListener("error", () => done("aborted"), { once: true });
   audio.play().catch((err) => {
     // Browser autoplay policies block playback until the user has interacted
     // with the page; after any click/keypress this succeeds.
     console.warn("[tts] autoplay blocked (interact with the page first):", err?.message || err);
-    done();
+    done("aborted");
+  });
+}
+
+/** @param {unknown} data @returns {TtsClip | null} */
+function parseClip(data) {
+  if (typeof data !== "string" || !data) return null;
+  try {
+    const parsed = JSON.parse(data);
+    if (typeof parsed?.id !== "string" || typeof parsed?.audio !== "string") return null;
+    return {
+      id: parsed.id,
+      audio: parsed.audio,
+      nearEndLeadSeconds: Number(parsed.near_end_lead_seconds) || 0,
+    };
+  } catch {
+    return { id: null, audio: data, nearEndLeadSeconds: 0 };
+  }
+}
+
+/** @param {TtsClip} clip @param {"started" | "near_end" | "ended" | "aborted"} event */
+function report(clip, event) {
+  if (clip.id === null) return;
+  ros.publish(TTS_PLAYBACK_TOPIC, {
+    data: JSON.stringify({ id: clip.id, event }),
   });
 }
 

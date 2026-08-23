@@ -463,7 +463,12 @@ def agent_factory(monkeypatch):
     created = []
 
     def make(trace=None) -> tuple[BrainAgent, BrainState]:
-        logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
+        logger = SimpleNamespace(
+            info=lambda *a: None,
+            warn=lambda *a: None,
+            warning=lambda *a: None,
+            error=lambda *a: None,
+        )
         node = SimpleNamespace(get_logger=lambda: logger)
         config = SimpleNamespace(
             gemini_model="m",
@@ -489,10 +494,10 @@ def agent_factory(monkeypatch):
             emit_system=lambda *a, **k: None,
             emit=lambda *a, **k: None,
             emit_thoughts=lambda *a, **k: None,
-            speak=lambda text, replace_pending=False: spoken.append((text, replace_pending)),
+            speak=lambda text, replace_pending=False, **kwargs: spoken.append((text, replace_pending)),
             spoken=spoken,
         )
-        chat.stream_speech = lambda: SpeechStreamer(chat)
+        chat.stream_speech = lambda **kwargs: SpeechStreamer(chat, **kwargs)
         agent = BrainAgent(
             node,
             state,

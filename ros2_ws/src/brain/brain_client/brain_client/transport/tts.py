@@ -7,16 +7,39 @@ Generates speech audio and plays it through the robot's audio system.
 """
 
 import base64
+import json
 import queue
 import struct
 import subprocess
 import threading
 import time
+import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 from brain_client.common.logging import UniversalLogger
+from brain_client.transport.playback import PlaybackEvent, PlaybackObserver
 from innate_proxy import ProxyClient
 from innate_proxy.adapters.cartesia import ProxyCartesiaClient
+
+_PCM_BYTES_PER_SECOND = 44_100 * 2
+_WAV_HEADER_BYTES = 44
+
+
+@dataclass(frozen=True)
+class QueuedSpeech:
+    text: str
+    voice_config: dict[str, Any] | None
+    playback_observer: PlaybackObserver | None
+    lead_seconds: float
+
+
+@dataclass
+class BrowserPlayback:
+    clip_id: str
+    observer: PlaybackObserver | None
+    done: threading.Event = field(default_factory=threading.Event)
+    success: bool = False
 
 
 class TTSHandler:
@@ -62,13 +85,15 @@ class TTSHandler:
         self.tts_status_pub = tts_status_pub
         self.tts_audio_pub = tts_audio_pub
         self._simulator_mode = simulator_mode
+        self._browser_playback: BrowserPlayback | None = None
+        self._browser_playback_lock = threading.Lock()
 
         # Initialize Cartesia client
         self._init_client()
 
         # Async speech is played in order by one worker so back-to-back calls
         # aren't dropped; bounded so a runaway say() loop can't build a backlog.
-        self._speech_queue: queue.Queue = queue.Queue(maxsize=16)
+        self._speech_queue: queue.Queue[QueuedSpeech | None] = queue.Queue(maxsize=16)
         threading.Thread(target=self._speech_loop, daemon=True).start()
 
     def _init_client(self):
@@ -123,7 +148,14 @@ class TTSHandler:
             except Exception as e:
                 self.logger.debug(f"Failed to publish TTS status: {e}")
 
-    def speak_text(self, text: str, voice_config: dict[str, Any] | None = None) -> bool:
+    def speak_text(
+        self,
+        text: str,
+        voice_config: dict[str, Any] | None = None,
+        *,
+        playback_observer: PlaybackObserver | None = None,
+        lead_seconds: float = 0.0,
+    ) -> bool:
         """
         Convert text to speech and play it.
 
@@ -163,9 +195,9 @@ class TTSHandler:
             }
 
             if self._simulator_mode and self.tts_audio_pub is not None:
-                success = self._synthesize_to_topic(text, voice, t_start)
+                success = self._synthesize_to_topic(text, voice, t_start, playback_observer, lead_seconds)
             else:
-                success = self._synthesize_to_aplay(text, voice, t_start)
+                success = self._synthesize_to_aplay(text, voice, t_start, playback_observer, lead_seconds)
         except Exception as e:
             self.logger.error(f"❌ TTS generation failed: {e}")
             success = False
@@ -191,7 +223,14 @@ class TTSHandler:
             },
         )
 
-    def _synthesize_to_aplay(self, text: str, voice: dict[str, Any], t_start: float) -> bool:
+    def _synthesize_to_aplay(
+        self,
+        text: str,
+        voice: dict[str, Any],
+        t_start: float,
+        playback_observer: PlaybackObserver | None,
+        lead_seconds: float,
+    ) -> bool:
         """Stream speech straight into aplay (real robot's speaker)."""
         text_len = len(text)
         # Volume is managed system-wide by app.cpp via
@@ -224,6 +263,7 @@ class TTSHandler:
 
         writer = threading.Thread(target=_writer, daemon=True)
         writer.start()
+        cue_timer: threading.Timer | None = None
 
         try:
             total_bytes = 0
@@ -239,8 +279,11 @@ class TTSHandler:
                 if t_first_chunk is None:
                     t_first_chunk = time.perf_counter()
                     self.logger.info(f"⏱️ TTS first byte in {(t_first_chunk - t_api) * 1000:.0f}ms")
+                    self._emit_playback(playback_observer, PlaybackEvent.STARTED)
                 q.put(chunk)
 
+            if total_bytes == 0:
+                raise RuntimeError("TTS produced no audio")
             t_stream_done = time.perf_counter()
 
             # Deliberately NOT mirrored to /tts/audio: the robot's own speaker is
@@ -249,13 +292,24 @@ class TTSHandler:
             # operator). /tts/audio is the sim-only path, where there is no
             # speaker (_synthesize_to_topic).
 
-            # Signal writer to close stdin and wait for aplay to finish
+            cue_timer = self._schedule_near_end(
+                playback_observer,
+                duration_seconds=_pcm_duration_seconds(total_bytes),
+                playback_started=t_first_chunk,
+                lead_seconds=lead_seconds,
+            )
             q.put(None)
             writer.join()
             player.wait()
             t_play_done = time.perf_counter()
 
             if player.returncode == 0:
+                if cue_timer is not None:
+                    cue_pending = cue_timer.is_alive()
+                    cue_timer.cancel()
+                    if cue_pending:
+                        self._emit_playback(playback_observer, PlaybackEvent.NEAR_END)
+                self._emit_playback(playback_observer, PlaybackEvent.ENDED)
                 ttfb_ms = (t_first_chunk - t_api) * 1000 if t_first_chunk else 0
                 self.logger.info(
                     f"✅ TTS done ({text_len} chars): "
@@ -266,9 +320,15 @@ class TTSHandler:
                 )
                 return True
             stderr = player.stderr.read().decode(errors="replace").strip() if player.stderr else ""
+            if cue_timer is not None:
+                cue_timer.cancel()
+            self._emit_playback(playback_observer, PlaybackEvent.ABORTED)
             self.logger.error(f"❌ aplay failed (rc={player.returncode}): {stderr}")
             return False
         except Exception as e:
+            if cue_timer is not None:
+                cue_timer.cancel()
+            self._emit_playback(playback_observer, PlaybackEvent.ABORTED)
             self.logger.error(f"❌ Streaming TTS failed: {e}")
             q.put(None)
             writer.join(timeout=2)
@@ -278,12 +338,15 @@ class TTSHandler:
                 pass
             return False
 
-    def _synthesize_to_topic(self, text: str, voice: dict[str, Any], t_start: float) -> bool:
-        """Synthesize the full clip and publish it (base64 WAV) on /tts/audio.
-
-        The sim container has no audio device, so the webapp is the speaker. We
-        collect the whole clip (utterances are short) and publish it once.
-        """
+    def _synthesize_to_topic(
+        self,
+        text: str,
+        voice: dict[str, Any],
+        t_start: float,
+        playback_observer: PlaybackObserver | None,
+        lead_seconds: float,
+    ) -> bool:
+        """Synthesize one browser clip and wait for its actual playback result."""
         t_api = time.perf_counter()
         buf = bytearray()
         t_first_chunk = None
@@ -297,26 +360,70 @@ class TTSHandler:
 
         if not buf:
             self.logger.error("❌ TTS produced no audio")
+            self._emit_playback(playback_observer, PlaybackEvent.ABORTED)
             return False
 
-        self._publish_audio(bytes(buf))
+        duration_seconds = _pcm_duration_seconds(len(buf))
+        playback = BrowserPlayback(uuid.uuid4().hex, playback_observer)
+        with self._browser_playback_lock:
+            self._browser_playback = playback
+        self._publish_audio(bytes(buf), playback.clip_id, lead_seconds)
+        timeout = max(15.0, duration_seconds + 10.0)
+        if not playback.done.wait(timeout):
+            self.logger.error(f"Browser did not finish TTS clip {playback.clip_id} within {timeout:.1f}s")
+            playback.done.set()
+            self._emit_playback(playback.observer, PlaybackEvent.ABORTED)
+        with self._browser_playback_lock:
+            if self._browser_playback is playback:
+                self._browser_playback = None
         self.logger.info(
-            f"✅ TTS streamed to browser ({len(text)} chars, {len(buf) / 1024:.0f}KB, "
+            f"{'✅' if playback.success else '❌'} TTS browser playback "
+            f"({len(text)} chars, {len(buf) / 1024:.0f}KB, "
             f"total={(time.perf_counter() - t_start) * 1000:.0f}ms)"
         )
-        return True
+        return playback.success
 
-    def _publish_audio(self, wav: bytes) -> None:
-        """Publish a finished clip on /tts/audio as base64 WAV for clients to play."""
+    def _publish_audio(self, wav: bytes, clip_id: str, lead_seconds: float) -> None:
+        """Publish one identified browser playback request."""
         if self.tts_audio_pub is None or not wav:
             return
         from std_msgs.msg import String
 
-        payload = base64.b64encode(_finalize_wav(wav)).decode("ascii")
-        self.tts_audio_pub.publish(String(data=payload))
+        payload = {
+            "id": clip_id,
+            "audio": base64.b64encode(_finalize_wav(wav)).decode("ascii"),
+            "near_end_lead_seconds": max(0.0, lead_seconds),
+        }
+        self.tts_audio_pub.publish(String(data=json.dumps(payload, separators=(",", ":"))))
+
+    def on_browser_playback(self, payload: str) -> None:
+        """Forward an elected simulator speaker's playback event."""
+        try:
+            data = json.loads(payload)
+            clip_id = data["id"]
+            event = PlaybackEvent(data["event"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            self.logger.warning("Ignoring invalid /tts/playback event")
+            return
+        with self._browser_playback_lock:
+            playback = self._browser_playback
+        if playback is None or clip_id != playback.clip_id or playback.done.is_set():
+            return
+        if event == PlaybackEvent.ENDED:
+            playback.success = True
+            playback.done.set()
+        elif event == PlaybackEvent.ABORTED:
+            playback.done.set()
+        self._emit_playback(playback.observer, event)
 
     def speak_text_async(
-        self, text: str, voice_config: dict[str, Any] | None = None, replace_pending: bool = False
+        self,
+        text: str,
+        voice_config: dict[str, Any] | None = None,
+        replace_pending: bool = False,
+        *,
+        playback_observer: PlaybackObserver | None = None,
+        lead_seconds: float = 0.0,
     ) -> None:
         """
         Queue text to be spoken. Utterances play in order, one at a time;
@@ -337,13 +444,23 @@ class TTSHandler:
             if replace_pending:
                 while True:
                     try:
-                        stale, _ = self._speech_queue.get_nowait()
-                        self.logger.info(f"🔇 Dropping superseded speech: '{stale[:60]}'")
+                        stale = self._speech_queue.get_nowait()
+                        if stale is not None:
+                            self.logger.info(f"🔇 Dropping superseded speech: '{stale.text[:60]}'")
+                            self._emit_playback(stale.playback_observer, PlaybackEvent.ABORTED)
                     except queue.Empty:
                         break
-            self._speech_queue.put_nowait((text, voice_config))
+            self._speech_queue.put_nowait(
+                QueuedSpeech(
+                    text=text,
+                    voice_config=voice_config,
+                    playback_observer=_unique_observer(playback_observer),
+                    lead_seconds=lead_seconds,
+                )
+            )
         except queue.Full:
             self.logger.warning(f"🔇 Speech queue full, dropping: '{text[:60]}'")
+            self._emit_playback(playback_observer, PlaybackEvent.ABORTED)
 
     def _speech_loop(self):
         """Single worker: plays queued utterances in order, retrying each once."""
@@ -351,11 +468,46 @@ class TTSHandler:
             item = self._speech_queue.get()
             if item is None:
                 break
-            text, voice_config = item
-            if not self.speak_text(text, voice_config):
+            if not self.speak_text(
+                item.text,
+                item.voice_config,
+                playback_observer=item.playback_observer,
+                lead_seconds=item.lead_seconds,
+            ):
+                if item.playback_observer is not None:
+                    continue
                 self.logger.info("🔄 Retrying TTS after 1 second...")
                 time.sleep(1)
-                self.speak_text(text, voice_config)
+                self.speak_text(
+                    item.text,
+                    item.voice_config,
+                    playback_observer=None,
+                )
+
+    def _schedule_near_end(
+        self,
+        observer: PlaybackObserver | None,
+        *,
+        duration_seconds: float,
+        playback_started: float | None,
+        lead_seconds: float,
+    ) -> threading.Timer | None:
+        if observer is None:
+            return None
+        elapsed = time.perf_counter() - playback_started if playback_started is not None else 0.0
+        delay = max(0.0, duration_seconds - elapsed - max(0.0, lead_seconds))
+        timer = threading.Timer(delay, self._emit_playback, args=(observer, PlaybackEvent.NEAR_END))
+        timer.daemon = True
+        timer.start()
+        return timer
+
+    def _emit_playback(self, observer: PlaybackObserver | None, event: PlaybackEvent) -> None:
+        if observer is None:
+            return
+        try:
+            observer(event)
+        except Exception as error:  # noqa: BLE001 — playback reporting must not break speech
+            self.logger.error(f"Speech playback observer failed: {error}")
 
     def close(self):
         """Clean up resources."""
@@ -363,9 +515,16 @@ class TTSHandler:
         # a blocking put() could hang shutdown if the queue is full
         try:
             while True:
-                self._speech_queue.get_nowait()
+                queued = self._speech_queue.get_nowait()
+                if queued is not None:
+                    self._emit_playback(queued.playback_observer, PlaybackEvent.ABORTED)
         except queue.Empty:
             pass
+        with self._browser_playback_lock:
+            playback, self._browser_playback = self._browser_playback, None
+        if playback is not None:
+            playback.done.set()
+            self._emit_playback(playback.observer, PlaybackEvent.ABORTED)
         try:
             self._speech_queue.put_nowait(None)
         except queue.Full:
@@ -392,3 +551,23 @@ def _finalize_wav(data: bytes) -> bytes:
     struct.pack_into("<I", out, 4, len(out) - 8)  # RIFF chunk size
     struct.pack_into("<I", out, data_idx + 4, len(out) - (data_idx + 8))  # data size
     return bytes(out)
+
+
+def _pcm_duration_seconds(byte_count: int) -> float:
+    return max(0, byte_count - _WAV_HEADER_BYTES) / _PCM_BYTES_PER_SECOND
+
+
+def _unique_observer(observer: PlaybackObserver | None) -> PlaybackObserver | None:
+    if observer is None:
+        return None
+    seen: set[PlaybackEvent] = set()
+    lock = threading.Lock()
+
+    def notify(event: PlaybackEvent) -> None:
+        with lock:
+            if event in seen:
+                return
+            seen.add(event)
+        observer(event)
+
+    return notify

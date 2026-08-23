@@ -36,6 +36,8 @@ export const HEAD_SET_POSITION_TOPIC = "/mars/head/set_position";
 export const HEAD_CURRENT_POSITION_TOPIC = "/mars/head/current_position";
 
 export const TTS_TOPIC = "/brain/tts";
+export const TTS_AUDIO_TOPIC = "/tts/audio";
+export const TTS_PLAYBACK_TOPIC = "/tts/playback";
 
 // Sim only: the operator's microphone as base64 PCM16 mono at 24 kHz
 // (std_msgs/String). MicroInput reads this instead of arecord, mirroring
