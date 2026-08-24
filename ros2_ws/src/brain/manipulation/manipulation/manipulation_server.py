@@ -1145,10 +1145,19 @@ class ManipulationServer(Node):
                 f"Arm goto service called with position: {[float(p) for p in position]} (time: {time_duration}s)"
             )
 
-            # Wait for the service call to complete (service blocks for time_duration internally)
-            timeout_sec = time_duration + 0.2  # Small buffer for network/processing overhead
+            # The goto completes when the arm ARRIVES: nominal duration plus
+            # settle and scheduling drift (measured 0.2-0.25s past nominal on
+            # an idle sim). Wait past the arm server's own internal bound
+            # instead of racing it.
+            timeout_sec = time_duration + 6.0
             start_wait = time.time()
             while not future.done():
+                if self._cancel_requested.is_set():
+                    # The command is already dispatched (the arm finishes or
+                    # is preempted by the cleanup goto); stop waiting so
+                    # cancellation tears the behavior down promptly.
+                    self.get_logger().info("Arm goto wait interrupted by cancel request")
+                    return False
                 if time.time() - start_wait > timeout_sec:
                     self.get_logger().error(f"Arm goto service timed out after {timeout_sec}s")
                     return False

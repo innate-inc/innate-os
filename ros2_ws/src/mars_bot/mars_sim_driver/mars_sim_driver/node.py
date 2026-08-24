@@ -345,9 +345,8 @@ class VirtualMarsNode(Node):
         return time.monotonic()
 
     # Settle: a goto completes when the arm ARRIVES (tol), like real servos,
-    # not when its time runs out. The cap bounds a blocked joint AND honours
-    # the service contract: manipulation_server waits only `time + 0.2s` wall
-    # for goto_js, so the settle must fit inside that budget.
+    # not when its time runs out. The cap bounds a blocked joint so a slow
+    # settle can't hang the goto_js caller.
     SETTLE_TOL_RAD = 0.015
     SETTLE_CAP_S = 0.15
 
