@@ -76,6 +76,32 @@ class DepartureGuard:
                 raise ValueError(f"departure guard {name} must be a finite positive number")
 
 
+@dataclass(frozen=True)
+class InteractionGuard:
+    """Temporarily hide escape skills while a required interaction is unresolved."""
+
+    trigger_skill_names: tuple[str, ...]
+    trigger_result_prefixes: tuple[str, ...]
+    blocked_skill_ids: tuple[str, ...]
+    release_skill_names: tuple[str, ...]
+    release_result_prefixes: tuple[str, ...]
+    maximum_hold_s: float
+
+    def __post_init__(self) -> None:
+        if not all(
+            (
+                self.trigger_skill_names,
+                self.trigger_result_prefixes,
+                self.blocked_skill_ids,
+                self.release_skill_names,
+                self.release_result_prefixes,
+            )
+        ):
+            raise ValueError("interaction guard trigger, blocked, and release fields cannot be empty")
+        if not math.isfinite(self.maximum_hold_s) or self.maximum_hold_s <= 0:
+            raise ValueError("interaction guard maximum_hold_s must be a finite positive number")
+
+
 class Agent(ABC):
     """
     Base class for all agents.
@@ -219,6 +245,10 @@ class Agent(ABC):
 
     def get_departure_guard(self) -> DepartureGuard | None:
         """Optionally protect a running search from immediate repeat cancellation."""
+        return None
+
+    def get_interaction_guard(self) -> InteractionGuard | None:
+        """Optionally keep escape skills hidden while an interaction is unresolved."""
         return None
 
     def input_names(self) -> list[str]:

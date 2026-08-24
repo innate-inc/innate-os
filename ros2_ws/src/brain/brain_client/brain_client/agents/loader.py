@@ -17,7 +17,7 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-from brain_client.agents.types import Agent, DepartureGuard, TurnIntervals
+from brain_client.agents.types import Agent, DepartureGuard, InteractionGuard, TurnIntervals
 from brain_client.common.dynamic_loader import class_name_to_snake_case, evict_modules_under
 from brain_client.common.script_paths import (
     classify_source,
@@ -99,6 +99,12 @@ def build_agent_instances(
                 raise TypeError(
                     f"{type(agent).__name__}.get_departure_guard() must return DepartureGuard or None, "
                     f"got {departure_guard!r}"
+                )
+            interaction_guard = agent.get_interaction_guard()
+            if interaction_guard is not None and not isinstance(interaction_guard, InteractionGuard):
+                raise TypeError(
+                    f"{type(agent).__name__}.get_interaction_guard() must return InteractionGuard or None, "
+                    f"got {interaction_guard!r}"
                 )
             agent.uses_gaze()
             skill_ids = agent.skill_ids()

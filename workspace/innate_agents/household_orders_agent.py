@@ -9,7 +9,7 @@ from innate_skills.person_identity import PersonIdentity
 from innate_skills.place_doordash_order import PlaceDoordashOrder
 from inputs.micro_input import MicroInput
 
-from brain_client.agents.types import Agent, DepartureGuard, InputRef, SkillRef, TurnIntervals
+from brain_client.agents.types import Agent, DepartureGuard, InputRef, InteractionGuard, SkillRef, TurnIntervals
 
 
 class HouseholdOrdersAgent(Agent):
@@ -54,6 +54,19 @@ class HouseholdOrdersAgent(Agent):
             protected_skill_ids=("innate-os/find_next_person",),
             minimum_departure_m=1.25,
             maximum_hold_s=12.0,
+        )
+
+    def get_interaction_guard(self) -> InteractionGuard:
+        # A missing note means a resident is identified but not yet handled.
+        # Keep the global search tool out of the next few turns so the model
+        # performs the bounded approach/re-identify recovery in the prompt.
+        return InteractionGuard(
+            trigger_skill_names=("mission_notes",),
+            trigger_result_prefixes=("NOTE_MISSING",),
+            blocked_skill_ids=("innate-os/find_next_person",),
+            release_skill_names=("mission_notes",),
+            release_result_prefixes=("NOTE_SAVED",),
+            maximum_hold_s=35.0,
         )
 
     def get_prompt(self) -> str:

@@ -140,6 +140,7 @@ class BrainAgent:
         self._speaker: SpeechStreamer | None = None  # the in-flight turn's streamer (the racing loop reads it)
         self._pause_until = 0.0  # monotonic deadline of the current between-turns pause
         self._departure_anchor: tuple[float, float, float] | None = None
+        self._interaction_guard_started_at: float | None = None
         self._turn_user_spoke = False
 
         self._runtime = LoopThread("brain-agent")
@@ -190,6 +191,7 @@ class BrainAgent:
         self._activated_at = time.monotonic()
         self._error_streak = 0
         self._departure_anchor = None
+        self._interaction_guard_started_at = None
         self._runtime.spawn(self._loop())
         return True
 
@@ -465,6 +467,9 @@ class BrainAgent:
         self._turn_user_spoke = user_spoke
         active_ids = set(self._roster.active_skill_ids())
         skills = [meta for meta in self._state.registry.metadata if meta["id"] in active_ids]
+        blocked_ids = self._interaction_blocked_skill_ids()
+        if blocked_ids:
+            skills = [meta for meta in skills if meta["id"] not in blocked_ids]
         # One naming pass feeds both the declarations and the dispatch map, so
         # the name the model calls always resolves to the skill it was declared for.
         named = assign_tool_names(skills)
@@ -587,6 +592,21 @@ class BrainAgent:
             f"(or {policy.maximum_hold_s:g} s elapse)"
         )
 
+    def _interaction_guard_policy(self):
+        directive = self._state.current_directive
+        getter = getattr(directive, "get_interaction_guard", None) if directive is not None else None
+        return getter() if getter is not None else None
+
+    def _interaction_blocked_skill_ids(self) -> frozenset[str]:
+        policy = self._interaction_guard_policy()
+        started_at = self._interaction_guard_started_at
+        if policy is None or started_at is None:
+            return frozenset()
+        if time.monotonic() - started_at >= policy.maximum_hold_s:
+            self._interaction_guard_started_at = None
+            return frozenset()
+        return frozenset(policy.blocked_skill_ids)
+
     def _go_to_point_in_view(self, args: dict) -> str:
         """Project the pointed-at floor pixel into a local navigate_to_position goal."""
         # Gate on the ACTIVE set, not the registry: a hallucinated call must
@@ -679,6 +699,16 @@ class BrainAgent:
             pose = self._pose.current_pose_xyt()
             if pose is not None:
                 self._departure_anchor = (pose[0], pose[1], time.monotonic())
+        interaction_policy = self._interaction_guard_policy()
+        if interaction_policy is not None and status == "completed" and detail is not None:
+            if skill_name in interaction_policy.release_skill_names and any(
+                detail.startswith(prefix) for prefix in interaction_policy.release_result_prefixes
+            ):
+                self._interaction_guard_started_at = None
+            elif skill_name in interaction_policy.trigger_skill_names and any(
+                detail.startswith(prefix) for prefix in interaction_policy.trigger_result_prefixes
+            ):
+                self._interaction_guard_started_at = time.monotonic()
         line = f"Skill {skill_name} {status}"
         if detail:
             line += f": {detail}"
