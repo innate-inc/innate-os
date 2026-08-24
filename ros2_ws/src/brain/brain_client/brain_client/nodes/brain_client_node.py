@@ -43,6 +43,7 @@ from brain_client.perception.gaze_control import GazeController
 from brain_client.perception.pose_tracking import PoseTracker
 from brain_client.perception.scan_health import ScanHealthMonitor
 from brain_client.robot.arm_recovery import ArmRecovery
+from brain_client.robot.rest_pose import ArmRestPose
 from brain_client.skills.hot_reload import ReloadCoordinator
 from brain_client.skills.roster import SkillRoster
 from brain_client.skills.runner import PrimitiveRunner
@@ -231,6 +232,7 @@ class BrainClientNode(Node):
         self.camera.motion_suppressed = lambda: self.state.primitive_running is not None or self.camera.recently_driven
         self.camera.on_motion = self._on_camera_motion
         self.arm_recovery = ArmRecovery(self, state, runner=self.runner, chat=self.chat, brain=self.brain)
+        self.rest_pose = ArmRestPose(self, state)
         self.lifecycle = BrainLifecycle(
             self,
             state,
@@ -240,6 +242,7 @@ class BrainClientNode(Node):
             runner=self.runner,
             gaze=self.gaze,
             chat=self.chat,
+            rest_pose=self.rest_pose,
             active_inputs_pub=self.active_inputs_pub,
             stop_robot=self._stop_robot,
             publish_status=self.publish_agent_status,

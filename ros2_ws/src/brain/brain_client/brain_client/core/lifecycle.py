@@ -27,6 +27,7 @@ class BrainLifecycle:
         runner,
         gaze,
         chat,
+        rest_pose,
         active_inputs_pub,
         stop_robot,
         publish_status,
@@ -40,6 +41,7 @@ class BrainLifecycle:
         self._runner = runner
         self._gaze = gaze
         self._chat = chat
+        self._rest_pose = rest_pose
         self._active_inputs_pub = active_inputs_pub
         self._stop_robot = stop_robot
         self._publish_status = publish_status
@@ -66,6 +68,7 @@ class BrainLifecycle:
             self._publish_status()
             return
         self.activate_directive_inputs()
+        self._rest_pose.fold()
         self._publish_status()
         # Announce in the shared chat so EVERY client sees it, not just the
         # device whose button was pressed (clients don't echo locally).
