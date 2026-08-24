@@ -2537,6 +2537,14 @@ def test_choose_view_penalizes_a_winding_route(monkeypatch):
     assert (view.row, view.col) == same_side
 
 
+def test_sweep_information_utility_prefers_efficient_gain_over_long_detour():
+    nearby = search_module._coverage_travel_utility(40, 2.0, sweeping=True)
+    distant = search_module._coverage_travel_utility(50, 8.0, sweeping=True)
+
+    assert nearby > distant
+    assert search_module._coverage_travel_utility(50, 0.0, sweeping=True) == 50
+
+
 def test_choose_view_avoids_looking_toward_a_handled_person(monkeypatch):
     reachable = np.ones((10, 10), dtype=bool)
     plan = search_module._PlanningGrid(
@@ -2805,44 +2813,7 @@ def test_apartment_route_cost_exposes_the_long_path_hidden_by_euclidean_distance
     assert route_distance > direct_distance * 3.0
 
 
-def test_search_prefers_nearby_route_over_distant_gain(monkeypatch):
-    traversable = np.ones((1, 10), dtype=bool)
-    plan = search_module._PlanningGrid(
-        resolution=1.0,
-        origin_x=0.0,
-        origin_y=0.0,
-        origin_theta=0.0,
-        traversable=traversable,
-        blocked=~traversable,
-        safe=traversable,
-        reachable=traversable,
-        navigable=traversable,
-    )
-    near = (0, 2)
-    far = (0, 8)
-    monkeypatch.setattr(search_module, "_sample_viewpoints", lambda _plan: [far, near])
-
-    def visible(_plan, row, col, _theta):
-        if (row, col) == near:
-            return frozenset(range(10, 20))
-        if (row, col) == far:
-            return frozenset(range(100, 200))
-        return frozenset()
-
-    monkeypatch.setattr(search_module, "_visible_cells", visible)
-
-    view, _covered = search_module._choose_view(
-        plan,
-        Pose(0.5, 0.5, 0.0),
-        [{"x": 0.5, "y": 0.5, "theta": 0.0}],
-        [],
-    )
-
-    assert view is not None
-    assert (view.row, view.col) == near
-
-
-def test_apartment_search_continues_locally_after_two_stops():
+def test_apartment_search_prefers_efficient_unseen_view_after_two_stops():
     map_state = _apartment_map_state()
     pose = Pose(-1.93, 2.71, math.radians(-8.0))
     observations = [
@@ -2854,8 +2825,10 @@ def test_apartment_search_continues_locally_after_two_stops():
     assert plan is not None
     view, _covered = search_module._choose_view(plan, pose, observations, [])
     assert view is not None
-    route_distance = search_module._grid_travel_distances(plan, pose)[view.row, view.col]
-    assert route_distance <= 1.0
+    route_distances = search_module._grid_travel_distances(plan, pose)
+    old_far_target = search_module._world_to_cell(plan, -0.2134, -2.7856)
+    assert route_distances[view.row, view.col] < route_distances[old_far_target]
+    assert view.gain >= search_module.MIN_NEW_CELLS
 
 
 def test_visualize_saves_map_without_camera_or_safe_viewpoint(tmp_path, monkeypatch):

@@ -44,8 +44,9 @@ HEADING_COUNT = 8
 MAX_VIEWPOINTS = 240
 MIN_NEW_CELLS = 6
 INITIAL_TRAVEL_COST_CELLS_PER_M = 12.0
-SWEEP_TRAVEL_COST_CELLS_PER_M = 1.0
-NOVELTY_BONUS_CELLS_PER_M = 10.0
+SWEEP_INFORMATION_DECAY_PER_M = 0.35
+SWEEP_NOVELTY_BONUS_CELLS_PER_M = 2.0
+SWEEP_NOVELTY_BONUS_MAX_M = 2.0
 HANDLED_PERSON_ESTIMATED_DISTANCE_M = 1.5
 HANDLED_PERSON_VIEW_PENALTY_CELLS = 220.0
 HANDLED_PERSON_PROXIMITY_RADIUS_M = 2.0
@@ -392,6 +393,13 @@ def _distance_from_observations(x: float, y: float, observations: list[dict]) ->
     return min(distances) if distances else 0.0
 
 
+def _coverage_travel_utility(gain: int, route_distance_m: float, *, sweeping: bool) -> float:
+    """Score information against actual route cost without rewarding long trips."""
+    if not sweeping:
+        return gain - INITIAL_TRAVEL_COST_CELLS_PER_M * route_distance_m
+    return gain / (1.0 + SWEEP_INFORMATION_DECAY_PER_M * route_distance_m)
+
+
 def _handled_person_anchors() -> list[tuple[float, float]]:
     """Estimated map positions for residents whose orders are already durable."""
     root = artifact_root()
@@ -449,7 +457,6 @@ def _choose_view(
 ) -> tuple[_View | None, set[int]]:
     covered = _covered_cells(plan, observations)
     route_distances = _grid_travel_distances(plan, pose)
-    travel_cost = SWEEP_TRAVEL_COST_CELLS_PER_M if observations else INITIAL_TRAVEL_COST_CELLS_PER_M
     sparse_viewpoints = _sample_viewpoints(plan)
     pose_row, pose_col = _world_to_cell(plan, pose.x, pose.y)
     person_anchors = handled_person_anchors or []
@@ -506,9 +513,8 @@ def _choose_view(
                         * HANDLED_PERSON_PROXIMITY_PENALTY_CELLS_PER_M
                     )
                 score = (
-                    gain
-                    - travel_cost * evaluation_distance
-                    + NOVELTY_BONUS_CELLS_PER_M * novelty
+                    _coverage_travel_utility(gain, evaluation_distance, sweeping=bool(observations))
+                    + SWEEP_NOVELTY_BONUS_CELLS_PER_M * min(novelty, SWEEP_NOVELTY_BONUS_MAX_M)
                     - 0.5 * _angular_distance(theta, pose.theta)
                     - person_view_penalty
                     - person_proximity_penalty
