@@ -377,8 +377,7 @@ class ManipulationServer(Node):
             if start_pose:
                 self.get_logger().info(f"Moving to start pose: {start_pose} (time: {start_pose_time}s)")
                 if not self.call_arm_goto_service(start_pose, start_pose_time):
-                    self.get_logger().error("Failed to move to start pose")
-                    return "FAILURE", "Failed to move arm to start pose"
+                    return self._goto_outcome("Failed to move arm to start pose")
 
             # Execute policy inference
             start_time = time.time()
@@ -417,7 +416,7 @@ class ManipulationServer(Node):
                     self.get_logger().info("Behavior execution canceled")
                     self._stop_robot()
                     if end_pose:
-                        self.call_arm_goto_service(end_pose, end_pose_time)
+                        self.call_arm_goto_service(end_pose, end_pose_time, interruptible=False)
                     return "CANCELLED", "User requested cancellation"
 
                 # Check if duration completed (moved earlier to prevent infinite loop)
@@ -465,8 +464,7 @@ class ManipulationServer(Node):
             if end_pose:
                 self.get_logger().info(f"Moving to end pose: {end_pose} (time: {end_pose_time}s)")
                 if not self.call_arm_goto_service(end_pose, end_pose_time):
-                    self.get_logger().error("Failed to move to end pose")
-                    return "FAILURE", "Failed to move arm to end pose"
+                    return self._goto_outcome("Failed to move arm to end pose")
 
             # One concise summary per policy execution.
             total_elapsed = time.time() - start_time
@@ -514,8 +512,7 @@ class ManipulationServer(Node):
 
                 # Execute pose movement
                 if not self.call_arm_goto_service(pose, steps):
-                    self.get_logger().error(f"Failed to reach pose {i + 1}")
-                    return "FAILURE", f"Failed to reach pose {i + 1}/{len(poses)}"
+                    return self._goto_outcome(f"Failed to reach pose {i + 1}/{len(poses)}")
 
                 time.sleep(steps)
 
@@ -556,8 +553,7 @@ class ManipulationServer(Node):
                 # Use start_pose from metadata
                 self.get_logger().info(f"Moving to start pose from metadata: {start_pose} (time: {start_pose_time}s)")
                 if not self.call_arm_goto_service(start_pose, start_pose_time):
-                    self.get_logger().error("Failed to move to start pose")
-                    return "FAILURE", "Failed to move to start pose"
+                    return self._goto_outcome("Failed to move to start pose")
             else:
                 # Fall back to first action from H5 file
                 # Action format: [arm_joints(6), linear.x, angular.z, progress?, termination?]
@@ -567,8 +563,7 @@ class ManipulationServer(Node):
                     f"Moving to initial arm position from H5: {first_arm_position} (time: {start_pose_time}s)"
                 )
                 if not self.call_arm_goto_service(first_arm_position, start_pose_time):
-                    self.get_logger().error("Failed to move to initial arm position")
-                    return "FAILURE", "Failed to move to initial arm position"
+                    return self._goto_outcome("Failed to move to initial arm position")
 
             # Replay parameters
             total_steps = actions.shape[0]
@@ -590,7 +585,7 @@ class ManipulationServer(Node):
                     self.get_logger().info("Replay execution canceled")
                     self._stop_robot()
                     if end_pose:
-                        self.call_arm_goto_service(end_pose, end_pose_time)
+                        self.call_arm_goto_service(end_pose, end_pose_time, interruptible=False)
                     return "CANCELLED", "User requested cancellation"
 
                 # Get current action
@@ -637,8 +632,7 @@ class ManipulationServer(Node):
             if end_pose:
                 self.get_logger().info(f"Moving to end pose: {end_pose} (time: {end_pose_time}s)")
                 if not self.call_arm_goto_service(end_pose, end_pose_time):
-                    self.get_logger().error("Failed to move to end pose")
-                    return "FAILURE", "Failed to move to end pose"
+                    return self._goto_outcome("Failed to move to end pose")
 
             self.get_logger().info(f"Replay behavior {behavior_name} completed successfully")
             return "SUCCESS", f"Replay completed successfully with {total_steps} steps"
@@ -1124,8 +1118,22 @@ class ManipulationServer(Node):
 
         return True
 
-    def call_arm_goto_service(self, position, time_duration=5):
-        """Call the arm goto service with specified position and wait for completion."""
+    def _goto_outcome(self, detail: str) -> tuple[str, str]:
+        """The outcome a failed goto reports. A cancel interrupts the wait and
+        returns False like any other failure, but must not abort the action —
+        and skills_server classifies the two on this text."""
+        if self._cancel_requested.is_set():
+            self.get_logger().info("Behavior cancelled while the arm was moving")
+            return "CANCELLED", "User requested cancellation"
+        self.get_logger().error(detail)
+        return "FAILURE", detail
+
+    def call_arm_goto_service(self, position, time_duration=5, *, interruptible=True):
+        """Call the arm goto service with specified position and wait for completion.
+
+        ``interruptible=False`` waits through a pending cancel: the end-pose
+        park is committed work, and cutting its wait short frees the arm for
+        the next command while it is still travelling."""
         if not self.arm_goto_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().error("Arm goto service not available")
             return False
@@ -1152,7 +1160,7 @@ class ManipulationServer(Node):
             timeout_sec = time_duration + 6.0
             start_wait = time.time()
             while not future.done():
-                if self._cancel_requested.is_set():
+                if interruptible and self._cancel_requested.is_set():
                     # The command is already dispatched (the arm finishes or
                     # is preempted by the cleanup goto); stop waiting so
                     # cancellation tears the behavior down promptly.
