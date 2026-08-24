@@ -24,6 +24,8 @@ NEW_CONFIDENCE = 0.72
 MAX_PENDING_OBSERVATIONS = 6
 MAX_CONTACT_REFERENCES = 6
 MAX_REFERENCE_IMAGES_PER_PERSON = 2
+APPEARANCE_CACHE_MIN_SIMILARITY = 0.975
+APPEARANCE_CACHE_MIN_MARGIN = 0.06
 IDENTIFY_FRAME_TIMEOUT_S = 5.0
 PERSON_VIEW_HEAD_PITCH_DEG = 20.0
 HEAD_POSITION_TOLERANCE_DEG = 2.0
@@ -271,6 +273,80 @@ def _reference_owner(
             if entry is not excluding and encoded_image in _reference_images(entry):
                 return entry
     return None
+
+
+def _appearance_signature(encoded_image: str) -> tuple[float, ...] | None:
+    """Return a compact spatial color signature for a centered resident view."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    if not encoded_image or len(encoded_image) > 8_000_000:
+        return None
+    try:
+        decoded = base64.b64decode(encoded_image, validate=True)
+        with Image.open(io.BytesIO(decoded)) as source:
+            image = source.convert("HSV")
+            width, height = image.size
+            if width < 32 or height < 32:
+                return None
+            # Exclude far sides and the top edge, which are mostly room
+            # background. Split legs-through-torso into a 2x3 grid so a
+            # similarly colored room cannot match by global color alone.
+            image = image.crop((width // 4, height // 8, width * 3 // 4, height * 15 // 16))
+            width, height = image.size
+            signature: list[float] = []
+            for row in range(3):
+                for column in range(2):
+                    region = image.crop(
+                        (
+                            column * width // 2,
+                            row * height // 3,
+                            (column + 1) * width // 2,
+                            (row + 1) * height // 3,
+                        )
+                    )
+                    bins = [0] * 48
+                    for hue, saturation, value in region.getdata():
+                        index = (hue * 12 // 256) * 4 + (saturation * 2 // 256) * 2 + (value * 2 // 256)
+                        bins[index] += 1
+                    total = sum(bins)
+                    if total == 0:
+                        return None
+                    signature.extend(count / total for count in bins)
+            return tuple(signature)
+    except Exception:
+        return None
+
+
+def _appearance_similarity(left: tuple[float, ...], right: tuple[float, ...]) -> float:
+    if len(left) != len(right) or not left:
+        return 0.0
+    # Every one of the six spatial histograms is independently normalized.
+    return sum(min(a, b) for a, b in zip(left, right, strict=True)) / 6
+
+
+def _appearance_cache_match(state: dict[str, Any], encoded_image: str) -> tuple[dict[str, Any], float] | None:
+    """Return only a uniquely convincing cached resident appearance match."""
+    current = _appearance_signature(encoded_image)
+    if current is None:
+        return None
+    scores: list[tuple[float, dict[str, Any]]] = []
+    for entry in [*state["encounters"], *state["pending"]]:
+        best = 0.0
+        for reference in _reference_images(entry):
+            signature = _appearance_signature(reference)
+            if signature is not None:
+                best = max(best, _appearance_similarity(current, signature))
+        if best > 0.0:
+            scores.append((best, entry))
+    scores.sort(key=lambda item: item[0], reverse=True)
+    if not scores or scores[0][0] < APPEARANCE_CACHE_MIN_SIMILARITY:
+        return None
+    runner_up = scores[1][0] if len(scores) > 1 else 0.0
+    if scores[0][0] - runner_up < APPEARANCE_CACHE_MIN_MARGIN:
+        return None
+    return scores[0][1], scores[0][0]
 
 
 def _deduplicate_references(state: dict[str, Any]) -> None:
@@ -967,6 +1043,25 @@ class ResidentRoster(Skill):
             self._save_state(state)
             return _result("IDENTITY_UNAVAILABLE", {"reason": unavailable_reason})
 
+        encoded_frame = str(frame)
+        exact_owner = _reference_owner(state, encoded_frame)
+        cached_match = (exact_owner, 1.0) if exact_owner is not None else _appearance_cache_match(state, encoded_frame)
+        if cached_match is not None:
+            cached_owner, similarity = cached_match
+            if continuity is None or continuity is cached_owner:
+                return self._identity_result(
+                    state,
+                    "KNOWN_PERSON",
+                    cached_owner,
+                    frame,
+                    identity={
+                        "decision": "match",
+                        "confidence": round(similarity, 3),
+                        "view_quality": "good",
+                        "reason": "strict body-region appearance cache match",
+                    },
+                )
+
         references = _contact_references(state)
         sheet_result = _contact_sheet(references) if references else None
         mark_timing("reference_sheet")
@@ -1070,7 +1165,6 @@ class ResidentRoster(Skill):
                 image=frame.jpeg,
             )
 
-        encoded_frame = str(frame)
         exact_owner = _reference_owner(state, encoded_frame)
         if exact_owner is not None:
             if continuity is not None and continuity is not exact_owner:
