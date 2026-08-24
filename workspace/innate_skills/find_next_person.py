@@ -44,9 +44,8 @@ HEADING_COUNT = 8
 MAX_VIEWPOINTS = 240
 MIN_NEW_CELLS = 6
 INITIAL_TRAVEL_COST_CELLS_PER_M = 12.0
-SWEEP_INFORMATION_DECAY_PER_M = 0.35
-SWEEP_NOVELTY_BONUS_CELLS_PER_M = 2.0
-SWEEP_NOVELTY_BONUS_MAX_M = 2.0
+SWEEP_TRAVEL_COST_CELLS_PER_M = 1.0
+SWEEP_NOVELTY_BONUS_CELLS_PER_M = 10.0
 SWEEP_BACKTRACK_PENALTY_CELLS = 12.0
 HANDLED_PERSON_ESTIMATED_DISTANCE_M = 1.5
 HANDLED_PERSON_VIEW_PENALTY_CELLS = 220.0
@@ -395,10 +394,9 @@ def _distance_from_observations(x: float, y: float, observations: list[dict]) ->
 
 
 def _coverage_travel_utility(gain: int, route_distance_m: float, *, sweeping: bool) -> float:
-    """Score information against actual route cost without rewarding long trips."""
-    if not sweeping:
-        return gain - INITIAL_TRAVEL_COST_CELLS_PER_M * route_distance_m
-    return gain / (1.0 + SWEEP_INFORMATION_DECAY_PER_M * route_distance_m)
+    """Keep the first view local, then let coverage gain dominate route length."""
+    travel_cost = SWEEP_TRAVEL_COST_CELLS_PER_M if sweeping else INITIAL_TRAVEL_COST_CELLS_PER_M
+    return gain - travel_cost * route_distance_m
 
 
 def _backtrack_penalty(x: float, y: float, observations: list[dict]) -> float:
@@ -534,7 +532,7 @@ def _choose_view(
                     )
                 score = (
                     _coverage_travel_utility(gain, evaluation_distance, sweeping=bool(observations))
-                    + SWEEP_NOVELTY_BONUS_CELLS_PER_M * min(novelty, SWEEP_NOVELTY_BONUS_MAX_M)
+                    + SWEEP_NOVELTY_BONUS_CELLS_PER_M * novelty
                     - _backtrack_penalty(evaluation_x, evaluation_y, observations)
                     - 0.5 * _angular_distance(theta, pose.theta)
                     - person_view_penalty

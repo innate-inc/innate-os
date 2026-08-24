@@ -2509,11 +2509,11 @@ def test_choose_view_penalizes_a_winding_route(monkeypatch):
     assert (view.row, view.col) == same_side
 
 
-def test_sweep_information_utility_prefers_efficient_gain_over_long_detour():
+def test_sweep_information_utility_lets_extra_coverage_outweigh_a_detour():
     nearby = search_module._coverage_travel_utility(40, 2.0, sweeping=True)
     distant = search_module._coverage_travel_utility(50, 8.0, sweeping=True)
 
-    assert nearby > distant
+    assert distant > nearby
     assert search_module._coverage_travel_utility(50, 0.0, sweeping=True) == 50
 
 
