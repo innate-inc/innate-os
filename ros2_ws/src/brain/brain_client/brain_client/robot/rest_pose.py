@@ -84,7 +84,12 @@ class ArmRestPose:
         if response is None or not response.success:
             self._logger.warn("[RestPose] The arm rejected the rest fold; leaving it where it is")
             return
-        if settle:
-            # Same second command Manipulation.rest() sends: the fold shifts a
-            # held load, and the servos need a re-command to settle under it.
-            self._send(_SETTLE_DURATION_S, settle=False)
+        if not settle:
+            return
+        if self._state.primitive_running is not None:
+            # The agent claimed the arm during the fold; the settle would drag
+            # its trajectory back toward rest.
+            return
+        # Same second command Manipulation.rest() sends: the fold shifts a held
+        # load, and the servos need a re-command to settle under it.
+        self._send(_SETTLE_DURATION_S, settle=False)
