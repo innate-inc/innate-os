@@ -47,6 +47,7 @@ INITIAL_TRAVEL_COST_CELLS_PER_M = 12.0
 SWEEP_INFORMATION_DECAY_PER_M = 0.35
 SWEEP_NOVELTY_BONUS_CELLS_PER_M = 2.0
 SWEEP_NOVELTY_BONUS_MAX_M = 2.0
+SWEEP_BACKTRACK_PENALTY_CELLS = 12.0
 HANDLED_PERSON_ESTIMATED_DISTANCE_M = 1.5
 HANDLED_PERSON_VIEW_PENALTY_CELLS = 220.0
 HANDLED_PERSON_PROXIMITY_RADIUS_M = 2.0
@@ -400,6 +401,25 @@ def _coverage_travel_utility(gain: int, route_distance_m: float, *, sweeping: bo
     return gain / (1.0 + SWEEP_INFORMATION_DECAY_PER_M * route_distance_m)
 
 
+def _backtrack_penalty(x: float, y: float, observations: list[dict]) -> float:
+    """Penalize reversing the last exploration leg without forbidding it."""
+    if len(observations) < 2:
+        return 0.0
+    try:
+        previous_x, previous_y = float(observations[-2]["x"]), float(observations[-2]["y"])
+        current_x, current_y = float(observations[-1]["x"]), float(observations[-1]["y"])
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+    incoming_x, incoming_y = current_x - previous_x, current_y - previous_y
+    outgoing_x, outgoing_y = x - current_x, y - current_y
+    incoming_norm = math.hypot(incoming_x, incoming_y)
+    outgoing_norm = math.hypot(outgoing_x, outgoing_y)
+    if incoming_norm < VIEWPOINT_SPACING_M or outgoing_norm < VIEWPOINT_SPACING_M:
+        return 0.0
+    cosine = (incoming_x * outgoing_x + incoming_y * outgoing_y) / (incoming_norm * outgoing_norm)
+    return SWEEP_BACKTRACK_PENALTY_CELLS * max(0.0, -cosine)
+
+
 def _handled_person_anchors() -> list[tuple[float, float]]:
     """Estimated map positions for residents whose orders are already durable."""
     root = artifact_root()
@@ -515,6 +535,7 @@ def _choose_view(
                 score = (
                     _coverage_travel_utility(gain, evaluation_distance, sweeping=bool(observations))
                     + SWEEP_NOVELTY_BONUS_CELLS_PER_M * min(novelty, SWEEP_NOVELTY_BONUS_MAX_M)
+                    - _backtrack_penalty(evaluation_x, evaluation_y, observations)
                     - 0.5 * _angular_distance(theta, pose.theta)
                     - person_view_penalty
                     - person_proximity_penalty

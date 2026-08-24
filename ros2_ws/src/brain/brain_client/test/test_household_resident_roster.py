@@ -2517,6 +2517,16 @@ def test_sweep_information_utility_prefers_efficient_gain_over_long_detour():
     assert search_module._coverage_travel_utility(50, 0.0, sweeping=True) == 50
 
 
+def test_backtrack_penalty_prefers_continuing_an_exploration_leg():
+    observations = [{"x": 0.0, "y": 0.0}, {"x": 2.0, "y": 0.0}]
+
+    assert search_module._backtrack_penalty(4.0, 0.0, observations) == 0.0
+    assert search_module._backtrack_penalty(0.0, 0.0, observations) == pytest.approx(
+        search_module.SWEEP_BACKTRACK_PENALTY_CELLS
+    )
+    assert 0.0 < search_module._backtrack_penalty(1.0, 1.0, observations) < search_module.SWEEP_BACKTRACK_PENALTY_CELLS
+
+
 def test_choose_view_avoids_looking_toward_a_handled_person(monkeypatch):
     reachable = np.ones((10, 10), dtype=bool)
     plan = search_module._PlanningGrid(
