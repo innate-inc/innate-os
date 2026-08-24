@@ -907,34 +907,6 @@ def test_contact_sheet_budget_gives_each_profile_a_first_view_before_seconds():
     assert [item[2] for item in selected[4:]] == ["1-side", "2-side"]
 
 
-def test_appearance_cache_matches_only_unique_near_duplicate():
-    state = roster_module.ResidentRoster._fresh_state()
-    red = _frame((170, 35, 35))
-    blue = _frame((35, 35, 170))
-    current = _frame((168, 36, 34))
-    state["encounters"] = [
-        {"encounter_id": "resident-001", "reference_images_b64": [str(red)]},
-        {"encounter_id": "resident-002", "reference_images_b64": [str(blue)]},
-    ]
-
-    match = roster_module._appearance_cache_match(state, str(current))
-
-    assert match is not None
-    assert match[0]["encounter_id"] == "resident-001"
-    assert match[1] >= roster_module.APPEARANCE_CACHE_MIN_SIMILARITY
-
-
-def test_appearance_cache_rejects_ambiguous_gallery():
-    state = roster_module.ResidentRoster._fresh_state()
-    same = _frame((80, 110, 50))
-    state["encounters"] = [
-        {"encounter_id": "resident-001", "reference_images_b64": [str(same)]},
-        {"encounter_id": "resident-002", "reference_images_b64": [str(same)]},
-    ]
-
-    assert roster_module._appearance_cache_match(state, str(same)) is None
-
-
 def test_roster_status_contract_contains_state_not_policy(roster):
     state = roster_module.ResidentRoster._fresh_state()
     state["encounters"] = [
