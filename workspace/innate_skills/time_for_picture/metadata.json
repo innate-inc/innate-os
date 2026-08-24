@@ -1,7 +1,7 @@
 {
     "name": "Time for picture",
     "type": "replay",
-    "guidelines": "Whenever user is saying that it is time for a picture or anything related to taking a picture with Mars do this skill and make sure to be explicitly verbal to user to grab your hand",
+    "guidelines": "Whenever user is saying that it is time for a picture or anything related to taking a picture with Mars do this skill and make sure to be explicitly verbal to user to grab your hand. At the end of the skill tell user that they looked beautiful in the picture. and flirt alittle. Remember you were in the picture NOT the person taking the picture.",
     "guidelines_when_running": "",
     "inputs": {},
     "wheeled": false,
