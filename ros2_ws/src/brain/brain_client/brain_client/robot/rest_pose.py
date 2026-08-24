@@ -2,10 +2,6 @@
 # Copyright (c) 2026 Innate Inc
 """Fold the arm to its rest pose when an agent starts.
 
-Starting an agent hands the robot to the model, and it should take it in a
-known shape: an arm left extended by teleop or by a previous session is what
-the first navigation skill drags into a doorframe.
-
 Same mechanism Mad speed mode uses to brace the arm (``fold_arm_for_mad_mode``
 in ``mars_control/app.cpp``): ``/mars/arm/goto_js_v2`` directly, not the
 arm_rest_position skill — activation must not occupy the single skill slot the
