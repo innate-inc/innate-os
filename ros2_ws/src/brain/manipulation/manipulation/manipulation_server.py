@@ -34,6 +34,7 @@ from manipulation.act_config import (  # noqa: E402
     normalize_state_dict,
     validate_action_dim,
 )
+from manipulation.audio_output import AudioOutput  # noqa: E402
 
 # Pure (ROS-free) auto-stop logic, kept in its own module.
 from manipulation.auto_stop import LearnedStopDetector, StepSignals  # noqa: E402
@@ -48,7 +49,9 @@ from manipulation.config_validation import (  # noqa: E402
     LearnedExecCfg,
     PosesExecCfg,
     ReplayExecCfg,
+    ResolvedAudioCue,
     ValidatedBehavior,
+    index_replay_cues,
     validate_behavior_config,
 )
 
@@ -75,6 +78,8 @@ class ManipulationServer(Node):
         # Learned-policy runtime knobs (from manipulation_server.yaml; overridable via config/settings.yaml).
         self.declare_parameter("inference_hz", 25.0)
         self.declare_parameter("speed", 1.5)
+        self.declare_parameter("simulator_mode", False)
+        self.simulator_mode = bool(self.get_parameter("simulator_mode").value)
         # inference_hz drives the loop period (1.0 / inference_hz); guard against <= 0.
         inference_hz = self.get_parameter("inference_hz").value
         if inference_hz <= 0:
@@ -151,6 +156,8 @@ class ManipulationServer(Node):
         self.arm_state_pub = self.create_publisher(Float64MultiArray, "/mars/arm/commands", 10)
         # Head position command (degrees) — only published for head-enabled replay skills.
         self.head_set_position_pub = self.create_publisher(Int32, "/mars/head/set_position", 10)
+        self.audio_output = AudioOutput(self, self.simulator_mode)
+        self.get_logger().info(f"Replay audio output: {'browser' if self.simulator_mode else 'ALSA speaker'}")
         # Per-step inference timing breakdown (JSON String), for the webapp Profiling page.
         # Only published while a learned behavior is executing, so it's free when idle.
         self.inference_profile_pub = self.create_publisher(String, "/brain/manipulation/inference_profile", 10)
@@ -299,6 +306,7 @@ class ManipulationServer(Node):
                     skill_dir,
                     validated.params,
                     replay_path=validated.resolved_path,
+                    replay_cues=validated.replay_cues,
                 )
             else:
                 # Unreachable: validator restricts behavior_type to the three
@@ -523,7 +531,14 @@ class ManipulationServer(Node):
             self.get_logger().error(f"Error in poses behavior execution: {e}")
             return "FAILURE", f"Exception during poses execution: {str(e)}"
 
-    def _execute_replay_behavior(self, goal_handle, skill_dir, params: ReplayExecCfg, replay_path: str):
+    def _execute_replay_behavior(
+        self,
+        goal_handle,
+        skill_dir,
+        params: ReplayExecCfg,
+        replay_path: str,
+        replay_cues: tuple[ResolvedAudioCue, ...] = (),
+    ):
         """Execute a replay-based behavior from H5 file."""
         behavior_name = os.path.basename(skill_dir.rstrip("/"))
         self.get_logger().info(f"Executing replay behavior: {behavior_name}")
@@ -569,6 +584,7 @@ class ManipulationServer(Node):
             total_steps = actions.shape[0]
             step_duration = 1.0 / replay_hz
             total_duration = total_steps * step_duration
+            cues_by_step = index_replay_cues(replay_cues, total_steps)
 
             self.get_logger().info(
                 f"Starting replay: {total_steps} steps at {replay_hz} Hz (total: {total_duration:.1f}s)"
@@ -584,9 +600,20 @@ class ManipulationServer(Node):
                 if self._cancel_requested.is_set():
                     self.get_logger().info("Replay execution canceled")
                     self._stop_robot()
+                    self.audio_output.stop()
                     if end_pose:
                         self.call_arm_goto_service(end_pose, end_pose_time, interruptible=False)
                     return "CANCELLED", "User requested cancellation"
+
+                if self.audio_output.playing:
+                    audio_error = self.audio_output.poll()
+                    if audio_error:
+                        self._stop_robot()
+                        return "FAILURE", audio_error
+
+                for cue in cues_by_step.get(step_idx, ()):
+                    self.get_logger().info(f"Replay audio cue at action {step_idx}: {os.path.basename(cue.audio_path)}")
+                    self.audio_output.start(cue.audio_path)
 
                 # Get current action
                 action = actions[step_idx]
@@ -634,6 +661,14 @@ class ManipulationServer(Node):
                 if not self.call_arm_goto_service(end_pose, end_pose_time):
                     return self._goto_outcome("Failed to move to end pose")
 
+            while self.audio_output.playing:
+                if self._cancel_requested.is_set():
+                    return "CANCELLED", "User requested cancellation"
+                audio_error = self.audio_output.poll()
+                if audio_error:
+                    return "FAILURE", audio_error
+                time.sleep(0.05)
+
             self.get_logger().info(f"Replay behavior {behavior_name} completed successfully")
             return "SUCCESS", f"Replay completed successfully with {total_steps} steps"
 
@@ -641,6 +676,8 @@ class ManipulationServer(Node):
             self.get_logger().error(f"Error in replay behavior execution: {e}")
             self._stop_robot()
             return "FAILURE", f"Exception during replay execution: {str(e)}"
+        finally:
+            self.audio_output.stop()
 
     def _load_policy_for_behavior(self, checkpoint_path, action_dim, n_action_steps_override=None):
         """Load ACT policy for a specific behavior.

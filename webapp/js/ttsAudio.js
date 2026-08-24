@@ -1,15 +1,12 @@
 // @ts-check
-// Robot speech playback. In SIM mode the brain publishes synthesized speech
-// identified WAV clips on /tts/audio whenever it speaks — "make the robot
-// speak", agent replies, skill narration. The sim has no audio device, so the
-// browser is the speaker. The real robot plays speech out its own physical
-// speaker and publishes nothing here (a browser playing it too would double
-// the voice), so against a robot this module simply never fires.
+// Robot audio playback. In SIM mode, speech and replay cues publish identified
+// WAV clips on /tts/audio because the simulator has no audio device. Hardware
+// plays those clips on its own speaker and publishes nothing here.
 // Mounted from the shell (which loads on every page), so speech plays no matter
 // which page is open.
 
 import { ros } from "./rosClient.js";
-import { TTS_AUDIO_TOPIC, TTS_PLAYBACK_TOPIC } from "./constants.js";
+import { TTS_AUDIO_TOPIC, TTS_CANCEL_TOPIC, TTS_PLAYBACK_TOPIC } from "./constants.js";
 import { isMicAudioActive, setTtsPlaying } from "./micAudioState.js";
 
 let started = false;
@@ -19,6 +16,8 @@ let started = false;
 // playing tab; when that tab closes, the browser passes the lock (and the
 // voice) to the next one. Browsers without Web Locks keep the old behavior.
 let speaker = !("locks" in navigator);
+/** @type {Map<string, () => void>} */
+const activeCancels = new Map();
 navigator.locks?.request("innate-tts-speaker", () => {
   speaker = true;
   return new Promise(() => {}); // hold until this tab closes
@@ -41,10 +40,13 @@ export function initTtsAudio() {
     }
     enqueue(clip);
   }, undefined, "std_msgs/msg/String");
+  ros.subscribe(TTS_CANCEL_TOPIC, (msg) => {
+    if (typeof msg?.data === "string") cancelClip(msg.data);
+  }, undefined, "std_msgs/msg/String");
 }
 
-// The brain waits for this speaker's ended/aborted event before publishing the
-// next clip. The local queue still absorbs reconnect and legacy-client bursts.
+// Publishers wait for this speaker's ended/aborted event. The local queue still
+// absorbs reconnect and legacy-client bursts.
 /** @typedef {{ id: string | null, audio: string, nearEndLeadSeconds: number }} TtsClip */
 /** @type {TtsClip[]} */
 const pending = [];
@@ -63,6 +65,16 @@ function enqueue(clip) {
     console.warn("[tts] playback backlog full — dropping the oldest clip");
   }
   if (!playing) playNext();
+}
+
+/** @param {string} clipId */
+function cancelClip(clipId) {
+  const pendingIndex = pending.findIndex((clip) => clip.id === clipId);
+  if (pendingIndex >= 0) {
+    const [clip] = pending.splice(pendingIndex, 1);
+    if (clip) report(clip, "aborted");
+  }
+  activeCancels.get(clipId)?.();
 }
 
 function playNext() {
@@ -102,6 +114,7 @@ function play(clip) {
   const done = (event) => {
     if (released) return;
     released = true;
+    if (clip.id !== null) activeCancels.delete(clip.id);
     if (event === "ended" && !nearEndSent && clip.nearEndLeadSeconds > 0) {
       nearEndSent = true;
       report(clip, "near_end");
@@ -111,6 +124,12 @@ function play(clip) {
     URL.revokeObjectURL(url);
     playNext();
   };
+  if (clip.id !== null) {
+    activeCancels.set(clip.id, () => {
+      audio.pause();
+      done("aborted");
+    });
+  }
   audio.addEventListener("playing", () => report(clip, "started"), { once: true });
   audio.addEventListener("timeupdate", nearEnd);
   audio.addEventListener("ended", () => done("ended"), { once: true });

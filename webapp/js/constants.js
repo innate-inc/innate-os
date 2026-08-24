@@ -37,6 +37,7 @@ export const HEAD_CURRENT_POSITION_TOPIC = "/mars/head/current_position";
 
 export const TTS_TOPIC = "/brain/tts";
 export const TTS_AUDIO_TOPIC = "/tts/audio";
+export const TTS_CANCEL_TOPIC = "/tts/cancel";
 export const TTS_PLAYBACK_TOPIC = "/tts/playback";
 
 // Sim only: the operator's microphone as base64 PCM16 mono at 24 kHz

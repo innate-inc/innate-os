@@ -5,6 +5,7 @@
 manipulation_server:
   ros__parameters:
     data_directory: "~/innate-os/workspace/custom_skills"  # Fallback default; behavior.launch.py overrides this with $INNATE_OS_ROOT/workspace/custom_skills.
+    simulator_mode: false
     # Learned-policy inference
     inference_hz: 25.0                      # policy inference loop rate (Hz)
     speed: 1.5                             # action execution speed multiplier

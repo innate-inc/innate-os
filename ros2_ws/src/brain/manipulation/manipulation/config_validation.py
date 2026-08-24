@@ -31,7 +31,7 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from typing import Annotated, Any, Union
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import (
     BaseModel,
@@ -267,10 +267,32 @@ class PosesExecCfg(_BaseExecCfg):
         return _finite_number(value)
 
 
+class AudioCueConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=False)
+
+    at_action_index: int = Field(..., ge=0)
+    action: Literal["play_audio"]
+    audio_file: str = Field(..., min_length=1)
+
+    @field_validator("at_action_index", mode="before")
+    @classmethod
+    def _guard_action_index(cls, value: Any) -> Any:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"expected an integer, got {type(value).__name__} ({value!r})")
+        return value
+
+
+@dataclass(frozen=True)
+class ResolvedAudioCue:
+    at_action_index: int
+    audio_path: str
+
+
 class ReplayExecCfg(_BaseExecCfg):
     """``execution`` block for ``type: replay`` skills."""
 
     replay_file: str = Field(..., min_length=1)
+    cues: list[AudioCueConfig] = Field(default_factory=list)
     start_pose: Pose6 | None = None
     end_pose: Pose6 | None = None
     start_pose_time: float = Field(1.0, gt=0)
@@ -293,6 +315,20 @@ class ReplayExecCfg(_BaseExecCfg):
         if value is None:
             return value
         return _finite_number(value)
+
+
+def index_replay_cues(
+    cues: tuple[ResolvedAudioCue, ...],
+    total_steps: int,
+) -> dict[int, tuple[ResolvedAudioCue, ...]]:
+    indexed: dict[int, list[ResolvedAudioCue]] = {}
+    for cue in cues:
+        if cue.at_action_index >= total_steps:
+            raise BehaviorConfigError(
+                f"execution.cues: action index {cue.at_action_index} is outside the {total_steps}-step trajectory"
+            )
+        indexed.setdefault(cue.at_action_index, []).append(cue)
+    return {step: tuple(cues_at_step) for step, cues_at_step in indexed.items()}
 
 
 ExecCfg = Union[LearnedExecCfg, PosesExecCfg, ReplayExecCfg]  # noqa: UP007
@@ -320,6 +356,7 @@ class ValidatedBehavior:
     # (``checkpoint`` for learned, ``replay_file`` for replay). ``None`` for
     # poses skills, which don't reference any file.
     resolved_path: str | None = None
+    replay_cues: tuple[ResolvedAudioCue, ...] = ()
 
 
 def _format_validation_error(exc: ValidationError, prefix: str = "execution") -> str:
@@ -404,6 +441,7 @@ def validate_behavior_config(
 
     # 4. Asset existence checks.
     resolved_path: str | None = None
+    replay_cues: tuple[ResolvedAudioCue, ...] = ()
     if behavior_type == "learned":
         assert isinstance(params, LearnedExecCfg)  # for type checkers
         resolved_path = os.path.join(skill_dir, params.checkpoint)
@@ -414,9 +452,20 @@ def validate_behavior_config(
         resolved_path = os.path.join(skill_dir, params.replay_file)
         if check_files_exist and not os.path.isfile(resolved_path):
             raise BehaviorConfigError(f"execution.replay_file: file does not exist at {resolved_path!r}")
+        resolved_cues: list[ResolvedAudioCue] = []
+        skill_root = os.path.realpath(skill_dir)
+        for index, cue in enumerate(params.cues):
+            cue_path = os.path.realpath(os.path.join(skill_root, cue.audio_file))
+            if os.path.commonpath((skill_root, cue_path)) != skill_root:
+                raise BehaviorConfigError(f"execution.cues.{index}.audio_file: must stay inside the skill directory")
+            if check_files_exist and not os.path.isfile(cue_path):
+                raise BehaviorConfigError(f"execution.cues.{index}.audio_file: file does not exist at {cue_path!r}")
+            resolved_cues.append(ResolvedAudioCue(cue.at_action_index, cue_path))
+        replay_cues = tuple(resolved_cues)
 
     return ValidatedBehavior(
         behavior_type=behavior_type,
         params=params,
         resolved_path=resolved_path,
+        replay_cues=replay_cues,
     )

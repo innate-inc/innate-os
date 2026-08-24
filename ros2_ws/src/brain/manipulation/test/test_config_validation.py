@@ -33,6 +33,7 @@ from manipulation.config_validation import (  # noqa: E402
     LearnedExecCfg,
     PosesExecCfg,
     ReplayExecCfg,
+    index_replay_cues,
     validate_behavior_config,
 )
 
@@ -387,7 +388,9 @@ class TestReplayExecCfg:
         assert isinstance(result.params, ReplayExecCfg)
         assert result.params.replay_file == "ep.h5"
         assert result.params.replay_frequency == 20.0
+        assert result.params.cues == []
         assert result.resolved_path == os.path.join(str(tmp_path), "ep.h5")
+        assert result.replay_cues == ()
 
     def test_missing_replay_file_rejected(self, tmp_path):
         with pytest.raises(BehaviorConfigError, match="replay_file"):
@@ -437,6 +440,112 @@ class TestReplayExecCfg:
                 tmp_path,
             )
 
+    def test_audio_cue_resolves_inside_skill(self, tmp_path):
+        _touch(tmp_path, "ep.h5")
+        _touch(tmp_path, "cue.wav")
+        result = validate_behavior_config(
+            {
+                "type": "replay",
+                "execution": {
+                    "replay_file": "ep.h5",
+                    "cues": [
+                        {
+                            "at_action_index": 94,
+                            "action": "play_audio",
+                            "audio_file": "cue.wav",
+                        }
+                    ],
+                },
+            },
+            str(tmp_path),
+            check_files_exist=True,
+        )
+        assert isinstance(result.params, ReplayExecCfg)
+        assert result.params.cues[0].at_action_index == 94
+        assert result.replay_cues[0].audio_path == str(tmp_path / "cue.wav")
+        assert index_replay_cues(result.replay_cues, 110) == {94: result.replay_cues}
+
+    def test_missing_audio_cue_file_rejected(self, tmp_path):
+        _touch(tmp_path, "ep.h5")
+        with pytest.raises(BehaviorConfigError, match=r"cues\.0\.audio_file.*does not exist"):
+            validate_behavior_config(
+                {
+                    "type": "replay",
+                    "execution": {
+                        "replay_file": "ep.h5",
+                        "cues": [
+                            {
+                                "at_action_index": 2,
+                                "action": "play_audio",
+                                "audio_file": "missing.wav",
+                            }
+                        ],
+                    },
+                },
+                str(tmp_path),
+                check_files_exist=True,
+            )
+
+    @pytest.mark.parametrize("bad", [-1, 1.5, True, "2"])
+    def test_bad_audio_cue_step_rejected(self, tmp_path, bad):
+        with pytest.raises(BehaviorConfigError, match=r"cues\.0\.at_action_index"):
+            _validate(
+                {
+                    "type": "replay",
+                    "execution": {
+                        "replay_file": "ep.h5",
+                        "cues": [
+                            {
+                                "at_action_index": bad,
+                                "action": "play_audio",
+                                "audio_file": "cue.wav",
+                            }
+                        ],
+                    },
+                },
+                tmp_path,
+            )
+
+    def test_audio_cue_cannot_escape_skill_directory(self, tmp_path):
+        with pytest.raises(BehaviorConfigError, match="must stay inside"):
+            _validate(
+                {
+                    "type": "replay",
+                    "execution": {
+                        "replay_file": "ep.h5",
+                        "cues": [
+                            {
+                                "at_action_index": 2,
+                                "action": "play_audio",
+                                "audio_file": "../cue.wav",
+                            }
+                        ],
+                    },
+                },
+                tmp_path,
+            )
+
+    def test_audio_cue_step_must_exist_in_trajectory(self, tmp_path):
+        result = _validate(
+            {
+                "type": "replay",
+                "execution": {
+                    "replay_file": "ep.h5",
+                    "cues": [
+                        {
+                            "at_action_index": 110,
+                            "action": "play_audio",
+                            "audio_file": "cue.wav",
+                        }
+                    ],
+                },
+            },
+            tmp_path,
+        )
+        assert isinstance(result.params, ReplayExecCfg)
+        with pytest.raises(BehaviorConfigError, match="outside the 110-step trajectory"):
+            index_replay_cues(result.replay_cues, 110)
+
 
 # ---------------------------------------------------------------------------
 # Regression: real skill metadata files must keep parsing.
@@ -444,7 +553,7 @@ class TestReplayExecCfg:
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
-_WAVE_METADATA = _REPO_ROOT / "workspace" / "skills" / "wave" / "metadata.json"
+_WAVE_METADATA = _REPO_ROOT / "workspace" / "innate_skills" / "wave" / "metadata.json"
 
 
 @pytest.mark.skipif(
