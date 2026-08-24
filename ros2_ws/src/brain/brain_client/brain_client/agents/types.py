@@ -48,6 +48,34 @@ class TurnIntervals:
                 raise ValueError(f"turn interval {name} must be a finite positive number or None")
 
 
+@dataclass(frozen=True)
+class DepartureGuard:
+    """Keep a search moving briefly after recognizing an already-known subject.
+
+    A fast visual supervision loop can otherwise cancel the newly restarted
+    search for the same unchanged person every second.  Agents opt in by
+    naming the terminal result prefixes that establish an anchor and the
+    skills that must be allowed to depart from it.  User speech always bypasses
+    the guard.
+    """
+
+    trigger_skill_names: tuple[str, ...]
+    trigger_result_prefixes: tuple[str, ...]
+    protected_skill_ids: tuple[str, ...]
+    minimum_departure_m: float
+    maximum_hold_s: float
+
+    def __post_init__(self) -> None:
+        if not self.trigger_skill_names or not self.trigger_result_prefixes or not self.protected_skill_ids:
+            raise ValueError("departure guard trigger names, result prefixes, and protected skills cannot be empty")
+        for name, value in (
+            ("minimum_departure_m", self.minimum_departure_m),
+            ("maximum_hold_s", self.maximum_hold_s),
+        ):
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"departure guard {name} must be a finite positive number")
+
+
 class Agent(ABC):
     """
     Base class for all agents.
@@ -188,6 +216,10 @@ class Agent(ABC):
         visual reaction cadence.
         """
         return TurnIntervals()
+
+    def get_departure_guard(self) -> DepartureGuard | None:
+        """Optionally protect a running search from immediate repeat cancellation."""
+        return None
 
     def input_names(self) -> list[str]:
         """get_inputs() normalized to device-name strings — the only form the

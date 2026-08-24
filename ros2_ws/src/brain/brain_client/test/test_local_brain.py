@@ -450,7 +450,7 @@ import threading  # noqa: E402
 import time  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
-from brain_client.agents.types import TurnIntervals  # noqa: E402
+from brain_client.agents.types import DepartureGuard, TurnIntervals  # noqa: E402
 from brain_client.brain.agent import BrainAgent  # noqa: E402
 from brain_client.brain.utils import Event, EventKind  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
@@ -528,6 +528,64 @@ def test_agent_turn_intervals_override_only_the_requested_mode(agent_factory):
 def test_agent_turn_intervals_reject_non_positive_or_non_finite_values(value):
     with pytest.raises(ValueError, match="finite positive"):
         TurnIntervals(supervision=value)
+
+
+def departure_guard() -> DepartureGuard:
+    return DepartureGuard(
+        trigger_skill_names=("person_identity",),
+        trigger_result_prefixes=("KNOWN_PERSON",),
+        protected_skill_ids=("innate-os/find_next_person",),
+        minimum_departure_m=1.25,
+        maximum_hold_s=12.0,
+    )
+
+
+def test_known_person_departure_guard_hides_stop_until_robot_moves(agent_factory):
+    agent, state = agent_factory()
+    pose = [(2.0, 3.0, 0.0)]
+    agent._pose = SimpleNamespace(current_pose_xyt=lambda: pose[0], is_mapfree=False)
+    state.current_directive = SimpleNamespace(
+        get_turn_intervals=lambda: TurnIntervals(), get_departure_guard=departure_guard
+    )
+
+    agent.on_skill_event("completed", "person_identity", "KNOWN_PERSON encounter_id=resident-1")
+    state.primitive_running = RunningSkill("find_next_person", "innate-os/find_next_person")
+
+    declarations = agent._build_tools([])[0]["functionDeclarations"]
+    assert [declaration["name"] for declaration in declarations] == [WAIT]
+
+    pose[0] = (3.3, 3.0, 0.0)
+    declarations = agent._build_tools([])[0]["functionDeclarations"]
+    assert [declaration["name"] for declaration in declarations] == [STOP_SKILL, WAIT]
+
+
+def test_departure_guard_never_blocks_user_requested_stop(agent_factory):
+    agent, state = agent_factory()
+    agent._pose = SimpleNamespace(current_pose_xyt=lambda: (2.0, 3.0, 0.0), is_mapfree=False)
+    state.current_directive = SimpleNamespace(
+        get_turn_intervals=lambda: TurnIntervals(), get_departure_guard=departure_guard
+    )
+    agent.on_skill_event("completed", "person_identity", "KNOWN_PERSON encounter_id=resident-1")
+    state.primitive_running = RunningSkill("find_next_person", "innate-os/find_next_person")
+
+    declarations = agent._build_tools([Event("The user says: stop", kind=EventKind.USER)])[0][
+        "functionDeclarations"
+    ]
+    assert [declaration["name"] for declaration in declarations] == [STOP_SKILL]
+
+
+@pytest.mark.parametrize("field,value", [("minimum_departure_m", 0.0), ("maximum_hold_s", float("inf"))])
+def test_departure_guard_rejects_invalid_bounds(field, value):
+    kwargs = dict(
+        trigger_skill_names=("person_identity",),
+        trigger_result_prefixes=("KNOWN_PERSON",),
+        protected_skill_ids=("innate-os/find_next_person",),
+        minimum_departure_m=1.25,
+        maximum_hold_s=12.0,
+    )
+    kwargs[field] = value
+    with pytest.raises(ValueError, match="finite positive"):
+        DepartureGuard(**kwargs)
 
 
 def run_turn(agent: BrainAgent) -> None:

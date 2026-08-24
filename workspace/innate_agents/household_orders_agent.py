@@ -9,7 +9,7 @@ from innate_skills.person_identity import PersonIdentity
 from innate_skills.place_doordash_order import PlaceDoordashOrder
 from inputs.micro_input import MicroInput
 
-from brain_client.agents.types import Agent, InputRef, SkillRef, TurnIntervals
+from brain_client.agents.types import Agent, DepartureGuard, InputRef, SkillRef, TurnIntervals
 
 
 class HouseholdOrdersAgent(Agent):
@@ -42,6 +42,19 @@ class HouseholdOrdersAgent(Agent):
         # after each completed model turn so a resident cannot pass through
         # the camera for most of the global five-second supervision pause.
         return TurnIntervals(supervision=1.0)
+
+    def get_departure_guard(self) -> DepartureGuard:
+        # Once durable identity says this is an already-handled resident, do
+        # not let the one-second visual loop cancel the next search for the
+        # same unchanged close-up.  Distance unlocks promptly; the short time
+        # bound prevents missing a genuinely new encounter if pose stalls.
+        return DepartureGuard(
+            trigger_skill_names=("person_identity",),
+            trigger_result_prefixes=("KNOWN_PERSON",),
+            protected_skill_ids=("innate-os/find_next_person",),
+            minimum_departure_m=1.25,
+            maximum_hold_s=12.0,
+        )
 
     def get_prompt(self) -> str:
         return """You are Mars. Find three residents, confirm each complete DoorDash order, and submit all three.

@@ -139,6 +139,8 @@ class BrainAgent:
         self._turn_in_flight = False
         self._speaker: SpeechStreamer | None = None  # the in-flight turn's streamer (the racing loop reads it)
         self._pause_until = 0.0  # monotonic deadline of the current between-turns pause
+        self._departure_anchor: tuple[float, float, float] | None = None
+        self._turn_user_spoke = False
 
         self._runtime = LoopThread("brain-agent")
         self._new_event = asyncio.Event()  # something was queued (loop thread; set via runtime.post)
@@ -187,6 +189,7 @@ class BrainAgent:
             return False
         self._activated_at = time.monotonic()
         self._error_streak = 0
+        self._departure_anchor = None
         self._runtime.spawn(self._loop())
         return True
 
@@ -459,6 +462,7 @@ class BrainAgent:
     def _build_tools(self, events: list[Event]) -> list[dict]:
         running = self._state.primitive_running
         user_spoke = any(event.kind == EventKind.USER for event in events)
+        self._turn_user_spoke = user_spoke
         active_ids = set(self._roster.active_skill_ids())
         skills = [meta for meta in self._state.registry.metadata if meta["id"] in active_ids]
         # One naming pass feeds both the declarations and the dispatch map, so
@@ -466,7 +470,12 @@ class BrainAgent:
         named = assign_tool_names(skills)
         self._tool_map = {name: meta["id"] for name, meta in named}
         if running is not None:
-            return build_tools([], running.primitive_name, user_spoke=user_spoke)
+            return build_tools(
+                [],
+                running.primitive_name,
+                user_spoke=user_spoke,
+                can_stop_running=self._departure_guard_reason() is None,
+            )
         return build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids)
 
     # ================= act =================
@@ -541,6 +550,9 @@ class BrainAgent:
         return "started — you will get an event when it finishes"
 
     def _stop_skill(self) -> str:
+        guard_reason = self._departure_guard_reason()
+        if guard_reason is not None and not self._turn_user_spoke:
+            return f"rejected — {guard_reason}"
         if self._runner.has_active_goal:
             self._runner.cancel_active_goal()
             return "stopping — you will get an event when it has stopped"
@@ -551,6 +563,29 @@ class BrainAgent:
         if self._runner.cancel_external():
             return "stopping — you will get an event when it has stopped"
         return "could not stop it — the skills server is unreachable"
+
+    def _departure_guard_reason(self) -> str | None:
+        """Why the current skill must continue away from a recent identity anchor."""
+        directive = self._state.current_directive
+        policy = directive.get_departure_guard() if directive is not None else None
+        running = self._state.primitive_running
+        anchor = self._departure_anchor
+        if policy is None or running is None or anchor is None or running.skill_id not in policy.protected_skill_ids:
+            return None
+        anchor_x, anchor_y, anchored_at = anchor
+        elapsed = time.monotonic() - anchored_at
+        if elapsed >= policy.maximum_hold_s:
+            self._departure_anchor = None
+            return None
+        pose = self._pose.current_pose_xyt()
+        if pose is not None and math.hypot(pose[0] - anchor_x, pose[1] - anchor_y) >= policy.minimum_departure_m:
+            self._departure_anchor = None
+            return None
+        return (
+            f"continue {running.primitive_name} until the robot has departed at least "
+            f"{policy.minimum_departure_m:g} m from the already-known person "
+            f"(or {policy.maximum_hold_s:g} s elapse)"
+        )
 
     def _go_to_point_in_view(self, args: dict) -> str:
         """Project the pointed-at floor pixel into a local navigate_to_position goal."""
@@ -632,6 +667,18 @@ class BrainAgent:
     def on_skill_event(
         self, status: str, skill_name: str, detail: str | None = None, image: bytes | None = None
     ) -> None:
+        directive = self._state.current_directive
+        policy = directive.get_departure_guard() if directive is not None else None
+        if (
+            policy is not None
+            and status == "completed"
+            and skill_name in policy.trigger_skill_names
+            and detail is not None
+            and any(detail.startswith(prefix) for prefix in policy.trigger_result_prefixes)
+        ):
+            pose = self._pose.current_pose_xyt()
+            if pose is not None:
+                self._departure_anchor = (pose[0], pose[1], time.monotonic())
         line = f"Skill {skill_name} {status}"
         if detail:
             line += f": {detail}"
