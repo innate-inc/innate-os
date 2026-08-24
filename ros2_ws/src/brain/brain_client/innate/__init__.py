@@ -64,6 +64,7 @@ from typing import TYPE_CHECKING
 
 from brain_client.agents.types import Agent, InputRef, SkillRef
 from brain_client.robot.exceptions import ArmFailed, ArmUnhealthy
+from brain_client.skills.choreograph import perform, say, together
 from brain_client.skills.types import (
     PhysicalSkill,
     Skill,
@@ -95,6 +96,7 @@ __all__ = [
     "ArmUnhealthy",
     "CAMERAS",
     "PhysicalSkill",
+    "perform",
     "Battery",
     "DepthMap",
     "Head",
@@ -118,6 +120,8 @@ __all__ = [
     "SkillResult",
     "SkillReturn",
     "SpatialMemory",
+    "say",
+    "together",
     "TrainedSkill",
     "Waypoint",
     "WristImage",

@@ -21,6 +21,12 @@
   contract: `execute()` returns the message str (or `SkillOutput(message, data)`,
   or None); `self.fail(message)` fails the run. Legacy `(message, SkillResult)`
   tuple returns are deprecated but still normalize.
+- `choreograph.py` — immutable `say()` / `perform()` / `together()` authoring
+  steps interpreted by `self.choreograph(...)`. A standalone `say()` waits;
+  `together(say(...), perform(...), ...)` starts one or more skills when speech
+  playback starts and waits for all of them, with at most one physical skill.
+  `perform(..., start_after=seconds)` delays an action from that start.
+  Replay-internal cues remain synchronized to action indices.
 
 The skill-facing state snapshot types (`Odometry`, `Pose`, `Battery`, ...) are
 not framework code and live in `../state/` — ROS-free dataclasses converted

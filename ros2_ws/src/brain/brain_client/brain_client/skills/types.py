@@ -25,6 +25,7 @@ from brain_client.common.logging import UniversalLogger
 from brain_client.common.script_paths import Source
 
 if TYPE_CHECKING:
+    from brain_client.skills.choreograph import ChoreographyStep
     from brain_client.skills.invoker import SkillInvoker
 
 T = TypeVar("T")
@@ -365,6 +366,8 @@ class TrainedSkill:
 
 class _BoundPhysicalSkill:
     """A declared physical skill, bound to the run's invoker at wire time."""
+
+    _is_bound_physical_skill = True
 
     def __init__(self, skill_id: str, invoker):
         self._skill_id = skill_id
@@ -808,6 +811,12 @@ class Skill(ABC):
             raise SkillFailed(output.message)
         return output
 
+    def choreograph(self, *steps: "ChoreographyStep") -> None:
+        """Execute say(), perform(), and together() steps in order."""
+        from brain_client.skills.choreograph import run
+
+        run(self, steps)
+
     def wire_subskills(self, wire_child: "Callable[[type[Skill]], Skill]", _seen: frozenset = frozenset()) -> None:
         """Construct and attach every declared sub-skill, recursively.
 
@@ -981,8 +990,15 @@ class Skill(ABC):
     def say(self, text: str, wait: bool = False) -> None:
         """Speak through the robot's voice; ``wait=True`` blocks until
         playback ends (best effort). No-op if speech isn't available."""
-        if not text or self.node is None:
+        if not self._publish_speech(text, observe=wait):
             return
+
+        if wait:
+            self._wait_for_speech_end(text)
+
+    def _publish_speech(self, text: str, *, observe: bool) -> bool:
+        if not text or self.node is None:
+            return False
         if self._say_publisher is None:
             self._say_publisher = self.node.create_publisher(String, TTS_TOPIC, 10)
             # fresh publisher every run — wait briefly for the TTS engine to
@@ -993,14 +1009,26 @@ class Skill(ABC):
                 if self.cancelled:
                     break
                 time.sleep(0.02)
-        if wait and self._tts_status_sub is None:
+        if observe and self._tts_status_sub is None:
             self._tts_status_sub = self.node.create_subscription(String, TTS_STATUS_TOPIC, self._on_tts_status, 10)
+        if observe:
+            self._tts_playing = None
         self._say_publisher.publish(String(data=text))
-        if wait:
-            self._wait_for_speech_end(text)
+        return True
 
     def _on_tts_status(self, msg: String) -> None:
         self._tts_playing = msg.data
+
+    def _start_choreographed_speech(self, text: str) -> bool:
+        if not self._publish_speech(text, observe=True):
+            return False
+        return self.wait_for(lambda: True if self._tts_playing == "true" else None, timeout=15.0) is not None
+
+    def _wait_for_choreographed_speech_end(self, text: str) -> None:
+        if self._tts_playing != "true":
+            return
+        timeout = max(30.0, 0.1 * len(text))
+        self.wait_for(lambda: True if self._tts_playing != "true" else None, timeout=timeout, poll=0.05)
 
     def _wait_for_speech_end(self, text: str) -> None:
         # A cancel abandons the wait (best effort, like the rest of say():
