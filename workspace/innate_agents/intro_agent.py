@@ -1,12 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 from innate_skills.close_gripper import CloseGripper
+from innate_skills.come_here import ComeHere
+from innate_skills.dance import Dance
 from innate_skills.head_emotion import HeadEmotion
 from innate_skills.navigate_to_position import NavigateToPosition
 from innate_skills.open_gripper import OpenGripper
 from innate_skills.pick_any_object import PickAnyObject
 from innate_skills.playback import Playback
+from innate_skills.point_at_something import PointAtSomething
 from innate_skills.search_memory import SearchMemory
+from innate_skills.sign_off import SignOff
+from innate_skills.strike_a_pose import StrikeAPose
+from innate_skills.time_for_picture import TimeForPicture
 from innate_skills.wave import Wave
 from inputs.micro_input import MicroInput
 
@@ -27,9 +33,23 @@ class IntroAgent(Agent):
         return "Intro Agent"
 
     def get_skills(self) -> list[SkillRef]:
-        """Navigation code skills plus the recorded wave — Wave is the typed
-        ref generated inside the recording folder (see skills/physical_refs.py)."""
-        return [NavigateToPosition, Wave, PickAnyObject, OpenGripper, CloseGripper, SearchMemory, HeadEmotion, Playback]
+        """Navigation code skills plus typed refs for recorded gestures."""
+        return [
+            NavigateToPosition,
+            Wave,
+            ComeHere,
+            SignOff,
+            PointAtSomething,
+            Dance,
+            StrikeAPose,
+            TimeForPicture,
+            PickAnyObject,
+            OpenGripper,
+            CloseGripper,
+            SearchMemory,
+            HeadEmotion,
+            Playback,
+        ]
 
     def get_inputs(self) -> list[InputRef]:
         """Enable microphone input to hear user"""
