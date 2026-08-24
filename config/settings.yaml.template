@@ -210,6 +210,7 @@
 #     send_arm_camera_image: true   # also send the arm wrist camera image to the model
 #     log_everything: true          # log every turn's full input
 #     gemini_model: "gemini-3.6-flash"
+#     timezone: ""                  # IANA zone for the clock the agent sees; "" = the robot OS's own
 #     idle_turn_interval: 3.0       # seconds between looks when no skill is running
 #     supervision_turn_interval: 5.0  # seconds between looks while a skill runs
 

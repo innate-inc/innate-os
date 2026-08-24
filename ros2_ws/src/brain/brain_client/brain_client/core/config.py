@@ -50,6 +50,7 @@ class BrainConfig:
 
     # --- Timing ---
     scan_stale_after_sec: float
+    timezone: str  # IANA name for the agent's wall clock; "" = the host's local zone
 
     # --- Proxy service config (credentials come from env, not params) ---
     cartesia_voice_id: str
@@ -115,6 +116,9 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     "history_max_image_turns": 3,
     # --- Timing ---
     "scan_stale_after_sec": 10.0,
+    # The host's own zone by default. Set this when the robot's OS is left on
+    # UTC — the agent states the time out loud, so a wrong zone is user-visible.
+    "timezone": "",
     # --- Proxy service config ---
     "cartesia_voice_id": "9fdaae0b-f885-4813-b589-3c07cf9d5fea",
 }

@@ -26,6 +26,7 @@ import json
 import math
 import time
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from brain_client.brain import grounding
@@ -44,6 +45,7 @@ from brain_client.brain.utils import (
     in_image,
     observation_text,
     parse_view_point,
+    resolve_timezone,
 )
 from brain_client.perception.scan_health import ScanHealthReporter
 from brain_client.transport.chat import Sender
@@ -107,6 +109,11 @@ class BrainAgent:
         self._lidar = ScanHealthReporter(
             scan_health, pose_tracker, chat, self._logger, enabled=not config.simulator_mode
         )
+        # Boot tolerates a bad zone (warn + host local); a Settings write does
+        # not — set_timezone rejects it so the operator sees the typo.
+        self._timezone = resolve_timezone(config.timezone)
+        if config.timezone.strip() and self._timezone is None:
+            self._logger.warn(f"[Brain] Unknown timezone '{config.timezone}' — using the host's local zone")
 
         transport, self.backend = pick_transport(proxy)
         self._context = (
@@ -145,6 +152,14 @@ class BrainAgent:
 
         if self._context is not None:
             self._context.on_request = self._trace_request  # the monitor renders the exact request body
+
+    def set_timezone(self, name: str) -> bool:
+        """Point the status-line clock at an IANA zone ("" = the host's own); False if unknown."""
+        zone = resolve_timezone(name)
+        if name.strip() and zone is None:
+            return False
+        self._timezone = zone
+        return True
 
     @property
     def available(self) -> bool:
@@ -415,6 +430,7 @@ class BrainAgent:
 
         running = self._state.primitive_running
         text = observation_text(
+            now=self._now(),
             uptime_s=int(time.monotonic() - self._activated_at),
             pose=self._pose_at_capture,
             battery=self._battery.current if self._battery is not None else None,
@@ -424,6 +440,10 @@ class BrainAgent:
             has_wrist_frame=arm_jpeg is not None,
         )
         return text, frames
+
+    def _now(self) -> datetime:
+        """Wall clock as an aware datetime, so the status line can name the zone."""
+        return datetime.now(self._timezone) if self._timezone is not None else datetime.now().astimezone()
 
     def _running_guidance(self, running: RunningSkill | None) -> str:
         if running is None:

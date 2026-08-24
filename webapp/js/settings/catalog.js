@@ -98,6 +98,22 @@ const STT_BACKEND_OPTIONS = [
   { value: "openai", label: "OpenAI Realtime" },
 ];
 
+// The robot's OS ships on Etc/UTC, so the agent's clock has to be told where the
+// robot physically stands — not where an operator is teleoperating from. A shortlist
+// plus Custom: the full IANA set is ~600 names, unusable as a dropdown.
+const TIMEZONE_OPTIONS = [
+  { value: "", label: "Robot system setting" },
+  { value: "America/Los_Angeles", label: "Los Angeles (US Pacific)" },
+  { value: "America/Denver", label: "Denver (US Mountain)" },
+  { value: "America/Chicago", label: "Chicago (US Central)" },
+  { value: "America/New_York", label: "New York (US Eastern)" },
+  { value: "Europe/London", label: "London" },
+  { value: "Europe/Berlin", label: "Berlin" },
+  { value: "Europe/Prague", label: "Prague" },
+  { value: "Asia/Tokyo", label: "Tokyo" },
+  { value: "UTC", label: "UTC" },
+];
+
 const VAD_ENGINE_OPTIONS = [
   { value: "silero", label: "Silero (neural)" },
   { value: "energy", label: "Energy threshold" },
@@ -299,6 +315,13 @@ export const SETTINGS_PAGES = [
           { path: ["brain_client_node", P, "height_cam"], label: "Camera height", default: 0.19663, type: "float", unit: "m", doc: "Camera height above the floor" },
           { path: ["brain_client_node", P, "scan_stale_after_sec"], label: "Scan stale after", default: 10, type: "float", unit: "s", doc: "Seconds without a lidar scan before flagging stale" },
           { path: ["brain_client_node", P, "send_arm_camera_image"], label: "Send arm-camera image", default: true, type: "bool", doc: "Also send the arm wrist camera image to the model" },
+        ],
+      },
+      {
+        title: "Clock",
+        note: "The agent reads the local date and time on every turn, so it can tell morning from midnight and answer when asked. Set where the ROBOT is — not where you are, which differs when you teleoperate.",
+        knobs: [
+          { path: ["brain_client_node", P, "timezone"], label: "Time zone", default: "", type: "string", doc: "IANA time zone for the clock the agent sees. \"Robot system setting\" follows the robot's OS, which ships on UTC — pick a zone here unless you have set one over SSH. Any other IANA name works in Custom.", options: TIMEZONE_OPTIONS, customPlaceholder: "e.g. Australia/Sydney", live: "/brain_client_node" },
         ],
       },
       {

@@ -91,7 +91,6 @@ class BrainClientNode(Node):
 
         self._proxy = self._init_proxy()
         self._tts_handler = self._init_tts()
-        self.add_on_set_parameters_callback(self._on_parameter_change)
 
         # --- helper node for synchronous service calls (not spun by the executor) ---
         self._service_call_node = rclpy.create_node("brain_client_service_caller")
@@ -99,6 +98,8 @@ class BrainClientNode(Node):
         self._reload_skills_client = self._service_call_node.create_client(ReloadSkillsAgents, "/brain/reload_skills")
 
         self._build_collaborators()
+        # Registered only once every collaborator a live write reaches exists.
+        self.add_on_set_parameters_callback(self._on_parameter_change)
         self._create_always_on_subscriptions()
         self._create_services()
         self._startup()
@@ -141,12 +142,18 @@ class BrainClientNode(Node):
     def _on_parameter_change(self, params: list[Parameter]) -> SetParametersResult:
         """Apply the parameters that take effect without a restart.
 
-        Only the TTS voice does: every other field was copied into a collaborator at
-        construction, so accepting a write would leave the robot running the old value.
-        Those are stored for the next boot, which is what the Settings page's `live`
-        flag says about them.
+        Only the TTS voice and the agent's timezone do: every other field was copied
+        into a collaborator at construction, so accepting a write would leave the robot
+        running the old value. Those are stored for the next boot, which is what the
+        Settings page's `live` flag says about them.
         """
         for param in params:
+            if param.name == "timezone":
+                if self.brain.set_timezone(str(param.value)):
+                    continue
+                return SetParametersResult(
+                    successful=False, reason=f"unknown timezone '{param.value}' (expected an IANA name, e.g. UTC)"
+                )
             if param.name != "cartesia_voice_id":
                 continue
             voice_id = str(param.value).strip()
