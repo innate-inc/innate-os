@@ -2509,6 +2509,43 @@ def test_choose_view_penalizes_a_winding_route(monkeypatch):
     assert (view.row, view.col) == same_side
 
 
+def test_choose_view_avoids_looking_toward_a_handled_person(monkeypatch):
+    reachable = np.ones((10, 10), dtype=bool)
+    plan = search_module._PlanningGrid(
+        resolution=1.0,
+        origin_x=0.0,
+        origin_y=0.0,
+        origin_theta=0.0,
+        traversable=reachable,
+        blocked=~reachable,
+        safe=reachable,
+        reachable=reachable,
+        navigable=reachable,
+    )
+    toward_person = (2, 2)
+    away_from_person = (2, 4)
+    monkeypatch.setattr(search_module, "_sample_viewpoints", lambda _plan: [toward_person, away_from_person])
+    monkeypatch.setattr(search_module, "_grid_travel_distances", lambda _plan, _pose: np.zeros((10, 10)))
+
+    def visible(_plan, row, col, _theta):
+        if (row, col) == toward_person:
+            return frozenset(range(60))  # includes handled-person cell 22 and has higher raw gain
+        return frozenset(range(40, 95))
+
+    monkeypatch.setattr(search_module, "_visible_cells", visible)
+
+    view, _covered = search_module._choose_view(
+        plan,
+        Pose(3.5, 2.5, 0.0),
+        [],
+        [],
+        handled_person_anchors=[(2.5, 2.5)],
+    )
+
+    assert view is not None
+    assert (view.row, view.col) == away_from_person
+
+
 def test_choose_view_does_not_repeat_a_target_already_observed_from_standoff(monkeypatch):
     traversable = np.ones((6, 6), dtype=bool)
     plan = search_module._PlanningGrid(

@@ -523,6 +523,7 @@ def _roster_artifact(state: dict[str, Any]) -> bytes | None:
     jpeg = io.BytesIO()
     canvas.save(jpeg, format="JPEG", quality=88, optimize=True)
     public_state = {
+        "run_id": state.get("run_id"),
         "expected_residents": state["expected_residents"],
         "active_encounter_id": state.get("active_encounter_id"),
         "residents": [
@@ -534,6 +535,7 @@ def _roster_artifact(state: dict[str, Any]) -> bytes | None:
                 "saved_angles": len(_reference_images(entry)),
                 "references_verified": _references_verified(entry),
                 "last_identity": _load_identity_metadata(entry),
+                "last_seen_pose": _load_pose_record(entry.get("last_seen_pose")),
             }
             for entry in state["encounters"]
         ],
@@ -638,6 +640,9 @@ class ResidentRoster(Skill):
                     False if legacy_state and references else item.get("reference_images_verified") is not False
                 ),
             }
+            last_seen_pose = _load_pose_record(item.get("last_seen_pose"))
+            if last_seen_pose is not None:
+                entry["last_seen_pose"] = last_seen_pose
             identity = _load_identity_metadata(item)
             if identity is not None:
                 entry["last_identity"] = identity
@@ -661,6 +666,9 @@ class ResidentRoster(Skill):
                     False if legacy_state and references else item.get("reference_images_verified") is not False
                 ),
             }
+            last_seen_pose = _load_pose_record(item.get("last_seen_pose"))
+            if last_seen_pose is not None:
+                entry["last_seen_pose"] = last_seen_pose
             identity = _load_identity_metadata(item)
             if identity is not None:
                 entry["last_identity"] = identity
@@ -860,6 +868,7 @@ class ResidentRoster(Skill):
         state["active_observation_image_b64"] = str(frame)
         state["active_identified_at"] = time.time()
         state["active_identified_pose"] = _pose_record(self.pose)
+        entry["last_seen_pose"] = _pose_record(self.pose)
         state["active_observation_pending_reference"] = pending_reference
         state["active_continuity_id"] = continuity_id
         self._save_state(state)
