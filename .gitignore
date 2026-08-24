@@ -76,9 +76,12 @@ sim/launcher/.state/
 *.bin
 *.h5
 !workspace/innate_skills/come_here/episode_0.h5
+!workspace/innate_skills/dance/episode_0.h5
 !workspace/innate_skills/point_at_something/episode_0.h5
 !workspace/innate_skills/short_clap/episode_0.h5
 !workspace/innate_skills/sign_off/episode_0.h5
+!workspace/innate_skills/strike_a_pose/episode_0.h5
+!workspace/innate_skills/time_for_picture/episode_0.h5
 weights/
 checkpoints/
 runs/

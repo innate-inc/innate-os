@@ -1,0 +1,29 @@
+{
+    "name": "Dance",
+    "type": "replay",
+    "guidelines": "Whenever there is music you hear or if the person asks you to show some dance moves or dance do this skill. be sure before dancing to announce its time to dance",
+    "guidelines_when_running": "",
+    "inputs": {},
+    "wheeled": false,
+    "execution": {
+        "model_type": "replay",
+        "replay_file": "episode_0.h5",
+        "replay_frequency": 30.0,
+        "start_pose": [
+            1.4173982480063325,
+            -1.4296700943094176,
+            1.4404079598246171,
+            0.619728238305799,
+            1.3667768820061064,
+            -0.34054373491061235
+        ],
+        "end_pose": [
+            1.696582751401519,
+            -1.4312040750973032,
+            1.4787574795217582,
+            0.01227184630308513,
+            1.3391652278241648,
+            -0.34514567727426926
+        ]
+    }
+}

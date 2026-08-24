@@ -1,0 +1,29 @@
+{
+    "name": "Time for picture",
+    "type": "replay",
+    "guidelines": "Whenever user is saying that it is time for a picture or anything related to taking a picture with Mars do this skill and make sure to be explicitly verbal to user to grab your hand",
+    "guidelines_when_running": "",
+    "inputs": {},
+    "wheeled": false,
+    "execution": {
+        "model_type": "replay",
+        "replay_file": "episode_0.h5",
+        "replay_frequency": 30.0,
+        "start_pose": [
+            1.8515148109779689,
+            -1.428136113521532,
+            1.4618836908550161,
+            0.4325825821837508,
+            -0.06289321230331128,
+            -0.32980586939541284
+        ],
+        "end_pose": [
+            1.753340040553288,
+            -1.4296700943094176,
+            1.4542137869155878,
+            0.5399612373357456,
+            0.10891263593988053,
+            -0.05522330836388308
+        ]
+    }
+}

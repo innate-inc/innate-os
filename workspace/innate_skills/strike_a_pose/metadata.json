@@ -1,0 +1,29 @@
+{
+    "name": "Strike a pose",
+    "type": "replay",
+    "guidelines": "Whenever someone asks you to strike a pose do this skill",
+    "guidelines_when_running": "",
+    "inputs": {},
+    "wheeled": false,
+    "execution": {
+        "model_type": "replay",
+        "replay_file": "episode_0.h5",
+        "replay_frequency": 30.0,
+        "start_pose": [
+            1.538582730249298,
+            -1.4250681519457606,
+            1.4603497100671303,
+            0.5230874486690036,
+            -0.16873788666742054,
+            -0.3436116964863836
+        ],
+        "end_pose": [
+            1.7027186745530618,
+            -1.428136113521532,
+            1.4618836908550161,
+            0.5184855063053467,
+            -0.0521553467881118,
+            -0.3313398501832985
+        ]
+    }
+}
