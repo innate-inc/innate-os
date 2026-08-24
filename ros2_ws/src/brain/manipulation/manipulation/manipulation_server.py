@@ -621,8 +621,8 @@ class ManipulationServer(Node):
                 # Extract arm commands (first 6 elements = joint positions)
                 self._publish_arm(action[0:6])
 
-                # Extract cmd_vel commands (elements 6-7 = linear.x, angular.z).
-                self._publish_base(float(action[6]), float(action[7]), self.replay_base_speed_scale)
+                if params.publish_base_commands:
+                    self._publish_base(float(action[6]), float(action[7]), self.replay_base_speed_scale)
 
                 # Extract head command (element 8 = head angle in degrees), present only
                 # for head-enabled replay skills; arm/base-only skills have width 8.
@@ -645,8 +645,8 @@ class ManipulationServer(Node):
                 if sleep_time > 0:
                     time.sleep(sleep_time)
 
-            # Stop robot after replay and hold last arm position
-            self._stop_robot()
+            if params.publish_base_commands:
+                self._stop_robot()
 
             # Hold the last arm position to prevent drift
             last_arm_position = actions[-1][0:6].tolist()
@@ -1208,14 +1208,15 @@ class ManipulationServer(Node):
                     return False
                 time.sleep(0.05)  # Small sleep to avoid busy-waiting
 
-            # Check result
             result = future.result()
-            if result is not None:
-                self.get_logger().info("Arm goto service completed successfully")
-                return True
-            else:
+            if result is None:
                 self.get_logger().error("Arm goto service returned None result")
                 return False
+            if not result.success:
+                self.get_logger().error("Arm goto service rejected the requested move")
+                return False
+            self.get_logger().info("Arm goto service completed successfully")
+            return True
 
         except Exception as e:
             self.get_logger().error(

@@ -293,6 +293,7 @@ class ReplayExecCfg(_BaseExecCfg):
 
     replay_file: str = Field(..., min_length=1)
     cues: list[AudioCueConfig] = Field(default_factory=list)
+    publish_base_commands: bool = True
     start_pose: Pose6 | None = None
     end_pose: Pose6 | None = None
     start_pose_time: float = Field(1.0, gt=0)
