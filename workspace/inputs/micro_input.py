@@ -62,6 +62,8 @@ ELEVENLABS_AUDIO_FORMAT = f"pcm_{DEFAULT_SAMPLE_RATE}"
 
 # std_msgs/String of base64 PCM16 mono at DEFAULT_SAMPLE_RATE.
 MIC_AUDIO_TOPIC = "/mic/audio"
+MIC_CAPTURE_TOPIC = "/mic/capture"
+
 
 STT_BACKENDS = frozenset({"elevenlabs_batch", "gemini", "elevenlabs", "openai"})
 BATCH_BACKENDS = frozenset({"elevenlabs_batch", "gemini"})
@@ -148,6 +150,7 @@ class MicroInput(InputDevice):
         self._realtime_speech_stopped_at = None
         self._rolling_rms = RollingRms(DEFAULT_SAMPLE_RATE, RMS_WINDOW_SECS)
         self._rms_level = 0.0
+        self._capture_audio_pub = None
         self._audio_device_id = "unavailable"
         self._audio_device_name = "No capture source"
         # Initialize logger wrapper (will be updated when set_logger is called)
@@ -196,6 +199,7 @@ class MicroInput(InputDevice):
         if not self.proxy:
             raise RuntimeError("no STT configuration (the proxy client was never created)")
 
+        self._ensure_capture_publisher()
         try:
             self._rolling_rms = RollingRms(DEFAULT_SAMPLE_RATE, RMS_WINDOW_SECS)
             self._rms_level = 0.0
@@ -479,6 +483,21 @@ class MicroInput(InputDevice):
             data_type="telemetry",
         )
 
+    def _ensure_capture_publisher(self) -> None:
+        if self.node is None:
+            return
+        from std_msgs.msg import String
+
+        if self._capture_audio_pub is None:
+            self._capture_audio_pub = self.node.create_publisher(String, MIC_CAPTURE_TOPIC, 10)
+
+    def _publish_capture_audio(self, chunk: bytes) -> None:
+        if self._capture_audio_pub is None or self._capture_audio_pub.get_subscription_count() == 0:
+            return
+        from std_msgs.msg import String
+
+        self._capture_audio_pub.publish(String(data=base64.b64encode(chunk).decode("ascii")))
+
     def _connect_elevenlabs(self) -> str:
         """Open a Scribe realtime session. Returns the model id."""
         self.logger.info("🔗 Connecting to ElevenLabs Scribe via proxy...")
@@ -714,6 +733,9 @@ class MicroInput(InputDevice):
                     continue
 
                 try:
+                    if not self._is_robot_talking:
+                        self._publish_capture_audio(chunk)
+
                     # Skip sending if not connected (reconnection in progress)
                     if not self._is_connected:
                         continue
