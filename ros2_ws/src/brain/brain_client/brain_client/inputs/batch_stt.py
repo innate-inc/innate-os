@@ -239,9 +239,8 @@ def sanitize_keyterms(terms: Iterable[str] | str) -> list[str]:
 
 
 def keyterms_with_name(terms: Sequence[str], name: str | None) -> list[str]:
-    """The configured vocabulary with the robot's live name biased first — the
-    name the user actually calls it need not be the DEFAULT_KEYTERMS one. An
-    empty vocabulary stays empty: it means biasing (and its surcharge) is off."""
+    """The vocabulary with the robot's live name biased first. An empty
+    vocabulary stays empty — it means biasing (and its surcharge) is off."""
     if not terms or not name:
         return list(terms)
     return sanitize_keyterms([name, f"hey {name}", *terms])

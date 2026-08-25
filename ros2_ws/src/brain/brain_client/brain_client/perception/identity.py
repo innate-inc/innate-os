@@ -47,9 +47,8 @@ def parse_identity(payload: str) -> RobotIdentity | None:
     )
 
 
-# These strings are interpolated into the system prompt, and /robot/info is
-# writable by any rosbridge client: collapsing whitespace and capping length
-# keeps a hostile value a phrase, not a paragraph of injected instructions.
+# Fields reach the system prompt and any rosbridge client can write them —
+# flattened and capped, a hostile value stays a phrase, not injected structure.
 _MAX_FIELD_CHARS = 80
 
 

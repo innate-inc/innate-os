@@ -65,8 +65,7 @@ def _identity_block(identity: RobotIdentity | None) -> str:
         sentences.append(f"Your body is {identity.color}.")
     if identity.hardware_revision:
         sentences.append(f"Your hardware revision is {identity.hardware_revision}.")
-    if identity.version:
-        sentences.append(f"Your software version is {identity.version}.")
+    sentences.append(f"You run Innate OS {identity.version}." if identity.version else "You run Innate OS.")
     if identity.wifi_ssid:
         sentences.append(f'You are on the Wi-Fi network "{identity.wifi_ssid}".')
     if identity.hostname:

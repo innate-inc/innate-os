@@ -127,7 +127,7 @@ export const SETTINGS_PAGES = [
     icon: "robot.svg",
     title: "Robot",
     summary: "The robot's name and identity",
-    note: "The name persists on the robot, feeds the brain's knowledge of itself, and sets the robot's network hostname.",
+    note: "The name persists on the robot and feeds the brain's knowledge of itself.",
     sections: [],
   },
   {

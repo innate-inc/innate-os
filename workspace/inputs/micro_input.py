@@ -297,11 +297,8 @@ class MicroInput(InputDevice):
         return str(self.proxy.config.get("stt_language") or "en")
 
     def _stt_keyterms(self) -> list[str]:
-        """Vocabulary the batch backends bias toward; an empty list disables biasing.
-
-        Passed to the transcribers as a supplier and re-read per utterance, so a
-        renamed robot hears its new name without an STT restart.
-        """
+        """Bias vocabulary, re-read per utterance so a renamed robot hears its
+        new name without an STT restart; an empty list disables biasing."""
         configured = self.proxy.config.get("stt_keyterms", DEFAULT_KEYTERMS)
         terms = sanitize_keyterms(configured)
         if len(terms) != len(configured) and not self._warned_dropped_keyterms:

@@ -416,17 +416,14 @@ function buildVolumeSection() {
 }
 
 /**
- * Live robot-name control. Like the volume slider this bypasses the yaml flow:
- * it reads the current name from /robot/info and writes via /set_robot_name,
- * which persists on the robot immediately — no restart. The robot also syncs
- * its system hostname to the new name within ~30s, so its .local address moves.
+ * Live robot-name control: like the volume slider, rosbridge instead of yaml —
+ * reads the current name from /robot/info, writes via /set_robot_name, applies
+ * immediately.
  * @returns {{section: HTMLElement, row: HTMLElement, label: string, description: string}}
  */
 function buildRobotNameSection() {
   const labelText = "Robot name";
-  const descriptionText =
-    "What the robot is called. It knows itself by this name, and the name also becomes " +
-    "the robot's network hostname — its .local address follows a rename.";
+  const descriptionText = "What the robot is called — it knows itself by this name and answers to it.";
   const section = textEl("section", "set-card-volume");
 
   const row = textEl("div", "set-row");
@@ -453,8 +450,7 @@ function buildRobotNameSection() {
   enableRowClick(row);
   section.appendChild(row);
 
-  // Last name known to be applied on the robot; the anti-clobber reference for
-  // the 1 Hz /robot/info feed while the operator is editing.
+  // Last name known to be applied on the robot; the anti-clobber reference.
   let robotName = "";
   let hasValue = false; // false until /robot/info reports the live name
   let dirty = false;
@@ -517,7 +513,7 @@ function buildRobotNameSection() {
       robotName = next;
       dirty = false;
       input.value = next;
-      setLiveStatus("Renamed. The hostname follows within ~30 seconds.", "ok");
+      setLiveStatus("Renamed.", "ok");
     } catch {
       setLiveStatus("Couldn't rename the robot. Try again.", "err");
     } finally {
