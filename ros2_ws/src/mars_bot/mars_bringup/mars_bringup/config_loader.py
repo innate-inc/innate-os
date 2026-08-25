@@ -203,6 +203,16 @@ _SETTINGS_DOUBLE_KEYS = frozenset(
         "image_send_hz",
         "cmd_publish_hz",
         "poll_period_sec",
+        # innate_nav_node
+        "max_linear_speed",
+        "max_angular_speed",
+        "max_linear_accel",
+        "max_linear_decel",
+        "max_angular_accel",
+        "max_angular_decel",
+        "expected_fx",
+        # wide_view
+        "hfov_deg",
     }
 )
 

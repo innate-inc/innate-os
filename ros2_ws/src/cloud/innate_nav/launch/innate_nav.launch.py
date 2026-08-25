@@ -10,6 +10,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from mars_bringup.config_loader import settings_params
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -38,7 +39,7 @@ def generate_launch_description() -> LaunchDescription:
         executable="wide_view",
         name="wide_view",
         output="screen",
-        parameters=[LaunchConfiguration("params_file")],
+        parameters=[LaunchConfiguration("params_file"), *settings_params()],
         condition=IfCondition(LaunchConfiguration("wide_view")),
     )
 
@@ -47,7 +48,9 @@ def generate_launch_description() -> LaunchDescription:
         executable="innate_nav_node",
         name="innate_nav_node",
         output="screen",
-        parameters=[LaunchConfiguration("params_file")],
+        # settings.yaml layers last and wins. It is read from the repo, not the
+        # install tree, so tuning these needs a restart and not a rebuild.
+        parameters=[LaunchConfiguration("params_file"), *settings_params()],
         remappings=[
             ("/cmd_vel_nav", LaunchConfiguration("cmd_vel_topic")),
         ],

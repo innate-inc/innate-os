@@ -271,6 +271,24 @@
 #     cmd_publish_hz: 50.0                  # cmd_vel republish rate during a move
 #     poll_period_sec: 0.02                 # action-loop poll interval
 
+# ── Navigation policy (innate_nav) ────────────────────────────────────
+# (The policy server URL is connectivity and lives in .env as INNATE_NAV_SERVER_URL.)
+# Speeds are the policy's own ceiling, separate from nav (nav2), uninavid and
+# motion_control (teleop). The bringup `safety` /cmd_vel clamp is still the ceiling.
+# The accel knobs bound how fast those speeds may CHANGE: the policy publishes to
+# /cmd_vel_nav, which is Nav2's velocity_smoother OUTPUT, so nothing downstream
+# shapes these commands. Too low is its own failure -- a ramp that idles below the
+# speed the base can execute reads as "wedged" to the blocked detector and the run
+# turns in place instead of driving.
+# innate_nav_node:
+#   ros__parameters:
+#     max_linear_speed: 0.4                 # m/s, forward ceiling
+#     max_angular_speed: 1.0                # rad/s, turn ceiling
+#     max_linear_accel: 0.3                 # m/s^2, how fast it may speed up
+#     max_linear_decel: 1.0                 # m/s^2, braking; harsher on purpose
+#     max_angular_accel: 0.5                # rad/s^2
+#     max_angular_decel: 2.0                # rad/s^2
+
 # Extra agent/skill directories (script_paths.extra_agent_dirs / extra_skill_dirs)
 # were removed in 0.7: agents and skills load only from workspace/. To add a
 # skill pack, drop its directory into workspace/ — it is picked up (and
