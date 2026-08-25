@@ -3,10 +3,15 @@
 """Fold the arm to its rest pose when an agent starts.
 
 Same mechanism Mad speed mode uses to brace the arm (``fold_arm_for_mad_mode``
-in ``mars_control/app.cpp``): ``/mars/arm/goto_js_v2`` directly, not the
+in ``mars_control/app.cpp``): one ``/mars/arm/goto_js_v2`` call, not the
 arm_rest_position skill — activation must not occupy the single skill slot the
 agent's own first turn needs. Fire-and-forget, so the agent starts thinking
 while the arm folds.
+
+One command, deliberately: Manipulation.rest() re-commands the pose to settle
+the servos under a shifted load, but it runs inside a skill that owns the arm.
+Nothing here owns it, and a second command decided on the ROS callback thread
+cannot be sequenced against an agent claiming the arm on its own thread.
 """
 
 from __future__ import annotations
@@ -30,7 +35,6 @@ GOTO_JS_SERVICE = "/mars/arm/goto_js_v2"
 COMMAND_STATE_TOPIC = "/mars/arm/command_state"
 
 _FOLD_DURATION_S = 3.0
-_SETTLE_DURATION_S = 1.0
 
 _LATCHED_QOS = QoSProfile(
     depth=1,
@@ -55,10 +59,6 @@ class ArmRestPose:
         """Fold to rest, keeping the grip; returns once the goto is sent."""
         if self._state.primitive_running is not None:
             return  # a skill already owns the arm
-        self._logger.info("[RestPose] Folding the arm to its rest pose for the starting agent")
-        self._send(_FOLD_DURATION_S, settle=True)
-
-    def _send(self, duration: float, *, settle: bool) -> None:
         if not self._client.service_is_ready():
             self._logger.warn(f"[RestPose] {GOTO_JS_SERVICE} is not ready; the arm stays where it is")
             return
@@ -68,24 +68,15 @@ class ArmRestPose:
         # it is current-based position control, so re-commanding it above that
         # target zeroes the preload and drops a held object.
         request.data.data = [*Manipulation.REST[:5], self._grip if self._grip is not None else Manipulation.REST[5]]
-        request.time = duration
-        self._client.call_async(request).add_done_callback(lambda future: self._on_result(future, settle))
+        request.time = _FOLD_DURATION_S
+        self._logger.info("[RestPose] Folding the arm to its rest pose for the starting agent")
+        self._client.call_async(request).add_done_callback(self._on_result)
 
     def _on_command_state(self, msg: JointState) -> None:
         if len(msg.position) >= 6:
             self._grip = float(msg.position[5])
 
-    def _on_result(self, future: Future, settle: bool) -> None:
+    def _on_result(self, future: Future) -> None:
         response = future.result()
         if response is None or not response.success:
             self._logger.warn("[RestPose] The arm rejected the rest fold; leaving it where it is")
-            return
-        if not settle:
-            return
-        if self._state.primitive_running is not None:
-            # The agent claimed the arm during the fold; the settle would drag
-            # its trajectory back toward rest.
-            return
-        # Same second command Manipulation.rest() sends: the fold shifts a held
-        # load, and the servos need a re-command to settle under it.
-        self._send(_SETTLE_DURATION_S, settle=False)
