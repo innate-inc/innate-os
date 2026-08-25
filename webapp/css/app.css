@@ -2397,6 +2397,26 @@ select.skill-input {
   color: var(--ctl-accent);
 }
 
+/* ---- relocate shortcut ---------------------------------------------------- */
+
+.relocate-control {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.relocate-label {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--ctl-text);
+}
+
+.relocate-button:focus-visible {
+  outline: 2px solid var(--ctl-accent);
+  outline-offset: 2px;
+}
+
 /* ---- head tilt ------------------------------------------------------------ */
 
 .head-tilt {

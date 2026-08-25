@@ -84,8 +84,10 @@ function buildCockpit(root) {
   if (!config.simControls && videoStage.audioEl) {
     parts.push(createAudioToggle(rightRail, session, videoStage.audioEl));
   }
+  const cameraSwitch = createCameraSwitch(root, session, ros);
   parts.push(
     createSpeedModes(rightRail, ros),
+    createRelocateButton(rightRail, cameraSwitch.openRelocate),
     createHeadTilt(rightRail, ros),
     createWasdChips(chipsOverlay, keyboard),
     createJoystick(stickOverlay, drive),
@@ -94,7 +96,7 @@ function buildCockpit(root) {
     createSkillsMenu(ttsOverlay, ros),
     createArmPanel(armOverlay, ros, { hideServices: !!config.simControls }),
     ...(config.simControls ? [] : [createProfilingPanel(root, session)]),
-    createCameraSwitch(root, session, ros),
+    cameraSwitch,
     keyboard,
   );
 
@@ -109,6 +111,42 @@ function buildCockpit(root) {
       for (const part of parts) part.destroy();
       session.destroy();
       root.innerHTML = "";
+    },
+  };
+}
+
+/**
+ * Keep relocation one click away while driving: the map switcher promotes the
+ * live map and opens the exact Auto / Manual controls used by Navigation.
+ * @param {HTMLElement} parent
+ * @param {() => void} openRelocate
+ * @returns {{ destroy: () => void }}
+ */
+function createRelocateButton(parent, openRelocate) {
+  const wrap = document.createElement("div");
+  wrap.className = "relocate-control";
+
+  const label = document.createElement("span");
+  label.className = "relocate-label";
+  label.textContent = "RELOCATE";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "icon-toggle relocate-button";
+  button.title = "Relocate robot on the map (auto or manual)";
+  button.setAttribute("aria-label", "Relocate robot");
+  button.innerHTML =
+    '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">' +
+    '<circle cx="8" cy="8" r="4.5"/><path d="M8 .8v2.4M8 12.8v2.4M.8 8h2.4M12.8 8h2.4"/>' +
+    "</svg>";
+  button.addEventListener("click", openRelocate);
+
+  wrap.append(label, button);
+  parent.appendChild(wrap);
+  return {
+    destroy() {
+      button.removeEventListener("click", openRelocate);
+      wrap.remove();
     },
   };
 }

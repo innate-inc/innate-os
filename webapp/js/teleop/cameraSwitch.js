@@ -48,7 +48,7 @@ const MAP_ZOOM_DEFAULT = { small: 6, big: 16 }; // tighter as a thumbnail, wider
  *   primary. Switching views still works and still persists — the next mount
  *   just starts here again. Falls back to the usual default if the view is not
  *   in the roster.
- * @returns {{ destroy: () => void }}
+ * @returns {{ destroy: () => void, openRelocate: () => void }}
  */
 export function createCameraSwitch(parent, session, ros, opts = {}) {
   const storeKey = opts.storeKey || STORE_KEY;
@@ -72,9 +72,10 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   // synchronously so the tiles have something to reparent, and the widget drops into it once the import
   // lands. It is persistent and reparents between a strip tile (small) and the stage (big) — never rebuilt.
   /** @type {HTMLElement | null} */ let mapHost = null;
-  /** @type {{ destroy: () => void, setZoom: (m: number) => void, refresh: () => void } | null} */ let mapWidget = null;
+  /** @type {{ destroy: () => void, setZoom: (m: number) => void, refresh: () => void, openLocate: () => void } | null} */ let mapWidget = null;
   /** @type {"small" | "big"} which saved zoom is live: thumbnail vs full stage */ let mapMode = "small";
   let mapZoom = { ...MAP_ZOOM_DEFAULT };
+  let locateOnMapReady = false;
 
   loadPrefs();
 
@@ -204,6 +205,10 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
             // robot's spatial memory, and this is where you watch it happen.
             layers: { memories: true },
           });
+          if (locateOnMapReady) {
+            locateOnMapReady = false;
+            mapWidget.openLocate();
+          }
         })
         .catch(() => {
           // A dropped fetch must not blank the map for the session: with the
@@ -388,7 +393,16 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   }, undefined, "std_msgs/msg/String");
 
   return {
+    /** Promote the map and open its existing Auto / Manual localization menu.
+     * If the lazily-loaded widget is still arriving, remember the intent and
+     * open the menu as soon as it mounts. */
+    openRelocate() {
+      if (primary !== MAP_ID) promote(MAP_ID);
+      if (mapWidget) mapWidget.openLocate();
+      else locateOnMapReady = true;
+    },
     destroy() {
+      locateOnMapReady = false;
       unsub?.();
       unsubSession();
       mapWidget?.destroy();
