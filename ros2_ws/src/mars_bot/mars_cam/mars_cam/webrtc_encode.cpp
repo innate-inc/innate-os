@@ -9,7 +9,7 @@
 #include <cctype>  // std::isalnum (audio element/device validation)
 #include <cmath>
 #include <cstdlib>
-#include <cstring>  // memcpy (push_frame)
+#include <cstring>     // memcpy (push_frame)
 #include <filesystem>  // /proc/asound (mic lookup)
 #include <fstream>
 #include <memory>
