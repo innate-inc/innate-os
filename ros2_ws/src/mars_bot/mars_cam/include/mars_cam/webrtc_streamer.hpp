@@ -67,6 +67,21 @@ struct CameraEncoder {
     WebRTCStreamer* owner = nullptr;                 // for the static appsink new-sample callback
 };
 
+// The talkback switch one peer's playback branch obeys. Written by set_peer_talk (a ROS callback,
+// under peers_mutex_) and by the pad-added handler on webrtcbin's streaming thread — which must NOT
+// take peers_mutex_ (~Peer joins that thread under it), hence its own leaf mutex. The valve's drop
+// property is written only under this mutex and only from `open`, so a release can never be overwritten
+// by a stale snapshot: whoever writes last read `open` inside the same critical section.
+struct TalkGate {
+    std::mutex mutex;
+    bool open = false;            // the operator is holding talk
+    GstElement* valve = nullptr;  // this peer's playback valve, ref'd; set once by pad-added
+    ~TalkGate() {
+        if (valve)
+            gst_object_unref(valve);
+    }
+};
+
 // One connected WebRTC peer. The cameras are encoded ONCE in a persistent pipeline; each peer owns a
 // lightweight *transport* pipeline (appsrc(RTP) -> webrtcbin) that the shared encoders fan their RTP
 // out to. Creating/destroying a peer never touches the encoders, so memory stays flat and a dead peer
@@ -84,10 +99,8 @@ struct Peer {
     bool audio_requested = false;            // the operator's LISTEN intent; audio_active is it minus the talk duck
     bool with_talk = false;                  // the audio m-line was negotiated sendrecv (talkback possible)
     bool talk_active = false;                // operator is holding talk: their mic plays out the robot's speaker
-    // Read on webrtcbin's streaming thread (the pad-added handler, via a copy tagged on the element) to
-    // set the valve's initial state; that thread must NOT take peers_mutex_ — ~Peer runs set_state(NULL)
-    // under it, which joins the thread. Same lock-free escape as media_ready.
-    std::shared_ptr<std::atomic<bool>> talk_gate = std::make_shared<std::atomic<bool>>(false);
+    // Shared with the pad-added handler via a copy tagged on the webrtcbin element (see TalkGate).
+    std::shared_ptr<TalkGate> talk_gate = std::make_shared<TalkGate>();
     // True only after webrtcbin CONNECTED; gates RTP fan-out into webrtcbin. Shared + atomic because it
     // is written from webrtcbin's PC thread (the connection-state callback, via a copy tagged on the
     // element) — that callback must NOT take peers_mutex_: ~Peer runs set_state(NULL) under the mutex,

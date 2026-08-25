@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <sstream>
 
 namespace mars_cam {
@@ -166,14 +167,14 @@ Peer* WebRTCStreamer::create_peer_transport(const std::string& client_id, const 
     }
     // Talkback rides that same m-line in reverse: claim the recv direction, then take the operator's mic
     // off webrtcbin's pad-added. The gate is shared with that callback because it fires on webrtcbin's
-    // streaming thread, which must not touch peers_ (see Peer::talk_gate).
+    // streaming thread, which must not touch peers_ (see TalkGate).
     if (ok && peer->with_audio && enable_talkback_) {
         peer->with_talk = enable_talk_direction(peer->webrtc, static_cast<guint>(negotiated.size()));
         if (peer->with_talk) {
-            peer->talk_gate->store(talk_active, std::memory_order_relaxed);
+            peer->talk_gate->open = talk_active;  // pre-PLAYING: the pad-added thread does not exist yet
             g_object_set_data_full(G_OBJECT(peer->webrtc), "mars_talk_gate",
-                                   new std::shared_ptr<std::atomic<bool>>(peer->talk_gate),
-                                   [](gpointer p) { delete static_cast<std::shared_ptr<std::atomic<bool>>*>(p); });
+                                   new std::shared_ptr<TalkGate>(peer->talk_gate),
+                                   [](gpointer p) { delete static_cast<std::shared_ptr<TalkGate>*>(p); });
             g_signal_connect(peer->webrtc, "pad-added", G_CALLBACK(on_talk_pad_added), this);
         } else {
             RCLCPP_WARN(this->get_logger(), "webrtcbin refused a sendrecv audio transceiver; talkback disabled");
@@ -352,9 +353,9 @@ void WebRTCStreamer::on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer
     if (!is_audio) {
         return;  // we negotiate no recv video; anything else is not ours to play
     }
-    // One branch per peer: set_peer_talk finds the valve by name, so a second one would be built already
-    // muted and stay that way. A peer offers exactly once (the offer-once latch), so a second audio pad
-    // means an assumption changed and talkback needs revisiting — not a silent extra branch.
+    // One branch per peer: the gate owns exactly one valve, so a second branch would play ungated. A peer
+    // offers exactly once (the offer-once latch), so a second audio pad means an assumption changed and
+    // talkback needs revisiting — not a silent extra branch.
     if (g_object_get_data(G_OBJECT(webrtc), "mars_talk_attached")) {
         RCLCPP_WARN(self->get_logger(), "Second talkback audio pad on one peer; ignoring it");
         return;
@@ -378,16 +379,6 @@ void WebRTCStreamer::on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer
         return;
     }
 
-    // The valve opens only while the operator holds the button; a peer that never talks never reaches the
-    // speaker, even though its RTP is arriving.
-    auto* gate =
-        static_cast<std::shared_ptr<std::atomic<bool>>*>(g_object_get_data(G_OBJECT(webrtc), "mars_talk_gate"));
-    const bool open = gate && (*gate)->load(std::memory_order_relaxed);
-    if (GstElement* valve = gst_bin_get_by_name(GST_BIN(branch), "talk_valve")) {
-        g_object_set(valve, "drop", open ? FALSE : TRUE, nullptr);
-        gst_object_unref(valve);
-    }
-
     gst_bin_add(GST_BIN(pipeline), branch);
     gst_element_sync_state_with_parent(branch);
     GstPad* sink = gst_element_get_static_pad(branch, "sink");
@@ -402,13 +393,19 @@ void WebRTCStreamer::on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer
         gst_object_unref(pipeline);
         return;
     }
-    // Re-arm the valve from the gate now that the branch is findable: a release landing between the first
-    // gate read and gst_bin_add stores false and finds no valve to close, so the pre-add snapshot would
-    // pin the speaker open. set_peer_talk stores before it looks up, so one of the two writers is last
-    // with the current value whichever way this interleaves.
-    const bool open_now = gate && (*gate)->load(std::memory_order_relaxed);
-    if (GstElement* valve = gst_bin_get_by_name(GST_BIN(branch), "talk_valve")) {
+    // Hand the valve to the gate and arm it in one critical section (see TalkGate). Until here the valve
+    // has dropped everything — it is built drop=true — so a press that raced the attach opens it now, and
+    // a release can never be undone by a stale snapshot: this read and write are atomic against
+    // set_peer_talk's.
+    bool open_now = false;
+    auto* gate = static_cast<std::shared_ptr<TalkGate>*>(g_object_get_data(G_OBJECT(webrtc), "mars_talk_gate"));
+    GstElement* valve = gst_bin_get_by_name(GST_BIN(branch), "talk_valve");
+    if (gate && valve) {
+        std::lock_guard<std::mutex> lock((*gate)->mutex);
+        (*gate)->valve = valve;  // the gate keeps this ref; ~TalkGate releases it
+        open_now = (*gate)->open;
         g_object_set(valve, "drop", open_now ? FALSE : TRUE, nullptr);
+    } else if (valve) {
         gst_object_unref(valve);
     }
     g_object_set_data(G_OBJECT(webrtc), "mars_talk_attached", GINT_TO_POINTER(1));
@@ -420,10 +417,10 @@ void WebRTCStreamer::on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer
 // operator can press talk before their first RTP packet arrives); the valve is flipped when it does.
 void WebRTCStreamer::set_peer_talk(Peer* peer, bool on) {
     peer->talk_active = on;
-    peer->talk_gate->store(on, std::memory_order_relaxed);
-    if (GstElement* valve = gst_bin_get_by_name(GST_BIN(peer->pipeline), "talk_valve")) {
-        g_object_set(valve, "drop", on ? FALSE : TRUE, nullptr);
-        gst_object_unref(valve);
+    std::lock_guard<std::mutex> lock(peer->talk_gate->mutex);
+    peer->talk_gate->open = on;
+    if (peer->talk_gate->valve) {
+        g_object_set(peer->talk_gate->valve, "drop", on ? FALSE : TRUE, nullptr);
     }
 }
 
@@ -471,7 +468,7 @@ void WebRTCStreamer::destroy_peer(const std::string& client_id) {
     if (p->audio_active)
         want_audio_.fetch_sub(1, std::memory_order_relaxed);  // mic closed by the health poll
     if (p->talk_active) {
-        p->talk_gate->store(false, std::memory_order_relaxed);  // a peer that vanishes mid-sentence goes quiet
+        set_peer_talk(p, false);  // a peer that vanishes mid-sentence goes quiet
         want_talk_.fetch_sub(1, std::memory_order_relaxed);
         reconcile_talk();
     }

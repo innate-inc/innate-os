@@ -92,6 +92,8 @@ export class WebRtcSession {
   // mid-prompt) discards its stream instead of re-capturing the mic after teardown.
   #micEpoch = 0;
   /** @type {RTCRtpSender | null} */ #talkSender = null;
+  #talkDesired = false;
+  /** @type {Promise<boolean> | null} */ #micOpening = null;
   #processingOffer = false;
   #remoteDescriptionSet = false;
   /** @type {RTCIceCandidateInit[]} */ #iceQueue = [];
@@ -228,8 +230,12 @@ export class WebRtcSession {
    * @returns {Promise<void>}
    */
   async setTalk(on) {
+    // Recorded before any await: a release landing while getUserMedia is still pending must beat the
+    // press that is waiting on it, or the resumed press puts the operator live with the button already up.
+    this.#talkDesired = on;
     if (this.#state.talkRequested === on) return;
     if (on && !(await this.#openMic())) return; // the failure is already in state.talkError
+    if (this.#talkDesired !== on) return; // superseded while the mic was being acquired
     this.#patch({ talkRequested: on });
     this.#applyTalkTrack();
     if (!this.#started || this.#ros.state !== "connected") return;
@@ -253,6 +259,19 @@ export class WebRtcSession {
       this.#patch({ talkError: "Open the app over https to use the microphone" });
       return false;
     }
+    // Single-flight: a press-release-press while the first acquisition is pending must join it, not
+    // start a second one — the losing stream would never be stopped and the mic stays captured.
+    const opening = (this.#micOpening ??= this.#acquireMic());
+    try {
+      return await opening;
+    } finally {
+      // Only the promise we awaited: a late resumer must not clobber a newer acquisition's slot.
+      if (this.#micOpening === opening) this.#micOpening = null;
+    }
+  }
+
+  /** @returns {Promise<boolean>} */
+  async #acquireMic() {
     const epoch = this.#micEpoch;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
