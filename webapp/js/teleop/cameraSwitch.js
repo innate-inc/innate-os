@@ -32,16 +32,25 @@ const MAP_ZOOM_DEFAULT = { small: 6, big: 16 }; // tighter as a thumbnail, wider
  * @param {HTMLElement} parent cockpit root — owns the strip and (when big) the map layer.
  * @param {import("../webrtcSession.js").WebRtcSession} session
  * @param {import("../rosClient.js").RosClient} ros
- * @param {{ storeKey?: string, stripParent?: HTMLElement, primaryOnMount?: string }} [opts]
+ * @param {{
+ *   storeKey?: string,
+ *   stripParent?: HTMLElement,
+ *   primaryOnMount?: string,
+ *   staticMapMedia?: string
+ * }} [opts]
  *   storeKey: isolate this strip's prefs (primary view, map state) per page.
  *   primaryOnMount: open on this view every time, ignoring any persisted
  *   primary. Switching views still works and still persists — the next mount
  *   just starts here again. Falls back to the usual default if the view is not
  *   in the roster.
+ *   staticMapMedia: keep the map tile in place while this media query matches.
  * @returns {{ destroy: () => void }}
  */
 export function createCameraSwitch(parent, session, ros, opts = {}) {
   const storeKey = opts.storeKey || STORE_KEY;
+  const staticMapMedia = opts.staticMapMedia
+    ? window.matchMedia(opts.staticMapMedia)
+    : null;
 
   const strip = document.createElement("div");
   strip.className = "cam-strip";
@@ -97,6 +106,10 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
     localStorage.setItem(storeKey, JSON.stringify({ enabled: [...enabledCams], mapOn, primary }));
   }
 
+  function mapIsStatic() {
+    return staticMapMedia?.matches ?? false;
+  }
+
   // Drop names the roster no longer has, then guarantee a valid enabled primary (the stage always needs a
   // view). Zero cameras is fine when the map is primary (map-only releases WebRTC). Default when nothing
   // valid persists: the first camera.
@@ -107,7 +120,8 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
     for (const n of roster) enabledCams.add(n);
     mapOn = true;
     const validPrimary =
-      primary === MAP_ID || (roster.includes(primary) && enabledCams.has(primary));
+      (primary === MAP_ID && !mapIsStatic()) ||
+      (roster.includes(primary) && enabledCams.has(primary));
     if (!validPrimary) {
       // No saved choice (or a stale one): default to the view that shows the
       // robot best -- the sim's orbit "top view" (only simulated robots have
@@ -248,8 +262,21 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   function buildMapTile() {
     const tile = liveTile(MAP_ID, "Map", "Switch to Map view · scroll to zoom");
     tile.classList.add("cam-tile-map");
+    syncMapTileInteraction(tile);
     if (mapHost) tile.prepend(mapHost); // reparent the persistent host into the thumbnail
     return tile;
+  }
+
+  /** @param {HTMLElement} tile */
+  function syncMapTileInteraction(tile) {
+    const staticMap = mapIsStatic();
+    tile.classList.toggle("static", staticMap);
+    tile.tabIndex = staticMap ? -1 : 0;
+    tile.setAttribute("role", staticMap ? "group" : "button");
+    tile.setAttribute(
+      "aria-label",
+      staticMap ? "Map view · scroll to zoom" : "Switch to Map view · scroll to zoom",
+    );
   }
 
   /** Live thumbnail shell (caller prepends the video/map). @param {string} id @param {string} label @param {string} title */
@@ -259,9 +286,13 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
     tile.tabIndex = 0;
     tile.setAttribute("role", "button");
     tile.setAttribute("aria-label", title);
-    tile.addEventListener("click", () => promote(id));
+    tile.addEventListener("click", () => {
+      if (id === MAP_ID && mapIsStatic()) return;
+      promote(id);
+    });
     tile.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
+      if (id === MAP_ID && mapIsStatic()) return;
       event.preventDefault();
       promote(id);
     });
@@ -289,6 +320,17 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   }
 
   const unsubSession = session.onChange(syncStreams);
+  const onStaticMapChange = () => {
+    const previousPrimary = primary;
+    reconcile();
+    if (primary !== previousPrimary) {
+      commit();
+      return;
+    }
+    const tile = strip.querySelector(".cam-tile-map");
+    if (tile instanceof HTMLElement) syncMapTileInteraction(tile);
+  };
+  staticMapMedia?.addEventListener("change", onStaticMapChange);
 
   const unsub = ros.subscribe(WEBRTC_ACTIVE_STREAMS_TOPIC, (m) => {
     const raw = m?.data ?? m?.msg?.data;
@@ -311,6 +353,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
     destroy() {
       unsub?.();
       unsubSession();
+      staticMapMedia?.removeEventListener("change", onStaticMapChange);
       mapWidget?.destroy();
       mapHost?.remove();
       mapHost = null; // an import still in flight must not build into the removed host
