@@ -114,6 +114,9 @@ class Endpointer:
         self._in_speech = False
         self._silence_bytes = 0
         self._voiced_bytes = 0
+        self.tail_secs = 0.0
+        """Trailing silence of the utterance just closed — how long the speaker
+        had already stopped by the time the endpointer noticed."""
 
     @property
     def in_speech(self) -> bool:
@@ -158,6 +161,7 @@ class Endpointer:
 
     def _close(self) -> bytes | None:
         utterance = bytes(self._utterance)
+        self.tail_secs = self._silence_bytes / self._bytes_per_sec
         long_enough = self._voiced_bytes / self._bytes_per_sec >= MIN_VOICED_SECS
         self._in_speech = False
         self._utterance = bytearray()
@@ -357,9 +361,9 @@ class BatchSttSession:
             secs = len(utterance) / (self._sample_rate * 2)
             self._logger.info(f"🎤 Utterance closed ({secs:.1f}s), transcribing...")
             self.utterance_count += 1
-            # The clock starts here, not at the end of speech: the trailing
-            # silence_secs the endpointer waited out is already inside `secs`.
-            self._mark(Stage.UTTERANCE_CLOSED, secs=round(secs, 2))
+            # `tail` back-dates the real end of speech: this mark fires a whole
+            # silence_secs later, and that wait is the first thing a person feels.
+            self._mark(Stage.UTTERANCE_CLOSED, secs=round(secs, 2), tail=round(self._endpointer.tail_secs, 3))
             self._enqueue(utterance)
 
     def _enqueue(self, item: bytes | None) -> None:
