@@ -124,6 +124,9 @@
   .mark-card .status { max-width: 56ch; }
 
   /* Rolling timeline: one shared wall clock, three lanes, newest at the right. */
+  .rt { user-select: none; }
+  .rt-lane { cursor: grab; }
+  .rt.dragging .rt-lane { cursor: grabbing; }
   .rt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
   .rt-name { width: 74px; flex: none; font-size: 0.68rem; color: var(--muted);
              text-transform: uppercase; letter-spacing: 0.05em; text-align: right; }
@@ -134,11 +137,15 @@
                  white-space: nowrap; text-shadow: 0 0 3px rgba(0,0,0,0.6); }
   .rt-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--grid); }
   .rt-now { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--c-bad); opacity: 0.6; }
-  .rt-you { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--c-vad); }
+  /* A 2px line is unhittable, so the element is a wider transparent target
+     centred on the instant and the visible line is drawn inside it. */
+  .rt-you { position: absolute; top: 0; bottom: 0; width: 11px; margin-left: -5px; background: none; cursor: help; }
+  .rt-you::after { content: ""; position: absolute; left: 5px; top: 0; bottom: 0; width: 2px; background: var(--c-vad); }
+  .rt-you:hover::after { left: 4px; width: 4px; }
   .rt-axis { position: relative; height: 15px; margin-left: 82px; }
   .rt-axis i { position: absolute; font-size: 0.66rem; font-style: normal;
                color: var(--muted); transform: translateX(-50%); white-space: nowrap; }
-  .rt-bar:hover, .rt-you:hover { outline: 1px solid var(--ink); outline-offset: -1px; }
+  .rt-bar:hover { outline: 1px solid var(--ink); outline-offset: -1px; }
   .rt-tip {
     position: fixed; z-index: 20; pointer-events: none; max-width: 320px;
     background: var(--surface); color: var(--ink);
@@ -221,17 +228,14 @@
 <section class="card">
   <h2>Rolling timeline</h2>
   <div class="row" style="margin-bottom:10px">
-    <label class="status">window
-      <select id="window">
-        <option value="15">15 s</option>
-        <option value="30" selected>30 s</option>
-        <option value="60">60 s</option>
-        <option value="120">2 min</option>
-      </select>
-    </label>
+    <button id="zoom-out" title="show more time">−</button>
+    <span class="status mono" id="span-text" style="min-width:70px;text-align:center"></span>
+    <button id="zoom-in" title="show less time">+</button>
     <label class="status"><input type="checkbox" id="follow" checked style="vertical-align:-2px"> follow now</label>
+    <span class="status">scroll to zoom · drag to pan</span>
     <span class="status" id="rt-text"></span>
   </div>
+  <div class="legend" id="legend"></div>
   <div class="rt" id="rt"></div>
   <div class="rt-tip" id="rt-tip" hidden></div>
 </section>
@@ -240,7 +244,6 @@
 
 <section class="card">
   <h2>Timeline — newest first</h2>
-  <div class="legend" id="legend"></div>
   <div id="runs"><div class="empty">Waiting for an exchange. Start the agent, then speak to it or send a message above.</div></div>
 </section>
 
@@ -520,8 +523,14 @@ function runLabel(run) {
 const wasSilent = (run) => !!first(run, "stream_done") && !first(run, "speech_queued");
 
 // ---- rendering ------------------------------------------------------------
-const fmt = (ms) => (ms >= 1000 ? (ms / 1000).toFixed(2) + " s" : Math.round(ms) + " ms");
-const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour12: false });
+// Everything on this page is read to the millisecond — a duration rounded to
+// 10 ms hides exactly the differences it exists to show.
+const fmt = (ms) => (ms >= 1000 ? (ms / 1000).toFixed(3) + " s" : Math.round(ms) + " ms");
+
+function clock(t) {
+  const d = new Date(t * 1000);
+  return `${d.toLocaleTimeString([], { hour12: false })}.${String(d.getMilliseconds()).padStart(3, "0")}`;
+}
 
 function median(xs) {
   if (!xs.length) return null;
@@ -617,21 +626,46 @@ function barDetail(run, s) {
 // One shared wall clock instead of per-exchange rows normalised to their own
 // zero: this is the view that shows how the housekeeping turns interleave with
 // what you said, and how long the gaps really are.
-/** The right-hand edge of the window. It tracks the wall clock only while
- *  something is actually feeding it: a stopped agent (or a dropped socket)
- *  produces no marks, and sliding on regardless would scroll the last exchange
- *  away against a clock nothing is driving. */
-function rollingEdge() {
+const SPAN_MIN = 0.5;
+const SPAN_MAX = 600;
+
+/** The window width, for the zoom readout. */
+const spanLabel = (secs) =>
+  secs >= 60 ? `${(secs / 60).toFixed(secs >= 600 ? 0 : 1)}m` : secs >= 10 ? `${Math.round(secs)}s` : secs >= 1 ? `${secs.toFixed(1)}s` : `${Math.round(secs * 1000)}ms`;
+
+/** Tick labels take their precision from the step, never from each value —
+ *  mixing "−12s" and "−6.0s" on one axis reads as different resolutions. */
+function tickFormat(step) {
+  if (step >= 5) return (s) => `${Math.round(s)}s`;
+  if (step >= 0.5) return (s) => `${s.toFixed(1)}s`;
+  return (s) => `${Math.round(s * 1000)}ms`;
+}
+
+let viewSpan = 30; // seconds across the window
+let viewEnd = null; // null = auto; a number pins the right edge (pan/zoom/freeze)
+
+/** The right-hand edge of the window when it is left on auto. It tracks the
+ *  wall clock only while something is actually feeding it: a stopped agent (or
+ *  a dropped socket) produces no marks, and sliding on regardless would scroll
+ *  the last exchange away against a clock nothing is driving. */
+function autoEdge() {
   const now = robotNow();
-  if (!$("follow").checked) return { t1: rollingFrozenAt ?? now, why: "manual" };
   const live = brainActive !== false && ros.state === "connected";
-  if (live) return { t1: now, why: "live" };
-  if (!lastMarkT) return { t1: now, why: "live" }; // nothing to hold on to yet
+  if (live || !lastMarkT) return { t1: now, why: "live" };
   return { t1: Math.min(now, lastMarkT + 1), why: brainActive === false ? "stopped" : "offline" };
 }
 
+const rollingEdge = () => (viewEnd != null ? { t1: viewEnd, why: "manual" } : autoEdge());
+
+/** Pin the window where it currently sits, so a pan or zoom has something to
+ *  move relative to and the view stops chasing the clock. */
+function detachView() {
+  if (viewEnd == null) viewEnd = rollingEdge().t1;
+  $("follow").checked = false;
+}
+
 function renderRolling(runs) {
-  const span = Number($("window").value);
+  const span = viewSpan;
   const { t1, why } = rollingEdge();
   const t0 = t1 - span;
   const pct = (t) => ((t - t0) / span) * 100;
@@ -663,18 +697,30 @@ function renderRolling(runs) {
 
   // Gridlines every fifth of the window, plus the edge marker and every press.
   const steps = 5;
+  const tick = tickFormat(span / steps);
   let grid = "";
   let axis = "";
   for (let i = 0; i <= steps; i++) {
     const at = (i / steps) * 100;
     grid += `<div class="rt-grid" style="left:${at}%"></div>`;
-    const label = i === steps ? (why === "live" ? "now" : clock(t1)) : `−${Math.round(span - (i / steps) * span)}s`;
+    const label = i === steps ? (why === "live" ? "now" : clock(t1)) : `−${tick(span - (i / steps) * span)}`;
     axis += `<i style="left:${at}%">${label}</i>`;
   }
-  const presses = marks
-    .filter((m) => m.stage === "you_stopped" && m.t >= t0 && m.t <= t1)
-    .map((m) => `<div class="rt-you" style="left:${pct(m.t)}%" data-tip="you stopped speaking"></div>`)
-    .join("");
+  // Drawn from the runs, not from `marks`, so each press can report what
+  // followed it — it is the reference point everything else is measured from.
+  let presses = "";
+  for (const run of runs) {
+    for (const m of run.stages.you_stopped ?? []) {
+      if (m.t < t0 || m.t > t1) continue;
+      const spoke = vadSpeechEnd(run);
+      const aud = audibleAt(run);
+      const lines = ["you stopped speaking", clock(m.t)];
+      if (spoke != null) lines.push(`+${fmt((spoke - m.t) * 1000)}  robot's own estimate of speech end`);
+      if (aud) lines.push(`+${fmt((aud.t - m.t) * 1000)}  first audio`);
+      if (run.end > m.t) lines.push(`+${fmt((run.end - m.t) * 1000)}  exchange finished`);
+      presses += `<div class="rt-you" style="left:${pct(m.t)}%" data-tip="${escapeHtml(lines.join("\n"))}"></div>`;
+    }
+  }
   const nowLine = why === "live" ? '<div class="rt-now" style="left:100%"></div>' : "";
 
   $("rt").innerHTML =
@@ -684,6 +730,7 @@ function renderRolling(runs) {
         `<div class="rt-lane">${grid}${presses}${lanes[i].join("")}${nowLine}</div></div>`,
     ).join("") + `<div class="rt-axis">${axis}</div>`;
 
+  $("span-text").textContent = spanLabel(span);
   $("rt-text").textContent = {
     live: "",
     manual: `frozen at ${clock(t1)} — retick "follow now" to resume`,
@@ -800,13 +847,12 @@ function renderLog() {
       const extra = Object.entries(rest)
         .map(([k, v]) => `${k}=${typeof v === "string" ? v.slice(0, 60) : v}`)
         .join(" ");
-      return `${clock(t)}.${String(Math.floor((t % 1) * 1000)).padStart(3, "0")}  ${stage.padEnd(17)} ${extra}`;
+      return `${clock(t)}  ${stage.padEnd(17)} ${extra}`;
     })
     .join("\n");
 }
 
 let lastRuns = [];
-let rollingFrozenAt = null;
 let rtHover = false;
 
 function render() {
@@ -827,7 +873,66 @@ renderLegend();
 setInterval(render, 200);
 
 $("follow").addEventListener("change", (e) => {
-  rollingFrozenAt = e.target.checked ? null : rollingEdge().t1;
+  viewEnd = e.target.checked ? null : rollingEdge().t1;
+  redrawRolling();
+});
+
+// ---- zoom and pan ----------------------------------------------------------
+// The lanes are one continuous time axis, so zoom is a span change and pan is
+// an edge change; both pin the view first, since a window that keeps chasing
+// the clock cannot be navigated.
+const redrawRolling = () => renderRolling(lastRuns);
+
+function setSpan(next, holdAtFraction = 1) {
+  const span = Math.min(SPAN_MAX, Math.max(SPAN_MIN, next));
+  if (span === viewSpan) return;
+  detachView();
+  // Keep whatever sits under `holdAtFraction` of the width where it is, so the
+  // wheel zooms around the pointer instead of around the right edge.
+  const held = viewEnd - viewSpan + holdAtFraction * viewSpan;
+  viewEnd = held + (1 - holdAtFraction) * span;
+  viewSpan = span;
+  redrawRolling();
+}
+
+$("zoom-in").onclick = () => setSpan(viewSpan / 1.6, 0.5);
+$("zoom-out").onclick = () => setSpan(viewSpan * 1.6, 0.5);
+
+$("rt").addEventListener(
+  "wheel",
+  (e) => {
+    const lane = e.target instanceof Element ? e.target.closest(".rt-lane") : null;
+    if (!lane) return;
+    e.preventDefault();
+    const box = lane.getBoundingClientRect();
+    setSpan(viewSpan * Math.exp(e.deltaY * 0.002), (e.clientX - box.left) / box.width);
+  },
+  { passive: false },
+);
+
+/** @type {{ x: number, t1: number, width: number } | null} */
+let drag = null;
+
+$("rt").addEventListener("mousedown", (e) => {
+  const lane = e.target instanceof Element ? e.target.closest(".rt-lane") : null;
+  if (!lane || e.button !== 0) return;
+  e.preventDefault();
+  detachView();
+  drag = { x: e.clientX, t1: viewEnd, width: lane.getBoundingClientRect().width };
+  $("rt").classList.add("dragging");
+  tip.hidden = true;
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!drag) return;
+  viewEnd = drag.t1 - ((e.clientX - drag.x) / drag.width) * viewSpan;
+  redrawRolling();
+});
+
+window.addEventListener("mouseup", () => {
+  if (!drag) return;
+  drag = null;
+  $("rt").classList.remove("dragging");
 });
 
 // ---- hover cards on the rolling timeline -----------------------------------
