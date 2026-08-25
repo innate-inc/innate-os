@@ -47,11 +47,17 @@ def parse_identity(payload: str) -> RobotIdentity | None:
     )
 
 
+# These strings are interpolated into the system prompt, and /robot/info is
+# writable by any rosbridge client: collapsing whitespace and capping length
+# keeps a hostile value a phrase, not a paragraph of injected instructions.
+_MAX_FIELD_CHARS = 80
+
+
 def _clean(info: dict, key: str) -> str | None:
     value = info.get(key)
     if not isinstance(value, str):
         return None
-    return value.strip() or None
+    return " ".join(value.split())[:_MAX_FIELD_CHARS] or None
 
 
 class IdentityMonitor:
