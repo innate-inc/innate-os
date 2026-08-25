@@ -266,6 +266,12 @@ interface WebRtcState {
   videoLive: boolean[];
   audioStream: MediaStream | null;
   audioRequested: boolean;
+  /** The operator is holding talk: this browser's mic is playing out the robot's speaker. */
+  talkRequested: boolean;
+  /** The open microphone, for metering. Outlives a single press; null until the first one. */
+  talkStream: MediaStream | null;
+  /** Why the microphone could not be opened (permission, no device, insecure origin), or null. */
+  talkError: string | null;
   /** Live RTCPeerConnection.iceConnectionState ("new" before a peer exists). */
   iceState: string;
   /** True once we've fallen back to a public STUN server after the local-only config failed. */

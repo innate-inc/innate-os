@@ -21,6 +21,19 @@ struct FanOutTarget {
     std::string stream;
     GstElement* src = nullptr;
 };
+
+// Element names and device strings are interpolated into parsed pipeline descriptions, so anything that
+// could inject a second element is rejected outright.
+bool is_plain_element(const std::string& name) {
+    return !name.empty() && std::all_of(name.begin(), name.end(),
+                                        [](unsigned char c) { return std::isalnum(c) || c == '-' || c == '_'; });
+}
+
+bool is_plain_device(const std::string& device) {
+    return std::all_of(device.begin(), device.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == ':' || c == ',' || c == '.' || c == '=' || c == '-' || c == '_' || c == '/';
+    });
+}
 }  // namespace
 
 // =============================================================================
@@ -225,22 +238,14 @@ void WebRTCStreamer::fan_out_sample(GstElement* appsink, const std::string& cam)
 bool WebRTCStreamer::build_audio_pipeline() {
     // Validate the mic element + device (a plain element name / device string — these go into a parsed
     // pipeline description, so reject anything that could inject extra elements).
-    const bool valid_element = !audio_source_element_.empty() &&
-                               std::all_of(audio_source_element_.begin(), audio_source_element_.end(),
-                                           [](unsigned char c) { return std::isalnum(c) || c == '-' || c == '_'; });
-    if (!valid_element) {
+    if (!is_plain_element(audio_source_element_)) {
         RCLCPP_ERROR(this->get_logger(), "audio_source_element '%s' is not a plain element name",
                      audio_source_element_.c_str());
         return false;
     }
     std::string src = audio_source_element_;
     if (!audio_capture_device_.empty()) {
-        const bool valid_device =
-            std::all_of(audio_capture_device_.begin(), audio_capture_device_.end(), [](unsigned char c) {
-                return std::isalnum(c) || c == ':' || c == ',' || c == '.' || c == '=' || c == '-' || c == '_' ||
-                       c == '/';
-            });
-        if (!valid_device) {
+        if (!is_plain_device(audio_capture_device_)) {
             RCLCPP_ERROR(this->get_logger(), "audio_capture_device '%s' has unexpected chars",
                          audio_capture_device_.c_str());
             return false;
@@ -277,6 +282,43 @@ bool WebRTCStreamer::build_audio_pipeline() {
     RCLCPP_INFO(this->get_logger(), "Shared audio pipeline built (mic '%s', closed until a peer wants audio)",
                 src.c_str());
     return true;
+}
+
+// One peer's speaker path, hung off webrtcbin's recv pad. The valve is the privacy gate (closed until the
+// operator holds talk); the queue is what keeps a blocking ALSA write off webrtcbin's streaming thread.
+// The sink neither syncs nor prerolls: it is fed live, and behind a closed valve it would otherwise wait
+// forever for a first buffer and stall the branch's state change.
+std::string WebRTCStreamer::talk_branch_description() const {
+    if (!is_plain_element(audio_sink_element_) || !is_plain_device(audio_playback_device_)) {
+        return "";  // the constructor checks this once and disables talkback rather than parsing it
+    }
+    std::string sink = audio_sink_element_;
+    if (!audio_playback_device_.empty()) {
+        sink += " device=\"" + audio_playback_device_ + "\"";
+    }
+    return "valve name=talk_valve drop=true ! "
+           "rtpopusdepay ! opusdec plc=true ! audioconvert ! audioresample ! "
+           "volume name=talk_volume volume=" +
+           std::to_string(talkback_volume_) +
+           " ! "
+           "queue leaky=downstream max-size-buffers=0 max-size-bytes=0 max-size-time=200000000 ! " +
+           sink + " name=talk_sink sync=false async=false";
+}
+
+void WebRTCStreamer::reconcile_talk() {
+    // The brain ducks its mic on this, exactly as it does for /tts/is_playing — otherwise the agent
+    // transcribes the operator's own voice coming out of the robot and answers it. Never joins a thread,
+    // so unlike reconcile_audio this is safe to call with peers_mutex_ held.
+    const bool talking = want_talk_.load(std::memory_order_relaxed) > 0;
+    if (talking == talk_playing_ || !talkback_status_pub_) {
+        return;
+    }
+    talk_playing_ = talking;
+    std_msgs::msg::String msg;
+    msg.data = talking ? "true" : "false";
+    talkback_status_pub_->publish(msg);
+    RCLCPP_INFO(this->get_logger(), "Talkback %s",
+                talking ? "OPEN (an operator is speaking through the robot)" : "closed");
 }
 
 void WebRTCStreamer::reconcile_audio() {

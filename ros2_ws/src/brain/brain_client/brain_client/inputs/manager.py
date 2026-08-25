@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Input-device management: load, route data, activate/deactivate, TTS ducking.
+"""Input-device management: load, route data, activate/deactivate, speaker ducking.
 
 Bridges ROS topics to the pure-Python input devices. Input authors implement the
 :class:`~brain_client.inputs.types.InputDevice` interface and never touch ROS; this
@@ -35,6 +35,7 @@ class InputDeviceManager:
         self.input_devices: dict[str, InputDevice] = {}
         self._mic_enabled = True
         self._requested_inputs: set[str] = set()
+        self._speaking_sources: set[str] = set()
         self._load(proxy)
 
     def _load(self, proxy) -> None:
@@ -164,12 +165,22 @@ class InputDeviceManager:
         if device is not None:
             self._apply(MIC_DEVICE_NAME, device, enabled and MIC_DEVICE_NAME in self._requested_inputs)
 
-    def handle_tts_status(self, raw: str) -> None:
-        """Notify ducking-capable devices when the robot starts/stops speaking."""
-        is_playing = raw.lower() in ("true", "1", "playing")
+    def handle_speaker_status(self, source: str, raw: str) -> None:
+        """Duck the mic while the robot's speaker is busy. TTS and teleop talkback reach the same
+        speaker independently, so sources are a set, not a flag: TTS ending mid-sentence must not
+        un-duck the mic while the operator is still speaking into the room."""
+        speaking = raw.lower() in ("true", "1", "playing")
+        was_busy = bool(self._speaking_sources)
+        if speaking:
+            self._speaking_sources.add(source)
+        else:
+            self._speaking_sources.discard(source)
+        is_busy = bool(self._speaking_sources)
+        if is_busy == was_busy:
+            return
         for name, device in self.input_devices.items():
             try:
-                device.set_tts_playing(is_playing)
+                device.set_tts_playing(is_busy)
             except Exception as e:
                 # Per-device: one broken hook must not silence ducking for the rest.
                 self._logger.error(f"Error setting TTS state on input device '{name}': {e}")

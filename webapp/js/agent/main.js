@@ -26,7 +26,7 @@ import { createCameraSwitch } from "../teleop/cameraSwitch.js";
 import { sharedAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
-import { createAgentMicControl } from "./agentMicControl.js";
+import { createMicControl } from "../micControl.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
 // marks a sim deployment — used here to drop the (absent) battery readout. Fetched
@@ -152,7 +152,7 @@ function buildAgentView(root) {
     renderStageView(next);
   }
 
-  /** @type {ReturnType<typeof createAgentMicControl> | null} */
+  /** @type {ReturnType<typeof createMicControl> | null} */
   let micControl = null;
   const panel = createAgentPanel(root, ros, agentState, {
     enableMic: Boolean(config.simControls),
@@ -177,9 +177,10 @@ function buildAgentView(root) {
   root.addEventListener("pointerdown", onScenePointerDown);
   const telemetry = telemetryOverlay ? createTelemetry(telemetryOverlay, ros) : null;
   if (config.simControls) {
-    micControl = createAgentMicControl(panel.micMount, {
+    micControl = createMicControl(panel.micMount, {
       startListening: panel.startMic,
       stopListening: panel.stopMic,
+      composerInput: panel.micMount.closest(".agent-compose")?.querySelector(".agent-compose-input"),
     });
   }
 

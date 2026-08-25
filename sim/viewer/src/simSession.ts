@@ -51,6 +51,9 @@ export interface SimSessionState {
   videoLive: boolean[];
   audioStream: MediaStream | null;
   audioRequested: boolean;
+  talkRequested: boolean;
+  talkStream: MediaStream | null;
+  talkError: string | null;
   iceState: string;
   stunFallback: boolean;
 }
@@ -63,6 +66,9 @@ export class SimSession {
     videoLive: [],
     audioStream: null,
     audioRequested: false,
+    talkRequested: false,
+    talkStream: null,
+    talkError: null,
     iceState: "connected",
     stunFallback: false,
   };
@@ -350,8 +356,9 @@ export class SimSession {
     this.#controller?.send({ op: "abort_challenge" });
   }
 
-  // WebRTC-specific surface: harmless no-ops in sim.
+  // WebRTC-specific surface: harmless no-ops in sim (no mic to hear, no speaker to talk out of).
   setAudio(_on: boolean): void {}
+  async setTalk(_on: boolean): Promise<void> {}
   async getStats(): Promise<null> {
     return null;
   }

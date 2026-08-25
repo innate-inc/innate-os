@@ -1,6 +1,12 @@
 // @ts-check
+// Hold-to-talk button: pointer-hold or spacebar, with the ripple/waveform glass
+// the agent composer introduced. Shared by the two pages that capture the
+// operator's voice — the agent page (sim), where speech becomes a transcript,
+// and teleop, where it plays live out the robot's speaker. Only the wording
+// differs; the hold semantics (and the rule that the spacebar belongs to
+// whatever the operator is typing in) are the same either way.
 
-import { isTypingContext } from "../shell.js";
+import { isTypingContext } from "./shell.js";
 
 const RIPPLE_COUNT = 3;
 const WAVEFORM_BAR_COUNT = 9;
@@ -18,7 +24,10 @@ const WAVEFORM_DB_RANGE = 48;
  * @param {HTMLElement} root
  * @param {{
  *   startListening: () => void | Promise<void>,
- *   stopListening: () => void
+ *   stopListening: () => void,
+ *   holdLabel?: string,
+ *   listeningLabel?: string,
+ *   composerInput?: Element | null
  * }} callbacks
  * @returns {{
  *   destroy: () => void,
@@ -27,9 +36,14 @@ const WAVEFORM_DB_RANGE = 48;
  *   setAudioFeedback: (feedback: { level: number, waveform: number[] }) => void
  * }}
  */
-export function createAgentMicControl(root, callbacks) {
-  const { startListening, stopListening } = callbacks;
-  const composerInput = root.closest(".agent-compose")?.querySelector(".agent-compose-input");
+export function createMicControl(root, callbacks) {
+  const {
+    startListening,
+    stopListening,
+    holdLabel = "Hold to talk to the agent",
+    listeningLabel = "Listening…",
+    composerInput = null,
+  } = callbacks;
 
   const control = document.createElement("div");
   control.className = "agent-mic-control";
@@ -37,7 +51,7 @@ export function createAgentMicControl(root, callbacks) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "agent-mic-button";
-  button.setAttribute("aria-label", "Hold to talk to the agent");
+  button.setAttribute("aria-label", holdLabel);
   button.setAttribute("aria-pressed", "false");
   button.title = "Hold to talk — Spacebar, or click and hold";
 
@@ -98,10 +112,10 @@ export function createAgentMicControl(root, callbacks) {
     button.setAttribute("aria-busy", String(isWaiting));
     button.setAttribute(
       "aria-label",
-      isUnavailable ? unavailableReason || "Microphone unavailable" : "Hold to talk to the agent",
+      isUnavailable ? unavailableReason || "Microphone unavailable" : holdLabel,
     );
     button.title = isUnavailable ? "" : "Hold to talk — Spacebar, or click and hold";
-    stateLabel.textContent = isWaiting ? "Starting…" : isListening ? "Listening…" : "";
+    stateLabel.textContent = isWaiting ? "Starting…" : isListening ? listeningLabel : "";
     const messageText = shouldShowUnavailableMessage
       ? unavailableReason || "Microphone unavailable"
       : shouldShowHoldHint
@@ -229,10 +243,12 @@ export function createAgentMicControl(root, callbacks) {
   }
 
   function spacebarCanControlMic() {
-    if (!(composerInput instanceof HTMLTextAreaElement)) return false;
     // Only a focused composer holding a draft blocks the spacebar; an unsent
-    // draft must not disable push-to-talk for the whole page.
-    if (document.activeElement === composerInput) return composerInput.value.length === 0;
+    // draft must not disable push-to-talk for the whole page. Pages without a
+    // composer (teleop) fall through to the generic typing guard.
+    if (composerInput instanceof HTMLTextAreaElement && document.activeElement === composerInput) {
+      return composerInput.value.length === 0;
+    }
     return !isTypingContext();
   }
 
