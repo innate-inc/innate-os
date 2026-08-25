@@ -1501,20 +1501,18 @@ select.skill-input {
   display: none;
 }
 
-/* The sim's feed frame is opaque and paints after the map host (which is the
-   cockpit's first child, so the overlays win on DOM order), which left a
-   promoted map hidden behind it. Give the map the frame's own box and lift it
-   over the frame; the overlays sit at z-index >= 5 and still paint on top. */
-.agent-cockpit.agent-sim .cam-map-host.big {
+/* The opaque feed frame paints after the map host, so a promoted map must rise
+   above it. */
+.agent-cockpit .cam-map-host.big {
   z-index: 1;
 }
 
-@media (min-width: 1401px) {
+@media (min-width: 1281px) {
   /* Inset by the frame's 1px border rather than drawing a second one, so the
      map sits in the frame the same way the feed does and the hairline stays
      whatever the frame says it is. 17px radius is the frame's 18px less that
      border, matching the video. */
-  .agent-cockpit.agent-sim .cam-map-host.big {
+  .agent-cockpit .cam-map-host.big {
     top: calc(var(--agent-dock-gutter) + 1px);
     right: auto;
     bottom: auto;
@@ -6443,10 +6441,11 @@ select.skill-input {
 .agent-cockpit {
   --agent-dock-width: 360px;
   --agent-dock-gutter: 18px;
-  /* Inset of every floating control from the feed frame's edge. The camera
-     strip set the precedent; the rest match it. */
+  /* Inset for controls over the feed; the row below aligns to its outer edges. */
   --agent-overlay-inset: 14px;
   --agent-telemetry-height: 56px;
+  --agent-telemetry-width: 360px;
+  --agent-stage-toggle-width: 136px;
 }
 
 .agent-cockpit .agent-feed-frame {
@@ -6470,7 +6469,7 @@ select.skill-input {
 }
 
 .agent-cockpit .agent-telemetry-overlay {
-  width: var(--agent-dock-width);
+  width: var(--agent-telemetry-width);
   height: var(--agent-telemetry-height);
   border-radius: 14px;
 }
@@ -6917,7 +6916,7 @@ select.skill-input {
   bottom: calc(
     var(--agent-dock-gutter) + var(--agent-overlay-inset)
   ) !important;
-  left: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+  left: var(--agent-dock-gutter);
 }
 
 /* Agent page keeps every camera live (no off pill), so any off tile here is the
@@ -7461,6 +7460,7 @@ select.skill-input {
 @media (min-width: 641px) {
   .agent-cockpit {
     --agent-dock-width: 388px;
+    --agent-telemetry-width: 388px;
   }
 
   .agent-cockpit .overlay-stack-top-left {
@@ -8725,23 +8725,20 @@ select.skill-input {
 
 @media (min-width: 641px) {
   .agent-cockpit .agent-stage-view-toggle {
-    width: 136px;
+    width: var(--agent-stage-toggle-width);
     justify-content: center;
   }
 }
 
-@media (min-width: 641px) {
-  .agent-cockpit.agent-sim .agent-feed-frame {
+@media (min-width: 1001px) {
+  .agent-cockpit .agent-feed-frame {
     position: absolute;
     display: block;
     top: var(--agent-dock-gutter);
     right: auto;
     bottom: auto;
     left: var(--agent-dock-gutter);
-    width: calc(
-      100% - var(--agent-dock-width) - var(--agent-dock-gutter) -
-        var(--agent-dock-gutter) - var(--agent-dock-gutter)
-    );
+    width: var(--agent-frame-width);
     height: auto;
     aspect-ratio: 4 / 3;
     overflow: hidden;
@@ -8750,108 +8747,59 @@ select.skill-input {
     border-radius: 18px;
   }
 
-  .agent-cockpit.agent-sim .agent-feed-frame > .video-stage {
+  .agent-cockpit .agent-feed-frame > .video-stage {
     position: absolute !important;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    left: 0;
+    inset: 0;
     width: 100%;
     height: 100%;
     aspect-ratio: 4 / 3;
     transform: none;
   }
 
-  .agent-cockpit.agent-sim .video-stage > :is(canvas, video) {
+  .agent-cockpit .video-stage > :is(canvas, video) {
     width: 100%;
     height: 100%;
     border: 0;
     border-radius: 17px;
-    object-fit: cover;
+    object-fit: contain;
+    object-position: center;
   }
 
-  .agent-cockpit.agent-sim .overlay-stack-top-left {
-    top: 32px;
-    right: calc(
-      var(--agent-dock-width) + var(--agent-dock-gutter) + var(--agent-dock-gutter) +
-        14px
-    );
-  }
-
-  .agent-cockpit.agent-sim .cam-strip {
+  .agent-cockpit .cam-strip {
     --pip-gap: 12px;
   }
-
 }
 
-@media (min-width: 641px) and (max-width: 1400px) {
-  .agent-cockpit .video-stage {
-    position: absolute !important;
-    inset: 0;
-    width: auto;
-    height: auto;
-  }
-
-  .agent-cockpit .video-stage video {
-    width: 100%;
-    height: 100%;
-    max-height: none;
-    border: 0;
-    border-radius: 0;
-    object-position: center;
-    object-fit: cover;
-  }
-
-  .agent-cockpit.agent-sim .agent-feed-frame {
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    aspect-ratio: auto;
-    border: 0;
-    border-radius: 0;
-  }
-
-  .agent-cockpit.agent-sim .agent-feed-frame > .video-stage {
-    width: 100%;
-    height: 100%;
-    aspect-ratio: auto;
-  }
-
-  .agent-cockpit.agent-sim .video-stage > :is(canvas, video) {
-    border-radius: 0;
-  }
-}
-
-/* Wide-but-short screens: the 4:3 frame is derived from whatever width the dock
-   leaves over, so past a certain aspect ratio it is taller than the stage and
-   its bottom corners get cropped. Invert the dependency — size the frame from
-   the available height, then define the dock as the width left over. Every rule
-   that already anchors to --agent-dock-width (the panel, the camera strip, the
-   Inspect Brain toggle) then follows the frame's edge for free. Below this the
-   dock's own width still binds, so the two agree at the boundary. */
-@media (min-width: 1401px) {
-  .agent-cockpit.agent-sim {
-    /* Fixed dock width, kept as its own name so --agent-dock-width can be
-       derived below without a circular reference. */
-    --agent-dock-base: 388px;
-    --agent-frame-fit: calc((100dvh - 2 * var(--agent-dock-gutter)) * 4 / 3);
-    --agent-frame-max: calc(
-      100% - var(--agent-dock-base) - 3 * var(--agent-dock-gutter)
+@media (min-width: 1281px) {
+  .agent-cockpit {
+    --agent-dock-min-width: 388px;
+    --agent-frame-width: min(
+      calc(
+        (
+            100dvh - 2 * var(--agent-dock-gutter) -
+              var(--agent-overlay-inset) -
+              var(--agent-telemetry-height)
+          ) *
+          4 /
+          3
+      ),
+      calc(
+        100vw - 64px - var(--agent-dock-min-width) -
+          3 * var(--agent-dock-gutter)
+      )
     );
-    --agent-frame-width: min(var(--agent-frame-fit), var(--agent-frame-max));
+    --agent-frame-height: calc(var(--agent-frame-width) * 3 / 4);
+    --agent-control-row-top: calc(
+      var(--agent-dock-gutter) + var(--agent-frame-height) +
+        var(--agent-overlay-inset)
+    );
     --agent-dock-width: calc(
-      100% - var(--agent-frame-width) - 3 * var(--agent-dock-gutter)
+      100vw - 64px - var(--agent-frame-width) -
+        3 * var(--agent-dock-gutter)
     );
   }
-}
 
-/* Floating controls all sit --agent-overlay-inset inside the frame's edge.
-   They live in two different containing blocks — the scene-setup stack is a
-   child of the stage, while the challenge dock and Inspect Brain hang off the
-   cockpit — so the cockpit-anchored pair add the gutter to reach the same edge
-   the stage-anchored ones start from. */
-@media (min-width: 641px) {
-  .agent-cockpit.agent-sim .overlay-stack-top-left {
+  .agent-cockpit .overlay-stack-top-left {
     top: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
     right: calc(
       var(--agent-dock-width) + 2 * var(--agent-dock-gutter) +
@@ -8859,7 +8807,51 @@ select.skill-input {
     );
   }
 
+  .agent-cockpit .agent-telemetry-overlay {
+    inset: var(--agent-control-row-top) auto auto var(--agent-dock-gutter);
+  }
+
   .agent-cockpit .agent-stage-view-toggle {
+    top: var(--agent-control-row-top);
+    right: calc(var(--agent-dock-width) + 2 * var(--agent-dock-gutter));
+    bottom: auto;
+  }
+
+  .agent-cockpit .sim-debug-stack {
+    top: var(--agent-control-row-top) !important;
+    bottom: auto !important;
+    left: var(--agent-dock-gutter);
+  }
+
+  .agent-cockpit .agent-challenge-dock {
+    top: var(--agent-control-row-top);
+    bottom: auto;
+    left: calc(var(--agent-dock-gutter) + 56px + 10px);
+  }
+}
+
+/* 506px reserves the 64px rail, 388px dock, and three 18px gutters. */
+@media (min-width: 1281px) and (min-width: calc((100dvh - 36px) * 4 / 3 + 506px)) {
+  .agent-cockpit {
+    --agent-frame-width: calc(
+      (100dvh - 2 * var(--agent-dock-gutter)) * 4 / 3
+    );
+    --agent-frame-height: calc(var(--agent-frame-width) * 3 / 4);
+    --agent-dock-width: calc(
+      100vw - 64px - var(--agent-frame-width) -
+        3 * var(--agent-dock-gutter)
+    );
+  }
+
+  .agent-cockpit .agent-telemetry-overlay {
+    inset:
+      auto auto
+      calc(var(--agent-dock-gutter) + var(--agent-overlay-inset))
+      calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+  }
+
+  .agent-cockpit .agent-stage-view-toggle {
+    top: auto;
     right: calc(
       var(--agent-dock-width) + 2 * var(--agent-dock-gutter) +
         var(--agent-overlay-inset)
@@ -8867,9 +8859,16 @@ select.skill-input {
     bottom: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
   }
 
-  /* Sits to the right of the scene-setup button, which is 56px wide and starts
-     one inset in from the frame's left edge. */
+  .agent-cockpit .sim-debug-stack {
+    top: auto !important;
+    bottom: calc(
+      var(--agent-dock-gutter) + var(--agent-overlay-inset)
+    ) !important;
+    left: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+  }
+
   .agent-cockpit .agent-challenge-dock {
+    top: auto;
     bottom: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
     left: calc(
       var(--agent-dock-gutter) + var(--agent-overlay-inset) + 56px + 10px
@@ -8877,7 +8876,148 @@ select.skill-input {
   }
 }
 
-@media (max-width: 1280px) {
+@media (min-width: 1001px) and (max-width: 1280px) {
+  .agent-cockpit {
+    --agent-map-row-min-height: 96px;
+    --agent-stage-width: calc(
+      100vw - 64px - var(--agent-dock-width) -
+        3 * var(--agent-dock-gutter)
+    );
+    --agent-frame-width: min(
+      var(--agent-stage-width),
+      calc(
+        (
+            100dvh - 2 * var(--agent-dock-gutter) -
+              2 * var(--agent-overlay-inset) -
+              var(--agent-telemetry-height) -
+              var(--agent-map-row-min-height)
+          ) *
+          4 /
+          3
+      )
+    );
+    --agent-frame-height: calc(var(--agent-frame-width) * 3 / 4);
+    --agent-map-row-height: calc(
+      100dvh - 2 * var(--agent-dock-gutter) -
+        2 * var(--agent-overlay-inset) -
+        var(--agent-telemetry-height) -
+        var(--agent-frame-height)
+    );
+    --agent-frame-right: calc(
+      100vw - 64px - var(--agent-dock-gutter) -
+        var(--agent-frame-width)
+    );
+    --agent-control-row-top: calc(
+      100dvh - var(--agent-dock-gutter) -
+        var(--agent-telemetry-height)
+    );
+    --agent-telemetry-width: min(
+      388px,
+      calc(
+        var(--agent-frame-width) - var(--agent-stage-toggle-width) -
+          var(--agent-overlay-inset)
+      )
+    );
+  }
+
+  .agent-cockpit .overlay-stack-top-left {
+    top: var(--agent-dock-gutter);
+    right: auto;
+    bottom: auto;
+    left: var(--agent-dock-gutter);
+    width: var(--agent-frame-width);
+    height: calc(
+      var(--agent-map-row-height) + var(--agent-overlay-inset) +
+        var(--agent-frame-height)
+    );
+    pointer-events: none;
+  }
+
+  .agent-cockpit .cam-strip {
+    --pip-w: 92px;
+    --pip-h: 92px;
+    position: relative;
+    display: flex;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    justify-content: flex-end;
+    align-items: flex-start;
+    padding-top: var(--agent-overlay-inset);
+    padding-right: var(--agent-overlay-inset);
+    pointer-events: none;
+  }
+
+  .agent-cockpit .cam-strip .cam-tile {
+    pointer-events: auto;
+  }
+
+  .agent-cockpit .cam-tile-map {
+    position: absolute;
+    top: calc(var(--agent-frame-height) + var(--agent-overlay-inset));
+    right: 0;
+    left: 0;
+    width: 100%;
+    height: var(--agent-map-row-height);
+    grid-template-rows: minmax(0, 1fr) 25px;
+    border-radius: 14px;
+  }
+
+  .agent-cockpit .cam-tile-map.static {
+    cursor: default;
+  }
+
+  .agent-cockpit .cam-tile-map.static:hover {
+    z-index: auto;
+    filter: saturate(0.22);
+    border-color: rgb(255 255 255 / 28%);
+    transform: none;
+  }
+
+  .agent-cockpit .cam-tile-map.static:active {
+    transform: none;
+  }
+
+  .agent-cockpit .cam-tile-map.static:hover .cam-tile-label {
+    color: rgb(255 255 255 / 82%);
+    background: rgb(18 18 21 / 42%);
+  }
+
+  .agent-cockpit .cam-map-host.big {
+    top: var(--agent-dock-gutter);
+    right: auto;
+    bottom: auto;
+    left: var(--agent-dock-gutter);
+    width: var(--agent-frame-width);
+    height: auto;
+    aspect-ratio: 4 / 3;
+    border-radius: 18px;
+  }
+
+  .agent-cockpit .agent-telemetry-overlay {
+    inset: var(--agent-control-row-top) auto auto var(--agent-dock-gutter);
+  }
+
+  .agent-cockpit .agent-stage-view-toggle {
+    top: var(--agent-control-row-top);
+    right: var(--agent-frame-right);
+    bottom: auto;
+  }
+
+  .agent-cockpit .sim-debug-stack {
+    top: var(--agent-control-row-top) !important;
+    bottom: auto !important;
+    left: var(--agent-dock-gutter);
+  }
+
+  .agent-cockpit .agent-challenge-dock {
+    top: var(--agent-control-row-top);
+    bottom: auto;
+    left: calc(var(--agent-dock-gutter) + 56px + 10px);
+  }
+}
+
+@media (max-width: 1000px) {
   .agent-width-guard {
     position: fixed;
     z-index: 1000;

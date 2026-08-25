@@ -39,7 +39,8 @@ const config = await getConfig();
 // WebRTC for real robots, the Three.js SimSession in simulation (see
 // robotSession.js).
 const { createSession, createStage } = await robotSessionFactory();
-const MIN_AGENT_VIEW_WIDTH = 1281;
+const MIN_AGENT_VIEW_WIDTH = 1001;
+const STATIC_MAP_MEDIA = `(min-width: ${MIN_AGENT_VIEW_WIDTH}px) and (max-width: 1280px)`;
 
 /** @param {HTMLElement} stage */
 export function mount(stage) {
@@ -81,6 +82,7 @@ function buildAgentView(root) {
     // "top view" every visit rather than whatever was left selected last time.
     // Real robots have no orbit camera, so their saved choice is untouched.
     primaryOnMount: config.simControls ? "orbit" : undefined,
+    staticMapMedia: STATIC_MAP_MEDIA,
   });
   const telemetryOverlay = config.simControls ? null : document.createElement("div");
   if (telemetryOverlay) {
