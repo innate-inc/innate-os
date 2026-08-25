@@ -43,9 +43,6 @@ CAMERA_RAYS = 41
 HEADING_COUNT = 8
 MAX_VIEWPOINTS = 240
 MIN_NEW_CELLS = 6
-INITIAL_TRAVEL_COST_CELLS_PER_M = 12.0
-SWEEP_TRAVEL_COST_CELLS_PER_M = 1.0
-NOVELTY_BONUS_CELLS_PER_M = 10.0
 FRAME_TIMEOUT_S = 5.0
 PERSON_VIEW_HEAD_PITCH_DEG = 20.0
 HEAD_POSITION_TOLERANCE_DEG = 2.0
@@ -378,16 +375,6 @@ def _too_close_to_unreachable(x: float, y: float, unreachable: list[dict]) -> bo
     return False
 
 
-def _distance_from_observations(x: float, y: float, observations: list[dict]) -> float:
-    distances: list[float] = []
-    for observation in observations:
-        try:
-            distances.append(math.hypot(x - float(observation["x"]), y - float(observation["y"])))
-        except (KeyError, TypeError, ValueError):
-            continue
-    return min(distances) if distances else 0.0
-
-
 def _standoff_target_was_observed(x: float, y: float, observations: list[dict]) -> bool:
     """Whether this requested position already produced a stopped-short view."""
     for observation in observations:
@@ -411,12 +398,12 @@ def _choose_view(
 ) -> tuple[_View | None, set[int]]:
     covered = _covered_cells(plan, observations)
     route_distances = _grid_travel_distances(plan, pose)
-    travel_cost = SWEEP_TRAVEL_COST_CELLS_PER_M if observations else INITIAL_TRAVEL_COST_CELLS_PER_M
     sparse_viewpoints = _sample_viewpoints(plan)
     pose_row, pose_col = _world_to_cell(plan, pose.x, pose.y)
 
     def score_candidates(candidates: list[tuple[int, int]]) -> _View | None:
         best: _View | None = None
+        best_key: tuple[float, int, float, int, int, int] | None = None
         for index, (row, col) in enumerate(candidates):
             if cancellation_check is not None and index % 12 == 0:
                 cancellation_check()
@@ -447,19 +434,24 @@ def _choose_view(
                 gain = len(visible.difference(covered))
                 if gain < MIN_NEW_CELLS:
                     continue
-                # The first observation stays local. Once the search has evidence,
-                # spread stops across unseen wings instead of exhaustively sweeping
-                # one room before visiting the rest of the home.
-                novelty = _distance_from_observations(evaluation_x, evaluation_y, observations)
-                score = (
-                    gain
-                    - travel_cost * evaluation_distance
-                    + NOVELTY_BONUS_CELLS_PER_M * novelty
-                    - 0.5 * _angular_distance(theta, pose.theta)
+                angular_distance = _angular_distance(theta, pose.theta)
+                # Sweep locally before crossing the map. Route distance is the
+                # primary key so walls and corridors count; among equally near
+                # viewpoints prefer more unseen floor, then less turning. The
+                # row/column/heading suffix keeps the choice deterministic.
+                key = (
+                    round(evaluation_distance, 6),
+                    -gain,
+                    round(angular_distance, 6),
+                    row,
+                    col,
+                    heading_index,
                 )
+                score = gain - evaluation_distance - 0.5 * angular_distance
                 view = _View(row, col, x, y, theta, visible, gain, score)
-                if best is None or view.score > best.score:
+                if best_key is None or key < best_key:
                     best = view
+                    best_key = key
         return best
 
     best = score_candidates(sparse_viewpoints)
@@ -1105,6 +1097,18 @@ class FindNextPerson(Skill):
         )
 
     def execute(self, reset: bool = False, visualize: bool = False) -> SkillReturn:
+        timing_started = time.monotonic()
+        timing_last = timing_started
+
+        def mark_timing(phase: str) -> None:
+            nonlocal timing_last
+            now = time.monotonic()
+            self.logger.info(
+                f"[SkillPhaseTiming] skill=find_next_person phase={phase} "
+                f"duration_ms={(now - timing_last) * 1000.0:.1f} total_ms={(now - timing_started) * 1000.0:.1f}"
+            )
+            timing_last = now
+
         if reset:
             run_id = active_run_id()
             if run_id is None:
@@ -1126,9 +1130,11 @@ class FindNextPerson(Skill):
                 "Mission coverage reset",
                 "The map will appear when find_next_person selects its first viewpoint.",
             )
+            mark_timing("reset")
             return _result("SEARCH_RESET")
 
         map_state = self.wait_for(lambda: self.map, timeout=FRAME_TIMEOUT_S)
+        mark_timing("map_wait")
         if map_state is None or map_state.grid is None:
             self._preserve_visualization(
                 "map unavailable",
@@ -1137,6 +1143,7 @@ class FindNextPerson(Skill):
             )
             return _result("MAP_UNAVAILABLE", {"reason": "no_readable_map"})
         pose = self.wait_for(lambda: self.pose, timeout=FRAME_TIMEOUT_S)
+        mark_timing("pose_wait")
         if pose is None:
             self._preserve_visualization(
                 "pose unavailable",
@@ -1146,6 +1153,7 @@ class FindNextPerson(Skill):
             return _result("POSE_UNAVAILABLE", {"reason": "no_localized_pose"})
         cells = map_state.grid
         plan = _build_planning_grid(map_state, pose)
+        mark_timing("planning_grid")
         if plan is None:
             self._preserve_visualization(
                 "map unusable",
@@ -1219,6 +1227,7 @@ class FindNextPerson(Skill):
             return _result("MAP_UNAVAILABLE", {"reason": "no_safe_reachable_viewpoint"})
 
         if self.wait_for(lambda: self.image, timeout=FRAME_TIMEOUT_S) is None:
+            mark_timing("camera_wait")
             self._refresh_visualization(
                 plan,
                 state,
@@ -1227,6 +1236,7 @@ class FindNextPerson(Skill):
                 status="camera unavailable; coverage unchanged",
             )
             return _result("CAMERA_UNAVAILABLE", {"phase": "before_navigation"})
+        mark_timing("camera_wait")
 
         try:
             view, covered = _choose_view(
@@ -1236,6 +1246,7 @@ class FindNextPerson(Skill):
                 _navigation_exclusions(state),
                 cancellation_check=self.check_cancelled,
             )
+            mark_timing("view_selection")
         except SkillCancelled:
             self._refresh_visualization(
                 plan,
@@ -1260,6 +1271,7 @@ class FindNextPerson(Skill):
             )
 
         self._refresh_visualization(plan, state, covered, pose, status="navigating to next viewpoint", target=view)
+        mark_timing("pre_navigation_visualization")
 
         def refresh_interrupted(status: str) -> None:
             current_pose = self.pose or pose
@@ -1382,6 +1394,8 @@ class FindNextPerson(Skill):
                 "SEARCH_INFRASTRUCTURE_FAILURE",
                 {"component": "navigation", "reason": str(error)},
             )
+        finally:
+            mark_timing("navigation")
 
         if _clear_navigation_failure(state, view):
             self.storage["state"] = state
@@ -1398,6 +1412,7 @@ class FindNextPerson(Skill):
         except SkillCancelled:
             refresh_interrupted("interrupted while raising the camera")
             raise
+        mark_timing("head_and_camera")
         if fresh_frame is None:
             self._refresh_visualization(
                 plan,
@@ -1423,6 +1438,7 @@ class FindNextPerson(Skill):
                 ),
                 timeout=FRAME_TIMEOUT_S,
             )
+            mark_timing("pose_verification")
         except SkillCancelled:
             refresh_interrupted("interrupted while verifying the observation pose")
             raise
@@ -1459,6 +1475,7 @@ class FindNextPerson(Skill):
             observed_pose,
             status=f"observation {len(state['observations'])} committed",
         )
+        mark_timing("result_visualization")
         return _result(
             "SEARCH_OBSERVATION",
             {

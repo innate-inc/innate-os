@@ -2740,7 +2740,44 @@ def test_apartment_route_cost_exposes_the_long_path_hidden_by_euclidean_distance
     assert route_distance > direct_distance * 3.0
 
 
-def test_apartment_search_spreads_to_the_unobserved_wing_after_two_stops(monkeypatch):
+def test_search_prefers_nearby_route_over_distant_gain(monkeypatch):
+    traversable = np.ones((1, 10), dtype=bool)
+    plan = search_module._PlanningGrid(
+        resolution=1.0,
+        origin_x=0.0,
+        origin_y=0.0,
+        origin_theta=0.0,
+        traversable=traversable,
+        blocked=~traversable,
+        safe=traversable,
+        reachable=traversable,
+        navigable=traversable,
+    )
+    near = (0, 2)
+    far = (0, 8)
+    monkeypatch.setattr(search_module, "_sample_viewpoints", lambda _plan: [far, near])
+
+    def visible(_plan, row, col, _theta):
+        if (row, col) == near:
+            return frozenset(range(10, 20))
+        if (row, col) == far:
+            return frozenset(range(100, 200))
+        return frozenset()
+
+    monkeypatch.setattr(search_module, "_visible_cells", visible)
+
+    view, _covered = search_module._choose_view(
+        plan,
+        Pose(0.5, 0.5, 0.0),
+        [{"x": 0.5, "y": 0.5, "theta": 0.0}],
+        [],
+    )
+
+    assert view is not None
+    assert (view.row, view.col) == near
+
+
+def test_apartment_search_continues_locally_after_two_stops():
     map_state = _apartment_map_state()
     pose = Pose(-1.93, 2.71, math.radians(-8.0))
     observations = [
@@ -2752,14 +2789,8 @@ def test_apartment_search_spreads_to_the_unobserved_wing_after_two_stops(monkeyp
     assert plan is not None
     view, _covered = search_module._choose_view(plan, pose, observations, [])
     assert view is not None
-    assert view.x == pytest.approx(-0.2134, abs=0.001)
-    assert view.y == pytest.approx(-2.7856, abs=0.001)
-    assert math.degrees(view.theta) == pytest.approx(180.0)
-
-    monkeypatch.setattr(search_module, "NOVELTY_BONUS_CELLS_PER_M", 9.0)
-    underweighted_view, _covered = search_module._choose_view(plan, pose, observations, [])
-    assert underweighted_view is not None
-    assert (underweighted_view.x, underweighted_view.y) != pytest.approx((view.x, view.y))
+    route_distance = search_module._grid_travel_distances(plan, pose)[view.row, view.col]
+    assert route_distance <= 1.0
 
 
 def test_visualize_saves_map_without_camera_or_safe_viewpoint(tmp_path, monkeypatch):
