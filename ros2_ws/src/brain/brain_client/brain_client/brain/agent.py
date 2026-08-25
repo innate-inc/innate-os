@@ -109,8 +109,7 @@ class BrainAgent:
         self._lidar = ScanHealthReporter(
             scan_health, pose_tracker, chat, self._logger, enabled=not config.simulator_mode
         )
-        # Boot tolerates a bad zone (warn + host local); a Settings write does
-        # not — set_timezone rejects it so the operator sees the typo.
+        # Boot tolerates a bad zone; set_timezone rejects one, so a Settings typo surfaces.
         self._timezone = resolve_timezone(config.timezone)
         if config.timezone.strip() and self._timezone is None:
             self._logger.warn(f"[Brain] Unknown timezone '{config.timezone}' — using the host's local zone")

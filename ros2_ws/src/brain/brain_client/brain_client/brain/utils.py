@@ -59,19 +59,14 @@ class TraceEvent(StrEnum):
     SNAPSHOT = "snapshot"
 
 
-# An unsynced clock (no RTC battery, no network yet at boot) reads 1970, and a
-# confidently wrong time misleads the agent worse than no time at all.
+# Cold boot before NTP, on a robot whose RTC lost the time: the clock reads 1970.
 _CLOCK_VALID_FROM_YEAR = 2025
+_CLOCK_UNSET = "time not known"
 
 
 def resolve_timezone(name: str) -> tzinfo | None:
-    """A named IANA zone, or None for the system's local zone.
-
-    An unknown name or missing tzdata falls back to local — a misconfigured
-    zone must not take the brain down with it. Local stays None rather than
-    resolving to a tzinfo here: a snapshot of the host's current offset would
-    freeze the brain on one side of a DST change.
-    """
+    """An IANA zone by name, or None for the host's own — left unresolved so a
+    DST change is picked up rather than frozen at boot."""
     if not name.strip():
         return None
     try:
@@ -81,14 +76,10 @@ def resolve_timezone(name: str) -> tzinfo | None:
 
 
 def clock_text(now: datetime) -> str:
-    """The wall clock as the status line shows it, or "" when it can't be trusted.
-
-    Minute precision: at a 3 s turn interval, seconds are noise that reads as
-    something to act on. The zone abbreviation is what makes a robot left on
-    UTC visible in the transcript instead of silently wrong.
-    """
+    """The wall clock for the status line, or a marker the agent can act on:
+    a confidently wrong time misleads it worse than a stated unknown does."""
     if now.year < _CLOCK_VALID_FROM_YEAR:
-        return ""
+        return _CLOCK_UNSET
     return f"{now:%a %Y-%m-%d %H:%M %Z}".strip()
 
 
@@ -104,8 +95,7 @@ def observation_text(
     has_wrist_frame: bool,
 ) -> str:
     """The text half of a turn input: robot status, guidance, and new events."""
-    clock = clock_text(now)
-    status = f"[{clock} | t+{uptime_s}s]" if clock else f"[t+{uptime_s}s]"
+    status = f"[{clock_text(now)} | t+{uptime_s}s]"
     if pose is not None:
         status += f" pose: x={pose[0]:.2f}m y={pose[1]:.2f}m heading={math.degrees(pose[2]):.0f}°"
     if battery is not None:
