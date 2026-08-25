@@ -610,10 +610,9 @@ class MicroInput(InputDevice):
                     card_id = match.group(2)
                     card_name = match.group(3)
                     device_num = match.group(4)
-                    # sysdefault, not plughw: it goes through dsnoop, so the teleop WebRTC stream can open
-                    # the same mic at the same time. plughw takes the card exclusively and locks teleop out.
-                    # sysdefault only addresses the card's device 0; the rare card capturing on another
-                    # device keeps the exact (exclusive) address rather than failing to open at all.
+                    # sysdefault goes through dsnoop, so the teleop WebRTC stream can open the same mic
+                    # concurrently (plughw is exclusive and would lock it out) — but it only addresses
+                    # device 0, so a card capturing on another device keeps its exact, exclusive address.
                     device_id = f"sysdefault:CARD={card_id}" if device_num == "0" else f"plughw:{card_num},{device_num}"
                     devices.append({"card": card_num, "device": device_num, "name": card_name, "id": device_id})
         except Exception:

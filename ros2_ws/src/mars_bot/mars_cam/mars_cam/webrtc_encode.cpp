@@ -390,9 +390,8 @@ void WebRTCStreamer::reconcile_audio() {
         return;
     }
     if (want) {
-        // A mic that cannot open (unplugged, or held exclusively by another process) fails on every poll,
-        // so back the retry off — at 5 Hz it buries the log under its own GStreamer errors for as long as
-        // the operator leaves the toggle on.
+        // A mic that cannot open fails identically on every poll; without the backoff the 5 Hz retry
+        // buries the log under its own GStreamer errors for as long as the toggle stays on.
         const int64_t now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
         if (now_ns < mic_retry_ns_) {
             return;
