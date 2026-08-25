@@ -151,6 +151,21 @@ class InputDeviceManager:
             return False, f"Failed to {'activate' if active else 'deactivate'} inputs: {', '.join(failed)}"
         return True, f"All inputs {'activated' if active else 'deactivated'}"
 
+    def reopen(self, name: str = MIC_DEVICE_NAME) -> bool:
+        """Close and reopen one device so it picks up changed settings.
+
+        Devices read their configuration in ``on_open`` — the microphone reads
+        the STT backend and the VAD knobs there — so a settings write reaches
+        them only through a close/open cycle. A device that is not open has
+        nothing to re-read; it takes the new values whenever it next opens.
+        """
+        device = self.input_devices.get(name)
+        if device is None or not device.is_active():
+            return False
+        self._logger.info(f"🔄 Reopening input device '{name}' to apply new settings")
+        self._apply(name, device, False)
+        return self._apply(name, device, True)
+
     def set_mic_enabled(self, enabled: bool) -> None:
         """Apply the robot-level microphone toggle."""
         if enabled != self._mic_enabled:

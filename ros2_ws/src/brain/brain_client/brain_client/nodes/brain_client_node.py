@@ -150,12 +150,18 @@ class BrainClientNode(Node):
     def _on_parameter_change(self, params: list[Parameter]) -> SetParametersResult:
         """Apply the parameters that take effect without a restart.
 
-        Only the TTS voice and the agent's timezone do: every other field was copied
-        into a collaborator at construction, so accepting a write would leave the robot
-        running the old value. Those are stored for the next boot, which is what the
-        Settings page's `live` flag says about them.
+        Only the TTS voice, the agent's timezone and the Gemini model do: every other
+        field was copied into a collaborator at construction, so accepting a write
+        would leave the robot running the old value. Those are stored for the next
+        boot, which is what the Settings page's `live` flag says about them.
         """
         for param in params:
+            if param.name == "gemini_model":
+                if self.brain.set_model(str(param.value)):
+                    continue
+                return SetParametersResult(
+                    successful=False, reason="the brain has no Gemini transport, or the model name was empty"
+                )
             if param.name == "timezone":
                 if self.brain.set_timezone(str(param.value)):
                     continue

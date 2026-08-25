@@ -11,6 +11,7 @@ device loading, data routing, and activation. No device logic lives here.
 from __future__ import annotations
 
 import rclpy
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
 from std_msgs.msg import Bool, String
@@ -28,14 +29,22 @@ class InputManagerNode(Node):
         self.logger = UniversalLogger(enabled=True, wrapped_logger=self.get_logger())
         self.logger.info("🔌 Starting Input Manager Node...")
 
-        proxy = self._init_proxy()
+        self._proxy = self._init_proxy()
 
         self.chat_in_pub = self.create_publisher(String, "/brain/chat_in", 10)
         self.custom_pub = self.create_publisher(String, "/input_manager/custom", 10)
         self.telemetry_pub = self.create_publisher(String, "/input_manager/telemetry", 10)
         self.manager = InputDeviceManager(
-            self, proxy, chat_in_pub=self.chat_in_pub, custom_pub=self.custom_pub, telemetry_pub=self.telemetry_pub
+            self,
+            self._proxy,
+            chat_in_pub=self.chat_in_pub,
+            custom_pub=self.custom_pub,
+            telemetry_pub=self.telemetry_pub,
         )
+
+        # Registered only once the manager exists — a live write reaches it at once.
+        self._reopen_timer: object | None = None
+        self.add_on_set_parameters_callback(self._on_parameter_change)
 
         self.create_subscription(String, "/input_manager/active_inputs", self._on_active_inputs, 10)
         self.create_subscription(String, "/tts/is_playing", self._on_tts_status, 10)
@@ -98,6 +107,38 @@ class InputManagerNode(Node):
             # devices that can run on a direct key (Gemini) need them.
             self.logger.warning("⚠️ Proxy not configured - only direct-key backends will work")
         return proxy
+
+    def _on_parameter_change(self, params) -> SetParametersResult:
+        """Apply STT settings live by re-opening the microphone.
+
+        ProxyClient keeps the config dict this node handed it, so writing into
+        it is what every device sees on its next open; the reopen is what makes
+        that "now" instead of "next time the agent starts".
+        """
+        if self._proxy is None:
+            return SetParametersResult(successful=True)
+        touched = [p.name for p in params if p.name.startswith("stt_")]
+        for param in params:
+            if param.name in self._proxy.config:
+                self._proxy.config[param.name] = param.value
+        if touched:
+            self.logger.info(f"⚙️ STT settings changed ({', '.join(touched)})")
+            self._schedule_reopen()
+        return SetParametersResult(successful=True)
+
+    def _schedule_reopen(self) -> None:
+        """Reopen off the parameter callback: opening a realtime backend dials a
+        WebSocket, and blocking here would hold up the set_parameters reply on
+        this single-threaded executor. Also debounces a multi-knob write."""
+        if self._reopen_timer is not None:
+            self.destroy_timer(self._reopen_timer)
+        self._reopen_timer = self.create_timer(0.1, self._reopen_now)
+
+    def _reopen_now(self) -> None:
+        if self._reopen_timer is not None:
+            self.destroy_timer(self._reopen_timer)
+            self._reopen_timer = None
+        self.manager.reopen()
 
     def _on_active_inputs(self, msg: String) -> None:
         self.manager.handle_active_inputs(msg.data)

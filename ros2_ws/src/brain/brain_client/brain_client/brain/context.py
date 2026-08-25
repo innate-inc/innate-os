@@ -65,6 +65,17 @@ class GeminiContext:
         # as read-only — it shares structure with the live history.
         self.on_request: Callable[[dict], None] | None = None
 
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @model.setter
+    def model(self, name: str) -> None:
+        """Swap the model between turns. It is read per request, so the next
+        generate uses it and the history carries over untouched — which is what
+        makes an A/B over one conversation meaningful."""
+        self._model = name
+
     def clear(self) -> None:
         self._history = []
         self._latest_only_turn = None
