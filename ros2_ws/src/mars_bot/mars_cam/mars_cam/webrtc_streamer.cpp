@@ -84,6 +84,13 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
     this->declare_parameter("enable_audio", true);
     this->declare_parameter("audio_source_element", "alsasrc");
     this->declare_parameter("audio_capture_device", "");
+    // Talkback: the operator's mic, received on the same m-line the robot's mic is sent on, played out the
+    // robot's speaker. The ALSA default is dmix (config/alsa/asound.conf), so this shares the device with
+    // the brain's TTS aplay instead of fighting it for exclusive access.
+    this->declare_parameter("enable_talkback", true);
+    this->declare_parameter("audio_sink_element", "alsasink");
+    this->declare_parameter("audio_playback_device", "");
+    this->declare_parameter("talkback_volume", 1.0);
     this->declare_parameter("playout_min_delay_ms", 0);
     this->declare_parameter("playout_max_delay_ms", 40);
     this->declare_parameter("enable_local_stun", true);
@@ -98,6 +105,10 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
     enable_audio_ = this->get_parameter("enable_audio").as_bool();
     audio_source_element_ = this->get_parameter("audio_source_element").as_string();
     audio_capture_device_ = this->get_parameter("audio_capture_device").as_string();
+    enable_talkback_ = this->get_parameter("enable_talkback").as_bool();
+    audio_sink_element_ = this->get_parameter("audio_sink_element").as_string();
+    audio_playback_device_ = this->get_parameter("audio_playback_device").as_string();
+    talkback_volume_ = this->get_parameter("talkback_volume").as_double();
     playout_min_delay_ms_ = static_cast<guint>(this->get_parameter("playout_min_delay_ms").as_int());
     playout_max_delay_ms_ = static_cast<guint>(this->get_parameter("playout_max_delay_ms").as_int());
     enable_local_stun_ = this->get_parameter("enable_local_stun").as_bool();
@@ -127,6 +138,7 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
     offer_id_pub_ = this->create_publisher<std_msgs::msg::String>("/webrtc/offer_id", 10);
     ice_out_id_pub_ = this->create_publisher<std_msgs::msg::String>("/webrtc/ice_out_id", 10);
     active_streams_pub_ = this->create_publisher<std_msgs::msg::String>("/webrtc/active_streams", 10);
+    talkback_status_pub_ = this->create_publisher<std_msgs::msg::String>("/talkback/is_playing", 10);
 
     start_sub_ = this->create_subscription<std_msgs::msg::String>(
         "/webrtc/start", 10, std::bind(&WebRTCStreamer::on_start, this, std::placeholders::_1));
@@ -149,6 +161,28 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
         RCLCPP_WARN(this->get_logger(), "Audio pipeline build failed; continuing video-only");
         enable_audio_ = false;
     }
+    if (enable_talkback_ && talk_branch_description().empty()) {
+        RCLCPP_ERROR(this->get_logger(), "audio_sink_element/audio_playback_device rejected; talkback disabled");
+        enable_talkback_ = false;
+    }
+    // The branch is only built when a peer's mic arrives, so check the speaker element up front rather
+    // than failing per-peer inside a GStreamer callback.
+    if (enable_talkback_) {
+        GstElementFactory* sink = gst_element_factory_find(audio_sink_element_.c_str());
+        if (!sink) {
+            RCLCPP_WARN(this->get_logger(), "No '%s' element on this system; talkback disabled",
+                        audio_sink_element_.c_str());
+            enable_talkback_ = false;
+        } else {
+            gst_object_unref(sink);
+        }
+    }
+    // Talkback is the RECEIVE half of the audio m-line, and that m-line exists only because the mic is
+    // sending on it — no mic, no talkback. Lifting that would mean an add-transceiver(RECVONLY) m-line.
+    if (enable_talkback_ && !enable_audio_) {
+        RCLCPP_WARN(this->get_logger(), "No audio m-line (mic unavailable); talkback disabled");
+        enable_talkback_ = false;
+    }
     start_local_stun_server();
 
     health_timer_ =
@@ -159,6 +193,8 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
     RCLCPP_INFO(this->get_logger(), "WebRTC Streamer ready (%zu cameras, source: %s, compressed: %s)", cameras_.size(),
                 current_source_.c_str(), use_compressed_images_ ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "  Mic audio: %s", enable_audio_ ? "enabled (opt-in per peer)" : "disabled");
+    RCLCPP_INFO(this->get_logger(), "  Talkback: %s",
+                enable_talkback_ ? "enabled (push-to-talk per peer)" : "disabled");
     RCLCPP_INFO(this->get_logger(), "  Local STUN: %s", enable_local_stun_ ? "enabled" : "disabled");
     RCLCPP_INFO(this->get_logger(), "  RTCP-inactivity teardown: %.1f s", rtcp_inactivity_timeout_s_);
 }
@@ -520,6 +556,7 @@ void WebRTCStreamer::publish_status() {
             c["client_id"] = p->client_id;
             c["source"] = current_source_;
             c["audio"] = p->audio_active;
+            c["talk"] = p->talk_active;
             c["connection_state"] = conn;
             c["media_ready"] = p->media_ready->load(std::memory_order_relaxed);
             if (rtcp_age >= 0.0) {
@@ -539,6 +576,7 @@ void WebRTCStreamer::publish_status() {
     for (auto& cam : cameras_)
         cams.push_back(cam->name);
     root["cameras"] = cams;
+    root["talkback"] = talk_playing_;  // someone is audibly speaking through the robot right now
 
     std_msgs::msg::String msg;
     msg.data = root.dump();

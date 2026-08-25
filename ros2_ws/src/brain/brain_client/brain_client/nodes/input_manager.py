@@ -39,6 +39,9 @@ class InputManagerNode(Node):
 
         self.create_subscription(String, "/input_manager/active_inputs", self._on_active_inputs, 10)
         self.create_subscription(String, "/tts/is_playing", self._on_tts_status, 10)
+        # A teleop operator talking through the robot's speaker (mars_cam webrtc talkback) is a voice the
+        # robot is emitting, not one it is hearing — duck the mic for it exactly as for its own speech.
+        self.create_subscription(String, "/talkback/is_playing", self._on_talkback_status, 10)
         self.create_service(SetBool, "/input_manager/set_input_active", self._svc_set_input_active)
 
         mic_state_qos = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
@@ -103,7 +106,10 @@ class InputManagerNode(Node):
         self.manager.handle_active_inputs(msg.data)
 
     def _on_tts_status(self, msg: String) -> None:
-        self.manager.handle_tts_status(msg.data)
+        self.manager.handle_speaker_status("tts", msg.data)
+
+    def _on_talkback_status(self, msg: String) -> None:
+        self.manager.handle_speaker_status("talkback", msg.data)
 
     def _on_mic_enabled(self, msg: Bool) -> None:
         self.manager.set_mic_enabled(msg.data)

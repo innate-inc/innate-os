@@ -2421,6 +2421,16 @@ select.skill-input {
   color: var(--ctl-accent);
 }
 
+/* ---- teleop push-to-talk ------------------------------------------------- */
+
+/* The shared mic control carries its own glass circle, so it sits on the TTS
+   row like every other .overlay-tts child; its state label and hint float above
+   the bar from inside the control itself. */
+.talk-control {
+  display: flex;
+  align-items: center;
+}
+
 /* ---- leader arm panel -------------------------------------------------------- */
 
 .overlay-arm {

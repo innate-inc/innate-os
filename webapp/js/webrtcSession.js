@@ -13,6 +13,11 @@
 // operator opts in); video dispatched by transceiver mid with arrival-order
 // fallback; only the main camera is exposed (the arm camera is ignored in v1).
 //
+// Talkback rides the SAME audio m-line in reverse: the robot offers it sendrecv,
+// so we answer sendrecv and keep an empty sender until the operator holds talk,
+// then replaceTrack(mic) — no renegotiation, and no getUserMedia (so no mic
+// permission prompt) until the button is actually pressed.
+//
 // Self-heal: 30 s initial-handshake watchdog, ICE disconnected/failed
 // persisting 10 s → re-handshake, and a re-handshake whenever the rosbridge
 // link comes back. Audio config changes debounce 700 ms then rebuild the pc —
@@ -50,6 +55,17 @@ const OFFER_GUARD_RESET_MS = 1_000;
 // refreshing feel faster.
 const MAX_HANDSHAKE_ATTEMPTS = 3;
 
+// The robot never offered a channel our voice could travel on — distinct from a local mic failure, and
+// cleared (not overwritten) once a rebuilt peer does offer one.
+const NO_TALK_PATH = "This robot can't play your voice";
+
+/** @param {any} err @returns {string} */
+function describeMicError(err) {
+  if (err?.name === "NotAllowedError") return "Microphone permission denied";
+  if (err?.name === "NotFoundError") return "No microphone found";
+  return err?.message || "Microphone unavailable";
+}
+
 export class WebRtcSession {
   /** @type {import("./rosClient.js").RosClient} */ #ros;
   /** @type {RTCPeerConnection | null} */ #pc = null;
@@ -60,6 +76,9 @@ export class WebRtcSession {
     videoLive: [],
     audioStream: null,
     audioRequested: false,
+    talkRequested: false,
+    talkStream: null,
+    talkError: null,
     iceState: "new",
     stunFallback: false,
   };
@@ -68,6 +87,8 @@ export class WebRtcSession {
 
   #started = false;
   #builtWithAudio = false;
+  /** @type {MediaStream | null} */ #micStream = null;
+  /** @type {RTCRtpSender | null} */ #talkSender = null;
   #processingOffer = false;
   #remoteDescriptionSet = false;
   /** @type {RTCIceCandidateInit[]} */ #iceQueue = [];
@@ -150,9 +171,17 @@ export class WebRtcSession {
     this.#useFallbackStun = false;
     this.#closePc();
     this.#clearAudioDebounce();
+    this.#closeMic();
     // No mic stream once stopped (e.g. leaving the teleop page) — let TTS play.
     setMicAudioActive(false);
-    this.#patch({ status: "idle", videoStream: null, audioStream: null, iceState: "new", stunFallback: false });
+    this.#patch({
+      status: "idle",
+      videoStream: null,
+      audioStream: null,
+      talkRequested: false,
+      iceState: "new",
+      stunFallback: false,
+    });
   }
 
   destroy() {
@@ -179,14 +208,94 @@ export class WebRtcSession {
     setMicAudioActive(on);
     if (!this.#started || this.#ros.state !== "connected") return;
     if (this.#pc) {
-      this.#ros.publish(WEBRTC_START_TOPIC, {
-        data: JSON.stringify({ source: "live", audio: on, client_id: this.#clientId, video: this.#activeCams }),
-      });
+      this.#ros.publish(WEBRTC_START_TOPIC, this.#startPayload());
       console.log("[webrtc] audio toggle ->", on, "(no reconnect)");
     } else {
       // No live peer (map-only, all cameras off) — bring one up so the mic can flow.
       this.#handshake();
     }
+  }
+
+  /**
+   * Hold/release talkback: this browser's microphone plays out the robot's speaker, live. The audio
+   * m-line is already negotiated sendrecv, so this is a track swap plus a no-reneg START — the same
+   * instant path the camera and mic toggles take. Opening the mic is the only slow part, and it happens
+   * on the first press rather than on page load.
+   * @param {boolean} on
+   * @returns {Promise<void>}
+   */
+  async setTalk(on) {
+    if (this.#state.talkRequested === on) return;
+    if (on && !(await this.#openMic())) return; // the failure is already in state.talkError
+    this.#patch({ talkRequested: on });
+    this.#applyTalkTrack();
+    if (!this.#started || this.#ros.state !== "connected") return;
+    if (this.#pc) {
+      this.#ros.publish(WEBRTC_START_TOPIC, this.#startPayload());
+      console.log("[webrtc] talk ->", on, "(no reconnect)");
+    } else {
+      // Map-only view (no cameras, not listening) — bring a peer up so the voice has a path.
+      this.#handshake();
+    }
+  }
+
+  /**
+   * Open (once) and keep this session's microphone. Returns false when it can't be had — over plain
+   * http getUserMedia is simply absent, which is the common case on a LAN robot.
+   * @returns {Promise<boolean>}
+   */
+  async #openMic() {
+    if (this.#micStream) return true;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.#patch({ talkError: "Open the app over https to use the microphone" });
+      return false;
+    }
+    try {
+      this.#micStream = await navigator.mediaDevices.getUserMedia({
+        // Cancels what this browser is playing (the robot's mic, if the operator is also listening);
+        // the robot-side half-duplex duck is what handles the loop through its own speaker.
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      this.#patch({ talkStream: this.#micStream, talkError: null });
+      return true;
+    } catch (err) {
+      this.#patch({ talkError: describeMicError(err) });
+      return false;
+    }
+  }
+
+  /** Put the mic on the wire (or take it off) without renegotiating. */
+  #applyTalkTrack() {
+    const track = this.#micStream?.getAudioTracks()[0] ?? null;
+    if (track) track.enabled = this.#state.talkRequested;
+    // replaceTrack(null) stops the RTP; the sender (and the robot's playback branch) survive for the
+    // next press. void: a failure here means the pc died, which the watchdog already handles.
+    void this.#talkSender?.replaceTrack(this.#state.talkRequested ? track : null).catch(() => {});
+  }
+
+  #closeMic() {
+    for (const track of this.#micStream?.getTracks() ?? []) track.stop();
+    this.#micStream = null;
+    this.#talkSender = null;
+    this.#patch({ talkStream: null });
+  }
+
+  /**
+   * The robot's START payload. Cameras, mic and talkback all ride the same message, and every caller
+   * sends the CURRENT full state — the robot diffs it, so a partial payload would silently turn things off.
+   * @param {Record<string, unknown>} [over] fields that differ from current state
+   */
+  #startPayload(over = {}) {
+    return {
+      data: JSON.stringify({
+        source: "live",
+        client_id: this.#clientId,
+        video: this.#activeCams,
+        audio: this.#state.audioRequested,
+        talk: this.#state.talkRequested,
+        ...over,
+      }),
+    };
   }
 
   /**
@@ -209,9 +318,7 @@ export class WebRtcSession {
       this.#handshake();
       return;
     }
-    this.#ros.publish(WEBRTC_START_TOPIC, {
-      data: JSON.stringify({ source: "live", video: next, audio: this.#state.audioRequested, client_id: this.#clientId }),
-    });
+    this.#ros.publish(WEBRTC_START_TOPIC, this.#startPayload());
     console.log("[webrtc] active cameras ->", next.join("+"), "(no reconnect)");
   }
 
@@ -240,17 +347,15 @@ export class WebRtcSession {
   // ---- handshake ----------------------------------------------------------
 
   #handshake() {
-    // Map-only view: no cameras (and no mic) requested. Tear the peer down and stay idle — the robot
+    // Map-only view: no cameras, not listening, not talking. Tear the peer down and stay idle — the robot
     // releases its side on an empty START, and arming a watchdog for media that will never come would
     // just thrash. The map runs over rosbridge, so it's unaffected. (Mic-only still builds a peer below.)
-    if (this.#activeCams.length === 0 && !this.#state.audioRequested) {
+    if (this.#activeCams.length === 0 && !this.#state.audioRequested && !this.#state.talkRequested) {
       this.#closePc();
       this.#videoLive = [];
       this.#patch({ status: "idle", videoStream: null, ...this.#videoArrays() });
       if (this.#ros.state === "connected") {
-        this.#ros.publish(WEBRTC_START_TOPIC, {
-          data: JSON.stringify({ source: "live", video: [], audio: false, client_id: this.#clientId }),
-        });
+        this.#ros.publish(WEBRTC_START_TOPIC, this.#startPayload({ audio: false, talk: false }));
       }
       console.log("[webrtc] no streams requested — peer released (map-only)");
       return;
@@ -330,15 +435,7 @@ export class WebRtcSession {
     // Ask the robot to push just the selected camera. It still negotiates every camera's transceiver for
     // a client_id peer (so switching is reneg-free), but won't encode/send the others until we request
     // them — so we don't waste its bandwidth/CPU on cameras we're not viewing.
-    this.#ros.publish(WEBRTC_START_TOPIC, {
-      data: JSON.stringify({
-        source: "live",
-        audio: this.#state.audioRequested,
-        client_id: this.#clientId,
-        renegotiate: true,
-        video: this.#activeCams,
-      }),
-    });
+    this.#ros.publish(WEBRTC_START_TOPIC, this.#startPayload({ renegotiate: true }));
     console.log("[webrtc] handshake: START sent", { client_id: this.#clientId, audio: this.#builtWithAudio });
   }
 
@@ -446,6 +543,7 @@ export class WebRtcSession {
       await pc.setRemoteDescription({ type: "offer", sdp });
       if (this.#pc !== pc) return;
       this.#remoteDescriptionSet = true;
+      this.#claimTalkSender(pc);
       // Offer applied — past the lost-START window; now we're waiting on ICE
       // and media, which deserves a longer leash before we rebuild.
       this.#armWatchdog(MEDIA_TIMEOUT_MS);
@@ -477,6 +575,29 @@ export class WebRtcSession {
         this.#processingOffer = false;
       }, OFFER_GUARD_RESET_MS);
     }
+  }
+
+  /**
+   * The robot offers audio sendrecv; a transceiver built from a remote offer defaults to recvonly, so
+   * without this the answer gives away the send half and talkback would need a renegotiation to get it
+   * back. Claiming it costs nothing when the operator never talks: a sendrecv m-line with no track sends
+   * no RTP at all.
+   * @param {RTCPeerConnection} pc
+   */
+  #claimTalkSender(pc) {
+    const audio = pc.getTransceivers().find((t) => t.receiver?.track?.kind === "audio");
+    try {
+      if (!audio) throw new Error("no audio m-line");
+      audio.direction = "sendrecv";
+      this.#talkSender = audio.sender;
+    } catch {
+      // No audio m-line at all (a robot with no mic negotiates none), or one we can't send on. Say so
+      // rather than letting the operator hold a button that broadcasts nothing.
+      this.#patch({ talkError: NO_TALK_PATH });
+      return;
+    }
+    if (this.#state.talkError === NO_TALK_PATH) this.#patch({ talkError: null });
+    this.#applyTalkTrack(); // a rebuild mid-sentence puts the mic straight back on the new peer
   }
 
   /** @param {any} payload /webrtc/ice_out_id message: std_msgs/String whose data is {client_id, candidate, ...} */
@@ -581,6 +702,7 @@ export class WebRtcSession {
     this.#remoteDescriptionSet = false;
     this.#iceQueue = [];
     this.#videoTrackCount = 0;
+    this.#talkSender = null; // belongs to the pc; the mic stream survives for the next one
     const pc = this.#pc;
     this.#pc = null;
     if (pc) {

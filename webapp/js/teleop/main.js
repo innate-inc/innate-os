@@ -6,9 +6,10 @@
 //
 // Disconnected: one quiet connect card. Connected: the video is the room —
 // full-bleed stage with glass overlays (telemetry top-left, head tilt and
-// mic toggle on the right edge, WASD chips bottom-left, joystick + TTS
-// bottom-center). On reconnecting we keep the cockpit (frozen video, badge
-// pulses); only an intentional disconnect or failed connect shows the card.
+// mic toggle on the right edge, WASD chips bottom-left, joystick + speak bar
+// + hold-to-talk bottom-center). On reconnecting we keep the cockpit (frozen
+// video, badge pulses); only an intentional disconnect or failed connect
+// shows the card.
 
 import { ros } from "../rosClient.js";
 import { drive } from "../driveController.js";
@@ -22,6 +23,7 @@ import { createKeyboardDrive, createWasdChips } from "./keyboardDrive.js";
 import { createHeadTilt } from "./headTilt.js";
 import { createSpeedModes } from "./speedModes.js";
 import { createTtsBar } from "./ttsBar.js";
+import { createTalkControl } from "./talkControl.js";
 import { createTelemetry } from "./telemetry.js";
 import { createArmPanel } from "./armPanel.js";
 import { createProfilingPanel } from "./profilingPanel.js";
@@ -90,6 +92,9 @@ function buildCockpit(root) {
     createWasdChips(chipsOverlay, keyboard),
     createJoystick(stickOverlay, drive),
     createTtsBar(ttsOverlay, ros),
+    // Speaking, both ways: type it, or hold to send your own voice. Skipped in
+    // the sim for the same reason as the mic toggle — nothing there to play it.
+    ...(config.simControls ? [] : [createTalkControl(ttsOverlay, session)]),
     // Collapsible skill launcher pinned next to the speak bar.
     createSkillsMenu(ttsOverlay, ros),
     createArmPanel(armOverlay, ros, { hideServices: !!config.simControls }),

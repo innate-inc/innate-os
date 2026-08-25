@@ -88,6 +88,7 @@ const char* peer_label(const std::string& client_id) {
 void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg) {
     std::string source = "live";
     bool request_audio = false;
+    bool request_talk = false;
     std::string client_id;
     std::vector<std::string> videos;
     bool video_specified = false;
@@ -125,6 +126,13 @@ void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg) {
         }
         request_audio = json["audio"].get<bool>();
     }
+    if (json.contains("talk")) {
+        if (!json["talk"].is_boolean()) {
+            RCLCPP_WARN(this->get_logger(), "Ignoring START for '%s': talk must be boolean", client_id.c_str());
+            return;
+        }
+        request_talk = json["talk"].get<bool>();
+    }
     if (json.contains("renegotiate")) {
         if (!json["renegotiate"].is_boolean()) {
             RCLCPP_WARN(this->get_logger(), "Ignoring START for '%s': renegotiate must be boolean", client_id.c_str());
@@ -161,9 +169,9 @@ void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg) {
     for (const auto& v : videos) {
         video_list += (video_list.empty() ? "" : "+") + v;
     }
-    RCLCPP_INFO(this->get_logger(), "START '%s' (source=%s, video=[%s], audio=%s, renegotiate=%s)", client_id.c_str(),
-                source.c_str(), video_list.c_str(), request_audio ? "requested" : "off",
-                renegotiate ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "START '%s' (source=%s, video=[%s], audio=%s, talk=%s, renegotiate=%s)",
+                client_id.c_str(), source.c_str(), video_list.c_str(), request_audio ? "requested" : "off",
+                request_talk ? "requested" : "off", renegotiate ? "true" : "false");
 
     std::lock_guard<std::mutex> lock(peers_mutex_);
 
@@ -176,10 +184,13 @@ void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg) {
     }
 
     const bool audio_active = enable_audio_ && request_audio;
+    const bool talk_active = enable_talkback_ && request_talk;
     // Peers negotiate the audio m-line up front (if a mic exists) so toggling is reneg-free, like cameras.
     const bool negotiate_audio = enable_audio_;
 
-    if (videos.empty() && !audio_active) {
+    // A talk-only peer (cameras off, not listening) still needs its transport — releasing it here would
+    // cut the operator off mid-sentence.
+    if (videos.empty() && !audio_active && !talk_active) {
         RCLCPP_INFO(this->get_logger(), "START requested no streams; releasing peer");
         destroy_peer(client_id);
         return;
@@ -190,7 +201,7 @@ void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg) {
     if (!renegotiate) {
         auto it = peers_.find(client_id);
         if (it != peers_.end() && it->second->with_audio == negotiate_audio) {
-            update_peer_active(it->second.get(), videos, audio_active);
+            update_peer_active(it->second.get(), videos, audio_active, talk_active);
             return;
         }
     }
@@ -200,7 +211,7 @@ void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg) {
     std::vector<std::string> all_cams;
     for (auto& cam : cameras_)
         all_cams.push_back(cam->name);
-    if (!create_peer_transport(client_id, all_cams, videos, negotiate_audio, audio_active)) {
+    if (!create_peer_transport(client_id, all_cams, videos, negotiate_audio, audio_active, talk_active)) {
         RCLCPP_ERROR(this->get_logger(), "Failed to start transport for peer");
     }
 }
