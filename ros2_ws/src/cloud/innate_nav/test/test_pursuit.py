@@ -12,7 +12,15 @@ import math
 import numpy as np
 import pytest
 from innate_nav.policy_client import Pose
-from innate_nav.pursuit import BlockedDetector, PursuitCfg, reanchor, recovery_turn, steering_target, velocity
+from innate_nav.pursuit import (
+    BlockedDetector,
+    PursuitCfg,
+    rate_limit,
+    reanchor,
+    recovery_turn,
+    steering_target,
+    velocity,
+)
 
 # --- re-anchoring ------------------------------------------------------------
 
@@ -120,3 +128,22 @@ def test_blocked_detector_stays_quiet_when_no_motion_was_commanded():
         assert not det.update(i * 0.1, 0.0, Pose(0.0, 0.0, 0.0))
 
 
+def test_a_command_never_moves_faster_than_its_acceleration_budget():
+    """The tracker recomputes speed from scratch each tick, so a new plan can
+    ask for a step change. Nothing downstream of /cmd_vel_nav smooths it."""
+    cfg, dt = PursuitCfg(), 1 / 50
+    for start, target in ((0.0, cfg.v_max), (cfg.v_max, 0.0), (0.4, -0.4)):
+        v = start
+        for _ in range(200):
+            nxt = rate_limit(v, target, cfg.a_lin, cfg.d_lin, dt)
+            assert abs(nxt - v) <= max(cfg.a_lin, cfg.d_lin) * dt + 1e-12
+            v = nxt
+        assert v == pytest.approx(target)
+
+
+def test_braking_gets_the_larger_budget_and_a_stalled_clock_moves_nothing():
+    cfg, dt = PursuitCfg(), 1 / 50
+    up = rate_limit(0.0, 0.4, cfg.a_lin, cfg.d_lin, dt)
+    down = 0.4 - rate_limit(0.4, 0.0, cfg.a_lin, cfg.d_lin, dt)
+    assert down > up
+    assert rate_limit(0.2, 0.4, cfg.a_lin, cfg.d_lin, 0.0) == 0.2

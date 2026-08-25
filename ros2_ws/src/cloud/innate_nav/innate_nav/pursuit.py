@@ -40,6 +40,16 @@ class PursuitCfg:
     # truncate_to puts the cut point ON the first blocked cell, so the worst
     # cost of the kept path was always ~INSCRIBED and v was always 0.
     min_speed_scale: float = 0.35
+    # Acceleration limits, m/s^2 and rad/s^2, magnitudes. No training
+    # counterpart -- the policy plans a path, not a velocity profile, and the
+    # simulator it learned in had a massless base. These are the same numbers
+    # Nav2's velocity_smoother imposes on this body when Nav2 drives it.
+    # Braking is allowed to be harsher than accelerating: a late stop is worse
+    # than a jerky one.
+    a_lin: float = 0.3
+    d_lin: float = 1.0
+    a_ang: float = 0.5
+    d_ang: float = 2.0
 
 
 def reanchor(waypoints_m: np.ndarray, capture: Pose, now: Pose) -> np.ndarray:
@@ -207,3 +217,19 @@ def recovery_turn(wp_m: np.ndarray, cfg: PursuitCfg = PursuitCfg()) -> float:
 
 def plan_waypoints(plan: Plan) -> np.ndarray:
     return np.asarray(plan.waypoints_m, dtype=np.float64).reshape(-1, 3)
+
+
+def rate_limit(prev: float, target: float, accel: float, decel: float,
+               dt: float) -> float:
+    """Step one velocity component toward its target within an acceleration
+    budget.
+
+    Growing in magnitude is acceleration; anything that shrinks it -- including
+    a sign reversal, whose far side is really acceleration the other way -- is
+    braking, and braking gets the larger budget.
+    """
+    if dt <= 0.0:
+        return prev
+    growing = abs(target) > abs(prev) and prev * target >= 0.0
+    step = (accel if growing else decel) * dt
+    return prev + max(-step, min(step, target - prev))

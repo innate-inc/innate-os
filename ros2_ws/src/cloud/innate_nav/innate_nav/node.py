@@ -61,6 +61,7 @@ from .pursuit import (
     avoid,
     odom_path_from,
     plan_waypoints,
+    rate_limit,
     reanchor,
     recovery_turn,
     speed_scale,
@@ -122,6 +123,13 @@ class InnateNavNode(Node):
         self.declare_parameter("token_budget", 3072)
         self.declare_parameter("max_linear_speed", PursuitCfg().v_max)
         self.declare_parameter("max_angular_speed", PursuitCfg().w_max)
+        # The policy publishes straight to /cmd_vel_nav, which is where Nav2's
+        # velocity_smoother writes -- so nothing downstream limits how fast
+        # these commands change. This is that limit.
+        self.declare_parameter("max_linear_accel", PursuitCfg().a_lin)
+        self.declare_parameter("max_linear_decel", PursuitCfg().d_lin)
+        self.declare_parameter("max_angular_accel", PursuitCfg().a_ang)
+        self.declare_parameter("max_angular_decel", PursuitCfg().d_ang)
         self.declare_parameter("publish_path", True)
         self.declare_parameter("use_costmap", True)
         self.declare_parameter("camera_info_topic", "/mars/main_camera/left/wide/camera_info")
@@ -133,6 +141,10 @@ class InnateNavNode(Node):
         self._cfg = PursuitCfg(
             v_max=float(self.get_parameter("max_linear_speed").value),
             w_max=float(self.get_parameter("max_angular_speed").value),
+            a_lin=float(self.get_parameter("max_linear_accel").value),
+            d_lin=float(self.get_parameter("max_linear_decel").value),
+            a_ang=float(self.get_parameter("max_angular_accel").value),
+            d_ang=float(self.get_parameter("max_angular_decel").value),
         )
 
         self._client: PolicyClient | None = None
@@ -148,6 +160,9 @@ class InnateNavNode(Node):
         self._recovering_until = 0.0
         self._recovery_w = 0.0
         self._last_seq = 0
+        self._cmd_v = 0.0
+        self._cmd_w = 0.0
+        self._cmd_at = 0.0
         self._frames_seen = 0
         self._frames_sent = 0
         self._last_sent_at = 0.0
@@ -290,7 +305,7 @@ class InnateNavNode(Node):
             return
 
         if plan.stop:
-            self._cmd.publish(_STOP)
+            self._halt()
             self._arrived.set()
             return
 
@@ -314,9 +329,7 @@ class InnateNavNode(Node):
             )
             v, w = 0.0, self._recovery_w
 
-        twist = Twist()
-        twist.linear.x, twist.angular.z = v, w
-        self._cmd.publish(twist)
+        self._drive(v, w)
 
         # One counter for "this plan is new", reset with the episode: a second
         # one carried across episodes and silently swallowed every operator
@@ -327,6 +340,33 @@ class InnateNavNode(Node):
             self._publish_observations(plan)
             if bool(self.get_parameter("publish_path").value):
                 self._publish_path(wp, pose)
+
+    def _drive(self, v: float, w: float) -> None:
+        """Every moving command goes out through here, ramped.
+
+        The tracker recomputes v and w from scratch each tick, so a new plan or
+        a recovery turn can ask for a step change the base answers with a lurch
+        -- and on a robot carrying an arm, a lurch is what puts the arm into a
+        doorframe. Measured dt rather than the nominal tick: a late tick has
+        genuinely had longer to accelerate, and pretending otherwise makes the
+        ramp lie about the speed the base is already at.
+        """
+        now = time.monotonic()
+        dt = min(now - self._cmd_at, 4.0 / CONTROL_HZ) if self._cmd_at else 1.0 / CONTROL_HZ
+        self._cmd_at = now
+        self._cmd_v = rate_limit(self._cmd_v, v, self._cfg.a_lin, self._cfg.d_lin, dt)
+        self._cmd_w = rate_limit(self._cmd_w, w, self._cfg.a_ang, self._cfg.d_ang, dt)
+        twist = Twist()
+        twist.linear.x, twist.angular.z = self._cmd_v, self._cmd_w
+        self._cmd.publish(twist)
+
+    def _halt(self) -> None:
+        """Stop now, unramped: a cancel, an abort or an arrival must not coast.
+        The ramp restarts from rest so the next run does not inherit a stale
+        speed the base is no longer moving at."""
+        self._cmd_v = self._cmd_w = 0.0
+        self._cmd_at = 0.0
+        self._cmd.publish(_STOP)
 
     def _track(self, wp_m, pose: Pose) -> tuple[float, float]:
         """Pure pursuit, clipped and nudged by the local costmap.
@@ -555,6 +595,9 @@ class InnateNavNode(Node):
         self._blocked.reset()
         self._recovering_until = 0.0
         self._last_seq = 0
+        self._cmd_v = 0.0
+        self._cmd_w = 0.0
+        self._cmd_at = 0.0
         self._frames_seen = 0
         self._frames_sent = 0
 
@@ -566,7 +609,7 @@ class InnateNavNode(Node):
                 token_budget=int(self.get_parameter("token_budget").value),
             )
         except Exception as exc:  # noqa: BLE001 -- server down is a goal failure
-            self._cmd.publish(_STOP)
+            self._halt()
             goal_handle.abort()
             return self._result(result, False, f"no policy server at {server}: {exc}")
 
@@ -583,17 +626,17 @@ class InnateNavNode(Node):
         try:
             while rclpy.ok() and goal_handle.is_active:
                 if goal_handle.is_cancel_requested or self._cancel_requested.is_set():
-                    self._cmd.publish(_STOP)
+                    self._halt()
                     goal_handle.canceled()
                     return self._result(result, False, "canceled")
                 if self._arrived.is_set():
-                    self._cmd.publish(_STOP)
+                    self._halt()
                     goal_handle.succeed()
                     return self._result(result, True, "arrived (waypoint collapse)")
 
                 plan = client.plan
                 if plan is None and time.monotonic() - opened > FIRST_PLAN_S:
-                    self._cmd.publish(_STOP)
+                    self._halt()
                     goal_handle.abort()
                     return self._result(result, False, self._stall_reason(server))
                 if plan is not None:
@@ -603,7 +646,7 @@ class InnateNavNode(Node):
                     goal_handle.publish_feedback(feedback)
                 time.sleep(0.1)
 
-            self._cmd.publish(_STOP)
+            self._halt()
             return self._result(result, False, "preempted")
         finally:
             # Only tear down if this goal still owns the client. A preempting
@@ -613,7 +656,7 @@ class InnateNavNode(Node):
             # being tracked, and the robot sits still until the goal times out.
             if self._client is client:
                 self._client = None
-                self._cmd.publish(_STOP)
+                self._halt()
                 self._clear_path()
             client.close()
 

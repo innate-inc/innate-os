@@ -16,6 +16,14 @@ innate_nav_node:
     token_budget: 3072
     max_linear_speed: 0.4
     max_angular_speed: 1.0
+    # How fast those speeds may change, m/s^2 and rad/s^2. The policy publishes
+    # to /cmd_vel_nav, which is Nav2's velocity_smoother OUTPUT, so nothing
+    # downstream smooths these commands -- unlike when Nav2 drives. Defaults
+    # match that smoother. Braking is deliberately harsher than accelerating.
+    max_linear_accel: 0.3
+    max_linear_decel: 1.0
+    max_angular_accel: 0.5
+    max_angular_decel: 2.0
     publish_path: true
     # Clip and nudge the policy's path with Nav2's local costmap (/scan only --
     # the depth STVL layer is disabled -- inflated against the live footprint).
