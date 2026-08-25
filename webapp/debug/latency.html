@@ -138,6 +138,15 @@
   .rt-axis { position: relative; height: 15px; margin-left: 82px; }
   .rt-axis i { position: absolute; font-size: 0.66rem; font-style: normal;
                color: var(--muted); transform: translateX(-50%); white-space: nowrap; }
+  .rt-bar:hover, .rt-you:hover { outline: 1px solid var(--ink); outline-offset: -1px; }
+  .rt-tip {
+    position: fixed; z-index: 20; pointer-events: none; max-width: 320px;
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--ring); border-radius: 6px; padding: 8px 11px;
+    font-size: 0.78rem; line-height: 1.45; white-space: pre-line;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22);
+  }
+  .rt-tip b { display: block; font-size: 0.82rem; margin-bottom: 2px; }
 
   table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
   th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); }
@@ -224,6 +233,7 @@
     <span class="status" id="rt-text"></span>
   </div>
   <div class="rt" id="rt"></div>
+  <div class="rt-tip" id="rt-tip" hidden></div>
 </section>
 
 <section class="tiles" id="tiles"></section>
@@ -368,9 +378,16 @@ function noteClock(m) {
 /** Now, on the robot's clock. */
 const robotNow = () => Date.now() / 1000 + clockOffset;
 
+// Newest activity on the wire. The rolling window stops here when the agent is
+// not running, so a stopped agent leaves the last exchange on screen instead of
+// scrolling it away against a clock nothing is feeding.
+let lastMarkT = 0;
+let brainActive = null; // null until /brain/agent_status (latched) arrives
+
 function addMark(m, fromRobot = true) {
   if (!m || typeof m.t !== "number" || typeof m.stage !== "string") return;
   if (fromRobot) noteClock(m);
+  if (m.t > lastMarkT) lastMarkT = m.t;
   marks.push(m);
   if (marks.length > MAX_MARKS) marks = marks.slice(-MAX_MARKS);
   dirty = true;
@@ -552,20 +569,76 @@ function renderTiles(runs) {
     tile("Exchanges captured", String(runs.length), `${marks.length} marks`);
 }
 
+/** The lines under a hover card that only make sense for that one stage. */
+function barDetail(run, s) {
+  const out = [];
+  const uc = first(run, "utterance_closed");
+  const chat = first(run, "chat_in");
+  switch (s.key) {
+    case "vad_tail":
+      out.push("the endpointer waiting out stt_vad_silence_secs");
+      if (uc) out.push(`utterance was ${uc.secs}s of audio`);
+      break;
+    case "mic_lag":
+      out.push("your press → the robot's own estimate of when you stopped");
+      break;
+    case "stt":
+      if (chat?.backend) out.push(`backend: ${chat.backend}`);
+      if (first(run, "stt_done")?.chars != null) out.push(`${first(run, "stt_done").chars} chars transcribed`);
+      break;
+    case "look":
+      out.push("camera grab, prompt build, base64 of every frame");
+      break;
+    case "ttft":
+    case "stream":
+    case "gemini":
+      // The card already carries runLabel above, which names the turn when the
+      // exchange has no user text of its own.
+      if (run.turn != null && !runLabel(run).includes(`turn ${run.turn}`)) out.push(`turn ${run.turn}`);
+      if (s.key === "gemini") out.push("no first token: this turn produced no speech");
+      break;
+    case "tts_queue":
+      out.push("sentence waiting for the single speech worker");
+      break;
+    case "synth":
+    case "speak": {
+      const chars = first(run, "tts_start")?.chars;
+      if (chars != null) out.push(`${chars} chars of speech`);
+      const done = last(run, "tts_play_done");
+      if (s.key === "speak" && done?.audio_ms != null) out.push(`${fmt(done.audio_ms)} of audio`);
+      if (isTopicMode(run)) out.push("sim: nothing is audible until the browser has the clip");
+      break;
+    }
+  }
+  return out;
+}
+
 // ---- rolling timeline -----------------------------------------------------
 // One shared wall clock instead of per-exchange rows normalised to their own
 // zero: this is the view that shows how the housekeeping turns interleave with
 // what you said, and how long the gaps really are.
+/** The right-hand edge of the window. It tracks the wall clock only while
+ *  something is actually feeding it: a stopped agent (or a dropped socket)
+ *  produces no marks, and sliding on regardless would scroll the last exchange
+ *  away against a clock nothing is driving. */
+function rollingEdge() {
+  const now = robotNow();
+  if (!$("follow").checked) return { t1: rollingFrozenAt ?? now, why: "manual" };
+  const live = brainActive !== false && ros.state === "connected";
+  if (live) return { t1: now, why: "live" };
+  if (!lastMarkT) return { t1: now, why: "live" }; // nothing to hold on to yet
+  return { t1: Math.min(now, lastMarkT + 1), why: brainActive === false ? "stopped" : "offline" };
+}
+
 function renderRolling(runs) {
   const span = Number($("window").value);
-  const following = $("follow").checked;
-  const now = robotNow();
-  const t1 = following ? now : rollingFrozenAt ?? now;
+  const { t1, why } = rollingEdge();
   const t0 = t1 - span;
   const pct = (t) => ((t - t0) / span) * 100;
 
   const lanes = LANES.map(() => []);
   for (const run of runs) {
+    const since = { you: "after you stopped", vad: "after speech ended", mark: "into the exchange" }[run.anchorKind];
     for (const s of segments(run)) {
       const a = run.start + s.t0;
       const b = run.start + s.t1;
@@ -574,27 +647,35 @@ function renderRolling(runs) {
       const right = Math.min(pct(b), 100);
       const label = s.key === "speak" && isTopicMode(run) ? "collecting clip" : s.label;
       const width = Math.max(right - left, 0.15);
+      const tip = [
+        `${label} — ${fmt(s.ms)}`,
+        `${clock(a)} → ${clock(b)}`,
+        `+${fmt(s.t0 * 1000)} ${since}`,
+        runLabel(run),
+        ...barDetail(run, s),
+      ].join("\n");
       lanes[s.lane].push(
         `<div class="rt-bar" style="left:${left}%;width:${width}%;background:var(${s.color})" ` +
-          `title="${label}: ${fmt(s.ms)} @ ${clock(a)}">${width >= 6 ? `<span>${fmt(s.ms)}</span>` : ""}</div>`,
+          `data-tip="${escapeHtml(tip)}">${width >= 6 ? `<span>${fmt(s.ms)}</span>` : ""}</div>`,
       );
     }
   }
 
-  // Gridlines every fifth of the window, plus a "now" edge and every press.
+  // Gridlines every fifth of the window, plus the edge marker and every press.
   const steps = 5;
   let grid = "";
   let axis = "";
   for (let i = 0; i <= steps; i++) {
     const at = (i / steps) * 100;
     grid += `<div class="rt-grid" style="left:${at}%"></div>`;
-    axis += `<i style="left:${at}%">${i === steps ? "now" : `−${Math.round(span - (i / steps) * span)}s`}</i>`;
+    const label = i === steps ? (why === "live" ? "now" : clock(t1)) : `−${Math.round(span - (i / steps) * span)}s`;
+    axis += `<i style="left:${at}%">${label}</i>`;
   }
   const presses = marks
     .filter((m) => m.stage === "you_stopped" && m.t >= t0 && m.t <= t1)
-    .map((m) => `<div class="rt-you" style="left:${pct(m.t)}%" title="you stopped speaking"></div>`)
+    .map((m) => `<div class="rt-you" style="left:${pct(m.t)}%" data-tip="you stopped speaking"></div>`)
     .join("");
-  const nowLine = following ? '<div class="rt-now" style="left:100%"></div>' : "";
+  const nowLine = why === "live" ? '<div class="rt-now" style="left:100%"></div>' : "";
 
   $("rt").innerHTML =
     LANES.map(
@@ -603,7 +684,12 @@ function renderRolling(runs) {
         `<div class="rt-lane">${grid}${presses}${lanes[i].join("")}${nowLine}</div></div>`,
     ).join("") + `<div class="rt-axis">${axis}</div>`;
 
-  $("rt-text").textContent = following ? "" : `frozen at ${clock(t1)} — retick to resume`;
+  $("rt-text").textContent = {
+    live: "",
+    manual: `frozen at ${clock(t1)} — retick "follow now" to resume`,
+    stopped: `agent stopped — held at the last mark, ${clock(t1)}`,
+    offline: `not connected — held at the last mark, ${clock(t1)}`,
+  }[why];
   $("clock-text").textContent = clockKnown
     ? `clock offset robot − browser: ${(clockOffset * 1000).toFixed(0)} ms ` +
       `(${offsetSamples.length} samples) — the button is stamped through this`
@@ -721,6 +807,7 @@ function renderLog() {
 
 let lastRuns = [];
 let rollingFrozenAt = null;
+let rtHover = false;
 
 function render() {
   if (dirty) {
@@ -732,14 +819,44 @@ function render() {
     renderWarnings(lastRuns);
     renderLog();
   }
-  // Always: the window slides even when no new mark has arrived.
-  renderRolling(lastRuns);
+  // Always: the window slides even when no new mark has arrived — except while
+  // the pointer is on it, so a hover card can be read.
+  if (!rtHover) renderRolling(lastRuns);
 }
 renderLegend();
 setInterval(render, 200);
 
 $("follow").addEventListener("change", (e) => {
-  rollingFrozenAt = e.target.checked ? null : robotNow();
+  rollingFrozenAt = e.target.checked ? null : rollingEdge().t1;
+});
+
+// ---- hover cards on the rolling timeline -----------------------------------
+// The lane markup is rebuilt on every frame, so the listeners live on the
+// container, not the bars. Hovering also holds the redraw: without that, the
+// element under the cursor is replaced mid-read and the card flickers away.
+const tip = $("rt-tip");
+
+$("rt").addEventListener("mousemove", (e) => {
+  const bar = e.target instanceof Element ? e.target.closest("[data-tip]") : null;
+  if (!bar) {
+    tip.hidden = true;
+    return;
+  }
+  const [head, ...rest] = (bar.getAttribute("data-tip") ?? "").split("\n");
+  tip.innerHTML = `<b></b>`;
+  tip.firstChild.textContent = head;
+  tip.append(rest.join("\n"));
+  tip.hidden = false;
+  // Flip to the left of the cursor when the card would run off the viewport.
+  const box = tip.getBoundingClientRect();
+  const x = e.clientX + 14 + box.width > window.innerWidth ? e.clientX - 14 - box.width : e.clientX + 14;
+  tip.style.left = `${Math.max(4, x)}px`;
+  tip.style.top = `${Math.max(4, Math.min(e.clientY + 16, window.innerHeight - box.height - 4))}px`;
+});
+$("rt").addEventListener("mouseenter", () => (rtHover = true));
+$("rt").addEventListener("mouseleave", () => {
+  rtHover = false;
+  tip.hidden = true;
 });
 
 // ---- the ground-truth button ----------------------------------------------
@@ -773,10 +890,10 @@ if (new URLSearchParams(location.search).has("demo")) {
     ["chat_in", 0.002, { backend: "elevenlabs_batch" }],
     ["event_queued", 0.006, { kind: "user", text: 'The user says: "turn left and tell me what you see"' }],
     ["turn_start", 0.09, { turn: 7 }], ["request_sent", 0.12, { turn: 7 }], ["first_text", 0.71, { turn: 7 }],
-    ["speech_queued", 0.05, { chars: 22, first: true }], ["tts_start", 0.003, {}],
-    ["tts_request", 0.001, { mode: "aplay" }], ["tts_first_byte", 0.24, { mode: "aplay" }],
+    ["speech_queued", 0.05, { chars: 22, first: true }], ["tts_start", 0.003, { chars: 22 }],
+    ["tts_request", 0.001, { chars: 22, mode: "aplay" }], ["tts_first_byte", 0.24, { ms: 240, mode: "aplay" }],
     ["stream_done", 0.1, { turn: 7 }], ["speech_queued", 0.02, { chars: 31 }],
-    ["tts_play_done", 1.3, { mode: "aplay" }],
+    ["tts_play_done", 1.3, { ms: 1550, audio_ms: 1410, mode: "aplay" }],
     ["event_queued", 4.0, { kind: "user", text: 'The user says: "stop"' }],
     ["turn_start", 0.05, { turn: 8 }], ["request_sent", 0.1, { turn: 8 }],
     ["event_queued", 0.4, { kind: "user", text: 'The user says: "actually go right"' }],
@@ -815,7 +932,8 @@ ros.subscribe(
 ros.subscribe(
   AGENT_STATUS_TOPIC,
   jsonHandler((d) => {
-    $("agent-text").textContent = d.brain_active
+    brainActive = !!d.brain_active;
+    $("agent-text").textContent = brainActive
       ? `running: ${d.current_directive || "(no agent)"}`
       : "agent stopped";
     if (d.current_directive) $("directive").value = d.current_directive;
