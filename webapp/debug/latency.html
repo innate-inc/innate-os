@@ -213,6 +213,42 @@
   <div class="warn-line" id="warn" hidden></div>
 </section>
 
+<section class="card">
+  <h2>Live configuration</h2>
+  <div class="row">
+    <label class="status">brain model
+      <input id="cfg-model" class="mono" size="20" list="model-presets" placeholder="gemini-…">
+      <datalist id="model-presets">
+        <option value="gemini-3.6-flash"></option>
+        <option value="gemini-3.6-pro"></option>
+        <option value="gemini-2.5-flash"></option>
+        <option value="gemini-2.5-pro"></option>
+      </datalist>
+    </label>
+    <label class="status">STT
+      <select id="cfg-backend">
+        <option value="elevenlabs_batch">ElevenLabs Scribe (batch)</option>
+        <option value="gemini">Gemini (batch)</option>
+        <option value="elevenlabs">ElevenLabs Scribe (realtime)</option>
+        <option value="openai">OpenAI Realtime</option>
+      </select>
+    </label>
+    <label class="status">VAD engine
+      <select id="cfg-vad-engine">
+        <option value="silero">Silero</option>
+        <option value="energy">Energy</option>
+      </select>
+    </label>
+    <label class="status">silence <input id="cfg-silence" type="number" step="0.05" min="0.1" max="3" size="4" style="width:5.5em"> s</label>
+    <label class="status">threshold <input id="cfg-threshold" type="number" step="0.05" min="0" max="1" size="4" style="width:5.5em"></label>
+  </div>
+  <div class="row">
+    <button id="cfg-apply" class="primary">Apply</button>
+    <button id="cfg-reload">Re-read from robot</button>
+    <span class="status" id="cfg-text">The brain model takes effect on the next turn; an STT change reopens the microphone (~1 s deaf).</span>
+  </div>
+</section>
+
 <section class="card mark-card">
   <h2>Ground truth</h2>
   <div class="row">
@@ -233,6 +269,8 @@
     <button id="zoom-in" title="show less time">+</button>
     <label class="status"><input type="checkbox" id="follow" checked style="vertical-align:-2px"> follow now</label>
     <span class="status">scroll to zoom · drag to pan</span>
+    <button id="capture-png">Capture PNG</button>
+    <button id="capture-svg">SVG</button>
     <span class="status" id="rt-text"></span>
   </div>
   <div class="legend" id="legend"></div>
@@ -985,38 +1023,6 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ---- feeds ----------------------------------------------------------------
-// ?demo fills the page from a scripted exchange, so the layout and the stitching
-// can be checked with no robot in the picture (the brain monitor has the same).
-if (new URLSearchParams(location.search).has("demo")) {
-  const t0 = Date.now() / 1000 - 18;
-  const script = [
-    ["you_stopped", 0.0, {}], ["utterance_closed", 0.62, { secs: 1.4, tail: 0.5 }],
-    ["stt_request", 0.004, {}], ["stt_done", 0.38, { chars: 9 }],
-    ["chat_in", 0.002, { backend: "elevenlabs_batch" }],
-    ["event_queued", 0.006, { kind: "user", text: 'The user says: "turn left and tell me what you see"' }],
-    ["turn_start", 0.09, { turn: 7 }], ["request_sent", 0.12, { turn: 7 }], ["first_text", 0.71, { turn: 7 }],
-    ["speech_queued", 0.05, { chars: 22, first: true }], ["tts_start", 0.003, { chars: 22 }],
-    ["tts_request", 0.001, { chars: 22, mode: "aplay" }], ["tts_first_byte", 0.24, { ms: 240, mode: "aplay" }],
-    ["stream_done", 0.1, { turn: 7 }], ["speech_queued", 0.02, { chars: 31 }],
-    ["tts_play_done", 1.3, { ms: 1550, audio_ms: 1410, mode: "aplay" }],
-    ["event_queued", 4.0, { kind: "user", text: 'The user says: "stop"' }],
-    ["turn_start", 0.05, { turn: 8 }], ["request_sent", 0.1, { turn: 8 }],
-    ["event_queued", 0.4, { kind: "user", text: 'The user says: "actually go right"' }],
-    ["turn_start", 0.03, { turn: 9 }], ["turn_dropped", 0.01, { turn: 8, reason: "preempted" }],
-    ["request_sent", 0.09, { turn: 9 }], ["first_text", 0.6, { turn: 9 }], ["stream_done", 0.3, { turn: 9 }],
-    ["speech_queued", 0.04, { chars: 18, first: true }], ["tts_start", 0.002, {}],
-    ["tts_request", 0.001, { mode: "aplay" }], ["tts_first_byte", 0.19, { mode: "aplay" }],
-    ["tts_play_done", 0.9, { mode: "aplay" }],
-    // A housekeeping turn that runs the model and says nothing — the case the
-    // per-exchange view used to draw as an empty row.
-    ["turn_start", 3.0, { turn: 10 }], ["request_sent", 0.11, { turn: 10 }],
-    ["stream_done", 1.19, { turn: 10 }],
-  ];
-  let t = t0;
-  for (const [stage, dt, extra] of script) addMark({ t: (t += dt), stage, ...extra }, false);
-  clockKnown = true;
-}
-
 const jsonHandler = (fn) => (msg) => {
   try {
     fn(JSON.parse(msg.data));
@@ -1061,11 +1067,275 @@ ros.onStateChange((state) => {
   $("conn-text").textContent = state === "connected" ? `rosbridge @ ${ros.ip}` : state;
   const off = state !== "connected";
   for (const id of ["start", "stop", "send", "directive"]) $(id).disabled = off;
-  if (state === "connected") void loadDirectives();
+  if (state === "connected") {
+    void loadDirectives();
+    void readConfig();
+  }
 });
 
 $("connect").onclick = () => ros.connect($("host").value.trim());
 if (defaultTarget) ros.connect(defaultTarget);
+
+// ---- capture ---------------------------------------------------------------
+// Exactly the window on screen — same zoom, same pan — redrawn as standalone
+// SVG with the configuration that produced it baked in, because a timeline
+// without its model and STT backend is not evidence of anything.
+const CAP = { w: 1180, pad: 24, laneH: 26, gap: 6, nameW: 92 };
+
+function captureSvg() {
+  const span = viewSpan;
+  const { t1, why } = rollingEdge();
+  const t0 = t1 - span;
+  const plotW = CAP.w - CAP.pad * 2 - CAP.nameW;
+  const x = (t) => CAP.pad + CAP.nameW + ((t - t0) / span) * plotW;
+
+  const meta = [
+    ["brain model", liveConfig.gemini_model ?? "unknown"],
+    ["STT backend", liveConfig.stt_backend ?? "unknown"],
+    ["VAD", `${liveConfig.stt_vad_engine ?? "?"} · ${liveConfig.stt_vad_silence_secs ?? "?"}s silence · threshold ${liveConfig.stt_vad_threshold ?? "?"}`],
+    ["speech out", lastRuns.some(isTopicMode) ? "sim — whole clip to /tts/audio" : "streamed to the speaker"],
+    ["window", `${spanLabel(span)} ending ${clock(t1)}${why === "live" ? " (live)" : ""}`],
+    ["captured", new Date().toLocaleString()],
+  ];
+
+  // Lay the legend out first: it wraps, and the image has to be tall enough for
+  // however many rows that takes.
+  const legendRows = [[]];
+  let lx = CAP.pad;
+  for (const b of LEGEND) {
+    const w = 24 + b.label.length * 5.7;
+    if (lx + w > CAP.w - CAP.pad && legendRows.at(-1).length) {
+      legendRows.push([]);
+      lx = CAP.pad;
+    }
+    legendRows.at(-1).push({ ...b, x: lx });
+    lx += w;
+  }
+
+  const headH = 34 + meta.length * 15 + 14;
+  const lanesTop = headH + 10;
+  const legendTop = lanesTop + LANES.length * (CAP.laneH + CAP.gap) + 20;
+  const height = legendTop + 14 + legendRows.length * 16 + 8;
+
+  const esc = (v) => String(v).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+  const css = getComputedStyle(document.documentElement);
+  const ink = css.getPropertyValue("--ink").trim() || "#111";
+  const muted = css.getPropertyValue("--muted").trim() || "#888";
+  const surface = css.getPropertyValue("--surface").trim() || "#fff";
+  const lane = css.getPropertyValue("--surface-2").trim() || "#eee";
+  const gridCol = css.getPropertyValue("--grid").trim() || "#ddd";
+  const colour = (token) => css.getPropertyValue(token).trim() || "#888";
+
+  const parts = [
+    `<rect width="${CAP.w}" height="${height}" fill="${surface}"/>`,
+    `<text x="${CAP.pad}" y="${CAP.pad + 6}" font-size="15" font-weight="600" fill="${ink}">Agent latency — ${esc(spanLabel(span))} window</text>`,
+  ];
+  meta.forEach(([k, v], i) => {
+    const y = CAP.pad + 28 + i * 15;
+    parts.push(`<text x="${CAP.pad}" y="${y}" font-size="11" fill="${muted}">${esc(k)}</text>`);
+    parts.push(`<text x="${CAP.pad + 92}" y="${y}" font-size="11" fill="${ink}">${esc(v)}</text>`);
+  });
+
+  const ticks = 6;
+  const tick = tickFormat(span / (ticks - 1));
+  for (let i = 0; i < ticks; i++) {
+    const at = CAP.pad + CAP.nameW + (i / (ticks - 1)) * plotW;
+    parts.push(`<line x1="${at}" y1="${lanesTop}" x2="${at}" y2="${legendTop - 22}" stroke="${gridCol}" stroke-width="1"/>`);
+    const label = i === ticks - 1 ? (why === "live" ? "now" : clock(t1)) : `−${tick(span - (i / (ticks - 1)) * span)}`;
+    parts.push(
+      `<text x="${at}" y="${legendTop - 8}" font-size="10" fill="${muted}" text-anchor="${i === ticks - 1 ? "end" : "middle"}">${esc(label)}</text>`,
+    );
+  }
+
+  LANES.forEach((name, li) => {
+    const y = lanesTop + li * (CAP.laneH + CAP.gap);
+    parts.push(`<rect x="${CAP.pad + CAP.nameW}" y="${y}" width="${plotW}" height="${CAP.laneH}" rx="3" fill="${lane}"/>`);
+    parts.push(
+      `<text x="${CAP.pad + CAP.nameW - 8}" y="${y + CAP.laneH / 2 + 4}" font-size="10" fill="${muted}" text-anchor="end">${esc(name.toUpperCase())}</text>`,
+    );
+    for (const run of lastRuns) {
+      for (const s of segments(run)) {
+        if (s.lane !== li) continue;
+        const a = run.start + s.t0;
+        const b = run.start + s.t1;
+        if (b < t0 || a > t1) continue;
+        const x0 = Math.max(x(a), CAP.pad + CAP.nameW);
+        const w = Math.max(Math.min(x(b), CAP.pad + CAP.nameW + plotW) - x0, 1);
+        parts.push(
+          `<rect x="${x0.toFixed(1)}" y="${y + 3}" width="${w.toFixed(1)}" height="${CAP.laneH - 6}" rx="2" fill="${colour(s.color)}"/>`,
+        );
+        if (w > 44)
+          parts.push(
+            `<text x="${(x0 + 4).toFixed(1)}" y="${y + CAP.laneH / 2 + 4}" font-size="10" fill="#fff">${esc(fmt(s.ms))}</text>`,
+          );
+      }
+    }
+    // The press marks span every lane, so the eye can drop straight down from them.
+    for (const run of lastRuns)
+      for (const m of run.stages.you_stopped ?? [])
+        if (m.t >= t0 && m.t <= t1)
+          parts.push(`<rect x="${(x(m.t) - 1).toFixed(1)}" y="${y}" width="2" height="${CAP.laneH}" fill="${colour("--c-vad")}"/>`);
+  });
+
+  legendRows.forEach((row, ri) => {
+    const y = legendTop + 12 + ri * 16;
+    for (const b of row) {
+      parts.push(`<rect x="${b.x}" y="${y}" width="9" height="9" rx="2" fill="${colour(b.color)}"/>`);
+      parts.push(`<text x="${b.x + 13}" y="${y + 8}" font-size="10" fill="${muted}">${esc(b.label)}</text>`);
+    }
+  });
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${CAP.w}" height="${height}" viewBox="0 0 ${CAP.w} ${height}" ` +
+    `font-family="system-ui, -apple-system, sans-serif">${parts.join("")}</svg>`
+  );
+}
+
+function download(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** A filename that says what it is without opening it. */
+const captureName = (ext) =>
+  `latency-${(liveConfig.gemini_model ?? "model").replace(/[^\w.-]/g, "")}-${(liveConfig.stt_backend ?? "stt").replace(/[^\w.-]/g, "")}-` +
+  `${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.${ext}`;
+
+$("capture-svg").onclick = () => download(new Blob([captureSvg()], { type: "image/svg+xml" }), captureName("svg"));
+
+$("capture-png").onclick = () => {
+  const svg = captureSvg();
+  const img = new Image();
+  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+  img.onload = () => {
+    // 2x for a legible screenshot on a retina display or in a ticket.
+    const canvas = Object.assign(document.createElement("canvas"), {
+      width: img.width * 2,
+      height: img.height * 2,
+    });
+    const ctx = canvas.getContext("2d");
+    ctx.scale(2, 2);
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    canvas.toBlob((blob) => blob && download(blob, captureName("png")), "image/png");
+  };
+  img.onerror = () => {
+    // Rasterising can fail (tainted canvas, no SVG image support); the vector
+    // file is the same picture, so hand that over rather than nothing.
+    URL.revokeObjectURL(url);
+    download(new Blob([svg], { type: "image/svg+xml" }), captureName("svg"));
+    $("rt-text").textContent = "PNG rasterising failed — saved the SVG instead";
+  };
+  img.src = url;
+};
+
+// ---- live configuration ----------------------------------------------------
+// Read straight off the running nodes rather than off settings.yaml: the file is
+// what the robot will boot with, the parameters are what it is running now, and
+// on this page only the second one explains a measurement.
+const BRAIN_NODE = "/brain_client_node";
+const STT_NODE = "/input_manager_node";
+const PARAM_TYPE = { bool: 1, int: 2, float: 3, string: 4 };
+
+/** @type {{node: string, name: string, type: string, el: string}[]} */
+const CONFIG_KNOBS = [
+  { node: BRAIN_NODE, name: "gemini_model", type: "string", el: "cfg-model" },
+  { node: STT_NODE, name: "stt_backend", type: "string", el: "cfg-backend" },
+  { node: STT_NODE, name: "stt_vad_engine", type: "string", el: "cfg-vad-engine" },
+  { node: STT_NODE, name: "stt_vad_silence_secs", type: "float", el: "cfg-silence" },
+  { node: STT_NODE, name: "stt_vad_threshold", type: "float", el: "cfg-threshold" },
+];
+
+/** What the robot is running right now — also stamped into every capture. */
+let liveConfig = {};
+
+function paramValue(v) {
+  // rcl_interfaces/msg/ParameterValue, decoded by its own type tag.
+  switch (v?.type) {
+    case 1: return v.bool_value;
+    case 2: return v.integer_value;
+    case 3: return v.double_value;
+    case 4: return v.string_value;
+    default: return null;
+  }
+}
+
+async function readConfig() {
+  for (const node of [BRAIN_NODE, STT_NODE]) {
+    const knobs = CONFIG_KNOBS.filter((k) => k.node === node);
+    try {
+      const res = await ros.callService(`${node}/get_parameters`, { names: knobs.map((k) => k.name) });
+      (res?.values ?? []).forEach((v, i) => {
+        const value = paramValue(v);
+        if (value === null || value === "" ) return;
+        liveConfig[knobs[i].name] = value;
+        $(knobs[i].el).value = String(value);
+      });
+    } catch {
+      $("cfg-text").textContent = `Could not read parameters from ${node} — is it running?`;
+    }
+  }
+  renderConfigLine();
+}
+
+function renderConfigLine() {
+  const c = liveConfig;
+  const parts = [];
+  if (c.gemini_model) parts.push(c.gemini_model);
+  if (c.stt_backend) parts.push(c.stt_backend);
+  if (c.stt_vad_engine) parts.push(`${c.stt_vad_engine} vad`);
+  if (c.stt_vad_silence_secs != null) parts.push(`${c.stt_vad_silence_secs}s silence`);
+  $("cfg-text").textContent = parts.length ? `running: ${parts.join(" · ")}` : "";
+}
+
+$("cfg-apply").onclick = async () => {
+  const byNode = new Map();
+  for (const knob of CONFIG_KNOBS) {
+    const raw = $(knob.el).value.trim();
+    if (!raw) continue;
+    const value = knob.type === "float" ? Number(raw) : raw;
+    if (knob.type === "float" && !Number.isFinite(value)) continue;
+    if (liveConfig[knob.name] !== undefined && String(liveConfig[knob.name]) === String(value)) continue;
+    byNode.set(knob.node, [...(byNode.get(knob.node) ?? []), { ...knob, value }]);
+  }
+  if (!byNode.size) {
+    $("cfg-text").textContent = "nothing changed";
+    return;
+  }
+  $("cfg-apply").disabled = true;
+  const failed = [];
+  for (const [node, knobs] of byNode) {
+    try {
+      const res = await ros.callService(`${node}/set_parameters`, {
+        parameters: knobs.map((k) => ({
+          name: k.name,
+          value: {
+            type: PARAM_TYPE[k.type],
+            bool_value: false,
+            integer_value: 0,
+            double_value: k.type === "float" ? k.value : 0,
+            string_value: k.type === "string" ? k.value : "",
+          },
+        })),
+      });
+      // The call resolves even when a node rejects a value, so read each result.
+      (res?.results ?? []).forEach((r, i) => {
+        if (r?.successful === false) failed.push(`${knobs[i].name}: ${r.reason || "rejected"}`);
+      });
+    } catch (err) {
+      failed.push(`${node}: ${err}`);
+    }
+  }
+  $("cfg-apply").disabled = false;
+  // Read back rather than assume: a node may clamp or refuse a value, and the
+  // capture metadata must say what is running, not what was asked for.
+  await readConfig();
+  if (failed.length) $("cfg-text").textContent = `rejected — ${failed.join("; ")}`;
+};
+
+$("cfg-reload").onclick = () => void readConfig();
 
 // ---- controls -------------------------------------------------------------
 async function loadDirectives() {
@@ -1132,6 +1402,7 @@ $("clear").onclick = () => {
 $("copy").onclick = async () => {
   const payload = {
     captured: new Date().toISOString(),
+    config: liveConfig,
     runs: lastRuns.map((r) => ({
       start: r.start,
       turn: r.turn,
@@ -1175,6 +1446,47 @@ fetch("/config.json")
     };
   })
   .catch(() => {});
+// ?demo fills the page from a scripted exchange, so the layout and the stitching
+// can be checked with no robot in the picture (the brain monitor has the same).
+if (new URLSearchParams(location.search).has("demo")) {
+  const t0 = Date.now() / 1000 - 18;
+  const script = [
+    ["you_stopped", 0.0, {}], ["utterance_closed", 0.62, { secs: 1.4, tail: 0.5 }],
+    ["stt_request", 0.004, {}], ["stt_done", 0.38, { chars: 9 }],
+    ["chat_in", 0.002, { backend: "elevenlabs_batch" }],
+    ["event_queued", 0.006, { kind: "user", text: 'The user says: "turn left and tell me what you see"' }],
+    ["turn_start", 0.09, { turn: 7 }], ["request_sent", 0.12, { turn: 7 }], ["first_text", 0.71, { turn: 7 }],
+    ["speech_queued", 0.05, { chars: 22, first: true }], ["tts_start", 0.003, { chars: 22 }],
+    ["tts_request", 0.001, { chars: 22, mode: "aplay" }], ["tts_first_byte", 0.24, { ms: 240, mode: "aplay" }],
+    ["stream_done", 0.1, { turn: 7 }], ["speech_queued", 0.02, { chars: 31 }],
+    ["tts_play_done", 1.3, { ms: 1550, audio_ms: 1410, mode: "aplay" }],
+    ["event_queued", 4.0, { kind: "user", text: 'The user says: "stop"' }],
+    ["turn_start", 0.05, { turn: 8 }], ["request_sent", 0.1, { turn: 8 }],
+    ["event_queued", 0.4, { kind: "user", text: 'The user says: "actually go right"' }],
+    ["turn_start", 0.03, { turn: 9 }], ["turn_dropped", 0.01, { turn: 8, reason: "preempted" }],
+    ["request_sent", 0.09, { turn: 9 }], ["first_text", 0.6, { turn: 9 }], ["stream_done", 0.3, { turn: 9 }],
+    ["speech_queued", 0.04, { chars: 18, first: true }], ["tts_start", 0.002, {}],
+    ["tts_request", 0.001, { mode: "aplay" }], ["tts_first_byte", 0.19, { mode: "aplay" }],
+    ["tts_play_done", 0.9, { mode: "aplay" }],
+    // A housekeeping turn that runs the model and says nothing — the case the
+    // per-exchange view used to draw as an empty row.
+    ["turn_start", 3.0, { turn: 10 }], ["request_sent", 0.11, { turn: 10 }],
+    ["stream_done", 1.19, { turn: 10 }],
+  ];
+  let t = t0;
+  for (const [stage, dt, extra] of script) addMark({ t: (t += dt), stage, ...extra }, false);
+  clockKnown = true;
+  liveConfig = {
+    gemini_model: "gemini-3.6-flash",
+    stt_backend: "elevenlabs_batch",
+    stt_vad_engine: "silero",
+    stt_vad_silence_secs: 0.5,
+    stt_vad_threshold: 0.2,
+  };
+  for (const knob of CONFIG_KNOBS) $(knob.el).value = String(liveConfig[knob.name]);
+  renderConfigLine();
+}
+
 </script>
 </body>
 </html>
