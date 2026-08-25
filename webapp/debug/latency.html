@@ -18,7 +18,8 @@
     --grid: #e1e0d9;
 
     --c-wait: #b9b8ae;      /* on-robot queueing / plumbing — never a vendor */
-    --c-look: #1f9c95;      /* camera grab + prompt build */
+    --c-vad: #c99a2e;       /* silence the endpointer waited out before it acted */
+    --c-look: #4a7fb5;      /* camera grab + prompt build */
     --c-stt: #2a9d8f;
     --c-model: #6f4fd8;
     --c-model-2: #a08ae8;
@@ -38,7 +39,8 @@
       --ring: rgba(255, 255, 255, 0.13);
       --grid: #2c2c2a;
       --c-wait: #4a4a46;
-      --c-look: #2ab5ac;
+      --c-vad: #d9a939;
+      --c-look: #5b93cc;
       --c-stt: #3ab7a6;
       --c-model: #8f74ee;
       --c-model-2: #6a55b0;
@@ -113,6 +115,30 @@
   }
   .tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink); opacity: 0.35; }
 
+  .stopped {
+    font-size: 1rem; font-weight: 600; padding: 12px 22px;
+    background: var(--c-vad); color: #1a1500; border-color: transparent;
+  }
+  .stopped small { display: block; font-size: 0.66rem; font-weight: 400; opacity: 0.75; letter-spacing: 0.08em; }
+  .stopped:active { transform: translateY(1px); }
+  .mark-card .status { max-width: 56ch; }
+
+  /* Rolling timeline: one shared wall clock, three lanes, newest at the right. */
+  .rt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+  .rt-name { width: 74px; flex: none; font-size: 0.68rem; color: var(--muted);
+             text-transform: uppercase; letter-spacing: 0.05em; text-align: right; }
+  .rt-lane { position: relative; flex: 1; height: 24px; background: var(--surface-2);
+             border-radius: 3px; overflow: hidden; }
+  .rt-bar { position: absolute; top: 3px; height: 18px; border-radius: 2px; min-width: 1px; overflow: hidden; }
+  .rt-bar span { position: absolute; left: 4px; line-height: 18px; font-size: 0.66rem; color: #fff;
+                 white-space: nowrap; text-shadow: 0 0 3px rgba(0,0,0,0.6); }
+  .rt-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--grid); }
+  .rt-now { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--c-bad); opacity: 0.6; }
+  .rt-you { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--c-vad); }
+  .rt-axis { position: relative; height: 15px; margin-left: 82px; }
+  .rt-axis i { position: absolute; font-size: 0.66rem; font-style: normal;
+               color: var(--muted); transform: translateX(-50%); white-space: nowrap; }
+
   table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
   th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); }
   th:first-child, td:first-child { text-align: left; }
@@ -171,6 +197,35 @@
   <div class="warn-line" id="warn" hidden></div>
 </section>
 
+<section class="card mark-card">
+  <h2>Ground truth</h2>
+  <div class="row">
+    <button id="stopped" class="stopped">I stopped speaking<small>space</small></button>
+    <div class="status" id="stopped-text">
+      Press it the instant you finish your sentence. Everything downstream is then
+      measured from that press, not from the robot noticing.
+    </div>
+  </div>
+  <div class="row"><span class="status" id="clock-text">clock offset: waiting for the first mark…</span></div>
+</section>
+
+<section class="card">
+  <h2>Rolling timeline</h2>
+  <div class="row" style="margin-bottom:10px">
+    <label class="status">window
+      <select id="window">
+        <option value="15">15 s</option>
+        <option value="30" selected>30 s</option>
+        <option value="60">60 s</option>
+        <option value="120">2 min</option>
+      </select>
+    </label>
+    <label class="status"><input type="checkbox" id="follow" checked style="vertical-align:-2px"> follow now</label>
+    <span class="status" id="rt-text"></span>
+  </div>
+  <div class="rt" id="rt"></div>
+</section>
+
 <section class="tiles" id="tiles"></section>
 
 <section class="card">
@@ -200,10 +255,18 @@
     <li><b>Grey bars are the robot's own plumbing</b> — queues, thread handoffs, the
       wait between an event landing and the loop picking it up. Coloured bars are a
       vendor round trip or the speaker.</li>
-    <li><b>Trailing silence is not shown.</b> The clock starts when the VAD declares the
-      utterance over, which is already <code>stt_vad_silence_secs</code> (default 0.5 s)
-      after you stopped talking. That constant is a real part of what a person feels;
-      add it mentally, or lower it in settings and re-measure.</li>
+    <li><b>The clock starts when you stopped talking</b>, not when the robot noticed.
+      Press <b>I stopped speaking</b> (or space) as you finish and every bar is measured
+      from that press. Without a press, the amber <i>VAD silence</i> bar back-dates it
+      instead: the endpointer reports how much trailing silence it sat through
+      (<code>stt_vad_silence_secs</code>, default 0.5 s), and that wait is drawn rather
+      than hidden. Press and back-date together give you the mic + detection lag between
+      them.</li>
+    <li><b>A silent turn is a finding, not a gap.</b> A turn that runs the model and says
+      nothing has no first token to measure, so its whole call shows as one violet
+      <i>Gemini (silent turn)</i> bar and the row is flagged. If the turn that consumed
+      your speech is silent and the reply arrives a turn later, that whole turn is
+      latency you are paying.</li>
   </ul>
 
   <h3>Sim is not hardware</h3>
@@ -254,31 +317,60 @@ const $ = (id) => document.getElementById(id);
 // decide where one exchange ends and the next begins. Everything downstream of
 // the request (first token, sentences, TTS clips) interleaves by design and is
 // absorbed into whichever exchange is open.
-const UPSTREAM = ["utterance_closed", "stt_request", "stt_done", "chat_in", "event_queued", "turn_start", "request_sent"];
+// "you_stopped" is the button, not the robot: a browser-side mark translated
+// onto the robot's clock (see clockOffset). It outranks everything, so a press
+// always opens the exchange it belongs to.
+const UPSTREAM = ["you_stopped", "utterance_closed", "stt_request", "stt_done", "chat_in", "event_queued", "turn_start", "request_sent"];
 const RANK = new Map(UPSTREAM.map((s, i) => [s, i]));
 
-// Two lanes on one time axis. The voice lane starts while the brain lane is
+// Three lanes on one time axis. The voice lane starts while the brain lane is
 // still running — the robot speaks its first sentence mid-stream — and stacking
 // them would have to invent an order that does not exist.
+const LANES = ["mic + STT", "brain", "voice"];
 const BARS = [
+  { key: "vad_tail",  lane: 0, label: "VAD silence",   color: "--c-vad" }, // synthesised in segments()
   { key: "stt_queue", lane: 0, label: "STT queue",     from: ["utterance_closed"],  to: ["stt_request"],   color: "--c-wait" },
   { key: "stt",       lane: 0, label: "STT call",      from: ["stt_request"],       to: ["stt_done"],      color: "--c-stt" },
-  { key: "handoff",   lane: 0, label: "→ brain",       from: ["stt_done", "chat_in"], to: ["event_queued"], color: "--c-wait" },
-  { key: "wake",      lane: 0, label: "agent wake",    from: ["event_queued"],      to: ["turn_start"],    color: "--c-wait" },
-  { key: "look",      lane: 0, label: "look + prompt", from: ["turn_start"],        to: ["request_sent"],  color: "--c-look" },
-  { key: "ttft",      lane: 0, label: "Gemini TTFT",   from: ["request_sent"],      to: ["first_text"],    color: "--c-model" },
-  { key: "stream",    lane: 0, label: "Gemini stream", from: ["first_text"],        to: ["stream_done"],   color: "--c-model-2" },
-  { key: "tts_queue", lane: 1, label: "TTS queue",     from: ["speech_queued"],     to: ["tts_start"],     color: "--c-wait" },
-  { key: "synth",     lane: 1, label: "Cartesia TTFB", from: ["tts_request"],       to: ["tts_first_byte"], color: "--c-tts" },
-  { key: "speak",     lane: 1, label: "speaking",      from: ["tts_first_byte"],    to: ["tts_play_done"], color: "--c-play", toLast: true },
+  { key: "handoff",   lane: 0, label: "\u2192 brain",       from: ["stt_done", "chat_in"], to: ["event_queued"], color: "--c-wait" },
+  { key: "wake",      lane: 1, label: "agent wake",    from: ["event_queued"],      to: ["turn_start"],    color: "--c-wait" },
+  { key: "look",      lane: 1, label: "look + prompt", from: ["turn_start"],        to: ["request_sent"],  color: "--c-look" },
+  { key: "ttft",      lane: 1, label: "Gemini TTFT",   from: ["request_sent"],      to: ["first_text"],    color: "--c-model" },
+  { key: "stream",    lane: 1, label: "Gemini stream", from: ["first_text"],        to: ["stream_done"],   color: "--c-model-2" },
+  // A turn that says nothing never emits first_text, so neither bar above can be
+  // drawn — without this one its whole model call is invisible.
+  { key: "gemini",    lane: 1, label: "Gemini (silent turn)", from: ["request_sent"], to: ["stream_done"], color: "--c-model" },
+  { key: "tts_queue", lane: 2, label: "TTS queue",     from: ["speech_queued"],     to: ["tts_start"],     color: "--c-wait" },
+  { key: "synth",     lane: 2, label: "Cartesia TTFB", from: ["tts_request"],       to: ["tts_first_byte"], color: "--c-tts" },
+  { key: "speak",     lane: 2, label: "speaking",      from: ["tts_first_byte"],    to: ["tts_play_done"], color: "--c-play", toLast: true },
 ];
 
 /** @type {any[]} */
 let marks = [];
 let dirty = true;
 
-function addMark(m) {
+// robot clock − browser clock, so the button's press time can be expressed on
+// the same axis as the robot's marks. Each arriving mark is one sample of
+// (robot stamp − local arrival); the *largest* recent sample is the one whose
+// transit was shortest, which is the least wrong. Bounded so a stale outlier
+// cannot latch forever.
+const OFFSET_SAMPLES = 120;
+let offsetSamples = [];
+let clockOffset = 0;
+let clockKnown = false;
+
+function noteClock(m) {
+  offsetSamples.push(m.t - Date.now() / 1000);
+  if (offsetSamples.length > OFFSET_SAMPLES) offsetSamples = offsetSamples.slice(-OFFSET_SAMPLES);
+  clockOffset = Math.max(...offsetSamples);
+  clockKnown = true;
+}
+
+/** Now, on the robot's clock. */
+const robotNow = () => Date.now() / 1000 + clockOffset;
+
+function addMark(m, fromRobot = true) {
   if (!m || typeof m.t !== "number" || typeof m.stage !== "string") return;
+  if (fromRobot) noteClock(m);
   marks.push(m);
   if (marks.length > MAX_MARKS) marks = marks.slice(-MAX_MARKS);
   dirty = true;
@@ -328,6 +420,15 @@ function buildRuns(all) {
     }
     push(cur, m);
   }
+  // Back-date each exchange onto when speech really ended, so every offset below
+  // is measured from the thing a person actually experiences.
+  for (const run of runs) {
+    const pressed = first(run, "you_stopped")?.t;
+    const spoke = vadSpeechEnd(run);
+    run.anchorKind = pressed != null ? "you" : spoke != null ? "vad" : "mark";
+    const start = pressed ?? spoke;
+    if (start != null && start < run.start) run.start = start;
+  }
   return runs.slice(-MAX_RUNS).reverse();
 }
 
@@ -342,15 +443,40 @@ function pick(run, stages, wantLast) {
   return null;
 }
 
+/** The moment the speaker actually stopped, on the robot's clock: the endpointer
+ *  reports how much trailing silence it waited out, and that wait is the first
+ *  thing a person feels. Null when nothing endpointed locally. */
+function vadSpeechEnd(run) {
+  const uc = first(run, "utterance_closed");
+  return uc && typeof uc.tail === "number" ? uc.t - uc.tail : null;
+}
+
 function segments(run) {
   const out = [];
+  const base = run.start;
+  const add = (key, label, color, lane, from, to) =>
+    out.push({ key, label, color, lane, t0: from - base, t1: to - base, ms: Math.round((to - from) * 1000) });
+
+  // Two synthetic bars: neither end is a mark of its own.
+  const pressed = first(run, "you_stopped")?.t ?? null;
+  const spoke = vadSpeechEnd(run);
+  const uc = first(run, "utterance_closed");
+  if (pressed !== null && spoke !== null && spoke > pressed) add("mic_lag", "mic + VAD lag", "--c-wait", 0, pressed, spoke);
+  if (spoke !== null && uc) add("vad_tail", "VAD silence", "--c-vad", 0, spoke, uc.t);
+
+  const spoken = !!first(run, "first_text");
   for (const bar of BARS) {
+    if (!bar.from) continue; // synthesised above
+    // A silent turn has no first_text, so ttft/stream cannot be drawn; the
+    // whole-call bar stands in for them. Never both.
+    if (bar.key === "gemini" && spoken) continue;
+    if ((bar.key === "ttft" || bar.key === "stream") && !spoken) continue;
     const a = pick(run, bar.from, false);
     const b = pick(run, bar.to, bar.toLast);
     if (!a || !b || b.t < a.t) continue;
-    out.push({ ...bar, t0: a.t - run.start, t1: b.t - run.start, ms: Math.round((b.t - a.t) * 1000) });
+    out.push({ ...bar, t0: a.t - base, t1: b.t - base, ms: Math.round((b.t - a.t) * 1000) });
   }
-  return out;
+  return out.sort((x, y) => x.t0 - y.t0);
 }
 
 /** Sim publishes the finished clip instead of streaming to a speaker. */
@@ -367,8 +493,14 @@ function runLabel(run) {
   if (said) return said.replace(/^The user says:\s*/, "").slice(0, 90);
   const chars = first(run, "stt_done")?.chars;
   if (chars) return `(transcript, ${chars} chars)`;
+  // Housekeeping: the loop thinks on its own interval, with nobody waiting.
+  if (run.turn != null) return `turn ${run.turn} · no user input`;
   return "(no user event)";
 }
+
+/** A turn that ran the model and said nothing — the empty voice lane is the
+ *  finding, not a gap in the data. */
+const wasSilent = (run) => !!first(run, "stream_done") && !first(run, "speech_queued");
 
 // ---- rendering ------------------------------------------------------------
 const fmt = (ms) => (ms >= 1000 ? (ms / 1000).toFixed(2) + " s" : Math.round(ms) + " ms");
@@ -381,29 +513,101 @@ function median(xs) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
+const LEGEND = [
+  { label: "mic + VAD lag", color: "--c-wait" },
+  { label: "VAD silence", color: "--c-vad" },
+  ...BARS.filter((b) => b.from),
+];
+
 function renderLegend() {
-  $("legend").innerHTML = BARS.map(
+  $("legend").innerHTML = LEGEND.map(
     (b) => `<span><i class="swatch" style="background:var(${b.color})"></i>${b.label}</span>`,
   ).join("");
 }
 
 function renderTiles(runs) {
-  const complete = runs.filter((r) => audibleAt(r) && !r.dropped);
+  // Only exchanges someone was actually waiting on: a housekeeping turn's
+  // "latency" is an interval, not a delay, and would flatter the median.
+  const asked = runs.filter((r) => first(r, "event_queued") || first(r, "you_stopped"));
+  const complete = asked.filter((r) => audibleAt(r) && !r.dropped);
   const toAudio = complete.map((r) => (audibleAt(r).t - r.start) * 1000);
   const ttft = runs.map((r) => segments(r).find((s) => s.key === "ttft")?.ms).filter((v) => v != null);
   const total = complete.map((r) => (r.end - r.start) * 1000);
 
   const tile = (label, value, sub) =>
     `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
-
   const show = (xs) => (xs.length ? fmt(median(xs)) : "—");
   const spread = (xs) => (xs.length ? `n=${xs.length} · last ${fmt(xs[0])}` : "no samples yet");
 
+  // Name the tile after the WEAKEST anchor in the sample, never the best one:
+  // a median over one pressed and one back-dated exchange does not measure
+  // "from when you stopped", and must not claim to.
+  const kinds = new Set(complete.map((r) => r.anchorKind));
+  const from = kinds.has("mark") ? "First mark" : kinds.has("vad") ? "Speech end" : "You stop";
+
   $("tiles").innerHTML =
-    tile("Utterance → first audio", show(toAudio), spread(toAudio)) +
+    tile(`${from} → first audio`, show(toAudio), spread(toAudio)) +
     tile("Gemini time to first token", show(ttft), spread(ttft)) +
-    tile("Utterance → reply finished", show(total), spread(total)) +
+    tile(`${from} → reply finished`, show(total), spread(total)) +
     tile("Exchanges captured", String(runs.length), `${marks.length} marks`);
+}
+
+// ---- rolling timeline -----------------------------------------------------
+// One shared wall clock instead of per-exchange rows normalised to their own
+// zero: this is the view that shows how the housekeeping turns interleave with
+// what you said, and how long the gaps really are.
+function renderRolling(runs) {
+  const span = Number($("window").value);
+  const following = $("follow").checked;
+  const now = robotNow();
+  const t1 = following ? now : rollingFrozenAt ?? now;
+  const t0 = t1 - span;
+  const pct = (t) => ((t - t0) / span) * 100;
+
+  const lanes = LANES.map(() => []);
+  for (const run of runs) {
+    for (const s of segments(run)) {
+      const a = run.start + s.t0;
+      const b = run.start + s.t1;
+      if (b < t0 || a > t1) continue;
+      const left = Math.max(pct(a), 0);
+      const right = Math.min(pct(b), 100);
+      const label = s.key === "speak" && isTopicMode(run) ? "collecting clip" : s.label;
+      const width = Math.max(right - left, 0.15);
+      lanes[s.lane].push(
+        `<div class="rt-bar" style="left:${left}%;width:${width}%;background:var(${s.color})" ` +
+          `title="${label}: ${fmt(s.ms)} @ ${clock(a)}">${width >= 6 ? `<span>${fmt(s.ms)}</span>` : ""}</div>`,
+      );
+    }
+  }
+
+  // Gridlines every fifth of the window, plus a "now" edge and every press.
+  const steps = 5;
+  let grid = "";
+  let axis = "";
+  for (let i = 0; i <= steps; i++) {
+    const at = (i / steps) * 100;
+    grid += `<div class="rt-grid" style="left:${at}%"></div>`;
+    axis += `<i style="left:${at}%">${i === steps ? "now" : `−${Math.round(span - (i / steps) * span)}s`}</i>`;
+  }
+  const presses = marks
+    .filter((m) => m.stage === "you_stopped" && m.t >= t0 && m.t <= t1)
+    .map((m) => `<div class="rt-you" style="left:${pct(m.t)}%" title="you stopped speaking"></div>`)
+    .join("");
+  const nowLine = following ? '<div class="rt-now" style="left:100%"></div>' : "";
+
+  $("rt").innerHTML =
+    LANES.map(
+      (name, i) =>
+        `<div class="rt-row"><span class="rt-name">${name}</span>` +
+        `<div class="rt-lane">${grid}${presses}${lanes[i].join("")}${nowLine}</div></div>`,
+    ).join("") + `<div class="rt-axis">${axis}</div>`;
+
+  $("rt-text").textContent = following ? "" : `frozen at ${clock(t1)} — retick to resume`;
+  $("clock-text").textContent = clockKnown
+    ? `clock offset robot − browser: ${(clockOffset * 1000).toFixed(0)} ms ` +
+      `(${offsetSamples.length} samples) — the button is stamped through this`
+    : "clock offset: waiting for the first mark…";
 }
 
 function renderRuns(runs) {
@@ -442,7 +646,11 @@ function renderRuns(runs) {
         return bars ? `<div class="track">${bars}${tick}</div>` : "";
       };
       const sentences = run.stages.speech_queued?.length ?? 0;
-      const flag = run.dropped ? `<span class="flag">turn ${run.dropped}</span>` : "";
+      const flag = run.dropped
+        ? `<span class="flag">turn ${run.dropped}</span>`
+        : wasSilent(run)
+          ? '<span class="flag" title="the model ran but produced no speech">silent turn</span>'
+          : "";
       const mode = topic ? " · sim (clip → /tts/audio)" : "";
       return (
         `<div class="run">` +
@@ -512,26 +720,56 @@ function renderLog() {
 }
 
 let lastRuns = [];
+let rollingFrozenAt = null;
+
 function render() {
-  if (!dirty) return;
-  dirty = false;
-  lastRuns = buildRuns(marks);
-  renderTiles(lastRuns);
-  renderRuns(lastRuns);
-  renderStats(lastRuns);
-  renderWarnings(lastRuns);
-  renderLog();
+  if (dirty) {
+    dirty = false;
+    lastRuns = buildRuns(marks);
+    renderTiles(lastRuns);
+    renderRuns(lastRuns);
+    renderStats(lastRuns);
+    renderWarnings(lastRuns);
+    renderLog();
+  }
+  // Always: the window slides even when no new mark has arrived.
+  renderRolling(lastRuns);
 }
 renderLegend();
-setInterval(render, 300);
+setInterval(render, 200);
+
+$("follow").addEventListener("change", (e) => {
+  rollingFrozenAt = e.target.checked ? null : robotNow();
+});
+
+// ---- the ground-truth button ----------------------------------------------
+// Browser-side, so it is stamped on the robot's clock before it joins the rest.
+function markStopped() {
+  if (!clockKnown) {
+    $("stopped-text").textContent = "No marks received yet — the clocks are not aligned, so a press would be meaningless.";
+    return;
+  }
+  addMark({ t: robotNow(), stage: "you_stopped" }, false);
+  const btn = $("stopped");
+  btn.textContent = "marked";
+  setTimeout(() => (btn.innerHTML = "I stopped speaking<small>space</small>"), 500);
+}
+$("stopped").onclick = markStopped;
+document.addEventListener("keydown", (e) => {
+  if (e.code !== "Space" || e.repeat) return;
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+  e.preventDefault();
+  markStopped();
+});
 
 // ---- feeds ----------------------------------------------------------------
 // ?demo fills the page from a scripted exchange, so the layout and the stitching
 // can be checked with no robot in the picture (the brain monitor has the same).
 if (new URLSearchParams(location.search).has("demo")) {
-  const t0 = Date.now() / 1000 - 30;
+  const t0 = Date.now() / 1000 - 18;
   const script = [
-    ["utterance_closed", 0.0, { secs: 1.4 }], ["stt_request", 0.004, {}], ["stt_done", 0.38, { chars: 9 }],
+    ["you_stopped", 0.0, {}], ["utterance_closed", 0.62, { secs: 1.4, tail: 0.5 }],
+    ["stt_request", 0.004, {}], ["stt_done", 0.38, { chars: 9 }],
     ["chat_in", 0.002, { backend: "elevenlabs_batch" }],
     ["event_queued", 0.006, { kind: "user", text: 'The user says: "turn left and tell me what you see"' }],
     ["turn_start", 0.09, { turn: 7 }], ["request_sent", 0.12, { turn: 7 }], ["first_text", 0.71, { turn: 7 }],
@@ -547,9 +785,14 @@ if (new URLSearchParams(location.search).has("demo")) {
     ["speech_queued", 0.04, { chars: 18, first: true }], ["tts_start", 0.002, {}],
     ["tts_request", 0.001, { mode: "aplay" }], ["tts_first_byte", 0.19, { mode: "aplay" }],
     ["tts_play_done", 0.9, { mode: "aplay" }],
+    // A housekeeping turn that runs the model and says nothing — the case the
+    // per-exchange view used to draw as an empty row.
+    ["turn_start", 3.0, { turn: 10 }], ["request_sent", 0.11, { turn: 10 }],
+    ["stream_done", 1.19, { turn: 10 }],
   ];
   let t = t0;
-  for (const [stage, dt, extra] of script) addMark({ t: (t += dt), stage, ...extra });
+  for (const [stage, dt, extra] of script) addMark({ t: (t += dt), stage, ...extra }, false);
+  clockKnown = true;
 }
 
 const jsonHandler = (fn) => (msg) => {
