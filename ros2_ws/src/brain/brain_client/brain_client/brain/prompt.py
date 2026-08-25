@@ -71,5 +71,4 @@ def _identity_block(identity: RobotIdentity | None) -> str:
     if identity.hostname:
         host = identity.hostname if identity.hostname.endswith(".local") else f"{identity.hostname}.local"
         sentences.append(f'On the local network you are reachable as "{host}".')
-    sentences.append("The user can rename you from the app's Settings page.")
     return "\nAbout you: " + " ".join(sentences) + "\n"

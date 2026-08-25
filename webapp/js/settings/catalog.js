@@ -74,7 +74,6 @@
  * @property {string} summary  Index subtitle.
  * @property {string} [note]  Page introduction under the h1.
  * @property {boolean} [hasSpeakerVolume]  Inject the live speaker-volume control.
- * @property {boolean} [hasRobotName]  Inject the live robot-name control.
  * @property {PageSection[]} sections
  */
 
@@ -122,14 +121,6 @@ const VAD_ENGINE_OPTIONS = [
 
 /** @type {SettingsPage[]} */
 export const SETTINGS_PAGES = [
-  {
-    hasRobotName: true,
-    icon: "robot.svg",
-    title: "Robot",
-    summary: "The robot's name and identity",
-    note: "The name persists on the robot and feeds the brain's knowledge of itself.",
-    sections: [],
-  },
   {
     hasSpeakerVolume: true,
     icon: "volume.svg",
