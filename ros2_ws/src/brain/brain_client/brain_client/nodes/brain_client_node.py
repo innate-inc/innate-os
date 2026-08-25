@@ -50,6 +50,7 @@ from brain_client.brain.agent import BrainAgent
 from brain_client.brain.memory_search import MemorySearch
 from brain_client.brain.search_server import MemorySearchServer
 from brain_client.brain.utils import EventKind
+from brain_client.common.latency import LATENCY_TOPIC, marker
 from brain_client.common.script_paths import get_innate_os_root
 from brain_client.core.config import BrainConfig
 from brain_client.core.lifecycle import BrainLifecycle
@@ -108,6 +109,11 @@ class BrainClientNode(Node):
         # Deep agent-loop telemetry (JSON) for the webapp's Brain page
         # (webapp/js/brain/): turn lifecycle, tool calls, queue snapshots.
         self.brain_trace_pub = self.create_publisher(String, "/brain/trace", 10)
+        # Stage-boundary timings for webapp/debug/latency.html. Its own topic,
+        # not /brain/trace: subscribing to that one turns on the heavy traces
+        # (every frame the model saw), which would inflate what it measures.
+        self.brain_latency_pub = self.create_publisher(String, LATENCY_TOPIC, 10)
+        self.mark = marker(lambda payload: self.brain_latency_pub.publish(String(data=json.dumps(payload))))
         self._agent_status_heartbeat = None
 
         self._proxy = self._init_proxy()
@@ -155,6 +161,7 @@ class BrainClientNode(Node):
             tts_status_pub=self.tts_status_pub,
             tts_audio_pub=self.tts_audio_pub,
             simulator_mode=self.config.simulator_mode,
+            mark=self.mark,
         )
         if handler.is_available():
             self.get_logger().info(f"🗣️ Text-to-speech enabled (voice: {handler.voice_id})")
@@ -209,7 +216,9 @@ class BrainClientNode(Node):
 
     def _build_collaborators(self) -> None:
         cfg, state = self.config, self.state
-        self.chat = ChatManager(self.get_logger(), self.chat_out_pub, self.task_status_pub, self._tts_handler)
+        self.chat = ChatManager(
+            self.get_logger(), self.chat_out_pub, self.task_status_pub, self._tts_handler, mark=self.mark
+        )
         self._recorded_skill_runs: deque[tuple[str, str]] = deque(maxlen=256)
         self.camera = CameraCapture(self, cfg)
         self.pose_tracker = PoseTracker(self, odom_topic=cfg.odom_topic, nav_mode_topic=cfg.current_nav_mode_topic)
@@ -294,6 +303,7 @@ class BrainClientNode(Node):
             identity=self.identity,
             trace=lambda payload: self.brain_trace_pub.publish(String(data=payload)),
             on_thinking_changed=self.publish_agent_status,
+            mark=self.mark,
         )
         # Heavy traces (request bodies, frames — hundreds of KB per turn) are
         # only serialized while a monitor actually subscribes to /brain/trace.

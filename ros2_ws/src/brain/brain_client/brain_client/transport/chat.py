@@ -17,6 +17,7 @@ import time
 
 from brain_client.brain.context import split_tool_narration
 from brain_client.common.enums import StrEnum
+from brain_client.common.latency import Mark, Stage, marker
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _REPLY_IDS = itertools.count(1)
@@ -33,11 +34,12 @@ class Sender(StrEnum):
 
 
 class ChatManager:
-    def __init__(self, logger, chat_out_pub, task_status_pub, tts_handler=None):
+    def __init__(self, logger, chat_out_pub, task_status_pub, tts_handler=None, *, mark: Mark | None = None):
         self._logger = logger
         self._chat_out_pub = chat_out_pub
         self._task_status_pub = task_status_pub
         self._tts_handler = tts_handler
+        self._mark = mark if mark is not None else marker(None)
         self.history: list[dict] = []
 
     @staticmethod
@@ -106,7 +108,7 @@ class ChatManager:
             self._tts_handler.speak_text_async(text, replace_pending=replace_pending, reply_id=reply_id)
 
     def stream_speech(self) -> SpeechStreamer:
-        return SpeechStreamer(self)
+        return SpeechStreamer(self, self._mark)
 
 
 class SpeechStreamer:
@@ -120,8 +122,9 @@ class SpeechStreamer:
     decided to abandon it.
     """
 
-    def __init__(self, chat: ChatManager):
+    def __init__(self, chat: ChatManager, mark: Mark | None = None):
         self._chat = chat
+        self._mark = mark if mark is not None else marker(None)
         self._buffer = ""
         self._muted = False
         self._lock = threading.Lock()
@@ -177,5 +180,6 @@ class SpeechStreamer:
         # The first sentence supersedes stale queued utterances (a reply
         # mid-playback keeps its rest, see _survives_flush in tts.py); the
         # rest of this reply queues in order behind it.
+        self._mark(Stage.SPEECH_QUEUED, chars=len(sentence), first=not self.spoke)
         self._chat.speak(sentence, replace_pending=not self.spoke, reply_id=self._reply_id)
         self.spoke = True

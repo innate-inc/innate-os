@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from brain_client.common.latency import Mark, Stage, marker
 from brain_client.common.logging import UniversalLogger
 from innate_proxy import ProxyClient
 from innate_proxy.adapters.cartesia import ProxyCartesiaClient
@@ -63,6 +64,7 @@ class TTSHandler:
         tts_status_pub=None,
         tts_audio_pub=None,
         simulator_mode: bool = False,
+        mark: Mark | None = None,
     ):
         """
         Initialize the TTS handler.
@@ -76,6 +78,7 @@ class TTSHandler:
                 webapp plays the clip instead of the speaker.
             simulator_mode: When True, synthesized speech is published on
                 ``tts_audio_pub`` rather than played locally via aplay.
+            mark: Optional latency sink (see brain_client.common.latency).
         """
         self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
         self._proxy: ProxyClient = proxy
@@ -87,6 +90,7 @@ class TTSHandler:
         self.tts_status_pub = tts_status_pub
         self.tts_audio_pub = tts_audio_pub
         self._simulator_mode = simulator_mode
+        self._mark = mark if mark is not None else marker(None)
 
         # Initialize Cartesia client
         self._init_client()
@@ -192,6 +196,7 @@ class TTSHandler:
 
         t_start = time.perf_counter()
         text_len = len(text)
+        self._mark(Stage.TTS_START, chars=text_len)
         try:
             self.logger.info(f"🗣️ TTS start ({text_len} chars): '{text[:60]}{'...' if text_len > 60 else ''}'")
 
@@ -288,6 +293,7 @@ class TTSHandler:
             t_first_chunk = None
 
             t_api = time.perf_counter()
+            self._mark(Stage.TTS_REQUEST, chars=len(text), mode="aplay")
             for chunk in self._stream_tts_bytes(text, voice, for_speaker=True):
                 if not chunk:
                     continue
@@ -297,6 +303,9 @@ class TTSHandler:
                 if t_first_chunk is None:
                     t_first_chunk = time.perf_counter()
                     self.logger.info(f"⏱️ TTS first byte in {(t_first_chunk - t_api) * 1000:.0f}ms")
+                    # aplay is already draining the pipe, so this is also when
+                    # the speaker starts making sound.
+                    self._mark(Stage.TTS_FIRST_BYTE, ms=round((t_first_chunk - t_api) * 1000), mode="aplay")
                     if on_start is not None:
                         on_start()
 
@@ -321,6 +330,12 @@ class TTSHandler:
                 return False
             if player.returncode == 0:
                 ttfb_ms = (t_first_chunk - t_api) * 1000 if t_first_chunk else 0
+                self._mark(
+                    Stage.TTS_PLAY_DONE,
+                    ms=round((t_play_done - t_start) * 1000),
+                    audio_ms=round(total_bytes / (44100 * 2) * 1000),
+                    mode="aplay",
+                )
                 self.logger.info(
                     f"✅ TTS done ({text_len} chars): "
                     f"TTFB={ttfb_ms:.0f}ms "
@@ -355,6 +370,7 @@ class TTSHandler:
         collect the whole clip (utterances are short) and publish it once.
         """
         t_api = time.perf_counter()
+        self._mark(Stage.TTS_REQUEST, chars=len(text), mode="topic")
         buf = bytearray()
         t_first_chunk = None
         for chunk in self._stream_tts_bytes(text, voice, for_speaker=False):
@@ -363,6 +379,9 @@ class TTSHandler:
             if t_first_chunk is None:
                 t_first_chunk = time.perf_counter()
                 self.logger.info(f"⏱️ TTS first byte in {(t_first_chunk - t_api) * 1000:.0f}ms")
+                # Nothing is audible yet, unlike the aplay path: the sim holds
+                # the whole clip back until the stream ends.
+                self._mark(Stage.TTS_FIRST_BYTE, ms=round((t_first_chunk - t_api) * 1000), mode="topic")
             buf.extend(chunk)
 
         if not buf:
@@ -378,6 +397,12 @@ class TTSHandler:
         # the clip's actual duration so completion callbacks match what the
         # operator hears in the browser.
         duration_s = _wav_duration_s(wav)
+        self._mark(
+            Stage.TTS_PLAY_DONE,
+            ms=round((time.perf_counter() - t_start) * 1000),
+            audio_ms=round(duration_s * 1000),
+            mode="topic",
+        )
         if duration_s > 0:
             self._closing.wait(duration_s)  # close() must not ride out a whole clip
         self.logger.info(

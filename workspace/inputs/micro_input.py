@@ -41,6 +41,7 @@ import time
 import numpy as np
 from innate_llm import configure
 
+from brain_client.common.latency import Stage, marker
 from brain_client.common.logging import UniversalLogger
 from brain_client.inputs.batch_stt import (
     DEFAULT_KEYTERMS,
@@ -221,6 +222,9 @@ class MicroInput(InputDevice):
         self._connect_failures = 0
         self._identity = None  # IdentityMonitor, created on first open (needs the node)
         self._warned_dropped_keyterms = False
+        # Latency marks ride the telemetry topic this device already publishes on
+        # — an input device has no ROS of its own to open /brain/latency with.
+        self._mark = marker(lambda payload: self.send_data({"kind": "latency", **payload}, data_type="telemetry"))
         # Initialize logger wrapper (will be updated when set_logger is called)
         self.logger = UniversalLogger(enabled=False)
 
@@ -447,6 +451,7 @@ class MicroInput(InputDevice):
             silence_secs=silence_secs,
             on_transcript=self._on_transcript_if_active,
             logger=self.logger,
+            mark=self._mark,
         )
 
     def _make_vad(self, cfg: dict) -> tuple[VoicedDetector, str]:
@@ -876,6 +881,9 @@ class MicroInput(InputDevice):
             return
         self.logger.info(f"🎤 Transcript: {text}")
 
+        # The one STT mark every backend produces: under vendor endpointing
+        # nothing before this is observable here.
+        self._mark(Stage.CHAT_IN, backend=self._backend, vad=self._vad_engine, chars=len(text))
         self.send_data(text, data_type="chat_in")
         self._last_transcript = text
         self._send_vad_status()
