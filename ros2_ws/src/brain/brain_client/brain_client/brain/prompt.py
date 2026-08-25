@@ -61,8 +61,8 @@ def _identity_block(identity: RobotIdentity | None) -> str:
     if identity is None:
         return ""
     sentences = [f"Your name is {identity.name} — that is you; answer to it, and speak of yourself by it."]
-    if identity.color:
-        sentences.append(f"Your body is {identity.color}.")
+    # Stated as unknown rather than omitted — with no color at all, the model invents one.
+    sentences.append(f"Your body is {identity.color}." if identity.color else "You do not know your body's color.")
     if identity.hardware_revision:
         sentences.append(f"Your hardware revision is {identity.hardware_revision}.")
     sentences.append(f"You run Innate OS {identity.version}." if identity.version else "You run Innate OS.")
