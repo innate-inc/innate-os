@@ -60,7 +60,12 @@ def generate_launch_description():
     brain_client_node = Node(
         package="brain_client",
         executable="brain_client_node.py",
-        name="brain_client_node",
+        # No name= here: launch turns it into a process-wide __node:= remap, which
+        # renames EVERY node the process creates — the service-call node, the memory
+        # search server, skill helpers — to this one name. Three nodes then answer
+        # /brain_client_node/set_parameters, and the two that never declared
+        # gemini_model reject the write as undeclared. The executable already names
+        # itself; the remap only ever collided.
         parameters=[
             {
                 "image_topic": LaunchConfiguration("image_topic"),
@@ -96,7 +101,6 @@ def generate_launch_description():
             Node(
                 package="brain_client",
                 executable="skills_server.py",
-                name="skills_action_server",
                 output="screen",
                 # Skills ask the same model the brain runs on unless one names its own:
                 # the launch defaults, then settings.yaml's brain section, as for the brain.
@@ -120,7 +124,6 @@ def generate_launch_description():
             Node(
                 package="brain_client",
                 executable="arm_sdk_server.py",
-                name="arm_sdk_server",
                 output="screen",
                 respawn=True,
                 respawn_delay=2.0,
