@@ -366,6 +366,15 @@ bool WebRTCStreamer::build_audio_pipeline() {
     return true;
 }
 
+// Every mic failure lands here — a synchronous set_state refusal or an error the bus reports later —
+// so the retry backoff cannot be sidestepped: an open that "succeeds" ASYNC and then fails on the bus
+// would otherwise be reopened by every 5 Hz poll. Same locking contract as closing in reconcile_audio.
+void WebRTCStreamer::fail_audio_pipeline() {
+    gst_element_set_state(audio_pipeline_, GST_STATE_NULL);
+    audio_playing_ = false;
+    mic_retry_ns_ = std::chrono::steady_clock::now().time_since_epoch().count() + kMicRetryBackoffNs;
+}
+
 void WebRTCStreamer::reconcile_audio() {
     // Mic-privacy gate: the mic pipeline is PLAYING only while some peer has audio ACTIVE, NULL otherwise
     // (the device is genuinely closed). Opening (NULL->PLAYING) starts threads and never blocks, so it is
@@ -393,8 +402,7 @@ void WebRTCStreamer::reconcile_audio() {
             mic_retry_ns_ = 0;
             RCLCPP_INFO(this->get_logger(), "Mic opened (a peer activated audio)");
         } else {
-            gst_element_set_state(audio_pipeline_, GST_STATE_NULL);
-            mic_retry_ns_ = now_ns + kMicRetryBackoffNs;
+            fail_audio_pipeline();
             RCLCPP_WARN(this->get_logger(), "Mic '%s' failed to open; retrying in %lld s",
                         audio_capture_device_.empty() ? "(default)" : audio_capture_device_.c_str(),
                         static_cast<long long>(kMicRetryBackoffNs / 1000000000));

@@ -160,6 +160,7 @@ class WebRTCStreamer : public rclcpp::Node {
     // ---- Shared audio (mic) — encoded once like the cameras, fanned out, gated for privacy ----
     bool build_audio_pipeline();  // alsasrc -> opusenc -> rtpopuspay -> appsink (built once, kept NULL)
     void reconcile_audio();       // PLAYING when some peer has audio active, NULL otherwise (mic off)
+    void fail_audio_pipeline();   // NULL + arm the retry backoff; the one landing for every mic failure
     static GstFlowReturn on_audio_sample(GstElement* appsink, gpointer user_data);
     void fan_out_audio(GstElement* appsink);
 

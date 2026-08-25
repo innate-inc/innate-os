@@ -349,12 +349,11 @@ void WebRTCStreamer::poll_pipeline_health() {
 
     drain_bus(encode_pipeline_, "encode", /*expected_teardown=*/false);
     // A runtime mic error (device unplugged, fatal xrun) otherwise leaves audio_playing_ true with a dead
-    // pipeline, and reconcile_audio() no-ops on it forever. Reset so the reconcile below reopens — once if
-    // the fault was transient, onto the failed-open backoff if the device is gone. Safe here: the lock is
-    // not yet held, so NULL-ing (which joins the fan-out thread) cannot deadlock.
+    // pipeline, and reconcile_audio() no-ops on it forever. Fail it onto the backoff, and the reconcile
+    // retries once that expires. Safe here: the lock is not yet held, so NULL-ing (which joins the
+    // fan-out thread) cannot deadlock.
     if (drain_bus(audio_pipeline_, "audio", /*expected_teardown=*/false) && audio_playing_) {
-        gst_element_set_state(audio_pipeline_, GST_STATE_NULL);
-        audio_playing_ = false;
+        fail_audio_pipeline();
     }
 
     std::unique_lock<std::mutex> lock(peers_mutex_);
