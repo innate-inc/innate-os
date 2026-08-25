@@ -155,6 +155,16 @@
   }
   .rt-tip b { display: block; font-size: 0.82rem; margin-bottom: 2px; }
 
+  .pin { border-top: 1px solid var(--grid); padding: 12px 0 10px; }
+  .pin:first-child { border-top: 0; padding-top: 2px; }
+  .pin-head { display: flex; align-items: center; gap: 9px; margin-bottom: 3px; flex-wrap: wrap; }
+  .pin-head b { font-family: ui-monospace, Menlo, monospace; color: var(--muted); font-weight: 600; }
+  .pin-cfg { font-family: ui-monospace, Menlo, monospace; font-size: 0.79rem; color: var(--ink); }
+  .pin-note { flex: 1 1 130px; min-width: 90px; margin-left: auto; padding: 3px 8px; font-size: 0.82rem; }
+  .pin-head button { padding: 3px 9px; font-size: 0.78rem; }
+  .pin-stats { font-size: 0.79rem; color: var(--ink-2); margin-bottom: 6px;
+               font-family: ui-monospace, Menlo, monospace; }
+
   table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
   th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); }
   th:first-child, td:first-child { text-align: left; }
@@ -269,13 +279,19 @@
     <button id="zoom-in" title="show less time">+</button>
     <label class="status"><input type="checkbox" id="follow" checked style="vertical-align:-2px"> follow now</label>
     <span class="status">scroll to zoom · drag to pan</span>
-    <button id="capture-png">Capture PNG</button>
-    <button id="capture-svg">SVG</button>
+    <button id="pin" class="primary">Pin this view</button>
     <span class="status" id="rt-text"></span>
   </div>
   <div class="legend" id="legend"></div>
   <div class="rt" id="rt"></div>
   <div class="rt-tip" id="rt-tip" hidden></div>
+</section>
+
+<section class="card" id="pins-card" hidden>
+  <h2>Pinned segments <span class="status" id="pins-count"></span>
+    <button id="pins-clear" style="float:right;padding:3px 9px;font-size:0.8rem">Clear all</button>
+  </h2>
+  <div id="pins"></div>
 </section>
 
 <section class="tiles" id="tiles"></section>
@@ -313,6 +329,12 @@
       (<code>stt_vad_silence_secs</code>, default 0.5 s), and that wait is drawn rather
       than hidden. Press and back-date together give you the mic + detection lag between
       them.</li>
+    <li><b>Pin before you change anything.</b> A pin keeps the window exactly as it
+      sits — same zoom, same pan — with its own copy of the runs and the configuration
+      that produced them, and it stays interactive: hover a pinned bar and you get the
+      same card. Pin config A, change a knob, pin config B, and the two headline
+      numbers sit one above the other. Notes are for what the setting was; the config
+      line is filled in from what the robot reported, not from what you typed.</li>
     <li><b>A silent turn is a finding, not a gap.</b> A turn that runs the model and says
       nothing has no first token to measure, so its whole call shows as one violet
       <i>Gemini (silent turn)</i> bar and the row is flagged. If the turn that consumed
@@ -702,9 +724,10 @@ function detachView() {
   $("follow").checked = false;
 }
 
-function renderRolling(runs) {
-  const span = viewSpan;
-  const { t1, why } = rollingEdge();
+/** The lane markup for one window. Shared by the live view and every pin, so a
+ *  pinned segment is the same picture with the same hover cards — not a
+ *  screenshot of one. */
+function timelineHtml({ runs, t1, span, why }) {
   const t0 = t1 - span;
   const pct = (t) => ((t - t0) / span) * 100;
 
@@ -761,12 +784,22 @@ function renderRolling(runs) {
   }
   const nowLine = why === "live" ? '<div class="rt-now" style="left:100%"></div>' : "";
 
-  $("rt").innerHTML =
+  return (
     LANES.map(
       (name, i) =>
         `<div class="rt-row"><span class="rt-name">${name}</span>` +
         `<div class="rt-lane">${grid}${presses}${lanes[i].join("")}${nowLine}</div></div>`,
-    ).join("") + `<div class="rt-axis">${axis}</div>`;
+    ).join("") + `<div class="rt-axis">${axis}</div>`
+  );
+}
+
+/** Everything a window needs to be drawn, so a pin can keep its own copy. */
+const currentView = () => ({ runs: lastRuns, span: viewSpan, ...rollingEdge() });
+
+function renderRolling(runs) {
+  const span = viewSpan;
+  const { t1, why } = rollingEdge();
+  $("rt").innerHTML = timelineHtml({ runs, t1, span, why });
 
   $("span-text").textContent = spanLabel(span);
   $("rt-text").textContent = {
@@ -979,9 +1012,12 @@ window.addEventListener("mouseup", () => {
 // element under the cursor is replaced mid-read and the card flickers away.
 const tip = $("rt-tip");
 
-$("rt").addEventListener("mousemove", (e) => {
-  const bar = e.target instanceof Element ? e.target.closest("[data-tip]") : null;
-  if (!bar) {
+document.addEventListener("mousemove", (e) => {
+  const el = e.target instanceof Element ? e.target : null;
+  // Only the LIVE window pauses its redraw; a pin is already frozen.
+  rtHover = !!el?.closest("#rt");
+  const bar = el?.closest("[data-tip]") ?? null;
+  if (!bar || drag) {
     tip.hidden = true;
     return;
   }
@@ -996,8 +1032,7 @@ $("rt").addEventListener("mousemove", (e) => {
   tip.style.left = `${Math.max(4, x)}px`;
   tip.style.top = `${Math.max(4, Math.min(e.clientY + 16, window.innerHeight - box.height - 4))}px`;
 });
-$("rt").addEventListener("mouseenter", () => (rtHover = true));
-$("rt").addEventListener("mouseleave", () => {
+document.addEventListener("mouseleave", () => {
   rtHover = false;
   tip.hidden = true;
 });
@@ -1082,18 +1117,16 @@ if (defaultTarget) ros.connect(defaultTarget);
 // without its model and STT backend is not evidence of anything.
 const CAP = { w: 1180, pad: 24, laneH: 26, gap: 6, nameW: 92 };
 
-function captureSvg() {
-  const span = viewSpan;
-  const { t1, why } = rollingEdge();
+function captureSvg({ runs, span, t1, why, config }) {
   const t0 = t1 - span;
   const plotW = CAP.w - CAP.pad * 2 - CAP.nameW;
   const x = (t) => CAP.pad + CAP.nameW + ((t - t0) / span) * plotW;
 
   const meta = [
-    ["brain model", liveConfig.gemini_model ?? "unknown"],
-    ["STT backend", liveConfig.stt_backend ?? "unknown"],
-    ["VAD", `${liveConfig.stt_vad_engine ?? "?"} · ${liveConfig.stt_vad_silence_secs ?? "?"}s silence · threshold ${liveConfig.stt_vad_threshold ?? "?"}`],
-    ["speech out", lastRuns.some(isTopicMode) ? "sim — whole clip to /tts/audio" : "streamed to the speaker"],
+    ["brain model", config.gemini_model ?? "unknown"],
+    ["STT backend", config.stt_backend ?? "unknown"],
+    ["VAD", `${config.stt_vad_engine ?? "?"} · ${config.stt_vad_silence_secs ?? "?"}s silence · threshold ${config.stt_vad_threshold ?? "?"}`],
+    ["speech out", runs.some(isTopicMode) ? "sim — whole clip to /tts/audio" : "streamed to the speaker"],
     ["window", `${spanLabel(span)} ending ${clock(t1)}${why === "live" ? " (live)" : ""}`],
     ["captured", new Date().toLocaleString()],
   ];
@@ -1153,7 +1186,7 @@ function captureSvg() {
     parts.push(
       `<text x="${CAP.pad + CAP.nameW - 8}" y="${y + CAP.laneH / 2 + 4}" font-size="10" fill="${muted}" text-anchor="end">${esc(name.toUpperCase())}</text>`,
     );
-    for (const run of lastRuns) {
+    for (const run of runs) {
       for (const s of segments(run)) {
         if (s.lane !== li) continue;
         const a = run.start + s.t0;
@@ -1171,7 +1204,7 @@ function captureSvg() {
       }
     }
     // The press marks span every lane, so the eye can drop straight down from them.
-    for (const run of lastRuns)
+    for (const run of runs)
       for (const m of run.stages.you_stopped ?? [])
         if (m.t >= t0 && m.t <= t1)
           parts.push(`<rect x="${(x(m.t) - 1).toFixed(1)}" y="${y}" width="2" height="${CAP.laneH}" fill="${colour("--c-vad")}"/>`);
@@ -1199,37 +1232,133 @@ function download(blob, name) {
 }
 
 /** A filename that says what it is without opening it. */
-const captureName = (ext) =>
-  `latency-${(liveConfig.gemini_model ?? "model").replace(/[^\w.-]/g, "")}-${(liveConfig.stt_backend ?? "stt").replace(/[^\w.-]/g, "")}-` +
-  `${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.${ext}`;
+const captureName = (pin, ext) =>
+  `latency-${(pin.config.gemini_model ?? "model").replace(/[^\w.-]/g, "")}-` +
+  `${(pin.config.stt_backend ?? "stt").replace(/[^\w.-]/g, "")}-` +
+  `${(pin.note || "").trim().replace(/[^\w-]+/g, "_").slice(0, 24) || `pin${pin.id}`}.${ext}`;
 
-$("capture-svg").onclick = () => download(new Blob([captureSvg()], { type: "image/svg+xml" }), captureName("svg"));
+// ---- pinned segments -------------------------------------------------------
+// A pin is a frozen window kept on the page, not a screenshot: it holds its own
+// runs, zoom and configuration, and re-renders through the same timelineHtml,
+// so the hover cards keep working. Pinning A, changing a knob and pinning B is
+// what the comparison actually looks like.
+/** @type {any[]} */
+let pins = [];
+let pinSeq = 0;
 
-$("capture-png").onclick = () => {
-  const svg = captureSvg();
+function pinCurrent() {
+  const view = currentView();
+  pins.unshift({
+    id: ++pinSeq,
+    at: robotNow(),
+    // Snapshot by value: buildRuns creates fresh objects each pass, so these
+    // will not be mutated under the pin, but the array itself is reassigned.
+    runs: [...view.runs],
+    span: view.span,
+    t1: view.t1,
+    why: view.why === "live" ? "manual" : view.why, // a pin is never "now" again
+    config: { ...liveConfig },
+    note: "",
+  });
+  renderPins();
+  $("pins-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+/** The numbers that make two pins comparable at a glance. */
+function pinStats(pin) {
+  const asked = pin.runs.filter((r) => first(r, "event_queued") || first(r, "you_stopped"));
+  const done = asked.filter((r) => audibleAt(r) && !r.dropped);
+  const toAudio = done.map((r) => (audibleAt(r).t - r.start) * 1000);
+  const ttft = pin.runs.map((r) => segments(r).find((s) => s.key === "ttft")?.ms).filter((v) => v != null);
+  const out = [];
+  if (toAudio.length) out.push(`to first audio ${fmt(median(toAudio))} (n=${toAudio.length})`);
+  if (ttft.length) out.push(`TTFT ${fmt(median(ttft))} (n=${ttft.length})`);
+  if (!out.length) out.push("no completed exchange in this window");
+  return out.join(" · ");
+}
+
+function pinConfigLine(pin) {
+  const c = pin.config;
+  return [
+    c.gemini_model ?? "model unknown",
+    c.stt_backend ?? "stt unknown",
+    c.stt_vad_engine ? `${c.stt_vad_engine} vad` : null,
+    c.stt_vad_silence_secs != null ? `${c.stt_vad_silence_secs}s silence` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function renderPins() {
+  $("pins-card").hidden = !pins.length;
+  $("pins-count").textContent = pins.length ? `(${pins.length})` : "";
+  $("pins").innerHTML = pins
+    .map(
+      (pin) =>
+        `<div class="pin" data-pin="${pin.id}">` +
+        `<div class="pin-head">` +
+        `<b>#${pin.id}</b>` +
+        `<span class="pin-cfg">${escapeHtml(pinConfigLine(pin))}</span>` +
+        `<span class="status">${spanLabel(pin.span)} to ${clock(pin.t1)}</span>` +
+        `<input class="pin-note" data-pin="${pin.id}" placeholder="note…" value="${escapeHtml(pin.note)}">` +
+        `<button class="pin-png" data-pin="${pin.id}">PNG</button>` +
+        `<button class="pin-del" data-pin="${pin.id}" title="remove">✕</button>` +
+        `</div>` +
+        `<div class="pin-stats">${escapeHtml(pinStats(pin))}</div>` +
+        `<div class="rt">${timelineHtml(pin)}</div>` +
+        `</div>`,
+    )
+    .join("");
+}
+
+$("pin").onclick = pinCurrent;
+$("pins-clear").onclick = () => {
+  pins = [];
+  renderPins();
+};
+
+// Delegated: the pin list is rebuilt whenever a pin is added, noted or removed.
+$("pins").addEventListener("click", (e) => {
+  const btn = e.target instanceof Element ? e.target.closest("button[data-pin]") : null;
+  if (!btn) return;
+  const id = Number(btn.dataset.pin);
+  const pin = pins.find((p) => p.id === id);
+  if (!pin) return;
+  if (btn.classList.contains("pin-del")) {
+    pins = pins.filter((p) => p.id !== id);
+    renderPins();
+  } else if (btn.classList.contains("pin-png")) {
+    savePng(pin);
+  }
+});
+$("pins").addEventListener("input", (e) => {
+  const el = e.target;
+  if (!(el instanceof HTMLInputElement) || !el.classList.contains("pin-note")) return;
+  const pin = pins.find((p) => p.id === Number(el.dataset.pin));
+  if (pin) pin.note = el.value; // not a re-render: that would blur the field mid-type
+});
+
+function savePng(pin) {
+  const svg = captureSvg(pin);
   const img = new Image();
   const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
   img.onload = () => {
-    // 2x for a legible screenshot on a retina display or in a ticket.
-    const canvas = Object.assign(document.createElement("canvas"), {
-      width: img.width * 2,
-      height: img.height * 2,
-    });
+    // 2x so it stays legible in a ticket or on a retina display.
+    const canvas = Object.assign(document.createElement("canvas"), { width: img.width * 2, height: img.height * 2 });
     const ctx = canvas.getContext("2d");
     ctx.scale(2, 2);
     ctx.drawImage(img, 0, 0);
     URL.revokeObjectURL(url);
-    canvas.toBlob((blob) => blob && download(blob, captureName("png")), "image/png");
+    canvas.toBlob((blob) => blob && download(blob, captureName(pin, "png")), "image/png");
   };
   img.onerror = () => {
-    // Rasterising can fail (tainted canvas, no SVG image support); the vector
-    // file is the same picture, so hand that over rather than nothing.
+    // Rasterising can fail; the vector file is the same picture, so hand that
+    // over rather than nothing.
     URL.revokeObjectURL(url);
-    download(new Blob([svg], { type: "image/svg+xml" }), captureName("svg"));
-    $("rt-text").textContent = "PNG rasterising failed — saved the SVG instead";
+    download(new Blob([svg], { type: "image/svg+xml" }), captureName(pin, "svg"));
   };
   img.src = url;
-};
+}
 
 // ---- live configuration ----------------------------------------------------
 // Read straight off the running nodes rather than off settings.yaml: the file is
