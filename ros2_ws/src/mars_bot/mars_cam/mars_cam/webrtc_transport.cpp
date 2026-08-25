@@ -399,10 +399,20 @@ void WebRTCStreamer::on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer
         RCLCPP_ERROR(self->get_logger(), "Failed to link the talkback branch to webrtcbin");
         gst_element_set_state(branch, GST_STATE_NULL);
         gst_bin_remove(GST_BIN(pipeline), branch);
-    } else {
-        g_object_set_data(G_OBJECT(webrtc), "mars_talk_attached", GINT_TO_POINTER(1));
-        RCLCPP_INFO(self->get_logger(), "Talkback branch attached (speaker %s)", open ? "open" : "muted");
+        gst_object_unref(pipeline);
+        return;
     }
+    // Re-arm the valve from the gate now that the branch is findable: a release landing between the first
+    // gate read and gst_bin_add stores false and finds no valve to close, so the pre-add snapshot would
+    // pin the speaker open. set_peer_talk stores before it looks up, so one of the two writers is last
+    // with the current value whichever way this interleaves.
+    const bool open_now = gate && (*gate)->load(std::memory_order_relaxed);
+    if (GstElement* valve = gst_bin_get_by_name(GST_BIN(branch), "talk_valve")) {
+        g_object_set(valve, "drop", open_now ? FALSE : TRUE, nullptr);
+        gst_object_unref(valve);
+    }
+    g_object_set_data(G_OBJECT(webrtc), "mars_talk_attached", GINT_TO_POINTER(1));
+    RCLCPP_INFO(self->get_logger(), "Talkback branch attached (speaker %s)", open_now ? "open" : "muted");
     gst_object_unref(pipeline);
 }
 

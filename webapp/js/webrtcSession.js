@@ -88,6 +88,9 @@ export class WebRtcSession {
   #started = false;
   #builtWithAudio = false;
   /** @type {MediaStream | null} */ #micStream = null;
+  // Bumped by #closeMic so a getUserMedia still pending across a stop() (operator left the page
+  // mid-prompt) discards its stream instead of re-capturing the mic after teardown.
+  #micEpoch = 0;
   /** @type {RTCRtpSender | null} */ #talkSender = null;
   #processingOffer = false;
   #remoteDescriptionSet = false;
@@ -250,15 +253,22 @@ export class WebRtcSession {
       this.#patch({ talkError: "Open the app over https to use the microphone" });
       return false;
     }
+    const epoch = this.#micEpoch;
     try {
-      this.#micStream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         // Cancels what this browser is playing (the robot's mic, if the operator is also listening);
         // the robot-side half-duplex duck is what handles the loop through its own speaker.
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
+      if (epoch !== this.#micEpoch) {
+        for (const track of stream.getTracks()) track.stop();
+        return false;
+      }
+      this.#micStream = stream;
       this.#patch({ talkStream: this.#micStream, talkError: null });
       return true;
     } catch (err) {
+      if (epoch !== this.#micEpoch) return false;
       this.#patch({ talkError: describeMicError(err) });
       return false;
     }
@@ -274,6 +284,7 @@ export class WebRtcSession {
   }
 
   #closeMic() {
+    this.#micEpoch += 1;
     for (const track of this.#micStream?.getTracks() ?? []) track.stop();
     this.#micStream = null;
     this.#talkSender = null;
