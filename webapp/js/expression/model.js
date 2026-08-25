@@ -22,7 +22,7 @@
  * @typedef {Record<ActuatorKey, number>} Pose
  * @typedef {Partial<Record<ActuatorKey, number>>} PoseDelta
  * @typedef {{ key: string, label: string, negLabel: string, posLabel: string,
- *             doc: string, neg: PoseDelta, pos: PoseDelta }} Axis
+ *             group: "shape" | "stance", doc: string, neg: PoseDelta, pos: PoseDelta }} Axis
  * @typedef {Record<string, number>} Weights axis key -> weight in [-1, 1]
  * @typedef {{ key: string, label: string, doc: string, weights: Weights }} Preset
  */
@@ -42,11 +42,13 @@ export const ACTUATORS = [
   { key: "head", label: "head pitch", min: -40, max: 70, unit: "°", step: 1 },
   { key: "baseX", label: "base advance", min: -0.3, max: 0.3, unit: "m", step: 0.005 },
   { key: "baseY", label: "base sidestep", min: -0.3, max: 0.3, unit: "m", step: 0.005 },
-  { key: "baseYaw", label: "base turn", min: -0.7854, max: 0.7854, unit: "rad", step: 0.01 },
+  { key: "baseYaw", label: "base turn", min: -1.6, max: 1.6, unit: "rad", step: 0.01 },
 ];
 
 // At-ease: arm loosely folded near the SDK rest pose but off the joint limits
-// (so every axis has room in both directions), head level on the person.
+// (so every axis has room in both directions), head level on the person, and
+// the base standing slightly OBLIQUE — a relaxed body doesn't square up, so
+// squaring on becomes an engagement signal the orient axis can spend.
 /** @type {Pose} */
 export const NEUTRAL = {
   j1: 0.9,
@@ -58,7 +60,7 @@ export const NEUTRAL = {
   head: 8,
   baseX: 0,
   baseY: 0,
-  baseYaw: 0,
+  baseYaw: 0.26,
 };
 
 // The person the robot is expressing *to* stands here (base frame, meters) —
@@ -71,70 +73,95 @@ export const PERSON = { x: 1.0, y: 0, height: 1.65 };
 // sculpted poses, axes added or dropped, and the result persists and exports
 // with the pose library. Deltas are what the +1 / −1 extreme adds to NEUTRAL;
 // anything an axis doesn't mention stays untouched, so axes compose additively.
+// Shape axes describe the BODY's configuration (arm + head — Laban's Shape);
+// stance axes describe where the base stands relative to the person, which
+// the runtime driving layer will own at execution time. This is the
+// conversation's core vocabulary — orient, approach, expand, rise, tilt,
+// asymmetry — translated to MARS's morphology: "lean" is the arm+head mass
+// shifting (the chassis can't tilt), and "head tilt / asymmetry" becomes the
+// askew axis (the head can only pitch, so the wrist roll + arm cant carry
+// the cocked-head quality).
 /** @type {Axis[]} */
 export const AXES = [
   {
     key: "approach",
     label: "approach",
-    negLabel: "withdraw",
-    posLabel: "advance",
-    doc: "Distance to the person — the most primitive engagement signal. Advancing commits the body toward the stimulus; withdrawing moves the vulnerable whole away from it.",
-    neg: { baseX: -0.24 },
-    pos: { baseX: 0.17 },
-  },
-  {
-    key: "turn",
-    label: "turn",
-    negLabel: "away right",
-    posLabel: "away left",
-    doc: "Facing. 0 is square-on; either sign breaks the face-to-face axis. Body turned away with the head still on target reads very differently from full disengagement.",
-    neg: { baseYaw: -0.7 },
-    pos: { baseYaw: 0.7 },
-  },
-  {
-    key: "sidestep",
-    label: "sidestep",
-    negLabel: "right",
-    posLabel: "left",
-    doc: "Lateral offset from the person's axis — circling, peeking, giving way.",
-    neg: { baseY: -0.2 },
-    pos: { baseY: 0.2 },
-  },
-  {
-    key: "rise",
-    label: "rise",
-    negLabel: "shrink",
-    posLabel: "tower",
-    doc: "Silhouette height. The arm is most of what MARS can raise: mast-high arm plus lifted head maximizes apparent size; folding it low with the head dropped minimizes it.",
-    neg: { j2: -0.5, j3: 0.35, j4: -0.8, head: -30 },
-    pos: { j1: -0.7, j2: 0.75, j3: -2.75, j4: 0.3, head: 14 },
+    negLabel: "retract",
+    posLabel: "lean in",
+    group: "shape",
+    doc: "Body lean without moving the feet: the arm-and-head mass reaches toward the person (effector presented, gaze committed) or pulls back against the chassis, protecting the protruding parts. Distance itself is the advance axis.",
+    neg: { j2: -0.4, j3: 0.35, j4: -0.9, j6: -0.12, head: -4 },
+    pos: { j1: -0.9, j2: 1.0, j3: -1.0, j4: -0.3, j6: 0.3, head: 4 },
   },
   {
     key: "expand",
     label: "expand",
-    negLabel: "clench",
-    posLabel: "flare",
-    doc: "Silhouette width. Flaring swings the arm out of the body outline and opens the gripper; clenching folds everything inside the chassis footprint and shuts the claw.",
+    negLabel: "contract",
+    posLabel: "expand",
+    group: "shape",
+    doc: "Silhouette width. Expanding swings the arm out of the body outline and opens the gripper; contracting folds everything inside the chassis footprint and shuts the claw.",
     neg: { j1: 0.5, j3: 0.3, j4: -0.5, j6: -0.12 },
     pos: { j1: -1.5, j3: -0.85, j4: 0.4, j6: 0.6 },
   },
   {
-    key: "reach",
-    label: "reach",
-    negLabel: "guard",
-    posLabel: "offer",
-    doc: "Arm extension along the robot→person line. Offering presents the effector to the person; guarding pulls it in against the chassis, protecting the protruding part.",
-    neg: { j2: -0.4, j3: 0.35, j4: -0.9, j6: -0.12 },
-    pos: { j1: -0.9, j2: 1.0, j3: -1.0, j4: -0.3, j6: 0.3 },
+    key: "rise",
+    label: "rise",
+    negLabel: "low",
+    posLabel: "tall",
+    group: "shape",
+    doc: "Silhouette height. The arm is the only mass MARS can raise: mast-high maximizes apparent size, folded low minimizes it. Gaze height is attend's job, so the two can disagree (tall but downcast, small but watching).",
+    neg: { j2: -0.5, j3: 0.35, j4: -0.8 },
+    pos: { j1: -0.7, j2: 0.75, j3: -2.75, j4: 0.3 },
   },
   {
     key: "attend",
     label: "attend",
     negLabel: "downcast",
     posLabel: "raised",
+    group: "shape",
     doc: "Gaze height. The person's face is ~1.5 m above the robot's, so sensors-on-target means head pitched well up; head at the floor abandons the target entirely.",
     neg: { head: -45 },
     pos: { head: 55 },
+  },
+  {
+    key: "askew",
+    label: "askew",
+    negLabel: "canted in",
+    posLabel: "canted out",
+    group: "shape",
+    doc: "Asymmetry — the cocked-head quality. MARS's head can't roll, so the wrist roll and the arm canting across (in) or wide of (out) the body carry it; 0 is the composed, regular posture.",
+    neg: { j1: 0.55, j4: -0.4, j5: -1.3 },
+    pos: { j1: -0.5, j3: -0.3, j5: 1.3 },
+  },
+  {
+    key: "advance",
+    label: "advance",
+    negLabel: "withdraw",
+    posLabel: "advance",
+    group: "stance",
+    doc: "Distance to the person — the most primitive engagement signal. Advancing commits the whole body toward the stimulus; withdrawing moves it away.",
+    neg: { baseX: -0.24 },
+    pos: { baseX: 0.17 },
+  },
+  {
+    key: "orient",
+    label: "orient",
+    negLabel: "turned away",
+    posLabel: "squared on",
+    group: "stance",
+    doc: "Facing, away ↔ toward. Neutral stands casually oblique; +1 squares the body onto the person (full engagement), −1 turns it ~85° away. Turned away with the head still on target (attend up) reads guarded, not disengaged.",
+    neg: { baseYaw: 1.2 },
+    pos: { baseYaw: -0.26 },
+  },
+  {
+    key: "sidestep",
+    label: "sidestep",
+    negLabel: "right",
+    posLabel: "left",
+    group: "stance",
+    doc: "Lateral offset from the person's axis — circling, peeking, giving way.",
+    neg: { baseY: -0.2 },
+    pos: { baseY: 0.2 },
   },
 ];
 
@@ -146,49 +173,49 @@ export const PRESETS = [
   {
     key: "curious",
     label: "curious",
-    doc: "Get the sensors closer to the thing without committing the body: advance a little, slight peek angle, head up and forward.",
-    weights: { approach: 0.45, sidestep: 0.25, rise: 0.15, reach: 0.35, attend: 0.7 },
+    doc: "Get the sensors closer without committing the body: a small advance, a lean in, the cocked-head cant, gaze up on the person.",
+    weights: { approach: 0.5, askew: 0.4, advance: 0.4, orient: 0.3, rise: 0.1, attend: 0.7 },
   },
   {
     key: "excited",
     label: "excited",
-    doc: "Maximum energy: big, tall, open, pressing toward the person.",
-    weights: { approach: 0.5, rise: 0.65, expand: 0.7, reach: 0.2, attend: 0.8 },
+    doc: "Maximum energy: squared on, big, tall, open, pressing toward the person.",
+    weights: { advance: 0.5, orient: 1, rise: 0.7, expand: 0.7, attend: 0.8 },
   },
   {
     key: "confident",
     label: "confident",
-    doc: "Maximize apparent size and hold the ground: tall, open, square-on, no retreat.",
-    weights: { approach: 0.2, rise: 0.9, expand: 0.45, attend: 0.55 },
+    doc: "Maximize apparent size, square on, hold the ground: tall, open, composed (no cant), no retreat.",
+    weights: { advance: 0.2, orient: 1, rise: 0.9, expand: 0.45, attend: 0.55 },
   },
   {
     key: "affectionate",
     label: "affectionate",
-    doc: "Close the distance and present the effector — contact-seeking, softly raised gaze.",
-    weights: { approach: 0.65, rise: -0.1, expand: 0.15, reach: 0.8, attend: 0.5 },
+    doc: "Close the distance and lean in, effector offered — contact-seeking, softly raised gaze.",
+    weights: { advance: 0.65, orient: 0.6, approach: 0.85, expand: 0.15, attend: 0.5 },
   },
   {
     key: "fearful",
     label: "fearful",
-    doc: "Retreat and shrink — but the head stays on the threat. Monitoring while withdrawing is what separates fear from mere disengagement.",
-    weights: { approach: -0.9, turn: 0.25, rise: -0.7, expand: -0.6, reach: -0.7, attend: 0.35 },
+    doc: "Retreat, shrink, pull the body in — but the head stays on the threat. Monitoring while withdrawing is what separates fear from mere disengagement.",
+    weights: { advance: -0.9, orient: -0.25, approach: -0.7, rise: -0.7, expand: -0.6, attend: 0.35 },
   },
   {
     key: "sad",
     label: "sad",
-    doc: "Low energy, no target focus: slumped small, gaze at the floor, slight drift away.",
-    weights: { approach: -0.3, rise: -0.6, expand: -0.3, reach: -0.3, attend: -0.9 },
+    doc: "Low energy, no target focus: slumped small, gaze at the floor, slight drift away and off-axis.",
+    weights: { advance: -0.3, orient: -0.2, approach: -0.3, rise: -0.6, expand: -0.3, attend: -0.9 },
   },
   {
     key: "suspicious",
     label: "suspicious",
-    doc: "Body turned off-axis and edged away while the head keeps watching — guarded observation.",
-    weights: { approach: -0.25, turn: 0.6, sidestep: -0.3, expand: -0.2, attend: 0.4 },
+    doc: "Body turned off-axis and edged away while the head keeps watching, a wary cant — guarded observation.",
+    weights: { advance: -0.25, orient: -0.55, sidestep: -0.3, expand: -0.2, askew: 0.3, attend: 0.4 },
   },
   {
     key: "relaxed",
     label: "relaxed",
-    doc: "At ease near neutral: soft gaze on the person, nothing braced.",
+    doc: "At ease: the casually oblique neutral stance, soft gaze on the person, nothing braced.",
     weights: { attend: 0.2 },
   },
 ];
@@ -222,6 +249,7 @@ export function sanitizeBasis(raw) {
       label: String(a.label || builtin?.label || key),
       negLabel: String(a.negLabel || builtin?.negLabel || "−"),
       posLabel: String(a.posLabel || builtin?.posLabel || "+"),
+      group: a.group === "stance" || a.group === "shape" ? a.group : (builtin?.group ?? "shape"),
       doc: String(a.doc || builtin?.doc || "custom axis"),
       neg: sanitizeOffsets(a.neg),
       pos: sanitizeOffsets(a.pos),

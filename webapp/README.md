@@ -11,11 +11,12 @@ same modules:
   lidar, nav state, per-topic receive rates), and live strip charts (commanded
   vs measured velocity, nearest obstacle).
 - **Expression** (`/expression`) — the Expression Studio: author MARS body
-  language on semantic pose axes (approach, turn, rise, expand, reach,
-  attend), preview it on the full-robot 3D model, apply it to the live arm +
-  head, and score poses with blind VLM judges that are never told the target
-  emotion. The axis basis itself is editable in-studio: sculpt a pose, then
-  capture it as an axis's ±1 extreme; edits persist and export with poses.
+  language on semantic pose axes split into shape (approach, expand, rise,
+  attend, askew) and stance (advance, orient, sidestep), preview it on the
+  full-robot 3D model, apply it to the live arm + head, and score poses with
+  blind VLM judges that are never told the target emotion. The axis basis
+  itself is editable in-studio: sculpt a pose, then capture it as an axis's
+  ±1 extreme; edits persist and export with poses.
 - **Collect** (`collect/`) — record episodes (learned skills) and one-shot
   recorded movements; reuses the teleop cockpit with a recording HUD.
 - **Datasets** (`datasets/`) — browse a skill's episodes and replay them

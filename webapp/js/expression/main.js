@@ -116,6 +116,9 @@ const CSS = `
 .exs-copy.copied { color: var(--ok); border-color: var(--ok); }
 
 /* --- axes --------------------------------------------------------------- */
+.exs-axgroup { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .09em;
+  font-weight: 600; margin: 12px 0 2px; padding-top: 8px; border-top: 1px solid var(--hairline); }
+.exs-axgroup:first-child { margin-top: 2px; padding-top: 0; border-top: none; }
 .exs-axis { margin: 9px 0; }
 .exs-axis-top { display: flex; align-items: baseline; gap: 8px; }
 .exs-axis-name { font-size: 12.5px; color: var(--text); width: 74px; }
@@ -379,12 +382,31 @@ export function mount(stage) {
   }
 
   // ---- axes UI ------------------------------------------------------------
+  const GROUP_LABELS = {
+    shape: "shape · the body's configuration",
+    stance: "stance · where it stands vs the person",
+  };
+
+  /** Append a group eyebrow to `parent` when `axis` starts a new group —
+   * suppressed while the whole basis lives in one group.
+   * @param {HTMLElement} parent @param {import("./model.js").Axis} axis @param {{ g: string }} state */
+  function groupEyebrow(parent, axis, state) {
+    if (axis.group === state.g || new Set(basis.map((a) => a.group)).size < 2) return;
+    state.g = axis.group;
+    const eyebrow = document.createElement("div");
+    eyebrow.className = "exs-axgroup";
+    eyebrow.textContent = GROUP_LABELS[axis.group] ?? axis.group;
+    parent.appendChild(eyebrow);
+  }
+
   // Rebuilt whenever the basis editor changes the axis roster or its labels.
   function renderAxes() {
     axisSliders.length = 0;
     axisVals.length = 0;
     el("axes").innerHTML = "";
+    const state = { g: "" };
     for (const axis of basis) {
+      groupEyebrow(el("axes"), axis, state);
       const row = document.createElement("div");
       row.className = "exs-axis";
       row.title = axis.doc;
@@ -455,7 +477,9 @@ export function mount(stage) {
 
   function renderBasisEditor() {
     el("basisRows").innerHTML = "";
+    const state = { g: "" };
     basis.forEach((axis, index) => {
+      groupEyebrow(el("basisRows"), axis, state);
       const row = document.createElement("div");
       row.className = "exs-bx";
       row.innerHTML = `
@@ -541,11 +565,13 @@ export function mount(stage) {
     }
     let key = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "axis";
     while (basis.some((a) => a.key === key)) key += "2";
-    basis.push({
+    // After the last shape axis, so the shape/stance grouping stays contiguous.
+    basis.splice(basis.map((a) => a.group).lastIndexOf("shape") + 1, 0, {
       key,
       label: name,
       negLabel: "−",
       posLabel: "+",
+      group: "shape",
       doc: "custom axis — sculpt each extreme with the sliders, then capture it",
       neg: {},
       pos: {},
