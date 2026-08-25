@@ -22,6 +22,12 @@ import {
   skillNameKey,
   skillStatusLabel,
 } from "./skillFormat.js";
+import {
+  clockTime,
+  createSpeechTimeline,
+  describeDebugEvent,
+  timestampMs,
+} from "./speechDebug.js";
 
 // Runs of the same skill collapse into one group at this many in a row.
 const SKILL_GROUP_MIN = 3;
@@ -35,6 +41,7 @@ const SKILL_GROUP_MIN = 3;
  *   wrap: HTMLElement,
  *   addThought: (kind: string, text: string, ts: number) => void,
  *   addMessage: (kind: string, text: string, ts: number, label?: string) => void,
+ *   addDebugEvent: (event: any) => void,
  *   addSkillRun: (key: string, name: string, status: string, ts: number, reason: string, args: any) => void,
  *   routeChatOut: (sender: string, text: string, ts: number) => void,
  *   replay: (entries: any[]) => void,
@@ -181,6 +188,7 @@ export function createChatStream(opts = {}) {
   /** @type {{ wrap: HTMLElement, status: HTMLElement, list: HTMLElement, lastByKind: Record<string, string>, startTs: number, latestTs: number } | null} */
   let thoughts = null;
   let lastTs = 0;
+  const speechTimeline = createSpeechTimeline();
   let replayingHistory = false;
   /** @type {Set<ReturnType<typeof setTimeout>>} */
   const compactEnterTimers = new Set();
@@ -339,6 +347,44 @@ export function createChatStream(opts = {}) {
     } else {
       settleStreamAfterAppend(wasAtBottom);
     }
+  }
+
+  /** @param {any} rawEvent */
+  function addDebugEvent(rawEvent) {
+    const event = speechTimeline.observe(rawEvent);
+    if (event === null) return;
+    const description = describeDebugEvent(event);
+    if (!description) return;
+    const wasAtBottom = atBottom();
+    skillStreak = null;
+    const el = document.createElement("div");
+    el.className = `chat-debug ${description.level}`;
+    const source = document.createElement("span");
+    source.className = "chat-debug-source mono";
+    const sourceName = String(event?.source ?? "speech").toUpperCase();
+    source.textContent = event?.utterance_id ? `${sourceName} #${event.utterance_id}` : sourceName;
+    const copy = document.createElement("span");
+    copy.className = "chat-debug-copy";
+    const titleRow = document.createElement("span");
+    titleRow.className = "chat-debug-title-row";
+    const title = document.createElement("span");
+    title.className = "chat-debug-title";
+    title.textContent = description.title;
+    const time = document.createElement("time");
+    time.className = "chat-debug-time mono";
+    time.dateTime = new Date(timestampMs(event?.timestamp)).toISOString();
+    time.textContent = clockTime(event?.timestamp);
+    titleRow.append(title, time);
+    copy.append(titleRow);
+    if (description.detail) {
+      const detail = document.createElement("span");
+      detail.className = "chat-debug-detail mono";
+      detail.textContent = description.detail;
+      copy.append(detail);
+    }
+    el.append(source, copy);
+    appendStreamItem(el);
+    settleStreamAfterAppend(wasAtBottom);
   }
 
   /** @param {string} name */
@@ -539,6 +585,9 @@ export function createChatStream(opts = {}) {
       return; // raw vision dumps — noisy, drop
     } else if (sender === "user" || sender === "robot") {
       addMessage(sender, text, ts);
+      if (sender !== "robot" || replayingHistory) return;
+      const response = speechTimeline.response(ts * 1000);
+      if (response !== null) addDebugEvent(response);
     } else {
       addMessage("system", text, ts, sender || undefined);
     }
@@ -575,6 +624,7 @@ export function createChatStream(opts = {}) {
     skillRuns.clear();
     skillStreak = null;
     lastTs = 0;
+    speechTimeline.reset();
     replayingHistory = true;
     stream.classList.add("replaying");
     try {
@@ -595,6 +645,7 @@ export function createChatStream(opts = {}) {
     wrap: streamWrap,
     addThought,
     addMessage,
+    addDebugEvent,
     addSkillRun,
     routeChatOut,
     replay,

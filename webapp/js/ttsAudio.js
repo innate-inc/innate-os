@@ -9,9 +9,8 @@
 // which page is open.
 
 import { ros } from "./rosClient.js";
+import { TTS_AUDIO_TOPIC, TTS_PLAYBACK_TOPIC } from "./constants.js";
 import { isMicAudioActive, setTtsPlaying } from "./micAudioState.js";
-
-const TTS_AUDIO_TOPIC = "/tts/audio";
 
 let started = false;
 
@@ -28,15 +27,19 @@ navigator.locks?.request("innate-tts-speaker", () => {
 export function initTtsAudio() {
   if (started) return;
   started = true;
+  ros.advertise(TTS_PLAYBACK_TOPIC, "std_msgs/msg/String");
 
   ros.subscribe(TTS_AUDIO_TOPIC, (msg) => {
     if (!speaker) return; // another tab is the elected speaker
-    const b64 = msg?.data;
-    if (typeof b64 !== "string" || !b64) return;
+    const clip = parseClip(msg?.data);
+    if (clip === null) return;
     // Defensive: if a clip does arrive while the operator has the robot mic
     // open, skip it — the speaker would be heard through the mic as well.
-    if (isMicAudioActive()) return;
-    enqueue(b64);
+    if (isMicAudioActive()) {
+      report(clip, "aborted", "mic_active");
+      return;
+    }
+    enqueue(clip);
   }, undefined, "std_msgs/msg/String");
 }
 
@@ -44,7 +47,8 @@ export function initTtsAudio() {
 // aplay finishes. In sim a clip is "done" once published, so the robot half can
 // only serialize synthesis — played on arrival, a two-sentence reply talks over
 // itself. This queue is what puts that behavior back.
-/** @type {string[]} */
+/** @typedef {{ id: string | null, audio: string }} TtsClip */
+/** @type {TtsClip[]} */
 const pending = [];
 let playing = false;
 
@@ -52,54 +56,79 @@ let playing = false;
 // reason speak_text_async drops superseded speech).
 const MAX_PENDING = 4;
 
-/** @param {string} b64 */
-function enqueue(b64) {
-  pending.push(b64);
+/** @param {TtsClip} clip */
+function enqueue(clip) {
+  pending.push(clip);
   while (pending.length > MAX_PENDING) {
-    pending.shift();
+    const dropped = pending.shift();
+    if (dropped) report(dropped, "aborted", "backlog");
     console.warn("[tts] playback backlog full — dropping the oldest clip");
   }
   if (!playing) playNext();
 }
 
 function playNext() {
-  const b64 = pending.shift();
-  if (b64 === undefined) {
+  const clip = pending.shift();
+  if (clip === undefined) {
     playing = false;
     return;
   }
   playing = true;
   try {
-    play(b64);
+    play(clip);
   } catch (err) {
     console.warn("[tts] failed to play audio:", err);
+    report(clip, "aborted", "playback_error");
     playNext(); // one bad clip must not strand the rest of the reply
   }
 }
 
-/** @param {string} b64 base64-encoded WAV */
-function play(b64) {
-  const blob = new Blob([/** @type {BlobPart} */ (base64ToBytes(b64))], { type: "audio/wav" });
+/** @param {TtsClip} clip */
+function play(clip) {
+  const blob = new Blob([/** @type {BlobPart} */ (base64ToBytes(clip.audio))], { type: "audio/wav" });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
   // The mic stream stops publishing while this is set, so every path must
   // release it — one that never finishes mutes the microphone for the session.
   setTtsPlaying(true);
   let released = false;
-  const done = () => {
+  /** @param {"ended" | "aborted"} event @param {string} [reason] */
+  const done = (event, reason) => {
     if (released) return;
     released = true;
+    report(clip, event, reason);
     setTtsPlaying(false);
     URL.revokeObjectURL(url);
     playNext();
   };
-  audio.addEventListener("ended", done, { once: true });
-  audio.addEventListener("error", done, { once: true });
+  audio.addEventListener("playing", () => report(clip, "started"), { once: true });
+  audio.addEventListener("ended", () => done("ended"), { once: true });
+  audio.addEventListener("error", () => done("aborted", "media_error"), { once: true });
   audio.play().catch((err) => {
     // Browser autoplay policies block playback until the user has interacted
     // with the page; after any click/keypress this succeeds.
     console.warn("[tts] autoplay blocked (interact with the page first):", err?.message || err);
-    done();
+    done("aborted", "autoplay");
+  });
+}
+
+/** @param {unknown} data @returns {TtsClip | null} */
+function parseClip(data) {
+  if (typeof data !== "string" || !data) return null;
+  try {
+    const parsed = JSON.parse(data);
+    if (typeof parsed?.id !== "string" || typeof parsed?.audio !== "string") return null;
+    return { id: parsed.id, audio: parsed.audio };
+  } catch {
+    return { id: null, audio: data };
+  }
+}
+
+/** @param {TtsClip} clip @param {"started" | "ended" | "aborted"} event @param {string} [reason] */
+function report(clip, event, reason) {
+  if (clip.id === null) return;
+  ros.publish(TTS_PLAYBACK_TOPIC, {
+    data: JSON.stringify({ id: clip.id, event, ...(reason ? { reason } : {}) }),
   });
 }
 

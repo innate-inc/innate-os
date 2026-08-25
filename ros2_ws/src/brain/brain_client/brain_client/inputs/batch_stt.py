@@ -21,10 +21,12 @@ import json
 import math
 import queue
 import threading
+import time
 import wave
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
-from typing import TYPE_CHECKING, Any, Protocol
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from brain_client.brain.transport import GENERATE_PATH
 
@@ -95,6 +97,15 @@ def pcm_to_wav(pcm: bytes, sample_rate: int, channels: int = 1) -> bytes:
     return buf.getvalue()
 
 
+@dataclass(frozen=True)
+class EndpointEvent:
+    phase: Literal["speech_started", "utterance_closed", "utterance_rejected"]
+    audio_seconds: float
+    peak_level: float
+    pcm: bytes | None = None
+    close_reason: Literal["silence", "max_duration"] | None = None
+
+
 class Endpointer:
     """Cuts a continuous PCM stream into utterances by a voiced/unvoiced detector.
 
@@ -112,6 +123,7 @@ class Endpointer:
         self._in_speech = False
         self._silence_bytes = 0
         self._voiced_bytes = 0
+        self._peak_level = 0.0
 
     @property
     def in_speech(self) -> bool:
@@ -121,8 +133,7 @@ class Endpointer:
     def utterance_secs(self) -> float:
         return len(self._utterance) / self._bytes_per_sec
 
-    def feed(self, chunk: bytes) -> bytes | None:
-        """Consume one chunk; returns the finished utterance's PCM when one closes."""
+    def feed(self, chunk: bytes) -> EndpointEvent | None:
         voiced = self._is_voiced(chunk)
 
         if not self._in_speech:
@@ -133,9 +144,11 @@ class Endpointer:
             self._utterance = bytearray(b"".join(self._pre_roll))
             self._silence_bytes = 0
             self._voiced_bytes = len(chunk)
-            return None
+            self._peak_level = self._is_voiced.level
+            return EndpointEvent("speech_started", self.utterance_secs, self._peak_level)
 
         self._utterance.extend(chunk)
+        self._peak_level = max(self._peak_level, self._is_voiced.level)
         if voiced:
             self._silence_bytes = 0
             self._voiced_bytes += len(chunk)
@@ -146,7 +159,10 @@ class Endpointer:
         utterance_secs = len(self._utterance) / self._bytes_per_sec
         if trailing_silence < self._silence_secs and utterance_secs < MAX_UTTERANCE_SECS:
             return None
-        return self._close()
+        close_reason: Literal["silence", "max_duration"] = (
+            "silence" if trailing_silence >= self._silence_secs else "max_duration"
+        )
+        return self._close(close_reason)
 
     def _buffer_pre_roll(self, chunk: bytes) -> None:
         self._pre_roll.append(chunk)
@@ -154,16 +170,25 @@ class Endpointer:
         while self._pre_roll and self._pre_roll_bytes > PRE_ROLL_SECS * self._bytes_per_sec:
             self._pre_roll_bytes -= len(self._pre_roll.popleft())
 
-    def _close(self) -> bytes | None:
+    def _close(self, close_reason: Literal["silence", "max_duration"]) -> EndpointEvent:
         utterance = bytes(self._utterance)
+        audio_seconds = len(utterance) / self._bytes_per_sec
         long_enough = self._voiced_bytes / self._bytes_per_sec >= MIN_VOICED_SECS
+        peak_level = self._peak_level
         self._in_speech = False
         self._utterance = bytearray()
         self._pre_roll.clear()
         self._pre_roll_bytes = 0
         self._voiced_bytes = 0
         self._silence_bytes = 0
-        return utterance if long_enough else None
+        self._peak_level = 0.0
+        return EndpointEvent(
+            phase="utterance_closed" if long_enough else "utterance_rejected",
+            audio_seconds=audio_seconds,
+            peak_level=peak_level,
+            pcm=utterance if long_enough else None,
+            close_reason=close_reason,
+        )
 
 
 # Tighter than the transports' shared defaults (60 s proxy / 120 s direct) —
@@ -310,6 +335,15 @@ def gemini_transcriber(rest: GeminiRest, model: str, language: str, keyterms: Se
 MAX_PENDING_UTTERANCES = 4
 
 
+@dataclass(frozen=True)
+class PendingUtterance:
+    pcm: bytes
+    utterance_id: int
+    audio_seconds: float
+    closed_at: float
+    peak_level: float
+
+
 class BatchSttSession:
     """Feeds mic chunks to the endpointer and transcribes closed utterances.
 
@@ -328,13 +362,16 @@ class BatchSttSession:
         silence_secs: float,
         on_transcript: Callable[[str], None],
         logger: UniversalLogger,
+        on_debug: Callable[[dict[str, Any]], None] | None = None,
     ):
         self._transcriber = transcriber
         self._sample_rate = sample_rate
         self._on_transcript = on_transcript
+        self._on_debug = on_debug
         self._logger = logger
+        self._silence_secs = silence_secs
         self._endpointer = Endpointer(sample_rate=sample_rate, is_voiced=is_voiced, silence_secs=silence_secs)
-        self._utterances: queue.Queue[bytes | None] = queue.Queue(maxsize=MAX_PENDING_UTTERANCES)
+        self._utterances: queue.Queue[PendingUtterance | None] = queue.Queue(maxsize=MAX_PENDING_UTTERANCES)
         self._worker: threading.Thread | None = None
         self._stopped = False
         self.utterance_count = 0
@@ -348,21 +385,57 @@ class BatchSttSession:
         return True
 
     def feed(self, chunk: bytes) -> None:
-        utterance = self._endpointer.feed(chunk)
-        if utterance is not None:
-            self._logger.info(f"🎤 Utterance closed ({len(utterance) / (self._sample_rate * 2):.1f}s), transcribing...")
-            self.utterance_count += 1
-            self._enqueue(utterance)
+        event = self._endpointer.feed(chunk)
+        if event is None:
+            return
+        if event.phase == "speech_started":
+            self._emit_debug("speech_started")
+            return
+        if event.phase == "utterance_rejected":
+            self._emit_debug(
+                "utterance_rejected",
+                audio_seconds=round(event.audio_seconds, 2),
+                close_reason=event.close_reason,
+                peak_level=round(event.peak_level, 4),
+            )
+            return
+        assert event.pcm is not None
+        self.utterance_count += 1
+        pending = PendingUtterance(
+            pcm=event.pcm,
+            utterance_id=self.utterance_count,
+            audio_seconds=event.audio_seconds,
+            closed_at=time.monotonic(),
+            peak_level=event.peak_level,
+        )
+        self._logger.info(f"🎤 Utterance closed ({event.audio_seconds:.1f}s), transcribing...")
+        self._emit_debug(
+            "utterance_closed",
+            utterance_id=pending.utterance_id,
+            audio_seconds=round(event.audio_seconds, 2),
+            queue_depth=self._utterances.qsize(),
+            close_reason=event.close_reason,
+            silence_seconds=self._silence_secs,
+            peak_level=round(pending.peak_level, 4),
+        )
+        self._enqueue(pending)
 
-    def _enqueue(self, item: bytes | None) -> None:
+    def _enqueue(self, item: PendingUtterance | None) -> None:
         while True:
             try:
                 self._utterances.put_nowait(item)
                 return
             except queue.Full:
                 try:
-                    self._utterances.get_nowait()
+                    dropped = self._utterances.get_nowait()
                     self._logger.error("❌ Transcription backlog full — dropping oldest utterance")
+                    if dropped is not None:
+                        self._emit_debug(
+                            "utterance_dropped",
+                            utterance_id=dropped.utterance_id,
+                            audio_seconds=round(dropped.audio_seconds, 2),
+                            peak_level=round(dropped.peak_level, 4),
+                        )
                 except queue.Empty:
                     pass
 
@@ -383,15 +456,47 @@ class BatchSttSession:
 
     def _transcribe_loop(self) -> None:
         while True:
-            utterance = self._utterances.get()
-            if utterance is None:
+            pending = self._utterances.get()
+            if pending is None:
                 return
+            started_at = time.monotonic()
+            queue_ms = (started_at - pending.closed_at) * 1000
             try:
-                text = self._transcriber(pcm_to_wav(utterance, self._sample_rate))
-                # A call that outlives stop() must not publish: by the time it
-                # returns, the mic may be active again under a newer session.
-                if text and not self._stopped:
-                    self._on_transcript(text)
+                text = self._transcriber(pcm_to_wav(pending.pcm, self._sample_rate))
             except Exception as e:  # noqa: BLE001 — one failed call must not kill the mic
                 self.failure_count += 1
+                self._emit_debug(
+                    "transcription_failed",
+                    utterance_id=pending.utterance_id,
+                    audio_seconds=round(pending.audio_seconds, 2),
+                    queue_ms=round(queue_ms),
+                    transcribe_ms=round((time.monotonic() - started_at) * 1000),
+                    error_type=type(e).__name__,
+                    peak_level=round(pending.peak_level, 4),
+                )
                 self._logger.error(f"❌ Batch transcription failed: {e}")
+                continue
+            transcribe_ms = (time.monotonic() - started_at) * 1000
+            self._emit_debug(
+                "transcript_ready" if text else "no_speech",
+                utterance_id=pending.utterance_id,
+                audio_seconds=round(pending.audio_seconds, 2),
+                queue_ms=round(queue_ms),
+                transcribe_ms=round(transcribe_ms),
+                stop_to_transcript_ms=round(queue_ms + transcribe_ms),
+                characters=len(text),
+                peak_level=round(pending.peak_level, 4),
+            )
+            # A call that outlives stop() must not publish against the next session.
+            if text and not self._stopped:
+                self._on_transcript(text)
+
+    def _emit_debug(self, phase: str, **details: Any) -> None:
+        if self._on_debug is None:
+            return
+        try:
+            self._on_debug(
+                {"kind": "speech_debug", "source": "stt", "phase": phase, "timestamp": time.time(), **details}
+            )
+        except Exception as e:  # noqa: BLE001 — diagnostics must never interrupt transcription
+            self._logger.debug(f"Speech telemetry failed: {e}")

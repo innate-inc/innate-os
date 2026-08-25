@@ -25,14 +25,17 @@ shared.
 Uses proxy services via self.proxy (injected by InputManager).
 """
 
+import array
 import base64
 import json
+import math
 import queue
 import re
 import shutil
 import subprocess
 import threading
 import time
+from collections import deque
 
 from brain_client.brain.transport import pick_rest
 from brain_client.common.logging import UniversalLogger
@@ -71,6 +74,7 @@ VENDOR_VAD_ENGINE = "vendor"
 
 # One vad_status frame per this many mic chunks (20 ms each) — 5 Hz on the wire.
 VAD_STATUS_EVERY_CHUNKS = 10
+RMS_WINDOW_SECS = 0.5
 
 ELEVENLABS_ERROR_TYPES = frozenset(
     {
@@ -88,6 +92,29 @@ ELEVENLABS_ERROR_TYPES = frozenset(
         "transcriber_error",
     }
 )
+
+
+class RollingRms:
+    def __init__(self, sample_rate: int, window_secs: float):
+        self._target_samples = round(sample_rate * window_secs)
+        self._chunks: deque[tuple[int, int]] = deque()
+        self._square_sum = 0
+        self._sample_count = 0
+
+    def add(self, chunk: bytes) -> float:
+        samples = array.array("h", chunk[: len(chunk) - len(chunk) % 2])
+        square_sum = sum(sample * sample for sample in samples)
+        sample_count = len(samples)
+        self._chunks.append((square_sum, sample_count))
+        self._square_sum += square_sum
+        self._sample_count += sample_count
+        while self._chunks and self._sample_count - self._chunks[0][1] >= self._target_samples:
+            old_square_sum, old_sample_count = self._chunks.popleft()
+            self._square_sum -= old_square_sum
+            self._sample_count -= old_sample_count
+        if not self._sample_count:
+            return 0.0
+        return math.sqrt(self._square_sum / self._sample_count) / 32768.0
 
 
 class MicroInput(InputDevice):
@@ -112,10 +139,17 @@ class MicroInput(InputDevice):
         self._stop_evt = threading.Event()
         self._audio_thread = None
         self._is_robot_talking = False  # For ducking (mic-specific)
+        self._ducking_started_at = None
         self._reconnect_thread = None
         self._is_connected = False
         self._reconnect_delay = 1  # Start with 1 second
         self._max_reconnect_delay = 30  # Max 30 seconds between retries
+        self._realtime_speech_started_at = None
+        self._realtime_speech_stopped_at = None
+        self._rolling_rms = RollingRms(DEFAULT_SAMPLE_RATE, RMS_WINDOW_SECS)
+        self._rms_level = 0.0
+        self._audio_device_id = "unavailable"
+        self._audio_device_name = "No capture source"
         # Initialize logger wrapper (will be updated when set_logger is called)
         self.logger = UniversalLogger(enabled=False)
 
@@ -138,7 +172,20 @@ class MicroInput(InputDevice):
         Args:
             is_playing: True if robot is speaking, False otherwise
         """
+        if is_playing == self._is_robot_talking:
+            return
         self._is_robot_talking = is_playing
+        if is_playing:
+            self._ducking_started_at = time.monotonic()
+            self._emit_speech_debug("ducking_started")
+            return
+        duration_ms = (
+            round((time.monotonic() - self._ducking_started_at) * 1000)
+            if self._ducking_started_at is not None
+            else None
+        )
+        self._ducking_started_at = None
+        self._emit_speech_debug("ducking_ended", duration_ms=duration_ms)
 
     def on_open(self):
         """Start the audio source and connect to the STT backend.
@@ -150,6 +197,8 @@ class MicroInput(InputDevice):
             raise RuntimeError("no STT configuration (the proxy client was never created)")
 
         try:
+            self._rolling_rms = RollingRms(DEFAULT_SAMPLE_RATE, RMS_WINDOW_SECS)
+            self._rms_level = 0.0
             self.mic = self._start_audio_source()
             self.logger.info(f"🎙️ Microphone started (rate: {DEFAULT_SAMPLE_RATE}, channels: {DEFAULT_CHANNELS})")
             self._connect_via_proxy()
@@ -164,13 +213,18 @@ class MicroInput(InputDevice):
         # No arecord at all, rather than arecord listing no cards: a robot whose
         # microphone did not enumerate still has a working `default` to reach for.
         if shutil.which("arecord") is None and self.node is not None:
+            self._audio_device_id = MIC_AUDIO_TOPIC
+            self._audio_device_name = "Browser microphone"
             mic = RosPcmStreamer(self.node, self.logger)
             mic.start()
             return mic
 
-        self.logger.info(f"🎙️ Using audio device: {device or 'default'}")
+        self._audio_device_id = device or "default"
+        if device is None:
+            self._audio_device_name = "ALSA default"
+        self.logger.info(f"🎙️ Using audio device: {self._audio_device_id}")
         mic = ArecordStreamer(self.logger)
-        mic.start(device=device or "default", sample_rate=DEFAULT_SAMPLE_RATE, channels=DEFAULT_CHANNELS)
+        mic.start(device=self._audio_device_id, sample_rate=DEFAULT_SAMPLE_RATE, channels=DEFAULT_CHANNELS)
         return mic
 
     def _on_elevenlabs_message(self, ws, message: str):
@@ -184,11 +238,9 @@ class MicroInput(InputDevice):
         etype = event.get("message_type")
 
         if etype == "committed_transcript":
-            text = event.get("text", "")
-            if text and self.is_active():
-                self._on_transcript(text)
+            self._finish_realtime_utterance(str(event.get("text", "") or ""))
         elif etype == "partial_transcript":
-            pass  # interim result — only the committed transcript reaches chat
+            self._mark_realtime_speech_started()
         elif etype == "session_started":
             self.logger.info(f"📋 Scribe session started: {event.get('config', {})}")
         elif etype == "insufficient_audio_activity":
@@ -218,10 +270,10 @@ class MicroInput(InputDevice):
                 f"📋 Session updated - transcription: {e.get('session', {}).get('input_audio_transcription', {})}, "
                 f"turn_detection: {e.get('session', {}).get('turn_detection', {})}"
             ),
-            "input_audio_buffer.speech_started": lambda e: self.logger.info("🎤 Speech detected"),
-            "input_audio_buffer.speech_stopped": lambda e: self.logger.info("🔇 Speech stopped"),
-            "conversation.item.input_audio_transcription.completed": lambda e: (
-                self._on_transcript(e.get("transcript", "")) if e.get("transcript") and self.is_active() else None
+            "input_audio_buffer.speech_started": lambda e: self._mark_realtime_speech_started(),
+            "input_audio_buffer.speech_stopped": lambda e: self._mark_realtime_speech_stopped(),
+            "conversation.item.input_audio_transcription.completed": lambda e: self._finish_realtime_utterance(
+                str(e.get("transcript", "") or "")
             ),
             "error": lambda e: (
                 self.logger.error(
@@ -277,10 +329,12 @@ class MicroInput(InputDevice):
         """Handle WebSocket close event - trigger reconnection."""
         self.logger.warning("WebSocket closed")
         self._is_connected = False
+        self._clear_realtime_timing()
 
         # Don't reconnect if we're shutting down
         if self._stop_evt.is_set():
             return
+        self._emit_speech_debug("connection_lost")
 
         # Start reconnection in background thread
         self._schedule_reconnect()
@@ -362,6 +416,7 @@ class MicroInput(InputDevice):
             silence_secs=silence_secs,
             on_transcript=self._on_transcript_if_active,
             logger=self.logger,
+            on_debug=self._on_batch_debug,
         )
 
     def _make_vad(self, cfg: dict) -> tuple[VoicedDetector, str]:
@@ -395,9 +450,8 @@ class MicroInput(InputDevice):
             return
         frame = {
             "kind": "vad_status",
-            "backend": self._backend,
-            "engine": self._vad_engine,
             "last_transcript": self._last_transcript,
+            **self._audio_telemetry_context(),
         }
         if self._backend not in BATCH_BACKENDS or detector is None:
             self.send_data({**frame, "engine": VENDOR_VAD_ENGINE}, data_type="telemetry")
@@ -408,7 +462,6 @@ class MicroInput(InputDevice):
                 "threshold": detector.threshold,
                 "level": round(detector.level, 4),
                 "voiced": detector.voiced,
-                "ducking": self._is_robot_talking,
                 **client.status(),
             },
             data_type="telemetry",
@@ -489,6 +542,7 @@ class MicroInput(InputDevice):
 
                     if self._is_connected:
                         self.logger.info("✅ Reconnection successful!")
+                        self._emit_speech_debug("connection_restored")
                         break
 
                 except Exception as e:
@@ -502,6 +556,105 @@ class MicroInput(InputDevice):
     def _on_transcript_if_active(self, text: str):
         if self.is_active():
             self._on_transcript(text)
+
+    def _on_batch_debug(self, event: dict[str, object]) -> None:
+        audio_queue = getattr(self.mic, "queue", None)
+        self.send_data(
+            {
+                **event,
+                **self._speech_debug_context(),
+                "audio_queue_chunks": audio_queue.qsize() if audio_queue is not None else None,
+                "dropped_audio_chunks": getattr(self.mic, "dropped_chunks", 0),
+            },
+            data_type="telemetry",
+        )
+
+    def _speech_debug_context(self) -> dict[str, object]:
+        detector = self._vad_detector
+        cfg = self.proxy.config if self.proxy is not None else {}
+        context = self._audio_telemetry_context()
+        if self._backend in BATCH_BACKENDS and detector is not None:
+            return {
+                **context,
+                "vad_threshold": detector.threshold,
+                "vad_level": round(detector.level, 4),
+                "silence_seconds": float(cfg.get("stt_vad_silence_secs", 0.5)),
+            }
+        return {
+            **context,
+            "vad_threshold": float(cfg.get("stt_realtime_vad_threshold", 0.3)),
+            "silence_seconds": float(cfg.get("stt_realtime_vad_silence_secs", 0.7)),
+        }
+
+    def _audio_telemetry_context(self) -> dict[str, object]:
+        return {
+            "backend": self._backend,
+            "engine": self._vad_engine if self._backend in BATCH_BACKENDS else VENDOR_VAD_ENGINE,
+            "capture": "browser" if isinstance(self.mic, RosPcmStreamer) else "hardware",
+            "audio_device_id": self._audio_device_id,
+            "audio_device_name": self._audio_device_name,
+            "rms": round(self._rms_level, 4),
+            "ducking": self._is_robot_talking,
+        }
+
+    def _emit_speech_debug(self, phase: str, **details: object) -> None:
+        self.send_data(
+            {
+                "kind": "speech_debug",
+                "source": "stt",
+                "phase": phase,
+                "timestamp": time.time(),
+                **self._speech_debug_context(),
+                **details,
+            },
+            data_type="telemetry",
+        )
+
+    def _mark_realtime_speech_started(self) -> None:
+        if self._realtime_speech_started_at is not None:
+            return
+        self._realtime_speech_started_at = time.monotonic()
+        self._realtime_speech_stopped_at = None
+        self.logger.info("🎤 Speech detected")
+        self._emit_speech_debug("speech_started")
+
+    def _mark_realtime_speech_stopped(self) -> None:
+        stopped_at = time.monotonic()
+        audio_seconds = (
+            stopped_at - self._realtime_speech_started_at if self._realtime_speech_started_at is not None else None
+        )
+        self._realtime_speech_stopped_at = stopped_at
+        self.logger.info("🔇 Speech stopped")
+        self._emit_speech_debug(
+            "utterance_closed",
+            audio_seconds=round(audio_seconds, 2) if audio_seconds is not None else None,
+        )
+
+    def _finish_realtime_utterance(self, text: str) -> None:
+        now = time.monotonic()
+        elapsed_ms = (
+            round((now - self._realtime_speech_started_at) * 1000)
+            if self._realtime_speech_started_at is not None
+            else None
+        )
+        stop_to_transcript_ms = (
+            round((now - self._realtime_speech_stopped_at) * 1000)
+            if self._realtime_speech_stopped_at is not None
+            else None
+        )
+        self._clear_realtime_timing()
+        self._emit_speech_debug(
+            "transcript_ready" if text else "no_speech",
+            total_ms=elapsed_ms,
+            stop_to_transcript_ms=stop_to_transcript_ms,
+            characters=len(text),
+        )
+        if text and self.is_active():
+            self._on_transcript(text)
+
+    def _clear_realtime_timing(self) -> None:
+        self._realtime_speech_started_at = None
+        self._realtime_speech_stopped_at = None
 
     def _send_chunk(self, chunk: bytes):
         """Hand one PCM chunk to the backend: fed locally (batch) or framed onto the wire."""
@@ -530,14 +683,24 @@ class MicroInput(InputDevice):
             chunks_seen = 0
             empty_count = 0
             ducking_logged = False
+            stalled_at = None
             while not self._stop_evt.is_set():
                 try:
                     chunk = self.mic.queue.get(timeout=0.1)
+                    self._rms_level = self._rolling_rms.add(chunk)
                     empty_count = 0  # Reset on successful get
+                    if stalled_at is not None:
+                        self._emit_speech_debug(
+                            "audio_resumed",
+                            stalled_ms=round((time.monotonic() - stalled_at) * 1000),
+                        )
+                        stalled_at = None
                 except queue.Empty:
                     empty_count += 1
-                    if empty_count == 50:
+                    if empty_count == 50 and not isinstance(self.mic, RosPcmStreamer):
                         self.logger.warning("⚠️ No audio chunks received (queue empty for 5s)")
+                        stalled_at = time.monotonic()
+                        self._emit_speech_debug("audio_stalled", empty_seconds=5)
                     continue
 
                 try:
@@ -580,6 +743,7 @@ class MicroInput(InputDevice):
         """Stop microphone and disconnect."""
         self._stop_evt.set()
         self._is_connected = False  # Prevent reconnection attempts
+        self._clear_realtime_timing()
 
         if self._audio_thread:
             self._audio_thread.join(timeout=1.0)
@@ -661,6 +825,7 @@ class MicroInput(InputDevice):
             preferred_device = devices[0]
 
         if preferred_device:
+            self._audio_device_name = preferred_device["name"]
             self.logger.info(f"🎙️ Selected audio device: {preferred_device['name']} ({preferred_device['id']})")
 
         return preferred_device["id"] if preferred_device else None
@@ -685,6 +850,7 @@ class RosPcmStreamer:
         self.queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self.sample_rate = DEFAULT_SAMPLE_RATE
         self.channels = DEFAULT_CHANNELS
+        self.dropped_chunks = 0
         self._node = node
         self.logger = logger
         self._sub = None
@@ -704,7 +870,7 @@ class RosPcmStreamer:
         try:
             self.queue.put_nowait(chunk)
         except queue.Full:
-            pass
+            self.dropped_chunks += 1
 
     def stop(self):
         if self._sub is not None:
@@ -721,6 +887,7 @@ class ArecordStreamer:
         self.logger = logger
         self.sample_rate = DEFAULT_SAMPLE_RATE
         self.channels = DEFAULT_CHANNELS
+        self.dropped_chunks = 0
         self._reader_thread: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -779,7 +946,7 @@ class ArecordStreamer:
                     try:
                         self.queue.put_nowait(chunk)
                     except queue.Full:
-                        pass
+                        self.dropped_chunks += 1
             except Exception as e:
                 self.logger.error(f"arecord reader error: {e}")
 

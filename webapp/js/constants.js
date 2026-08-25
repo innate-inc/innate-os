@@ -36,6 +36,8 @@ export const HEAD_SET_POSITION_TOPIC = "/mars/head/set_position";
 export const HEAD_CURRENT_POSITION_TOPIC = "/mars/head/current_position";
 
 export const TTS_TOPIC = "/brain/tts";
+export const TTS_AUDIO_TOPIC = "/tts/audio";
+export const TTS_PLAYBACK_TOPIC = "/tts/playback";
 
 // Sim only: the operator's microphone as base64 PCM16 mono at 24 kHz
 // (std_msgs/String). MicroInput reads this instead of arecord, mirroring
@@ -48,6 +50,7 @@ export const MIC_AUDIO_TOPIC = "/mic/audio";
 // the agent's reply. Same topics the sim console + mobile app use.
 export const CHAT_IN_TOPIC = "/brain/chat_in";
 export const CHAT_OUT_TOPIC = "/brain/chat_out";
+export const SPEECH_TELEMETRY_TOPIC = "/input_manager/telemetry";
 // Full chat history snapshot (brain_messages/srv/GetChatHistory → {history}, a
 // JSON string of {sender, text, timestamp, ...} entries). Fetched on connect so
 // the panel shows the conversation from before this page load, not just live.

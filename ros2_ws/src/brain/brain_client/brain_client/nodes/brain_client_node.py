@@ -75,6 +75,7 @@ class BrainClientNode(Node):
         self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.task_status_pub = self.create_publisher(String, "/brain/skill_status_update", 10)
         self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
+        self.speech_telemetry_pub = self.create_publisher(String, "/input_manager/telemetry", 10)
         # Synthesized speech (base64 WAV) for clients to play. Sim-only: the sim
         # has no audio device, so the webapp is the speaker.
         self.tts_audio_pub = self.create_publisher(String, "/tts/audio", 10)
@@ -132,6 +133,7 @@ class BrainClientNode(Node):
             proxy=self._proxy,
             tts_status_pub=self.tts_status_pub,
             tts_audio_pub=self.tts_audio_pub,
+            speech_debug_pub=self.speech_telemetry_pub,
             simulator_mode=self.config.simulator_mode,
         )
         if handler.is_available():
@@ -267,6 +269,8 @@ class BrainClientNode(Node):
         self.create_subscription(String, "/brain/chat_in", self._on_chat_in, 10)
         self.create_subscription(String, "/input_manager/custom", self._on_custom_input, 10)
         self.create_subscription(String, "/brain/tts", self._on_tts, 10)
+        if self.config.simulator_mode:
+            self.create_subscription(String, "/tts/playback", self._on_tts_playback, 10)
         self.create_subscription(String, "/brain/set_directive", self._on_set_directive, 10)
         self.create_subscription(String, "/brain/set_active_skills", self._on_set_active_skills, 10)
         self.create_subscription(String, "/brain/manual_skill_event", self._on_manual_skill_event, 10)
@@ -397,6 +401,10 @@ class BrainClientNode(Node):
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
             self.chat.speak(text)
+
+    def _on_tts_playback(self, msg: String) -> None:
+        if self._tts_handler is not None and self.config.simulator_mode:
+            self._tts_handler.on_browser_playback(msg.data)
 
     def _on_set_directive(self, msg: String) -> None:
         self.lifecycle.set_directive(msg.data)
