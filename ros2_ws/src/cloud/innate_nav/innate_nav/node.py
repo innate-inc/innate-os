@@ -315,11 +315,14 @@ class InnateNavNode(Node):
         now = time.monotonic()
         if now < self._recovering_until:
             v, w = 0.0, self._recovery_w
-        elif self._blocked.update(now, v, pose):
+        elif self._blocked.update(now, self._cmd_v, pose):
             # The camera cannot see "wedged against a wall" -- pressed into one
             # the view is a texture close-up, far off-distribution, and the
             # policy keeps confidently predicting forward. Odometry disagreeing
-            # with the command is the only honest signal.
+            # with the command is the only honest signal -- and the command is
+            # the ramped one that reached the wheels, never the tracker's
+            # request, which during every ramp-up is a speed nothing was asked
+            # to travel at.
             self._recovery_w = recovery_turn(wp, self._cfg)
             self._recovering_until = now + RECOVERY_S
             self._blocked.reset()
