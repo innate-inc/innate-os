@@ -141,6 +141,13 @@ class Manipulation:
     STREAM_MAX_SPEED = 1.8  # rad/s
     STREAM_IDLE_S = 0.4
 
+    # A motion completes on ARRIVAL, and motions serialize in the driver, so a
+    # queued one waits out whatever is already moving before its own duration
+    # even starts. Wait past the driver's own completion bound (total + 5s)
+    # rather than racing it: a failed wait must mean failed or hung, not merely
+    # queued behind another arm client.
+    _MOTION_SLACK_S = 6.0
+
     # /mars/arm/status samples torque state, then runs a multi-second servo
     # sweep before publishing — a heartbeat can arrive after a local torque
     # command yet predate it. Local writes stay authoritative for this long.
@@ -793,10 +800,10 @@ class Manipulation:
         try:
             future = self._goto_js_client.call_async(request)
             if wait:
-                if not self._await_motion_result(future, "GotoJS v2", duration + 1.0):
+                if not self._await_motion_result(future, "GotoJS v2", duration + self._MOTION_SLACK_S):
                     return False
             else:
-                self._pending = _PendingMotion(future, "GotoJS v2", time.monotonic() + duration + 1.0)
+                self._pending = _PendingMotion(future, "GotoJS v2", time.monotonic() + duration + self._MOTION_SLACK_S)
         except Exception as e:
             self.logger.error(f"[Manipulation] Exception calling GotoJS v2: {e}")
             return False
@@ -835,10 +842,12 @@ class Manipulation:
         try:
             future = self._goto_js_traj_client.call_async(request)
             if wait:
-                if not self._await_motion_result(future, "GotoJSTrajectory", total_time + 5.0):
+                if not self._await_motion_result(future, "GotoJSTrajectory", total_time + self._MOTION_SLACK_S):
                     return False
             else:
-                self._pending = _PendingMotion(future, "GotoJSTrajectory", time.monotonic() + total_time + 5.0)
+                self._pending = _PendingMotion(
+                    future, "GotoJSTrajectory", time.monotonic() + total_time + self._MOTION_SLACK_S
+                )
         except Exception as e:
             self.logger.error(f"[Manipulation] Exception calling GotoJSTrajectory: {e}")
             return False
