@@ -29,7 +29,7 @@ ROS_COMMAND_GROUPS=(
     "ros2 launch manipulation behavior.launch.py|ros2 launch brain_client input_manager.launch.py"
     "ros2 launch mars_cam camera_composable.launch.py|ros2 launch mars_control udp_leader_receiver.launch.py"
     "ros2 launch mars_arm ik.launch.py|cd ~/innate-os && ros2 launch innate_logger logger.launch.py"
-    "cd ~/innate-os && ros2 run innate_training_node training_node|cd ~/innate-os && ros2 launch innate_uninavid uninavid.launch.py"
+    "cd ~/innate-os && ros2 run innate_training_node training_node|cd ~/innate-os && ros2 launch innate_nav innate_nav.launch.py wide_view:=true"
     "cd ~/innate-os && ros2 launch innate_console console.launch.py|cd ~/innate-os/webapp && while true; do INNATE_HTTP_PORT=4080 python3 proxy/https_server.py 4443; sleep 2; done"
     "ros2 launch dataset_encoder dataset_encoder.launch.py"
 )
@@ -41,7 +41,7 @@ WINDOW_NAMES=(
     "behaviors-inputs"
     "cam-leader"
     "ik-logger"
-    "training-uninavid"
+    "training-innate-nav"
     "console-webapp"
     "encoder"
 )
