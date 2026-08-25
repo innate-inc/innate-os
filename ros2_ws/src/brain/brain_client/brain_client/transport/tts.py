@@ -30,12 +30,14 @@ class QueuedSpeech:
     text: str
     voice_config: dict[str, Any] | None
     queued_at: float
+    utterance_ids: tuple[str, ...]
 
 
 @dataclass
 class BrowserPlayback:
     clip_id: str
     first_byte_ms: int | None
+    utterance_ids: tuple[str, ...]
     done: threading.Event = field(default_factory=threading.Event)
     started_reported: bool = False
     success: bool = False
@@ -172,6 +174,7 @@ class TTSHandler:
         voice_config: dict[str, Any] | None = None,
         *,
         queued_at: float | None = None,
+        utterance_ids: tuple[str, ...] = (),
     ) -> bool:
         """
         Convert text to speech and play it.
@@ -204,10 +207,12 @@ class TTSHandler:
         playback_start = time.perf_counter()
         t_start = queued_at if queued_at is not None else playback_start
         text_len = len(text)
+        correlation = _correlation(utterance_ids)
         self._publish_speech_debug(
             "speech_started",
             characters=text_len,
             queue_ms=round((playback_start - queued_at) * 1000) if queued_at is not None else 0,
+            **correlation,
         )
         try:
             self.logger.info(f"🗣️ TTS start ({text_len} chars): '{text[:60]}{'...' if text_len > 60 else ''}'")
@@ -218,9 +223,9 @@ class TTSHandler:
             }
 
             if self._simulator_mode and self.tts_audio_pub is not None:
-                success = self._synthesize_to_topic(text, voice, t_start)
+                success = self._synthesize_to_topic(text, voice, t_start, utterance_ids)
             else:
-                success = self._synthesize_to_aplay(text, voice, t_start)
+                success = self._synthesize_to_aplay(text, voice, t_start, correlation)
         except Exception as e:
             self.logger.error(f"❌ TTS generation failed: {e}")
             success = False
@@ -234,6 +239,7 @@ class TTSHandler:
                 "speech_failed",
                 characters=text_len,
                 total_ms=round((time.perf_counter() - t_start) * 1000),
+                **correlation,
             )
         return success
 
@@ -252,7 +258,13 @@ class TTSHandler:
             },
         )
 
-    def _synthesize_to_aplay(self, text: str, voice: dict[str, Any], t_start: float) -> bool:
+    def _synthesize_to_aplay(
+        self,
+        text: str,
+        voice: dict[str, Any],
+        t_start: float,
+        correlation: dict[str, object],
+    ) -> bool:
         """Stream speech straight into aplay (real robot's speaker)."""
         text_len = len(text)
         # Volume is managed system-wide by app.cpp via
@@ -304,6 +316,7 @@ class TTSHandler:
                         "audio_started",
                         ttfb_ms=round((t_first_chunk - t_api) * 1000),
                         output="speaker",
+                        **correlation,
                     )
                 q.put(chunk)
 
@@ -338,6 +351,7 @@ class TTSHandler:
                     playback_seconds=round(_pcm_duration_seconds(total_bytes), 2),
                     total_ms=round((t_play_done - t_start) * 1000),
                     output="speaker",
+                    **correlation,
                 )
                 return True
             stderr = player.stderr.read().decode(errors="replace").strip() if player.stderr else ""
@@ -353,7 +367,13 @@ class TTSHandler:
                 pass
             return False
 
-    def _synthesize_to_topic(self, text: str, voice: dict[str, Any], t_start: float) -> bool:
+    def _synthesize_to_topic(
+        self,
+        text: str,
+        voice: dict[str, Any],
+        t_start: float,
+        utterance_ids: tuple[str, ...],
+    ) -> bool:
         """Synthesize the full clip and publish it (base64 WAV) on /tts/audio.
 
         The sim container has no audio device, so the webapp is the speaker. We
@@ -379,10 +399,11 @@ class TTSHandler:
         playback = BrowserPlayback(
             clip_id=uuid.uuid4().hex,
             first_byte_ms=round((t_first_chunk - t_api) * 1000) if t_first_chunk else None,
+            utterance_ids=utterance_ids,
         )
         with self._browser_playback_lock:
             self._browser_playback = playback
-        self._publish_audio(bytes(buf), playback.clip_id)
+        self._publish_audio(bytes(buf), playback.clip_id, utterance_ids)
         timeout = max(15.0, duration_seconds + 10.0)
         if not playback.done.wait(timeout):
             self.logger.error(f"Browser did not finish TTS clip {playback.clip_id} within {timeout:.1f}s")
@@ -404,10 +425,11 @@ class TTSHandler:
                 playback_seconds=round(duration_seconds, 2),
                 total_ms=round((time.perf_counter() - t_start) * 1000),
                 output="browser",
+                **_correlation(utterance_ids),
             )
         return playback.success
 
-    def _publish_audio(self, wav: bytes, clip_id: str) -> None:
+    def _publish_audio(self, wav: bytes, clip_id: str, utterance_ids: tuple[str, ...]) -> None:
         """Publish an identified browser playback request."""
         if self.tts_audio_pub is None or not wav:
             return
@@ -416,6 +438,7 @@ class TTSHandler:
         payload = {
             "id": clip_id,
             "audio": base64.b64encode(_finalize_wav(wav)).decode("ascii"),
+            **_correlation(utterance_ids),
         }
         self.tts_audio_pub.publish(String(data=json.dumps(payload, separators=(",", ":"))))
 
@@ -425,6 +448,7 @@ class TTSHandler:
             clip_id = data["id"]
             event = data["event"]
             reason = data.get("reason")
+            utterance_id = data.get("utterance_id")
         except (json.JSONDecodeError, KeyError, TypeError):
             self.logger.warning("Ignoring invalid /tts/playback event")
             return
@@ -432,6 +456,7 @@ class TTSHandler:
             not isinstance(clip_id, str)
             or event not in {"started", "ended", "aborted"}
             or (reason is not None and not isinstance(reason, str))
+            or (utterance_id is not None and not isinstance(utterance_id, str))
         ):
             self.logger.warning("Ignoring invalid /tts/playback event")
             return
@@ -439,6 +464,8 @@ class TTSHandler:
         with self._browser_playback_lock:
             playback = self._browser_playback
             if playback is None or clip_id != playback.clip_id or playback.done.is_set():
+                return
+            if utterance_id is not None and utterance_id != _primary_utterance_id(playback.utterance_ids):
                 return
             if event == "started" and not playback.started_reported:
                 playback.started_reported = True
@@ -449,12 +476,22 @@ class TTSHandler:
             elif event == "aborted":
                 playback.done.set()
         if started:
-            self._publish_speech_debug("audio_started", ttfb_ms=playback.first_byte_ms, output="browser")
+            self._publish_speech_debug(
+                "audio_started",
+                ttfb_ms=playback.first_byte_ms,
+                output="browser",
+                **_correlation(playback.utterance_ids),
+            )
         elif event == "aborted":
             self.logger.warning(f"Browser aborted TTS playback ({reason or 'unknown reason'})")
 
     def speak_text_async(
-        self, text: str, voice_config: dict[str, Any] | None = None, replace_pending: bool = False
+        self,
+        text: str,
+        voice_config: dict[str, Any] | None = None,
+        replace_pending: bool = False,
+        *,
+        utterance_ids: tuple[str, ...] = (),
     ) -> None:
         """
         Queue text to be spoken. Utterances play in order, one at a time;
@@ -480,7 +517,14 @@ class TTSHandler:
                             self.logger.info(f"🔇 Dropping superseded speech: '{stale.text[:60]}'")
                     except queue.Empty:
                         break
-            self._speech_queue.put_nowait(QueuedSpeech(text, voice_config, time.perf_counter()))
+            self._speech_queue.put_nowait(
+                QueuedSpeech(
+                    text=text,
+                    voice_config=voice_config,
+                    queued_at=time.perf_counter(),
+                    utterance_ids=utterance_ids,
+                )
+            )
         except queue.Full:
             self.logger.warning(f"🔇 Speech queue full, dropping: '{text[:60]}'")
 
@@ -490,13 +534,23 @@ class TTSHandler:
             item = self._speech_queue.get()
             if item is None:
                 break
-            if self.speak_text(item.text, item.voice_config, queued_at=item.queued_at):
+            if self.speak_text(
+                item.text,
+                item.voice_config,
+                queued_at=item.queued_at,
+                utterance_ids=item.utterance_ids,
+            ):
                 continue
             if self._simulator_mode:
                 continue
             self.logger.info("🔄 Retrying TTS after 1 second...")
             time.sleep(1)
-            self.speak_text(item.text, item.voice_config, queued_at=item.queued_at)
+            self.speak_text(
+                item.text,
+                item.voice_config,
+                queued_at=item.queued_at,
+                utterance_ids=item.utterance_ids,
+            )
 
     def close(self):
         """Clean up resources."""
@@ -537,3 +591,17 @@ def _finalize_wav(data: bytes) -> bytes:
 
 def _pcm_duration_seconds(byte_count: int) -> float:
     return max(0, byte_count - _WAV_HEADER_BYTES) / _PCM_BYTES_PER_SECOND
+
+
+def _primary_utterance_id(utterance_ids: tuple[str, ...]) -> str | None:
+    return utterance_ids[-1] if utterance_ids else None
+
+
+def _correlation(utterance_ids: tuple[str, ...]) -> dict[str, object]:
+    primary = _primary_utterance_id(utterance_ids)
+    if primary is None:
+        return {}
+    return {
+        "utterance_id": primary,
+        "utterance_ids": list(utterance_ids),
+    }

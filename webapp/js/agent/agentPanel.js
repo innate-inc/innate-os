@@ -285,7 +285,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const text = String(payload?.text ?? "");
     if (!sender || !text) return;
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
-    chat.routeChatOut(sender, text, ts);
+    chat.routeChatOut(sender, text, ts, payload);
   }, undefined, "std_msgs/msg/String");
 
   const unsubSkill = rosClient.subscribe(SKILL_STATUS_UPDATE_TOPIC, (m) => {

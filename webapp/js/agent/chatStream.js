@@ -43,7 +43,7 @@ const SKILL_GROUP_MIN = 3;
  *   addMessage: (kind: string, text: string, ts: number, label?: string) => void,
  *   addDebugEvent: (event: any) => void,
  *   addSkillRun: (key: string, name: string, status: string, ts: number, reason: string, args: any) => void,
- *   routeChatOut: (sender: string, text: string, ts: number) => void,
+ *   routeChatOut: (sender: string, text: string, ts: number, event?: any) => void,
  *   replay: (entries: any[]) => void,
  *   setMode: (mode: "compact" | "detailed") => void,
  *   destroy: () => void,
@@ -575,10 +575,8 @@ export function createChatStream(opts = {}) {
 
   // ---- history replay -----------------------------------------------------
 
-  /** Route one chat_out-shaped message to the right renderer. Live messages and
-   *  replayed history entries share this so the two paths cannot drift.
-   *  @param {string} sender @param {string} text @param {number} ts */
-  function routeChatOut(sender, text, ts) {
+  /** @param {string} sender @param {string} text @param {number} ts @param {any} [event] */
+  function routeChatOut(sender, text, ts, event = {}) {
     if (sender === "robot_thoughts" || sender === "robot_anticipation") {
       addThought(sender, text, ts);
     } else if (sender === "vision_agent_output") {
@@ -586,7 +584,7 @@ export function createChatStream(opts = {}) {
     } else if (sender === "user" || sender === "robot") {
       addMessage(sender, text, ts);
       if (sender !== "robot" || replayingHistory) return;
-      const response = speechTimeline.response(ts * 1000);
+      const response = speechTimeline.response({ ...event, timestamp: ts });
       if (response !== null) addDebugEvent(response);
     } else {
       addMessage("system", text, ts, sender || undefined);
@@ -608,7 +606,7 @@ export function createChatStream(opts = {}) {
     }
     const text = String(e?.text ?? "");
     if (!text) return;
-    routeChatOut(sender, text, ts);
+    routeChatOut(sender, text, ts, e);
   }
 
   /** Replace the transcript with a history snapshot. The snapshot already

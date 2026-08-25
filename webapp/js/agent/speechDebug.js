@@ -1,67 +1,75 @@
 // @ts-check
 
+/** @typedef {{ stoppedAt: number | null, transcriptAt: number | null, replied: boolean, voiced: boolean }} SpeechRecord */
+
 export function createSpeechTimeline() {
-  /** @type {number | null} */
-  let stoppedAt = null;
-  /** @type {number | null} */
-  let transcriptAt = null;
-  let pendingTranscripts = 0;
-  let responseTranscriptCount = 0;
-  /** @type {number | null} */
-  let repliedToTranscriptAt = null;
-  /** @type {number | null} */
-  let voicedForTranscriptAt = null;
+  /** @type {Map<string, SpeechRecord>} */
+  const records = new Map();
+
+  /** @param {string} utteranceId */
+  function recordFor(utteranceId) {
+    let record = records.get(utteranceId);
+    if (record !== undefined) return record;
+    record = { stoppedAt: null, transcriptAt: null, replied: false, voiced: false };
+    records.set(utteranceId, record);
+    const oldest = records.keys().next().value;
+    if (records.size > 32 && oldest !== undefined) records.delete(oldest);
+    return record;
+  }
 
   return {
     /** @param {any} raw */
     observe(raw) {
       const event = { ...raw };
+      const utteranceId = eventUtteranceId(event);
+      if (utteranceId === null) return event;
+      const record = recordFor(utteranceId);
       const at = timestampMs(event.timestamp);
       if (event.source === "stt" && event.phase === "speech_started") {
-        event.new_exchange = pendingTranscripts === 0;
-        stoppedAt = null;
+        event.new_exchange = true;
+        record.stoppedAt = null;
       } else if (event.source === "stt" && event.phase === "utterance_closed") {
-        stoppedAt = at;
+        record.stoppedAt = at;
       } else if (event.source === "stt" && event.phase === "transcript_ready") {
-        event.stop_to_transcript_ms ??= stoppedAt === null ? null : Math.max(0, at - stoppedAt);
-        transcriptAt = at;
-        pendingTranscripts += 1;
+        event.stop_to_transcript_ms ??=
+          record.stoppedAt === null ? null : Math.max(0, at - record.stoppedAt);
+        record.transcriptAt = at;
       } else if (event.source === "tts" && event.phase === "audio_started") {
-        if (transcriptAt !== null && voicedForTranscriptAt === transcriptAt) return null;
-        voicedForTranscriptAt = transcriptAt;
-        responseTranscriptCount = claimResponseTranscripts(pendingTranscripts, responseTranscriptCount);
-        pendingTranscripts = 0;
-        event.transcript_to_voice_ms = transcriptAt === null ? null : Math.max(0, at - transcriptAt);
-        event.stop_to_voice_ms = stoppedAt === null ? null : Math.max(0, at - stoppedAt);
-        event.bundled_transcripts = responseTranscriptCount;
+        if (record.voiced) return null;
+        record.voiced = true;
+        event.transcript_to_voice_ms =
+          record.transcriptAt === null ? null : Math.max(0, at - record.transcriptAt);
+        event.stop_to_voice_ms =
+          record.stoppedAt === null ? null : Math.max(0, at - record.stoppedAt);
+        event.bundled_transcripts = bundledTranscriptCount(event);
       }
       return event;
     },
 
-    /** @param {number} at */
-    response(at) {
-      if (transcriptAt === null || repliedToTranscriptAt === transcriptAt) return null;
-      repliedToTranscriptAt = transcriptAt;
-      responseTranscriptCount = claimResponseTranscripts(pendingTranscripts, responseTranscriptCount);
-      pendingTranscripts = 0;
+    /** @param {any} raw */
+    response(raw) {
+      const utteranceId = eventUtteranceId(raw);
+      if (utteranceId === null) return null;
+      const record = records.get(utteranceId);
+      if (record?.transcriptAt == null || record.replied) return null;
+      record.replied = true;
+      const at = timestampMs(raw.timestamp);
       return {
         source: "agent",
         phase: "response_ready",
+        utterance_id: utteranceId,
+        utterance_ids: raw.utterance_ids,
         timestamp: at / 1000,
-        transcript_to_response_ms: Math.max(0, at - transcriptAt),
-        stop_to_response_ms: stoppedAt === null ? null : Math.max(0, at - stoppedAt),
-        bundled_transcripts: responseTranscriptCount,
-        voice_started: voicedForTranscriptAt === transcriptAt,
+        transcript_to_response_ms: Math.max(0, at - record.transcriptAt),
+        stop_to_response_ms:
+          record.stoppedAt === null ? null : Math.max(0, at - record.stoppedAt),
+        bundled_transcripts: bundledTranscriptCount(raw),
+        voice_started: record.voiced,
       };
     },
 
     reset() {
-      stoppedAt = null;
-      transcriptAt = null;
-      pendingTranscripts = 0;
-      responseTranscriptCount = 0;
-      repliedToTranscriptAt = null;
-      voicedForTranscriptAt = null;
+      records.clear();
     },
   };
 }
@@ -239,9 +247,16 @@ export function timestampMs(value) {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : Date.now();
 }
 
-/** @param {number} pending @param {number} current */
-export function claimResponseTranscripts(pending, current) {
-  return pending > 0 ? pending : current;
+/** @param {any} event */
+function eventUtteranceId(event) {
+  return typeof event?.utterance_id === "string" ? event.utterance_id : null;
+}
+
+/** @param {any} event */
+function bundledTranscriptCount(event) {
+  return Array.isArray(event?.utterance_ids) && event.utterance_ids.length > 0
+    ? event.utterance_ids.length
+    : 1;
 }
 
 /** @param {any} event */

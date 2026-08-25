@@ -381,7 +381,8 @@ class BrainClientNode(Node):
             self.get_logger().warn("[BrainClient] Brain is not active. Skipping chat_in message.")
             return
         self.chat.history.append(data)
-        self.brain.on_user_message(data["text"])
+        utterance_id = data.get("utterance_id")
+        self.brain.on_user_message(data["text"], utterance_id if isinstance(utterance_id, str) else None)
         self.get_logger().info(f"User message: {data['text']}")
 
     def _on_custom_input(self, msg: String) -> None:

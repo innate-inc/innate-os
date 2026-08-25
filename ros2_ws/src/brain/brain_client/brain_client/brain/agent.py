@@ -276,7 +276,10 @@ class BrainAgent:
         events = list(self._events)
         self._turn_count += 1
         self._turn_started_at = time.monotonic()
-        speaker = self._speaker = self._chat.stream_speech()  # published before the first await, for the racing loop
+        utterance_ids = tuple(
+            event.utterance_id for event in events if event.kind == EventKind.USER and event.utterance_id is not None
+        )
+        speaker = self._speaker = self._chat.stream_speech(utterance_ids)
         try:
             await self._think(context, events, speaker)
         except asyncio.CancelledError:
@@ -478,7 +481,7 @@ class BrainAgent:
         speaker.flush()  # the reply's last sentence has no trailing boundary
         if speaker.spoke and speech:
             self._chat.emit(
-                Sender.ROBOT, speech, speak=False
+                Sender.ROBOT, speech, speak=False, utterance_ids=speaker.utterance_ids
             )  # audio went out per sentence; the panel gets one message
         return outcomes
 
@@ -601,11 +604,17 @@ class BrainAgent:
         return adjusted
 
     # ================= events (executor thread) =================
-    def add_event(self, text: str, image: bytes | None = None, kind: EventKind = EventKind.INFO) -> None:
+    def add_event(
+        self,
+        text: str,
+        image: bytes | None = None,
+        kind: EventKind = EventKind.INFO,
+        utterance_id: str | None = None,
+    ) -> None:
         """Queue something that happened; the loop wakes for an immediate turn."""
         if not self.available:
             return  # no transport, no loop: these would accumulate forever
-        self._events.append(Event(text, image, kind))
+        self._events.append(Event(text, image, kind, utterance_id))
         self._runtime.post(self._wake, kind)
         self._trace(TraceEvent.EVENT, kind=kind, text=text, image=image is not None)
 
@@ -615,8 +624,8 @@ class BrainAgent:
         if kind == EventKind.USER:
             self._user_spoke.set()
 
-    def on_user_message(self, text: str) -> None:
-        self.add_event(f'The user says: "{text}"', kind=EventKind.USER)
+    def on_user_message(self, text: str, utterance_id: str | None = None) -> None:
+        self.add_event(f'The user says: "{text}"', kind=EventKind.USER, utterance_id=utterance_id)
 
     def on_custom_input(self, data: dict) -> None:
         device = data.get("input_device", "unknown")

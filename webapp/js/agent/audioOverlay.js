@@ -1,7 +1,7 @@
 // @ts-check
 
 import { CHAT_OUT_TOPIC, SPEECH_TELEMETRY_TOPIC } from "../constants.js";
-import { createSpeechTimeline, timestampMs } from "./speechDebug.js";
+import { createSpeechTimeline } from "./speechDebug.js";
 
 const STALE_AFTER_MS = 2_500;
 
@@ -406,7 +406,7 @@ export function createAudioOverlay(stage, ros) {
       try {
         const data = JSON.parse(msg.data);
         if (data?.sender !== "robot") return;
-        const response = speechTimeline.response(timestampMs(data.timestamp));
+        const response = speechTimeline.response(data);
         if (response === null) return;
         transcriptToReplyMs = response.transcript_to_response_ms;
         responseTranscriptCount = response.bundled_transcripts;

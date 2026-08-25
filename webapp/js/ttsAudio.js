@@ -47,7 +47,7 @@ export function initTtsAudio() {
 // aplay finishes. In sim a clip is "done" once published, so the robot half can
 // only serialize synthesis — played on arrival, a two-sentence reply talks over
 // itself. This queue is what puts that behavior back.
-/** @typedef {{ id: string | null, audio: string }} TtsClip */
+/** @typedef {{ id: string | null, audio: string, utteranceId: string | null }} TtsClip */
 /** @type {TtsClip[]} */
 const pending = [];
 let playing = false;
@@ -118,9 +118,13 @@ function parseClip(data) {
   try {
     const parsed = JSON.parse(data);
     if (typeof parsed?.id !== "string" || typeof parsed?.audio !== "string") return null;
-    return { id: parsed.id, audio: parsed.audio };
+    return {
+      id: parsed.id,
+      audio: parsed.audio,
+      utteranceId: typeof parsed.utterance_id === "string" ? parsed.utterance_id : null,
+    };
   } catch {
-    return { id: null, audio: data };
+    return { id: null, audio: data, utteranceId: null };
   }
 }
 
@@ -128,7 +132,12 @@ function parseClip(data) {
 function report(clip, event, reason) {
   if (clip.id === null) return;
   ros.publish(TTS_PLAYBACK_TOPIC, {
-    data: JSON.stringify({ id: clip.id, event, ...(reason ? { reason } : {}) }),
+    data: JSON.stringify({
+      id: clip.id,
+      event,
+      ...(clip.utteranceId ? { utterance_id: clip.utteranceId } : {}),
+      ...(reason ? { reason } : {}),
+    }),
   });
 }
 

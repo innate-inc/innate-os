@@ -38,16 +38,27 @@ class ChatManager:
         self.history: list[dict] = []
 
     @staticmethod
-    def entry(sender: Sender, text: str) -> dict:
-        return {"sender": sender, "text": text, "timestamp": time.time()}
+    def entry(sender: Sender, text: str, utterance_ids: tuple[str, ...] = ()) -> dict:
+        entry = {"sender": sender, "text": text, "timestamp": time.time()}
+        if utterance_ids:
+            entry["utterance_id"] = utterance_ids[-1]
+            entry["utterance_ids"] = list(utterance_ids)
+        return entry
 
-    def emit(self, sender: Sender, text: str, speak: bool | None = None) -> None:
+    def emit(
+        self,
+        sender: Sender,
+        text: str,
+        speak: bool | None = None,
+        *,
+        utterance_ids: tuple[str, ...] = (),
+    ) -> None:
         """Append a chat entry, publish it, and (for robot speech) speak it.
 
         ``speak`` defaults to True only for the ROBOT sender, matching the old
         behaviour where thoughts/anticipation were published but not spoken.
         """
-        chat_entry = self.entry(sender, text)
+        chat_entry = self.entry(sender, text, utterance_ids)
         self.history.append(chat_entry)
         self._logger.debug(f"chat_out: {chat_entry}")
         from std_msgs.msg import String  # deferred: keeps the module importable without ROS
@@ -57,7 +68,7 @@ class ChatManager:
         if speak is None:
             speak = sender == Sender.ROBOT
         if speak and text and text.strip():
-            self.speak(text)
+            self.speak(text, utterance_ids=utterance_ids)
 
     def emit_system(self, text: str) -> None:
         """Publish a system message (never spoken)."""
@@ -98,12 +109,22 @@ class ChatManager:
     def clear(self) -> None:
         self.history = []
 
-    def speak(self, text: str, replace_pending: bool = False) -> None:
+    def speak(
+        self,
+        text: str,
+        replace_pending: bool = False,
+        *,
+        utterance_ids: tuple[str, ...] = (),
+    ) -> None:
         if self._tts_handler is not None:
-            self._tts_handler.speak_text_async(text, replace_pending=replace_pending)
+            self._tts_handler.speak_text_async(
+                text,
+                replace_pending=replace_pending,
+                utterance_ids=utterance_ids,
+            )
 
-    def stream_speech(self) -> SpeechStreamer:
-        return SpeechStreamer(self)
+    def stream_speech(self, utterance_ids: tuple[str, ...] = ()) -> SpeechStreamer:
+        return SpeechStreamer(self, utterance_ids)
 
 
 class SpeechStreamer:
@@ -117,8 +138,9 @@ class SpeechStreamer:
     decided to abandon it.
     """
 
-    def __init__(self, chat: ChatManager):
+    def __init__(self, chat: ChatManager, utterance_ids: tuple[str, ...] = ()):
         self._chat = chat
+        self.utterance_ids = utterance_ids
         self._buffer = ""
         self._muted = False
         self._lock = threading.Lock()
@@ -172,5 +194,9 @@ class SpeechStreamer:
             return
         # The first sentence supersedes any stale queued utterances; the rest
         # of the reply queues in order behind it.
-        self._chat.speak(sentence, replace_pending=not self.spoke)
+        self._chat.speak(
+            sentence,
+            replace_pending=not self.spoke,
+            utterance_ids=self.utterance_ids,
+        )
         self.spoke = True

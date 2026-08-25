@@ -35,6 +35,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 from collections import deque
 
 from brain_client.brain.transport import pick_rest
@@ -146,6 +147,7 @@ class MicroInput(InputDevice):
         self._max_reconnect_delay = 30  # Max 30 seconds between retries
         self._realtime_speech_started_at = None
         self._realtime_speech_stopped_at = None
+        self._realtime_utterance_id: str | None = None
         self._rolling_rms = RollingRms(DEFAULT_SAMPLE_RATE, RMS_WINDOW_SECS)
         self._rms_level = 0.0
         self._audio_device_id = "unavailable"
@@ -553,9 +555,9 @@ class MicroInput(InputDevice):
         self._reconnect_thread = threading.Thread(target=reconnect_loop, daemon=True)
         self._reconnect_thread.start()
 
-    def _on_transcript_if_active(self, text: str):
+    def _on_transcript_if_active(self, text: str, utterance_id: str) -> None:
         if self.is_active():
-            self._on_transcript(text)
+            self._on_transcript(text, utterance_id)
 
     def _on_batch_debug(self, event: dict[str, object]) -> None:
         audio_queue = getattr(self.mic, "queue", None)
@@ -613,10 +615,11 @@ class MicroInput(InputDevice):
     def _mark_realtime_speech_started(self) -> None:
         if self._realtime_speech_started_at is not None:
             return
+        self._realtime_utterance_id = uuid.uuid4().hex
         self._realtime_speech_started_at = time.monotonic()
         self._realtime_speech_stopped_at = None
         self.logger.info("🎤 Speech detected")
-        self._emit_speech_debug("speech_started")
+        self._emit_speech_debug("speech_started", utterance_id=self._realtime_utterance_id)
 
     def _mark_realtime_speech_stopped(self) -> None:
         stopped_at = time.monotonic()
@@ -627,11 +630,13 @@ class MicroInput(InputDevice):
         self.logger.info("🔇 Speech stopped")
         self._emit_speech_debug(
             "utterance_closed",
+            utterance_id=self._realtime_utterance_id,
             audio_seconds=round(audio_seconds, 2) if audio_seconds is not None else None,
         )
 
     def _finish_realtime_utterance(self, text: str) -> None:
         now = time.monotonic()
+        utterance_id = self._realtime_utterance_id or uuid.uuid4().hex
         elapsed_ms = (
             round((now - self._realtime_speech_started_at) * 1000)
             if self._realtime_speech_started_at is not None
@@ -645,16 +650,18 @@ class MicroInput(InputDevice):
         self._clear_realtime_timing()
         self._emit_speech_debug(
             "transcript_ready" if text else "no_speech",
+            utterance_id=utterance_id,
             total_ms=elapsed_ms,
             stop_to_transcript_ms=stop_to_transcript_ms,
             characters=len(text),
         )
         if text and self.is_active():
-            self._on_transcript(text)
+            self._on_transcript(text, utterance_id)
 
     def _clear_realtime_timing(self) -> None:
         self._realtime_speech_started_at = None
         self._realtime_speech_stopped_at = None
+        self._realtime_utterance_id = None
 
     def _send_chunk(self, chunk: bytes):
         """Hand one PCM chunk to the backend: fed locally (batch) or framed onto the wire."""
@@ -830,12 +837,12 @@ class MicroInput(InputDevice):
 
         return preferred_device["id"] if preferred_device else None
 
-    def _on_transcript(self, text: str) -> None:
+    def _on_transcript(self, text: str, utterance_id: str) -> None:
         """Called when transcript is ready."""
         if text:
             self.logger.info(f"🎤 Transcript: {text}")
 
-            self.send_data(text, data_type="chat_in")
+            self.send_data({"text": text, "utterance_id": utterance_id}, data_type="chat_in")
             self._last_transcript = text
             self._send_vad_status()
 

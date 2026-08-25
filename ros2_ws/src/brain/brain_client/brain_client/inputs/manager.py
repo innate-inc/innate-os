@@ -72,7 +72,8 @@ class InputDeviceManager:
         try:
             text = data if isinstance(data, str) else data.get("text", "")
             if data_type == "chat_in":
-                data_dict = {"text": text, "sender": "user", "timestamp": time.time()}
+                data_dict = {"text": text} if isinstance(data, str) else data.copy()
+                data_dict.update(sender="user", timestamp=time.time())
             else:
                 data_dict = {"text": data} if isinstance(data, str) else data.copy()
                 data_dict["input_device"] = device_name

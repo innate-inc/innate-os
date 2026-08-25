@@ -22,6 +22,7 @@ import math
 import queue
 import threading
 import time
+import uuid
 import wave
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
@@ -338,7 +339,7 @@ MAX_PENDING_UTTERANCES = 4
 @dataclass(frozen=True)
 class PendingUtterance:
     pcm: bytes
-    utterance_id: int
+    utterance_id: str
     audio_seconds: float
     closed_at: float
     peak_level: float
@@ -360,7 +361,7 @@ class BatchSttSession:
         sample_rate: int,
         is_voiced: VoicedDetector,
         silence_secs: float,
-        on_transcript: Callable[[str], None],
+        on_transcript: Callable[[str, str], None],
         logger: UniversalLogger,
         on_debug: Callable[[dict[str, Any]], None] | None = None,
     ):
@@ -373,6 +374,7 @@ class BatchSttSession:
         self._endpointer = Endpointer(sample_rate=sample_rate, is_voiced=is_voiced, silence_secs=silence_secs)
         self._utterances: queue.Queue[PendingUtterance | None] = queue.Queue(maxsize=MAX_PENDING_UTTERANCES)
         self._worker: threading.Thread | None = None
+        self._utterance_id: str | None = None
         self._stopped = False
         self.utterance_count = 0
         self.failure_count = 0
@@ -389,11 +391,15 @@ class BatchSttSession:
         if event is None:
             return
         if event.phase == "speech_started":
-            self._emit_debug("speech_started")
+            self._utterance_id = uuid.uuid4().hex
+            self._emit_debug("speech_started", utterance_id=self._utterance_id)
             return
+        utterance_id = self._utterance_id or uuid.uuid4().hex
+        self._utterance_id = None
         if event.phase == "utterance_rejected":
             self._emit_debug(
                 "utterance_rejected",
+                utterance_id=utterance_id,
                 audio_seconds=round(event.audio_seconds, 2),
                 close_reason=event.close_reason,
                 peak_level=round(event.peak_level, 4),
@@ -403,7 +409,7 @@ class BatchSttSession:
         self.utterance_count += 1
         pending = PendingUtterance(
             pcm=event.pcm,
-            utterance_id=self.utterance_count,
+            utterance_id=utterance_id,
             audio_seconds=event.audio_seconds,
             closed_at=time.monotonic(),
             peak_level=event.peak_level,
@@ -489,7 +495,7 @@ class BatchSttSession:
             )
             # A call that outlives stop() must not publish against the next session.
             if text and not self._stopped:
-                self._on_transcript(text)
+                self._on_transcript(text, pending.utterance_id)
 
     def _emit_debug(self, phase: str, **details: Any) -> None:
         if self._on_debug is None:

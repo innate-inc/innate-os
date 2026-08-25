@@ -30,6 +30,7 @@ class Event:
     text: str
     image: bytes | None = None
     kind: EventKind = EventKind.INFO
+    utterance_id: str | None = None
 
 
 class FrameLabel(StrEnum):
