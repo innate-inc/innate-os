@@ -21,6 +21,7 @@ import {
   SCAN_TOPIC,
   GLOBAL_COSTMAP_TOPIC,
   LOCAL_COSTMAP_TOPIC,
+  NAV_POLICY_PATH_TOPIC,
   TF_STATIC_TOPIC,
   MAPPING_POSE_TOPIC,
   MEMORY_POSITIONS_TOPIC,
@@ -89,6 +90,8 @@ export const MAP_COLORS = {
   trail: "rgb(255 92 225 / 45%)",
   goal: "#00ff88",
   route: "#00b7ff",
+  policy: "#ffd700",
+  policyPoint: "#00ff88",
   scan: "#d96a5a",
   memory: MEMORY_COLOR,
   costLethal: "rgb(217 106 90 / 82%)",
@@ -136,7 +139,7 @@ const TRAIL_MAX_POINTS = 600;
 const TRAIL_JUMP_M = 1;
 
 /**
- * @typedef {"scan" | "costmap" | "local" | "trail" | "memories" | "keepout"} LayerName
+ * @typedef {"scan" | "costmap" | "local" | "trail" | "memories" | "keepout" | "policy"} LayerName
  */
 
 // ---- spatial-memory layer tuning -------------------------------------------
@@ -353,6 +356,33 @@ export function createMap(root, opts = {}) {
     const s = Math.sin(amclPose.yaw);
     return { x: amclPose.x + dx * c - dy * s, y: amclPose.y + dx * s + dy * c, yaw: amclPose.yaw + dyaw };
   }
+  /** Odom point -> map frame, through the AMCL fix the robot pose uses. Without
+   *  a fix the two frames are the same and the point passes through. */
+  function odomPointToMap(x, y) {
+    if (mappingMode || !amclPose || !odomAtAmcl) return { x, y };
+    const ca = Math.cos(-odomAtAmcl.yaw);
+    const sa = Math.sin(-odomAtAmcl.yaw);
+    const dxo = x - odomAtAmcl.x;
+    const dyo = y - odomAtAmcl.y;
+    const dx = dxo * ca - dyo * sa;
+    const dy = dxo * sa + dyo * ca;
+    const c = Math.cos(amclPose.yaw);
+    const s = Math.sin(amclPose.yaw);
+    return { x: amclPose.x + dx * c - dy * s, y: amclPose.y + dx * s + dy * c };
+  }
+
+  /** @param {any} msg nav_msgs/Path from the policy, in odom */
+  function onPolicyPath(msg) {
+    const poses = msg?.poses || [];
+    // The node publishes an EMPTY path when a run ends; that is the signal to
+    // stop drawing, not a dropped message.
+    policyPath = poses.length
+      ? poses.map((p) => ({ x: p?.pose?.position?.x ?? 0, y: p?.pose?.position?.y ?? 0 }))
+      : null;
+    policyAtS = Date.now() / 1000;
+    draw();
+  }
+
   /** @type {Array<{ x: number, y: number }> | null} world-frame plan points */
   let plan = null;
 
@@ -360,7 +390,13 @@ export function createMap(root, opts = {}) {
   /** @type {Record<LayerName, boolean>} */
   // Zones are shown by default on every surface: the robot enforces them, so a
   // map view that hides them by default would misrepresent where it can drive.
-  const layers = { scan: false, costmap: false, local: false, trail: false, memories: false, keepout: true, ...opts.layers };
+  const layers = { scan: false, costmap: false, local: false, trail: false, memories: false,
+                   keepout: true, policy: false, ...opts.layers };
+  /** @type {Array<{ x: number, y: number }> | null} the nav policy's waypoints,
+   *  in ODOM (the frame the node publishes) — drawn through the same AMCL
+   *  composition as the robot, so they land where the robot will. */
+  let policyPath = null;
+  let policyAtS = 0;
   /** @type {any} latest sensor_msgs/LaserScan */
   let scanMsg = null;
   // base_link -> base_laser from /tf_static (URDF); zero until it arrives.
@@ -965,6 +1001,14 @@ export function createMap(root, opts = {}) {
       keepoutSavePending = null;
       clearTimeout(keepoutSaveTimer);
     }
+    if (layers.policy && !layerUnsubs.policy) {
+      layerUnsubs.policy = ros.subscribe(
+        NAV_POLICY_PATH_TOPIC, onPolicyPath, 0, "nav_msgs/msg/Path");
+    } else if (!layers.policy && layerUnsubs.policy) {
+      layerUnsubs.policy();
+      delete layerUnsubs.policy;
+      policyPath = null;
+    }
     if (layers.memories && !layerUnsubs.memsearch) {
       layerUnsubs.memsearch = ros.subscribe(MEMORY_SEARCH_TOPIC, onMemorySearch, 0, "std_msgs/msg/String");
     } else if (!layers.memories && layerUnsubs.memsearch) {
@@ -1412,6 +1456,35 @@ export function createMap(root, opts = {}) {
       ctx.strokeStyle = MAP_COLORS.route;
       ctx.lineWidth = 2 * dpr();
       ctx.stroke(path);
+    }
+
+    // The policy's waypoints: gold line, green points, the same pairing the sim
+    // viewer draws on the floor so the two surfaces read as one thing. Stale
+    // paths fade rather than vanish -- a run that stopped replanning is worth
+    // seeing, and a line that merely disappears looks like a dropped message.
+    if (layers.policy && policyPath && pose) {
+      const ageS = Date.now() / 1000 - policyAtS;
+      ctx.globalAlpha = ageS > 3 ? 0.3 : 1;
+      const pts = policyPath.map((w) => {
+        const m = odomPointToMap(w.x, w.y);
+        return worldToCanvas(m.x, m.y);
+      });
+      const here = worldToCanvas(pose.x, pose.y);
+      ctx.beginPath();
+      ctx.moveTo(here.px, here.py);
+      for (const q of pts) ctx.lineTo(q.px, q.py);
+      ctx.strokeStyle = MAP_COLORS.policy;
+      ctx.lineWidth = 2 * dpr();
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.stroke();
+      ctx.fillStyle = MAP_COLORS.policyPoint;
+      for (const q of pts) {
+        ctx.beginPath();
+        ctx.arc(q.px, q.py, 2.5 * dpr(), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
     }
 
     // Laser scan, projected from the composed robot pose + the static laser

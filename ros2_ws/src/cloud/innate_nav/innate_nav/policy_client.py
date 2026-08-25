@@ -36,7 +36,7 @@ import struct
 import threading
 import urllib.error
 import urllib.request
-from dataclasses import asdict, dataclass, fields
+from dataclasses import MISSING, asdict, dataclass, field, fields
 
 from websockets.sync.client import connect
 
@@ -92,6 +92,10 @@ class Plan:
     seq: int
     compute_ms: float
     model: str
+    # Pixel size each of those frames was resized to for the forward. Optional
+    # so an older server still drives the robot -- the operator view degrades,
+    # the navigation does not.
+    history_sizes: list[list[int]] = field(default_factory=list)
 
     @staticmethod
     def from_json(text: str) -> Plan:
@@ -101,7 +105,9 @@ class Plan:
         d = json.loads(text)
         d["capture_pose"] = Pose(**d["capture_pose"])
         known = {f.name for f in fields(Plan)}
-        missing = known - set(d)
+        required = {f.name for f in fields(Plan)
+                    if f.default is MISSING and f.default_factory is MISSING}
+        missing = required - set(d)
         if missing:
             raise ValueError(f"plan is missing {sorted(missing)}; server too old?")
         return Plan(**{k: v for k, v in d.items() if k in known})

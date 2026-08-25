@@ -25,6 +25,7 @@ import {
   LOCAL_COSTMAP_TOPIC,
   MEMORY_POSITIONS_TOPIC,
   MEMORY_SEARCH_TOPIC,
+  NAV_POLICY_PATH_TOPIC,
   NAV_CURRENT_MAP_TOPIC,
   ODOM_TOPIC,
   PLAN_TOPICS,
@@ -59,6 +60,7 @@ const LAYERS = [
   { key: "local", label: "Local costmap", on: false, topic: LOCAL_COSTMAP_TOPIC },
   { key: "trail", label: "Path traveled", on: true, topic: ODOM_TOPIC },
   { key: "memories", label: "Memories", on: true, topic: MEMORY_POSITIONS_TOPIC },
+  { key: "policy", label: "Policy waypoints", on: false, topic: NAV_POLICY_PATH_TOPIC },
 ];
 
 /** @param {HTMLElement} stage */

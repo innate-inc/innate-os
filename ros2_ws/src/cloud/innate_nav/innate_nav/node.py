@@ -83,6 +83,10 @@ FIRST_PLAN_S = 20.0
 # Operator status rate. Fast enough that "a new observation went up" reads as
 # live, slow enough to stay off the control thread's back.
 STATUS_HZ = 5.0
+# The strip carries the window at the model's own resolution -- a quarter of a
+# megabyte an update -- so it goes out slower than plans arrive. The window
+# barely changes between consecutive plans anyway.
+STRIP_HZ = 1.0
 
 
 def _yaw_of(odom: Odometry) -> float:
@@ -185,7 +189,7 @@ class InnateNavNode(Node):
         self._obs_pub = self.create_publisher(
             CompressedImage, "/nav_policy/observations/compressed", 1)
         self._obs = ObservationStrip()
-        self._obs_seq = -1
+        self._obs_at = 0.0
         self._plan_times: deque[float] = deque(maxlen=16)
         self.create_timer(1.0 / STATUS_HZ, self._publish_status,
                           callback_group=MutuallyExclusiveCallbackGroup())
@@ -251,8 +255,7 @@ class InnateNavNode(Node):
             client.send_frame(bytes(msg.data), pose, stamp)
             self._frames_sent += 1
             self._last_sent_at = stamp
-            if self._obs_pub.get_subscription_count() > 0:
-                self._obs.remember(bytes(msg.data), stamp)
+            self._obs.remember(bytes(msg.data), stamp)
         except Exception as exc:  # noqa: BLE001 -- a dead socket ends the goal, not the node
             self.get_logger().warning(f"frame upload failed ({exc!r}); ending goal")
             self._cancel_requested.set()
@@ -296,12 +299,13 @@ class InnateNavNode(Node):
         twist.linear.x, twist.angular.z = v, w
         self._cmd.publish(twist)
 
-        if plan.seq > self._obs_seq:
-            self._obs_seq = plan.seq
-            self._plan_times.append(time.monotonic())
-            self._publish_observations(plan)
+        # One counter for "this plan is new", reset with the episode: a second
+        # one carried across episodes and silently swallowed every operator
+        # view until a run outlived the last one's plan count.
         if plan.seq > self._last_seq:
             self._last_seq = plan.seq
+            self._plan_times.append(time.monotonic())
+            self._publish_observations(plan)
             if bool(self.get_parameter("publish_path").value):
                 self._publish_path(wp, pose)
 
@@ -354,15 +358,22 @@ class InnateNavNode(Node):
 
     def _publish_observations(self, plan) -> None:
         """The window this plan was made from, as the strip of frames the model
-        saw. Only the robot still has them; the server names them by the stamp
-        the robot assigned."""
-        if self._obs_pub.get_subscription_count() <= 0:
+        saw, each at the resolution it was given. Only the robot still has the
+        frames; the server names them by the stamp the robot assigned, and says
+        what size it resized each to."""
+        now = time.monotonic()
+        if now - self._obs_at < 1.0 / STRIP_HZ:
             return
-        strip = self._obs.strip(list(plan.history_stamps))
+        strip = self._obs.strip(list(plan.history_stamps), list(plan.history_sizes))
         if strip is None:
             return
+        self._obs_at = now
         msg = CompressedImage()
         msg.header.stamp = self.get_clock().now().to_msg()
+        # Not a TF frame: the plan this strip was composed from. Status and
+        # strip travel on separate topics at separate rates, so a viewer that
+        # pairs them by arrival draws one plan's window over another's frames.
+        msg.header.frame_id = str(plan.seq)
         msg.format = "jpeg"
         msg.data = cv2.imencode(".jpg", strip, [cv2.IMWRITE_JPEG_QUALITY, 70])[1].tobytes()
         self._obs_pub.publish(msg)
@@ -374,10 +385,11 @@ class InnateNavNode(Node):
         return (len(self._plan_times) - 1) / span if span > 0 else 0.0
 
     def _publish_status(self) -> None:
-        """One JSON snapshot for the operator view. Cheap, and skipped entirely
-        while nobody subscribes."""
-        if self._status_pub.get_subscription_count() <= 0:
-            return
+        """One JSON snapshot for the operator view.
+
+        Not gated on subscriber count: an operator view that silently stops
+        because a count read 0 is worse than the few hundred bytes it costs.
+        """
         client = self._client
         plan = client.plan if client is not None else None
         now = time.monotonic()
@@ -410,6 +422,9 @@ class InnateNavNode(Node):
                 # Age of each observation in the window, oldest first: the
                 # spread is what shows uniform-vs-latest at a glance.
                 "history_ages_s": [max(0.0, now - self._t0 - t) for t in plan.history_stamps],
+                # Pixels the model was given per frame: the budget buys detail
+                # at the recent end, and these are what say how much.
+                "history_sizes": [list(s) for s in plan.history_sizes],
             }
         msg = String()
         msg.data = json.dumps(state)
@@ -498,6 +513,7 @@ class InnateNavNode(Node):
         opened = time.monotonic()
         self._instruction, self._episode_id, self._server = instruction, handle.episode_id, server
         self._obs.clear()
+        self._obs_at = 0.0
         self._plan_times.clear()
         self.get_logger().info(
             f"episode {handle.episode_id} [{handle.task_family}/{handle.history_mode}"

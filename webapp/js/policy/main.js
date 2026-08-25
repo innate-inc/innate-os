@@ -23,6 +23,8 @@ import {
   NAV_POLICY_OBSERVATIONS_TOPIC,
   NAV_POLICY_STATUS_TOPIC,
 } from "../constants.js";
+import { createMap } from "../map/mapWidget.js";
+import { createObsBar } from "./obsBar.js";
 import { createStatusPanel } from "./statusPanel.js";
 
 const { createSession, createStage } = await robotSessionFactory();
@@ -31,6 +33,7 @@ const { createSession, createStage } = await robotSessionFactory();
 export function mount(stage) {
   return mountPage(stage, "policy-page", (root) => {
     root.innerHTML = `
+      <div class="policy-obs-slot"></div>
       <div class="policy-main">
         <form class="policy-bar">
           <input class="policy-instruction" type="text" autocomplete="off"
@@ -40,7 +43,10 @@ export function mount(stage) {
           <button class="policy-go" type="submit">Go</button>
           <button class="policy-stop" type="button" disabled>Stop</button>
         </form>
-        <div class="policy-scene"></div>
+        <div class="policy-views">
+          <div class="policy-scene"></div>
+          <div class="policy-map"></div>
+        </div>
         <div class="policy-status" role="status"></div>
       </div>
       <aside class="policy-side"></aside>`;
@@ -52,6 +58,15 @@ export function mount(stage) {
     const stop = /** @type {HTMLButtonElement} */ (root.querySelector(".policy-stop"));
     const line = /** @type {HTMLElement} */ (root.querySelector(".policy-status"));
     const sceneRoot = /** @type {HTMLElement} */ (root.querySelector(".policy-scene"));
+
+    // The map carries the waypoints on hardware, where the stage is camera
+    // video and there is no floor to draw them on.
+    const map = createMap(/** @type {HTMLElement} */ (root.querySelector(".policy-map")), {
+      zoom: 8,
+      layers: { policy: true },
+    });
+
+    const obsBar = createObsBar(/** @type {HTMLElement} */ (root.querySelector(".policy-obs-slot")));
 
     const session = createSession();
     const scene = createStage
@@ -88,6 +103,7 @@ export function mount(stage) {
         run = null;
         setRunning(false, text);
         panel.clear();
+        obsBar.clear();
       };
       promise.then(
         (values) => finish(values?.message || "done"),
@@ -104,14 +120,16 @@ export function mount(stage) {
     const unsubStatus = ros.subscribe(NAV_POLICY_STATUS_TOPIC, (msg) => {
       if (typeof msg?.data !== "string") return;
       try {
-        panel.setStatus(JSON.parse(msg.data));
+        const status = JSON.parse(msg.data);
+        panel.setStatus(status);
+        obsBar.setStatus(status);
       } catch {
         // a truncated payload is not worth tearing the page down over
       }
     }, undefined, "std_msgs/msg/String");
 
     const unsubObs = ros.subscribe(NAV_POLICY_OBSERVATIONS_TOPIC, (msg) => {
-      if (typeof msg?.data === "string") panel.setStrip(msg.data);
+      if (typeof msg?.data === "string") obsBar.setStrip(msg.data, msg?.header?.frame_id);
     }, undefined, "sensor_msgs/msg/CompressedImage");
 
     return {
@@ -122,7 +140,9 @@ export function mount(stage) {
         unsubObs();
         scene.destroy();
         session.destroy();
+        map.destroy();
         panel.destroy();
+        obsBar.destroy();
       },
     };
   });

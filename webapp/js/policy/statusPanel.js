@@ -1,13 +1,12 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// The inference readout: what the model is looking at, and when it last looked.
+// The inference readout: the three clocks, and what the run is doing.
 //
-// Three clocks run independently (streaming ~5Hz, inference free-running,
-// control 50Hz), and most confusing behaviour is one of them stalling while
-// the others carry on. So the panel reports them separately rather than as a
-// single "connected" light: frames going up, plans coming back, and the age of
-// the observation window behind the newest plan.
+// They run independently (streaming ~5Hz, inference free-running, control
+// 50Hz), and most confusing behaviour is one of them stalling while the others
+// carry on. So the panel reports them separately rather than as a single
+// "connected" light. What the model is looking at is the bar's job (obsBar.js).
 
 const FIELDS = [
   ["episode", (s) => s.episode_id || "—"],
@@ -30,26 +29,13 @@ export function createStatusPanel(parent) {
       <div class="policy-clock" data-k="age"><b>—</b><span>plan age</span></div>
       <div class="policy-clock" data-k="compute"><b>—</b><span>compute</span></div>
     </div>
-    <div class="policy-panel-head">Observation window</div>
-    <div class="policy-window-note"></div>
-    <img class="policy-strip" alt="the frames this plan was made from" />
-    <div class="policy-ages"></div>
     <div class="policy-panel-head">State</div>
     <div class="policy-flags"></div>`;
   parent.appendChild(root);
 
   const meta = root.querySelector(".policy-meta");
-  const note = root.querySelector(".policy-window-note");
-  const strip = /** @type {HTMLImageElement} */ (root.querySelector(".policy-strip"));
-  const ages = root.querySelector(".policy-ages");
   const flags = root.querySelector(".policy-flags");
   const clock = (k) => root.querySelector(`.policy-clock[data-k="${k}"] b`);
-
-  /** @param {string} b64 */
-  function setStrip(b64) {
-    strip.src = `data:image/jpeg;base64,${b64}`;
-    strip.classList.add("has-image");
-  }
 
   /** @param {any} s the parsed /nav_policy/status payload */
   function setStatus(s) {
@@ -65,18 +51,6 @@ export function createStatusPanel(parent) {
     el("age", plan ? secs(plan.age_s) : "—");
     el("compute", plan ? `${Math.round(plan.compute_ms)} ms` : "—");
 
-    if (note) {
-      note.textContent = plan
-        ? `${plan.history_indices.length} of ${plan.keyframes} keyframes, oldest first`
-        : "waiting for the first plan";
-    }
-    if (ages && plan) {
-      // The spread across the window is the tell: bunched at the right means
-      // recency-only, evenly spaced means the whole episode is in view.
-      const list = plan.history_ages_s || [];
-      ages.textContent = list.length
-        ? `age ${secs(list[0], 1)} … ${secs(list[list.length - 1], 1)}` : "";
-    }
     if (flags) {
       const on = [];
       if (s.running) on.push("running");
@@ -89,11 +63,8 @@ export function createStatusPanel(parent) {
   }
 
   function clear() {
-    strip.removeAttribute("src");
-    strip.classList.remove("has-image");
-    if (note) note.textContent = "no episode running";
-    if (ages) ages.textContent = "";
+    flags && (flags.innerHTML = "");
   }
 
-  return { setStatus, setStrip, clear, destroy: () => root.remove() };
+  return { setStatus, clear, destroy: () => root.remove() };
 }

@@ -42,6 +42,17 @@ def test_a_field_this_client_does_not_know_is_ignored_not_fatal():
     assert plan.seq == 7
 
 
+def test_a_server_that_does_not_report_frame_sizes_still_drives_the_robot():
+    """The sizes are for the operator view only. An older server omitting them
+    must cost the strip its resolutions, not the run its plans."""
+    plan = Plan.from_json(json.dumps(FULL))
+    assert plan.history_sizes == []
+    assert plan.waypoints_m == [[0.25, 0.0, 0.0]]
+
+    seen = Plan.from_json(json.dumps({**FULL, "history_sizes": [[352, 192], [640, 384]]}))
+    assert seen.history_sizes == [[352, 192], [640, 384]]
+
+
 def test_a_missing_field_is_a_clear_error_rather_than_a_confusing_one():
     lean = {k: v for k, v in FULL.items() if k != "history_stamps"}
     with pytest.raises(ValueError, match="history_stamps"):
