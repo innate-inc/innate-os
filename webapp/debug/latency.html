@@ -1451,7 +1451,14 @@ $("cfg-apply").onclick = async () => {
       });
       // The call resolves even when a node rejects a value, so read each result.
       (res?.results ?? []).forEach((r, i) => {
-        if (r?.successful === false) failed.push(`${knobs[i].name}: ${r.reason || "rejected"}`);
+        if (r?.successful !== false) return;
+        // rclpy's "undeclared" message reports an empty name list (its generator
+        // is consumed by any() before list()), so it never says which knob. Here
+        // it means the call reached a node that is not the brain.
+        const hint = /undeclared/.test(r.reason ?? "")
+          ? "reached a node that never declared it — restart to pick up the launch fix that stops helper nodes taking the brain's name"
+          : r.reason || "rejected";
+        failed.push(`${knobs[i].name}: ${hint}`);
       });
     } catch (err) {
       failed.push(`${node}: ${err}`);
