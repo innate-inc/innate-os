@@ -18,12 +18,10 @@ namespace {
 // webrtcbin's recv jitterbuffer, in ms.
 constexpr int kTalkJitterMs = 100;
 
-// `a=sendrecv` on the audio m-line is what invites the browser to send its mic back on the SAME m-line,
-// so talkback costs no extra m-line and no renegotiation. GStreamer 1.20's webrtcbin already offers
-// sendrecv for a transceiver built from a sink pad — but that is its default, not a contract, so set it
-// explicitly and verify it stuck: an upgrade that starts defaulting to sendonly then disables talkback
-// loudly instead of silently swallowing the operator's voice. Returns false if this webrtcbin won't hand
-// the transceiver over or won't take the direction (video + mic are unaffected either way).
+// `a=sendrecv` on the audio m-line invites the browser to send its mic back on the SAME m-line — no
+// extra m-line, no renegotiation. webrtcbin 1.20 already defaults to sendrecv here, but that is a
+// default, not a contract: set it and verify it stuck, so an upgrade fails loudly instead of silently
+// swallowing the operator's voice.
 bool enable_talk_direction(GstElement* webrtc, guint mline) {
     GstWebRTCRTPTransceiver* trans = nullptr;
     g_signal_emit_by_name(webrtc, "get-transceiver", mline, &trans);
@@ -165,9 +163,8 @@ Peer* WebRTCStreamer::create_peer_transport(const std::string& client_id, const 
             peer->with_audio = false;
         }
     }
-    // Talkback rides that same m-line in reverse: claim the recv direction, then take the operator's mic
-    // off webrtcbin's pad-added. The gate is shared with that callback because it fires on webrtcbin's
-    // streaming thread, which must not touch peers_ (see TalkGate).
+    // Talkback rides that same m-line in reverse: claim the recv direction, then take the operator's
+    // mic off webrtcbin's pad-added (see TalkGate for why the gate is shared with that callback).
     if (ok && peer->with_audio && enable_talkback_) {
         peer->with_talk = enable_talk_direction(peer->webrtc, static_cast<guint>(negotiated.size()));
         if (peer->with_talk) {
@@ -353,9 +350,8 @@ void WebRTCStreamer::on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer
     if (!is_audio) {
         return;  // we negotiate no recv video; anything else is not ours to play
     }
-    // One branch per peer: the gate owns exactly one valve, so a second branch would play ungated. A peer
-    // offers exactly once (the offer-once latch), so a second audio pad means an assumption changed and
-    // talkback needs revisiting — not a silent extra branch.
+    // One branch per peer: the gate owns exactly one valve, so a second branch would play ungated. A
+    // peer offers exactly once, so a second audio pad means an assumption changed — say so.
     if (g_object_get_data(G_OBJECT(webrtc), "mars_talk_attached")) {
         RCLCPP_WARN(self->get_logger(), "Second talkback audio pad on one peer; ignoring it");
         return;
@@ -393,10 +389,8 @@ void WebRTCStreamer::on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer
         gst_object_unref(pipeline);
         return;
     }
-    // Hand the valve to the gate and arm it in one critical section (see TalkGate). Until here the valve
-    // has dropped everything — it is built drop=true — so a press that raced the attach opens it now, and
-    // a release can never be undone by a stale snapshot: this read and write are atomic against
-    // set_peer_talk's.
+    // Hand the valve to the gate and arm it in one critical section (see TalkGate). Until here the
+    // valve has dropped everything (built drop=true), so audio that raced the attach never leaked.
     bool open_now = false;
     auto* gate = static_cast<std::shared_ptr<TalkGate>*>(g_object_get_data(G_OBJECT(webrtc), "mars_talk_gate"));
     GstElement* valve = gst_bin_get_by_name(GST_BIN(branch), "talk_valve");

@@ -222,12 +222,9 @@ export class WebRtcSession {
   }
 
   /**
-   * Hold/release talkback: this browser's microphone plays out the robot's speaker, live. The audio
-   * m-line is already negotiated sendrecv, so this is a track swap plus a no-reneg START — the same
-   * instant path the camera and mic toggles take. Opening the mic is the only slow part, and it happens
-   * on the first press rather than on page load.
+   * Hold/release talkback: this browser's mic plays out the robot's speaker — a track swap on the
+   * already-sendrecv audio m-line plus a no-reneg START. getUserMedia waits for the first press.
    * @param {boolean} on
-   * @returns {Promise<void>}
    */
   async setTalk(on) {
     // Recorded before any await: a release landing while getUserMedia is still pending must beat the
@@ -248,29 +245,24 @@ export class WebRtcSession {
     }
   }
 
-  /**
-   * Open (once) and keep this session's microphone. Returns false when it can't be had — over plain
-   * http getUserMedia is simply absent, which is the common case on a LAN robot.
-   * @returns {Promise<boolean>}
-   */
+  /** Open (once) and keep this session's mic; false when it can't be had (getUserMedia needs https). */
   async #openMic() {
     if (this.#micStream) return true;
     if (!navigator.mediaDevices?.getUserMedia) {
       this.#patch({ talkError: "Open the app over https to use the microphone" });
       return false;
     }
-    // Single-flight: a press-release-press while the first acquisition is pending must join it, not
-    // start a second one — the losing stream would never be stopped and the mic stays captured.
+    // Single-flight: overlapping presses must join one acquisition — a losing parallel stream would
+    // never be stopped and the mic stays captured. The guard on clearing keeps a late resumer from
+    // clobbering a newer acquisition's slot.
     const opening = (this.#micOpening ??= this.#acquireMic());
     try {
       return await opening;
     } finally {
-      // Only the promise we awaited: a late resumer must not clobber a newer acquisition's slot.
       if (this.#micOpening === opening) this.#micOpening = null;
     }
   }
 
-  /** @returns {Promise<boolean>} */
   async #acquireMic() {
     const epoch = this.#micEpoch;
     try {
@@ -311,9 +303,9 @@ export class WebRtcSession {
   }
 
   /**
-   * The robot's START payload. Cameras, mic and talkback all ride the same message, and every caller
-   * sends the CURRENT full state — the robot diffs it, so a partial payload would silently turn things off.
-   * @param {Record<string, unknown>} [over] fields that differ from current state
+   * The robot's START payload: always the CURRENT full state — the robot diffs it, so a partial
+   * payload would silently turn things off.
+   * @param {Record<string, unknown>} [over]
    */
   #startPayload(over = {}) {
     return {
@@ -608,10 +600,8 @@ export class WebRtcSession {
   }
 
   /**
-   * The robot offers audio sendrecv; a transceiver built from a remote offer defaults to recvonly, so
-   * without this the answer gives away the send half and talkback would need a renegotiation to get it
-   * back. Claiming it costs nothing when the operator never talks: a sendrecv m-line with no track sends
-   * no RTP at all.
+   * A transceiver built from a remote offer defaults to recvonly, which would give away the send half
+   * the robot offered. Claiming sendrecv costs nothing: an m-line with no track sends no RTP.
    * @param {RTCPeerConnection} pc
    */
   #claimTalkSender(pc) {

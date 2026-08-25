@@ -84,9 +84,8 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
     this->declare_parameter("enable_audio", true);
     this->declare_parameter("audio_source_element", "alsasrc");
     this->declare_parameter("audio_capture_device", "");
-    // Talkback: the operator's mic, received on the same m-line the robot's mic is sent on, played out the
-    // robot's speaker. The ALSA default is dmix (config/alsa/asound.conf), so this shares the device with
-    // the brain's TTS aplay instead of fighting it for exclusive access.
+    // Talkback plays the operator's mic out the robot's speaker. The ALSA default is dmix
+    // (config/alsa/asound.conf), so it shares the device with TTS instead of fighting for it.
     this->declare_parameter("enable_talkback", true);
     this->declare_parameter("audio_sink_element", "alsasink");
     this->declare_parameter("audio_playback_device", "");

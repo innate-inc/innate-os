@@ -166,12 +166,9 @@ class InputDeviceManager:
             self._apply(MIC_DEVICE_NAME, device, enabled and MIC_DEVICE_NAME in self._requested_inputs)
 
     def handle_speaker_status(self, source: str, raw: str) -> None:
-        """Duck the mic while the robot's speaker is busy, whoever is driving it.
-
-        Two independent sources reach the same speaker — the brain's own TTS and a teleop operator
-        talking through the robot — so the sources are tracked as a set rather than a flag: TTS ending
-        mid-sentence must not un-duck the mic while the operator is still speaking into the room.
-        """
+        """Duck the mic while the robot's speaker is busy. TTS and teleop talkback reach the same
+        speaker independently, so sources are a set, not a flag: TTS ending mid-sentence must not
+        un-duck the mic while the operator is still speaking into the room."""
         speaking = raw.lower() in ("true", "1", "playing")
         was_busy = bool(self._speaking_sources)
         if speaking:

@@ -67,11 +67,10 @@ struct CameraEncoder {
     WebRTCStreamer* owner = nullptr;                 // for the static appsink new-sample callback
 };
 
-// The talkback switch one peer's playback branch obeys. Written by set_peer_talk (a ROS callback,
-// under peers_mutex_) and by the pad-added handler on webrtcbin's streaming thread — which must NOT
-// take peers_mutex_ (~Peer joins that thread under it), hence its own leaf mutex. The valve's drop
-// property is written only under this mutex and only from `open`, so a release can never be overwritten
-// by a stale snapshot: whoever writes last read `open` inside the same critical section.
+// The talkback switch one peer's playback branch obeys. The pad-added handler runs on webrtcbin's
+// streaming thread, which must NOT take peers_mutex_ (~Peer joins that thread under it) — hence its own
+// leaf mutex. The valve's drop property is written only under it and only from `open`, so a release can
+// never be overwritten by a stale snapshot.
 struct TalkGate {
     std::mutex mutex;
     bool open = false;            // the operator is holding talk
@@ -178,8 +177,6 @@ class WebRTCStreamer : public rclcpp::Node {
     void fan_out_sample(GstElement* appsink, const std::string& cam);
 
     // ---- Talkback: the operator's mic, received on the audio m-line and played out the speaker ----
-    // Built per peer on webrtcbin's pad-added (the recv side of the sendrecv audio transceiver) and gated
-    // by a valve, so nothing reaches the speaker unless the operator is holding the talk button.
     static void on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer user_data);
     std::string talk_branch_description() const;  // valve -> depay -> decode -> speaker
     void set_peer_talk(Peer* peer, bool on);      // flip the gate + the valve; caller holds peers_mutex_
