@@ -47,6 +47,7 @@ from brain_client.brain.utils import (
     parse_view_point,
     resolve_timezone,
 )
+from brain_client.common.latency import Mark, Stage, marker
 from brain_client.perception.scan_health import ScanHealthReporter
 from brain_client.transport.chat import Sender
 
@@ -94,6 +95,7 @@ class BrainAgent:
         scan_health: ScanHealthMonitor | None = None,
         battery: BatteryMonitor | None = None,
         trace: Callable[[str], None] | None = None,
+        mark: Mark | None = None,
     ):
         self._logger = node.get_logger()
         self._state = state
@@ -106,6 +108,7 @@ class BrainAgent:
         self._chat = chat
         self._gaze = gaze
         self._trace_sink = trace  # publishes one JSON string per event on /brain/trace
+        self._mark = mark if mark is not None else marker(None)  # stage timings on /brain/latency
         self._lidar = ScanHealthReporter(
             scan_health, pose_tracker, chat, self._logger, enabled=not config.simulator_mode
         )
@@ -150,7 +153,7 @@ class BrainAgent:
         self.trace_has_audience: Callable[[], bool] = lambda: True
 
         if self._context is not None:
-            self._context.on_request = self._trace_request  # the monitor renders the exact request body
+            self._context.on_request = self._on_request  # the monitor renders the exact request body
 
     def set_timezone(self, name: str) -> bool:
         """Point the status-line clock at an IANA zone ("" = the host's own); False if unknown."""
@@ -276,11 +279,13 @@ class BrainAgent:
         events = list(self._events)
         self._turn_count += 1
         self._turn_started_at = time.monotonic()
+        self._mark(Stage.TURN_START, turn=self._turn_count, events=len(events))
         speaker = self._speaker = self._chat.stream_speech()  # published before the first await, for the racing loop
         try:
             await self._think(context, events, speaker)
         except asyncio.CancelledError:
             self._trace(TraceEvent.TURN_DROPPED, turn=self._turn_count, latency=self._elapsed())
+            self._mark(Stage.TURN_DROPPED, turn=self._turn_count, reason="preempted")
             raise
         except Exception as error:
             await self._back_off(error, seen=len(events))
@@ -300,10 +305,12 @@ class BrainAgent:
 
         response = await self._generate(context, message, tools, system, speaker, wrist_frames)
         latency = self._elapsed()
+        self._mark(Stage.STREAM_DONE, turn=self._turn_count, ms=round(latency * 1000))
         self._report_recovered()
         if not self._state.is_brain_active:
             # Deactivation raced this turn's response: drop the whole exchange.
             self._trace(TraceEvent.TURN_DROPPED, turn=self._turn_count, latency=latency)
+            self._mark(Stage.TURN_DROPPED, turn=self._turn_count, reason="deactivated")
             return
 
         decision = context.absorb(message, response, latest_only_images=wrist_frames)
@@ -335,10 +342,25 @@ class BrainAgent:
         self._turn_in_flight = True
         try:
             return await asyncio.to_thread(
-                context.generate, message, tools, system, speaker.feed, latest_only_images=wrist_frames
+                context.generate, message, tools, system, self._timed_feed(speaker), latest_only_images=wrist_frames
             )
         finally:
             self._turn_in_flight = False
+
+    def _timed_feed(self, speaker: SpeechStreamer) -> Callable[[str], None]:
+        """``speaker.feed``, marking the turn's first text delta — the model's
+        time-to-first-token, which is what decides how soon the robot can talk."""
+        turn = self._turn_count
+        marked = False
+
+        def feed(text: str) -> None:
+            nonlocal marked
+            if not marked:
+                marked = True
+                self._mark(Stage.FIRST_TEXT, turn=turn, ms=round(self._elapsed() * 1000))
+            speaker.feed(text)
+
+        return feed
 
     def _report_recovered(self) -> None:
         if not self._error_streak:
@@ -608,6 +630,7 @@ class BrainAgent:
         self._events.append(Event(text, image, kind))
         self._runtime.post(self._wake, kind)
         self._trace(TraceEvent.EVENT, kind=kind, text=text, image=image is not None)
+        self._mark(Stage.EVENT_QUEUED, kind=kind, text=text[:120])
 
     def _wake(self, kind: EventKind) -> None:
         """Loop thread: end any pause; user speech also abandons a housekeeping turn."""
@@ -644,7 +667,8 @@ class BrainAgent:
             return
         self._trace_sink(json.dumps({"ev": event, "t": time.time(), **fields}))
 
-    def _trace_request(self, body: dict) -> None:
+    def _on_request(self, body: dict) -> None:
+        self._mark(Stage.REQUEST_SENT, turn=self._turn_count, ms=round(self._elapsed() * 1000))
         self._trace(TraceEvent.TURN_REQUEST, heavy=True, turn=self._turn_count, body=body)
 
     def _trace_turn_start(

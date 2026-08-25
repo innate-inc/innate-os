@@ -21,12 +21,14 @@ import json
 import math
 import queue
 import threading
+import time
 import wave
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, Protocol
 
 from brain_client.brain.transport import GENERATE_PATH
+from brain_client.common.latency import Mark, Stage, marker
 
 if TYPE_CHECKING:
     from brain_client.brain.transport import GeminiRest
@@ -328,11 +330,13 @@ class BatchSttSession:
         silence_secs: float,
         on_transcript: Callable[[str], None],
         logger: UniversalLogger,
+        mark: Mark | None = None,
     ):
         self._transcriber = transcriber
         self._sample_rate = sample_rate
         self._on_transcript = on_transcript
         self._logger = logger
+        self._mark = mark if mark is not None else marker(None)
         self._endpointer = Endpointer(sample_rate=sample_rate, is_voiced=is_voiced, silence_secs=silence_secs)
         self._utterances: queue.Queue[bytes | None] = queue.Queue(maxsize=MAX_PENDING_UTTERANCES)
         self._worker: threading.Thread | None = None
@@ -350,8 +354,12 @@ class BatchSttSession:
     def feed(self, chunk: bytes) -> None:
         utterance = self._endpointer.feed(chunk)
         if utterance is not None:
-            self._logger.info(f"🎤 Utterance closed ({len(utterance) / (self._sample_rate * 2):.1f}s), transcribing...")
+            secs = len(utterance) / (self._sample_rate * 2)
+            self._logger.info(f"🎤 Utterance closed ({secs:.1f}s), transcribing...")
             self.utterance_count += 1
+            # The clock starts here, not at the end of speech: the trailing
+            # silence_secs the endpointer waited out is already inside `secs`.
+            self._mark(Stage.UTTERANCE_CLOSED, secs=round(secs, 2))
             self._enqueue(utterance)
 
     def _enqueue(self, item: bytes | None) -> None:
@@ -387,7 +395,10 @@ class BatchSttSession:
             if utterance is None:
                 return
             try:
+                self._mark(Stage.STT_REQUEST, secs=round(len(utterance) / (self._sample_rate * 2), 2))
+                started = time.monotonic()
                 text = self._transcriber(pcm_to_wav(utterance, self._sample_rate))
+                self._mark(Stage.STT_DONE, ms=round((time.monotonic() - started) * 1000), chars=len(text))
                 # A call that outlives stop() must not publish: by the time it
                 # returns, the mic may be active again under a newer session.
                 if text and not self._stopped:

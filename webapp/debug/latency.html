@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent latency — speech in, speech out</title>
+<link rel="icon" type="image/avif" href="/public/innate-logo.avif">
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --surface-2: #f1f0ec;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --ring: rgba(11, 11, 11, 0.12);
+    --grid: #e1e0d9;
+
+    --c-wait: #b9b8ae;      /* on-robot queueing / plumbing — never a vendor */
+    --c-look: #1f9c95;      /* camera grab + prompt build */
+    --c-stt: #2a9d8f;
+    --c-model: #6f4fd8;
+    --c-model-2: #a08ae8;
+    --c-tts: #eb6834;
+    --c-play: #1f8a3b;
+    --c-bad: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --surface-2: #232322;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --ring: rgba(255, 255, 255, 0.13);
+      --grid: #2c2c2a;
+      --c-wait: #4a4a46;
+      --c-look: #2ab5ac;
+      --c-stt: #3ab7a6;
+      --c-model: #8f74ee;
+      --c-model-2: #6a55b0;
+      --c-tts: #e0703f;
+      --c-play: #35b357;
+      --c-bad: #e05a4b;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 80px; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  header h1 { font-size: 1.45rem; font-weight: 650; letter-spacing: -0.015em; margin: 0 0 4px; }
+  header p { color: var(--ink-2); margin: 0 0 16px; max-width: 74ch; font-size: 0.92rem; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--ring);
+    border-radius: 8px; padding: 14px 16px; margin-bottom: 16px;
+  }
+  h2 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.07em;
+       color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .row + .row { margin-top: 10px; }
+
+  button, select, input {
+    font: inherit; color: var(--ink); background: var(--surface-2);
+    border: 1px solid var(--ring); border-radius: 5px; padding: 6px 11px;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--ink-2); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.primary { background: var(--ink); color: var(--page); border-color: var(--ink); }
+  input.grow { flex: 1 1 240px; min-width: 160px; }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-bad); display: inline-block; }
+  .dot.ok { background: var(--c-play); }
+  .dot.warn { background: var(--c-tts); }
+  .status { color: var(--ink-2); font-size: 0.85rem; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 13px 15px; }
+  .tile .label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .tile .value { font-size: 1.6rem; font-weight: 600; letter-spacing: -0.02em; margin-top: 3px;
+                 font-family: ui-monospace, Menlo, monospace; }
+  .tile .sub { font-size: 0.76rem; color: var(--ink-2); margin-top: 2px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 0.76rem; color: var(--ink-2); margin-bottom: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+
+  .run { border-top: 1px solid var(--grid); padding: 11px 0 9px; }
+  .run:first-of-type { border-top: 0; }
+  .run-head { display: flex; gap: 10px; align-items: baseline; font-size: 0.8rem; color: var(--ink-2); margin-bottom: 6px; }
+  .run-head .who { color: var(--ink); font-weight: 500; }
+  .run-head .total { margin-left: auto; font-family: ui-monospace, Menlo, monospace; color: var(--ink); }
+  .run-head .flag { color: var(--c-bad); font-size: 0.74rem; }
+
+  .track { position: relative; height: 22px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+  .track + .track { margin-top: 3px; }
+  .bar { position: absolute; top: 3px; height: 16px; border-radius: 2px; min-width: 2px; overflow: hidden; }
+  .bar span {
+    position: absolute; left: 5px; top: 0; line-height: 16px; font-size: 0.68rem;
+    color: #fff; white-space: nowrap; text-shadow: 0 0 3px rgba(0,0,0,0.55); pointer-events: none;
+  }
+  .tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink); opacity: 0.35; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+  th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.72rem;
+       text-transform: uppercase; letter-spacing: 0.05em; }
+  td.num { font-family: ui-monospace, Menlo, monospace; }
+
+  .empty { color: var(--muted); font-size: 0.87rem; padding: 18px 0; }
+  .warn-line { color: var(--c-tts); font-size: 0.82rem; margin-top: 8px; }
+
+  details.raw summary { cursor: pointer; color: var(--ink-2); font-size: 0.85rem; }
+  pre.log { max-height: 320px; overflow: auto; font-size: 0.74rem; line-height: 1.45;
+            background: var(--surface-2); border-radius: 5px; padding: 10px; margin-top: 10px; }
+
+  footer { color: var(--ink-2); font-size: 0.84rem; margin-top: 26px; }
+  footer h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em;
+              color: var(--muted); margin: 18px 0 6px; }
+  footer li { margin-bottom: 5px; }
+  code { background: var(--surface-2); padding: 1px 5px; border-radius: 3px; font-size: 0.88em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Agent latency — speech in, speech out</h1>
+  <p>
+    Every stage boundary the robot publishes on <code>/brain/latency</code> and
+    <code>/input_manager/telemetry</code>, stitched into one timeline per exchange.
+    All marks come off the robot's own clock, so the bars are directly comparable;
+    nothing here is measured in the browser. Debug page — not linked from the app.
+  </p>
+</header>
+
+<section class="card">
+  <h2>Connection &amp; agent</h2>
+  <div class="row">
+    <span class="dot" id="conn-dot"></span>
+    <input id="host" class="mono" size="16" placeholder="robot host">
+    <button id="connect">Connect</button>
+    <span class="status" id="conn-text">…</span>
+  </div>
+  <div class="row">
+    <select id="directive"><option value="">— agent —</option></select>
+    <button id="start" class="primary">Start agent</button>
+    <button id="stop">Stop agent</button>
+    <button id="mic" hidden>Mic off</button>
+    <span class="status" id="agent-text"></span>
+  </div>
+  <div class="row">
+    <input id="say" class="grow mono" placeholder="type a message to the agent (skips STT entirely)">
+    <button id="send">Send</button>
+    <button id="clear">Clear runs</button>
+    <button id="copy">Copy JSON</button>
+  </div>
+  <div class="warn-line" id="warn" hidden></div>
+</section>
+
+<section class="tiles" id="tiles"></section>
+
+<section class="card">
+  <h2>Timeline — newest first</h2>
+  <div class="legend" id="legend"></div>
+  <div id="runs"><div class="empty">Waiting for an exchange. Start the agent, then speak to it or send a message above.</div></div>
+</section>
+
+<section class="card">
+  <h2>Per-stage statistics</h2>
+  <div id="stats"><div class="empty">No completed segments yet.</div></div>
+</section>
+
+<section class="card">
+  <details class="raw">
+    <summary>Raw marks</summary>
+    <pre class="log mono" id="log"></pre>
+  </details>
+</section>
+
+<footer>
+  <h3>How to read it</h3>
+  <ul>
+    <li><b>Bars overlap on purpose.</b> The robot starts speaking at the first sentence
+      boundary, so Cartesia and the speaker are busy while Gemini is still streaming.
+      A stacked chart would have to invent an order that does not exist.</li>
+    <li><b>Grey bars are the robot's own plumbing</b> — queues, thread handoffs, the
+      wait between an event landing and the loop picking it up. Coloured bars are a
+      vendor round trip or the speaker.</li>
+    <li><b>Trailing silence is not shown.</b> The clock starts when the VAD declares the
+      utterance over, which is already <code>stt_vad_silence_secs</code> (default 0.5 s)
+      after you stopped talking. That constant is a real part of what a person feels;
+      add it mentally, or lower it in settings and re-measure.</li>
+  </ul>
+
+  <h3>Sim is not hardware</h3>
+  <ul>
+    <li><b>Sim TTS holds the whole clip back.</b> On hardware, audio streams straight
+      into <code>aplay</code>, so <i>Cartesia first byte</i> is when the speaker starts
+      making sound. In sim there is no audio device: the brain collects the entire clip
+      and publishes it on <code>/tts/audio</code> for the browser. The page labels that
+      bar differently and does not pretend the two are comparable.</li>
+    <li><b>Sim mic adds a hop.</b> The browser captures, encodes base64 PCM, and pushes it
+      over rosbridge before the robot's VAD ever sees it — plus the page's own 800 ms
+      VAD tail. Hardware listens with a local ALSA device.</li>
+    <li>Everything between <i>agent wake</i> and <i>Gemini stream</i> is the same code in
+      both, so that middle section <i>is</i> comparable.</li>
+  </ul>
+
+  <h3>Backends</h3>
+  <ul>
+    <li>The batch STT backends (<code>elevenlabs_batch</code>, <code>gemini</code> — batch
+      is the default) endpoint on the robot, so their internals are visible.</li>
+    <li>The realtime backends (<code>elevenlabs</code>, <code>openai</code>) endpoint
+      inside the vendor's WebSocket session. Nothing before the transcript is
+      observable, and the page says so rather than drawing a bar it cannot measure.</li>
+  </ul>
+</footer>
+
+</div>
+
+<script type="module">
+import { ros } from "/js/rosClient.js";
+import { initTtsAudio } from "/js/ttsAudio.js";
+
+const LATENCY_TOPIC = "/brain/latency";
+const TELEMETRY_TOPIC = "/input_manager/telemetry";
+const CHAT_IN_TOPIC = "/brain/chat_in";
+const AGENT_STATUS_TOPIC = "/brain/agent_status";
+const SET_DIRECTIVE_TOPIC = "/brain/set_directive";
+const SET_BRAIN_ACTIVE_SERVICE = "/brain/set_brain_active";
+const GET_DIRECTIVES_SERVICE = "/brain/get_available_directives";
+
+const MAX_MARKS = 5000;
+const MAX_RUNS = 40;
+
+const $ = (id) => document.getElementById(id);
+
+// ---- stitching ------------------------------------------------------------
+// Only the upstream stages are strictly ordered in wall-clock time, so only they
+// decide where one exchange ends and the next begins. Everything downstream of
+// the request (first token, sentences, TTS clips) interleaves by design and is
+// absorbed into whichever exchange is open.
+const UPSTREAM = ["utterance_closed", "stt_request", "stt_done", "chat_in", "event_queued", "turn_start", "request_sent"];
+const RANK = new Map(UPSTREAM.map((s, i) => [s, i]));
+
+// Two lanes on one time axis. The voice lane starts while the brain lane is
+// still running — the robot speaks its first sentence mid-stream — and stacking
+// them would have to invent an order that does not exist.
+const BARS = [
+  { key: "stt_queue", lane: 0, label: "STT queue",     from: ["utterance_closed"],  to: ["stt_request"],   color: "--c-wait" },
+  { key: "stt",       lane: 0, label: "STT call",      from: ["stt_request"],       to: ["stt_done"],      color: "--c-stt" },
+  { key: "handoff",   lane: 0, label: "→ brain",       from: ["stt_done", "chat_in"], to: ["event_queued"], color: "--c-wait" },
+  { key: "wake",      lane: 0, label: "agent wake",    from: ["event_queued"],      to: ["turn_start"],    color: "--c-wait" },
+  { key: "look",      lane: 0, label: "look + prompt", from: ["turn_start"],        to: ["request_sent"],  color: "--c-look" },
+  { key: "ttft",      lane: 0, label: "Gemini TTFT",   from: ["request_sent"],      to: ["first_text"],    color: "--c-model" },
+  { key: "stream",    lane: 0, label: "Gemini stream", from: ["first_text"],        to: ["stream_done"],   color: "--c-model-2" },
+  { key: "tts_queue", lane: 1, label: "TTS queue",     from: ["speech_queued"],     to: ["tts_start"],     color: "--c-wait" },
+  { key: "synth",     lane: 1, label: "Cartesia TTFB", from: ["tts_request"],       to: ["tts_first_byte"], color: "--c-tts" },
+  { key: "speak",     lane: 1, label: "speaking",      from: ["tts_first_byte"],    to: ["tts_play_done"], color: "--c-play", toLast: true },
+];
+
+/** @type {any[]} */
+let marks = [];
+let dirty = true;
+
+function addMark(m) {
+  if (!m || typeof m.t !== "number" || typeof m.stage !== "string") return;
+  marks.push(m);
+  if (marks.length > MAX_MARKS) marks = marks.slice(-MAX_MARKS);
+  dirty = true;
+}
+
+function newRun(m) {
+  return { start: m.t, end: m.t, top: -1, turn: null, closed: false, dropped: null, marks: [], stages: {} };
+}
+
+function push(run, m) {
+  run.marks.push(m);
+  (run.stages[m.stage] ||= []).push(m);
+  if (m.t > run.end) run.end = m.t;
+  if (m.t < run.start) run.start = m.t;
+}
+
+function buildRuns(all) {
+  const sorted = [...all].sort((a, b) => a.t - b.t);
+  const runs = [];
+  const byTurn = new Map();
+  let cur = null;
+  for (const m of sorted) {
+    // Non-user events (motion, skill results) drive turns too, but they are not
+    // an exchange anyone is waiting on — they would open a run per wave.
+    if (m.stage === "event_queued" && m.kind !== "user") continue;
+
+    // A turn-scoped mark belongs to its own turn's run even when a newer
+    // exchange has since opened (a preempted turn reports after its successor
+    // started).
+    if (typeof m.turn === "number" && m.stage !== "turn_start" && byTurn.has(m.turn)) {
+      const owner = byTurn.get(m.turn);
+      push(owner, m);
+      if (m.stage === "turn_dropped") { owner.dropped = m.reason || "dropped"; owner.closed = true; }
+      continue;
+    }
+
+    const rank = RANK.get(m.stage);
+    if (rank !== undefined) {
+      if (!cur || cur.closed || rank <= cur.top) { cur = newRun(m); runs.push(cur); }
+      cur.top = rank;
+      if (m.stage === "turn_start") { cur.turn = m.turn; byTurn.set(m.turn, cur); }
+    } else if (!cur || cur.closed) {
+      // Downstream with nothing open: speech the agent loop did not produce
+      // (e.g. /brain/tts from the teleop page). Worth timing on its own.
+      cur = newRun(m);
+      runs.push(cur);
+    }
+    push(cur, m);
+  }
+  return runs.slice(-MAX_RUNS).reverse();
+}
+
+const first = (run, stage) => run.stages[stage]?.[0] ?? null;
+const last = (run, stage) => run.stages[stage]?.at(-1) ?? null;
+
+function pick(run, stages, wantLast) {
+  for (const s of stages) {
+    const m = wantLast ? last(run, s) : first(run, s);
+    if (m) return m;
+  }
+  return null;
+}
+
+function segments(run) {
+  const out = [];
+  for (const bar of BARS) {
+    const a = pick(run, bar.from, false);
+    const b = pick(run, bar.to, bar.toLast);
+    if (!a || !b || b.t < a.t) continue;
+    out.push({ ...bar, t0: a.t - run.start, t1: b.t - run.start, ms: Math.round((b.t - a.t) * 1000) });
+  }
+  return out;
+}
+
+/** Sim publishes the finished clip instead of streaming to a speaker. */
+const isTopicMode = (run) => (first(run, "tts_request")?.mode ?? first(run, "tts_play_done")?.mode) === "topic";
+
+/** When sound actually reaches a human: the first WAV chunk on hardware, the
+ *  published clip in sim (where nothing is audible until the browser has it). */
+function audibleAt(run) {
+  return isTopicMode(run) ? first(run, "tts_play_done") : first(run, "tts_first_byte");
+}
+
+function runLabel(run) {
+  const said = first(run, "event_queued")?.text;
+  if (said) return said.replace(/^The user says:\s*/, "").slice(0, 90);
+  const chars = first(run, "stt_done")?.chars;
+  if (chars) return `(transcript, ${chars} chars)`;
+  return "(no user event)";
+}
+
+// ---- rendering ------------------------------------------------------------
+const fmt = (ms) => (ms >= 1000 ? (ms / 1000).toFixed(2) + " s" : Math.round(ms) + " ms");
+const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour12: false });
+
+function median(xs) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+function renderLegend() {
+  $("legend").innerHTML = BARS.map(
+    (b) => `<span><i class="swatch" style="background:var(${b.color})"></i>${b.label}</span>`,
+  ).join("");
+}
+
+function renderTiles(runs) {
+  const complete = runs.filter((r) => audibleAt(r) && !r.dropped);
+  const toAudio = complete.map((r) => (audibleAt(r).t - r.start) * 1000);
+  const ttft = runs.map((r) => segments(r).find((s) => s.key === "ttft")?.ms).filter((v) => v != null);
+  const total = complete.map((r) => (r.end - r.start) * 1000);
+
+  const tile = (label, value, sub) =>
+    `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+
+  const show = (xs) => (xs.length ? fmt(median(xs)) : "—");
+  const spread = (xs) => (xs.length ? `n=${xs.length} · last ${fmt(xs[0])}` : "no samples yet");
+
+  $("tiles").innerHTML =
+    tile("Utterance → first audio", show(toAudio), spread(toAudio)) +
+    tile("Gemini time to first token", show(ttft), spread(ttft)) +
+    tile("Utterance → reply finished", show(total), spread(total)) +
+    tile("Exchanges captured", String(runs.length), `${marks.length} marks`);
+}
+
+function renderRuns(runs) {
+  const host = $("runs");
+  if (!runs.length) {
+    host.innerHTML = '<div class="empty">Waiting for an exchange. Start the agent, then speak to it or send a message above.</div>';
+    return;
+  }
+  // One shared scale so rows are comparable to each other, not just internally.
+  const scale = Math.max(...runs.map((r) => (r.end - r.start) * 1000), 1);
+
+  host.innerHTML = runs
+    .map((run) => {
+      const segs = segments(run);
+      const totalMs = (run.end - run.start) * 1000;
+      const topic = isTopicMode(run);
+      const sentence = first(run, "speech_queued");
+      const tick = sentence
+        ? `<div class="tick" style="left:${(((sentence.t - run.start) * 1000) / scale) * 100}%" title="first sentence ready for TTS"></div>`
+        : "";
+      const lane = (n) => {
+        const bars = segs
+          .filter((s) => s.lane === n)
+          .map((s) => {
+            const left = ((s.t0 * 1000) / scale) * 100;
+            const width = Math.max((s.ms / scale) * 100, 0.4);
+            const label = s.key === "speak" && topic ? "collecting clip" : s.label;
+            // A label wider than its bar reads as the neighbour's number; hover carries it instead.
+            const text = width >= 7 ? `<span>${fmt(s.ms)}</span>` : "";
+            return (
+              `<div class="bar" style="left:${left}%;width:${width}%;background:var(${s.color})" ` +
+              `title="${label}: ${fmt(s.ms)}">${text}</div>`
+            );
+          })
+          .join("");
+        return bars ? `<div class="track">${bars}${tick}</div>` : "";
+      };
+      const sentences = run.stages.speech_queued?.length ?? 0;
+      const flag = run.dropped ? `<span class="flag">turn ${run.dropped}</span>` : "";
+      const mode = topic ? " · sim (clip → /tts/audio)" : "";
+      return (
+        `<div class="run">` +
+        `<div class="run-head"><span class="mono">${clock(run.start)}</span>` +
+        `<span class="who">${escapeHtml(runLabel(run))}</span>${flag}` +
+        `<span class="total">${fmt(totalMs)}${sentences > 1 ? ` · ${sentences} sentences` : ""}${mode}</span></div>` +
+        lane(0) +
+        lane(1) +
+        `</div>`
+      );
+    })
+    .join("");
+}
+
+function renderStats(runs) {
+  const rows = BARS.map((bar) => {
+    const xs = runs.map((r) => segments(r).find((s) => s.key === bar.key)?.ms).filter((v) => v != null);
+    return { bar, xs };
+  }).filter((r) => r.xs.length);
+
+  if (!rows.length) {
+    $("stats").innerHTML = '<div class="empty">No completed segments yet.</div>';
+    return;
+  }
+  $("stats").innerHTML =
+    "<table><thead><tr><th>Stage</th><th>n</th><th>p50</th><th>min</th><th>max</th></tr></thead><tbody>" +
+    rows
+      .map(
+        ({ bar, xs }) =>
+          `<tr><td><i class="swatch" style="background:var(${bar.color})"></i> ${bar.label}</td>` +
+          `<td class="num">${xs.length}</td><td class="num">${fmt(median(xs))}</td>` +
+          `<td class="num">${fmt(Math.min(...xs))}</td><td class="num">${fmt(Math.max(...xs))}</td></tr>`,
+      )
+      .join("") +
+    "</tbody></table>";
+}
+
+function renderWarnings(runs) {
+  const el = $("warn");
+  const notes = [];
+  const sawTranscript = runs.some((r) => first(r, "chat_in"));
+  const sawEndpoint = runs.some((r) => first(r, "utterance_closed"));
+  if (sawTranscript && !sawEndpoint) {
+    const backend = runs.map((r) => first(r, "chat_in")?.backend).find(Boolean) ?? "realtime";
+    notes.push(`STT backend "${backend}" endpoints inside the vendor session — nothing before the transcript is measurable here.`);
+  }
+  if (runs.some((r) => r.dropped)) notes.push("Some turns were preempted or deactivated; their rows are incomplete by design.");
+  el.hidden = !notes.length;
+  el.textContent = notes.join(" ");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+
+function renderLog() {
+  const recent = [...marks].sort((a, b) => a.t - b.t).slice(-200);
+  $("log").textContent = recent
+    .map((m) => {
+      const { t, stage, ...rest } = m;
+      const extra = Object.entries(rest)
+        .map(([k, v]) => `${k}=${typeof v === "string" ? v.slice(0, 60) : v}`)
+        .join(" ");
+      return `${clock(t)}.${String(Math.floor((t % 1) * 1000)).padStart(3, "0")}  ${stage.padEnd(17)} ${extra}`;
+    })
+    .join("\n");
+}
+
+let lastRuns = [];
+function render() {
+  if (!dirty) return;
+  dirty = false;
+  lastRuns = buildRuns(marks);
+  renderTiles(lastRuns);
+  renderRuns(lastRuns);
+  renderStats(lastRuns);
+  renderWarnings(lastRuns);
+  renderLog();
+}
+renderLegend();
+setInterval(render, 300);
+
+// ---- feeds ----------------------------------------------------------------
+// ?demo fills the page from a scripted exchange, so the layout and the stitching
+// can be checked with no robot in the picture (the brain monitor has the same).
+if (new URLSearchParams(location.search).has("demo")) {
+  const t0 = Date.now() / 1000 - 30;
+  const script = [
+    ["utterance_closed", 0.0, { secs: 1.4 }], ["stt_request", 0.004, {}], ["stt_done", 0.38, { chars: 9 }],
+    ["chat_in", 0.002, { backend: "elevenlabs_batch" }],
+    ["event_queued", 0.006, { kind: "user", text: 'The user says: "turn left and tell me what you see"' }],
+    ["turn_start", 0.09, { turn: 7 }], ["request_sent", 0.12, { turn: 7 }], ["first_text", 0.71, { turn: 7 }],
+    ["speech_queued", 0.05, { chars: 22, first: true }], ["tts_start", 0.003, {}],
+    ["tts_request", 0.001, { mode: "aplay" }], ["tts_first_byte", 0.24, { mode: "aplay" }],
+    ["stream_done", 0.1, { turn: 7 }], ["speech_queued", 0.02, { chars: 31 }],
+    ["tts_play_done", 1.3, { mode: "aplay" }],
+    ["event_queued", 4.0, { kind: "user", text: 'The user says: "stop"' }],
+    ["turn_start", 0.05, { turn: 8 }], ["request_sent", 0.1, { turn: 8 }],
+    ["event_queued", 0.4, { kind: "user", text: 'The user says: "actually go right"' }],
+    ["turn_start", 0.03, { turn: 9 }], ["turn_dropped", 0.01, { turn: 8, reason: "preempted" }],
+    ["request_sent", 0.09, { turn: 9 }], ["first_text", 0.6, { turn: 9 }], ["stream_done", 0.3, { turn: 9 }],
+    ["speech_queued", 0.04, { chars: 18, first: true }], ["tts_start", 0.002, {}],
+    ["tts_request", 0.001, { mode: "aplay" }], ["tts_first_byte", 0.19, { mode: "aplay" }],
+    ["tts_play_done", 0.9, { mode: "aplay" }],
+  ];
+  let t = t0;
+  for (const [stage, dt, extra] of script) addMark({ t: (t += dt), stage, ...extra });
+}
+
+const jsonHandler = (fn) => (msg) => {
+  try {
+    fn(JSON.parse(msg.data));
+  } catch {
+    /* a malformed payload must not kill the subscription */
+  }
+};
+
+ros.subscribe(LATENCY_TOPIC, jsonHandler(addMark), 0, "std_msgs/msg/String");
+ros.subscribe(
+  TELEMETRY_TOPIC,
+  jsonHandler((d) => {
+    if (d.kind === "latency") addMark(d);
+  }),
+  0,
+  "std_msgs/msg/String",
+);
+ros.subscribe(
+  AGENT_STATUS_TOPIC,
+  jsonHandler((d) => {
+    $("agent-text").textContent = d.brain_active
+      ? `running: ${d.current_directive || "(no agent)"}`
+      : "agent stopped";
+    if (d.current_directive) $("directive").value = d.current_directive;
+  }),
+  0,
+  "std_msgs/msg/String",
+);
+
+initTtsAudio(); // in sim the robot's voice comes out of this page's speakers
+
+// ---- connection -----------------------------------------------------------
+const servedHost = location.hostname;
+const robotServed = servedHost && servedHost !== "localhost" && servedHost !== "127.0.0.1";
+const defaultTarget = robotServed ? servedHost : (ros.lastIp ?? servedHost);
+$("host").value = defaultTarget ?? "";
+
+ros.onStateChange((state) => {
+  const dot = $("conn-dot");
+  dot.className = "dot" + (state === "connected" ? " ok" : state === "connecting" ? " warn" : "");
+  $("conn-text").textContent = state === "connected" ? `rosbridge @ ${ros.ip}` : state;
+  const off = state !== "connected";
+  for (const id of ["start", "stop", "send", "directive"]) $(id).disabled = off;
+  if (state === "connected") void loadDirectives();
+});
+
+$("connect").onclick = () => ros.connect($("host").value.trim());
+if (defaultTarget) ros.connect(defaultTarget);
+
+// ---- controls -------------------------------------------------------------
+async function loadDirectives() {
+  try {
+    const res = await ros.callService(GET_DIRECTIVES_SERVICE, {});
+    const entries = Array.isArray(res?.directives) ? res.directives : [];
+    const raw = JSON.parse(entries[0] ?? "[]");
+    const list = Array.isArray(raw) ? raw : raw?.agents || [];
+    const sel = $("directive");
+    const keep = sel.value;
+    sel.innerHTML =
+      '<option value="">— agent —</option>' +
+      list
+        .filter((a) => a?.id)
+        .map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.display_name || a.id)}</option>`)
+        .join("");
+    if (keep) sel.value = keep;
+  } catch {
+    /* the brain serves this on a single-threaded executor; a miss is not fatal */
+  }
+}
+
+$("start").onclick = async () => {
+  const id = $("directive").value;
+  if (!id) {
+    $("agent-text").textContent = "pick an agent first — the brain refuses to activate without a directive";
+    return;
+  }
+  ros.publish(SET_DIRECTIVE_TOPIC, { data: id });
+  try {
+    await ros.callService(SET_BRAIN_ACTIVE_SERVICE, { data: true });
+  } catch (e) {
+    $("agent-text").textContent = String(e);
+  }
+};
+
+$("stop").onclick = async () => {
+  try {
+    await ros.callService(SET_BRAIN_ACTIVE_SERVICE, { data: false });
+  } catch (e) {
+    $("agent-text").textContent = String(e);
+  }
+};
+
+const unadvertiseChat = ros.advertise(CHAT_IN_TOPIC, "std_msgs/msg/String");
+window.addEventListener("pagehide", unadvertiseChat);
+
+function send() {
+  const text = $("say").value.trim();
+  if (!text) return;
+  ros.publish(CHAT_IN_TOPIC, { data: JSON.stringify({ text, sender: "user", timestamp: Date.now() / 1000 }) });
+  $("say").value = "";
+}
+$("send").onclick = send;
+$("say").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") send();
+});
+
+$("clear").onclick = () => {
+  marks = [];
+  dirty = true;
+};
+
+$("copy").onclick = async () => {
+  const payload = {
+    captured: new Date().toISOString(),
+    runs: lastRuns.map((r) => ({
+      start: r.start,
+      turn: r.turn,
+      dropped: r.dropped,
+      label: runLabel(r),
+      mode: isTopicMode(r) ? "topic" : "aplay",
+      totalMs: Math.round((r.end - r.start) * 1000),
+      segments: segments(r).map((s) => ({ key: s.key, ms: s.ms })),
+    })),
+    marks: [...marks].sort((a, b) => a.t - b.t),
+  };
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    $("copy").textContent = "Copied";
+    setTimeout(() => ($("copy").textContent = "Copy JSON"), 1200);
+  } catch {
+    $("copy").textContent = "Clipboard blocked";
+  }
+};
+
+// The browser is the sim robot's microphone (there is no capture device in the
+// container). Against a real robot this button stays hidden — the robot listens
+// with its own mic, and a second stream would double every utterance.
+fetch("/config.json")
+  .then((r) => r.json())
+  .then(async (cfg) => {
+    if (!cfg?.simControls) return;
+    const { createMicStream } = await import("/js/agent/micStream.js");
+    const btn = $("mic");
+    btn.hidden = false;
+    const stream = createMicStream(ros, (s) => {
+      btn.textContent = s.busy ? "Mic …" : s.on ? "Mic ON" : "Mic off";
+      btn.classList.toggle("primary", s.on);
+      if (s.error) $("agent-text").textContent = s.error;
+    });
+    let on = false;
+    btn.onclick = () => {
+      on = !on;
+      if (on) void stream.start();
+      else stream.stop();
+    };
+  })
+  .catch(() => {});
+</script>
+</body>
+</html>
