@@ -37,6 +37,7 @@ import os
 import threading
 import time
 from collections import deque
+from dataclasses import replace
 
 import cv2
 import rclpy
@@ -44,10 +45,12 @@ from geometry_msgs.msg import PoseStamped, Twist
 from innate_cloud_msgs.action import NavigateInstruction
 from innate_cloud_msgs.srv import CheckPolicyServer
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, CompressedImage
 from std_msgs.msg import String
@@ -92,6 +95,16 @@ STRIP_HZ = 1.0
 # A connection test answers quickly or it is not a test -- someone is watching
 # a button, and "no route to host" should not take the run-start timeout.
 PROBE_TIMEOUT_S = 4.0
+# The knobs the operator may turn while the robot is driving, mapped onto the
+# PursuitCfg fields they set. Everything else is read where it is used.
+_TUNABLE = {
+    "max_linear_speed": "v_max",
+    "max_angular_speed": "w_max",
+    "max_linear_accel": "a_lin",
+    "max_linear_decel": "d_lin",
+    "max_angular_accel": "a_ang",
+    "max_angular_decel": "d_ang",
+}
 
 
 def _fx_of(camera: dict) -> float:
@@ -146,6 +159,7 @@ class InnateNavNode(Node):
             a_ang=float(self.get_parameter("max_angular_accel").value),
             d_ang=float(self.get_parameter("max_angular_decel").value),
         )
+        self.add_on_set_parameters_callback(self._retune)
 
         self._client: PolicyClient | None = None
         self._costmap: Costmap | None = None
@@ -343,6 +357,29 @@ class InnateNavNode(Node):
             self._publish_observations(plan)
             if bool(self.get_parameter("publish_path").value):
                 self._publish_path(wp, pose)
+
+    def _retune(self, params: list[Parameter]) -> SetParametersResult:
+        """Apply a speed or acceleration change to the tracker mid-run.
+
+        Without this the knobs would be read once at construction, so a write
+        would be accepted and then quietly ignored -- worse than refusing it,
+        because the operator would tune against a number the robot is not using.
+        Every one is a positive magnitude: a zero acceleration budget pins the
+        ramp at whatever speed it is holding, so the run can neither reach its
+        speed nor come to rest.
+        """
+        fields = {}
+        for p in params:
+            field = _TUNABLE.get(p.name)
+            if field is None:
+                continue
+            if not p.value > 0.0:
+                return SetParametersResult(
+                    successful=False, reason=f"{p.name} must be greater than 0")
+            fields[field] = float(p.value)
+        if fields:
+            self._cfg = replace(self._cfg, **fields)
+        return SetParametersResult(successful=True)
 
     def _drive(self, v: float, w: float) -> None:
         """Every moving command goes out through here, ramped.

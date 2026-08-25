@@ -14,6 +14,7 @@
   <depend>cv_bridge</depend>
   <depend>std_msgs</depend>
   <depend>innate_cloud_msgs</depend>
+  <depend>rcl_interfaces</depend>
   <exec_depend>mars_bringup</exec_depend>
 
   <export>

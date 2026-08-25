@@ -11136,6 +11136,26 @@ select.skill-input {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.07);
 }
+.policy-tuning { margin-top: 4px; }
+.policy-knobs { display: grid; gap: 4px; }
+.policy-knob { display: grid; grid-template-columns: 1fr 68px 34px; align-items: center; gap: 6px; }
+.policy-knob label { font-size: 11.5px; opacity: 0.7; }
+.policy-knob input {
+  width: 100%;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+}
+.policy-knob input:disabled { opacity: 0.4; }
+.policy-knob span { font-size: 10px; opacity: 0.45; }
+.policy-tuning-foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.policy-tuning-status { font-size: 10.5px; opacity: 0.55; overflow-wrap: anywhere; }
+.policy-tuning-status.ok { opacity: 0.8; }
+.policy-tuning-status.bad { opacity: 1; color: #ff8a80; }
 @media (max-width: 1200px) {
   .policy-views { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
 }

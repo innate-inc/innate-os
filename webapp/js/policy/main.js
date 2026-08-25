@@ -27,6 +27,7 @@ import {
 import { createMap } from "../map/mapWidget.js";
 import { createObsBar } from "./obsBar.js";
 import { createStatusPanel } from "./statusPanel.js";
+import { createTuningPanel } from "./tuningPanel.js";
 
 const { createSession, createStage } = await robotSessionFactory();
 
@@ -75,7 +76,9 @@ export function mount(stage) {
     const scene = createStage
       ? createStage(sceneRoot, session, { chipsOn: ["waypoints"] })
       : createVideoStage(sceneRoot, session);
-    const panel = createStatusPanel(/** @type {HTMLElement} */ (root.querySelector(".policy-side")));
+    const side = /** @type {HTMLElement} */ (root.querySelector(".policy-side"));
+    const panel = createStatusPanel(side);
+    const tuning = createTuningPanel(side);
     // The stage only draws what the session streams it; without this the scene
     // mounts empty and the orbit camera has nothing to orbit.
     session.start();
@@ -169,6 +172,7 @@ export function mount(stage) {
         session.destroy();
         map.destroy();
         panel.destroy();
+        tuning.destroy();
         obsBar.destroy();
       },
     };
