@@ -232,6 +232,7 @@ class WebRTCStreamer : public rclcpp::Node {
     std::atomic<int> want_audio_{0};         // # peers with audio active; >0 => mic open (pipeline PLAYING)
     std::atomic<uint64_t> audio_frames_{0};  // for status: is audio actually flowing
     bool audio_playing_ = false;             // current audio pipeline state (gated by want_audio_)
+    int64_t mic_retry_ns_ = 0;               // earliest retry after a failed open (the poll runs at 5 Hz)
 
     // ---- Peers ----
     std::map<std::string, std::unique_ptr<Peer>> peers_;

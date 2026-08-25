@@ -10,17 +10,98 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>  // memcpy (push_frame)
+#include <filesystem>  // /proc/asound (mic lookup)
+#include <fstream>
 #include <memory>
 #include <sstream>
 
 namespace mars_cam {
 
 namespace {
+
+// Backoff between attempts to reopen a mic that just refused to open.
+constexpr int64_t kMicRetryBackoffNs = 10LL * 1000000000LL;
+
 struct FanOutTarget {
     std::string client_id;
     std::string stream;
     GstElement* src = nullptr;
 };
+
+// A card can capture iff it exposes a pcm*c node.
+bool card_can_capture(const std::filesystem::path& dir) {
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        const std::string node = entry.path().filename().string();
+        if (node.rfind("pcm", 0) == 0 && node.back() == 'c') {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool looks_like_camera(std::string name) {
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+    return name.find("camera") != std::string::npos || name.find("webcam") != std::string::npos;
+}
+
+// A dedicated mic beats a camera's built-in one, and both beat the Tegra I2S card, whose capture nodes are
+// XBAR links with nothing on the far end. Mirrors the ladder workspace/inputs/micro_input.py walks, so the
+// agent and the teleop stream land on the same microphone.
+int capture_rank(const std::string& driver, const std::string& long_name) {
+    if (driver != "USB-Audio") {
+        return 1;
+    }
+    return looks_like_camera(long_name) ? 2 : 3;
+}
+
+// Parses lines of /proc/asound/cards: " 0 [Camera         ]: USB-Audio - Arducam USB Camera".
+// Each card's second (continuation) line has no brackets and is skipped.
+std::string best_capture_card() {
+    std::ifstream cards("/proc/asound/cards");
+    std::string line;
+    std::string best;
+    int best_rank = 0;
+    while (std::getline(cards, line)) {
+        const std::size_t open = line.find('[');
+        const std::size_t close = line.find("]: ");
+        const std::size_t dash = line.find(" - ", close == std::string::npos ? 0 : close);
+        if (open == std::string::npos || close == std::string::npos || dash == std::string::npos) {
+            continue;
+        }
+        std::string id = line.substr(open + 1, close - open - 1);
+        id.erase(id.find_last_not_of(' ') + 1);
+        const std::string driver = line.substr(close + 3, dash - close - 3);
+        const std::string long_name = line.substr(dash + 3);
+        std::error_code ec;
+        const std::filesystem::path dir = "/proc/asound/" + id;
+        if (!std::filesystem::exists(dir, ec) || !card_can_capture(dir)) {
+            continue;
+        }
+        const int rank = capture_rank(driver, long_name);
+        if (rank > best_rank) {
+            best_rank = rank;
+            best = id;
+        }
+    }
+    return best;
+}
+
+// The mic's ALSA card name is not the same on every MARS build, so a configured name that is absent here
+// would open nothing and the operator would hear silence with no clue why. Anything not in CARD= form (an
+// explicit hw:0,0) is a deliberate choice and is left alone.
+std::string resolve_capture_device(const std::string& configured) {
+    const std::size_t card = configured.find("CARD=");
+    if (card == std::string::npos) {
+        return configured;
+    }
+    std::error_code ec;
+    if (std::filesystem::exists("/proc/asound/" + configured.substr(card + 5), ec)) {
+        return configured;
+    }
+    const std::string best = best_capture_card();
+    return best.empty() ? configured : configured.substr(0, card + 5) + best;
+}
 }  // namespace
 
 // =============================================================================
@@ -245,6 +326,12 @@ bool WebRTCStreamer::build_audio_pipeline() {
                          audio_capture_device_.c_str());
             return false;
         }
+        const std::string resolved = resolve_capture_device(audio_capture_device_);
+        if (resolved != audio_capture_device_) {
+            RCLCPP_WARN(this->get_logger(), "audio_capture_device '%s' is not present; using '%s' instead",
+                        audio_capture_device_.c_str(), resolved.c_str());
+            audio_capture_device_ = resolved;
+        }
         src += " device=\"" + audio_capture_device_ + "\"";
     }
     // mic -> opus -> rtp -> appsink (the fan-out tap). Encoded once for all peers; matches the RTP caps
@@ -294,15 +381,28 @@ void WebRTCStreamer::reconcile_audio() {
         return;
     }
     if (want) {
+        // A mic that cannot open (unplugged, or held exclusively by another process) fails on every poll,
+        // so back the retry off — at 5 Hz it buries the log under its own GStreamer errors for as long as
+        // the operator leaves the toggle on.
+        const int64_t now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+        if (now_ns < mic_retry_ns_) {
+            return;
+        }
         if (gst_element_set_state(audio_pipeline_, GST_STATE_PLAYING) != GST_STATE_CHANGE_FAILURE) {
             audio_playing_ = true;
+            mic_retry_ns_ = 0;
             RCLCPP_INFO(this->get_logger(), "Mic opened (a peer activated audio)");
         } else {
-            RCLCPP_WARN(this->get_logger(), "Mic failed to open");
+            gst_element_set_state(audio_pipeline_, GST_STATE_NULL);
+            mic_retry_ns_ = now_ns + kMicRetryBackoffNs;
+            RCLCPP_WARN(this->get_logger(), "Mic '%s' failed to open; retrying in %lld s",
+                        audio_capture_device_.empty() ? "(default)" : audio_capture_device_.c_str(),
+                        static_cast<long long>(kMicRetryBackoffNs / 1000000000));
         }
     } else {
         gst_element_set_state(audio_pipeline_, GST_STATE_NULL);  // closes the device; joins the fan-out thread
         audio_playing_ = false;
+        mic_retry_ns_ = 0;  // the next request tries immediately, whatever the last one cost
         RCLCPP_INFO(this->get_logger(), "Mic closed (no peer wants audio)");
     }
 }

@@ -604,12 +604,15 @@ class MicroInput(InputDevice):
         try:
             result = subprocess.run(["arecord", "-l"], capture_output=True, text=True, timeout=5)
             if result.returncode == 0:
-                pattern = r"card (\d+):.*?\[([^\]]+)\].*?device (\d+):"
+                pattern = r"card (\d+): (\S+) \[([^\]]+)\].*?device (\d+):"
                 for match in re.finditer(pattern, result.stdout):
                     card_num = match.group(1)
-                    card_name = match.group(2)
-                    device_num = match.group(3)
-                    device_id = f"plughw:{card_num},{device_num}"
+                    card_id = match.group(2)
+                    card_name = match.group(3)
+                    device_num = match.group(4)
+                    # sysdefault, not plughw: it goes through dsnoop, so the teleop WebRTC stream can open
+                    # the same mic at the same time. plughw takes the card exclusively and locks teleop out.
+                    device_id = f"sysdefault:CARD={card_id}"
                     devices.append({"card": card_num, "device": device_num, "name": card_name, "id": device_id})
         except Exception:
             pass
