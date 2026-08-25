@@ -2,10 +2,12 @@
 # Build the innate-gstreamer-opt Debian package: a self-contained GStreamer at
 # /opt/gst that unlocks webrtcbin's ULPFEC (broken on the system 1.20 — see
 # docs/WEBRTC_FEC_GST_UPGRADE.md). Run natively on a Jetson (arm64); the deb
-# then goes to the innate-packages repo root, where check-prebuilt-deb.sh is
-# the CI gate and publish.sh signs and indexes it. Robots pick it up through
-# the normal update flow via apt-dependencies.hardware.txt, and
-# camera_composable.launch.py activates /opt/gst automatically when present.
+# ships as a GitHub Release asset on innate-packages, referenced from its
+# prebuilt-debs.txt manifest (this script prints the exact handoff commands),
+# where check-prebuilt-deb.sh is the CI gate and publish.sh signs and indexes
+# it. Robots pick it up through the normal update flow via
+# apt-dependencies.hardware.txt, and camera_composable.launch.py activates
+# /opt/gst automatically when present.
 #
 #   ./scripts/update/build_gst_opt.sh   # -> innate-gstreamer-opt_<v>-1jammy_arm64.deb
 #   GST_VERSION=1.24.13 DEB_INC=2 ./scripts/update/build_gst_opt.sh
@@ -73,8 +75,26 @@ for p in openh264 fdkaac qmlgl ximagesrc ximagesink rfbsrc aom dc1394 de265 \
   rm -f "$GST/$LIBDIR/gstreamer-1.0/libgst$p.so"
 done
 find "$GST/$LIBDIR" -maxdepth 1 -type l -name 'lib*.so' -delete
+rm -rf "$GST/$LIBDIR/cairo"  # only cairo's LD_PRELOAD trace shims live here
 # Subprojects nest more include/ dirs under lib (graphene does).
 find "$GST" -type d -name include -prune -exec rm -rf {} +
+find "$GST" -depth -type d -empty -delete
+
+# The 1.24 CLI must not share a registry cache with the system 1.20: both
+# default to $XDG_CACHE_HOME/gstreamer-1.0/registry.aarch64.bin, and the
+# magic-version mismatch makes each run discard the other's cache (a full
+# plugin rescan on every alternating start). Real binaries live in libexec;
+# bin/ keeps wrappers pinning a cache file of their own.
+mkdir -p "$GST/libexec/gst-opt"
+for tool in "$GST"/bin/gst-*; do
+  name=${tool##*/}
+  mv "$tool" "$GST/libexec/gst-opt/$name"
+  { echo '#!/bin/sh'
+    echo 'export GST_REGISTRY="${GST_REGISTRY:-${XDG_CACHE_HOME:-$HOME/.cache}/gstreamer-1.0/registry-opt.aarch64.bin}"'
+    echo "exec $PREFIX/libexec/gst-opt/$name \"\$@\""
+  } > "$tool"
+  chmod 755 "$tool"
+done
 
 # $ORIGIN-relative RUNPATH (not LD_LIBRARY_PATH) is what makes /opt/gst
 # self-contained next to the system GStreamer: without it, gst-inspect-1.0
@@ -95,29 +115,41 @@ export LD_LIBRARY_PATH="$GST/$LIBDIR"
 export GST_PLUGIN_PATH="$GST/$LIBDIR/gstreamer-1.0:/usr/lib/aarch64-linux-gnu/gstreamer-1.0"
 export GST_REGISTRY="$WORK/verify.registry"
 rm -f "$GST_REGISTRY"
-B="$GST/bin/gst-inspect-1.0"
+# The real ELF, not the bin/ wrapper: wrappers exec the installed $PREFIX
+# path, which doesn't exist in the staging tree.
+B="$GST/libexec/gst-opt/gst-inspect-1.0"
 for el in webrtcbin vp8enc rtpvp8pay srtpenc dtlssrtpenc rtpulpfecenc rtpredenc \
           nicesink nvv4l2decoder nvvidconv nvjpegenc; do
   "$B" "$el" > /dev/null || { echo "VERIFY FAILED: $el"; exit 1; }
 done
 
-# Depends is computed from the DT_NEEDED closure, never written by hand: every
-# soname not bundled under /opt/gst must be owned by an installed jammy
-# package, or the build refuses to ship.
-find "$GST" -name 'lib*.so*' -printf '%f\n' | sort -u > "$WORK/bundled"
-find "$ROOT" -type f -exec readelf -d {} \; 2>/dev/null \
-  | awk '/\(NEEDED\)/ {gsub(/[][]/, "", $NF); print $NF}' | sort -u > "$WORK/needed"
-: > "$WORK/deppkgs"
-comm -23 "$WORK/needed" "$WORK/bundled" | while read -r so; do
-  sopath=$(ldconfig -p | awk -v so="$so" '$1 == so && !hit {print $NF; hit=1}')
-  [ -n "$sopath" ] || { echo "DEPENDS FAILED: $so not in ldconfig"; exit 1; }
-  pkg=$( (dpkg -S "$sopath" 2>/dev/null || dpkg -S "$(realpath "$sopath")") | head -1 | cut -d: -f1)
-  [ -n "$pkg" ] || { echo "DEPENDS FAILED: no package owns $sopath"; exit 1; }
-  echo "$pkg" >> "$WORK/deppkgs"
-done
-DEPENDS=$(sort -u "$WORK/deppkgs" \
-  | sed 's/^libglib2\.0-0$/libglib2.0-0 (>= 2.64)/' \
-  | paste -sd, - | sed 's/,/, /g')
+# Depends comes from dpkg-shlibdeps, never a bare package-ownership closure:
+# symbols files carry per-symbol version floors (the payload imports g_memdup2,
+# GLib 2.68 — an unversioned dep installs cleanly on focal/L4T r35 and every
+# plugin dlopen then dies at runtime with no apt error). Bundled sonames map
+# to this package via shlibs.local and are filtered back out of the field.
+SHLIB="$WORK/shlibdeps"
+rm -rf "$SHLIB" && mkdir -p "$SHLIB/debian"
+printf 'Source: innate-gstreamer-opt\nMaintainer: Innate Inc <ops@innate.bot>\n\nPackage: innate-gstreamer-opt\nArchitecture: arm64\nDescription: shlibdeps stub\n' \
+  > "$SHLIB/debian/control"
+find "$GST/$LIBDIR" -maxdepth 1 -type f -name 'lib*.so*' -exec readelf -d {} \; 2>/dev/null \
+  | awk '/SONAME/ {gsub(/[][]/, "", $NF); print $NF}' | sort -u \
+  | sed -E 's/^(.+)\.so\.(.+)$/\1 \2 innate-gstreamer-opt/' > "$SHLIB/debian/shlibs.local"
+# `if`, not `&&`: a trailing non-ELF (the bin/ wrappers) would otherwise end
+# the substitution non-zero and errexit kills the build with no message.
+ELFS=$(find "$ROOT" -type f ! -path "$ROOT/DEBIAN/*" \
+  | while read -r f; do
+      if readelf -h "$f" >/dev/null 2>&1; then echo "$f"; fi
+    done)
+DEPENDS=$(cd "$SHLIB" && dpkg-shlibdeps -O -l"$GST/$LIBDIR" $(printf -- '-e%s ' $ELFS) \
+    2>"$WORK/shlibdeps.log" \
+  | sed 's/^shlibs:Depends=//' | tr ',' '\n' | sed 's/^ *//;s/ *$//' \
+  | grep -v '^innate-gstreamer-opt$' | sort -u | paste -sd, - | sed 's/,/, /g') \
+  || { tail -5 "$WORK/shlibdeps.log"; echo "DEPENDS FAILED: dpkg-shlibdeps"; exit 1; }
+case "$DEPENDS" in *"libc6 (>="*) ;; *)
+  echo "DEPENDS FAILED: unversioned libc6 (symbols files missing?)"; exit 1 ;; esac
+case "$DEPENDS" in *"libglib2.0-0 (>="*) ;; *)
+  echo "DEPENDS FAILED: unversioned libglib2.0-0"; exit 1 ;; esac
 
 mkdir -p "$ROOT/usr/share/doc/innate-gstreamer-opt"
 cat > "$ROOT/usr/share/doc/innate-gstreamer-opt/copyright" << EOF
@@ -161,4 +193,19 @@ find "$ROOT" -type d -exec chmod 755 {} +
 # silently signs nothing on a zstd deb.
 DEB="$WORK/innate-gstreamer-opt_${V}-${REV}_arm64.deb"
 dpkg-deb -Zxz --root-owner-group --build "$ROOT" "$DEB"
-echo "OK: $DEB"
+SHA=$(sha256sum "$DEB" | cut -d' ' -f1)
+TAG="innate-gstreamer-opt-$V-$REV"
+cat << EOF
+OK: $DEB
+
+To ship it (from an innate-packages checkout; validate first with
+./check-prebuilt-deb.sh $DEB):
+
+  gh release create $TAG $DEB \\
+    --title "innate-gstreamer-opt $V-$REV" \\
+    --notes "Built from innate-os commit $SRC_COMMIT. sha256: $SHA"
+
+then replace the innate-gstreamer-opt line in prebuilt-debs.txt with:
+
+  $TAG $(basename "$DEB") $SHA
+EOF
