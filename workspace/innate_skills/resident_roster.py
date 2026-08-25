@@ -925,6 +925,18 @@ class ResidentRoster(Skill):
         return frame, None
 
     def _identify(self, encounter_id: str | None = None) -> SkillOutput:
+        timing_started = time.monotonic()
+        timing_last = timing_started
+
+        def mark_timing(phase: str) -> None:
+            nonlocal timing_last
+            now = time.monotonic()
+            self.logger.info(
+                f"[SkillPhaseTiming] skill=person_identity phase={phase} "
+                f"duration_ms={(now - timing_last) * 1000.0:.1f} total_ms={(now - timing_started) * 1000.0:.1f}"
+            )
+            timing_last = now
+
         state = self._load_state()
         continuity_id = _clean_text(encounter_id, 80)
         continuity, _continuity_collection = self._find_entry(state, continuity_id)
@@ -949,6 +961,7 @@ class ResidentRoster(Skill):
         # independently reframed here, so this is safe after either systematic
         # search or a separate visual approach whose Nav2 tree looked down.
         frame, unavailable_reason = self._fresh_upward_frame()
+        mark_timing("head_and_camera")
         if frame is None:
             _clear_identity_binding(state)
             self._save_state(state)
@@ -957,6 +970,7 @@ class ResidentRoster(Skill):
         encoded_frame = str(frame)
         references = _contact_references(state)
         sheet_result = _contact_sheet(references) if references else None
+        mark_timing("reference_sheet")
         if references and sheet_result is None:
             payload = {"reason": "saved_reference_images_unreadable"}
             if continuity is not None:
@@ -1015,6 +1029,7 @@ class ResidentRoster(Skill):
         except Exception as error:
             self.logger.warning(f"[ResidentRoster] identity model unavailable: {error}")
             reply = None
+        mark_timing("vision_model")
         # ask_image may have been inside a successful blocking HTTP request
         # when Stop arrived. Never mutate the roster after that request unless
         # this run is still live.
