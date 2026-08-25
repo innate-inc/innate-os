@@ -362,7 +362,9 @@ export function createChatStream(opts = {}) {
     const source = document.createElement("span");
     source.className = "chat-debug-source mono";
     const sourceName = String(event?.source ?? "speech").toUpperCase();
-    source.textContent = event?.utterance_id ? `${sourceName} #${event.utterance_id}` : sourceName;
+    const utteranceId = typeof event?.utterance_id === "string" ? event.utterance_id : "";
+    source.textContent = utteranceId ? `${sourceName} #${utteranceId.slice(0, 8)}` : sourceName;
+    if (utteranceId) source.title = `${sourceName} utterance ${utteranceId}`;
     const copy = document.createElement("span");
     copy.className = "chat-debug-copy";
     const titleRow = document.createElement("span");

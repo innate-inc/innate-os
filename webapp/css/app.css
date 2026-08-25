@@ -8889,15 +8889,18 @@ select.skill-input {
 .chat-debug-source {
   flex: 0 0 auto;
   min-width: 28px;
+  max-width: 96px;
   padding-top: 2px;
   color: rgb(153 139 255 / 88%);
   font-size: 9px;
   letter-spacing: 0.09em;
+  overflow-wrap: anywhere;
 }
 
 .chat-debug-copy {
   display: flex;
   min-width: 0;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 2px;
 }
@@ -8906,17 +8909,21 @@ select.skill-input {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
 .chat-debug-title {
+  min-width: 0;
   color: rgb(231 231 234 / 88%);
   font-size: 11px;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .chat-debug-time {
   flex: none;
+  margin-left: auto;
   color: rgb(231 231 234 / 34%);
   font-size: 8px;
   letter-spacing: 0.03em;
