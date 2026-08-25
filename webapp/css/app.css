@@ -11075,6 +11075,7 @@ select.skill-input {
 }
 .policy-bar button:disabled { opacity: 0.4; cursor: default; }
 .policy-stop:not(:disabled) { border-color: rgba(255, 120, 120, 0.55); color: #ff9a9a; }
+.policy-test { padding: 9px 14px; opacity: 0.8; }
 /* Camera and map side by side: the scene shows what the robot sees, the map
    shows where the policy is sending it -- and on hardware the map is the only
    one of the two that can carry waypoints. */
@@ -11105,6 +11106,7 @@ select.skill-input {
    joystick, so they come back down to the corner. */
 .policy-scene .sim-debug-stack { bottom: 14px; }
 .policy-status { font-size: 12px; opacity: 0.75; min-height: 1.2em; }
+.policy-status.bad { color: #ff8a80; opacity: 1; }
 
 .policy-side { min-height: 0; overflow-y: auto; }
 .policy-panel { display: flex; flex-direction: column; gap: 8px; }

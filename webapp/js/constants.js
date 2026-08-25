@@ -95,6 +95,9 @@ export const NAV_POLICY_STATUS_TOPIC = "/nav_policy/status"; // std_msgs/String,
 export const NAV_POLICY_OBSERVATIONS_TOPIC = "/nav_policy/observations/compressed";
 export const NAV_POLICY_ACTION = "/innate_nav/navigate";
 export const NAV_POLICY_ACTION_TYPE = "innate_cloud_msgs/action/NavigateInstruction";
+// Probe the policy server without starting a run: the ROBOT asks, because it is
+// the one that has to reach it (innate_cloud_msgs/srv/CheckPolicyServer).
+export const NAV_POLICY_CHECK_SERVICE = "/nav_policy/check_server";
 // AMCL's map-frame pose estimate (geometry_msgs/PoseWithCovarianceStamped).
 export const AMCL_POSE_TOPIC = "/amcl_pose";
 // The exact goal navigate_to_position commanded (geometry_msgs/PoseStamped, latched).

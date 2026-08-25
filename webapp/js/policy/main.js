@@ -20,6 +20,7 @@ import { createVideoStage } from "../teleop/videoStage.js";
 import {
   NAV_POLICY_ACTION,
   NAV_POLICY_ACTION_TYPE,
+  NAV_POLICY_CHECK_SERVICE,
   NAV_POLICY_OBSERVATIONS_TOPIC,
   NAV_POLICY_STATUS_TOPIC,
 } from "../constants.js";
@@ -40,6 +41,7 @@ export function mount(stage) {
                  placeholder="Tell the robot where to go — “drive through the doorway into the next room”" />
           <input class="policy-server" type="text" autocomplete="off"
                  placeholder="policy server (optional)" />
+          <button class="policy-test" type="button">Test</button>
           <button class="policy-go" type="submit">Go</button>
           <button class="policy-stop" type="button" disabled>Stop</button>
         </form>
@@ -55,6 +57,7 @@ export function mount(stage) {
     const instruction = /** @type {HTMLInputElement} */ (root.querySelector(".policy-instruction"));
     const server = /** @type {HTMLInputElement} */ (root.querySelector(".policy-server"));
     const go = /** @type {HTMLButtonElement} */ (root.querySelector(".policy-go"));
+    const test = /** @type {HTMLButtonElement} */ (root.querySelector(".policy-test"));
     const stop = /** @type {HTMLButtonElement} */ (root.querySelector(".policy-stop"));
     const line = /** @type {HTMLElement} */ (root.querySelector(".policy-status"));
     const sceneRoot = /** @type {HTMLElement} */ (root.querySelector(".policy-scene"));
@@ -85,8 +88,32 @@ export function mount(stage) {
       stop.disabled = !on;
       instruction.disabled = on;
       server.disabled = on;
-      if (text !== undefined) line.textContent = text;
+      test.disabled = on;
+      if (text !== undefined) {
+        line.textContent = text;
+        line.classList.remove("bad");
+      }
     }
+
+    // The probe runs on the robot, not here: this page is served over HTTPS and
+    // the server is plain HTTP on the LAN, and it is the robot's route that
+    // matters anyway.
+    test.addEventListener("click", async () => {
+      test.disabled = true;
+      line.classList.remove("bad");
+      line.textContent = "testing…";
+      try {
+        const res = await ros.callService(
+          NAV_POLICY_CHECK_SERVICE, { server: server.value.trim() }, 8000);
+        line.textContent = res?.message || "no answer from the robot";
+        line.classList.toggle("bad", !res?.success);
+      } catch (err) {
+        line.textContent = err?.message || "the robot did not answer";
+        line.classList.add("bad");
+      } finally {
+        test.disabled = false;
+      }
+    });
 
     form.addEventListener("submit", (e) => {
       e.preventDefault();

@@ -1,0 +1,7 @@
+# Probe the policy server without starting a run: whether the robot can reach
+# it, what checkpoint it is serving, and whether this robot's camera is the one
+# that checkpoint was trained on.
+string server               # blank falls back to the node's configured server
+---
+bool success
+string message              # what was found, or why the robot could not reach it

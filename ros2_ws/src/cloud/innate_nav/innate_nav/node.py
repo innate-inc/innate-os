@@ -42,6 +42,7 @@ import cv2
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from innate_cloud_msgs.action import NavigateInstruction
+from innate_cloud_msgs.srv import CheckPolicyServer
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -87,6 +88,17 @@ STATUS_HZ = 5.0
 # megabyte an update -- so it goes out slower than plans arrive. The window
 # barely changes between consecutive plans anyway.
 STRIP_HZ = 1.0
+# A connection test answers quickly or it is not a test -- someone is watching
+# a button, and "no route to host" should not take the run-start timeout.
+PROBE_TIMEOUT_S = 4.0
+
+
+def _fx_of(camera: dict) -> float:
+    """The focal length implied by a camera spec: fx = (w/2) / tan(hfov/2)."""
+    w, hfov = float(camera.get("width", 0)), float(camera.get("hfov", 0))
+    if w <= 0 or not 0 < hfov < 180:
+        return 0.0
+    return (w / 2) / math.tan(math.radians(hfov) / 2)
 
 
 def _yaw_of(odom: Odometry) -> float:
@@ -127,6 +139,7 @@ class InnateNavNode(Node):
         self._costmap: Costmap | None = None
         self._warned_no_costmap = False
         self._checked_intrinsics = False
+        self._cam_fx = 0.0
         self._pose: Pose | None = None
         self._goal_handle = None
         self._cancel_requested = threading.Event()
@@ -207,6 +220,11 @@ class InnateNavNode(Node):
             cancel_callback=lambda _: CancelResponse.ACCEPT,
             callback_group=ReentrantCallbackGroup(),
         )
+        # Its own group: the probe blocks on the network for a few seconds and
+        # must not hold up the control tick while it does.
+        self._check_srv = self.create_service(
+            CheckPolicyServer, "/nav_policy/check_server", self._check_server,
+            callback_group=MutuallyExclusiveCallbackGroup())
         self.get_logger().info(f"InnateNavNode ready (policy server {self._server_url})")
 
     # ── sensing ───────────────────────────────────────────────────────────
@@ -228,6 +246,7 @@ class InnateNavNode(Node):
         """The geometry is the contract, so check it rather than trusting the
         topic name. A camera whose focal length is not the one the policy was
         trained at makes it misjudge every distance, silently and plausibly."""
+        self._cam_fx = float(msg.k[0])
         if self._checked_intrinsics:
             return
         self._checked_intrinsics = True
@@ -383,6 +402,47 @@ class InnateNavNode(Node):
             return 0.0
         span = self._plan_times[-1] - self._plan_times[0]
         return (len(self._plan_times) - 1) / span if span > 0 else 0.0
+
+    def _check_server(self, request: CheckPolicyServer.Request,
+                      response: CheckPolicyServer.Response) -> CheckPolicyServer.Response:
+        """Can this robot reach that policy server, and is it the right one?
+
+        Reachability is only half the question. A server that answers happily
+        while serving a checkpoint trained at a different focal length drives
+        the robot into things for reasons no log line explains, so the camera
+        the robot actually has is checked against the one the checkpoint was
+        trained on before anyone starts a run.
+        """
+        server = server_url(request.server, self._server_url)
+        try:
+            info = PolicyClient(server, token=self._server_token,
+                                timeout_s=PROBE_TIMEOUT_S).model_info()
+        except Exception as exc:  # noqa: BLE001 -- every failure is an answer here
+            response.success = False
+            response.message = f"{server} unreachable: {exc}"
+            return response
+
+        cam = info.get("camera") or {}
+        parts = [f"{info.get('model', '?')} on {info.get('device', '?')}",
+                 f"history {info.get('history_k', '?')}",
+                 f"budgets {info.get('token_budgets', [])}"]
+        want = _fx_of(cam)
+        if want and self._cam_fx:
+            off = self._cam_fx / want
+            if abs(off - 1.0) > 0.005:
+                response.success = False
+                response.message = (
+                    f"reachable ({parts[0]}) but WRONG CAMERA: this robot publishes "
+                    f"fx={self._cam_fx:.1f} and the checkpoint was trained at {want:.1f}, "
+                    f"so it would read every distance {want / self._cam_fx:.2f}x off")
+                return response
+            parts.append(f"camera matches (fx {want:.1f})")
+        elif want:
+            parts.append(f"camera fx {want:.1f} — nothing on {self.get_parameter('camera_info_topic').value} yet")
+
+        response.success = True
+        response.message = f"{server}: " + ", ".join(parts)
+        return response
 
     def _publish_status(self) -> None:
         """One JSON snapshot for the operator view.
