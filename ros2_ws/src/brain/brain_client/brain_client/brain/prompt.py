@@ -4,10 +4,32 @@
 
 from __future__ import annotations
 
+import base64
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from brain_client.perception.identity import RobotIdentity
+
+# 384px on the long side on purpose: one Gemini tile (258 tokens) per request.
+_PORTRAIT = Path(__file__).parent.parent / "assets" / "self_portrait.jpg"
+_PORTRAIT_CAPTION = (
+    "For reference, this is what you look like — your robot model, pictured in black; your own body color may differ."
+)
+
+
+def self_reference_turns() -> list[dict]:
+    """A pinned exchange showing the model its own body. Gemini's
+    systemInstruction is text-only, so the portrait rides at the front of
+    every request's contents instead (GeminiContext's ``reference``)."""
+    if not _PORTRAIT.is_file():
+        return []
+    image = {"inlineData": {"mimeType": "image/jpeg", "data": base64.b64encode(_PORTRAIT.read_bytes()).decode()}}
+    return [
+        {"role": "user", "parts": [{"text": _PORTRAIT_CAPTION}, image]},
+        {"role": "model", "parts": [{"text": "Understood — that is my body."}]},
+    ]
+
 
 _SYSTEM_PROMPT = """\
 You are the brain of a MARS, the Innate home robot. You run on the robot itself.

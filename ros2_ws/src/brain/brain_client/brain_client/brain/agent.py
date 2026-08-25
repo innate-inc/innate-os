@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING
 from brain_client.brain import grounding
 from brain_client.brain.context import Decision, GeminiContext, ToolCall
 from brain_client.brain.loop import LoopThread
-from brain_client.brain.prompt import build_system_prompt
+from brain_client.brain.prompt import build_system_prompt, self_reference_turns
 from brain_client.brain.tools import GO_TO_POINT_IN_VIEW, STOP_SKILL, WAIT, assign_tool_names, build_tools
 from brain_client.brain.transport import pick_transport
 from brain_client.brain.utils import (
@@ -125,6 +125,7 @@ class BrainAgent:
                 thinking_level=config.gemini_thinking_level,
                 max_history=config.history_max_entries,
                 max_image_turns=config.history_max_image_turns,
+                reference=self_reference_turns(),
             )
             if transport is not None
             else None
