@@ -44,6 +44,7 @@ def _contract(output, code: str) -> dict:
 
 class FakeEncoder:
     available = True
+    face_available = True
 
     def __init__(self, embeddings):
         self.diagnostics = {"body_available": True, "face_available": True}
@@ -63,7 +64,43 @@ def identity(tmp_path, monkeypatch):
     )
     skill.pose = Pose(1.0, 2.0, 0.0)
     skill._fresh_upward_frame = lambda: (_frame((80, 100, 120)), None)
+    monkeypatch.setattr(
+        identity_module,
+        "shared_encoder",
+        lambda: FakeEncoder([]),
+    )
     return skill
+
+
+class MissingFaceEncoder:
+    available = True
+    face_available = False
+    diagnostics = {
+        "body_available": True,
+        "body_error": None,
+        "face_available": False,
+        "face_error": "ModuleNotFoundError: No module named 'inspireface'",
+    }
+
+
+def test_begin_fails_explicitly_without_face_backend(identity, monkeypatch):
+    monkeypatch.setattr(identity_module, "shared_encoder", MissingFaceEncoder)
+
+    unavailable = _contract(identity._begin(), "IDENTITY_UNAVAILABLE")
+
+    assert unavailable["reason"] == "face_encoder_unavailable"
+    assert unavailable["diagnostics"]["body_available"] is True
+    assert unavailable["diagnostics"]["face_available"] is False
+
+
+def test_identify_fails_explicitly_if_face_backend_disappears(identity, monkeypatch):
+    identity._begin()
+    monkeypatch.setattr(identity_module, "shared_encoder", MissingFaceEncoder)
+
+    unavailable = _contract(identity._identify(), "IDENTITY_UNAVAILABLE")
+
+    assert unavailable["reason"] == "face_encoder_unavailable"
+    assert unavailable["diagnostics"]["face_available"] is False
 
 
 def test_identify_does_not_enroll_until_remember(identity, monkeypatch):

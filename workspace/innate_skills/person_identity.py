@@ -288,16 +288,27 @@ class PersonIdentity(Skill):
         run_id = active_run_id()
         if run_id is None:
             return _result("RUN_UNINITIALIZED")
+        encoder = shared_encoder()
+        if not encoder.face_available:
+            return _result(
+                "IDENTITY_UNAVAILABLE",
+                {
+                    "reason": "face_encoder_unavailable",
+                    "diagnostics": encoder.diagnostics,
+                },
+            )
         # The previous Gemini-backed implementation used this key. It held
         # duplicate base64 frames but is not part of the local gallery schema.
         if "state" in self.storage:
             del self.storage["state"]
         state = self._load_gallery()
         if state.get("run_id") == run_id:
-            return _result("IDENTITY_ALREADY_INITIALIZED", self._public_data(state))
+            return _result(
+                "IDENTITY_ALREADY_INITIALIZED",
+                {**self._public_data(state), "local_encoder": encoder.diagnostics},
+            )
         state = self._fresh_gallery(run_id)
         self._save_gallery(state)
-        encoder = shared_encoder()
         return _result(
             "IDENTITY_INITIALIZED",
             {**self._public_data(state), "local_encoder": encoder.diagnostics},
@@ -315,6 +326,15 @@ class PersonIdentity(Skill):
             self._save_gallery(state)
             return _result("IDENTITY_UNAVAILABLE", {"reason": unavailable_reason})
         encoder = shared_encoder()
+        if not encoder.face_available:
+            return _result(
+                "IDENTITY_UNAVAILABLE",
+                {
+                    "reason": "face_encoder_unavailable",
+                    "diagnostics": encoder.diagnostics,
+                },
+                image=frame.jpeg,
+            )
         if not encoder.available:
             return _result(
                 "IDENTITY_UNAVAILABLE",

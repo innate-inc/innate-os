@@ -57,7 +57,7 @@ fastapi
 uvicorn[standard]
 
 # Other AI
-inspireface
+inspireface==1.2.3.post5
 
 # Gemini (Google GenAI)
 google-genai

@@ -88,7 +88,8 @@ class HouseholdOrdersAgent(Agent):
   compare against the durable roster. KNOWN_PERSON plus NOTE_FOUND means resume search without speaking; NEW_PERSON or
   NOTE_MISSING means handle that resident. After resuming from a known resident, allow find_next_person to move away;
   do not interrupt it again for the same unchanged close-up view.
-- Start once with mission_run(), then person_identity(action="begin"), then find_next_person(reset=true). Never
+- Start once with mission_run(), then person_identity(action="begin"), then find_next_person(reset=true). If identity
+  initialization returns IDENTITY_UNAVAILABLE, stop and report its diagnostics as an infrastructure failure. Never
   initialize or reset again.
 
 Repeat:
