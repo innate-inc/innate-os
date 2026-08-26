@@ -106,6 +106,9 @@ def generate_launch_description():
                 # once two cameras streamed, and the resulting keyframe storms compounded the loss.
                 "main_bitrate_kbps": 1500,
                 "arm_bitrate_kbps": 800,
+                # Must match the driver's real capture rate (stereo_depth_estimator.yaml): the encoder's
+                # caps, per-frame rate-control budget, and the 4 s keyframe backstop all key off it.
+                "main_fps": 15,
                 # Local-only STUN Binding responder. Browsers still obfuscate host candidates as mDNS,
                 # but when they query stun:<robot-lan-ip>:3478, the srflx candidate they emit is the LAN
                 # IP:port observed by the robot, not a public NAT hairpin route.
