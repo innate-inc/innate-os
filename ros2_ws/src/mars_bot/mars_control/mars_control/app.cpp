@@ -111,7 +111,6 @@ std::string exec_command(const std::string& cmd) {
         const auto left =
             std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
         if (left <= std::chrono::milliseconds::zero()) {
-            killpg(pid, SIGKILL);
             break;
         }
         pollfd pfd{fds[0], POLLIN, 0};
@@ -120,7 +119,6 @@ std::string exec_command(const std::string& cmd) {
             continue;
         }
         if (ready <= 0) {
-            killpg(pid, SIGKILL);
             break;
         }
         char buffer[256];
@@ -134,7 +132,16 @@ std::string exec_command(const std::string& cmd) {
         result.append(buffer, static_cast<size_t>(n));
     }
     close(fds[0]);
-    waitpid(pid, nullptr, 0);
+    // EOF only proves the last pipeline stage closed stdout; an earlier stage may
+    // still be hung, so the reap honours the same deadline before killing the group.
+    while (waitpid(pid, nullptr, WNOHANG) == 0) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            killpg(pid, SIGKILL);
+            waitpid(pid, nullptr, 0);
+            break;
+        }
+        poll(nullptr, 0, 10);
+    }
 
     // Trim trailing newline
     while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
