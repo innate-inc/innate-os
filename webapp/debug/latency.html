@@ -145,9 +145,9 @@
   .rt-axis { position: relative; flex: 1; height: 15px; }
   .rt-axis i { position: absolute; font-size: 0.66rem; font-style: normal;
                color: var(--muted); transform: translateX(-50%); white-space: nowrap; }
-  /* The end labels would hang half outside the plot; anchor them inward. */
-  .rt-axis i.first { transform: none; }
-  .rt-axis i.last { transform: translateX(-100%); }
+  /* A tick at the very edge would hang half outside the plot; anchor it inward. */
+  .rt-axis i.start { transform: none; }
+  .rt-axis i.end { transform: translateX(-100%); }
   .rt-bar:hover { outline: 1px solid var(--ink); outline-offset: -1px; }
   .rt-tip {
     position: fixed; z-index: 20; pointer-events: none; max-width: 320px;
@@ -278,10 +278,13 @@
   <h2>Rolling timeline</h2>
   <div class="row" style="margin-bottom:10px">
     <button id="zoom-out" title="show more time">−</button>
-    <span class="status mono" id="span-text" style="min-width:70px;text-align:center"></span>
+    <input id="span-input" class="mono" type="number" step="0.1" min="0.5" max="600"
+           title="window length in seconds" style="width:6.5em;text-align:right">
+    <span class="status">s</span>
     <button id="zoom-in" title="show less time">+</button>
     <label class="status"><input type="checkbox" id="follow" checked style="vertical-align:-2px"> follow now</label>
     <span class="status">scroll to zoom · drag to pan</span>
+    <button id="zero">Zero on speech end</button>
     <button id="pin" class="primary">Pin this view</button>
     <span class="status" id="rt-text"></span>
   </div>
@@ -704,28 +707,95 @@ const SPAN_MAX = 600;
 const spanLabel = (secs) =>
   secs >= 60 ? `${(secs / 60).toFixed(secs >= 600 ? 0 : 1)}m` : secs >= 10 ? `${Math.round(secs)}s` : secs >= 1 ? `${secs.toFixed(1)}s` : `${Math.round(secs * 1000)}ms`;
 
-/** Tick labels take their precision from the step, never from each value —
- *  mixing "−12s" and "−6.0s" on one axis reads as different resolutions. */
-function tickFormat(step) {
-  if (step >= 5) return (s) => `${Math.round(s)}s`;
-  if (step >= 0.5) return (s) => `${s.toFixed(1)}s`;
-  return (s) => `${Math.round(s * 1000)}ms`;
+/** Gridlines land on round times, never on fractions of the window. A 1-2-5
+ *  ladder picks the coarsest step that still gives roughly TICK_TARGET marks, so
+ *  zooming changes which round times are shown rather than sliding the same
+ *  arbitrary offsets around — and every label is exact at that step's precision. */
+const NICE_STEPS = [
+  0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
+  1, 2, 5, 10, 15, 30, 60, 120, 300, 600,
+];
+const TICK_TARGET = 6;
+
+/** The ladder rung whose tick count lands nearest TICK_TARGET, not merely the
+ *  first that fits: taking the first jumps a whole rung when span/target lands
+ *  just above one, halving the marks (a 30 s window ticking every 10 s). */
+function niceStep(span) {
+  let best = NICE_STEPS.at(-1);
+  let bestError = Infinity;
+  for (const step of NICE_STEPS) {
+    const count = span / step;
+    if (count > 14) continue; // more labels than the axis can carry
+    const error = Math.abs(count - TICK_TARGET);
+    if (error < bestError) {
+      bestError = error;
+      best = step;
+    }
+  }
+  return best;
 }
 
-/** A tick's wall clock, carrying only the digits the zoom can actually resolve. */
-function axisTime(t, span) {
-  const d = new Date(t * 1000);
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  const ss = String(d.getSeconds()).padStart(2, "0");
-  const ms = String(d.getMilliseconds()).padStart(3, "0");
-  // Always hour-anchored: a bare "15:07" on a 30 s window reads as a wall clock
-  // and puts the reader a quarter of an hour out.
-  return span >= 60 ? `${hh}:${mm}:${ss}` : `${hh}:${mm}:${ss}.${ms}`;
+/** Marks for one window: `frac` is 0..1 across the plot, `label` is the exact
+ *  wall clock at the step's precision. `gutter` carries the shared hour and
+ *  minute so each label can stay short without becoming ambiguous. */
+function axisTicks(t0, t1, span, zero = null) {
+  const step = niceStep(span);
+  const decimals = step >= 1 ? 0 : step >= 0.1 ? 1 : step >= 0.01 ? 2 : 3;
+  const hhmm = (d) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+
+  // Zeroed: step off the chosen instant so it is itself a tick, and read every
+  // label as an offset from it. The unit comes from the step, never from each
+  // value, so one axis never mixes "+1s" with "+200ms".
+  if (zero !== null) {
+    const unit = step >= 1 ? (o) => `${o.toFixed(0)}s` : step >= 0.1 ? (o) => `${o.toFixed(1)}s` : (o) => `${Math.round(o * 1000)}ms`;
+    const ticks = [];
+    const from = Math.ceil((t0 - zero) / step) * step;
+    for (let i = 0; ; i++) {
+      const offset = from + i * step;
+      const t = zero + offset;
+      if (t > t1 + 1e-9) break;
+      const frac = (t - t0) / span;
+      const rounded = Math.abs(offset) < step / 2 ? 0 : offset;
+      ticks.push({
+        t,
+        frac,
+        label: rounded === 0 ? "0" : `${rounded > 0 ? "+" : "−"}${unit(Math.abs(rounded))}`,
+        anchor: frac < 0.03 ? "start" : frac > 0.97 ? "end" : "middle",
+      });
+    }
+    return { ticks, gutter: `0 = ${clock(zero)}`, step };
+  }
+
+  const ticks = [];
+  let previousMinute = hhmm(new Date(t0 * 1000));
+  const gutter = previousMinute;
+  const start = Math.ceil(t0 / step) * step;
+  // Indexed, not accumulated: adding `step` a few hundred times drifts, and the
+  // whole point of these marks is that they sit on exact values.
+  for (let i = 0; ; i++) {
+    const t = start + i * step;
+    if (t > t1 + 1e-9) break;
+    const d = new Date(t * 1000);
+    const secs = (d.getSeconds() + d.getMilliseconds() / 1000).toFixed(decimals);
+    const padded = secs.padStart(decimals ? 3 + decimals : 2, "0");
+    const minute = hhmm(d);
+    // The minute is only repeated where it actually changes; elsewhere the
+    // gutter carries it.
+    const label = minute === previousMinute ? padded : `${minute}:${padded}`;
+    previousMinute = minute;
+    const frac = (t - t0) / span;
+    ticks.push({ t, frac, label, anchor: frac < 0.03 ? "start" : frac > 0.97 ? "end" : "middle" });
+  }
+  // Above a minute per step every label already carries its own hour and
+  // minute, and a window-start time in the gutter would just read as a
+  // fourth tick that does not line up with anything.
+  const shortened = ticks.some((tick) => !tick.label.includes(":"));
+  return { ticks, gutter: shortened ? gutter : "", step };
 }
 
 let viewSpan = 30; // seconds across the window
 let viewEnd = null; // null = auto; a number pins the right edge (pan/zoom/freeze)
+let zeroAt = null; // null = wall clock; an instant makes every label an offset from it
 
 /** The right-hand edge of the window when it is left on auto. It tracks the
  *  wall clock only while something is actually feeding it: a stopped agent (or
@@ -750,7 +820,7 @@ function detachView() {
 /** The lane markup for one window. Shared by the live view and every pin, so a
  *  pinned segment is the same picture with the same hover cards — not a
  *  screenshot of one. */
-function timelineHtml({ runs, t1, span, why }) {
+function timelineHtml({ runs, t1, span, why, zeroAt = null }) {
   const t0 = t1 - span;
   const pct = (t) => ((t - t0) / span) * 100;
 
@@ -780,16 +850,13 @@ function timelineHtml({ runs, t1, span, why }) {
   }
 
   // Gridlines every fifth of the window, plus the edge marker and every press.
-  const steps = 5;
+  const { ticks, gutter } = axisTicks(t0, t1, span, zeroAt);
   let grid = "";
   let axis = "";
-  for (let i = 0; i <= steps; i++) {
-    const at = (i / steps) * 100;
+  for (const tick of ticks) {
+    const at = tick.frac * 100;
     grid += `<div class="rt-grid" style="left:${at}%"></div>`;
-    // Wall-clock on every tick, not an offset from a moving edge: the point of
-    // panning to a moment is being able to read what time it is there.
-    const edge = i === 0 ? " first" : i === steps ? " last" : "";
-    axis += `<i class="tick${edge}" style="left:${at}%">${axisTime(t0 + (i / steps) * span, span)}</i>`;
+    axis += `<i class="${tick.anchor}" style="left:${at}%">${tick.label}</i>`;
   }
   // Drawn from the runs, not from `marks`, so each press can report what
   // followed it — it is the reference point everything else is measured from.
@@ -815,19 +882,22 @@ function timelineHtml({ runs, t1, span, why }) {
         `<div class="rt-lane">${grid}${presses}${lanes[i].join("")}${nowLine}</div></div>`,
     ).join("") +
     // Same row shape as a lane, so the ticks sit on the gridlines they name.
-    `<div class="rt-row"><span class="rt-name"></span><div class="rt-axis">${axis}</div></div>`
+    // The gutter carries the hour and minute the short labels leave out.
+    `<div class="rt-row"><span class="rt-name">${gutter}</span><div class="rt-axis">${axis}</div></div>`
   );
 }
 
 /** Everything a window needs to be drawn, so a pin can keep its own copy. */
-const currentView = () => ({ runs: lastRuns, span: viewSpan, ...rollingEdge() });
+const currentView = () => ({ runs: lastRuns, span: viewSpan, zeroAt, ...rollingEdge() });
 
 function renderRolling(runs) {
   const span = viewSpan;
   const { t1, why } = rollingEdge();
-  $("rt").innerHTML = timelineHtml({ runs, t1, span, why });
+  $("rt").innerHTML = timelineHtml({ runs, t1, span, why, zeroAt });
 
-  $("span-text").textContent = spanLabel(span);
+  // Never while it is being typed into: rewriting the field under the cursor
+  // fights the user mid-keystroke.
+  if (document.activeElement !== $("span-input")) $("span-input").value = String(+span.toFixed(3));
   $("rt-text").textContent = {
     live: "",
     manual: `frozen at ${clock(t1)} — retick "follow now" to resume`,
@@ -991,8 +1061,60 @@ function setSpan(next, holdAtFraction = 1) {
   redrawRolling();
 }
 
-$("zoom-in").onclick = () => setSpan(viewSpan / 1.6, 0.5);
-$("zoom-out").onclick = () => setSpan(viewSpan * 1.6, 0.5);
+/** The instant to measure from: the newest press, or — with no press — the
+ *  robot's own estimate of when speech ended. */
+function latestSpeechEnd() {
+  for (const run of lastRuns) {
+    const t = first(run, "you_stopped")?.t ?? vadSpeechEnd(run);
+    if (t != null) return t;
+  }
+  return null;
+}
+
+$("zero").onclick = () => {
+  if (zeroAt !== null) {
+    zeroAt = null;
+    $("zero").textContent = "Zero on speech end";
+    $("zero").classList.remove("primary");
+    redrawRolling();
+    return;
+  }
+  const t = latestSpeechEnd();
+  if (t === null) {
+    $("rt-text").textContent = "no speech end to zero on — press the button while you talk, or use a batch STT backend";
+    return;
+  }
+  zeroAt = t;
+  detachView();
+  // A tenth of the window ahead of it, so what led up to the moment stays on
+  // screen as negative offsets instead of being cut off at the edge.
+  viewEnd = t + viewSpan * 0.9;
+  $("zero").textContent = "Zeroed — clear";
+  $("zero").classList.add("primary");
+  redrawRolling();
+};
+
+function zoomPivot() {
+  if (zeroAt === null) return 0.5;
+  const frac = (zeroAt - (rollingEdge().t1 - viewSpan)) / viewSpan;
+  return frac >= 0 && frac <= 1 ? frac : 0.5; // off screen: nothing to hold
+}
+
+/** Typing a length means "show me this many seconds", so it holds the right
+ *  edge — unless a zero is set, which is then the thing worth holding. */
+function applyTypedSpan() {
+  const secs = Number($("span-input").value);
+  if (!Number.isFinite(secs) || secs <= 0) return;
+  setSpan(secs, zeroAt === null ? 1 : zoomPivot());
+  $("span-input").value = String(+viewSpan.toFixed(3)); // show the clamped value
+}
+$("span-input").addEventListener("change", applyTypedSpan);
+$("span-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") applyTypedSpan();
+});
+
+$("zoom-in").onclick = () => setSpan(viewSpan / 1.6, zoomPivot());
+$("zoom-out").onclick = () => setSpan(viewSpan * 1.6, zoomPivot());
 
 $("rt").addEventListener(
   "wheel",
@@ -1142,7 +1264,7 @@ if (defaultTarget) ros.connect(defaultTarget);
 // without its model and STT backend is not evidence of anything.
 const CAP = { w: 1180, pad: 24, laneH: 26, gap: 6, nameW: 92 };
 
-function captureSvg({ runs, span, t1, why, config }) {
+function captureSvg({ runs, span, t1, why, config, zeroAt = null }) {
   const t0 = t1 - span;
   const plotW = CAP.w - CAP.pad * 2 - CAP.nameW;
   const x = (t) => CAP.pad + CAP.nameW + ((t - t0) / span) * plotW;
@@ -1194,16 +1316,17 @@ function captureSvg({ runs, span, t1, why, config }) {
     parts.push(`<text x="${CAP.pad + 92}" y="${y}" font-size="11" fill="${ink}">${esc(v)}</text>`);
   });
 
-  const ticks = 6;
-  const tick = tickFormat(span / (ticks - 1));
-  for (let i = 0; i < ticks; i++) {
-    const at = CAP.pad + CAP.nameW + (i / (ticks - 1)) * plotW;
-    parts.push(`<line x1="${at}" y1="${lanesTop}" x2="${at}" y2="${legendTop - 22}" stroke="${gridCol}" stroke-width="1"/>`);
-    const label = i === ticks - 1 ? (why === "live" ? "now" : clock(t1)) : `−${tick(span - (i / (ticks - 1)) * span)}`;
+  const { ticks, gutter } = axisTicks(t0, t1, span, zeroAt);
+  for (const tick of ticks) {
+    const at = CAP.pad + CAP.nameW + tick.frac * plotW;
+    parts.push(`<line x1="${at.toFixed(1)}" y1="${lanesTop}" x2="${at.toFixed(1)}" y2="${legendTop - 22}" stroke="${gridCol}" stroke-width="1"/>`);
     parts.push(
-      `<text x="${at}" y="${legendTop - 8}" font-size="10" fill="${muted}" text-anchor="${i === ticks - 1 ? "end" : "middle"}">${esc(label)}</text>`,
+      `<text x="${at.toFixed(1)}" y="${legendTop - 8}" font-size="10" fill="${muted}" text-anchor="${tick.anchor}">${esc(tick.label)}</text>`,
     );
   }
+  parts.push(
+    `<text x="${CAP.pad + CAP.nameW - 8}" y="${legendTop - 8}" font-size="10" fill="${muted}" text-anchor="end">${esc(gutter)}</text>`,
+  );
 
   LANES.forEach((name, li) => {
     const y = lanesTop + li * (CAP.laneH + CAP.gap);
@@ -1281,6 +1404,7 @@ function pinCurrent() {
     runs: [...view.runs],
     span: view.span,
     t1: view.t1,
+    zeroAt: view.zeroAt,
     why: view.why === "live" ? "manual" : view.why, // a pin is never "now" again
     config: { ...liveConfig },
     note: "",
