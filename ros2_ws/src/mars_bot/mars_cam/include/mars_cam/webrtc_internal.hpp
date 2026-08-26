@@ -69,6 +69,10 @@ inline int cam_pt_for_index(size_t index) {
 
 inline constexpr int kAudioPt = 127;
 
+// The dynamic PT range is 96-127; camera 6 would land on 126 and push its aux block onto (and past)
+// kAudioPt, so the stride fits exactly 6 cameras. configure_cameras enforces this.
+inline constexpr size_t kMaxCameras = 6;
+
 // Chrome/Firefox often obfuscate their host ICE candidates as "<uuid>.local" mDNS names (one per local
 // interface). These parsing helpers are kept for diagnostics and for a future non-destructive fast path:
 // if we ever resolve a .local name ourselves, we must ADD the resolved-IP candidate, not replace/drop the

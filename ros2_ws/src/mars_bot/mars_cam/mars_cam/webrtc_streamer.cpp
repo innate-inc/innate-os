@@ -186,6 +186,11 @@ void WebRTCStreamer::configure_cameras() {
     };
     const auto names = this->declare_parameter<std::vector<std::string>>("cameras", {"main", "arm"});
     for (const auto& name : names) {
+        if (cameras_.size() >= kMaxCameras) {
+            RCLCPP_ERROR(this->get_logger(), "Camera '%s' dropped: the RTP payload-type space fits %zu cameras",
+                         name.c_str(), kMaxCameras);
+            continue;
+        }
         std::string def_live, def_replay;
         int def_fps = 30;
         if (auto it = kDefaults.find(name); it != kDefaults.end()) {
@@ -430,8 +435,9 @@ void WebRTCStreamer::poll_network_adaptation() {
     // Enter DEGRADED fast (2 s of trouble), leave slowly (15 s without it) — flapping re-keyframes
     // hurt more than staying conservative. Loss-only: RTT is a property of the path, not damage — a
     // tunneled remote link sits at 250-350 ms forever, and an RTT trigger flapped DEGRADED every ~30 s
-    // on exactly that path. A tick with no report leaves the counters unchanged.
-    const bool report = loss >= 0 || rtt >= 0;
+    // on exactly that path. A tick without a loss measurement leaves the counters unchanged — an
+    // RTT-only report can't prove the link clean.
+    const bool report = loss >= 0;
     const bool bad = loss >= 30;
     if (report) {
         adapt_bad_ticks_ = bad ? adapt_bad_ticks_ + 1 : 0;

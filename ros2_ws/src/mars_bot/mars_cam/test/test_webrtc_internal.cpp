@@ -13,9 +13,10 @@ TEST(CamPt, StrideLeavesAuxSlotsAndAudioClear) {
     EXPECT_EQ(cam_pt_for_index(0), 96);
     EXPECT_EQ(cam_pt_for_index(1), 101);
     EXPECT_EQ(cam_pt_for_index(2), 106);
-    for (size_t i = 0; i < 6; ++i) {
+    for (size_t i = 0; i < kMaxCameras; ++i) {
         EXPECT_LT(cam_pt_for_index(i) + 4, kAudioPt);  // aux block clear of audio
     }
+    EXPECT_GE(cam_pt_for_index(kMaxCameras) + 4, kAudioPt);  // one more would collide — the cap is tight
 }
 
 // ---- SSRCs: fixed, unique per camera, 1-based off the base ----
