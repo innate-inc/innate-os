@@ -337,9 +337,11 @@ void WebRTCStreamer::on_peer_stats(GstPromise* promise, gpointer user_data) {
                 type != GST_WEBRTC_STATS_REMOTE_INBOUND_RTP) {
                 return TRUE;
             }
-            // rb-fractionlost is the RR's 0-255 fraction; round-trip-time is seconds (double).
-            if (guint fl = 0; gst_structure_get_uint(s, "rb-fractionlost", &fl)) {
-                const int promille = static_cast<int>(fl * 1000 / 255);
+            // fraction-lost is the RR's loss as a double in [0,1); round-trip-time is seconds (double).
+            // (rb-fractionlost exists only on webrtcbin's INTERNAL input stats, never in this reply —
+            // reading it here left the controller loss-blind, adapting on RTT alone.)
+            if (gdouble fl = 0.0; gst_structure_get_double(s, "fraction-lost", &fl)) {
+                const int promille = static_cast<int>(fl * 1000.0);
                 if (promille > self->rtcp_loss_promille_.load(std::memory_order_relaxed)) {
                     self->rtcp_loss_promille_.store(promille, std::memory_order_relaxed);
                 }
@@ -388,9 +390,11 @@ void WebRTCStreamer::apply_adaptation(bool degraded, int loss_promille, int rtt_
                                  : "GOOD: full bitrate, on-demand keyframes, base FEC";
     if (loss_promille < 0 && rtt_ms < 0) {
         RCLCPP_INFO(this->get_logger(), "Network adaptation -> %s (no viewer reports)", state);
+    } else if (loss_promille < 0) {
+        RCLCPP_INFO(this->get_logger(), "Network adaptation -> %s (viewer loss n/a, rtt %d ms)", state, rtt_ms);
     } else {
         RCLCPP_INFO(this->get_logger(), "Network adaptation -> %s (viewer loss %.1f%%, rtt %d ms)", state,
-                    loss_promille < 0 ? 0.0 : loss_promille / 10.0, rtt_ms);
+                    loss_promille / 10.0, rtt_ms);
     }
 }
 
@@ -424,11 +428,11 @@ void WebRTCStreamer::poll_network_adaptation() {
     }
 
     // Enter DEGRADED fast (2 s of trouble), leave slowly (15 s without it) — flapping re-keyframes
-    // hurt more than staying conservative. clean is exactly !bad: any value band between the two
-    // would freeze the exit counter and make DEGRADED permanent (e.g. a steady 200 ms RTT path).
-    // A tick with no report leaves the counters unchanged (get-stats answers land between ticks).
+    // hurt more than staying conservative. Loss-only: RTT is a property of the path, not damage — a
+    // tunneled remote link sits at 250-350 ms forever, and an RTT trigger flapped DEGRADED every ~30 s
+    // on exactly that path. A tick with no report leaves the counters unchanged.
     const bool report = loss >= 0 || rtt >= 0;
-    const bool bad = loss >= 30 || rtt >= 250;
+    const bool bad = loss >= 30;
     if (report) {
         adapt_bad_ticks_ = bad ? adapt_bad_ticks_ + 1 : 0;
         adapt_good_ticks_ = bad ? 0 : adapt_good_ticks_ + 1;
