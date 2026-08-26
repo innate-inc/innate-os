@@ -64,6 +64,10 @@ class GeminiContext:
         # goes on the wire (from generate's thread). The body must be treated
         # as read-only — it shares structure with the live history.
         self.on_request: Callable[[dict], None] | None = None
+        # Same contract as on_request, once per part as it arrives off the wire.
+        # Order is the model's own, so a caller can see whether it emitted a
+        # functionCall before or after the words that go with it.
+        self.on_part: Callable[[dict], None] | None = None
 
     @property
     def model(self) -> str:
@@ -150,6 +154,8 @@ class GeminiContext:
             content = _model_content(chunk) or {}
             for part in content.get("parts") or []:
                 parts.append(part)
+                if self.on_part is not None:
+                    self.on_part(part)
                 if on_speech and part.get("text") and not part.get("thought"):
                     on_speech(part["text"])
         if not parts:

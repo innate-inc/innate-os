@@ -1029,6 +1029,15 @@
   padding: 7px 10px;
   margin-bottom: 8px;
 }
+.br-i-block.raw .t {
+  /* A whole response body: monospace, wrapped, and capped so it cannot push
+     the distilled view off the top of the inspector. */
+  font: 11px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow: auto;
+}
 .br-i-block .l {
   font: 600 10px var(--font-mono);
   letter-spacing: 0.16em;

@@ -156,6 +156,16 @@ export function createBrainMonitor(root, opts = {}) {
         if (inspecting === d.turn) renderInspector();
       }
     }
+    if (d.ev === "turn_response") {
+      // The model's parts verbatim. turn_end carries the distilled Decision,
+      // which reorders them into thoughts/speech/calls and so cannot answer
+      // whether a call was emitted before or after the words that go with it.
+      const rec = turns.get(d.turn);
+      if (rec) {
+        rec.response = d.response;
+        if (inspecting === d.turn) renderInspector();
+      }
+    }
     if (d.ev === "turn_end") {
       S.streak = 0;
       renderStreak();
@@ -614,6 +624,15 @@ export function createBrainMonitor(root, opts = {}) {
         out.append(iBlock(`call · ${c.name}${args}`, `→ ${c.outcome || ""}`, "call"));
       }
       if (!out.children.length) out.innerHTML = `<div class="br-empty">no output — observed only</div>`;
+    }
+    // Raw parts, in the model's own order, under the distilled view.
+    if (rec.response) {
+      const parts = rec.response?.candidates?.[0]?.content?.parts ?? [];
+      const order = parts
+        .map((p, i) => `${i + 1}. ${p.functionCall ? `functionCall ${p.functionCall.name}` : p.thought ? "thought" : p.text !== undefined ? `text (${p.text.length} chars)` : Object.keys(p).join("+")}`)
+        .join("\n");
+      out.append(iBlock("parts, in the order the model emitted them", order || "—", "raw"));
+      out.append(iBlock("raw response", JSON.stringify(rec.response, null, 2), "raw"));
     }
 
     $(".br-i-sys pre").textContent =

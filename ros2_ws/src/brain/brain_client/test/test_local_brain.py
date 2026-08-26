@@ -1063,14 +1063,18 @@ def test_trace_reports_the_turn_lifecycle(agent_factory, monkeypatch):
         "turn_error",
         "turn_start",
         "turn_request",
+        # Only the turn that actually returned reports a response body.
+        "turn_response",
         "turn_end",
         "snapshot",
     ]
     assert traces[0]["kind"] == "user"
     assert traces[3]["streak"] == 1 and traces[3]["backoff"] == 5.0
     assert traces[5]["body"]["contents"][-1]["role"] == "user"
-    assert traces[6]["calls"] == [{"name": "wait", "args": {}, "outcome": "ok"}]
-    snapshot = traces[7]
+    # The model's parts verbatim, which the distilled turn_end below reorders.
+    assert traces[6]["response"]["candidates"][0]["content"]["parts"][0]["functionCall"]["name"] == "wait"
+    assert traces[7]["calls"] == [{"name": "wait", "args": {}, "outcome": "ok"}]
+    snapshot = traces[8]
     # History: the user turn, the model turn, and the wait call's functionResponse.
     assert snapshot["active"] is False and snapshot["backend"] == "gemini-direct" and snapshot["history"] == 3
 

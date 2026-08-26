@@ -158,6 +158,7 @@ class BrainAgent:
 
         if self._context is not None:
             self._context.on_request = self._on_request  # the monitor renders the exact request body
+            self._context.on_part = self._on_part
 
     def set_model(self, name: str) -> bool:
         """Point the next turn at a different Gemini model; False if unreachable.
@@ -325,6 +326,7 @@ class BrainAgent:
 
         response = await self._generate(context, message, tools, system, speaker, wrist_frames)
         latency = self._elapsed()
+        self._trace_response(response)
         self._mark(Stage.STREAM_DONE, turn=self._turn_count, ms=round(latency * 1000))
         self._report_recovered()
         if not self._state.is_brain_active:
@@ -707,6 +709,22 @@ class BrainAgent:
         if self._trace_sink is None or (heavy and not self.trace_has_audience()):
             return
         self._trace_sink(json.dumps({"ev": event, "t": time.time(), **fields}))
+
+    def _on_part(self, part: dict) -> None:
+        """One part off the wire (generate's thread). Only function calls are
+        marked: text already has first_text, and marking every text delta would
+        put dozens of marks on the wire per turn for one answer."""
+        call = part.get("functionCall")
+        if call is None:
+            return
+        self._mark(
+            Stage.MODEL_CALL, turn=self._turn_count, name=call.get("name") or "?", ms=round(self._elapsed() * 1000)
+        )
+
+    def _trace_response(self, response: dict) -> None:
+        """The model's parts verbatim, in the order it emitted them — the
+        distilled Decision cannot show whether a call came before its words."""
+        self._trace(TraceEvent.TURN_RESPONSE, heavy=True, turn=self._turn_count, response=response)
 
     def _on_request(self, body: dict) -> None:
         self._mark(Stage.REQUEST_SENT, turn=self._turn_count, ms=round(self._elapsed() * 1000))
