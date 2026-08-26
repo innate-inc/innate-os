@@ -67,20 +67,6 @@ struct CameraEncoder {
     WebRTCStreamer* owner = nullptr;                 // for the static appsink new-sample callback
 };
 
-// The talkback switch one peer's playback branch obeys. The pad-added handler runs on webrtcbin's
-// streaming thread, which must NOT take peers_mutex_ (~Peer joins that thread under it) — hence its own
-// leaf mutex. The valve's drop property is written only under it and only from `open`, so a release can
-// never be overwritten by a stale snapshot.
-struct TalkGate {
-    std::mutex mutex;
-    bool open = false;            // the operator is holding talk
-    GstElement* valve = nullptr;  // this peer's playback valve, ref'd; set once by pad-added
-    ~TalkGate() {
-        if (valve)
-            gst_object_unref(valve);
-    }
-};
-
 // One connected WebRTC peer. The cameras are encoded ONCE in a persistent pipeline; each peer owns a
 // lightweight *transport* pipeline (appsrc(RTP) -> webrtcbin) that the shared encoders fan their RTP
 // out to. Creating/destroying a peer never touches the encoders, so memory stays flat and a dead peer
@@ -98,8 +84,10 @@ struct Peer {
     bool audio_requested = false;            // the operator's LISTEN intent; audio_active is it minus the talk duck
     bool with_talk = false;                  // the audio m-line was negotiated sendrecv (talkback possible)
     bool talk_active = false;                // operator is holding talk: their mic plays out the robot's speaker
-    // Shared with the pad-added handler via a copy tagged on the webrtcbin element (see TalkGate).
-    std::shared_ptr<TalkGate> talk_gate = std::make_shared<TalkGate>();
+    // Privacy gate: the peer's RTP tap forwards to the speaker only while this is true. Read per sample
+    // on the peer's streaming thread (via a copy tagged on the tap), which must NOT take peers_mutex_ —
+    // ~Peer joins that thread under it. Purely read there, so a plain atomic suffices.
+    std::shared_ptr<std::atomic<bool>> talk_gate = std::make_shared<std::atomic<bool>>(false);
     // True only after webrtcbin CONNECTED; gates RTP fan-out into webrtcbin. Shared + atomic because it
     // is written from webrtcbin's PC thread (the connection-state callback, via a copy tagged on the
     // element) — that callback must NOT take peers_mutex_: ~Peer runs set_state(NULL) under the mutex,
@@ -178,8 +166,10 @@ class WebRTCStreamer : public rclcpp::Node {
 
     // ---- Talkback: the operator's mic, received on the audio m-line and played out the speaker ----
     static void on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer user_data);
-    std::string talk_branch_description() const;  // valve -> depay -> decode -> speaker
-    void set_peer_talk(Peer* peer, bool on);      // flip the gate + the valve; caller holds peers_mutex_
+    static GstFlowReturn on_talk_sample(GstElement* appsink, gpointer user_data);
+    std::string speaker_pipeline_description() const;  // appsrc(RTP) -> depay -> decode -> [probe] -> speaker
+    bool build_speaker_pipeline();                     // built + PLAYING at startup; peers' taps feed it
+    void set_peer_talk(Peer* peer, bool on);           // flip the gate; caller holds peers_mutex_
     void reconcile_talk();  // publish /talkback/is_playing when the last talker stops (or the first starts)
 
     // ---- Shared audio (mic) — encoded once like the cameras, fanned out, gated for privacy ----
@@ -262,9 +252,11 @@ class WebRTCStreamer : public rclcpp::Node {
     std::atomic<uint64_t> audio_frames_{0};  // for status: is audio actually flowing
     bool audio_playing_ = false;             // current audio pipeline state (gated by want_audio_)
 
-    // ---- Talkback (browser mic -> robot speaker): per-peer recv branches, gated by a valve ----
-    std::atomic<int> want_talk_{0};  // # peers holding the talk button; >0 => the robot is audibly speaking
-    bool talk_playing_ = false;      // last published /talkback/is_playing state
+    // ---- Talkback (browser mic -> robot speaker): per-peer RTP taps into one speaker pipeline ----
+    GstElement* speaker_pipeline_ = nullptr;  // appsrc..alsasink; PLAYING for the node's lifetime
+    GstElement* talk_appsrc_ = nullptr;       // ref'd; the taps push into it from peer streaming threads
+    std::atomic<int> want_talk_{0};           // # peers holding the talk button; >0 => the robot is audibly speaking
+    bool talk_playing_ = false;               // last published /talkback/is_playing state
 
     // ---- Peers ----
     std::map<std::string, std::unique_ptr<Peer>> peers_;
@@ -290,6 +282,7 @@ class WebRTCStreamer : public rclcpp::Node {
     std::string audio_source_element_ = "alsasrc";
     std::string audio_capture_device_;
     bool enable_talkback_ = true;
+    bool enable_echo_cancel_ = false;  // AEC on the mic feed; lifts the half-duplex duck when on
     std::string audio_sink_element_ = "alsasink";
     std::string audio_playback_device_;
     double talkback_volume_ = 1.0;

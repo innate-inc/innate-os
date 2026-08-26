@@ -257,7 +257,12 @@ bool WebRTCStreamer::build_audio_pipeline() {
     std::string desc = src +
                        " do-timestamp=true ! "
                        "queue leaky=downstream max-size-buffers=10 max-size-time=0 max-size-bytes=0 ! "
-                       "audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! "
+                       "audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! " +
+                       // AEC subtracts the speaker pipeline's playout (via its webrtcechoprobe) from the
+                       // capture — what makes full-duplex talkback possible. delay-agnostic: capture and
+                       // playout are separate pipelines on separate clocks, and dmix hides the true
+                       // playout latency, so the canceller must estimate alignment itself.
+                       std::string(enable_echo_cancel_ ? "webrtcdsp echo-cancel=true delay-agnostic=true ! " : "") +
                        "opusenc bitrate=24000 audio-type=voice ! "
                        "rtpopuspay name=pay_audio pt=98 ! "
                        "appsink name=sink_audio emit-signals=true sync=false async=false max-buffers=4 drop=true ";
@@ -284,11 +289,12 @@ bool WebRTCStreamer::build_audio_pipeline() {
     return true;
 }
 
-// One peer's speaker path, hung off webrtcbin's recv pad. The valve is the privacy gate (closed until the
-// operator holds talk); the queue is what keeps a blocking ALSA write off webrtcbin's streaming thread.
-// The sink neither syncs nor prerolls: it is fed live, and behind a closed valve it would otherwise wait
-// forever for a first buffer and stall the branch's state change.
-std::string WebRTCStreamer::talk_branch_description() const {
+// The one speaker path every talking peer feeds (their taps push RTP into talk_src). One path means one
+// place for the echo probe — AEC needs a single reference of what the speaker plays. The probe keeps
+// GStreamer's auto-name webrtcechoprobe0, which the mic pipeline's webrtcdsp pairs with; it sits after
+// the volume so the reference matches the level actually played. The queue keeps a blocking ALSA write
+// off the pushing peer's streaming thread; the sink neither syncs nor prerolls (fed live).
+std::string WebRTCStreamer::speaker_pipeline_description() const {
     if (!is_plain_element(audio_sink_element_) || !is_plain_device(audio_playback_device_)) {
         return "";  // the constructor checks this once and disables talkback rather than parsing it
     }
@@ -296,13 +302,62 @@ std::string WebRTCStreamer::talk_branch_description() const {
     if (!audio_playback_device_.empty()) {
         sink += " device=\"" + audio_playback_device_ + "\"";
     }
-    return "valve name=talk_valve drop=true ! "
+    return "appsrc name=talk_src is-live=true format=time do-timestamp=true "
+           "caps=\"application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload=98\" ! "
            "rtpopusdepay ! opusdec plc=true ! audioconvert ! audioresample ! "
            "volume name=talk_volume volume=" +
-           std::to_string(talkback_volume_) +
-           " ! "
-           "queue leaky=downstream max-size-buffers=0 max-size-bytes=0 max-size-time=200000000 ! " +
-           sink + " name=talk_sink sync=false async=false";
+           std::to_string(talkback_volume_) + " ! " + std::string(enable_echo_cancel_ ? "webrtcechoprobe ! " : "") +
+           "queue leaky=downstream max-size-buffers=0 max-size-bytes=0 max-size-time=200000000 ! " + sink +
+           " name=talk_sink sync=false async=false";
+}
+
+// Built once and left PLAYING for the node's lifetime: the probe must exist before the mic pipeline's
+// webrtcdsp activates, and ALSA is dmix, so holding the playback device open costs nothing. With no
+// talker the appsrc is simply silent.
+bool WebRTCStreamer::build_speaker_pipeline() {
+    GError* error = nullptr;
+    speaker_pipeline_ = gst_parse_launch(speaker_pipeline_description().c_str(), &error);
+    if (error) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to create speaker pipeline: %s", error->message);
+        g_error_free(error);
+        if (speaker_pipeline_) {
+            gst_object_unref(speaker_pipeline_);
+            speaker_pipeline_ = nullptr;
+        }
+        return false;
+    }
+    talk_appsrc_ = gst_bin_get_by_name(GST_BIN(speaker_pipeline_), "talk_src");
+    if (!talk_appsrc_ || gst_element_set_state(speaker_pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+        RCLCPP_ERROR(this->get_logger(), "Speaker pipeline failed to start");
+        return false;
+    }
+    return true;
+}
+
+// A talking peer's RTP arriving, on that peer's streaming thread — it must not take peers_mutex_ (~Peer
+// joins this thread under it), so the gate rides on the tap and the appsrc is a set-once member. Two
+// peers talking at once interleave RTP into one depayloader and glitch; one talker at a time is the
+// supported shape.
+GstFlowReturn WebRTCStreamer::on_talk_sample(GstElement* appsink, gpointer user_data) {
+    auto* self = static_cast<WebRTCStreamer*>(user_data);
+    GstSample* sample = gst_app_sink_pull_sample(GST_APP_SINK(appsink));
+    if (!sample) {
+        return GST_FLOW_OK;
+    }
+    auto* gate =
+        static_cast<std::shared_ptr<std::atomic<bool>>*>(g_object_get_data(G_OBJECT(appsink), "mars_talk_gate"));
+    GstBuffer* buffer = gst_sample_get_buffer(sample);
+    if (buffer && gate && (*gate)->load(std::memory_order_relaxed) && self->talk_appsrc_) {
+        GstBuffer* out = gst_buffer_copy(buffer);
+        GST_BUFFER_PTS(out) = GST_CLOCK_TIME_NONE;
+        GST_BUFFER_DTS(out) = GST_CLOCK_TIME_NONE;
+        GstFlowReturn ret;
+        // "push-buffer" is transfer-none (see fan_out) — unref or leak one packet per push.
+        g_signal_emit_by_name(self->talk_appsrc_, "push-buffer", out, &ret);
+        gst_buffer_unref(out);
+    }
+    gst_sample_unref(sample);
+    return GST_FLOW_OK;
 }
 
 void WebRTCStreamer::reconcile_talk() {
