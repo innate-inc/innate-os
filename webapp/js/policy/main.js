@@ -15,8 +15,10 @@
 
 import { mountPage } from "../pageMount.js";
 import { ros } from "../rosClient.js";
+import { drive } from "../driveController.js";
 import { robotSessionFactory } from "../robotSession.js";
 import { createVideoStage } from "../teleop/videoStage.js";
+import { createJoystick } from "../teleop/joystick.js";
 import {
   NAV_POLICY_ACTION,
   NAV_POLICY_ACTION_TYPE,
@@ -76,6 +78,16 @@ export function mount(stage) {
     const scene = createStage
       ? createStage(sceneRoot, session, { chipsOn: ["waypoints"] })
       : createVideoStage(sceneRoot, session);
+    // The same stick teleop and the Nav page mount, over this page's scene. It
+    // publishes /joystick, which mars_app turns into /cmd_vel_teleop -- the mux
+    // input that outranks the policy's /cmd_vel_nav. So the stick takes the
+    // robot off the policy while it is held, and the policy has it back about
+    // half a second after release, without the run ending: that is how you
+    // straighten out a run that is drifting instead of stopping and restarting.
+    const stickOverlay = document.createElement("div");
+    stickOverlay.className = "overlay overlay-joystick";
+    sceneRoot.appendChild(stickOverlay);
+    const stick = createJoystick(stickOverlay, drive);
     const side = /** @type {HTMLElement} */ (root.querySelector(".policy-side"));
     const panel = createStatusPanel(side);
     const tuning = createTuningPanel(side);
@@ -168,6 +180,10 @@ export function mount(stage) {
         if (run) run.cancel();
         unsubStatus();
         unsubObs();
+        // Leaving must not leave the stick latched forward.
+        drive.haltAll();
+        stick.destroy();
+        stickOverlay.remove();
         scene.destroy();
         session.destroy();
         map.destroy();
