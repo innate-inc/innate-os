@@ -336,6 +336,16 @@ class BrainAgent:
             return
 
         decision = context.absorb(message, response, latest_only_images=wrist_frames)
+        # What the turn came to, on the latency stream rather than only in the
+        # trace: a bar that says a turn took 1.5 s is not worth much without
+        # knowing whether it produced words, a tool call, or nothing at all.
+        self._mark(
+            Stage.DECISION,
+            turn=self._turn_count,
+            speech=(decision.speech or "")[:200],
+            calls=[call.name for call in decision.calls],
+            thoughts=(decision.thoughts or "")[:200],
+        )
         del self._events[: len(events)]
         events.clear()  # committed: a failure below backs off against an empty peek
         outcomes = self._act(decision, speaker, context)
