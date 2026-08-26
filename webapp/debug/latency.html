@@ -125,6 +125,8 @@
   .stopped small { display: block; font-size: 0.66rem; font-weight: 400; opacity: 0.75; letter-spacing: 0.08em; }
   .stopped:active { transform: translateY(1px); }
   .mark-card .status { max-width: 56ch; }
+  /* An edited field is a request, not the robot's state — say so on the field. */
+  .pending { border-color: var(--c-vad); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-vad) 28%, transparent); }
 
   /* Rolling timeline: one shared wall clock, three lanes, newest at the right. */
   .rt { user-select: none; }
@@ -263,10 +265,13 @@
     <label class="status">threshold <input id="cfg-threshold" type="number" step="0.05" min="0" max="1" size="4" style="width:5.5em"></label>
   </div>
   <div class="row">
-    <label class="status" title="Voice the reply's held last sentence before dispatching the turn's tools">
-      <input type="checkbox" id="cfg-speak-first" style="vertical-align:-2px"> speak before acting
+    <label class="status">reply order
+      <select id="cfg-speak-first">
+        <option value="false" selected>act, then speak</option>
+        <option value="true">speak, then act</option>
+      </select>
     </label>
-    <span class="status">off = the robot starts moving, then speaks — a one-sentence reply is held until the tools are dispatched</span>
+    <span class="status" id="cfg-order-note"></span>
   </div>
   <div class="row">
     <button id="cfg-apply" class="primary">Apply</button>
@@ -1602,8 +1607,8 @@ const CONFIG_KNOBS = [
   { node: BRAIN_NODE, name: "speak_before_tools", type: "bool", el: "cfg-speak-first" },
 ];
 
-/** Checkboxes carry their value on .checked, everything else on .value. */
-const knobValue = (knob) => ($(knob.el).type === "checkbox" ? $(knob.el).checked : $(knob.el).value.trim());
+/** Every control reports a string; a bool knob's is "true"/"false". */
+const knobValue = (knob) => (knob.type === "bool" ? $(knob.el).value === "true" : $(knob.el).value.trim());
 
 /** What the robot is running right now — also stamped into every capture. */
 let liveConfig = {};
@@ -1629,14 +1634,47 @@ async function readConfig() {
         if (value === null || value === "") return;
         liveConfig[knobs[i].name] = value;
         const el = $(knobs[i].el);
-        if (el.type === "checkbox") el.checked = Boolean(value);
-        else el.value = String(value);
+        const text = String(value);
+        // Assigning an unlisted value to a <select> blanks it, which reads as
+        // "no setting" rather than "a setting I cannot show".
+        if (el.tagName === "SELECT" && ![...el.options].some((o) => o.value === text)) {
+          $("cfg-text").textContent = `${knobs[i].name}: robot reports ${text}, which is not one of the options`;
+          return;
+        }
+        el.value = text;
       });
     } catch {
       $("cfg-text").textContent = `Could not read parameters from ${node} — is it running?`;
     }
   }
   renderConfigLine();
+}
+
+/** Fields hold what you are about to apply; liveConfig holds what the robot
+ *  reported. Nothing said which was which, so an edited field read as the
+ *  running state. Mark every field that differs, and say how many. */
+function markPending() {
+  const changed = CONFIG_KNOBS.filter((knob) => {
+    const running = liveConfig[knob.name];
+    if (running === undefined) return false;
+    return String(knobValue(knob)) !== String(running);
+  });
+  for (const knob of CONFIG_KNOBS) $(knob.el).classList.toggle("pending", changed.includes(knob));
+  // Nothing read back means nothing to diff against — leave Apply usable so a
+  // flaky get_parameters cannot lock the page out of writing.
+  const blind = !Object.keys(liveConfig).length;
+  $("cfg-apply").textContent = changed.length ? `Apply ${changed.length} change${changed.length > 1 ? "s" : ""}` : "Apply";
+  $("cfg-apply").disabled = !changed.length && !blind;
+  return changed.length || !blind ? changed : CONFIG_KNOBS;
+}
+
+function renderOrderNote() {
+  const asked = $("cfg-speak-first").value === "true";
+  const unknown = liveConfig.speak_before_tools === undefined ? " · the robot has not reported this setting" : "";
+  $("cfg-order-note").textContent =
+    (asked
+      ? "the reply's held last sentence is voiced first, then the turn's tools dispatch"
+      : "the tools dispatch first; a one-sentence reply is held until after — the robot moves, then speaks") + unknown;
 }
 
 function renderConfigLine() {
@@ -1647,17 +1685,30 @@ function renderConfigLine() {
   if (c.stt_vad_engine) parts.push(`${c.stt_vad_engine} vad`);
   if (c.stt_vad_silence_secs != null) parts.push(`${c.stt_vad_silence_secs}s silence`);
   if (c.speak_before_tools != null) parts.push(c.speak_before_tools ? "speak→act" : "act→speak");
-  $("cfg-text").textContent = parts.length ? `running: ${parts.join(" · ")}` : "";
+  $("cfg-text").textContent = parts.length ? `on the robot now: ${parts.join(" · ")}` : "";
+  renderOrderNote();
+  markPending();
+}
+
+// Any edit re-checks what differs, so the marking never lags the fields.
+for (const knob of CONFIG_KNOBS) {
+  $(knob.el).addEventListener("input", () => {
+    renderOrderNote();
+    markPending();
+  });
+  $(knob.el).addEventListener("change", () => {
+    renderOrderNote();
+    markPending();
+  });
 }
 
 $("cfg-apply").onclick = async () => {
   const byNode = new Map();
-  for (const knob of CONFIG_KNOBS) {
+  for (const knob of markPending()) {
     const raw = knobValue(knob);
     if (raw === "") continue;
     const value = knob.type === "float" ? Number(raw) : raw;
     if (knob.type === "float" && !Number.isFinite(value)) continue;
-    if (liveConfig[knob.name] !== undefined && String(liveConfig[knob.name]) === String(value)) continue;
     byNode.set(knob.node, [...(byNode.get(knob.node) ?? []), { ...knob, value }]);
   }
   if (!byNode.size) {
@@ -1869,6 +1920,7 @@ if (new URLSearchParams(location.search).has("demo")) {
     stt_vad_engine: "silero",
     stt_vad_silence_secs: 0.5,
     stt_vad_threshold: 0.2,
+    speak_before_tools: false,
   };
   for (const knob of CONFIG_KNOBS) $(knob.el).value = String(liveConfig[knob.name]);
   renderConfigLine();
