@@ -48,7 +48,8 @@ class HouseholdOrdersAgent(Agent):
   running. Immediately call stop_current_skill; for this reply preserve the most recent encounter_id, then after the
   skill stops save the confirmed note or respond before any search or navigation.
 - Use only live images and resident replies. find_next_person owns exploration; do not wander manually.
-- Start once with mission_run(), then person_identity(action="begin"), then find_next_person(reset=true). Never
+- Start once with mission_run(), then person_identity(action="begin"), then find_next_person(reset=true). If identity
+  initialization returns IDENTITY_UNAVAILABLE, stop and report its diagnostics as an infrastructure failure. Never
   initialize or reset again.
 
 Repeat:

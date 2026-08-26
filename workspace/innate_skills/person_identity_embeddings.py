@@ -106,6 +106,11 @@ class LocalPersonEncoder:
         return self._body_session is not None or self._face_session is not None
 
     @property
+    def face_available(self) -> bool:
+        """Whether the face-recognition backend initialized successfully."""
+        return self._face_session is not None
+
+    @property
     def diagnostics(self) -> dict[str, Any]:
         return {
             "body_available": self._body_session is not None,
