@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
 // Head tilt — thin vertical slider on the right edge, hairline tick at 0°.
-// Drag publishes std_msgs/Int32 to /mars/head/set_position at ~10 Hz; a
-// marker fed from /mars/head/current_position (JSON-in-String) shows where
-// the head really is. The default ±range is only a fallback: the feedback
-// payload carries the robot's real min/max angles (e.g. ±25° on MARS) and
-// the slider adopts them on first contact.
+// Drag publishes std_msgs/Int32 to /mars/head/set_position at ~10 Hz.
+// Feedback from /mars/head/current_position (JSON-in-String) drives the
+// thumb whenever the operator isn't dragging — so a skill moving the head
+// keeps the slider honest — and a marker shows where the head really is
+// mid-drag. The default ±range is only a fallback: the feedback payload
+// carries the robot's real min/max angles (e.g. ±25° on MARS) and the
+// slider adopts them on first contact.
 
 import {
   HEAD_SET_POSITION_TOPIC,
@@ -81,7 +83,7 @@ export function createHeadTilt(parent, rosClient) {
     topLabel.textContent = `+${Math.round(maxDeg)}`;
     bottomLabel.textContent = String(Math.round(minDeg));
     zeroTick.style.top = `${fractionFor(0) * 100}%`;
-    if (commanded !== null) place(thumb, commanded);
+    if (shownDeg !== null) place(thumb, shownDeg);
   }
 
   /** @param {HTMLElement} el @param {number} deg */
@@ -92,7 +94,14 @@ export function createHeadTilt(parent, rosClient) {
   let dragging = false;
   let lastPublishAt = 0;
   /** @type {number | null} */
-  let commanded = null;
+  let shownDeg = null;
+
+  /** @param {number} deg */
+  function show(deg) {
+    shownDeg = deg;
+    place(thumb, deg);
+    readout.textContent = `${Math.round(deg)}°`;
+  }
 
   /** @param {PointerEvent} e @returns {number} */
   function degreesFrom(e) {
@@ -103,9 +112,7 @@ export function createHeadTilt(parent, rosClient) {
 
   /** @param {number} deg @param {boolean} force */
   function command(deg, force) {
-    commanded = deg;
-    place(thumb, deg);
-    readout.textContent = `${deg}°`;
+    show(deg);
     const now = performance.now();
     if (force || now - lastPublishAt >= PUBLISH_GAP_MS) {
       lastPublishAt = now;
@@ -159,11 +166,7 @@ export function createHeadTilt(parent, rosClient) {
     const deg = Math.max(minDeg, Math.min(maxDeg, parsed.current_position));
     actual.hidden = false;
     place(actual, deg);
-    // Until the operator commands something, the thumb tracks reality.
-    if (!dragging && commanded === null) {
-      place(thumb, deg);
-      readout.textContent = `${Math.round(deg)}°`;
-    }
+    if (!dragging) show(deg);
   }, undefined, "std_msgs/msg/String");
 
   return {
