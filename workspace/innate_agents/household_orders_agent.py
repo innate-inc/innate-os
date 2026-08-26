@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
+from brain_client.agents.types import Agent, InputRef, SkillRef
 from innate_skills.find_next_person import FindNextPerson
 from innate_skills.mission_notes import MissionNotes
 from innate_skills.mission_run import MissionRun
@@ -8,8 +9,6 @@ from innate_skills.navigate_to_position import NavigateToPosition
 from innate_skills.person_identity import PersonIdentity
 from innate_skills.place_doordash_order import PlaceDoordashOrder
 from inputs.micro_input import MicroInput
-
-from brain_client.agents.types import Agent, InputRef, SkillRef
 
 
 class HouseholdOrdersAgent(Agent):
@@ -64,8 +63,9 @@ Repeat:
    move_straight(distance=-0.5), then identify exactly once more. Do not use navigate_to_position for this retreat: it
    may turn toward a goal behind the robot and lose the resident. If the move fails, the second identity is unavailable,
    or the image was not clearly a too-close resident, search. Never repeat this backward reframing attempt for the same
-   observation.
-3. Use the encounter_id returned by identity and immediately call mission_notes(action="get", key=encounter_id).
+   observation. On UNKNOWN_PERSON, immediately call person_identity(action="remember") and use the encounter_id it
+   returns. On KNOWN_PERSON, use its encounter_id. On IDENTITY_AMBIGUOUS, do not store the observation; search again.
+3. Use the encounter_id returned by identity or remember and immediately call mission_notes(action="get", key=encounter_id).
    NOTE_FOUND means this resident already confirmed an order, so search again. On NOTE_MISSING ask:
    "Hi, what would you like from DoorDash?"
 4. Only when the required 10-second reply window ends in silence, move forward once with
