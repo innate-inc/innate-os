@@ -4,9 +4,10 @@
 // Head tilt — thin vertical slider on the right edge, hairline tick at 0°.
 // Drag publishes std_msgs/Int32 to /mars/head/set_position at ~10 Hz.
 // Feedback from /mars/head/current_position (JSON-in-String) drives the
-// thumb whenever the operator isn't dragging — so a skill moving the head
-// keeps the slider honest — and a marker shows where the head really is
-// mid-drag. The default ±range is only a fallback: the feedback payload
+// thumb whenever the operator isn't dragging (after a short post-release
+// hold, so lagging reports don't yank the gesture back) — a skill moving
+// the head keeps the slider honest — and a marker shows where the head
+// really is mid-drag. The default ±range is only a fallback: the feedback payload
 // carries the robot's real min/max angles (e.g. ±25° on MARS) and the
 // slider adopts them on first contact.
 
@@ -18,6 +19,7 @@ import {
 } from "../constants.js";
 
 const PUBLISH_GAP_MS = 100;
+const FEEDBACK_GRACE_MS = 500;
 
 /**
  * @param {HTMLElement} parent
@@ -93,6 +95,9 @@ export function createHeadTilt(parent, rosClient) {
 
   let dragging = false;
   let lastPublishAt = 0;
+  // Feedback lags a release (transport + head travel), so the first post-drag
+  // report would yank the thumb back before it chases; hold the gesture briefly.
+  let feedbackHoldUntil = 0;
   /** @type {number | null} */
   let shownDeg = null;
 
@@ -142,6 +147,7 @@ export function createHeadTilt(parent, rosClient) {
     if (!dragging) return;
     dragging = false;
     wrap.classList.remove("engaged");
+    feedbackHoldUntil = performance.now() + FEEDBACK_GRACE_MS;
     command(degreesFrom(e), true); // final value always goes out
   }
 
@@ -166,7 +172,7 @@ export function createHeadTilt(parent, rosClient) {
     const deg = Math.max(minDeg, Math.min(maxDeg, parsed.current_position));
     actual.hidden = false;
     place(actual, deg);
-    if (!dragging) show(deg);
+    if (!dragging && performance.now() >= feedbackHoldUntil) show(deg);
   }, undefined, "std_msgs/msg/String");
 
   return {
