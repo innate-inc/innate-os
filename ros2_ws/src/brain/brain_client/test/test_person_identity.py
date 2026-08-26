@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 from brain_client.skills.types import SkillStorage
 from brain_client.state.image import MainImage
@@ -52,6 +53,55 @@ class FakeEncoder:
 
     def encode(self, _jpeg):
         return next(self.embeddings)
+
+
+class _DetectedFace:
+    def __init__(self, location):
+        self.location = location
+
+
+class _ScaleSensitiveFaceSession:
+    def __init__(self):
+        self.detected_widths = []
+        self.feature_frame_shape = None
+
+    def face_detection(self, frame):
+        self.detected_widths.append(frame.shape[1])
+        if len(self.detected_widths) != 2:
+            return []
+        return [_DetectedFace((80, 40, 120, 80))]
+
+    def face_feature_extract(self, frame, _face):
+        self.feature_frame_shape = frame.shape
+        return np.asarray([3.0, 4.0], dtype=np.float32)
+
+
+def test_face_detection_retries_at_higher_resolution():
+    encoder = embeddings_module.LocalPersonEncoder.__new__(
+        embeddings_module.LocalPersonEncoder
+    )
+    encoder._face_session = _ScaleSensitiveFaceSession()
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    detection_frame, face, bounds = encoder._detect_face(frame)
+    embedding = encoder._face_embedding(detection_frame, face)
+
+    assert encoder._face_session.detected_widths == [640, 624, 624, 624, 624]
+    assert encoder._face_session.feature_frame_shape == (468, 624, 3)
+    assert bounds == pytest.approx(
+        (53.333, 26.667, 80.0, 53.333), abs=0.001
+    )
+    assert embedding == pytest.approx([0.6, 0.8])
+
+
+def test_body_crop_is_derived_from_face_and_clamped_to_frame():
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    crop = embeddings_module.LocalPersonEncoder._person_crop_from_face(
+        frame, (300.0, 60.0, 340.0, 100.0)
+    )
+
+    assert crop.shape == (390, 200, 3)
 
 
 @pytest.fixture
