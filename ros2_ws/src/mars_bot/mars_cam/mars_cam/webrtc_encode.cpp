@@ -45,12 +45,12 @@ bool looks_like_camera(std::string name) {
     return name.find("camera") != std::string::npos || name.find("webcam") != std::string::npos;
 }
 
-// A dedicated mic beats a camera's built-in one, and both beat the Tegra I2S card, whose capture nodes are
-// XBAR links with nothing on the far end. Mirrors the ladder workspace/inputs/micro_input.py walks, so the
-// agent and the teleop stream land on the same microphone.
+// A dedicated mic beats a camera's built-in one. The Tegra I2S card is never a fallback (rank 0): its
+// capture nodes are XBAR links with nothing on the far end, so it opens cleanly and records silence.
+// Approximates the name-based ladder in workspace/inputs/micro_input.py; the two are separate copies.
 int capture_rank(const std::string& driver, const std::string& long_name) {
     if (driver != "USB-Audio") {
-        return 1;
+        return 0;
     }
     return looks_like_camera(long_name) ? 2 : 3;
 }
@@ -314,7 +314,7 @@ bool WebRTCStreamer::build_audio_pipeline() {
                      audio_source_element_.c_str());
         return false;
     }
-    std::string src = audio_source_element_;
+    std::string src = audio_source_element_ + " name=src_audio";
     if (!audio_capture_device_.empty()) {
         const bool valid_device =
             std::all_of(audio_capture_device_.begin(), audio_capture_device_.end(), [](unsigned char c) {
@@ -325,12 +325,6 @@ bool WebRTCStreamer::build_audio_pipeline() {
             RCLCPP_ERROR(this->get_logger(), "audio_capture_device '%s' has unexpected chars",
                          audio_capture_device_.c_str());
             return false;
-        }
-        const std::string resolved = resolve_capture_device(audio_capture_device_);
-        if (resolved != audio_capture_device_) {
-            RCLCPP_WARN(this->get_logger(), "audio_capture_device '%s' is not present; using '%s' instead",
-                        audio_capture_device_.c_str(), resolved.c_str());
-            audio_capture_device_ = resolved;
         }
         src += " device=\"" + audio_capture_device_ + "\"";
     }
@@ -355,8 +349,9 @@ bool WebRTCStreamer::build_audio_pipeline() {
         return false;
     }
     audio_sink_ = gst_bin_get_by_name(GST_BIN(audio_pipeline_), "sink_audio");
-    if (!audio_sink_) {
-        RCLCPP_ERROR(this->get_logger(), "Audio pipeline missing appsink");
+    audio_src_ = gst_bin_get_by_name(GST_BIN(audio_pipeline_), "src_audio");
+    if (!audio_sink_ || !audio_src_) {
+        RCLCPP_ERROR(this->get_logger(), "Audio pipeline missing appsink or source");
         return false;
     }
     g_signal_connect(audio_sink_, "new-sample", G_CALLBACK(on_audio_sample), this);
@@ -386,6 +381,9 @@ void WebRTCStreamer::reconcile_audio() {
         return;
     }
     const bool want = want_audio_.load(std::memory_order_relaxed) > 0;
+    if (!want) {
+        mic_retry_ns_ = 0;  // dropping the request clears the backoff even when nothing was open
+    }
     if (want == audio_playing_) {
         return;
     }
@@ -396,6 +394,16 @@ void WebRTCStreamer::reconcile_audio() {
         if (now_ns < mic_retry_ns_) {
             return;
         }
+        std::string device = audio_capture_device_;
+        if (!device.empty() && audio_src_) {
+            // Re-resolved on every attempt: the configured card can (re)appear after boot.
+            device = resolve_capture_device(device);
+            if (device != audio_capture_device_) {
+                RCLCPP_WARN(this->get_logger(), "audio_capture_device '%s' is not present; using '%s' instead",
+                            audio_capture_device_.c_str(), device.c_str());
+            }
+            g_object_set(audio_src_, "device", device.c_str(), nullptr);
+        }
         if (gst_element_set_state(audio_pipeline_, GST_STATE_PLAYING) != GST_STATE_CHANGE_FAILURE) {
             audio_playing_ = true;
             mic_retry_ns_ = 0;
@@ -403,13 +411,12 @@ void WebRTCStreamer::reconcile_audio() {
         } else {
             fail_audio_pipeline();
             RCLCPP_WARN(this->get_logger(), "Mic '%s' failed to open; retrying in %lld s",
-                        audio_capture_device_.empty() ? "(default)" : audio_capture_device_.c_str(),
+                        device.empty() ? "(default)" : device.c_str(),
                         static_cast<long long>(kMicRetryBackoffNs / 1000000000));
         }
     } else {
         gst_element_set_state(audio_pipeline_, GST_STATE_NULL);  // closes the device; joins the fan-out thread
         audio_playing_ = false;
-        mic_retry_ns_ = 0;  // the next request tries immediately, whatever the last one cost
         RCLCPP_INFO(this->get_logger(), "Mic closed (no peer wants audio)");
     }
 }

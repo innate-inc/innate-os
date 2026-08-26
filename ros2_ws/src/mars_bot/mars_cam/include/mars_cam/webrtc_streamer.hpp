@@ -230,6 +230,7 @@ class WebRTCStreamer : public rclcpp::Node {
     // ---- Shared audio (mic) pipeline: encoded once, fanned out to peers, gated for mic privacy ----
     GstElement* audio_pipeline_ = nullptr;   // built once if enable_audio_; alsasrc..rtpopuspay..appsink
     GstElement* audio_sink_ = nullptr;       // ref'd appsink (the fan-out tap)
+    GstElement* audio_src_ = nullptr;        // ref'd mic source (device re-resolved before each open)
     std::atomic<int> want_audio_{0};         // # peers with audio active; >0 => mic open (pipeline PLAYING)
     std::atomic<uint64_t> audio_frames_{0};  // for status: is audio actually flowing
     // audio_playing_ and mic_retry_ns_ are unlocked on purpose: every writer is a ROS callback on this

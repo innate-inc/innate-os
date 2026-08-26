@@ -244,6 +244,8 @@ WebRTCStreamer::~WebRTCStreamer() {
     }
     if (audio_sink_)
         gst_object_unref(audio_sink_);
+    if (audio_src_)
+        gst_object_unref(audio_src_);
     if (audio_pipeline_) {
         gst_element_set_state(audio_pipeline_, GST_STATE_NULL);
         gst_object_unref(audio_pipeline_);
