@@ -179,6 +179,7 @@ export const SETTINGS_PAGES = [
           // `/**` in the file so a restart reaches every node that declares it, but the
           // live push goes to brain_client_node alone — it owns the only TTS that speaks.
           { path: ["/**", P, "cartesia_voice_id"], label: "TTS voice", default: "9fdaae0b-f885-4813-b589-3c07cf9d5fea", type: "string", doc: "Cartesia voice for everything the robot speaks. Pick a stock voice, or paste any voice ID from Cartesia's library of hundreds.", docHref: "https://play.cartesia.ai/voices", docLinkText: "Browse Cartesia voices\u00A0↗", options: VOICE_OPTIONS, live: "/brain_client_node" },
+          { path: ["brain_client_node", P, "follow_up_after_silent_call"], label: "Answer straight after acting", default: false, type: "bool", doc: "A function call ends the model's turn — it answers once it sees the result. Off, that answer waits out the whole idle interval; on, the next turn is taken immediately.", live: "/brain_client_node" },
           { path: ["brain_client_node", P, "speak_before_tools"], label: "Speak before acting", default: false, type: "bool", doc: "Voice the reply's last held sentence before dispatching the turn's tools. Off, the robot starts moving first and speaks after — a one-sentence reply is entirely held until then.", live: "/brain_client_node" },
         ],
       },

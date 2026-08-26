@@ -271,7 +271,18 @@
         <option value="true">speak, then act</option>
       </select>
     </label>
+    <label class="status">after a silent action
+      <select id="cfg-follow-up">
+        <option value="false" selected>wait for the interval</option>
+        <option value="true">answer at once</option>
+      </select>
+    </label>
+  </div>
+  <div class="row">
     <span class="status" id="cfg-order-note"></span>
+  </div>
+  <div class="row">
+    <span class="status" id="cfg-follow-note"></span>
   </div>
   <div class="row">
     <button id="cfg-apply" class="primary">Apply</button>
@@ -1605,6 +1616,7 @@ const CONFIG_KNOBS = [
   { node: STT_NODE, name: "stt_vad_silence_secs", type: "float", el: "cfg-silence" },
   { node: STT_NODE, name: "stt_vad_threshold", type: "float", el: "cfg-threshold" },
   { node: BRAIN_NODE, name: "speak_before_tools", type: "bool", el: "cfg-speak-first" },
+  { node: BRAIN_NODE, name: "follow_up_after_silent_call", type: "bool", el: "cfg-follow-up" },
 ];
 
 /** Every control reports a string; a bool knob's is "true"/"false". */
@@ -1670,6 +1682,10 @@ function markPending() {
 
 function renderOrderNote() {
   const asked = $("cfg-speak-first").value === "true";
+  $("cfg-follow-note").textContent =
+    $("cfg-follow-up").value === "true"
+      ? "a turn that called a tool without speaking is answered on the very next turn — a function call ends the model's turn, so its words come once it sees the result"
+      : "a turn that called a tool without speaking waits out the whole idle interval before the model gets to answer";
   const unknown = liveConfig.speak_before_tools === undefined ? " · the robot has not reported this setting" : "";
   $("cfg-order-note").textContent =
     (asked
@@ -1685,6 +1701,7 @@ function renderConfigLine() {
   if (c.stt_vad_engine) parts.push(`${c.stt_vad_engine} vad`);
   if (c.stt_vad_silence_secs != null) parts.push(`${c.stt_vad_silence_secs}s silence`);
   if (c.speak_before_tools != null) parts.push(c.speak_before_tools ? "speak→act" : "act→speak");
+  if (c.follow_up_after_silent_call != null) parts.push(c.follow_up_after_silent_call ? "answer at once" : "answer next interval");
   $("cfg-text").textContent = parts.length ? `on the robot now: ${parts.join(" · ")}` : "";
   renderOrderNote();
   markPending();
@@ -1921,6 +1938,7 @@ if (new URLSearchParams(location.search).has("demo")) {
     stt_vad_silence_secs: 0.5,
     stt_vad_threshold: 0.2,
     speak_before_tools: false,
+    follow_up_after_silent_call: false,
   };
   for (const knob of CONFIG_KNOBS) $(knob.el).value = String(liveConfig[knob.name]);
   renderConfigLine();
