@@ -49,11 +49,14 @@ const OFFER_GUARD_RESET_MS = 1_000;
 // Bounded retries instead of a single long stare-at-black, which is what made
 // refreshing feel faster.
 const MAX_HANDSHAKE_ATTEMPTS = 3;
-// Adaptive receive jitter buffer: receivers attach pinned to 0 (lowest latency,
-// right on LAN), then every poll the target is re-derived from path RTT + recent
-// video loss. On WAN a NACK retransmit arrives ~1 RTT after the gap, so the
-// buffer must cover that or loss plays out as artifacts/freezes.
+// Adaptive receive jitter buffer: receivers attach at the pc's last-known target
+// (0 until the path is measured — right on LAN), re-derived every poll from path
+// RTT + recent video loss. On WAN a NACK retransmit arrives ~1 RTT after the gap,
+// so the buffer must cover that or loss plays out as artifacts/freezes. Polls run
+// fast until the first RTT sample lands (ICE just connected): the first seconds
+// are exactly when an unbuffered receiver on a long path shows every loss.
 const JITTER_POLL_MS = 3_000;
+const JITTER_POLL_FAST_MS = 500;
 
 export class WebRtcSession {
   /** @type {import("./rosClient.js").RosClient} */ #ros;
@@ -369,17 +372,18 @@ export class WebRtcSession {
       return;
     }
 
-    // Start the video receiver's jitter buffer at zero (lowest latency, right
-    // on LAN); #adaptJitterBuffer raises it when RTT/loss show retransmits need
-    // room to land. Units differ: jitterBufferTarget is in milliseconds,
-    // playoutDelayHint in seconds (a 40ms target is 40 vs 0.04). Modern Chrome
-    // honors jitterBufferTarget and ignores the hint (not a strict fallback —
-    // both are set whenever present).
+    // Start the video receiver's jitter buffer at this pc's last-known target (0
+    // until the first RTT sample — lowest latency, right on LAN), not a hard 0: a
+    // track arriving after the path was measured must not reset to an unbuffered
+    // state the adapt poll already rejected. Units differ: jitterBufferTarget is
+    // in milliseconds, playoutDelayHint in seconds (a 40ms target is 40 vs 0.04).
+    // Modern Chrome honors jitterBufferTarget and ignores the hint (not a strict
+    // fallback — both are set whenever present).
     const receiver = event.receiver;
     if (receiver) {
       try {
-        if ("jitterBufferTarget" in receiver) receiver.jitterBufferTarget = 0;
-        if ("playoutDelayHint" in receiver) receiver.playoutDelayHint = 0;
+        if ("jitterBufferTarget" in receiver) receiver.jitterBufferTarget = this.#lastJitterTargetMs;
+        if ("playoutDelayHint" in receiver) receiver.playoutDelayHint = this.#lastJitterTargetMs / 1000;
       } catch {
         // unsupported; default buffer applies
       }
@@ -585,25 +589,36 @@ export class WebRtcSession {
 
   #startJitterPoll() {
     this.#clearJitterPoll();
-    this.#lastJitterTargetMs = 0; // the new pc's receivers attach pinned to 0 (#onTrack)
+    // #lastJitterTargetMs deliberately carries over from the previous pc: a rebuild talks to the
+    // same robot over the same path, so its tracks attach already buffered (#onTrack) instead of
+    // replaying the unbuffered first seconds. A stale value costs one fast poll to correct.
     this.#lastVideoPackets = { received: 0, lost: 0 };
-    this.#jitterPoll = setInterval(() => void this.#adaptJitterBuffer(), JITTER_POLL_MS);
+    const pc = this.#pc;
+    const tick = async () => {
+      if (this.#pc !== pc) return; // superseded mid-flight; don't re-arm a dead chain
+      const measured = await this.#adaptJitterBuffer();
+      if (this.#pc !== pc) return;
+      this.#jitterPoll = setTimeout(tick, measured ? JITTER_POLL_MS : JITTER_POLL_FAST_MS);
+    };
+    this.#jitterPoll = setTimeout(tick, JITTER_POLL_FAST_MS);
   }
 
   #clearJitterPoll() {
     if (this.#jitterPoll !== null) {
-      clearInterval(this.#jitterPoll);
+      clearTimeout(this.#jitterPoll);
       this.#jitterPoll = null;
     }
   }
 
   // Clean fast path (LAN-ish RTT, ~no loss) → 0. Otherwise ~1.2×RTT + 30ms, capped at 500,
   // so a NACK retransmit lands before playout. 20ms hysteresis avoids churning the decoder.
+  // Returns whether an RTT sample was available, so #startJitterPoll keeps the fast cadence
+  // until the path is measured.
   async #adaptJitterBuffer() {
     const pc = this.#pc;
-    if (!pc) return;
+    if (!pc) return false;
     const stats = await pc.getStats().catch(() => null);
-    if (!stats || this.#pc !== pc) return;
+    if (!stats || this.#pc !== pc) return false;
 
     /** @type {number | null} */ let rttMs = null;
     const packets = { received: 0, lost: 0 };
@@ -618,11 +633,11 @@ export class WebRtcSession {
     const dReceived = packets.received - this.#lastVideoPackets.received;
     const dLost = packets.lost - this.#lastVideoPackets.lost;
     this.#lastVideoPackets = packets;
-    if (rttMs === null) return;
+    if (rttMs === null) return false;
 
     const loss = dLost > 0 ? dLost / (dReceived + dLost) : 0;
     const target = rttMs < 60 && loss < 0.005 ? 0 : Math.min(500, Math.round(rttMs * 1.2 + 30));
-    if (Math.abs(target - this.#lastJitterTargetMs) <= 20) return;
+    if (Math.abs(target - this.#lastJitterTargetMs) <= 20) return true;
     this.#lastJitterTargetMs = target;
     for (const receiver of pc.getReceivers()) {
       if (receiver.track.kind !== "video") continue;
@@ -634,6 +649,7 @@ export class WebRtcSession {
       }
     }
     console.log(`[webrtc] jitter target -> ${target}ms (rtt ${Math.round(rttMs)}ms, loss ${(loss * 100).toFixed(1)}%)`);
+    return true;
   }
 
   #closePc() {
