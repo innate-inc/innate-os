@@ -336,6 +336,7 @@ export const SETTINGS_PAGES = [
         title: "AI models",
         note: "The brain and the speech-to-text path use separate models. The transcribe backend picks which STT model knob applies.",
         knobs: [
+          { path: ["brain_client_node", P, "follow_up_after_silent_call"], label: "Answer straight after acting", default: false, type: "bool", doc: "A function call ends the model's turn — it answers once it sees the result. Off, that answer waits out the whole idle interval; on, the next turn is taken immediately.", subsection: "Brain", live: "/brain_client_node" },
           { path: ["brain_client_node", P, "speak_before_tools"], label: "Speak before acting", default: false, type: "bool", doc: "Voice the reply's last held sentence before dispatching the turn's tools. Off, the robot starts moving first and speaks after — a one-sentence reply is entirely held until then.", subsection: "Brain", live: "/brain_client_node" },
           { path: ["brain_client_node", P, "gemini_model"], label: "Brain model", default: "gemini-3.6-flash", type: "string", doc: "Gemini model powering the local brain. Applies from the next turn — no restart.", subsection: "Brain", live: "/brain_client_node" },
           { path: ["input_manager_node", P, "stt_backend"], label: "Transcribe backend", default: "elevenlabs_batch", type: "string", options: STT_BACKEND_OPTIONS, doc: "Which service transcribes the microphone", subsection: "Speech to text", live: "/input_manager_node" },

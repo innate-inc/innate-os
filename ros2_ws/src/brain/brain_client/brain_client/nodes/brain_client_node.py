@@ -156,6 +156,12 @@ class BrainClientNode(Node):
         boot, which is what the Settings page's `live` flag says about them.
         """
         for param in params:
+            if param.name == "follow_up_after_silent_call":
+                self.brain.follow_up_after_silent_call = bool(param.value)
+                self.get_logger().info(
+                    f"[BrainClient] After a silent action: {'answer at once' if param.value else 'wait for the interval'}"
+                )
+                continue
             if param.name == "speak_before_tools":
                 self.brain.speak_before_tools = bool(param.value)
                 self.get_logger().info(

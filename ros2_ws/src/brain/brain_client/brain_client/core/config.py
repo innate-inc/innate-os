@@ -48,6 +48,7 @@ class BrainConfig:
     history_max_entries: int  # conversation entries kept for the model
     history_max_image_turns: int  # newest turns keeping head-camera frames (wrist keeps only the newest)
     speak_before_tools: bool  # voice the reply's held last sentence before dispatching the turn's tools
+    follow_up_after_silent_call: bool  # take the next turn at once when a turn acted without speaking
 
     # --- Timing ---
     scan_stale_after_sec: float
@@ -115,6 +116,9 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     # left at their sentence boundaries mid-stream), but a one-sentence reply is
     # all last sentence — so False makes the robot act, then speak.
     "speak_before_tools": False,
+    # A functionCall ends the model's turn — it answers once the result is back.
+    # Left to the idle interval, that answer arrives seconds after the action.
+    "follow_up_after_silent_call": False,
     "idle_turn_interval": 3.0,
     "supervision_turn_interval": 5.0,
     "history_max_entries": 60,

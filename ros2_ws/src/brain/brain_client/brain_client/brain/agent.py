@@ -75,6 +75,7 @@ _MAX_EVENTS_QUEUED = 30  # the oldest beyond this are dropped as stale stimuli
 _MAX_EVENT_IMAGES = 4  # newest event images sent per turn; older ones arrive as text only
 _MAX_RERUNS = 2  # nonstop user speech cannot starve the loop
 _EVENT_TURN_GAP = 1.0  # floor between event-driven turns (feedback chatter); user speech skips it
+_MAX_FOLLOW_UPS = 1  # consecutive immediate turns after a silent action, before the interval returns
 _DROP_EVENTS_AFTER = 3  # failed turns before the peeked events are dropped (the batch may be the poison)
 
 
@@ -150,6 +151,8 @@ class BrainAgent:
         # A/B switch for the reply-vs-action ordering in _act; the node keeps it
         # in step with the ROS parameter so it can be flipped between turns.
         self.speak_before_tools = config.speak_before_tools
+        self.follow_up_after_silent_call = config.follow_up_after_silent_call
+        self._acted_without_speaking = False
 
         # Set by the composition root: gates only the HEAVY traces (request
         # bodies, frames) — hundreds of KB per turn, otherwise serialized and
@@ -249,6 +252,7 @@ class BrainAgent:
         heartbeat = asyncio.ensure_future(self._heartbeat())
         turn = spoke = None
         reruns = 0
+        follow_ups = 0
         try:
             while True:
                 await self._await_camera()
@@ -263,6 +267,10 @@ class BrainAgent:
                     continue
                 await turn
                 reruns = 0
+                if not self._events and self._follow_up_now(follow_ups):
+                    follow_ups += 1
+                    continue  # straight back round: the model is waiting to answer
+                follow_ups = 0
                 if not self._events:
                     await self._pause(self._interval())
                 else:
@@ -277,6 +285,14 @@ class BrainAgent:
             for task in (turn, spoke):
                 if task is not None:
                     task.cancel()  # stop() can land mid-race; the turn dies with the loop
+
+    def _follow_up_now(self, follow_ups: int) -> bool:
+        """Whether to take the next turn immediately instead of idling.
+
+        Capped: if the follow-up acts silently again the loop would spin, so
+        after one the interval takes over and the robot settles.
+        """
+        return self.follow_up_after_silent_call and self._acted_without_speaking and follow_ups < _MAX_FOLLOW_UPS
 
     def _abandon(self, turn: asyncio.Task[None]) -> bool:
         """Cancel a thinking turn the user just talked over — unless it already
@@ -300,6 +316,7 @@ class BrainAgent:
         events = list(self._events)
         self._turn_count += 1
         self._turn_started_at = time.monotonic()
+        self._acted_without_speaking = False
         self._mark(Stage.TURN_START, turn=self._turn_count, events=len(events))
         speaker = self._speaker = self._chat.stream_speech()  # published before the first await, for the racing loop
         try:
@@ -349,6 +366,9 @@ class BrainAgent:
         del self._events[: len(events)]
         events.clear()  # committed: a failure below backs off against an empty peek
         outcomes = self._act(decision, speaker, context)
+        # A turn that acted and said nothing is mid-exchange, not finished: the
+        # model ended its turn at the call and answers once it sees the outcome.
+        self._acted_without_speaking = bool(decision.calls) and not decision.speech
         self._trace(
             TraceEvent.TURN_END,
             turn=self._turn_count,
