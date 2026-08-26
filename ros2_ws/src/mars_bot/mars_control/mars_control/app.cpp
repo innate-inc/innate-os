@@ -38,7 +38,11 @@
 #include <memory>
 #include <regex>
 #include <sstream>
+#include <cerrno>
+#include <poll.h>
 #include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 using json = nlohmann::json;
 using namespace std::chrono_literals;
@@ -71,18 +75,67 @@ bool is_running_in_docker() {
 }
 
 /**
- * Execute a shell command and return its output (trimmed).
+ * Execute a shell command and return its output (trimmed), giving up after
+ * EXEC_COMMAND_TIMEOUT. popen() has no deadline, and a hung helper must cost the
+ * caller seconds, not forever — a wedged avahi-daemon once blocked `avahi-resolve`
+ * indefinitely. The child gets its own process group so the timeout kills the
+ * whole pipeline, not just the shell.
  */
+constexpr std::chrono::seconds EXEC_COMMAND_TIMEOUT{10};
+
 std::string exec_command(const std::string& cmd) {
-    std::array<char, 256> buffer;
-    std::string result;
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
-    if (!pipe) {
+    int fds[2];
+    if (pipe(fds) != 0) {
         return "";
     }
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result += buffer.data();
+    const pid_t pid = fork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        return "";
     }
+    if (pid == 0) {
+        setpgid(0, 0);
+        dup2(fds[1], STDOUT_FILENO);
+        close(fds[0]);
+        close(fds[1]);
+        execl("/bin/sh", "sh", "-c", cmd.c_str(), static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    setpgid(pid, pid);  // both sides set it — killpg must not race the child's exec
+    close(fds[1]);
+
+    std::string result;
+    const auto deadline = std::chrono::steady_clock::now() + EXEC_COMMAND_TIMEOUT;
+    for (;;) {
+        const auto left =
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+        if (left <= std::chrono::milliseconds::zero()) {
+            killpg(pid, SIGKILL);
+            break;
+        }
+        pollfd pfd{fds[0], POLLIN, 0};
+        const int ready = poll(&pfd, 1, static_cast<int>(left.count()));
+        if (ready < 0 && errno == EINTR) {
+            continue;
+        }
+        if (ready <= 0) {
+            killpg(pid, SIGKILL);
+            break;
+        }
+        char buffer[256];
+        const ssize_t n = read(fds[0], buffer, sizeof(buffer));
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n <= 0) {
+            break;
+        }
+        result.append(buffer, static_cast<size_t>(n));
+    }
+    close(fds[0]);
+    waitpid(pid, nullptr, 0);
+
     // Trim trailing newline
     while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
         result.pop_back();
@@ -374,15 +427,12 @@ class AppControl : public rclcpp::Node {
         // Load app configuration
         _load_app_config();
 
-        // Cache for WiFi SSID to avoid frequent subprocess calls
-        _cached_wifi_ssid = "";
-        _last_wifi_check_time = 0.0;
-        _wifi_check_interval = 10.0;  // Check WiFi every 10 seconds instead of every 1 second
-
-        // Cache for update check to avoid frequent subprocess calls
-        _cached_update_available = false;
-        _last_update_check_time = 0.0;
-        _update_check_interval = 300.0;  // Check for updates every 5 minutes
+        // Everything that shells out (robot info, hostname sync, the admin services)
+        // runs in this group, serviced by the executor's second thread: a hung external
+        // helper must never starve the drive smoother — a wedged avahi-daemon once
+        // blocked avahi-resolve for seconds per call and drove the 50 Hz timer to
+        // ~0.2 Hz. Mutually exclusive, so robot_info.json access stays serialised.
+        slow_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
         // Declare parameters
         std::string mars_root = get_mars_root();
@@ -507,34 +557,41 @@ class AppControl : public rclcpp::Node {
         mad_mode_timer_ = this->create_wall_timer(100ms, std::bind(&AppControl::watch_mad_mode, this));
 
         // Timer for publishing robot info
-        robot_info_timer_ = this->create_wall_timer(1000ms, std::bind(&AppControl::publish_robot_info_callback, this));
+        robot_info_timer_ =
+            this->create_wall_timer(1000ms, std::bind(&AppControl::publish_robot_info_callback, this), slow_group_);
 
         // Timer for syncing system hostname to robot name
-        hostname_sync_timer_ = this->create_wall_timer(30000ms, std::bind(&AppControl::sync_hostname_callback, this));
+        hostname_sync_timer_ =
+            this->create_wall_timer(30000ms, std::bind(&AppControl::sync_hostname_callback, this), slow_group_);
 
         // Service for setting robot name
         set_robot_name_srv_ = this->create_service<mars_msgs::srv::SetRobotName>(
             "/set_robot_name",
-            std::bind(&AppControl::set_robot_name_callback, this, std::placeholders::_1, std::placeholders::_2));
+            std::bind(&AppControl::set_robot_name_callback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default, slow_group_);
 
         // Service for triggering system update
         trigger_update_srv_ = this->create_service<mars_msgs::srv::TriggerUpdate>(
             "/trigger_update",
-            std::bind(&AppControl::trigger_update_callback, this, std::placeholders::_1, std::placeholders::_2));
+            std::bind(&AppControl::trigger_update_callback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default, slow_group_);
 
         // Service for system shutdown
         shutdown_srv_ = this->create_service<mars_msgs::srv::Shutdown>(
-            "/shutdown", std::bind(&AppControl::shutdown_callback, this, std::placeholders::_1, std::placeholders::_2));
+            "/shutdown", std::bind(&AppControl::shutdown_callback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default, slow_group_);
 
         // Service for setting system volume
         set_volume_srv_ = this->create_service<mars_msgs::srv::SetVolume>(
             "/set_volume",
-            std::bind(&AppControl::set_volume_callback, this, std::placeholders::_1, std::placeholders::_2));
+            std::bind(&AppControl::set_volume_callback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default, slow_group_);
 
         // Service for enabling/disabling the robot microphone
         set_microphone_srv_ = this->create_service<std_srvs::srv::SetBool>(
             "/set_microphone",
-            std::bind(&AppControl::set_microphone_callback, this, std::placeholders::_1, std::placeholders::_2));
+            std::bind(&AppControl::set_microphone_callback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default, slow_group_);
 
         // Latched publisher for microphone state
         mic_enabled_pub_ =
@@ -682,32 +739,47 @@ class AppControl : public rclcpp::Node {
     }
 
     /**
-     * Get WiFi SSID with caching to avoid frequent subprocess calls.
-     * Only checks for new SSID if the configured interval has passed.
+     * Facts gathered by shelling out, refreshed together at most every SLOW_FACTS_INTERVAL_S.
+     * They change rarely (the BT MAC never, version/tags only on update), so re-running
+     * seven subprocesses on every 1 Hz info tick was pure load on the Jetson.
      */
-    std::string get_cached_wifi_ssid() {
-        double current_time =
+    struct SlowFacts {
+        std::string wifi_ssid;
+        std::string hostname;
+        std::string bluetooth_id;
+        std::string version;
+        std::string tag_subject;
+        std::string tag_body;
+    };
+
+    const SlowFacts& cached_slow_facts() {
+        const double current_time =
             std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (last_slow_facts_time_ != 0.0 && (current_time - last_slow_facts_time_) < SLOW_FACTS_INTERVAL_S) {
+            return slow_facts_;
+        }
+        last_slow_facts_time_ = current_time;
 
-        // If we haven't checked recently or don't have a cached value, check now
-        if (_cached_wifi_ssid.empty() || (current_time - _last_wifi_check_time) > _wifi_check_interval) {
-            std::string new_ssid = nmcli_get_active_wifi_ssid();
-
-            // Only log if the SSID actually changed or this is the first check
-            if (new_ssid != _cached_wifi_ssid) {
-                if (!new_ssid.empty()) {
-                    RCLCPP_INFO(this->get_logger(), "WiFi SSID updated: %s -> %s", _cached_wifi_ssid.c_str(),
-                                new_ssid.c_str());
-                } else {
-                    RCLCPP_WARN(this->get_logger(), "Could not retrieve WiFi SSID");
-                }
-
-                _cached_wifi_ssid = new_ssid;
+        std::string new_ssid = nmcli_get_active_wifi_ssid();
+        if (new_ssid != slow_facts_.wifi_ssid) {
+            if (!new_ssid.empty()) {
+                RCLCPP_INFO(this->get_logger(), "WiFi SSID updated: %s -> %s", slow_facts_.wifi_ssid.c_str(),
+                            new_ssid.c_str());
+            } else {
+                RCLCPP_WARN(this->get_logger(), "Could not retrieve WiFi SSID");
             }
-            _last_wifi_check_time = current_time;
+            slow_facts_.wifi_ssid = std::move(new_ssid);
         }
 
-        return _cached_wifi_ssid;
+        slow_facts_.hostname = get_hostname();
+        if (slow_facts_.bluetooth_id.empty()) {
+            slow_facts_.bluetooth_id = get_bluetooth_device_id();
+        }
+        const std::string mars_root = get_mars_root();
+        slow_facts_.version = get_robot_version(mars_root);
+        slow_facts_.tag_subject = get_tag_subject(mars_root);
+        slow_facts_.tag_body = get_tag_body(mars_root);
+        return slow_facts_;
     }
 
     /**
@@ -1185,42 +1257,22 @@ class AppControl : public rclcpp::Node {
                 data_to_publish_dict["minimum_app_version"] = app_config_["minimum_app_version"];
             }
 
-            // Include WiFi SSID
-            std::string wifi_ssid = get_cached_wifi_ssid();
-            if (!wifi_ssid.empty()) {
-                data_to_publish_dict["wifi_ssid"] = wifi_ssid;
+            const SlowFacts& facts = cached_slow_facts();
+            if (!facts.wifi_ssid.empty()) {
+                data_to_publish_dict["wifi_ssid"] = facts.wifi_ssid;
             }
-
-            // Include robot version and tag info
-            try {
-                std::string mars_root = get_mars_root();
-                std::string robot_version = get_robot_version(mars_root);
-                data_to_publish_dict["version"] = robot_version;
-
-                // Include tag subject and body for the latest version
-                std::string tag_subject = get_tag_subject(mars_root);
-                if (!tag_subject.empty()) {
-                    data_to_publish_dict["tag_subject"] = tag_subject;
-                }
-
-                std::string tag_body = get_tag_body(mars_root);
-                if (!tag_body.empty()) {
-                    data_to_publish_dict["tag_body"] = tag_body;
-                }
-            } catch (const std::exception& e) {
-                RCLCPP_ERROR(this->get_logger(), "Failed to get robot version: %s", e.what());
+            data_to_publish_dict["version"] = facts.version;
+            if (!facts.tag_subject.empty()) {
+                data_to_publish_dict["tag_subject"] = facts.tag_subject;
             }
-
-            // Include Bluetooth device ID
-            std::string device_id = get_bluetooth_device_id();
-            if (!device_id.empty()) {
-                data_to_publish_dict["device_id"] = device_id;
+            if (!facts.tag_body.empty()) {
+                data_to_publish_dict["tag_body"] = facts.tag_body;
             }
-
-            // Include system hostname
-            std::string hostname = get_hostname();
-            if (!hostname.empty()) {
-                data_to_publish_dict["hostname"] = hostname;
+            if (!facts.bluetooth_id.empty()) {
+                data_to_publish_dict["device_id"] = facts.bluetooth_id;
+            }
+            if (!facts.hostname.empty()) {
+                data_to_publish_dict["hostname"] = facts.hostname;
             }
 
             // Include update availability status
@@ -1474,15 +1526,18 @@ class AppControl : public rclcpp::Node {
     // Member variables
     json app_config_;
 
-    // Cache for WiFi SSID to avoid frequent subprocess calls
-    std::string _cached_wifi_ssid;
-    double _last_wifi_check_time;
-    double _wifi_check_interval;
+    // Shelled-out facts cache (see cached_slow_facts). Only touched from the slow group.
+    static constexpr double SLOW_FACTS_INTERVAL_S = 10.0;
+    SlowFacts slow_facts_;
+    double last_slow_facts_time_ = 0.0;
 
     // Cache for update check to avoid frequent subprocess calls
-    bool _cached_update_available;
-    double _last_update_check_time;
-    double _update_check_interval;
+    bool _cached_update_available = false;
+    double _last_update_check_time = 0.0;
+    double _update_check_interval = 300.0;  // Check for updates every 5 minutes
+
+    // See the constructor: the group every shell-out callback lives in.
+    rclcpp::CallbackGroup::SharedPtr slow_group_;
 
     // Subscribers
     rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr joystick_sub_;
@@ -1509,7 +1564,8 @@ class AppControl : public rclcpp::Node {
     rclcpp::TimerBase::SharedPtr mad_mode_timer_;
 
     // Drive smoother state. Only touched from joystick_callback and drive_smoother_callback,
-    // which the single-threaded executor serialises, so no locking is needed.
+    // both in the default mutually-exclusive callback group, which serialises them even
+    // under the two-thread executor, so no locking is needed.
     double target_linear_ = 0.0;
     double target_angular_ = 0.0;
     drive::DriveSmoother smoother_;
@@ -1545,8 +1601,12 @@ class AppControl : public rclcpp::Node {
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<mars_control::AppControl>();
+    // Two threads: the second exists so the slow group's shell-outs can block without
+    // ever starving the drive smoother (see slow_group_ in the constructor).
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
+    executor.add_node(node);
     try {
-        rclcpp::spin(node);
+        executor.spin();
     } catch (const std::exception& e) {
         RCLCPP_ERROR(node->get_logger(), "Unhandled exception in app node: %s", e.what());
     }
