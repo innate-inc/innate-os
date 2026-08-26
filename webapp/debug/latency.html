@@ -1637,60 +1637,33 @@ function paramValue(v) {
 }
 
 async function readConfig() {
-  for (const node of [BRAIN_NODE, STT_NODE]) {
-    const knobs = CONFIG_KNOBS.filter((k) => k.node === node);
+  // One call per knob, never a batch: rclpy fails a get_parameters/set_parameters
+  // batch atomically when any single name is undeclared, and reports it with an
+  // empty name list — so one knob a robot has never heard of blanks every other
+  // reading with no clue which was at fault.
+  for (const knob of CONFIG_KNOBS) {
     try {
-      const res = await ros.callService(`${node}/get_parameters`, { names: knobs.map((k) => k.name) });
-      (res?.values ?? []).forEach((v, i) => {
-        const value = paramValue(v);
-        if (value === null || value === "") return;
-        liveConfig[knobs[i].name] = value;
-        const el = $(knobs[i].el);
-        const text = String(value);
-        // Assigning an unlisted value to a <select> blanks it, which reads as
-        // "no setting" rather than "a setting I cannot show".
-        if (el.tagName === "SELECT" && ![...el.options].some((o) => o.value === text)) {
-          $("cfg-text").textContent = `${knobs[i].name}: robot reports ${text}, which is not one of the options`;
-          return;
-        }
-        el.value = text;
-      });
+      const res = await ros.callService(`${knob.node}/get_parameters`, { names: [knob.name] });
+      const value = paramValue((res?.values ?? [])[0]);
+      if (value === null || value === "") {
+        delete liveConfig[knob.name]; // the robot does not have this one
+        continue;
+      }
+      liveConfig[knob.name] = value;
+      const el = $(knob.el);
+      const text = String(value);
+      // Assigning an unlisted value to a <select> blanks it, which reads as
+      // "no setting" rather than "a setting I cannot show".
+      if (el.tagName === "SELECT" && ![...el.options].some((o) => o.value === text)) {
+        $("cfg-text").textContent = `${knob.name}: robot reports ${text}, which is not one of the options`;
+        continue;
+      }
+      el.value = text;
     } catch {
-      $("cfg-text").textContent = `Could not read parameters from ${node} — is it running?`;
+      $("cfg-text").textContent = `Could not read ${knob.name} from ${knob.node} — is it running?`;
     }
   }
   renderConfigLine();
-}
-
-/** Fields hold what you are about to apply; liveConfig holds what the robot
- *  reported. Nothing said which was which, so an edited field read as the
- *  running state. Mark every field that differs, and say how many. */
-function markPending() {
-  const changed = CONFIG_KNOBS.filter((knob) => {
-    const running = liveConfig[knob.name];
-    if (running === undefined) return false;
-    return String(knobValue(knob)) !== String(running);
-  });
-  for (const knob of CONFIG_KNOBS) $(knob.el).classList.toggle("pending", changed.includes(knob));
-  // Nothing read back means nothing to diff against — leave Apply usable so a
-  // flaky get_parameters cannot lock the page out of writing.
-  const blind = !Object.keys(liveConfig).length;
-  $("cfg-apply").textContent = changed.length ? `Apply ${changed.length} change${changed.length > 1 ? "s" : ""}` : "Apply";
-  $("cfg-apply").disabled = !changed.length && !blind;
-  return changed.length || !blind ? changed : CONFIG_KNOBS;
-}
-
-function renderOrderNote() {
-  const asked = $("cfg-speak-first").value === "true";
-  $("cfg-follow-note").textContent =
-    $("cfg-follow-up").value === "true"
-      ? "a turn that called a tool without speaking is answered on the very next turn — a function call ends the model's turn, so its words come once it sees the result"
-      : "a turn that called a tool without speaking waits out the whole idle interval before the model gets to answer";
-  const unknown = liveConfig.speak_before_tools === undefined ? " · the robot has not reported this setting" : "";
-  $("cfg-order-note").textContent =
-    (asked
-      ? "the reply's held last sentence is voiced first, then the turn's tools dispatch"
-      : "the tools dispatch first; a one-sentence reply is held until after — the robot moves, then speaks") + unknown;
 }
 
 function renderConfigLine() {
@@ -1720,47 +1693,43 @@ for (const knob of CONFIG_KNOBS) {
 }
 
 $("cfg-apply").onclick = async () => {
-  const byNode = new Map();
-  for (const knob of markPending()) {
-    const raw = knobValue(knob);
-    if (raw === "") continue;
-    const value = knob.type === "float" ? Number(raw) : raw;
-    if (knob.type === "float" && !Number.isFinite(value)) continue;
-    byNode.set(knob.node, [...(byNode.get(knob.node) ?? []), { ...knob, value }]);
-  }
-  if (!byNode.size) {
+  const changed = markPending().filter((knob) => knobValue(knob) !== "");
+  if (!changed.length) {
     $("cfg-text").textContent = "nothing changed";
     return;
   }
   $("cfg-apply").disabled = true;
   const failed = [];
-  for (const [node, knobs] of byNode) {
+  // Sent one at a time for the same reason they are read one at a time: a
+  // batch is atomic, so a knob this robot lacks would silently drop the rest.
+  for (const knob of changed) {
+    const raw = knobValue(knob);
+    const value = knob.type === "float" ? Number(raw) : raw;
+    if (knob.type === "float" && !Number.isFinite(value)) continue;
     try {
-      const res = await ros.callService(`${node}/set_parameters`, {
-        parameters: knobs.map((k) => ({
-          name: k.name,
-          value: {
-            type: PARAM_TYPE[k.type],
-            bool_value: k.type === "bool" ? Boolean(k.value) : false,
-            integer_value: 0,
-            double_value: k.type === "float" ? k.value : 0,
-            string_value: k.type === "string" ? k.value : "",
+      const res = await ros.callService(`${knob.node}/set_parameters`, {
+        parameters: [
+          {
+            name: knob.name,
+            value: {
+              type: PARAM_TYPE[knob.type],
+              bool_value: knob.type === "bool" ? Boolean(value) : false,
+              integer_value: 0,
+              double_value: knob.type === "float" ? value : 0,
+              string_value: knob.type === "string" ? value : "",
+            },
           },
-        })),
+        ],
       });
-      // The call resolves even when a node rejects a value, so read each result.
-      (res?.results ?? []).forEach((r, i) => {
-        if (r?.successful !== false) return;
-        // rclpy's "undeclared" message reports an empty name list (its generator
-        // is consumed by any() before list()), so it never says which knob. Here
-        // it means the call reached a node that is not the brain.
-        const hint = /undeclared/.test(r.reason ?? "")
-          ? "reached a node that never declared it — restart to pick up the launch fix that stops helper nodes taking the brain's name"
-          : r.reason || "rejected";
-        failed.push(`${knobs[i].name}: ${hint}`);
-      });
+      const result = (res?.results ?? [])[0];
+      if (result?.successful === false) {
+        // rclpy's "undeclared" message names no parameter (its generator is
+        // consumed by any() before list()), so say which one ourselves.
+        const undeclared = /undeclared/.test(result.reason ?? "");
+        failed.push(`${knob.name}: ${undeclared ? "this robot does not have that setting" : result.reason || "rejected"}`);
+      }
     } catch (err) {
-      failed.push(`${node}: ${err}`);
+      failed.push(`${knob.name}: ${err}`);
     }
   }
   $("cfg-apply").disabled = false;
