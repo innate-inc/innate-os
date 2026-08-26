@@ -891,6 +891,17 @@ function timelineHtml({ runs, t1, span, why, zeroAt = null }) {
       if (m.t < t0 || m.t > t1) continue;
       const done = (run.stages.tool_done ?? []).find((d) => d.name === m.name && d.t >= m.t);
       const lines = [`tool: ${m.name}`, clock(m.t), `+${fmt((m.t - run.start) * 1000)} into the exchange`];
+      // When the model emitted the call, versus its first spoken word: this is
+      // what says whether Gemini decided to act before it decided what to say.
+      const emitted = (run.stages.model_call ?? []).find((c) => c.name === m.name);
+      if (emitted) {
+        lines.push(`model emitted it ${fmt((m.t - emitted.t) * 1000)} earlier, at +${fmt(emitted.ms)} of the stream`);
+        const firstText = first(run, "first_text");
+        if (firstText) {
+          const d = (firstText.t - emitted.t) * 1000;
+          lines.push(d >= 0 ? `first word came ${fmt(d)} after it` : `first word came ${fmt(-d)} before it`);
+        }
+      }
       if (done) {
         lines.push(`dispatch took ${fmt(done.ms)}`, done.outcome ?? "");
       }

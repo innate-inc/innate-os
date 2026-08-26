@@ -52,6 +52,7 @@ class TraceEvent(StrEnum):
     EVENT = "event"
     TURN_START = "turn_start"
     TURN_REQUEST = "turn_request"
+    TURN_RESPONSE = "turn_response"
     TURN_END = "turn_end"
     TURN_ERROR = "turn_error"
     TURN_DROPPED = "turn_dropped"

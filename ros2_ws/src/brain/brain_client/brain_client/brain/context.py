@@ -110,6 +110,10 @@ class ChatContext:
         # Token counts of the newest response — prompt/cached/output — surfaced
         # on the trace snapshot (cache-hit observability).
         self.last_usage: dict[str, int] = {}
+        # Same contract as on_request, once for the assembled reply. The
+        # provider streams text and thoughts only, so a call is first visible
+        # when the reply lands, not at the instant the model emitted it.
+        self.on_reply: Callable[[Json], None] | None = None
 
     @property
     def model(self) -> str:
@@ -197,6 +201,8 @@ class ChatContext:
             # events queued and the failure is visible.
             why = f"{reply.finish}" + (f" ({reply.detail})" if reply.detail else "")
             raise RuntimeError(f"{self._provider.model.name} returned no content: finish={why}")
+        if self.on_reply is not None:
+            self.on_reply(trace_reply(reply.message))
         # Usage rides the reply and is committed by absorb, on the loop
         # thread: writing self.last_usage here would let an abandoned turn's
         # orphaned request overwrite the committed turn's counts.
@@ -291,6 +297,12 @@ def trace_body(request: Request) -> Json:
             }
         ],
     }
+
+
+def trace_reply(message: Message) -> Json:
+    """The assembled reply in the brain monitor's dialect, parts in the order
+    the model emitted them — the distilled Decision reorders them."""
+    return {"candidates": [{"content": _trace_content(message)}]}
 
 
 def _trace_content(message: Message) -> Json:

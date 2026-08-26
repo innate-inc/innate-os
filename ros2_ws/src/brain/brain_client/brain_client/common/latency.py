@@ -40,6 +40,7 @@ class Stage(StrEnum):
     TURN_START = "turn_start"
     REQUEST_SENT = "request_sent"
     FIRST_TEXT = "first_text"  # first non-thought delta: when speech *could* start
+    MODEL_CALL = "model_call"  # the model emitted a functionCall part (not yet dispatched)
     STREAM_DONE = "stream_done"
     TOOL_CALL = "tool_call"  # a tool/skill dispatch begins
     TOOL_DONE = "tool_done"  # ...and returns; for a skill that is the goal sent, not run

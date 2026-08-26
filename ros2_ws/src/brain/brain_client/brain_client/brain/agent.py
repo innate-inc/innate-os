@@ -57,7 +57,7 @@ from brain_client.transport.chat import Sender
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from innate_llm import Llm
+    from innate_llm import Json, Llm
     from rclpy.node import Node
 
     from brain_client.core.config import BrainConfig
@@ -194,6 +194,7 @@ class BrainAgent:
 
         if self._context is not None:
             self._context.on_request = self._on_request  # the monitor renders the exact request body
+            self._context.on_reply = self._on_reply
 
     def set_model(self, name: str) -> bool:
         """Point the next turn at a different Gemini model; False if unreachable.
@@ -836,6 +837,16 @@ class BrainAgent:
         if self._trace_sink is None or (heavy and not self.trace_has_audience()):
             return
         self._trace_sink(json.dumps({"ev": event, "t": time.time(), **fields}))
+
+    def _on_reply(self, response: Json) -> None:
+        """The assembled reply (generate's thread): traced verbatim, and a
+        model_call mark per call. The provider streams no call deltas, so those
+        marks land when the reply does — their order within it is the model's."""
+        now_ms = round(self._elapsed() * 1000)
+        for part in response["candidates"][0]["content"]["parts"]:
+            if call := part.get("functionCall"):
+                self._mark(Stage.MODEL_CALL, turn=self._turn_count, name=call["name"], ms=now_ms)
+        self._trace(TraceEvent.TURN_RESPONSE, heavy=True, turn=self._turn_count, response=response)
 
     def _on_request(self, body: dict) -> None:
         self._mark(Stage.REQUEST_SENT, turn=self._turn_count, ms=round(self._elapsed() * 1000))
