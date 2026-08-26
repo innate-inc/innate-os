@@ -31,6 +31,10 @@ class Stage(StrEnum):
     UTTERANCE_CLOSED = "utterance_closed"  # local VAD called the end of speech (batch backends only)
     STT_REQUEST = "stt_request"
     STT_DONE = "stt_done"
+    # Realtime backends only: the vendor endpoints inside its own session, so
+    # these are the only boundaries it hands back before the transcript.
+    STT_PARTIAL = "stt_partial"  # first interim result of this utterance
+    VENDOR_SPEECH_END = "vendor_speech_end"  # the vendor's VAD called the end of speech
     CHAT_IN = "chat_in"  # transcript handed to the brain (every backend)
     EVENT_QUEUED = "event_queued"
     TURN_START = "turn_start"

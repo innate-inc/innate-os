@@ -115,6 +115,7 @@ class MicroInput(InputDevice):
         self._is_robot_talking = False  # For ducking (mic-specific)
         self._reconnect_thread = None
         self._is_connected = False
+        self._partial_marked = False  # one STT_PARTIAL per utterance, not per interim
         self._reconnect_delay = 1  # Start with 1 second
         self._max_reconnect_delay = 30  # Max 30 seconds between retries
         # Latency marks ride the telemetry topic this device already publishes on
@@ -189,10 +190,16 @@ class MicroInput(InputDevice):
 
         if etype == "committed_transcript":
             text = event.get("text", "")
+            self._partial_marked = False
             if text and self.is_active():
                 self._on_transcript(text)
         elif etype == "partial_transcript":
-            pass  # interim result — only the committed transcript reaches chat
+            # Only the committed transcript reaches chat, but the first interim
+            # result is the one boundary Scribe gives before committing — without
+            # it a realtime backend draws nothing at all.
+            if not self._partial_marked:
+                self._partial_marked = True
+                self._mark(Stage.STT_PARTIAL, backend=self._backend)
         elif etype == "session_started":
             self.logger.info(f"📋 Scribe session started: {event.get('config', {})}")
         elif etype == "insufficient_audio_activity":
@@ -223,7 +230,10 @@ class MicroInput(InputDevice):
                 f"turn_detection: {e.get('session', {}).get('turn_detection', {})}"
             ),
             "input_audio_buffer.speech_started": lambda e: self.logger.info("🎤 Speech detected"),
-            "input_audio_buffer.speech_stopped": lambda e: self.logger.info("🔇 Speech stopped"),
+            "input_audio_buffer.speech_stopped": lambda e: (
+                self.logger.info("🔇 Speech stopped"),
+                self._mark(Stage.VENDOR_SPEECH_END, backend=self._backend),
+            ),
             "conversation.item.input_audio_transcription.completed": lambda e: (
                 self._on_transcript(e.get("transcript", "")) if e.get("transcript") and self.is_active() else None
             ),
@@ -281,6 +291,7 @@ class MicroInput(InputDevice):
         """Handle WebSocket close event - trigger reconnection."""
         self.logger.warning("WebSocket closed")
         self._is_connected = False
+        self._partial_marked = False  # one STT_PARTIAL per utterance, not per interim
 
         # Don't reconnect if we're shutting down
         if self._stop_evt.is_set():
@@ -584,7 +595,8 @@ class MicroInput(InputDevice):
     def on_close(self):
         """Stop microphone and disconnect."""
         self._stop_evt.set()
-        self._is_connected = False  # Prevent reconnection attempts
+        self._is_connected = False
+        self._partial_marked = False  # one STT_PARTIAL per utterance, not per interim  # Prevent reconnection attempts
 
         if self._audio_thread:
             self._audio_thread.join(timeout=1.0)
