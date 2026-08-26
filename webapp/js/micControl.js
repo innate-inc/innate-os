@@ -27,12 +27,17 @@ const WAVEFORM_DB_RANGE = 48;
  *   stopListening: () => void,
  *   holdLabel?: string,
  *   listeningLabel?: string,
+ *   buttonLabel?: string,
+ *   buttonHint?: string,
+ *   activeButtonLabel?: string,
+ *   activeButtonHint?: string,
  *   composerInput?: Element | null
  * }} callbacks
  * @returns {{
  *   destroy: () => void,
  *   setEnabled: (enabled: boolean) => void,
  *   setCaptureState: (state: { on: boolean, busy: boolean, error: string | null }) => void,
+ *   setReceiveState: (state: { on: boolean, label?: string, hint?: string }) => void,
  *   setAudioFeedback: (feedback: { level: number, waveform: number[] }) => void
  * }}
  */
@@ -42,6 +47,10 @@ export function createMicControl(root, callbacks) {
     stopListening,
     holdLabel = "Hold to talk to the agent",
     listeningLabel = "Listening…",
+    buttonLabel = "",
+    buttonHint = "",
+    activeButtonLabel = "LIVE",
+    activeButtonHint = "Release to stop",
     composerInput = null,
   } = callbacks;
 
@@ -56,6 +65,13 @@ export function createMicControl(root, callbacks) {
   button.title = "Hold to talk — Spacebar, or click and hold";
 
   const icon = decorativeSpan("agent-mic-icon");
+  const action = document.createElement("span");
+  action.className = "agent-mic-action";
+  const actionLabel = document.createElement("span");
+  actionLabel.className = "agent-mic-action-label";
+  const actionHint = document.createElement("span");
+  actionHint.className = "agent-mic-action-hint";
+  action.append(actionLabel, actionHint);
 
   const waveform = decorativeSpan("agent-mic-waveform");
   const waveformBars = Array.from({ length: WAVEFORM_BAR_COUNT }, () =>
@@ -69,6 +85,8 @@ export function createMicControl(root, callbacks) {
 
   const stateLabel = document.createElement("span");
   stateLabel.className = "agent-mic-label";
+  stateLabel.setAttribute("role", "status");
+  stateLabel.setAttribute("aria-live", "polite");
 
   const messageBubble = document.createElement("span");
   messageBubble.className = "agent-mic-message";
@@ -76,6 +94,10 @@ export function createMicControl(root, callbacks) {
   messageBubble.setAttribute("aria-hidden", "true");
 
   button.append(innerWaves, hoverGlow, icon, waveform);
+  if (buttonLabel) {
+    button.classList.add("labeled");
+    button.append(action);
+  }
   control.append(outerWaves, button, stateLabel, messageBubble);
   root.append(control);
 
@@ -86,6 +108,9 @@ export function createMicControl(root, callbacks) {
   let isCaptureOn = false;
   let isCaptureBusy = false;
   let isMicEnabled = true;
+  let isReceiveOn = false;
+  let receiveLabel = "LISTENING";
+  let receiveHint = "3s after quiet";
   /** @type {string | null} */
   let unavailableReason = null;
   let listeningRequestId = 0;
@@ -100,10 +125,12 @@ export function createMicControl(root, callbacks) {
     const isListening = isPushToTalkActive && isCaptureOn && !isUnavailable;
     const isWaiting =
       isPushToTalkActive && (isCaptureBusy || !isCaptureOn) && !isUnavailable;
+    const isReceiving = isReceiveOn && !isWaiting && !isListening && !isUnavailable;
     const shouldShowHoldHint =
       isHoldHintVisible && !isUnavailable && !isWaiting && !isListening;
     const shouldShowUnavailableMessage = isUnavailable && isUnavailableMessageVisible;
     control.classList.toggle("listening", isListening);
+    control.classList.toggle("receiving", isReceiving);
     control.classList.toggle("waiting", isWaiting);
     control.classList.toggle("unavailable", isUnavailable);
     control.classList.toggle("show-hold-hint", shouldShowHoldHint);
@@ -115,7 +142,25 @@ export function createMicControl(root, callbacks) {
       isUnavailable ? unavailableReason || "Microphone unavailable" : holdLabel,
     );
     button.title = isUnavailable ? "" : "Hold to talk — Spacebar, or click and hold";
-    stateLabel.textContent = isWaiting ? "Starting…" : isListening ? listeningLabel : "";
+    let statusText = "";
+    let visibleLabel = buttonLabel;
+    let visibleHint = buttonHint;
+    if (isWaiting) {
+      statusText = "Starting…";
+      visibleLabel = "CONNECTING";
+      visibleHint = "Keep holding";
+    } else if (isListening) {
+      statusText = listeningLabel;
+      visibleLabel = activeButtonLabel;
+      visibleHint = activeButtonHint;
+    } else if (isReceiving) {
+      statusText = `${receiveLabel} — ${receiveHint}`;
+      visibleLabel = receiveLabel;
+      visibleHint = receiveHint;
+    }
+    stateLabel.textContent = statusText;
+    actionLabel.textContent = visibleLabel;
+    actionHint.textContent = visibleHint;
     const messageText = shouldShowUnavailableMessage
       ? unavailableReason || "Microphone unavailable"
       : shouldShowHoldHint
@@ -319,6 +364,7 @@ export function createMicControl(root, callbacks) {
   document.addEventListener("visibilitychange", onDocumentVisibilityChange, listenerOptions);
   document.addEventListener("focusin", onDocumentFocusIn, listenerOptions);
   document.addEventListener("pointerdown", dismissMicMessages, listenerOptions);
+  renderMicState();
 
   return {
     setEnabled(enabled) {
@@ -337,6 +383,13 @@ export function createMicControl(root, callbacks) {
         isUnavailableMessageVisible = error !== null;
       }
       updateMicAvailability();
+    },
+    setReceiveState({ on, label = "LISTENING", hint = "3s after quiet" }) {
+      if (isReceiveOn === on && receiveLabel === label && receiveHint === hint) return;
+      isReceiveOn = on;
+      receiveLabel = label;
+      receiveHint = hint;
+      renderMicState();
     },
     /** @param {{ level: number, waveform: number[] }} feedback */
     setAudioFeedback({ level, waveform }) {

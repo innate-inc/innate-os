@@ -183,33 +183,64 @@ export function createVideoStage(parent, session) {
 }
 
 /**
- * Robot-mic toggle. Starts muted; the click both requests the audio m-line
- * (debounced rebuild in the session) and primes playback inside the gesture.
+ * Robot-mic toggle. Standalone mode controls the session directly; onToggle
+ * lets Teleop use the same control as its Always Listen override.
  * @param {HTMLElement} parent
  * @param {import("../webrtcSession.js").WebRtcSession} session
  * @param {HTMLAudioElement} audioEl
- * @returns {{ destroy: () => void }}
+ * @param {{
+ *   onToggle?: (active: boolean) => void,
+ *   ariaLabel?: string,
+ *   activeTitle?: string,
+ *   inactiveTitle?: string,
+ *   icon?: "speaker" | "ear"
+ * }} [options]
+ * @returns {{
+ *   setActive: (active: boolean) => void,
+ *   setEnabled: (enabled: boolean) => void,
+ *   destroy: () => void
+ * }}
  */
-export function createAudioToggle(parent, session, audioEl) {
+export function createAudioToggle(parent, session, audioEl, options = {}) {
+  const {
+    onToggle = null,
+    ariaLabel = "Robot microphone",
+    activeTitle = "Robot mic on — click to mute",
+    inactiveTitle = "Robot mic off — click to listen",
+    icon = "speaker",
+  } = options;
   const button = document.createElement("button");
   button.className = "icon-toggle audio-toggle";
   button.type = "button";
   button.innerHTML =
-    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<path d="M11 5 6.5 9H3.5v6h3L11 19z"/>' +
-    '<path class="wave wave1" d="M15 9.5a4 4 0 0 1 0 5"/>' +
-    '<path class="wave wave2" d="M17.5 7a8 8 0 0 1 0 10"/>' +
-    "</svg>";
+    icon === "ear"
+      ? '<span class="audio-toggle-ear" aria-hidden="true"></span>'
+      : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M11 5 6.5 9H3.5v6h3L11 19z"/>' +
+        '<path class="wave wave1" d="M15 9.5a4 4 0 0 1 0 5"/>' +
+        '<path class="wave wave2" d="M17.5 7a8 8 0 0 1 0 10"/>' +
+        "</svg>";
+
+  let controlledActive = false;
+
+  /** @param {boolean} active */
+  function render(active) {
+    button.classList.toggle("active", active);
+    button.title = active ? activeTitle : inactiveTitle;
+    button.setAttribute("aria-pressed", String(active));
+    button.setAttribute("aria-label", ariaLabel);
+  }
 
   const unsub = session.onChange((state) => {
-    button.classList.toggle("active", state.audioRequested);
-    button.title = state.audioRequested ? "Robot mic on — click to mute" : "Robot mic off — click to listen";
-    button.setAttribute("aria-pressed", String(state.audioRequested));
-    button.setAttribute("aria-label", "Robot microphone");
+    if (!onToggle) render(state.audioRequested);
   });
 
   button.addEventListener("click", () => {
-    const next = !session.state.audioRequested;
+    const next = onToggle ? !controlledActive : !session.state.audioRequested;
+    if (onToggle) {
+      onToggle(next);
+      return;
+    }
     session.setAudio(next);
     if (next) {
       // Inside the gesture: unlocks audible playback for this page session.
@@ -224,6 +255,13 @@ export function createAudioToggle(parent, session, audioEl) {
 
   parent.appendChild(button);
   return {
+    setActive(active) {
+      controlledActive = active;
+      render(active);
+    },
+    setEnabled(enabled) {
+      button.disabled = !enabled;
+    },
     destroy() {
       unsub();
       button.remove();

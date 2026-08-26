@@ -17,7 +17,7 @@ import { getConfig } from "../config.js";
 import { WebRtcSession } from "../webrtcSession.js";
 import { robotSessionFactory } from "../robotSession.js";
 import { mountPage } from "../pageMount.js";
-import { createVideoStage, createAudioToggle } from "./videoStage.js";
+import { createVideoStage } from "./videoStage.js";
 import { createJoystick } from "./joystick.js";
 import { createKeyboardDrive, createWasdChips } from "./keyboardDrive.js";
 import { createHeadTilt } from "./headTilt.js";
@@ -80,22 +80,15 @@ function buildCockpit(root) {
   const keyboard = createKeyboardDrive(drive);
   const telemetry = telemetryOverlay ? createTelemetry(telemetryOverlay, ros) : null;
   const parts = [videoStage, ...(telemetry ? [telemetry] : [])];
-  // Robot-mic toggle. Skipped in the sim: the simulator's WebRTC server streams
-  // video only (no microphone), so the toggle would do nothing. config.simControls
-  // is the sim deployment's feature flag (env-driven; false on the real robot).
-  if (!config.simControls && videoStage.audioEl) {
-    parts.push(createAudioToggle(rightRail, session, videoStage.audioEl));
-  }
   parts.push(
     createSpeedModes(rightRail, ros),
     createHeadTilt(rightRail, ros),
     createWasdChips(chipsOverlay, keyboard),
     createJoystick(stickOverlay, drive),
     createTtsBar(ttsOverlay, ros),
-    // Speaking, both ways: type it, or hold to send your own voice. Skipped in
-    // the sim for the same reason as the mic toggle — nothing there to play it.
-    ...(config.simControls ? [] : [createTalkControl(ttsOverlay, session)]),
-    // Collapsible skill launcher pinned next to the speak bar.
+    ...(!config.simControls && videoStage.audioEl
+      ? [createTalkControl(ttsOverlay, session, videoStage.audioEl)]
+      : []),
     createSkillsMenu(ttsOverlay, ros),
     createArmPanel(armOverlay, ros, { hideServices: !!config.simControls }),
     ...(config.simControls ? [] : [createProfilingPanel(root, session)]),

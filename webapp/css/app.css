@@ -2361,6 +2361,20 @@ select.skill-input {
   opacity: 0.2;
 }
 
+.audio-toggle-ear {
+  width: 20px;
+  height: 20px;
+  background: currentColor;
+  mask: url("/js/teleop/ear.svg") center / contain no-repeat;
+  -webkit-mask: url("/js/teleop/ear.svg") center / contain no-repeat;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.audio-toggle:not(.active) .audio-toggle-ear {
+  opacity: 0.34;
+  transform: scale(0.92);
+}
+
 /* ---- TTS bar ---------------------------------------------------------------- */
 
 .tts-bar {
@@ -2512,6 +2526,7 @@ select.skill-input {
 .talk-control {
   display: flex;
   align-items: center;
+  gap: 6px;
 }
 
 /* ---- leader arm panel -------------------------------------------------------- */
@@ -7294,45 +7309,58 @@ select.skill-input {
     transition-duration: 180ms;
   }
 
-  .agent-mic-control:not(.listening):not(.waiting):not(.unavailable) .agent-mic-button:hover {
+  .agent-mic-control:not(.listening):not(.receiving):not(.waiting):not(.unavailable)
+    .agent-mic-button:hover {
     color: #fff;
     border-color: rgb(255 255 255 / 48%);
   }
 
-  .agent-mic-control:not(.listening):not(.waiting):not(.unavailable) .agent-mic-button:hover::before {
+  .agent-mic-control:not(.listening):not(.receiving):not(.waiting):not(.unavailable)
+    .agent-mic-button:hover::before {
     transform: scale(1.07);
   }
 
-  .agent-mic-control:not(.listening):not(.waiting):not(.unavailable) .agent-mic-button:hover::after {
+  .agent-mic-control:not(.listening):not(.receiving):not(.waiting):not(.unavailable)
+    .agent-mic-button:hover::after {
     opacity: 0.62;
   }
 
-  .agent-mic-control:not(.listening):not(.waiting):not(.unavailable) .agent-mic-button:hover .agent-mic-icon {
+  .agent-mic-control:not(.listening):not(.receiving):not(.waiting):not(.unavailable)
+    .agent-mic-button:hover
+    .agent-mic-icon {
     opacity: 1;
     transform: scale(1.08);
   }
 
-  .agent-mic-control:not(.listening):not(.waiting):not(.unavailable) .agent-mic-button:hover .agent-mic-hover-glow {
+  .agent-mic-control:not(.listening):not(.receiving):not(.waiting):not(.unavailable)
+    .agent-mic-button:hover
+    .agent-mic-hover-glow {
     opacity: 1;
     transform: scale(1.07);
   }
 
-  .agent-mic-control:not(.listening):not(.waiting):not(.unavailable):has(.agent-mic-button:hover)
+  .agent-mic-control:not(.listening):not(.receiving):not(.waiting):not(.unavailable):has(
+      .agent-mic-button:hover
+    )
     .agent-mic-outer-waves {
     opacity: 0;
   }
 
-  .agent-mic-control:not(.listening):not(.waiting):not(.unavailable):has(.agent-mic-button:hover)
+  .agent-mic-control:not(.listening):not(.receiving):not(.waiting):not(.unavailable):has(
+      .agent-mic-button:hover
+    )
     .agent-mic-outer-wave {
     animation-play-state: paused;
   }
 }
 
-.agent-mic-control:not(.listening):not(.waiting):not(.unavailable) .agent-mic-outer-waves {
+.agent-mic-control:not(.listening):not(.receiving):not(.waiting):not(.unavailable)
+  .agent-mic-outer-waves {
   opacity: 1;
 }
 
-.agent-mic-control:not(.listening):not(.waiting):not(.unavailable) .agent-mic-outer-wave {
+.agent-mic-control:not(.listening):not(.receiving):not(.waiting):not(.unavailable)
+  .agent-mic-outer-wave {
   animation: agent-mic-outer-wave 1.8s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
 }
 
@@ -7453,6 +7481,213 @@ select.skill-input {
 
 .agent-mic-inner-wave:nth-child(3) {
   animation-delay: -1.8s;
+}
+
+.agent-mic-action {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+  pointer-events: none;
+}
+
+.agent-mic-action-label {
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.agent-mic-action-hint {
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1.1;
+  color: rgb(255 255 255 / 52%);
+  white-space: nowrap;
+}
+
+.talk-control .agent-mic-control,
+.talk-control .agent-mic-button {
+  width: 166px;
+}
+
+.talk-control .agent-mic-button {
+  grid-template-columns: 48px 1fr;
+  overflow: hidden;
+  border-radius: 21px 8px 8px 21px;
+  background:
+    linear-gradient(110deg, rgb(255 255 255 / 10%), transparent 54%),
+    rgb(8 8 10 / 58%);
+  border-color: rgb(255 255 255 / 34%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 12%),
+    0 14px 38px rgb(0 0 0 / 24%);
+}
+
+.talk-control .agent-mic-button::before {
+  display: none;
+}
+
+.talk-control .agent-mic-button::after {
+  border-radius: inherit;
+  background: transparent;
+  transition: opacity 220ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.talk-control .agent-mic-icon {
+  grid-column: 1;
+  width: 17px;
+  height: 17px;
+  margin-left: 8px;
+  transition:
+    opacity 140ms ease 60ms,
+    transform 180ms cubic-bezier(0.215, 0.61, 0.355, 1) 60ms;
+}
+
+.talk-control .agent-mic-waveform {
+  left: 18px;
+  transform: translateX(-2px) scaleX(0.72);
+  transition:
+    opacity 100ms ease,
+    transform 160ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.talk-control .agent-mic-hover-glow {
+  inset: 0;
+  width: auto;
+  height: auto;
+  border-radius: inherit;
+  background: linear-gradient(110deg, rgb(255 255 255 / 16%), transparent 56%);
+}
+
+.talk-control .agent-mic-inner-waves {
+  display: none;
+}
+
+.talk-control .agent-mic-outer-waves {
+  display: none;
+}
+
+.talk-control .audio-toggle {
+  width: 36px;
+  height: 42px;
+  flex: 0 0 36px;
+  border-radius: 8px 21px 21px 8px;
+  background: rgb(8 8 10 / 58%);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.talk-control .audio-toggle.active {
+  color: rgb(151 229 193);
+  background:
+    radial-gradient(circle at 50% 50%, rgb(118 226 174 / 26%), transparent 56%),
+    linear-gradient(110deg, rgb(39 98 70 / 54%), rgb(13 42 30 / 82%));
+  border-color: rgb(151 229 193 / 34%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 16%),
+    0 0 22px rgb(85 209 145 / 18%);
+}
+
+.talk-control .audio-toggle:disabled {
+  color: rgb(255 255 255 / 34%);
+  background: rgb(8 8 10 / 42%);
+  border-color: rgb(255 255 255 / 12%);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.talk-control .audio-toggle:focus-visible {
+  outline-color: rgb(255 255 255 / 46%);
+}
+
+.talk-control .audio-toggle.active:focus-visible {
+  outline-color: rgb(151 229 193 / 72%);
+}
+
+.talk-control .agent-mic-message {
+  right: -42px;
+  width: min(300px, calc(100vw - 32px));
+}
+
+.talk-control .agent-mic-message::after {
+  right: 59px;
+}
+
+.talk-control .agent-mic-label {
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.talk-control .agent-mic-control.listening .agent-mic-button {
+  color: rgb(236 231 255);
+  border-color: rgb(185 162 255 / 54%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 18%),
+    0 0 28px rgb(121 86 232 / 28%);
+  transform: scale(0.97);
+}
+
+.talk-control .agent-mic-control.listening .agent-mic-button::after {
+  background:
+    radial-gradient(circle at 28px 50%, rgb(185 162 255 / 34%), transparent 34%),
+    linear-gradient(110deg, rgb(112 82 210 / 48%), rgb(32 24 58 / 82%));
+}
+
+.talk-control .agent-mic-control.listening .agent-mic-action-label {
+  color: var(--agent-purple);
+}
+
+.talk-control .agent-mic-control.unavailable .agent-mic-action {
+  opacity: 0.5;
+}
+
+.talk-control .agent-mic-control.receiving .agent-mic-button {
+  color: rgb(151 229 193);
+  border-color: rgb(151 229 193 / 34%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 16%),
+    0 0 22px rgb(85 209 145 / 18%);
+}
+
+.talk-control .agent-mic-control.receiving .agent-mic-button::after {
+  background:
+    radial-gradient(circle at 28px 50%, rgb(118 226 174 / 26%), transparent 34%),
+    linear-gradient(110deg, rgb(39 98 70 / 54%), rgb(13 42 30 / 82%));
+  opacity: 1;
+}
+
+.talk-control .agent-mic-control.receiving .agent-mic-icon {
+  opacity: 0;
+  transform: scale(0.8);
+  transition-delay: 0ms;
+}
+
+.talk-control .agent-mic-control.receiving .agent-mic-waveform {
+  opacity: 1;
+  transform: translateX(0) scaleX(1);
+  transition-delay: 55ms;
+}
+
+.talk-control .agent-mic-control.listening .agent-mic-icon {
+  transition-delay: 0ms;
+}
+
+.talk-control .agent-mic-control.listening .agent-mic-waveform {
+  transform: translateX(0) scaleX(1);
+  transition-delay: 55ms;
+}
+
+.talk-control.always-listen .agent-mic-action-hint {
+  color: rgb(151 229 193 / 72%);
 }
 
 @keyframes agent-mic-outer-wave {
