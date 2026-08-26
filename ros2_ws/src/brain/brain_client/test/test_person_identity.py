@@ -9,18 +9,20 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
+from PIL import Image
+
 from brain_client.skills.types import SkillStorage
 from brain_client.state.image import MainImage
 from brain_client.state.pose import Pose
-from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO_ROOT / "workspace"))
 
-from innate_skills import mission_run as run_module
-from innate_skills import person_identity as identity_module
-from innate_skills import person_identity_embeddings as embeddings_module
+from innate_skills import mission_run as run_module  # noqa: E402
+from innate_skills import person_identity as identity_module  # noqa: E402
+from innate_skills import person_identity_embeddings as embeddings_module  # noqa: E402
 
 
 def test_body_reid_model_is_the_reviewed_export():
@@ -54,14 +56,55 @@ class FakeEncoder:
         return next(self.embeddings)
 
 
+class _DetectedFace:
+    def __init__(self, location):
+        self.location = location
+
+
+class _ScaleSensitiveFaceSession:
+    def __init__(self):
+        self.detected_widths = []
+        self.feature_frame_shape = None
+
+    def face_detection(self, frame):
+        self.detected_widths.append(frame.shape[1])
+        if len(self.detected_widths) != 2:
+            return []
+        return [_DetectedFace((80, 40, 120, 80))]
+
+    def face_feature_extract(self, frame, _face):
+        self.feature_frame_shape = frame.shape
+        return np.asarray([3.0, 4.0], dtype=np.float32)
+
+
+def test_face_detection_retries_at_higher_resolution():
+    encoder = embeddings_module.LocalPersonEncoder.__new__(embeddings_module.LocalPersonEncoder)
+    encoder._face_session = _ScaleSensitiveFaceSession()
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    detection_frame, face, bounds = encoder._detect_face(frame)
+    embedding = encoder._face_embedding(detection_frame, face)
+
+    assert encoder._face_session.detected_widths == [640, 624, 624, 624, 624]
+    assert encoder._face_session.feature_frame_shape == (468, 624, 3)
+    assert bounds == pytest.approx((53.333, 26.667, 80.0, 53.333), abs=0.001)
+    assert embedding == pytest.approx([0.6, 0.8])
+
+
+def test_body_crop_is_derived_from_face_and_clamped_to_frame():
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    crop = embeddings_module.LocalPersonEncoder._person_crop_from_face(frame, (300.0, 60.0, 340.0, 100.0))
+
+    assert crop.shape == (390, 200, 3)
+
+
 @pytest.fixture
 def identity(tmp_path, monkeypatch):
     monkeypatch.setenv("INNATE_OS_ROOT", str(tmp_path))
     run_module.start_run("test_agent")
     skill = identity_module.PersonIdentity(None)
-    skill._storage = SkillStorage(
-        tmp_path / "workspace" / "skill_storage" / "person_identity.json"
-    )
+    skill._storage = SkillStorage(tmp_path / "workspace" / "skill_storage" / "person_identity.json")
     skill.pose = Pose(1.0, 2.0, 0.0)
     skill._fresh_upward_frame = lambda: (_frame((80, 100, 120)), None)
     monkeypatch.setattr(
@@ -200,9 +243,7 @@ def test_add_view_requires_visual_compatibility(identity):
     state["profiles"] = [
         {
             "encounter_id": "resident-001",
-            "views": [
-                {"image_b64": str(_frame((1, 2, 3))), "body": [1.0, 0.0], "face": None}
-            ],
+            "views": [{"image_b64": str(_frame((1, 2, 3))), "body": [1.0, 0.0], "face": None}],
         }
     ]
     state["pending_observation"] = {

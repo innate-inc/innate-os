@@ -35,6 +35,6 @@ class MapExplorerAgent(Agent):
 - EXPLORATION_UNREACHABLE means that target was skipped or deferred; continue with explore_map().
 - Stop only on EXPLORATION_COMPLETE, MAP_UNAVAILABLE, POSE_UNAVAILABLE, CAMERA_UNAVAILABLE, or
   EXPLORATION_INFRASTRUCTURE_FAILURE. On completion, report the returned coverage fraction once.
-- Never enter unknown, occupied, unreachable, or keepout space. The exploration skill enforces these constraints.
+- Never enter unknown, occupied, or unreachable space. The exploration skill enforces these constraints.
 
 Visualize only when asked."""

@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-from brain_client.agents.types import Agent, InputRef, SkillRef
 from innate_skills.find_next_person import FindNextPerson
 from innate_skills.mission_notes import MissionNotes
 from innate_skills.mission_run import MissionRun
@@ -9,6 +8,8 @@ from innate_skills.navigate_to_position import NavigateToPosition
 from innate_skills.person_identity import PersonIdentity
 from innate_skills.place_doordash_order import PlaceDoordashOrder
 from inputs.micro_input import MicroInput
+
+from brain_client.agents.types import Agent, InputRef, SkillRef
 
 
 class HouseholdOrdersAgent(Agent):

@@ -171,7 +171,7 @@ def _plan_route(
 class ExploreMap(FindNextPerson):
     """Move through safe known-free viewpoints until camera coverage is complete.
 
-    Unknown, occupied, unreachable, and keepout cells are excluded. The planner
+    Unknown, occupied, and unreachable cells are excluded. The planner
     first establishes the full attainable visibility set, deletes every
     redundant stop without losing any of it, then applies obstacle-aware open
     route optimization before motion begins. Each successful call advances one

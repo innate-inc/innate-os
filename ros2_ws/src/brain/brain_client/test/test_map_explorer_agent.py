@@ -63,7 +63,7 @@ def test_map_explorer_agent_uses_only_run_and_exploration_skills():
         assert "explore_map(reset=true)" in prompt
         assert "EXPLORATION_OBSERVATION" in prompt
         assert "EXPLORATION_COMPLETE" in prompt
-        assert "unknown, occupied, unreachable, or keepout" in prompt
+        assert "unknown, occupied, or unreachable" in prompt
     finally:
         Agent._registry.clear()
         Agent._registry.update(saved_registry)

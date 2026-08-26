@@ -16,7 +16,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from innate import Head, HeadState, MainImage, Pose, Skill, SkillOutput, SkillReturn
 from innate_skills.mission_run import active_run_id, write_artifact_set
 from innate_skills.person_identity_embeddings import (
     BODY_PLAUSIBLE_THRESHOLD,
@@ -26,6 +25,8 @@ from innate_skills.person_identity_embeddings import (
     serialized_embedding,
     shared_encoder,
 )
+
+from innate import Head, HeadState, MainImage, Pose, Skill, SkillOutput, SkillReturn
 
 STATE_VERSION = 1
 MAX_VIEWS_PER_PERSON = 4
@@ -39,9 +40,7 @@ OBSERVATION_MAX_ROTATION_RAD = math.radians(30.0)
 ARTIFACT_RELATIVE_DIR = Path("workspace/skill_storage/household_orders")
 
 
-def _result(
-    code: str, payload: dict[str, Any] | None = None, *, image: bytes | None = None
-) -> SkillOutput:
+def _result(code: str, payload: dict[str, Any] | None = None, *, image: bytes | None = None) -> SkillOutput:
     data = payload or {}
     return SkillOutput(
         f"{code} {json.dumps(data, separators=(',', ':'), ensure_ascii=False)}",
@@ -51,16 +50,12 @@ def _result(
 
 
 def _pose_record(pose: Pose | None) -> dict[str, float] | None:
-    if pose is None or not all(
-        math.isfinite(value) for value in (pose.x, pose.y, pose.theta)
-    ):
+    if pose is None or not all(math.isfinite(value) for value in (pose.x, pose.y, pose.theta)):
         return None
     return {"x": float(pose.x), "y": float(pose.y), "theta": float(pose.theta)}
 
 
-def _observation_is_current(
-    observation: dict[str, Any] | None, pose: Pose | None
-) -> tuple[bool, str]:
+def _observation_is_current(observation: dict[str, Any] | None, pose: Pose | None) -> tuple[bool, str]:
     if not isinstance(observation, dict):
         return False, "no_pending_observation"
     captured_at = observation.get("captured_at")
@@ -80,10 +75,7 @@ def _observation_is_current(
             math.cos(current["theta"] - previous["theta"]),
         )
     )
-    if (
-        translation > OBSERVATION_MAX_TRANSLATION_M
-        or rotation > OBSERVATION_MAX_ROTATION_RAD
-    ):
+    if translation > OBSERVATION_MAX_TRANSLATION_M or rotation > OBSERVATION_MAX_ROTATION_RAD:
         return False, "robot_moved_since_identify"
     return True, ""
 
@@ -103,15 +95,11 @@ class PersonIdentity(Skill):
 
     def _fresh_upward_frame(self) -> tuple[MainImage | None, str | None]:
         """Capture identity evidence after the low-mounted camera looks up."""
-        current_head = self.wait_for(
-            lambda: self.head_position, timeout=HEAD_SETTLE_TIMEOUT_S
-        )
+        current_head = self.wait_for(lambda: self.head_position, timeout=HEAD_SETTLE_TIMEOUT_S)
         if current_head is None:
             return None, "no_current_head_position"
         target = PERSON_VIEW_HEAD_PITCH_DEG
-        if current_head.max_degrees is not None and math.isfinite(
-            current_head.max_degrees
-        ):
+        if current_head.max_degrees is not None and math.isfinite(current_head.max_degrees):
             target = min(target, current_head.max_degrees)
         command = round(target)
         feedback_before_command = current_head.raw_source
@@ -120,12 +108,8 @@ class PersonIdentity(Skill):
             lambda: (
                 self.head_position
                 if self.head_position is not None
-                and (
-                    feedback_before_command is None
-                    or self.head_position.raw_source is not feedback_before_command
-                )
-                and abs(self.head_position.pitch_degrees - command)
-                <= HEAD_POSITION_TOLERANCE_DEG
+                and (feedback_before_command is None or self.head_position.raw_source is not feedback_before_command)
+                and abs(self.head_position.pitch_degrees - command) <= HEAD_POSITION_TOLERANCE_DEG
                 else None
             ),
             timeout=HEAD_SETTLE_TIMEOUT_S,
@@ -134,21 +118,13 @@ class PersonIdentity(Skill):
             return None, "head_did_not_settle_upward"
         settled_frame = self.image
         first_frame = self.wait_for(
-            lambda: (
-                self.image
-                if self.image is not None and self.image is not settled_frame
-                else None
-            ),
+            lambda: self.image if self.image is not None and self.image is not settled_frame else None,
             timeout=IDENTIFY_FRAME_TIMEOUT_S,
         )
         if first_frame is None:
             return None, "no_fresh_upward_camera_frame"
         second_frame = self.wait_for(
-            lambda: (
-                self.image
-                if self.image is not None and self.image is not first_frame
-                else None
-            ),
+            lambda: self.image if self.image is not None and self.image is not first_frame else None,
             timeout=IDENTIFY_FRAME_TIMEOUT_S,
         )
         if second_frame is None:
@@ -169,26 +145,16 @@ class PersonIdentity(Skill):
         raw = self.storage.get("gallery")
         if not isinstance(raw, dict) or raw.get("version") != STATE_VERSION:
             return self._fresh_gallery()
-        state = self._fresh_gallery(
-            raw.get("run_id") if isinstance(raw.get("run_id"), str) else None
-        )
+        state = self._fresh_gallery(raw.get("run_id") if isinstance(raw.get("run_id"), str) else None)
         sequence = raw.get("next_sequence")
-        if (
-            isinstance(sequence, int)
-            and not isinstance(sequence, bool)
-            and sequence > 0
-        ):
+        if isinstance(sequence, int) and not isinstance(sequence, bool) and sequence > 0:
             state["next_sequence"] = sequence
         used: set[str] = set()
         for raw_profile in raw.get("profiles", []):
             if not isinstance(raw_profile, dict):
                 continue
             encounter_id = raw_profile.get("encounter_id")
-            if (
-                not isinstance(encounter_id, str)
-                or not encounter_id
-                or encounter_id in used
-            ):
+            if not isinstance(encounter_id, str) or not encounter_id or encounter_id in used:
                 continue
             views = []
             for raw_view in raw_profile.get("views", [])[-MAX_VIEWS_PER_PERSON:]:
@@ -199,11 +165,7 @@ class PersonIdentity(Skill):
                     serialized_embedding(raw_view.get("face")),
                 )
                 image = raw_view.get("image_b64")
-                if (
-                    (body is not None or face is not None)
-                    and isinstance(image, str)
-                    and image
-                ):
+                if (body is not None or face is not None) and isinstance(image, str) and image:
                     views.append({"image_b64": image, "body": body, "face": face})
             if views:
                 state["profiles"].append({"encounter_id": encounter_id, "views": views})
@@ -241,9 +203,7 @@ class PersonIdentity(Skill):
 
             profiles = state["profiles"]
             width, tile_height = 640, 150
-            canvas = PilImage.new(
-                "RGB", (width, max(110, 30 + tile_height * len(profiles))), "#111318"
-            )
+            canvas = PilImage.new("RGB", (width, max(110, 30 + tile_height * len(profiles))), "#111318")
             draw = ImageDraw.Draw(canvas)
             draw.text(
                 (16, 10),
@@ -255,15 +215,11 @@ class PersonIdentity(Skill):
                 draw.text((16, y + 8), profile["encounter_id"], fill="#7dffc4")
                 for column, view in enumerate(profile.get("views", [])):
                     try:
-                        image = PilImage.open(
-                            io.BytesIO(base64.b64decode(view["image_b64"]))
-                        ).convert("RGB")
+                        image = PilImage.open(io.BytesIO(base64.b64decode(view["image_b64"]))).convert("RGB")
                         image.thumbnail((110, 115))
                         x = 145 + column * 120
                         canvas.paste(image, (x, y + 5))
-                        channels = "+".join(
-                            name for name in ("face", "body") if view.get(name)
-                        )
+                        channels = "+".join(name for name in ("face", "body") if view.get(name))
                         draw.text((x, y + 123), channels, fill="#a7adb8")
                     except (OSError, TypeError, ValueError):
                         continue
@@ -279,9 +235,7 @@ class PersonIdentity(Skill):
             )
             return png.getvalue()
         except (OSError, TypeError, ValueError) as error:
-            self.logger.warning(
-                f"[PersonIdentity] could not refresh visualization: {error}"
-            )
+            self.logger.warning(f"[PersonIdentity] could not refresh visualization: {error}")
             return None
 
     def _begin(self) -> SkillOutput:
@@ -398,9 +352,7 @@ class PersonIdentity(Skill):
             )
         return _result("UNKNOWN_PERSON", {"timing": timing}, image=frame.jpeg)
 
-    def _pending(
-        self, state: dict[str, Any]
-    ) -> tuple[dict[str, Any] | None, SkillOutput | None]:
+    def _pending(self, state: dict[str, Any]) -> tuple[dict[str, Any] | None, SkillOutput | None]:
         observation = state.get("pending_observation")
         current, reason = _observation_is_current(observation, self.pose)
         if not current:
@@ -436,11 +388,7 @@ class PersonIdentity(Skill):
     def _add_view(self, encounter_id: str | None) -> SkillOutput:
         state = self._load_gallery()
         profile = next(
-            (
-                item
-                for item in state["profiles"]
-                if item["encounter_id"] == encounter_id
-            ),
+            (item for item in state["profiles"] if item["encounter_id"] == encounter_id),
             None,
         )
         if profile is None:
@@ -450,14 +398,8 @@ class PersonIdentity(Skill):
             return error
         scores = profile_scores([profile], observation)
         only = scores[0]
-        face_ok = (
-            only.get("face_score") is not None
-            and only["face_score"] >= FACE_PLAUSIBLE_THRESHOLD
-        )
-        body_ok = (
-            only.get("body_score") is not None
-            and only["body_score"] >= BODY_PLAUSIBLE_THRESHOLD
-        )
+        face_ok = only.get("face_score") is not None and only["face_score"] >= FACE_PLAUSIBLE_THRESHOLD
+        body_ok = only.get("body_score") is not None and only["body_score"] >= BODY_PLAUSIBLE_THRESHOLD
         if not face_ok and not body_ok:
             return _result(
                 "IDENTITY_NOT_STORED",
@@ -503,6 +445,4 @@ class PersonIdentity(Skill):
             return self._add_view(encounter_id)
         if normalized == "visualize":
             return self._visualize()
-        self.fail(
-            "Unknown action. Use one of: begin, identify, remember, add_view, visualize."
-        )
+        self.fail("Unknown action. Use one of: begin, identify, remember, add_view, visualize.")
