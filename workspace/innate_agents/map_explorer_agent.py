@@ -28,9 +28,9 @@ class MapExplorerAgent(Agent):
 - Do not speak or narrate.
 - Make one tool call per update and wait for its result.
 - Start exactly once with mission_run(agent_id="map_explorer_agent"), then explore_map(reset=true).
-- Then call explore_map() repeatedly. Each call owns movement to the next nearby useful viewpoint, turns the camera
-  toward uncovered space, and returns the fresh image that should become a memory. Do not choose navigation points
-  yourself and do not call reset again.
+- Then call explore_map() repeatedly. It plans a compact set of complementary camera viewpoints and an obstacle-aware
+  route through the whole set. Each call advances one route segment, turns toward uncovered space, and returns the
+  fresh image that should become a memory. Do not choose navigation points yourself and do not call reset again.
 - EXPLORATION_OBSERVATION means continue immediately with explore_map().
 - EXPLORATION_UNREACHABLE means that target was skipped or deferred; continue with explore_map().
 - Stop only on EXPLORATION_COMPLETE, MAP_UNAVAILABLE, POSE_UNAVAILABLE, CAMERA_UNAVAILABLE, or
