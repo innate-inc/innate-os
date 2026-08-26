@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 # 384px on the long side on purpose: one Gemini tile (258 tokens) per request.
 _PORTRAIT = Path(__file__).parent.parent / "assets" / "self_portrait.jpg"
 _PORTRAIT_CAPTION = (
-    "For reference, this is what you look like — your robot model, pictured in black; your own body color may differ."
+    "For reference, this is how a black MARS looks. You are this model of robot; your own color may differ."
 )
 
 
@@ -27,7 +27,7 @@ def self_reference_turns() -> list[dict]:
     image = {"inlineData": {"mimeType": "image/jpeg", "data": base64.b64encode(_PORTRAIT.read_bytes()).decode()}}
     return [
         {"role": "user", "parts": [{"text": _PORTRAIT_CAPTION}, image]},
-        {"role": "model", "parts": [{"text": "Understood — that is my body."}]},
+        {"role": "model", "parts": [{"text": "Understood — that is what my model of robot looks like."}]},
     ]
 
 
