@@ -330,10 +330,23 @@ select.skill-input {
   /* Short: the page mounts in ~0.4s on robot WiFi, so a 0.4s fade was half the
      perceived load. Long enough to not flash. */
   transition: opacity 0.2s ease;
+  /* Invisible for the first beat: a LAN mount (~0.4s) is removed before the splash
+     ever paints, so only genuinely slow loads (remote/tunneled) get one, fading in. */
+  animation: boot-appear 0.3s ease-out 0.4s backwards;
 }
 
-/* .is-leaving is set by router.js to fade out; then the element is removed. */
+@keyframes boot-appear {
+  from {
+    opacity: 0;
+  }
+}
+
+/* .is-leaving is set by router.js to fade out; then the element is removed.
+   animation: none drops boot-appear's backwards fill so the fade-out transition
+   owns opacity even when the mount lands mid-appear (router's 400ms fallback
+   removal covers the still-invisible case, where no transition fires). */
 .boot-splash.is-leaving {
+  animation: none;
   opacity: 0;
   pointer-events: none;
 }
@@ -374,9 +387,23 @@ select.skill-input {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* Deliberate exceptions to the global * { animation: none !important } kill (see
+     ---- motion ----), which froze the splash fully visible over a dead bar: these
+     are opacity-only (zero travel), which reduced motion permits. !important wins
+     here on specificity against the star rule.
+
+     A full-width span read as a progress bar stuck at 100%; a centered partial
+     segment pulsing in place still says "indeterminate". */
+  .boot-splash {
+    animation: boot-appear 0.3s ease-out 0.4s backwards !important;
+  }
+  .boot-splash.is-leaving {
+    animation: none !important; /* hide instantly; the fade-out transition is killed anyway */
+  }
   .boot-splash__bar span {
-    animation: boot-pulse 1.4s ease-in-out infinite;
-    width: 100%;
+    animation: boot-pulse 1.4s ease-in-out infinite !important;
+    width: 40%;
+    margin: 0 auto;
     transform: none;
   }
   @keyframes boot-pulse {
