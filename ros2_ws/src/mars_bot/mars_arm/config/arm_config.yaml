@@ -123,8 +123,11 @@
       # Close gently — the current cap means it presses in rather than impacts.
       profile_velocity: 60
       profile_acceleration: 30
-      gains_near: [400, 0, 0, 0, 0]
-      gains_teleop: [400, 0, 0, 0, 0]     # November teleop gains
+      # kd, not kp, is what mode 5 needs: the current cap saturates the position loop and
+      # the light free-swinging jaw then limit-cycles +/-0.2 rad forever once a fast move
+      # excites it. Measured unstable below kd 60-100; grip force is kp against the cap.
+      gains_near: [400, 0, 400, 0, 0]
+      gains_teleop: [400, 0, 400, 0, 0]   # November teleop gains + kd
 
     joint_7:
       servo_id: 7
