@@ -41,6 +41,8 @@ class Stage(StrEnum):
     REQUEST_SENT = "request_sent"
     FIRST_TEXT = "first_text"  # first non-thought delta: when speech *could* start
     STREAM_DONE = "stream_done"
+    TOOL_CALL = "tool_call"  # a tool/skill dispatch begins
+    TOOL_DONE = "tool_done"  # ...and returns; for a skill that is the goal sent, not run
     TURN_DROPPED = "turn_dropped"  # preempted or deactivated: the chain below is broken
     SPEECH_QUEUED = "speech_queued"
     TTS_START = "tts_start"

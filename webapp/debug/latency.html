@@ -19,6 +19,7 @@
 
     --c-wait: #b9b8ae;      /* on-robot queueing / plumbing — never a vendor */
     --c-vad: #c99a2e;       /* silence the endpointer waited out before it acted */
+    --c-tool: #c2338f;      /* the instant a tool/skill was dispatched */
     --c-look: #4a7fb5;      /* camera grab + prompt build */
     --c-stt: #2a9d8f;
     --c-model: #6f4fd8;
@@ -40,6 +41,7 @@
       --grid: #2c2c2a;
       --c-wait: #4a4a46;
       --c-vad: #d9a939;
+      --c-tool: #e05aae;
       --c-look: #5b93cc;
       --c-stt: #3ab7a6;
       --c-model: #8f74ee;
@@ -142,6 +144,10 @@
   .rt-you { position: absolute; top: 0; bottom: 0; width: 11px; margin-left: -5px; background: none; cursor: help; }
   .rt-you::after { content: ""; position: absolute; left: 5px; top: 0; bottom: 0; width: 2px; background: var(--c-vad); }
   .rt-you:hover::after { left: 4px; width: 4px; }
+  .rt-tool { position: absolute; top: 0; bottom: 0; width: 11px; margin-left: -5px; background: none; cursor: help; }
+  .rt-tool::after { content: ""; position: absolute; left: 5px; top: 0; bottom: 0; width: 2px;
+                    background: var(--c-tool); }
+  .rt-tool:hover::after { left: 4px; width: 4px; }
   .rt-axis { position: relative; flex: 1; height: 15px; }
   .rt-axis i { position: absolute; font-size: 0.66rem; font-style: normal;
                color: var(--muted); transform: translateX(-50%); white-space: nowrap; }
@@ -254,6 +260,12 @@
     </label>
     <label class="status">silence <input id="cfg-silence" type="number" step="0.05" min="0.1" max="3" size="4" style="width:5.5em"> s</label>
     <label class="status">threshold <input id="cfg-threshold" type="number" step="0.05" min="0" max="1" size="4" style="width:5.5em"></label>
+  </div>
+  <div class="row">
+    <label class="status" title="Voice the reply's held last sentence before dispatching the turn's tools">
+      <input type="checkbox" id="cfg-speak-first" style="vertical-align:-2px"> speak before acting
+    </label>
+    <span class="status">off = the robot starts moving, then speaks — a one-sentence reply is held until the tools are dispatched</span>
   </div>
   <div class="row">
     <button id="cfg-apply" class="primary">Apply</button>
@@ -873,13 +885,35 @@ function timelineHtml({ runs, t1, span, why, zeroAt = null }) {
       presses += `<div class="rt-you" style="left:${pct(m.t)}%" data-tip="${escapeHtml(lines.join("\n"))}"></div>`;
     }
   }
+  let tools = "";
+  for (const run of runs) {
+    for (const m of run.stages.tool_call ?? []) {
+      if (m.t < t0 || m.t > t1) continue;
+      const done = (run.stages.tool_done ?? []).find((d) => d.name === m.name && d.t >= m.t);
+      const lines = [`tool: ${m.name}`, clock(m.t), `+${fmt((m.t - run.start) * 1000)} into the exchange`];
+      if (done) {
+        lines.push(`dispatch took ${fmt(done.ms)}`, done.outcome ?? "");
+      }
+      // The whole reply-order question, answered on the marker itself.
+      const audible = audibleAt(run);
+      if (audible) {
+        const delta = (audible.t - m.t) * 1000;
+        lines.push(
+          delta >= 0
+            ? `speech started ${fmt(delta)} AFTER this dispatch`
+            : `speech started ${fmt(-delta)} BEFORE this dispatch`,
+        );
+      }
+      tools += `<div class="rt-tool" style="left:${pct(m.t)}%" data-tip="${escapeHtml(lines.filter(Boolean).join("\n"))}"></div>`;
+    }
+  }
   const nowLine = why === "live" ? '<div class="rt-now" style="left:100%"></div>' : "";
 
   return (
     LANES.map(
       (name, i) =>
         `<div class="rt-row"><span class="rt-name">${name}</span>` +
-        `<div class="rt-lane">${grid}${presses}${lanes[i].join("")}${nowLine}</div></div>`,
+        `<div class="rt-lane">${grid}${presses}${tools}${lanes[i].join("")}${nowLine}</div></div>`,
     ).join("") +
     // Same row shape as a lane, so the ticks sit on the gridlines they name.
     // The gutter carries the hour and minute the short labels leave out.
@@ -1273,6 +1307,7 @@ function captureSvg({ runs, span, t1, why, config, zeroAt = null }) {
     ["brain model", config.gemini_model ?? "unknown"],
     ["STT backend", config.stt_backend ?? "unknown"],
     ["VAD", `${config.stt_vad_engine ?? "?"} · ${config.stt_vad_silence_secs ?? "?"}s silence · threshold ${config.stt_vad_threshold ?? "?"}`],
+    ["reply order", config.speak_before_tools ? "speak, then act" : "act, then speak"],
     ["speech out", runs.some(isTopicMode) ? "sim — whole clip to /tts/audio" : "streamed to the speaker"],
     ["window", `${spanLabel(span)} ending ${clock(t1)}${why === "live" ? " (live)" : ""}`],
     ["captured", new Date().toLocaleString()],
@@ -1433,6 +1468,7 @@ function pinConfigLine(pin) {
     c.stt_backend ?? "stt unknown",
     c.stt_vad_engine ? `${c.stt_vad_engine} vad` : null,
     c.stt_vad_silence_secs != null ? `${c.stt_vad_silence_secs}s silence` : null,
+    c.speak_before_tools != null ? (c.speak_before_tools ? "speak→act" : "act→speak") : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -1524,7 +1560,11 @@ const CONFIG_KNOBS = [
   { node: STT_NODE, name: "stt_vad_engine", type: "string", el: "cfg-vad-engine" },
   { node: STT_NODE, name: "stt_vad_silence_secs", type: "float", el: "cfg-silence" },
   { node: STT_NODE, name: "stt_vad_threshold", type: "float", el: "cfg-threshold" },
+  { node: BRAIN_NODE, name: "speak_before_tools", type: "bool", el: "cfg-speak-first" },
 ];
+
+/** Checkboxes carry their value on .checked, everything else on .value. */
+const knobValue = (knob) => ($(knob.el).type === "checkbox" ? $(knob.el).checked : $(knob.el).value.trim());
 
 /** What the robot is running right now — also stamped into every capture. */
 let liveConfig = {};
@@ -1547,9 +1587,11 @@ async function readConfig() {
       const res = await ros.callService(`${node}/get_parameters`, { names: knobs.map((k) => k.name) });
       (res?.values ?? []).forEach((v, i) => {
         const value = paramValue(v);
-        if (value === null || value === "" ) return;
+        if (value === null || value === "") return;
         liveConfig[knobs[i].name] = value;
-        $(knobs[i].el).value = String(value);
+        const el = $(knobs[i].el);
+        if (el.type === "checkbox") el.checked = Boolean(value);
+        else el.value = String(value);
       });
     } catch {
       $("cfg-text").textContent = `Could not read parameters from ${node} — is it running?`;
@@ -1565,14 +1607,15 @@ function renderConfigLine() {
   if (c.stt_backend) parts.push(c.stt_backend);
   if (c.stt_vad_engine) parts.push(`${c.stt_vad_engine} vad`);
   if (c.stt_vad_silence_secs != null) parts.push(`${c.stt_vad_silence_secs}s silence`);
+  if (c.speak_before_tools != null) parts.push(c.speak_before_tools ? "speak→act" : "act→speak");
   $("cfg-text").textContent = parts.length ? `running: ${parts.join(" · ")}` : "";
 }
 
 $("cfg-apply").onclick = async () => {
   const byNode = new Map();
   for (const knob of CONFIG_KNOBS) {
-    const raw = $(knob.el).value.trim();
-    if (!raw) continue;
+    const raw = knobValue(knob);
+    if (raw === "") continue;
     const value = knob.type === "float" ? Number(raw) : raw;
     if (knob.type === "float" && !Number.isFinite(value)) continue;
     if (liveConfig[knob.name] !== undefined && String(liveConfig[knob.name]) === String(value)) continue;
@@ -1591,7 +1634,7 @@ $("cfg-apply").onclick = async () => {
           name: k.name,
           value: {
             type: PARAM_TYPE[k.type],
-            bool_value: false,
+            bool_value: k.type === "bool" ? Boolean(k.value) : false,
             integer_value: 0,
             double_value: k.type === "float" ? k.value : 0,
             string_value: k.type === "string" ? k.value : "",
@@ -1743,7 +1786,12 @@ if (new URLSearchParams(location.search).has("demo")) {
     ["turn_start", 0.09, { turn: 7 }], ["request_sent", 0.12, { turn: 7 }], ["first_text", 0.71, { turn: 7 }],
     ["speech_queued", 0.05, { chars: 22, first: true }], ["tts_start", 0.003, { chars: 22 }],
     ["tts_request", 0.001, { chars: 22, mode: "aplay" }], ["tts_first_byte", 0.24, { ms: 240, mode: "aplay" }],
-    ["stream_done", 0.1, { turn: 7 }], ["speech_queued", 0.02, { chars: 31 }],
+    ["stream_done", 0.1, { turn: 7 }],
+    // The act-then-speak ordering: the head is dispatched, and only then does
+    // the reply's held last sentence reach TTS.
+    ["tool_call", 0.004, { turn: 7, name: "head_emotion" }],
+    ["tool_done", 0.021, { turn: 7, name: "head_emotion", ms: 21, outcome: "started — you will get an event when it finishes" }],
+    ["speech_queued", 0.02, { chars: 31 }],
     ["tts_play_done", 1.3, { ms: 1550, audio_ms: 1410, mode: "aplay" }],
     ["event_queued", 4.0, { kind: "user", text: 'The user says: "stop"' }],
     ["turn_start", 0.05, { turn: 8 }], ["request_sent", 0.1, { turn: 8 }],

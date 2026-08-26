@@ -150,12 +150,18 @@ class BrainClientNode(Node):
     def _on_parameter_change(self, params: list[Parameter]) -> SetParametersResult:
         """Apply the parameters that take effect without a restart.
 
-        Only the TTS voice, the agent's timezone and the Gemini model do: every other
+        Only the TTS voice, the timezone, the Gemini model and the reply order do: every other
         field was copied into a collaborator at construction, so accepting a write
         would leave the robot running the old value. Those are stored for the next
         boot, which is what the Settings page's `live` flag says about them.
         """
         for param in params:
+            if param.name == "speak_before_tools":
+                self.brain.speak_before_tools = bool(param.value)
+                self.get_logger().info(
+                    f"[BrainClient] Reply order: {'speak, then act' if param.value else 'act, then speak'}"
+                )
+                continue
             if param.name == "gemini_model":
                 if self.brain.set_model(str(param.value)):
                     continue

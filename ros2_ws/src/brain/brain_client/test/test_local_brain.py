@@ -474,6 +474,7 @@ def agent_factory(monkeypatch):
             supervision_turn_interval=5.0,
             simulator_mode=False,
             timezone="",
+            speak_before_tools=False,
         )
         state = BrainState()
         state.is_brain_active = True

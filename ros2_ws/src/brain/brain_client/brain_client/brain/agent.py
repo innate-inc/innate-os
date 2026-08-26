@@ -147,6 +147,10 @@ class BrainAgent:
         self._new_event = asyncio.Event()  # something was queued (loop thread; set via runtime.post)
         self._user_spoke = asyncio.Event()  # like _new_event, but only user speech sets it
 
+        # A/B switch for the reply-vs-action ordering in _act; the node keeps it
+        # in step with the ROS parameter so it can be flipped between turns.
+        self.speak_before_tools = config.speak_before_tools
+
         # Set by the composition root: gates only the HEAVY traces (request
         # bodies, frames) — hundreds of KB per turn, otherwise serialized and
         # published for nobody. Small events always publish.
@@ -505,20 +509,31 @@ class BrainAgent:
     def _act(self, decision: Decision, speaker: SpeechStreamer, context: GeminiContext) -> list[tuple[ToolCall, str]]:
         # Execute and answer the calls before any chat I/O: a functionCall
         # left unanswered in history poisons every later request.
+        if self.speak_before_tools:
+            self._release_speech(speaker, decision.speech)
         outcomes = [(call, self._execute(call)) for call in decision.calls]
         context.add_tool_outcomes(outcomes)
         if decision.thoughts:
             self._chat.emit_thoughts(decision.thoughts)
-        speech = decision.speech
-        user_waiting = any(event.kind == EventKind.USER for event in self._events)
-        if speech and not speaker.spoke and user_waiting:
-            self._suppress_reply(speaker, speech)
-        speaker.flush()  # the reply's last sentence has no trailing boundary
-        if speaker.spoke and speech:
+        if not self.speak_before_tools:
+            self._release_speech(speaker, decision.speech)
+        if speaker.spoke and decision.speech:
             self._chat.emit(
-                Sender.ROBOT, speech, speak=False
+                Sender.ROBOT, decision.speech, speak=False
             )  # audio went out per sentence; the panel gets one message
         return outcomes
+
+    def _release_speech(self, speaker: SpeechStreamer, speech: str | None) -> None:
+        """Drop a reply the user has already talked over, then voice what is left.
+
+        Only the reply's LAST sentence is still held here — the rest went out at
+        their sentence boundaries mid-stream — but a one-sentence reply is all
+        last sentence, so where this runs relative to the tool calls decides
+        whether the robot speaks before or after it starts moving.
+        """
+        if speech and not speaker.spoke and any(event.kind == EventKind.USER for event in self._events):
+            self._suppress_reply(speaker, speech)
+        speaker.flush()  # the reply's last sentence has no trailing boundary
 
     def _suppress_reply(self, speaker: SpeechStreamer, speech: str) -> None:
         """A reply that never started speaking loses to a newer user message.
@@ -540,11 +555,21 @@ class BrainAgent:
         would orphan the model's function calls in history.
         """
         self._logger.info(f"[Brain] Tool call: {call.name}({call.args})")
+        self._mark(Stage.TOOL_CALL, name=call.name, turn=self._turn_count)
+        started = time.monotonic()
         try:
-            return self._dispatch(call)
+            outcome = self._dispatch(call)
         except Exception as error:
             self._logger.error(f"[Brain] Tool call {call.name} failed: {error!r}")
-            return f"failed — {error}"
+            outcome = f"failed — {error}"
+        self._mark(
+            Stage.TOOL_DONE,
+            name=call.name,
+            ms=round((time.monotonic() - started) * 1000),
+            outcome=outcome[:80],
+            turn=self._turn_count,
+        )
+        return outcome
 
     def _dispatch(self, call: ToolCall) -> str:
         if call.name == WAIT:
