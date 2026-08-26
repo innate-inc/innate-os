@@ -215,6 +215,7 @@ class MicroInput(InputDevice):
         self._reconnect_lock = threading.Lock()
         self._reconnecting = False
         self._is_connected = False
+        self._partial_marked = False  # one STT_PARTIAL per utterance, not per interim
         self._reconnect_delay = 1  # Start with 1 second
         self._max_reconnect_delay = 30  # Max 30 seconds between retries
         # Connects and closes without an intervening session_started (a close
@@ -321,6 +322,7 @@ class MicroInput(InputDevice):
 
         if etype == "committed_transcript":
             text = event.get("text", "")
+            self._partial_marked = False
             if text:
                 self._utterance_count += 1
                 latency = f"{round((time.monotonic() - self._commit_at) * 1000)} ms" if self._commit_at else "n/a"
@@ -328,7 +330,12 @@ class MicroInput(InputDevice):
             if text and self.is_active():
                 self._on_transcript(text)
         elif etype == "partial_transcript":
-            pass  # interim result — only the committed transcript reaches chat
+            # Only the committed transcript reaches chat, but the first interim
+            # result is the one boundary Scribe gives before committing — without
+            # it a realtime backend draws nothing at all.
+            if not self._partial_marked:
+                self._partial_marked = True
+                self._mark(Stage.STT_PARTIAL, backend=self._backend)
         elif etype == "session_started":
             self._connect_failures = 0
             self.logger.info(f"📋 Scribe session started: {event.get('config', {})}")
@@ -360,6 +367,7 @@ class MicroInput(InputDevice):
         self.logger.warning("WebSocket closed")
         self._is_connected = False
         self._connect_failures += 1
+        self._partial_marked = False
 
         # Don't reconnect if we're shutting down
         if self._stop_evt.is_set():
@@ -783,6 +791,7 @@ class MicroInput(InputDevice):
         if self._audio_stop is not None:
             self._audio_stop.set()
         self._is_connected = False  # Prevent reconnection attempts
+        self._partial_marked = False
 
         # Reconnect thread first — it may still be creating the audio thread
         # this method is about to join.

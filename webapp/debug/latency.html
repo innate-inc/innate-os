@@ -142,9 +142,12 @@
   .rt-you { position: absolute; top: 0; bottom: 0; width: 11px; margin-left: -5px; background: none; cursor: help; }
   .rt-you::after { content: ""; position: absolute; left: 5px; top: 0; bottom: 0; width: 2px; background: var(--c-vad); }
   .rt-you:hover::after { left: 4px; width: 4px; }
-  .rt-axis { position: relative; height: 15px; margin-left: 82px; }
+  .rt-axis { position: relative; flex: 1; height: 15px; }
   .rt-axis i { position: absolute; font-size: 0.66rem; font-style: normal;
                color: var(--muted); transform: translateX(-50%); white-space: nowrap; }
+  /* The end labels would hang half outside the plot; anchor them inward. */
+  .rt-axis i.first { transform: none; }
+  .rt-axis i.last { transform: translateX(-100%); }
   .rt-bar:hover { outline: 1px solid var(--ink); outline-offset: -1px; }
   .rt-tip {
     position: fixed; z-index: 20; pointer-events: none; max-width: 320px;
@@ -393,7 +396,7 @@ const $ = (id) => document.getElementById(id);
 // "you_stopped" is the button, not the robot: a browser-side mark translated
 // onto the robot's clock (see clockOffset). It outranks everything, so a press
 // always opens the exchange it belongs to.
-const UPSTREAM = ["you_stopped", "utterance_closed", "stt_request", "stt_done", "chat_in", "event_queued", "turn_start", "request_sent"];
+const UPSTREAM = ["you_stopped", "utterance_closed", "stt_request", "stt_done", "stt_partial", "vendor_speech_end", "chat_in", "event_queued", "turn_start", "request_sent"];
 const RANK = new Map(UPSTREAM.map((s, i) => [s, i]));
 
 // Three lanes on one time axis. The voice lane starts while the brain lane is
@@ -404,6 +407,11 @@ const BARS = [
   { key: "vad_tail",  lane: 0, label: "VAD silence",   color: "--c-vad" }, // synthesised in segments()
   { key: "stt_queue", lane: 0, label: "STT queue",     from: ["utterance_closed"],  to: ["stt_request"],   color: "--c-wait" },
   { key: "stt",       lane: 0, label: "STT call",      from: ["stt_request"],       to: ["stt_done"],      color: "--c-stt" },
+  // Realtime backends endpoint inside the vendor session: no local utterance,
+  // so the batch bars above never draw. These are the boundaries the vendor does
+  // hand back, and the press is the only anchor before them.
+  { key: "vendor_lag", lane: 0, label: "vendor VAD lag", from: ["you_stopped"], to: ["vendor_speech_end"], color: "--c-vad" },
+  { key: "stt_vendor", lane: 0, label: "STT (vendor)",   from: ["vendor_speech_end", "stt_partial", "you_stopped"], to: ["chat_in"], color: "--c-stt" },
   { key: "handoff",   lane: 0, label: "\u2192 brain",       from: ["stt_done", "chat_in"], to: ["event_queued"], color: "--c-wait" },
   { key: "wake",      lane: 1, label: "agent wake",    from: ["event_queued"],      to: ["turn_start"],    color: "--c-wait" },
   { key: "look",      lane: 1, label: "look + prompt", from: ["turn_start"],        to: ["request_sent"],  color: "--c-look" },
@@ -545,8 +553,11 @@ function segments(run) {
   if (spoke !== null && uc) add("vad_tail", "VAD silence", "--c-vad", 0, spoke, uc.t);
 
   const spoken = !!first(run, "first_text");
+  const endpointedLocally = !!uc;
   for (const bar of BARS) {
     if (!bar.from) continue; // synthesised above
+    // Local endpointing and vendor endpointing are alternatives, never both.
+    if ((bar.key === "stt_vendor" || bar.key === "vendor_lag") && endpointedLocally) continue;
     // A silent turn has no first_text, so ttft/stream cannot be drawn; the
     // whole-call bar stands in for them. Never both.
     if (bar.key === "gemini" && spoken) continue;
@@ -701,6 +712,18 @@ function tickFormat(step) {
   return (s) => `${Math.round(s * 1000)}ms`;
 }
 
+/** A tick's wall clock, carrying only the digits the zoom can actually resolve. */
+function axisTime(t, span) {
+  const d = new Date(t * 1000);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  const ms = String(d.getMilliseconds()).padStart(3, "0");
+  // Always hour-anchored: a bare "15:07" on a 30 s window reads as a wall clock
+  // and puts the reader a quarter of an hour out.
+  return span >= 60 ? `${hh}:${mm}:${ss}` : `${hh}:${mm}:${ss}.${ms}`;
+}
+
 let viewSpan = 30; // seconds across the window
 let viewEnd = null; // null = auto; a number pins the right edge (pan/zoom/freeze)
 
@@ -758,14 +781,15 @@ function timelineHtml({ runs, t1, span, why }) {
 
   // Gridlines every fifth of the window, plus the edge marker and every press.
   const steps = 5;
-  const tick = tickFormat(span / steps);
   let grid = "";
   let axis = "";
   for (let i = 0; i <= steps; i++) {
     const at = (i / steps) * 100;
     grid += `<div class="rt-grid" style="left:${at}%"></div>`;
-    const label = i === steps ? (why === "live" ? "now" : clock(t1)) : `−${tick(span - (i / steps) * span)}`;
-    axis += `<i style="left:${at}%">${label}</i>`;
+    // Wall-clock on every tick, not an offset from a moving edge: the point of
+    // panning to a moment is being able to read what time it is there.
+    const edge = i === 0 ? " first" : i === steps ? " last" : "";
+    axis += `<i class="tick${edge}" style="left:${at}%">${axisTime(t0 + (i / steps) * span, span)}</i>`;
   }
   // Drawn from the runs, not from `marks`, so each press can report what
   // followed it — it is the reference point everything else is measured from.
@@ -789,7 +813,9 @@ function timelineHtml({ runs, t1, span, why }) {
       (name, i) =>
         `<div class="rt-row"><span class="rt-name">${name}</span>` +
         `<div class="rt-lane">${grid}${presses}${lanes[i].join("")}${nowLine}</div></div>`,
-    ).join("") + `<div class="rt-axis">${axis}</div>`
+    ).join("") +
+    // Same row shape as a lane, so the ticks sit on the gridlines they name.
+    `<div class="rt-row"><span class="rt-name"></span><div class="rt-axis">${axis}</div></div>`
   );
 }
 
@@ -861,8 +887,7 @@ function renderRuns(runs) {
         `<div class="run-head"><span class="mono">${clock(run.start)}</span>` +
         `<span class="who">${escapeHtml(runLabel(run))}</span>${flag}` +
         `<span class="total">${fmt(totalMs)}${sentences > 1 ? ` · ${sentences} sentences` : ""}${mode}</span></div>` +
-        lane(0) +
-        lane(1) +
+        LANES.map((_, i) => lane(i)).join("") +
         `</div>`
       );
     })
@@ -1585,7 +1610,7 @@ fetch("/config.json")
 // ?demo fills the page from a scripted exchange, so the layout and the stitching
 // can be checked with no robot in the picture (the brain monitor has the same).
 if (new URLSearchParams(location.search).has("demo")) {
-  const t0 = Date.now() / 1000 - 18;
+  const t0 = Date.now() / 1000 - 26;
   const script = [
     ["you_stopped", 0.0, {}], ["utterance_closed", 0.62, { secs: 1.4, tail: 0.5 }],
     ["stt_request", 0.004, {}], ["stt_done", 0.38, { chars: 9 }],
@@ -1608,6 +1633,16 @@ if (new URLSearchParams(location.search).has("demo")) {
     // per-exchange view used to draw as an empty row.
     ["turn_start", 3.0, { turn: 10 }], ["request_sent", 0.11, { turn: 10 }],
     ["stream_done", 1.19, { turn: 10 }],
+    // A vendor-endpointed exchange (realtime backend): no local utterance, so
+    // the batch bars cannot draw and the vendor boundaries stand in for them.
+    ["you_stopped", 2.4, {}], ["stt_partial", 0.31, { backend: "elevenlabs" }],
+    ["chat_in", 0.74, { backend: "elevenlabs", chars: 24 }],
+    ["event_queued", 0.006, { kind: "user", text: 'The user says: "what do you see"' }],
+    ["turn_start", 0.08, { turn: 11 }], ["request_sent", 0.13, { turn: 11 }],
+    ["first_text", 0.94, { turn: 11 }], ["speech_queued", 0.04, { chars: 30, first: true }],
+    ["tts_start", 0.002, { chars: 30 }], ["tts_request", 0.001, { chars: 30, mode: "aplay" }],
+    ["tts_first_byte", 0.26, { ms: 260, mode: "aplay" }], ["stream_done", 0.2, { turn: 11 }],
+    ["tts_play_done", 1.1, { ms: 1400, audio_ms: 1300, mode: "aplay" }],
   ];
   let t = t0;
   for (const [stage, dt, extra] of script) addMark({ t: (t += dt), stage, ...extra }, false);
