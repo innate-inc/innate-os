@@ -363,22 +363,27 @@ void WebRTCStreamer::on_peer_stats(GstPromise* promise, gpointer user_data) {
     gst_promise_unref(promise);
 }
 
-void WebRTCStreamer::apply_adaptation(bool degraded, int loss_promille, int rtt_ms) {
-    degraded_ = degraded;
+void WebRTCStreamer::apply_adaptation(AdaptRung rung, int loss_promille, int rtt_ms) {
+    adapt_rung_ = rung;
+    degraded_ = rung == AdaptRung::kDegraded;
+    // Shedding is the point: the old DEGRADED (60% bitrate x 100% FEC) offered 1800 kbps against
+    // GOOD's 1875 — a 4% cut with double the packets, feeding the congestion it answered.
+    const int tenths = rung == AdaptRung::kDegraded ? 4 : rung == AdaptRung::kRecovering ? 7 : 10;
     for (auto& cam : cameras_) {
         GstElement* enc = gst_bin_get_by_name(GST_BIN(encode_pipeline_), ("enc_" + cam->name).c_str());
         if (!enc) {
             continue;
         }
-        const int bps = cam->bitrate_kbps * 1000 * (degraded ? 6 : 10) / 10;
+        const int bps = cam->bitrate_kbps * 1000 * tenths / 10;
         g_object_set(enc, "target-bitrate", bps, nullptr);
         gst_object_unref(enc);
     }
-    // FEC strength follows the state: webrtcbin binds the transceiver's fec-percentage to the live
-    // rtpulpfecenc, so full protection is only paid for while a viewer needs it (measured: 100%
-    // took a 4-5%-loss path from 17-29 s frozen/min to 0.7 s; 25% stayed keyframe-bound).
+    // FEC follows the rung, elevated (2x base) only at the bottom: the measurement that favored
+    // 100% ("17-29 s frozen/min -> 0.7 s") was taken at 60% bitrate — no real shedding, FEC as the
+    // only repair. With the load actually cut, FEC only has the residual loss left to fix, and
+    // RECOVERING probes upward at base FEC so the probe itself doesn't re-load the path.
     if (video_fec_percentage_ > 0) {
-        const guint pct = degraded ? 100u : video_fec_percentage_;
+        const guint pct = rung == AdaptRung::kDegraded ? degraded_fec_pct() : video_fec_percentage_;
         std::lock_guard<std::mutex> lock(peers_mutex_);
         for (auto& kv : peers_) {
             for (size_t i = 0; i < kv.second->videos.size(); ++i) {
@@ -391,8 +396,9 @@ void WebRTCStreamer::apply_adaptation(bool degraded, int loss_promille, int rtt_
             }
         }
     }
-    const char* state = degraded ? "DEGRADED: 60% bitrate + 1 Hz keyframes + full FEC"
-                                 : "GOOD: full bitrate, on-demand keyframes, base FEC";
+    const char* state = rung == AdaptRung::kDegraded      ? "DEGRADED: 40% bitrate + 2x FEC"
+                        : rung == AdaptRung::kRecovering  ? "RECOVERING: 70% bitrate + base FEC"
+                                                          : "GOOD: full bitrate + base FEC";
     if (loss_promille < 0 && rtt_ms < 0) {
         RCLCPP_INFO(this->get_logger(), "Network adaptation -> %s (no viewer reports)", state);
     } else if (loss_promille < 0) {
@@ -421,42 +427,35 @@ void WebRTCStreamer::poll_network_adaptation() {
         }
     }
 
-    // Last viewer gone: back to GOOD now, so the next peer (LAN included) isn't served a DEGRADED
-    // state frozen from a link that no longer exists.
+    // Last viewer gone: back to GOOD now, so the next peer (LAN included) isn't served a rung
+    // frozen from a link that no longer exists.
     if (!any_peers) {
         adapt_bad_ticks_ = 0;
         adapt_good_ticks_ = 0;
-        if (degraded_) {
-            apply_adaptation(false, loss, rtt);
+        if (adapt_rung_ != AdaptRung::kGood) {
+            apply_adaptation(AdaptRung::kGood, loss, rtt);
         }
         return;
     }
 
-    // Enter DEGRADED fast (2 s of trouble), leave slowly (15 s without it) — flapping re-keyframes
-    // hurt more than staying conservative. Loss-only: RTT is a property of the path, not damage — a
-    // tunneled remote link sits at 250-350 ms forever, and an RTT trigger flapped DEGRADED every ~30 s
-    // on exactly that path. A tick without a loss measurement leaves the counters unchanged — an
-    // RTT-only report can't prove the link clean.
+    // Drop to the bottom rung fast (2 s of loss), climb ONE rung per 15 clean s — a one-step
+    // DEGRADED→GOOD exit doubles the offered load at once and re-congests the path (measured:
+    // 34 flips/hour on a tunneled link). Loss-only: RTT is a property of the path, not damage;
+    // a tick without a loss measurement leaves the counters unchanged (RTT alone can't prove
+    // the link clean). Recovery keyframes stay purely PLI-driven on every rung — a forced IDR
+    // is the most expensive burst a congested link can be handed.
     const bool report = loss >= 0;
     const bool bad = loss >= 30;
     if (report) {
         adapt_bad_ticks_ = bad ? adapt_bad_ticks_ + 1 : 0;
         adapt_good_ticks_ = bad ? 0 : adapt_good_ticks_ + 1;
     }
-    if (!degraded_ && adapt_bad_ticks_ >= 2) {
-        apply_adaptation(true, loss, rtt);
-    } else if (degraded_ && adapt_good_ticks_ >= 15) {
-        apply_adaptation(false, loss, rtt);
-    }
-
-    // Bounded corruption age while DEGRADED: a keyframe per second per flowing camera, no PLI
-    // round-trip needed. maybe_force_keyframe's 500 ms throttle also coalesces this with real PLIs.
-    if (degraded_) {
-        for (auto& cam : cameras_) {
-            if (cam->want.load(std::memory_order_relaxed) > 0) {
-                maybe_force_keyframe(cam->name);
-            }
-        }
+    if (adapt_bad_ticks_ >= 2 && adapt_rung_ != AdaptRung::kDegraded) {
+        apply_adaptation(AdaptRung::kDegraded, loss, rtt);
+    } else if (adapt_good_ticks_ >= 15 && adapt_rung_ != AdaptRung::kGood) {
+        adapt_good_ticks_ = 0;  // the next rung needs its own clean window
+        apply_adaptation(
+            adapt_rung_ == AdaptRung::kDegraded ? AdaptRung::kRecovering : AdaptRung::kGood, loss, rtt);
     }
 }
 

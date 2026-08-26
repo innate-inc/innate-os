@@ -20,6 +20,7 @@
 #include <opencv2/opencv.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <memory>
@@ -215,13 +216,15 @@ class WebRTCStreamer : public rclcpp::Node {
     void publish_status();        // /webrtc/active_streams snapshot at 0.5 Hz
 
     // ---- RTCP-driven sender adaptation (executor thread + webrtcbin stats callbacks) ----
-    // The viewers' RTCP receiver reports carry loss + RTT back to us; a 1 Hz poll turns the worst
-    // of them into two states. GOOD = full bitrate, keyframes on demand only (lowest latency).
-    // DEGRADED = ~60% bitrate + a periodic 1 Hz keyframe, so reference-chain corruption on an
-    // unrepairable link clears in bounded time instead of smearing until a PLI round-trip.
+    // The viewers' RTCP receiver reports carry loss back to us; a 1 Hz poll steers a three-rung
+    // ladder. Viewer loss means the path is congested, so DEGRADED must genuinely shed load —
+    // 40% bitrate + 2x-base FEC is ~half of GOOD's bytes — and the climb back is one rung per
+    // clean window, because restoring full load in one step just re-congests the path.
+    enum class AdaptRung { kGood, kRecovering, kDegraded };
     void poll_network_adaptation();
-    static void on_peer_stats(GstPromise* promise, gpointer user_data);   // parses one get-stats reply
-    void apply_adaptation(bool degraded, int loss_promille, int rtt_ms);  // sets vp8enc bitrates + logs
+    static void on_peer_stats(GstPromise* promise, gpointer user_data);  // parses one get-stats reply
+    void apply_adaptation(AdaptRung rung, int loss_promille, int rtt_ms);  // sets vp8enc bitrates + FEC, logs
+    guint degraded_fec_pct() const { return std::min(100u, video_fec_percentage_ * 2); }
 
     // ---- Local STUN helper ----
     // Minimal RFC 8489 Binding responder. This gives browsers a robot-local STUN server so their srflx
@@ -268,7 +271,8 @@ class WebRTCStreamer : public rclcpp::Node {
     // webrtcbin stats callbacks, read by the 1 Hz adaptation tick.
     std::atomic<int> rtcp_loss_promille_{-1};
     std::atomic<int> rtcp_rtt_ms_{-1};
-    std::atomic<bool> degraded_{false};  // adaptation state; also read on webrtcbin threads (on-new-transceiver)
+    std::atomic<bool> degraded_{false};  // rung == kDegraded; also read on webrtcbin threads (on-new-transceiver)
+    AdaptRung adapt_rung_ = AdaptRung::kGood;
     int adapt_bad_ticks_ = 0;
     int adapt_good_ticks_ = 0;
 
