@@ -83,9 +83,10 @@ def write_artifact_set(kind: str, artifacts: dict[str, bytes], *, snapshot: bool
 class MissionRun(Skill):
     """Start a fresh generic run shared by this agent's stateful skills."""
 
-    def execute(self) -> SkillReturn:
-        run = start_run("household_orders_agent")
+    def execute(self, agent_id: str = "household_orders_agent") -> SkillReturn:
+        """Start a run, retaining the household agent as the legacy default."""
+        run = start_run(agent_id)
         return SkillOutput(
-            f"RUN_STARTED {json.dumps({'run_id': run['run_id']}, separators=(',', ':'))}",
-            data={"run_id": run["run_id"]},
+            f"RUN_STARTED {json.dumps({'run_id': run['run_id'], 'agent_id': agent_id}, separators=(',', ':'))}",
+            data={"run_id": run["run_id"], "agent_id": agent_id},
         )

@@ -674,7 +674,7 @@ def _coverage_artifact(
     coverage = _coverage_fraction(plan, covered)
     reachable = plan.traversable & plan.reachable
     reachable_count = int(reachable.sum())
-    draw.text((16, 14), "HOUSEHOLD EXPLORATION COVERAGE", fill=(245, 247, 250))
+    draw.text((16, 14), "MAP EXPLORATION COVERAGE", fill=(245, 247, 250))
     draw.text(
         (16, 38),
         f"{coverage:.0%} planner-estimated coverage · {len(state['observations'])} observation poses · "
@@ -811,7 +811,7 @@ def _placeholder_artifact(
         return None
     canvas = Image.new("RGB", (760, 260), (17, 20, 26))
     draw = ImageDraw.Draw(canvas)
-    draw.text((24, 26), "HOUSEHOLD EXPLORATION COVERAGE", fill=(245, 247, 250))
+    draw.text((24, 26), "MAP EXPLORATION COVERAGE", fill=(245, 247, 250))
     draw.text((24, 80), headline, fill=(87, 221, 204))
     draw.text((24, 112), detail, fill=(166, 177, 194))
     png = io.BytesIO()
