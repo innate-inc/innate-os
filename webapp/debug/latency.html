@@ -486,6 +486,8 @@ const robotNow = () => Date.now() / 1000 + clockOffset;
 // scrolling it away against a clock nothing is feeding.
 let lastMarkT = 0;
 let brainActive = null; // null until /brain/agent_status (latched) arrives
+let runningDirective = "";
+let directivePending = false; // an agent picked here but not started yet
 
 function addMark(m, fromRobot = true) {
   if (!m || typeof m.t !== "number" || typeof m.stage !== "string") return;
@@ -1315,10 +1317,11 @@ ros.subscribe(
   AGENT_STATUS_TOPIC,
   jsonHandler((d) => {
     brainActive = !!d.brain_active;
-    $("agent-text").textContent = brainActive
-      ? `running: ${d.current_directive || "(no agent)"}`
-      : "agent stopped";
-    if (d.current_directive) $("directive").value = d.current_directive;
+    runningDirective = d.current_directive || "";
+    const next = pickerSync(runningDirective, $("directive").value, directivePending);
+    directivePending = next.pending;
+    $("directive").value = next.value;
+    renderAgentLine();
   }),
   0,
   "std_msgs/msg/String",
@@ -1742,6 +1745,29 @@ $("cfg-apply").onclick = async () => {
 $("cfg-reload").onclick = () => void readConfig();
 
 // ---- controls -------------------------------------------------------------
+/** Where the agent picker should sit after a status heartbeat.
+ *
+ *  /brain/agent_status repeats every 3 s, and mirroring it into the picker
+ *  unconditionally snatched a half-made selection back before Start could be
+ *  pressed. A pick is held until the robot itself reports it.
+ */
+function pickerSync(running, picked, pending) {
+  const stillPending = running === picked ? false : pending;
+  return { value: running && !stillPending ? running : picked, pending: stillPending };
+}
+
+function renderAgentLine() {
+  const picked = $("directive").value;
+  $("directive").classList.toggle("pending", directivePending);
+  const state = brainActive ? `running: ${runningDirective || "(no agent)"}` : "agent stopped";
+  $("agent-text").textContent = directivePending && picked ? `${state} · ${picked} selected — press Start` : state;
+}
+
+$("directive").addEventListener("change", () => {
+  directivePending = $("directive").value !== runningDirective;
+  renderAgentLine();
+});
+
 async function loadDirectives() {
   try {
     const res = await ros.callService(GET_DIRECTIVES_SERVICE, {});
