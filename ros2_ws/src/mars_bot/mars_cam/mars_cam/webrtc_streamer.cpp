@@ -378,12 +378,13 @@ void WebRTCStreamer::apply_adaptation(AdaptRung rung, int loss_promille, int rtt
         g_object_set(enc, "target-bitrate", bps, nullptr);
         gst_object_unref(enc);
     }
-    // FEC follows the rung, elevated (2x base) only at the bottom: the measurement that favored
-    // 100% ("17-29 s frozen/min -> 0.7 s") was taken at 60% bitrate — no real shedding, FEC as the
-    // only repair. With the load actually cut, FEC only has the residual loss left to fix, and
-    // RECOVERING probes upward at base FEC so the probe itself doesn't re-load the path.
+    // FEC is graduated down the ladder: full at the bottom (see degraded_fec_pct — residual burst
+    // loss on the remote leg is what FEC exists for, and 100% of a 40% bitrate is still cheap),
+    // 2x base while RECOVERING probes upward, base at GOOD.
     if (video_fec_percentage_ > 0) {
-        const guint pct = rung == AdaptRung::kDegraded ? degraded_fec_pct() : video_fec_percentage_;
+        const guint pct = rung == AdaptRung::kDegraded      ? degraded_fec_pct()
+                          : rung == AdaptRung::kRecovering  ? std::min(100u, video_fec_percentage_ * 2)
+                                                            : video_fec_percentage_;
         std::lock_guard<std::mutex> lock(peers_mutex_);
         for (auto& kv : peers_) {
             for (size_t i = 0; i < kv.second->videos.size(); ++i) {
@@ -396,8 +397,8 @@ void WebRTCStreamer::apply_adaptation(AdaptRung rung, int loss_promille, int rtt
             }
         }
     }
-    const char* state = rung == AdaptRung::kDegraded      ? "DEGRADED: 40% bitrate + 2x FEC"
-                        : rung == AdaptRung::kRecovering  ? "RECOVERING: 70% bitrate + base FEC"
+    const char* state = rung == AdaptRung::kDegraded      ? "DEGRADED: 40% bitrate + full FEC"
+                        : rung == AdaptRung::kRecovering  ? "RECOVERING: 70% bitrate + 2x FEC"
                                                           : "GOOD: full bitrate + base FEC";
     if (loss_promille < 0 && rtt_ms < 0) {
         RCLCPP_INFO(this->get_logger(), "Network adaptation -> %s (no viewer reports)", state);
