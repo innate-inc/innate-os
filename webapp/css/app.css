@@ -112,6 +112,33 @@ body {
   outline-offset: 2px;
 }
 
+/* An app, not a document: the initial `cursor: auto` puts an I-beam over every
+   readout and panel label, promising text entry on surfaces that take none.
+   Arrow by default — `button` and the `cursor: pointer` rules still win. */
+body {
+  cursor: default;
+}
+
+/* The caret opts back in for the two things it can honestly mean: type here, or
+   select-and-copy here (the surfaces that also override `user-select: none`). */
+input:not([type]),
+input[type="text"],
+input[type="search"],
+input[type="number"],
+input[type="password"],
+input[type="email"],
+input[type="url"],
+input[type="tel"],
+textarea,
+[contenteditable],
+.agent-stream,
+.skills-pop-status,
+.challenge-active,
+.col-msg,
+.logs-view {
+  cursor: text;
+}
+
 button {
   font: inherit;
   color: inherit;
