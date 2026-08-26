@@ -107,6 +107,7 @@
   .run-head .who { color: var(--ink); font-weight: 500; }
   .run-head .total { margin-left: auto; font-family: ui-monospace, Menlo, monospace; color: var(--ink); }
   .run-head .flag { color: var(--c-bad); font-size: 0.74rem; }
+  .run-said { font-size: 0.79rem; color: var(--ink-2); margin: -2px 0 6px; }
 
   .track { position: relative; height: 22px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
   .track + .track { margin-top: 3px; }
@@ -604,6 +605,28 @@ function runLabel(run) {
   return "(no user event)";
 }
 
+/** What the turn resolved to, in words. The whole point of a bar is lost if you
+ *  cannot tell whether that second and a half produced speech, an action, or
+ *  nothing. */
+function decisionLines(run) {
+  const d = first(run, "decision");
+  if (!d) return [];
+  const out = [];
+  out.push(d.speech ? `said: “${d.speech}”` : "said nothing");
+  out.push(d.calls?.length ? `called: ${d.calls.join(", ")}` : "called no tool");
+  if (d.thoughts) out.push(`thought: ${d.thoughts}`);
+  return out;
+}
+
+/** The same outcome as one short line, for a row header. */
+function decisionSummary(run) {
+  const d = first(run, "decision");
+  if (!d) return "";
+  const said = d.speech ? `“${d.speech.slice(0, 60)}${d.speech.length > 60 ? "…" : ""}”` : "silent";
+  const called = d.calls?.length ? ` · ${d.calls.join(", ")}` : "";
+  return `${said}${called}`;
+}
+
 /** A turn that ran the model and said nothing — the empty voice lane is the
  *  finding, not a gap in the data. */
 const wasSilent = (run) => !!first(run, "stream_done") && !first(run, "speech_queued");
@@ -691,6 +714,7 @@ function barDetail(run, s) {
       // exchange has no user text of its own.
       if (run.turn != null && !runLabel(run).includes(`turn ${run.turn}`)) out.push(`turn ${run.turn}`);
       if (s.key === "gemini") out.push("no first token: this turn produced no speech");
+      out.push(...decisionLines(run));
       break;
     case "tts_queue":
       out.push("sentence waiting for the single speech worker");
@@ -905,6 +929,8 @@ function timelineHtml({ runs, t1, span, why, zeroAt = null }) {
       if (done) {
         lines.push(`dispatch took ${fmt(done.ms)}`, done.outcome ?? "");
       }
+      const decision = first(run, "decision");
+      if (decision) lines.push(decision.speech ? `the turn also said: “${decision.speech}”` : "the turn said nothing");
       // The whole reply-order question, answered on the marker itself.
       const audible = audibleAt(run);
       if (audible) {
@@ -997,11 +1023,13 @@ function renderRuns(runs) {
           ? '<span class="flag" title="the model ran but produced no speech">silent turn</span>'
           : "";
       const mode = topic ? " · sim (clip → /tts/audio)" : "";
+      const outcome = decisionSummary(run);
       return (
         `<div class="run">` +
         `<div class="run-head"><span class="mono">${clock(run.start)}</span>` +
         `<span class="who">${escapeHtml(runLabel(run))}</span>${flag}` +
         `<span class="total">${fmt(totalMs)}${sentences > 1 ? ` · ${sentences} sentences` : ""}${mode}</span></div>` +
+        (outcome ? `<div class="run-said">→ ${escapeHtml(outcome)}</div>` : "") +
         LANES.map((_, i) => lane(i)).join("") +
         `</div>`
       );
@@ -1800,7 +1828,9 @@ if (new URLSearchParams(location.search).has("demo")) {
     ["stream_done", 0.1, { turn: 7 }],
     // The act-then-speak ordering: the head is dispatched, and only then does
     // the reply's held last sentence reach TTS.
-    ["tool_call", 0.004, { turn: 7, name: "head_emotion" }],
+    ["decision", 0.001, { turn: 7, speech: "Turning left now. I can see a desk and a window.", calls: ["head_emotion"], thoughts: "The user asked me to turn and describe." }],
+    ["model_call", -1.2, { turn: 7, name: "head_emotion", ms: 640 }],
+    ["tool_call", 1.204, { turn: 7, name: "head_emotion" }],
     ["tool_done", 0.021, { turn: 7, name: "head_emotion", ms: 21, outcome: "started — you will get an event when it finishes" }],
     ["speech_queued", 0.02, { chars: 31 }],
     ["tts_play_done", 1.3, { ms: 1550, audio_ms: 1410, mode: "aplay" }],
@@ -1816,13 +1846,16 @@ if (new URLSearchParams(location.search).has("demo")) {
     // per-exchange view used to draw as an empty row.
     ["turn_start", 3.0, { turn: 10 }], ["request_sent", 0.11, { turn: 10 }],
     ["stream_done", 1.19, { turn: 10 }],
+    ["decision", 0.001, { turn: 10, speech: "", calls: ["head_emotion"], thoughts: "Nothing needs saying; a nod is enough." }],
     // A vendor-endpointed exchange (realtime backend): no local utterance, so
     // the batch bars cannot draw and the vendor boundaries stand in for them.
     ["you_stopped", 2.4, {}], ["stt_partial", 0.31, { backend: "elevenlabs" }],
     ["chat_in", 0.74, { backend: "elevenlabs", chars: 24 }],
     ["event_queued", 0.006, { kind: "user", text: 'The user says: "what do you see"' }],
     ["turn_start", 0.08, { turn: 11 }], ["request_sent", 0.13, { turn: 11 }],
-    ["first_text", 0.94, { turn: 11 }], ["speech_queued", 0.04, { chars: 30, first: true }],
+    ["first_text", 0.94, { turn: 11 }],
+    ["decision", 0.001, { turn: 11, speech: "A desk with a monitor, and a window behind it.", calls: [], thoughts: "Describe what is in frame." }],
+    ["speech_queued", 0.04, { chars: 30, first: true }],
     ["tts_start", 0.002, { chars: 30 }], ["tts_request", 0.001, { chars: 30, mode: "aplay" }],
     ["tts_first_byte", 0.26, { ms: 260, mode: "aplay" }], ["stream_done", 0.2, { turn: 11 }],
     ["tts_play_done", 1.1, { ms: 1400, audio_ms: 1300, mode: "aplay" }],

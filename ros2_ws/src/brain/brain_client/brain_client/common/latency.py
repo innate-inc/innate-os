@@ -42,6 +42,7 @@ class Stage(StrEnum):
     FIRST_TEXT = "first_text"  # first non-thought delta: when speech *could* start
     MODEL_CALL = "model_call"  # the model emitted a functionCall part (not yet dispatched)
     STREAM_DONE = "stream_done"
+    DECISION = "decision"  # what the turn actually resolved to: words, calls, or neither
     TOOL_CALL = "tool_call"  # a tool/skill dispatch begins
     TOOL_DONE = "tool_done"  # ...and returns; for a skill that is the goal sent, not run
     TURN_DROPPED = "turn_dropped"  # preempted or deactivated: the chain below is broken
