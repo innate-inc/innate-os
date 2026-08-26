@@ -386,36 +386,6 @@ select.skill-input {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  /* Deliberate exceptions to the global * { animation: none !important } kill (see
-     ---- motion ----), which froze the splash fully visible over a dead bar: these
-     are opacity-only (zero travel), which reduced motion permits. !important wins
-     here on specificity against the star rule.
-
-     A full-width span read as a progress bar stuck at 100%; a centered partial
-     segment pulsing in place still says "indeterminate". */
-  .boot-splash {
-    animation: boot-appear 0.3s ease-out 0.4s backwards !important;
-  }
-  .boot-splash.is-leaving {
-    animation: none !important; /* hide instantly; the fade-out transition is killed anyway */
-  }
-  .boot-splash__bar span {
-    animation: boot-pulse 1.4s ease-in-out infinite !important;
-    width: 40%;
-    margin: 0 auto;
-    transform: none;
-  }
-  @keyframes boot-pulse {
-    0%,
-    100% {
-      opacity: 0.25;
-    }
-    50% {
-      opacity: 0.8;
-    }
-  }
-}
 
 /* ---- stage -------------------------------------------------------------- */
 
@@ -5224,6 +5194,23 @@ select.episodes-tool {
   *::after {
     animation: none !important;
     transition: none !important;
+  }
+
+  /* Exceptions: loading indicators are state, not decoration — frozen, a sweep
+     reads as a bar stuck at 100% and a status pulse reads as a hung page.
+     macOS's own progress indicators keep animating under Reduce Motion. These
+     re-declarations beat the star kill on specificity. */
+  .boot-splash {
+    animation: boot-appear 0.3s ease-out 0.4s backwards !important;
+  }
+  .boot-splash.is-leaving {
+    animation: none !important; /* hide instantly; the fade-out transition is killed */
+  }
+  .boot-splash__bar span {
+    animation: boot-sweep 1.1s ease-in-out infinite !important;
+  }
+  .video-status.waiting .video-status-text {
+    animation: breathe 2.2s ease-in-out infinite !important;
   }
 }
 
