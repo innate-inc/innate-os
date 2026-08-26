@@ -293,9 +293,9 @@ WebRTCStreamer::~WebRTCStreamer() {
         gst_element_set_state(audio_pipeline_, GST_STATE_NULL);
         gst_object_unref(audio_pipeline_);
     }
-    // After the peers: their taps push into talk_appsrc_ until their pipelines are down.
-    if (talk_appsrc_)
-        gst_object_unref(talk_appsrc_);
+    // After the peers: destroy_peer pulls each one's input out of the mixer, so by here it has none.
+    if (talk_mixer_)
+        gst_object_unref(talk_mixer_);
     if (speaker_pipeline_) {
         gst_element_set_state(speaker_pipeline_, GST_STATE_NULL);
         gst_object_unref(speaker_pipeline_);
