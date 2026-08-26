@@ -52,6 +52,7 @@ class BrainConfig:
     supervision_turn_interval: float  # seconds between looks while a skill runs
     history_max_entries: int  # conversation entries kept for the model
     history_max_image_turns: int  # frame-turn floor: compaction keeps 1-2x this many (wrist keeps only the newest)
+    speak_before_tools: bool  # voice the reply's held last sentence before dispatching the turn's tools
 
     # --- Timing ---
     scan_stale_after_sec: float
@@ -117,6 +118,10 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     "llm_thinking": "minimal",
     "llm_extra_body": "",
     "memory_llm_model": "",
+    # Only the reply's LAST sentence is still held when the tools run (the rest
+    # left at their sentence boundaries mid-stream), but a one-sentence reply is
+    # all last sentence — so False makes the robot act, then speak.
+    "speak_before_tools": False,
     "idle_turn_interval": 3.0,
     "supervision_turn_interval": 5.0,
     # Compaction evicts to half the cap, so depth rides 1000-2000 entries. A silent
