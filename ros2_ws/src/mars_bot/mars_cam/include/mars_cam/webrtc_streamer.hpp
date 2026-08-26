@@ -44,7 +44,7 @@ class WebRTCStreamer;  // CameraEncoder back-references the node for the static 
 struct CameraEncoder {
     std::string name;
     std::string live_topic, replay_topic;
-    int pt = 96;      // RTP payload type, unique per camera (audio uses 98)
+    int pt = 96;      // RTP payload type, unique per camera (see cam_pt_for_index)
     int fps = 30;     // encoder framerate (appsrc caps)
     int width = 640;  // encode resolution (appsrc caps); incoming frames are resized to it
     int height = 480;

@@ -209,7 +209,7 @@ Peer* WebRTCStreamer::create_peer_transport(const std::string& client_id, const 
             GstCaps* caps =
                 gst_caps_new_simple("application/x-rtp", "media", G_TYPE_STRING, "audio", "encoding-name",
                                     G_TYPE_STRING, "OPUS", "clock-rate", G_TYPE_INT, 48000, "encoding-params",
-                                    G_TYPE_STRING, "2", "payload", G_TYPE_INT, 98, nullptr);
+                                    G_TYPE_STRING, "2", "payload", G_TYPE_INT, kAudioPt, nullptr);
             if (link_rtp_appsrc(peer->webrtc, asrc, caps, 1 * 1024 * 1024)) {
                 peer->rtp["audio"] = asrc;  // keep the ref
             } else {

@@ -279,13 +279,13 @@ bool WebRTCStreamer::build_audio_pipeline() {
         src += " device=\"" + audio_capture_device_ + "\"";
     }
     // mic -> opus -> rtp -> appsink (the fan-out tap). Encoded once for all peers; matches the RTP caps
-    // each peer's transport audio appsrc declares (OPUS/48000/pt98).
+    // each peer's transport audio appsrc declares (OPUS/48000, kAudioPt).
     std::string desc = src +
                        " do-timestamp=true ! "
                        "queue leaky=downstream max-size-buffers=10 max-size-time=0 max-size-bytes=0 ! "
                        "audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! "
                        "opusenc bitrate=24000 audio-type=voice ! "
-                       "rtpopuspay name=pay_audio pt=98 ! "
+                       "rtpopuspay name=pay_audio pt=" + std::to_string(kAudioPt) + " ! "
                        "appsink name=sink_audio emit-signals=true sync=false async=false max-buffers=4 drop=true ";
     GError* error = nullptr;
     audio_pipeline_ = gst_parse_launch(desc.c_str(), &error);

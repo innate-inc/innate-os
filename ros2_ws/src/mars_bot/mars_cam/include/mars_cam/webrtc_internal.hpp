@@ -60,11 +60,14 @@ inline guint cam_ssrc_for_index(size_t index) {
     return 0x1A2B3C00u + static_cast<guint>(index) + 1u;
 }
 
-// RTP payload type per camera (96, 97, 99, 100, …) — skips 98, which the audio (opus) payloader uses.
+// PTs must be unique across the whole BUNDLE (RFC 8843 §9.1), INCLUDING the red/ulpfec/rtx/rtx PTs
+// webrtcbin auto-assigns per video m-line — sequentially after that m-line's media PT, at link time.
+// A 5-PT stride (96, 101, 106, …) leaves each m-line its 4 aux slots; audio sits above them all.
 inline int cam_pt_for_index(size_t index) {
-    const int pt = 96 + static_cast<int>(index);
-    return pt >= 98 ? pt + 1 : pt;
+    return 96 + 5 * static_cast<int>(index);
 }
+
+inline constexpr int kAudioPt = 127;
 
 // Chrome/Firefox often obfuscate their host ICE candidates as "<uuid>.local" mDNS names (one per local
 // interface). These parsing helpers are kept for diagnostics and for a future non-destructive fast path:

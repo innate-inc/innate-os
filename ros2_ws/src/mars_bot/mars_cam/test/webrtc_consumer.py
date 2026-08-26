@@ -51,8 +51,8 @@ START = "/webrtc/start"
 ACTIVE = "/webrtc/active_streams"
 OFFER_ID = "/webrtc/offer_id"
 
-# rtp payload types the node assigns: pt96 = main cam, pt97 = arm cam, pt98 = opus mic.
-PT = {96: "main", 97: "arm", 98: "audio"}
+# rtp payload types the node assigns: pt96 = main cam, pt101 = arm cam, pt127 = opus mic.
+PT = {96: "main", 101: "arm", 127: "audio"}
 
 
 class Driver:

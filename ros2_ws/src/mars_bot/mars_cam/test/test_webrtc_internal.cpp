@@ -8,13 +8,14 @@
 
 using namespace mars_cam;
 
-// ---- RTP payload types: 96, 97, then skip 98 (reserved for opus audio), 99, 100, … ----
-TEST(CamPt, SkipsAudioPayloadType98) {
+// ---- RTP payload types: 5-PT stride so each m-line's red/ulpfec/rtx/rtx aux PTs stay unique ----
+TEST(CamPt, StrideLeavesAuxSlotsAndAudioClear) {
     EXPECT_EQ(cam_pt_for_index(0), 96);
-    EXPECT_EQ(cam_pt_for_index(1), 97);
-    EXPECT_EQ(cam_pt_for_index(2), 99);  // 98 is opus
-    EXPECT_EQ(cam_pt_for_index(3), 100);
-    EXPECT_NE(cam_pt_for_index(2), 98);
+    EXPECT_EQ(cam_pt_for_index(1), 101);
+    EXPECT_EQ(cam_pt_for_index(2), 106);
+    for (size_t i = 0; i < 6; ++i) {
+        EXPECT_LT(cam_pt_for_index(i) + 4, kAudioPt);  // aux block clear of audio
+    }
 }
 
 // ---- SSRCs: fixed, unique per camera, 1-based off the base ----
