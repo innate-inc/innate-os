@@ -46,9 +46,14 @@ PARAMS = {
     "tilt_deg": -20.0,
     "settle_s": 1.2,
     # Objects don't teleport: a match farther than this from the last sighting
-    # is a different instance (e.g. an identical twin), not the target. Sized
-    # above the worst back-projection disagreement between consecutive looks.
-    "mem_gate_m": 0.5,
+    # is a different instance (e.g. an identical twin), not the target. The
+    # allowance grows with the range the memory was taken at, because
+    # pixel_to_floor over-ranges an object whose visible centre sits above the
+    # floor by ~range * height / camera_height (0.26 m) — a 6 cm object at 2 m
+    # back-projects 0.6 m too far, and only 0.11 m too far at the 0.37 m pick
+    # range, so a flat gate would reject the very object it is protecting.
+    "mem_gate_m": 0.35,
+    "mem_gate_frac": 0.4,
     # POSITION. sweet_x ceiling is 0.43 (reach clamp); 0.37 grasps at ~0.32 —
     # grasping at the 0.40 reach edge stalls the wrist and overloads servo 2.
     "sweet_x": 0.37,
@@ -111,6 +116,12 @@ WRIST_ALIGN_TIMEOUT_S = 60.0
 WRIST_MAX_JUMP_PX = 80.0
 WRIST_SEG_MIN_SCORE = 25.0
 WRIST_CAM_ABOVE_EE = 0.07
+# Gate rejections before the memory is treated as stale and re-anchored. At 2,
+# the first rejection still coasts — that is the case the gate exists for (the
+# target missed for one frame while a twin is detected) — and _localize_retry's
+# second look re-anchors instead of turning a wrong memory into a run-ending
+# "could not centre".
+MEM_COAST_LIMIT = 2
 WRIST_SEARCH_ARM = [0.1473, -0.0706, -0.4449, 1.3376, -0.0491]
 
 
@@ -166,7 +177,9 @@ class PickAnyObject(Skill):
     _p = PARAMS
     _grip_strength: float | None = None
     _holding = False  # fingers committed on an object this run
-    _last_seen_odom: tuple[float, float] | None = None
+    # (odom x, odom y, range from the base at that sighting)
+    _last_seen: tuple[float, float, float] | None = None
+    _coasts = 0  # consecutive looks the memory gate rejected
 
     @resource
     def _proxy(self):
@@ -181,29 +194,54 @@ class PickAnyObject(Skill):
         c, s = math.cos(th), math.sin(th)
         return (ox + c * xy[0] - s * xy[1], oy + s * xy[0] + c * xy[1])
 
+    def _sighting(self, cand):
+        """Candidate pixel -> (odom x, odom y, range from the base), or None
+        when it doesn't back-project or odometry is missing."""
+        xy = pixel_to_floor(cand[0], cand[1], self._p["tilt_deg"])
+        wxy = self._base_to_odom(xy) if xy else None
+        return (wxy[0], wxy[1], math.hypot(xy[0], xy[1])) if wxy else None
+
     def _memory_dist(self, cand):
         """Metres from a candidate to the remembered target; inf when the
         back-projection or odometry is unavailable."""
-        xy = pixel_to_floor(cand[0], cand[1], self._p["tilt_deg"])
-        wxy = self._base_to_odom(xy) if xy else None
-        if wxy is None or self._last_seen_odom is None:
+        seen = self._sighting(cand)
+        if seen is None or self._last_seen is None:
             return math.inf
-        return math.hypot(wxy[0] - self._last_seen_odom[0], wxy[1] - self._last_seen_odom[1])
+        return math.hypot(seen[0] - self._last_seen[0], seen[1] - self._last_seen[1])
 
     def _choose_cand(self, cands):
         """Object permanence: among several identical-looking matches, keep the
         instance we've been tracking — the one nearest to where the target was
         last seen (odom frame, so the memory survives base motion between
-        looks). A best match outside mem_gate_m is a different instance, so
-        the target counts as not seen this frame rather than re-anchoring on
-        a twin. Gemini's best-first order only breaks the first look."""
-        if self._last_seen_odom is None:
+        looks). A best match outside the gate is a different instance, so the
+        target counts as not seen this frame rather than re-anchoring on a
+        twin. Gemini's best-first order only breaks the first look.
+
+        The pick of the nearest candidate is immune to back-projection bias
+        (identical twins in one frame share it); only the absolute gate is
+        not, hence its range term."""
+        if self._last_seen is None:
             return cands[0]
         best = min(cands, key=self._memory_dist)
         d = self._memory_dist(best)
-        if d > self._p["mem_gate_m"]:
-            self.logger.info(f"[PickAnyObject] {len(cands)} match(es), nearest {d:.2f}m from last sighting — coasting")
-            return None
+        gate = self._p["mem_gate_m"] + self._p["mem_gate_frac"] * self._last_seen[2]
+        if d > gate:
+            self._coasts += 1
+            if self._coasts < MEM_COAST_LIMIT:
+                self.logger.info(
+                    f"[PickAnyObject] {len(cands)} match(es), nearest {d:.2f}m from last sighting "
+                    f"(gate {gate:.2f}m) — coasting"
+                )
+                return None
+            # Disagreeing look after look means the memory is stale, not that
+            # the object teleported. Drop it and re-anchor: coasting forever
+            # would strand the run in "could not centre" while Gemini is
+            # returning the object in every frame.
+            self.logger.info(f"[PickAnyObject] memory {d:.2f}m off for {self._coasts} looks — re-anchoring")
+            self._last_seen = None
+            self._coasts = 0
+            return cands[0]
+        self._coasts = 0
         if len(cands) > 1:
             self.logger.info(
                 f"[PickAnyObject] {len(cands)} matches; kept #{cands.index(best) + 1} ({d:.2f}m from last sighting)"
@@ -244,10 +282,9 @@ class PickAnyObject(Skill):
         if grip is not None:
             lo, hi = GRIP_STRENGTH_RANGE
             self._grip_strength = max(lo, min(hi, grip))
-        xy = pixel_to_floor(u, v, self._p["tilt_deg"])
-        wxy = self._base_to_odom(xy) if xy else None
-        if wxy is not None:
-            self._last_seen_odom = wxy
+        seen = self._sighting(cand)
+        if seen is not None:
+            self._last_seen = seen
         return (u, v)
 
     def _localize_px(self, prompt):
@@ -826,7 +863,8 @@ class PickAnyObject(Skill):
         # Per-run reset: don't carry the last run's object or grip rating.
         self._grip_strength = None
         self._holding = False
-        self._last_seen_odom = None
+        self._last_seen = None
+        self._coasts = 0
         try:
             self.head.set_position(int(round(self._p["tilt_deg"])))
             # Fold to rest so the arm doesn't occlude the head camera

@@ -52,20 +52,51 @@ def parse_dets(text):
 
 
 def _norm1k(v):
-    """Gemini's normalized 0-1000 coords drift slightly out of range; clamp so
-    downstream slicing/CamShift never sees negative or off-image pixels."""
+    """Gemini's normalized 0-1000 coord -> clamped float, or None when it is
+    not a number. Clamped because the values drift slightly out of range and
+    downstream slicing/CamShift must never see negative or off-image pixels;
+    None because every match is now parsed, so one `null` coordinate late in
+    the reply must not sink the usable matches ahead of it."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        return None
     return min(1000.0, max(0.0, float(v)))
 
 
 def _box_corners_px(det):
     """box_2d [ymin,xmin,ymax,xmax] 0-1000 -> (x0,y0,x1,y1) px."""
     b = det.get("box_2d")
-    if not b or len(b) < 4:
+    if not isinstance(b, (list, tuple)) or len(b) < 4:
         return None
-    y0, x0, y1, x1 = [_norm1k(v) for v in b[:4]]
+    y0, x0, y1, x1 = (_norm1k(v) for v in b[:4])
+    if y0 is None or x0 is None or y1 is None or x1 is None:
+        return None
     y0, y1 = sorted((y0, y1))
     x0, x1 = sorted((x0, x1))
     return (x0 / 1000.0 * IMG_W, y0 / 1000.0 * IMG_H, x1 / 1000.0 * IMG_W, y1 / 1000.0 * IMG_H)
+
+
+def _grasp_px(det):
+    """grasp_point [y,x] 0-1000 -> (u, v) px, or None."""
+    gp = det.get("grasp_point")
+    if not isinstance(gp, (list, tuple)) or len(gp) < 2:
+        return None
+    y, x = _norm1k(gp[0]), _norm1k(gp[1])
+    if x is None or y is None:
+        return None
+    return (x / 1000.0 * IMG_W, y / 1000.0 * IMG_H)
+
+
+def _grip(det):
+    """grip_strength as a float, or None when absent or not a number."""
+    g = det.get("grip_strength")
+    if isinstance(g, bool) or not isinstance(g, (int, float)) or not math.isfinite(g):
+        return None
+    return float(g)
+
+
+def _center_px(det):
+    c = _box_corners_px(det)
+    return ((c[0] + c[2]) / 2.0, (c[1] + c[3]) / 2.0) if c else None
 
 
 def parse_det_cands(text):
@@ -73,17 +104,10 @@ def parse_det_cands(text):
     (u, v) is the grasp_point when given, else the box center."""
     cands = []
     for det in parse_dets(text):
-        gp = det.get("grasp_point")
-        if gp and len(gp) >= 2:
-            u, v = _norm1k(gp[1]) / 1000.0 * IMG_W, _norm1k(gp[0]) / 1000.0 * IMG_H
-        else:
-            c = _box_corners_px(det)
-            if not c:
-                continue
-            u, v = (c[0] + c[2]) / 2.0, (c[1] + c[3]) / 2.0
-        g = det.get("grip_strength")
-        grip = float(g) if isinstance(g, (int, float)) and not isinstance(g, bool) and math.isfinite(g) else None
-        cands.append((u, v, grip))
+        px = _grasp_px(det) or _center_px(det)
+        if px is None:
+            continue
+        cands.append((px[0], px[1], _grip(det)))
     return cands
 
 
@@ -96,9 +120,9 @@ def parse_det_px(text):
 def parse_det_grip(text):
     """grip_strength (float) from the best detection, or None."""
     for det in parse_dets(text):
-        g = det.get("grip_strength")
-        if isinstance(g, (int, float)) and not isinstance(g, bool) and math.isfinite(g):
-            return float(g)
+        g = _grip(det)
+        if g is not None:
+            return g
     return None
 
 
