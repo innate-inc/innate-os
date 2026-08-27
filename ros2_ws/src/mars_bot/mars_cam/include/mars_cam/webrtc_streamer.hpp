@@ -276,7 +276,9 @@ class WebRTCStreamer : public rclcpp::Node {
     // webrtcbin stats callbacks, read by the 1 Hz adaptation tick.
     std::atomic<int> rtcp_loss_promille_{-1};
     std::atomic<int> rtcp_rtt_ms_{-1};
-    std::atomic<bool> degraded_{false};  // rung == kDegraded; also read on webrtcbin threads (on-new-transceiver)
+    // The current rung's FEC ladder value (set by apply_adaptation). Atomic because peers joining
+    // mid-rung read it on webrtcbin threads (on-new-transceiver) to start at the fleet's level.
+    std::atomic<guint> current_fec_pct_{25};
     AdaptRung adapt_rung_ = AdaptRung::kGood;
     int adapt_bad_ticks_ = 0;
     int adapt_good_ticks_ = 0;

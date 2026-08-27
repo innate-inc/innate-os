@@ -108,6 +108,7 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
     video_nack_ = this->get_parameter("video_nack").as_bool();
     video_fec_percentage_ =
         static_cast<guint>(std::clamp(this->get_parameter("video_fec_percentage").as_int(), int64_t{0}, int64_t{100}));
+    current_fec_pct_ = video_fec_percentage_;
     enable_local_stun_ = this->get_parameter("enable_local_stun").as_bool();
     local_stun_port_ = static_cast<int>(this->get_parameter("local_stun_port").as_int());
     rtcp_inactivity_timeout_s_ = this->get_parameter("rtcp_inactivity_timeout_s").as_double();
@@ -365,7 +366,6 @@ void WebRTCStreamer::on_peer_stats(GstPromise* promise, gpointer user_data) {
 
 void WebRTCStreamer::apply_adaptation(AdaptRung rung, int loss_promille, int rtt_ms) {
     adapt_rung_ = rung;
-    degraded_ = rung == AdaptRung::kDegraded;
     // Shedding is the point: the old DEGRADED (60% bitrate x 100% FEC) offered 1800 kbps against
     // GOOD's 1875 — a 4% cut with double the packets, feeding the congestion it answered.
     const int tenths = rung == AdaptRung::kDegraded ? 4 : rung == AdaptRung::kRecovering ? 7 : 10;
@@ -381,10 +381,11 @@ void WebRTCStreamer::apply_adaptation(AdaptRung rung, int loss_promille, int rtt
     // FEC is graduated down the ladder: full at the bottom (see degraded_fec_pct — residual burst
     // loss on the remote leg is what FEC exists for, and 100% of a 40% bitrate is still cheap),
     // 2x base while RECOVERING probes upward, base at GOOD.
+    const guint pct = rung == AdaptRung::kDegraded     ? degraded_fec_pct()
+                      : rung == AdaptRung::kRecovering ? std::min(100u, video_fec_percentage_ * 2)
+                                                       : video_fec_percentage_;
+    current_fec_pct_ = pct;
     if (video_fec_percentage_ > 0) {
-        const guint pct = rung == AdaptRung::kDegraded     ? degraded_fec_pct()
-                          : rung == AdaptRung::kRecovering ? std::min(100u, video_fec_percentage_ * 2)
-                                                           : video_fec_percentage_;
         std::lock_guard<std::mutex> lock(peers_mutex_);
         for (auto& kv : peers_) {
             for (size_t i = 0; i < kv.second->videos.size(); ++i) {
@@ -444,7 +445,9 @@ void WebRTCStreamer::poll_network_adaptation() {
     // 34 flips/hour on a tunneled link). Loss-only: RTT is a property of the path, not damage;
     // a tick without a loss measurement leaves the counters unchanged (RTT alone can't prove
     // the link clean). Recovery keyframes stay purely PLI-driven on every rung — a forced IDR
-    // is the most expensive burst a congested link can be handed.
+    // is the most expensive burst a congested link can be handed. Note get-stats repeats the last
+    // RR's fraction-lost until the next RR lands, so on sparse-RTCP paths the 2-tick entry can be
+    // one bad report sampled twice — a floor, not two independent reports.
     const bool report = loss >= 0;
     const bool bad = loss >= 30;
     if (report) {
