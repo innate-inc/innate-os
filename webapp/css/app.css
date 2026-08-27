@@ -8543,10 +8543,6 @@ select.skill-input {
   min-height: 0;
 }
 
-.agent-stream-wrap.can-scroll-up {
-  padding-top: 50px;
-}
-
 .agent-stream {
   flex: 1 1 auto;
   min-height: 0;
@@ -8562,10 +8558,6 @@ select.skill-input {
 
 .agent-stream > * {
   flex-shrink: 0;
-}
-
-.agent-stream-compact-spacer {
-  pointer-events: none;
 }
 
 .agent-stream::-webkit-scrollbar {
@@ -8607,70 +8599,6 @@ select.skill-input {
 
 .agent-stream.compact .chat-msg {
   max-width: 100%;
-}
-
-.agent-stream-earlier {
-  position: absolute;
-  z-index: 2;
-  top: 9px;
-  left: 2px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  color: rgb(231 231 234 / 78%);
-  background: rgb(8 8 10 / 94%);
-  border: 1px solid rgb(255 255 255 / 16%);
-  border-radius: 999px;
-  box-shadow: 0 6px 16px rgb(0 0 0 / 28%);
-  cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-4px);
-  transition:
-    opacity 150ms cubic-bezier(0.215, 0.61, 0.355, 1),
-    transform 150ms cubic-bezier(0.215, 0.61, 0.355, 1),
-    color 150ms ease,
-    background 150ms ease,
-    border-color 150ms ease;
-}
-
-.agent-stream-earlier svg {
-  width: 16px;
-  height: 16px;
-}
-
-.agent-stream-wrap.can-scroll-up .agent-stream-earlier {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
-}
-
-.agent-stream-wrap.can-scroll-up::before {
-  position: absolute;
-  z-index: 1;
-  top: 25px;
-  right: 0;
-  left: 46px;
-  height: 1px;
-  background: rgb(255 255 255 / 10%);
-  pointer-events: none;
-  content: "";
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .agent-stream-earlier:hover {
-    color: #fff;
-    background: rgb(12 12 16 / 86%);
-    border-color: rgb(255 255 255 / 24%);
-  }
-}
-
-.agent-stream-earlier:focus-visible {
-  outline: 2px solid var(--ctl-accent);
-  outline-offset: 1px;
 }
 
 @keyframes compact-message-in {

@@ -2,9 +2,9 @@
 // Agent chat transcript — thoughts, chat messages, and skill runs in one
 // scrollable stream, in Compact or Detailed mode.
 //
-// Owns all transcript state (scroll pinning, the open thought group, live skill
+// Owns all transcript state (scroll position, the open thought group, live skill
 // runs, and the skill-run streak). That state is mutually entangled — a single
-// message can close a thought group, break a streak, pin the prompt and animate
+// message can close a thought group, break a streak, move the scroll and animate
 // an entry — so it lives in one module rather than being threaded between
 // several. Nothing here talks to ROS: the panel feeds it messages.
 
@@ -63,21 +63,7 @@ export function createChatStream(opts = {}) {
   streamWrap.className = "agent-stream-wrap";
   const stream = document.createElement("div");
   stream.className = "agent-stream compact";
-  // Extra scroll range lets a short current turn align to the top.
-  const compactSpacer = document.createElement("div");
-  compactSpacer.className = "agent-stream-compact-spacer";
-  compactSpacer.setAttribute("aria-hidden", "true");
-  stream.append(compactSpacer);
-  const earlierBtn = document.createElement("button");
-  earlierBtn.type = "button";
-  earlierBtn.className = "agent-stream-earlier";
-  earlierBtn.setAttribute("aria-label", "Earlier messages");
-  earlierBtn.setAttribute("aria-hidden", "true");
-  earlierBtn.title = "Earlier messages";
-  earlierBtn.tabIndex = -1;
-  earlierBtn.innerHTML =
-    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6,14 12,8 18,14"/></svg>';
-  streamWrap.append(stream, earlierBtn);
+  streamWrap.append(stream);
   compactBtn.classList.add("active");
   compactBtn.setAttribute("aria-pressed", "true");
   detailedBtn.setAttribute("aria-pressed", "false");
@@ -85,97 +71,20 @@ export function createChatStream(opts = {}) {
   detailedBtn.addEventListener("click", () => setStreamMode("detailed"));
   // ---- stream helpers -----------------------------------------------------
 
-  // Detailed stays sticky-bottom. Compact pins the current user prompt to the
-  // top (older turns sit above it) so each send feels like a fresh page.
+  // Follow new output while the reader is already at the bottom. Sending a new
+  // prompt explicitly returns there; incoming output never yanks scrollback
+  // away from someone reading an earlier turn.
   function atBottom() {
     return stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80;
   }
   /** @param {boolean} wasAtBottom */
   function settleStreamAfterAppend(wasAtBottom) {
-    if (stream.classList.contains("compact")) {
-      sizeCompactSpacer();
-      updateScrollHint();
-      return;
-    }
     if (wasAtBottom) stream.scrollTop = stream.scrollHeight;
-    updateScrollHint();
   }
-
-  function updateScrollHint() {
-    const show =
-      stream.classList.contains("compact") &&
-      compactPrompt !== null &&
-      hasEarlierMessages(compactPrompt) &&
-      stream.scrollTop > 0;
-    streamWrap.classList.toggle("can-scroll-up", show);
-    earlierBtn.setAttribute("aria-hidden", String(!show));
-    earlierBtn.tabIndex = show ? 0 : -1;
-  }
-
-  /** @type {HTMLElement | null} */
-  let compactPrompt = null;
 
   /** @param {HTMLElement} el */
   function appendStreamItem(el) {
-    stream.insertBefore(el, compactSpacer);
-  }
-
-  function sizeCompactSpacer() {
-    if (!stream.classList.contains("compact") || !compactPrompt) {
-      if (compactSpacer.style.height !== "0px") compactSpacer.style.height = "0px";
-      return;
-    }
-    const styles = getComputedStyle(stream);
-    const gap = Number.parseFloat(styles.rowGap) || 0;
-    const topInset = Number.parseFloat(styles.paddingTop) || 0;
-    let used = compactPrompt.offsetHeight;
-    for (
-      let node = compactPrompt.nextElementSibling;
-      node && node !== compactSpacer;
-      node = node.nextElementSibling
-    ) {
-      if (!(node instanceof HTMLElement)) continue;
-      if (getComputedStyle(node).display === "none") continue;
-      used += node.offsetHeight + gap;
-    }
-    const next = `${Math.max(0, stream.clientHeight - used - topInset)}px`;
-    if (compactSpacer.style.height !== next) compactSpacer.style.height = next;
-  }
-
-  /** @param {HTMLElement} el */
-  function hasEarlierMessages(el) {
-    for (let node = el.previousElementSibling; node; node = node.previousElementSibling) {
-      if (!(node instanceof HTMLElement)) continue;
-      if (getComputedStyle(node).display === "none") continue;
-      return true;
-    }
-    return false;
-  }
-
-  /** @param {HTMLElement} el */
-  function pinCompactPrompt(el) {
-    compactPrompt = el;
-    if (!stream.classList.contains("compact") || replayingHistory) {
-      updateScrollHint();
-      return;
-    }
-    sizeCompactSpacer();
-    const topInset = Number.parseFloat(getComputedStyle(stream).paddingTop) || 0;
-    const promptTop = el.getBoundingClientRect().top;
-    const streamTop = stream.getBoundingClientRect().top;
-    stream.scrollTop += promptTop - streamTop - topInset;
-    updateScrollHint();
-  }
-
-  function pinLatestCompactTurn() {
-    const users = stream.querySelectorAll(".chat-msg.user");
-    const prompt = compactPrompt ?? users[users.length - 1] ?? null;
-    if (!(prompt instanceof HTMLElement)) {
-      sizeCompactSpacer();
-      updateScrollHint();
-      return;
-    }
-    pinCompactPrompt(prompt);
+    stream.append(el);
   }
 
   /** @type {{ wrap: HTMLElement, status: HTMLElement, list: HTMLElement, lastByKind: Record<string, string>, startTs: number, latestTs: number } | null} */
@@ -220,12 +129,7 @@ export function createChatStream(opts = {}) {
         setSkillElementOpen(card, head, !compact);
       }
     }
-    if (compact) pinLatestCompactTurn();
-    else {
-      compactSpacer.style.height = "0px";
-      stream.scrollTop = stream.scrollHeight;
-      updateScrollHint();
-    }
+    stream.scrollTop = stream.scrollHeight;
   }
 
   /** @param {HTMLElement} el */
@@ -238,20 +142,6 @@ export function createChatStream(opts = {}) {
     }, 180);
     compactEnterTimers.add(timer);
   }
-
-  earlierBtn.addEventListener("click", () => {
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    stream.scrollBy({
-      top: -Math.max(stream.clientHeight * 0.75, 120),
-      behavior: reduced ? "auto" : "smooth",
-    });
-  });
-  stream.addEventListener("scroll", updateScrollHint, { passive: true });
-  const streamResize = new ResizeObserver(() => {
-    if (stream.classList.contains("compact")) sizeCompactSpacer();
-    updateScrollHint();
-  });
-  streamResize.observe(stream);
 
   /** @param {boolean} active */
   function setThoughtsStatus(active) {
@@ -334,8 +224,7 @@ export function createChatStream(opts = {}) {
     if (label !== "skill_output") animateCompactEnter(el);
     lastTs = ts;
     if (kind === "user") {
-      pinCompactPrompt(el);
-      if (!stream.classList.contains("compact")) stream.scrollTop = stream.scrollHeight;
+      stream.scrollTop = stream.scrollHeight;
     } else {
       settleStreamAfterAppend(wasAtBottom);
     }
@@ -406,7 +295,6 @@ export function createChatStream(opts = {}) {
       const open = !group.classList.contains("open");
       setSkillElementOpen(group, head, open);
       head.title = open ? "Hide repeated skill calls" : "Show each skill call";
-      sizeCompactSpacer();
     });
     head.title = "Show each skill call";
     streak.group = group;
@@ -494,7 +382,6 @@ export function createChatStream(opts = {}) {
       head.addEventListener("click", () => {
         if (!createdRun.hasDetail) return;
         setSkillRunOpen(createdRun, !createdRun.wrap.classList.contains("open"));
-        sizeCompactSpacer();
       });
       skillRuns.set(key, createdRun);
       if (!attachSkillToStreak(name, wrap)) {
@@ -567,8 +454,7 @@ export function createChatStream(opts = {}) {
    *  wholesale rather than trying to merge.
    *  @param {any[]} entries */
   function replay(entries) {
-    stream.replaceChildren(compactSpacer);
-    compactPrompt = null;
+    stream.replaceChildren();
     for (const timer of compactEnterTimers) clearTimeout(timer);
     compactEnterTimers.clear();
     thoughts = null;
@@ -583,11 +469,7 @@ export function createChatStream(opts = {}) {
       replayingHistory = false;
       stream.classList.remove("replaying");
     }
-    if (stream.classList.contains("compact")) pinLatestCompactTurn();
-    else {
-      stream.scrollTop = stream.scrollHeight;
-      updateScrollHint();
-    }
+    stream.scrollTop = stream.scrollHeight;
   }
 
   return {
@@ -601,7 +483,6 @@ export function createChatStream(opts = {}) {
     setMode: setStreamMode,
     destroy() {
       for (const timer of compactEnterTimers) clearTimeout(timer);
-      streamResize.disconnect();
     },
   };
 }
