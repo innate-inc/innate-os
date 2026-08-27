@@ -59,13 +59,12 @@ PARAMS = {
     # bounce goes back out. 0.10 asks for 8.1 cm and the reach clamp below
     # trims it to whatever the arm can actually hold at the release height.
     "drop_inset": 0.10,
-    "release_clear_m": 0.04,  # gripper height above the rim on the way in
-    # Release height above the container's FLOOR. Dropping from over the rim
-    # bounced the object back out — a 0.14 m fall into a 0.14 m box. Lower is
-    # also easier on the arm: reach grows as z drops (0.39 m at the rim, 0.41 m
-    # down here), so the descent never costs inset.
-    "release_inside_m": 0.06,
-    "descend_s": 1.2,
+    # Gripper height above the rim at release. The arm stays here and simply
+    # opens — it does not follow the object down. At arm_pitch the claw already
+    # points down, so the fingertips hang below the rim at this height and the
+    # object is inside the container before it is let go; reaching further down
+    # only drives them toward the container's floor.
+    "release_clear_m": 0.04,
     "release_settle_s": 0.8,
     # Carry pose for the drive in. The pick leaves the object held forward of
     # the 0.25 m bumper and below a container's rim, so the gripper reaches
@@ -81,7 +80,7 @@ PARAMS = {
     # above it the real servo overcurrent-trips.
     "carry_grip": 0.60,
     "carry_grip_s": 0.8,
-    "lift_after_m": 0.12,  # enough to clear a rim the gripper is now INSIDE
+    "lift_after_m": 0.08,  # the fingertips hang below the rim even at hover
     "hover_s": 2.5,
     "arm_pitch": 1.30,
     # Least the gripper may sit past the near face and still be over the
@@ -261,23 +260,10 @@ class DropInBox(_FloorApproach):
                 f"Could not hold the gripper over the rim at z={z:.2f} m — "
                 f"the container looks too tall for this arm ({e})"
             ) from e
-        # Latched BEFORE the claw opens: a cancel during the descent or settle
-        # below must still lift out of the container, and an unlatched flag
+        # Latched BEFORE the claw opens: a cancel during the settle below must
+        # still lift the fingers out of the container, and an unlatched flag
         # folded REST straight through the wall.
         self._over_rim = True
-
-        # Over the rim, now down inside it before letting go. tolerance_z=None
-        # because touching down early is a fine way for this move to end.
-        inside = min(rim - 0.02, p["release_inside_m"])
-        if inside > p["rim_z_min"]:
-            try:
-                self.manipulation.move_to(
-                    x, y, inside, pitch=p["arm_pitch"], duration=p["descend_s"], tolerance_xy=0.06, tolerance_z=None
-                )
-                z = inside
-            except ArmFailed as e:
-                self.logger.warning(f"[DropInBox] could not descend into the container ({e}); releasing from the rim")
-        self._debug("descend", target_xyz=[x, y, z], rim_z=rim)
 
         self.check_cancelled()  # last exit before the object leaves the claw
         self.manipulation.gripper_open(duration=1.0)
