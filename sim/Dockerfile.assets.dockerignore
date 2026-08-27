@@ -15,6 +15,9 @@
 !sim/viewer/public/models/human.glb
 !sim/viewer/public/models/labrador.glb
 !sim/viewer/public/models/soccer_ball.glb
+!sim/viewer/public/models/resident_alex.glb
+!sim/viewer/public/models/resident_blake.glb
+!sim/viewer/public/models/resident_casey.glb
 
 # The work store (seeded): the decomposition, room exports and nav map, plus
 # the authored props. Must cover config.SIM_ASSET_UNITS -- a subtree the seeder

@@ -156,11 +156,14 @@ RUN node tools/split-apartment.mjs ./appartement.glb /out/models/apartment
 FROM scratch AS assemble
 COPY --from=derived /out/physics                  /viewer/physics
 COPY --from=split   /out/models/apartment         /viewer/models/apartment
-# The props: authored glTF straight from the seeded context; their hull soups
-# come from `derived`.
+# The props: authored glTF straight from the seeded context. Decomposed object
+# props also receive hull soups from `derived`; residents use convex hulls.
 COPY sim/viewer/public/models/human.glb           /viewer/models/human.glb
 COPY sim/viewer/public/models/labrador.glb        /viewer/models/labrador.glb
 COPY sim/viewer/public/models/soccer_ball.glb     /viewer/models/soccer_ball.glb
+COPY sim/viewer/public/models/resident_alex.glb    /viewer/models/resident_alex.glb
+COPY sim/viewer/public/models/resident_blake.glb   /viewer/models/resident_blake.glb
+COPY sim/viewer/public/models/resident_casey.glb   /viewer/models/resident_casey.glb
 COPY --from=derived /out/models                   /viewer/models
 # No /viewer/robot: the webapp serves the robot description straight out of
 # ros2_ws (webapp/proxy/https_server.py).

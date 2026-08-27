@@ -44,11 +44,23 @@ RAW_FILES = {
     ),
     # The browser's prop models -- the glTF exports the viewer loads. Their
     # MuJoCo counterparts are the authored meshes under assets/objects and
-    # assets/humans below. No *_hulls.f32: tools/build_viewer_physics.py derives
-    # those from the collision hulls decompose_objects.py makes from the .obj.
+    # assets/humans below. Decomposed object props get derived *_hulls.f32
+    # files; residents use their visual mesh's convex hull directly.
     SIM / "viewer" / "public" / "models" / "human.glb": (
         f"{_RAW_RELEASE}/human.glb",
         "e089c1eb6624fa881773bd08542c16aa13afbe2bb6323216d00c3e377b668ec8",
+    ),
+    SIM / "viewer" / "public" / "models" / "resident_alex.glb": (
+        f"{_RAW_RELEASE}/resident_alex.glb",
+        "2f7f877bf0ad4b063cf18e2912fbf5e6d236a1d7d034c356ab935238bd15ae98",
+    ),
+    SIM / "viewer" / "public" / "models" / "resident_blake.glb": (
+        f"{_RAW_RELEASE}/resident_blake.glb",
+        "7c9d211fa89f5d75ff985c483879a606062d4c3064023c0d67326e386aa74a9b",
+    ),
+    SIM / "viewer" / "public" / "models" / "resident_casey.glb": (
+        f"{_RAW_RELEASE}/resident_casey.glb",
+        "2ddd1b74d7477932a996feeb82272cbe3f55e35799f229979bbb2024ae0f890b",
     ),
     SIM / "viewer" / "public" / "models" / "labrador.glb": (
         f"{_RAW_RELEASE}/labrador.glb",
@@ -65,6 +77,30 @@ RAW_FILES = {
     SIM / "assets" / "humans" / "casual_man_basecolor.png": (
         f"{_RAW_RELEASE}/casual_man_basecolor.png",
         "c742c793985222cdc84d073abca1101b06270f502a377105c03c3827a4d834c6",
+    ),
+    SIM / "assets" / "humans" / "resident_alex.obj": (
+        f"{_RAW_RELEASE}/resident_alex.obj",
+        "f33ba7ea12590b8b16428f967534ee8d3ac63de3b8a9964312dbbf66590e0b21",
+    ),
+    SIM / "assets" / "humans" / "resident_alex_basecolor.png": (
+        f"{_RAW_RELEASE}/resident_alex_basecolor.png",
+        "f2ddce768302f0762311f148ac56d1c517b623b988272a25a7728058d9c07a16",
+    ),
+    SIM / "assets" / "humans" / "resident_blake.obj": (
+        f"{_RAW_RELEASE}/resident_blake.obj",
+        "d87c2d9b0e8366afa9201e3b3a35383b48d16a6c38da4edf03fc9be1b47bfa0c",
+    ),
+    SIM / "assets" / "humans" / "resident_blake_basecolor.png": (
+        f"{_RAW_RELEASE}/resident_blake_basecolor.png",
+        "bd3ff333ad7a50b7451b23e51fc01ac9f7a8242a120670f680b6aae7dbeba334",
+    ),
+    SIM / "assets" / "humans" / "resident_casey.obj": (
+        f"{_RAW_RELEASE}/resident_casey.obj",
+        "4c7ccecb4f1e640a27fcb812080879877e6d5cae7a33ea8cd8a2b26a12a02cb6",
+    ),
+    SIM / "assets" / "humans" / "resident_casey_basecolor.png": (
+        f"{_RAW_RELEASE}/resident_casey_basecolor.png",
+        "b1a927b6684d2de00db65ff834bf6f8889cbf99e637fe3d26709cf45ae360698",
     ),
     SIM / "assets" / "objects" / "labrador.obj": (
         f"{_RAW_RELEASE}/labrador.obj",
