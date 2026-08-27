@@ -7,11 +7,13 @@ import {
   ONBOARDING_SEEN_KEY,
   ONBOARDING_VERSION,
 } from "../js/onboarding.js";
-import { FIRST_NUDGE, REPLY_NUDGE } from "../js/agent/agentOnboarding.js";
+import { FIRST_NUDGE, INTRO_NUDGE, REPLY_NUDGE } from "../js/agent/agentOnboarding.js";
 
 assert.equal(ONBOARDING_SEEN_KEY, `innate.onboardingSeen.v${ONBOARDING_VERSION}`);
 assert.equal(ONBOARDING_VERSION, 2);
 assert.equal(ONBOARDING_REQUEST_EVENT, "innate:onboarding-request");
+assert.equal(INTRO_NUDGE.title, "Meet MARS");
+assert.match(INTRO_NUDGE.body, /control room/);
 assert.match(FIRST_NUDGE.body, /Agent menu/);
 assert.match(FIRST_NUDGE.body, /type the message/);
 assert.deepEqual(FIRST_NUDGE.examples, ["What can you do?"]);
@@ -19,7 +21,7 @@ assert.match(REPLY_NUDGE.body, /navigate/);
 assert.match(REPLY_NUDGE.body, /wave/);
 assert.match(REPLY_NUDGE.body, /pick up/);
 
-for (const nudge of [FIRST_NUDGE, REPLY_NUDGE]) {
+for (const nudge of [INTRO_NUDGE, FIRST_NUDGE, REPLY_NUDGE]) {
   assert.ok(nudge.eyebrow.trim());
   assert.ok(nudge.title.trim());
   assert.ok(nudge.body.trim());
