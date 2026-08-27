@@ -78,7 +78,7 @@ export function createChatStream(opts = {}) {
     return stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80;
   }
   /** @param {boolean} wasAtBottom */
-  function settleStreamAfterAppend(wasAtBottom) {
+  function settleStreamAfterMutation(wasAtBottom) {
     if (wasAtBottom) stream.scrollTop = stream.scrollHeight;
   }
 
@@ -183,8 +183,10 @@ export function createChatStream(opts = {}) {
       const list = document.createElement("div");
       list.className = "chat-thoughts-list";
       toggle.addEventListener("click", () => {
+        const wasAtBottom = atBottom();
         const open = wrap.classList.toggle("open");
         arrow.textContent = open ? "▴" : "▾";
+        settleStreamAfterMutation(wasAtBottom);
       });
       wrap.append(toggle, list);
       appendStreamItem(wrap);
@@ -199,7 +201,7 @@ export function createChatStream(opts = {}) {
       thoughts.list.appendChild(item);
     }
     setThoughtsStatus(true);
-    settleStreamAfterAppend(wasAtBottom);
+    settleStreamAfterMutation(wasAtBottom);
   }
 
   /** @param {string} kind @param {string} text @param {number} ts @param {string} [label] */
@@ -226,7 +228,7 @@ export function createChatStream(opts = {}) {
     if (kind === "user") {
       stream.scrollTop = stream.scrollHeight;
     } else {
-      settleStreamAfterAppend(wasAtBottom);
+      settleStreamAfterMutation(wasAtBottom);
     }
   }
 
@@ -292,9 +294,11 @@ export function createChatStream(opts = {}) {
     first?.before(group);
     list.append(...streak.wraps);
     head.addEventListener("click", () => {
+      const wasAtBottom = atBottom();
       const open = !group.classList.contains("open");
       setSkillElementOpen(group, head, open);
       head.title = open ? "Hide repeated skill calls" : "Show each skill call";
+      settleStreamAfterMutation(wasAtBottom);
     });
     head.title = "Show each skill call";
     streak.group = group;
@@ -381,7 +385,9 @@ export function createChatStream(opts = {}) {
       run = createdRun;
       head.addEventListener("click", () => {
         if (!createdRun.hasDetail) return;
+        const wasAtBottom = atBottom();
         setSkillRunOpen(createdRun, !createdRun.wrap.classList.contains("open"));
+        settleStreamAfterMutation(wasAtBottom);
       });
       skillRuns.set(key, createdRun);
       if (!attachSkillToStreak(name, wrap)) {
@@ -411,7 +417,7 @@ export function createChatStream(opts = {}) {
 
     lastTs = ts;
     if (cls !== "running") skillRuns.delete(key);
-    settleStreamAfterAppend(wasAtBottom);
+    settleStreamAfterMutation(wasAtBottom);
   }
 
   // ---- history replay -----------------------------------------------------

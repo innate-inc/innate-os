@@ -35,6 +35,7 @@ class FakeClassList {
     if (next) this.values.add(name);
     else this.values.delete(name);
     this.sync();
+    this.owner.onClassToggle?.(name, next);
     return next;
   }
 
@@ -53,6 +54,7 @@ class FakeElement {
     this.scrollHeight = 0;
     this.clientHeight = 0;
     this.textContent = "";
+    this.listeners = new Map();
   }
 
   set className(value) {
@@ -81,7 +83,13 @@ class FakeElement {
     this.attributes.set(name, String(value));
   }
 
-  addEventListener() {}
+  addEventListener(name, listener) {
+    this.listeners.set(name, listener);
+  }
+
+  click() {
+    this.listeners.get("click")?.();
+  }
 
   querySelectorAll() {
     return [];
@@ -130,6 +138,34 @@ test("incoming output preserves manual scrollback", () => {
   const { chat, stream } = fixture();
   stream.scrollTop = 120;
   chat.addMessage("robot", "still working", 3);
+  assert.equal(stream.scrollTop, 120);
+  chat.destroy();
+});
+
+test("expanding thoughts preserves bottom anchoring", () => {
+  const { chat, stream } = fixture();
+  stream.scrollTop = 700;
+  chat.addThought("robot_thoughts", "planning", 4);
+  stream.scrollTop = 700;
+  const thought = stream.children[0];
+  thought.onClassToggle = (name, open) => {
+    if (name === "open" && open) stream.scrollHeight = 1200;
+  };
+  thought.children[0].click();
+  assert.equal(stream.scrollTop, 1200);
+  chat.destroy();
+});
+
+test("expanding thoughts preserves manual scrollback", () => {
+  const { chat, stream } = fixture();
+  stream.scrollTop = 700;
+  chat.addThought("robot_thoughts", "planning", 5);
+  stream.scrollTop = 120;
+  const thought = stream.children[0];
+  thought.onClassToggle = (name, open) => {
+    if (name === "open" && open) stream.scrollHeight = 1200;
+  };
+  thought.children[0].click();
   assert.equal(stream.scrollTop, 120);
   chat.destroy();
 });
