@@ -504,11 +504,24 @@ select.skill-input {
 
 .agent-onboarding-target {
   position: relative;
-  z-index: 1101 !important;
   outline: 2px solid var(--ctl-accent);
   outline-offset: 5px;
   border-radius: 10px;
   box-shadow: 0 0 0 8px rgb(232 163 61 / 10%);
+}
+
+.agent-onboarding-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  pointer-events: none;
+}
+
+.agent-onboarding-mask-segment {
+  position: fixed;
+  background: rgb(0 0 0 / 78%);
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
 }
 
 .agent-onboarding-card {
