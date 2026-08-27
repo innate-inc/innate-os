@@ -7,7 +7,7 @@
 // Disconnected: one quiet connect card. Connected: the video is the room —
 // full-bleed stage with glass overlays (telemetry top-left, head tilt and
 // mic toggle on the right edge, WASD chips bottom-left, joystick + speak bar
-// + hold-to-talk bottom-center). On reconnecting we keep the cockpit (frozen
+// + mic mute toggle bottom-center). On reconnecting we keep the cockpit (frozen
 // video, badge pulses); only an intentional disconnect or failed connect
 // shows the card.
 

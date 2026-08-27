@@ -1,8 +1,15 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// Teleop half-duplex audio: hold to transmit, then listen until three seconds
-// of room silence. A new hold always preempts listening.
+// Teleop talkback behind a Meet-style mute toggle. Unmuted, the mic streams
+// continuously and the room stays audible — full duplex through the robot's
+// AEC — except while the operator speaks: voice activity drops local playback
+// to DUCK_VOLUME (a duck, not a mute: loud room events and an interrupting
+// voice still read through) and recovers DUCK_RELEASE_MS after the last
+// syllable, long enough for the echo the AEC lets leak to finish its
+// speaker→mic→return round trip. (A robot without AEC ducks the mic it sends
+// while talk is on; there the operator hears nothing while unmuted.) Muting
+// listens on until three seconds of room silence, as before.
 
 import { createMicControl } from "../micControl.js";
 import { createAudioToggle } from "./videoStage.js";
@@ -12,6 +19,11 @@ const FFT_SIZE = 256;
 const RECEIVE_QUIET_MS = 3_000;
 const REMOTE_ACTIVITY_THRESHOLD = 0.02;
 const LEVEL_SMOOTHING = 0.75;
+const SPEECH_THRESHOLD = 0.03;
+// Voice→speaker→robot-mic→back is ~300-500ms on the LAN; the release must outlast it plus reverb.
+const DUCK_RELEASE_MS = 900;
+// Low enough to bury the AEC's residual echo, high enough that a shout or an interruption registers.
+const DUCK_VOLUME = 0.12;
 
 /**
  * @param {HTMLElement} parent
@@ -26,18 +38,22 @@ export function createTalkControl(parent, session, audioEl) {
 
   let isReceiving = false;
   let alwaysListen = false;
+  let unmuted = false;
+  let ducked = false;
+  let lastVoiceAt = -Infinity;
   let receiveDeadline = 0;
   let receiveTimer = 0;
 
   const control = createMicControl(mount, {
+    mode: "toggle",
     startListening: startTransmitting,
     stopListening: stopTransmitting,
-    holdLabel: "Hold to transmit in two-way talk",
-    listeningLabel: "Transmitting — you are audible",
-    buttonLabel: "2-WAY TALK",
-    buttonHint: "Hold to transmit",
-    activeButtonLabel: "TRANSMITTING",
-    activeButtonHint: "Release to listen",
+    holdLabel: "Toggle your microphone",
+    listeningLabel: "Unmuted — you are audible",
+    buttonLabel: "MIC MUTED",
+    buttonHint: "Unmute to talk",
+    activeButtonLabel: "MIC LIVE",
+    activeButtonHint: "Room ducks while you speak",
   });
 
   /** @type {ReturnType<typeof createAudioToggle>} */
@@ -85,15 +101,32 @@ export function createTalkControl(parent, session, audioEl) {
     const level = rms(samples);
     control.setAudioFeedback({ level, waveform: buckets(samples) });
     smoothedLevel = smoothedLevel * LEVEL_SMOOTHING + level * (1 - LEVEL_SMOOTHING);
+    if (meterMode === "transmit") {
+      // Raw level, not smoothed: the duck must attack on the first frame of voice.
+      const now = performance.now();
+      if (level >= SPEECH_THRESHOLD) lastVoiceAt = now;
+      setDucked(now - lastVoiceAt < DUCK_RELEASE_MS);
+    }
     if (
       meterMode === "receive" &&
-      !alwaysListen &&
+      !receiveHeld() &&
       isReceiving &&
       smoothedLevel >= REMOTE_ACTIVITY_THRESHOLD
     ) {
       receiveDeadline = performance.now() + RECEIVE_QUIET_MS;
     }
     frame = requestAnimationFrame(tick);
+  }
+
+  /** @param {boolean} d */
+  function setDucked(d) {
+    if (ducked === d) return;
+    ducked = d;
+    audioEl.volume = d ? DUCK_VOLUME : 1;
+  }
+
+  function receiveHeld() {
+    return alwaysListen || unmuted;
   }
 
   function stopMetering() {
@@ -119,7 +152,7 @@ export function createTalkControl(parent, session, audioEl) {
     const remaining = Math.max(0, receiveDeadline - performance.now());
     receiveTimer = window.setTimeout(() => {
       receiveTimer = 0;
-      if (alwaysListen || !isReceiving) return;
+      if (receiveHeld() || !isReceiving) return;
       if (performance.now() < receiveDeadline) {
         scheduleReceiveClose();
         return;
@@ -144,7 +177,7 @@ export function createTalkControl(parent, session, audioEl) {
     renderReceiveState();
     session.setAudio(true);
     void audioEl.play().catch(() => {});
-    if (alwaysListen) {
+    if (receiveHeld()) {
       window.clearTimeout(receiveTimer);
       receiveTimer = 0;
     } else {
@@ -165,28 +198,32 @@ export function createTalkControl(parent, session, audioEl) {
   /** @param {boolean} active */
   function toggleAlwaysListen(active) {
     alwaysListen = active;
-    if (session.state.talkRequested) return;
+    if (unmuted) return; // receive is already held open while unmuted
     if (active) startReceiving();
     else stopReceiving();
   }
 
   async function startTransmitting() {
-    stopReceiving();
+    unmuted = true;
     listenToggle.setEnabled(false);
+    startReceiving(); // inside the click gesture, so audioEl.play() unlocks audible autoplay
     await session.setTalk(true);
   }
 
   function stopTransmitting() {
+    unmuted = false;
     listenToggle.setEnabled(true);
+    setDucked(false);
     const didTransmit = session.state.talkRequested;
     void session.setTalk(false);
-    if (didTransmit || alwaysListen) startReceiving();
+    if (didTransmit || alwaysListen) startReceiving(); // re-arms the 3s-quiet window
+    else stopReceiving();
   }
 
   const unsub = session.onChange((state) => {
-    listenToggle.setEnabled(!state.talkRequested);
-    if (state.talkRequested) listenToggle.setActive(false);
+    listenToggle.setEnabled(!state.talkRequested && !unmuted);
     control.setCaptureState({ on: state.talkRequested, busy: false, error: state.talkError });
+    if (!state.talkRequested) setDucked(false);
     if (state.talkRequested && state.talkStream) {
       meter(state.talkStream, "transmit");
       return;
