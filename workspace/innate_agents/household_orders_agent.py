@@ -9,7 +9,7 @@ from innate_skills.person_identity import PersonIdentity
 from innate_skills.place_doordash_order import PlaceDoordashOrder
 from inputs.micro_input import MicroInput
 
-from brain_client.agents.types import Agent, InputRef, SkillRef
+from brain_client.agents.types import Agent, DepartureGuard, InputRef, InteractionGuard, SkillRef, TurnIntervals
 
 
 class HouseholdOrdersAgent(Agent):
@@ -37,6 +37,38 @@ class HouseholdOrdersAgent(Agent):
     def get_inputs(self) -> list[InputRef]:
         return [MicroInput]
 
+    def get_turn_intervals(self) -> TurnIntervals:
+        # Search is a long-running navigation skill. Look again one second
+        # after each completed model turn so a resident cannot pass through
+        # the camera for most of the global five-second supervision pause.
+        return TurnIntervals(supervision=1.0)
+
+    def get_departure_guard(self) -> DepartureGuard:
+        # Once durable identity says this is an already-handled resident, do
+        # not let the one-second visual loop cancel the next search for the
+        # same unchanged close-up.  Distance unlocks promptly; the short time
+        # bound prevents missing a genuinely new encounter if pose stalls.
+        return DepartureGuard(
+            trigger_skill_names=("person_identity",),
+            trigger_result_prefixes=("KNOWN_PERSON",),
+            protected_skill_ids=("innate-os/find_next_person",),
+            minimum_departure_m=1.25,
+            maximum_hold_s=12.0,
+        )
+
+    def get_interaction_guard(self) -> InteractionGuard:
+        # A missing note means a resident is identified but not yet handled.
+        # Keep the global search tool out of the next few turns so the model
+        # performs the bounded approach/re-identify recovery in the prompt.
+        return InteractionGuard(
+            trigger_skill_names=("mission_notes",),
+            trigger_result_prefixes=("NOTE_MISSING",),
+            blocked_skill_ids=("innate-os/find_next_person",),
+            release_skill_names=("mission_notes",),
+            release_result_prefixes=("NOTE_SAVED",),
+            maximum_hold_s=35.0,
+        )
+
     def get_prompt(self) -> str:
         return """You are Mars. Find three residents, confirm each complete DoorDash order, and submit all three.
 
@@ -49,6 +81,13 @@ class HouseholdOrdersAgent(Agent):
   running. Immediately call stop_current_skill; for this reply preserve the most recent encounter_id, then after the
   skill stops save the confirmed note or respond before any search or navigation.
 - Use only live images and resident replies. find_next_person owns exploration; do not wander manually.
+- While find_next_person is running, inspect every new image. If any person is visible enough to identify, immediately
+  call stop_current_skill, then call person_identity(action="identify") exactly once. Navigation is only a means to
+  find residents: never continue past a visible person merely to finish the current route.
+- Do not decide from appearance alone that a visible person is someone already handled. Stop and let person_identity
+  compare against the durable roster. KNOWN_PERSON plus NOTE_FOUND means resume search without speaking; NEW_PERSON or
+  NOTE_MISSING means handle that resident. After resuming from a known resident, allow find_next_person to move away;
+  do not interrupt it again for the same unchanged close-up view.
 - Start once with mission_run(), then person_identity(action="begin"), then find_next_person(reset=true). Never
   initialize or reset again.
 

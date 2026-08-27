@@ -450,6 +450,7 @@ import threading  # noqa: E402
 import time  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
+from brain_client.agents.types import DepartureGuard, InteractionGuard, TurnIntervals  # noqa: E402
 from brain_client.brain.agent import BrainAgent  # noqa: E402
 from brain_client.brain.utils import Event, EventKind  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
@@ -512,6 +513,138 @@ def agent_factory(monkeypatch):
     yield make
     for agent in created:
         agent.shutdown()
+
+
+def test_agent_turn_intervals_override_only_the_requested_mode(agent_factory):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(get_turn_intervals=lambda: TurnIntervals(supervision=1.0))
+
+    assert agent._interval() == 3.0
+    state.primitive_running = RunningSkill("search", "innate-os/find_next_person")
+    assert agent._interval() == 1.0
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, float("inf"), float("nan")])
+def test_agent_turn_intervals_reject_non_positive_or_non_finite_values(value):
+    with pytest.raises(ValueError, match="finite positive"):
+        TurnIntervals(supervision=value)
+
+
+def departure_guard() -> DepartureGuard:
+    return DepartureGuard(
+        trigger_skill_names=("person_identity",),
+        trigger_result_prefixes=("KNOWN_PERSON",),
+        protected_skill_ids=("innate-os/find_next_person",),
+        minimum_departure_m=1.25,
+        maximum_hold_s=12.0,
+    )
+
+
+def test_known_person_departure_guard_hides_stop_until_robot_moves(agent_factory):
+    agent, state = agent_factory()
+    pose = [(2.0, 3.0, 0.0)]
+    agent._pose = SimpleNamespace(current_pose_xyt=lambda: pose[0], is_mapfree=False)
+    state.current_directive = SimpleNamespace(
+        get_turn_intervals=lambda: TurnIntervals(), get_departure_guard=departure_guard
+    )
+
+    agent.on_skill_event("completed", "person_identity", "KNOWN_PERSON encounter_id=resident-1")
+    state.primitive_running = RunningSkill("find_next_person", "innate-os/find_next_person")
+
+    declarations = agent._build_tools([])[0]["functionDeclarations"]
+    assert [declaration["name"] for declaration in declarations] == [WAIT]
+
+    pose[0] = (3.3, 3.0, 0.0)
+    declarations = agent._build_tools([])[0]["functionDeclarations"]
+    assert [declaration["name"] for declaration in declarations] == [STOP_SKILL, WAIT]
+
+
+def test_departure_guard_never_blocks_user_requested_stop(agent_factory):
+    agent, state = agent_factory()
+    agent._pose = SimpleNamespace(current_pose_xyt=lambda: (2.0, 3.0, 0.0), is_mapfree=False)
+    state.current_directive = SimpleNamespace(
+        get_turn_intervals=lambda: TurnIntervals(), get_departure_guard=departure_guard
+    )
+    agent.on_skill_event("completed", "person_identity", "KNOWN_PERSON encounter_id=resident-1")
+    state.primitive_running = RunningSkill("find_next_person", "innate-os/find_next_person")
+
+    declarations = agent._build_tools([Event("The user says: stop", kind=EventKind.USER)])[0][
+        "functionDeclarations"
+    ]
+    assert [declaration["name"] for declaration in declarations] == [STOP_SKILL]
+
+
+@pytest.mark.parametrize("field,value", [("minimum_departure_m", 0.0), ("maximum_hold_s", float("inf"))])
+def test_departure_guard_rejects_invalid_bounds(field, value):
+    kwargs = dict(
+        trigger_skill_names=("person_identity",),
+        trigger_result_prefixes=("KNOWN_PERSON",),
+        protected_skill_ids=("innate-os/find_next_person",),
+        minimum_departure_m=1.25,
+        maximum_hold_s=12.0,
+    )
+    kwargs[field] = value
+    with pytest.raises(ValueError, match="finite positive"):
+        DepartureGuard(**kwargs)
+
+
+def interaction_guard() -> InteractionGuard:
+    return InteractionGuard(
+        trigger_skill_names=("mission_notes",),
+        trigger_result_prefixes=("NOTE_MISSING",),
+        blocked_skill_ids=("innate-os/find_next_person",),
+        release_skill_names=("mission_notes",),
+        release_result_prefixes=("NOTE_SAVED",),
+        maximum_hold_s=35.0,
+    )
+
+
+def test_interaction_guard_hides_search_until_note_is_saved(agent_factory):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(
+        get_turn_intervals=lambda: TurnIntervals(),
+        get_departure_guard=lambda: None,
+        get_interaction_guard=interaction_guard,
+    )
+    state.registry.metadata = [
+        {"id": "innate-os/find_next_person", "name": "find_next_person", "inputs": {}},
+        {"id": "innate-os/navigate_to_position", "name": "navigate_to_position", "inputs": {}},
+    ]
+    agent._roster = SimpleNamespace(
+        active_skill_ids=lambda: ["innate-os/find_next_person", "innate-os/navigate_to_position"]
+    )
+
+    agent.on_skill_event("completed", "mission_notes", 'NOTE_MISSING {"key":"resident-002"}')
+    declarations = agent._build_tools([])[0]["functionDeclarations"]
+    names = [declaration["name"] for declaration in declarations]
+    assert "find_next_person" not in names
+    assert "navigate_to_position" in names
+
+    agent.on_skill_event("completed", "mission_notes", 'NOTE_SAVED {"key":"resident-002"}')
+    declarations = agent._build_tools([])[0]["functionDeclarations"]
+    assert "find_next_person" in [declaration["name"] for declaration in declarations]
+
+
+def test_interaction_guard_expires_fail_open(agent_factory):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(get_interaction_guard=interaction_guard)
+    agent._interaction_guard_started_at = time.monotonic() - 36.0
+
+    assert agent._interaction_blocked_skill_ids() == frozenset()
+    assert agent._interaction_guard_started_at is None
+
+
+@pytest.mark.parametrize("value", [0.0, float("inf"), float("nan")])
+def test_interaction_guard_rejects_invalid_timeout(value):
+    with pytest.raises(ValueError, match="finite positive"):
+        InteractionGuard(
+            trigger_skill_names=("mission_notes",),
+            trigger_result_prefixes=("NOTE_MISSING",),
+            blocked_skill_ids=("innate-os/find_next_person",),
+            release_skill_names=("mission_notes",),
+            release_result_prefixes=("NOTE_SAVED",),
+            maximum_hold_s=value,
+        )
 
 
 def run_turn(agent: BrainAgent) -> None:
