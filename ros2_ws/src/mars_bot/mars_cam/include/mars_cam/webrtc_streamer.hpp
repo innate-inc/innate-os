@@ -175,11 +175,14 @@ class WebRTCStreamer : public rclcpp::Node {
     std::string speaker_pipeline_description() const;  // audiomixer -> volume -> [probe] -> speaker
     static std::string talk_decode_description();      // one peer's depay -> decode -> PCM appsink
     bool build_speaker_pipeline();                     // built + PLAYING at startup; peers mix into it
+    void teardown_speaker_pipeline();                  // only with no peers alive (they hold inputs inside it)
+    void restart_speaker_pipeline();                   // health poll: NULL->PLAYING after a bus error (throttled)
     // Give/take this peer its own appsrc + audiomixer pad. Both run on the executor thread with
     // peers_mutex_ held; detach is safe only after ~Peer has joined the thread that pushes.
     bool attach_speaker_input(Peer* peer);
     void detach_speaker_input(GstElement* src, GstPad* pad);
-    void set_peer_talk(Peer* peer, bool on);  // flip the gate; caller holds peers_mutex_
+    void set_peer_talk(Peer* peer, bool on);         // flip the gate; caller holds peers_mutex_
+    bool peer_audio_active(const Peer& peer) const;  // listen intent minus the talk duck (lifted by AEC)
     void reconcile_talk();  // publish /talkback/is_playing when the last talker stops (or the first starts)
 
     // ---- Shared audio (mic) — encoded once like the cameras, fanned out, gated for privacy ----
@@ -269,6 +272,7 @@ class WebRTCStreamer : public rclcpp::Node {
     GstElement* talk_mixer_ = nullptr;        // ref'd; peers request their input pads from it
     std::atomic<int> want_talk_{0};           // # peers holding the talk button; >0 => the robot is audibly speaking
     bool talk_playing_ = false;               // last published /talkback/is_playing state
+    int64_t last_speaker_restart_ns_ = 0;     // restart_speaker_pipeline backoff
 
     // ---- Peers ----
     std::map<std::string, std::unique_ptr<Peer>> peers_;

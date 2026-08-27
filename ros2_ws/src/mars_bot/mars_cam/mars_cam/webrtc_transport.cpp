@@ -179,11 +179,7 @@ Peer* WebRTCStreamer::create_peer_transport(const std::string& client_id, const 
         }
     }
     peer->talk_active = peer->with_talk && talk_active;
-    // The robot's speaker is within earshot of its own mic, so without AEC the talker would hear their
-    // own voice come back — half-duplex ducks the mic to them. With AEC the echo is subtracted at the
-    // capture, so the duck (and the deafness it causes while talking) is lifted.
-    const bool talk_duck = peer->talk_active && !enable_echo_cancel_;
-    peer->audio_active = peer->with_audio && peer->audio_requested && !talk_duck;
+    peer->audio_active = peer_audio_active(*peer);
     if (!ok) {
         RCLCPP_ERROR(this->get_logger(), "Transport pipeline missing/failed an rtp appsrc");
         return nullptr;  // ~Peer() tears down the pipeline + the rtp appsrcs stored so far
@@ -242,7 +238,7 @@ Peer* WebRTCStreamer::create_peer_transport(const std::string& client_id, const 
         peer->with_talk = false;
         peer->talk_active = false;
         peer->talk_gate->store(false, std::memory_order_relaxed);
-        peer->audio_active = peer->with_audio && peer->audio_requested;  // nothing left to duck for
+        peer->audio_active = peer_audio_active(*peer);  // talk_active now false: nothing left to duck for
     }
     if (peer->with_talk) {
         g_object_set_data(G_OBJECT(peer->webrtc), "mars_talk_src", peer->talk_src);
@@ -321,7 +317,7 @@ void WebRTCStreamer::update_peer_active(Peer* peer, const std::vector<std::strin
     // the lock; closing it (want_audio_ -> 0) is deferred to the health poll, which runs without the lock,
     // because NULL-ing the audio pipeline joins the fan-out thread that also takes peers_mutex_.
     peer->audio_requested = audio_active;
-    const bool audio_now = peer->with_audio && audio_active && !(peer->talk_active && !enable_echo_cancel_);
+    const bool audio_now = peer_audio_active(*peer);
     if (audio_now != peer->audio_active) {
         if (audio_now) {
             want_audio_.fetch_add(1, std::memory_order_relaxed);
@@ -431,6 +427,13 @@ void WebRTCStreamer::on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer
 void WebRTCStreamer::set_peer_talk(Peer* peer, bool on) {
     peer->talk_active = on;
     peer->talk_gate->store(on, std::memory_order_relaxed);
+}
+
+// The mic a peer hears is their LISTEN intent minus the talk duck: without AEC a talking operator would
+// hear their own voice come back off the robot's speaker; with AEC the echo is subtracted at the capture,
+// so the duck (and the deafness it causes while talking) is lifted.
+bool WebRTCStreamer::peer_audio_active(const Peer& peer) const {
+    return peer.with_audio && peer.audio_requested && !(peer.talk_active && !enable_echo_cancel_);
 }
 
 void WebRTCStreamer::on_negotiation_needed(GstElement* webrtc, gpointer user_data) {

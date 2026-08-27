@@ -173,6 +173,22 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
             gst_object_unref(sink);
         }
     }
+    // webrtcdsp is its own .so inside gstreamer1.0-plugins-bad (built only when webrtc-audio-processing
+    // is present); a system without it should degrade to plain half-duplex talkback, not lose talkback
+    // to a parse failure.
+    if (enable_echo_cancel_) {
+        GstElementFactory* dsp = gst_element_factory_find("webrtcdsp");
+        GstElementFactory* probe = gst_element_factory_find("webrtcechoprobe");
+        if (!dsp || !probe) {
+            RCLCPP_WARN(this->get_logger(),
+                        "webrtcdsp/webrtcechoprobe unavailable; echo cancel off (half-duplex talkback)");
+            enable_echo_cancel_ = false;
+        }
+        if (dsp)
+            gst_object_unref(dsp);
+        if (probe)
+            gst_object_unref(probe);
+    }
     // Before the mic pipeline: its webrtcdsp pairs with this pipeline's probe, which must exist first.
     if (enable_talkback_ && !build_speaker_pipeline()) {
         enable_talkback_ = false;
@@ -190,6 +206,8 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
     if (enable_talkback_ && !enable_audio_) {
         RCLCPP_WARN(this->get_logger(), "No audio m-line (mic unavailable); talkback disabled");
         enable_talkback_ = false;
+        enable_echo_cancel_ = false;
+        teardown_speaker_pipeline();  // just built above; keeping it PLAYING would hold ALSA open for nothing
     }
     start_local_stun_server();
 
@@ -294,12 +312,7 @@ WebRTCStreamer::~WebRTCStreamer() {
         gst_object_unref(audio_pipeline_);
     }
     // After the peers: destroy_peer pulls each one's input out of the mixer, so by here it has none.
-    if (talk_mixer_)
-        gst_object_unref(talk_mixer_);
-    if (speaker_pipeline_) {
-        gst_element_set_state(speaker_pipeline_, GST_STATE_NULL);
-        gst_object_unref(speaker_pipeline_);
-    }
+    teardown_speaker_pipeline();
 }
 
 // =============================================================================
@@ -401,7 +414,9 @@ void WebRTCStreamer::poll_pipeline_health() {
 
     drain_bus(encode_pipeline_, "encode", /*expected_teardown=*/false);
     drain_bus(audio_pipeline_, "audio", /*expected_teardown=*/false);
-    drain_bus(speaker_pipeline_, "speaker", /*expected_teardown=*/false);
+    if (drain_bus(speaker_pipeline_, "speaker", /*expected_teardown=*/false)) {
+        restart_speaker_pipeline();
+    }
 
     std::unique_lock<std::mutex> lock(peers_mutex_);
     if (peers_.empty()) {

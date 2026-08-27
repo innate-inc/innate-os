@@ -258,18 +258,19 @@ bool WebRTCStreamer::build_audio_pipeline() {
     }
     // mic -> opus -> rtp -> appsink (the fan-out tap). Encoded once for all peers; matches the RTP caps
     // each peer's transport audio appsrc declares (OPUS/48000/pt98).
-    std::string desc = src +
-                       " do-timestamp=true ! "
-                       "queue leaky=downstream max-size-buffers=10 max-size-time=0 max-size-bytes=0 ! "
-                       "audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! " +
-                       // AEC subtracts the speaker pipeline's playout (via its webrtcechoprobe) from the
-                       // capture — what makes full-duplex talkback possible. delay-agnostic: capture and
-                       // playout are separate pipelines on separate clocks, and dmix hides the true
-                       // playout latency, so the canceller must estimate alignment itself.
-                       std::string(enable_echo_cancel_ ? "webrtcdsp echo-cancel=true delay-agnostic=true ! " : "") +
-                       "opusenc bitrate=24000 audio-type=voice ! "
-                       "rtpopuspay name=pay_audio pt=98 ! "
-                       "appsink name=sink_audio emit-signals=true sync=false async=false max-buffers=4 drop=true ";
+    std::string desc =
+        src +
+        " do-timestamp=true ! "
+        "queue leaky=downstream max-size-buffers=10 max-size-time=0 max-size-bytes=0 ! "
+        "audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! " +
+        // AEC subtracts the speaker pipeline's playout (via its webrtcechoprobe) from the
+        // capture — what makes full-duplex talkback possible. delay-agnostic: capture and
+        // playout are separate pipelines on separate clocks, and dmix hides the true
+        // playout latency, so the canceller must estimate alignment itself.
+        std::string(enable_echo_cancel_ ? "webrtcdsp probe=talk_probe echo-cancel=true delay-agnostic=true ! " : "") +
+        "opusenc bitrate=24000 audio-type=voice ! "
+        "rtpopuspay name=pay_audio pt=98 ! "
+        "appsink name=sink_audio emit-signals=true sync=false async=false max-buffers=4 drop=true ";
     GError* error = nullptr;
     audio_pipeline_ = gst_parse_launch(desc.c_str(), &error);
     if (error) {
@@ -294,11 +295,13 @@ bool WebRTCStreamer::build_audio_pipeline() {
 }
 
 // The speaker every talking peer mixes into. One SINK is what AEC needs — a single reference of what
-// was played, taken by the probe (auto-named webrtcechoprobe0, which the mic pipeline's webrtcdsp pairs
-// with) after the volume, so the reference matches the level actually heard. One MIXER is what keeps N
-// operators able to talk at once: each peer decodes on its own thread and contributes a mixer input, so
-// their streams are summed here rather than sharing a depayloader. The queue keeps a blocking ALSA write
-// off the mixer thread; the sink neither syncs nor prerolls (it is fed live).
+// was played, taken by the probe (named: webrtcdsp pairs by name, and the default auto-name is a
+// process-global counter, not a contract in a shared composable container) after the volume, so the
+// reference matches the level actually heard. The 48k-mono pin in front of it keeps the probe at the
+// capture's rate regardless of what the sink negotiates — webrtcdsp refuses a mismatched probe. One
+// MIXER is what keeps N operators able to talk at once: each peer decodes on its own thread and
+// contributes a mixer input, so their streams are summed here rather than sharing a depayloader. The
+// queue keeps a blocking ALSA write off the mixer thread; the sink neither syncs nor prerolls (fed live).
 std::string WebRTCStreamer::speaker_pipeline_description() const {
     if (!is_plain_element(audio_sink_element_) || !is_plain_device(audio_playback_device_)) {
         return "";  // the constructor checks this once and disables talkback rather than parsing it
@@ -309,7 +312,9 @@ std::string WebRTCStreamer::speaker_pipeline_description() const {
     }
     return "audiomixer name=talk_mix ! audioconvert ! audioresample ! "
            "volume name=talk_volume volume=" +
-           std::to_string(talkback_volume_) + " ! " + std::string(enable_echo_cancel_ ? "webrtcechoprobe ! " : "") +
+           std::to_string(talkback_volume_) + " ! " +
+           std::string(enable_echo_cancel_ ? "audio/x-raw,rate=48000,channels=1 ! webrtcechoprobe name=talk_probe ! "
+                                           : "") +
            "queue leaky=downstream max-size-buffers=0 max-size-bytes=0 max-size-time=200000000 ! " + sink +
            " name=talk_sink sync=false async=false";
 }
@@ -343,9 +348,42 @@ bool WebRTCStreamer::build_speaker_pipeline() {
     talk_mixer_ = gst_bin_get_by_name(GST_BIN(speaker_pipeline_), "talk_mix");
     if (!talk_mixer_ || gst_element_set_state(speaker_pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
         RCLCPP_ERROR(this->get_logger(), "Speaker pipeline failed to start");
+        teardown_speaker_pipeline();
         return false;
     }
     return true;
+}
+
+// Only callable with no peers alive (constructor, destructor-after-peers, build failure): peers hold
+// mixer inputs inside this pipeline and push into them from their own streaming threads.
+void WebRTCStreamer::teardown_speaker_pipeline() {
+    if (talk_mixer_) {
+        gst_object_unref(talk_mixer_);
+        talk_mixer_ = nullptr;
+    }
+    if (speaker_pipeline_) {
+        gst_element_set_state(speaker_pipeline_, GST_STATE_NULL);
+        gst_object_unref(speaker_pipeline_);
+        speaker_pipeline_ = nullptr;
+    }
+}
+
+// The pipeline is shared and lifetime-scoped, so nothing rebuilds it after a runtime error (an unplugged
+// USB speaker, an ALSA fault). NULL->PLAYING re-opens the device in place — the same elements, so the
+// peers' mixer inputs ride through the cycle — throttled so a genuinely dead sink doesn't churn every
+// 200 ms health poll.
+void WebRTCStreamer::restart_speaker_pipeline() {
+    const int64_t now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+    if (now_ns - last_speaker_restart_ns_ < static_cast<int64_t>(5 * GST_SECOND)) {
+        return;
+    }
+    last_speaker_restart_ns_ = now_ns;
+    gst_element_set_state(speaker_pipeline_, GST_STATE_NULL);
+    if (gst_element_set_state(speaker_pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+        RCLCPP_WARN(this->get_logger(), "Speaker pipeline restart failed; retrying after backoff");
+    } else {
+        RCLCPP_INFO(this->get_logger(), "Speaker pipeline restarted after a bus error");
+    }
 }
 
 // Add this peer's input to the live mixer. An input that never carries audio does not stall the mix
