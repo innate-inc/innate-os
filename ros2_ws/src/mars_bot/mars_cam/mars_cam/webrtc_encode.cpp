@@ -264,10 +264,14 @@ bool WebRTCStreamer::build_audio_pipeline() {
         "queue leaky=downstream max-size-buffers=10 max-size-time=0 max-size-bytes=0 ! "
         "audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! " +
         // AEC subtracts the speaker pipeline's playout (via its webrtcechoprobe) from the
-        // capture — what makes full-duplex talkback possible. delay-agnostic: capture and
-        // playout are separate pipelines on separate clocks, and dmix hides the true
-        // playout latency, so the canceller must estimate alignment itself.
-        std::string(enable_echo_cancel_ ? "webrtcdsp probe=talk_probe echo-cancel=true delay-agnostic=true ! " : "") +
+        // capture — what makes full-duplex talkback possible. delay-agnostic measured BROKEN
+        // on this hardware (data/aec_bench sweep, 2026-08-27: ERLE ~1 dB — the estimator never
+        // aligns through dmix); with reported latencies the canceller aligns from the first
+        // burst (ERLE ~50 dB, residual below the mic's own noise floor), and suppression can
+        // then stay at moderate, which keeps an interrupting far-end voice alive in double-talk.
+        std::string(enable_echo_cancel_ ? "webrtcdsp probe=talk_probe echo-cancel=true delay-agnostic=false "
+                                          "echo-suppression-level=moderate ! "
+                                        : "") +
         "opusenc bitrate=24000 audio-type=voice ! "
         "rtpopuspay name=pay_audio pt=98 ! "
         "appsink name=sink_audio emit-signals=true sync=false async=false max-buffers=4 drop=true ";
