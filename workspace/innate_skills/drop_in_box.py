@@ -22,6 +22,14 @@ from innate.geometry import IMG_H, IMG_W, pixel_to_height
 
 Box = tuple[int, int, int, int]
 
+# Arm reach as a sphere about the shoulder, from the URDF: joint2 sits at
+# (0.086, 0.0845) in base_link and 0.326 m of link follows it. The 0.086 m
+# forward offset is the whole reason a drop over a rim is possible at all.
+# Sanity check on the model: it puts the floor-height limit at 0.407 m, which
+# is where Manipulation.REACH_X's hardcoded 0.40 comes from.
+SHOULDER_X, SHOULDER_Z = 0.086, 0.0845
+ARM_REACH = 0.326
+
 # Claw angle band that means "something is between the fingers": above the
 # closed-on-air floor (pick_any_object's GRIPPER_EMPTY_J6) and below a claw
 # sitting at its commanded-open limit, which is holding nothing.
@@ -43,13 +51,17 @@ PARAMS = {
     "lift_after_m": 0.04,
     "hover_s": 2.5,
     "arm_pitch": 1.30,
-    # Rim estimate band. Below the floor of this the geometry is noise; above
-    # its top the arm cannot hold a pose over the rim at all (see drop_z_max).
+    # Least the gripper may sit past the near face and still be over the
+    # interior. Below this the object would land on the rim.
+    "drop_inset_min": 0.03,
+    # Keep off the kinematic edge: pick already notes that working at the 0.40
+    # reach limit stalls the wrist and overloads servo 2.
+    "reach_margin": 0.03,
+    # Rim estimate band. Under the floor the geometry is noise; over the top
+    # no release pose fits — at sweet_x + drop_inset_min the envelope runs out
+    # at a rim of about 0.22, which is where this number comes from.
     "rim_z_min": 0.04,
     "rim_z_max": 0.22,
-    # Ceiling on the release height. The arm's true envelope at this reach is
-    # unmeasured — probe it before raising this, or IK just refuses the pose.
-    "drop_z_max": 0.26,
 }
 
 
@@ -72,6 +84,7 @@ class DropInBox(_FloorApproach):
     _last_box: Box | None = None
     _near_rim_v: float | None = None
     _rim_z: float | None = None
+    _label = "the box"
     _over_rim = False  # the gripper is inside the container's footprint
 
     def _detect_px(self, prompt: str) -> tuple[float, float] | None:
@@ -154,13 +167,28 @@ class DropInBox(_FloorApproach):
         self._debug("hold", j6=j6, by_joint=by_joint, wrist=seen, held=held)
         return held
 
+    def _release_x(self, near_x: float, z: float) -> float:
+        """How far forward the gripper may hover at height `z`, or raise if the
+        rim is high enough that nothing over the interior is still in reach."""
+        p = self._p
+        limit = reach_x_max(z)
+        limit = None if limit is None else limit - p["reach_margin"]
+        floor = near_x + p["drop_inset_min"]
+        if limit is None or limit < floor:
+            raise SkillFailed(
+                f"'{self._label}' is too tall to reach over — its rim needs the gripper at "
+                f"z={z:.2f} m, where the arm only reaches x={limit or 0.0:.2f} m and the "
+                f"container's near wall is already at x={near_x:.2f} m"
+            )
+        return min(near_x + p["drop_inset"], limit)
+
     def _release_at(self, near_x: float, near_y: float) -> tuple[float, float, float]:
         """Hover over the container interior and open the claw."""
         p = self._p
         rim = self._rim_height(near_x)
-        z = min(p["drop_z_max"], rim + p["release_clear_m"])
-        x, y = self.manipulation.clamp_reach(near_x + p["drop_inset"], near_y)
-        self._debug("release", target_xyz=[x, y, z], rim_z=rim)
+        z = rim + p["release_clear_m"]
+        x, y = self.manipulation.clamp_reach(self._release_x(near_x, z), near_y)
+        self._debug("release", target_xyz=[x, y, z], rim_z=rim, reach_x_max=reach_x_max(z))
 
         self.manipulation.torque_on()
         try:
@@ -232,6 +260,7 @@ class DropInBox(_FloorApproach):
         self._near_rim_v = None
         self._rim_z = None
         self._over_rim = False
+        self._label = prompt
         released_z = None
         try:
             self.head.set_position(int(round(self._p["tilt_deg"])))
@@ -259,6 +288,12 @@ class DropInBox(_FloorApproach):
             self.mobility.stop()
             self._retract()
             self.head.set_position(0)
+
+
+def reach_x_max(z: float) -> float | None:
+    """Furthest forward (base_link x) the gripper reaches at height `z`."""
+    span = ARM_REACH**2 - (z - SHOULDER_Z) ** 2
+    return SHOULDER_X + math.sqrt(span) if span > 0 else None
 
 
 def _near_rim_v(text: str | None) -> float | None:

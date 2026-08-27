@@ -199,10 +199,17 @@ class Prop:
             # visible and collidable, all from one geom.
             geoms = self._primitive_geom(f"{self.name}_geom", visual_group, physical=True)
         else:
-            material = f' material="mat_{self.name}"' if self.texture_path is not None else self._fill(visual_group)
+            # _fill already carries group=; a textured prop swaps rgba for a
+            # material and has to bring its own, or an untextured mesh emits
+            # group= twice and MuJoCo rejects the whole model.
+            material = (
+                f' material="mat_{self.name}" group="{visual_group}"'
+                if self.texture_path is not None
+                else self._fill(visual_group)
+            )
             geoms = (
                 f'\n      <geom name="{self.name}_visual" mesh="{self.name}" type="mesh"{material}'
-                f' contype="0" conaffinity="0" density="0" group="{visual_group}"/>'
+                f' contype="0" conaffinity="0" density="0"/>'
             )
             pieces = self.collision_pieces
             if pieces:
