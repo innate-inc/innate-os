@@ -126,6 +126,7 @@ async function render(route) {
     // loading scrim here), so hand off from the boot splash. In `finally` so a
     // failed first mount still clears it rather than stranding the splash.
     dismissBootSplash();
+    shell.firstPageReady();
   }
 }
 
