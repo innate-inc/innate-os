@@ -68,16 +68,29 @@ def _box_corners_px(det):
     return (x0 / 1000.0 * IMG_W, y0 / 1000.0 * IMG_H, x1 / 1000.0 * IMG_W, y1 / 1000.0 * IMG_H)
 
 
-def parse_det_px(text):
-    """Best (u, v) from a Gemini detection reply."""
+def parse_det_cands(text):
+    """All detections -> [(u, v, grip_strength | None)], best first.
+    (u, v) is the grasp_point when given, else the box center."""
+    cands = []
     for det in parse_dets(text):
         gp = det.get("grasp_point")
         if gp and len(gp) >= 2:
-            return (_norm1k(gp[1]) / 1000.0 * IMG_W, _norm1k(gp[0]) / 1000.0 * IMG_H)
-        c = _box_corners_px(det)
-        if c:
-            return ((c[0] + c[2]) / 2.0, (c[1] + c[3]) / 2.0)
-    return None
+            u, v = _norm1k(gp[1]) / 1000.0 * IMG_W, _norm1k(gp[0]) / 1000.0 * IMG_H
+        else:
+            c = _box_corners_px(det)
+            if not c:
+                continue
+            u, v = (c[0] + c[2]) / 2.0, (c[1] + c[3]) / 2.0
+        g = det.get("grip_strength")
+        grip = float(g) if isinstance(g, (int, float)) and not isinstance(g, bool) and math.isfinite(g) else None
+        cands.append((u, v, grip))
+    return cands
+
+
+def parse_det_px(text):
+    """Best (u, v) from a Gemini detection reply."""
+    cands = parse_det_cands(text)
+    return (cands[0][0], cands[0][1]) if cands else None
 
 
 def parse_det_grip(text):
@@ -89,8 +102,9 @@ def parse_det_grip(text):
     return None
 
 
-def parse_det_box(text):
-    """Best (x, y, w, h) from a Gemini detection reply."""
+def parse_det_boxes(text):
+    """All (x, y, w, h) boxes from a Gemini detection reply, best first."""
+    boxes = []
     for det in parse_dets(text):
         c = _box_corners_px(det)
         if not c:
@@ -98,8 +112,14 @@ def parse_det_box(text):
         x, y = int(c[0]), int(c[1])
         w, h = int(c[2]) - x, int(c[3]) - y
         if w >= 8 and h >= 8:
-            return (x, y, w, h)
-    return None
+            boxes.append((x, y, w, h))
+    return boxes
+
+
+def parse_det_box(text):
+    """Best (x, y, w, h) from a Gemini detection reply."""
+    boxes = parse_det_boxes(text)
+    return boxes[0] if boxes else None
 
 
 LK_PARAMS: dict[str, Any] = dict(
