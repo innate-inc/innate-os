@@ -30,13 +30,14 @@ class _Utterance:
 
     text: str
     voice_config: dict[str, Any] | None
+    on_start: Callable[[], None] | None
     on_done: Callable[[bool], None] | None
     reply_id: str | None  # sentences of one streamed reply share an id
     protected: bool  # never flushed (environment speech: not our backlog)
 
 
 def _survives_flush(item: _Utterance, playing_reply_id: str | None) -> bool:
-    """A reply that started speaking holds the floor: its remaining sentences
+    """A reply the user is hearing holds the floor: its remaining sentences
     survive a newer reply's flush. Everything else queued is stale backlog."""
     if item.protected:
         return True
@@ -154,13 +155,19 @@ class TTSHandler:
             except Exception as e:
                 self.logger.debug(f"Failed to publish TTS status: {e}")
 
-    def speak_text(self, text: str, voice_config: dict[str, Any] | None = None) -> bool:
+    def speak_text(
+        self,
+        text: str,
+        voice_config: dict[str, Any] | None = None,
+        on_start: Callable[[], None] | None = None,
+    ) -> bool:
         """
         Convert text to speech and play it.
 
         Args:
             text: Text to speak
             voice_config: Optional voice configuration override
+            on_start: Called once the first audio reaches the speaker
 
         Returns:
             True if speech was successfully generated and played, False otherwise
@@ -194,9 +201,9 @@ class TTSHandler:
             }
 
             if self._simulator_mode and self.tts_audio_pub is not None:
-                success = self._synthesize_to_topic(text, voice, t_start)
+                success = self._synthesize_to_topic(text, voice, t_start, on_start)
             else:
-                success = self._synthesize_to_aplay(text, voice, t_start)
+                success = self._synthesize_to_aplay(text, voice, t_start, on_start)
         except Exception as e:
             self.logger.error(f"❌ TTS generation failed: {e}")
             success = False
@@ -222,7 +229,13 @@ class TTSHandler:
             },
         )
 
-    def _synthesize_to_aplay(self, text: str, voice: dict[str, Any], t_start: float) -> bool:
+    def _synthesize_to_aplay(
+        self,
+        text: str,
+        voice: dict[str, Any],
+        t_start: float,
+        on_start: Callable[[], None] | None = None,
+    ) -> bool:
         """Stream speech straight into aplay (real robot's speaker)."""
         text_len = len(text)
         # Volume is managed system-wide by app.cpp via
@@ -267,10 +280,12 @@ class TTSHandler:
                     continue
                 chunk_count += 1
                 total_bytes += len(chunk)
+                q.put(chunk)
                 if t_first_chunk is None:
                     t_first_chunk = time.perf_counter()
                     self.logger.info(f"⏱️ TTS first byte in {(t_first_chunk - t_api) * 1000:.0f}ms")
-                q.put(chunk)
+                    if on_start is not None:
+                        on_start()
 
             t_stream_done = time.perf_counter()
 
@@ -309,7 +324,13 @@ class TTSHandler:
                 pass
             return False
 
-    def _synthesize_to_topic(self, text: str, voice: dict[str, Any], t_start: float) -> bool:
+    def _synthesize_to_topic(
+        self,
+        text: str,
+        voice: dict[str, Any],
+        t_start: float,
+        on_start: Callable[[], None] | None = None,
+    ) -> bool:
         """Synthesize the full clip and publish it (base64 WAV) on /tts/audio.
 
         The sim container has no audio device, so the webapp is the speaker. We
@@ -332,6 +353,8 @@ class TTSHandler:
 
         wav = _finalize_wav(bytes(buf))
         self._publish_audio(wav)
+        if on_start is not None:
+            on_start()
         # Publishing the full clip is the beginning of playback, not the end.
         # Keep /tts/is_playing true (and the serialized worker occupied) for
         # the clip's actual duration so completion callbacks match what the
@@ -359,6 +382,7 @@ class TTSHandler:
         text: str,
         voice_config: dict[str, Any] | None = None,
         replace_pending: bool = False,
+        on_start: Callable[[], None] | None = None,
         on_done: Callable[[bool], None] | None = None,
         reply_id: str | None = None,
         protected: bool = False,
@@ -374,6 +398,7 @@ class TTSHandler:
                 queued backlog is what makes the robot talk over the
                 conversation). The reply being spoken keeps the floor: its
                 remaining sentences survive, see _survives_flush.
+            on_start: Optional callback invoked once, when playback begins.
             on_done: Optional callback invoked once, after playback (and one
                 retry on failure) has finished.
             reply_id: Groups the sentences of one streamed reply.
@@ -397,7 +422,7 @@ class TTSHandler:
                 self._speech_queue.extend(kept)
             queued = len(self._speech_queue) < self._speech_queue_maxlen
             if queued:
-                self._speech_queue.append(_Utterance(text, voice_config, on_done, reply_id, protected))
+                self._speech_queue.append(_Utterance(text, voice_config, on_start, on_done, reply_id, protected))
                 self._speech_cv.notify()
         if not queued:
             self.logger.warning(f"🔇 Speech queue full, dropping: '{text[:60]}'")
@@ -424,6 +449,36 @@ class TTSHandler:
         for callback in dropped_callbacks:
             callback(False)
 
+    def _once(self, callback: Callable[[], None] | None) -> Callable[[], None] | None:
+        """Guard a playback-start callback: fired at most once, never raising
+        into the synthesis path that calls it."""
+        if callback is None:
+            return None
+        fired = False
+
+        def guarded() -> None:
+            nonlocal fired
+            if fired:
+                return
+            fired = True
+            try:
+                callback()
+            except Exception as e:  # noqa: BLE001 -- a bad listener must not abort playback
+                self.logger.error(f"TTS start callback failed: {e}")
+
+        return guarded
+
+    def _floor_taken_on_start(self, reply_id: str | None, announce: Callable[[], None] | None) -> Callable[[], None]:
+        """Take the floor when the clip becomes audible -- the only moment that
+        earns a reply the right to keep its queued siblings."""
+
+        def taken() -> None:
+            self._set_playing_reply(reply_id)
+            if announce is not None:
+                announce()
+
+        return taken
+
     def _set_playing_reply(self, reply_id: str | None) -> None:
         with self._speech_cv:
             self._playing_reply_id = reply_id
@@ -435,19 +490,20 @@ class TTSHandler:
                 while not self._speech_queue:
                     self._speech_cv.wait()
                 item = self._speech_queue.popleft()
-                if item is not None:
-                    self._playing_reply_id = item.reply_id
             if item is None:
                 break
-            success = self.speak_text(item.text, item.voice_config)
+            # Synthesis runs before a word is audible, and a failed attempt is
+            # never audible at all. A reply holds the floor over those stretches
+            # only if it takes it when its audio starts -- otherwise a newer
+            # reply's flush spares siblings of speech nobody has heard, and they
+            # play ahead of the newer answer.
+            take_floor = self._floor_taken_on_start(item.reply_id, self._once(item.on_start))
+            success = self.speak_text(item.text, item.voice_config, take_floor)
             if not success:
-                # A failed sentence loses the floor during its retry delay, so
-                # a newer reply can flush its not-yet-played siblings.
                 self._set_playing_reply(None)
                 self.logger.info("🔄 Retrying TTS after 1 second...")
                 time.sleep(1)
-                self._set_playing_reply(item.reply_id)
-                success = self.speak_text(item.text, item.voice_config)
+                success = self.speak_text(item.text, item.voice_config, take_floor)
             if not success:
                 self._set_playing_reply(None)
                 self._drop_queued_reply(item.reply_id)

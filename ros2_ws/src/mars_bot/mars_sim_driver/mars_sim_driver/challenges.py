@@ -61,6 +61,9 @@ CLOCK_REWIND_S = 0.5
 CHAT_WRITE_TIMEOUT_S = 2.0
 CHAT_OUTBOX_MAXLEN = 64
 
+# Sender the brain routes to a voice instead of straight into the chat.
+ENVIRONMENT_SPEECH_SENDER = "environment_speech"
+
 
 class _ChatWriteTimeout(TimeoutError):
     """A bounded chat write hit its deadline -- delivery is unknown."""
@@ -294,8 +297,8 @@ class EnvironmentReply:
     """One utterance spoken by a simulated character.
 
     The challenge owns the words and voice choice; the generic bridge owns
-    delivery.  In simulator mode the brain speaks this through Cartesia and
-    releases the transcript to normal chat as playback starts.
+    delivery.  In simulator mode the brain speaks this through Cartesia, shows
+    the line in chat as playback starts, and hands it to the agent when it ends.
     """
 
     speaker: str
@@ -446,7 +449,6 @@ class ChallengeEngine:
         self._run_epoch = 0
         # Run tokens keep delayed environment replies out of later scenes.
         self._run_token = 0
-        self._speech_serial = 0
         self._chat_inputs: deque[tuple[int, dict]] = deque(maxlen=CHAT_OUTBOX_MAXLEN)
         self._chat_ready = threading.Condition(self._mutex)
         # Orders the final bounded send against run invalidation.
@@ -636,15 +638,6 @@ class ChallengeEngine:
             publish()
             return True
 
-    def requeue_chat_input_if_current(self, token: int, payload: dict) -> bool:
-        """Release a spoken environment reply into chat after its audio ends."""
-        with self._chat_ready:
-            if self.active is None or self.state not in ("running", "passed") or token != self._run_token:
-                return False
-            self._queue_chat_input(payload)
-            self._chat_ready.notify_all()
-            return True
-
     # -- evaluation (physics thread, after state gathering; no sim access) --
 
     def tick(
@@ -689,26 +682,16 @@ class ChallengeEngine:
                             events.append({**event, "_source": _ENVIRONMENT_EVENT_SOURCE})
                         for reply in runtime_result.replies:
                             if isinstance(reply, EnvironmentReply):
-                                self._speech_serial += 1
-                                text = reply.text
-                                speech = {
-                                    "id": f"{self._run_token}:{self._speech_serial}",
+                                payload = {
+                                    "sender": ENVIRONMENT_SPEECH_SENDER,
+                                    "speaker": reply.speaker,
                                     "text": reply.text,
                                     "voice_id": reply.voice_id,
                                 }
                             elif isinstance(reply, str):
-                                text = reply
-                                speech = None
+                                payload = {"sender": "user", "text": reply, "timestamp": time.time()}
                             else:
                                 raise TypeError("challenge runtime replies must be strings or EnvironmentReply values")
-                            payload = {
-                                "text": text,
-                                "sender": "user",
-                                "timestamp": time.time(),
-                            }
-                            if speech is not None:
-                                payload["speaker"] = reply.speaker
-                                payload["_environment_speech"] = speech
                             self._queue_chat_input(payload)
                         if runtime_result.replies:
                             self._chat_ready.notify_all()
@@ -809,18 +792,14 @@ class ChallengeChatBridge:
 
     Robot utterances arrive on ``/brain/chat_out`` and are judged against the
     next ground-truth tick. Environment replies are published to
-    ``/brain/chat_in`` so both the active agent and every chat UI receive them
-    through the same interface as a human speaker. Subscribe and publish use
-    separate best-effort connections so an idle receive loop cannot strand a
-    reply waiting in the engine outbox.
+    ``/brain/chat_in``, where the brain voices a spoken one and decides when its
+    line reaches the chat and the agent. Subscribe and publish use separate
+    best-effort connections so an idle receive loop cannot strand a reply
+    waiting in the engine outbox.
     """
 
     CHAT_OUT = "/brain/chat_out"
     CHAT_IN = "/brain/chat_in"
-    ENVIRONMENT_SPEECH_DONE = "/brain/environment_speech_done"
-    ENVIRONMENT_SPEECH_SENDER = "environment_speech"
-    # Lost playback ack: post the transcript as text anyway after this long.
-    SPEECH_ACK_TIMEOUT_S = 30.0
 
     @staticmethod
     def _send_with_timeout(connection, message: str, timeout_s: float = CHAT_WRITE_TIMEOUT_S) -> None:
@@ -854,9 +833,7 @@ class ChallengeChatBridge:
     def __init__(self, engine: ChallengeEngine, url: str = "ws://127.0.0.1:9090"):
         self.engine = engine
         self.url = url
-        self._pending_speech: dict[str, tuple[int, dict, threading.Timer]] = {}
-        self._pending_speech_lock = threading.Lock()
-        self._speech_done_ready = threading.Event()
+        self._subscribed = threading.Event()
         threading.Thread(target=self._subscribe, daemon=True).start()
         threading.Thread(target=self._publish, daemon=True).start()
 
@@ -875,27 +852,6 @@ class ChallengeChatBridge:
         timestamp = payload.get("timestamp")
         return text, float(timestamp) if isinstance(timestamp, int | float) else None
 
-    @classmethod
-    def environment_speech_done(cls, message: str) -> str | None:
-        """Decode one completion acknowledgment from the brain's TTS worker."""
-        frame = json.loads(message)
-        if frame.get("topic") != cls.ENVIRONMENT_SPEECH_DONE:
-            return None
-        payload = json.loads(frame["msg"]["data"])
-        request_id = payload.get("id")
-        return request_id if isinstance(request_id, str) and request_id else None
-
-    def _release_pending_speech(self, request_id: str) -> None:
-        """Post a spoken reply's transcript into chat, exactly once."""
-        with self._pending_speech_lock:
-            entry = self._pending_speech.pop(request_id, None)
-        if entry is None:
-            return
-        token, payload, timer = entry
-        timer.cancel()
-        payload["timestamp"] = time.time()
-        self.engine.requeue_chat_input_if_current(token, payload)
-
     def _subscribe(self) -> None:
         try:
             from websockets.sync.client import connect
@@ -906,18 +862,13 @@ class ChallengeChatBridge:
         while True:
             try:
                 with connect(self.url, open_timeout=5) as ws:
-                    for topic in (self.CHAT_OUT, self.ENVIRONMENT_SPEECH_DONE):
-                        ws.send(json.dumps({"op": "subscribe", "topic": topic, "type": "std_msgs/String"}))
-                    self._speech_done_ready.set()
+                    ws.send(json.dumps({"op": "subscribe", "topic": self.CHAT_OUT, "type": "std_msgs/String"}))
+                    self._subscribed.set()
                     if not announced:
                         print(f"[challenges] environment chat listening ({self.url})", flush=True)
                         announced = True
                     for message in ws:
                         try:
-                            request_id = self.environment_speech_done(message)
-                            if request_id is not None:
-                                self._release_pending_speech(request_id)
-                                continue
                             speech = self.robot_speech(message)
                             if speech is not None:
                                 self.engine.post_robot_speech(*speech)
@@ -926,7 +877,7 @@ class ChallengeChatBridge:
             except Exception:  # noqa: BLE001,S110 -- rosbridge down/restarting; retry
                 pass
             finally:
-                self._speech_done_ready.clear()
+                self._subscribed.clear()
             time.sleep(5)
 
     def _publish(self) -> None:
@@ -952,7 +903,7 @@ class ChallengeChatBridge:
         ready_since = None
         while True:
             if ws is None:
-                if not self._speech_done_ready.is_set():
+                if not self._subscribed.is_set():
                     ready_since = None
                 elif ready_since is None:
                     ready_since = time.time()
@@ -970,36 +921,11 @@ class ChallengeChatBridge:
                 try:
                     if ws is None:
                         ws = open_connection()
-                    outbound_payload = dict(payload)
-                    speech = outbound_payload.pop("_environment_speech", None)
-                    body = (
-                        {**speech, "sender": self.ENVIRONMENT_SPEECH_SENDER}
-                        if isinstance(speech, dict)
-                        else outbound_payload
-                    )
-                    if isinstance(speech, dict):
-                        request_id = speech.get("id")
-                        if not isinstance(request_id, str) or not request_id:
-                            raise ValueError("environment speech request has no id")
-                        # Subscribe before sending the one-shot TTS request.
-                        if not self._speech_done_ready.wait(5.0):
-                            raise TimeoutError("environment speech completion subscription is unavailable")
-                        # A lost request or ack must not silence the resident.
-                        watchdog = threading.Timer(
-                            self.SPEECH_ACK_TIMEOUT_S, self._release_pending_speech, args=(request_id,)
-                        )
-                        watchdog.daemon = True
-                        with self._pending_speech_lock:
-                            previous = self._pending_speech.get(request_id)
-                            if previous is not None:
-                                previous[2].cancel()
-                            self._pending_speech[request_id] = (token, outbound_payload, watchdog)
-                        watchdog.start()
                     frame = json.dumps(
                         {
                             "op": "publish",
                             "topic": self.CHAT_IN,
-                            "msg": {"data": json.dumps(body)},
+                            "msg": {"data": json.dumps(payload)},
                         }
                     )
 
@@ -1013,7 +939,6 @@ class ChallengeChatBridge:
                 except _ChatWriteTimeout:
                     # Delivery is unknown: the frame may have landed before the
                     # deadline cut the socket, and a resend would repeat the line.
-                    # A spoken transcript still surfaces via the ack watchdog.
                     print("[challenges] chat write timed out -- reply not resent", flush=True)
                     if ws is not None:
                         try:

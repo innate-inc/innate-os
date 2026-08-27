@@ -27,6 +27,7 @@ class Sender(StrEnum):
 
     ROBOT = "robot"
     ROBOT_THOUGHTS = "robot_thoughts"
+    USER = "user"
     SYSTEM = "system"
     SKILL_OUTPUT = "skill_output"
 

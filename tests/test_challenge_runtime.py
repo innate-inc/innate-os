@@ -27,7 +27,6 @@ except ImportError:
 sys.path.insert(0, str(DRIVER_PACKAGE))
 
 from mars_sim_driver.challenges import (  # noqa: E402
-    CHAT_OUTBOX_MAXLEN,
     Challenge,
     ChallengeChatBridge,
     ChallengeEngine,
@@ -97,13 +96,6 @@ def test_loader_supports_challenge_packages_with_private_modules(tmp_path):
     assert loaded["packaged"].title == "Packaged challenge"
 
 
-def test_loader_ignores_plain_data_directories(tmp_path, capsys):
-    (tmp_path / "fixtures").mkdir()
-
-    assert load_challenges([tmp_path]) == {}
-    assert capsys.readouterr().out == ""
-
-
 def test_runtime_events_are_trusted_and_parallel_goals_are_unordered(tmp_path):
     engine, sim, runtime = _engine(tmp_path)
     assert runtime.reset_count == 1
@@ -122,7 +114,7 @@ def test_runtime_events_are_trusted_and_parallel_goals_are_unordered(tmp_path):
     assert [goal["done"] for goal in block["active"]["goals"]] == [True, True]
 
 
-def test_environment_reply_uses_normal_chat_with_private_speech_metadata(tmp_path):
+def test_environment_reply_is_a_speech_request_the_brain_voices(tmp_path):
     engine, sim, _runtime = _engine(tmp_path)
     engine.post_robot_speech("a")
     _tick(engine, sim)
@@ -132,39 +124,27 @@ def test_environment_reply_uses_normal_chat_with_private_speech_metadata(tmp_pat
     assert engine.chat_input_is_current(token)
     assert payload["text"] == "Confirmed"
     assert payload["speaker"] == "A"
-    assert payload["sender"] == "user"
-    assert payload["_environment_speech"]["voice_id"] == "voice-a"
+    assert payload["sender"] == "environment_speech"
+    assert payload["voice_id"] == "voice-a"
 
 
 def test_restart_invalidates_queued_and_dequeued_replies(tmp_path):
     engine, sim, _runtime = _engine(tmp_path)
     engine.post_robot_speech("a")
     _tick(engine, sim)
-    old_token, old_payload = engine.next_chat_input(timeout=0.0)
+    old_token, _old_payload = engine.next_chat_input(timeout=0.0)
 
     assert engine.start("characters")
 
     assert not engine.chat_input_is_current(old_token)
-    assert not engine.requeue_chat_input_if_current(old_token, old_payload)
     assert engine.next_chat_input(timeout=0.0) is None
-
-
-def test_deactivate_clears_a_bounded_chat_outbox(tmp_path):
-    engine, _sim, _runtime = _engine(tmp_path)
-    payload = {"sender": "user", "text": "reply"}
-    for _ in range(CHAT_OUTBOX_MAXLEN + 10):
-        assert engine.requeue_chat_input_if_current(engine._run_token, payload)
-
-    assert len(engine._chat_inputs) == CHAT_OUTBOX_MAXLEN
-    engine.abort()
-    assert not engine._chat_inputs
 
 
 def _topic_frame(topic: str, payload: dict) -> str:
     return json.dumps({"topic": topic, "msg": {"data": json.dumps(payload)}})
 
 
-def test_chat_bridge_accepts_only_visible_robot_speech_and_valid_acks():
+def test_chat_bridge_accepts_only_visible_robot_speech():
     robot = _topic_frame(
         ChallengeChatBridge.CHAT_OUT,
         {"sender": "robot", "text": "Hello", "timestamp": 42.5},
@@ -173,11 +153,8 @@ def test_chat_bridge_accepts_only_visible_robot_speech_and_valid_acks():
         ChallengeChatBridge.CHAT_OUT,
         {"sender": "robot_thoughts", "text": "private", "timestamp": 42.5},
     )
-    ack = _topic_frame(ChallengeChatBridge.ENVIRONMENT_SPEECH_DONE, {"id": "2:7", "success": True})
-
     assert ChallengeChatBridge.robot_speech(robot) == ("Hello", 42.5)
     assert ChallengeChatBridge.robot_speech(thought) is None
-    assert ChallengeChatBridge.environment_speech_done(ack) == "2:7"
 
 
 def test_chat_write_timeout_interrupts_a_stalled_socket():

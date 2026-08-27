@@ -10,9 +10,7 @@ _NON_WORD = re.compile(r"[^a-z0-9]+")
 _SCOPE_PUNCTUATION = re.compile(r"[,;:.!?]+")
 _READBACK_PREFIXES = ("actually ", "okay ", "so you want ", "you want ", "your order is ", "you said ")
 _NEGATION_WORD = re.compile(r"\b(?:not|never|no|without|skip|hold|omit|remove)\b")
-_NEGATION_SCOPE_BOUNDARY = re.compile(
-    r"\b(?:and|but|clausebreak|except|however|instead|plus|though|with|yet)\b"
-)
+_NEGATION_SCOPE_BOUNDARY = re.compile(r"\b(?:and|but|clausebreak|except|however|instead|plus|though|with|yet)\b")
 _ORDER_REQUEST_PHRASES = (
     "what would you like",
     "what do you want",

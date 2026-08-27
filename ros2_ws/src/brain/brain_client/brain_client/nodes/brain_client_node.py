@@ -48,7 +48,7 @@ from brain_client.skills.hot_reload import ReloadCoordinator
 from brain_client.skills.roster import SkillRoster
 from brain_client.skills.runner import PrimitiveRunner
 from brain_client.skills.workspace_import import format_load_error, unique_key
-from brain_client.transport.chat import ChatManager
+from brain_client.transport.chat import ChatManager, Sender
 from brain_client.transport.tts import TTSHandler
 
 LATCHED_QOS = QoSProfile(
@@ -78,7 +78,6 @@ class BrainClientNode(Node):
         # Synthesized speech (base64 WAV) for clients to play. Sim-only: the sim
         # has no audio device, so the webapp is the speaker.
         self.tts_audio_pub = self.create_publisher(String, "/tts/audio", 10)
-        self.environment_speech_done_pub = self.create_publisher(String, "/brain/environment_speech_done", 10)
         # Live agent state, so clients see a stop/start/directive change made
         # from another device without polling. Latched + heartbeat because
         # bridges (rws) that subscribe after boot miss the latched sample.
@@ -403,40 +402,48 @@ class BrainClientNode(Node):
             self.chat.speak(text)
 
     def _on_environment_speech(self, payload: dict) -> None:
-        """Speak a simulated character, acknowledging after playback."""
+        """Speak a simulated character: the line reaches the chat as the voice
+        starts and the agent only once it stops, so the robot does not answer a
+        resident who is still talking."""
         if not self.config.simulator_mode:
             # /brain/chat_in is an open bus: without this gate, anything that
             # can publish there could drive a real robot's speaker in any voice.
             self.get_logger().warning("Ignoring environment speech request: only the simulator may send it")
             return
         try:
-            request_id = payload["id"]
             text = payload["text"]
             voice_id = payload["voice_id"]
-            if not all(isinstance(value, str) and value.strip() for value in (request_id, text, voice_id)):
-                raise ValueError("id, text, and voice_id must be non-empty strings")
+            if not all(isinstance(value, str) and value.strip() for value in (text, voice_id)):
+                raise ValueError("text and voice_id must be non-empty strings")
         except (KeyError, ValueError) as exc:
             self.get_logger().warning(f"Ignoring invalid environment speech request: {exc}")
             return
 
-        def acknowledge(success: bool) -> None:
-            result = {"id": request_id, "success": success, "timestamp": time.time()}
-            self.environment_speech_done_pub.publish(String(data=json.dumps(result)))
+        shown = threading.Event()
+
+        def show() -> None:
+            if not shown.is_set():
+                shown.set()
+                self.chat.emit(Sender.USER, text, speak=False)
+
+        def deliver(_success: bool) -> None:
+            show()  # a clip that never played still leaves its line on screen
+            if self.state.is_brain_active:
+                self.brain.on_user_message(text)
 
         if self._tts_handler is None:
             self.get_logger().warning("Environment speech requested while TTS is unavailable")
-            acknowledge(False)
+            deliver(False)
             return
         queued = self._tts_handler.speak_text_async(
             text,
             voice_config={"mode": "id", "id": voice_id},
-            # The simulator releases the transcript into chat only after the
-            # resident has finished speaking, like a real spoken interaction.
-            on_done=acknowledge,
+            on_start=show,
+            on_done=deliver,
             protected=True,  # another character's line: agent flushes must not cancel it
         )
         if not queued:
-            acknowledge(False)
+            deliver(False)
 
     def _on_set_directive(self, msg: String) -> None:
         self.lifecycle.set_directive(msg.data)
