@@ -47,6 +47,7 @@ APPROACH_PARAMS = {
     "sweet_x": 0.37,
     "box_y": 0.0,
     "box_half_px": 40.0,
+    "box_half_v_px": 40.0,
     "accept_frac": 0.5,
     "box_steps": 6.0,
     "bearing_go_deg": 4.0,
@@ -65,8 +66,8 @@ APPROACH_PARAMS = {
 FOLLOW_TIMEOUT_S = 20.0
 
 
-def inside_box(px, cu, cv, half):
-    return abs(px[0] - cu) <= half and abs(px[1] - cv) <= half
+def inside_box(px, cu, cv, half_u, half_v=None):
+    return abs(px[0] - cu) <= half_u and abs(px[1] - cv) <= (half_u if half_v is None else half_v)
 
 
 class _FloorApproach(Skill):
@@ -123,8 +124,10 @@ class _FloorApproach(Skill):
             return None
         return {
             "center_px": [cu, cv],
-            "outer_px": half,
-            "accept_px": accept,
+            "outer_px": half[0],
+            "outer_v_px": half[1],
+            "accept_px": accept[0],
+            "accept_v_px": accept[1],
             "xy": [self._p["sweet_x"], self._p["box_y"]],
         }
 
@@ -207,12 +210,20 @@ class _FloorApproach(Skill):
     # --- position the base ---
 
     def _sweet_box(self):
-        """(center_px, outer_half, accept_half). Stop only inside accept."""
+        """(centre, (outer_u, outer_v), (accept_u, accept_v)). Stop only inside
+        accept.
+
+        The two axes carry different units of error and cannot share a
+        tolerance: at the drop's 0.30 m park distance one image row is ~1.2 cm
+        of RANGE but only ~0.8 mm of bearing, so the box widened enough to
+        hold a clipped container's drifting centroid would also accept parking
+        8 cm out — past the reach the release needs."""
         c = floor_to_pixel(self._p["sweet_x"], self._p["box_y"], self._p["tilt_deg"])
         if c is None or not (0 <= c[0] < IMG_W and 0 <= c[1] < IMG_H):
             raise SkillFailed("approach box off-image — check tilt_deg/sweet_x")
-        half = self._p["box_half_px"]
-        return (c[0], c[1]), half, half * self._p["accept_frac"]
+        hu, hv = self._p["box_half_px"], self._p["box_half_v_px"]
+        frac = self._p["accept_frac"]
+        return (c[0], c[1]), (hu, hv), (hu * frac, hv * frac)
 
     def _follow_into_box(self, seed_px):
         """Optical-flow base servo into the sweet box. No Gemini.
@@ -255,7 +266,7 @@ class _FloorApproach(Skill):
                 self._debug("follow", note="off-image", sweet=sweet)
                 return "lost", None
 
-            if inside_box((u, v), cu, cv, accept):
+            if inside_box((u, v), cu, cv, accept[0], accept[1]):
                 in_box += 1
                 self.mobility.stop()
                 if in_box >= 3:
@@ -267,10 +278,10 @@ class _FloorApproach(Skill):
 
             # Deadband = accept (inner) box; right -> -wz, too close (low) -> -vx.
             wz = self.mobility.servo_vel(
-                u - cu, self._p["follow_gain_ang"], self._p["rot_wz_min"], self._p["rot_wz_max"], accept
+                u - cu, self._p["follow_gain_ang"], self._p["rot_wz_min"], self._p["rot_wz_max"], accept[0]
             )
             vx = self.mobility.servo_vel(
-                v - cv, self._p["follow_gain_lin"], self._p["drive_v_min"], self._p["drive_v_max"], accept
+                v - cv, self._p["follow_gain_lin"], self._p["drive_v_min"], self._p["drive_v_max"], accept[1]
             )
             self.mobility.send_cmd_vel(vx, wz, 0.15)
             self._debug("follow", track_px=[u, v], cmd=[vx, wz], sweet=sweet)
@@ -300,7 +311,7 @@ class _FloorApproach(Skill):
             # step budget runs out and reports a failure to centre something
             # that is already centred.
             (cu, cv), _half, accept = self._sweet_box()
-            if xy is not None and inside_box(seed, cu, cv, accept):
+            if xy is not None and inside_box(seed, cu, cv, accept[0], accept[1]):
                 return xy
             result, _pt = self._follow_into_box(seed)
             if result == "noframe":
@@ -311,7 +322,7 @@ class _FloorApproach(Skill):
             xy2, px2 = self._localize_retry(prompt)
             if px2 is None:
                 self._position_failed(prompt)
-            if xy2 is not None and inside_box(px2, cu, cv, accept):
+            if xy2 is not None and inside_box(px2, cu, cv, accept[0], accept[1]):
                 return xy2
             xy, seed = xy2, (px2 if xy2 is not None else None)
         self._position_failed(prompt)
@@ -328,7 +339,7 @@ class _FloorApproach(Skill):
                 if px is None:
                     self._position_failed(prompt)
             (cu, cv), _half, accept = self._sweet_box()
-            if xy is not None and inside_box(px, cu, cv, accept):
+            if xy is not None and inside_box(px, cu, cv, accept[0], accept[1]):
                 return xy
             if xy is None:
                 px = None

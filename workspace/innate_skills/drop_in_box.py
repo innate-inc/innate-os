@@ -18,7 +18,7 @@ from innate_skills.approach import APPROACH_PARAMS, _FloorApproach
 from innate import Head, JointStates, Manipulation, SkillReturn, WristImage, vision
 from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
-from innate.geometry import IMG_H, IMG_W, pixel_to_height
+from innate.geometry import IMG_H, IMG_W, pixel_to_floor, pixel_to_height
 
 # Arm reach as a sphere about the shoulder, from the URDF: joint2 sits at
 # (0.086, 0.0845) in base_link and 0.326 m of link follows it. The 0.086 m
@@ -35,22 +35,35 @@ HOLDING_J6 = (-0.065, 0.80)
 
 VERIFY_BACKUP_M = 0.15
 
+# A detection touching the top of the frame has had its rim cropped away, so
+# any height read off it is meaningless — at the park distance the container
+# fills the view and both the bbox top and the model's rim line sit at row 0.
+CLIP_MARGIN_PX = 3.0
+
 PARAMS = {
     **APPROACH_PARAMS,
     # The box's near floor edge parks here. Bounded below by the 0.25 m front
     # bumper (costmap footprint) and above by the 0.40 m reach clamp, which has
     # to also fit drop_inset — the window is barely 5 cm wide.
     "sweet_x": 0.30,
-    # Looser than pick's 40/0.5. Close in, a container runs off the frame
-    # edges, so its bbox centre stops tracking its true middle — and it does
-    # not need pick's precision anyway: 54 px is ~40 mm of lateral error at
-    # this range, against a 316 mm interior.
-    "box_half_px": 90.0,
+    # Bearing: loose. Close in a container runs off the frame edges and its
+    # bbox centre stops tracking its middle; 66 px is ~50 mm of lateral error
+    # here, against a 316 mm interior. Range: TIGHTER than pick's, because one
+    # image row is ~1.2 cm of range at 0.30 m and the whole usable window
+    # between the bumper and the reach limit is about 5 cm. 18 px is ~2.2 cm.
+    "box_half_px": 110.0,
+    "box_half_v_px": 30.0,
     "accept_frac": 0.6,
     # How far past the near face the gripper hovers, so the object clears the
     # box wall on the way down.
     "drop_inset": 0.07,
-    "release_clear_m": 0.05,  # gripper height above the rim at release
+    "release_clear_m": 0.04,  # gripper height above the rim on the way in
+    # Release height above the container's FLOOR. Dropping from over the rim
+    # bounced the object back out — a 0.14 m fall into a 0.14 m box. Lower is
+    # also easier on the arm: reach grows as z drops (0.39 m at the rim, 0.41 m
+    # down here), so the descent never costs inset.
+    "release_inside_m": 0.06,
+    "descend_s": 1.2,
     "release_settle_s": 0.8,
     # Carry pose for the drive in. The pick leaves the object held forward of
     # the 0.25 m bumper and below a container's rim, so the gripper reaches
@@ -59,7 +72,7 @@ PARAMS = {
     "carry_x": 0.24,
     "carry_z": 0.30,
     "carry_s": 2.0,
-    "lift_after_m": 0.04,
+    "lift_after_m": 0.12,  # enough to clear a rim the gripper is now INSIDE
     "hover_s": 2.5,
     "arm_pitch": 1.30,
     # Least the gripper may sit past the near face and still be over the
@@ -128,27 +141,33 @@ class DropInBox(_FloorApproach):
         self._box_u = min(float(IMG_W - 1), x + w / 2.0)
         self._box_top_v = float(y)
         px = (self._box_u, min(float(IMG_H - 1), float(y + h)))
+        self._measure_rim(px)
         self._debug("detect", image=img, label=prompt, box_px=list(box), point_px=list(px), near_rim_v=self._near_rim_v)
         return px
 
-    def _rim_height(self, near_x: float) -> float:
-        """Rim height above the floor: the near-rim row's ray crossing the
-        vertical through the near face, clamped into the workable band.
-
-        The detection's own top edge is the fallback and it reads HIGH — that
-        row is the FAR rim seen from above, 15-75 mm over the near one on
-        typical boxes — so near_rim_y is used whenever the model returned it."""
-        p = self._p
-        floor = p["rim_z_min"]
-        if self._box_u is None or self._box_top_v is None:
-            return floor
+    def _measure_rim(self, px: tuple[float, float]) -> None:
+        """Bank the rim height from THIS detection, while the container is
+        still whole in frame. Height is a property of the box, not of where
+        the robot stands, so an estimate taken at range survives the approach
+        — by the time the base has parked the rim is cropped off the top of
+        the image and cannot be measured at all."""
         v = self._near_rim_v if self._near_rim_v is not None else self._box_top_v
-        source = "near_rim" if self._near_rim_v is not None else "bbox_top"
-        raw = pixel_to_height(self._box_u, v, p["tilt_deg"], near_x)
-        rim = floor if raw is None else max(floor, min(p["rim_z_max"], raw))
-        self._rim_z = rim
-        self.logger.info(f"[DropInBox] rim {rim:.3f} (raw={raw}, from {source}) at near_x={near_x:.3f}")
-        self._debug("rim", rim_z=rim, rim_raw=raw, rim_source=source, rim_v=v, near_x=near_x)
+        if v is None or v <= CLIP_MARGIN_PX or self._box_top_v is None or self._box_top_v <= CLIP_MARGIN_PX:
+            return
+        xy = pixel_to_floor(px[0], px[1], self._p["tilt_deg"])
+        if xy is None or self._box_u is None:
+            return
+        raw = pixel_to_height(self._box_u, v, self._p["tilt_deg"], xy[0])
+        if raw is None:
+            return
+        self._rim_z = max(self._p["rim_z_min"], min(self._p["rim_z_max"], raw))
+        self.logger.info(f"[DropInBox] rim {self._rim_z:.3f} (raw={raw:.3f}) measured at range {xy[0]:.2f}")
+
+    def _rim_height(self, near_x: float) -> float:
+        """The rim height banked by _measure_rim, or the floor of the band if
+        no detection ever caught the container uncropped."""
+        rim = self._rim_z if self._rim_z is not None else self._p["rim_z_min"]
+        self._debug("rim", rim_z=rim, measured=self._rim_z is not None, near_x=near_x)
         return rim
 
     def _j6(self) -> float | None:
@@ -171,13 +190,15 @@ class DropInBox(_FloorApproach):
         return _yes_no(text)
 
     def _holding(self) -> bool:
-        """The gripper has something in it. Joints decide; the wrist camera
-        only gets a say when they say no, so a mis-read j6 cannot strand a
-        genuinely carried object."""
+        """The gripper has something in it. The wrist camera decides whenever
+        it has a view: j6 cannot tell a grip from a claw merely parked shut —
+        REST leaves it at 0.003, inside the band a held object produces — and
+        that false positive sends the robot off to flail at a container with
+        an empty gripper. The joints are the fallback."""
         j6 = self._j6()
         by_joint = j6 is not None and HOLDING_J6[0] < j6 < HOLDING_J6[1]
-        seen = self._wrist_sees_object() if not by_joint else None
-        held = by_joint or seen is True
+        seen = self._wrist_sees_object()
+        held = by_joint if seen is None else seen
         self.logger.info(f"[DropInBox] hold check: j6={j6} joints={by_joint} wrist={seen} -> {held}")
         self._debug("hold", j6=j6, by_joint=by_joint, wrist=seen, held=held)
         return held
@@ -227,10 +248,24 @@ class DropInBox(_FloorApproach):
                 f"Could not hold the gripper over the rim at z={z:.2f} m — "
                 f"the container looks too tall for this arm ({e})"
             ) from e
-        # Latched BEFORE the claw opens: a cancel during the settle below must
-        # still lift out of the container, and an unlatched flag folded REST
-        # straight through the wall.
+        # Latched BEFORE the claw opens: a cancel during the descent or settle
+        # below must still lift out of the container, and an unlatched flag
+        # folded REST straight through the wall.
         self._over_rim = True
+
+        # Over the rim, now down inside it before letting go. tolerance_z=None
+        # because touching down early is a fine way for this move to end.
+        inside = min(rim - 0.02, p["release_inside_m"])
+        if inside > p["rim_z_min"]:
+            try:
+                self.manipulation.move_to(
+                    x, y, inside, pitch=p["arm_pitch"], duration=p["descend_s"], tolerance_xy=0.06, tolerance_z=None
+                )
+                z = inside
+            except ArmFailed as e:
+                self.logger.warning(f"[DropInBox] could not descend into the container ({e}); releasing from the rim")
+        self._debug("descend", target_xyz=[x, y, z], rim_z=rim)
+
         self.check_cancelled()  # last exit before the object leaves the claw
         self.manipulation.gripper_open(duration=1.0)
         self.sleep(p["release_settle_s"])
