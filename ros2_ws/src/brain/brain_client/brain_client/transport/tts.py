@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 import wave
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -91,11 +92,14 @@ class TTSHandler:
 
         # Async speech is played in order by one worker so back-to-back calls
         # aren't dropped; bounded so a runaway say() loop can't build a backlog.
-        self._speech_queue: queue.Queue = queue.Queue(maxsize=16)
-        # Last-popped reply id; ids are unique per reply, so a stale value
-        # can never wrongly protect a newer reply's sentences.
+        self._speech_queue: deque[_Utterance | None] = deque()
+        self._speech_queue_maxlen = 16
+        # Guards the queue and the floor together: popping an utterance and
+        # taking the floor for its reply must be one step, or a flush racing
+        # the pop judges siblings against the previous reply's id.
+        self._speech_cv = threading.Condition()
         self._playing_reply_id: str | None = None
-        self._speech_queue_lock = threading.Lock()
+        self._closing = threading.Event()
         threading.Thread(target=self._speech_loop, daemon=True).start()
 
     def _init_client(self):
@@ -334,7 +338,7 @@ class TTSHandler:
         # operator hears in the browser.
         duration_s = _wav_duration_s(wav)
         if duration_s > 0:
-            time.sleep(duration_s)
+            self._closing.wait(duration_s)  # close() must not ride out a whole clip
         self.logger.info(
             f"✅ TTS streamed to browser ({len(text)} chars, {len(buf) / 1024:.0f}KB, "
             f"total={(time.perf_counter() - t_start) * 1000:.0f}ms)"
@@ -342,12 +346,12 @@ class TTSHandler:
         return True
 
     def _publish_audio(self, wav: bytes) -> None:
-        """Publish a finished clip on /tts/audio as base64 WAV for clients to play."""
+        """Publish one already-finalized clip on /tts/audio as base64 WAV."""
         if self.tts_audio_pub is None or not wav:
             return
         from std_msgs.msg import String
 
-        payload = base64.b64encode(_finalize_wav(wav)).decode("ascii")
+        payload = base64.b64encode(wav).decode("ascii")
         self.tts_audio_pub.publish(String(data=payload))
 
     def speak_text_async(
@@ -379,72 +383,73 @@ class TTSHandler:
             self.logger.debug("🔇 TTS not available, skipping async speech")
             return False
         dropped_callbacks = []
-        try:
-            with self._speech_queue_lock:
-                if replace_pending:
-                    kept = []
-                    while True:
-                        try:
-                            stale = self._speech_queue.get_nowait()
-                        except queue.Empty:
-                            break
-                        if stale is None or _survives_flush(stale, self._playing_reply_id):
-                            kept.append(stale)  # keep close()'s stop sentinel too
-                            continue
-                        self.logger.info(f"🔇 Dropping superseded speech: '{stale.text[:60]}'")
-                        if stale.on_done is not None:
-                            dropped_callbacks.append(stale.on_done)
-                    for item in kept:
-                        self._speech_queue.put_nowait(item)
-                self._speech_queue.put_nowait(_Utterance(text, voice_config, on_done, reply_id, protected))
-        except queue.Full:
+        with self._speech_cv:
+            if replace_pending:
+                kept = []
+                for stale in self._speech_queue:
+                    if stale is None or _survives_flush(stale, self._playing_reply_id):
+                        kept.append(stale)  # keep close()'s stop sentinel too
+                        continue
+                    self.logger.info(f"🔇 Dropping superseded speech: '{stale.text[:60]}'")
+                    if stale.on_done is not None:
+                        dropped_callbacks.append(stale.on_done)
+                self._speech_queue.clear()
+                self._speech_queue.extend(kept)
+            queued = len(self._speech_queue) < self._speech_queue_maxlen
+            if queued:
+                self._speech_queue.append(_Utterance(text, voice_config, on_done, reply_id, protected))
+                self._speech_cv.notify()
+        if not queued:
             self.logger.warning(f"🔇 Speech queue full, dropping: '{text[:60]}'")
-            return False
         for callback in dropped_callbacks:
             callback(False)
-        return True
+        return queued
 
     def _drop_queued_reply(self, reply_id: str | None) -> None:
         """Discard sibling sentences after their reply fails terminally."""
         if reply_id is None:
             return
-        kept = []
         dropped_callbacks = []
-        with self._speech_queue_lock:
-            while True:
-                try:
-                    queued = self._speech_queue.get_nowait()
-                except queue.Empty:
-                    break
+        with self._speech_cv:
+            kept = []
+            for queued in self._speech_queue:
                 if queued is not None and queued.reply_id == reply_id:
                     self.logger.info(f"🔇 Dropping remainder of failed reply: '{queued.text[:60]}'")
                     if queued.on_done is not None:
                         dropped_callbacks.append(queued.on_done)
                     continue
                 kept.append(queued)
-            for queued in kept:
-                self._speech_queue.put_nowait(queued)
+            self._speech_queue.clear()
+            self._speech_queue.extend(kept)
         for callback in dropped_callbacks:
             callback(False)
+
+    def _set_playing_reply(self, reply_id: str | None) -> None:
+        with self._speech_cv:
+            self._playing_reply_id = reply_id
 
     def _speech_loop(self):
         """Single worker: plays queued utterances in order, retrying each once."""
         while True:
-            item = self._speech_queue.get()
+            with self._speech_cv:
+                while not self._speech_queue:
+                    self._speech_cv.wait()
+                item = self._speech_queue.popleft()
+                if item is not None:
+                    self._playing_reply_id = item.reply_id
             if item is None:
                 break
-            self._playing_reply_id = item.reply_id
             success = self.speak_text(item.text, item.voice_config)
             if not success:
                 # A failed sentence loses the floor during its retry delay, so
                 # a newer reply can flush its not-yet-played siblings.
-                self._playing_reply_id = None
+                self._set_playing_reply(None)
                 self.logger.info("🔄 Retrying TTS after 1 second...")
                 time.sleep(1)
-                self._playing_reply_id = item.reply_id
+                self._set_playing_reply(item.reply_id)
                 success = self.speak_text(item.text, item.voice_config)
             if not success:
-                self._playing_reply_id = None
+                self._set_playing_reply(None)
                 self._drop_queued_reply(item.reply_id)
             if item.on_done is not None:
                 try:
@@ -454,17 +459,14 @@ class TTSHandler:
 
     def close(self):
         """Clean up resources."""
-        # drop any queued backlog, then hand the worker its stop sentinel;
-        # a blocking put() could hang shutdown if the queue is full
-        try:
-            while True:
-                self._speech_queue.get_nowait()
-        except queue.Empty:
-            pass
-        try:
-            self._speech_queue.put_nowait(None)
-        except queue.Full:
-            pass
+        self._closing.set()  # cuts a sim playback wait short (_synthesize_to_topic)
+        with self._speech_cv:
+            dropped = [item.on_done for item in self._speech_queue if item is not None and item.on_done is not None]
+            self._speech_queue.clear()
+            self._speech_queue.append(None)
+            self._speech_cv.notify()
+        for callback in dropped:
+            callback(False)  # a dangling environment-speech ack would wait out its 30s watchdog
         if self._cartesia_client:
             self.logger.info("🔇 TTS handler closed")
             # Cartesia client doesn't need explicit cleanup in sync mode

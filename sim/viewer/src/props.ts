@@ -79,7 +79,23 @@ function makeNameLabel(text: string, heightM: number): THREE.Sprite {
   sprite.center.set(0.5, 0);
   sprite.position.z = heightM;
   sprite.renderOrder = 10;
+  sprite.userData.isNameLabel = true;
   return sprite;
+}
+
+function nameLabelOf(root: THREE.Object3D): THREE.Sprite | undefined {
+  return root.children.find((child) => child.userData.isNameLabel) as THREE.Sprite | undefined;
+}
+
+/** Body-frame z just above everything drawn under `root` (label excluded). */
+function labelAnchorZ(root: THREE.Object3D): number {
+  const label = nameLabelOf(root);
+  if (label) root.remove(label);
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(root);
+  if (label) root.add(label);
+  const top = box.isEmpty() ? 0.42 : box.max.z - root.getWorldPosition(new THREE.Vector3()).z;
+  return top + 0.08;
 }
 
 /** One prop as the world server describes it (props.py Prop.manifest). */
@@ -164,6 +180,11 @@ export class PropLibrary {
     for (const [name, root] of this.roots) {
       if (!this.info.has(name)) {
         this.scene.remove(root);
+        const label = nameLabelOf(root);
+        if (label) {
+          label.material.map?.dispose();
+          label.material.dispose();
+        }
         this.roots.delete(name);
         this.firstSeen.delete(name); // re-added later, it gets a fresh grace window
       }
@@ -297,8 +318,9 @@ export class PropLibrary {
       if (info.viewer.glb) void this.swapWhenReady(info, root, placeholder);
     }
     if (info.viewer.nameLabel) {
-      const fallbackHeight = info.size.length === 3 ? info.size[2] * 2 + 0.08 : 0.5;
-      root.add(makeNameLabel(info.title, info.viewer.nameLabelHeightM ?? fallbackHeight));
+      // Measured from the drawn content: `size` is the fallback collision box,
+      // which for a mesh prop bears no relation to the model's height.
+      root.add(makeNameLabel(info.title, info.viewer.nameLabelHeightM ?? labelAnchorZ(root)));
     }
     this.onChanged();
     return root;
@@ -335,6 +357,8 @@ export class PropLibrary {
     root.remove(placeholder);
     placeholder.geometry.dispose();
     root.add(model);
+    const label = info.viewer.nameLabelHeightM === undefined ? nameLabelOf(root) : undefined;
+    if (label) label.position.z = labelAnchorZ(root); // the placeholder's height was a stand-in
     this.onChanged();
   }
 

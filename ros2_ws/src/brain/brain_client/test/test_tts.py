@@ -3,9 +3,9 @@
 """Small deterministic checks for simulator speech timing and queue policy."""
 
 import io
-import queue
 import threading
 import wave
+from collections import deque
 from types import SimpleNamespace
 
 import pytest
@@ -54,10 +54,9 @@ def test_wav_duration_rejects_invalid_audio():
 
 def test_failed_reply_no_longer_holds_the_floor(monkeypatch):
     handler = TTSHandler.__new__(TTSHandler)
-    handler._speech_queue = queue.Queue()
-    handler._speech_queue_lock = threading.Lock()
-    handler._speech_queue.put(_utterance(reply_id="failed-reply"))
-    handler._speech_queue.put(None)
+    handler._speech_queue = deque([_utterance(reply_id="failed-reply"), None])
+    handler._speech_queue_maxlen = 16
+    handler._speech_cv = threading.Condition()
     handler._playing_reply_id = None
     handler.logger = SimpleNamespace(info=lambda _message: None, error=lambda _message: None)
     handler.speak_text = lambda _text, _voice: False
@@ -70,10 +69,14 @@ def test_failed_reply_no_longer_holds_the_floor(monkeypatch):
 
 def test_new_reply_during_retry_drops_failed_reply_siblings(monkeypatch):
     handler = TTSHandler.__new__(TTSHandler)
-    handler._speech_queue = queue.Queue()
-    handler._speech_queue_lock = threading.Lock()
-    handler._speech_queue.put(_Utterance("failed first", None, None, "failed-reply", False))
-    handler._speech_queue.put(_Utterance("stale sibling", None, None, "failed-reply", False))
+    handler._speech_queue = deque(
+        [
+            _Utterance("failed first", None, None, "failed-reply", False),
+            _Utterance("stale sibling", None, None, "failed-reply", False),
+        ]
+    )
+    handler._speech_queue_maxlen = 16
+    handler._speech_cv = threading.Condition()
     handler._playing_reply_id = None
     handler.logger = SimpleNamespace(
         debug=lambda _message: None,
@@ -91,7 +94,7 @@ def test_new_reply_during_retry_drops_failed_reply_siblings(monkeypatch):
     def enqueue_new_reply(_seconds):
         assert handler._playing_reply_id is None
         assert handler.speak_text_async("new reply", replace_pending=True, reply_id="new-reply")
-        handler._speech_queue.put(None)
+        handler._speech_queue.append(None)
 
     handler.speak_text = speak
     monkeypatch.setattr("brain_client.transport.tts.time.sleep", enqueue_new_reply)

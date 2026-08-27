@@ -404,13 +404,18 @@ class BrainClientNode(Node):
 
     def _on_environment_speech(self, payload: dict) -> None:
         """Speak a simulated character, acknowledging after playback."""
+        if not self.config.simulator_mode:
+            # /brain/chat_in is an open bus: without this gate, anything that
+            # can publish there could drive a real robot's speaker in any voice.
+            self.get_logger().warning("Ignoring environment speech request: only the simulator may send it")
+            return
         try:
             request_id = payload["id"]
             text = payload["text"]
             voice_id = payload["voice_id"]
             if not all(isinstance(value, str) and value.strip() for value in (request_id, text, voice_id)):
                 raise ValueError("id, text, and voice_id must be non-empty strings")
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        except (KeyError, ValueError) as exc:
             self.get_logger().warning(f"Ignoring invalid environment speech request: {exc}")
             return
 
