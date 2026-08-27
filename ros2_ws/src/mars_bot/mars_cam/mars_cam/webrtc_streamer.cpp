@@ -382,9 +382,9 @@ void WebRTCStreamer::apply_adaptation(AdaptRung rung, int loss_promille, int rtt
     // loss on the remote leg is what FEC exists for, and 100% of a 40% bitrate is still cheap),
     // 2x base while RECOVERING probes upward, base at GOOD.
     if (video_fec_percentage_ > 0) {
-        const guint pct = rung == AdaptRung::kDegraded      ? degraded_fec_pct()
-                          : rung == AdaptRung::kRecovering  ? std::min(100u, video_fec_percentage_ * 2)
-                                                            : video_fec_percentage_;
+        const guint pct = rung == AdaptRung::kDegraded     ? degraded_fec_pct()
+                          : rung == AdaptRung::kRecovering ? std::min(100u, video_fec_percentage_ * 2)
+                                                           : video_fec_percentage_;
         std::lock_guard<std::mutex> lock(peers_mutex_);
         for (auto& kv : peers_) {
             for (size_t i = 0; i < kv.second->videos.size(); ++i) {
@@ -397,9 +397,9 @@ void WebRTCStreamer::apply_adaptation(AdaptRung rung, int loss_promille, int rtt
             }
         }
     }
-    const char* state = rung == AdaptRung::kDegraded      ? "DEGRADED: 40% bitrate + full FEC"
-                        : rung == AdaptRung::kRecovering  ? "RECOVERING: 70% bitrate + 2x FEC"
-                                                          : "GOOD: full bitrate + base FEC";
+    const char* state = rung == AdaptRung::kDegraded     ? "DEGRADED: 40% bitrate + full FEC"
+                        : rung == AdaptRung::kRecovering ? "RECOVERING: 70% bitrate + 2x FEC"
+                                                         : "GOOD: full bitrate + base FEC";
     if (loss_promille < 0 && rtt_ms < 0) {
         RCLCPP_INFO(this->get_logger(), "Network adaptation -> %s (no viewer reports)", state);
     } else if (loss_promille < 0) {
@@ -455,8 +455,7 @@ void WebRTCStreamer::poll_network_adaptation() {
         apply_adaptation(AdaptRung::kDegraded, loss, rtt);
     } else if (adapt_good_ticks_ >= 15 && adapt_rung_ != AdaptRung::kGood) {
         adapt_good_ticks_ = 0;  // the next rung needs its own clean window
-        apply_adaptation(
-            adapt_rung_ == AdaptRung::kDegraded ? AdaptRung::kRecovering : AdaptRung::kGood, loss, rtt);
+        apply_adaptation(adapt_rung_ == AdaptRung::kDegraded ? AdaptRung::kRecovering : AdaptRung::kGood, loss, rtt);
     }
 }
 

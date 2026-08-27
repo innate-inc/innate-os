@@ -222,12 +222,14 @@ class WebRTCStreamer : public rclcpp::Node {
     // per clean window, because restoring full load in one step just re-congests the path.
     enum class AdaptRung { kGood, kRecovering, kDegraded };
     void poll_network_adaptation();
-    static void on_peer_stats(GstPromise* promise, gpointer user_data);  // parses one get-stats reply
+    static void on_peer_stats(GstPromise* promise, gpointer user_data);    // parses one get-stats reply
     void apply_adaptation(AdaptRung rung, int loss_promille, int rtt_ms);  // sets vp8enc bitrates + FEC, logs
     // Bottom-rung FEC is the measured value, not a scaling of the base: on a 4-5%-loss path, 100%
     // cut frozen time from 17-29 s/min to 0.7 s where lighter FEC stayed keyframe-bound — and live
     // burst loss persisted at 50% even after the bitrate was properly shed.
-    guint degraded_fec_pct() const { return 100u; }
+    guint degraded_fec_pct() const {
+        return 100u;
+    }
 
     // ---- Local STUN helper ----
     // Minimal RFC 8489 Binding responder. This gives browsers a robot-local STUN server so their srflx

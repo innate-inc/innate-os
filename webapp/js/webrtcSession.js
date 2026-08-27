@@ -640,7 +640,7 @@ export class WebRtcSession {
     if (Math.abs(target - this.#lastJitterTargetMs) <= 20) return true;
     this.#lastJitterTargetMs = target;
     for (const receiver of pc.getReceivers()) {
-      if (receiver.track.kind !== "video") continue;
+      if (receiver.track?.kind !== "video") continue; // track is null on stopped receivers; a throw here would kill the poll chain
       try {
         if ("jitterBufferTarget" in receiver) receiver.jitterBufferTarget = target;
         if ("playoutDelayHint" in receiver) receiver.playoutDelayHint = target / 1000; // seconds (see #onTrack)

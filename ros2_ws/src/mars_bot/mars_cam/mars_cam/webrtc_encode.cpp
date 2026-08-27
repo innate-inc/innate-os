@@ -285,7 +285,9 @@ bool WebRTCStreamer::build_audio_pipeline() {
                        "queue leaky=downstream max-size-buffers=10 max-size-time=0 max-size-bytes=0 ! "
                        "audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! "
                        "opusenc bitrate=24000 audio-type=voice ! "
-                       "rtpopuspay name=pay_audio pt=" + std::to_string(kAudioPt) + " ! "
+                       "rtpopuspay name=pay_audio pt=" +
+                       std::to_string(kAudioPt) +
+                       " ! "
                        "appsink name=sink_audio emit-signals=true sync=false async=false max-buffers=4 drop=true ";
     GError* error = nullptr;
     audio_pipeline_ = gst_parse_launch(desc.c_str(), &error);
