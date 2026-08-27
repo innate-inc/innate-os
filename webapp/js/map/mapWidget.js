@@ -191,7 +191,7 @@ function rasterizeGrid(msg, canvas, ctx, paint) {
  *   small); enables scroll-to-zoom. Omit to fit the whole grid (the standalone page). onZoomChange
  *   fires after each wheel-zoom. layers turns on optional overlays (Nav page): live lidar scan,
  *   global/local costmaps, odometry trail — each adds its subscription only while enabled.
- * @returns {{ destroy: () => void, refresh: () => void, openLocate: () => void, setZoom: (meters: number) => void, setLayer: (name: LayerName, on: boolean) => void, setMappingMode: (on: boolean) => void, clearTrail: () => void, mapChanged: () => void, highlightMemory: (id: number | null) => void, focusMemory: (id: number) => void, robotNowS: () => number }}
+ * @returns {{ destroy: () => void, refresh: () => void, setZoom: (meters: number) => void, setLayer: (name: LayerName, on: boolean) => void, setMappingMode: (on: boolean) => void, clearTrail: () => void, mapChanged: () => void, highlightMemory: (id: number | null) => void, focusMemory: (id: number) => void, robotNowS: () => number }}
  */
 export function createMap(root, opts = {}) {
   let zoomMeters = opts.zoom;
@@ -232,7 +232,7 @@ export function createMap(root, opts = {}) {
   const backBtn = makeButton(ICONS.back, "");
   backBtn.classList.add("map-btn-compact");
   backBtn.title = "Back";
-  const locateBtn = makeButton(ICONS.locate, "Locate", "auto or manual");
+  const locateBtn = makeButton(ICONS.locate, "Relocate", "auto or manual");
   locateBtn.title = `${LOCALIZE_SERVICE} · ${SET_INITIAL_POSE_SERVICE}`;
   const autoBtn = makeButton(ICONS.auto, "Auto", "match lidar to the map");
   autoBtn.title = LOCALIZE_SERVICE;
@@ -1849,13 +1849,6 @@ export function createMap(root, opts = {}) {
      *  resized against the box it actually landed in. */
     refresh() {
       fit();
-    },
-    /** Open the shared Auto / Manual localization controls. Teleop uses this
-     * after promoting its map, so relocation is reachable without first
-     * navigating to the dedicated Nav page. */
-    openLocate() {
-      if (mappingMode) return;
-      setUi("locate");
     },
     /** Swap to a saved zoom (e.g. when this widget reparents between thumbnail and full stage). */
     setZoom(meters) {
