@@ -66,17 +66,12 @@ PARAMS = {
     # only drives them toward the container's floor.
     "release_clear_m": 0.04,
     "release_settle_s": 0.8,
-    # Carry pose for the drive in. The pick leaves the object held forward of
-    # the 0.25 m bumper and below a container's rim, so the gripper reaches
-    # the near wall before the base ever parks — tuck it back and lift it
-    # clear before driving.
+    # Where the object is lifted to before reaching over the rim. This happens
+    # at the container, NOT for the drive: held up during the approach the
+    # gripper and its object sit in the head camera's view of the very floor
+    # being searched, so the object rides in the pick's own carry pose until
+    # the base has parked.
     "carry_x": 0.24,
-    # Held to the RIGHT, not straight ahead: base_link +y is left, so the
-    # camera's right is -y. Dead centre put the gripper and its object at
-    # image u=385, square over the floor the head camera is trying to search;
-    # -0.10 moves them to u=607 of 640 — hard against the edge — and is still
-    # inside Manipulation.REACH_Y.
-    "carry_y": -0.10,
     "carry_z": 0.30,
     "carry_s": 2.0,
     # Re-squeeze before driving. move_to only carries the STANDING grip target
@@ -217,28 +212,33 @@ class DropInBox(_FloorApproach):
         self._debug("hold", j6=j6, by_joint=by_joint, wrist=seen, held=held)
         return held
 
-    def _carry_high(self) -> None:
-        """Lift the held object above rim height and back inside the footprint
-        before driving. Best effort: a refused pose is worth a warning, not a
-        failed run — the object is still held either way."""
+    def _secure_grip(self) -> None:
+        """Re-close the claw before the drive. move_to only carries the
+        STANDING grip target forward, which is whatever the last motion
+        happened to command — run standalone, or after anything that touched
+        the claw, that can be a target the object has already worked loose
+        from. Best effort: a refused close is worth a warning, not a failed
+        run."""
         p = self._p
         self.manipulation.torque_on()
         try:
             self.manipulation.gripper_close(p["carry_grip"], duration=p["carry_grip_s"])
         except (ArmFailed, ArmUnhealthy) as e:
-            self.logger.warning(f"[DropInBox] could not re-grip before the carry ({e})")
+            self.logger.warning(f"[DropInBox] could not re-grip before the drive ({e})")
+        self._debug("grip", j6=self._j6())
+
+    def _lift_clear(self, y: float) -> None:
+        """Raise the object above rim height, at the release bearing, so the
+        reach over the near wall comes down from above rather than straight
+        through it. Best effort — the object is still held either way."""
+        p = self._p
         try:
             self.manipulation.move_to(
-                p["carry_x"],
-                p["carry_y"],
-                p["carry_z"],
-                pitch=p["arm_pitch"],
-                duration=p["carry_s"],
-                tolerance_xy=0.06,
+                p["carry_x"], y, p["carry_z"], pitch=p["arm_pitch"], duration=p["carry_s"], tolerance_xy=0.06
             )
         except (ArmFailed, ArmUnhealthy) as e:
-            self.logger.warning(f"[DropInBox] could not raise the carry pose ({e}); driving as-is")
-        self._debug("carry", target_xyz=[p["carry_x"], p["carry_y"], p["carry_z"]], j6=self._j6())
+            self.logger.warning(f"[DropInBox] could not lift clear of the rim ({e}); reaching from where it is")
+        self._debug("lift", target_xyz=[p["carry_x"], y, p["carry_z"]], j6=self._j6())
 
     def _release_x(self, near_x: float, z: float) -> float:
         """How far forward the gripper may hover at height `z`, or raise if the
@@ -264,6 +264,7 @@ class DropInBox(_FloorApproach):
         self._debug("release", target_xyz=[x, y, z], rim_z=rim, reach_x_max=reach_x_max(z))
 
         self.manipulation.torque_on()
+        self._lift_clear(y)
         try:
             self.manipulation.move_to(x, y, z, pitch=p["arm_pitch"], duration=p["hover_s"], tolerance_xy=0.06)
         except ArmFailed as e:
@@ -350,7 +351,7 @@ class DropInBox(_FloorApproach):
             if not self._holding():
                 self.fail("I'm not holding anything to put away")
 
-            self._carry_high()
+            self._secure_grip()
             self.say(f"Looking for {prompt}.")
             xy = self._search(prompt)
             xy = self._position_above(prompt, xy)
