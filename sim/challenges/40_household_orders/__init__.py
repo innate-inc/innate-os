@@ -88,7 +88,7 @@ CHALLENGE = Challenge(
     # identity, so these yaws turn each resident toward their room's open
     # floor rather than the nearest wall.
     setup=[
-        Drop("resident_alex", -4.59, 4.34, yaw_deg=-90),
+        Drop("resident_alex", -4.59, 4.34, yaw_deg=0),
         Drop("resident_blake", -0.74, -2.76, yaw_deg=180),
         Drop("resident_casey", -0.64, 2.89, yaw_deg=90),
     ],
