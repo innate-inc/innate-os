@@ -13,8 +13,8 @@ assert.equal(ONBOARDING_SEEN_KEY, `innate.onboardingSeen.v${ONBOARDING_VERSION}`
 assert.equal(ONBOARDING_VERSION, 2);
 assert.equal(ONBOARDING_REQUEST_EVENT, "innate:onboarding-request");
 assert.match(FIRST_NUDGE.body, /Agent menu/);
-assert.match(FIRST_NUDGE.body, /type a message/);
-assert.ok(FIRST_NUDGE.examples.some((example) => /see|wave/i.test(example)));
+assert.match(FIRST_NUDGE.body, /type the message/);
+assert.deepEqual(FIRST_NUDGE.examples, ["What can you do?"]);
 assert.match(REPLY_NUDGE.body, /navigate/);
 assert.match(REPLY_NUDGE.body, /wave/);
 assert.match(REPLY_NUDGE.body, /pick up/);

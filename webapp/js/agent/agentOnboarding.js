@@ -6,9 +6,9 @@ import { ONBOARDING_REQUEST_EVENT, markOnboardingSeen } from "../onboarding.js";
 
 export const FIRST_NUDGE = {
   eyebrow: "Demo Agent is ready",
-  title: "Say hello to MARS",
-  body: "Hold the mic or type a message. Use the Agent menu above to switch personalities or task-specific agents.",
-  examples: ["What can you see?", "Wave hello"],
+  title: "Talk to MARS",
+  body: "Hold the mic or type the message below. You can switch agents from the Agent menu after this introduction.",
+  examples: ["What can you do?"],
 };
 
 export const REPLY_NUDGE = {
@@ -29,6 +29,8 @@ export function createAgentOnboarding(root) {
   let card = null;
   /** @type {HTMLElement | null} */
   let target = null;
+  /** @type {HTMLElement | null} */
+  let mask = null;
   let awaitingReply = false;
 
   function start() {
@@ -43,6 +45,8 @@ export function createAgentOnboarding(root) {
   function close(remember) {
     card?.remove();
     card = null;
+    mask?.remove();
+    mask = null;
     target?.classList.remove("agent-onboarding-target");
     target = null;
     root.classList.remove("agent-onboarding-focused");
@@ -56,6 +60,15 @@ export function createAgentOnboarding(root) {
     if (phase === "first") {
       root.classList.add("agent-onboarding-focused");
       document.body.classList.add("agent-onboarding-active");
+      mask = document.createElement("div");
+      mask.className = "agent-onboarding-mask";
+      mask.setAttribute("aria-hidden", "true");
+      for (let index = 0; index < 4; index += 1) {
+        const segment = document.createElement("div");
+        segment.className = "agent-onboarding-mask-segment";
+        mask.appendChild(segment);
+      }
+      root.appendChild(mask);
     }
     target = anchor instanceof HTMLElement ? anchor : root;
     target.classList.add("agent-onboarding-target");
@@ -92,7 +105,7 @@ export function createAgentOnboarding(root) {
     const dismiss = document.createElement("button");
     dismiss.type = "button";
     dismiss.className = "agent-onboarding-dismiss";
-    dismiss.textContent = phase === "first" ? "I'll explore" : "Keep talking";
+    dismiss.textContent = phase === "first" ? "Skip" : "Keep talking";
     dismiss.addEventListener("click", () => close(true));
     actions.appendChild(dismiss);
     if (phase === "reply") {
@@ -111,6 +124,18 @@ export function createAgentOnboarding(root) {
   function position() {
     if (!card || !target) return;
     const rect = target.getBoundingClientRect();
+    if (mask) {
+      const [topMask, rightMask, bottomMask, leftMask] = /** @type {HTMLElement[]} */ ([...mask.children]);
+      const pad = 8;
+      const holeTop = Math.max(0, rect.top - pad);
+      const holeRight = Math.min(window.innerWidth, rect.right + pad);
+      const holeBottom = Math.min(window.innerHeight, rect.bottom + pad);
+      const holeLeft = Math.max(0, rect.left - pad);
+      setMaskRect(topMask, 0, 0, window.innerWidth, holeTop);
+      setMaskRect(rightMask, holeRight, holeTop, window.innerWidth - holeRight, holeBottom - holeTop);
+      setMaskRect(bottomMask, 0, holeBottom, window.innerWidth, window.innerHeight - holeBottom);
+      setMaskRect(leftMask, 0, holeTop, holeLeft, holeBottom - holeTop);
+    }
     const width = card.offsetWidth || 340;
     const height = card.offsetHeight || 190;
     let left = rect.left - width - 16;
@@ -118,6 +143,14 @@ export function createAgentOnboarding(root) {
     const top = Math.max(12, Math.min(window.innerHeight - height - 12, rect.top + rect.height / 2 - height / 2));
     card.style.left = `${Math.max(76, left)}px`;
     card.style.top = `${top}px`;
+  }
+
+  /** @param {HTMLElement} element @param {number} left @param {number} top @param {number} width @param {number} height */
+  function setMaskRect(element, left, top, width, height) {
+    element.style.left = `${left}px`;
+    element.style.top = `${top}px`;
+    element.style.width = `${Math.max(0, width)}px`;
+    element.style.height = `${Math.max(0, height)}px`;
   }
 
   function onUserMessage() {
