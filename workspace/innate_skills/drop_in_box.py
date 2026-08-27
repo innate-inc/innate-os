@@ -71,6 +71,12 @@ PARAMS = {
     # the near wall before the base ever parks — tuck it back and lift it
     # clear before driving.
     "carry_x": 0.24,
+    # Held to the RIGHT, not straight ahead: base_link +y is left, so the
+    # camera's right is -y. Dead centre put the gripper and its object at
+    # image u=385, square over the floor the head camera is trying to search;
+    # -0.10 moves them to u=607 of 640 — hard against the edge — and is still
+    # inside Manipulation.REACH_Y.
+    "carry_y": -0.10,
     "carry_z": 0.30,
     "carry_s": 2.0,
     # Re-squeeze before driving. move_to only carries the STANDING grip target
@@ -223,11 +229,16 @@ class DropInBox(_FloorApproach):
             self.logger.warning(f"[DropInBox] could not re-grip before the carry ({e})")
         try:
             self.manipulation.move_to(
-                p["carry_x"], 0.0, p["carry_z"], pitch=p["arm_pitch"], duration=p["carry_s"], tolerance_xy=0.06
+                p["carry_x"],
+                p["carry_y"],
+                p["carry_z"],
+                pitch=p["arm_pitch"],
+                duration=p["carry_s"],
+                tolerance_xy=0.06,
             )
         except (ArmFailed, ArmUnhealthy) as e:
             self.logger.warning(f"[DropInBox] could not raise the carry pose ({e}); driving as-is")
-        self._debug("carry", target_xz=[p["carry_x"], p["carry_z"]], j6=self._j6())
+        self._debug("carry", target_xyz=[p["carry_x"], p["carry_y"], p["carry_z"]], j6=self._j6())
 
     def _release_x(self, near_x: float, z: float) -> float:
         """How far forward the gripper may hover at height `z`, or raise if the
