@@ -153,7 +153,7 @@ class HouseholdOrdersRuntime(ChallengeRuntime):
                 result.replies.append(
                     EnvironmentReply(
                         resident.name,
-                        f"{resident.order} Please repeat the complete order back to me.",
+                        f"I'm {resident.name} and I want {resident.order} Please repeat the complete order back to me.",
                         resident.voice_id,
                     )
                 )
@@ -166,7 +166,7 @@ class HouseholdOrdersRuntime(ChallengeRuntime):
                 result.replies.append(
                     EnvironmentReply(
                         resident.name,
-                        f"Not quite. {resident.order} Please repeat the complete order back to me.",
+                        f"Not quite. I want {resident.order} Please repeat the complete order back to me.",
                         resident.voice_id,
                     )
                 )

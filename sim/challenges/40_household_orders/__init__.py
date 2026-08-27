@@ -25,9 +25,7 @@ RESIDENTS = [
         id="alex",
         name="Alex",
         prop="resident_alex",
-        order=(
-            "From Chipotle, I'd like a chicken burrito bowl with brown rice, black beans, mild salsa, and no cheese."
-        ),
+        order="a chicken burrito bowl from Chipotle with brown rice, black beans, mild salsa, and no cheese.",
         voice_id=FEMININE_VOICE_ID,
         accepted_readbacks=("Chipotle chicken bowl with brown rice, black beans, mild salsa, and without cheese.",),
         required_facts=(
@@ -44,7 +42,7 @@ RESIDENTS = [
         name="Blake",
         prop="resident_blake",
         order=(
-            "From Sweetgreen, I'd like the Harvest Bowl with roasted chicken, "
+            "the Harvest Bowl from Sweetgreen with roasted chicken, "
             "no goat cheese, and the balsamic vinaigrette on the side."
         ),
         voice_id=MASCULINE_VOICE_ID,
@@ -64,7 +62,7 @@ RESIDENTS = [
         id="casey",
         name="Casey",
         prop="resident_casey",
-        order="From Shake Shack, I'd like a ShackBurger with no pickles, cheese fries, and a vanilla shake.",
+        order="a ShackBurger from Shake Shack with no pickles, cheese fries, and a vanilla shake.",
         voice_id=FEMININE_VOICE_ID,
         accepted_readbacks=("From Shake Shack: a Shack Burger without pickles, cheese fries, and a vanilla shake.",),
         required_facts=(

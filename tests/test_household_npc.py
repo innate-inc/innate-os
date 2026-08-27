@@ -129,6 +129,9 @@ def test_residents_only_disclose_orders_when_asked(tmp_path, text, should_reply)
     if reply is not None:
         payload = reply[1]
         assert alex.order in payload["text"]
+        assert payload["text"].startswith("I'm Alex and I want ")
+        assert not payload["text"].startswith("Alex:")
+        assert payload["speaker"] == "Alex"
         assert payload["_environment_speech"]["voice_id"] == alex.voice_id
 
 
@@ -177,7 +180,7 @@ def test_complete_exact_or_allowlisted_readbacks_confirm(tmp_path, resident_id, 
     readback = resident.accepted_readbacks[0] if use_paraphrase else resident.order
     block = _speak(engine, sim, centers, position, readback)
 
-    assert "That's correct" in _reply(engine)["text"]
+    assert _reply(engine)["text"] == "That's correct. Thank you."
     assert block["active"]["state"] == "passed"
 
 
