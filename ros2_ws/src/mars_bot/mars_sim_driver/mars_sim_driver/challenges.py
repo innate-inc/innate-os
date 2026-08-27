@@ -61,6 +61,11 @@ CLOCK_REWIND_S = 0.5
 CHAT_WRITE_TIMEOUT_S = 2.0
 CHAT_OUTBOX_MAXLEN = 64
 
+
+class _ChatWriteTimeout(TimeoutError):
+    """A bounded chat write hit its deadline -- delivery is unknown."""
+
+
 # Robot-owned JSON cannot reproduce this in-process provenance marker.
 _ENVIRONMENT_EVENT_SOURCE = object()
 
@@ -312,6 +317,10 @@ class ChallengeRuntime:
     The engine owns lifecycle, trusted-event provenance, and chat transport.
     A runtime owns scenario policy and private state. This keeps concepts such
     as residents, orders, or game rules out of the generic judge.
+
+    ``update`` runs on the physics thread under the engine lock at tick rate:
+    return fast, never block, and emit each reply once -- the engine does not
+    rate-limit or dedupe.
     """
 
     def reset(self) -> None:
@@ -577,6 +586,17 @@ class ChallengeEngine:
         """Feed one normal robot chat utterance to the active environment."""
         self.post_event({"type": "robot_speech", "text": text, "timestamp": timestamp or time.time()})
 
+    def _queue_chat_input(self, payload: dict) -> None:
+        """Callers hold _mutex. Appending to the full outbox (the publisher
+        cannot drain it -- rosbridge down) evicts the oldest reply: say which."""
+        if len(self._chat_inputs) == CHAT_OUTBOX_MAXLEN:
+            evicted = self._chat_inputs[0][1]
+            print(
+                f"[challenges] chat outbox full, dropping oldest reply: '{str(evicted.get('text', ''))[:60]}'",
+                flush=True,
+            )
+        self._chat_inputs.append((self._run_token, payload))
+
     def next_chat_input(self, timeout: float | None = None) -> tuple[int, dict] | None:
         """Wait for the next current-run NPC reply for rosbridge to publish.
 
@@ -621,7 +641,7 @@ class ChallengeEngine:
         with self._chat_ready:
             if self.active is None or self.state not in ("running", "passed") or token != self._run_token:
                 return False
-            self._chat_inputs.append((token, payload))
+            self._queue_chat_input(payload)
             self._chat_ready.notify_all()
             return True
 
@@ -688,15 +708,12 @@ class ChallengeEngine:
                             }
                             if speech is not None:
                                 payload["_environment_speech"] = speech
-                            self._chat_inputs.append(
-                                (
-                                    self._run_token,
-                                    payload,
-                                )
-                            )
+                            self._queue_chat_input(payload)
                         if runtime_result.replies:
                             self._chat_ready.notify_all()
-                    first = self.goal_done.index(False)
+                    # next(), not index(): a ValueError escaping this block must
+                    # mean a scenario bug and fail the run, not read as "all done".
+                    first = next((i for i, done in enumerate(self.goal_done) if not done), None)
                     progressed = False
                     while True:
                         try:
@@ -726,7 +743,7 @@ class ChallengeEngine:
                         if not all(self.goal_done[start:end]):
                             break
 
-                    if not progressed and any(ev.get("status") == "completed" for ev in events):
+                    if first is not None and not progressed and any(ev.get("status") == "completed" for ev in events):
                         # Nothing took them, and ordered goals do not defer:
                         # these completions are gone. Say so, or a challenge
                         # author watches a run die on the clock with both tasks
@@ -737,8 +754,6 @@ class ChallengeEngine:
                             f"goals are ordered and {challenge.goals[first].label!r} is still open",
                             flush=True,
                         )
-                except ValueError:  # no False left: all goals done
-                    pass
                 except Exception as exc:  # noqa: BLE001 -- challenge bug fails the run, not the sim
                     self.state, self.reason = "failed", f"challenge error: {exc!r}"
                     self._record(challenge.id, "failed", None)
@@ -829,7 +844,7 @@ class ChallengeChatBridge:
             connection.send(message)
         except Exception as exc:
             if timed_out.is_set():
-                raise TimeoutError("challenge chat websocket write timed out") from exc
+                raise _ChatWriteTimeout("challenge chat websocket write timed out") from exc
             raise
         finally:
             finished.set()
@@ -993,6 +1008,18 @@ class ChallengeChatBridge:
 
                     if not self.engine.publish_chat_input_if_current(token, send):
                         break
+                    break
+                except _ChatWriteTimeout:
+                    # Delivery is unknown: the frame may have landed before the
+                    # deadline cut the socket, and a resend would repeat the line.
+                    # A spoken transcript still surfaces via the ack watchdog.
+                    print("[challenges] chat write timed out -- reply not resent", flush=True)
+                    if ws is not None:
+                        try:
+                            ws.close()
+                        except Exception:  # noqa: BLE001,S110 -- already gone
+                            pass
+                    ws = None
                     break
                 except Exception:  # noqa: BLE001 -- rosbridge down/restarting; retry this current reply
                     if ws is not None:
