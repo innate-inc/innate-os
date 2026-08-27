@@ -55,3 +55,16 @@ def floor_to_pixel(x, y, head_tilt_deg):
     b = sum(D[i] * right[i] for i in range(3))
     c = sum(D[i] * down[i] for i in range(3))
     return (CX + (b / a) * FX, CY + (c / a) * FX)
+
+
+def pixel_to_height(u, v, head_tilt_deg, x):
+    """Height (base_link z) where pixel (u,v)'s ray crosses the vertical line
+    at forward distance ``x``, or None. Reads the rim height of a box whose
+    floor-contact edge has already been localized to ``x``."""
+    cam, fwd, right, down = _cam_pose(head_tilt_deg)
+    xo, yo = (u - CX) / FX, (v - CY) / FX
+    d = tuple(fwd[i] + xo * right[i] + yo * down[i] for i in range(3))
+    if abs(d[0]) < 1e-6:
+        return None
+    t = (x - cam[0]) / d[0]
+    return cam[2] + t * d[2] if t > 0 else None
