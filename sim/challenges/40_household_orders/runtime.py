@@ -8,7 +8,10 @@ from mars_sim_driver.challenges import ChallengeRuntime, EnvironmentReply, Runti
 
 _NON_WORD = re.compile(r"[^a-z0-9]+")
 _READBACK_PREFIXES = ("actually ", "okay ", "so you want ", "you want ", "your order is ", "you said ")
-_NEGATION_PREFIX = re.compile(r"(?:^|\s)(?:not|never|no|without|skip|hold|omit|remove)(?:\s+the)?\s*$")
+_NEGATION_PREFIX = re.compile(
+    r"(?:^|\s)(?:not|never|no|without|skip|hold|omit|remove)"
+    r"(?:\s+(?:additional|any|extra|more|of|the))*\s*$"
+)
 _ORDER_REQUEST_PHRASES = (
     "what would you like",
     "what do you want",

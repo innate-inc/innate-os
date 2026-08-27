@@ -221,6 +221,7 @@ def test_complete_natural_readbacks_confirm(tmp_path, resident_id, readback):
         "A chicken bowl from Chipotle with brown rice.",
         "From Chipotle, a chicken burrito bowl with brown rice, black beans, mild salsa, no cheese, and add cheese.",
         "From Chipotle, a chicken burrito bowl with brown rice, black beans, mild salsa, and not no cheese.",
+        "From Chipotle, a chicken burrito bowl with no more brown rice, black beans, mild salsa, and no cheese.",
     ],
 )
 def test_incomplete_or_contradictory_readbacks_do_not_confirm(tmp_path, readback):
