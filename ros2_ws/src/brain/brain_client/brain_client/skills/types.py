@@ -645,7 +645,10 @@ def _materialize_feed_annotations(cls) -> None:
             )
             continue
         resolved, optional = _split_optional(annotation)
-        if isinstance(resolved, type) and issubclass(resolved, Skill) and resolved is not Skill:
+        # py3.10 quirk: a subscripted generic (`tuple[float, float]`) passes
+        # isinstance(..., type) but crashes issubclass — and is never a feed.
+        is_class = isinstance(resolved, type) and get_origin(resolved) is None
+        if is_class and issubclass(resolved, Skill) and resolved is not Skill:
             if optional:
                 # The feed rule (`| None` = best effort) does not extend to
                 # composition: a declared sub-skill is always wired and its
@@ -660,7 +663,7 @@ def _materialize_feed_annotations(cls) -> None:
             setattr(cls, name, descriptor)
             descriptor.__set_name__(cls, name)
             continue
-        if isinstance(resolved, type) and issubclass(resolved, TrainedSkill) and resolved is not TrainedSkill:
+        if is_class and issubclass(resolved, TrainedSkill) and resolved is not TrainedSkill:
             # a generated physical-skill ref: same declaration shape as a code
             # sub-skill, materialized as the PhysicalSkill descriptor
             if optional:
@@ -679,7 +682,7 @@ def _materialize_feed_annotations(cls) -> None:
                 "(`gripper_open: GripperOpen`); bare `Skill` declares nothing."
             )
             continue
-        entry = feed_types.get(resolved) if isinstance(resolved, type) else None
+        entry = feed_types.get(resolved) if is_class else None
         if entry is None:
             hint = _feed_attr_hints().get(name)
             if hint is not None:
