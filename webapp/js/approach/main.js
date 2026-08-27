@@ -39,7 +39,7 @@ const PAGE_CSS = `
       .approach-page .spacer { flex: 1; }
       .approach-page { overflow: auto; height: 100%; }
       .approach-page main { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(320px, 420px);
-        gap: 12px; padding: 12px; align-items: start; max-width: 1500px; }
+        gap: 12px; padding: 12px; align-items: start; max-width: 1180px; }
       @media (max-width: 940px) { main { grid-template-columns: 1fr; } }
       .approach-page .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; }
       .approach-page .panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim);
@@ -47,7 +47,7 @@ const PAGE_CSS = `
         display: flex; align-items: center; gap: 8px; }
       .approach-page .panel h2 .spacer { flex: 1; }
       .approach-page .panel .body { padding: 10px 12px; }
-      .approach-page canvas { display: block; width: 100%; max-width: 760px; height: auto; background: #000;
+      .approach-page canvas { display: block; width: 100%; height: auto; background: #000;
         border-radius: 0 0 8px 8px; }
       .approach-page .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-family: var(--mono); font-size: 12px; }
       .approach-page .kv .k { color: var(--dim); } .kv .v { text-align: right; word-break: break-word; }
@@ -136,6 +136,11 @@ function buildView(root) {
   // current. frameAge below says how stale the overlays themselves are.
   const CAM_TOPIC = "/mars/main_camera/left/image_raw/compressed";
   const CAM_THROTTLE_MS = 200;
+  // Overlays are computed for the frame the model saw. Drawn at full strength
+  // over a LIVE background they lie — an 80-second-old detection box sitting
+  // on the sofa while the container it named is somewhere else entirely — so
+  // past this age they fade to a ghost.
+  const OVERLAY_FRESH_MS = 2500;
   // Namespace is workspace-dependent (innate_skills -> "innate-os"), so the
   // picker reads the live roster instead of hardcoding ids that silently
   // 404 when a skill moves package.
@@ -203,7 +208,12 @@ function buildView(root) {
       label(view, `park x=${sweet.xy?.[0]?.toFixed(2)}`, cu - sweet.accept_px, cv - sweet.accept_px - 2, "#3ddc84");
     }
 
+    // The sweet box is geometry (a fixed pixel target for this tilt and park
+    // distance), true of any frame — it never fades. Everything below is an
+    // observation of one particular frame.
+    const ageOf = (rec) => (rec?._rx ? performance.now() - rec._rx : Infinity);
     const det = last.detect;
+    view.globalAlpha = ageOf(det) < OVERLAY_FRESH_MS ? 1 : 0.28;
     if (det?.box_px) {
       const [x, y, w, h] = det.box_px;
       view.strokeStyle = "#ffcf5c"; view.lineWidth = 2;
@@ -218,10 +228,12 @@ function buildView(root) {
     if (det?.point_px) cross(view, det.point_px[0], det.point_px[1], 10, "#ff5cd8", 2.5);
 
     const trk = last.follow?.track_px;
+    view.globalAlpha = ageOf(last.follow) < OVERLAY_FRESH_MS ? 1 : 0.28;
     if (trk) {
       view.fillStyle = "#ff9a3d";
       view.beginPath(); view.arc(trk[0], trk[1], 5, 0, Math.PI * 2); view.fill();
     }
+    view.globalAlpha = 1;
   }
 
   function drawPlan() {
@@ -332,8 +344,9 @@ function buildView(root) {
       ["verdict", v?.reply ? String(v.reply).slice(0, 80) : null],
     ]);
     const ageOf = (stamp) => `${((performance.now() - stamp) / 1000) | 0}s`;
+    const stale = performance.now() - frameStamp > OVERLAY_FRESH_MS;
     $("frameAge").textContent = live
-      ? `live${frameStamp ? ` · overlays ${ageOf(frameStamp)} old` : ""}`
+      ? `live${frameStamp ? ` · overlays ${ageOf(frameStamp)} old${stale ? " (faded)" : ""}` : ""}`
       : frameStamp
         ? `frame ${ageOf(frameStamp)} ago`
         : "";
@@ -357,6 +370,7 @@ function buildView(root) {
     // A tick keeps the previous stage's overlays: only a record that
     // carries a frame replaces the image the overlays are drawn on.
     if (rec.stage === "detect" || rec.stage === "localize") last.follow = null;
+    rec._rx = performance.now();
     last[rec.stage] = rec;
     if (rec.image) {
       const img = new Image();

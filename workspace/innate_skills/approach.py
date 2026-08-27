@@ -300,6 +300,8 @@ class _FloorApproach(Skill):
             return self._position_stepwise(prompt, xy)
 
         seed = floor_to_pixel(xy[0], xy[1], self._p["tilt_deg"])
+        _fallback_xy = xy
+        lost = 0
         for _attempt in range(int(self._p["box_steps"])):
             if seed is None:
                 xy, seed = self._localize_retry(prompt)
@@ -317,8 +319,17 @@ class _FloorApproach(Skill):
             if result == "noframe":
                 return self._position_stepwise(prompt, xy)
             if result == "lost":
+                # Optical flow has nothing to hold on a big, low-contrast face
+                # filling the near field — a container's bottom edge at arm's
+                # length is one beige line on beige floor. Two failures in a
+                # row is the tracker telling us so; the odometry stepper closes
+                # the last few centimetres on measurements instead of texture.
+                lost += 1
+                if lost >= 2:
+                    return self._position_stepwise(prompt, xy if xy is not None else _fallback_xy)
                 seed = None
                 continue
+            lost = 0
             xy2, px2 = self._localize_retry(prompt)
             if px2 is None:
                 self._position_failed(prompt)

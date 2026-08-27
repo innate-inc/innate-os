@@ -54,9 +54,11 @@ PARAMS = {
     "box_half_px": 110.0,
     "box_half_v_px": 30.0,
     "accept_frac": 0.6,
-    # How far past the near face the gripper hovers, so the object clears the
-    # box wall on the way down.
-    "drop_inset": 0.07,
+    # How far past the near face the gripper reaches. 0.07 released only 5.8 cm
+    # inside a 31.6 cm interior — hugging the near wall, which is where a
+    # bounce goes back out. 0.10 asks for 8.1 cm and the reach clamp below
+    # trims it to whatever the arm can actually hold at the release height.
+    "drop_inset": 0.10,
     "release_clear_m": 0.04,  # gripper height above the rim on the way in
     # Release height above the container's FLOOR. Dropping from over the rim
     # bounced the object back out — a 0.14 m fall into a 0.14 m box. Lower is
@@ -72,6 +74,13 @@ PARAMS = {
     "carry_x": 0.24,
     "carry_z": 0.30,
     "carry_s": 2.0,
+    # Re-squeeze before driving. move_to only carries the STANDING grip target
+    # forward, which is whatever the last motion happened to command — run
+    # standalone, or after anything that touched the claw, that can be a
+    # target the object has already worked loose from. GRIPPER_MAX_STRENGTH;
+    # above it the real servo overcurrent-trips.
+    "carry_grip": 0.60,
+    "carry_grip_s": 0.8,
     "lift_after_m": 0.12,  # enough to clear a rim the gripper is now INSIDE
     "hover_s": 2.5,
     "arm_pitch": 1.30,
@@ -210,12 +219,16 @@ class DropInBox(_FloorApproach):
         p = self._p
         self.manipulation.torque_on()
         try:
+            self.manipulation.gripper_close(p["carry_grip"], duration=p["carry_grip_s"])
+        except (ArmFailed, ArmUnhealthy) as e:
+            self.logger.warning(f"[DropInBox] could not re-grip before the carry ({e})")
+        try:
             self.manipulation.move_to(
                 p["carry_x"], 0.0, p["carry_z"], pitch=p["arm_pitch"], duration=p["carry_s"], tolerance_xy=0.06
             )
         except (ArmFailed, ArmUnhealthy) as e:
             self.logger.warning(f"[DropInBox] could not raise the carry pose ({e}); driving as-is")
-        self._debug("carry", target_xz=[p["carry_x"], p["carry_z"]])
+        self._debug("carry", target_xz=[p["carry_x"], p["carry_z"]], j6=self._j6())
 
     def _release_x(self, near_x: float, z: float) -> float:
         """How far forward the gripper may hover at height `z`, or raise if the
