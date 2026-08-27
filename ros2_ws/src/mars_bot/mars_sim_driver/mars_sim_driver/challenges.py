@@ -690,7 +690,7 @@ class ChallengeEngine:
                         for reply in runtime_result.replies:
                             if isinstance(reply, EnvironmentReply):
                                 self._speech_serial += 1
-                                text = f"{reply.speaker}: {reply.text}"
+                                text = reply.text
                                 speech = {
                                     "id": f"{self._run_token}:{self._speech_serial}",
                                     "text": reply.text,
@@ -707,6 +707,7 @@ class ChallengeEngine:
                                 "timestamp": time.time(),
                             }
                             if speech is not None:
+                                payload["speaker"] = reply.speaker
                                 payload["_environment_speech"] = speech
                             self._queue_chat_input(payload)
                         if runtime_result.replies:

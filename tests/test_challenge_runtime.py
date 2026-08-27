@@ -130,7 +130,8 @@ def test_environment_reply_uses_normal_chat_with_private_speech_metadata(tmp_pat
     token, payload = engine.next_chat_input(timeout=0.0)
 
     assert engine.chat_input_is_current(token)
-    assert payload["text"] == "A: Confirmed"
+    assert payload["text"] == "Confirmed"
+    assert payload["speaker"] == "A"
     assert payload["sender"] == "user"
     assert payload["_environment_speech"]["voice_id"] == "voice-a"
 
