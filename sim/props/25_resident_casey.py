@@ -2,7 +2,6 @@
 
 from mars_sim_driver.props import Prop
 
-# Casey's resident mesh is pre-normalized to metres, Z-up, and feet-at-origin.
 PROP = Prop(
     name="resident_casey",
     label="C",

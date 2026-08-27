@@ -1,10 +1,14 @@
-"""Household Orders: find three residents and collect their DoorDash orders."""
+"""Household Orders: find three residents and collect their DoorDash orders.
+
+place_doordash_order is deliberately not in workspace/innate_skills/: it ships
+with the Household Orders agent. On a robot without that agent the checkout
+goal simply never fires -- the same way every skill goal behaves with
+rosbridge down (see 10_victory_lap.py).
+"""
 
 from mars_sim_driver.challenges import Challenge, Drop, EventSeen, Goal, SkillDone
 
 from .runtime import HouseholdOrdersRuntime, Resident
-
-RESIDENT_DIALOGUE_RADIUS_M = 2.0
 
 # Stable American-English Cartesia voices recommended for conversational
 # agents. Blake's scan is masculine; Alex's and Casey's are feminine.
@@ -34,7 +38,6 @@ RESIDENTS = [
             ("mild salsa",),
         ),
         excluded_items=("cheese",),
-        radius_m=RESIDENT_DIALOGUE_RADIUS_M,
     ),
     Resident(
         id="blake",
@@ -56,7 +59,6 @@ RESIDENTS = [
             ("on the side", "dressing on the side", "vinaigrette on the side"),
         ),
         excluded_items=("goat cheese",),
-        radius_m=RESIDENT_DIALOGUE_RADIUS_M,
     ),
     Resident(
         id="casey",
@@ -72,7 +74,6 @@ RESIDENTS = [
             ("vanilla shake", "vanilla milkshake"),
         ),
         excluded_items=("pickles",),
-        radius_m=RESIDENT_DIALOGUE_RADIUS_M,
     ),
 ]
 
@@ -84,13 +85,14 @@ CHALLENGE = Challenge(
         "and repeat the full order back until they confirm it. You may visit them in any order. Once all "
         "three orders are confirmed, submit them together with the place_doordash_order skill."
     ),
-    # Keep each resident on clear, navigable floor in a different room. These
-    # points leave enough clearance for the robot to approach without putting
-    # a resident inside bedroom furniture or beyond the apartment walls.
+    # Each resident stands on clear, navigable floor in a different room,
+    # with enough clearance for the robot to approach. The scans face +y at
+    # identity, so these yaws turn each resident toward their room's open
+    # floor rather than the nearest wall.
     setup=[
-        Drop("resident_alex", -4.59, 4.34, yaw_deg=0),
+        Drop("resident_alex", -4.59, 4.34, yaw_deg=-90),
         Drop("resident_blake", -0.74, -2.76, yaw_deg=180),
-        Drop("resident_casey", -0.64, 2.89, yaw_deg=-90),
+        Drop("resident_casey", -0.64, 2.89, yaw_deg=90),
     ],
     runtime=HouseholdOrdersRuntime(RESIDENTS),
     goals=[

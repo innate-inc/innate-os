@@ -23,10 +23,12 @@ _ORDER_REQUEST_PHRASES = (
 _ORDER_TOPICS = frozenset({"breakfast", "dinner", "doordash", "food", "lunch", "meal", "order"})
 _REQUEST_MARKERS = ("can i", "do you", "may i", "need your", "please", "tell me", "what ", "which ", "would you")
 
-# A nearby resident should only answer speech directed toward them. The head
-# camera's horizontal field of view is about 84 degrees; this 50-degree half
-# angle keeps a small navigation margin without letting off-camera residents
-# answer for the person the robot is actually looking at.
+RESIDENT_DIALOGUE_RADIUS_M = 2.0
+
+# A nearby resident only answers speech directed toward them, judged from the
+# BASE yaw -- the only heading WorldState carries; head pan is invisible here.
+# 50 degrees separates two residents in one room while tolerating an imperfect
+# approach angle.
 _REPLY_HALF_ANGLE_RAD = math.radians(50.0)
 
 
@@ -46,7 +48,7 @@ class Resident:
     # Items that must be explicitly excluded and must not occur positively
     # elsewhere in the utterance.
     excluded_items: tuple[str, ...] = ()
-    radius_m: float = 1.5
+    radius_m: float = RESIDENT_DIALOGUE_RADIUS_M
 
 
 def _normalize_speech(text: str) -> str:
@@ -126,15 +128,12 @@ class HouseholdOrdersRuntime(ChallengeRuntime):
         return abs(relative_bearing) <= _REPLY_HALF_ANGLE_RAD
 
     def _nearest(self, state: WorldState) -> Resident | None:
-        robot = state.pos("robot")
-        if robot is None:
-            return None
         candidates: list[tuple[float, str, Resident]] = []
         for resident in self.residents:
             pos = state.pos(resident.prop)
             if pos is None:
                 continue
-            distance = math.hypot(robot[0] - pos[0], robot[1] - pos[1])
+            distance = math.hypot(state.robot[0] - pos[0], state.robot[1] - pos[1])
             if distance <= resident.radius_m and self._is_in_front(state.robot, pos):
                 candidates.append((distance, resident.id, resident))
         return min(candidates, default=(0.0, "", None))[2]

@@ -85,6 +85,7 @@ def test_dockerignore_admits_every_seeded_file():
     )
 
 
+@pytest.mark.skipif(not SEEDER.is_file(), reason="asset tooling not present")
 def test_household_resident_source_outputs_are_complete():
     spec = importlib.util.spec_from_file_location("seed_asset_context", SEEDER)
     seed = importlib.util.module_from_spec(spec)
