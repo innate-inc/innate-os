@@ -4,6 +4,12 @@
 
 import { ONBOARDING_REQUEST_EVENT, markOnboardingSeen } from "../onboarding.js";
 
+export const INTRO_NUDGE = {
+  eyebrow: "Welcome to Innate OS",
+  title: "Meet MARS",
+  body: "This is your robot's control room. Talk to MARS, watch it work, and guide it through the world.",
+};
+
 export const FIRST_NUDGE = {
   eyebrow: "Demo Agent is ready",
   title: "Talk to MARS",
@@ -36,9 +42,7 @@ export function createAgentOnboarding(root) {
   function start() {
     close(false);
     awaitingReply = false;
-    root.classList.add("agent-onboarding-focused");
-    document.body.classList.add("agent-onboarding-active");
-    show(FIRST_NUDGE, root.querySelector(".agent-compose"), "first");
+    show(INTRO_NUDGE, null, "intro");
   }
 
   /** @param {boolean} remember */
@@ -54,24 +58,25 @@ export function createAgentOnboarding(root) {
     if (remember) markOnboardingSeen();
   }
 
-  /** @param {typeof FIRST_NUDGE | typeof REPLY_NUDGE} copy @param {Element | null} anchor @param {"first" | "reply"} phase */
+  /** @param {typeof INTRO_NUDGE | typeof FIRST_NUDGE | typeof REPLY_NUDGE} copy @param {Element | null} anchor @param {"intro" | "first" | "reply"} phase */
   function show(copy, anchor, phase) {
     close(false);
-    if (phase === "first") {
+    if (phase === "intro" || phase === "first") {
       root.classList.add("agent-onboarding-focused");
       document.body.classList.add("agent-onboarding-active");
       mask = document.createElement("div");
       mask.className = "agent-onboarding-mask";
       mask.setAttribute("aria-hidden", "true");
-      for (let index = 0; index < 4; index += 1) {
+      const segmentCount = phase === "intro" ? 1 : 4;
+      for (let index = 0; index < segmentCount; index += 1) {
         const segment = document.createElement("div");
         segment.className = "agent-onboarding-mask-segment";
         mask.appendChild(segment);
       }
       root.appendChild(mask);
     }
-    target = anchor instanceof HTMLElement ? anchor : root;
-    target.classList.add("agent-onboarding-target");
+    target = anchor instanceof HTMLElement ? anchor : phase === "intro" ? null : root;
+    target?.classList.add("agent-onboarding-target");
 
     card = document.createElement("aside");
     card.className = `agent-onboarding-card is-${phase}`;
@@ -105,10 +110,19 @@ export function createAgentOnboarding(root) {
     const dismiss = document.createElement("button");
     dismiss.type = "button";
     dismiss.className = "agent-onboarding-dismiss";
-    dismiss.textContent = phase === "first" ? "Skip" : "Keep talking";
+    dismiss.textContent = phase === "reply" ? "Keep talking" : "Skip";
     dismiss.addEventListener("click", () => close(true));
     actions.appendChild(dismiss);
-    if (phase === "reply") {
+    if (phase === "intro") {
+      const next = document.createElement("button");
+      next.type = "button";
+      next.className = "agent-onboarding-primary";
+      next.textContent = "Meet MARS";
+      next.addEventListener("click", () => {
+        show(FIRST_NUDGE, root.querySelector(".agent-compose"), "first");
+      });
+      actions.appendChild(next);
+    } else if (phase === "reply") {
       const nav = document.createElement("a");
       nav.href = "/nav";
       nav.className = "agent-onboarding-primary";
@@ -122,7 +136,15 @@ export function createAgentOnboarding(root) {
   }
 
   function position() {
-    if (!card || !target) return;
+    if (!card) return;
+    if (card.classList.contains("is-intro")) {
+      const segment = /** @type {HTMLElement | null} */ (mask?.firstElementChild);
+      if (segment) setMaskRect(segment, 0, 0, window.innerWidth, window.innerHeight);
+      card.style.removeProperty("left");
+      card.style.removeProperty("top");
+      return;
+    }
+    if (!target) return;
     const rect = target.getBoundingClientRect();
     if (mask) {
       const [topMask, rightMask, bottomMask, leftMask] = /** @type {HTMLElement[]} */ ([...mask.children]);
