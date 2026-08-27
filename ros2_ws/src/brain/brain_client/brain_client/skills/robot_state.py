@@ -15,7 +15,13 @@ from typing import TYPE_CHECKING
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import OccupancyGrid
 from nav_msgs.msg import Odometry as OdometryMsg
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSHistoryPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import BatteryState, JointState, LaserScan
 from std_msgs.msg import String
 
@@ -80,12 +86,13 @@ class RobotStateProvider:
         self._battery_sub = None
         self._amcl_pose_sub = None
         self._scan_sub = None
-        # Gate feeds with this flag, never by destroying subscriptions:
+        # Gate high-rate feeds with this flag, never by destroying subscriptions:
         # destroying one the executor already selected as "ready" crashes the
         # process (InvalidHandle -> rmw_zenoh SIGABRT), easiest to hit right
-        # after a cancel. The subs live on manipulation's private node, parked
+        # after a cancel. Those subs live on manipulation's private node, parked
         # between skills — always-alive feeds (~400 msgs/s) would otherwise
-        # cost ~half a Jetson core while idle.
+        # cost ~half a Jetson core while idle. The low-rate latched map and pose
+        # live on the always-spinning action-server node instead (see start()).
         self._active = False
         self._warned_missing = set()  # warn once per missing state, not at 50 Hz
 
@@ -136,15 +143,25 @@ class RobotStateProvider:
         if self._odom_sub is not None:
             return
         feed_node = self._manipulation.node
+        # The navigation map and localized pose are latched: they may publish
+        # only once, before a skill activates these parked subscriptions. Match
+        # their transient-local durability so every run receives the retained
+        # state instead of waiting forever for a new sample.
+        latched_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self._odom_sub = feed_node.create_subscription(OdometryMsg, "/odom", self._on_odom, 10)
-        self._map_sub = feed_node.create_subscription(OccupancyGrid, "/map", self._on_map, 1)
+        self._map_sub = self._node.create_subscription(OccupancyGrid, "/map", self._on_map, latched_qos)
         self._head_position_sub = feed_node.create_subscription(
             String, self._head_current_position_topic, self._on_head_position, 10
         )
         self._joint_states_sub = feed_node.create_subscription(JointState, "/joint_states", self._on_joint_states, 10)
         self._battery_sub = feed_node.create_subscription(BatteryState, "/battery_state", self._on_battery, 10)
-        self._amcl_pose_sub = feed_node.create_subscription(
-            PoseWithCovarianceStamped, "/amcl_pose", self._on_amcl_pose, 10
+        self._amcl_pose_sub = self._node.create_subscription(
+            PoseWithCovarianceStamped, "/amcl_pose", self._on_amcl_pose, latched_qos
         )
         # the lidar driver publishes with sensor-data QoS (best effort); a
         # reliable subscription would never match it
@@ -156,14 +173,11 @@ class RobotStateProvider:
         self._active = False
         self._manipulation.stop()
         self.last_odom = None
-        self.last_map = None
         self.last_head_position = None
         self.last_joint_states = None
         self.last_battery = None
-        self.last_amcl_pose = None
         self.last_scan = None
         self._lidar_cache = None
-        self._map_cache = None
         self._main_image_cache = None
         self._wrist_image_cache = None
 
@@ -172,8 +186,9 @@ class RobotStateProvider:
             self.last_odom = msg
 
     def _on_map(self, msg: OccupancyGrid) -> None:
-        if self._active:
-            self.last_map = msg
+        # Always-on low-rate feed: map switches while no skill is running must
+        # replace the retained grid before the next skill reads it.
+        self.last_map = msg
 
     def _on_joint_states(self, msg: JointState) -> None:
         if self._active:
@@ -184,8 +199,9 @@ class RobotStateProvider:
             self.last_battery = msg
 
     def _on_amcl_pose(self, msg: PoseWithCovarianceStamped) -> None:
-        if self._active:
-            self.last_amcl_pose = msg
+        # Same lifecycle as the map. Keeping localization current avoids serving
+        # the previous skill's pose while the high-rate executor is parked.
+        self.last_amcl_pose = msg
 
     def _on_scan(self, msg: LaserScan) -> None:
         if self._active:

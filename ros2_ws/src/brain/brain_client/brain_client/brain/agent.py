@@ -595,6 +595,7 @@ class BrainAgent:
             capture_pose=self._pose_at_capture,
             current_pose=self._pose.current_pose_xyt(),
             is_mapfree=self._pose.is_mapfree,
+            use_static_map=getattr(self._pose, "cur_nav_mode", None) == "navigation",
         )
         if adjusted is not inputs:
             self._logger.info(f"[Brain] nav goal re-based to the current pose: {adjusted}")

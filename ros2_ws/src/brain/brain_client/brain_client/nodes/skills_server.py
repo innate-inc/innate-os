@@ -456,6 +456,10 @@ class SkillsActionServer(Node):
             swap_run_cancel(previous_run_cancel)
 
     def _run_code_skill_prepared(self, skill, entry, skill_type, inputs, goal_handle) -> SkillOutput:
+        run_started = time.monotonic()
+        state_ready_at = None
+        execute_started = None
+        execute_finished = None
         skill._begin_run(goal_handle)
         if skill.cancelled:
             self.get_logger().info(f"Skill '{skill_type}' cancelled before it started")
@@ -482,6 +486,7 @@ class SkillsActionServer(Node):
             if camera_feeds:
                 self._camera_node.start(camera_feeds)
             self.robot_state.wait_for_required_states(skill)
+            state_ready_at = time.monotonic()
             if skill.cancelled:
                 return SkillOutput("Skill cancelled before it started", status=SkillResult.CANCELLED)
             missing = skill.missing_required_robot_states()
@@ -491,9 +496,12 @@ class SkillsActionServer(Node):
                 self.robot_state.begin_continuous_updates(skill)
                 began_continuous_updates = True
                 self.get_logger().info(f"Started continuous state updates for '{skill_type}' at 50Hz")
-            return normalize_skill_result(
-                skill.execute(**_coerce_numeric_inputs(entry, inputs)), skill.name, logger=skill.logger
-            )
+            execute_started = time.monotonic()
+            try:
+                raw_result = skill.execute(**_coerce_numeric_inputs(entry, inputs))
+            finally:
+                execute_finished = time.monotonic()
+            return normalize_skill_result(raw_result, skill.name, logger=skill.logger)
         except SkillCancelled as e:
             return SkillOutput(str(e) or "Skill cancelled", status=SkillResult.CANCELLED)
         except SkillFailed as e:
@@ -503,6 +511,16 @@ class SkillsActionServer(Node):
                 self.robot_state.end_continuous_updates()
             if camera_feeds:
                 self._camera_node.stop(camera_feeds)
+            finished = time.monotonic()
+            state_end = state_ready_at or execute_started or execute_finished or finished
+            execution_end = execute_finished or finished
+            state_ms = (state_end - run_started) * 1000.0
+            execute_ms = (execution_end - execute_started) * 1000.0 if execute_started is not None else 0.0
+            teardown_ms = max(0.0, (finished - execution_end) * 1000.0)
+            self.get_logger().info(
+                f"[SkillTiming] skill={skill_type} total_ms={(finished - run_started) * 1000.0:.1f} "
+                f"state_ms={state_ms:.1f} execute_ms={execute_ms:.1f} teardown_ms={teardown_ms:.1f}"
+            )
 
     def _execute_physical_skill(self, goal_handle, skill_type, physical_data):
         self.get_logger().info(f"Delegating physical skill '{skill_type}' to behavior_server")
