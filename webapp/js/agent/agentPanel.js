@@ -40,7 +40,9 @@ const CHAT_EXAMPLES = [
  * @param {ReturnType<typeof import("../teleop/agentState.js").sharedAgentState>} agentState
  * @param {{
  *   enableMic?: boolean,
- *   onMicState?: (state: {on: boolean, busy: boolean, level: number, waveform: number[], error: string | null}) => void
+ *   onMicState?: (state: {on: boolean, busy: boolean, level: number, waveform: number[], error: string | null}) => void,
+ *   onUserMessage?: () => void,
+ *   onRobotMessage?: (message: HTMLElement | null) => void
  * }} opts
  *   enableMic connects the browser microphone in sim, where the robot has no
  *   physical microphone (see micStream.js).
@@ -233,6 +235,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     input.value = "";
     input.style.height = "auto";
     syncComposerAction();
+    opts.onUserMessage?.();
     await directives.ensureRunning();
     rosClient.publish(CHAT_IN_TOPIC, {
       data: JSON.stringify({ text, sender: "user", timestamp: Date.now() / 1000, origin: selfOrigin }),
@@ -303,6 +306,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const text = String(payload?.text ?? "");
     if (!text) return;
     chat.addMessage("user", text, Number(payload?.timestamp) || Date.now() / 1000);
+    opts.onUserMessage?.();
   }, undefined, "std_msgs/msg/String");
 
   const unsubOut = rosClient.subscribe(CHAT_OUT_TOPIC, (m) => {
@@ -316,7 +320,12 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const sender = String(payload?.sender ?? "");
     const text = String(payload?.text ?? "");
     if (!sender || !text) return;
-    chat.routeChatOut(sender, text, Number(payload?.timestamp) || Date.now() / 1000);
+    const ts = Number(payload?.timestamp) || Date.now() / 1000;
+    chat.routeChatOut(sender, text, ts);
+    if (sender === "robot") {
+      const messages = chat.wrap.querySelectorAll(".chat-msg.robot");
+      opts.onRobotMessage?.(/** @type {HTMLElement | null} */ (messages[messages.length - 1] ?? null));
+    }
   }, undefined, "std_msgs/msg/String");
 
   const unsubSkill = rosClient.subscribe(SKILL_STATUS_UPDATE_TOPIC, (m) => {

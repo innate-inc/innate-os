@@ -484,148 +484,121 @@ select.skill-input {
 
 /* ---- app onboarding ---------------------------------------------------- */
 
-.onboarding {
-  position: fixed;
-  inset: 0;
-  z-index: 1100; /* above the boot splash while its short fade finishes */
+/* Conversation-aware Agent coach. */
+.agent-onboarding-active .rail-nav:not(.rail-foot),
+.agent-onboarding-focused .overlay-stack-top-left,
+.agent-onboarding-focused .agent-stage-view-toggle,
+.agent-onboarding-focused .sim-debug-stack,
+.agent-onboarding-focused .agent-challenge-dock {
+  opacity: 0;
   pointer-events: none;
 }
 
-.onboarding-blocker {
-  position: absolute;
-  inset: 0;
-  pointer-events: auto;
+.rail-nav,
+.overlay-stack-top-left,
+.agent-stage-view-toggle,
+.sim-debug-stack,
+.agent-challenge-dock {
+  transition: opacity 180ms ease;
 }
 
-.onboarding-spotlight {
-  position: fixed;
-  border: 1px solid var(--ctl-accent);
-  border-radius: 11px;
-  box-shadow: 0 0 0 9999px rgb(0 0 0 / 70%), 0 0 0 4px rgb(232 163 61 / 13%);
-  transition: left 180ms ease, top 180ms ease, width 180ms ease, height 180ms ease;
+.agent-onboarding-target {
+  position: relative;
+  z-index: 1101 !important;
+  outline: 2px solid var(--ctl-accent);
+  outline-offset: 5px;
+  border-radius: 10px;
+  box-shadow: 0 0 0 8px rgb(232 163 61 / 10%);
 }
 
-.onboarding-card {
+.agent-onboarding-card {
   position: fixed;
-  width: min(360px, calc(100vw - 24px));
+  z-index: 1102;
+  width: min(350px, calc(100vw - 88px));
   padding: 20px;
   border: 1px solid var(--hairline-strong);
   border-radius: 12px;
-  background: var(--panel);
+  background: rgb(18 20 23 / 94%);
+  backdrop-filter: blur(20px);
   box-shadow: 0 18px 50px rgb(0 0 0 / 48%);
-  pointer-events: auto;
 }
 
-.onboarding.is-centered .onboarding-spotlight {
-  display: none;
-}
-
-.onboarding.is-centered .onboarding-blocker {
-  background: rgb(0 0 0 / 70%);
-}
-
-.onboarding.is-centered .onboarding-card {
-  top: 50%;
-  left: calc(50% + 32px);
-  transform: translate(-50%, -50%);
-}
-
-.onboarding-top,
-.onboarding-actions,
-.onboarding-buttons {
-  display: flex;
-  align-items: center;
-}
-
-.onboarding-top,
-.onboarding-actions {
-  justify-content: space-between;
-}
-
-.onboarding-progress {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
-}
-
-.onboarding-title {
-  margin: 14px 0 8px;
+.agent-onboarding-card h2 {
+  margin: 12px 0 8px;
   font-size: 20px;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
 
-.onboarding-body {
-  min-height: 60px;
+.agent-onboarding-card p {
   margin: 0;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.55;
 }
 
-.onboarding-actions {
-  margin-top: 22px;
+.agent-onboarding-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 15px;
 }
 
-.onboarding-buttons {
-  gap: 8px;
-}
-
-.onboarding-skip,
-.onboarding-button {
-  border: 0;
+.agent-onboarding-examples button {
+  padding: 7px 10px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 4%);
+  color: var(--text);
   font: inherit;
+  font-size: 11px;
   cursor: pointer;
 }
 
-.onboarding-skip {
-  padding: 8px 0;
-  background: none;
-  color: var(--muted);
-  font-size: 11px;
+.agent-onboarding-examples button:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
 }
 
-.onboarding-skip:hover {
-  color: var(--text);
+.agent-onboarding-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
 }
 
-.onboarding-button {
-  min-width: 70px;
+.agent-onboarding-actions button,
+.agent-onboarding-actions a {
   padding: 9px 13px;
   border: 1px solid var(--hairline-strong);
   border-radius: 8px;
   background: rgb(255 255 255 / 4%);
   color: var(--text);
+  font: inherit;
   font-size: 11px;
   letter-spacing: 0.08em;
+  text-decoration: none;
   text-transform: uppercase;
+  cursor: pointer;
 }
 
-.onboarding-button:hover {
-  background: rgb(255 255 255 / 8%);
-}
-
-.onboarding-next {
+.agent-onboarding-actions .agent-onboarding-primary {
   border-color: var(--accent-dim);
   color: var(--accent);
 }
 
 @media (max-width: 520px) {
-  .onboarding-card {
-    width: min(300px, calc(100vw - 88px));
+  .agent-onboarding-card {
+    right: 12px;
+    bottom: 100px;
+    left: 76px !important;
+    top: auto !important;
+    width: auto;
     padding: 18px;
   }
 
-  .onboarding.is-centered .onboarding-card {
-    left: calc(50% + 32px);
-  }
-
-  .onboarding-title {
+  .agent-onboarding-card h2 {
     font-size: 18px;
-  }
-
-  .onboarding-actions {
-    align-items: flex-end;
   }
 }
 

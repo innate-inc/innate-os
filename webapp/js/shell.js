@@ -78,7 +78,8 @@ export function initShell(navigate) {
   footNav.setAttribute("aria-label", "Utility");
   const onboarding = createOnboarding();
   let activeKey = "";
-  let firstPageMounted = false;
+  let checkedFirstPage = false;
+  let onboardingPending = false;
 
   /**
    * (Re)build the rail from railRows — links in group order, a divider at each
@@ -128,8 +129,18 @@ export function initShell(navigate) {
     button.innerHTML =
       '<span class="rail-ico"><span class="rail-help-mark" aria-hidden="true">?</span></span>' +
       '<span class="rail-label">Help</span>';
-    button.addEventListener("click", onboarding.start);
+    button.addEventListener("click", requestOnboarding);
     return button;
+  }
+
+  function requestOnboarding() {
+    onboardingPending = true;
+    if (activeKey === "agent") {
+      onboardingPending = false;
+      onboarding.start();
+    } else {
+      navigate("/");
+    }
   }
 
   /** @param {string | null} label */
@@ -221,9 +232,14 @@ export function initShell(navigate) {
   }
 
   function firstPageReady() {
-    if (firstPageMounted) return;
-    firstPageMounted = true;
-    onboarding.maybeStart();
+    if (!checkedFirstPage) {
+      checkedFirstPage = true;
+      onboardingPending = onboarding.shouldAutoStart();
+      if (onboardingPending && activeKey !== "agent") navigate("/");
+    }
+    if (!onboardingPending || activeKey !== "agent") return;
+    onboardingPending = false;
+    onboarding.start();
   }
 
   return { setActive, firstPageReady };

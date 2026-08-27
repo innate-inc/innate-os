@@ -2,18 +2,27 @@
 // Copyright (c) 2026 Innate Inc
 
 import assert from "node:assert/strict";
-import { ONBOARDING_SEEN_KEY, ONBOARDING_STEPS, ONBOARDING_VERSION } from "../js/onboarding.js";
+import {
+  ONBOARDING_REQUEST_EVENT,
+  ONBOARDING_SEEN_KEY,
+  ONBOARDING_VERSION,
+} from "../js/onboarding.js";
+import { FIRST_NUDGE, REPLY_NUDGE } from "../js/agent/agentOnboarding.js";
 
 assert.equal(ONBOARDING_SEEN_KEY, `innate.onboardingSeen.v${ONBOARDING_VERSION}`);
-assert.equal(ONBOARDING_STEPS[0].target, null, "tour opens with an unanchored welcome");
-assert.equal(ONBOARDING_STEPS.at(-1)?.target, ".rail-help", "tour ends on its permanent launcher");
-assert.ok(ONBOARDING_STEPS.some((step) => step.target?.includes('data-section="settings"')));
-assert.equal(new Set(ONBOARDING_STEPS.map((step) => step.title)).size, ONBOARDING_STEPS.length);
+assert.equal(ONBOARDING_VERSION, 2);
+assert.equal(ONBOARDING_REQUEST_EVENT, "innate:onboarding-request");
+assert.match(FIRST_NUDGE.body, /Agent menu/);
+assert.match(FIRST_NUDGE.body, /type a message/);
+assert.ok(FIRST_NUDGE.examples.some((example) => /see|wave/i.test(example)));
+assert.match(REPLY_NUDGE.body, /navigate/);
+assert.match(REPLY_NUDGE.body, /wave/);
+assert.match(REPLY_NUDGE.body, /pick up/);
 
-for (const step of ONBOARDING_STEPS) {
-  assert.ok(step.eyebrow.trim());
-  assert.ok(step.title.trim());
-  assert.ok(step.body.trim());
+for (const nudge of [FIRST_NUDGE, REPLY_NUDGE]) {
+  assert.ok(nudge.eyebrow.trim());
+  assert.ok(nudge.title.trim());
+  assert.ok(nudge.body.trim());
 }
 
-console.log(`ok - ${ONBOARDING_STEPS.length}-step onboarding contract`);
+console.log("ok - conversation onboarding contract");

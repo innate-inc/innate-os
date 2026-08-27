@@ -29,6 +29,7 @@ import { sharedAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
 import { createAgentMicControl } from "./agentMicControl.js";
+import { createAgentOnboarding } from "./agentOnboarding.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
 // marks a sim deployment — used here to drop the (absent) battery readout. Fetched
@@ -158,6 +159,7 @@ function buildAgentView(root) {
 
   /** @type {ReturnType<typeof createAgentMicControl> | null} */
   let micControl = null;
+  const onboarding = createAgentOnboarding(root);
   const panel = createAgentPanel(root, ros, agentState, {
     enableMic: Boolean(config.simControls),
     onMicState: (state) => {
@@ -167,6 +169,8 @@ function buildAgentView(root) {
         waveform: state.waveform,
       });
     },
+    onUserMessage: onboarding.onUserMessage,
+    onRobotMessage: onboarding.onRobotMessage,
   });
   const simSession = /** @type {any} */ (session);
   const challengePanel =
@@ -236,6 +240,7 @@ function buildAgentView(root) {
     // Square, always-live camera tiles (own prefs key so teleop's defaults stay put).
     cameraSwitch,
     ...(micControl ? [micControl] : []),
+    onboarding,
     panel,
     {
       destroy: () => {
