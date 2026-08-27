@@ -20,14 +20,17 @@ CHALLENGE = Challenge(
     # the vision model — verified, three scans running — while "the small
     # white block" picks first try. The words here are what reaches the skill.
     brief=(
-        "A small white block is on the floor and an open cardboard box stands a "
-        "couple of metres away. Pick up the block and drop it into the box."
+        "A small white block is on the floor right in front of you, with an open "
+        "cardboard box a little beyond it. Pick up the block and drop it into the box."
     ),
-    # Same room and in each other's line of sight: this challenge is here to
-    # exercise pick -> carry -> drop, not cross-apartment navigation.
+    # Both dead ahead of the spawn pose (-4.34, -0.17, facing -y), so the run
+    # starts on the manipulation rather than on a search: the block 0.65 m out
+    # and the box 1.2 m beyond it, in that order. These two spots are measured,
+    # not guessed — props dropped here settle upright at their rest heights
+    # (block z=0.030, box z=0.070) with the robot's head camera on both.
     setup=[
-        Drop("sock", -4.69, 1.29),
-        Drop("crate", -3.30, 2.05),
+        Drop("sock", -4.34, -0.82),
+        Drop("crate", -4.34, -1.35),
     ],
     goals=[
         Goal("Pick up the block", SkillDone("pick_any_object")),
