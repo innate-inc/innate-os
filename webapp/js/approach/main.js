@@ -37,8 +37,9 @@ const PAGE_CSS = `
       .approach-page .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); display: inline-block; flex: none; }
       .approach-page .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
       .approach-page .spacer { flex: 1; }
-      .approach-page main { display: grid; grid-template-columns: minmax(420px, 1.5fr) minmax(320px, 1fr);
-        gap: 12px; padding: 12px; align-items: start; }
+      .approach-page { overflow: auto; height: 100%; }
+      .approach-page main { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(320px, 420px);
+        gap: 12px; padding: 12px; align-items: start; max-width: 1500px; }
       @media (max-width: 940px) { main { grid-template-columns: 1fr; } }
       .approach-page .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; }
       .approach-page .panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim);
@@ -46,7 +47,8 @@ const PAGE_CSS = `
         display: flex; align-items: center; gap: 8px; }
       .approach-page .panel h2 .spacer { flex: 1; }
       .approach-page .panel .body { padding: 10px 12px; }
-      .approach-page canvas { display: block; width: 100%; height: auto; background: #000; border-radius: 0 0 8px 8px; }
+      .approach-page canvas { display: block; width: 100%; max-width: 760px; height: auto; background: #000;
+        border-radius: 0 0 8px 8px; }
       .approach-page .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-family: var(--mono); font-size: 12px; }
       .approach-page .kv .k { color: var(--dim); } .kv .v { text-align: right; word-break: break-word; }
       .approach-page .kv .v.bad { color: var(--bad); } .kv .v.ok { color: var(--ok); } .kv .v.warn { color: var(--warn); }
@@ -128,6 +130,12 @@ function buildView(root) {
   const EXECUTE_SKILL_ACTION_TYPE = "brain_messages/action/ExecuteSkill";
   const CANCEL_SKILL_SERVICE = "/brain/cancel_skill";
   const AVAILABLE_SKILLS_TOPIC = "/brain/available_skills";
+  // The debug records carry a frame only on a Gemini look — a 55 kB base64
+  // JPEG per servo tick would stall rosbridge — so the background comes from
+  // the camera topic instead and the overlays are drawn over whatever is
+  // current. frameAge below says how stale the overlays themselves are.
+  const CAM_TOPIC = "/mars/main_camera/left/image_raw/compressed";
+  const CAM_THROTTLE_MS = 200;
   // Namespace is workspace-dependent (innate_skills -> "innate-os"), so the
   // picker reads the live roster instead of hardcoding ids that silently
   // 404 when a skill moves package.
@@ -147,6 +155,9 @@ function buildView(root) {
   const last = { detect: null, localize: null, follow: null, rim: null, release: null, hold: null, verify: null };
   let frame = null;          // HTMLImageElement of the newest published JPEG
   let frameStamp = 0;
+  let live = null;             // newest camera frame, drawn under the overlays
+  let liveStamp = 0;
+  let livePending = false;
   let records = 0;
   let run = null;            // { cancel, skill }
 
@@ -171,7 +182,8 @@ function buildView(root) {
 
   function drawView() {
     view.clearRect(0, 0, IMG_W, IMG_H);
-    if (frame) view.drawImage(frame, 0, 0, IMG_W, IMG_H);
+    const bg = live ?? frame;
+    if (bg) view.drawImage(bg, 0, 0, IMG_W, IMG_H);
     else {
       view.fillStyle = "#111"; view.fillRect(0, 0, IMG_W, IMG_H);
       view.fillStyle = "#666"; view.font = "13px system-ui";
@@ -319,7 +331,12 @@ function buildView(root) {
       ["landed", v ? String(v.landed) : null, v && v.landed === false ? "bad" : "ok"],
       ["verdict", v?.reply ? String(v.reply).slice(0, 80) : null],
     ]);
-    $("frameAge").textContent = frameStamp ? `frame ${(performance.now() - frameStamp) / 1000 | 0}s ago` : "";
+    const ageOf = (stamp) => `${((performance.now() - stamp) / 1000) | 0}s`;
+    $("frameAge").textContent = live
+      ? `live${frameStamp ? ` · overlays ${ageOf(frameStamp)} old` : ""}`
+      : frameStamp
+        ? `frame ${ageOf(frameStamp)} ago`
+        : "";
   }
 
   function logLine(rec) {
@@ -365,6 +382,29 @@ function buildView(root) {
     if (ids.includes(keep)) $("skill").value = keep;
   }, 0, "std_msgs/msg/String"));
 
+  // Decode at most one camera frame at a time: under load the arrivals outrun
+  // decoding and the queue grows without the view ever getting fresher.
+  unsubs.push(
+    ros.subscribe(
+      CAM_TOPIC,
+      (msg) => {
+        if (livePending || !msg?.data) return;
+        livePending = true;
+        const img = new Image();
+        img.onload = () => {
+          live = img;
+          liveStamp = performance.now();
+          livePending = false;
+          render();
+        };
+        img.onerror = () => { livePending = false; };
+        img.src = `data:image/jpeg;base64,${msg.data}`;
+      },
+      CAM_THROTTLE_MS,
+      "sensor_msgs/msg/CompressedImage",
+    ),
+  );
+
   unsubs.push(ros.subscribe(DEBUG_TOPIC, (msg) => {
     try {
       onRecord(JSON.parse(msg.data));
@@ -375,7 +415,7 @@ function buildView(root) {
 
   $("clear").onclick = () => {
     for (const k of Object.keys(last)) last[k] = null;
-    frame = null; frameStamp = 0; records = 0;
+    frame = null; frameStamp = 0; live = null; liveStamp = 0; records = 0;
     $("log").innerHTML = ""; $("count").textContent = "0";
     render();
   };
