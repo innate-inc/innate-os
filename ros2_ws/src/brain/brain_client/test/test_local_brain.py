@@ -490,7 +490,7 @@ def agent_factory(monkeypatch):
             emit_system=lambda *a, **k: None,
             emit=lambda *a, **k: None,
             emit_thoughts=lambda *a, **k: None,
-            speak=lambda text, replace_pending=False: spoken.append((text, replace_pending)),
+            speak=lambda text, replace_pending=False, reply_id=None: spoken.append((text, replace_pending)),
             spoken=spoken,
         )
         chat.stream_speech = lambda: SpeechStreamer(chat)
@@ -906,19 +906,27 @@ def test_nonstop_speech_cannot_starve_the_loop(agent_factory):
 
 def test_speech_streamer_speaks_sentence_by_sentence():
     spoken = []
-    chat = SimpleNamespace(speak=lambda text, replace_pending=False: spoken.append((text, replace_pending)))
+    chat = SimpleNamespace(
+        speak=lambda text, replace_pending=False, reply_id=None: spoken.append((text, replace_pending, reply_id))
+    )
     streamer = SpeechStreamer(chat)
     streamer.feed("I see a ball. It is ")
     streamer.feed("red! And")
     streamer.feed(" close.")
     streamer.flush()
     # First sentence supersedes any stale queue; the rest append in order.
-    assert spoken == [("I see a ball.", True), ("It is red!", False), ("And close.", False)]
+    assert [(text, replace) for text, replace, _ in spoken] == [
+        ("I see a ball.", True),
+        ("It is red!", False),
+        ("And close.", False),
+    ]
+    assert spoken[0][2] is not None
+    assert {reply_id for _, _, reply_id in spoken} == {spoken[0][2]}
 
 
 def test_speech_streamer_mutes_leaked_tool_narration_and_skips_noise():
     spoken = []
-    chat = SimpleNamespace(speak=lambda text, replace_pending=False: spoken.append(text))
+    chat = SimpleNamespace(speak=lambda text, replace_pending=False, reply_id=None: spoken.append(text))
     streamer = SpeechStreamer(chat)
     streamer.feed("Done. Calling tool default_api. This must not be spoken.")
     streamer.flush()
@@ -932,7 +940,7 @@ def test_speech_streamer_mutes_leaked_tool_narration_and_skips_noise():
 
 def test_speech_streamer_mute_drops_everything_not_yet_spoken():
     spoken = []
-    chat = SimpleNamespace(speak=lambda text, replace_pending=False: spoken.append(text))
+    chat = SimpleNamespace(speak=lambda text, replace_pending=False, reply_id=None: spoken.append(text))
     streamer = SpeechStreamer(chat)
     streamer.feed("First. Sec")
     streamer.mute()
@@ -945,7 +953,7 @@ def test_speech_streamer_try_abandon_is_atomic_with_spoke():
     # The loop's preemption check: abandon must succeed only while nothing has
     # been voiced, and a successful abandon must silence the rest of the reply.
     spoken = []
-    chat = SimpleNamespace(speak=lambda text, replace_pending=False: spoken.append(text))
+    chat = SimpleNamespace(speak=lambda text, replace_pending=False, reply_id=None: spoken.append(text))
     unspoken = SpeechStreamer(chat)
     unspoken.feed("Not yet a full sentence")
     assert unspoken.try_abandon() is True

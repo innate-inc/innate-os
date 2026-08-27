@@ -1,6 +1,6 @@
-"""Droppable props: free-floating MuJoCo bodies parked off-map until something
-places them. Manipulation targets (cube, can, sock, ...) and scenery (a person,
-a dog, ...) differ only in what their sidecars say.
+"""Droppable props: MuJoCo bodies parked off-map until something places them.
+Manipulation targets (cube, can, sock, ...) are free-floating; stationary
+scenery can be kinematic. Both differ only in what their sidecars say.
 
 A sidecar is a Python module exporting ``PROP = Prop(...)`` (the same shape as
 sim/challenges/), found under any props root. Python rather than data because
@@ -78,11 +78,15 @@ class Prop:
     # to clear furniture, then physics settles it).
     rest_z: float = 0.02
     drop_z: float | None = None
+    # Kinematic props are fixed from dynamics but remain placeable through
+    # MuJoCo's mocap pose arrays. This is for stationary scenery such as an NPC,
+    # not for manipulation targets that need gravity and contact response.
+    kinematic: bool = field(default=False, kw_only=True)
     # Where the robot puts this prop when asked to place it in front of itself:
     # robot-frame metres. The manipulation props' values place them on an arc
     # the arm can reach top-down -- do NOT round them off.
     reach: tuple[float, float] = (0.6, 0.0)
-    # Body-frame offset from the free-joint origin to the visual CENTRE. Only
+    # Body-frame offset from the body origin to the visual CENTRE. Only
     # non-zero for a mesh whose origin is not its middle (the human scan stands
     # feet-at-origin), so distances to it mean what a reader expects.
     center_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -188,7 +192,7 @@ class Prop:
         return out
 
     def body_xml(self, park_x: float, park_y: float, visual_group: int, collision_group: int) -> str:
-        """The prop's free body, parked at (park_x, park_y)."""
+        """The prop's dynamic or mocap body, parked at (park_x, park_y)."""
         mesh = self.mesh_path
         if mesh is None:
             # No mesh installed: the primitive IS the prop -- visible, lidar-
@@ -204,7 +208,10 @@ class Prop:
             if pieces:
                 for i in range(len(pieces)):
                     geoms += self._geom(
-                        f"{self.name}_col{i}", f'mesh="{self.name}_col{i}" type="mesh"', collision_group, physical=True
+                        f"{self.name}_col{i}",
+                        f'mesh="{self.name}_col{i}" type="mesh"',
+                        collision_group,
+                        physical=True,
                     )
             elif self.collision == "hull" or self.collision == "pieces":
                 # "pieces" with none installed degrades to the mesh's own hull.
@@ -213,9 +220,10 @@ class Prop:
                 )
             else:
                 geoms += self._primitive_geom(f"{self.name}_geom", collision_group, physical=True)
+        body_kind = ' mocap="true"' if self.kinematic else ""
+        joint = "" if self.kinematic else f'\n      <freejoint name="{self.name}_free"/>'
         return f"""
-    <body name="{self.name}" pos="{park_x:.4f} {park_y:.4f} {self.rest_z:g}">
-      <freejoint name="{self.name}_free"/>{geoms}
+    <body name="{self.name}"{body_kind} pos="{park_x:.4f} {park_y:.4f} {self.rest_z:g}">{joint}{geoms}
     </body>"""
 
     # -- what the browser needs to draw and offer this prop --
@@ -264,14 +272,17 @@ class PropRegistry:
     """The props in one world: their MJCF, their addresses in the compiled
     model, and which of them are currently out on the floor.
 
-    The method-name verbs are load-bearing: ``drop_*`` releases from ``drop_z``
-    and lets physics settle the prop onto whatever is below, ``place_*`` sets
-    it down at ``rest_z`` already at rest.
+    The method-name verbs are load-bearing for dynamic props: ``drop_*``
+    releases from ``drop_z`` and lets physics settle the prop onto whatever is
+    below, ``place_*`` sets it down at ``rest_z`` already at rest. Kinematic
+    scenery snaps to the corresponding pose because gravity cannot move it.
     """
 
     def __init__(self, props: dict[str, Prop]):
         self.props = props
-        self._addr: dict[str, tuple[int, int, int]] = {}  # name -> (body id, qpos adr, dof adr)
+        # name -> (body id, qpos adr, dof adr, mocap id). Exactly one address
+        # family is present: dynamic props use qpos/dof, kinematic props mocap.
+        self._addr: dict[str, tuple[int, int | None, int | None, int | None]] = {}
         self.out: set[str] = set()  # on the floor rather than parked off-map
 
     @classmethod
@@ -305,24 +316,37 @@ class PropRegistry:
         """Resolve each prop's addresses in the compiled model. Called once
         after the model is built (or loaded from cache)."""
         self._addr.clear()
-        for name in self.props:
-            jid = model.joint(f"{name}_free").id
-            self._addr[name] = (model.body(name).id, model.jnt_qposadr[jid], model.jnt_dofadr[jid])
+        for name, prop in self.props.items():
+            bid = model.body(name).id
+            if prop.kinematic:
+                mocap_id = int(model.body_mocapid[bid])
+                if mocap_id < 0:
+                    raise ValueError(f"kinematic prop {name!r} did not compile as a mocap body")
+                self._addr[name] = (bid, None, None, mocap_id)
+            else:
+                jid = model.joint(f"{name}_free").id
+                self._addr[name] = (bid, int(model.jnt_qposadr[jid]), int(model.jnt_dofadr[jid]), None)
 
     # -- placement (callers hold the sim lock) --
 
     def _set_pose(self, data, name: str, x: float, y: float, z: float, yaw: float) -> None:
         """Write one prop's pose and zero its velocity. The z is the caller's
         choice of drop_z or rest_z -- that choice IS drop-vs-place."""
-        _bid, qadr, dadr = self._addr[name]
+        _bid, qadr, dadr, mocap_id = self._addr[name]
         half = yaw / 2
-        data.qpos[qadr : qadr + 7] = [x, y, z, math.cos(half), 0.0, 0.0, math.sin(half)]
-        data.qvel[dadr : dadr + 6] = 0.0
+        quat = (math.cos(half), 0.0, 0.0, math.sin(half))
+        if mocap_id is not None:
+            data.mocap_pos[mocap_id] = [x, y, z]
+            data.mocap_quat[mocap_id] = quat
+        else:
+            assert qadr is not None and dadr is not None
+            data.qpos[qadr : qadr + 7] = [x, y, z, *quat]
+            data.qvel[dadr : dadr + 6] = 0.0
         self.out.add(name)
 
     def drop_at(self, data, name: str, x: float, y: float, yaw: float = 0.0) -> bool:
-        """Release a prop at its drop_z above (x, y), yawed about +z, and let
-        physics settle it onto whatever is below. False when prop does not exist."""
+        """Release a dynamic prop at drop_z, or snap a kinematic one there,
+        yawed about +z. False when the prop does not exist."""
         if name not in self._addr:
             return False
         self._set_pose(data, name, x, y, self.props[name].drop_z, yaw)
@@ -381,7 +405,7 @@ class PropRegistry:
         floor. Parked props are omitted, not reported at their parking spot."""
         return {
             name: [*map(float, data.xpos[bid]), *map(float, data.xquat[bid])]
-            for name, (bid, _q, _d) in self._addr.items()
+            for name, (bid, _q, _d, _m) in self._addr.items()
             if name in self.out
         }
 
@@ -391,7 +415,7 @@ class PropRegistry:
         parked."""
         if name not in self.out or name not in self._addr:
             return None
-        bid, _q, _d = self._addr[name]
+        bid, _q, _d, _m = self._addr[name]
         ox, oy, oz = self.props[name].center_offset
         if ox == oy == oz == 0.0:
             return float(data.xpos[bid][0]), float(data.xpos[bid][1])

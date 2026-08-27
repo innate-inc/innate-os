@@ -9,6 +9,7 @@ history list so no other component needs to.
 
 from __future__ import annotations
 
+import itertools
 import json
 import re
 import threading
@@ -18,6 +19,7 @@ from brain_client.brain.context import split_tool_narration
 from brain_client.common.enums import StrEnum
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
+_REPLY_IDS = itertools.count(1)
 
 
 class Sender(StrEnum):
@@ -98,9 +100,9 @@ class ChatManager:
     def clear(self) -> None:
         self.history = []
 
-    def speak(self, text: str, replace_pending: bool = False) -> None:
+    def speak(self, text: str, replace_pending: bool = False, reply_id: str | None = None) -> None:
         if self._tts_handler is not None:
-            self._tts_handler.speak_text_async(text, replace_pending=replace_pending)
+            self._tts_handler.speak_text_async(text, replace_pending=replace_pending, reply_id=reply_id)
 
     def stream_speech(self) -> SpeechStreamer:
         return SpeechStreamer(self)
@@ -123,6 +125,7 @@ class SpeechStreamer:
         self._muted = False
         self._lock = threading.Lock()
         self.spoke = False
+        self._reply_id = f"reply-{next(_REPLY_IDS)}"
 
     def feed(self, text: str) -> None:
         self._buffer += text
@@ -170,7 +173,8 @@ class SpeechStreamer:
             self._muted = True
         if not re.search(r"[a-zA-Z0-9]", sentence):
             return
-        # The first sentence supersedes any stale queued utterances; the rest
-        # of the reply queues in order behind it.
-        self._chat.speak(sentence, replace_pending=not self.spoke)
+        # The first sentence supersedes stale queued utterances (a reply
+        # mid-playback keeps its rest, see _survives_flush in tts.py); the
+        # rest of this reply queues in order behind it.
+        self._chat.speak(sentence, replace_pending=not self.spoke, reply_id=self._reply_id)
         self.spoke = True

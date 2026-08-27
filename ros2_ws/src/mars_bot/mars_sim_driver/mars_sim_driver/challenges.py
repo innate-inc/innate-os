@@ -36,11 +36,16 @@ Example (sim/challenges/shepherd.py):
     )
 """
 
+import hashlib
 import importlib.util
 import json
 import math
+import socket
+import sys
 import threading
 import time
+from collections import deque
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -51,6 +56,13 @@ from . import world
 # thread and an observer command) can legitimately deliver snapshots about one
 # physics slice apart, ~25ms; a reset drops the clock by the whole uptime.
 CLOCK_REWIND_S = 0.5
+
+# Bound the final websocket send so Abort/Start cannot wait indefinitely.
+CHAT_WRITE_TIMEOUT_S = 2.0
+CHAT_OUTBOX_MAXLEN = 64
+
+# Robot-owned JSON cannot reproduce this in-process provenance marker.
+_ENVIRONMENT_EVENT_SOURCE = object()
 
 # --- world-state view handed to predicates ---
 
@@ -178,6 +190,41 @@ class SkillDone(Predicate):
             self.guard.reset()
 
 
+@dataclass
+class EventSeen(Predicate):
+    """Latch once a typed challenge event with the requested fields arrives.
+
+    Unlike :class:`SkillDone`, this is for environment-owned events rather
+    than robot skill lifecycle updates. The latch lets several EventSeen
+    predicates inside an AllOf complete on different ticks and in any order.
+    """
+
+    type: str
+    fields: dict[str, object] = field(default_factory=dict)
+    guard: Predicate | None = None
+    _seen: bool = field(default=False, init=False, repr=False)
+
+    def update(self, state: WorldState, events: list[dict]) -> bool:
+        if self._seen:
+            return True
+        for event in events:
+            if event.get("_source") is not _ENVIRONMENT_EVENT_SOURCE:
+                continue
+            if event.get("type") != self.type:
+                continue
+            if any(event.get(key) != value for key, value in self.fields.items()):
+                continue
+            if self.guard is None or self.guard.update(state, events):
+                self._seen = True
+                break
+        return self._seen
+
+    def reset(self) -> None:
+        self._seen = False
+        if self.guard is not None:
+            self.guard.reset()
+
+
 # Every child is updated on every tick, never short-circuited: a stateful
 # predicate only advances when it is asked, so a Hold sitting behind a decided
 # sibling would silently restart its dwell each tick if all()/any() stopped
@@ -225,10 +272,54 @@ class Drop:
 
 @dataclass
 class Goal:
-    """One checklist entry; latches once its predicate reports True."""
+    """One checklist entry; latches once its predicate reports True.
+
+    Adjacent goals with the same non-empty ``parallel_group`` are all judged
+    while that block is active. The following goal remains locked until every
+    goal in the block is done.
+    """
 
     label: str
     predicate: Predicate
+    parallel_group: str | None = None
+
+
+@dataclass
+class EnvironmentReply:
+    """One utterance spoken by a simulated character.
+
+    The challenge owns the words and voice choice; the generic bridge owns
+    delivery.  In simulator mode the brain speaks this through Cartesia and
+    releases the transcript to normal chat as playback starts.
+    """
+
+    speaker: str
+    text: str
+    voice_id: str
+
+
+@dataclass
+class RuntimeResult:
+    """Environment events and chat replies produced by one runtime update."""
+
+    events: list[dict] = field(default_factory=list)
+    replies: list[str | EnvironmentReply] = field(default_factory=list)
+
+
+class ChallengeRuntime:
+    """Optional stateful environment behavior attached to one challenge.
+
+    The engine owns lifecycle, trusted-event provenance, and chat transport.
+    A runtime owns scenario policy and private state. This keeps concepts such
+    as residents, orders, or game rules out of the generic judge.
+    """
+
+    def reset(self) -> None:
+        """Start a fresh run, discarding all state from the previous one."""
+
+    def update(self, state: WorldState, events: list[dict]) -> RuntimeResult:
+        """React to one judged world snapshot and its external events."""
+        return RuntimeResult()
 
 
 @dataclass
@@ -237,12 +328,12 @@ class Challenge:
     title: str
     brief: str  # shown to the user; what to tell (or do with) the robot
     setup: list[Drop]
-    # Strictly ordered: goal N is judged only after N-1, and skill completions
-    # are NOT deferred -- one that arrives while an earlier goal is open is
-    # discarded (logged), not saved for the goal it would have satisfied. Order
-    # the goals the way the robot will actually do them, and give a SkillDone
-    # guard enough slack that the step really can pass when it fires.
+    # Adjacent goals with one parallel_group form an unordered phase. Events
+    # arriving before their phase are discarded rather than deferred.
     goals: list[Goal]
+    # Optional scenario-specific behavior. It is deliberately absent from the
+    # public roster/state stream, so private environment facts stay private.
+    runtime: ChallengeRuntime | None = field(default=None, kw_only=True, repr=False)
     time_limit_s: float | None = None
     reset_world: bool = True  # robot back to spawn + props re-parked on start
 
@@ -260,14 +351,36 @@ def load_challenges(roots: list[Path]) -> dict[str, Challenge]:
     for root in roots:
         if not root.is_dir():
             continue
-        for path in sorted(root.glob("*.py")):
-            if path.name.startswith("_"):
-                continue
+        files = [path for path in root.glob("*.py") if not path.name.startswith("_")]
+        packages = [
+            path / "__init__.py"
+            for path in root.iterdir()
+            if path.is_dir() and not path.name.startswith("_") and (path / "__init__.py").is_file()
+        ]
+        for path in sorted(
+            files + packages,
+            key=lambda candidate: candidate.parent.name if candidate.name == "__init__.py" else candidate.name,
+        ):
             try:
-                spec = importlib.util.spec_from_file_location(f"sim_challenge_{path.stem}", path)
+                sidecar_name = path.parent.name if path.name == "__init__.py" else path.stem
+                path_key = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:12]
+                module_name = f"sim_challenge_{sidecar_name}_{path_key}"
+                package_paths = [str(path.parent)] if path.name == "__init__.py" else None
+                spec = importlib.util.spec_from_file_location(
+                    module_name,
+                    path,
+                    submodule_search_locations=package_paths,
+                )
                 assert spec and spec.loader
                 module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
+                # A path-derived package name supports relative imports without
+                # sharing helper-module state across override roots.
+                sys.modules[module_name] = module
+                try:
+                    spec.loader.exec_module(module)
+                except Exception:
+                    sys.modules.pop(module_name, None)
+                    raise
                 challenge: Challenge = module.CHALLENGE
                 found[challenge.id] = challenge
             except Exception as exc:  # noqa: BLE001
@@ -288,8 +401,10 @@ class ChallengeEngine:
     after state gathering, with no sim access of its own (pure evaluation
     under _mutex); post_event() may be called from any thread.
 
-    Lock order is _run_lock -> sim_lock -> _mutex, and no two are ever held
-    together; anything that changes here has to keep that true.
+    Lock order is ``_run_lock -> _chat_send_lock -> _mutex``. The sim lock is
+    taken under _run_lock during scene setup but released before _mutex; it is
+    never held with either chat/engine lock. Anything that changes here has to
+    keep those relationships true.
     """
 
     def __init__(
@@ -320,6 +435,13 @@ class ChallengeEngine:
         # fresh run judged against the previous one's clock and props.
         self.world_epoch = 0
         self._run_epoch = 0
+        # Run tokens keep delayed environment replies out of later scenes.
+        self._run_token = 0
+        self._speech_serial = 0
+        self._chat_inputs: deque[tuple[int, dict]] = deque(maxlen=CHAT_OUTBOX_MAXLEN)
+        self._chat_ready = threading.Condition(self._mutex)
+        # Orders the final bounded send against run invalidation.
+        self._chat_send_lock = threading.Lock()
         self._events: list[dict] = []
         self.active: Challenge | None = None
         self.state = "running"  # of the active challenge: running | passed | failed
@@ -414,9 +536,16 @@ class ChallengeEngine:
                 self._run_epoch = epoch
                 self.elapsed_s = 0.0
                 self._events.clear()  # anything that happened during setup is not this run's
+                if challenge.runtime is not None:
+                    try:
+                        challenge.runtime.reset()
+                    except Exception as exc:  # noqa: BLE001 -- challenge bug fails the run, not the sim
+                        self.state, self.reason = "failed", f"challenge runtime reset error: {exc!r}"
                 entry = self.progress.setdefault(challenge_id, {"attempts": 0, "passed": False, "best_time_s": None})
                 entry["attempts"] += 1
                 self.active = challenge  # last: judging starts here
+                if self.state == "failed":
+                    self._record(challenge.id, "failed", None)
         return True
 
     def abort(self) -> None:
@@ -429,15 +558,72 @@ class ChallengeEngine:
     def _deactivate(self) -> None:
         """Stop judging. A run still in progress is recorded as aborted --
         whether the user pressed Abort or started something else over it."""
-        with self._mutex:
-            if self.active is not None and self.state == "running":
-                self._record(self.active.id, "aborted", None)
-            self.active = None
+        # Once invalidation owns this lock, no old-token reply can be sent.
+        with self._chat_send_lock:
+            with self._mutex:
+                if self.active is not None and self.state == "running":
+                    self._record(self.active.id, "aborted", None)
+                self.active = None
+                self._run_token += 1
+                self._chat_inputs.clear()
+                self._chat_ready.notify_all()
 
     def post_event(self, event: dict) -> None:
         with self._mutex:
             if self.active is not None and self.state == "running":
                 self._events.append(event)
+
+    def post_robot_speech(self, text: str, timestamp: float | None = None) -> None:
+        """Feed one normal robot chat utterance to the active environment."""
+        self.post_event({"type": "robot_speech", "text": text, "timestamp": timestamp or time.time()})
+
+    def next_chat_input(self, timeout: float | None = None) -> tuple[int, dict] | None:
+        """Wait for the next current-run NPC reply for rosbridge to publish.
+
+        Stale items are discarded here as well as checked immediately before
+        publication. Passing zero makes this a non-blocking poll for tests.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        with self._chat_ready:
+            while True:
+                while self._chat_inputs:
+                    token, payload = self._chat_inputs.popleft()
+                    if self.active is not None and self.state in ("running", "passed") and token == self._run_token:
+                        return token, payload
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return None
+                    self._chat_ready.wait(remaining)
+                else:
+                    self._chat_ready.wait()
+
+    def chat_input_is_current(self, token: int) -> bool:
+        """Whether a dequeued reply still belongs to the displayed run."""
+        with self._mutex:
+            return self.active is not None and self.state in ("running", "passed") and token == self._run_token
+
+    def publish_chat_input_if_current(self, token: int, publish) -> bool:
+        """Atomically order one send before or after run invalidation.
+
+        ``publish`` must only perform the already-connected websocket send;
+        callers keep reconnect/advertise work outside this lock and enforce a
+        finite write deadline.
+        """
+        with self._chat_send_lock:
+            if not self.chat_input_is_current(token):
+                return False
+            publish()
+            return True
+
+    def requeue_chat_input_if_current(self, token: int, payload: dict) -> bool:
+        """Release a spoken environment reply into chat after its audio ends."""
+        with self._chat_ready:
+            if self.active is None or self.state not in ("running", "passed") or token != self._run_token:
+                return False
+            self._chat_inputs.append((token, payload))
+            self._chat_ready.notify_all()
+            return True
 
     # -- evaluation (physics thread, after state gathering; no sim access) --
 
@@ -475,18 +661,72 @@ class ChallengeEngine:
                 state = WorldState(t=t, robot=pose, centers=centers)
                 self.elapsed_s = max(0.0, t - self.started_t)
                 try:
-                    idx = first = self.goal_done.index(False)
-                    # Goals stay strictly ordered, but a batch that satisfies
-                    # several of them in sequence has to advance all of them:
-                    # ticks only happen when physics stepped, so one stall or a
-                    # rosbridge reconnect hands a single tick several
-                    # completions, and stopping at the first would drop the
-                    # later goal's event even though the robot did things in
-                    # the right order.
-                    while idx < len(challenge.goals) and challenge.goals[idx].predicate.update(state, events):
-                        self.goal_done[idx] = True
-                        idx += 1
-                    if idx == first and any(ev.get("status") == "completed" for ev in events):
+                    if challenge.runtime is not None:
+                        runtime_result = challenge.runtime.update(state, events)
+                        for event in runtime_result.events:
+                            if not isinstance(event, dict):
+                                raise TypeError("challenge runtime events must be dictionaries")
+                            events.append({**event, "_source": _ENVIRONMENT_EVENT_SOURCE})
+                        for reply in runtime_result.replies:
+                            if isinstance(reply, EnvironmentReply):
+                                self._speech_serial += 1
+                                text = f"{reply.speaker}: {reply.text}"
+                                speech = {
+                                    "id": f"{self._run_token}:{self._speech_serial}",
+                                    "text": reply.text,
+                                    "voice_id": reply.voice_id,
+                                }
+                            elif isinstance(reply, str):
+                                text = reply
+                                speech = None
+                            else:
+                                raise TypeError("challenge runtime replies must be strings or EnvironmentReply values")
+                            payload = {
+                                "text": text,
+                                "sender": "user",
+                                "timestamp": time.time(),
+                            }
+                            if speech is not None:
+                                payload["_environment_speech"] = speech
+                            self._chat_inputs.append(
+                                (
+                                    self._run_token,
+                                    payload,
+                                )
+                            )
+                        if runtime_result.replies:
+                            self._chat_ready.notify_all()
+                    first = self.goal_done.index(False)
+                    progressed = False
+                    while True:
+                        try:
+                            idx = self.goal_done.index(False)
+                        except ValueError:
+                            break
+                        goal = challenge.goals[idx]
+                        if goal.parallel_group is None:
+                            if not goal.predicate.update(state, events):
+                                break
+                            self.goal_done[idx] = True
+                            progressed = True
+                            continue
+
+                        # Every open sibling in the phase sees the same events.
+                        group = goal.parallel_group
+                        start = idx
+                        while start > 0 and challenge.goals[start - 1].parallel_group == group:
+                            start -= 1
+                        end = idx + 1
+                        while end < len(challenge.goals) and challenge.goals[end].parallel_group == group:
+                            end += 1
+                        for sibling in range(start, end):
+                            if not self.goal_done[sibling] and challenge.goals[sibling].predicate.update(state, events):
+                                self.goal_done[sibling] = True
+                                progressed = True
+                        if not all(self.goal_done[start:end]):
+                            break
+
+                    if not progressed and any(ev.get("status") == "completed" for ev in events):
                         # Nothing took them, and ordered goals do not defer:
                         # these completions are gone. Say so, or a challenge
                         # author watches a run die on the clock with both tasks
@@ -546,6 +786,222 @@ class ChallengeEngine:
                 ],
             }
         return block
+
+
+class ChallengeChatBridge:
+    """Connect an active challenge runtime to the robot's normal chat topics.
+
+    Robot utterances arrive on ``/brain/chat_out`` and are judged against the
+    next ground-truth tick. Environment replies are published to
+    ``/brain/chat_in`` so both the active agent and every chat UI receive them
+    through the same interface as a human speaker. Subscribe and publish use
+    separate best-effort connections so an idle receive loop cannot strand a
+    reply waiting in the engine outbox.
+    """
+
+    CHAT_OUT = "/brain/chat_out"
+    CHAT_IN = "/brain/chat_in"
+    ENVIRONMENT_SPEECH_DONE = "/brain/environment_speech_done"
+    ENVIRONMENT_SPEECH_SENDER = "environment_speech"
+    # Lost playback ack: post the transcript as text anyway after this long.
+    SPEECH_ACK_TIMEOUT_S = 30.0
+
+    @staticmethod
+    def _send_with_timeout(connection, message: str, timeout_s: float = CHAT_WRITE_TIMEOUT_S) -> None:
+        """Send once, interrupting a wedged sync websocket at the deadline."""
+        if timeout_s <= 0:
+            raise ValueError("websocket write timeout must be positive")
+        finished = threading.Event()
+        timed_out = threading.Event()
+
+        def interrupt_stalled_write() -> None:
+            if finished.wait(timeout_s):
+                return
+            timed_out.set()
+            # websockets itself uses shutdown to interrupt a blocking recv on
+            # every supported platform; it interrupts sendall as well.
+            with suppress(OSError):
+                connection.socket.shutdown(socket.SHUT_RDWR)
+
+        watchdog = threading.Thread(target=interrupt_stalled_write, daemon=True)
+        watchdog.start()
+        try:
+            connection.send(message)
+        except Exception as exc:
+            if timed_out.is_set():
+                raise TimeoutError("challenge chat websocket write timed out") from exc
+            raise
+        finally:
+            finished.set()
+            watchdog.join()
+
+    def __init__(self, engine: ChallengeEngine, url: str = "ws://127.0.0.1:9090"):
+        self.engine = engine
+        self.url = url
+        self._pending_speech: dict[str, tuple[int, dict, threading.Timer]] = {}
+        self._pending_speech_lock = threading.Lock()
+        self._speech_done_ready = threading.Event()
+        threading.Thread(target=self._subscribe, daemon=True).start()
+        threading.Thread(target=self._publish, daemon=True).start()
+
+    @classmethod
+    def robot_speech(cls, message: str) -> tuple[str, float | None] | None:
+        """Decode one rosbridge frame, accepting only visible robot speech."""
+        frame = json.loads(message)
+        if frame.get("topic") != cls.CHAT_OUT:
+            return None
+        payload = json.loads(frame["msg"]["data"])
+        if payload.get("sender") != "robot":
+            return None
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return None
+        timestamp = payload.get("timestamp")
+        return text, float(timestamp) if isinstance(timestamp, int | float) else None
+
+    @classmethod
+    def environment_speech_done(cls, message: str) -> str | None:
+        """Decode one completion acknowledgment from the brain's TTS worker."""
+        frame = json.loads(message)
+        if frame.get("topic") != cls.ENVIRONMENT_SPEECH_DONE:
+            return None
+        payload = json.loads(frame["msg"]["data"])
+        request_id = payload.get("id")
+        return request_id if isinstance(request_id, str) and request_id else None
+
+    def _release_pending_speech(self, request_id: str) -> None:
+        """Post a spoken reply's transcript into chat, exactly once."""
+        with self._pending_speech_lock:
+            entry = self._pending_speech.pop(request_id, None)
+        if entry is None:
+            return
+        token, payload, timer = entry
+        timer.cancel()
+        payload["timestamp"] = time.time()
+        self.engine.requeue_chat_input_if_current(token, payload)
+
+    def _subscribe(self) -> None:
+        try:
+            from websockets.sync.client import connect
+        except ImportError:
+            print("[challenges] `websockets` client unavailable -- environment chat disabled", flush=True)
+            return
+        announced = False
+        while True:
+            try:
+                with connect(self.url, open_timeout=5) as ws:
+                    for topic in (self.CHAT_OUT, self.ENVIRONMENT_SPEECH_DONE):
+                        ws.send(json.dumps({"op": "subscribe", "topic": topic, "type": "std_msgs/String"}))
+                    self._speech_done_ready.set()
+                    if not announced:
+                        print(f"[challenges] environment chat listening ({self.url})", flush=True)
+                        announced = True
+                    for message in ws:
+                        try:
+                            request_id = self.environment_speech_done(message)
+                            if request_id is not None:
+                                self._release_pending_speech(request_id)
+                                continue
+                            speech = self.robot_speech(message)
+                            if speech is not None:
+                                self.engine.post_robot_speech(*speech)
+                        except Exception as exc:  # noqa: BLE001 -- junk on the open chat bus
+                            print(f"[challenges] ignoring chat event: {exc!r}", flush=True)
+            except Exception:  # noqa: BLE001,S110 -- rosbridge down/restarting; retry
+                pass
+            finally:
+                self._speech_done_ready.clear()
+            time.sleep(5)
+
+    def _publish(self) -> None:
+        try:
+            from websockets.sync.client import connect
+        except ImportError:
+            return  # the subscriber logged the missing optional dependency
+        ws = None
+        announced = False
+
+        def open_connection():
+            # No advertise: rws resolves the topic type itself.
+            connection = connect(self.url, open_timeout=5, close_timeout=CHAT_WRITE_TIMEOUT_S)
+            nonlocal announced
+            if not announced:
+                print(f"[challenges] environment replies connected ({self.url})", flush=True)
+                announced = True
+            return connection
+
+        # Connect early, but clear of rws startup and its handshake hang
+        # (see sim_rosbridge.launch.py): the subscriber proves rws is serving.
+        EAGER_CONNECT_GRACE_S = 10.0
+        ready_since = None
+        while True:
+            if ws is None:
+                if not self._speech_done_ready.is_set():
+                    ready_since = None
+                elif ready_since is None:
+                    ready_since = time.time()
+                elif time.time() - ready_since >= EAGER_CONNECT_GRACE_S:
+                    try:
+                        ws = open_connection()
+                    except Exception:  # noqa: BLE001 -- rosbridge dropped again; re-arm the grace period
+                        ws = None
+                        ready_since = None
+            item = self.engine.next_chat_input(timeout=1.0)
+            if item is None:
+                continue
+            token, payload = item
+            while self.engine.chat_input_is_current(token):
+                try:
+                    if ws is None:
+                        ws = open_connection()
+                    outbound_payload = dict(payload)
+                    speech = outbound_payload.pop("_environment_speech", None)
+                    body = (
+                        {**speech, "sender": self.ENVIRONMENT_SPEECH_SENDER}
+                        if isinstance(speech, dict)
+                        else outbound_payload
+                    )
+                    if isinstance(speech, dict):
+                        request_id = speech.get("id")
+                        if not isinstance(request_id, str) or not request_id:
+                            raise ValueError("environment speech request has no id")
+                        # Subscribe before sending the one-shot TTS request.
+                        if not self._speech_done_ready.wait(5.0):
+                            raise TimeoutError("environment speech completion subscription is unavailable")
+                        # A lost request or ack must not silence the resident.
+                        watchdog = threading.Timer(
+                            self.SPEECH_ACK_TIMEOUT_S, self._release_pending_speech, args=(request_id,)
+                        )
+                        watchdog.daemon = True
+                        with self._pending_speech_lock:
+                            previous = self._pending_speech.get(request_id)
+                            if previous is not None:
+                                previous[2].cancel()
+                            self._pending_speech[request_id] = (token, outbound_payload, watchdog)
+                        watchdog.start()
+                    frame = json.dumps(
+                        {
+                            "op": "publish",
+                            "topic": self.CHAT_IN,
+                            "msg": {"data": json.dumps(body)},
+                        }
+                    )
+
+                    # Re-check after connection setup, which may have blocked.
+                    def send(connection=ws, message=frame):
+                        self._send_with_timeout(connection, message)
+
+                    if not self.engine.publish_chat_input_if_current(token, send):
+                        break
+                    break
+                except Exception:  # noqa: BLE001 -- rosbridge down/restarting; retry this current reply
+                    if ws is not None:
+                        try:
+                            ws.close()
+                        except Exception:  # noqa: BLE001,S110 -- already gone
+                            pass
+                    ws = None
+                    time.sleep(1)
 
 
 class SkillEventBridge:
