@@ -35,7 +35,7 @@ try:
 except ImportError:  # view-only feature; the sim must not die without it
     ws_serve = None
 
-from .challenges import ChallengeEngine, SkillEventBridge
+from .challenges import ChallengeChatBridge, ChallengeEngine, SkillEventBridge
 from .core import CAMERA_HEIGHT, CAMERA_WIDTH, VirtualMars, encode_jpeg, release_freed_heap
 
 # Depth renders at the pointcloud grid: identical published cloud, 16x less fill.
@@ -459,6 +459,7 @@ def main() -> None:
 
     threading.Thread(target=server.physics_loop, daemon=True).start()
     SkillEventBridge(server.challenges)  # robot skill events for challenge goals (best-effort)
+    ChallengeChatBridge(server.challenges)  # robot speech <-> environment replies (best-effort)
 
     def accept_loop(listener: socket.socket) -> None:
         while True:

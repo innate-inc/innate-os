@@ -13,16 +13,22 @@
 // props.ts do not form a runtime cycle.
 
 import * as THREE from "three";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { PropInfo, PropViewerDef } from "./props";
 
 /** Rescale + re-origin a raw glb into its MuJoCo body's local frame (glb
  * exports bake arbitrary origins, orientations and unit scales). */
 function normalizeModel(scene: THREE.Object3D, def: PropViewerDef): void {
+  if (def.preNormalized) return;
   if (def.rotateToZUp !== false) scene.rotation.x = Math.PI / 2; // glTF Y-up -> scene Z-up
   scene.updateMatrixWorld(true);
   const size = new THREE.Box3().setFromObject(scene).getSize(new THREE.Vector3());
-  const upExtent = def.rotateToZUp !== false ? size.z : size.y;
+  // `rotateToZUp: false` also supports intentionally unrotated Y-up models
+  // (the lying rescue human). Infer which authored axis is vertical from the
+  // dominant Y/Z extent so already-Z-up models remain usable with old rosters.
+  const zUp = def.rotateToZUp !== false || size.z >= size.y;
+  const upExtent = zUp ? size.z : size.y;
   const span = def.fitDim === "height" ? upExtent : Math.max(size.x, size.y, size.z);
   if (def.fitSizeM && span > 0) scene.scale.multiplyScalar(def.fitSizeM / span);
 
@@ -36,7 +42,7 @@ function normalizeModel(scene: THREE.Object3D, def: PropViewerDef): void {
   }
   // base: centred in the ground plane, up-axis min sitting at the origin.
   scene.position.x -= center.x;
-  if (def.rotateToZUp !== false) {
+  if (zUp) {
     scene.position.y -= center.y;
     scene.position.z -= scaled.min.z;
   } else {
@@ -83,7 +89,7 @@ export class PropModels {
 
   async #parse(info: PropInfo): Promise<THREE.Group | null> {
     try {
-      const gltf = await new GLTFLoader().loadAsync(info.viewer.glb!);
+      const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(info.viewer.glb!);
       normalizeModel(gltf.scene, info.viewer);
       gltf.scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {

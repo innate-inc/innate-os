@@ -78,6 +78,7 @@ class BrainClientNode(Node):
         # Synthesized speech (base64 WAV) for clients to play. Sim-only: the sim
         # has no audio device, so the webapp is the speaker.
         self.tts_audio_pub = self.create_publisher(String, "/tts/audio", 10)
+        self.environment_speech_done_pub = self.create_publisher(String, "/brain/environment_speech_done", 10)
         # Live agent state, so clients see a stop/start/directive change made
         # from another device without polling. Latched + heartbeat because
         # bridges (rws) that subscribe after boot miss the latched sample.
@@ -373,6 +374,9 @@ class BrainClientNode(Node):
                 "[BrainClient] Ignoring /brain/chat_in: payload must be a JSON object with a 'text' field."
             )
             return
+        if data.get("sender") == "environment_speech":
+            self._on_environment_speech(data)
+            return
         if not self.state.is_brain_active:
             self.get_logger().warn("[BrainClient] Brain is not active. Skipping chat_in message.")
             return
@@ -397,6 +401,37 @@ class BrainClientNode(Node):
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
             self.chat.speak(text)
+
+    def _on_environment_speech(self, payload: dict) -> None:
+        """Speak a simulated character, acknowledging after playback."""
+        try:
+            request_id = payload["id"]
+            text = payload["text"]
+            voice_id = payload["voice_id"]
+            if not all(isinstance(value, str) and value.strip() for value in (request_id, text, voice_id)):
+                raise ValueError("id, text, and voice_id must be non-empty strings")
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            self.get_logger().warning(f"Ignoring invalid environment speech request: {exc}")
+            return
+
+        def acknowledge(success: bool) -> None:
+            result = {"id": request_id, "success": success, "timestamp": time.time()}
+            self.environment_speech_done_pub.publish(String(data=json.dumps(result)))
+
+        if self._tts_handler is None:
+            self.get_logger().warning("Environment speech requested while TTS is unavailable")
+            acknowledge(False)
+            return
+        queued = self._tts_handler.speak_text_async(
+            text,
+            voice_config={"mode": "id", "id": voice_id},
+            # The simulator releases the transcript into chat only after the
+            # resident has finished speaking, like a real spoken interaction.
+            on_done=acknowledge,
+            protected=True,  # another character's line: agent flushes must not cancel it
+        )
+        if not queued:
+            acknowledge(False)
 
     def _on_set_directive(self, msg: String) -> None:
         self.lifecycle.set_directive(msg.data)
