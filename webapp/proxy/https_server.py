@@ -49,6 +49,7 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import web
+from fleet_routes import fleet_response
 from media_routes import (
     episode_response,
     joints_response,
@@ -480,6 +481,7 @@ def build_app() -> web.Application:
     app.router.add_get("/worldstate", ws_proxy)
     app.router.add_get("/config.json", config_handler)
     app.router.add_get("/episode", episode_response)
+    app.router.add_get("/fleet.json", fleet_response)
     app.router.add_get("/episode/joints", joints_response)
     app.router.add_get("/episode/profile", profile_response)
     app.router.add_get("/episode/thumb", thumb_response)
