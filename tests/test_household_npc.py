@@ -222,6 +222,7 @@ def test_complete_natural_readbacks_confirm(tmp_path, resident_id, readback):
         "From Chipotle, a chicken burrito bowl with brown rice, black beans, mild salsa, no cheese, and add cheese.",
         "From Chipotle, a chicken burrito bowl with brown rice, black beans, mild salsa, and not no cheese.",
         "From Chipotle, a chicken burrito bowl with no more brown rice, black beans, mild salsa, and no cheese.",
+        "From Chipotle, a chicken burrito bowl with no longer brown rice, black beans, mild salsa, and no cheese.",
     ],
 )
 def test_incomplete_or_contradictory_readbacks_do_not_confirm(tmp_path, readback):
@@ -232,6 +233,25 @@ def test_incomplete_or_contradictory_readbacks_do_not_confirm(tmp_path, readback
     _reply(engine)
 
     block = _speak(engine, sim, centers, position, readback)
+
+    assert "Not quite" in _reply(engine)["text"]
+    assert block["active"]["state"] == "running"
+
+
+def test_negated_alternative_contradicts_positive_alias(tmp_path):
+    engine, sim, centers, residents = _engine(tmp_path, ("casey",))
+    casey = residents["casey"]
+    position = centers[casey.prop]
+    _speak(engine, sim, centers, position, "What is your order?")
+    _reply(engine)
+
+    block = _speak(
+        engine,
+        sim,
+        centers,
+        position,
+        "A ShackBurger from Shake Shack, but no Shack Burger, with no pickles, cheese fries, and a vanilla shake.",
+    )
 
     assert "Not quite" in _reply(engine)["text"]
     assert block["active"]["state"] == "running"

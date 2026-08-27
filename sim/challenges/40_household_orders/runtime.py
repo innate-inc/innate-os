@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from mars_sim_driver.challenges import ChallengeRuntime, EnvironmentReply, RuntimeResult, WorldState
 
 _NON_WORD = re.compile(r"[^a-z0-9]+")
+_SCOPE_PUNCTUATION = re.compile(r"[,;:.!?]+")
 _READBACK_PREFIXES = ("actually ", "okay ", "so you want ", "you want ", "your order is ", "you said ")
-_NEGATION_PREFIX = re.compile(
-    r"(?:^|\s)(?:not|never|no|without|skip|hold|omit|remove)"
-    r"(?:\s+(?:additional|any|extra|more|of|the))*\s*$"
+_NEGATION_WORD = re.compile(r"\b(?:not|never|no|without|skip|hold|omit|remove)\b")
+_NEGATION_SCOPE_BOUNDARY = re.compile(
+    r"\b(?:and|but|clausebreak|except|however|instead|plus|though|with|yet)\b"
 )
 _ORDER_REQUEST_PHRASES = (
     "what would you like",
@@ -58,6 +59,10 @@ def _normalize_speech(text: str) -> str:
     return " ".join(_NON_WORD.sub(" ", text.lower()).split())
 
 
+def _normalize_scoped_speech(text: str) -> str:
+    return _normalize_speech(_SCOPE_PUNCTUATION.sub(" clausebreak ", text))
+
+
 def _asks_for_order(text: str) -> bool:
     """Return whether speech is asking a resident what they want to order."""
 
@@ -83,8 +88,11 @@ class HouseholdOrdersRuntime(ChallengeRuntime):
     @staticmethod
     def _matches(resident: Resident, text: str) -> bool:
         normalized = _normalize_speech(text)
+        scoped = _normalize_scoped_speech(text)
         while prefix := next((prefix for prefix in _READBACK_PREFIXES if normalized.startswith(prefix)), None):
             normalized = normalized[len(prefix) :]
+            if scoped.startswith(prefix):
+                scoped = scoped[len(prefix) :]
         accepted = {_normalize_speech(readback) for readback in (resident.order, *resident.accepted_readbacks)}
         if normalized in accepted:
             return True
@@ -92,7 +100,7 @@ class HouseholdOrdersRuntime(ChallengeRuntime):
         # Accept natural changes in sentence framing and word order by checking
         # the order's facts independently. Exclusions need stricter handling:
         # "no cheese, but add cheese" and "not no cheese" must both fail.
-        remainder = f" {normalized} "
+        remainder = f" {scoped} "
         for item in resident.excluded_items:
             phrase = re.escape(_normalize_speech(item)).replace(r"\ ", r"\s+")
             exclusion = re.compile(
@@ -103,23 +111,38 @@ class HouseholdOrdersRuntime(ChallengeRuntime):
             if not matches:
                 return False
             for match in matches:
-                if _NEGATION_PREFIX.search(remainder[: match.start()]):
+                if HouseholdOrdersRuntime._is_negated_occurrence(remainder, match.start()):
                     return False
             remainder = exclusion.sub(" ", remainder)
             if re.search(rf"\b{phrase}\b", remainder):
                 return False
 
         return bool(resident.required_facts) and all(
-            any(HouseholdOrdersRuntime._has_positive_phrase(normalized, phrase) for phrase in alternatives)
+            HouseholdOrdersRuntime._matches_required_fact(scoped, alternatives)
             for alternatives in resident.required_facts
         )
 
     @staticmethod
-    def _has_positive_phrase(text: str, phrase: str) -> bool:
-        normalized_phrase = _normalize_speech(phrase)
-        phrase_pattern = re.escape(normalized_phrase).replace(r"\ ", r"\s+")
-        matches = list(re.finditer(rf"\b{phrase_pattern}\b", text))
-        return bool(matches) and all(not _NEGATION_PREFIX.search(text[: match.start()]) for match in matches)
+    def _is_negated_occurrence(text: str, start: int) -> bool:
+        """Return whether a negator governs the phrase beginning at ``start``."""
+
+        prefix = text[:start]
+        boundaries = list(_NEGATION_SCOPE_BOUNDARY.finditer(prefix))
+        scope = prefix[boundaries[-1].end() :] if boundaries else prefix
+        return _NEGATION_WORD.search(scope) is not None
+
+    @staticmethod
+    def _matches_required_fact(text: str, alternatives: tuple[str, ...]) -> bool:
+        """Require a fact while rejecting negated occurrences of any alias."""
+
+        found = False
+        for phrase in alternatives:
+            phrase_pattern = re.escape(_normalize_speech(phrase)).replace(r"\ ", r"\s+")
+            for match in re.finditer(rf"\b{phrase_pattern}\b", text):
+                found = True
+                if HouseholdOrdersRuntime._is_negated_occurrence(text, match.start()):
+                    return False
+        return found
 
     @staticmethod
     def _is_in_front(robot: tuple[float, float, float], pos: tuple[float, float]) -> bool:
