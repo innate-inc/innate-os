@@ -184,7 +184,8 @@ real robot runs — develop here, deploy there. Start with the docs:
 ### Challenges
 
 Scored tasks for what you build: find a collapsed person and stay with them,
-push a soccer ball to the dog, celebrate good news with the skill you wrote.
+push a soccer ball to the dog, collect food orders from residents, or celebrate
+good news with the skill you wrote.
 Pick one from the panel at the top-left of the Agent page — it resets the
 world, drops the props the scenario needs, and ticks a goal checklist with a
 timer. Results (passed, attempts, best time) persist in
@@ -193,6 +194,12 @@ timer. Results (passed, attempts, best time) persist in
 The **world server** judges, not the robot: goals are read from MuJoCo's own
 state, and the robot stack is never told a challenge exists. Passing means
 the robot really did the thing, not that it reported doing it.
+
+A challenge defines the **environment and judge**, not the agent being tested.
+It may place props, create conversational residents, keep scenario facts
+hidden, and score resulting events; it does not install a directive or add
+robot skills. Select or build the agent separately, then run it against the
+challenge.
 
 A challenge is a sidecar in [`sim/challenges/`](challenges/) — the same shape
 as a prop's — exporting `CHALLENGE = Challenge(...)`:
@@ -217,10 +224,20 @@ CHALLENGE = Challenge(
 are judged strictly in order and latch once true. The predicates are `Near`,
 `InCircle`, `InRect`, `Hold` (a dwell — true for N seconds without a break),
 `SkillDone` (optionally guarded by another predicate, so "wave WHILE next to
-the person" counts and a wave across the room does not), and `AllOf`/`AnyOf`.
-Everything but `SkillDone` is read from the world; skill completions arrive
-from the robot over rosbridge, so with rosbridge down the world-state goals
-still work and skill goals simply never fire.
+the person" counts and a wave across the room does not), `EventSeen`, and
+`AllOf`/`AnyOf`.
+
+Simple challenges are one-file sidecars. A challenge with private stateful
+environment behavior may instead be a package whose `__init__.py` exports the
+same `CHALLENGE` value and attaches a `ChallengeRuntime`. The runtime receives
+world snapshots and external events, then returns trusted environment events
+and ordinary chat replies. Scenario concepts and private facts stay in that
+package rather than entering the generic challenge engine; see
+`sim/challenges/40_household_orders/`.
+
+Everything but robot lifecycle and speech events is read from the world. Those
+events arrive over rosbridge, so with rosbridge down the world-state goals
+still work while skill and resident-dialogue goals simply never fire.
 
 ### When do changes take effect?
 
@@ -448,6 +465,10 @@ sidecar (see [Challenges](#challenges)) plus three pieces of engine:
 - `SkillEventBridge` subscribes to `/brain/skill_status_update` over the
   stack's rosbridge for `SkillDone`. Entirely best-effort: the sim never
   waits on it and never fails because of it.
+- `ChallengeChatBridge` listens to normal robot speech on `/brain/chat_out`
+  and publishes runtime-generated environment replies on `/brain/chat_in`.
+  Scenario-private facts stay inside the runtime; the robot receives only its
+  ordinary chat output.
 
 Distances are measured to a prop's visual centre, not its body origin (a
 human scan stands feet-at-origin), which the prop sidecar already knows —

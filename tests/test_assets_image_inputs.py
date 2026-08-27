@@ -85,6 +85,18 @@ def test_dockerignore_admits_every_seeded_file():
     )
 
 
+def test_household_resident_source_outputs_are_complete():
+    spec = importlib.util.spec_from_file_location("seed_asset_context", SEEDER)
+    seed = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(seed)
+
+    relative = {path.relative_to(REPO_ROOT).as_posix() for path in seed.RAW_FILES}
+    for resident in ("alex", "blake", "casey"):
+        assert f"sim/assets/humans/resident_{resident}.obj" in relative
+        assert f"sim/assets/humans/resident_{resident}_basecolor.png" in relative
+        assert f"sim/viewer/public/models/resident_{resident}.glb" in relative
+
+
 @pytest.mark.skipif(not WORKFLOW.is_file(), reason="publish workflow not present")
 def test_every_hashed_input_also_triggers_a_publish():
     """A hashed-but-unlisted file renames the image without building it: silent
