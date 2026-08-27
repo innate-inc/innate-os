@@ -18,6 +18,7 @@
 // only decides how long to wait for one.
 
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { PropModels } from "./propModels";
 
@@ -39,6 +40,10 @@ export interface PropViewerDef {
   fitDim?: "height" | "max";
   /** Where the body origin sits: feet-down vs geometric centre. */
   origin?: "base" | "center";
+  /** Wall thickness (metres) of an open-top container, drawn hollow instead
+   * of as a solid box. Mirrors the slab decomposition props.py hands MuJoCo,
+   * so the 3D view shows the cavity the robot's cameras already see. */
+  openBoxWallM?: number;
   /** CoACD hull soup (float32 xyz) in the body frame, for the collision overlay. */
   hulls?: string;
   /** Draw the prop title as a browser-only billboard above the model. */
@@ -139,7 +144,26 @@ function primitiveGeometry(info: PropInfo): THREE.BufferGeometry {
     return new THREE.CylinderGeometry(s[0], s[0], s[1] * 2, 40).rotateX(Math.PI / 2);
   }
   // MuJoCo box sizes are half-extents.
+  const wall = info.viewer.openBoxWallM;
+  if (wall && wall > 0 && s.length === 3) return openBoxGeometry(s, wall);
   return new THREE.BoxGeometry(s[0] * 2, s[1] * 2, s[2] * 2);
+}
+
+/** Floor plus four walls, hollow above — the same five convex slabs props.py
+ * writes for an open container, so a crate reads as something to drop into
+ * rather than a solid block. */
+function openBoxGeometry(s: number[], wall: number): THREE.BufferGeometry {
+  const [hx, hy, hz] = s;
+  const w = Math.min(wall, hx, hy, hz);
+  const slab = (sx: number, sy: number, sz: number, x: number, y: number, z: number) =>
+    new THREE.BoxGeometry(sx, sy, sz).translate(x, y, z);
+  return mergeGeometries([
+    slab(hx * 2, hy * 2, w, 0, 0, -hz + w / 2),
+    slab(w, hy * 2, hz * 2, -hx + w / 2, 0, 0),
+    slab(w, hy * 2, hz * 2, hx - w / 2, 0, 0),
+    slab((hx - w) * 2, w, hz * 2, 0, -hy + w / 2, 0),
+    slab((hx - w) * 2, w, hz * 2, 0, hy - w / 2, 0),
+  ]);
 }
 
 /**

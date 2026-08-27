@@ -33,5 +33,8 @@ PROP = Prop(
     # In front of the robot, past the 0.25 m bumper, roughly where the skill
     # wants to end up parked -- so "lay out the set, run the skill" works.
     reach=(0.62, 0.0),
-    viewer={"fitSizeM": 0.34, "fitDim": "max", "origin": "center"},
+    # openBoxWallM, not a glb: the browser builds the same hollow shape MuJoCo
+    # collides with, so the 3D view and the robot's camera agree without the
+    # asset bundle having to ship a model for it.
+    viewer={"openBoxWallM": 0.012, "fitSizeM": 0.34, "fitDim": "max", "origin": "center"},
 )

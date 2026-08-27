@@ -20,8 +20,6 @@ from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
 from innate.geometry import IMG_H, IMG_W, pixel_to_height
 
-Box = tuple[int, int, int, int]
-
 # Arm reach as a sphere about the shoulder, from the URDF: joint2 sits at
 # (0.086, 0.0845) in base_link and 0.326 m of link follows it. The 0.086 m
 # forward offset is the whole reason a drop over a rim is possible at all.
@@ -43,11 +41,24 @@ PARAMS = {
     # bumper (costmap footprint) and above by the 0.40 m reach clamp, which has
     # to also fit drop_inset — the window is barely 5 cm wide.
     "sweet_x": 0.30,
+    # Looser than pick's 40/0.5. Close in, a container runs off the frame
+    # edges, so its bbox centre stops tracking its true middle — and it does
+    # not need pick's precision anyway: 54 px is ~40 mm of lateral error at
+    # this range, against a 316 mm interior.
+    "box_half_px": 90.0,
+    "accept_frac": 0.6,
     # How far past the near face the gripper hovers, so the object clears the
     # box wall on the way down.
     "drop_inset": 0.07,
     "release_clear_m": 0.05,  # gripper height above the rim at release
     "release_settle_s": 0.8,
+    # Carry pose for the drive in. The pick leaves the object held forward of
+    # the 0.25 m bumper and below a container's rim, so the gripper reaches
+    # the near wall before the base ever parks — tuck it back and lift it
+    # clear before driving.
+    "carry_x": 0.24,
+    "carry_z": 0.30,
+    "carry_s": 2.0,
     "lift_after_m": 0.04,
     "hover_s": 2.5,
     "arm_pitch": 1.30,
@@ -81,7 +92,11 @@ class DropInBox(_FloorApproach):
     joint_states: JointStates | None
 
     _p = PARAMS
-    _last_box: Box | None = None
+    # The last detection, as the two scalars _rim_height needs. Kept apart
+    # rather than as the box tuple: a subscripted generic in a class-level
+    # annotation crashes the feed-annotation machinery at import.
+    _box_u: float | None = None
+    _box_top_v: float | None = None
     _near_rim_v: float | None = None
     _rim_z: float | None = None
     _label = "the box"
@@ -104,13 +119,15 @@ class DropInBox(_FloorApproach):
             "behind it. Empty list if no container is visible."
         )
         box = vision.parse_det_box(text)
-        self._last_box = box
         self._near_rim_v = _near_rim_v(text)
         if box is None:
+            self._box_u = self._box_top_v = None
             self._debug("detect", image=img, label=prompt, note="no container")
             return None
         x, y, w, h = box
-        px = (x + w / 2.0, min(float(IMG_H - 1), float(y + h)))
+        self._box_u = min(float(IMG_W - 1), x + w / 2.0)
+        self._box_top_v = float(y)
+        px = (self._box_u, min(float(IMG_H - 1), float(y + h)))
         self._debug("detect", image=img, label=prompt, box_px=list(box), point_px=list(px), near_rim_v=self._near_rim_v)
         return px
 
@@ -123,13 +140,11 @@ class DropInBox(_FloorApproach):
         typical boxes — so near_rim_y is used whenever the model returned it."""
         p = self._p
         floor = p["rim_z_min"]
-        if self._last_box is None:
+        if self._box_u is None or self._box_top_v is None:
             return floor
-        x, y, w, _h = self._last_box
-        u = min(float(IMG_W - 1), x + w / 2.0)
-        v = self._near_rim_v if self._near_rim_v is not None else float(y)
+        v = self._near_rim_v if self._near_rim_v is not None else self._box_top_v
         source = "near_rim" if self._near_rim_v is not None else "bbox_top"
-        raw = pixel_to_height(u, v, p["tilt_deg"], near_x)
+        raw = pixel_to_height(self._box_u, v, p["tilt_deg"], near_x)
         rim = floor if raw is None else max(floor, min(p["rim_z_max"], raw))
         self._rim_z = rim
         self.logger.info(f"[DropInBox] rim {rim:.3f} (raw={raw}, from {source}) at near_x={near_x:.3f}")
@@ -166,6 +181,20 @@ class DropInBox(_FloorApproach):
         self.logger.info(f"[DropInBox] hold check: j6={j6} joints={by_joint} wrist={seen} -> {held}")
         self._debug("hold", j6=j6, by_joint=by_joint, wrist=seen, held=held)
         return held
+
+    def _carry_high(self) -> None:
+        """Lift the held object above rim height and back inside the footprint
+        before driving. Best effort: a refused pose is worth a warning, not a
+        failed run — the object is still held either way."""
+        p = self._p
+        self.manipulation.torque_on()
+        try:
+            self.manipulation.move_to(
+                p["carry_x"], 0.0, p["carry_z"], pitch=p["arm_pitch"], duration=p["carry_s"], tolerance_xy=0.06
+            )
+        except (ArmFailed, ArmUnhealthy) as e:
+            self.logger.warning(f"[DropInBox] could not raise the carry pose ({e}); driving as-is")
+        self._debug("carry", target_xz=[p["carry_x"], p["carry_z"]])
 
     def _release_x(self, near_x: float, z: float) -> float:
         """How far forward the gripper may hover at height `z`, or raise if the
@@ -210,13 +239,18 @@ class DropInBox(_FloorApproach):
     def _retract(self) -> None:
         """Best-effort teardown: straight up off the rim, then fold. Never
         raises. Lifting first matters — REST swings the gripper forward and
-        down, which would drag it through the container wall."""
+        down, which would drag it through the container wall.
+
+        The fold is 5 joints unless the object has actually been released:
+        REST's 6th element is a claw command, so folding with it after a
+        failure opens the fingers and drops the object on the floor."""
         try:
             if self._over_rim:
                 self.manipulation.move_by(dz=self._p["lift_after_m"], duration=1.0, tolerance_xy=None, tolerance_z=None)
                 # Committed teardown (runs after cancel): time.sleep on purpose.
                 time.sleep(0.3)
-            self.manipulation.move_joints(self.manipulation.REST, duration=3.0)
+            rest = self.manipulation.REST if self._over_rim else self.manipulation.REST[:5]  # 5 = keep the grip
+            self.manipulation.move_joints(rest, duration=3.0)
         except Exception as e:  # noqa: BLE001 — teardown must not mask the run result
             self.logger.warning(f"[DropInBox] retract failed: {e}")
 
@@ -256,7 +290,7 @@ class DropInBox(_FloorApproach):
         if self._proxy is None:
             self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
 
-        self._last_box = None
+        self._box_u = self._box_top_v = None
         self._near_rim_v = None
         self._rim_z = None
         self._over_rim = False
@@ -264,9 +298,14 @@ class DropInBox(_FloorApproach):
         released_z = None
         try:
             self.head.set_position(int(round(self._p["tilt_deg"])))
+            # The 50 Hz state feeds only start with the run, so the very first
+            # read is empty — judging the grip there reports a genuinely
+            # carried object as an empty claw and refuses to move.
+            self.wait_for(lambda: self.joint_states, timeout=3.0)
             if not self._holding():
                 self.fail("I'm not holding anything to put away")
 
+            self._carry_high()
             self.say(f"Looking for {prompt}.")
             xy = self._search(prompt)
             xy = self._position_above(prompt, xy)

@@ -36,6 +36,10 @@ if TYPE_CHECKING:
 # frame, or rosbridge stalls under a 30 Hz image stream.
 DEBUG_TOPIC = "/brain/approach_debug"
 DEBUG_TICK_MIN_S = 0.1
+# Only the servo loop is throttled. Throttling by "carries no image" instead
+# dropped every one-off stage record that happened to land within 100 ms of
+# the detection before it — which is all of them.
+DEBUG_THROTTLED_STAGES = ("follow",)
 
 APPROACH_PARAMS = {
     "tilt_deg": -20.0,
@@ -87,11 +91,11 @@ class _FloorApproach(Skill):
     # --- debug telemetry ---
 
     def _debug(self, stage, *, image=None, **fields):
-        """Publish one debug record. Ticks (no image) are rate-limited; a stage
-        carrying a frame always goes out. Never raises — telemetry must not be
-        able to fail a run."""
+        """Publish one debug record. Servo ticks are rate-limited, every other
+        stage always goes out. Never raises — telemetry must not be able to
+        fail a run."""
         now = time.monotonic()
-        if image is None and now - self._debug_last < DEBUG_TICK_MIN_S:
+        if stage in DEBUG_THROTTLED_STAGES and now - self._debug_last < DEBUG_TICK_MIN_S:
             return
         self._debug_last = now
         if self.node is None:
@@ -287,9 +291,17 @@ class _FloorApproach(Skill):
         seed = floor_to_pixel(xy[0], xy[1], self._p["tilt_deg"])
         for _attempt in range(int(self._p["box_steps"])):
             if seed is None:
-                seed = self._detect_px(prompt) or self._detect_px(prompt)
+                xy, seed = self._localize_retry(prompt)
                 if seed is None:
                     self._position_failed(prompt)
+            # Arrived already? Checked BEFORE servoing, because a tracker that
+            # loses its seed sends the loop back here with the base parked
+            # where it should be — and without this it re-seeds until the
+            # step budget runs out and reports a failure to centre something
+            # that is already centred.
+            (cu, cv), _half, accept = self._sweet_box()
+            if xy is not None and inside_box(seed, cu, cv, accept):
+                return xy
             result, _pt = self._follow_into_box(seed)
             if result == "noframe":
                 return self._position_stepwise(prompt, xy)
@@ -299,10 +311,9 @@ class _FloorApproach(Skill):
             xy2, px2 = self._localize_retry(prompt)
             if px2 is None:
                 self._position_failed(prompt)
-            (cu, cv), _half, accept = self._sweet_box()
             if xy2 is not None and inside_box(px2, cu, cv, accept):
                 return xy2
-            seed = px2 if xy2 is not None else None
+            xy, seed = xy2, (px2 if xy2 is not None else None)
         self._position_failed(prompt)
 
     def _position_stepwise(self, prompt, xy):
