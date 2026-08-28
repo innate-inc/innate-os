@@ -809,6 +809,12 @@ def ensure_home_mount_sources() -> None:
             ssh_dir.mkdir(mode=0o700)
 
 
+def world_endpoint() -> str:
+    """The address the container reaches the host world server on (see
+    _world_server_bind_addresses for which host address that resolves to)."""
+    return f"host.docker.internal:{WORLD_SERVER_PORT}"
+
+
 # Container port -> the host port this launcher now publishes it on. Container
 # ports never move; only the published side does.
 _CONTAINER_PORT_PUBLISH = (
@@ -818,6 +824,40 @@ _CONTAINER_PORT_PUBLISH = (
     ("9999/udp", SIM_UDP_PORT),
     ("8765/tcp", SIM_FOXGLOVE_PORT),
 )
+
+
+# Container env the port block decides. Neither appears in the published ports,
+# so a world-port change alone would otherwise leave a reused container talking
+# to the old server. The third field is what an ABSENT variable means: it
+# mirrors the consumer's own fallback, so a container from before the variable
+# existed is not read as drift.
+_CONTAINER_ENV_PUBLISH = (
+    ("VIRTUAL_MARS_REMOTE", world_endpoint(), ""),
+    ("INNATE_WORLD_STATE_PORT", str(WORLD_STATE_PORT), "8800"),
+)
+
+
+def _container_env(name: str) -> dict[str, str] | None:
+    """The container's baked environment, or None when the probe cannot answer."""
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{json .Config.Env}}", name],
+            text=True,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+            timeout=DOCKER_PROBE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        entries = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    pairs = (entry.partition("=") for entry in entries)
+    return {key: value for key, sep, value in pairs if sep}
 
 
 def _container_port_map(name: str) -> dict[str, set[int]] | None:
@@ -845,20 +885,28 @@ def _container_port_map(name: str) -> dict[str, set[int]] | None:
     return mapping
 
 
-def os_container_ports_current() -> bool:
-    """False when the running OS container publishes any service on a host port
-    other than the one the launcher now resolves.
+def os_container_current() -> bool:
+    """False when the running OS container publishes a service on a host port,
+    or carries a world-server address, other than what the launcher now
+    resolves.
 
-    A running container's published ports cannot be changed in place, so drift
-    costs a recreate. Two ways to drift: checkouts that ran the brain in a
-    cloud-agent container shifted Foxglove to 8766 (the agent owned 8765), and
-    any INNATE_SIM_PORT_BASE change moves all five at once. An unanswered probe
-    reports "current" -- a flaky answer must not cost a recreate.
+    Neither a running container's published ports nor its environment can be
+    changed in place, so drift in either costs a recreate. Three ways to drift:
+    checkouts that ran the brain in a cloud-agent container shifted Foxglove to
+    8766 (the agent owned 8765), an INNATE_SIM_PORT_BASE change moves all five
+    publishes at once, and a world-port change moves only the environment. An
+    unanswered probe reports "current" -- a flaky answer must not cost a
+    recreate.
     """
     published = _container_port_map(OS_CONTAINER_NAME)
     if published is None:
         return True
-    return all(host in published.get(spec, set()) for spec, host in _CONTAINER_PORT_PUBLISH)
+    if not all(host in published.get(spec, set()) for spec, host in _CONTAINER_PORT_PUBLISH):
+        return False
+    env = _container_env(OS_CONTAINER_NAME)
+    if env is None:
+        return True
+    return all(env.get(key, absent) == expected for key, expected, absent in _CONTAINER_ENV_PUBLISH)
 
 
 def retitle_step(message: str) -> None:
@@ -872,8 +920,8 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
     os_image = str(config["os_image"]).strip()
     os_image_auto = bool(config["os_image_auto"])
     reuse_running_container = container_running(OS_CONTAINER_NAME)
-    if reuse_running_container and not os_container_ports_current():
-        log(f"The running OS container publishes on older host ports; recreating it to serve {config['webapp_url']}.")
+    if reuse_running_container and not os_container_current():
+        log(f"The running OS container is bound to an older port block; recreating it to serve {config['webapp_url']}.")
         reuse_running_container = False
 
     if reuse_running_container:
@@ -1231,7 +1279,7 @@ def _host_port_free(port: int, *, udp: bool) -> bool:
 def _container_published_ports(name: str) -> set[int]:
     """Host ports a container publishes. Read rather than assumed: a container
     started under a different port block still publishes the OLD ones, and
-    os_container_ports_current is what recreates it for that."""
+    os_container_current is what recreates it for that."""
     published = _container_port_map(name)
     return set() if published is None else {port for ports in published.values() for port in ports}
 
@@ -1624,7 +1672,7 @@ def runtime_already_running(config: dict[str, object]) -> bool:
     a different port block still publishes the ports the dashboard no longer
     prints, and only a recreate can move them -- so it is not reusable, however
     healthy it looks."""
-    return os_runtime_ready(config) and os_container_ports_current()
+    return os_runtime_ready(config) and os_container_current()
 
 
 def format_startup_check(ok: bool, label: str, detail: str) -> str:
@@ -2404,7 +2452,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
         raise StackError(_UV_MISSING_MESSAGE)
 
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
-    endpoint = f"host.docker.internal:{WORLD_SERVER_PORT}"
+    endpoint = world_endpoint()
     bind = os.environ.get("INNATE_SIM_WORLD_BIND", "").strip() or _world_server_bind_addresses()
     if not bind:
         # Fail closed: no host-only bind must never widen to 0.0.0.0.
@@ -2418,7 +2466,11 @@ def ensure_world_server(config: dict[str, object]) -> str:
     if reply is not None:
         expected_binds = {b.strip() for b in bind.split(",") if b.strip()}
         actual_binds = reply.get("binds")
-        if reply.get("state_port") and actual_binds is not None and set(actual_binds) == expected_binds:
+        if (
+            reply.get("state_port") == WORLD_STATE_PORT
+            and actual_binds is not None
+            and set(actual_binds) == expected_binds
+        ):
             # The MuJoCo model is compiled at server start; a URDF or
             # world-module edit since then is not in the running physics.
             running_digest = ""
@@ -2434,6 +2486,11 @@ def ensure_world_server(config: dict[str, object]) -> str:
         # INNATE_SIM_WORLD_BIND=0.0.0.0 server) -- restart instead.
         elif not reply.get("state_port"):
             log("Host world server is outdated (no observer state stream) -- restarting it...")
+        elif reply["state_port"] != WORLD_STATE_PORT:
+            log(
+                f"Host world server streams observer state on port {reply['state_port']}, but the "
+                f"webapp and viewer were told {WORLD_STATE_PORT} -- restarting it..."
+            )
         elif actual_binds is None:
             log("Host world server predates bind reporting -- restarting it...")
         else:
