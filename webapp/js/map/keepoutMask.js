@@ -163,6 +163,13 @@ export function shouldActivateMapFingerprint(candidate, selected, selectionPendi
   return candidate !== selected || arrivedAfterSelection;
 }
 
+/** A new robot can publish /map before its current-map string catches up.
+ * @param {string | null} candidate @param {string | null} selected @param {string | null} active
+ * @param {boolean} robotSelectionPending */
+export function isRobotSelectionCatchup(candidate, selected, active, robotSelectionPending) {
+  return !!robotSelectionPending && !!candidate && candidate === selected && candidate === active;
+}
+
 /** @param {KeepoutGrid | null} grid @param {{ mapHash: string, data: number[] } | null} expected */
 export function keepoutUpdateMatches(grid, expected) {
   return (

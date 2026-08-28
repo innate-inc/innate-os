@@ -39,6 +39,7 @@ import {
   keepoutUpdateMatches,
   mapFingerprintFromMessage,
   paintKeepout,
+  isRobotSelectionCatchup,
   shouldActivateMapFingerprint,
 } from "./keepoutMask.js";
 
@@ -385,6 +386,7 @@ export function createMap(root, opts = {}) {
   /** @type {string | null} most recently completed /map fingerprint, even if its notification has not arrived */
   let candidateMapHash = null;
   let mapSelectionPending = false;
+  let robotSelectionPending = false;
   let mapGenerationAtSelectionChange = 0;
   let mapFingerprintGeneration = 0;
   /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null} */
@@ -2143,6 +2145,7 @@ export function createMap(root, opts = {}) {
     selectedMapHash = null;
     candidateMapHash = null;
     mapSelectionPending = false;
+    robotSelectionPending = true;
     keepoutGrid = null;
     latestKeepoutGrid = null;
     keepoutPlacement = null;
@@ -2270,6 +2273,12 @@ export function createMap(root, opts = {}) {
      * otherwise onMap enables the editor only after a post-notification grid. */
     mapChanged() {
       dropFrameState();
+      if (isRobotSelectionCatchup(candidateMapHash, selectedMapHash, activeMapHash, robotSelectionPending)) {
+        robotSelectionPending = false;
+        draw();
+        return;
+      }
+      robotSelectionPending = false;
       mapSelectionPending = true;
       mapGenerationAtSelectionChange = mapFingerprintGeneration;
       activeMapHash = null;
