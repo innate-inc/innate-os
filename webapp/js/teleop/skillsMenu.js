@@ -45,7 +45,8 @@ function shortcutKbd(label) {
  * @param {import("../rosClient.js").RosClient} rosClient
  * @param {{
  *   onSkillStarted?: (run: {skillId: string, inputs: Record<string, any>}) => void,
- *   onSkillCompleted?: (run: {skillId: string, inputs: Record<string, any>}) => void
+ *   onSkillCompleted?: (run: {skillId: string, inputs: Record<string, any>}) => void,
+ *   onOpenChange?: (open: boolean) => void
  * }} [opts]
  * @returns {{ destroy: () => void }}
  */
@@ -352,6 +353,7 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
     menu.classList.toggle("open", open);
     btn.classList.toggle("active", open);
     btn.setAttribute("aria-expanded", String(open));
+    opts.onOpenChange?.(open);
     syncActive();
     if (open) {
       render();
