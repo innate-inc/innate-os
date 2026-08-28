@@ -384,6 +384,8 @@ export function createMap(root, opts = {}) {
   let keepoutPlacement = null;
   /** @type {{ x: number, y: number } | null} */
   let keepoutStroke = null;
+  /** @type {{ x: number, y: number } | null} cursor preview at the brush's true world-space radius */
+  let keepoutHoverPt = null;
   let keepoutDirty = false;
   /** @type {{ mapHash: string, data: number[], successText: string } | null} */
   let keepoutSavePending = null;
@@ -1391,6 +1393,23 @@ export function createMap(root, opts = {}) {
 
     drawMemorySearch();
 
+    // Preview the exact floor area the keepout brush will affect before the
+    // pointer is pressed. The radius stays world-sized as the map zooms.
+    if (keepoutHoverPt && keepoutGrid && (ui === "keepout" || ui === "keepout-erase")) {
+      const { px, py } = worldToCanvas(keepoutHoverPt.x, keepoutHoverPt.y);
+      const radiusPx = (KEEPOUT_BRUSH_RADIUS_M / grid.resolution) * scale;
+      ctx.save();
+      ctx.strokeStyle = ui === "keepout" ? "rgb(255 70 94 / 95%)" : "rgb(255 255 255 / 90%)";
+      ctx.fillStyle = ui === "keepout" ? "rgb(255 70 94 / 12%)" : "rgb(8 8 10 / 22%)";
+      ctx.lineWidth = Math.max(1.5 * dpr(), 1);
+      if (ui === "keepout-erase") ctx.setLineDash([4 * dpr(), 3 * dpr()]);
+      ctx.beginPath();
+      ctx.arc(px, py, radiusPx, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // Ghost dot under the cursor while manual/goto is armed, until the press
     // starts the real drag.
     if (hoverPt && !goalDrag && (ui === "manual" || ui === "goto")) {
@@ -1673,7 +1692,10 @@ export function createMap(root, opts = {}) {
       hoverPt = null;
       draw();
     }
-    if (ui !== "keepout" && ui !== "keepout-erase") keepoutStroke = null;
+    if (ui !== "keepout" && ui !== "keepout-erase") {
+      keepoutStroke = null;
+      keepoutHoverPt = null;
+    }
     render();
   }
 
@@ -1811,6 +1833,7 @@ export function createMap(root, opts = {}) {
         return;
       }
       const point = canvasToWorld(px, py);
+      keepoutHoverPt = point;
       keepoutStroke = point;
       keepoutDirty = paintKeepout(keepoutGrid, point.x, point.y, point.x, point.y, KEEPOUT_BRUSH_RADIUS_M, ui === "keepout");
       rasterizeKeepout();
@@ -1836,6 +1859,7 @@ export function createMap(root, opts = {}) {
     if (keepoutStroke && keepoutGrid && (ui === "keepout" || ui === "keepout-erase")) {
       const { px, py } = eventToCanvas(e);
       const point = canvasToWorld(px, py);
+      keepoutHoverPt = point;
       keepoutDirty =
         paintKeepout(
           keepoutGrid,
@@ -1848,6 +1872,13 @@ export function createMap(root, opts = {}) {
         ) || keepoutDirty;
       keepoutStroke = point;
       rasterizeKeepout();
+      draw();
+      return;
+    }
+    if (!panDrag && (ui === "keepout" || ui === "keepout-erase")) {
+      if (!grid || !view) return;
+      const { px, py } = eventToCanvas(e);
+      keepoutHoverPt = canvasToWorld(px, py);
       draw();
       return;
     }
@@ -2020,6 +2051,10 @@ export function createMap(root, opts = {}) {
   canvas.addEventListener("pointercancel", onPointerUp);
   canvas.addEventListener("pointerleave", () => {
     setMemHover(null);
+    if (keepoutHoverPt) {
+      keepoutHoverPt = null;
+      draw();
+    }
     if (!hoverPt) return;
     hoverPt = null;
     draw();
