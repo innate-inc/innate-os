@@ -123,6 +123,7 @@ class DropInBox(_FloorApproach):
     _rim_z: float | None = None
     _label = "the box"
     _over_rim = False  # the gripper is inside the container's footprint
+    _released = False  # the object has left the claw
 
     def _detect_px(self, prompt: str) -> tuple[float, float] | None:
         """Head frame -> the container's near floor-contact pixel, or None.
@@ -291,8 +292,24 @@ class DropInBox(_FloorApproach):
 
         self.check_cancelled()  # last exit before the object leaves the claw
         self.manipulation.gripper_open(duration=1.0)
+        self._released = True
         self.sleep(p["release_settle_s"])
+        # Out of the container BEFORE anything drives: the verification backs
+        # the base up 0.15 m, and doing that with the claw still hooked over
+        # the rim drags the container along with it.
+        self._lift_out()
         return x, y, z
+
+    def _lift_out(self) -> None:
+        """Straight up until the fingers clear the rim. Never raises; clears
+        the over-rim latch only on success, so a failed lift still tells
+        teardown the gripper is in the container."""
+        try:
+            self.manipulation.move_by(dz=self._p["lift_after_m"], duration=1.0, tolerance_xy=None, tolerance_z=None)
+            self._over_rim = False
+        except (ArmFailed, ArmUnhealthy) as e:
+            self.logger.warning(f"[DropInBox] could not lift clear of the container ({e})")
+        self._debug("lift_out", over_rim=self._over_rim)
 
     def _retract(self) -> None:
         """Best-effort teardown: straight up off the rim, then fold. Never
@@ -304,10 +321,12 @@ class DropInBox(_FloorApproach):
         outright would open the fingers and drop the object on the floor."""
         try:
             if self._over_rim:
+                # Only reached when the normal lift-out never ran (a cancel
+                # mid-release, or a lift that failed). Committed teardown:
+                # time.sleep on purpose.
                 self.manipulation.move_by(dz=self._p["lift_after_m"], duration=1.0, tolerance_xy=None, tolerance_z=None)
-                # Committed teardown (runs after cancel): time.sleep on purpose.
                 time.sleep(0.3)
-            if self._over_rim:
+            if self._released:
                 self.manipulation.move_joints(self.manipulation.REST, duration=3.0)
             else:
                 self.manipulation.rest(duration=3.0)  # keeps the grip on a run that never released
@@ -354,6 +373,7 @@ class DropInBox(_FloorApproach):
         self._near_rim_v = None
         self._rim_z = None
         self._over_rim = False
+        self._released = False
         self._label = prompt
         released_z = None
         try:
