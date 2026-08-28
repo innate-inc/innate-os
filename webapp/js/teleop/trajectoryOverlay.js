@@ -144,8 +144,8 @@ function along(a, b, t) {
  * view is drawn even when the poses bracketing it both fall outside. Only a
  * genuine break — leaving the frame, or a pose behind the lens — splits the
  * run, so disjoint visible stretches are still never bridged.
- * startAtRobot: the first path point is visible and lies at the robot, so the
- * leading segment may extend to the robot's feet without fabricating route.
+ * startAtRobot: segments[0] itself begins at the first path pose and that pose
+ * lies at the robot, so it may extend to the feet without fabricating route.
  * @param {Array<{ fwd: number, right: number }>} points
  * @param {number} pitchDeg head pitch, positive up
  * @param {number} vw @param {number} vh video frame size in pixels
@@ -166,19 +166,14 @@ export function projectToImage(points, pitchDeg, vw, vh, camera = REAL_CAMERA) {
     return { x: fx * (p.right / rotZ) + cx, y: fy * (-rotY / rotZ) + cy, depth: rotZ };
   });
 
-  const head = seen[0];
-  const startAtRobot =
-    !!head &&
-    head.x >= 0 &&
-    head.x <= vw &&
-    head.y >= 0 &&
-    head.y <= vh &&
-    Math.hypot(points[0].fwd, points[0].right) <= ANCHOR_NEAR_M;
+  const head = points[0];
+  const nearRobot = !!head && Math.hypot(head.fwd, head.right) <= ANCHOR_NEAR_M;
 
   /** @type {Array<Array<ImagePoint>>} */
   const segments = [];
   /** @type {Array<ImagePoint> | null} */
   let seg = null;
+  let startAtRobot = false;
   for (let i = 0; i + 1 < seen.length; i++) {
     const a = seen[i];
     const b = seen[i + 1];
@@ -194,7 +189,14 @@ export function projectToImage(points, pitchDeg, vw, vh, camera = REAL_CAMERA) {
     const [enter, exit] = range;
     // enter > 0 means this edge crossed in from outside, so it starts a run
     // rather than continuing the previous one.
-    if (!seg || enter > 0) segments.push((seg = [along(a, b, enter)]));
+    if (!seg || enter > 0) {
+      segments.push((seg = [along(a, b, enter)]));
+      // Earned by this run, not by its index: enter === 0 on the very first
+      // edge is what puts the first pose at the head of segments[0]. Drop that
+      // edge — the next pose is behind the lens — and a later run takes index 0
+      // without touching the robot, so it must not inherit the anchor.
+      if (i === 0 && enter === 0) startAtRobot = nearRobot;
+    }
     seg.push(along(a, b, exit));
     if (exit < 1) seg = null; // the route leaves the frame here
   }

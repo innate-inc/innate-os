@@ -118,6 +118,28 @@ test("a route whose first point is culled is not anchored into a wedge", () => {
   assert.ok(Math.max(...poly.map((p) => p.y)) < 480, "culled start must not touch the bottom");
 });
 
+test("a run that only inherits index 0 does not inherit the feet anchor", () => {
+  // The first pose is visible and at the robot, but the next one falls behind
+  // the lens, so that leading edge is dropped and a later run becomes
+  // segments[0] — without ever touching the robot.
+  const { segments, startAtRobot } = projectToImage(
+    [
+      { fwd: 0.38, right: 0 },
+      { fwd: 0.05, right: 0 },
+      { fwd: 1, right: 0 },
+      { fwd: 1.5, right: 0 },
+    ],
+    0,
+    640,
+    480,
+  );
+  assert.equal(segments.length, 1, "only the far run survives");
+  assert.equal(startAtRobot, false, "the anchor belongs to the dropped run, not this one");
+  const poly = ribbon(segments[0], 640, 480, startAtRobot);
+  assert.ok(poly);
+  assert.ok(Math.max(...poly.map((p) => p.y)) < 480, "no wedge down to the image bottom");
+});
+
 test("only a route that truly starts at the robot is anchored to its feet", () => {
   const ahead = projectToImage(
     [
