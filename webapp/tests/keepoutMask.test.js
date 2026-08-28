@@ -6,6 +6,7 @@ import {
   keepoutMessage,
   keepoutUpdateMatches,
   isRobotSelectionCatchup,
+  mapEpochFromMessage,
   mapFingerprintFromMessage,
   paintKeepout,
   sha256Hex,
@@ -87,6 +88,12 @@ assert.equal(shouldActivateMapFingerprint("new", "old", false, false), false, "a
 assert.equal(shouldActivateMapFingerprint("new", "old", true, false), true, "an early new /map activates when selection catches up");
 assert.equal(shouldActivateMapFingerprint("old", "old", true, false), false, "a stale latched map cannot reopen the editor");
 assert.equal(shouldActivateMapFingerprint("new", "old", true, true), true, "a post-selection /map activates normally");
+assert.equal(
+  shouldActivateMapFingerprint("same", "same", true, false, "2:0", "1:0"),
+  true,
+  "an equal-content reload is distinguished by its map-load epoch",
+);
+assert.equal(mapEpochFromMessage({ info: { map_load_time: { sec: 12, nanosec: 34 } } }), "12:34");
 assert.equal(isRobotSelectionCatchup("new", "new", "new", true), true, "a new robot's late map name preserves its active map");
 assert.equal(isRobotSelectionCatchup("old", "old", null, true), false, "a map name cannot preserve a disabled stale editor");
 const pendingUpdate = { mapHash: localizationHash, data: grid.data.slice() };

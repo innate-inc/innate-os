@@ -154,13 +154,32 @@ export function keepoutGridForMap(grid, mapHash) {
   return grid && mapHash && grid.mapHash === mapHash ? grid : null;
 }
 
+/** Stable identity for one loaded /map instance; equal map contents can have different epochs.
+ * @param {any} msg @returns {string | null} */
+export function mapEpochFromMessage(msg) {
+  const key = (/** @type {any} */ stamp) => {
+    const sec = Number(stamp?.sec);
+    const nanosec = Number(stamp?.nanosec);
+    return Number.isFinite(sec) && Number.isFinite(nanosec) && (sec !== 0 || nanosec !== 0) ? `${sec}:${nanosec}` : null;
+  };
+  return key(msg?.info?.map_load_time) ?? key(msg?.header?.stamp);
+}
+
 /** Decide whether a received /map fingerprint belongs to the selected-map epoch.
  * @param {string} candidate @param {string | null} selected
- * @param {boolean} selectionPending @param {boolean} arrivedAfterSelection */
-export function shouldActivateMapFingerprint(candidate, selected, selectionPending, arrivedAfterSelection) {
+ * @param {boolean} selectionPending @param {boolean} arrivedAfterSelection
+ * @param {string | null} candidateEpoch @param {string | null} selectedEpoch */
+export function shouldActivateMapFingerprint(
+  candidate,
+  selected,
+  selectionPending,
+  arrivedAfterSelection,
+  candidateEpoch = null,
+  selectedEpoch = null,
+) {
   if (!selected) return true;
   if (!selectionPending) return candidate === selected;
-  return candidate !== selected || arrivedAfterSelection;
+  return candidate !== selected || (!!candidateEpoch && !!selectedEpoch && candidateEpoch !== selectedEpoch) || arrivedAfterSelection;
 }
 
 /** A new robot can publish /map before its current-map string catches up.

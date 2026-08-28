@@ -37,6 +37,7 @@ import {
   keepoutGridFromMessage,
   keepoutMessage,
   keepoutUpdateMatches,
+  mapEpochFromMessage,
   mapFingerprintFromMessage,
   paintKeepout,
   isRobotSelectionCatchup,
@@ -383,8 +384,12 @@ export function createMap(root, opts = {}) {
   let activeMapHash = null;
   /** @type {string | null} fingerprint paired with the last current-map notification */
   let selectedMapHash = null;
+  /** @type {string | null} map-load epoch paired with selectedMapHash */
+  let selectedMapEpoch = null;
   /** @type {string | null} most recently completed /map fingerprint, even if its notification has not arrived */
   let candidateMapHash = null;
+  /** @type {string | null} map-load epoch paired with candidateMapHash */
+  let candidateMapEpoch = null;
   let mapSelectionPending = false;
   let robotSelectionPending = false;
   let mapGenerationAtSelectionChange = 0;
@@ -1048,7 +1053,9 @@ export function createMap(root, opts = {}) {
     // editor until their exact content hashes agree, regardless of which one
     // arrives first during a map switch.
     const fingerprintGeneration = ++mapFingerprintGeneration;
+    const mapEpoch = mapEpochFromMessage(msg);
     candidateMapHash = null;
+    candidateMapEpoch = null;
     activeMapHash = null;
     keepoutGrid = null;
     keepoutPlacement = null;
@@ -1058,6 +1065,7 @@ export function createMap(root, opts = {}) {
     void mapFingerprintFromMessage(msg).then((mapHash) => {
       if (fingerprintGeneration !== mapFingerprintGeneration) return;
       candidateMapHash = mapHash;
+      candidateMapEpoch = mapEpoch;
       if (
         mapHash &&
         shouldActivateMapFingerprint(
@@ -1065,9 +1073,18 @@ export function createMap(root, opts = {}) {
           selectedMapHash,
           mapSelectionPending,
           fingerprintGeneration > mapGenerationAtSelectionChange,
+          mapEpoch,
+          selectedMapEpoch,
         )
       ) {
+        const earlyEqualReload =
+          !mapSelectionPending &&
+          mapHash === selectedMapHash &&
+          !!mapEpoch &&
+          !!selectedMapEpoch &&
+          mapEpoch !== selectedMapEpoch;
         selectedMapHash = mapHash;
+        if (!earlyEqualReload) selectedMapEpoch = mapEpoch;
         mapSelectionPending = false;
         activeMapHash = mapHash;
         syncKeepoutForMap();
@@ -2143,7 +2160,9 @@ export function createMap(root, opts = {}) {
     mapFingerprintGeneration++;
     activeMapHash = null;
     selectedMapHash = null;
+    selectedMapEpoch = null;
     candidateMapHash = null;
+    candidateMapEpoch = null;
     mapSelectionPending = false;
     robotSelectionPending = true;
     keepoutGrid = null;
@@ -2291,9 +2310,10 @@ export function createMap(root, opts = {}) {
       clearTimeout(keepoutSaveTimer);
       if (
         candidateMapHash &&
-        shouldActivateMapFingerprint(candidateMapHash, selectedMapHash, true, false)
+        shouldActivateMapFingerprint(candidateMapHash, selectedMapHash, true, false, candidateMapEpoch, selectedMapEpoch)
       ) {
         selectedMapHash = candidateMapHash;
+        selectedMapEpoch = candidateMapEpoch;
         mapSelectionPending = false;
         activeMapHash = candidateMapHash;
         syncKeepoutForMap();
