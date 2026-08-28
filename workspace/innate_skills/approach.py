@@ -25,7 +25,7 @@ from innate import (
 )
 from innate import gemini as gemlib
 from innate.exceptions import SkillFailed
-from innate.geometry import IMG_H, IMG_W, floor_to_pixel, pixel_to_floor
+from innate.geometry import FX, FY, HEAD_ORIGIN, IMG_H, IMG_W, floor_to_pixel, pixel_to_floor
 
 if TYPE_CHECKING:
     from innate_proxy import ProxyClient
@@ -44,7 +44,11 @@ DEBUG_THROTTLED_STAGES = ("follow",)
 APPROACH_PARAMS = {
     "tilt_deg": -20.0,
     "settle_s": 1.2,
-    "sweet_x": 0.37,
+    # 0.285 is the SAME physical park distance pick was tuned to — it was
+    # written as 0.37 while geometry.py assumed a 70 deg lens that read
+    # ranges ~2x long; the 2026-08-28 calibration fix rescaled the number,
+    # not the behaviour (identical pixel target).
+    "sweet_x": 0.285,
     "box_y": 0.0,
     "box_half_px": 40.0,
     "box_half_v_px": 40.0,
@@ -64,6 +68,25 @@ APPROACH_PARAMS = {
 }
 
 FOLLOW_TIMEOUT_S = 20.0
+# Self-tracking guard: a pixel glued in place through real base motion is not
+# on the floor — it is on the robot (the arm or the carried object in frame),
+# or on a box the bumper is pushing along, and the servo would chase it
+# forever. A real floor point must travel at least _min_px_shift for the
+# odometry the base racked up; the tracker is called static when it shows
+# less than a third of that.
+STATIC_MIN_PX = 5.0
+
+
+def _min_px_shift(o0, o1, floor_xy):
+    """Least pixel travel a floor point must show between two odometry poses
+    (yaw sweeps u by FX rad^-1; advance drops v by FY*h/x^2 per metre).
+    0 when odometry is missing, so the guard never fires without it."""
+    if o0 is None or o1 is None:
+        return 0.0
+    dyaw = abs(math.atan2(math.sin(o1[2] - o0[2]), math.cos(o1[2] - o0[2])))
+    dist = math.hypot(o1[0] - o0[0], o1[1] - o0[1])
+    fwd = dist * FY * HEAD_ORIGIN[2] / max(floor_xy[0], 0.15) ** 2 if floor_xy else 0.0
+    return dyaw * FX + fwd
 
 
 def inside_box(px, cu, cv, half_u, half_v=None):
@@ -238,6 +261,7 @@ class _FloorApproach(Skill):
         (cu, cv), _half, accept = self._sweet_box()
         sweet = self._debug_sweet()
         t0 = time.monotonic()
+        anchor, anchor_odo = (u, v), self._odom_xyt()
         while time.monotonic() - t0 < FOLLOW_TIMEOUT_S:
             # Only track NEW frames: the camera runs slower than this loop,
             # and a stale frame re-tracked would count one observation twice.
@@ -269,12 +293,27 @@ class _FloorApproach(Skill):
             if inside_box((u, v), cu, cv, accept[0], accept[1]):
                 in_box += 1
                 self.mobility.stop()
+                anchor, anchor_odo = (u, v), self._odom_xyt()
                 if in_box >= 3:
                     self._debug("follow", track_px=[u, v], note="in_box", sweet=sweet)
                     return "in_box", (u, v)
                 self.sleep(0.03)
                 continue
             in_box = 0
+
+            floor_est = pixel_to_floor(u, v, self._p["tilt_deg"])
+            if floor_est is None:
+                # Above the horizon (or behind the base): whatever the tracker
+                # is holding, it is not a floor-contact point any more.
+                self.mobility.stop()
+                self._debug("follow", track_px=[u, v], note="no floor under track", sweet=sweet)
+                return "lost", None
+            if math.hypot(u - anchor[0], v - anchor[1]) >= STATIC_MIN_PX:
+                anchor, anchor_odo = (u, v), self._odom_xyt()
+            elif _min_px_shift(anchor_odo, self._odom_xyt(), floor_est) >= 3 * STATIC_MIN_PX:
+                self.mobility.stop()
+                self._debug("follow", track_px=[u, v], note="static: tracking the robot itself", sweet=sweet)
+                return "lost", None
 
             # Deadband = accept (inner) box; right -> -wz, too close (low) -> -vx.
             wz = self.mobility.servo_vel(
@@ -299,7 +338,20 @@ class _FloorApproach(Skill):
         if not self.main_image:
             return self._position_stepwise(prompt, xy)
 
-        seed = floor_to_pixel(xy[0], xy[1], self._p["tilt_deg"])
+        # Centre the target before seeding the tracker: a seed near a frame
+        # edge can land on the robot's own arm or carried object, and the
+        # flow servo would then chase the robot itself.
+        bearing = math.atan2(xy[1], xy[0])
+        if abs(bearing) > math.radians(self._p["bearing_go_deg"]):
+            self._rotate_by(bearing)
+            xy2, px2 = self._localize_retry(prompt)
+            if px2 is None:
+                self._position_failed(prompt)
+            if xy2 is not None:
+                xy = xy2
+            seed = px2
+        else:
+            seed = floor_to_pixel(xy[0], xy[1], self._p["tilt_deg"])
         _fallback_xy = xy
         lost = 0
         for _attempt in range(int(self._p["box_steps"])):

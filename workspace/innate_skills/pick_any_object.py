@@ -43,8 +43,9 @@ CARRY_ARM = [0.0537, -0.50, 0.4157, 0.9434, -0.0077]
 NAV_ARM = [1.5708, -1.2195, 1.5723, 0.06, -0.47]
 
 # Pick parameters, tuned on hardware. The find/position half lives in
-# APPROACH_PARAMS; sweet_x's ceiling is 0.43 (reach clamp) and 0.37 grasps at
-# ~0.32 — grasping at the 0.40 reach edge stalls the wrist and overloads servo 2.
+# APPROACH_PARAMS (its sweet_x was renumbered by the 2026-08-28 camera
+# calibration fix — same physical park as always). Grasping at the 0.40
+# reach edge stalls the wrist and overloads servo 2.
 PARAMS = {
     **APPROACH_PARAMS,
     # Objects don't teleport: a match farther than this from the last sighting
