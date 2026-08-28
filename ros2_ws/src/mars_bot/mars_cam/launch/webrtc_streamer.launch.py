@@ -23,7 +23,8 @@ def generate_launch_description():
                         "enable_audio": True,
                         "audio_source_element": "alsasrc",
                         "audio_capture_device": "sysdefault:CARD=Light",
-                        "enable_talkback": True,  # operator push-to-talk out the robot speaker
+                        "enable_talkback": True,  # operator voice out the robot speaker
+                        "enable_echo_cancel": True,  # see camera_composable.launch.py
                     }
                 ],
             )

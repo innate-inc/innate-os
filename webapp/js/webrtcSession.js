@@ -14,9 +14,9 @@
 // fallback; only the main camera is exposed (the arm camera is ignored in v1).
 //
 // Talkback rides the SAME audio m-line in reverse: the robot offers it sendrecv,
-// so we answer sendrecv and keep an empty sender until the operator holds talk,
-// then replaceTrack(mic) — no renegotiation, and no getUserMedia (so no mic
-// permission prompt) until the button is actually pressed.
+// so we answer sendrecv and keep an empty sender until the operator first
+// unmutes, then replaceTrack(mic) — no renegotiation, and no getUserMedia (so
+// no mic permission prompt) until the mic is actually unmuted.
 //
 // Self-heal: 30 s initial-handshake watchdog, ICE disconnected/failed
 // persisting 10 s → re-handshake, and a re-handshake whenever the rosbridge
@@ -222,13 +222,13 @@ export class WebRtcSession {
   }
 
   /**
-   * Hold/release talkback: this browser's mic plays out the robot's speaker — a track swap on the
-   * already-sendrecv audio m-line plus a no-reneg START. getUserMedia waits for the first press.
+   * Unmute/mute talkback: this browser's mic plays out the robot's speaker — a track swap on the
+   * already-sendrecv audio m-line plus a no-reneg START. getUserMedia waits for the first unmute.
    * @param {boolean} on
    */
   async setTalk(on) {
-    // Recorded before any await: a release landing while getUserMedia is still pending must beat the
-    // press that is waiting on it, or the resumed press puts the operator live with the button already up.
+    // Recorded before any await: a mute landing while getUserMedia is still pending must beat the
+    // unmute that is waiting on it, or the resumed unmute puts the operator live after they muted.
     this.#talkDesired = on;
     if (this.#state.talkRequested === on) return;
     if (on && !(await this.#openMic())) return; // the failure is already in state.talkError
@@ -268,7 +268,7 @@ export class WebRtcSession {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         // Cancels what this browser is playing (the robot's mic, if the operator is also listening);
-        // the robot-side half-duplex duck is what handles the loop through its own speaker.
+        // the loop through the robot's own speaker is handled robot-side (AEC, or its half-duplex duck).
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       if (epoch !== this.#micEpoch) {

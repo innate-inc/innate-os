@@ -90,6 +90,10 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
     this->declare_parameter("audio_sink_element", "alsasink");
     this->declare_parameter("audio_playback_device", "");
     this->declare_parameter("talkback_volume", 1.0);
+    // Cancels the robot's own speaker out of its mic (webrtcdsp paired with the speaker pipeline's
+    // probe), which lifts the half-duplex duck: the talker keeps hearing the room. Off until validated
+    // on hardware — cancellation quality depends on dmix's unobservable playout latency.
+    this->declare_parameter("enable_echo_cancel", false);
     this->declare_parameter("playout_min_delay_ms", 0);
     this->declare_parameter("playout_max_delay_ms", 40);
     this->declare_parameter("enable_local_stun", true);
@@ -108,6 +112,7 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
     audio_sink_element_ = this->get_parameter("audio_sink_element").as_string();
     audio_playback_device_ = this->get_parameter("audio_playback_device").as_string();
     talkback_volume_ = this->get_parameter("talkback_volume").as_double();
+    enable_echo_cancel_ = this->get_parameter("enable_echo_cancel").as_bool();
     playout_min_delay_ms_ = static_cast<guint>(this->get_parameter("playout_min_delay_ms").as_int());
     playout_max_delay_ms_ = static_cast<guint>(this->get_parameter("playout_max_delay_ms").as_int());
     enable_local_stun_ = this->get_parameter("enable_local_stun").as_bool();
@@ -154,18 +159,10 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
         RCLCPP_FATAL(this->get_logger(), "Failed to build the persistent encode pipeline");
         throw std::runtime_error("encode pipeline build failed");
     }
-    // Shared mic pipeline (encoded once, fanned out, gated NULL/PLAYING for privacy). Optional: if it
-    // can't be built (no mic), carry on video-only.
-    if (enable_audio_ && !build_audio_pipeline()) {
-        RCLCPP_WARN(this->get_logger(), "Audio pipeline build failed; continuing video-only");
-        enable_audio_ = false;
-    }
-    if (enable_talkback_ && talk_branch_description().empty()) {
+    if (enable_talkback_ && speaker_pipeline_description().empty()) {
         RCLCPP_ERROR(this->get_logger(), "audio_sink_element/audio_playback_device rejected; talkback disabled");
         enable_talkback_ = false;
     }
-    // The branch is only built when a peer's mic arrives, so check the speaker element up front rather
-    // than failing per-peer inside a GStreamer callback.
     if (enable_talkback_) {
         GstElementFactory* sink = gst_element_factory_find(audio_sink_element_.c_str());
         if (!sink) {
@@ -176,11 +173,41 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
             gst_object_unref(sink);
         }
     }
+    // webrtcdsp is its own .so inside gstreamer1.0-plugins-bad (built only when webrtc-audio-processing
+    // is present); a system without it should degrade to plain half-duplex talkback, not lose talkback
+    // to a parse failure.
+    if (enable_echo_cancel_) {
+        GstElementFactory* dsp = gst_element_factory_find("webrtcdsp");
+        GstElementFactory* probe = gst_element_factory_find("webrtcechoprobe");
+        if (!dsp || !probe) {
+            RCLCPP_WARN(this->get_logger(),
+                        "webrtcdsp/webrtcechoprobe unavailable; echo cancel off (half-duplex talkback)");
+            enable_echo_cancel_ = false;
+        }
+        if (dsp)
+            gst_object_unref(dsp);
+        if (probe)
+            gst_object_unref(probe);
+    }
+    // Before the mic pipeline: its webrtcdsp pairs with this pipeline's probe, which must exist first.
+    if (enable_talkback_ && !build_speaker_pipeline()) {
+        enable_talkback_ = false;
+    }
+    // AEC exists to cancel talkback out of the mic; without talkback there is no probe to pair with.
+    enable_echo_cancel_ = enable_echo_cancel_ && enable_talkback_;
+    // Shared mic pipeline (encoded once, fanned out, gated NULL/PLAYING for privacy). Optional: if it
+    // can't be built (no mic), carry on video-only.
+    if (enable_audio_ && !build_audio_pipeline()) {
+        RCLCPP_WARN(this->get_logger(), "Audio pipeline build failed; continuing video-only");
+        enable_audio_ = false;
+    }
     // Talkback is the RECEIVE half of the audio m-line, and that m-line exists only because the mic is
     // sending on it — no mic, no talkback. Lifting that would mean an add-transceiver(RECVONLY) m-line.
     if (enable_talkback_ && !enable_audio_) {
         RCLCPP_WARN(this->get_logger(), "No audio m-line (mic unavailable); talkback disabled");
         enable_talkback_ = false;
+        enable_echo_cancel_ = false;
+        teardown_speaker_pipeline();  // just built above; keeping it PLAYING would hold ALSA open for nothing
     }
     start_local_stun_server();
 
@@ -192,8 +219,9 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
     RCLCPP_INFO(this->get_logger(), "WebRTC Streamer ready (%zu cameras, source: %s, compressed: %s)", cameras_.size(),
                 current_source_.c_str(), use_compressed_images_ ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "  Mic audio: %s", enable_audio_ ? "enabled (opt-in per peer)" : "disabled");
-    RCLCPP_INFO(this->get_logger(), "  Talkback: %s",
-                enable_talkback_ ? "enabled (push-to-talk per peer)" : "disabled");
+    RCLCPP_INFO(this->get_logger(), "  Talkback: %s%s",
+                enable_talkback_ ? "enabled (push-to-talk per peer)" : "disabled",
+                enable_echo_cancel_ ? ", echo-cancelled (full duplex)" : "");
     RCLCPP_INFO(this->get_logger(), "  Local STUN: %s", enable_local_stun_ ? "enabled" : "disabled");
     RCLCPP_INFO(this->get_logger(), "  RTCP-inactivity teardown: %.1f s", rtcp_inactivity_timeout_s_);
 }
@@ -283,6 +311,8 @@ WebRTCStreamer::~WebRTCStreamer() {
         gst_element_set_state(audio_pipeline_, GST_STATE_NULL);
         gst_object_unref(audio_pipeline_);
     }
+    // After the peers: destroy_peer pulls each one's input out of the mixer, so by here it has none.
+    teardown_speaker_pipeline();
 }
 
 // =============================================================================
@@ -384,6 +414,9 @@ void WebRTCStreamer::poll_pipeline_health() {
 
     drain_bus(encode_pipeline_, "encode", /*expected_teardown=*/false);
     drain_bus(audio_pipeline_, "audio", /*expected_teardown=*/false);
+    if (drain_bus(speaker_pipeline_, "speaker", /*expected_teardown=*/false)) {
+        restart_speaker_pipeline();
+    }
 
     std::unique_lock<std::mutex> lock(peers_mutex_);
     if (peers_.empty()) {

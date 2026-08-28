@@ -87,7 +87,11 @@ def generate_launch_description():
                 "enable_audio": True,
                 "audio_source_element": "alsasrc",
                 "audio_capture_device": "sysdefault:CARD=Light",
-                "enable_talkback": True,  # operator push-to-talk out the robot speaker
+                "enable_talkback": True,  # operator voice out the robot speaker
+                # Cancel the speaker out of the mic (webrtcdsp): the robot stops hearing itself and
+                # the half-duplex duck lifts, so an unmuted operator still hears the room. Degrades
+                # to plain half-duplex if the plugin is missing.
+                "enable_echo_cancel": True,
                 # Bound the teleop receiver's de-jitter buffer (ms) via the playout-delay RTP
                 # extension. Measured effect on the LAN: once this extension advertises playout-delay
                 # support, Chrome (which already pins jitterBufferTarget=0) drops the buffer from

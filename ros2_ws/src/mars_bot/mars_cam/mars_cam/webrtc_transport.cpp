@@ -164,23 +164,22 @@ Peer* WebRTCStreamer::create_peer_transport(const std::string& client_id, const 
         }
     }
     // Talkback rides that same m-line in reverse: claim the recv direction, then take the operator's
-    // mic off webrtcbin's pad-added (see TalkGate for why the gate is shared with that callback).
+    // mic off webrtcbin's pad-added (the gate rides element data because that callback and the decode
+    // branch's sample callback run on streaming threads that must not take peers_mutex_).
     if (ok && peer->with_audio && enable_talkback_) {
         peer->with_talk = enable_talk_direction(peer->webrtc, static_cast<guint>(negotiated.size()));
         if (peer->with_talk) {
-            peer->talk_gate->open = talk_active;  // pre-PLAYING: the pad-added thread does not exist yet
+            peer->talk_gate->store(talk_active, std::memory_order_relaxed);
             g_object_set_data_full(G_OBJECT(peer->webrtc), "mars_talk_gate",
-                                   new std::shared_ptr<TalkGate>(peer->talk_gate),
-                                   [](gpointer p) { delete static_cast<std::shared_ptr<TalkGate>*>(p); });
+                                   new std::shared_ptr<std::atomic<bool>>(peer->talk_gate),
+                                   [](gpointer p) { delete static_cast<std::shared_ptr<std::atomic<bool>>*>(p); });
             g_signal_connect(peer->webrtc, "pad-added", G_CALLBACK(on_talk_pad_added), this);
         } else {
             RCLCPP_WARN(this->get_logger(), "webrtcbin refused a sendrecv audio transceiver; talkback disabled");
         }
     }
     peer->talk_active = peer->with_talk && talk_active;
-    // Half-duplex: while the operator talks, stop sending them the robot's mic. The robot's speaker is
-    // within earshot of its own mic, so full duplex is an echo of the operator's own voice.
-    peer->audio_active = peer->with_audio && peer->audio_requested && !peer->talk_active;
+    peer->audio_active = peer_audio_active(*peer);
     if (!ok) {
         RCLCPP_ERROR(this->get_logger(), "Transport pipeline missing/failed an rtp appsrc");
         return nullptr;  // ~Peer() tears down the pipeline + the rtp appsrcs stored so far
@@ -229,6 +228,20 @@ Peer* WebRTCStreamer::create_peer_transport(const std::string& client_id, const 
         RCLCPP_ERROR(this->get_logger(), "Transport pipeline failed to reach PLAYING (audio=%s)",
                      with_audio ? "on" : "off");
         return nullptr;  // ~Peer() tears down the pipeline
+    }
+
+    // Every failure return is behind us, so an attached mixer input can no longer be orphaned by one.
+    // This is also before the offer is created below, and a peer cannot receive RTP before it has
+    // offered — so the tag is always in place by the time pad-added fires.
+    if (peer->with_talk && !attach_speaker_input(peer.get())) {
+        RCLCPP_WARN(this->get_logger(), "No speaker input for peer '%s'; talkback disabled for it", client_id.c_str());
+        peer->with_talk = false;
+        peer->talk_active = false;
+        peer->talk_gate->store(false, std::memory_order_relaxed);
+        peer->audio_active = peer_audio_active(*peer);  // talk_active now false: nothing left to duck for
+    }
+    if (peer->with_talk) {
+        g_object_set_data(G_OBJECT(peer->webrtc), "mars_talk_src", peer->talk_src);
     }
 
     // Keep listening for future negotiation-needed signals, but create the first offer explicitly after all
@@ -289,8 +302,8 @@ void WebRTCStreamer::update_peer_active(Peer* peer, const std::vector<std::strin
     }
     peer->active = next;
 
-    // Talkback toggles first: it ducks the outbound mic below, so the operator never hears their own voice
-    // come back off the robot's speaker.
+    // Talkback toggles first: without AEC it ducks the outbound mic below, so the operator never hears
+    // their own voice come back off the robot's speaker.
     const bool talk_now = peer->with_talk && talk_active;
     if (talk_now != peer->talk_active) {
         set_peer_talk(peer, talk_now);
@@ -304,7 +317,7 @@ void WebRTCStreamer::update_peer_active(Peer* peer, const std::vector<std::strin
     // the lock; closing it (want_audio_ -> 0) is deferred to the health poll, which runs without the lock,
     // because NULL-ing the audio pipeline joins the fan-out thread that also takes peers_mutex_.
     peer->audio_requested = audio_active;
-    const bool audio_now = peer->with_audio && audio_active && !peer->talk_active;
+    const bool audio_now = peer_audio_active(*peer);
     if (audio_now != peer->audio_active) {
         if (audio_now) {
             want_audio_.fetch_add(1, std::memory_order_relaxed);
@@ -361,8 +374,11 @@ void WebRTCStreamer::on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer
     if (!pipeline) {
         return;
     }
+    // This peer's own depayloader and decoder, in this peer's own pipeline — so its jitterbuffer's GAP
+    // events still reach opusdec (that is what plc=true conceals loss with), and so two operators talking
+    // at once never share a depayloader. Only the decoded PCM crosses into the shared speaker mixer.
     GError* error = nullptr;
-    GstElement* branch = gst_parse_bin_from_description(self->talk_branch_description().c_str(), TRUE, &error);
+    GstElement* branch = gst_parse_bin_from_description(talk_decode_description().c_str(), TRUE, &error);
     if (error || !branch) {
         RCLCPP_ERROR(self->get_logger(), "Talkback branch failed to build: %s", error ? error->message : "unknown");
         if (error) {
@@ -373,6 +389,20 @@ void WebRTCStreamer::on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer
         }
         gst_object_unref(pipeline);
         return;
+    }
+    // The gate and this peer's mixer input ride on the appsink: on_talk_sample runs on this peer's
+    // streaming thread, which must not reach into peers_ for either of them.
+    auto* gate =
+        static_cast<std::shared_ptr<std::atomic<bool>>*>(g_object_get_data(G_OBJECT(webrtc), "mars_talk_gate"));
+    auto* talk_src = static_cast<GstElement*>(g_object_get_data(G_OBJECT(webrtc), "mars_talk_src"));
+    if (GstElement* pcm_sink = gst_bin_get_by_name(GST_BIN(branch), "talk_pcm")) {
+        if (gate) {
+            g_object_set_data_full(G_OBJECT(pcm_sink), "mars_talk_gate", new std::shared_ptr<std::atomic<bool>>(*gate),
+                                   [](gpointer p) { delete static_cast<std::shared_ptr<std::atomic<bool>>*>(p); });
+        }
+        g_object_set_data(G_OBJECT(pcm_sink), "mars_talk_src", talk_src);
+        g_signal_connect(pcm_sink, "new-sample", G_CALLBACK(on_talk_sample), self);
+        gst_object_unref(pcm_sink);
     }
 
     gst_bin_add(GST_BIN(pipeline), branch);
@@ -389,33 +419,21 @@ void WebRTCStreamer::on_talk_pad_added(GstElement* webrtc, GstPad* pad, gpointer
         gst_object_unref(pipeline);
         return;
     }
-    // Hand the valve to the gate and arm it in one critical section (see TalkGate). Until here the
-    // valve has dropped everything (built drop=true), so audio that raced the attach never leaked.
-    bool open_now = false;
-    auto* gate = static_cast<std::shared_ptr<TalkGate>*>(g_object_get_data(G_OBJECT(webrtc), "mars_talk_gate"));
-    GstElement* valve = gst_bin_get_by_name(GST_BIN(branch), "talk_valve");
-    if (gate && valve) {
-        std::lock_guard<std::mutex> lock((*gate)->mutex);
-        (*gate)->valve = valve;  // the gate keeps this ref; ~TalkGate releases it
-        open_now = (*gate)->open;
-        g_object_set(valve, "drop", open_now ? FALSE : TRUE, nullptr);
-    } else if (valve) {
-        gst_object_unref(valve);
-    }
     g_object_set_data(G_OBJECT(webrtc), "mars_talk_attached", GINT_TO_POINTER(1));
-    RCLCPP_INFO(self->get_logger(), "Talkback branch attached (speaker %s)", open_now ? "open" : "muted");
+    RCLCPP_INFO(self->get_logger(), "Talkback branch attached (peer decodes into the speaker mixer)");
     gst_object_unref(pipeline);
 }
 
-// Open/close one peer's speaker path. The gate is the source of truth (the branch may not exist yet — the
-// operator can press talk before their first RTP packet arrives); the valve is flipped when it does.
 void WebRTCStreamer::set_peer_talk(Peer* peer, bool on) {
     peer->talk_active = on;
-    std::lock_guard<std::mutex> lock(peer->talk_gate->mutex);
-    peer->talk_gate->open = on;
-    if (peer->talk_gate->valve) {
-        g_object_set(peer->talk_gate->valve, "drop", on ? FALSE : TRUE, nullptr);
-    }
+    peer->talk_gate->store(on, std::memory_order_relaxed);
+}
+
+// The mic a peer hears is their LISTEN intent minus the talk duck: without AEC a talking operator would
+// hear their own voice come back off the robot's speaker; with AEC the echo is subtracted at the capture,
+// so the duck (and the deafness it causes while talking) is lifted.
+bool WebRTCStreamer::peer_audio_active(const Peer& peer) const {
+    return peer.with_audio && peer.audio_requested && !(peer.talk_active && !enable_echo_cancel_);
 }
 
 void WebRTCStreamer::on_negotiation_needed(GstElement* webrtc, gpointer user_data) {
@@ -468,7 +486,12 @@ void WebRTCStreamer::destroy_peer(const std::string& client_id) {
     }
 
     RCLCPP_INFO(this->get_logger(), "Released peer '%s'", client_id.c_str());
-    peers_.erase(it);           // ~Peer() NULLs the transport (joining its streaming threads) and releases the refs
+    // Taken before the erase, released after it: ~Peer NULLs the transport (joining the streaming thread
+    // that pushes into this appsrc), so only then is pulling its mixer input out of the speaker safe.
+    GstElement* talk_src = p->talk_src;
+    GstPad* talk_mix_pad = p->talk_mix_pad;
+    peers_.erase(it);  // ~Peer() NULLs the transport (joining its streaming threads) and releases the refs
+    detach_speaker_input(talk_src, talk_mix_pad);
     reconcile_subscriptions();  // last peer wanting a camera may have just left — drop its sub if so
 }
 

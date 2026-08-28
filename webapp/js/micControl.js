@@ -1,10 +1,11 @@
 // @ts-check
-// Hold-to-talk button: pointer-hold or spacebar, with the ripple/waveform glass
-// the agent composer introduced. Shared by the two pages that capture the
-// operator's voice — the agent page (sim), where speech becomes a transcript,
-// and teleop, where it plays live out the robot's speaker. Only the wording
-// differs; the hold semantics (and the rule that the spacebar belongs to
-// whatever the operator is typing in) are the same either way.
+// Operator mic button with the ripple/waveform glass the agent composer
+// introduced. Shared by the two pages that capture the operator's voice, in
+// two modes: "hold" (push-to-talk — pointer-hold or spacebar) on the agent
+// page (sim), where speech becomes a transcript, and "toggle" (Meet-style
+// mute/unmute — a click or a spacebar tap) on teleop, where it plays live out
+// the robot's speaker. In both modes the spacebar belongs to whatever the
+// operator is typing in.
 
 import { isTypingContext } from "./shell.js";
 
@@ -25,6 +26,7 @@ const WAVEFORM_DB_RANGE = 48;
  * @param {{
  *   startListening: () => void | Promise<void>,
  *   stopListening: () => void,
+ *   mode?: "hold" | "toggle",
  *   holdLabel?: string,
  *   listeningLabel?: string,
  *   buttonLabel?: string,
@@ -45,6 +47,7 @@ export function createMicControl(root, callbacks) {
   const {
     startListening,
     stopListening,
+    mode = "hold",
     holdLabel = "Hold to talk to the agent",
     listeningLabel = "Listening…",
     buttonLabel = "",
@@ -53,6 +56,10 @@ export function createMicControl(root, callbacks) {
     activeButtonHint = "Release to stop",
     composerInput = null,
   } = callbacks;
+  const isToggle = mode === "toggle";
+  const idleTitle = isToggle
+    ? "Toggle your mic — Spacebar or click"
+    : "Hold to talk — Spacebar, or click and hold";
 
   const control = document.createElement("div");
   control.className = "agent-mic-control";
@@ -62,7 +69,7 @@ export function createMicControl(root, callbacks) {
   button.className = "agent-mic-button";
   button.setAttribute("aria-label", holdLabel);
   button.setAttribute("aria-pressed", "false");
-  button.title = "Hold to talk — Spacebar, or click and hold";
+  button.title = idleTitle;
 
   const icon = decorativeSpan("agent-mic-icon");
   const action = document.createElement("span");
@@ -141,14 +148,14 @@ export function createMicControl(root, callbacks) {
       "aria-label",
       isUnavailable ? unavailableReason || "Microphone unavailable" : holdLabel,
     );
-    button.title = isUnavailable ? "" : "Hold to talk — Spacebar, or click and hold";
+    button.title = isUnavailable ? "" : idleTitle;
     let statusText = "";
     let visibleLabel = buttonLabel;
     let visibleHint = buttonHint;
     if (isWaiting) {
       statusText = "Starting…";
       visibleLabel = "CONNECTING";
-      visibleHint = "Keep holding";
+      visibleHint = isToggle ? "One moment" : "Keep holding";
     } else if (isListening) {
       statusText = listeningLabel;
       visibleLabel = activeButtonLabel;
@@ -236,6 +243,30 @@ export function createMicControl(root, callbacks) {
   function syncPushToTalk() {
     if (activeHoldSources.size > 0) void startPushToTalk();
     else stopPushToTalk();
+  }
+
+  function toggleMic() {
+    if (isPushToTalkActive) stopPushToTalk();
+    else void startPushToTalk();
+  }
+
+  /** @param {KeyboardEvent} event */
+  function onToggleKeyDown(event) {
+    if (event.code !== SPACEBAR_KEY_CODE) return;
+    if (
+      button.disabled ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      event.shiftKey ||
+      !spacebarCanControlMic()
+    ) {
+      return;
+    }
+    // Every repeat too, or a held spacebar scrolls the page; it also keeps a
+    // focused button from firing its native click on keyup (a double toggle).
+    event.preventDefault();
+    if (!event.repeat) toggleMic();
   }
 
   function cancelPendingPointerHold() {
@@ -354,15 +385,21 @@ export function createMicControl(root, callbacks) {
   }
 
   const listenerOptions = { signal: eventListenerController.signal };
-  button.addEventListener("pointerdown", onMicPointerDown, listenerOptions);
-  button.addEventListener("pointerup", onMicPointerUp, listenerOptions);
-  button.addEventListener("pointercancel", onMicPointerCancel, listenerOptions);
-  button.addEventListener("lostpointercapture", onMicPointerCancel, listenerOptions);
-  window.addEventListener("keydown", onWindowKeyDown, listenerOptions);
-  window.addEventListener("keyup", onWindowKeyUp, listenerOptions);
-  window.addEventListener("blur", releaseAllPushToTalkHolds, listenerOptions);
+  if (isToggle) {
+    button.addEventListener("click", toggleMic, listenerOptions);
+    window.addEventListener("keydown", onToggleKeyDown, listenerOptions);
+  } else {
+    button.addEventListener("pointerdown", onMicPointerDown, listenerOptions);
+    button.addEventListener("pointerup", onMicPointerUp, listenerOptions);
+    button.addEventListener("pointercancel", onMicPointerCancel, listenerOptions);
+    button.addEventListener("lostpointercapture", onMicPointerCancel, listenerOptions);
+    window.addEventListener("keydown", onWindowKeyDown, listenerOptions);
+    window.addEventListener("keyup", onWindowKeyUp, listenerOptions);
+    window.addEventListener("blur", releaseAllPushToTalkHolds, listenerOptions);
+    document.addEventListener("focusin", onDocumentFocusIn, listenerOptions);
+  }
+  // A hidden tab must not keep a live mic open (toggle) or a stuck hold (hold).
   document.addEventListener("visibilitychange", onDocumentVisibilityChange, listenerOptions);
-  document.addEventListener("focusin", onDocumentFocusIn, listenerOptions);
   document.addEventListener("pointerdown", dismissMicMessages, listenerOptions);
   renderMicState();
 
