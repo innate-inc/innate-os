@@ -15,6 +15,18 @@ import {
   SKILL_STATUS_UPDATE_TOPIC,
 } from "../constants.js";
 
+/** @param {any[]} skills @param {string} query */
+export function searchSkills(skills, query) {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return skills.filter((skill) => {
+    const text = `${formatName(skill)} ${skill.id} ${skill.group ?? ""}`.toLowerCase();
+    return terms.every((term) => text.includes(term));
+  });
+}
+
+export const nextSkillIndex = (index, length, delta) =>
+  Math.max(0, Math.min(length - 1, index + delta));
+
 /**
  * @param {HTMLElement} parent The bottom-bar overlay (shared with the TTS bar).
  * @param {import("../rosClient.js").RosClient} rosClient
@@ -27,13 +39,18 @@ export function createSkillsMenu(parent, rosClient) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "skills-menu-btn";
-  btn.title = `run a skill — roster from ${AVAILABLE_SKILLS_TOPIC}`;
+  btn.title = `Run a skill (⌘K) — roster from ${AVAILABLE_SKILLS_TOPIC}`;
+  btn.setAttribute("aria-haspopup", "true");
+  btn.setAttribute("aria-expanded", "false");
   const btnDot = document.createElement("span");
   btnDot.className = "skills-menu-dot";
   btnDot.title = "green while a skill is running";
   const btnLabel = document.createElement("span");
   btnLabel.className = "skills-menu-label";
   btnLabel.textContent = "Skills";
+  const btnShortcut = document.createElement("kbd");
+  btnShortcut.className = "skills-menu-shortcut mono";
+  btnShortcut.textContent = "⌘K";
   // Currently-running skill (from /brain/skill_status_update), or "None active".
   const btnActive = document.createElement("span");
   btnActive.className = "skills-menu-active";
@@ -41,10 +58,18 @@ export function createSkillsMenu(parent, rosClient) {
   const btnChevron = document.createElement("span");
   btnChevron.className = "skills-menu-chevron mono";
   btnChevron.textContent = "▾";
-  btn.append(btnDot, btnLabel, btnActive, btnChevron);
+  btn.append(btnDot, btnLabel, btnShortcut, btnActive, btnChevron);
 
   const pop = document.createElement("div");
   pop.className = "skills-pop";
+  const searchInput = document.createElement("input");
+  searchInput.type = "search";
+  searchInput.className = "skills-pop-search-input";
+  searchInput.placeholder = "Search skills…";
+  searchInput.autocomplete = "off";
+  searchInput.spellcheck = false;
+  searchInput.setAttribute("aria-label", "Search skills");
+  pop.appendChild(searchInput);
   pop.appendChild(buildTypeLegend());
   const scrollEl = document.createElement("div");
   scrollEl.className = "skills-pop-scroll";
@@ -64,6 +89,8 @@ export function createSkillsMenu(parent, rosClient) {
   let signature = "";
   /** @type {string | null} */
   let expandedId = null;
+  /** @type {string | null} */
+  let selectedId = null;
   /** Folder sections the user collapsed (by group path). @type {Set<string>} */
   const collapsedGroups = new Set();
   /** Per-skill, per-param string values, kept across re-renders. @type {Map<string, Record<string, string>>} */
@@ -275,7 +302,15 @@ export function createSkillsMenu(parent, rosClient) {
     open = next;
     menu.classList.toggle("open", open);
     btn.classList.toggle("active", open);
-    if (open) render();
+    btn.setAttribute("aria-expanded", String(open));
+    if (open) {
+      render();
+      requestAnimationFrame(() => {
+        if (!open) return;
+        searchInput.focus();
+        searchInput.select();
+      });
+    }
   }
 
   /** @param {MouseEvent} e */
@@ -284,10 +319,29 @@ export function createSkillsMenu(parent, rosClient) {
   }
   /** @param {KeyboardEvent} e */
   function onKeydown(e) {
-    if (e.key === "Escape" && open) setOpen(false);
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      setOpen(true);
+    } else if (e.key === "Escape" && open) {
+      setOpen(false);
+      btn.focus();
+    }
   }
 
   btn.addEventListener("click", () => setOpen(!open));
+  searchInput.addEventListener("input", () => {
+    selectedId = null;
+    render();
+  });
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      moveSelection(e.key === "ArrowDown" ? 1 : -1);
+    } else if (e.key === "Enter" && !e.isComposing) {
+      e.preventDefault();
+      activateSelection();
+    }
+  });
   // Keep clicks inside the menu from reaching onDocClick. Rendering a row swaps
   // the clicked element out of the DOM mid-event, so a bubbled document handler
   // would see the (now-detached) target as "outside" and wrongly close the popup.
@@ -322,35 +376,74 @@ export function createSkillsMenu(parent, rosClient) {
   function render() {
     syncActive();
     const frag = document.createDocumentFragment();
+    const query = searchInput.value.trim();
+    const visibleSkills = searchSkills(skills, query);
     // A run started elsewhere (agent, CLI, another tab) has no local cancel
     // handle — offer a Stop that goes through /brain/cancel_skill instead.
     if (topicActiveName && !(run && !run.done)) frag.appendChild(renderExternRow());
     // Root skills flat first (pinned order preserved), then one collapsible
     // section per folder (SkillInfo.group), folders alphabetical.
-    for (const skill of skills) {
+    for (const skill of visibleSkills) {
       if (!skill.group) frag.appendChild(renderRow(skill));
     }
-    for (const [group, members] of groupedSkills()) {
+    for (const [group, members] of groupedSkills(visibleSkills)) {
       frag.appendChild(renderGroupHeader(group, members.length));
-      if (!collapsedGroups.has(group)) {
+      if (query || !collapsedGroups.has(group)) {
         for (const skill of members) frag.appendChild(renderRow(skill));
       }
     }
-    if (skills.length === 0) {
+    if (visibleSkills.length === 0) {
       const empty = document.createElement("p");
       empty.className = "skills-pop-empty";
-      empty.textContent = rosClient.state === "connected" ? "No skills available." : "Not connected.";
+      empty.textContent = query
+        ? `No skills match “${query}”.`
+        : rosClient.state === "connected" ? "No skills available." : "Not connected.";
       frag.appendChild(empty);
     }
     listEl.replaceChildren(frag);
+    const buttons = selectableButtons();
+    if (!buttons.some((button) => button.dataset.skillId === selectedId)) {
+      selectedId = null;
+      if (buttons[0]) selectButton(buttons[0]);
+    }
+  }
+
+  function selectableButtons() {
+    return [...listEl.querySelectorAll(".skills-pop-item:not(:disabled)")].map((el) => /** @type {HTMLButtonElement} */ (el));
+  }
+
+  /** @param {HTMLButtonElement} button */
+  function selectButton(button) {
+    listEl.querySelector(".skills-pop-item.selected")?.classList.remove("selected");
+    button.classList.add("selected");
+    selectedId = button.dataset.skillId ?? null;
+    button.scrollIntoView({ block: "nearest" });
+  }
+
+  function moveSelection(delta) {
+    const buttons = selectableButtons();
+    const index = buttons.findIndex((button) => button.dataset.skillId === selectedId);
+    const next = nextSkillIndex(index, buttons.length, delta);
+    if (buttons[next]) selectButton(buttons[next]);
+  }
+
+  function activateSelection() {
+    const button = /** @type {HTMLButtonElement | null} */ (listEl.querySelector(".skills-pop-item.selected"));
+    if (!button) return;
+    button.click();
+    requestAnimationFrame(() => {
+      const input = listEl.querySelector(".skills-pop-row.expanded .skill-input");
+      if (input instanceof HTMLElement) input.focus();
+    });
   }
 
   /** Grouped skills as [group, members][] with folders alphabetical; members
-   *  keep the pinned/roster order of `skills`. @returns {[string, any[]][]} */
-  function groupedSkills() {
+   *  keep the pinned/roster order of `skills`.
+   *  @param {any[]} visibleSkills @returns {[string, any[]][]} */
+  function groupedSkills(visibleSkills) {
     /** @type {Map<string, any[]>} */
     const groups = new Map();
-    for (const skill of skills) {
+    for (const skill of visibleSkills) {
       const group = typeof skill.group === "string" ? skill.group : "";
       if (!group) continue;
       const members = groups.get(group) ?? [];
@@ -440,7 +533,8 @@ export function createSkillsMenu(parent, rosClient) {
 
     const head = document.createElement("button");
     head.type = "button";
-    head.className = "skills-pop-item";
+    head.className = "skills-pop-item" + (selectedId === skill.id ? " selected" : "");
+    head.dataset.skillId = skill.id;
     head.disabled = rosClient.state !== "connected";
 
     const typeMeta = skillTypeMeta(skill);
@@ -477,6 +571,7 @@ export function createSkillsMenu(parent, rosClient) {
       if (rosClient.state !== "connected") return;
       startRun(skill);
     });
+    head.addEventListener("mouseenter", () => selectButton(head));
 
     row.appendChild(head);
 
