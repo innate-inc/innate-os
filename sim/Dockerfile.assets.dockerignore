@@ -18,6 +18,8 @@
 !sim/viewer/public/models/resident_alex.glb
 !sim/viewer/public/models/resident_blake.glb
 !sim/viewer/public/models/resident_casey.glb
+!sim/viewer/public/models/soft_sock.glb
+!sim/viewer/public/models/soft_sock_skin.bin
 
 # The work store (seeded): the decomposition, room exports and nav map, plus
 # the authored props. Must cover config.SIM_ASSET_UNITS -- a subtree the seeder
@@ -29,6 +31,7 @@
 !sim/assets/map/**
 !sim/assets/humans/**
 !sim/assets/objects/**
+!sim/assets/softbodies/**
 
 # Node for the apartment split only. sim/viewer/src, tsconfig.json and
 # vite.lib.config.ts belong to sim/viewer/Dockerfile; admitting them here would

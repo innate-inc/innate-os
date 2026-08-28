@@ -164,6 +164,8 @@ COPY sim/viewer/public/models/soccer_ball.glb     /viewer/models/soccer_ball.glb
 COPY sim/viewer/public/models/resident_alex.glb    /viewer/models/resident_alex.glb
 COPY sim/viewer/public/models/resident_blake.glb   /viewer/models/resident_blake.glb
 COPY sim/viewer/public/models/resident_casey.glb   /viewer/models/resident_casey.glb
+COPY sim/viewer/public/models/soft_sock.glb        /viewer/models/soft_sock.glb
+COPY sim/viewer/public/models/soft_sock_skin.bin   /viewer/models/soft_sock_skin.bin
 COPY --from=derived /out/models                   /viewer/models
 # No /viewer/robot: the webapp serves the robot description straight out of
 # ros2_ws (webapp/proxy/https_server.py).

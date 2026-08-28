@@ -196,6 +196,7 @@ SIM_ASSET_UNITS_DERIVED = (
 SIM_ASSET_UNITS_AUTHORED = (
     "humans",
     "objects",
+    "softbodies",
 )
 SIM_ASSET_UNITS = SIM_ASSET_UNITS_DERIVED + SIM_ASSET_UNITS_AUTHORED
 # This file is deliberately NOT in ASSETS_IMAGE_INPUT_FILES -- that would retag
