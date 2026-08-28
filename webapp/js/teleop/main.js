@@ -99,7 +99,10 @@ function buildCockpit(root) {
     createHeadTilt(rightRail, ros),
     createWasdChips(chipsOverlay, keyboard),
     createJoystick(stickOverlay, drive),
-    createTtsBar(ttsOverlay, ros, { onSpeak: onboarding.onSpeak }),
+    createTtsBar(ttsOverlay, ros, {
+      onSpeak: onboarding.onSpeak,
+      onAvailabilityChange: onboarding.onSpeechAvailabilityChange,
+    }),
     // Collapsible skill launcher pinned next to the speak bar.
     createSkillsMenu(ttsOverlay, ros, {
       onSkillCompleted: onboarding.onSkillCompleted,

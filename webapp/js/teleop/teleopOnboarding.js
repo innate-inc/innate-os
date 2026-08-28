@@ -54,6 +54,10 @@ export const isCylinderPickupCompletion = (run) =>
   skillName(run.skillId) === "pick any object" &&
   String(run.inputs.prompt ?? "").trim().toLowerCase() === "the cylinder";
 
+/** @param {keyof typeof TELEOP_ONBOARDING_STEPS} step @param {boolean | null} speechAvailable */
+export const resolveAvailableStep = (step, speechAvailable) =>
+  step === "talk" && speechAvailable === false ? "pick" : step;
+
 /**
  * Guided first-run mission for direct control. Steps advance only when the
  * corresponding command is actually sent and, for skills, succeeds.
@@ -69,6 +73,8 @@ export function createTeleopOnboarding(root) {
   /** @type {keyof typeof TELEOP_ONBOARDING_STEPS | null} */
   let step = null;
   let skillsMenuOpen = false;
+  /** @type {boolean | null} */
+  let speechAvailable = null;
 
   /** @param {CustomEvent<{restart?: boolean}>} event */
   function onRequest(event) {
@@ -79,6 +85,7 @@ export function createTeleopOnboarding(root) {
 
   /** @param {keyof typeof TELEOP_ONBOARDING_STEPS} next */
   function show(next) {
+    next = resolveAvailableStep(next, speechAvailable);
     close(false);
     step = next;
     storageSet(TELEOP_ONBOARDING_PROGRESS_KEY, next);
@@ -218,6 +225,12 @@ export function createTeleopOnboarding(root) {
     if (step === "talk") show("pick");
   }
 
+  /** @param {boolean} available */
+  function onSpeechAvailabilityChange(available) {
+    speechAvailable = available;
+    if (!available && step === "talk") show("pick");
+  }
+
   function onSkillsMenuOpenChange(open) {
     skillsMenuOpen = open;
     requestAnimationFrame(position);
@@ -229,6 +242,7 @@ export function createTeleopOnboarding(root) {
   return {
     onSkillCompleted,
     onSpeak,
+    onSpeechAvailabilityChange,
     onSkillsMenuOpenChange,
     destroy() {
       close(false);
