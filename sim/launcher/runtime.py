@@ -809,18 +809,23 @@ def ensure_home_mount_sources() -> None:
             ssh_dir.mkdir(mode=0o700)
 
 
-def os_container_foxglove_port_current(config: dict[str, object]) -> bool:
-    """False when a running OS container publishes the Foxglove bridge on a host
-    port other than the one the launcher now advertises.
+# Container port -> the host port this launcher now publishes it on. Container
+# ports never move; only the published side does.
+_CONTAINER_PORT_PUBLISH = (
+    ("443/tcp", SIM_HTTPS_PORT),
+    ("80/tcp", SIM_HTTP_PORT),
+    ("9090/tcp", SIM_ROSBRIDGE_PORT),
+    ("9999/udp", SIM_UDP_PORT),
+    ("8765/tcp", SIM_FOXGLOVE_PORT),
+)
 
-    Checkouts that ran the brain in a cloud-agent container shifted the publish
-    to 8766 (the agent owned 8765); a running container's published ports cannot
-    be changed in place, so such a container has to be recreated. An unanswered
-    probe reports "current" -- a flaky answer must not cost a recreate.
-    """
+
+def _container_port_map(name: str) -> dict[str, set[int]] | None:
+    """`docker port` as {"443/tcp": {443}}, or None when the probe could not
+    answer -- not running, or a wedged daemon. None is "unknown", never "drift"."""
     try:
         result = subprocess.run(
-            ["docker", "port", OS_CONTAINER_NAME, "8765"],
+            ["docker", "port", name],
             text=True,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -828,11 +833,32 @@ def os_container_foxglove_port_current(config: dict[str, object]) -> bool:
             timeout=DOCKER_PROBE_TIMEOUT_S,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return True
+        return None
     if result.returncode != 0:
+        return None
+    mapping: dict[str, set[int]] = {}
+    for line in result.stdout.splitlines():
+        spec, arrow, published = line.partition(" -> ")
+        host_port = published.rpartition(":")[2].strip()
+        if arrow and host_port.isdigit():
+            mapping.setdefault(spec.strip(), set()).add(int(host_port))
+    return mapping
+
+
+def os_container_ports_current() -> bool:
+    """False when the running OS container publishes any service on a host port
+    other than the one the launcher now resolves.
+
+    A running container's published ports cannot be changed in place, so drift
+    costs a recreate. Two ways to drift: checkouts that ran the brain in a
+    cloud-agent container shifted Foxglove to 8766 (the agent owned 8765), and
+    any INNATE_SIM_PORT_BASE change moves all five at once. An unanswered probe
+    reports "current" -- a flaky answer must not cost a recreate.
+    """
+    published = _container_port_map(OS_CONTAINER_NAME)
+    if published is None:
         return True
-    published = str(config["foxglove_port"])
-    return any(line.strip().endswith(f":{published}") for line in result.stdout.splitlines())
+    return all(host in published.get(spec, set()) for spec, host in _CONTAINER_PORT_PUBLISH)
 
 
 def retitle_step(message: str) -> None:
@@ -846,11 +872,8 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
     os_image = str(config["os_image"]).strip()
     os_image_auto = bool(config["os_image_auto"])
     reuse_running_container = container_running(OS_CONTAINER_NAME)
-    if reuse_running_container and not os_container_foxglove_port_current(config):
-        log(
-            "The running OS container publishes Foxglove on an older host port; "
-            f"recreating it to serve ws://localhost:{config['foxglove_port']}."
-        )
+    if reuse_running_container and not os_container_ports_current():
+        log(f"The running OS container publishes on older host ports; recreating it to serve {config['webapp_url']}.")
         reuse_running_container = False
 
     if reuse_running_container:
@@ -1207,23 +1230,10 @@ def _host_port_free(port: int, *, udp: bool) -> bool:
 
 def _container_published_ports(name: str) -> set[int]:
     """Host ports a container publishes. Read rather than assumed: a container
-    started under a different port block still publishes the OLD ports, and
-    os_container_foxglove_port_current is what recreates it for that."""
-    try:
-        result = subprocess.run(
-            ["docker", "port", name],
-            text=True,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=False,
-            timeout=DOCKER_PROBE_TIMEOUT_S,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return set()
-    if result.returncode != 0:
-        return set()  # not running, or publishing nothing
-    published = (line.rpartition(":")[2].strip() for line in result.stdout.splitlines())
-    return {int(port) for port in published if port.isdigit()}
+    started under a different port block still publishes the OLD ones, and
+    os_container_ports_current is what recreates it for that."""
+    published = _container_port_map(name)
+    return set() if published is None else {port for ports in published.values() for port in ports}
 
 
 def _own_world_server_alive() -> bool:
@@ -1610,10 +1620,11 @@ def wait_for_virtual_mars(config: dict[str, object], *, timeout_seconds: float =
 
 
 def runtime_already_running(config: dict[str, object]) -> bool:
-    """The running stack is both complete and current. A container from an older
-    checkout serves the Foxglove bridge on a host port the dashboard no longer
-    prints, and only a recreate can move it -- so that stack is not reusable."""
-    return os_runtime_ready(config) and os_container_foxglove_port_current(config)
+    """The running stack is both complete and current. A container started under
+    a different port block still publishes the ports the dashboard no longer
+    prints, and only a recreate can move them -- so it is not reusable, however
+    healthy it looks."""
+    return os_runtime_ready(config) and os_container_ports_current()
 
 
 def format_startup_check(ok: bool, label: str, detail: str) -> str:
