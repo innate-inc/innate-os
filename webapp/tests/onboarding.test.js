@@ -14,13 +14,15 @@ import {
   isCylinderPickupCompletion,
   isWaveCompletion,
   resolveAvailableStep,
+  teleopIntroBody,
 } from "../js/teleop/teleopOnboarding.js";
 
 assert.equal(ONBOARDING_SEEN_KEY, `innate.onboardingSeen.v${ONBOARDING_VERSION}`);
 assert.equal(ONBOARDING_VERSION, 3);
 assert.equal(ONBOARDING_REQUEST_EVENT, "innate:onboarding-request");
 assert.equal(TELEOP_ONBOARDING_PROGRESS_KEY, `innate.teleopOnboardingProgress.v${ONBOARDING_VERSION}`);
-assert.match(TELEOP_ONBOARDING_STEPS.intro.body, /move it around/);
+assert.match(teleopIntroBody(false), /microphone to hear what it hears/);
+assert.match(teleopIntroBody(true), /physical MARS/);
 assert.match(TELEOP_ONBOARDING_STEPS.wave.body, /\{shortcut\}/);
 assert.match(TELEOP_ONBOARDING_STEPS.talk.body, /speech bar/);
 assert.match(TELEOP_ONBOARDING_STEPS.pick.body, /Pick Any Object/);

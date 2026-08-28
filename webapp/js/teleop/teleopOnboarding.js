@@ -15,7 +15,7 @@ export const TELEOP_ONBOARDING_STEPS = {
   intro: {
     eyebrow: "Welcome to Innate OS",
     title: "This is your robot",
-    body: "You can move it around, make it talk, and trigger any type of skill directly.",
+    body: "You can move it, turn on its microphone to hear what it hears, make it talk, and trigger skills.",
   },
   wave: {
     eyebrow: "1 of 3 · Skills",
@@ -58,12 +58,18 @@ export const isCylinderPickupCompletion = (run) =>
 export const resolveAvailableStep = (step, speechAvailable) =>
   step === "talk" && speechAvailable === false ? "pick" : step;
 
+/** @param {boolean} simControls */
+export const teleopIntroBody = (simControls) => simControls
+  ? "You can move it, make it talk, and trigger skills. On a physical MARS, you can also turn on its microphone to hear what it hears."
+  : TELEOP_ONBOARDING_STEPS.intro.body;
+
 /**
  * Guided first-run mission for direct control. Steps advance only when the
  * corresponding command is actually sent and, for skills, succeeds.
  * @param {HTMLElement} root
+ * @param {{ simControls?: boolean }} [opts]
  */
-export function createTeleopOnboarding(root) {
+export function createTeleopOnboarding(root, opts = {}) {
   /** @type {HTMLElement | null} */
   let card = null;
   /** @type {HTMLElement | null} */
@@ -112,7 +118,7 @@ export function createTeleopOnboarding(root) {
     card.innerHTML =
       `<span class="microlabel agent-onboarding-eyebrow">${copy.eyebrow}</span>` +
       `<h2>${copy.title}</h2>` +
-      `<p>${copy.body.replace("{shortcut}", shortcut)}</p>`;
+      `<p>${(next === "intro" ? teleopIntroBody(!!opts.simControls) : copy.body).replace("{shortcut}", shortcut)}</p>`;
 
     const actions = document.createElement("div");
     actions.className = "agent-onboarding-actions";
