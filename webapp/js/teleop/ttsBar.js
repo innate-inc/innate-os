@@ -1,9 +1,9 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// TTS bar — type, Enter, the robot says it. While focused, keyboard drive is
-// suppressed (the typing-context guard in keyboardDrive). Ctrl or Esc returns
-// focus to the page so WASD works again.
+// TTS bar — press Enter to focus, type, then Enter again and the robot says it.
+// While focused, keyboard drive is suppressed (the typing-context guard in
+// keyboardDrive). Sending, Ctrl, or Esc returns focus to the page so WASD works.
 
 import { AGENT_STATUS_TOPIC, TTS_TOPIC } from "../constants.js";
 
@@ -26,12 +26,12 @@ export function createTtsBar(parent, rosClient) {
   input.autocomplete = "off";
   input.spellcheck = false;
   input.setAttribute("aria-label", "Text to speech");
-  input.setAttribute("aria-keyshortcuts", "/");
+  input.setAttribute("aria-keyshortcuts", "Enter");
 
   const focusHint = document.createElement("button");
   focusHint.type = "button";
   focusHint.className = "tts-key tts-focus-key";
-  focusHint.textContent = "/";
+  focusHint.textContent = "↵";
   focusHint.setAttribute("aria-label", "Focus speech input");
   focusHint.setAttribute("aria-describedby", "tts-shortcut-tip");
   focusHint.onclick = () => input.focus();
@@ -41,7 +41,7 @@ export function createTtsBar(parent, rosClient) {
   shortcutTip.className = "tts-shortcut-tip";
   shortcutTip.setAttribute("role", "tooltip");
   shortcutTip.innerHTML = `
-    <kbd class="tts-tip-key">/</kbd><span>focus input</span>
+    <kbd class="tts-tip-key">Enter</kbd><span>focus input</span>
     <span aria-hidden="true">·</span>
     <kbd class="tts-tip-key">Ctrl</kbd><span>return to drive</span>
   `;
@@ -68,7 +68,7 @@ export function createTtsBar(parent, rosClient) {
 
   function send() {
     const text = input.value.trim();
-    if (!text) return;
+    if (!text) return false;
     rosClient.publish(TTS_TOPIC, { data: text });
     input.value = "";
     syncActions();
@@ -78,6 +78,7 @@ export function createTtsBar(parent, rosClient) {
       flashTimer = null;
       wrap.classList.remove("sent");
     }, SENT_FLASH_MS);
+    return true;
   }
 
   sendBtn.onclick = send;
@@ -93,7 +94,7 @@ export function createTtsBar(parent, rosClient) {
       input.blur();
       return;
     }
-    if (e.key === "Enter" && !e.isComposing) send();
+    if (e.key === "Enter" && !e.isComposing && send()) input.blur();
   });
   input.addEventListener("keyup", (e) => {
     if (e.key !== "Control") return;
@@ -106,12 +107,20 @@ export function createTtsBar(parent, rosClient) {
 
   /** @param {KeyboardEvent} e */
   function focusSpeechInput(e) {
-    if (e.key !== "/" || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+    // A skill form also uses Enter to launch. Its handler prevents the event,
+    // closes the menu, and returns focus to body before this window listener
+    // sees the same keydown; do not reinterpret that consumed Enter as chat.
+    if (e.defaultPrevented || e.key !== "Enter" || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
     const active = document.activeElement;
+    const target = e.target;
+    const fromTyping =
+      target instanceof HTMLElement &&
+      (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
     const typing =
       active instanceof HTMLElement &&
       (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable);
-    if (input.disabled || typing) return;
+    const neutral = !active || active === document.body;
+    if (input.disabled || fromTyping || typing || !neutral) return;
     e.preventDefault();
     input.focus();
   }

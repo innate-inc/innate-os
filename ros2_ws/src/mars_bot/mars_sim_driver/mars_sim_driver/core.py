@@ -22,6 +22,7 @@ from PIL import Image
 
 from . import world
 from .constants import CAMERA_FOVY, CAMERA_HEIGHT, CAMERA_WIDTH, WRIST_CAMERA_FOVY
+from .drive_limits import clamp_cmd_vel
 from .props import PropRegistry
 from .world import ARM_HOME, SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG
 
@@ -334,8 +335,7 @@ class VirtualMars:
         mujoco.mj_forward(self.model, self.data)
 
     def set_cmd_vel(self, vx: float, wz: float) -> None:
-        self._cmd_vx = max(-world.MAX_LINEAR, min(world.MAX_LINEAR, vx))
-        self._cmd_wz = max(-world.MAX_YAW, min(world.MAX_YAW, wz))
+        self._cmd_vx, self._cmd_wz = clamp_cmd_vel(vx, wz)
         self._cmd_sim_time = self.data.time
 
     def set_joint_target(self, name: str, value: float) -> None:

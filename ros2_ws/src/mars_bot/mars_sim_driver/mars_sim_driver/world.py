@@ -14,6 +14,9 @@ from typing import TYPE_CHECKING
 
 import mujoco
 
+from .drive_limits import MAX_LINEAR as MAX_LINEAR
+from .drive_limits import MAX_YAW as MAX_YAW
+
 # Matches sim/viewer's spawn (scene.ts SPAWN_*) and the webapp map origin.
 SPAWN_X = -4.34
 SPAWN_Y = -0.17
@@ -25,9 +28,6 @@ SPAWN_YAW_DEG = -89.8
 KP_FORWARD = 200.0
 KP_LATERAL = 40.0
 KP_YAW = 3.0
-
-MAX_LINEAR = 0.4
-MAX_YAW = 1.0
 
 # Position hold for the stopped base (core._station_keeping). HOLD_SETTLE_S
 # outlasts a skill's per-camera-frame cmd_vel gaps.
