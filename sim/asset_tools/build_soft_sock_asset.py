@@ -179,6 +179,29 @@ def _nearest_uvs(source_vertices: np.ndarray, source_uvs: np.ndarray, vertices: 
     return np.asarray(source_uvs[nearest], dtype=np.float64)
 
 
+def _position_uvs(vertices: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """Map model X/Z directly to texture U/V for clean semantic regions."""
+    low = reference.min(axis=0)
+    span = np.maximum(reference.max(axis=0) - low, 1.0e-12)
+    normalized = (vertices - low) / span
+    return np.column_stack((normalized[:, 0], normalized[:, 2]))
+
+
+def _two_tone_gray_texture(size: int) -> Image.Image:
+    """Create a clean light body with dark cuff and medium heel/toe."""
+    body = (184, 187, 190)
+    cuff = (58, 61, 65)
+    heel_toe = (99, 103, 108)
+    pixels = np.empty((size, size, 3), dtype=np.uint8)
+    pixels[:] = body
+    u = np.linspace(0.0, 1.0, size)[None, :]
+    v = np.linspace(1.0, 0.0, size)[:, None]
+    heel_or_toe = ((u <= 0.28) & (v <= 0.35)) | ((u >= 0.70) & (v <= 0.55))
+    pixels[heel_or_toe] = heel_toe
+    pixels[np.broadcast_to(v >= 0.78, (size, size))] = cuff
+    return Image.fromarray(pixels)
+
+
 def _export_glb(
     path: Path,
     vertices: np.ndarray,
@@ -275,18 +298,24 @@ def main() -> None:
     parser.add_argument("--control-rings", type=int, default=9)
     parser.add_argument("--control-segments", type=int, default=12)
     parser.add_argument("--texture-size", type=int, default=1024)
+    parser.add_argument("--palette", choices=("authored", "two-tone-gray"), default="two-tone-gray")
     args = parser.parse_args()
 
     with np.load(args.source_data.resolve()) as stored:
         source_vertices = np.asarray(stored["vertices"], dtype=np.float64)
         source_faces = np.asarray(stored["faces"], dtype=np.int32)
         source_uvs = np.asarray(stored["uvs"], dtype=np.float64)
+    if args.palette == "two-tone-gray":
+        source_uvs = _position_uvs(source_vertices, source_vertices)
 
     vertices, faces = _regular_control_cage(source_vertices, source_faces, args.control_rings, args.control_segments)
     anchor = np.array((vertices[:, 0].mean(), vertices[:, 1].mean(), vertices[:, 2].min()))
     vertices -= anchor
     source_vertices = source_vertices - anchor
-    uvs = _nearest_uvs(source_vertices, source_uvs, vertices)
+    if args.palette == "two-tone-gray":
+        uvs = _position_uvs(vertices, source_vertices)
+    else:
+        uvs = _nearest_uvs(source_vertices, source_uvs, vertices)
     hinges, rest_angles, rest_lengths = _build_hinges(vertices, faces)
     boundary_edges, nonmanifold_edges = _topology_counts(faces)
     if not boundary_edges or nonmanifold_edges:
@@ -294,11 +323,16 @@ def main() -> None:
 
     physics_dir = args.physics_dir.resolve()
     physics_dir.mkdir(parents=True, exist_ok=True)
-    with Image.open(args.source_texture.resolve()) as source:
-        physics_texture = source.convert("RGB")
-        if max(physics_texture.size) > args.texture_size:
-            physics_texture.thumbnail((args.texture_size, args.texture_size), Image.Resampling.LANCZOS)
-        physics_texture.save(physics_dir / "texture_base_color.png", optimize=True)
+    if args.palette == "two-tone-gray":
+        physics_texture = _two_tone_gray_texture(args.texture_size)
+    else:
+        with Image.open(args.source_texture.resolve()) as source:
+            physics_texture = source.convert("RGB")
+            if max(physics_texture.size) > args.texture_size:
+                physics_texture.thumbnail((args.texture_size, args.texture_size), Image.Resampling.LANCZOS)
+            physics_texture.load()
+    output_texture = physics_dir / "texture_base_color.png"
+    physics_texture.save(output_texture, optimize=True)
     np.savez_compressed(
         physics_dir / "cloth_data.npz",
         vertices=vertices,
@@ -317,7 +351,7 @@ def main() -> None:
         source_vertices,
         source_faces,
         source_uvs,
-        args.source_texture.resolve(),
+        output_texture,
         args.texture_size,
     )
     skin_error, skin_partition_error = _export_skin(args.viewer_skin.resolve(), source_vertices, vertices, faces)
