@@ -30,6 +30,7 @@ import { createSkillsMenu } from "./skillsMenu.js";
 import { createTeleopOnboarding } from "./teleopOnboarding.js";
 import { createCameraSwitch } from "./cameraSwitch.js";
 import { dismissAllConfirms } from "../nav/confirm.js";
+import { setTtsAudioEnabled } from "../ttsAudio.js";
 
 // Runtime feature flags (config.json, served static). Sim-only debug controls are
 // off unless a deployment opts in. Fetched once when this module first loads (the
@@ -90,8 +91,13 @@ function buildCockpit(root) {
   const parts = [videoStage, ...(telemetry ? [telemetry] : [])];
   // Keep the listen control in the same place on sim and hardware. The sim
   // starts listening by default; hardware remains opt-in for privacy.
-  if (config.simControls) session.setAudio(true);
-  parts.push(createAudioToggle(rightRail, session, videoStage.audioEl));
+  if (config.simControls) {
+    setTtsAudioEnabled(true);
+    session.setAudio(true);
+  }
+  parts.push(createAudioToggle(rightRail, session, videoStage.audioEl, {
+    onChange: config.simControls ? setTtsAudioEnabled : undefined,
+  }));
   parts.push(
     createSpeedModes(rightRail, ros),
     createHeadTilt(rightRail, ros),
@@ -130,6 +136,7 @@ function buildCockpit(root) {
       // navigating away doesn't leave one floating over the next page.
       dismissAllConfirms();
       for (const part of parts) part.destroy();
+      if (config.simControls) setTtsAudioEnabled(true);
       releaseSession(session);
       root.innerHTML = "";
     },

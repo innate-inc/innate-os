@@ -185,14 +185,15 @@ export function createVideoStage(parent, session) {
 }
 
 /**
- * Robot-mic toggle. Starts muted; the click both requests the audio m-line
- * (debounced rebuild in the session) and primes playback inside the gesture.
+ * Robot-sound toggle. On hardware, the click requests the microphone audio
+ * m-line and primes playback; in sim it controls browser speech playback.
  * @param {HTMLElement} parent
  * @param {import("../webrtcSession.js").WebRtcSession} session
  * @param {HTMLAudioElement | null} audioEl
+ * @param {{ onChange?: (on: boolean) => void }} [opts]
  * @returns {{ destroy: () => void }}
  */
-export function createAudioToggle(parent, session, audioEl) {
+export function createAudioToggle(parent, session, audioEl, opts = {}) {
   const button = document.createElement("button");
   button.className = "icon-toggle audio-toggle";
   button.type = "button";
@@ -205,14 +206,15 @@ export function createAudioToggle(parent, session, audioEl) {
 
   const unsub = session.onChange((state) => {
     button.classList.toggle("active", state.audioRequested);
-    button.title = state.audioRequested ? "Robot mic on — click to mute" : "Robot mic off — click to listen";
+    button.title = state.audioRequested ? "Robot sound on — click to mute" : "Robot sound off — click to listen";
     button.setAttribute("aria-pressed", String(state.audioRequested));
-    button.setAttribute("aria-label", "Robot microphone");
+    button.setAttribute("aria-label", "Robot sound");
   });
 
   button.addEventListener("click", () => {
     const next = !session.state.audioRequested;
     session.setAudio(next);
+    opts.onChange?.(next);
     if (next && audioEl) {
       // Inside the gesture: unlocks audible playback for this page session.
       audioEl.play().catch(() => {
