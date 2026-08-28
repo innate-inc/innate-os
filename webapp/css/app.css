@@ -1633,6 +1633,13 @@ select.skill-input {
   top: 72px;
 }
 
+/* The hardware telemetry card is taller than the simulator's camera strip.
+   Clear its bottom edge so Relocate cannot be covered while Go To remains
+   visible below it. */
+.cockpit.teleop-hardware .cam-map-host.big .map-controls {
+  top: 123px;
+}
+
 /* Map promoted to the big stage: full-bleed under the control overlays. Inserted as the stage's first
    child, so DOM order keeps the overlays (and the strip) painting on top; the video stage hides. */
 .cam-map-host.big {
@@ -9389,7 +9396,8 @@ select.skill-input {
   /* The camera strip spans the whole top on phones -- start below the tiles
      (the .big selector outranks the desktop cockpit offset). */
   .map-controls,
-  .cam-map-host.big .map-controls {
+  .cam-map-host.big .map-controls,
+  .cockpit.teleop-hardware .cam-map-host.big .map-controls {
     top: calc(26px + min(120px, 24vw));
     left: 14px;
   }

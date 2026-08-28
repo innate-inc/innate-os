@@ -55,6 +55,10 @@ export function mount(stage) {
  * @returns {{ destroy: () => void }}
  */
 function buildCockpit(root) {
+  // Hardware shows the telemetry card in the map's top-left corner; expose the
+  // mode to CSS so map controls can clear it without moving the sim layout.
+  root.classList.toggle("teleop-hardware", !config.simControls);
+
   const session = createSession();
   dbg.session = session;
 
