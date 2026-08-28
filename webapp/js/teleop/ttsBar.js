@@ -107,7 +107,10 @@ export function createTtsBar(parent, rosClient) {
 
   /** @param {KeyboardEvent} e */
   function focusSpeechInput(e) {
-    if (e.key !== "Enter" || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+    // A skill form also uses Enter to launch. Its handler prevents the event,
+    // closes the menu, and returns focus to body before this window listener
+    // sees the same keydown; do not reinterpret that consumed Enter as chat.
+    if (e.defaultPrevented || e.key !== "Enter" || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
     const active = document.activeElement;
     const target = e.target;
     const fromTyping =
