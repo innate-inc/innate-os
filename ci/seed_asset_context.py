@@ -123,7 +123,7 @@ RAW_FILES = {
     # run the simulator, and pinning each byte keeps the asset image reproducible.
     SIM / "assets" / "softbodies" / "soft_sock" / "cloth_data.npz": (
         f"{_RAW_RELEASE}/soft_sock_cloth_data.npz",
-        "d417af5c88f394282f383bda9ba81adc671565ee8963486cb6a083d77d0376ae",
+        "9d967b2fb830bce456bf3411ad34aa1f35efe934ed855706b07ac8bbef58c6f2",
     ),
     SIM / "assets" / "softbodies" / "soft_sock" / "texture_base_color.png": (
         f"{_RAW_RELEASE}/soft_sock_texture_base_color.png",
@@ -131,11 +131,11 @@ RAW_FILES = {
     ),
     SIM / "viewer" / "public" / "models" / "soft_sock.glb": (
         f"{_RAW_RELEASE}/soft_sock.glb",
-        "9d83274023ab1b0228ed63c9cb2616c46b71dc2d240035b2fef0c753bd999aee",
+        "71fe9deb6331ffa38d141522f2b7deab1e3184b75bcb62a36625c5f8bf0268ac",
     ),
     SIM / "viewer" / "public" / "models" / "soft_sock_skin.bin": (
         f"{_RAW_RELEASE}/soft_sock_skin.bin",
-        "41fc9d1e6e0ea00bb9577ee79ad14c3bd55439d68dd7ee125baaef509b40e39c",
+        "3bc4cfe01e8c0574ea16e140492aacdc770d342a0552f93f7f50184f642328db",
     ),
 }
 

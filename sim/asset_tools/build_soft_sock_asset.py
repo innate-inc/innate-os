@@ -4,9 +4,9 @@
 The source bundle keeps a high-resolution control surface.  That surface is
 useful for offline renders but too expensive for the simulator's wall-clock
 physics loop. Directly decimating its close inner/outer layers makes them
-intersect at tiny resolutions, so this tool builds a low-resolution convex
-cage, opens it at the cuff for cloth-like bending, and emits the two artifacts
-the runtime consumes:
+intersect at tiny resolutions, so this tool builds a regularly sampled
+cross-section cage with an open cuff and emits the two artifacts the runtime
+consumes:
 
 * ``cloth_data.npz`` for MuJoCo flex topology and rest-dihedral bending.
 * a textured, double-sided GLB plus a compact skin map for Three.js.
@@ -21,7 +21,6 @@ import argparse
 import json
 from pathlib import Path
 
-import coacd
 import numpy as np
 import trimesh
 from PIL import Image
@@ -71,79 +70,103 @@ def _topology_counts(faces: np.ndarray) -> tuple[int, int]:
     )
 
 
-def _convex_control_cage(
-    source_vertices: np.ndarray, source_faces: np.ndarray, target_vertices: int
-) -> tuple[np.ndarray, np.ndarray, float]:
-    """Build one deterministic convex cage and verify every face plane.
-
-    A convex cage is intentional here: QEM simplification of the authored
-    sock's close inner/outer layers produced penetrating rest triangles, so a
-    self-collision solve injected energy before the first physics step.  The
-    high-resolution outline is still preserved by the separate render skin.
-    """
-    coacd.set_log_level("off")
-    parts = coacd.run_coacd(
-        coacd.Mesh(source_vertices, source_faces),
-        threshold=1.0,
-        max_convex_hull=1,
-        preprocess_mode="off",
-        resolution=200,
-        mcts_nodes=4,
-        mcts_iterations=20,
-        mcts_max_depth=1,
-        merge=True,
-        decimate=True,
-        max_ch_vertex=target_vertices,
-        seed=0,
-    )
-    if len(parts) != 1:
-        raise RuntimeError(f"expected one convex control cage, got {len(parts)}")
-    vertices = np.asarray(parts[0][0], dtype=np.float64)
-    faces = np.asarray(parts[0][1], dtype=np.int32)
-    if len(vertices) > target_vertices:
-        raise RuntimeError(f"control cage has {len(vertices)} vertices, target was {target_vertices}")
-
+def _cross_section_points(vertices: np.ndarray, faces: np.ndarray, z: float) -> np.ndarray:
+    """Intersect the authored triangles with one horizontal plane."""
     triangles = vertices[faces]
-    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
-    centre = vertices.mean(axis=0)
-    orientation = np.einsum("ij,ij->i", normals, triangles.mean(axis=1) - centre)
-    if np.median(orientation) < 0.0:
-        faces = faces[:, (0, 2, 1)]
-        triangles = vertices[faces]
-        normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
-        orientation = np.einsum("ij,ij->i", normals, triangles.mean(axis=1) - centre)
-    if np.any(orientation <= 0.0):
-        raise RuntimeError("convex control cage has inconsistent face winding")
-    normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1.0e-12)
-    plane_distance = np.einsum("fvi,fi->fv", vertices[None, :, :] - triangles[:, None, 0, :], normals)
-    max_violation = float(max(0.0, np.max(plane_distance)))
-    if max_violation > 1.0e-8:
-        raise RuntimeError(f"control cage is not convex; plane violation {max_violation:g}m")
-    return vertices, faces, max_violation
+    points: list[np.ndarray] = []
+    for a, b in ((0, 1), (1, 2), (2, 0)):
+        va, vb = triangles[:, a], triangles[:, b]
+        denominator = vb[:, 2] - va[:, 2]
+        crossing = (np.abs(denominator) > 1.0e-12) & ((va[:, 2] - z) * (vb[:, 2] - z) <= 0.0)
+        t = (z - va[crossing, 2]) / denominator[crossing]
+        points.append(va[crossing, :2] + t[:, None] * (vb[crossing, :2] - va[crossing, :2]))
+    return np.unique(np.round(np.concatenate(points), 10), axis=0)
 
 
-def _open_cuff(vertices: np.ndarray, faces: np.ndarray) -> tuple[np.ndarray, np.ndarray, int]:
-    """Remove the +Z cap so the control surface bends like an open sock.
+def _convex_hull_2d(points: np.ndarray) -> np.ndarray:
+    """Andrew monotone-chain hull, returned counter-clockwise."""
+    ordered = sorted(map(tuple, points.tolist()))
+    if len(ordered) < 3:
+        raise RuntimeError("sock cross-section has fewer than three points")
 
-    The render mesh remains unchanged. Removing a connected cap (rather than
-    one triangle) also removes its internal edge constraints; a fully closed
-    triangulated convex shell would otherwise be mechanically rigid even
-    with zero bending stiffness.
+    def cross(o: tuple[float, float], a: tuple[float, float], b: tuple[float, float]) -> float:
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: list[tuple[float, float]] = []
+    for point in ordered:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0.0:
+            lower.pop()
+        lower.append(point)
+    upper: list[tuple[float, float]] = []
+    for point in reversed(ordered):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0.0:
+            upper.pop()
+        upper.append(point)
+    return np.asarray(lower[:-1] + upper[:-1], dtype=np.float64)
+
+
+def _sample_hull_radially(hull: np.ndarray, segments: int) -> np.ndarray:
+    """Sample a convex section at consistent angles around an interior point."""
+    center = hull.mean(axis=0)
+    sampled = []
+    for angle in np.linspace(0.0, 2.0 * np.pi, segments, endpoint=False):
+        direction = np.asarray((np.cos(angle), np.sin(angle)))
+        hits = []
+        for start, end in zip(hull, np.roll(hull, -1, axis=0), strict=True):
+            edge = end - start
+            denominator = direction[0] * edge[1] - direction[1] * edge[0]
+            if abs(denominator) < 1.0e-12:
+                continue
+            relative = start - center
+            distance = (relative[0] * edge[1] - relative[1] * edge[0]) / denominator
+            fraction = (relative[0] * direction[1] - relative[1] * direction[0]) / denominator
+            if distance >= 0.0 and -1.0e-9 <= fraction <= 1.0 + 1.0e-9:
+                hits.append(distance)
+        if not hits:
+            raise RuntimeError("failed to intersect a radial ray with the sock cross-section")
+        sampled.append(center + min(hits) * direction)
+    return np.asarray(sampled)
+
+
+def _regular_control_cage(
+    source_vertices: np.ndarray, source_faces: np.ndarray, rings: int, segments: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build an evenly sampled, open-cuff surface instead of a lumpy decimation.
+
+    The former 42-point convex hull put nearly every vertex at the sole or
+    cuff, leaving the middle of the sock as a few huge rigid triangles.  This
+    swept cage gives every longitudinal region the same deformation budget.
     """
-    triangles = vertices[faces]
-    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
-    normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1.0e-12)
-    z_max = float(vertices[:, 2].max())
-    z_span = z_max - float(vertices[:, 2].min())
-    remove = (normals[:, 2] > 0.9) & (triangles.mean(axis=1)[:, 2] > z_max - 0.1 * z_span)
-    removed = int(np.count_nonzero(remove))
-    if removed < 2:
-        raise RuntimeError(f"control cage cuff selection removed only {removed} faces")
-    faces = faces[~remove]
-    used = np.unique(faces)
-    remap = np.full(len(vertices), -1, dtype=np.int32)
-    remap[used] = np.arange(len(used), dtype=np.int32)
-    return vertices[used], remap[faces], removed
+    z_min = float(source_vertices[:, 2].min())
+    z_max = float(source_vertices[:, 2].max())
+    inset = min(0.002, 0.02 * (z_max - z_min))
+    levels = np.linspace(z_min + inset, z_max - inset, rings)
+    ring_vertices = []
+    for z in levels:
+        section = _cross_section_points(source_vertices, source_faces, float(z))
+        sampled = _sample_hull_radially(_convex_hull_2d(section), segments)
+        ring_vertices.append(np.column_stack((sampled, np.full(segments, z))))
+
+    vertices = np.concatenate(ring_vertices, axis=0)
+    bottom_center = np.asarray((vertices[:segments, 0].mean(), vertices[:segments, 1].mean(), z_min))
+    vertices = np.vstack((vertices, bottom_center))
+    bottom = len(vertices) - 1
+    faces: list[tuple[int, int, int]] = []
+    for ring in range(rings - 1):
+        lower = ring * segments
+        upper = (ring + 1) * segments
+        for segment in range(segments):
+            following = (segment + 1) % segments
+            a, b = lower + segment, lower + following
+            c, d = upper + following, upper + segment
+            if (ring + segment) % 2:
+                faces.extend(((a, b, d), (b, c, d)))
+            else:
+                faces.extend(((a, b, c), (a, c, d)))
+    for segment in range(segments):
+        following = (segment + 1) % segments
+        faces.append((bottom, following, segment))
+    return vertices, np.asarray(faces, dtype=np.int32)
 
 
 def _nearest_uvs(source_vertices: np.ndarray, source_uvs: np.ndarray, vertices: np.ndarray) -> np.ndarray:
@@ -195,48 +218,51 @@ def _export_skin(
     render_vertices: np.ndarray,
     control_vertices: np.ndarray,
     control_faces: np.ndarray,
-) -> float:
-    """Write render-vertex bindings to moving control triangles.
+) -> tuple[float, float]:
+    """Write a smooth radial-basis deformation map (ISK2).
 
-    ISK1 layout is deliberately browser-native: a 16-byte little-endian
-    header, uint16 control indices, alignment padding, float32 barycentric
-    weights, then float32 offsets in each rest triangle's local frame.
+    Per-triangle nearest bindings are discontinuous: neighboring render
+    vertices can follow unrelated cage faces and tear apart as those faces
+    fold.  A polyharmonic RBF map is continuous over the whole sock and its
+    affine tail reproduces translations, rotations, and rest geometry.
     """
-    control_mesh = trimesh.Trimesh(vertices=control_vertices, faces=control_faces, process=False, maintain_order=True)
-    closest, _distance, triangle_ids = trimesh.proximity.closest_point_naive(control_mesh, render_vertices)
-    triangles = control_vertices[control_faces[triangle_ids]]
-    weights = trimesh.triangles.points_to_barycentric(triangles, closest)
-    indices = np.asarray(control_faces[triangle_ids], dtype="<u2")
-
-    edge1 = triangles[:, 1] - triangles[:, 0]
-    tangent1 = edge1 / np.maximum(np.linalg.norm(edge1, axis=1, keepdims=True), 1.0e-12)
-    normal = np.cross(edge1, triangles[:, 2] - triangles[:, 0])
-    normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1.0e-12)
-    tangent2 = np.cross(normal, tangent1)
-    residual = render_vertices - closest
-    offsets = np.column_stack(
-        (
-            np.einsum("ij,ij->i", residual, tangent1),
-            np.einsum("ij,ij->i", residual, tangent2),
-            np.einsum("ij,ij->i", residual, normal),
-        )
-    ).astype("<f4")
-
-    reconstructed = (
-        np.einsum("ni,nij->nj", weights, triangles)
-        + offsets[:, 0, None] * tangent1
-        + offsets[:, 1, None] * tangent2
-        + offsets[:, 2, None] * normal
+    del control_faces  # topology drives physics; smooth skinning uses its vertices
+    scale = float(np.max(np.ptp(control_vertices, axis=0)))
+    controls = control_vertices / scale
+    renders = render_vertices / scale
+    distances = np.linalg.norm(controls[:, None, :] - controls[None, :, :], axis=2)
+    kernel = distances**3
+    affine = np.column_stack((np.ones(len(controls)), controls))
+    system = np.block(
+        [
+            [kernel + np.eye(len(controls)) * 1.0e-10, affine],
+            [affine.T, np.zeros((4, 4))],
+        ]
     )
-    error = float(np.max(np.linalg.norm(reconstructed - render_vertices, axis=1)))
+    rhs = np.vstack((np.eye(len(controls)), np.zeros((4, len(controls)))))
+    coefficients = np.linalg.solve(system, rhs)
+    evaluation = np.column_stack(
+        (
+            np.linalg.norm(renders[:, None, :] - controls[None, :, :], axis=2) ** 3,
+            np.ones(len(renders)),
+            renders,
+        )
+    )
+    weights = evaluation @ coefficients
+    reconstructed = weights @ control_vertices
+    rest_error = float(np.max(np.linalg.norm(reconstructed - render_vertices, axis=1)))
+    partition_error = float(np.max(np.abs(weights.sum(axis=1) - 1.0)))
 
-    header = b"ISK1" + np.asarray((len(render_vertices), len(control_vertices), 0), dtype="<u4").tobytes()
-    index_bytes = indices.tobytes()
-    padding = b"\0" * ((-len(index_bytes)) % 4)
-    payload = header + index_bytes + padding + np.asarray(weights, dtype="<f4").tobytes() + offsets.tobytes()
+    header = b"ISK2" + np.asarray((len(render_vertices), len(control_vertices), 0), dtype="<u4").tobytes()
+    payload = (
+        header
+        + np.asarray(control_vertices, dtype="<f4").tobytes()
+        + np.asarray(render_vertices, dtype="<f4").tobytes()
+        + np.asarray(weights, dtype="<f4").tobytes()
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
-    return error
+    return rest_error, partition_error
 
 
 def main() -> None:
@@ -246,7 +272,8 @@ def main() -> None:
     parser.add_argument("--physics-dir", type=Path, required=True)
     parser.add_argument("--viewer-glb", type=Path, required=True)
     parser.add_argument("--viewer-skin", type=Path, required=True)
-    parser.add_argument("--target-control-vertices", type=int, default=42)
+    parser.add_argument("--control-rings", type=int, default=9)
+    parser.add_argument("--control-segments", type=int, default=12)
     parser.add_argument("--texture-size", type=int, default=1024)
     args = parser.parse_args()
 
@@ -255,10 +282,7 @@ def main() -> None:
         source_faces = np.asarray(stored["faces"], dtype=np.int32)
         source_uvs = np.asarray(stored["uvs"], dtype=np.float64)
 
-    vertices, faces, max_convex_plane_violation = _convex_control_cage(
-        source_vertices, source_faces, args.target_control_vertices
-    )
-    vertices, faces, removed_cuff_faces = _open_cuff(vertices, faces)
+    vertices, faces = _regular_control_cage(source_vertices, source_faces, args.control_rings, args.control_segments)
     anchor = np.array((vertices[:, 0].mean(), vertices[:, 1].mean(), vertices[:, 2].min()))
     vertices -= anchor
     source_vertices = source_vertices - anchor
@@ -296,15 +320,15 @@ def main() -> None:
         args.source_texture.resolve(),
         args.texture_size,
     )
-    skin_error = _export_skin(args.viewer_skin.resolve(), source_vertices, vertices, faces)
+    skin_error, skin_partition_error = _export_skin(args.viewer_skin.resolve(), source_vertices, vertices, faces)
     diagnostics = {
         "source_vertices": len(source_vertices),
         "source_triangles": len(source_faces),
         "control_vertices": len(vertices),
         "control_triangles": len(faces),
-        "control_strategy": "open_cuff_convex_cage",
-        "removed_cuff_faces": removed_cuff_faces,
-        "max_convex_plane_violation_m": max_convex_plane_violation,
+        "control_strategy": "regular_cross_section_cage",
+        "control_rings": args.control_rings,
+        "control_segments": args.control_segments,
         "bending_hinges": len(hinges),
         "boundary_edges": boundary_edges,
         "nonmanifold_edges": nonmanifold_edges,
@@ -312,6 +336,7 @@ def main() -> None:
         "render_vertices": len(source_vertices),
         "render_triangles": len(source_faces),
         "skin_rest_max_error_m": skin_error,
+        "skin_partition_max_error": skin_partition_error,
         "viewer_glb_bytes": args.viewer_glb.resolve().stat().st_size,
         "viewer_skin_bytes": args.viewer_skin.resolve().stat().st_size,
         "physics_texture_bytes": (physics_dir / "texture_base_color.png").stat().st_size,

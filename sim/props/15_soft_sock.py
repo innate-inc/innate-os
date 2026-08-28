@@ -17,7 +17,7 @@ with np.load(_CLOTH_DATA) as _stored:
     _RENDER_VERTEX_COUNT = int(np.asarray(_stored["render_vertex_count"]))
 
 # The browser keeps the original 2,496-vertex textured surface and skins it
-# from the 42 vertices MuJoCo actually simulates.  Native robot cameras use the
+# from the 109 vertices MuJoCo actually simulates. Native robot cameras use the
 # separately copied texture on the low-resolution flex, so both views retain
 # the authored pattern rather than substituting a generic material.
 PROP = SoftProp(
@@ -29,7 +29,7 @@ PROP = SoftProp(
     deformable_id=1,
     rgba=(0.34117647, 0.57254902, 0.72156863, 1.0),
     # The generated local frame is XY-centred with its lowest point at z=0.
-    size=(0.0681, 0.0345, 0.1007),
+    size=(0.0553, 0.0299, 0.0998),
     mass=0.065,
     friction=(0.8, 0.02, 0.002),
     # Ten times the generic cloth default is the stiffest tested setting that

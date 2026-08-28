@@ -30,6 +30,29 @@ function isk1({
   return buffer;
 }
 
+function isk2({
+  renderCount = 1,
+  controlCount = 2,
+  controlRest = [0, 0, 0, 1, 0, 0],
+  renderRest = [0.25, 0, 0],
+  weights = [0.75, 0.25],
+  reserved = 0,
+} = {}) {
+  const controlOffset = ISK1_HEADER_BYTES;
+  const renderOffset = controlOffset + controlCount * 3 * 4;
+  const weightsOffset = renderOffset + renderCount * 3 * 4;
+  const buffer = new ArrayBuffer(weightsOffset + renderCount * controlCount * 4);
+  new Uint8Array(buffer).set([0x49, 0x53, 0x4b, 0x32]); // ISK2
+  const view = new DataView(buffer);
+  view.setUint32(4, renderCount, true);
+  view.setUint32(8, controlCount, true);
+  view.setUint32(12, reserved, true);
+  controlRest.forEach((value, index) => view.setFloat32(controlOffset + index * 4, value, true));
+  renderRest.forEach((value, index) => view.setFloat32(renderOffset + index * 4, value, true));
+  weights.forEach((value, index) => view.setFloat32(weightsOffset + index * 4, value, true));
+  return buffer;
+}
+
 test("decodes aligned ISK1 indices, weights, and local offsets", () => {
   const decoded = decodeDeformableSkin(isk1());
   assert.equal(decoded.renderCount, 1);
@@ -58,4 +81,19 @@ test("skins a render vertex in the triangle tangent frame", () => {
     Array.from(skinDeformablePositions(skin, controls)).map((v) => Number(v.toFixed(6))),
     [1.3, 2.5, 3],
   );
+});
+
+test("decodes and applies a smooth ISK2 displacement map", () => {
+  const skin = decodeDeformableSkin(isk2());
+  assert.equal(skin.kind, "smooth");
+  const controls = new Float32Array([
+    2, 3, 4,
+    3, 3, 4,
+  ]);
+  assert.deepEqual(Array.from(skinDeformablePositions(skin, controls)), [2.25, 3, 4]);
+});
+
+test("rejects malformed ISK2 data", () => {
+  assert.throws(() => decodeDeformableSkin(isk2({ reserved: 1 })), /reserved value 1/);
+  assert.throws(() => decodeDeformableSkin(isk2().slice(0, -4)), /expected exactly/);
 });

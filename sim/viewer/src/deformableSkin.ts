@@ -1,5 +1,6 @@
-/** Static mapping from a low-resolution simulated surface to a render mesh. */
-export interface DeformableSkin {
+/** Legacy per-triangle mapping kept so old asset bundles remain readable. */
+export interface TriangleDeformableSkin {
+  kind: "triangle";
   renderCount: number;
   controlCount: number;
   /** Three simulated-vertex indices per render vertex. */
@@ -10,8 +11,22 @@ export interface DeformableSkin {
   localOffsets: Float32Array;
 }
 
+/** Continuous affine-preserving mapping used by current deformable assets. */
+export interface SmoothDeformableSkin {
+  kind: "smooth";
+  renderCount: number;
+  controlCount: number;
+  controlRest: Float32Array;
+  renderRest: Float32Array;
+  /** Row-major renderCount x controlCount displacement weights. */
+  weights: Float32Array;
+}
+
+export type DeformableSkin = TriangleDeformableSkin | SmoothDeformableSkin;
+
 export const ISK1_HEADER_BYTES = 16;
 const ISK1_MAGIC_LE = 0x314b5349; // ASCII "ISK1" read little-endian.
+const ISK2_MAGIC_LE = 0x324b5349; // ASCII "ISK2" read little-endian.
 const BASIS_EPSILON = 1e-12;
 
 /** Decode a static ISK1 skin map.
@@ -32,7 +47,8 @@ export function decodeDeformableSkin(buffer: ArrayBuffer): DeformableSkin {
   }
 
   const view = new DataView(buffer);
-  if (view.getUint32(0, true) !== ISK1_MAGIC_LE) throw new Error("invalid ISK1 magic");
+  const magic = view.getUint32(0, true);
+  if (magic !== ISK1_MAGIC_LE && magic !== ISK2_MAGIC_LE) throw new Error("invalid deformable skin magic");
 
   const renderCount = view.getUint32(4, true);
   const controlCount = view.getUint32(8, true);
@@ -40,6 +56,28 @@ export function decodeDeformableSkin(buffer: ArrayBuffer): DeformableSkin {
   if (renderCount === 0) throw new Error("ISK1 render count must be positive");
   if (controlCount === 0) throw new Error("ISK1 control count must be positive");
   if (reserved !== 0) throw new Error(`unsupported ISK1 flags/reserved value ${reserved}`);
+
+  if (magic === ISK2_MAGIC_LE) {
+    const controlValues = controlCount * 3;
+    const renderValues = renderCount * 3;
+    const weightValues = renderCount * controlCount;
+    const controlOffset = ISK1_HEADER_BYTES;
+    const renderOffset = controlOffset + controlValues * Float32Array.BYTES_PER_ELEMENT;
+    const weightsOffset = renderOffset + renderValues * Float32Array.BYTES_PER_ELEMENT;
+    const expectedBytes = weightsOffset + weightValues * Float32Array.BYTES_PER_ELEMENT;
+    if (buffer.byteLength !== expectedBytes) {
+      throw new Error(`ISK2 skin is ${buffer.byteLength} bytes; expected exactly ${expectedBytes}`);
+    }
+    const controlRest = new Float32Array(buffer, controlOffset, controlValues);
+    const renderRest = new Float32Array(buffer, renderOffset, renderValues);
+    const weights = new Float32Array(buffer, weightsOffset, weightValues);
+    for (const values of [controlRest, renderRest, weights]) {
+      for (let i = 0; i < values.length; i += 1) {
+        if (!Number.isFinite(values[i])) throw new Error(`ISK2 value is not finite at element ${i}`);
+      }
+    }
+    return { kind: "smooth", renderCount, controlCount, controlRest, renderRest, weights };
+  }
 
   const tupleCount = renderCount * 3;
   const indicesOffset = ISK1_HEADER_BYTES;
@@ -63,7 +101,7 @@ export function decodeDeformableSkin(buffer: ArrayBuffer): DeformableSkin {
     if (!Number.isFinite(localOffsets[i])) throw new Error(`ISK1 local offset ${i} is not finite`);
   }
 
-  return { renderCount, controlCount, indices, weights, localOffsets };
+  return { kind: "triangle", renderCount, controlCount, indices, weights, localOffsets };
 }
 
 /** CPU-skin a render mesh from its simulated control surface.
@@ -84,6 +122,28 @@ export function skinDeformablePositions(
   }
   if (output.length !== expectedOutput) {
     throw new Error(`render buffer has ${output.length} values; expected ${expectedOutput}`);
+  }
+
+  if (skin.kind === "smooth") {
+    const { controlRest, renderRest, weights } = skin;
+    for (let render = 0; render < skin.renderCount; render += 1) {
+      const outputOffset = render * 3;
+      let x = renderRest[outputOffset];
+      let y = renderRest[outputOffset + 1];
+      let z = renderRest[outputOffset + 2];
+      const weightOffset = render * skin.controlCount;
+      for (let control = 0; control < skin.controlCount; control += 1) {
+        const controlOffset = control * 3;
+        const weight = weights[weightOffset + control];
+        x += weight * (controls[controlOffset] - controlRest[controlOffset]);
+        y += weight * (controls[controlOffset + 1] - controlRest[controlOffset + 1]);
+        z += weight * (controls[controlOffset + 2] - controlRest[controlOffset + 2]);
+      }
+      output[outputOffset] = x;
+      output[outputOffset + 1] = y;
+      output[outputOffset + 2] = z;
+    }
+    return output;
   }
 
   const { indices, weights, localOffsets } = skin;
