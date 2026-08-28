@@ -30,6 +30,7 @@ const RIBBON_FILL = "rgba(0, 255, 136, 0.85)";
 const NAV_STALE_MS = 4000;
 // A route starting farther than this from the robot is not connected to its feet.
 const ANCHOR_NEAR_M = 0.4;
+const NEAR_CLIP_M = 0.1;
 const STORE_KEY = "innate.trajOverlay";
 
 /** @param {number} pitchDeg @returns {number} height above the floor in metres */
@@ -53,12 +54,13 @@ export function robotRelative(points, pose) {
 }
 
 /** Each culled point splits the route so disjoint visible runs are not bridged.
- * startAtRobot: the first path point is visible and lies at the robot, so the
- * leading segment may extend to the robot's feet without fabricating route.
+ * A route that starts visible at the robot gains one leading point: the true
+ * robot→start ground line clipped at the near plane, so the ribbon meets the
+ * robot's feet by projection, never by image-space extrapolation.
  * @param {Array<{ fwd: number, right: number }>} points
  * @param {number} pitchDeg head pitch, positive up
  * @param {number} vw @param {number} vh video frame size in pixels
- * @returns {{ segments: Array<Array<{ x: number, y: number, depth: number }>>, startAtRobot: boolean }} */
+ * @returns {Array<Array<{ x: number, y: number, depth: number }>>} */
 export function projectToImage(points, pitchDeg, vw, vh) {
   const sx = vw / CAMERA.CALIB_W;
   const sy = vh / CAMERA.CALIB_H;
@@ -70,39 +72,48 @@ export function projectToImage(points, pitchDeg, vw, vh) {
   const pitch = (pitchDeg * Math.PI) / 180;
   const cp = Math.cos(pitch);
   const sp = Math.sin(pitch);
+
+  /** @param {number} fwd @param {number} right
+   * @returns {{ x: number, y: number, depth: number }} */
+  const project = (fwd, right) => {
+    const rotY = -h * cp - fwd * sp;
+    const rotZ = Math.max(NEAR_CLIP_M, -h * sp + fwd * cp);
+    return { x: fx * (right / rotZ) + cx, y: fy * (-rotY / rotZ) + cy, depth: rotZ };
+  };
+
   /** @type {Array<Array<{ x: number, y: number, depth: number }>>} */
   const segments = [];
   /** @type {Array<{ x: number, y: number, depth: number }> | null} */
   let seg = null;
-  let startAtRobot = false;
+  let firstVisible = false;
   for (let i = 0; i < points.length; i++) {
     const p = points[i];
-    const rotY = -h * cp - p.fwd * sp;
-    const rotZ = -h * sp + p.fwd * cp;
-    if (rotZ <= 0.1) {
+    if (-h * sp + p.fwd * cp <= NEAR_CLIP_M) {
       seg = null;
       continue;
     }
-    const u = fx * (p.right / rotZ) + cx;
-    const v = fy * (-rotY / rotZ) + cy;
-    if (u < 0 || u > vw || v < 0 || v > vh) {
+    const pt = project(p.fwd, p.right);
+    if (pt.x < 0 || pt.x > vw || pt.y < 0 || pt.y > vh) {
       seg = null;
       continue;
     }
     if (!seg) segments.push((seg = []));
-    seg.push({ x: u, y: v, depth: rotZ });
-    if (i === 0 && Math.hypot(p.fwd, p.right) <= ANCHOR_NEAR_M) startAtRobot = true;
+    seg.push(pt);
+    if (i === 0) firstVisible = true;
   }
-  return { segments, startAtRobot };
+
+  if (firstVisible && Math.hypot(points[0].fwd, points[0].right) <= ANCHOR_NEAR_M) {
+    const p0 = points[0];
+    const feetZ = -h * sp;
+    const t = feetZ > NEAR_CLIP_M ? 0 : (NEAR_CLIP_M - feetZ) / (p0.fwd * cp);
+    if (t < 1) segments[0].unshift(project(p0.fwd * t, p0.right * t));
+  }
+  return segments;
 }
 
-/** Only a segment whose route truly starts at the robot may anchor to its feet.
- * @param {Array<{ x: number, y: number, depth: number }>} pts
- * @param {number} vw frame width, bounds the anchor extrapolation
- * @param {number} bottomY
- * @param {boolean} [anchorBottom]
+/** @param {Array<{ x: number, y: number, depth: number }>} pts
  * @returns {Array<{ x: number, y: number }> | null} */
-export function ribbon(pts, vw, bottomY, anchorBottom = true) {
+export function ribbon(pts) {
   if (pts.length < 2) return null;
 
   /** @param {number} depth */
@@ -134,25 +145,6 @@ export function ribbon(pts, vw, bottomY, anchorBottom = true) {
   const left = [];
   /** @type {Array<{ x: number, y: number }>} */
   const right = [];
-
-  if (anchorBottom) {
-    const p0 = pts[0];
-    const p1 = pts[1];
-    let startX = p0.x;
-    let startY = p0.y;
-    const dy0 = p1.y - p0.y;
-    if (dy0 !== 0 && p0.y < bottomY) {
-      const t = (bottomY - p0.y) / dy0;
-      // Clamp near-horizontal extrapolation.
-      startX = Math.min(2 * vw, Math.max(-vw, p0.x + t * (p1.x - p0.x)));
-      startY = bottomY;
-    }
-    const start = { x: startX, y: startY };
-    const sp = perp(null, start, p0);
-    const shw = halfWidth(p0.depth);
-    left.push({ x: startX + sp.nx * shw, y: startY + sp.ny * shw });
-    right.push({ x: startX - sp.nx * shw, y: startY - sp.ny * shw });
-  }
 
   for (let i = 0; i < pts.length; i++) {
     const prev = i > 0 ? pts[i - 1] : null;
@@ -322,11 +314,11 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     const pose = planFrame === "odom" ? odomPose : mapPose();
     if (!pose) return;
 
-    const { segments, startAtRobot } = projectToImage(robotRelative(plan, pose), pitchDeg, vw, vh);
+    const segments = projectToImage(robotRelative(plan, pose), pitchDeg, vw, vh);
     /** @type {Array<Array<{ x: number, y: number }>>} */
     const polys = [];
-    for (let i = 0; i < segments.length; i++) {
-      const poly = ribbon(segments[i], vw, vh, i === 0 && startAtRobot);
+    for (const seg of segments) {
+      const poly = ribbon(seg);
       if (poly) polys.push(poly);
     }
     if (!polys.length) return;
@@ -342,6 +334,11 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     const offY = (ch - vh * fit) / 2;
     ctx.setTransform(dpr * fit, 0, 0, dpr * fit, dpr * offX, dpr * offY);
 
+    // The feet connector projects below the frame; never paint the letterbox bars.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, vw, vh);
+    ctx.clip();
     ctx.fillStyle = RIBBON_FILL;
     for (const poly of polys) {
       ctx.beginPath();
@@ -350,6 +347,7 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
       ctx.closePath();
       ctx.fill();
     }
+    ctx.restore();
   }
 
   const resize = new ResizeObserver(() => {
