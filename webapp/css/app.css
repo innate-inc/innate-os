@@ -5675,7 +5675,7 @@ select.episodes-tool {
 }
 
 /* Shortcut hint at the button's far edge, beside the chevron it shares a job
-   with. Dim at rest, full on hover; yields its space to a running skill's name. */
+   with. Dim at rest, full on hover. */
 .skills-menu-kbd {
   flex: 0 0 auto;
   padding: 2px 5px;
@@ -5690,10 +5690,6 @@ select.episodes-tool {
 
 .skills-menu-btn:hover .skills-menu-kbd {
   opacity: 1;
-}
-
-.skills-menu-active.on + .skills-menu-kbd {
-  display: none;
 }
 
 .skills-menu-chevron {
@@ -5882,8 +5878,8 @@ select.episodes-tool {
   cursor: not-allowed;
 }
 
-/* The name fills the row and centers itself; the number slot, dot, and tail
-   are fixed-width, so every row's columns line up regardless of name length. */
+/* Launcher layout: dot then name flush left, digit hint and chevron in fixed
+   columns at the right edge, aligned across rows by the name's flex. */
 .skills-pop-name {
   flex: 1;
   font-size: 13px;
@@ -5891,7 +5887,7 @@ select.episodes-tool {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: center;
+  text-align: left;
 }
 
 /* Skill-type indicator: learned (trained policy) / replay (recorded trajectory) /
@@ -6015,6 +6011,44 @@ select.skill-input {
   gap: 8px;
 }
 
+/* Enum pill group: one tab stop, arrows cycle, Enter runs (see renderChoice). */
+.skill-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  outline: 0;
+}
+
+.skill-choice:focus {
+  border-color: var(--accent-dim);
+}
+
+.skill-choice-opt {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: rgb(0 0 0 / 45%);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
+}
+
+.skill-choice-opt:hover {
+  color: var(--text);
+}
+
+.skill-choice-opt.on {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: var(--accent-faint);
+}
+
 .skill-bool-opt {
   min-height: 32px;
   font-size: 11px;
@@ -6089,13 +6123,42 @@ select.skill-input {
   font-size: 10px;
 }
 
-/* 1-9 digit hint on the first rows; rendered only while digits are live
-   (empty search), see render(). */
+/* 1-9 digit hint before the chevron, kbd-styled like the other shortcut
+   badges (a bare digit there would read as a count, like the group tails).
+   Filled only while digits are live (empty search), see render(); the blank
+   slot stays so the columns hold. */
 .skills-pop-num {
-  flex: 0 0 12px;
+  flex: 0 0 auto;
+  min-width: 16px;
+  padding: 1px 4px;
   font-size: 10px;
   color: var(--muted);
   text-align: center;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  opacity: 0.8;
+}
+
+.skills-pop-num:empty {
+  visibility: hidden;
+}
+
+/* Fixed tail width so the chevron column aligns across rows and headers. */
+.skills-pop-item .skills-pop-tail,
+.skills-pop-group .skills-pop-tail {
+  flex: 0 0 12px;
+  text-align: right;
+}
+
+/* Collapsed-folder count, hugging the folder name (the tail is auto-pushed
+   to the far edge). */
+.skills-pop-group-count {
+  flex: 0 0 auto;
+  font-size: 10px;
+}
+
+.skills-pop-group .skills-pop-tail {
+  margin-left: auto;
 }
 
 .skill-confirm:hover:not(:disabled) {

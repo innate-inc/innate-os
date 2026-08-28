@@ -52,7 +52,7 @@ export function createSkillsMenu(parent, rosClient) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "skills-menu-btn";
-  btn.title = `Run a skill (${shortcutLabel}) — roster from ${AVAILABLE_SKILLS_TOPIC}`;
+  btn.title = `Run a skill (${shortcutLabel} or Space) — roster from ${AVAILABLE_SKILLS_TOPIC}`;
   btn.setAttribute("aria-haspopup", "true");
   btn.setAttribute("aria-expanded", "false");
   const btnDot = document.createElement("span");
@@ -353,8 +353,17 @@ export function createSkillsMenu(parent, rosClient) {
         stopExternRun();
       }
     } else if (e.key === "Escape" && open) {
-      setOpen(false);
-      btn.focus();
+      // Staged: first Escape backs out of an expanded form to the list,
+      // the next closes the popup.
+      if (expandedId) {
+        expandedId = null;
+        render();
+        searchInput.focus();
+        searchInput.select();
+      } else {
+        setOpen(false);
+        btn.focus();
+      }
     } else if (e.key === "Enter" && open && expandedId && enterRunsForm(e.target)) {
       e.preventDefault();
       if (run && !run.done) {
@@ -364,10 +373,14 @@ export function createSkillsMenu(parent, rosClient) {
       if (rosClient.state !== "connected") return;
       const skill = skills.find((s) => s.id === expandedId);
       if (skill) startRun(skill);
-    } else if (open && !e.metaKey && !e.ctrlKey && !e.altKey && /^[1-9]$/.test(e.key) && digitPicksSkill(e.target)) {
+    } else if (e.key === " " && !open && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && neutralFocus(e.target)) {
+      e.preventDefault();
+      setOpen(true);
+    } else if (open && !e.metaKey && !e.ctrlKey && !e.altKey && /^[0-9]$/.test(e.key) && digitPicksSkill(e.target)) {
       e.preventDefault();
       e.stopPropagation(); // the shell binds bare digits to page navigation
-      const button = selectableButtons()[Number(e.key) - 1];
+      // 1-9 pick the first nine rows; 0 rounds out the row of keys as the tenth.
+      const button = selectableButtons()[e.key === "0" ? 9 : Number(e.key) - 1];
       if (button) {
         selectButton(button);
         activateSelection();
@@ -381,6 +394,12 @@ export function createSkillsMenu(parent, rosClient) {
    *  @param {EventTarget | null} target */
   function digitPicksSkill(target) {
     if (target === searchInput) return searchInput.value === "";
+    return neutralFocus(target);
+  }
+
+  /** Body (or nothing) focused — a key here can't mean typing or a native
+   *  button activation. @param {EventTarget | null} target */
+  function neutralFocus(target) {
     return !(target instanceof HTMLElement) || target === document.body;
   }
 
@@ -477,9 +496,9 @@ export function createSkillsMenu(parent, rosClient) {
     // is empty, so the badges only show then — a filtered list never lies.
     // Every row keeps its (blank) number slot so the columns stay aligned.
     if (!query) {
-      for (const [i, button] of buttons.slice(0, 9).entries()) {
+      for (const [i, button] of buttons.slice(0, 10).entries()) {
         const num = button.querySelector(".skills-pop-num");
-        if (num) num.textContent = String(i + 1);
+        if (num) num.textContent = i === 9 ? "0" : String(i + 1);
       }
     }
   }
@@ -508,7 +527,7 @@ export function createSkillsMenu(parent, rosClient) {
     if (!button) return;
     button.click();
     requestAnimationFrame(() => {
-      const input = listEl.querySelector(".skills-pop-row.expanded .skill-input");
+      const input = listEl.querySelector(".skills-pop-row.expanded :is(.skill-input, .skill-choice)");
       if (input instanceof HTMLElement) input.focus();
     });
   }
@@ -541,8 +560,16 @@ export function createSkillsMenu(parent, rosClient) {
     name.textContent = prettify(group);
     const tail = document.createElement("span");
     tail.className = "skills-pop-tail mono";
-    tail.textContent = collapsed ? `${count} ›` : "▾";
+    tail.textContent = collapsed ? "›" : "▾";
     head.append(name, tail);
+    if (collapsed) {
+      // Count beside the name, not in the tail — the right edge is reserved
+      // for shortcut digits and chevrons, and a bare count there mimics them.
+      const countEl = document.createElement("span");
+      countEl.className = "skills-pop-group-count mono";
+      countEl.textContent = String(count);
+      name.after(countEl);
+    }
     head.addEventListener("click", () => {
       if (collapsed) expandedGroups.add(group);
       else expandedGroups.delete(group);
@@ -581,15 +608,13 @@ export function createSkillsMenu(parent, rosClient) {
     head.className = "skills-pop-item";
     head.disabled = true;
     head.title = skill.load_error;
-    const num = document.createElement("span");
-    num.className = "skills-pop-num mono";
     const dot = document.createElement("span");
     dot.className = "skills-pop-type-dot broken";
     dot.title = "Failed to load";
     const name = document.createElement("span");
     name.className = "skills-pop-name";
     name.textContent = formatName(skill);
-    head.append(num, dot, name);
+    head.append(dot, name);
     const status = document.createElement("div");
     status.className = "skills-pop-status error";
     const txt = document.createElement("span");
@@ -633,7 +658,7 @@ export function createSkillsMenu(parent, rosClient) {
     tail.className = "skills-pop-tail mono";
     if (running) tail.textContent = "…";
     else if (expandable) tail.textContent = isExpanded ? "▾" : "›";
-    head.append(num, dot, name, tail);
+    head.append(dot, name, num, tail);
 
     head.addEventListener("click", () => {
       if (expandable) {
@@ -719,6 +744,59 @@ export function createSkillsMenu(parent, rosClient) {
     return form;
   }
 
+  /** Enum param as a keyboard-first pill group: the group is one focusable
+   *  widget, arrows cycle the value in place (no re-render, so focus holds),
+   *  Enter runs. An optional param gets a leading "—" pill meaning unset.
+   *  @param {any} skill @param {string} paramName @param {any} spec @param {any[]} options */
+  function renderChoice(skill, paramName, spec, options) {
+    const labels = (isRequired(spec) ? [] : [""]).concat(options.map(String));
+    const group = document.createElement("div");
+    group.className = "skill-choice";
+    group.tabIndex = 0;
+    group.setAttribute("role", "radiogroup");
+    group.setAttribute("aria-label", paramName);
+    const value = valueFor(skill.id, paramName, spec);
+    const pills = labels.map((label) => {
+      const pill = document.createElement("button");
+      pill.type = "button";
+      pill.tabIndex = -1; // the group is the tab stop; arrows move within it
+      pill.className = "skill-choice-opt" + (label === value ? " on" : "");
+      pill.textContent = label === "" ? "—" : label;
+      if (label === "") pill.title = "unset";
+      pill.addEventListener("click", () => {
+        select(label);
+        group.focus();
+      });
+      return pill;
+    });
+    group.append(...pills);
+
+    /** @param {string} label */
+    function select(label) {
+      setValue(skill.id, paramName, label);
+      for (const [i, pill] of pills.entries()) pill.classList.toggle("on", labels[i] === label);
+    }
+    /** @param {number} delta */
+    function move(delta) {
+      const current = labels.indexOf(valueFor(skill.id, paramName, spec));
+      if (current === -1) return select(labels[delta > 0 ? 0 : labels.length - 1]);
+      select(labels[(current + delta + labels.length) % labels.length]);
+    }
+    group.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        move(1);
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        move(-1);
+      } else if (e.key === "Enter" && !(run && !run.done)) {
+        e.preventDefault();
+        startRun(skill);
+      }
+    });
+    return group;
+  }
+
   /** @param {any} skill @param {string} paramName @param {any} spec */
   function renderParam(skill, paramName, spec) {
     const t = schemaType(spec);
@@ -740,17 +818,7 @@ export function createSkillsMenu(parent, rosClient) {
     rowEl.appendChild(labelRow);
 
     if (options.length > 0) {
-      const sel = document.createElement("select");
-      sel.className = "skill-input mono";
-      if (!isRequired(spec)) sel.appendChild(new Option("— unset —", ""));
-      for (const opt of options) {
-        const o = new Option(String(opt), String(opt));
-        if (String(opt) === value) o.selected = true;
-        sel.appendChild(o);
-      }
-      sel.value = value;
-      sel.addEventListener("change", () => setValue(skill.id, paramName, sel.value));
-      rowEl.appendChild(sel);
+      rowEl.appendChild(renderChoice(skill, paramName, spec, options));
     } else if (isBool(t)) {
       const group = document.createElement("div");
       group.className = "skill-bool";

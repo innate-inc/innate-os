@@ -44,10 +44,11 @@ const KEY_DIRS = new Map([
 
 function isTypingContext() {
   const el = document.activeElement;
-  return (
-    el instanceof HTMLElement &&
-    (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)
-  );
+  if (!(el instanceof HTMLElement)) return false;
+  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return true;
+  // The skills popup owns its keys (arrows cycle enum pills, digits pick rows)
+  // — a focused control in it must not also drive the base.
+  return el.closest(".skills-pop") !== null;
 }
 
 /**
