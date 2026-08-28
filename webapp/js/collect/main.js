@@ -27,7 +27,7 @@ import { createRecordPanel } from "./recordPanel.js";
 // Resolved once at import time (the router's dynamic import awaits it):
 // WebRTC for real robots, the Three.js SimSession in simulation (see
 // robotSession.js).
-const { createSession, createStage } = await robotSessionFactory();
+const { createSession, releaseSession, createStage } = await robotSessionFactory();
 
 /** @type {any} */
 const config = await getConfig();
@@ -43,6 +43,9 @@ export function mount(stage) {
  */
 function buildCockpit(root) {
   const session = createSession();
+  // No camera switcher on this page; the shared session may arrive on another
+  // page's view. (Sim sessions are per-page and lack the method.)
+  session.showMainCamera?.();
 
   const videoStage = createStage ? createStage(root, session) : createVideoStage(root, session);
 
@@ -106,7 +109,7 @@ function buildCockpit(root) {
     destroy() {
       drive.haltAll();
       for (const part of parts) part.destroy();
-      session.destroy();
+      releaseSession(session);
       root.innerHTML = "";
     },
   };

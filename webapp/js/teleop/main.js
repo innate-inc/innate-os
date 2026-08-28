@@ -43,7 +43,7 @@ const dbg = { ros, drive, session: null };
 // Resolved once at import time (the router's dynamic import awaits it):
 // WebRTC for real robots, the Three.js SimSession in simulation (see
 // robotSession.js).
-const { createSession, createStage } = await robotSessionFactory();
+const { createSession, releaseSession, createStage } = await robotSessionFactory();
 
 /** @param {HTMLElement} stage */
 export function mount(stage) {
@@ -107,7 +107,7 @@ function buildCockpit(root) {
       // navigating away doesn't leave one floating over the next page.
       dismissAllConfirms();
       for (const part of parts) part.destroy();
-      session.destroy();
+      releaseSession(session);
       root.innerHTML = "";
     },
   };

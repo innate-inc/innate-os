@@ -88,6 +88,7 @@ js/
   rosClient.js          shared rosbridge socket (reconnect, sub replay, services)
   driveController.js    /joystick heartbeat + joystick/keyboard arbitration
   webrtcSession.js      camera + mic over WebRTC, signaled through rosbridge
+  sharedVideoSession.js one app-level WebRtcSession shared by every video page
   dynamixel.js          leader-arm WebSerial reader (Protocol 2.0)
   shell.js              icon rail on every page
   railLayout.js         the rail's grouped roster (pure — tests/railLayout.test.js)

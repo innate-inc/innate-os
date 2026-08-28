@@ -38,7 +38,7 @@ const config = await getConfig();
 // Resolved once at import time (the router's dynamic import awaits it):
 // WebRTC for real robots, the Three.js SimSession in simulation (see
 // robotSession.js).
-const { createSession, createStage } = await robotSessionFactory();
+const { createSession, releaseSession, createStage } = await robotSessionFactory();
 const MIN_AGENT_VIEW_WIDTH = 1281;
 
 /** @param {HTMLElement} stage */
@@ -217,7 +217,7 @@ function buildAgentView(root) {
   return {
     destroy() {
       for (const part of parts) part.destroy();
-      session.destroy();
+      releaseSession(session);
       root.innerHTML = "";
     },
   };

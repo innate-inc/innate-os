@@ -21,7 +21,7 @@ import { createKeyboardDrive, createWasdChips } from "../teleop/keyboardDrive.js
 import { createHeadTilt } from "../teleop/headTilt.js";
 
 // One factory for the page's lifetime (it fetches config + maybe the sim
-// viewer bundle); sessions themselves are per-mapping-run.
+// viewer bundle); the session is acquired per mapping run and released after.
 const factoryPromise = robotSessionFactory();
 
 /**
@@ -29,11 +29,13 @@ const factoryPromise = robotSessionFactory();
  * @returns {Promise<{ destroy: () => void }>}
  */
 export async function createDriveKit(scene) {
-  const { createSession, createStage } = await factoryPromise;
+  const { createSession, releaseSession, createStage } = await factoryPromise;
   const session = createSession();
+  // The PiP always shows the main camera; the shared session may arrive on
+  // another page's view. (Sim sessions are per-page and lack the method.)
+  session.showMainCamera?.();
 
-  // Main-camera PiP, bottom-right — the session bootstraps with the "main"
-  // camera, so no roster handling is needed here.
+  // Main-camera PiP, bottom-right.
   const pip = document.createElement("div");
   pip.className = "nav-cam-pip";
   const stickOverlay = document.createElement("div");
@@ -60,7 +62,7 @@ export async function createDriveKit(scene) {
     destroy() {
       drive.haltAll();
       for (const part of parts) part.destroy();
-      session.destroy();
+      releaseSession(session);
       pip.remove();
       stickOverlay.remove();
       chipsOverlay.remove();

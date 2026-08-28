@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
 // WebRtcSession — one long-lived RTCPeerConnection signaled over the shared
-// RosClient (no second socket).
+// RosClient (no second socket). Pages share one instance via
+// sharedVideoSession.js: start() reuses a live link, so navigation costs a
+// no-reneg camera switch instead of a cold handshake.
 //
 // Handshake (robot is the offerer): build pc → publish /webrtc/start →
 // robot sends SDP offer on /webrtc/offer → setRemoteDescription, drain the
@@ -153,6 +155,7 @@ export class WebRtcSession {
   start() {
     this.#started = true;
     this.#handshakeAttempts = 0;
+    if (this.#pc) return; // live or mid-handshake (watchdogs own recovery) — a page switch must not rebuild it
     this.#handshake();
   }
 
@@ -160,6 +163,13 @@ export class WebRtcSession {
   stop() {
     this.#started = false;
     this.#useFallbackStun = false;
+    // Tell the robot to free this peer now — otherwise its encoders keep running
+    // until the 15 s RTCP-inactivity reap notices we're gone.
+    if (this.#pc && this.#ros.state === "connected") {
+      this.#ros.publish(WEBRTC_START_TOPIC, {
+        data: JSON.stringify({ source: "live", video: [], audio: false, client_id: this.#clientId }),
+      });
+    }
     this.#closePc();
     this.#clearAudioDebounce();
     // No mic stream once stopped (e.g. leaving the teleop page) — let TTS play.
@@ -247,6 +257,16 @@ export class WebRtcSession {
   /** @returns {{ index: number, name: string }} the currently displayed (big) camera */
   get primaryCamera() {
     return { index: this.#primaryIndex, name: this.#primaryName };
+  }
+
+  /**
+   * Restore the bootstrap view: the main camera streaming, big. For pages
+   * without a camera switcher — the shared session may arrive showing whatever
+   * set/primary the previous page left.
+   */
+  showMainCamera() {
+    this.setActiveCameras(["main"]);
+    this.setPrimaryCamera(0, "main");
   }
 
   // ---- handshake ----------------------------------------------------------

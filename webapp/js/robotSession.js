@@ -6,17 +6,22 @@
 // videoStage/cameraSwitch/profiling consume either without knowing.
 //
 // Usage (module top level -- the import must resolve before buildCockpit):
-//   const { createSession, createStage } = await robotSessionFactory();
+//   const { createSession, releaseSession, createStage } = await robotSessionFactory();
 //   ...inside buildCockpit:
 //     const session = createSession();
 //     const stage = createStage ? createStage(root, session) : createVideoStage(root, session);
+//   ...inside destroy: releaseSession(session), never session.destroy().
+//
+// Real robots hand every page the app-level shared WebRtcSession (see
+// sharedVideoSession.js), so page switches reuse the live link. Sim sessions
+// stay per-page: they render local canvases, so there is no link to keep warm.
 
 import { WebRtcSession } from "./webrtcSession.js";
-import { ros } from "./rosClient.js";
+import { acquireVideoSession, releaseVideoSession } from "./sharedVideoSession.js";
 import { getConfig } from "./config.js";
 
 /**
- * @returns {Promise<{ createSession: () => WebRtcSession, createStage: ((root: HTMLElement, session: WebRtcSession) => { audioEl: HTMLAudioElement | null, destroy: () => void }) | null }>}
+ * @returns {Promise<{ createSession: () => WebRtcSession, releaseSession: (session: WebRtcSession) => void, createStage: ((root: HTMLElement, session: WebRtcSession) => { audioEl: HTMLAudioElement | null, destroy: () => void }) | null }>}
  * createStage is null for real robots (pages use createVideoStage); in sim it
  * mounts the live Three.js canvas (full resolution, drag-to-orbit).
  */
@@ -31,11 +36,12 @@ export async function robotSessionFactory() {
       const mod = await import("/sim-viewer/sim-session.js");
       return {
         createSession: () => /** @type {any} */ (mod.createSimSession()),
+        releaseSession: (session) => session.destroy(),
         createStage: (root, session) => mod.createSimStage(root, /** @type {any} */ (session)),
       };
     } catch (err) {
       console.error("[robotSession] sim viewer bundle unavailable, falling back to WebRTC:", err);
     }
   }
-  return { createSession: () => new WebRtcSession(ros), createStage: null };
+  return { createSession: acquireVideoSession, releaseSession: releaseVideoSession, createStage: null };
 }

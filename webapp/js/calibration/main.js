@@ -12,7 +12,7 @@
 
 import { ros } from "../rosClient.js";
 import { mountPage } from "../pageMount.js";
-import { WebRtcSession } from "../webrtcSession.js";
+import { acquireVideoSession, releaseVideoSession } from "../sharedVideoSession.js";
 import { createVideoStage } from "../teleop/videoStage.js";
 import {
   RUN_STEREO_CALIBRATION_ACTION,
@@ -64,7 +64,9 @@ const CALIBRATION_BOARD_PDF_URL =
  * @returns {{ destroy: () => void }}
  */
 function buildView(root) {
-  const session = new WebRtcSession(ros);
+  const session = acquireVideoSession();
+  // No camera switcher here; the shared session may arrive on another page's view.
+  session.showMainCamera();
 
   // ---- header ---------------------------------------------------------
   const head = document.createElement("div");
@@ -544,7 +546,7 @@ function buildView(root) {
       if (leftCoverage.img.dataset.blobUrl) URL.revokeObjectURL(leftCoverage.img.dataset.blobUrl);
       if (rightCoverage.img.dataset.blobUrl) URL.revokeObjectURL(rightCoverage.img.dataset.blobUrl);
       videoStage.destroy();
-      session.destroy();
+      releaseVideoSession();
       root.innerHTML = "";
     },
   };
