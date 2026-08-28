@@ -20,12 +20,24 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { decodeDeformableSkin, skinDeformablePositions, type DeformableSkin } from "./deformableSkin";
+import type { DeformableFrame } from "./physics/deformableFrame";
 import { PropModels } from "./propModels";
 
 /** How long a prop with a glb stays undrawn waiting for its model before we
  * settle for the primitive. A prefetched model is ready well inside this, so
  * the window only opens for a drop that beats its own prefetch. */
 const MODEL_GRACE_MS = 300;
+
+/** Browser assets and stream identity for a deformable prop. */
+export interface PropDeformableViewerDef {
+  id: number;
+  controlVertexCount: number;
+  renderVertexCount: number;
+  skin: string;
+  /** Runtime IDF1 positions are world-space (the glb remains an identity local rest mesh). */
+  space: "world";
+}
 
 /** How the browser should place a prop's glb into its MuJoCo body frame. */
 export interface PropViewerDef {
@@ -46,6 +58,8 @@ export interface PropViewerDef {
   nameLabel?: boolean;
   /** Body-frame height of the billboard's bottom edge. */
   nameLabelHeightM?: number;
+  /** Present when this model is CPU-skinned from streamed control vertices. */
+  deformable?: PropDeformableViewerDef;
 }
 
 function makeNameLabel(text: string, heightM: number): THREE.Sprite {
@@ -173,6 +187,7 @@ export class PropLibrary {
   /** Roster from the server, by name. Empty until the first manifest lands. */
   private info = new Map<string, PropInfo>();
   private roots = new Map<string, THREE.Group>();
+  private placeholders = new Map<string, THREE.Mesh>();
   /** When each prop was first seen in a pose block, for MODEL_GRACE_MS. */
   private firstSeen = new Map<string, number>();
   private models: PropModels;
@@ -180,6 +195,18 @@ export class PropLibrary {
   private hulls: THREE.Mesh[] = [];
   private hullsVisible = false;
   private placementPreview?: PlacementPreview;
+  /** Stream id -> manifest name. Deformable IDs are connection-stable. */
+  private deformableNames = new Map<number, string>();
+  /** Only the newest frame matters; rendering deliberately does not queue. */
+  private latestDeformables = new Map<number, DeformableFrame>();
+  private deformableMeshes = new Map<string, THREE.Mesh>();
+  private deformableRestPositions = new Map<string, Float32Array>();
+  private activeDeformables = new Set<string>();
+  private skinLoads = new Map<string, Promise<DeformableSkin | null>>();
+  private skins = new Map<string, DeformableSkin>();
+  private failedSkins = new Set<string>();
+  private waitingForSkin = new Set<string>();
+  private warnings = new Set<string>();
 
   constructor(
     private scene: THREE.Scene,
@@ -198,6 +225,21 @@ export class PropLibrary {
     if (this.placementPreview && !this.info.has(this.placementPreview.name)) {
       this.clearPlacementPreview();
     }
+    this.deformableNames.clear();
+    for (const info of props) {
+      const def = info.viewer.deformable;
+      if (!def) continue;
+      if (def.space !== "world") {
+        this.warnOnce(`space:${info.name}`, `deformable prop '${info.name}' uses unsupported space '${def.space}'`);
+        continue;
+      }
+      const existing = this.deformableNames.get(def.id);
+      if (existing !== undefined) {
+        this.warnOnce(`id:${def.id}`, `deformable id ${def.id} is shared by '${existing}' and '${info.name}'`);
+        continue;
+      }
+      this.deformableNames.set(def.id, info.name);
+    }
     for (const [name, root] of this.roots) {
       if (!this.info.has(name)) {
         this.scene.remove(root);
@@ -207,8 +249,15 @@ export class PropLibrary {
           label.material.dispose();
         }
         this.roots.delete(name);
+        this.placeholders.delete(name);
         this.firstSeen.delete(name); // re-added later, it gets a fresh grace window
+        this.deformableMeshes.delete(name);
+        this.deformableRestPositions.delete(name);
+        this.activeDeformables.delete(name);
       }
+    }
+    for (const id of this.latestDeformables.keys()) {
+      if (!this.deformableNames.has(id)) this.latestDeformables.delete(id);
     }
     if (this.prefetching) this.prefetchModels();
   }
@@ -224,6 +273,9 @@ export class PropLibrary {
   prefetchModels(): void {
     this.prefetching = true;
     this.models.prefetch(this.info.values());
+    for (const info of this.info.values()) {
+      if (info.viewer.deformable) void this.loadSkin(info);
+    }
   }
 
   get manifest(): PropInfo[] {
@@ -235,17 +287,70 @@ export class PropLibrary {
    * rather than left behind at its last pose. */
   setPoses(poses: Record<string, number[]>): void {
     for (const [name, root] of this.roots) {
-      if (!poses[name]) root.visible = false;
+      if (!poses[name]) {
+        root.visible = false;
+        this.restoreDeformable(name);
+        const id = this.info.get(name)?.viewer.deformable?.id;
+        if (id !== undefined) this.latestDeformables.delete(id);
+      }
     }
     for (const [name, pose] of Object.entries(poses)) {
       const root = this.ensure(name);
       if (!root) continue; // unknown prop, or its glb is still loading
+      const deformable = this.info.get(name)?.viewer.deformable;
+      if (
+        deformable &&
+        this.deformableMeshes.has(name) &&
+        !this.latestDeformables.has(deformable.id)
+      ) {
+        // A previously skinned GLB was restored to local rest shape when the
+        // prop left. On re-drop, keep that base-origin mesh hidden for the one
+        // stream interval before its fresh world-space frame arrives.
+        root.visible = false;
+        continue;
+      }
       // Explicitly, not just on creation: a prop that was removed and put down
       // again reuses its hidden root and would otherwise stay invisible.
       root.visible = true;
-      root.position.set(pose[0], pose[1], pose[2]);
-      root.quaternion.set(pose[4], pose[5], pose[6], pose[3]);
+      if (this.activeDeformables.has(name)) {
+        // Keep the representative world translation on the root so scene
+        // systems such as the shadow fitter can locate this prop. The skinned
+        // world coordinates are translated back to this root's local frame.
+        root.position.set(pose[0], pose[1], pose[2]);
+        root.quaternion.identity();
+        root.scale.set(1, 1, 1);
+      } else {
+        // Before the first deformable frame, the undeformed local glb is a
+        // useful fallback and follows the soft body's representative pose.
+        root.position.set(pose[0], pose[1], pose[2]);
+        root.quaternion.set(pose[4], pose[5], pose[6], pose[3]);
+      }
+      // Once active, only a newly forwarded IDF1 frame should run the CPU
+      // skinning pass. This startup call is solely for a frame that arrived
+      // before its root/model became ready.
+      if (this.info.get(name)?.viewer.deformable && !this.activeDeformables.has(name)) {
+        this.requestDeformableApply(name);
+      }
     }
+  }
+
+  /** Cache and, when its glb/skin are ready, render the newest IDF1 update. */
+  setDeformableFrame(frame: DeformableFrame): void {
+    const name = this.deformableNames.get(frame.id);
+    if (!name) {
+      this.warnOnce(`frame-id:${frame.id}`, `received deformable frame for unknown id ${frame.id}`);
+      return;
+    }
+    const def = this.info.get(name)?.viewer.deformable;
+    if (!def || frame.vertexCount !== def.controlVertexCount) {
+      this.warnOnce(
+        `frame-count:${frame.id}:${frame.vertexCount}`,
+        `deformable '${name}' sent ${frame.vertexCount} controls; manifest expects ${def?.controlVertexCount ?? "none"}`,
+      );
+      return;
+    }
+    this.latestDeformables.set(frame.id, frame);
+    this.requestDeformableApply(name);
   }
 
   setHullsVisible(visible: boolean): void {
@@ -316,11 +421,20 @@ export class PropLibrary {
     const info = this.info.get(name);
     if (!info) return undefined; // a prop this build was never told about
 
+    const deformable = info.viewer.deformable;
+    const skinReady = !deformable || this.skins.has(deformable.skin);
+    const skinFailed = deformable ? this.failedSkins.has(deformable.skin) : false;
+    const frameReady = !deformable || this.latestDeformables.has(deformable.id);
+
     // Hold a prop with a glb undrawn for up to MODEL_GRACE_MS rather than
     // showing a primitive we are about to replace. setPoses retries every
     // frame, so the prop appears as soon as either the model or the grace
     // window is done -- and at once if we already know no model is coming.
-    const waiting = info.viewer.glb && !this.models.get(name) && !this.models.hasFailed(name);
+    const waiting =
+      info.viewer.glb &&
+      (!this.models.get(name) || !skinReady || !frameReady) &&
+      !this.models.hasFailed(name) &&
+      !skinFailed;
     if (waiting && !this.graceExpired(name, info)) return undefined;
 
     const root = new THREE.Group();
@@ -328,15 +442,32 @@ export class PropLibrary {
     this.scene.add(root);
     if (info.viewer.hulls) void this.loadHullSoup(info, root);
 
-    const model = this.models.get(name);
+    // A deformable GLB is meaningful only with its skin. Its local origin is
+    // intentionally not the representative centroid pose, so rendering it as
+    // a rigid fallback would float it. Use the centred physics primitive if
+    // the skin is pending past grace or has failed.
+    const model = skinReady && frameReady ? this.models.get(name) : undefined;
     if (model) {
       root.add(model);
+      this.requestDeformableApply(name);
     } else {
       // No glb, or one still parsing past its grace window: draw the primitive
       // physics is using, and swap the model in if it does still arrive.
       const placeholder = this.primitiveMesh(info);
+      this.placeholders.set(name, placeholder);
       root.add(placeholder);
-      if (info.viewer.glb) void this.swapWhenReady(info, root, placeholder);
+      if (info.viewer.glb && !skinFailed) {
+        if (deformable) {
+          // A streamed frame is the final readiness gate. Whichever of the
+          // model, skin, or frame arrives last asks requestDeformableApply to
+          // promote this centred primitive atomically.
+          void Promise.all([this.models.load(info), this.loadSkin(info)]).then(() =>
+            this.requestDeformableApply(info.name),
+          );
+        } else {
+          void this.swapWhenReady(info, root, placeholder);
+        }
+      }
     }
     if (info.viewer.nameLabel) {
       // Measured from the drawn content: `size` is the fallback collision box,
@@ -354,6 +485,7 @@ export class PropLibrary {
     if (since === undefined) {
       this.firstSeen.set(name, performance.now());
       void this.models.load(info); // dropped before its prefetch ran: parse it now
+      if (info.viewer.deformable) void this.loadSkin(info);
       return false;
     }
     return performance.now() - since >= MODEL_GRACE_MS;
@@ -375,12 +507,179 @@ export class PropLibrary {
   private async swapWhenReady(info: PropInfo, root: THREE.Group, placeholder: THREE.Mesh): Promise<void> {
     const model = await this.models.load(info);
     if (!model || placeholder.parent !== root) return; // failed, or the prop left the roster
+    if (info.viewer.deformable && !(await this.loadSkin(info))) return;
     root.remove(placeholder);
+    this.placeholders.delete(info.name);
     placeholder.geometry.dispose();
     root.add(model);
     const label = info.viewer.nameLabelHeightM === undefined ? nameLabelOf(root) : undefined;
     if (label) label.position.z = labelAnchorZ(root); // the placeholder's height was a stand-in
+    this.requestDeformableApply(info.name);
     this.onChanged();
+  }
+
+  /** Apply only the most recent cached frame, never a backlog of old shapes. */
+  private requestDeformableApply(name: string): void {
+    const info = this.info.get(name);
+    const def = info?.viewer.deformable;
+    const root = this.roots.get(name);
+    if (!info || !def || !root?.visible || !this.latestDeformables.has(def.id)) return;
+
+    const skin = this.skins.get(def.skin);
+    if (skin) {
+      const model = this.models.get(name);
+      const placeholder = this.placeholders.get(name);
+      if (model && placeholder?.parent === root) {
+        root.remove(placeholder);
+        placeholder.geometry.dispose();
+        root.add(model);
+        this.placeholders.delete(name);
+        this.onChanged();
+      }
+      this.applyLatestDeformable(info, root, skin);
+      return;
+    }
+    if (this.failedSkins.has(def.skin) || this.waitingForSkin.has(name)) return;
+    this.waitingForSkin.add(name);
+    void this.loadSkin(info).then((loaded) => {
+      this.waitingForSkin.delete(name);
+      const currentRoot = this.roots.get(name);
+      if (loaded && currentRoot?.visible) this.applyLatestDeformable(info, currentRoot, loaded);
+    });
+  }
+
+  private applyLatestDeformable(info: PropInfo, root: THREE.Group, skin: DeformableSkin): void {
+    const def = info.viewer.deformable!;
+    const frame = this.latestDeformables.get(def.id);
+    if (!frame || this.roots.get(info.name) !== root || !root.visible) return;
+    if (
+      skin.controlCount !== def.controlVertexCount ||
+      skin.renderCount !== def.renderVertexCount ||
+      frame.vertexCount !== skin.controlCount
+    ) {
+      this.warnOnce(
+        `skin-count:${info.name}`,
+        `deformable '${info.name}' count mismatch (manifest ${def.renderVertexCount}/${def.controlVertexCount}, skin ${skin.renderCount}/${skin.controlCount}, frame ${frame.vertexCount})`,
+      );
+      return;
+    }
+
+    const model = this.models.get(info.name);
+    if (!model || model.parent !== root) return; // placeholder still owns the root
+    const mesh = this.deformableMesh(info, model);
+    if (!mesh) return;
+    const position = mesh.geometry.getAttribute("position");
+    if (!(position instanceof THREE.BufferAttribute) || position.itemSize !== 3 || position.count !== skin.renderCount) {
+      this.warnOnce(`position:${info.name}`, `deformable '${info.name}' glb has no matching xyz position buffer`);
+      return;
+    }
+
+    let output: Float32Array;
+    if (position.array instanceof Float32Array && position.array.length === skin.renderCount * 3) {
+      output = position.array;
+    } else {
+      output = new Float32Array(skin.renderCount * 3);
+      mesh.geometry.setAttribute("position", new THREE.BufferAttribute(output, 3));
+    }
+    skinDeformablePositions(skin, frame.positions, output);
+    // skinDeformablePositions deliberately reconstructs exact world-space
+    // vertices. Geometry attributes are root-local, so remove only the root's
+    // representative translation; rotation and scale stay identity.
+    const rootX = root.position.x;
+    const rootY = root.position.y;
+    const rootZ = root.position.z;
+    for (let i = 0; i < output.length; i += 3) {
+      output[i] -= rootX;
+      output[i + 1] -= rootY;
+      output[i + 2] -= rootZ;
+    }
+    mesh.geometry.getAttribute("position").needsUpdate = true;
+    mesh.geometry.computeVertexNormals();
+    mesh.geometry.computeBoundingBox();
+    mesh.geometry.computeBoundingSphere();
+
+    root.quaternion.identity();
+    root.scale.set(1, 1, 1);
+    root.updateMatrixWorld(true);
+    this.activeDeformables.add(info.name);
+  }
+
+  /** Find the generated render mesh and preserve its undeformed local shape. */
+  private deformableMesh(info: PropInfo, model: THREE.Group): THREE.Mesh | undefined {
+    const cached = this.deformableMeshes.get(info.name);
+    if (cached?.parent) return cached;
+
+    const expected = info.viewer.deformable!.renderVertexCount;
+    const matches: THREE.Mesh[] = [];
+    model.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      const position = obj.geometry.getAttribute("position");
+      if (position?.itemSize === 3 && position.count === expected) matches.push(obj);
+    });
+    if (matches.length !== 1) {
+      this.warnOnce(
+        `mesh:${info.name}`,
+        `deformable '${info.name}' expected one ${expected}-vertex mesh in its glb; found ${matches.length}`,
+      );
+      return undefined;
+    }
+
+    const mesh = matches[0];
+    const position = mesh.geometry.getAttribute("position");
+    if (position instanceof THREE.BufferAttribute) position.setUsage(THREE.DynamicDrawUsage);
+    this.deformableMeshes.set(info.name, mesh);
+    this.deformableRestPositions.set(info.name, Float32Array.from(position.array));
+    for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      material.side = THREE.DoubleSide;
+      material.needsUpdate = true;
+    }
+    return mesh;
+  }
+
+  /** Put a hidden deformable back in its local rest shape for its next drop. */
+  private restoreDeformable(name: string): void {
+    if (!this.activeDeformables.delete(name)) return;
+    const mesh = this.deformableMeshes.get(name);
+    const rest = this.deformableRestPositions.get(name);
+    const position = mesh?.geometry.getAttribute("position");
+    if (!mesh || !rest || !(position instanceof THREE.BufferAttribute) || position.count * 3 !== rest.length) return;
+    position.copyArray(rest);
+    position.needsUpdate = true;
+    mesh.geometry.computeVertexNormals();
+    mesh.geometry.computeBoundingBox();
+    mesh.geometry.computeBoundingSphere();
+  }
+
+  private loadSkin(info: PropInfo): Promise<DeformableSkin | null> {
+    const def = info.viewer.deformable!;
+    const started = this.skinLoads.get(def.skin);
+    if (started) return started;
+    const load = (async () => {
+      try {
+        const res = await fetch(def.skin);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const skin = decodeDeformableSkin(await res.arrayBuffer());
+        if (skin.renderCount !== def.renderVertexCount || skin.controlCount !== def.controlVertexCount) {
+          throw new Error(
+            `manifest expects ${def.renderVertexCount}/${def.controlVertexCount}, skin contains ${skin.renderCount}/${skin.controlCount}`,
+          );
+        }
+        this.skins.set(def.skin, skin);
+        return skin;
+      } catch (err) {
+        this.failedSkins.add(def.skin);
+        console.warn(`[sim-viewer] deformable skin missing for '${info.name}' (${def.skin}); drawing its primitive`, err);
+        return null;
+      }
+    })();
+    this.skinLoads.set(def.skin, load);
+    return load;
+  }
+
+  private warnOnce(key: string, message: string): void {
+    if (this.warnings.has(key)) return;
+    this.warnings.add(key);
+    console.warn(`[sim-viewer] ${message}`);
   }
 
   private async loadHullSoup(info: PropInfo, root: THREE.Group): Promise<void> {

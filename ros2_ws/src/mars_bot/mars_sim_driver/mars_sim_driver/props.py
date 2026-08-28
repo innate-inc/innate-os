@@ -316,6 +316,10 @@ class PropRegistry:
         # name -> (body id, qpos adr, dof adr, mocap id). Exactly one address
         # family is present: dynamic props use qpos/dof, kinematic props mocap.
         self._addr: dict[str, tuple[int, int | None, int | None, int | None]] = {}
+        # Deformables have one XYZ slide triplet per control vertex rather
+        # than one free joint. Kept alongside the rigid map so the mature
+        # rigid path stays untouched.
+        self._soft: dict[str, object] = {}
         self.out: set[str] = set()  # on the floor rather than parked off-map
 
     @classmethod
@@ -349,7 +353,11 @@ class PropRegistry:
         """Resolve each prop's addresses in the compiled model. Called once
         after the model is built (or loaded from cache)."""
         self._addr.clear()
+        self._soft.clear()
         for name, prop in self.props.items():
+            if getattr(prop, "is_deformable", False):
+                self._soft[name] = prop.bind(model, self.park_xy(name))
+                continue
             bid = model.body(name).id
             if prop.kinematic:
                 mocap_id = int(model.body_mocapid[bid])
@@ -360,27 +368,35 @@ class PropRegistry:
                 jid = model.joint(f"{name}_free").id
                 self._addr[name] = (bid, int(model.jnt_qposadr[jid]), int(model.jnt_dofadr[jid]), None)
 
+    def _is_bound(self, name: str) -> bool:
+        return name in self._addr or name in self._soft
+
     # -- placement (callers hold the sim lock) --
 
     def _set_pose(self, data, name: str, x: float, y: float, z: float, yaw: float) -> None:
         """Write one prop's pose and zero its velocity. The z is the caller's
         choice of drop_z or rest_z -- that choice IS drop-vs-place."""
-        _bid, qadr, dadr, mocap_id = self._addr[name]
-        half = yaw / 2
-        quat = (math.cos(half), 0.0, 0.0, math.sin(half))
-        if mocap_id is not None:
-            data.mocap_pos[mocap_id] = [x, y, z]
-            data.mocap_quat[mocap_id] = quat
+        soft = self._soft.get(name)
+        if soft is not None:
+            soft.set_pose(data, x, y, z, yaw)
+            soft.set_active(data, True)
         else:
-            assert qadr is not None and dadr is not None
-            data.qpos[qadr : qadr + 7] = [x, y, z, *quat]
-            data.qvel[dadr : dadr + 6] = 0.0
+            _bid, qadr, dadr, mocap_id = self._addr[name]
+            half = yaw / 2
+            quat = (math.cos(half), 0.0, 0.0, math.sin(half))
+            if mocap_id is not None:
+                data.mocap_pos[mocap_id] = [x, y, z]
+                data.mocap_quat[mocap_id] = quat
+            else:
+                assert qadr is not None and dadr is not None
+                data.qpos[qadr : qadr + 7] = [x, y, z, *quat]
+                data.qvel[dadr : dadr + 6] = 0.0
         self.out.add(name)
 
     def drop_at(self, data, name: str, x: float, y: float, yaw: float = 0.0) -> bool:
         """Release a dynamic prop at drop_z, or snap a kinematic one there,
         yawed about +z. False when the prop does not exist."""
-        if name not in self._addr:
+        if not self._is_bound(name):
             return False
         self._set_pose(data, name, x, y, self.props[name].drop_z, yaw)
         return True
@@ -388,7 +404,7 @@ class PropRegistry:
     def place_at_robot(self, data, name: str, pose: tuple[float, float, float]) -> bool:
         """Set a prop down at rest_z at its `reach` offset from the robot's
         current pose. False when prop does not exist."""
-        if name not in self._addr:
+        if not self._is_bound(name):
             return False
         prop = self.props[name]
         rx, ry, ryaw = pose
@@ -415,10 +431,15 @@ class PropRegistry:
 
     def park(self, data, name: str) -> bool:
         """Send one prop back off-map."""
-        if name not in self._addr:
+        if not self._is_bound(name):
             return False
         park_x, park_y = self.park_xy(name)
-        self._set_pose(data, name, park_x, park_y, self.props[name].rest_z, 0.0)
+        soft = self._soft.get(name)
+        if soft is not None:
+            soft.park(data)
+            soft.set_active(data, False)
+        else:
+            self._set_pose(data, name, park_x, park_y, self.props[name].rest_z, 0.0)
         self.out.discard(name)
         return True
 
@@ -426,28 +447,61 @@ class PropRegistry:
         for name in list(self.props):
             self.park(data, name)
 
-    def mark_all_parked(self) -> None:
+    def mark_all_parked(self, data=None) -> None:
         """Catch the bookkeeping up after mj_resetData, which has already
         restored every prop to its parked pose."""
         self.out.clear()
+        if data is not None:
+            for soft in self._soft.values():
+                soft.park(data)
+                soft.set_active(data, False)
+
+    @property
+    def has_deformables(self) -> bool:
+        return bool(self._soft)
+
+    def prepare_step(self, data) -> None:
+        """Keep parked flexes at their compiled rest pose before dynamics."""
+        for name, soft in self._soft.items():
+            if name not in self.out:
+                soft.prepare_step(data)
+
+    def apply_deformable_forces(self, data) -> None:
+        """Apply rest-shape bending to active flexes after ``mj_step1``."""
+        for name, soft in self._soft.items():
+            if name in self.out:
+                soft.apply_forces(data)
+
+    def deformable_frames(self, data) -> list[tuple[int, object]]:
+        """Active control vertices for the observer-only browser stream."""
+        return [
+            (self.props[name].deformable_id, soft.vertices(data))
+            for name, soft in self._soft.items()
+            if name in self.out
+        ]
 
     # -- readout --
 
     def poses(self, data) -> dict[str, list[float]]:
         """Ground-truth {name: [x, y, z, qw, qx, qy, qz]} for props on the
         floor. Parked props are omitted, not reported at their parking spot."""
-        return {
+        poses = {
             name: [*map(float, data.xpos[bid]), *map(float, data.xquat[bid])]
             for name, (bid, _q, _d, _m) in self._addr.items()
             if name in self.out
         }
+        poses.update({name: soft.pose(data) for name, soft in self._soft.items() if name in self.out})
+        return poses
 
     def center_xy(self, data, name: str) -> tuple[float, float] | None:
         """xy of a prop's visual centre while it is out, correcting for an
         off-centre body origin (the human stands feet-at-origin). None while
         parked."""
-        if name not in self.out or name not in self._addr:
+        if name not in self.out or not self._is_bound(name):
             return None
+        soft = self._soft.get(name)
+        if soft is not None:
+            return soft.center_xy(data)
         bid, _q, _d, _m = self._addr[name]
         ox, oy, oz = self.props[name].center_offset
         if ox == oy == oz == 0.0:
