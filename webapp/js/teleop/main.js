@@ -101,7 +101,10 @@ function buildCockpit(root) {
     createJoystick(stickOverlay, drive),
     createTtsBar(ttsOverlay, ros, { onSpeak: onboarding.onSpeak }),
     // Collapsible skill launcher pinned next to the speak bar.
-    createSkillsMenu(ttsOverlay, ros, { onSkillCompleted: onboarding.onSkillCompleted }),
+    createSkillsMenu(ttsOverlay, ros, {
+      onSkillCompleted: onboarding.onSkillCompleted,
+      onOpenChange: onboarding.onSkillsMenuOpenChange,
+    }),
     createArmPanel(armOverlay, ros, { hideServices: !!config.simControls }),
     ...(config.simControls ? [] : [createProfilingPanel(root, session)]),
     createCameraSwitch(root, session, ros),

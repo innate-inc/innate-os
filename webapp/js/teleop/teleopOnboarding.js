@@ -68,6 +68,7 @@ export function createTeleopOnboarding(root) {
   let mask = null;
   /** @type {keyof typeof TELEOP_ONBOARDING_STEPS | null} */
   let step = null;
+  let skillsMenuOpen = false;
 
   /** @param {CustomEvent<{restart?: boolean}>} event */
   function onRequest(event) {
@@ -158,6 +159,20 @@ export function createTeleopOnboarding(root) {
       return;
     }
     if (!target) return;
+    const skillsPop = skillsMenuOpen && (step === "wave" || step === "pick")
+      ? document.querySelector(".skills-menu.open .skills-pop")
+      : null;
+    if (skillsPop instanceof HTMLElement) {
+      const popRect = skillsPop.getBoundingClientRect();
+      const availableWidth = popRect.left - 76 - 16;
+      card.style.width = `${Math.max(220, Math.min(280, availableWidth))}px`;
+      const width = card.offsetWidth;
+      const height = card.offsetHeight || 190;
+      card.style.left = `${Math.max(76, popRect.left - width - 16)}px`;
+      card.style.top = `${Math.max(12, Math.min(window.innerHeight - height - 12, popRect.top))}px`;
+      return;
+    }
+    card.style.width = "";
     const rect = target.getBoundingClientRect();
     const width = card.offsetWidth || 350;
     const height = card.offsetHeight || 190;
@@ -203,12 +218,18 @@ export function createTeleopOnboarding(root) {
     if (step === "talk") show("pick");
   }
 
+  function onSkillsMenuOpenChange(open) {
+    skillsMenuOpen = open;
+    requestAnimationFrame(position);
+  }
+
   window.addEventListener(ONBOARDING_REQUEST_EVENT, /** @type {EventListener} */ (onRequest));
   window.addEventListener("resize", position);
 
   return {
     onSkillCompleted,
     onSpeak,
+    onSkillsMenuOpenChange,
     destroy() {
       close(false);
       window.removeEventListener(ONBOARDING_REQUEST_EVENT, /** @type {EventListener} */ (onRequest));
