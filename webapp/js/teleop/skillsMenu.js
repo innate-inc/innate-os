@@ -271,7 +271,10 @@ export function createSkillsMenu(parent, rosClient) {
     render();
     if (closeOnStart) {
       setOpen(false);
-      btn.focus();
+      // Return keyboard control to the page. Keeping focus on the closed Skills
+      // button makes the next Enter reopen this menu instead of focusing chat.
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && menu.contains(focused)) focused.blur();
     } else if (open) {
       // The launch re-render dropped focus to the body, where keys mean driving
       // — keep the keyboard in skills control, ready for the next pick.
