@@ -421,8 +421,8 @@ export class SimSession {
     this.#controller?.send({ op: "abort_challenge" });
   }
 
-  // The sim has no microphone track yet, but it mirrors the listen state so
-  // Teleop can expose the same control and default it on.
+  // The sim has no WebRTC microphone track; browser TTS playback is controlled
+  // separately. Mirror the listen state for Teleop's shared button.
   setAudio(on: boolean): void {
     if (this.#state.audioRequested === on) return;
     this.#patch({ audioRequested: on });

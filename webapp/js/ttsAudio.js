@@ -14,6 +14,17 @@ import { isMicAudioActive, setTtsPlaying } from "./micAudioState.js";
 const TTS_AUDIO_TOPIC = "/tts/audio";
 
 let started = false;
+let enabled = true;
+/** @type {(() => void) | null} */
+let stopCurrent = null;
+
+/** @param {boolean} on */
+export function setTtsAudioEnabled(on) {
+  enabled = on;
+  if (on) return;
+  pending.length = 0;
+  stopCurrent?.();
+}
 
 // One speaker across tabs: rosbridge fans /tts/audio out to every client, so
 // N open tabs played N overlapping copies. A held Web Lock elects exactly one
@@ -35,7 +46,7 @@ export function initTtsAudio() {
   started = true;
 
   ros.subscribe(TTS_AUDIO_TOPIC, (msg) => {
-    if (!speaker) return; // another tab is the elected speaker
+    if (!speaker || !enabled) return; // another tab is the elected speaker, or this one is muted
     const b64 = msg?.data;
     if (typeof b64 !== "string" || !b64) return;
     // Defensive: if a clip does arrive while the operator has the robot mic
@@ -68,6 +79,11 @@ function enqueue(b64) {
 }
 
 function playNext() {
+  if (!enabled) {
+    pending.length = 0;
+    playing = false;
+    return;
+  }
   const b64 = pending.shift();
   if (b64 === undefined) {
     playing = false;
@@ -94,10 +110,16 @@ function play(b64) {
   const done = () => {
     if (released) return;
     released = true;
+    if (stopCurrent === stop) stopCurrent = null;
     setTtsPlaying(false);
     URL.revokeObjectURL(url);
     playNext();
   };
+  const stop = () => {
+    audio.pause();
+    done();
+  };
+  stopCurrent = stop;
   audio.addEventListener("ended", done, { once: true });
   audio.addEventListener("error", done, { once: true });
   audio.play().catch((err) => {
