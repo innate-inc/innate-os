@@ -189,7 +189,7 @@ export function createVideoStage(parent, session) {
  * (debounced rebuild in the session) and primes playback inside the gesture.
  * @param {HTMLElement} parent
  * @param {import("../webrtcSession.js").WebRtcSession} session
- * @param {HTMLAudioElement} audioEl
+ * @param {HTMLAudioElement | null} audioEl
  * @returns {{ destroy: () => void }}
  */
 export function createAudioToggle(parent, session, audioEl) {
@@ -213,13 +213,13 @@ export function createAudioToggle(parent, session, audioEl) {
   button.addEventListener("click", () => {
     const next = !session.state.audioRequested;
     session.setAudio(next);
-    if (next) {
+    if (next && audioEl) {
       // Inside the gesture: unlocks audible playback for this page session.
       audioEl.play().catch(() => {
         // No stream yet — fine, the session onChange handler replays once
         // the rebuilt connection delivers the mic track.
       });
-    } else {
+    } else if (audioEl) {
       audioEl.pause();
     }
   });

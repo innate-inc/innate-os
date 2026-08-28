@@ -58,18 +58,12 @@ export const isCylinderPickupCompletion = (run) =>
 export const resolveAvailableStep = (step, speechAvailable) =>
   step === "talk" && speechAvailable === false ? "pick" : step;
 
-/** @param {boolean} simControls */
-export const teleopIntroBody = (simControls) => simControls
-  ? "You can move it, make it talk, and trigger skills. On a physical MARS, you can also turn on its microphone to hear what it hears."
-  : TELEOP_ONBOARDING_STEPS.intro.body;
-
 /**
  * Guided first-run mission for direct control. Steps advance only when the
  * corresponding command is actually sent and, for skills, succeeds.
  * @param {HTMLElement} root
- * @param {{ simControls?: boolean }} [opts]
  */
-export function createTeleopOnboarding(root, opts = {}) {
+export function createTeleopOnboarding(root) {
   /** @type {HTMLElement | null} */
   let card = null;
   /** @type {HTMLElement | null} */
@@ -118,7 +112,7 @@ export function createTeleopOnboarding(root, opts = {}) {
     card.innerHTML =
       `<span class="microlabel agent-onboarding-eyebrow">${copy.eyebrow}</span>` +
       `<h2>${copy.title}</h2>` +
-      `<p>${(next === "intro" ? teleopIntroBody(!!opts.simControls) : copy.body).replace("{shortcut}", shortcut)}</p>`;
+      `<p>${copy.body.replace("{shortcut}", shortcut)}</p>`;
 
     const actions = document.createElement("div");
     actions.className = "agent-onboarding-actions";
