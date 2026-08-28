@@ -1126,7 +1126,7 @@ def ensure_os_container(
         f"nohup zsh -lc {shlex.quote(launch_script)} "
         ">/tmp/innate-os-session.log 2>&1 </dev/null & "
         f"for _ in {{1..60}}; do "
-        f"tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1 && "
+        f"tmux has-session -t {_tmux_exact_session_shell_target(TMUX_SESSION_NAME)} >/dev/null 2>&1 && "
         "echo 'ROS tmux session launch started.' && exit 0; "
         "sleep 0.05; "
         "done; "
@@ -1164,7 +1164,9 @@ def stop_os_session(config: dict[str, object]) -> None:
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     try:
         result = subprocess.run(
-            os_compose_zsh_cmd(f"tmux kill-session -t {shlex.quote(TMUX_SESSION_NAME)} 2>/dev/null || true"),
+            os_compose_zsh_cmd(
+                f"tmux kill-session -t {_tmux_exact_session_shell_target(TMUX_SESSION_NAME)} 2>/dev/null || true"
+            ),
             cwd=os_repo,
             env=os_compose_env(),
             text=True,
@@ -1503,6 +1505,16 @@ def os_compose_zsh_cmd(command: str) -> list[str]:
     return os_compose_exec_cmd("zsh", "-lc", command)
 
 
+def _tmux_exact_session_shell_target(session: str) -> str:
+    """Return an always-quoted exact tmux session target for a shell command.
+
+    zsh expands an unquoted leading ``=`` as a command path, so ``shlex.quote``
+    is insufficient here: POSIX considers ``=`` safe and leaves it bare.
+    """
+    exact = f"={session}"
+    return "'" + exact.replace("'", "'\"'\"'") + "'"
+
+
 def os_compose_zsh_interactive_cmd(command: str) -> list[str]:
     """Interactive zsh so ~/.zshrc runs: that's where ROS + the zenoh RMW env
     come from -- `ros2` in a plain -lc shell probes an empty default-DDS graph."""
@@ -1615,9 +1627,10 @@ def collect_os_process_status(config: dict[str, object]) -> dict[str, bool]:
     compose_env = os_compose_env()
     output = capture_command_output(
         os_compose_zsh_cmd(
-            f"tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1; "
+            f"tmux has-session -t {_tmux_exact_session_shell_target(TMUX_SESSION_NAME)} >/dev/null 2>&1; "
             "echo tmux=$?; "
-            f"tmux has-session -t {shlex.quote(WEBAPP_TMUX_SESSION_NAME)} >/dev/null 2>&1; "
+            f"tmux has-session -t {_tmux_exact_session_shell_target(WEBAPP_TMUX_SESSION_NAME)} "
+            ">/dev/null 2>&1; "
             "echo webapp_tmux=$?; "
             "pgrep -f '[r]ws_server|[r]osbridge_websocket' >/dev/null; echo rosbridge=$?; "
             "pgrep -f '[b]rain_client_node.py' >/dev/null; echo brain=$?; "
@@ -1854,7 +1867,8 @@ def capture_os_brain_logs(config: dict[str, object], lines: int = 18) -> list[st
         os_compose_exec_cmd(
             "sh",
             "-c",
-            f"if ! tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1; then "
+            f"if ! tmux has-session -t {_tmux_exact_session_shell_target(TMUX_SESSION_NAME)} "
+            ">/dev/null 2>&1; then "
             "echo __INNATE_NO_TMUX_SESSION__; "
             "exit 0; "
             "fi; "
@@ -2227,6 +2241,7 @@ def ensure_viewer_public_assets(config: dict[str, object]) -> None:
         sim_repo / "viewer" / "public" / ".installed-tag",
         label="viewer assets",
         geometry_hash=compute_geometry_inputs_hash(config["os_repo"]),  # type: ignore[arg-type]
+        preserve_children=("local-environments",),
     )
 
 
@@ -2239,6 +2254,7 @@ def install_layer_subtree(
     *,
     label: str,
     geometry_hash: str | None = None,
+    preserve_children: tuple[str, ...] = (),
 ) -> None:
     """Put one subtree of one image layer on disk, idempotently.
 
@@ -2292,8 +2308,39 @@ def install_layer_subtree(
         if not source.is_dir():
             raise StackError(f"{shorten_docker_image_ref(image)} layer {digest[7:19]} has no {subtree}/ subtree.")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.rmtree(destination, ignore_errors=True)
-        shutil.move(str(source), str(destination))
+        preserve_root = destination.parent / f".{destination.name}.preserve-{os.getpid()}"
+        shutil.rmtree(preserve_root, ignore_errors=True)
+        preserved: dict[str, Path] = {}
+        try:
+            for child_name in preserve_children:
+                if not _valid_sim_asset_root_name(child_name):
+                    raise StackError(f"Refusing to preserve an unsafe {label} child: {child_name!r}.")
+                child = destination / child_name
+                if child.exists() or child.is_symlink():
+                    preserve_root.mkdir(parents=True, exist_ok=True)
+                    backup = preserve_root / child_name
+                    os.replace(child, backup)
+                    preserved[child_name] = backup
+
+            shutil.rmtree(destination, ignore_errors=True)
+            shutil.move(str(source), str(destination))
+            for child_name, backup in preserved.items():
+                target = destination / child_name
+                if target.exists() or target.is_symlink():
+                    _remove_asset_path(target)
+                os.replace(backup, target)
+        except Exception:
+            destination.mkdir(parents=True, exist_ok=True)
+            for child_name, backup in preserved.items():
+                if not (backup.exists() or backup.is_symlink()):
+                    continue
+                target = destination / child_name
+                if target.exists() or target.is_symlink():
+                    _remove_asset_path(target)
+                os.replace(backup, target)
+            raise
+        finally:
+            shutil.rmtree(preserve_root, ignore_errors=True)
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(f"{digest} {image} {geometry_hash or ''}\n")
         log(f"{label} {digest[7:19]} installed.")

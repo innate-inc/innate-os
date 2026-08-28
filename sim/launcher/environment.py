@@ -24,6 +24,8 @@ DEFAULT_ENVIRONMENT_ID = "apartment"
 ENVIRONMENT_ID_RE = re.compile(r"^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?$")
 SUPPORTED_COORDINATE_SYSTEM = "gltf-y-up-meters"
 ACTIVE_ENVIRONMENT_FILENAME = ".active-environment.json"
+TRACKED_ENVIRONMENT_DIRECTORY = "environments"
+LOCAL_ENVIRONMENT_DIRECTORY = "environments.local"
 
 
 def _path_is_within(path: Path, root: Path) -> bool:
@@ -167,10 +169,28 @@ class EnvironmentPack:
 
 
 def available_environment_ids(sim_repo: Path) -> list[str]:
-    directory = sim_repo / "environments"
-    if not directory.is_dir():
-        return []
-    return sorted(path.stem for path in directory.glob("*.json") if ENVIRONMENT_ID_RE.fullmatch(path.stem))
+    environment_ids: set[str] = set()
+    for directory_name in (TRACKED_ENVIRONMENT_DIRECTORY, LOCAL_ENVIRONMENT_DIRECTORY):
+        directory = sim_repo / directory_name
+        if directory.is_dir():
+            environment_ids.update(
+                path.stem for path in directory.glob("*.json") if ENVIRONMENT_ID_RE.fullmatch(path.stem)
+            )
+    return sorted(environment_ids)
+
+
+def _environment_manifest_path(sim_repo: Path, environment_id: str) -> Path:
+    """Resolve a pack manifest, preferring the shareable tracked definition.
+
+    Purchased scenes can be used locally without checking their retrievable
+    geometry or a manifest that advertises missing assets into the public
+    repository. A local manifest may add a new ID, but cannot shadow a tracked
+    pack with the same ID.
+    """
+    tracked = sim_repo / TRACKED_ENVIRONMENT_DIRECTORY / f"{environment_id}.json"
+    if tracked.is_file():
+        return tracked
+    return sim_repo / LOCAL_ENVIRONMENT_DIRECTORY / f"{environment_id}.json"
 
 
 def _fail(message: str, *, manifest_path: Path | None = None) -> StackError:
@@ -239,7 +259,7 @@ def load_environment_pack(
         raise StackError(
             f"Invalid simulator environment {environment_id!r}. Use a lowercase name containing letters, numbers, or hyphens."
         )
-    manifest_path = sim_repo / "environments" / f"{environment_id}.json"
+    manifest_path = _environment_manifest_path(sim_repo, environment_id)
     if not manifest_path.is_file():
         available = available_environment_ids(sim_repo)
         choices = ", ".join(available) if available else "none"

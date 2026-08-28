@@ -135,6 +135,9 @@ MUJOCO_LOG.TXT
 # extracts these on `up`
 sim/viewer/public/
 sim/viewer/assets/
+# Locally licensed simulator packs. Their manifests and derived browser/world
+# assets stay on the buyer's machine and are never published from this repo.
+sim/environments.local/
 sim/.sim-assets.tmp*
 
 # boot sounds: WAV assets fetched by post_update.sh from GCS (too heavy for git)

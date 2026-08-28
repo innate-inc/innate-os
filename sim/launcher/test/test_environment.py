@@ -207,3 +207,18 @@ def test_unknown_environment_lists_available_packs(tmp_path):
     sim_repo = make_sim_repo(tmp_path)
     with pytest.raises(StackError, match="Available environments: test-room"):
         load_environment_pack(sim_repo, "missing")
+
+
+def test_local_environment_is_discoverable_but_cannot_shadow_a_tracked_pack(tmp_path):
+    sim_repo = make_sim_repo(tmp_path)
+    local = manifest("local-town")
+    local_directory = sim_repo / "environments.local"
+    local_directory.mkdir()
+    (local_directory / "local-town.json").write_text(json.dumps(local), encoding="utf-8")
+
+    assert load_environment_pack(sim_repo, "local-town").manifest_path == local_directory / "local-town.json"
+
+    shadow = manifest("test-room")
+    shadow["display_name"] = "Shadowed"
+    (local_directory / "test-room.json").write_text(json.dumps(shadow), encoding="utf-8")
+    assert load_environment_pack(sim_repo, "test-room").display_name == "Test Room"

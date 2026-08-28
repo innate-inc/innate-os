@@ -49,8 +49,10 @@ settle_after_launch() {
   fi
 }
 
-# First, ensure we have a clean tmux environment
-tmux kill-session -t "$SESSION_NAME" 2>/dev/null
+# First, ensure we have a clean tmux environment. tmux accepts unique session
+# name prefixes, so once `innate` is gone a bare `-t innate` resolves to the
+# surviving `innate-webapp` session. `=` requires an exact session match.
+tmux kill-session -t "=${SESSION_NAME}" 2>/dev/null
 sleep "$TMUX_CLEANUP_SETTLE_SECONDS"
 
 # Resolve and validate the selected pack's Nav2 map before starting any new
@@ -67,9 +69,9 @@ fi
 # normal CLI launch refreshes the proxy so checked-out code changes take effect;
 # the host controller sets PRESERVE_WEBAPP for an in-browser environment switch.
 if [[ "$PRESERVE_WEBAPP" != "1" ]]; then
-  tmux kill-session -t "$WEBAPP_SESSION_NAME" 2>/dev/null
+  tmux kill-session -t "=${WEBAPP_SESSION_NAME}" 2>/dev/null
 fi
-if ! tmux has-session -t "$WEBAPP_SESSION_NAME" 2>/dev/null; then
+if ! tmux has-session -t "=${WEBAPP_SESSION_NAME}" 2>/dev/null; then
   tmux new-session -d -x 240 -y 72 -s "$WEBAPP_SESSION_NAME" -n webapp
   tmux send-keys -t "${WEBAPP_SESSION_NAME}:webapp" "cd ~/innate-os/webapp && while true; do WEBAPP_SIM_CONTROLS=1 python3 proxy/https_server.py; sleep 2; done" C-m
   echo "Started persistent webapp (https :443 + http :80)..."

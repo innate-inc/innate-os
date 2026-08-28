@@ -92,3 +92,33 @@ def test_a_deleted_directory_is_reinstalled(monkeypatch, tmp_path):
 
     assert len(fetches) == 2
     assert (destination / "file.txt").exists()
+
+
+def test_a_viewer_refresh_preserves_locally_licensed_environment_assets(monkeypatch, tmp_path):
+    first_digest = "sha256:" + "c" * 64
+    second_digest = "sha256:" + "d" * 64
+    _fake_layer(monkeypatch, tmp_path, "viewer", first_digest)
+    destination, marker = tmp_path / "public", tmp_path / ".public-tag"
+
+    runtime.install_layer_subtree("ghcr.io/x/y:tag", 0, "viewer", destination, marker, label="viewer")
+    local_scene = destination / "local-environments/town/scene.glb"
+    local_scene.parent.mkdir(parents=True)
+    local_scene.write_bytes(b"licensed-local-scene")
+
+    monkeypatch.setattr(
+        runtime.oci,
+        "manifest_for_image",
+        lambda image: {"layers": [{"digest": second_digest}]},
+    )
+    runtime.install_layer_subtree(
+        "ghcr.io/x/y:tag",
+        0,
+        "viewer",
+        destination,
+        marker,
+        label="viewer",
+        preserve_children=("local-environments",),
+    )
+
+    assert (destination / "file.txt").read_text() == "contents"
+    assert local_scene.read_bytes() == b"licensed-local-scene"
