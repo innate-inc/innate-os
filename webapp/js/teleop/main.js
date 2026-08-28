@@ -86,7 +86,7 @@ function buildCockpit(root) {
 
   const keyboard = createKeyboardDrive(drive);
   const telemetry = telemetryOverlay ? createTelemetry(telemetryOverlay, ros) : null;
-  const onboarding = createTeleopOnboarding(root);
+  const onboarding = createTeleopOnboarding(root, { simControls: !!config.simControls });
   const parts = [videoStage, ...(telemetry ? [telemetry] : [])];
   // Robot-mic toggle. Skipped in the sim: the simulator's WebRTC server streams
   // video only (no microphone), so the toggle would do nothing. config.simControls
