@@ -9,7 +9,7 @@
 /**
  * @param {HTMLElement} parent
  * @param {import("../webrtcSession.js").WebRtcSession} session
- * @returns {{ audioEl: HTMLAudioElement, destroy: () => void }}
+ * @returns {{ el: HTMLElement, videoEl: HTMLVideoElement, audioEl: HTMLAudioElement, destroy: () => void }}
  */
 export function createVideoStage(parent, session) {
   const wrap = document.createElement("div");
@@ -171,6 +171,8 @@ export function createVideoStage(parent, session) {
   });
 
   return {
+    el: wrap,
+    videoEl: video,
     audioEl: audio,
     destroy() {
       unsub();
