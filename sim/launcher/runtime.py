@@ -61,6 +61,7 @@ from config import (
     TMUX_SESSION_NAME,
     VIEWER_BUILD_LOG_PATH,
     VIEWER_TREE_PATH,
+    WEBAPP_TMUX_SESSION_NAME,
     WORLD_SERVER_LOG_PATH,
     WORLD_SERVER_MODEL_DIGEST_PATH,
     WORLD_SERVER_PID_PATH,
@@ -108,6 +109,8 @@ COMPOSE_INSTALL_URL = "https://docs.docker.com/compose/install/linux/"
 DOCKER_PROBE_TIMEOUT_S = 15.0
 PROBE_TIMEOUT_S = 30.0  # compose-exec probes: zsh -ic + ros2 daemon can take ~15s
 COMPOSE_DOWN_TIMEOUT_S = 180.0
+ENVIRONMENT_CONTROL_CONTAINER_REQUEST_DIR = "/run/innate-sim-control/requests"
+ENVIRONMENT_CONTROL_CONTAINER_STATUS_DIR = "/run/innate-sim-control/status"
 
 
 def run_logged(
@@ -900,19 +903,84 @@ def os_container_current() -> bool:
     return all(env.get(key, absent) == expected for key, expected, absent in _CONTAINER_ENV_PUBLISH)
 
 
+def os_container_environment_control_mounts_current() -> bool:
+    """Whether the running container has the narrow browser-control mailboxes.
+
+    Mounts cannot be added to a live container.  A stack first started before
+    browser switching existed must therefore be recreated once; without this
+    gate ``cmd_up`` would take the warm path and its proxy could never reach the
+    host controller.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{json .Mounts}}", OS_CONTAINER_NAME],
+            text=True,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+            timeout=DOCKER_PROBE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    try:
+        mounts = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(mounts, list):
+        return False
+    by_destination = {
+        mount.get("Destination"): mount.get("RW")
+        for mount in mounts
+        if isinstance(mount, dict) and isinstance(mount.get("Destination"), str)
+    }
+    return (
+        by_destination.get(ENVIRONMENT_CONTROL_CONTAINER_REQUEST_DIR) is True
+        and by_destination.get(ENVIRONMENT_CONTROL_CONTAINER_STATUS_DIR) is False
+    )
+
+
 def retitle_step(message: str) -> None:
     step = active_step()
     if step is not None:
         step.retitle(message)
 
 
-def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline: bool = False) -> None:
+def ensure_os_container(
+    config: dict[str, object],
+    os_env_file: Path,
+    *,
+    offline: bool = False,
+    preserve_container: bool = False,
+) -> None:
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     os_image = str(config["os_image"]).strip()
     os_image_auto = bool(config["os_image_auto"])
     reuse_running_container = container_running(OS_CONTAINER_NAME)
+    if preserve_container and not reuse_running_container:
+        raise StackError(
+            "The simulator container stopped during the environment switch. "
+            "Refusing to recreate it because that would tear down the open web page."
+        )
     if reuse_running_container and not os_container_current():
-        log(f"The running OS container is bound to an older port block; recreating it to serve {config['webapp_url']}.")
+        if preserve_container:
+            raise StackError(
+                "The running simulator container uses outdated host ports. "
+                "Run `./innate-sim up` once before switching environments in the browser."
+            )
+        log(
+            "The running OS container is bound to an older port block; "
+            f"recreating it to serve {config['webapp_url']}."
+        )
+        reuse_running_container = False
+    if reuse_running_container and not os_container_environment_control_mounts_current():
+        if preserve_container:
+            raise StackError(
+                "The running simulator container is missing the environment-control mounts. "
+                "Run `./innate-sim up` once before switching environments in the browser."
+            )
+        log("The running OS container predates browser environment controls; recreating it once.")
         reuse_running_container = False
 
     if reuse_running_container:
@@ -1050,6 +1118,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
     launch_script = (
         "INNATE_SIM_TMUX_SETTLE_SECONDS=${INNATE_SIM_TMUX_SETTLE_SECONDS:-0} "
         "INNATE_SIM_TMUX_CLEANUP_SETTLE_SECONDS=${INNATE_SIM_TMUX_CLEANUP_SETTLE_SECONDS:-0} "
+        f"INNATE_SIM_PRESERVE_WEBAPP={1 if preserve_container else 0} "
         f"{OS_CONTAINER_TMUX_CMD}"
     )
     launch_wrapper = (
@@ -1534,6 +1603,7 @@ def collect_os_process_status(config: dict[str, object]) -> dict[str, bool]:
     status = {
         "os_running": os_running,
         "os_session_running": False,
+        "webapp_session_running": False,
         "rosbridge_process_live": False,
         "brain_process_live": False,
         "sim_driver_process_live": False,
@@ -1547,6 +1617,8 @@ def collect_os_process_status(config: dict[str, object]) -> dict[str, bool]:
         os_compose_zsh_cmd(
             f"tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1; "
             "echo tmux=$?; "
+            f"tmux has-session -t {shlex.quote(WEBAPP_TMUX_SESSION_NAME)} >/dev/null 2>&1; "
+            "echo webapp_tmux=$?; "
             "pgrep -f '[r]ws_server|[r]osbridge_websocket' >/dev/null; echo rosbridge=$?; "
             "pgrep -f '[b]rain_client_node.py' >/dev/null; echo brain=$?; "
             "pgrep -f 'mars_sim_driver/[s]im_driver' >/dev/null; echo simdriver=$?"
@@ -1560,6 +1632,7 @@ def collect_os_process_status(config: dict[str, object]) -> dict[str, bool]:
         if separator:
             values[key.strip()] = value.strip()
     status["os_session_running"] = values.get("tmux") == "0"
+    status["webapp_session_running"] = values.get("webapp_tmux") == "0"
     status["rosbridge_process_live"] = values.get("rosbridge") == "0"
     status["brain_process_live"] = values.get("brain") == "0"
     status["sim_driver_process_live"] = values.get("simdriver") == "0"
@@ -1680,9 +1753,15 @@ def wait_for_virtual_mars(config: dict[str, object], *, timeout_seconds: float =
 
 
 def runtime_already_running(config: dict[str, object]) -> bool:
-    """The running stack is both complete and current. A container on a stale port
-    block is not reusable however healthy it looks -- only a recreate moves it."""
-    return os_runtime_ready(config) and os_container_current()
+    """The running stack is complete and uses this checkout's current ports and
+    browser environment-control mounts. Only a recreate can repair either drift."""
+    os_status = collect_os_process_status(config)
+    return (
+        os_runtime_ready(config)
+        and bool(os_status["webapp_session_running"])
+        and os_container_current()
+        and os_container_environment_control_mounts_current()
+    )
 
 
 def format_startup_check(ok: bool, label: str, detail: str) -> str:
@@ -2590,6 +2669,19 @@ def world_server_running() -> bool:
     return _world_server_ping_reply(WORLD_SERVER_PORT) is not None
 
 
+def world_environment_is_current(config: dict[str, object]) -> bool:
+    """Whether the live MuJoCo process advertises the selected pack identity."""
+    environment = config.get("environment")
+    if not isinstance(environment, EnvironmentPack):
+        return False
+    reply = _world_server_ping_reply(WORLD_SERVER_PORT)
+    return bool(
+        reply is not None
+        and reply.get("environment_id") == environment.id
+        and reply.get("environment_fingerprint") == environment.fingerprint
+    )
+
+
 def _world_model_sources_digest(config: dict[str, object]) -> str:
     """Content digest of the sources compiled into the world server's MuJoCo
     model: the robot description, the driver's model-building modules, the
@@ -3036,6 +3128,20 @@ def stop_world_server() -> None:
         WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
         WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)
         WORLD_SERVER_MODEL_DIGEST_PATH.unlink(missing_ok=True)
+
+
+def stop_world_server_and_wait(*, timeout_seconds: float = 5.0) -> None:
+    """Stop this checkout's host world and prove the shared port was released."""
+    stop_world_server()
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not world_server_running():
+            return
+        time.sleep(0.1)
+    raise StackError(
+        "A host world server is still running after this checkout asked it to stop. "
+        "Refusing to change environments underneath a live physics process."
+    )
 
 
 def ensure_skill_assets(config: dict[str, object]) -> None:

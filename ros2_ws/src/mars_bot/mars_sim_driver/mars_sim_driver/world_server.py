@@ -245,7 +245,18 @@ class WorldServer:
         # viewer builds its models and buttons from the props; the challenge
         # panel gets titles and briefs here and progress from the stream.
         with contextlib.suppress(Exception):  # noqa: BLE001 -- client gone before the first frame
-            ws.send(json.dumps({"props": self.sim.prop_manifest(), "challenges": self.challenges.roster()}))
+            ws.send(
+                json.dumps(
+                    {
+                        "props": self.sim.prop_manifest(),
+                        "challenges": self.challenges.roster(),
+                        "environment": {
+                            "id": self.environment_id,
+                            "fingerprint": self.environment_fingerprint,
+                        },
+                    }
+                )
+            )
         last_seq = -1
         try:
             while True:

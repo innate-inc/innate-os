@@ -54,12 +54,21 @@ export interface WorldState {
   challenge: ChallengeBlock | null;
 }
 
+export interface WorldEnvironment {
+  id: string;
+  fingerprint: string;
+}
+
 export class WorldStateController {
   onState?: (state: WorldState) => void;
   /** The prop roster, sent once per connection (props.py sidecars). */
   onProps?: (props: PropInfo[]) => void;
   /** The challenge roster, sent in the same opening frame (challenges.py). */
   onChallenges?: (challenges: ChallengeInfo[]) => void;
+  /** Pack identity from the opening roster frame. */
+  onEnvironment?: (environment: WorldEnvironment) => void;
+  /** Socket availability across the world-server restart. */
+  onConnectionChange?: (connected: boolean) => void;
 
   #url: string;
   #ws!: WebSocket;
@@ -69,6 +78,7 @@ export class WorldStateController {
   #everOpened = false;
   #disposed = false;
   #retryMs = 500;
+  #retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(url: string) {
     this.#url = url;
@@ -82,9 +92,13 @@ export class WorldStateController {
   /** (Re)open the socket (no handshake; the server just pushes). On drop,
    * retry with backoff until dispose(). */
   #connect(): void {
+    if (this.#disposed) return;
     const ws = new WebSocket(this.#url);
     this.#ws = ws;
     ws.onopen = () => {
+      // A fresh transport has not proved its world identity yet. This also
+      // prevents a reconnect from momentarily reusing the previous roster.
+      this.onConnectionChange?.(false);
       this.#everOpened = true;
       this.#retryMs = 500;
       this.#resolveOpen();
@@ -94,8 +108,12 @@ export class WorldStateController {
       if (!this.#everOpened) this.#rejectOpen(new Error(`world state connection failed: ${this.#url}`));
     };
     ws.onclose = () => {
+      this.onConnectionChange?.(false);
       if (this.#disposed) return;
-      setTimeout(() => this.#connect(), this.#retryMs);
+      this.#retryTimer = setTimeout(() => {
+        this.#retryTimer = null;
+        this.#connect();
+      }, this.#retryMs);
       this.#retryMs = Math.min(this.#retryMs * 2, 5000);
     };
     ws.onmessage = (ev) => this.#onMessage(ev.data as string);
@@ -114,14 +132,31 @@ export class WorldStateController {
 
   dispose(): void {
     this.#disposed = true;
+    if (this.#retryTimer !== null) clearTimeout(this.#retryTimer);
+    this.#retryTimer = null;
     this.#ws.close();
   }
 
   #onMessage(raw: string): void {
-    const parsed = JSON.parse(raw) as { props?: PropInfo[]; challenges?: ChallengeInfo[] };
-    if (parsed.props || parsed.challenges) {
+    const parsed = JSON.parse(raw) as {
+      props?: PropInfo[];
+      challenges?: ChallengeInfo[];
+      environment?: WorldEnvironment;
+    };
+    if (parsed.props || parsed.challenges || parsed.environment) {
       // Roster frame, not a state frame: it has no clock and arrives once,
       // ahead of the stream (see world_server.serve_state).
+      if (
+        typeof parsed.environment?.id === "string" &&
+        typeof parsed.environment?.fingerprint === "string" &&
+        parsed.environment.id &&
+        parsed.environment.fingerprint
+      ) {
+        this.onEnvironment?.(parsed.environment);
+        // A TCP/WebSocket open is not enough after a restart: only advertise
+        // connected once this socket has proved which physics world it serves.
+        this.onConnectionChange?.(true);
+      }
       if (parsed.props) this.onProps?.(parsed.props);
       if (parsed.challenges) this.onChallenges?.(parsed.challenges);
       return;

@@ -7315,6 +7315,147 @@ select.skill-input {
   color: rgb(255 255 255 / 50%);
 }
 
+.sim-environment-picker {
+  display: grid;
+  gap: 7px;
+}
+
+.sim-environment-picker > label {
+  color: rgb(255 255 255 / 72%);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.sim-environment-picker__controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.sim-environment-picker select,
+.sim-environment-picker button {
+  min-height: 34px;
+  color: rgb(255 255 255 / 90%);
+  background: rgb(255 255 255 / 8%);
+  border: 1px solid rgb(255 255 255 / 13%);
+  border-radius: 9px;
+  font: 550 11px/1 var(--font-ui);
+}
+
+.sim-environment-picker select {
+  min-width: 0;
+  padding: 0 30px 0 10px;
+}
+
+.sim-environment-picker button {
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.sim-environment-picker button:not(:disabled) {
+  color: var(--agent-purple);
+  background: var(--agent-purple-fill);
+  border-color: var(--agent-purple-edge);
+}
+
+.sim-environment-picker :disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.sim-environment-transition {
+  position: fixed;
+  z-index: 2147483000;
+  inset: 0;
+  display: grid;
+  padding: 24px;
+  color: rgb(255 255 255 / 94%);
+  background: rgb(0 0 0 / 82%);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  place-items: center;
+}
+
+.sim-environment-transition[hidden] {
+  display: none;
+}
+
+.sim-environment-transition__card {
+  display: grid;
+  width: min(430px, 100%);
+  padding: 30px;
+  gap: 12px;
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 14px;
+  outline: none;
+  justify-items: center;
+}
+
+.sim-environment-transition__card h2,
+.sim-environment-transition__card p {
+  margin: 0;
+}
+
+.sim-environment-transition__card h2 {
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.sim-environment-transition__message {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sim-environment-transition__hint {
+  color: rgb(255 255 255 / 56%);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.sim-environment-transition__spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid rgb(255 255 255 / 18%);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: sim-environment-spin 800ms linear infinite;
+}
+
+.sim-environment-transition__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.sim-environment-transition__actions button {
+  min-height: 36px;
+  padding: 0 14px;
+  color: var(--ctl-text);
+  background: var(--ctl-glass);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.sim-environment-transition.is-failed .sim-environment-transition__card {
+  border-color: var(--ctl-edge-danger);
+}
+
+@keyframes sim-environment-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sim-environment-transition__spinner {
+    animation-duration: 2s;
+  }
+}
+
 .sim-scene-toggle {
   display: grid;
   width: 56px;

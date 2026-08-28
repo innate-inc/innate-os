@@ -23,6 +23,7 @@ const HEARTBEAT_MS = 150;
 // resting value still goes out within this window rather than waiting for the
 // next heartbeat — that tail was the bulk of the felt drive latency.
 const CHANGE_PUBLISH_MIN_GAP_MS = 16;
+const SIM_ENVIRONMENT_SWITCH_EVENT = "innate:sim-environment-switch-state";
 
 /** @param {number} v */
 const round3 = (v) => Math.round(v * 1000) / 1000;
@@ -39,12 +40,37 @@ export class DriveController {
   /** @type {number | null} */ #changeTimer = null;
   #lastPublishAt = 0;
   /** @type {Set<(state: DriveState) => void>} */ #listeners = new Set();
+  #environmentSwitching = false;
+  /** @type {Set<DriveSource>} */ #needsRelease = new Set();
 
   constructor() {
+    // The page shell owns a durable class as well as the transition event.
+    // A controller can be constructed after the overlay went up (for example
+    // when the SPA route changes mid-switch), so inherit the lock instead of
+    // relying only on an event that has already happened.
+    this.#environmentSwitching =
+      document.documentElement?.classList?.contains("sim-environment-switching") === true;
+    if (this.#environmentSwitching) this.#needsRelease = new Set(["joystick", "keyboard"]);
     window.addEventListener("blur", () => this.haltAll());
     window.addEventListener("pagehide", () => this.haltAll());
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "hidden") this.haltAll();
+    });
+    // The simulator keeps this document alive while physics, Nav2, and ROS are
+    // replaced underneath it. A full-screen transition overlay blocks pointer
+    // input, but it cannot release a keyboard key that was already held. Make
+    // the shared arbitration layer the safety boundary: publish one stop at
+    // transition start and refuse every source until the new world is ready.
+    document.addEventListener(SIM_ENVIRONMENT_SWITCH_EVENT, (event) => {
+      const active = event instanceof CustomEvent && event.detail?.active === true;
+      if (active === this.#environmentSwitching) return;
+      this.#environmentSwitching = active;
+      if (active) {
+        for (const source of /** @type {DriveSource[]} */ (["joystick", "keyboard"])) {
+          if (this.#inputs[source].engaged) this.#needsRelease.add(source);
+        }
+        this.haltAll();
+      }
     });
     ros.onStateChange((state) => {
       if (state !== "connected") this.haltAll();
@@ -60,6 +86,20 @@ export class DriveController {
    * @param {boolean} engaged
    */
   setInput(source, x, y, engaged) {
+    if (this.#environmentSwitching) {
+      // Keep callers' key/pointer bookkeeping independent from the interlock;
+      // they may continue reporting while an old key is physically down, but
+      // none of it becomes latched drive state until that source has returned
+      // to neutral after the transition. This prevents a key held across a
+      // long restart from moving the newly spawned robot immediately.
+      if (engaged) this.#needsRelease.add(source);
+      else this.#needsRelease.delete(source);
+      return;
+    }
+    if (this.#needsRelease.has(source)) {
+      if (!engaged) this.#needsRelease.delete(source);
+      return;
+    }
     const input = this.#inputs[source];
     input.x = x;
     input.y = y;

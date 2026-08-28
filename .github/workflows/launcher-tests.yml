@@ -31,5 +31,14 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Test simulator environment reloads
-        run: node webapp/tests/simEnvironmentReload.test.js
+      - name: Test in-page simulator environment switching
+        run: |
+          node webapp/tests/simEnvironmentReload.test.js
+          node webapp/tests/driveControllerEnvironmentSwitch.test.js
+
+      - name: Test simulator scene swapping
+        working-directory: sim/viewer
+        run: |
+          npm ci
+          npm run test:environment
+          npm run typecheck

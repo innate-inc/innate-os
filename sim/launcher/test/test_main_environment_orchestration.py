@@ -1,15 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 
+import contextlib
 import json
 import sys
 from pathlib import Path
+
+import pytest
 
 LAUNCHER_DIR = Path(__file__).resolve().parents[1]
 if str(LAUNCHER_DIR) not in sys.path:
     sys.path.insert(0, str(LAUNCHER_DIR))
 
 import main as launcher_main  # noqa: E402
+from config import StackError  # noqa: E402
 
 
 class FakePack:
@@ -93,6 +97,10 @@ def test_up_stops_a_partial_ros_session_before_asset_checks(monkeypatch, tmp_pat
     monkeypatch.setattr(launcher_main, "ensure_uv_available", lambda: None)
     monkeypatch.setattr(launcher_main, "report_configured_keys", lambda _config: None)
     monkeypatch.setattr(launcher_main, "ensure_workspace_dirs", lambda _config: None)
+    monkeypatch.setattr(launcher_main, "prepare_environment_control_directories", lambda: None)
+    monkeypatch.setattr(launcher_main, "ensure_environment_control_daemon", lambda _config: None)
+    monkeypatch.setattr(launcher_main, "request_environment_control_daemon_stop", lambda: None)
+    monkeypatch.setattr(launcher_main, "wait_for_environment_control_daemon_stop", lambda _pid: None)
     monkeypatch.setattr(launcher_main, "remove_superseded_containers", lambda: None)
     monkeypatch.setattr(launcher_main, "refuse_if_another_checkout_is_running", lambda: None)
     monkeypatch.setattr(launcher_main, "_active_environment_identity", lambda _config: (pack.id, pack.fingerprint))
@@ -177,3 +185,40 @@ def test_assets_refresh_preserves_live_pack_and_quiesces_before_mutation(monkeyp
     assert launcher_main.main() == 0
     assert overrides == ["gallery", "gallery"]
     assert events == ["stop-ros", "stop-world", "sim-assets", "viewer-assets", "start-ros"]
+
+
+def test_up_validation_error_keeps_existing_controller(monkeypatch):
+    stop_requests: list[str] = []
+    monkeypatch.setattr(
+        launcher_main,
+        "select_environment",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(StackError("unknown environment")),
+    )
+    monkeypatch.setattr(launcher_main, "simulator_lifecycle_lock", lambda: contextlib.nullcontext())
+    monkeypatch.setattr(
+        launcher_main,
+        "request_environment_control_daemon_stop",
+        lambda: stop_requests.append("stop") or 123,
+    )
+
+    with pytest.raises(StackError, match="unknown environment"):
+        launcher_main.cmd_up({}, watch=False, environment="missing")
+
+    assert stop_requests == []
+
+
+def test_down_cancels_pending_switch_after_container_stops(monkeypatch):
+    events: list[str] = []
+    monkeypatch.setattr(launcher_main, "remove_superseded_containers", lambda: events.append("remove-old"))
+    monkeypatch.setattr(launcher_main, "down_os", lambda _config: events.append("stop-container"))
+    monkeypatch.setattr(
+        launcher_main,
+        "cancel_pending_environment_control_request",
+        lambda: events.append("cancel-request"),
+    )
+    monkeypatch.setattr(launcher_main, "stop_world_server", lambda: events.append("stop-world"))
+    monkeypatch.setattr(launcher_main, "log", lambda _message: None)
+
+    launcher_main._cmd_down_locked({})
+
+    assert events == ["remove-old", "stop-container", "cancel-request", "stop-world"]

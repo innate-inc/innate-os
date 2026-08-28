@@ -182,6 +182,15 @@ simulator starts:
 ./innate-sim up --environment apartment
 ```
 
+While the simulator is running, open **Scene setup → Environment** in the
+3D view to switch between installed packs. The page stays mounted: controls
+are paused while the host replaces MuJoCo, Nav2, and the ROS session, then a
+fresh Three.js scene is swapped into the existing page. Controls are enabled
+again only after the host job, browser scene, and world-state stream report the
+same environment fingerprint. If startup fails, the launcher tries to restore
+the previous pack and keeps the transition screen up until that restored world
+is safe to use.
+
 For a persistent default, set it in `sim/config.toml`:
 
 ```toml

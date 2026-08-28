@@ -51,7 +51,6 @@ ROS_INSTALL_STATE_PATH = STATE_DIR / "ros-install.inputs.sha256"
 ROS_ENVIRONMENT_STATE_PATH = STATE_DIR / "ros-environment.fingerprint"
 OS_SESSION_READY_POLL_SECONDS = 0.25
 GENERATED_OS_ENV_PATH = STATE_DIR / "innate-os.env"
-
 PORT_BASE_ENV = "INNATE_SIM_PORT_BASE"
 
 
@@ -87,6 +86,21 @@ PUBLISHED_PORT_ENV = {
     "SIM_UDP_PORT": str(SIM_UDP_PORT),
     "SIM_FOXGLOVE_PORT": str(SIM_FOXGLOVE_PORT),
 }
+
+# Browser-triggered environment switches cross the container boundary through
+# two tiny bind-mounted mailboxes.  The request side is writable in the sim
+# container; status is mounted read-only there and remains host-owned.
+ENVIRONMENT_CONTROL_DIR = STATE_DIR / "environment-control"
+ENVIRONMENT_CONTROL_REQUEST_DIR = ENVIRONMENT_CONTROL_DIR / "requests"
+ENVIRONMENT_CONTROL_STATUS_DIR = ENVIRONMENT_CONTROL_DIR / "status"
+ENVIRONMENT_CONTROL_CURRENT_REQUEST_PATH = ENVIRONMENT_CONTROL_REQUEST_DIR / "current.json"
+ENVIRONMENT_CONTROL_CATALOG_PATH = ENVIRONMENT_CONTROL_STATUS_DIR / "catalog.json"
+ENVIRONMENT_CONTROL_HEARTBEAT_PATH = ENVIRONMENT_CONTROL_STATUS_DIR / "heartbeat.json"
+ENVIRONMENT_CONTROL_JOBS_DIR = ENVIRONMENT_CONTROL_STATUS_DIR / "jobs"
+ENVIRONMENT_CONTROL_PID_PATH = ENVIRONMENT_CONTROL_DIR / "controller.pid"
+ENVIRONMENT_CONTROL_SINGLETON_LOCK_PATH = ENVIRONMENT_CONTROL_DIR / "controller.lock"
+ENVIRONMENT_CONTROL_LOG_PATH = LOG_DIR / "environment-control.log"
+SIMULATOR_LIFECYCLE_LOCK_PATH = STATE_DIR / "simulator-lifecycle.lock"
 # How brain_client reaches Gemini: through the Innate proxy with a service key,
 # straight at Google with a Gemini key, or not at all.
 INNATE_BACKEND = "innate"
@@ -229,6 +243,7 @@ LOG_TARGETS = {
 
 SHOW_LIVE_DASHBOARD_DEFAULT = sys.stdout.isatty()
 TMUX_SESSION_NAME = "innate"
+WEBAPP_TMUX_SESSION_NAME = f"{TMUX_SESSION_NAME}-webapp"
 CLI_SIM = "./innate-sim"
 
 

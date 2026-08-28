@@ -9,9 +9,63 @@ pytest bucket."""
 
 import json
 import os
+import stat
+import uuid
 from urllib.parse import parse_qs, urlsplit
 
 from conftest import fake_ws_upstream, make_app_root, serve, sync
+
+CONTROL_NOW = 1_800_000_000.0
+CONTROL_JOB_ID = "123e4567-e89b-42d3-a456-426614174000"
+
+
+def make_environment_control(tmp_path):
+    requests = tmp_path / "control" / "requests"
+    status = tmp_path / "control" / "status"
+    jobs = status / "jobs"
+    requests.mkdir(parents=True)
+    jobs.mkdir(parents=True)
+    catalog = {
+        "schema_version": 1,
+        "active": {
+            "id": "apartment",
+            "display_name": "Apartment",
+            "fingerprint": "apartment-fingerprint",
+        },
+        "environments": [
+            {"id": "apartment", "display_name": "Apartment"},
+            {"id": "gallery", "display_name": "Gallery"},
+        ],
+    }
+    (status / "heartbeat.json").write_text(json.dumps({"schema_version": 1, "pid": 1234, "updated_at": CONTROL_NOW}))
+    (status / "catalog.json").write_text(json.dumps(catalog))
+    return requests, status, catalog
+
+
+def control_overrides(requests, status, **extra):
+    return {
+        "WEBAPP_SIM_CONTROLS": True,
+        "SIM_ENVIRONMENT_REQUESTS_DIR": requests,
+        "SIM_ENVIRONMENT_STATUS_DIR": status,
+        "SIM_ENVIRONMENT_TIME": lambda: CONTROL_NOW,
+        "SIM_ENVIRONMENT_UUID": lambda: uuid.UUID(CONTROL_JOB_ID),
+        **extra,
+    }
+
+
+def switch_job(*, state="running", phase="starting_ros", updated_at=CONTROL_NOW, **extra):
+    return {
+        "schema_version": 1,
+        "job_id": CONTROL_JOB_ID,
+        "target": {"id": "gallery", "display_name": "Gallery"},
+        "state": state,
+        "phase": phase,
+        "progress": 50,
+        "message": "Switching environments",
+        "started_at": CONTROL_NOW - 1,
+        "updated_at": updated_at,
+        **extra,
+    }
 
 
 def make_sim_viewer(tmp_path):
@@ -389,6 +443,254 @@ async def test_sim_environment_descriptor_and_collision_paths_fail_closed(tmp_pa
             response = await s.get(base + path)
             assert response.status == 404
             assert b"SECRET OUTSIDE" not in await response.read()
+
+
+@sync
+async def test_environment_control_routes_are_sim_only(tmp_path):
+    root = make_app_root(tmp_path)
+    requests, status, _catalog = make_environment_control(tmp_path)
+    async with serve(
+        ROOT=root,
+        WEBAPP_SIM_CONTROLS=False,
+        SIM_ENVIRONMENT_REQUESTS_DIR=requests,
+        SIM_ENVIRONMENT_STATUS_DIR=status,
+    ) as (session, base):
+        catalog = await session.get(base + "/sim-environments.json")
+        switch = await session.post(
+            base + "/sim-environment/switch",
+            json={"id": "gallery"},
+            headers={"X-Requested-By": "innate-webapp", "Origin": base},
+        )
+        job = await session.get(base + f"/sim-environment/switch/{CONTROL_JOB_ID}")
+        assert [catalog.status, switch.status, job.status] == [404, 404, 404]
+        assert all(response.headers["Cache-Control"] == "no-store, max-age=0" for response in (catalog, switch, job))
+    assert not (requests / "current.json").exists()
+
+
+@sync
+async def test_environment_catalog_is_validated_and_never_cached(tmp_path):
+    root = make_app_root(tmp_path)
+    requests, status, expected = make_environment_control(tmp_path)
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        response = await session.get(base + "/sim-environments.json")
+        assert response.status == 200
+        assert response.headers["Cache-Control"] == "no-store, max-age=0"
+        assert await response.json() == expected
+
+    # A live heartbeat never blesses a malformed or symlinked catalog.
+    (status / "catalog.json").write_text(json.dumps({**expected, "private": "/host/path"}))
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        response = await session.get(base + "/sim-environments.json")
+        assert response.status == 503
+        assert "/host/path" not in await response.text()
+    (status / "catalog.json").unlink()
+    outside = tmp_path / "outside-catalog.json"
+    outside.write_text(json.dumps(expected))
+    (status / "catalog.json").symlink_to(outside)
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        assert (await session.get(base + "/sim-environments.json")).status == 503
+
+
+@sync
+async def test_switch_request_is_exclusive_bounded_and_schema_checked(tmp_path):
+    root = make_app_root(tmp_path)
+    requests, status, _catalog = make_environment_control(tmp_path)
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        headers = {"X-Requested-By": "innate-webapp", "Origin": base}
+        previous_umask = os.umask(0o077)
+        try:
+            response = await session.post(base + "/sim-environment/switch", json={"id": "gallery"}, headers=headers)
+        finally:
+            os.umask(previous_umask)
+        assert response.status == 202
+        assert response.headers["Cache-Control"] == "no-store, max-age=0"
+        assert await response.json() == {
+            "job_id": CONTROL_JOB_ID,
+            "state": "queued",
+            "target": {"id": "gallery", "display_name": "Gallery"},
+        }
+
+        current_path = requests / "current.json"
+        # On native Linux the container writes as root and the host controller
+        # reads as the invoking user, so the bind-mounted request must be
+        # world-readable (its contents contain no secret).
+        assert stat.S_IMODE(current_path.stat().st_mode) == 0o644
+        assert current_path.stat().st_size <= 4096
+        assert json.loads(current_path.read_text()) == {
+            "schema_version": 1,
+            "job_id": CONTROL_JOB_ID,
+            "environment_id": "gallery",
+            "created_at": CONTROL_NOW,
+        }
+
+        # current.json exists before the first controller poll, so a rapid
+        # second click is still a conflict rather than another queued request.
+        duplicate = await session.post(base + "/sim-environment/switch", json={"id": "apartment"}, headers=headers)
+        duplicate_body = await duplicate.json()
+        assert duplicate.status == 409
+        assert duplicate_body["job_id"] == CONTROL_JOB_ID
+        assert duplicate_body["state"] == "queued"
+        assert duplicate_body["target"] == {"id": "gallery", "display_name": "Gallery"}
+
+        (status / "jobs" / f"{CONTROL_JOB_ID}.json").write_text(json.dumps(switch_job()))
+        running = await session.post(base + "/sim-environment/switch", json={"id": "apartment"}, headers=headers)
+        assert running.status == 409
+        assert (await running.json())["state"] == "running"
+
+
+@sync
+async def test_switch_post_rejects_cross_site_or_malformed_requests_without_writing(tmp_path):
+    root = make_app_root(tmp_path)
+    requests, status, _catalog = make_environment_control(tmp_path)
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        good_headers = {"X-Requested-By": "innate-webapp", "Origin": base}
+        attempts = [
+            await session.post(base + "/sim-environment/switch", json={"id": "gallery"}, headers={"Origin": base}),
+            await session.post(
+                base + "/sim-environment/switch",
+                json={"id": "gallery"},
+                headers={"X-Requested-By": "innate-webapp", "Origin": "https://attacker.invalid"},
+            ),
+            await session.post(
+                base + "/sim-environment/switch",
+                data='{"id":"gallery"}',
+                headers={**good_headers, "Content-Type": "text/plain"},
+            ),
+            await session.post(
+                base + "/sim-environment/switch",
+                data='{"id":"gallery",}',
+                headers={**good_headers, "Content-Type": "application/json"},
+            ),
+            await session.post(
+                base + "/sim-environment/switch",
+                data='{"id":"gallery","id":"apartment"}',
+                headers={**good_headers, "Content-Type": "application/json"},
+            ),
+            await session.post(base + "/sim-environment/switch", json={"id": "../gallery"}, headers=good_headers),
+            await session.post(
+                base + "/sim-environment/switch",
+                json={"id": "gallery", "command": "docker ps"},
+                headers=good_headers,
+            ),
+            await session.post(base + "/sim-environment/switch", json={"id": "not-installed"}, headers=good_headers),
+            await session.post(
+                base + "/sim-environment/switch",
+                data=json.dumps({"id": "g" * 5000}),
+                headers={**good_headers, "Content-Type": "application/json"},
+            ),
+        ]
+        assert [response.status for response in attempts] == [403, 403, 415, 400, 400, 400, 400, 404, 413]
+        assert all(response.headers["Cache-Control"] == "no-store, max-age=0" for response in attempts)
+    assert not (requests / "current.json").exists()
+
+
+@sync
+async def test_switch_rejects_stale_heartbeat_and_malformed_existing_mailbox(tmp_path):
+    root = make_app_root(tmp_path)
+    requests, status, _catalog = make_environment_control(tmp_path)
+    headers = {"X-Requested-By": "innate-webapp"}
+    (status / "heartbeat.json").write_text(
+        json.dumps({"schema_version": 1, "pid": 1234, "updated_at": CONTROL_NOW - 6})
+    )
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        response = await session.post(
+            base + "/sim-environment/switch",
+            json={"id": "gallery"},
+            headers={**headers, "Origin": base},
+        )
+        assert response.status == 503
+    assert not (requests / "current.json").exists()
+
+    (status / "heartbeat.json").write_text(json.dumps({"schema_version": 1, "pid": 1234, "updated_at": CONTROL_NOW}))
+    (requests / "current.json").write_text('{"command":"docker ps"}')
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        response = await session.post(
+            base + "/sim-environment/switch",
+            json={"id": "gallery"},
+            headers={**headers, "Origin": base},
+        )
+        assert response.status == 503
+        assert "docker ps" not in await response.text()
+
+    (requests / "current.json").unlink()
+    os.mkfifo(requests / "current.json")
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        response = await session.post(
+            base + "/sim-environment/switch",
+            json={"id": "gallery"},
+            headers={**headers, "Origin": base},
+        )
+        assert response.status == 503
+
+    # A syntactically valid mailbox must quickly gain a queued job snapshot;
+    # otherwise a live heartbeat cannot leave the UI stuck on 409 for minutes.
+    (requests / "current.json").unlink()
+    (requests / "current.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "job_id": CONTROL_JOB_ID,
+                "environment_id": "gallery",
+                "created_at": CONTROL_NOW - 3,
+            }
+        )
+    )
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        response = await session.post(
+            base + "/sim-environment/switch",
+            json={"id": "gallery"},
+            headers={**headers, "Origin": base},
+        )
+        assert response.status == 503
+
+
+@sync
+async def test_switch_job_status_is_safe_validated_and_terminal_authoritative(tmp_path):
+    root = make_app_root(tmp_path)
+    requests, status, _catalog = make_environment_control(tmp_path)
+    job_path = status / "jobs" / f"{CONTROL_JOB_ID}.json"
+    terminal = switch_job(
+        state="failed",
+        phase="failed",
+        message="Could not start ROS",
+        started_at=CONTROL_NOW - 101,
+        updated_at=CONTROL_NOW - 100,
+        finished_at=CONTROL_NOW - 99,
+        error="ROS readiness timeout",
+        recovered_environment={
+            "id": "apartment",
+            "display_name": "Apartment",
+            "fingerprint": "apartment-fingerprint",
+        },
+    )
+    # Terminal jobs outlive current.json; their age is not controller staleness.
+    job_path.write_text(json.dumps(terminal))
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        response = await session.get(base + f"/sim-environment/switch/{CONTROL_JOB_ID}")
+        assert response.status == 200
+        assert response.headers["Cache-Control"] == "no-store, max-age=0"
+        assert await response.json() == terminal
+        assert (await session.get(base + "/sim-environment/switch/not-a-uuid")).status == 400
+        assert (await session.get(base + "/sim-environment/switch/223e4567-e89b-42d3-a456-426614174000")).status == 404
+
+    job_path.write_text(json.dumps({**terminal, "progress": 101}))
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        assert (await session.get(base + f"/sim-environment/switch/{CONTROL_JOB_ID}")).status == 503
+
+    # Unknown controller fields are never forwarded to the browser.
+    job_path.write_text(json.dumps({**terminal, "host_path": "/Users/operator/secret"}))
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        response = await session.get(base + f"/sim-environment/switch/{CONTROL_JOB_ID}")
+        assert response.status == 503
+        assert "/Users/operator/secret" not in await response.text()
+
+    # A final-component symlink cannot turn a job id into an arbitrary file read.
+    job_path.unlink()
+    outside = tmp_path / "outside-job.json"
+    outside.write_text(json.dumps(terminal))
+    job_path.symlink_to(outside)
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        assert (await session.get(base + f"/sim-environment/switch/{CONTROL_JOB_ID}")).status == 503
 
 
 @sync

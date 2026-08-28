@@ -232,8 +232,12 @@ export class SimScene {
   /** Canvas width covered on the right by page chrome (see setSafeInsets). */
   private safeInsetRight = 0;
 
-  constructor(canvas: HTMLCanvasElement, opts: { fixedSize?: { width: number; height: number } } = {}) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    opts: { fixedSize?: { width: number; height: number }; environmentSource?: EnvironmentSource } = {},
+  ) {
     this.fixedSize = opts.fixedSize ?? null;
+    if (opts.environmentSource) this.environmentSourcePromise = Promise.resolve(opts.environmentSource);
     const w = this.fixedSize?.width ?? window.innerWidth;
     const h = this.fixedSize?.height ?? window.innerHeight;
     // Pre-pose orbit framing would flash before spawnAt replaces it.
@@ -483,15 +487,7 @@ export class SimScene {
 
   private environmentSource(): Promise<EnvironmentSource> {
     if (!this.environmentSourcePromise) {
-      const pending = resolveEnvironmentSource().then((source) => {
-        if (source.fingerprint) {
-          const shared = globalThis as typeof globalThis & {
-            __innateSimLoadedEnvironmentFingerprint?: string;
-          };
-          shared.__innateSimLoadedEnvironmentFingerprint = source.fingerprint;
-        }
-        return source;
-      });
+      const pending = resolveEnvironmentSource();
       this.environmentSourcePromise = pending;
       // A legacy fallback is deliberately not sticky: if a descriptor was only
       // briefly absent, the next consumer probes again instead of pinning this
@@ -568,11 +564,15 @@ export class SimScene {
 
   /**
    * Phase two: stream each room's glb through the queue and swap its
-   * placeholder box out on arrival. A room that fails is non-fatal (visual
-   * only): log it, drop its box, and let the rest of the apartment and the
-   * session carry on.
+   * placeholder box out on arrival. Initial startup remains tolerant of a
+   * visual-only failure, but a hot-swap candidate uses strict mode: every
+   * required mesh must load before it can replace the still-working scene.
    */
-  async streamApartment(queue: LoadQueue, layout: ApartmentLayout): Promise<void> {
+  async streamApartment(
+    queue: LoadQueue,
+    layout: ApartmentLayout,
+    { strict = false }: { strict?: boolean } = {},
+  ): Promise<void> {
     const loader = new GLTFLoader();
     const { group } = layout;
 
@@ -583,6 +583,7 @@ export class SimScene {
       // the sim just runs without the visual environment (robot still works).
       if (!layout.sceneUrl) {
         console.error("[sim-viewer] environment unavailable (no split manifest or monolith)");
+        if (strict) throw new Error("environment has neither a room manifest nor a monolithic scene");
         return;
       }
       try {
@@ -591,8 +592,13 @@ export class SimScene {
         group.add(root);
       } catch (err) {
         console.error("[sim-viewer] apartment unavailable (no manifest, no monolith):", err);
+        if (strict) throw err;
       }
       return;
+    }
+
+    if (strict && layout.rooms.length === 0) {
+      throw new Error("environment room manifest contains no valid rooms");
     }
 
     const roomBaseUrl = layout.roomBaseUrl ?? APARTMENT_ROOM_BASE_URL;
@@ -602,7 +608,10 @@ export class SimScene {
           this.dressRoom(root);
           group.add(root);
         })
-        .catch((err) => console.error(`[sim-viewer] apartment room '${room.file}' failed to load:`, err))
+        .catch((err) => {
+          console.error(`[sim-viewer] apartment room '${room.file}' failed to load:`, err);
+          if (strict) throw err;
+        })
         .finally(() => {
           group.remove(box);
           box.geometry.dispose(); // material is shared -- disposed in dispose()

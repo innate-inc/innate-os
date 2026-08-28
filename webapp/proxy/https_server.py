@@ -16,6 +16,11 @@ secure-origin features (WebSerial leader-arm) need HTTPS; the arm panel offers a
 one-click switch rather than an automatic bounce. A self-signed certificate is
 generated on first run (10 years) under ~/.innate-webapp-tls/ via openssl.
 
+In simulator mode, environment switching crosses a narrow file control plane:
+the proxy may create one bounded request in a writable mailbox and may only
+read the controller's catalog/job snapshots from a separate read-only mount.
+It never receives a Docker socket or shells out on behalf of those routes.
+
 Static files are served with aiohttp's FileResponse: a single stat() yields the
 mtime+size ETag, a matching If-None-Match returns a bodyless 304 before the file
 is read, and Range is honoured. Everything is no-cache — the browser revalidates
@@ -33,19 +38,25 @@ Persist:    launched on boot in the `console-webapp` tmux window
 """
 
 import asyncio
+import errno
 import gzip
 import json
 import logging
+import math
 import mimetypes
 import os
 import posixpath
 import re
 import shutil
 import ssl
+import stat
 import subprocess
 import sys
 import threading
+import time
+import uuid
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 import aiohttp
 from aiohttp import web
@@ -195,6 +206,36 @@ SIM_VIEWER_ROUTES = {
 }
 
 ENVIRONMENT_NO_STORE = {"Cache-Control": "no-store, max-age=0"}
+
+# The host launcher owns the simulator lifecycle. The webapp gets a deliberately
+# tiny filesystem control plane instead of access to Docker or a host shell:
+# requests is the one writable bind mount, status is a separate read-only one.
+SIM_ENVIRONMENT_REQUESTS_DIR = Path("/run/innate-sim-control/requests")
+SIM_ENVIRONMENT_STATUS_DIR = Path("/run/innate-sim-control/status")
+SIM_ENVIRONMENT_TIME = time.time
+SIM_ENVIRONMENT_UUID = uuid.uuid4
+
+ENVIRONMENT_ID_RE = re.compile(r"^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?$")
+JOB_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+SWITCH_STATES = {"queued", "running", "ready", "failed"}
+SWITCH_PHASES = {
+    "queued",
+    "validating",
+    "stopping_runtime",
+    "activating",
+    "starting_physics",
+    "starting_ros",
+    "waiting_ros",
+    "waiting_sim",
+    "rolling_back",
+    "ready",
+    "failed",
+}
+CONTROL_REQUEST_MAX_BYTES = 4096
+CONTROL_STATUS_MAX_BYTES = 64 * 1024
+CONTROL_HEARTBEAT_MAX_AGE_S = 5.0
+CONTROL_REQUEST_MAX_AGE_S = 300.0
+CONTROL_JOB_STATUS_GRACE_S = 2.0
 
 
 def _content_type(path: Path) -> str:
@@ -470,6 +511,453 @@ async def sim_environment_asset(request: web.Request) -> web.StreamResponse:
     return await _serve_static(target, request)
 
 
+class _ControlStateMissing(Exception):
+    """A requested controller snapshot does not exist."""
+
+
+class _ControlStateInvalid(Exception):
+    """The controller filesystem contract is missing, unsafe, or malformed."""
+
+
+def _strict_json_loads(raw: bytes) -> object:
+    """RFC JSON only: UTF-8, no duplicate keys, and no NaN/Infinity."""
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"invalid JSON constant: {value}")
+
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        value: dict[str, object] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError(f"duplicate JSON key: {key}")
+            value[key] = item
+        return value
+
+    return json.loads(raw.decode("utf-8"), parse_constant=reject_constant, object_pairs_hook=unique_object)
+
+
+def _control_json(body: dict[str, object], *, status: int = 200) -> web.Response:
+    return web.json_response(body, status=status, headers=ENVIRONMENT_NO_STORE)
+
+
+def _control_error(status: int, message: str, **details: object) -> web.Response:
+    return _control_json({"ok": False, "error": message, **details}, status=status)
+
+
+def _control_child(root: Path, *parts: str) -> Path:
+    """A fixed-name child whose parent cannot escape its injected mount."""
+    if any(not part or Path(part).name != part or "/" in part or "\\" in part for part in parts):
+        raise _ControlStateInvalid
+    try:
+        resolved_root = root.resolve(strict=True)
+        if not resolved_root.is_dir():
+            raise _ControlStateInvalid
+        target = root.joinpath(*parts)
+        resolved_parent = target.parent.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise _ControlStateInvalid from exc
+    if not resolved_parent.is_relative_to(resolved_root):
+        raise _ControlStateInvalid
+    return target
+
+
+def _read_control_json(path: Path, *, max_bytes: int = CONTROL_STATUS_MAX_BYTES) -> dict[str, object]:
+    """Read one bounded regular file without following a final symlink."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError as exc:
+        raise _ControlStateMissing from exc
+    except OSError as exc:
+        raise _ControlStateInvalid from exc
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size <= 0 or metadata.st_size > max_bytes:
+            raise _ControlStateInvalid
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while remaining:
+            chunk = os.read(fd, min(remaining, 16 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        if not raw or len(raw) > max_bytes:
+            raise _ControlStateInvalid
+        parsed = _strict_json_loads(raw)
+    except (OSError, RecursionError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise _ControlStateInvalid from exc
+    finally:
+        os.close(fd)
+    if not isinstance(parsed, dict):
+        raise _ControlStateInvalid
+    return parsed
+
+
+def _is_timestamp(value: object) -> bool:
+    if type(value) not in (int, float) or value <= 0:
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _is_safe_text(
+    value: object,
+    *,
+    max_length: int,
+    allow_empty: bool = False,
+    allow_newlines: bool = False,
+) -> bool:
+    if not isinstance(value, str) or len(value) > max_length or (not value and not allow_empty):
+        return False
+    return not any(ord(char) < 0x20 and (not allow_newlines or char not in "\n\t") for char in value)
+
+
+def _is_environment_id(value: object) -> bool:
+    return isinstance(value, str) and len(value) <= 64 and ENVIRONMENT_ID_RE.fullmatch(value) is not None
+
+
+def _is_job_id(value: object) -> bool:
+    if not isinstance(value, str) or JOB_ID_RE.fullmatch(value) is None:
+        return False
+    try:
+        return str(uuid.UUID(value)) == value
+    except ValueError:
+        return False
+
+
+def _environment_summary(value: object, *, fingerprint: bool) -> dict[str, str]:
+    expected = {"id", "display_name", *(("fingerprint",) if fingerprint else ())}
+    if not isinstance(value, dict) or set(value) != expected:
+        raise _ControlStateInvalid
+    environment_id = value.get("id")
+    display_name = value.get("display_name")
+    if not _is_environment_id(environment_id) or not _is_safe_text(display_name, max_length=160):
+        raise _ControlStateInvalid
+    result = {"id": environment_id, "display_name": display_name}
+    if fingerprint:
+        environment_fingerprint = value.get("fingerprint")
+        if not _is_safe_text(environment_fingerprint, max_length=256):
+            raise _ControlStateInvalid
+        result["fingerprint"] = environment_fingerprint
+    return result
+
+
+def _require_controller_healthy(now: float) -> None:
+    if not _is_timestamp(now):
+        raise _ControlStateInvalid
+    heartbeat_path = _control_child(SIM_ENVIRONMENT_STATUS_DIR, "heartbeat.json")
+    heartbeat = _read_control_json(heartbeat_path, max_bytes=4096)
+    if set(heartbeat) != {"schema_version", "pid", "updated_at"} or heartbeat.get("schema_version") != 1:
+        raise _ControlStateInvalid
+    pid = heartbeat.get("pid")
+    updated_at = heartbeat.get("updated_at")
+    if type(pid) is not int or not 0 < pid < 2**31 or not _is_timestamp(updated_at):
+        raise _ControlStateInvalid
+    age = now - updated_at
+    if age < -1.0 or age > CONTROL_HEARTBEAT_MAX_AGE_S:
+        raise _ControlStateInvalid
+
+
+def _load_environment_catalog(now: float) -> dict[str, object]:
+    _require_controller_healthy(now)
+    catalog_path = _control_child(SIM_ENVIRONMENT_STATUS_DIR, "catalog.json")
+    catalog = _read_control_json(catalog_path)
+    if set(catalog) != {"schema_version", "active", "environments"} or catalog.get("schema_version") != 1:
+        raise _ControlStateInvalid
+    raw_environments = catalog.get("environments")
+    if not isinstance(raw_environments, list) or len(raw_environments) > 256:
+        raise _ControlStateInvalid
+    environments = [_environment_summary(item, fingerprint=False) for item in raw_environments]
+    environment_ids = [item["id"] for item in environments]
+    if environment_ids != sorted(environment_ids) or len(environment_ids) != len(set(environment_ids)):
+        raise _ControlStateInvalid
+    raw_active = catalog.get("active")
+    active = None if raw_active is None else _environment_summary(raw_active, fingerprint=True)
+    if active is not None:
+        installed = next((item for item in environments if item["id"] == active["id"]), None)
+        if installed is None or installed["display_name"] != active["display_name"]:
+            raise _ControlStateInvalid
+    return {"schema_version": 1, "active": active, "environments": environments}
+
+
+def _validate_switch_request(value: dict[str, object], now: float) -> dict[str, object]:
+    if set(value) != {"schema_version", "job_id", "environment_id", "created_at"}:
+        raise _ControlStateInvalid
+    job_id = value.get("job_id")
+    environment_id = value.get("environment_id")
+    created_at = value.get("created_at")
+    if value.get("schema_version") != 1 or not _is_job_id(job_id) or not _is_environment_id(environment_id):
+        raise _ControlStateInvalid
+    if not _is_timestamp(created_at):
+        raise _ControlStateInvalid
+    age = now - created_at
+    if age < -1.0 or age > CONTROL_REQUEST_MAX_AGE_S:
+        raise _ControlStateInvalid
+    return {
+        "schema_version": 1,
+        "job_id": job_id,
+        "environment_id": environment_id,
+        "created_at": created_at,
+    }
+
+
+def _validate_switch_job(value: dict[str, object], expected_job_id: str) -> dict[str, object]:
+    required = {
+        "schema_version",
+        "job_id",
+        "target",
+        "state",
+        "phase",
+        "progress",
+        "message",
+        "started_at",
+        "updated_at",
+    }
+    optional = {"fingerprint", "finished_at", "recovered_environment", "error"}
+    if not required.issubset(value) or set(value) - required - optional:
+        raise _ControlStateInvalid
+    job_id = value.get("job_id")
+    state = value.get("state")
+    phase = value.get("phase")
+    progress = value.get("progress")
+    message = value.get("message")
+    started_at = value.get("started_at")
+    updated_at = value.get("updated_at")
+    if value.get("schema_version") != 1 or job_id != expected_job_id or not _is_job_id(job_id):
+        raise _ControlStateInvalid
+    if state not in SWITCH_STATES or phase not in SWITCH_PHASES:
+        raise _ControlStateInvalid
+    if type(progress) is not int or not 0 <= progress <= 100:
+        raise _ControlStateInvalid
+    if not _is_safe_text(message, max_length=2048, allow_empty=True, allow_newlines=True):
+        raise _ControlStateInvalid
+    if not _is_timestamp(started_at) or not _is_timestamp(updated_at) or updated_at < started_at:
+        raise _ControlStateInvalid
+    result: dict[str, object] = {
+        "schema_version": 1,
+        "job_id": job_id,
+        "target": _environment_summary(value.get("target"), fingerprint=False),
+        "state": state,
+        "phase": phase,
+        "progress": progress,
+        "message": message,
+        "started_at": started_at,
+        "updated_at": updated_at,
+    }
+    if "fingerprint" in value:
+        if not _is_safe_text(value["fingerprint"], max_length=256):
+            raise _ControlStateInvalid
+        result["fingerprint"] = value["fingerprint"]
+    if "finished_at" in value:
+        finished_at = value["finished_at"]
+        if not _is_timestamp(finished_at) or finished_at < started_at:
+            raise _ControlStateInvalid
+        result["finished_at"] = finished_at
+    if "recovered_environment" in value:
+        result["recovered_environment"] = _environment_summary(value["recovered_environment"], fingerprint=True)
+    if "error" in value:
+        if not _is_safe_text(value["error"], max_length=4096, allow_empty=True, allow_newlines=True):
+            raise _ControlStateInvalid
+        result["error"] = value["error"]
+    return result
+
+
+def _load_switch_job(job_id: str) -> dict[str, object]:
+    job_path = _control_child(SIM_ENVIRONMENT_STATUS_DIR, "jobs", f"{job_id}.json")
+    return _validate_switch_job(_read_control_json(job_path), job_id)
+
+
+def _request_is_same_origin(request: web.Request) -> bool:
+    origins = request.headers.getall("Origin", [])
+    if len(origins) != 1:
+        return False
+    try:
+        supplied = urlsplit(origins[0])
+        expected = urlsplit(f"{request.scheme}://{request.host}")
+        if supplied.username is not None or supplied.password is not None:
+            return False
+        if supplied.path not in ("", "/") or supplied.query or supplied.fragment:
+            return False
+        supplied_port = supplied.port or (443 if supplied.scheme.lower() == "https" else 80)
+        expected_port = expected.port or (443 if request.scheme.lower() == "https" else 80)
+    except (TypeError, ValueError):
+        return False
+    return (
+        supplied.scheme.lower() == request.scheme.lower()
+        and supplied.hostname is not None
+        and expected.hostname is not None
+        and supplied.hostname.rstrip(".").lower() == expected.hostname.rstrip(".").lower()
+        and supplied_port == expected_port
+    )
+
+
+def _write_switch_request(value: dict[str, object]) -> None:
+    current_path = _control_child(SIM_ENVIRONMENT_REQUESTS_DIR, "current.json")
+    payload = (json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True) + "\n").encode()
+    if len(payload) > CONTROL_REQUEST_MAX_BYTES:
+        raise _ControlStateInvalid
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        # The proxy runs as root in the container, while the host controller
+        # runs as the invoking user on native Linux. The non-secret mailbox
+        # payload must therefore be host-readable across the bind mount.
+        fd = os.open(current_path, flags, 0o644)
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        raise _ControlStateInvalid from exc
+    created = os.fstat(fd)
+    wrote = False
+    try:
+        # os.open's mode is filtered through the container's umask; normalize
+        # it explicitly so a hardened 0077 umask cannot recreate the Linux
+        # cross-UID read failure this mode is intended to prevent.
+        os.fchmod(fd, 0o644)
+        view = memoryview(payload)
+        while view:
+            count = os.write(fd, view)
+            if count <= 0:
+                raise OSError(errno.EIO, "short write")
+            view = view[count:]
+        os.fsync(fd)
+        wrote = True
+    except OSError as exc:
+        raise _ControlStateInvalid from exc
+    finally:
+        os.close(fd)
+        if not wrote:
+            try:
+                visible = current_path.lstat()
+                if (visible.st_dev, visible.st_ino) == (created.st_dev, created.st_ino):
+                    current_path.unlink()
+            except OSError:
+                pass
+
+
+def _existing_switch(now: float, catalog: dict[str, object]) -> dict[str, object]:
+    current_path = _control_child(SIM_ENVIRONMENT_REQUESTS_DIR, "current.json")
+    current = _validate_switch_request(
+        _read_control_json(current_path, max_bytes=CONTROL_REQUEST_MAX_BYTES),
+        now,
+    )
+    try:
+        job = _load_switch_job(current["job_id"])
+    except _ControlStateMissing:
+        # The controller polls every 250 ms. A valid, fresh mailbox precedes its
+        # first queued snapshot and is already authoritative enough to reject a
+        # double-click without misreporting the controller as unhealthy.
+        if now - current["created_at"] > CONTROL_JOB_STATUS_GRACE_S:
+            raise _ControlStateInvalid from None
+        target = next(
+            (item for item in catalog["environments"] if item["id"] == current["environment_id"]),
+            None,
+        )
+        if target is None:
+            raise _ControlStateInvalid from None
+        return {"job_id": current["job_id"], "state": "queued", "target": target}
+    if job["target"]["id"] != current["environment_id"]:
+        raise _ControlStateInvalid
+    if job["state"] not in {"queued", "running"}:
+        # Terminal status is published before the controller removes current;
+        # this tiny inconsistent window is not permission to overwrite it.
+        raise _ControlStateInvalid
+    return {"job_id": job["job_id"], "state": job["state"], "target": job["target"]}
+
+
+async def sim_environments_catalog(request: web.Request) -> web.Response:
+    if not WEBAPP_SIM_CONTROLS:
+        return _control_error(404, "not found")
+    try:
+        catalog = _load_environment_catalog(SIM_ENVIRONMENT_TIME())
+    except (_ControlStateMissing, _ControlStateInvalid):
+        return _control_error(503, "simulator environment controller unavailable")
+    return _control_json(catalog)
+
+
+async def sim_environment_switch(request: web.Request) -> web.Response:
+    if not WEBAPP_SIM_CONTROLS:
+        return _control_error(404, "not found")
+    requested_by = request.headers.getall("X-Requested-By", [])
+    if requested_by != ["innate-webapp"]:
+        return _control_error(403, "missing X-Requested-By header")
+    if not _request_is_same_origin(request):
+        return _control_error(403, "request origin does not match this simulator")
+    if request.content_type != "application/json":
+        return _control_error(415, "Content-Type must be application/json")
+    if request.content_length is not None and request.content_length > CONTROL_REQUEST_MAX_BYTES:
+        return _control_error(413, "request body too large")
+    raw = await request.content.read(CONTROL_REQUEST_MAX_BYTES + 1)
+    if len(raw) > CONTROL_REQUEST_MAX_BYTES:
+        return _control_error(413, "request body too large")
+    try:
+        body = _strict_json_loads(raw)
+    except (RecursionError, UnicodeError, ValueError, json.JSONDecodeError):
+        return _control_error(400, "invalid JSON body")
+    if not isinstance(body, dict) or set(body) != {"id"} or not _is_environment_id(body.get("id")):
+        return _control_error(400, "body must contain exactly one valid environment id")
+
+    now = SIM_ENVIRONMENT_TIME()
+    try:
+        catalog = _load_environment_catalog(now)
+    except (_ControlStateMissing, _ControlStateInvalid):
+        return _control_error(503, "simulator environment controller unavailable")
+    target = next((item for item in catalog["environments"] if item["id"] == body["id"]), None)
+    if target is None:
+        return _control_error(404, "environment is not installed")
+
+    job_id = str(SIM_ENVIRONMENT_UUID()).lower()
+    if not _is_job_id(job_id):
+        return _control_error(503, "simulator environment controller unavailable")
+    mailbox = {
+        "schema_version": 1,
+        "job_id": job_id,
+        "environment_id": target["id"],
+        "created_at": now,
+    }
+    for attempt in range(2):
+        try:
+            _write_switch_request(mailbox)
+            break
+        except FileExistsError:
+            try:
+                busy = _existing_switch(now, catalog)
+            except _ControlStateMissing:
+                # The controller can remove a terminal mailbox between O_EXCL
+                # and our inspection. Retry once rather than exposing that
+                # harmless cleanup race as a controller failure.
+                if attempt == 0:
+                    continue
+                return _control_error(503, "simulator environment controller state is inconsistent")
+            except _ControlStateInvalid:
+                return _control_error(503, "simulator environment controller state is inconsistent")
+            return _control_error(409, "an environment switch is already in progress", **busy)
+        except _ControlStateInvalid:
+            return _control_error(503, "simulator environment controller unavailable")
+    else:
+        return _control_error(503, "simulator environment controller unavailable")
+    return _control_json({"job_id": job_id, "state": "queued", "target": target}, status=202)
+
+
+async def sim_environment_switch_status(request: web.Request) -> web.Response:
+    if not WEBAPP_SIM_CONTROLS:
+        return _control_error(404, "not found")
+    job_id = request.match_info["job_id"]
+    if not _is_job_id(job_id):
+        return _control_error(400, "invalid environment switch job id")
+    try:
+        _require_controller_healthy(SIM_ENVIRONMENT_TIME())
+        job = _load_switch_job(job_id)
+    except _ControlStateMissing:
+        return _control_error(404, "environment switch job not found")
+    except _ControlStateInvalid:
+        return _control_error(503, "simulator environment controller state is invalid")
+    return _control_json(job)
+
+
 async def config_handler(request: web.Request) -> web.Response:
     """Serve config.json with env-driven feature flags overlaid, so a deployment
     can flip flags without editing the committed file (the sim sets
@@ -630,6 +1118,9 @@ def build_app() -> web.Application:
     app.router.add_get("/restart", restart_handler)
     # Before the catch-all; the bare /armsdk page route stays on the SPA shell.
     app.router.add_get("/armsdk/model/{tail:.*}", armsdk_model)
+    app.router.add_get("/sim-environments.json", sim_environments_catalog)
+    app.router.add_post("/sim-environment/switch", sim_environment_switch)
+    app.router.add_get("/sim-environment/switch/{job_id}", sim_environment_switch_status)
     app.router.add_get("/sim-environment/manifest.json", sim_environment_manifest)
     app.router.add_get("/sim-environment/scene.glb", sim_environment_asset)
     app.router.add_get("/sim-environment/layout.json", sim_environment_asset)

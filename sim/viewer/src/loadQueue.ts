@@ -25,10 +25,11 @@ export class LoadQueue {
   readonly #limit: number;
   readonly #onProgress?: (p: LoadProgress) => void;
   #active = 0;
-  #pending: Array<() => void> = [];
+  #pending: Array<{ run: () => void; reject: (error: Error) => void }> = [];
   #loaded = 0;
   #estimated = 0; // seeded denominator, before any Content-Length is known
   #nextId = 0;
+  #cancelled = false;
   #jobLoaded = new Map<number, number>(); // last loaded bytes reported, per job
   #jobTotal = new Map<number, number>(); // real size once its Content-Length lands
 
@@ -50,6 +51,7 @@ export class LoadQueue {
    * even when two jobs fetch the same URL.
    */
   add<T>(job: (report: ByteReport) => Promise<T>): Promise<T> {
+    if (this.#cancelled) return Promise.reject(new Error("load queue cancelled"));
     const id = this.#nextId++;
     return new Promise<T>((resolve, reject) => {
       const run = () => {
@@ -62,18 +64,20 @@ export class LoadQueue {
           .then(resolve, reject)
           .finally(() => {
             this.#active--;
-            this.#pending.shift()?.();
+            this.#pending.shift()?.run();
           });
       };
       if (this.#active < this.#limit) run();
-      else this.#pending.push(run);
+      else this.#pending.push({ run, reject });
     });
   }
 
   /** Drop all not-yet-started jobs -- teardown, so an abandoned stage stops
    * queuing new downloads. In-flight jobs (≤ limit) still finish. */
   cancel(): void {
-    this.#pending.length = 0;
+    this.#cancelled = true;
+    const pending = this.#pending.splice(0);
+    for (const job of pending) job.reject(new Error("load queue cancelled"));
   }
 
   #report(id: number, loaded: number, total: number): void {

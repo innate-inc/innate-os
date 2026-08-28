@@ -8,7 +8,7 @@ import json
 import os
 import subprocess
 import sys
-import time
+from collections.abc import Callable
 from pathlib import Path
 
 if sys.version_info < (3, 10):  # noqa: UP036
@@ -43,6 +43,14 @@ from dashboard import (
     watch_dashboard,
 )
 from environment import ACTIVE_ENVIRONMENT_FILENAME, EnvironmentPack, activate_environment, select_environment
+from environment_control import (
+    cancel_pending_environment_control_request,
+    ensure_environment_control_daemon,
+    prepare_environment_control_directories,
+    request_environment_control_daemon_stop,
+    simulator_lifecycle_lock,
+    wait_for_environment_control_daemon_stop,
+)
 from runtime import (
     assets_image_ref,
     capture_os_brain_logs,
@@ -69,6 +77,7 @@ from runtime import (
     sim_assets_install_is_current,
     stop_os_session,
     stop_world_server,
+    stop_world_server_and_wait,
     tail_file,
     wait_for_os_runtime_ready,
     wait_for_virtual_mars,
@@ -159,25 +168,17 @@ def _environment_assets_are_current(
 
 def _stop_local_world_before_asset_refresh() -> None:
     """Stop only this checkout's world, and prove it released the shared port."""
-    stop_world_server()
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
-        if not world_server_running():
-            return
-        time.sleep(0.1)
-    raise StackError(
-        "A host world server is still running after this checkout asked it to stop. "
-        "Refusing to replace simulator assets underneath a live physics process."
-    )
+    stop_world_server_and_wait()
 
 
-def cmd_up(
+def _cmd_up_locked(
     config: dict[str, object],
     *,
     watch: bool = SHOW_LIVE_DASHBOARD_DEFAULT,
     offline: bool = False,
     environment: str | None = None,
-) -> None:
+    on_teardown: Callable[[], None] | None = None,
+) -> bool:
     started = False
     try:
         # Parse the manifest before touching Docker or downloading anything, so
@@ -196,6 +197,7 @@ def cmd_up(
         # workspace dirs for the invoking user (root-owned bind-mount dirs on
         # Linux otherwise), and warns if an earlier run already claimed them.
         ensure_workspace_dirs(config)
+        prepare_environment_control_directories()
         # Before the fast path, not after it: the containers it removes are
         # exactly what an upgrade from a still-running older stack leaves
         # behind -- and one of them holds the ports this stack needs.
@@ -283,8 +285,8 @@ def cmd_up(
                         f"Recent OS log output:\n{tail_file(OS_SESSION_LOG_PATH, limit=80)}"
                     )
             log("Innate sim runtime is already running. Opening dashboard...")
-            show_runtime_dashboard(config, watch=watch)
-            return
+            ensure_environment_control_daemon(config)
+            return True
 
         os_env_file = build_os_env(config)
         if not offline:
@@ -333,7 +335,7 @@ def cmd_up(
             warn("the OOM killer (check: sudo dmesg | grep -i oom). Free up memory or add swap,")
             warn(f"then restart: {CLI_SIM} down && {CLI_SIM} up. Log: {CLI_SIM} logs world-server")
             warn(f"The runtime is left running for inspection; stop it with `{CLI_SIM} down`.")
-            return
+            return False
         if not sim_driver_ready:
             # Leave the runtime up so the failure can be inspected.
             warn("The sim driver (MuJoCo) never started publishing /odom.")
@@ -342,7 +344,7 @@ def cmd_up(
                 "`tmux attach -t innate` and check the 'sim-driver' window. "
                 f"Stop everything with `{CLI_SIM} down`."
             )
-            return
+            return False
         if config["brain_backend"] == NO_BACKEND:
             warn("No cloud LLM key configured — the sim is running WITHOUT an agent.")
             warn(
@@ -350,30 +352,78 @@ def cmd_up(
                 f"{ENV_PATH}, or run `{CLI_SIM} setup`, then restart."
             )
         success("Innate sim runtime is up.")
-        show_runtime_dashboard(config, watch=watch)
+        ensure_environment_control_daemon(config)
+        return True
     except KeyboardInterrupt:
         print()
         if started:
             warn("Interrupted. Stopping the Innate runtime...")
-            cmd_down(config)
+            try:
+                if on_teardown is not None:
+                    on_teardown()
+            finally:
+                _cmd_down_locked(config)
         else:
             warn("Interrupted before the Innate runtime finished starting.")
+        return False
     except StackError as exc:
         if started:
             # Show the real failure before cleanup: `docker compose down` can
             # take a while (or misbehave), and the error must not wait on it.
             print(f"Error: {exc}", file=sys.stderr)
             warn("Startup failed. Stopping the partially-started Innate runtime...")
-            cmd_down(config)
+            try:
+                if on_teardown is not None:
+                    on_teardown()
+            finally:
+                _cmd_down_locked(config)
             raise SystemExit(1) from exc
         raise
 
 
-def cmd_down(config: dict[str, object]) -> None:
+def cmd_up(
+    config: dict[str, object],
+    *,
+    watch: bool = SHOW_LIVE_DASHBOARD_DEFAULT,
+    offline: bool = False,
+    environment: str | None = None,
+) -> None:
+    # The dashboard can remain open for hours, so hold the cross-process lock
+    # only while mutating the runtime. Browser switches remain available while
+    # the dashboard watches the resulting stack.
+    controller_pids: list[int | None] = []
+    try:
+        with simulator_lifecycle_lock():
+            show_dashboard = _cmd_up_locked(
+                config,
+                watch=watch,
+                offline=offline,
+                environment=environment,
+                on_teardown=lambda: controller_pids.append(request_environment_control_daemon_stop()),
+            )
+    finally:
+        for controller_pid in controller_pids:
+            wait_for_environment_control_daemon_stop(controller_pid)
+    if show_dashboard:
+        show_runtime_dashboard(config, watch=watch)
+
+
+def _cmd_down_locked(config: dict[str, object]) -> None:
     remove_superseded_containers()
     down_os(config)
+    cancel_pending_environment_control_request()
     stop_world_server()
     log("Innate sim runtime is down.")
+
+
+def cmd_down(config: dict[str, object]) -> None:
+    # Signal before waiting for the lifecycle lock. If the controller already
+    # owns it, its in-flight transaction finishes safely; if it is queued, its
+    # stop-aware lock wait exits instead of deadlocking teardown.
+    controller_pid = request_environment_control_daemon_stop()
+    with simulator_lifecycle_lock():
+        wait_for_environment_control_daemon_stop(controller_pid)
+        _cmd_down_locked(config)
 
 
 def _confirm_clean() -> bool:
@@ -387,13 +437,10 @@ def _confirm_clean() -> bool:
     return _prompt_yes_no("Continue?", default=False)
 
 
-def cmd_clean(config: dict[str, object], *, assume_yes: bool = False) -> None:
-    if not assume_yes and not _confirm_clean():
-        warn("Aborted. Nothing was deleted.")
-        return
-
+def _cmd_clean_locked(config: dict[str, object]) -> None:
     stop_world_server()
     clean_runtime(config)
+    cancel_pending_environment_control_request()
     success("Innate sim runtime cleaned (containers and volumes removed).")
 
     print("Preserved (never deleted by clean):")
@@ -402,6 +449,60 @@ def cmd_clean(config: dict[str, object], *, assume_yes: bool = False) -> None:
     print(f"  - sim config:   {SIM_CONFIG_PATH}")
 
     log(f"Run `{CLI_SIM} up` to start the runtime again.")
+
+
+def cmd_clean(config: dict[str, object], *, assume_yes: bool = False) -> None:
+    if not assume_yes and not _confirm_clean():
+        warn("Aborted. Nothing was deleted.")
+        return
+
+    controller_pid = request_environment_control_daemon_stop()
+    with simulator_lifecycle_lock():
+        wait_for_environment_control_daemon_stop(controller_pid)
+        _cmd_clean_locked(config)
+
+
+def cmd_assets(config: dict[str, object]) -> None:
+    """Refresh environment assets and restore exactly the consumers in use."""
+    # Pure download+extract: VirtualMars (scripts/notebooks, no ROS, no
+    # Docker) needs sim/assets without bringing the stack up. If a world server
+    # is running, reconcile it like `up` would: its MuJoCo model was compiled
+    # from the previous bundle and must not keep serving stale collision data.
+    refuse_if_another_checkout_is_running()
+    active_identity = _active_environment_identity(config)
+    os_status = collect_os_process_status(config)
+    os_session_was_running = bool(os_status["os_session_running"])
+    world_was_running = world_server_running()
+    active_environment_id = (
+        active_identity[0] if active_identity and (os_session_was_running or world_was_running) else None
+    )
+    pack = select_environment(config, active_environment_id)
+
+    # `assets` explicitly refreshes install trees. Stop every local consumer
+    # first, even if the ROS session is only partially healthy.
+    if os_session_was_running:
+        stop_os_session(config)
+    if world_was_running:
+        _stop_local_world_before_asset_refresh()
+
+    ensure_sim_assets(config)
+    ensure_viewer_public_assets(config)
+    pack = select_environment(config, pack.id)
+    activate_environment(pack)
+
+    # Restore exactly the consumers that were live before the refresh. A ROS
+    # session always needs its matching world endpoint and reseeds Nav2 from
+    # the newly activated descriptor during launch.
+    if world_was_running or os_session_was_running:
+        config["world_endpoint"], _world_restarted = ensure_world_server(config)
+        if os_session_was_running:
+            ensure_os_container(config, build_os_env(config))
+            if not wait_for_os_runtime_ready(config, timeout_seconds=120.0) or not wait_for_virtual_mars(config):
+                raise StackError(
+                    "The ROS session did not become ready after refreshing simulator environment assets.\n"
+                    f"Recent OS log output:\n{tail_file(OS_SESSION_LOG_PATH, limit=80)}"
+                )
+    success("Simulator environment assets are in place.")
 
 
 def cmd_logs(target: str, lines: int | None = None) -> None:
@@ -451,7 +552,8 @@ def cmd_setup(
     if prefetch:
         ensure_docker_available(command_hint=f"{CLI_SIM} setup")
         ensure_uv_prerequisite()
-        prefetch_runtime(config)
+        with simulator_lifecycle_lock():
+            prefetch_runtime(config)
     success("Simulator setup is ready." if prefetch else "Keys saved.")
     print(f"OS secrets: {ENV_PATH}")
     if prefetch:
@@ -588,51 +690,8 @@ def main() -> int:
             ensure_docker_available(command_hint=f"{CLI_SIM} down")
             cmd_down(config)
         elif args.sim_command == "assets":
-            # Pure download+extract: VirtualMars (scripts/notebooks, no ROS,
-            # no Docker) needs sim/assets without bringing the stack up. If a
-            # world server IS running, reconcile it like `up` would -- its
-            # MuJoCo model was compiled from the previous bundle, and leaving
-            # it serving stale collision physics is worse than a restart.
-            # The command has no --environment flag: while a stack is live,
-            # refresh the pack it is actually using (including a one-launch
-            # CLI override), never the configured/default pack by accident.
-            refuse_if_another_checkout_is_running()
-            active_identity = _active_environment_identity(config)
-            os_status = collect_os_process_status(config)
-            os_session_was_running = bool(os_status["os_session_running"])
-            world_was_running = world_server_running()
-            active_environment_id = (
-                active_identity[0] if active_identity and (os_session_was_running or world_was_running) else None
-            )
-            pack = select_environment(config, active_environment_id)
-
-            # `assets` explicitly refreshes install trees. Stop every local
-            # consumer first, even if the ROS session is only partially healthy.
-            if os_session_was_running:
-                stop_os_session(config)
-            if world_was_running:
-                _stop_local_world_before_asset_refresh()
-
-            ensure_sim_assets(config)
-            ensure_viewer_public_assets(config)
-            pack = select_environment(config, pack.id)
-            activate_environment(pack)
-
-            # Restore exactly the consumers that were live before the refresh.
-            # A ROS session always needs its matching world endpoint and reseeds
-            # Nav2 from the newly activated descriptor during launch.
-            if world_was_running or os_session_was_running:
-                config["world_endpoint"], _world_restarted = ensure_world_server(config)
-                if os_session_was_running:
-                    ensure_os_container(config, build_os_env(config))
-                    if not wait_for_os_runtime_ready(config, timeout_seconds=120.0) or not wait_for_virtual_mars(
-                        config
-                    ):
-                        raise StackError(
-                            "The ROS session did not become ready after refreshing simulator environment assets.\n"
-                            f"Recent OS log output:\n{tail_file(OS_SESSION_LOG_PATH, limit=80)}"
-                        )
-            success("Simulator environment assets are in place.")
+            with simulator_lifecycle_lock():
+                cmd_assets(config)
         elif args.sim_command == "clean":
             ensure_docker_available(command_hint=f"{CLI_SIM} clean")
             cmd_clean(config, assume_yes=args.yes)

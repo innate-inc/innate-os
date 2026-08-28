@@ -36,6 +36,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 SESSION_NAME="${INNATE_SIM_TMUX_SESSION:-innate}"
+WEBAPP_SESSION_NAME="${SESSION_NAME}-webapp"
+PRESERVE_WEBAPP="${INNATE_SIM_PRESERVE_WEBAPP:-0}"
 # Use braces in tmux targets so zsh does not interpret ":foo" as a parameter modifier.
 TMUX_TARGET_PREFIX="${SESSION_NAME}"
 STARTUP_SETTLE_SECONDS="${INNATE_SIM_TMUX_SETTLE_SECONDS:-0}"
@@ -57,6 +59,22 @@ sleep "$TMUX_CLEANUP_SETTLE_SECONDS"
 if ! python3 "$SIM_OS_ROOT/scripts/seed_sim_environment.py"; then
   echo "Failed to seed navigation from the active simulator environment." >&2
   exit 1
+fi
+
+# The browser page is the progress and recovery surface while an environment
+# changes. Keep its HTTP/WebSocket proxy in a separate tmux session so killing
+# and rebuilding the ROS session below never kills the already-open page. A
+# normal CLI launch refreshes the proxy so checked-out code changes take effect;
+# the host controller sets PRESERVE_WEBAPP for an in-browser environment switch.
+if [[ "$PRESERVE_WEBAPP" != "1" ]]; then
+  tmux kill-session -t "$WEBAPP_SESSION_NAME" 2>/dev/null
+fi
+if ! tmux has-session -t "$WEBAPP_SESSION_NAME" 2>/dev/null; then
+  tmux new-session -d -x 240 -y 72 -s "$WEBAPP_SESSION_NAME" -n webapp
+  tmux send-keys -t "${WEBAPP_SESSION_NAME}:webapp" "cd ~/innate-os/webapp && while true; do WEBAPP_SIM_CONTROLS=1 python3 proxy/https_server.py; sleep 2; done" C-m
+  echo "Started persistent webapp (https :443 + http :80)..."
+else
+  echo "Persistent webapp already running."
 fi
 
 # Create a new tmux session for the local Innate runtime
@@ -132,19 +150,12 @@ tmux send-keys -t "${TMUX_TARGET_PREFIX}:vision-nav" "ros2 launch innate_uninavi
 echo "Started vision navigation inference client..."
 settle_after_launch
 
-# === Window 7: Console + Webapp UI ===
-# The robot webapp serves the sim UI too (replacing sim/frontend). Its python
-# front door binds 443 (https) + 80 (http) inside the container — both exposed by
-# docker-compose.dev.yml — and proxies /ws to the sim rosbridge on 9090.
+# === Window 7: Console ===
+# The webapp proxy lives in the persistent `${WEBAPP_SESSION_NAME}` session
+# above; only ROS-dependent processes belong in this restartable session.
 tmux new-window -t "$SESSION_NAME" -n console-webapp
 tmux send-keys -t "${TMUX_TARGET_PREFIX}:console-webapp" "ros2 launch innate_console console.launch.py" C-m
 echo "Started console..."
-settle_after_launch
-tmux split-window -t "${TMUX_TARGET_PREFIX}:console-webapp" -h
-# WEBAPP_SIM_CONTROLS makes the webapp pick the rendered SimSession for its
-# camera panel (js/robotSession.js) instead of WebRTC.
-tmux send-keys -t "${TMUX_TARGET_PREFIX}:console-webapp.1" "cd ~/innate-os/webapp && while true; do WEBAPP_SIM_CONTROLS=1 python3 proxy/https_server.py; sleep 2; done" C-m
-echo "Started webapp (https :443 + http :80)..."
 
 # === Window 8: Foxglove Bridge ===
 # Always on in the sim: connect Foxglove Studio to ws://localhost:8765 (host
