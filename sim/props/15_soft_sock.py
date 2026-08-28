@@ -31,7 +31,14 @@ PROP = SoftProp(
     # The generated local frame is XY-centred with its lowest point at z=0.
     size=(0.0553, 0.0299, 0.0998),
     mass=0.065,
+    condim=3,
+    contact_priority=3,
     friction=(0.8, 0.02, 0.002),
+    # Model the folded fabric as a thin shell instead of an effectively
+    # zero-thickness mathematical surface.  The contact margin lets MuJoCo
+    # establish the constraint before a narrow fingertip crosses the shell.
+    radius=0.001,
+    contact_margin=0.001,
     # Ten times the generic cloth default is the stiffest tested setting that
     # still settles within three simulated seconds; higher values kept the
     # coarse cage visibly buzzing after contact.
