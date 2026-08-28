@@ -130,10 +130,6 @@ echo "=== integration tests: --symlink-install ==="
 # removed `setup.py develop`, after which none of these pins stay load-bearing.
 python3 -m pip install --quiet 'setuptools<80'
 rm -rf build install log
-colcon build --symlink-install \
-  --parallel-workers "$(( $(nproc) < 3 ? $(nproc) : 3 ))" --cmake-args \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-  -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+build_workspace --symlink-install
 source install/setup.bash
 run_ros_integration_tests
