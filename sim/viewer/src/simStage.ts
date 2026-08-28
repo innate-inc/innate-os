@@ -172,7 +172,7 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
   modeSwitch.append(robotButton, spotButton);
   const placementHint = document.createElement("p");
   placementHint.className = "sim-placement-hint";
-  let placement: PlacementState = { kind: "near-robot" };
+  let placement: PlacementState = { kind: "choose-prop" };
   const selectedProp = (): string | null =>
     placement.kind === "following" || placement.kind === "rotating" ? placement.prop : null;
   const refreshPlacementHint = () => {
