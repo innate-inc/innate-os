@@ -49,7 +49,7 @@ test("projection responds to head pitch and its compensated camera height", () =
 });
 
 test("a route that leaves and re-enters the frame is split instead of bridged", () => {
-  const { segments, startVisible } = projectToImage(
+  const { segments, startAtRobot } = projectToImage(
     [
       { fwd: 1, right: -0.4 },
       { fwd: 1.5, right: -0.4 },
@@ -62,7 +62,7 @@ test("a route that leaves and re-enters the frame is split instead of bridged", 
     480,
   );
   assert.equal(segments.length, 2);
-  const first = ribbon(segments[0], 640, 480, startVisible);
+  const first = ribbon(segments[0], 640, 480, startAtRobot);
   const second = ribbon(segments[1], 640, 480, false);
   assert.ok(first && second);
   assert.ok(Math.max(...first.map((p) => p.x)) < Math.min(...second.map((p) => p.x)));
@@ -70,7 +70,7 @@ test("a route that leaves and re-enters the frame is split instead of bridged", 
 });
 
 test("a route whose first point is culled is not anchored into a wedge", () => {
-  const { segments, startVisible } = projectToImage(
+  const { segments, startAtRobot } = projectToImage(
     [
       { fwd: 0.2, right: 5 },
       { fwd: 1, right: -0.2 },
@@ -80,10 +80,40 @@ test("a route whose first point is culled is not anchored into a wedge", () => {
     640,
     480,
   );
-  assert.equal(startVisible, false);
-  const poly = ribbon(segments[0], 640, 480, startVisible);
+  assert.equal(startAtRobot, false);
+  const poly = ribbon(segments[0], 640, 480, startAtRobot);
   assert.ok(poly);
   assert.ok(Math.max(...poly.map((p) => p.y)) < 480, "culled start must not touch the bottom");
+});
+
+test("only a route that truly starts at the robot is anchored to its feet", () => {
+  const ahead = projectToImage(
+    [
+      { fwd: 1, right: 0 },
+      { fwd: 1.5, right: 0 },
+    ],
+    0,
+    640,
+    480,
+  );
+  assert.equal(ahead.startAtRobot, false, "a visible but distant start is not the robot's");
+  const distant = ribbon(ahead.segments[0], 640, 480, ahead.startAtRobot);
+  assert.ok(distant);
+  assert.ok(Math.max(...distant.map((p) => p.y)) < 480, "distant start must not touch the bottom");
+
+  const near = projectToImage(
+    [
+      { fwd: 0.2, right: 0 },
+      { fwd: 0.6, right: 0 },
+    ],
+    -20,
+    640,
+    480,
+  );
+  assert.equal(near.startAtRobot, true);
+  const anchored = ribbon(near.segments[0], 640, 480, near.startAtRobot);
+  assert.ok(anchored);
+  close(Math.max(...anchored.map((p) => p.y)), 480, "a start at the robot reaches the feet");
 });
 
 test("the ribbon is symmetric, tapers with distance, and needs two points", () => {

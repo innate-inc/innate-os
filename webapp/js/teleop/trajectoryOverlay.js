@@ -28,6 +28,8 @@ export const CAMERA = {
 const RIBBON_FILL = "rgba(0, 255, 136, 0.85)";
 // The planner republishes while driving and stops on arrival.
 const NAV_STALE_MS = 4000;
+// A route starting farther than this from the robot is not connected to its feet.
+const ANCHOR_NEAR_M = 0.4;
 const STORE_KEY = "innate.trajOverlay";
 
 /** @param {number} pitchDeg @returns {number} height above the floor in metres */
@@ -51,10 +53,12 @@ export function robotRelative(points, pose) {
 }
 
 /** Each culled point splits the route so disjoint visible runs are not bridged.
+ * startAtRobot: the first path point is visible and lies at the robot, so the
+ * leading segment may extend to the robot's feet without fabricating route.
  * @param {Array<{ fwd: number, right: number }>} points
  * @param {number} pitchDeg head pitch, positive up
  * @param {number} vw @param {number} vh video frame size in pixels
- * @returns {{ segments: Array<Array<{ x: number, y: number, depth: number }>>, startVisible: boolean }} */
+ * @returns {{ segments: Array<Array<{ x: number, y: number, depth: number }>>, startAtRobot: boolean }} */
 export function projectToImage(points, pitchDeg, vw, vh) {
   const sx = vw / CAMERA.CALIB_W;
   const sy = vh / CAMERA.CALIB_H;
@@ -70,7 +74,7 @@ export function projectToImage(points, pitchDeg, vw, vh) {
   const segments = [];
   /** @type {Array<{ x: number, y: number, depth: number }> | null} */
   let seg = null;
-  let startVisible = false;
+  let startAtRobot = false;
   for (let i = 0; i < points.length; i++) {
     const p = points[i];
     const rotY = -h * cp - p.fwd * sp;
@@ -87,12 +91,12 @@ export function projectToImage(points, pitchDeg, vw, vh) {
     }
     if (!seg) segments.push((seg = []));
     seg.push({ x: u, y: v, depth: rotZ });
-    if (i === 0) startVisible = true;
+    if (i === 0 && Math.hypot(p.fwd, p.right) <= ANCHOR_NEAR_M) startAtRobot = true;
   }
-  return { segments, startVisible };
+  return { segments, startAtRobot };
 }
 
-/** Only the true first visible segment may be anchored to the robot's feet.
+/** Only a segment whose route truly starts at the robot may anchor to its feet.
  * @param {Array<{ x: number, y: number, depth: number }>} pts
  * @param {number} vw frame width, bounds the anchor extrapolation
  * @param {number} bottomY
@@ -318,11 +322,11 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     const pose = planFrame === "odom" ? odomPose : mapPose();
     if (!pose) return;
 
-    const { segments, startVisible } = projectToImage(robotRelative(plan, pose), pitchDeg, vw, vh);
+    const { segments, startAtRobot } = projectToImage(robotRelative(plan, pose), pitchDeg, vw, vh);
     /** @type {Array<Array<{ x: number, y: number }>>} */
     const polys = [];
     for (let i = 0; i < segments.length; i++) {
-      const poly = ribbon(segments[i], vw, vh, i === 0 && startVisible);
+      const poly = ribbon(segments[i], vw, vh, i === 0 && startAtRobot);
       if (poly) polys.push(poly);
     }
     if (!polys.length) return;
