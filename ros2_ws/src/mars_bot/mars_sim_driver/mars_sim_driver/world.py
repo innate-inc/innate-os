@@ -63,13 +63,7 @@ WHEEL_GEOMS = ("base_wheel_left", "base_wheel_right")
 # grippy pad's -- the torsion/roll terms are the binding constraint, never
 # slide (44N of pinch vs 1.6N objects).
 FINGER_CONDIM = 6
-# (slide, torsion, roll). Torsion/roll doubled from (2.0, 0.05, 0.02) because
-# a pinched box slid out during a carry, and the finger's priority governs
-# every pair so no prop can fix that from its own sidecar. Slide stays at 2.0
-# and the bump is small on purpose: at (2.5, 0.25, 0.08) the fingers grabbed
-# hard enough on the way down to shove the object out of the pinch, and the
-# grasp missed twice running.
-FINGER_FRICTION = (2.0, 0.15, 0.06)
+FINGER_FRICTION = (2.0, 0.05, 0.02)  # (slide, torsion, roll)
 FINGER_SOLREF = (0.005, 1.0)
 FINGER_SOLIMP = (0.95, 0.99, 0.001, 0.5, 2)  # (dmin, dmax, width, midpoint, power)
 # Sets closing speed: terminal rate = GRIPPER_EFFORT_LIMIT/FINGER_DAMPING
