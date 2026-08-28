@@ -40,6 +40,11 @@ SOFT_GRIP_MIN = 0.5
 # j2 = -0.50: the coupling limit at j1~0.05 clamps past it and logs forever.
 CARRY_ARM = [0.0537, -0.50, 0.4157, 0.9434, -0.0077]
 
+# Search/approach pose (j1-5). REST's j4 = -0.3 pitches the gripper UP into the
+# head camera, over the very floor patch the object sits on; the same fold with
+# the wrist flattened and rolled clears the frame.
+NAV_ARM = [1.5708, -1.2195, 1.5723, 0.06, -0.47]
+
 # Pick parameters, tuned on hardware.
 PARAMS = {
     # FIND / LOCALIZE
@@ -867,9 +872,9 @@ class PickAnyObject(Skill):
         self._coasts = 0
         try:
             self.head.set_position(int(round(self._p["tilt_deg"])))
-            # Fold to rest so the arm doesn't occlude the head camera
+            # Fold clear of the head camera before searching
             # (5-joint move: the claw keeps whatever it currently holds).
-            self.manipulation.move_joints(self.manipulation.REST[:5], duration=3.0)
+            self.manipulation.move_joints(NAV_ARM, duration=3.0)
 
             self.say(f"Looking for {prompt}.")
             xy = self._search(prompt)
