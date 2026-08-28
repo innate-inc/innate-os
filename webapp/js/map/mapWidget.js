@@ -39,6 +39,7 @@ import {
   keepoutUpdateMatches,
   mapFingerprintFromMessage,
   paintKeepout,
+  shouldActivateMapFingerprint,
 } from "./keepoutMask.js";
 
 // The /map grid rides ONE session-lived subscription instead of one per mount.
@@ -379,6 +380,12 @@ export function createMap(root, opts = {}) {
   let latestKeepoutGrid = null;
   /** @type {string | null} exact fingerprint of the displayed localization map */
   let activeMapHash = null;
+  /** @type {string | null} fingerprint paired with the last current-map notification */
+  let selectedMapHash = null;
+  /** @type {string | null} most recently completed /map fingerprint, even if its notification has not arrived */
+  let candidateMapHash = null;
+  let mapSelectionPending = false;
+  let mapGenerationAtSelectionChange = 0;
   let mapFingerprintGeneration = 0;
   /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null} */
   let keepoutPlacement = null;
@@ -1039,6 +1046,7 @@ export function createMap(root, opts = {}) {
     // editor until their exact content hashes agree, regardless of which one
     // arrives first during a map switch.
     const fingerprintGeneration = ++mapFingerprintGeneration;
+    candidateMapHash = null;
     activeMapHash = null;
     keepoutGrid = null;
     keepoutPlacement = null;
@@ -1047,8 +1055,21 @@ export function createMap(root, opts = {}) {
     draw();
     void mapFingerprintFromMessage(msg).then((mapHash) => {
       if (fingerprintGeneration !== mapFingerprintGeneration) return;
-      activeMapHash = mapHash;
-      syncKeepoutForMap();
+      candidateMapHash = mapHash;
+      if (
+        mapHash &&
+        shouldActivateMapFingerprint(
+          mapHash,
+          selectedMapHash,
+          mapSelectionPending,
+          fingerprintGeneration > mapGenerationAtSelectionChange,
+        )
+      ) {
+        selectedMapHash = mapHash;
+        mapSelectionPending = false;
+        activeMapHash = mapHash;
+        syncKeepoutForMap();
+      }
       draw();
     });
   }
@@ -2119,6 +2140,9 @@ export function createMap(root, opts = {}) {
     localGrid = null;
     mapFingerprintGeneration++;
     activeMapHash = null;
+    selectedMapHash = null;
+    candidateMapHash = null;
+    mapSelectionPending = false;
     keepoutGrid = null;
     latestKeepoutGrid = null;
     keepoutPlacement = null;
@@ -2242,11 +2266,12 @@ export function createMap(root, opts = {}) {
     },
     /** The active map switched: frame state is dropped here. Keepouts are
      * disabled immediately because this notification arrives before the new
-     * /map. Incrementing the generation also prevents an old async fingerprint
-     * from re-enabling the previous editor during the transition. */
+     * /map. A candidate that arrived first is retained and reconciled here;
+     * otherwise onMap enables the editor only after a post-notification grid. */
     mapChanged() {
       dropFrameState();
-      mapFingerprintGeneration++;
+      mapSelectionPending = true;
+      mapGenerationAtSelectionChange = mapFingerprintGeneration;
       activeMapHash = null;
       keepoutGrid = null;
       keepoutPlacement = null;
@@ -2255,6 +2280,15 @@ export function createMap(root, opts = {}) {
       keepoutDirty = false;
       keepoutSavePending = null;
       clearTimeout(keepoutSaveTimer);
+      if (
+        candidateMapHash &&
+        shouldActivateMapFingerprint(candidateMapHash, selectedMapHash, true, false)
+      ) {
+        selectedMapHash = candidateMapHash;
+        mapSelectionPending = false;
+        activeMapHash = candidateMapHash;
+        syncKeepoutForMap();
+      }
       draw();
     },
     /** The robot's clock in epoch seconds (see memClockSkew) — memory stamps

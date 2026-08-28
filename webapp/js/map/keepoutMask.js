@@ -154,6 +154,15 @@ export function keepoutGridForMap(grid, mapHash) {
   return grid && mapHash && grid.mapHash === mapHash ? grid : null;
 }
 
+/** Decide whether a received /map fingerprint belongs to the selected-map epoch.
+ * @param {string} candidate @param {string | null} selected
+ * @param {boolean} selectionPending @param {boolean} arrivedAfterSelection */
+export function shouldActivateMapFingerprint(candidate, selected, selectionPending, arrivedAfterSelection) {
+  if (!selected) return true;
+  if (!selectionPending) return candidate === selected;
+  return candidate !== selected || arrivedAfterSelection;
+}
+
 /** @param {KeepoutGrid | null} grid @param {{ mapHash: string, data: number[] } | null} expected */
 export function keepoutUpdateMatches(grid, expected) {
   return (

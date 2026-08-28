@@ -8,6 +8,7 @@ import {
   mapFingerprintFromMessage,
   paintKeepout,
   sha256Hex,
+  shouldActivateMapFingerprint,
 } from "../js/map/keepoutMask.js";
 
 function message(width = 8, height = 6, resolution = 0.5) {
@@ -81,6 +82,10 @@ assert.equal(keepoutGridForMap(grid, localizationHash), null, "a new /map immedi
 grid.mapHash = localizationHash;
 assert.equal(keepoutGridForMap(grid, localizationHash), grid, "editor state becomes usable only after its exact map arrives");
 assert.equal(keepoutGridForMap(grid, null), null, "clearing the active map identity disables editing during a map switch");
+assert.equal(shouldActivateMapFingerprint("new", "old", false, false), false, "an early /map waits for its selection notification");
+assert.equal(shouldActivateMapFingerprint("new", "old", true, false), true, "an early new /map activates when selection catches up");
+assert.equal(shouldActivateMapFingerprint("old", "old", true, false), false, "a stale latched map cannot reopen the editor");
+assert.equal(shouldActivateMapFingerprint("new", "old", true, true), true, "a post-selection /map activates normally");
 const pendingUpdate = { mapHash: localizationHash, data: grid.data.slice() };
 assert.equal(keepoutUpdateMatches(grid, pendingUpdate), true, "the exact republished cells acknowledge an accepted edit");
 grid.data[0] = grid.data[0] === 100 ? 0 : 100;
