@@ -268,7 +268,9 @@ class SoftProp:
     mass: float = 0.02
     radius: float = 4.0e-5
     condim: int = 3
+    contact_priority: int = 0
     friction: tuple[float, float, float] = (0.3, 0.01, 0.001)
+    contact_margin: float = 0.0
     contact_solref: tuple[float, float] = (0.003, 1.0)
     contact_solimp: tuple[float, ...] = (0.95, 0.99, 0.001)
     edge_solref: tuple[float, float] = (0.002, 1.0)
@@ -364,8 +366,8 @@ class SoftProp:
               {appearance} flatskin="false"
               point="{_numbers(vertices)}"
               element="{" ".join(str(int(index)) for index in faces.ravel())}"{texcoord}>
-      <contact contype="1" conaffinity="1" condim="{self.condim}"
-               friction="{_numbers(self.friction)}" margin="0"
+      <contact contype="1" conaffinity="1" condim="{self.condim}" priority="{self.contact_priority}"
+               friction="{_numbers(self.friction)}" margin="{self.contact_margin:g}"
                solref="{_numbers(self.contact_solref)}" solimp="{_numbers(self.contact_solimp)}"
                internal="false" selfcollide="auto"/>
       <edge equality="true" solref="{_numbers(self.edge_solref)}"
