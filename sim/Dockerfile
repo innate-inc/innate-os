@@ -73,6 +73,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
         websocket-client \
         watchdog \
         onnxruntime \
+        'inspireface==1.2.3.post5' \
         pillow && \
     uv pip install --system \
         --index-url https://download.pytorch.org/whl/cpu \
@@ -83,6 +84,38 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv pip install --system \
         'packaging>=24' \
         'setuptools==59.6.0'
+
+# InspireFace downloads its recognition pack on first session creation. Do
+# that while building so simulator identity never depends on runtime internet,
+# and fail the image build if the native face backend cannot initialize on the
+# target architecture.
+RUN python3 - <<'PY'
+from pathlib import Path
+
+import inspireface as isf
+
+parameter = isf.SessionCustomParameter(enable_recognition=True)
+session = isf.InspireFaceSession(
+    param=parameter,
+    detect_mode=isf.HF_DETECT_MODE_ALWAYS_DETECT,
+    max_detect_num=3,
+)
+session.set_detection_confidence_threshold(0.4)
+
+# inspireface 1.2.3.post5 downloads through ModelScope into its snapshot
+# hierarchy, but its fast cache check looks directly under ``ms/``. Expose the
+# downloaded pack at that expected path so later, offline processes reuse it.
+cache_root = Path.home() / ".inspireface" / "ms"
+cached_model = cache_root / "Pikachu"
+if not cached_model.exists():
+    downloaded_models = list((cache_root / "models").glob("**/Pikachu"))
+    if len(downloaded_models) != 1:
+        raise RuntimeError(
+            f"Expected one downloaded InspireFace model, found {downloaded_models}"
+        )
+    cached_model.symlink_to(downloaded_models[0])
+print("InspireFace recognition backend and model pack initialized")
+PY
 
 # 6. Install oh-my-zsh (for root, since containers typically run as root unless changed).
 RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" \

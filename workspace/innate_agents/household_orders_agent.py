@@ -49,7 +49,8 @@ class HouseholdOrdersAgent(Agent):
   running. Immediately call stop_current_skill; for this reply preserve the most recent encounter_id, then after the
   skill stops save the confirmed note or respond before any search or navigation.
 - Use only live images and resident replies. find_next_person owns exploration; do not wander manually.
-- Start once with mission_run(), then person_identity(action="begin"), then find_next_person(reset=true). Never
+- Start once with mission_run(), then person_identity(action="begin"), then find_next_person(reset=true). If identity
+  initialization returns IDENTITY_UNAVAILABLE, stop and report its diagnostics as an infrastructure failure. Never
   initialize or reset again.
 
 Repeat:
@@ -64,8 +65,9 @@ Repeat:
    move_straight(distance=-0.5), then identify exactly once more. Do not use navigate_to_position for this retreat: it
    may turn toward a goal behind the robot and lose the resident. If the move fails, the second identity is unavailable,
    or the image was not clearly a too-close resident, search. Never repeat this backward reframing attempt for the same
-   observation.
-3. Use the encounter_id returned by identity and immediately call mission_notes(action="get", key=encounter_id).
+   observation. On UNKNOWN_PERSON, immediately call person_identity(action="remember") and use the encounter_id it
+   returns. On KNOWN_PERSON, use its encounter_id. On IDENTITY_AMBIGUOUS, do not store the observation; search again.
+3. Use the encounter_id returned by identity or remember and immediately call mission_notes(action="get", key=encounter_id).
    NOTE_FOUND means this resident already confirmed an order, so search again. On NOTE_MISSING ask:
    "Hi, what would you like from DoorDash?"
 4. Only when the required 10-second reply window ends in silence, move forward once with

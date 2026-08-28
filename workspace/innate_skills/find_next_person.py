@@ -674,7 +674,7 @@ def _coverage_artifact(
     coverage = _coverage_fraction(plan, covered)
     reachable = plan.traversable & plan.reachable
     reachable_count = int(reachable.sum())
-    draw.text((16, 14), "HOUSEHOLD EXPLORATION COVERAGE", fill=(245, 247, 250))
+    draw.text((16, 14), "MAP EXPLORATION COVERAGE", fill=(245, 247, 250))
     draw.text(
         (16, 38),
         f"{coverage:.0%} planner-estimated coverage · {len(state['observations'])} observation poses · "
@@ -724,6 +724,31 @@ def _coverage_artifact(
             canvas_x = col * cell_px
             draw.rectangle((canvas_x, canvas_y, canvas_x + cell_px - 1, canvas_y + cell_px - 1), fill=color)
 
+    route_points = []
+    for waypoint in state.get("planned_route", []):
+        try:
+            route_row, route_col = _world_to_cell(plan, float(waypoint["x"]), float(waypoint["y"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= route_row < plan.height and 0 <= route_col < plan.width:
+            route_points.append(
+                (
+                    route_col * cell_px + cell_px / 2,
+                    top + (plan.height - 1 - route_row) * cell_px + cell_px / 2,
+                )
+            )
+    robot_row, robot_col = _world_to_cell(plan, pose.x, pose.y)
+    if route_points and 0 <= robot_row < plan.height and 0 <= robot_col < plan.width:
+        route_points.insert(
+            0,
+            (
+                robot_col * cell_px + cell_px / 2,
+                top + (plan.height - 1 - robot_row) * cell_px + cell_px / 2,
+            ),
+        )
+    if len(route_points) > 1:
+        draw.line(route_points, fill=(238, 177, 61), width=2)
+
     for observation in state["observations"]:
         _draw_pose_marker(draw, plan, observation, cell_px, top, (170, 249, 235))
     for unreachable in state["unreachable"]:
@@ -747,7 +772,7 @@ def _coverage_artifact(
     )
     draw.text(
         (16, top + map_height + 20),
-        "Estimated coverage is a static-map ray-cast from stopped poses; dynamic visual occluders are not modeled.",
+        "Gold line is viewpoint order (Nav2 chooses each safe segment); dynamic visual occluders are not modeled.",
         fill=(151, 163, 180),
     )
 
@@ -784,6 +809,7 @@ def _coverage_artifact(
             if target is not None
             else None
         ),
+        "planned_route": state.get("planned_route", []),
     }
     write_artifact_set(
         "exploration",
@@ -811,7 +837,7 @@ def _placeholder_artifact(
         return None
     canvas = Image.new("RGB", (760, 260), (17, 20, 26))
     draw = ImageDraw.Draw(canvas)
-    draw.text((24, 26), "HOUSEHOLD EXPLORATION COVERAGE", fill=(245, 247, 250))
+    draw.text((24, 26), "MAP EXPLORATION COVERAGE", fill=(245, 247, 250))
     draw.text((24, 80), headline, fill=(87, 221, 204))
     draw.text((24, 112), detail, fill=(166, 177, 194))
     png = io.BytesIO()
@@ -869,6 +895,7 @@ def _empty_state() -> dict:
         "navigation_failures": [],
         "recovery_anchor": None,
         "recovery_rejections": [],
+        "planned_route": [],
     }
 
 
@@ -885,6 +912,9 @@ def _read_state(raw) -> dict:
     recovery_rejections = raw.get("recovery_rejections", [])
     if not isinstance(recovery_rejections, list):
         recovery_rejections = []
+    planned_route = raw.get("planned_route", [])
+    if not isinstance(planned_route, list):
+        planned_route = []
     return {
         "version": STATE_VERSION,
         "run_id": raw.get("run_id") if isinstance(raw.get("run_id"), str) else None,
@@ -902,6 +932,7 @@ def _read_state(raw) -> dict:
         # A recovery target is one-shot. Keeping rejected reached poses here
         # prevents one locally blocked anchor from monopolizing exploration.
         "recovery_rejections": recovery_rejections,
+        "planned_route": [waypoint for waypoint in planned_route if isinstance(waypoint, dict)],
     }
 
 
@@ -918,6 +949,24 @@ class FindNextPerson(Skill):
     head: Head
     head_position: HeadState | None
     navigate: NavigateToPosition
+
+    def _select_view(
+        self,
+        plan: _PlanningGrid,
+        pose: Pose,
+        state: dict,
+    ) -> tuple[_View | None, set[int]]:
+        """Select one view; specialized explorers may preserve a global route."""
+        return _choose_view(
+            plan,
+            pose,
+            state["observations"],
+            _navigation_exclusions(state),
+            cancellation_check=self.check_cancelled,
+        )
+
+    def _complete_selected_view(self, state: dict, view: _View) -> None:
+        """Hook for planners that persist an ordered route across calls."""
 
     def _refresh_placeholder(self, status: str, headline: str, detail: str) -> bytes | None:
         try:
@@ -1179,13 +1228,7 @@ class FindNextPerson(Skill):
         if visualize:
             if plan.navigable.any():
                 try:
-                    view, covered = _choose_view(
-                        plan,
-                        pose,
-                        state["observations"],
-                        _navigation_exclusions(state),
-                        cancellation_check=self.check_cancelled,
-                    )
+                    view, covered = self._select_view(plan, pose, state)
                 except SkillCancelled:
                     self._refresh_visualization(
                         plan,
@@ -1239,13 +1282,7 @@ class FindNextPerson(Skill):
         mark_timing("camera_wait")
 
         try:
-            view, covered = _choose_view(
-                plan,
-                pose,
-                state["observations"],
-                _navigation_exclusions(state),
-                cancellation_check=self.check_cancelled,
-            )
+            view, covered = self._select_view(plan, pose, state)
             mark_timing("view_selection")
         except SkillCancelled:
             self._refresh_visualization(
@@ -1461,6 +1498,7 @@ class FindNextPerson(Skill):
             "stopped_short": stopped_short,
         }
         state["observations"].append(observation)
+        self._complete_selected_view(state, view)
         self.storage["state"] = state
 
         updated_covered = set(covered)
