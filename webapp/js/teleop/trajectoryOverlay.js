@@ -28,8 +28,6 @@ export const CAMERA = {
 const RIBBON_FILL = "rgba(0, 255, 136, 0.85)";
 // The planner republishes while driving and stops on arrival.
 const NAV_STALE_MS = 4000;
-// A route starting farther than this from the robot is not connected to its feet.
-const ANCHOR_NEAR_M = 0.4;
 const NEAR_CLIP_M = 0.1;
 const STORE_KEY = "innate.trajOverlay";
 
@@ -53,10 +51,9 @@ export function robotRelative(points, pose) {
   });
 }
 
-/** Each culled point splits the route so disjoint visible runs are not bridged.
- * A route that starts visible at the robot gains one leading point: the true
- * robot→start ground line clipped at the near plane, so the ribbon meets the
- * robot's feet by projection, never by image-space extrapolation.
+/** Every ribbon point is a published pose: the route splits only at the near
+ * plane, where projection is undefined, and off-frame points stay so the
+ * canvas clip — not point culling — trims the ribbon to the video rect.
  * @param {Array<{ fwd: number, right: number }>} points
  * @param {number} pitchDeg head pitch, positive up
  * @param {number} vw @param {number} vh video frame size in pixels
@@ -72,41 +69,19 @@ export function projectToImage(points, pitchDeg, vw, vh) {
   const pitch = (pitchDeg * Math.PI) / 180;
   const cp = Math.cos(pitch);
   const sp = Math.sin(pitch);
-
-  /** @param {number} fwd @param {number} right
-   * @returns {{ x: number, y: number, depth: number }} */
-  const project = (fwd, right) => {
-    const rotY = -h * cp - fwd * sp;
-    const rotZ = Math.max(NEAR_CLIP_M, -h * sp + fwd * cp);
-    return { x: fx * (right / rotZ) + cx, y: fy * (-rotY / rotZ) + cy, depth: rotZ };
-  };
-
   /** @type {Array<Array<{ x: number, y: number, depth: number }>>} */
   const segments = [];
   /** @type {Array<{ x: number, y: number, depth: number }> | null} */
   let seg = null;
-  let firstVisible = false;
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i];
-    if (-h * sp + p.fwd * cp <= NEAR_CLIP_M) {
+  for (const p of points) {
+    const rotZ = -h * sp + p.fwd * cp;
+    if (rotZ <= NEAR_CLIP_M) {
       seg = null;
       continue;
     }
-    const pt = project(p.fwd, p.right);
-    if (pt.x < 0 || pt.x > vw || pt.y < 0 || pt.y > vh) {
-      seg = null;
-      continue;
-    }
+    const rotY = -h * cp - p.fwd * sp;
     if (!seg) segments.push((seg = []));
-    seg.push(pt);
-    if (i === 0) firstVisible = true;
-  }
-
-  if (firstVisible && Math.hypot(points[0].fwd, points[0].right) <= ANCHOR_NEAR_M) {
-    const p0 = points[0];
-    const feetZ = -h * sp;
-    const t = feetZ > NEAR_CLIP_M ? 0 : (NEAR_CLIP_M - feetZ) / (p0.fwd * cp);
-    if (t < 1) segments[0].unshift(project(p0.fwd * t, p0.right * t));
+    seg.push({ x: fx * (p.right / rotZ) + cx, y: fy * (-rotY / rotZ) + cy, depth: rotZ });
   }
   return segments;
 }
@@ -334,7 +309,7 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     const offY = (ch - vh * fit) / 2;
     ctx.setTransform(dpr * fit, 0, 0, dpr * fit, dpr * offX, dpr * offY);
 
-    // The feet connector projects below the frame; never paint the letterbox bars.
+    // Off-frame poses survive projection; the clip is what trims the ribbon.
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, vw, vh);

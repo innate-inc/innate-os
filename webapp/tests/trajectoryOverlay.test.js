@@ -48,12 +48,12 @@ test("projection responds to head pitch and its compensated camera height", () =
   assert.ok(up.y > level.y, `pitching up should push the ground down (${up.y} vs ${level.y})`);
 });
 
-test("a route that leaves and re-enters the frame is split instead of bridged", () => {
+test("a route that dips behind the near plane is split, not bridged", () => {
   const segments = projectToImage(
     [
       { fwd: 1, right: -0.4 },
       { fwd: 1.5, right: -0.4 },
-      { fwd: 0.2, right: 5 },
+      { fwd: 0.05, right: 0 },
       { fwd: 2, right: 0.5 },
       { fwd: 2.5, right: 0.5 },
     ],
@@ -66,10 +66,9 @@ test("a route that leaves and re-enters the frame is split instead of bridged", 
   const second = ribbon(segments[1]);
   assert.ok(first && second);
   assert.ok(Math.max(...first.map((p) => p.x)) < Math.min(...second.map((p) => p.x)));
-  assert.ok(Math.max(...second.map((p) => p.y)) < 480, "re-entering run must not anchor");
 });
 
-test("a route whose first point is culled is not anchored into a wedge", () => {
+test("off-frame poses are kept for the clip, never deleted into a bridge", () => {
   const segments = projectToImage(
     [
       { fwd: 0.2, right: 5 },
@@ -80,63 +79,19 @@ test("a route whose first point is culled is not anchored into a wedge", () => {
     640,
     480,
   );
-  assert.equal(segments[0].length, 2, "a culled start gains no connector");
-  const poly = ribbon(segments[0]);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].length, 3, "every pose in front of the near plane is projected");
+  assert.ok(segments[0][0].x > 640, "the off-frame pose keeps its true projection");
+});
+
+test("a route from the robot reaches past the frame bottom through its own poses", () => {
+  const path = [0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6].map((fwd) => ({ fwd, right: 0 }));
+  const [seg] = projectToImage(path, -20, 640, 480);
+  assert.equal(seg.length, path.length - 1, "only the pose behind the near plane is dropped");
+  assert.ok(seg[0].y > 480, "the leading poses project below the frame, ready for the clip");
+  const poly = ribbon(seg);
   assert.ok(poly);
-  assert.ok(Math.max(...poly.map((p) => p.y)) < 480, "culled start must not touch the bottom");
-});
-
-test("only a route that truly starts at the robot is anchored to its feet", () => {
-  const ahead = projectToImage(
-    [
-      { fwd: 1, right: 0 },
-      { fwd: 1.5, right: 0 },
-    ],
-    0,
-    640,
-    480,
-  );
-  assert.equal(ahead[0].length, 2, "a visible but distant start gains no connector");
-  const distant = ribbon(ahead[0]);
-  assert.ok(distant);
-  assert.ok(Math.max(...distant.map((p) => p.y)) < 480, "distant start must not touch the bottom");
-
-  const near = projectToImage(
-    [
-      { fwd: 0.2, right: 0 },
-      { fwd: 0.6, right: 0 },
-    ],
-    -20,
-    640,
-    480,
-  );
-  assert.equal(near[0].length, 3, "a start at the robot gains the feet connector");
-  const anchored = ribbon(near[0]);
-  assert.ok(anchored);
-  assert.ok(
-    Math.max(...anchored.map((p) => p.y)) >= 480,
-    "the connector runs to the feet, past the frame's bottom edge",
-  );
-});
-
-test("the feet connector follows the robot-to-start line, not the route's direction", () => {
-  const [seg] = projectToImage(
-    [
-      { fwd: 0.3, right: 0.15 },
-      { fwd: 0.7, right: -0.1 },
-    ],
-    -20,
-    640,
-    480,
-  );
-  assert.equal(seg.length, 3);
-  const [connector, start, next] = seg;
-  assert.ok(connector.y > 480, "the connector is projected geometry below the frame");
-  assert.ok(next.x < start.x, "the route itself heads left");
-  assert.ok(
-    connector.x < start.x,
-    "the connector heads back toward the robot, not along the extrapolated route",
-  );
+  assert.ok(Math.max(...poly.map((p) => p.y)) > 480, "the ribbon crosses the bottom edge");
 });
 
 test("the ribbon is symmetric, tapers with distance, and needs two points", () => {
