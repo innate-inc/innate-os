@@ -35,6 +35,14 @@ HOLDING_J6 = (-0.065, 0.80)
 
 VERIFY_BACKUP_M = 0.15
 
+# Every arm move below that happens while the object is held passes
+# tolerance_xy=None, tolerance_z=None. This is load-bearing, not tidiness:
+# move_to's VERIFIED path answers a missed pose with Manipulation.recover,
+# which reboots the servos with torque off — that opens the fingers and drops
+# whatever is being carried, and only the standing grip TARGET survives the
+# reboot, so the code afterwards still believes it is holding. Harmless
+# mid-pick with an empty claw, a guaranteed drop while carrying.
+
 # A detection touching the top of the frame has had its rim cropped away, so
 # any height read off it is meaningless — at the park distance the container
 # fills the view and both the bbox top and the model's rim line sit at row 0.
@@ -250,7 +258,8 @@ class DropInBox(_FloorApproach):
                 p["travel_z"],
                 pitch=p["arm_pitch"],
                 duration=p["carry_s"],
-                tolerance_xy=0.06,
+                tolerance_xy=None,
+                tolerance_z=None,
             )
             self._debug("travel", target_xyz=[p["travel_x"], p["travel_y"], p["travel_z"]], j6=self._j6())
             return
@@ -269,7 +278,13 @@ class DropInBox(_FloorApproach):
         p = self._p
         try:
             self.manipulation.move_to(
-                p["carry_x"], y, p["carry_z"], pitch=p["arm_pitch"], duration=p["carry_s"], tolerance_xy=0.06
+                p["carry_x"],
+                y,
+                p["carry_z"],
+                pitch=p["arm_pitch"],
+                duration=p["carry_s"],
+                tolerance_xy=None,
+                tolerance_z=None,
             )
         except (ArmFailed, ArmUnhealthy) as e:
             self.logger.warning(f"[DropInBox] could not lift clear of the rim ({e}); reaching from where it is")
@@ -301,7 +316,9 @@ class DropInBox(_FloorApproach):
         self.manipulation.torque_on()
         self._lift_clear(y)
         try:
-            self.manipulation.move_to(x, y, z, pitch=p["arm_pitch"], duration=p["hover_s"], tolerance_xy=0.06)
+            self.manipulation.move_to(
+                x, y, z, pitch=p["arm_pitch"], duration=p["hover_s"], tolerance_xy=None, tolerance_z=None
+            )
         except ArmFailed as e:
             raise SkillFailed(
                 f"Could not hold the gripper over the rim at z={z:.2f} m — "
