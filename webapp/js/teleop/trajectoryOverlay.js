@@ -72,6 +72,9 @@ const RIBBON_FILL = "rgba(0, 255, 136, 0.85)";
 const NAV_STALE_MS = 4000;
 // A route starting farther than this from the robot is not connected to its feet.
 const ANCHOR_NEAR_M = 0.4;
+// Nearer than this the ground point is level with or behind the lens and has no
+// image position at all — the one case that genuinely breaks the route.
+const NEAR_PLANE_M = 0.1;
 const STORE_KEY = "innate.trajOverlay";
 
 /** @param {number} pitchDeg @returns {number} height above the floor in metres */
@@ -94,42 +97,106 @@ export function robotRelative(points, pose) {
   });
 }
 
-/** Each culled point splits the route so disjoint visible runs are not bridged.
+/** @typedef {{ x: number, y: number, depth: number }} ImagePoint */
+
+/** Liang-Barsky: the sub-range of the projected edge a->b that lies inside the
+ * frame, or null when none of it does.
+ * @param {ImagePoint} a @param {ImagePoint} b
+ * @param {number} vw @param {number} vh
+ * @returns {[number, number] | null} */
+function visibleRange(a, b, vw, vh) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const toward = [-dx, dx, -dy, dy];
+  const slack = [a.x, vw - a.x, a.y, vh - a.y];
+  let t0 = 0;
+  let t1 = 1;
+  for (let i = 0; i < 4; i++) {
+    if (toward[i] === 0) {
+      if (slack[i] < 0) return null; // runs parallel to this side, outside it
+      continue;
+    }
+    const t = slack[i] / toward[i];
+    if (toward[i] < 0) {
+      if (t > t1) return null;
+      if (t > t0) t0 = t;
+    } else {
+      if (t < t0) return null;
+      if (t < t1) t1 = t;
+    }
+  }
+  return [t0, t1];
+}
+
+/** @param {ImagePoint} a @param {ImagePoint} b @param {number} t @returns {ImagePoint} */
+function along(a, b, t) {
+  if (t === 0) return a;
+  if (t === 1) return b;
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    // Depth is not linear along a projected edge, but its reciprocal is.
+    depth: 1 / (1 / a.depth + (1 / b.depth - 1 / a.depth) * t),
+  };
+}
+
+/** Clips the route to the frame edge by edge, so a stretch that crosses the
+ * view is drawn even when the poses bracketing it both fall outside. Only a
+ * genuine break — leaving the frame, or a pose behind the lens — splits the
+ * run, so disjoint visible stretches are still never bridged.
  * startAtRobot: the first path point is visible and lies at the robot, so the
  * leading segment may extend to the robot's feet without fabricating route.
  * @param {Array<{ fwd: number, right: number }>} points
  * @param {number} pitchDeg head pitch, positive up
  * @param {number} vw @param {number} vh video frame size in pixels
  * @param {CameraModel} [camera] defaults to the physical head camera
- * @returns {{ segments: Array<Array<{ x: number, y: number, depth: number }>>, startAtRobot: boolean }} */
+ * @returns {{ segments: Array<Array<ImagePoint>>, startAtRobot: boolean }} */
 export function projectToImage(points, pitchDeg, vw, vh, camera = REAL_CAMERA) {
   const { fx, fy, cx, cy } = camera.lens(vw, vh);
   const h = camera.height(pitchDeg);
   const pitch = (pitchDeg * Math.PI) / 180;
   const cp = Math.cos(pitch);
   const sp = Math.sin(pitch);
-  /** @type {Array<Array<{ x: number, y: number, depth: number }>>} */
-  const segments = [];
-  /** @type {Array<{ x: number, y: number, depth: number }> | null} */
-  let seg = null;
-  let startAtRobot = false;
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i];
+
+  /** @type {Array<ImagePoint | null>} */
+  const seen = points.map((p) => {
     const rotY = -h * cp - p.fwd * sp;
     const rotZ = -h * sp + p.fwd * cp;
-    if (rotZ <= 0.1) {
+    if (rotZ <= NEAR_PLANE_M) return null;
+    return { x: fx * (p.right / rotZ) + cx, y: fy * (-rotY / rotZ) + cy, depth: rotZ };
+  });
+
+  const head = seen[0];
+  const startAtRobot =
+    !!head &&
+    head.x >= 0 &&
+    head.x <= vw &&
+    head.y >= 0 &&
+    head.y <= vh &&
+    Math.hypot(points[0].fwd, points[0].right) <= ANCHOR_NEAR_M;
+
+  /** @type {Array<Array<ImagePoint>>} */
+  const segments = [];
+  /** @type {Array<ImagePoint> | null} */
+  let seg = null;
+  for (let i = 0; i + 1 < seen.length; i++) {
+    const a = seen[i];
+    const b = seen[i + 1];
+    if (!a || !b) {
+      seg = null; // a pose behind the lens has no image position to clip against
+      continue;
+    }
+    const range = visibleRange(a, b, vw, vh);
+    if (!range) {
       seg = null;
       continue;
     }
-    const u = fx * (p.right / rotZ) + cx;
-    const v = fy * (-rotY / rotZ) + cy;
-    if (u < 0 || u > vw || v < 0 || v > vh) {
-      seg = null;
-      continue;
-    }
-    if (!seg) segments.push((seg = []));
-    seg.push({ x: u, y: v, depth: rotZ });
-    if (i === 0 && Math.hypot(p.fwd, p.right) <= ANCHOR_NEAR_M) startAtRobot = true;
+    const [enter, exit] = range;
+    // enter > 0 means this edge crossed in from outside, so it starts a run
+    // rather than continuing the previous one.
+    if (!seg || enter > 0) segments.push((seg = [along(a, b, enter)]));
+    seg.push(along(a, b, exit));
+    if (exit < 1) seg = null; // the route leaves the frame here
   }
   return { segments, startAtRobot };
 }

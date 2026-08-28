@@ -42,8 +42,12 @@ test("projection responds to head pitch and its compensated camera height", () =
     CAMERA.HEIGHT_M + CAMERA.PITCH_HEIGHT_COMP_M,
     "raised height",
   );
-  const [[level]] = projectToImage([{ fwd: 1, right: 0 }], 0, 640, 480).segments;
-  const [[up]] = projectToImage([{ fwd: 1, right: 0 }], 15, 640, 480).segments;
+  const ahead = [
+    { fwd: 1, right: 0 },
+    { fwd: 1.5, right: 0 },
+  ];
+  const [[level]] = projectToImage(ahead, 0, 640, 480).segments;
+  const [[up]] = projectToImage(ahead, 15, 640, 480).segments;
   close(level.x, CAMERA.CX * (640 / CAMERA.CALIB_W), "optical-axis column");
   assert.ok(up.y > level.y, `pitching up should push the ground down (${up.y} vs ${level.y})`);
 });
@@ -61,12 +65,40 @@ test("a route that leaves and re-enters the frame is split instead of bridged", 
     640,
     480,
   );
-  assert.equal(segments.length, 2);
+  assert.equal(segments.length, 2, "two runs, never bridged into one");
+  // Each run stops at the frame edge the route actually crossed, and every
+  // drawn point stays inside the frame.
+  for (const seg of segments) {
+    for (const p of seg) {
+      assert.ok(p.x >= 0 && p.x <= 640 && p.y >= 0 && p.y <= 480, `outside the frame: ${p.x},${p.y}`);
+    }
+  }
+  close(segments[0][segments[0].length - 1].x, 640, "first run exits at the right edge");
+  close(segments[1][0].x, 640, "second run re-enters at the right edge");
   const first = ribbon(segments[0], 640, 480, startAtRobot);
   const second = ribbon(segments[1], 640, 480, false);
   assert.ok(first && second);
-  assert.ok(Math.max(...first.map((p) => p.x)) < Math.min(...second.map((p) => p.x)));
   assert.ok(Math.max(...second.map((p) => p.y)) < 480, "re-entering run must not anchor");
+});
+
+test("an edge crossing the view is drawn though both its poses are outside", () => {
+  // The poses sit off opposite sides at the same depth, so the line between
+  // them sweeps straight across the frame.
+  const { segments } = projectToImage(
+    [
+      { fwd: 1, right: -1.5 },
+      { fwd: 1, right: 1.5 },
+    ],
+    0,
+    640,
+    480,
+  );
+  assert.equal(segments.length, 1, "the crossing stretch must survive");
+  const [run] = segments;
+  close(run[0].x, 0, "clipped to the left edge");
+  close(run[run.length - 1].x, 640, "clipped to the right edge");
+  for (const p of run) close(p.y, run[0].y, "a constant-depth crossing stays on one row");
+  assert.ok(ribbon(run, 640, 480, false), "and it yields a drawable ribbon");
 });
 
 test("a route whose first point is culled is not anchored into a wedge", () => {
@@ -127,9 +159,13 @@ test("the sim camera is an exact pinhole: centred, square-pixel, fixed height", 
   close(SIM_CAMERA.height(-30), SIM_CAMERA.height(30), "height is pitch-independent");
 
   // Straight ahead lands on the sim's optical axis; the real lens is off-centre.
-  const [[sim]] = projectToImage([{ fwd: 1, right: 0 }], 0, 1600, 900, SIM_CAMERA).segments;
+  const ahead = [
+    { fwd: 1, right: 0 },
+    { fwd: 1.5, right: 0 },
+  ];
+  const [[sim]] = projectToImage(ahead, 0, 1600, 900, SIM_CAMERA).segments;
   close(sim.x, 800, "sim optical-axis column");
-  const [[real]] = projectToImage([{ fwd: 1, right: 0 }], 0, 1600, 900).segments;
+  const [[real]] = projectToImage(ahead, 0, 1600, 900).segments;
   assert.ok(Math.abs(real.x - 800) > 1, "the real lens's principal point is off-centre");
 });
 
