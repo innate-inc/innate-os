@@ -5882,12 +5882,16 @@ select.episodes-tool {
   cursor: not-allowed;
 }
 
+/* The name fills the row and centers itself; the number slot, dot, and tail
+   are fixed-width, so every row's columns line up regardless of name length. */
 .skills-pop-name {
+  flex: 1;
   font-size: 13px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: center;
 }
 
 /* Skill-type indicator: learned (trained policy) / replay (recorded trajectory) /

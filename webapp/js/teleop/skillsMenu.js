@@ -475,12 +475,11 @@ export function createSkillsMenu(parent, rosClient) {
     }
     // Number hints mirror digitPicksSkill: digits only work while the search
     // is empty, so the badges only show then — a filtered list never lies.
+    // Every row keeps its (blank) number slot so the columns stay aligned.
     if (!query) {
       for (const [i, button] of buttons.slice(0, 9).entries()) {
-        const num = document.createElement("span");
-        num.className = "skills-pop-num mono";
-        num.textContent = String(i + 1);
-        button.prepend(num);
+        const num = button.querySelector(".skills-pop-num");
+        if (num) num.textContent = String(i + 1);
       }
     }
   }
@@ -582,13 +581,15 @@ export function createSkillsMenu(parent, rosClient) {
     head.className = "skills-pop-item";
     head.disabled = true;
     head.title = skill.load_error;
+    const num = document.createElement("span");
+    num.className = "skills-pop-num mono";
     const dot = document.createElement("span");
     dot.className = "skills-pop-type-dot broken";
     dot.title = "Failed to load";
     const name = document.createElement("span");
     name.className = "skills-pop-name";
     name.textContent = formatName(skill);
-    head.append(dot, name);
+    head.append(num, dot, name);
     const status = document.createElement("div");
     status.className = "skills-pop-status error";
     const txt = document.createElement("span");
@@ -615,6 +616,8 @@ export function createSkillsMenu(parent, rosClient) {
     head.dataset.skillId = skill.id;
     head.disabled = rosClient.state !== "connected";
 
+    const num = document.createElement("span");
+    num.className = "skills-pop-num mono";
     const typeMeta = skillTypeMeta(skill);
     const dot = document.createElement("span");
     dot.className = "skills-pop-type-dot" + (typeMeta ? ` ${typeMeta.cls}` : "");
@@ -630,7 +633,7 @@ export function createSkillsMenu(parent, rosClient) {
     tail.className = "skills-pop-tail mono";
     if (running) tail.textContent = "…";
     else if (expandable) tail.textContent = isExpanded ? "▾" : "›";
-    head.append(dot, name, tail);
+    head.append(num, dot, name, tail);
 
     head.addEventListener("click", () => {
       if (expandable) {
