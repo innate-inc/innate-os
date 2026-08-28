@@ -7,6 +7,7 @@ import {
   keepoutUpdateMatches,
   mapFingerprintFromMessage,
   paintKeepout,
+  sha256Hex,
 } from "../js/map/keepoutMask.js";
 
 function message(width = 8, height = 6, resolution = 0.5) {
@@ -63,6 +64,19 @@ const localizationMap = {
 };
 const localizationHash = await mapFingerprintFromMessage(localizationMap);
 assert.equal(localizationHash, "198e412bfd86ca78faf30d9ff7491cce2f9a0b25023bcd593b3024f44d7d7dc0");
+const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+try {
+  Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+  assert.equal(await mapFingerprintFromMessage(localizationMap), localizationHash, "plain HTTP produces the same map identity");
+} finally {
+  if (cryptoDescriptor) Object.defineProperty(globalThis, "crypto", cryptoDescriptor);
+  else delete globalThis.crypto;
+}
+assert.equal(
+  sha256Hex(new TextEncoder().encode("abc")),
+  "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+  "the HTTP-safe fallback implements SHA-256",
+);
 assert.equal(keepoutGridForMap(grid, localizationHash), null, "a new /map immediately rejects stale editor state");
 grid.mapHash = localizationHash;
 assert.equal(keepoutGridForMap(grid, localizationHash), grid, "editor state becomes usable only after its exact map arrives");
