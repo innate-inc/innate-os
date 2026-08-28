@@ -210,6 +210,10 @@ class WorldServer:
             with self.lock:
                 self.sim.remove_all_props()
             ok = True
+        elif op == "reset":  # onboarding starts every tour from the spawn pose
+            with self.lock:
+                self.sim.reset()
+            ok = True
         elif op == "start_challenge":  # sets its own scene up; see challenges.py
             self.challenges.start(str(cmd.get("id", "")))
             self.publish_state()

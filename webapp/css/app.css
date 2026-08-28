@@ -231,6 +231,15 @@ select.skill-input {
   color: var(--text);
 }
 
+.rail-action {
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
 .rail-link.active {
   color: var(--text);
 }
@@ -7135,6 +7144,180 @@ select.skill-input {
   background: transparent;
 }
 
+/* The onboarding hide/reveal pair is a specificity balance: this blanket rule
+   scores three classes (a :not() list counts once, as its most specific
+   argument), and every reveal below scores four, so reveals win on specificity
+   rather than on source order. Adding a chained :not() here would outscore them
+   and blank the page. */
+.agent-cockpit.agent-onboarding-enabled
+  > :not(.agent-mic-control, .agent-onboarding-nudge, .agent-onboarding-skip) {
+  transition:
+    opacity 220ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    visibility 0s;
+}
+
+.agent-cockpit.agent-onboarding-active
+  > :not(.agent-mic-control, .agent-onboarding-nudge, .agent-onboarding-skip) {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 180ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    visibility 0s linear 180ms;
+}
+
+.agent-onboarding-nudge {
+  position: absolute;
+  left: 50%;
+  bottom: 242px;
+  z-index: 9;
+  margin: 0;
+  color: rgb(231 231 234 / 58%);
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 6px);
+  transition:
+    opacity 180ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    transform 200ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    visibility 0s linear 200ms;
+}
+
+.agent-onboarding-nudge strong {
+  color: rgb(255 255 255 / 92%);
+  font-weight: 600;
+}
+
+.agent-cockpit.agent-onboarding-awaiting > .agent-onboarding-nudge {
+  visibility: visible;
+  opacity: 1;
+  transform: translate(-50%, 0);
+  transition:
+    opacity 180ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    transform 200ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    visibility 0s;
+}
+
+.agent-cockpit.agent-onboarding-active.agent-onboarding-staged > .agent-feed-frame {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.agent-cockpit.agent-onboarding-active .video-stage > canvas {
+  opacity: 0;
+  transition: opacity 2000ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  will-change: opacity;
+}
+
+.agent-cockpit.agent-onboarding-active.agent-onboarding-staged
+  > .agent-feed-frame
+  > .video-stage
+  > canvas {
+  opacity: 1;
+}
+
+.sim-onboarding-background-fade {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 1;
+  pointer-events: none;
+  transition: opacity 5000ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  will-change: opacity;
+}
+
+.sim-onboarding-background-fade.is-fading {
+  opacity: 0;
+}
+
+.agent-cockpit.agent-onboarding-active .video-stage > :not(canvas) {
+  display: none;
+}
+
+/* The current Agent composer owns the mic after onboarding. While the tour is
+   active, main.js temporarily moves that same control to the cockpit root so
+   it remains the centered, full-size first interaction from PR #690. */
+.agent-cockpit.agent-onboarding-active > .agent-mic-control {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 8;
+  width: 184px;
+  height: 184px;
+  transform: translateX(-50%);
+}
+
+.agent-cockpit.agent-onboarding-active > .agent-mic-control .agent-mic-button {
+  --agent-mic-inner-wave-scale: 2.62;
+  width: 184px;
+  height: 184px;
+}
+
+.agent-cockpit.agent-onboarding-active > .agent-mic-control .agent-mic-button::before {
+  width: 68px;
+  height: 68px;
+  border-width: 1.5px;
+}
+
+/* Tour reveals: each step un-hides one panel and it stays up for the rest of
+   the tour, so the page assembles itself a piece at a time. The blanket hide
+   above is what these override. */
+.agent-cockpit.agent-onboarding-active.agent-onboarding-show-cameras
+  > .overlay-stack-top-left,
+.agent-cockpit.agent-onboarding-active.agent-onboarding-show-telemetry
+  > .agent-telemetry-overlay,
+.agent-cockpit.agent-onboarding-active.agent-onboarding-show-chat > .agent-panel {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  animation: agent-onboarding-reveal 260ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+@keyframes agent-onboarding-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Offered only when the greeting goes unheard — the robot-level mic toggle can
+   veto the mic device, and the first step has no other way forward. */
+.agent-onboarding-skip {
+  position: absolute;
+  left: 50%;
+  bottom: 214px;
+  z-index: 9;
+  padding: 6px 14px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 6%);
+  color: rgb(231 231 234 / 72%);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transform: translateX(-50%);
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+.agent-onboarding-skip:hover {
+  background: rgb(255 255 255 / 10%);
+  color: rgb(255 255 255 / 92%);
+}
+
 .agent-cockpit .cam-strip {
   position: relative;
   top: auto;
@@ -7207,6 +7390,23 @@ select.skill-input {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .agent-cockpit.agent-onboarding-enabled
+    > :not(.agent-mic-control, .agent-onboarding-nudge, .agent-onboarding-skip),
+  .agent-cockpit.agent-onboarding-active .video-stage > canvas,
+  .sim-onboarding-background-fade,
+  .agent-onboarding-nudge {
+    transition: none;
+  }
+
+  .agent-cockpit.agent-onboarding-active.agent-onboarding-show-cameras
+    > .overlay-stack-top-left,
+  .agent-cockpit.agent-onboarding-active.agent-onboarding-show-telemetry
+    > .agent-telemetry-overlay,
+  .agent-cockpit.agent-onboarding-active.agent-onboarding-show-chat
+    > .agent-panel {
+    animation: none;
+  }
+
   .telemetry-value-duplicate {
     display: none;
   }

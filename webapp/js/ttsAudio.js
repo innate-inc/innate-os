@@ -14,6 +14,14 @@ import { isMicAudioActive, setTtsPlaying } from "./micAudioState.js";
 const TTS_AUDIO_TOPIC = "/tts/audio";
 
 let started = false;
+/** @type {Set<() => void>} */
+const playbackStartListeners = new Set();
+
+/** @param {() => void} listener */
+export function onTtsPlaybackStart(listener) {
+  playbackStartListeners.add(listener);
+  return () => playbackStartListeners.delete(listener);
+}
 
 // One speaker across tabs: rosbridge fans /tts/audio out to every client, so
 // N open tabs played N overlapping copies. A held Web Lock elects exactly one
@@ -95,6 +103,9 @@ function play(b64) {
   };
   audio.addEventListener("ended", done, { once: true });
   audio.addEventListener("error", done, { once: true });
+  audio.addEventListener("playing", () => {
+    for (const listener of playbackStartListeners) listener();
+  }, { once: true });
   audio.play().catch((err) => {
     // Browser autoplay policies block playback until the user has interacted
     // with the page; after any click/keypress this succeeds.

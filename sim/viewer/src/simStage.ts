@@ -10,7 +10,7 @@
 // which walked a phone into the OS memory killer.
 
 import * as THREE from "three";
-import { SimScene, type CameraMode, type CameraView } from "./scene";
+import { SimScene, type CameraMode, type CameraView, type OnboardingStep } from "./scene";
 import type { PropInfo } from "./props";
 import { LoadQueue } from "./loadQueue";
 import { THUMB_H, THUMB_W, type SimSession } from "./simSession";
@@ -73,6 +73,7 @@ export function createSimStage(
   setSafeInsets: (insets: { right?: number }) => void;
   attach: (parent: HTMLElement) => void;
   detach: () => void;
+  setOnboardingStep: (step: OnboardingStep) => void;
   destroy: () => void;
 } {
   const wrap = document.createElement("div");
@@ -409,6 +410,38 @@ export function createSimStage(
 
   const scene = new SimScene(canvas, { fixedSize: { width: parent.clientWidth || 1280, height: parent.clientHeight || 720 } });
   scene.followCamera = true;
+  let onboardingStep: OnboardingStep = "complete";
+  let backgroundFade: HTMLCanvasElement | null = null;
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const removeBackgroundFade = (snapshot: HTMLCanvasElement) => {
+    snapshot.remove();
+    if (backgroundFade === snapshot) backgroundFade = null;
+  };
+  const setOnboardingStep = (step: OnboardingStep) => {
+    if (step === onboardingStep) return;
+    // Any step of the tour, not just the welcome: the world fades in once,
+    // when onboarding hands over.
+    const revealBackground = onboardingStep !== "complete" && step === "complete";
+    backgroundFade?.remove();
+    backgroundFade = null;
+
+    if (revealBackground && !reduceMotion) {
+      const snapshot = document.createElement("canvas");
+      snapshot.className = "sim-onboarding-background-fade";
+      snapshot.width = canvas.width;
+      snapshot.height = canvas.height;
+      snapshot.getContext("2d")?.drawImage(canvas, 0, 0);
+      wrap.appendChild(snapshot);
+      backgroundFade = snapshot;
+      void snapshot.offsetWidth;
+      snapshot.classList.add("is-fading");
+      snapshot.addEventListener("transitionend", () => removeBackgroundFade(snapshot), { once: true });
+      setTimeout(() => removeBackgroundFade(snapshot), 5500);
+    }
+
+    onboardingStep = step;
+    scene.setOnboardingStep(step);
+  };
   // The scene takes chase off when the camera is dragged, so the switch has to
   // follow the scene rather than be the only thing that knows the mode.
   scene.onCameraModeChange = (mode) => {
@@ -638,6 +671,7 @@ export function createSimStage(
       clearPlacementSelection(); // an armed prop must not follow the pointer either
       wrap.remove();
     },
+    setOnboardingStep,
     destroy() {
       disposed = true;
       queue.cancel(); // stop pulling new downloads for a stage that's gone
@@ -650,6 +684,7 @@ export function createSimStage(
       window.removeEventListener("pointercancel", cancelDrop);
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
       document.removeEventListener("pointerdown", onOutsidePointer, true);
+      backgroundFade?.remove();
       scene.dispose();
       wrap.remove();
     },

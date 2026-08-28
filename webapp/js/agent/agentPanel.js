@@ -40,10 +40,13 @@ const CHAT_EXAMPLES = [
  * @param {ReturnType<typeof import("../teleop/agentState.js").sharedAgentState>} agentState
  * @param {{
  *   enableMic?: boolean,
- *   onMicState?: (state: {on: boolean, busy: boolean, level: number, waveform: number[], error: string | null}) => void
+ *   onMicState?: (state: {on: boolean, busy: boolean, level: number, waveform: number[], error: string | null}) => void,
+ *   ensureListening?: () => Promise<boolean>,
  * }} opts
  *   enableMic connects the browser microphone in sim, where the robot has no
  *   physical microphone (see micStream.js).
+ *   ensureListening, when it returns true, opens listening without starting an
+ *   agent during onboarding.
  * @returns {{
  *   destroy: () => void,
  *   startMic: () => Promise<void>,
@@ -188,8 +191,13 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   });
 
   // ---- composer -----------------------------------------------------------
-  async function startMic() {
+  async function ensureAgentOrOnboarding() {
+    if (opts.ensureListening && (await opts.ensureListening())) return;
     await directives.ensureRunning();
+  }
+
+  async function startMic() {
+    await ensureAgentOrOnboarding();
     await mic?.start();
   }
 
@@ -204,7 +212,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     input.value = "";
     input.style.height = "auto";
     syncComposerAction();
-    await directives.ensureRunning();
+    await ensureAgentOrOnboarding();
     rosClient.publish(CHAT_IN_TOPIC, {
       data: JSON.stringify({ text, sender: "user", timestamp: Date.now() / 1000, origin: selfOrigin }),
     });
@@ -336,4 +344,3 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     },
   };
 }
-

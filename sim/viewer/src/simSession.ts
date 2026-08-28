@@ -217,6 +217,7 @@ export class SimSession {
         this.#playT = null;
       }
       this.#live = true;
+      this.#flushReset(); // a state frame proves the socket is open both ways
       if (s.challenge) this.#publishChallenge(s.challenge);
       if (!this.#gotPose) {
         this.#gotPose = true;
@@ -339,6 +340,30 @@ export class SimSession {
       active: block.active,
     };
     for (const cb of this.#challengeListeners) cb(this.#challenge);
+  }
+
+  /**
+   * Put the world back to its starting state: robot at the spawn pose, arm
+   * home, props parked. Goes over the stage channel rather than the sim's
+   * /virtual_mars/reset topic — that topic carries std_msgs/Empty, which the
+   * bridge cannot serialize, and the malformed message kills the sim node.
+   *
+   * send() drops silently while the socket is still connecting, and onboarding
+   * asks for this within moments of the page mounting, so an unsent reset is
+   * remembered and flushed by the first state frame. Resetting is idempotent —
+   * a flush racing a fresh request is two teleports to the same pose.
+   */
+  resetWorld(): void {
+    this.#pendingReset = true;
+    this.#flushReset();
+  }
+
+  #pendingReset = false;
+
+  #flushReset(): void {
+    if (!this.#pendingReset || !this.#controller?.ready) return;
+    this.#pendingReset = false;
+    this.#controller.send({ op: "reset" });
   }
 
   /** Start a challenge by id (resets the world and drops its props). */

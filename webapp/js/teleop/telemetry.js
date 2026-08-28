@@ -10,9 +10,11 @@ import { BATTERY_STATE_TOPIC, ROBOT_INFO_TOPIC, WEBSOCKET_STATUS_TOPIC } from ".
 /**
  * @param {HTMLElement} parent
  * @param {import("../rosClient.js").RosClient} rosClient
+ * @param {{ showBattery?: boolean }} [opts] The sim has no battery, so it opts out.
  * @returns {{ destroy: () => void }}
  */
-export function createTelemetry(parent, rosClient) {
+export function createTelemetry(parent, rosClient, opts = {}) {
+  const showBattery = opts.showBattery !== false;
   const wrap = document.createElement("div");
   wrap.className = "telemetry";
 
@@ -25,6 +27,8 @@ export function createTelemetry(parent, rosClient) {
   const items = [name, battery, link, agent];
   /** @type {number | null} */
   let measureFrame = null;
+  battery.el.hidden = !showBattery;
+  wrap.classList.toggle("with-battery", showBattery);
 
   /**
    * @param {TelemetryKey} key
@@ -158,20 +162,22 @@ export function createTelemetry(parent, rosClient) {
     ),
   ];
 
-  unsubs.push(
-    rosClient.subscribe(
-      BATTERY_STATE_TOPIC,
-      (/** @type {BatteryStateMsg} */ msg) => {
-        const p = msg?.percentage;
-        if (typeof p !== "number" || Number.isNaN(p)) return;
-        // The robot publishes 0–100; tolerate a spec-compliant 0–1 source.
-        const pct = p <= 1 ? p * 100 : p;
-        update(battery, `${Math.round(pct)}%`, pct <= 15 ? "warn" : "");
-      },
-      1000,
-      "sensor_msgs/msg/BatteryState",
-    ),
-  );
+  if (showBattery) {
+    unsubs.push(
+      rosClient.subscribe(
+        BATTERY_STATE_TOPIC,
+        (/** @type {BatteryStateMsg} */ msg) => {
+          const p = msg?.percentage;
+          if (typeof p !== "number" || Number.isNaN(p)) return;
+          // The robot publishes 0–100; tolerate a spec-compliant 0–1 source.
+          const pct = p <= 1 ? p * 100 : p;
+          update(battery, `${Math.round(pct)}%`, pct <= 15 ? "warn" : "");
+        },
+        1000,
+        "sensor_msgs/msg/BatteryState",
+      ),
+    );
+  }
 
   return {
     destroy() {

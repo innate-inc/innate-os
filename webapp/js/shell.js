@@ -13,6 +13,7 @@ import { createArmAlert } from "./armAlert.js";
 import { maybeShowAppPromo } from "./appPromo.js";
 import { installPressActivate } from "./pressActivate.js";
 import { FOOTER_SECTIONS, GROUPS, SECTIONS, SIM_SECTIONS, railRows } from "./railLayout.js";
+import { resetAgentOnboarding } from "./agent/onboarding.js";
 
 /** @typedef {import("./railLayout.js").Section} Section */
 
@@ -85,7 +86,12 @@ export function initShell(navigate) {
   function renderNav(visible) {
     nav.innerHTML = "";
     for (const row of railRows(GROUPS, visible)) {
-      nav.appendChild(row.kind === "divider" ? buildDivider(row.label) : buildLink(row.section));
+      if (row.kind === "divider") {
+        nav.appendChild(buildDivider(row.label));
+        continue;
+      }
+      nav.appendChild(buildLink(row.section));
+      if (row.section.key === "armsdk") nav.appendChild(buildOnboardingReset());
     }
     footNav.innerHTML = "";
     for (const section of FOOTER_SECTIONS) {
@@ -112,6 +118,22 @@ export function initShell(navigate) {
       `<span class="rail-label">${section.label}</span>` +
       (shortcut ? `<span class="rail-key" aria-hidden="true">${shortcut}</span>` : "");
     return a;
+  }
+
+  function buildOnboardingReset() {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "rail-link rail-action";
+    button.title = "Reset Agent onboarding";
+    button.setAttribute("aria-label", "Reset Agent onboarding");
+    button.innerHTML =
+      '<span class="rail-ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v6h6"/><path d="M5.6 16.5A8 8 0 1 0 6 7.2L4 10"/></svg></span>' +
+      '<span class="rail-label">Reset onboarding</span>';
+    button.addEventListener("click", () => {
+      resetAgentOnboarding();
+      navigate("/");
+    });
+    return button;
   }
 
   /** @param {string | null} label */

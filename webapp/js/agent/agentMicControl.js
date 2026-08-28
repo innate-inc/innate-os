@@ -305,6 +305,7 @@ export function createAgentMicControl(root, callbacks) {
   document.addEventListener("pointerdown", dismissMicMessages, listenerOptions);
 
   return {
+    el: control,
     setEnabled(enabled) {
       if (isMicEnabled === enabled) return;
       isMicEnabled = enabled;

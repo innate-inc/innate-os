@@ -29,6 +29,8 @@ import { sharedAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
 import { createAgentMicControl } from "./agentMicControl.js";
+import { createAgentOnboarding } from "./onboarding.js";
+import { createScriptedActionRunner } from "./onboardingWelcome.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
 // marks a sim deployment — used here to drop the (absent) battery readout. Fetched
@@ -60,6 +62,35 @@ export function mount(stage) {
  */
 function buildAgentView(root) {
   const session = createSession();
+  const agentState = sharedAgentState();
+  const scriptedActions = config.simControls
+    ? createScriptedActionRunner(ros)
+    : null;
+  const onboarding =
+    config.simControls && scriptedActions
+      ? createAgentOnboarding(root, ros, {
+          runner: scriptedActions,
+          onHandoff: async () => {
+            const { agents, currentDirective } = agentState.get();
+            const preferred =
+              agents.find((agent) => agent.id === "intro_agent")?.id ||
+              currentDirective ||
+              agents[0]?.id ||
+              "";
+            if (preferred) await agentState.setDirective(preferred);
+          },
+          onResetWorld: () => {
+            const sim = /** @type {any} */ (session);
+            if (typeof sim.resetWorld !== "function") {
+              console.warn(
+                "[onboarding] stage has no resetWorld — rebuild sim/viewer (npm run build:lib)",
+              );
+              return;
+            }
+            sim.resetWorld();
+          },
+        })
+      : null;
 
   const feedFrame = document.createElement("div");
   feedFrame.className = "agent-feed-frame";
@@ -70,13 +101,18 @@ function buildAgentView(root) {
   const videoStage =
     realVideo ??
     /** @type {NonNullable<typeof createStage>} */ (createStage)(feedFrame, session);
+  const setOnboardingStep =
+    "setOnboardingStep" in videoStage ? videoStage.setOnboardingStep : null;
+  const stopOnboardingStageSync =
+    onboarding && setOnboardingStep
+      ? onboarding.onStep(setOnboardingStep)
+      : null;
   const sceneSetup = feedFrame.querySelector(".sim-debug-stack");
   if (sceneSetup) root.append(sceneSetup);
 
   const cornerStack = document.createElement("div");
   cornerStack.className = "overlay-stack-top-left";
   root.append(cornerStack);
-  const agentState = sharedAgentState();
 
   const cameraSwitch = createCameraSwitch(root, session, ros, {
     storeKey: "innate.cameras.agent",
@@ -86,11 +122,9 @@ function buildAgentView(root) {
     // Real robots have no orbit camera, so their saved choice is untouched.
     primaryOnMount: config.simControls ? "orbit" : undefined,
   });
-  const telemetryOverlay = config.simControls ? null : document.createElement("div");
-  if (telemetryOverlay) {
-    telemetryOverlay.className = "overlay telemetry-overlay agent-telemetry-overlay";
-    root.append(telemetryOverlay);
-  }
+  const telemetryOverlay = document.createElement("div");
+  telemetryOverlay.className = "overlay telemetry-overlay agent-telemetry-overlay";
+  root.append(telemetryOverlay);
 
   // The Brain monitor's layer sits between the camera overlays and the panel
   // (DOM order + z-index): opening it covers the stage but never the controls.
@@ -160,6 +194,10 @@ function buildAgentView(root) {
   let micControl = null;
   const panel = createAgentPanel(root, ros, agentState, {
     enableMic: Boolean(config.simControls),
+    ensureListening: async () => {
+      if (!onboarding || onboarding.isComplete()) return false;
+      return onboarding.ensureListening();
+    },
     onMicState: (state) => {
       micControl?.setCaptureState(state);
       micControl?.setAudioFeedback({
@@ -179,13 +217,28 @@ function buildAgentView(root) {
     challengePanel?.dismiss();
   };
   root.addEventListener("pointerdown", onScenePointerDown);
-  const telemetry = telemetryOverlay ? createTelemetry(telemetryOverlay, ros) : null;
+  const telemetry = createTelemetry(telemetryOverlay, ros, {
+    showBattery: !config.simControls,
+  });
   if (config.simControls) {
     micControl = createAgentMicControl(panel.micMount, {
-      startListening: panel.startMic,
-      stopListening: panel.stopMic,
+      startListening: () => {
+        onboarding?.noteMicDown();
+        return panel.startMic();
+      },
+      stopListening: () => {
+        onboarding?.noteMicUp();
+        panel.stopMic();
+      },
     });
   }
+  const stopOnboardingMicSync =
+    onboarding && micControl
+      ? onboarding.onStep((step) => {
+          const parent = step === "complete" ? panel.micMount : root;
+          if (micControl?.el.parentElement !== parent) parent.append(micControl.el);
+        })
+      : null;
 
   const compactLayout = window.matchMedia(COMPACT_LAYOUT_QUERY);
   const monitorTooNarrow = window.matchMedia(BRAIN_MONITOR_QUERY);
@@ -223,6 +276,10 @@ function buildAgentView(root) {
   applyLayout();
 
   const parts = [
+    ...(stopOnboardingStageSync ? [{ destroy: stopOnboardingStageSync }] : []),
+    ...(stopOnboardingMicSync ? [{ destroy: stopOnboardingMicSync }] : []),
+    ...(onboarding ? [onboarding] : []),
+    ...(scriptedActions ? [scriptedActions] : []),
     videoStage,
     {
       destroy: () => {
@@ -232,7 +289,7 @@ function buildAgentView(root) {
       },
     },
     ...(challengePanel ? [challengePanel] : []),
-    ...(telemetry ? [telemetry] : []),
+    telemetry,
     // Square, always-live camera tiles (own prefs key so teleop's defaults stay put).
     cameraSwitch,
     ...(micControl ? [micControl] : []),
@@ -274,4 +331,3 @@ function buildAgentView(root) {
     },
   };
 }
-

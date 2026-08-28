@@ -34,7 +34,6 @@ interface ManifestRoom {
   bytes: number;
   bbox: { min: number[]; max: number[] };
 }
-
 /** The apartment's wireframe skeleton: parent group (already in the scene,
  * carrying the Y-up -> Z-up rotation) plus one placeholder box per room, drawn
  * from the manifest alone. streamApartment() then swaps boxes for real glbs. */
@@ -109,7 +108,7 @@ const SHADOW_MARGIN_M = 0.5; // the robot's own extent plus the throw of its sha
 const SHADOW_MAP_PX = 2048;
 
 // Initial orbit framing used when a pose is snapped in (see spawnAt below).
-const INITIAL_ORBIT_POSITION = { forward: 0.61, left: 0.02, height: 0.25 };
+const INITIAL_ORBIT_POSITION = { forward: 0.75, left: 0.02, height: 0.28 };
 const INITIAL_ORBIT_TARGET = { forward: -0.01, left: 0, height: 0.13 };
 
 // How the orbit camera behaves. Orthogonal to CameraView, which picks WHICH
@@ -140,6 +139,17 @@ const TOP_FALLBACK_HEIGHT_M = 12;
 // Robot-mounted camera views: frames, axis conventions, FOV and near plane
 // match the driver's cameras (mars_sim_driver.core's CAMERAS).
 export type CameraView = "orbit" | "main" | "arm";
+// The tour steps between the greeting and the handoff all behave alike here:
+// everything but "complete" keeps the world hidden, so the robot stays on the
+// blank onboarding background while the UI panels appear one by one.
+export type OnboardingStep =
+  | "await_hello"
+  | "welcome"
+  | "await_go"
+  | "tour_cameras"
+  | "tour_telemetry"
+  | "tour_chat"
+  | "complete";
 // Track mars_sim_driver/constants.py: per-camera FOVs matching what the
 // driver renders (the head and wrist are different physical lenses), so the
 // operator's preview frames what the robot consumes. main is the head's real
@@ -183,6 +193,8 @@ export class SimScene {
   private lidarPoints?: THREE.Points;
   private keyLight?: THREE.DirectionalLight;
   private shadowCatcher?: THREE.Mesh;
+  private groundGrid?: THREE.GridHelper;
+  private apartmentRoot?: THREE.Group;
   private shadowBoxM = SHADOW_BOX_MIN_M;
   private robotXY: [number, number] = [0, 0];
   private hullsGroup?: THREE.Group;
@@ -206,6 +218,11 @@ export class SimScene {
   // While true a placement drag owns the pointer and orbit stays off.
   private placementMode = false;
   private cameraMode: CameraMode = "free";
+  private lidarVisible = false;
+  private onboardingStep: OnboardingStep = "complete";
+  private readonly worldBackground = new THREE.Color(0x14161a);
+  private readonly worldFog = new THREE.FogExp2(0x14161a, 0.035);
+  private readonly onboardingBackground = new THREE.Color(0x000000);
   /** Notified on every mode change, including one the user caused by grabbing
    * the camera out of chase -- so a mode switch in the UI can reflect it. */
   onCameraModeChange?: (mode: CameraMode) => void;
@@ -243,8 +260,8 @@ export class SimScene {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.5;
 
-    this.scene.background = new THREE.Color(0x14161a);
-    this.scene.fog = new THREE.FogExp2(0x14161a, 0.035);
+    this.scene.background = this.worldBackground;
+    this.scene.fog = this.worldFog;
 
     // Props share the apartment's hull wireframe material, so one "collisions"
     // toggle covers both. A prop entering the world refits the shadow box.
@@ -399,6 +416,7 @@ export class SimScene {
     const grid = new THREE.GridHelper(40, 80, 0x2a2d33, 0x1c1e22);
     grid.rotation.x = Math.PI / 2;
     grid.position.z = -0.02;
+    this.groundGrid = grid;
     this.scene.add(grid);
   }
 
@@ -416,7 +434,29 @@ export class SimScene {
   }
 
   setLidarVisible(visible: boolean): void {
-    if (this.lidarPoints) this.lidarPoints.visible = visible;
+    this.lidarVisible = visible;
+    if (this.lidarPoints) this.lidarPoints.visible = visible && this.onboardingStep === "complete";
+  }
+
+  setOnboardingStep(step: OnboardingStep): void {
+    if (step === this.onboardingStep) return;
+    this.onboardingStep = step;
+    this.followCamera = step === "complete";
+    this.setWorldVisible(step === "complete");
+  }
+
+  private setWorldVisible(visible: boolean): void {
+    this.scene.background = visible ? this.worldBackground : this.onboardingBackground;
+    this.scene.fog = visible ? this.worldFog : null;
+    if (this.groundGrid) this.groundGrid.visible = visible;
+    if (this.apartmentRoot) this.apartmentRoot.visible = visible;
+    if (this.shadowCatcher) this.shadowCatcher.visible = visible;
+    if (this.lidarPoints) this.lidarPoints.visible = visible && this.lidarVisible;
+    this.props.setSceneVisible(visible);
+    this.props.setHullsVisible(visible && this.hullsVisible);
+    if (this.hullsGroup) this.hullsGroup.visible = visible && this.hullsVisible;
+    for (const collider of this.robotColliders) collider.visible = visible && this.hullsVisible;
+    if (this.robotBox) this.robotBox.visible = visible;
   }
 
   /**
@@ -429,7 +469,7 @@ export class SimScene {
    */
   setCollisionHullsVisible(visible: boolean): void {
     this.hullsVisible = visible;
-    this.props.setHullsVisible(visible);
+    this.props.setHullsVisible(visible && this.onboardingStep === "complete");
     if (visible && !this.hullsPromise) {
       // ~1300 OBJ fetches; takes seconds on first show. A failure resets the
       // promise so toggling again retries instead of staying dead forever.
@@ -438,8 +478,9 @@ export class SimScene {
         this.hullsPromise = undefined;
       });
     }
-    if (this.hullsGroup) this.hullsGroup.visible = visible;
-    for (const collider of this.robotColliders) collider.visible = visible;
+    const shown = visible && this.onboardingStep === "complete";
+    if (this.hullsGroup) this.hullsGroup.visible = shown;
+    for (const collider of this.robotColliders) collider.visible = shown;
   }
 
   private async loadCollisionHulls(): Promise<void> {
@@ -470,7 +511,7 @@ export class SimScene {
         }),
       );
     }
-    group.visible = this.hullsVisible; // honor toggles made while loading
+    group.visible = this.hullsVisible && this.onboardingStep === "complete";
     this.hullsGroup = group;
     this.scene.add(group);
   }
@@ -486,6 +527,8 @@ export class SimScene {
     // so it's applied once; placeholder boxes and rooms attach underneath.
     const group = new THREE.Group();
     group.rotation.x = Math.PI / 2;
+    group.visible = this.onboardingStep === "complete";
+    this.apartmentRoot = group;
     this.scene.add(group);
 
     let manifest: ApartmentManifest | null = null;

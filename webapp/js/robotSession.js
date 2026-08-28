@@ -35,7 +35,16 @@ let simHolders = 0;
 /** @type {number | null} */ let simLinger = null;
 
 /**
- * @returns {Promise<{ createSession: () => WebRtcSession, releaseSession: (session: WebRtcSession) => void, createStage: ((root: HTMLElement, session: WebRtcSession) => { audioEl: HTMLAudioElement | null, destroy: () => void }) | null }>}
+ * @typedef {{
+ *   audioEl: HTMLAudioElement | null,
+ *   destroy: () => void,
+ *   setOnboardingStep?: (step: "await_hello" | "welcome" | "await_go"
+ *     | "tour_cameras" | "tour_telemetry" | "tour_chat" | "complete") => void
+ * }} RobotStage
+ */
+
+/**
+ * @returns {Promise<{ createSession: () => WebRtcSession, releaseSession: (session: WebRtcSession) => void, createStage: ((root: HTMLElement, session: WebRtcSession) => RobotStage) | null }>}
  * createStage is null for real robots (pages use createVideoStage); in sim it
  * mounts the live Three.js canvas (full resolution, drag-to-orbit).
  */
