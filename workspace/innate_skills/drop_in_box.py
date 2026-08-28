@@ -227,6 +227,18 @@ class DropInBox(_FloorApproach):
             self.logger.warning(f"[DropInBox] could not re-grip before the drive ({e})")
         self._debug("grip", j6=self._j6())
 
+    def _fold_for_travel(self) -> None:
+        """Drive folded. Manipulation.rest substitutes the standing grip target
+        for REST's own j6, so the object stays held while the arm tucks against
+        the body — out of the head camera's view of the floor it is searching,
+        and well inside the footprint, so nothing leads the bumper into the
+        container's near wall."""
+        try:
+            self.manipulation.rest(duration=self._p["carry_s"])
+        except (ArmFailed, ArmUnhealthy) as e:
+            self.logger.warning(f"[DropInBox] could not fold for the drive ({e}); driving as-is")
+        self._debug("fold", j6=self._j6())
+
     def _lift_clear(self, y: float) -> None:
         """Raise the object above rim height, at the release bearing, so the
         reach over the near wall comes down from above rather than straight
@@ -287,16 +299,18 @@ class DropInBox(_FloorApproach):
         raises. Lifting first matters — REST swings the gripper forward and
         down, which would drag it through the container wall.
 
-        The fold is 5 joints unless the object has actually been released:
-        REST's 6th element is a claw command, so folding with it after a
-        failure opens the fingers and drops the object on the floor."""
+        A run that never released folds through Manipulation.rest, which keeps
+        the grip: REST's 6th element is a claw command, so folding to it
+        outright would open the fingers and drop the object on the floor."""
         try:
             if self._over_rim:
                 self.manipulation.move_by(dz=self._p["lift_after_m"], duration=1.0, tolerance_xy=None, tolerance_z=None)
                 # Committed teardown (runs after cancel): time.sleep on purpose.
                 time.sleep(0.3)
-            rest = self.manipulation.REST if self._over_rim else self.manipulation.REST[:5]  # 5 = keep the grip
-            self.manipulation.move_joints(rest, duration=3.0)
+            if self._over_rim:
+                self.manipulation.move_joints(self.manipulation.REST, duration=3.0)
+            else:
+                self.manipulation.rest(duration=3.0)  # keeps the grip on a run that never released
         except Exception as e:  # noqa: BLE001 — teardown must not mask the run result
             self.logger.warning(f"[DropInBox] retract failed: {e}")
 
@@ -352,6 +366,7 @@ class DropInBox(_FloorApproach):
                 self.fail("I'm not holding anything to put away")
 
             self._secure_grip()
+            self._fold_for_travel()
             self.say(f"Looking for {prompt}.")
             xy = self._search(prompt)
             xy = self._position_above(prompt, xy)
