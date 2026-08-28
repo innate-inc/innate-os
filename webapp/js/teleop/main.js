@@ -86,14 +86,12 @@ function buildCockpit(root) {
 
   const keyboard = createKeyboardDrive(drive);
   const telemetry = telemetryOverlay ? createTelemetry(telemetryOverlay, ros) : null;
-  const onboarding = createTeleopOnboarding(root, { simControls: !!config.simControls });
+  const onboarding = createTeleopOnboarding(root);
   const parts = [videoStage, ...(telemetry ? [telemetry] : [])];
-  // Robot-mic toggle. Skipped in the sim: the simulator's WebRTC server streams
-  // video only (no microphone), so the toggle would do nothing. config.simControls
-  // is the sim deployment's feature flag (env-driven; false on the real robot).
-  if (!config.simControls && videoStage.audioEl) {
-    parts.push(createAudioToggle(rightRail, session, videoStage.audioEl));
-  }
+  // Keep the listen control in the same place on sim and hardware. The sim
+  // starts listening by default; hardware remains opt-in for privacy.
+  if (config.simControls) session.setAudio(true);
+  parts.push(createAudioToggle(rightRail, session, videoStage.audioEl));
   parts.push(
     createSpeedModes(rightRail, ros),
     createHeadTilt(rightRail, ros),
