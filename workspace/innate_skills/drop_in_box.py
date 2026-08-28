@@ -66,11 +66,18 @@ PARAMS = {
     # only drives them toward the container's floor.
     "release_clear_m": 0.04,
     "release_settle_s": 0.8,
-    # Where the object is lifted to before reaching over the rim. This happens
-    # at the container, NOT for the drive: held up during the approach the
-    # gripper and its object sit in the head camera's view of the very floor
-    # being searched, so the object rides in the pick's own carry pose until
-    # the base has parked.
+    # Travel pose: the object rides here for the drive. Swung to the RIGHT and
+    # held high — base_link +y is left, so the camera's right is -y. Chosen
+    # against three constraints at once: 83% of the arm's reach (the same
+    # margin the old straight-ahead pose had), |y| inside the 0.165 m nav
+    # footprint so nothing sticks out past the robot's own width, and a
+    # projection of u=893, v=-185 — off the right edge AND above the top of a
+    # 640x480 frame, so it cannot occlude the floor being searched.
+    "travel_x": 0.18,
+    "travel_y": -0.15,
+    "travel_z": 0.32,
+    # Where the object is lifted to at the container before reaching over the
+    # rim, at the release bearing.
     "carry_x": 0.24,
     "carry_z": 0.30,
     "carry_s": 2.0,
@@ -228,17 +235,32 @@ class DropInBox(_FloorApproach):
             self.logger.warning(f"[DropInBox] could not re-grip before the drive ({e})")
         self._debug("grip", j6=self._j6())
 
-    def _fold_for_travel(self) -> None:
-        """Drive folded. Manipulation.rest substitutes the standing grip target
-        for REST's own j6, so the object stays held while the arm tucks against
-        the body — out of the head camera's view of the floor it is searching,
-        and well inside the footprint, so nothing leads the bumper into the
-        container's near wall."""
+    def _carry_for_travel(self) -> None:
+        """Hold the object high and out to the right for the drive.
+
+        The rest fold carries it too low. Manipulation.rest is the fallback
+        rather than the choice: it keeps the grip (standing target substituted
+        for REST's own j6) and is known to be safe under load, so a pose this
+        arm will not solve still leaves the object held and the run going."""
+        p = self._p
         try:
-            self.manipulation.rest(duration=self._p["carry_s"])
+            self.manipulation.move_to(
+                p["travel_x"],
+                p["travel_y"],
+                p["travel_z"],
+                pitch=p["arm_pitch"],
+                duration=p["carry_s"],
+                tolerance_xy=0.06,
+            )
+            self._debug("travel", target_xyz=[p["travel_x"], p["travel_y"], p["travel_z"]], j6=self._j6())
+            return
         except (ArmFailed, ArmUnhealthy) as e:
-            self.logger.warning(f"[DropInBox] could not fold for the drive ({e}); driving as-is")
-        self._debug("fold", j6=self._j6())
+            self.logger.warning(f"[DropInBox] travel pose refused ({e}); folding to rest instead")
+        try:
+            self.manipulation.rest(duration=p["carry_s"])
+        except (ArmFailed, ArmUnhealthy) as e:
+            self.logger.warning(f"[DropInBox] could not fold for the drive either ({e}); driving as-is")
+        self._debug("travel", note="fell back to rest", j6=self._j6())
 
     def _lift_clear(self, y: float) -> None:
         """Raise the object above rim height, at the release bearing, so the
@@ -386,7 +408,7 @@ class DropInBox(_FloorApproach):
                 self.fail("I'm not holding anything to put away")
 
             self._secure_grip()
-            self._fold_for_travel()
+            self._carry_for_travel()
             self.say(f"Looking for {prompt}.")
             xy = self._search(prompt)
             xy = self._position_above(prompt, xy)
