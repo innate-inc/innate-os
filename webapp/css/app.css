@@ -5653,14 +5653,6 @@ select.episodes-tool {
   flex: 0 0 auto;
 }
 
-.skills-menu-shortcut {
-  padding: 2px 5px;
-  font-size: 10px;
-  color: var(--muted);
-  border: 1px solid var(--hairline);
-  border-radius: 4px;
-}
-
 /* Active-skill name (or "None active"), filling the widened button and
    truncating if long. The chevron is pushed to the far edge. */
 .skills-menu-active {
@@ -5702,7 +5694,7 @@ select.episodes-tool {
   bottom: calc(100% + 10px);
   right: 0;
   width: 280px;
-  max-height: min(52vh, 460px);
+  max-height: min(75vh, 720px);
   display: none;
   flex-direction: column;
   overflow: hidden;
@@ -5725,11 +5717,15 @@ select.episodes-tool {
   padding: 6px;
 }
 
-.skills-pop-search-input {
-  width: calc(100% - 16px);
-  min-height: 34px;
+.skills-pop-search {
+  position: relative;
   margin: 8px 8px 0;
-  padding: 0 10px;
+}
+
+.skills-pop-search-input {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 56px 0 10px;
   font: inherit;
   font-size: 12px;
   color: var(--text);
@@ -5741,6 +5737,20 @@ select.episodes-tool {
 
 .skills-pop-search-input:focus {
   border-color: var(--accent-dim);
+}
+
+/* Shortcut hint, riding inside the search field's right edge. */
+.skills-pop-search-kbd {
+  position: absolute;
+  top: 50%;
+  right: 9px;
+  transform: translateY(-50%);
+  padding: 2px 5px;
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  pointer-events: none;
 }
 
 .skills-pop-list {

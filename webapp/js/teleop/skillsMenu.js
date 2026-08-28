@@ -27,6 +27,10 @@ export function searchSkills(skills, query) {
 export const nextSkillIndex = (index, length, delta) =>
   Math.max(0, Math.min(length - 1, index + delta));
 
+// onKeydown accepts both ⌘K and Ctrl+K; this only picks which one to advertise.
+const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+const shortcutLabel = isMac ? "⌘K" : "Ctrl+K";
+
 /**
  * @param {HTMLElement} parent The bottom-bar overlay (shared with the TTS bar).
  * @param {import("../rosClient.js").RosClient} rosClient
@@ -39,7 +43,7 @@ export function createSkillsMenu(parent, rosClient) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "skills-menu-btn";
-  btn.title = `Run a skill (⌘K) — roster from ${AVAILABLE_SKILLS_TOPIC}`;
+  btn.title = `Run a skill (${shortcutLabel}) — roster from ${AVAILABLE_SKILLS_TOPIC}`;
   btn.setAttribute("aria-haspopup", "true");
   btn.setAttribute("aria-expanded", "false");
   const btnDot = document.createElement("span");
@@ -48,9 +52,6 @@ export function createSkillsMenu(parent, rosClient) {
   const btnLabel = document.createElement("span");
   btnLabel.className = "skills-menu-label";
   btnLabel.textContent = "Skills";
-  const btnShortcut = document.createElement("kbd");
-  btnShortcut.className = "skills-menu-shortcut mono";
-  btnShortcut.textContent = "⌘K";
   // Currently-running skill (from /brain/skill_status_update), or "None active".
   const btnActive = document.createElement("span");
   btnActive.className = "skills-menu-active";
@@ -58,10 +59,12 @@ export function createSkillsMenu(parent, rosClient) {
   const btnChevron = document.createElement("span");
   btnChevron.className = "skills-menu-chevron mono";
   btnChevron.textContent = "▾";
-  btn.append(btnDot, btnLabel, btnShortcut, btnActive, btnChevron);
+  btn.append(btnDot, btnLabel, btnActive, btnChevron);
 
   const pop = document.createElement("div");
   pop.className = "skills-pop";
+  const search = document.createElement("div");
+  search.className = "skills-pop-search";
   const searchInput = document.createElement("input");
   searchInput.type = "search";
   searchInput.className = "skills-pop-search-input";
@@ -69,7 +72,11 @@ export function createSkillsMenu(parent, rosClient) {
   searchInput.autocomplete = "off";
   searchInput.spellcheck = false;
   searchInput.setAttribute("aria-label", "Search skills");
-  pop.appendChild(searchInput);
+  const searchKbd = document.createElement("kbd");
+  searchKbd.className = "skills-pop-search-kbd mono";
+  searchKbd.textContent = shortcutLabel;
+  search.append(searchInput, searchKbd);
+  pop.appendChild(search);
   pop.appendChild(buildTypeLegend());
   const scrollEl = document.createElement("div");
   scrollEl.className = "skills-pop-scroll";
@@ -91,8 +98,8 @@ export function createSkillsMenu(parent, rosClient) {
   let expandedId = null;
   /** @type {string | null} */
   let selectedId = null;
-  /** Folder sections the user collapsed (by group path). @type {Set<string>} */
-  const collapsedGroups = new Set();
+  /** Folder sections the user expanded (by group path) — folders start closed. @type {Set<string>} */
+  const expandedGroups = new Set();
   /** Per-skill, per-param string values, kept across re-renders. @type {Map<string, Record<string, string>>} */
   const inputValues = new Map();
   /** Last/in-flight run. `done` marks the terminal state. @type {{ skillId: string, cancel: () => void, text: string, error: boolean, canceling: boolean, done: boolean } | null} */
@@ -321,7 +328,8 @@ export function createSkillsMenu(parent, rosClient) {
   function onKeydown(e) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
       e.preventDefault();
-      setOpen(true);
+      setOpen(!open);
+      if (!open) btn.focus();
     } else if (e.key === "Escape" && open) {
       setOpen(false);
       btn.focus();
@@ -388,7 +396,7 @@ export function createSkillsMenu(parent, rosClient) {
     }
     for (const [group, members] of groupedSkills(visibleSkills)) {
       frag.appendChild(renderGroupHeader(group, members.length));
-      if (query || !collapsedGroups.has(group)) {
+      if (query || expandedGroups.has(group)) {
         for (const skill of members) frag.appendChild(renderRow(skill));
       }
     }
@@ -455,7 +463,7 @@ export function createSkillsMenu(parent, rosClient) {
 
   /** Section header for one folder: click toggles collapse. @param {string} group @param {number} count */
   function renderGroupHeader(group, count) {
-    const collapsed = collapsedGroups.has(group);
+    const collapsed = !expandedGroups.has(group);
     const head = document.createElement("button");
     head.type = "button";
     head.className = "skills-pop-group";
@@ -468,8 +476,8 @@ export function createSkillsMenu(parent, rosClient) {
     tail.textContent = collapsed ? `${count} ›` : "▾";
     head.append(name, tail);
     head.addEventListener("click", () => {
-      if (collapsed) collapsedGroups.delete(group);
-      else collapsedGroups.add(group);
+      if (collapsed) expandedGroups.add(group);
+      else expandedGroups.delete(group);
       render();
     });
     return head;
