@@ -27,6 +27,7 @@ import { createTelemetry } from "./telemetry.js";
 import { createArmPanel } from "./armPanel.js";
 import { createProfilingPanel } from "./profilingPanel.js";
 import { createSkillsMenu } from "./skillsMenu.js";
+import { createTeleopOnboarding } from "./teleopOnboarding.js";
 import { createCameraSwitch } from "./cameraSwitch.js";
 import { dismissAllConfirms } from "../nav/confirm.js";
 
@@ -85,6 +86,7 @@ function buildCockpit(root) {
 
   const keyboard = createKeyboardDrive(drive);
   const telemetry = telemetryOverlay ? createTelemetry(telemetryOverlay, ros) : null;
+  const onboarding = createTeleopOnboarding(root);
   const parts = [videoStage, ...(telemetry ? [telemetry] : [])];
   // Robot-mic toggle. Skipped in the sim: the simulator's WebRTC server streams
   // video only (no microphone), so the toggle would do nothing. config.simControls
@@ -97,13 +99,14 @@ function buildCockpit(root) {
     createHeadTilt(rightRail, ros),
     createWasdChips(chipsOverlay, keyboard),
     createJoystick(stickOverlay, drive),
-    createTtsBar(ttsOverlay, ros),
+    createTtsBar(ttsOverlay, ros, { onSpeak: onboarding.onSpeak }),
     // Collapsible skill launcher pinned next to the speak bar.
-    createSkillsMenu(ttsOverlay, ros),
+    createSkillsMenu(ttsOverlay, ros, { onSkillCompleted: onboarding.onSkillCompleted }),
     createArmPanel(armOverlay, ros, { hideServices: !!config.simControls }),
     ...(config.simControls ? [] : [createProfilingPanel(root, session)]),
     createCameraSwitch(root, session, ros),
     keyboard,
+    onboarding,
   );
   // The sim's main view renders the same head camera (camera_optical_frame at
   // the driver's FOV), so the ribbon projects there too — the overlay swaps the

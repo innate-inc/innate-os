@@ -13,7 +13,7 @@ import { createAgentIndicator } from "./agentIndicator.js";
 import { createArmAlert } from "./armAlert.js";
 import { maybeShowAppPromo } from "./appPromo.js";
 import { installPressActivate } from "./pressActivate.js";
-import { createOnboarding } from "./onboarding.js";
+import { consumeAgentOnboardingRequest, createOnboarding } from "./onboarding.js";
 import { FOOTER_SECTIONS, GROUPS, SECTIONS, SIM_SECTIONS, railRows } from "./railLayout.js";
 
 /** @typedef {import("./railLayout.js").Section} Section */
@@ -80,6 +80,7 @@ export function initShell(navigate) {
   let activeKey = "";
   let checkedFirstPage = false;
   let onboardingPending = false;
+  let onboardingRestart = false;
 
   /**
    * (Re)build the rail from railRows — links in group order, a divider at each
@@ -135,11 +136,13 @@ export function initShell(navigate) {
 
   function requestOnboarding() {
     onboardingPending = true;
-    if (activeKey === "agent") {
+    onboardingRestart = true;
+    if (activeKey === "teleop") {
       onboardingPending = false;
-      onboarding.start();
+      onboarding.start(true);
+      onboardingRestart = false;
     } else {
-      navigate("/");
+      navigate("/teleop");
     }
   }
 
@@ -235,11 +238,15 @@ export function initShell(navigate) {
     if (!checkedFirstPage) {
       checkedFirstPage = true;
       onboardingPending = onboarding.shouldAutoStart();
-      if (onboardingPending && activeKey !== "agent") navigate("/");
+      if (onboardingPending && activeKey !== "teleop") navigate("/teleop");
     }
-    if (!onboardingPending || activeKey !== "agent") return;
-    onboardingPending = false;
-    onboarding.start();
+    if (onboardingPending && activeKey === "teleop") {
+      onboardingPending = false;
+      onboarding.start(onboardingRestart);
+      onboardingRestart = false;
+      return;
+    }
+    if (activeKey === "agent" && consumeAgentOnboardingRequest()) onboarding.start();
   }
 
   return { setActive, firstPageReady };
