@@ -50,23 +50,32 @@ CLIP_MARGIN_PX = 3.0
 
 PARAMS = {
     **APPROACH_PARAMS,
-    # The box's near floor edge parks here. Bounded below by the 0.25 m front
-    # bumper (costmap footprint) and above by the 0.40 m reach clamp, which has
-    # to also fit drop_inset — the window is barely 5 cm wide.
-    "sweet_x": 0.30,
+    # Head barely down for the whole run instead of the approach layer's -20.
+    # Under the calibrated intrinsics -12 sees floor from 0.19 m out — just
+    # short of the 0.23 park, so a clipped detection reads 0.19, outside the
+    # accept band, and cannot self-certify as parked.
+    "tilt_deg": -12.0,
+    # The box's near floor edge parks here — real metres since the 2026-08-28
+    # calibration fix. Close on purpose: at 0.33 the reach clamp trimmed
+    # every release to a rim hug; 0.23 lets drop_inset actually reach the
+    # interior. Physically clear of the body (the case front sits at ~0.03;
+    # the arm shoulder at 0.086 is the frontmost part) but the near edge
+    # projects only ~33 px above the frame bottom, so there is little room
+    # to see an overshoot.
+    "sweet_x": 0.23,
     # Bearing: loose. Close in a container runs off the frame edges and its
-    # bbox centre stops tracking its middle; 66 px is ~50 mm of lateral error
-    # here, against a 316 mm interior. Range: TIGHTER than pick's, because one
-    # image row is ~1.2 cm of range at 0.30 m and the whole usable window
-    # between the bumper and the reach limit is about 5 cm. 18 px is ~2.2 cm.
-    "box_half_px": 110.0,
-    "box_half_v_px": 30.0,
+    # bbox centre stops tracking its middle; 30 px accept is ~50 mm of lateral
+    # error at the park (1.7 mm/px), against a 316 mm interior. Range:
+    # TIGHTER, because the whole usable window between the bumper and the
+    # reach limit is about 5 cm; at 2.1 mm/row the 7 px accept is ~1.5 cm.
+    "box_half_px": 50.0,
+    "box_half_v_px": 12.0,
     "accept_frac": 0.6,
-    # How far past the near face the gripper reaches. 0.07 released only 5.8 cm
-    # inside a 31.6 cm interior — hugging the near wall, which is where a
-    # bounce goes back out. 0.10 asks for 8.1 cm and the reach clamp below
-    # trims it to whatever the arm can actually hold at the release height.
-    "drop_inset": 0.10,
+    # How far past the near face the gripper reaches. 0.03 released right at
+    # the rim and a sock draped on the border; 0.08 puts it a hand's width
+    # inside. The reach clamp still trims this on tall rims, down to
+    # drop_inset_min at worst.
+    "drop_inset": 0.08,
     # Gripper height above the rim at release. The arm stays here and simply
     # opens — it does not follow the object down. At arm_pitch the claw already
     # points down, so the fingertips hang below the rim at this height and the
@@ -74,16 +83,12 @@ PARAMS = {
     # only drives them toward the container's floor.
     "release_clear_m": 0.04,
     "release_settle_s": 0.8,
-    # Travel pose: the object rides here for the drive. Swung to the RIGHT and
-    # held high — base_link +y is left, so the camera's right is -y. Chosen
-    # against three constraints at once: 83% of the arm's reach (the same
-    # margin the old straight-ahead pose had), |y| inside the 0.165 m nav
-    # footprint so nothing sticks out past the robot's own width, and a
-    # projection of u=893, v=-185 — off the right edge AND above the top of a
-    # 640x480 frame, so it cannot occlude the floor being searched.
-    "travel_x": 0.18,
-    "travel_y": -0.15,
-    "travel_z": 0.32,
+    # Travel pose: chosen live on hardware (2026-08-28) via the joint-posing
+    # page for least head-camera occlusion — judged on the LIVE camera view,
+    # not the pinhole model, which reported earlier right-swung poses as
+    # off-frame when the real, wider lens saw them. 5 joints; move_joints
+    # carries the standing grip along as j6.
+    "travel_joints": [-1.72, 0.31, -1.84, 1.70, -0.26],
     # Where the object is lifted to at the container before reaching over the
     # rim, at the release bearing.
     "carry_x": 0.24,
@@ -106,8 +111,9 @@ PARAMS = {
     # reach limit stalls the wrist and overloads servo 2.
     "reach_margin": 0.03,
     # Rim estimate band. Under the floor the geometry is noise; over the top
-    # no release pose fits — at sweet_x + drop_inset_min the envelope runs out
-    # at a rim of about 0.22, which is where this number comes from.
+    # the head can't have measured it honestly. At the 0.23 park the reach
+    # envelope no longer binds below 0.22, so the ceiling is back to the
+    # tallest rim the release geometry was ever proven on.
     "rim_z_min": 0.04,
     "rim_z_max": 0.22,
 }
@@ -119,7 +125,9 @@ class DropInBox(_FloorApproach):
     The robot finds the container with its head camera, drives up to it,
     reaches over the rim and opens the gripper. Run pick_any_object first;
     this fails immediately if the gripper is empty. Only works for containers
-    low enough for the arm to reach over — roughly shoebox height."""
+    low enough for the arm to reach over — roughly shoebox height.
+    Call this only if the box is actually visible, otherwise search for it
+    first by looking around."""
 
     manipulation: Manipulation
     head: Head
@@ -243,32 +251,21 @@ class DropInBox(_FloorApproach):
             self.logger.warning(f"[DropInBox] could not re-grip before the drive ({e})")
         self._debug("grip", j6=self._j6())
 
-    def _carry_for_travel(self) -> None:
-        """Hold the object high and out to the right for the drive.
-
-        The rest fold carries it too low. Manipulation.rest is the fallback
-        rather than the choice: it keeps the grip (standing target substituted
-        for REST's own j6) and is known to be safe under load, so a pose this
-        arm will not solve still leaves the object held and the run going."""
-        p = self._p
+    def _carry_pose(self, joints: list[float]) -> None:
+        """Move the held object to a 5-joint pose; move_joints with 5 values
+        keeps the standing grip. Manipulation.rest is the fallback: also
+        grip-preserving and known safe under load, so a refused pose still
+        leaves the object held and the run going."""
         try:
-            self.manipulation.move_to(
-                p["travel_x"],
-                p["travel_y"],
-                p["travel_z"],
-                pitch=p["arm_pitch"],
-                duration=p["carry_s"],
-                tolerance_xy=None,
-                tolerance_z=None,
-            )
-            self._debug("travel", target_xyz=[p["travel_x"], p["travel_y"], p["travel_z"]], j6=self._j6())
+            self.manipulation.move_joints(joints, duration=self._p["carry_s"])
+            self._debug("travel", target_joints=joints, j6=self._j6())
             return
         except (ArmFailed, ArmUnhealthy) as e:
-            self.logger.warning(f"[DropInBox] travel pose refused ({e}); folding to rest instead")
+            self.logger.warning(f"[DropInBox] carry pose refused ({e}); folding to rest instead")
         try:
-            self.manipulation.rest(duration=p["carry_s"])
+            self.manipulation.rest(duration=self._p["carry_s"])
         except (ArmFailed, ArmUnhealthy) as e:
-            self.logger.warning(f"[DropInBox] could not fold for the drive either ({e}); driving as-is")
+            self.logger.warning(f"[DropInBox] could not fold either ({e}); carrying on as-is")
         self._debug("travel", note="fell back to rest", j6=self._j6())
 
     def _lift_clear(self, y: float) -> None:
@@ -373,7 +370,7 @@ class DropInBox(_FloorApproach):
             self.logger.warning(f"[DropInBox] retract failed: {e}")
 
     def _landed(self, prompt: str) -> bool:
-        """Back up, then ask both cameras whether the object went in."""
+        """Back up, then look for evidence the object did NOT go in."""
         self._drive(-VERIFY_BACKUP_M)
         self.sleep(self._p["settle_s"])
         main_img, wrist_img = self.main_image, self.wrist_image
@@ -388,20 +385,27 @@ class DropInBox(_FloorApproach):
             labels.append(f"Image {len(labels) + 1} is the head camera looking at the floor.")
         if wrist_img:
             labels.append(f"Image {len(labels) + 1} is the WRIST camera beside the gripper fingers (mirrored).")
+        # The burden of proof is on FAILURE: a successful drop is usually
+        # invisible — the object sits below the rim, hidden behind the near
+        # wall (a tall cardboard box produced a false "missed" when the model
+        # was asked to affirm "inside", 2026-08-28). Only seeing the object
+        # outside the container counts against the run.
         text = gemlib.ask_image(
             self._proxy,
             images,
-            f"The robot just tried to drop an object into '{prompt}'. {' '.join(labels)} "
-            "Did the object end up INSIDE the container? Answer NO if it is lying on the "
-            "floor beside the container, or still held in the gripper. Answer only YES or NO.",
+            f"The robot just dropped an object into '{prompt}'. {' '.join(labels)} "
+            "Can you SEE the dropped object OUTSIDE the container — lying on the floor "
+            "next to it, or still between the gripper fingers? A successful drop leaves "
+            "the object hidden inside the container, so if you cannot see it anywhere, "
+            "answer NO. Answer only YES or NO.",
             logger=self.logger,
         )
-        verdict = _yes_no(text)
-        self.logger.info(f"[DropInBox] landed: reply={text!r} -> {verdict}")
-        self._debug("verify", reply=text, landed=verdict, image=main_img)
+        missed = _yes_no(text)
+        self.logger.info(f"[DropInBox] landed: reply={text!r} -> {missed is not True}")
+        self._debug("verify", reply=text, landed=missed is not True, image=main_img)
         # No usable verdict is not a failure: the claw is open and the object
         # is no longer held, which is as much as this skill promised.
-        return verdict is not False
+        return missed is not True
 
     def execute(self, prompt: str = "the box") -> SkillReturn:
         """Drop whatever the gripper holds into `prompt`."""
@@ -425,7 +429,7 @@ class DropInBox(_FloorApproach):
                 self.fail("I'm not holding anything to put away")
 
             self._secure_grip()
-            self._carry_for_travel()
+            self._carry_pose(self._p["travel_joints"])
             self.say(f"Looking for {prompt}.")
             xy = self._search(prompt)
             xy = self._position_above(prompt, xy)
