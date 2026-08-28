@@ -5603,6 +5603,41 @@ select.episodes-tool {
   flex: 0 0 auto;
 }
 
+/* Bar-level interrupt, shown only while a skill runs with the popup closed.
+   Out of flow, hanging off the bar's right edge — appearing must not shift
+   the centered bar. */
+.skills-stop-btn {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  padding: 0 16px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--danger);
+  background: var(--ctl-glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--danger);
+  border-radius: 999px;
+  box-shadow: var(--ctl-sheen);
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.skills-stop-btn:hover:not(:disabled) {
+  background: var(--ctl-glass-hover);
+}
+
+.skills-stop-btn:disabled {
+  opacity: 0.6;
+}
+
 .skills-menu-btn {
   display: flex;
   align-items: center;
@@ -5848,6 +5883,11 @@ select.episodes-tool {
   border-radius: 10px;
 }
 
+/* The extern-run banner is a status-only card with no head above it. */
+.skills-pop-row.expanded > .skills-pop-status:first-child {
+  padding-top: 10px;
+}
+
 .skills-pop-item {
   display: flex;
   align-items: center;
@@ -5928,7 +5968,7 @@ select.episodes-tool {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 0 12px 10px;
+  padding: 6px 12px 10px;
   font-size: 11px;
   line-height: 1.35;
   color: var(--muted);
@@ -6009,6 +6049,13 @@ select.skill-input {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+  outline: 0;
+}
+
+.skill-bool:focus {
+  outline: 1px solid var(--accent-dim);
+  outline-offset: 3px;
+  border-radius: 9px;
 }
 
 /* Enum pill group: one tab stop, arrows cycle, Enter runs (see renderChoice). */
@@ -6106,20 +6153,19 @@ select.skill-input {
   transition: opacity 150ms ease, background 150ms ease, border-color 150ms ease;
 }
 
+/* Inside an already-bordered pill the hint is a plain glyph — a boxed kbd
+   there reads as a third nested border next to the row's digit badge. */
 .skill-run-kbd {
   margin-left: 8px;
-  padding: 1px 4px;
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0;
-  opacity: 0.75;
-  border: 1px solid currentcolor;
-  border-radius: 4px;
+  opacity: 0.9;
 }
 
 /* In-row Stop: the full-size pill crowds a one-line status readout. */
 .skill-confirm.compact {
-  min-height: 26px;
-  padding: 0 10px;
+  min-height: 28px;
+  padding: 0 14px;
   font-size: 10px;
 }
 

@@ -30,7 +30,7 @@ export const nextSkillIndex = (index, length, delta) =>
 // onKeydown accepts both ⌘ and Ctrl chords; these only pick what to advertise.
 const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 const shortcutLabel = isMac ? "⌘K" : "Ctrl+K";
-const stopShortcutLabel = isMac ? "⌘." : "Ctrl+.";
+const stopShortcutLabel = isMac ? "⌘I" : "Ctrl+I";
 
 /** @param {string} label */
 function shortcutKbd(label) {
@@ -97,7 +97,19 @@ export function createSkillsMenu(parent, rosClient) {
   scrollEl.appendChild(listEl);
   pop.appendChild(scrollEl);
 
-  menu.append(pop, btn);
+  // Interrupt without opening the menu: a red pill beside the button, shown
+  // only while a skill runs and the popup is closed (it has its own Stops).
+  const stopBtn = document.createElement("button");
+  stopBtn.type = "button";
+  stopBtn.className = "skills-stop-btn";
+  stopBtn.title = "Interrupt the running skill";
+  stopBtn.hidden = true;
+  stopBtn.addEventListener("click", () => {
+    if (run && !run.done) stopRun();
+    else if (topicActiveName) stopExternRun();
+  });
+
+  menu.append(pop, btn, stopBtn);
   parent.appendChild(menu);
 
   // ---- state --------------------------------------------------------------
@@ -257,10 +269,12 @@ export function createSkillsMenu(parent, rosClient) {
     );
     run = { skillId: skill.id, cancel, text: "Running…", error: false, canceling: false, done: false };
     render();
-    // Collapse the launcher once a run is underway — it otherwise covers the
-    // feed. The button's green dot + skill name keep showing what's active;
-    // reopen to Stop it.
-    setOpen(false);
+    // The launch re-render dropped focus to the body, where keys mean driving
+    // — keep the keyboard in skills control, ready for the next pick.
+    if (open) {
+      searchInput.focus();
+      searchInput.select();
+    }
 
     promise.then(
       (values) => {
@@ -322,6 +336,7 @@ export function createSkillsMenu(parent, rosClient) {
     menu.classList.toggle("open", open);
     btn.classList.toggle("active", open);
     btn.setAttribute("aria-expanded", String(open));
+    syncActive();
     if (open) {
       render();
       requestAnimationFrame(() => {
@@ -342,16 +357,12 @@ export function createSkillsMenu(parent, rosClient) {
       e.preventDefault();
       setOpen(!open);
       if (!open) btn.focus();
-    } else if ((e.metaKey || e.ctrlKey) && e.key === ".") {
-      // The platform cancel chord stops whatever skill is running — popup
-      // closed too: an emergency stop must not sit behind a menu.
-      if (run && !run.done) {
-        e.preventDefault();
-        stopRun();
-      } else if (topicActiveName) {
-        e.preventDefault();
-        stopExternRun();
-      }
+    } else if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === "i" || e.key === ".")) {
+      // ⌘I (plus ⌘., the platform cancel chord, as a silent alias) stops
+      // whatever is running — popup closed too, agent-started runs included.
+      e.preventDefault();
+      if (run && !run.done) stopRun();
+      else if (topicActiveName) stopExternRun();
     } else if (e.key === "Escape" && open) {
       // Staged: first Escape backs out of an expanded form to the list,
       // the next closes the popup.
@@ -373,9 +384,10 @@ export function createSkillsMenu(parent, rosClient) {
       if (rosClient.state !== "connected") return;
       const skill = skills.find((s) => s.id === expandedId);
       if (skill) startRun(skill);
-    } else if (e.key === " " && !open && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && neutralFocus(e.target)) {
+    } else if (e.key === " " && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && neutralFocus(e.target)) {
       e.preventDefault();
-      setOpen(true);
+      if (!open) setOpen(true);
+      else toggleSelectionDropdown();
     } else if (open && !e.metaKey && !e.ctrlKey && !e.altKey && /^[0-9]$/.test(e.key) && digitPicksSkill(e.target)) {
       e.preventDefault();
       e.stopPropagation(); // the shell binds bare digits to page navigation
@@ -426,6 +438,10 @@ export function createSkillsMenu(parent, rosClient) {
     } else if (e.key === "Enter" && !e.isComposing) {
       e.preventDefault();
       activateSelection();
+    } else if (e.key === " " && searchInput.value === "") {
+      // A space can't start a query, so it opens the selected row's dropdown.
+      e.preventDefault();
+      toggleSelectionDropdown();
     }
   });
   // Keep clicks inside the menu from reaching onDocClick. Rendering a row swaps
@@ -447,7 +463,7 @@ export function createSkillsMenu(parent, rosClient) {
     return topicActiveName;
   }
 
-  /** Paint the button's dot (grey/green) + active-skill label. */
+  /** Paint the button's dot (grey/green) + active-skill label + bar Stop. */
   function syncActive() {
     const name = currentActiveName();
     const on = name !== "";
@@ -455,6 +471,12 @@ export function createSkillsMenu(parent, rosClient) {
     btnActive.classList.toggle("on", on);
     btnActive.textContent = on ? name : "None active";
     btnActive.title = on ? name : "";
+    const localRunning = !!run && !run.done;
+    const canceling = (localRunning && run.canceling) || externCanceling;
+    stopBtn.hidden = !on || open;
+    stopBtn.disabled = canceling || (!localRunning && rosClient.state !== "connected");
+    if (canceling) stopBtn.textContent = "Stopping";
+    else stopBtn.replaceChildren("Stop", shortcutKbd(stopShortcutLabel));
   }
 
   // ---- rendering ----------------------------------------------------------
@@ -522,12 +544,61 @@ export function createSkillsMenu(parent, rosClient) {
     if (buttons[next]) selectButton(buttons[next]);
   }
 
+  /** Move focus between a form's controls (fields in order, Run last).
+   *  @param {HTMLElement} fromEl @param {number} delta */
+  function focusFormControl(fromEl, delta) {
+    const form = fromEl.closest(".skill-form");
+    if (!form) return;
+    const controls = [...form.querySelectorAll(".skill-input, .skill-choice, .skill-bool, .skill-confirm")];
+    const next = controls[controls.indexOf(fromEl) + delta];
+    if (next instanceof HTMLElement) next.focus();
+  }
+
+  /** Up/Down walk the form, Space advances, Enter runs — shared by every
+   *  single-tab-stop group widget (enum pills, bool). Left/Right stay the
+   *  group's own: they choose within it via `move`.
+   *  @param {HTMLElement} group @param {any} skill @param {(delta: number) => void} move */
+  function wireGroupKeys(group, skill, move) {
+    group.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        move(1);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        move(-1);
+      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        focusFormControl(group, e.key === "ArrowDown" ? 1 : -1);
+      } else if (e.key === " ") {
+        e.preventDefault();
+        focusFormControl(group, 1);
+      } else if (e.key === "Enter" && !(run && !run.done)) {
+        e.preventDefault();
+        startRun(skill);
+      }
+    });
+  }
+
+  /** Space on a selected row: toggle its param dropdown (focus lands on the
+   *  first field). Never launches — Enter and click are the run gestures. */
+  function toggleSelectionDropdown() {
+    const button = /** @type {HTMLButtonElement | null} */ (listEl.querySelector(".skills-pop-item.selected"));
+    const skill = skills.find((s) => s.id === button?.dataset.skillId);
+    if (!button || !skill || !hasParams(skill)) return;
+    button.click();
+    requestAnimationFrame(() => {
+      const input = listEl.querySelector(".skills-pop-row.expanded :is(.skill-input, .skill-choice, .skill-bool)");
+      if (input instanceof HTMLElement) input.focus();
+      else searchInput.focus();
+    });
+  }
+
   function activateSelection() {
     const button = /** @type {HTMLButtonElement | null} */ (listEl.querySelector(".skills-pop-item.selected"));
     if (!button) return;
     button.click();
     requestAnimationFrame(() => {
-      const input = listEl.querySelector(".skills-pop-row.expanded :is(.skill-input, .skill-choice)");
+      const input = listEl.querySelector(".skills-pop-row.expanded :is(.skill-input, .skill-choice, .skill-bool)");
       if (input instanceof HTMLElement) input.focus();
     });
   }
@@ -581,7 +652,7 @@ export function createSkillsMenu(parent, rosClient) {
   /** Banner row for the externally-started run: name + Stop. */
   function renderExternRow() {
     const row = document.createElement("div");
-    row.className = "skills-pop-row";
+    row.className = "skills-pop-row expanded";
     const status = document.createElement("div");
     status.className = "skills-pop-status";
     const txt = document.createElement("span");
@@ -633,7 +704,10 @@ export function createSkillsMenu(parent, rosClient) {
     const done = !!run && run.skillId === skill.id && run.done;
 
     const row = document.createElement("div");
-    row.className = "skills-pop-row" + (isExpanded ? " expanded" : "");
+    // The card backdrop groups a head with whatever renders beneath it — a
+    // param form, or a parameter-less skill's status line and Stop.
+    const carded = isExpanded || (!expandable && (running || done));
+    row.className = "skills-pop-row" + (carded ? " expanded" : "");
 
     const head = document.createElement("button");
     head.type = "button";
@@ -697,6 +771,19 @@ export function createSkillsMenu(parent, rosClient) {
         stop.disabled = !!run?.canceling;
         stop.addEventListener("click", stopRun);
         status.appendChild(stop);
+      } else {
+        // Done: clicking the head reruns, but nothing says so — give the
+        // card the same Run action a form footer has.
+        const again = document.createElement("button");
+        again.type = "button";
+        again.className = "skill-confirm compact";
+        again.append("Run", shortcutKbd("↵"));
+        again.title = EXECUTE_SKILL_ACTION;
+        again.disabled = rosClient.state !== "connected";
+        again.addEventListener("click", () => {
+          if (!(run && !run.done)) startRun(skill);
+        });
+        status.appendChild(again);
       }
       row.appendChild(status);
     }
@@ -738,6 +825,13 @@ export function createSkillsMenu(parent, rosClient) {
       action.disabled = !!otherRunning || rosClient.state !== "connected";
       action.addEventListener("click", () => startRun(skill));
     }
+
+    action.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        focusFormControl(action, -1);
+      }
+    });
 
     footer.append(status, action);
     form.appendChild(footer);
@@ -782,18 +876,7 @@ export function createSkillsMenu(parent, rosClient) {
       if (current === -1) return select(labels[delta > 0 ? 0 : labels.length - 1]);
       select(labels[(current + delta + labels.length) % labels.length]);
     }
-    group.addEventListener("keydown", (e) => {
-      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-        e.preventDefault();
-        move(1);
-      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-        e.preventDefault();
-        move(-1);
-      } else if (e.key === "Enter" && !(run && !run.done)) {
-        e.preventDefault();
-        startRun(skill);
-      }
-    });
+    wireGroupKeys(group, skill, move);
     return group;
   }
 
@@ -822,17 +905,33 @@ export function createSkillsMenu(parent, rosClient) {
     } else if (isBool(t)) {
       const group = document.createElement("div");
       group.className = "skill-bool";
-      for (const label of ["true", "false"]) {
+      group.tabIndex = 0;
+      group.setAttribute("role", "radiogroup");
+      group.setAttribute("aria-label", paramName);
+      const labels = ["true", "false"];
+      const opts = labels.map((label) => {
         const b = document.createElement("button");
         b.type = "button";
+        b.tabIndex = -1; // the group is the tab stop; arrows move within it
         b.className = "skill-bool-opt" + (value === label ? " on" : "");
         b.textContent = label;
         b.addEventListener("click", () => {
-          setValue(skill.id, paramName, label);
-          render();
+          select(label);
+          group.focus();
         });
-        group.appendChild(b);
+        return b;
+      });
+      group.append(...opts);
+      /** @param {string} label */
+      function select(label) {
+        setValue(skill.id, paramName, label);
+        for (const [i, b] of opts.entries()) b.classList.toggle("on", labels[i] === label);
       }
+      wireGroupKeys(group, skill, (delta) => {
+        const current = labels.indexOf(valueFor(skill.id, paramName, spec));
+        if (current === -1) return select(labels[delta > 0 ? 0 : labels.length - 1]);
+        select(labels[(current + delta + labels.length) % labels.length]);
+      });
       rowEl.appendChild(group);
     } else if (isJson(t)) {
       const ta = document.createElement("textarea");
@@ -852,6 +951,13 @@ export function createSkillsMenu(parent, rosClient) {
       inp.value = value;
       inp.placeholder = `${paramName}…`;
       inp.addEventListener("input", () => setValue(skill.id, paramName, inp.value));
+      // Vertical arrows walk the form; Left/Right stay caret movement.
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          focusFormControl(inp, e.key === "ArrowDown" ? 1 : -1);
+        }
+      });
       rowEl.appendChild(inp);
     }
     return rowEl;
