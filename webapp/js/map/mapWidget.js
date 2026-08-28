@@ -2241,10 +2241,20 @@ export function createMap(root, opts = {}) {
       draw();
     },
     /** The active map switched: frame state is dropped here. Keepouts are
-     * independently bound to the exact /map hash in onMap/onKeepout, avoiding
-     * any ordering dependency on the current-map notification. */
+     * disabled immediately because this notification arrives before the new
+     * /map. Incrementing the generation also prevents an old async fingerprint
+     * from re-enabling the previous editor during the transition. */
     mapChanged() {
       dropFrameState();
+      mapFingerprintGeneration++;
+      activeMapHash = null;
+      keepoutGrid = null;
+      keepoutPlacement = null;
+      keepoutStroke = null;
+      keepoutHoverPt = null;
+      keepoutDirty = false;
+      keepoutSavePending = null;
+      clearTimeout(keepoutSaveTimer);
       draw();
     },
     /** The robot's clock in epoch seconds (see memClockSkew) — memory stamps

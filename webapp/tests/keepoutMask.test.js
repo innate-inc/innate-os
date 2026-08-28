@@ -80,6 +80,7 @@ assert.equal(
 assert.equal(keepoutGridForMap(grid, localizationHash), null, "a new /map immediately rejects stale editor state");
 grid.mapHash = localizationHash;
 assert.equal(keepoutGridForMap(grid, localizationHash), grid, "editor state becomes usable only after its exact map arrives");
+assert.equal(keepoutGridForMap(grid, null), null, "clearing the active map identity disables editing during a map switch");
 const pendingUpdate = { mapHash: localizationHash, data: grid.data.slice() };
 assert.equal(keepoutUpdateMatches(grid, pendingUpdate), true, "the exact republished cells acknowledge an accepted edit");
 grid.data[0] = grid.data[0] === 100 ? 0 : 100;
