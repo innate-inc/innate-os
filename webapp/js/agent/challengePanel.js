@@ -8,6 +8,14 @@
 
 import { maybeShowChallengeIntro, showChallengeIntro } from "./challengeIntro.js";
 
+// This panel and the sim's scene setup expand over the same corner of the stage,
+// so at most one may be open. Scene setup lives in the separately-built sim
+// viewer bundle (sim/viewer/src/simStage.ts), so the handshake is a document
+// event rather than a shared module: the event name and the detail.panel values
+// are a contract with it.
+const PANEL_OPEN_EVENT = "innate:panel-open";
+const PANEL_ID = "agent-challenges";
+
 /**
  * @param {HTMLElement} root
  * @param {any} session sim session exposing onChallenge/startChallenge/abortChallenge
@@ -43,11 +51,19 @@ export function createChallengePanel(root, session) {
     dock.classList.toggle("open", next);
     launcher.setAttribute("aria-expanded", String(next));
     launcher.setAttribute("aria-label", next ? "Close challenges" : "Open challenges");
-    if (next && !revealed) {
-      revealed = true;
-      intro = maybeShowChallengeIntro();
-    }
+    if (!next) return;
+    document.dispatchEvent(new CustomEvent(PANEL_OPEN_EVENT, { detail: { panel: PANEL_ID } }));
+    if (revealed) return;
+    revealed = true;
+    intro = maybeShowChallengeIntro();
   };
+  // Deliberately opening the other panel closes this one even mid-run — unlike
+  // dismiss(), which protects a live goal list from a stray click on the scene.
+  const onPanelOpen = (/** @type {Event} */ event) => {
+    const opened = /** @type {CustomEvent<{ panel?: string }>} */ (event).detail?.panel;
+    if (opened !== PANEL_ID && open) setOpen(false);
+  };
+  document.addEventListener(PANEL_OPEN_EVENT, onPanelOpen);
   launcher.addEventListener("click", () => setOpen(!open));
   // Subtle standing hint back to the docs — reopens the first-run intro
   // (challengeIntro.js) with the tutorial link and preview.
@@ -239,6 +255,7 @@ export function createChallengePanel(root, session) {
     destroy() {
       intro?.close();
       unsub();
+      document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
       dock.remove();
     },
   };

@@ -18,6 +18,14 @@ const THUMB_FRAME_DIV = 2;
 // visible gain (~75Hz interpolated state) and the load jitters everything.
 const MIN_FRAME_MS = 1000 / 62;
 
+// Scene setup and the webapp's challenge panel expand over the same corner of
+// the stage, so at most one may be open. They ship in separate bundles -- this
+// one is vite-built and imported at runtime -- so the handshake is a document
+// event rather than a shared module: the event name and the detail.panel values
+// are a contract with webapp/js/agent/challengePanel.js.
+const PANEL_OPEN_EVENT = "innate:panel-open";
+const PANEL_ID = "sim-scene-setup";
+
 const VIEW_FOR: Record<string, CameraView> = { main: "main", arm: "arm", orbit: "orbit" };
 const ROTATION_DRAG_PX = 6;
 const PROP_FORWARD_ANGLE = Math.PI / 2;
@@ -84,7 +92,16 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
     setupToggle.setAttribute("aria-expanded", String(open));
     setupToggle.setAttribute("aria-label", open ? "Close scene setup" : "Open scene setup");
     localStorage.setItem("sim-scene-panel-open", String(open));
+    if (open) document.dispatchEvent(new CustomEvent(PANEL_OPEN_EVENT, { detail: { panel: PANEL_ID } }));
   };
+  const onPanelOpen = (event: Event) => {
+    const opened = (event as CustomEvent<{ panel?: string }>).detail?.panel;
+    if (opened === PANEL_ID || !setupOpen) return;
+    setSetupOpen(false);
+    // An armed prop would keep following the cursor with the panel gone.
+    clearPlacementSelection();
+  };
+  document.addEventListener(PANEL_OPEN_EVENT, onPanelOpen);
   setupToggle.onclick = () => setSetupOpen(!setupOpen);
   setup.append(setupBody, setupToggle);
   debugStack.appendChild(setup);
@@ -155,7 +172,7 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
   modeSwitch.append(robotButton, spotButton);
   const placementHint = document.createElement("p");
   placementHint.className = "sim-placement-hint";
-  let placement: PlacementState = { kind: "near-robot" };
+  let placement: PlacementState = { kind: "choose-prop" };
   const selectedProp = (): string | null =>
     placement.kind === "following" || placement.kind === "rotating" ? placement.prop : null;
   const refreshPlacementHint = () => {
@@ -541,6 +558,7 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
       longTaskObserver?.disconnect();
       window.removeEventListener("pointerup", finishDrop);
       window.removeEventListener("pointercancel", cancelDrop);
+      document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
       scene.dispose();
       wrap.remove();
     },

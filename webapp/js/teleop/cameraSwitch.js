@@ -15,6 +15,10 @@ import { WEBRTC_ACTIVE_STREAMS_TOPIC } from "../constants.js";
 // The enabled set + which view is primary persist in localStorage; by default only the default primary
 // camera and the map are on. A closed tile genuinely stops streaming (each live tile is a full-bitrate
 // WebRTC stream), so collapsing views is how an operator sheds bandwidth.
+//
+// In sim there is no such stream — a tile is a scissor render of the scene already on screen, round-robined
+// across frames, so a second camera costs nothing to shed. Sim cameras therefore skip the off rung entirely:
+// every camera is live, and its tile carries no ×.
 
 const STORE_KEY = "innate.cameras";
 
@@ -52,6 +56,13 @@ const MAP_ZOOM_DEFAULT = { small: 6, big: 16 }; // tighter as a thumbnail, wider
  */
 export function createCameraSwitch(parent, session, ros, opts = {}) {
   const storeKey = opts.storeKey || STORE_KEY;
+
+  // SimSession reaches here through robotSession.js's runtime import, so tsc only sees
+  // WebRtcSession -- duck-type the sim-only surface instead.
+  const maybeSim = /** @type {{ thumbnailCanvas?: (i: number) => HTMLCanvasElement | null }} */ (
+    /** @type {unknown} */ (session)
+  );
+  const simCams = typeof maybeSim.thumbnailCanvas === "function";
 
   const strip = document.createElement("div");
   strip.className = "cam-strip";
@@ -118,6 +129,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   // the default primary camera streams, plus the map.
   function reconcile() {
     enabledCams = new Set([...enabledCams].filter((n) => roster.includes(n)));
+    if (simCams) for (const name of roster) enabledCams.add(name);
     if (primary === "") mapOn = true; // nothing persisted yet — the map starts on
     // Roster membership is the validity test: the tail below re-enables the primary, so a
     // primaryOnMount view (or a migrated v1 primary) outside the saved enabled set still wins.
@@ -259,19 +271,14 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
     if (!enabledCams.has(name)) return offTile(name, displayLabel(name), `Turn on the ${name} camera`);
     const index = roster.indexOf(name);
     const label = displayLabel(name);
-    const tile = liveTile(name, label, `Switch to ${label} view`);
+    const tile = liveTile(name, label, `Switch to ${label} view`, !simCams);
     const status = document.createElement("span");
     status.className = "cam-tile-status";
     status.textContent = "connecting…";
     tile.append(status);
     // Sim sessions expose live canvases (no MediaStream pipeline -- canvas
     // capture pinned page composition to its capture rate); mount those
-    // directly. Real robots keep the <video> + WebRTC stream path. SimSession
-    // reaches here through robotSession.js's runtime import, so tsc only sees
-    // WebRtcSession -- duck-type the sim-only method instead.
-    const maybeSim = /** @type {{ thumbnailCanvas?: (i: number) => HTMLCanvasElement | null }} */ (
-      /** @type {unknown} */ (session)
-    );
+    // directly. Real robots keep the <video> + WebRTC stream path.
     const thumbCanvas = maybeSim.thumbnailCanvas?.(index) ?? null;
     if (thumbCanvas) {
       thumbCanvas.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
@@ -318,8 +325,10 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
     return tile;
   }
 
-  /** Live thumbnail shell (caller prepends the video/map). @param {string} id @param {string} label @param {string} title */
-  function liveTile(id, label, title) {
+  /** Live thumbnail shell (caller prepends the video/map).
+   *  @param {string} id @param {string} label @param {string} title
+   *  @param {boolean} [closable] false drops the × for a view that cannot be turned off. */
+  function liveTile(id, label, title, closable = true) {
     const tile = document.createElement("div");
     tile.className = "cam-tile live";
     tile.tabIndex = 0;
@@ -339,6 +348,8 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
     const tag = document.createElement("span");
     tag.className = "cam-tile-label";
     tag.textContent = label;
+    tile.append(tag);
+    if (!closable) return tile;
     const close = document.createElement("button");
     close.type = "button";
     close.className = "cam-tile-close";
@@ -348,7 +359,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
       e.stopPropagation();
       disable(id);
     });
-    tile.append(tag, close);
+    tile.append(close);
     return tile;
   }
 
