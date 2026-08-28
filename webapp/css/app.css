@@ -5674,6 +5674,28 @@ select.episodes-tool {
   color: var(--text);
 }
 
+/* Shortcut hint at the button's far edge, beside the chevron it shares a job
+   with. Dim at rest, full on hover; yields its space to a running skill's name. */
+.skills-menu-kbd {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  font-size: 10px;
+  letter-spacing: 0;
+  color: var(--muted);
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  opacity: 0.55;
+  transition: opacity 150ms ease;
+}
+
+.skills-menu-btn:hover .skills-menu-kbd {
+  opacity: 1;
+}
+
+.skills-menu-active.on + .skills-menu-kbd {
+  display: none;
+}
+
 .skills-menu-chevron {
   flex: 0 0 auto;
   font-size: 11px;
@@ -6044,6 +6066,32 @@ select.skill-input {
   border: 1px solid rgb(64 31 251 / 60%);
   border-radius: 8px;
   transition: opacity 150ms ease, background 150ms ease, border-color 150ms ease;
+}
+
+.skill-run-kbd {
+  margin-left: 8px;
+  padding: 1px 4px;
+  font-size: 10px;
+  letter-spacing: 0;
+  opacity: 0.75;
+  border: 1px solid currentcolor;
+  border-radius: 4px;
+}
+
+/* In-row Stop: the full-size pill crowds a one-line status readout. */
+.skill-confirm.compact {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 10px;
+}
+
+/* 1-9 digit hint on the first rows; rendered only while digits are live
+   (empty search), see render(). */
+.skills-pop-num {
+  flex: 0 0 12px;
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
 }
 
 .skill-confirm:hover:not(:disabled) {

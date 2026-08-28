@@ -27,9 +27,18 @@ export function searchSkills(skills, query) {
 export const nextSkillIndex = (index, length, delta) =>
   Math.max(0, Math.min(length - 1, index + delta));
 
-// onKeydown accepts both ⌘K and Ctrl+K; this only picks which one to advertise.
+// onKeydown accepts both ⌘ and Ctrl chords; these only pick what to advertise.
 const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 const shortcutLabel = isMac ? "⌘K" : "Ctrl+K";
+const stopShortcutLabel = isMac ? "⌘." : "Ctrl+.";
+
+/** @param {string} label */
+function shortcutKbd(label) {
+  const kbd = document.createElement("kbd");
+  kbd.className = "skill-run-kbd mono";
+  kbd.textContent = label;
+  return kbd;
+}
 
 /**
  * @param {HTMLElement} parent The bottom-bar overlay (shared with the TTS bar).
@@ -56,10 +65,13 @@ export function createSkillsMenu(parent, rosClient) {
   const btnActive = document.createElement("span");
   btnActive.className = "skills-menu-active";
   btnActive.textContent = "None active";
+  const btnShortcut = document.createElement("kbd");
+  btnShortcut.className = "skills-menu-kbd mono";
+  btnShortcut.textContent = shortcutLabel;
   const btnChevron = document.createElement("span");
   btnChevron.className = "skills-menu-chevron mono";
   btnChevron.textContent = "▾";
-  btn.append(btnDot, btnLabel, btnActive, btnChevron);
+  btn.append(btnDot, btnLabel, btnActive, btnShortcut, btnChevron);
 
   const pop = document.createElement("div");
   pop.className = "skills-pop";
@@ -330,10 +342,57 @@ export function createSkillsMenu(parent, rosClient) {
       e.preventDefault();
       setOpen(!open);
       if (!open) btn.focus();
+    } else if ((e.metaKey || e.ctrlKey) && e.key === ".") {
+      // The platform cancel chord stops whatever skill is running — popup
+      // closed too: an emergency stop must not sit behind a menu.
+      if (run && !run.done) {
+        e.preventDefault();
+        stopRun();
+      } else if (topicActiveName) {
+        e.preventDefault();
+        stopExternRun();
+      }
     } else if (e.key === "Escape" && open) {
       setOpen(false);
       btn.focus();
+    } else if (e.key === "Enter" && open && expandedId && enterRunsForm(e.target)) {
+      e.preventDefault();
+      if (run && !run.done) {
+        if (run.skillId === expandedId) stopRun(); // the form's action button is Stop
+        return;
+      }
+      if (rosClient.state !== "connected") return;
+      const skill = skills.find((s) => s.id === expandedId);
+      if (skill) startRun(skill);
+    } else if (open && !e.metaKey && !e.ctrlKey && !e.altKey && /^[1-9]$/.test(e.key) && digitPicksSkill(e.target)) {
+      e.preventDefault();
+      e.stopPropagation(); // the shell binds bare digits to page navigation
+      const button = selectableButtons()[Number(e.key) - 1];
+      if (button) {
+        selectButton(button);
+        activateSelection();
+      }
     }
+  }
+
+  /** Digits pick a numbered row only where they can't mean typed text: the
+   *  empty search box, or body focus after a re-render. A param field keeps
+   *  digits for values, a live query keeps them for the search.
+   *  @param {EventTarget | null} target */
+  function digitPicksSkill(target) {
+    if (target === searchInput) return searchInput.value === "";
+    return !(target instanceof HTMLElement) || target === document.body;
+  }
+
+  /** Enter runs the expanded form unless focus is somewhere Enter already has a
+   *  job: the search box (activates the selection), a textarea (JSON newlines),
+   *  a button/select (native activation), or an input elsewhere on the page.
+   *  Body counts — expanding a row re-renders and drops focus there.
+   *  @param {EventTarget | null} target */
+  function enterRunsForm(target) {
+    if (!(target instanceof HTMLElement) || target === document.body) return true;
+    if (!menu.contains(target) || target === searchInput) return false;
+    return target instanceof HTMLInputElement;
   }
 
   btn.addEventListener("click", () => setOpen(!open));
@@ -414,6 +473,16 @@ export function createSkillsMenu(parent, rosClient) {
       selectedId = null;
       if (buttons[0]) selectButton(buttons[0]);
     }
+    // Number hints mirror digitPicksSkill: digits only work while the search
+    // is empty, so the badges only show then — a filtered list never lies.
+    if (!query) {
+      for (const [i, button] of buttons.slice(0, 9).entries()) {
+        const num = document.createElement("span");
+        num.className = "skills-pop-num mono";
+        num.textContent = String(i + 1);
+        button.prepend(num);
+      }
+    }
   }
 
   function selectableButtons() {
@@ -493,8 +562,9 @@ export function createSkillsMenu(parent, rosClient) {
     txt.textContent = `${topicActiveName} — running`;
     const stop = document.createElement("button");
     stop.type = "button";
-    stop.className = "skill-confirm stop";
-    stop.textContent = externCanceling ? "Stopping" : "Stop";
+    stop.className = "skill-confirm stop compact";
+    if (externCanceling) stop.textContent = "Stopping";
+    else stop.append("Stop", shortcutKbd(stopShortcutLabel));
     stop.title = `this run was started elsewhere (agent or another client) — ${CANCEL_SKILL_SERVICE}`;
     stop.disabled = externCanceling || rosClient.state !== "connected";
     stop.addEventListener("click", stopExternRun);
@@ -593,8 +663,9 @@ export function createSkillsMenu(parent, rosClient) {
       if (running) {
         const stop = document.createElement("button");
         stop.type = "button";
-        stop.className = "skill-confirm stop";
-        stop.textContent = run?.canceling ? "Stopping" : "Stop";
+        stop.className = "skill-confirm stop compact";
+        if (run?.canceling) stop.textContent = "Stopping";
+        else stop.append("Stop", shortcutKbd(stopShortcutLabel));
         stop.disabled = !!run?.canceling;
         stop.addEventListener("click", stopRun);
         status.appendChild(stop);
@@ -627,13 +698,14 @@ export function createSkillsMenu(parent, rosClient) {
     action.type = "button";
     if (running) {
       action.className = "skill-confirm stop";
-      action.textContent = run?.canceling ? "Stopping" : "Stop";
+      if (run?.canceling) action.textContent = "Stopping";
+      else action.append("Stop", shortcutKbd(stopShortcutLabel));
       action.disabled = !!run?.canceling;
       action.addEventListener("click", stopRun);
     } else {
       action.className = "skill-confirm";
-      action.textContent = "Run";
-      action.title = EXECUTE_SKILL_ACTION;
+      action.append("Run", shortcutKbd("↵"));
+      action.title = `${EXECUTE_SKILL_ACTION} — Enter runs`;
       const otherRunning = run && !run.done && run.skillId !== skill.id;
       action.disabled = !!otherRunning || rosClient.state !== "connected";
       action.addEventListener("click", () => startRun(skill));
@@ -709,13 +781,6 @@ export function createSkillsMenu(parent, rosClient) {
       inp.value = value;
       inp.placeholder = `${paramName}…`;
       inp.addEventListener("input", () => setValue(skill.id, paramName, inp.value));
-      // Enter submits the skill (textarea is left alone so JSON can have newlines).
-      inp.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !(run && !run.done)) {
-          e.preventDefault();
-          startRun(skill);
-        }
-      });
       rowEl.appendChild(inp);
     }
     return rowEl;
