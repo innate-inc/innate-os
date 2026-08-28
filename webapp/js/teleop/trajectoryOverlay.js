@@ -1,13 +1,7 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// Trajectory-on-camera overlay — the planner's route projected onto the main
-// camera feed as a green ground ribbon, a port of the controller app's
-// TrajectoryOverlay. Plan points arrive in the map or odom frame; each draw
-// re-expresses them relative to the robot's current pose, drops them onto the
-// floor plane, and runs them through the head camera's calibrated pinhole
-// model. A right-rail toggle (persisted) turns the whole thing off, dropping
-// every subscription with it.
+// Projects the planner's route onto the main camera as a green ground ribbon.
 
 import {
   PLAN_TOPICS,
@@ -16,10 +10,7 @@ import {
   HEAD_CURRENT_POSITION_TOPIC,
 } from "../constants.js";
 
-// Head-camera model from the controller app's OpenCV calibration at 320x240.
-// The camera sits ~0.28 m off the floor and slides a little as the head
-// pitches; FY_SCALE is the app's empirical vertical-FOV fudge — keep them in
-// sync with innate-controller-app's TrajectoryOverlay or the two UIs drift.
+// Keep in sync with innate-controller-app's calibrated TrajectoryOverlay.
 export const CAMERA = {
   HEIGHT_M: 0.28,
   MIN_PITCH_DEG: -30,
@@ -35,25 +26,20 @@ export const CAMERA = {
 };
 
 const RIBBON_FILL = "rgba(0, 255, 136, 0.85)";
-// The planner republishes ~1 Hz while driving and stops on arrival, so a lull
-// means navigation ended (same rule as the map widget's route).
+// The planner republishes while driving and stops on arrival.
 const NAV_STALE_MS = 4000;
 const STORE_KEY = "innate.trajOverlay";
 
-/** @param {number} pitchDeg @returns {number} camera height above the floor, metres */
+/** @param {number} pitchDeg @returns {number} height above the floor in metres */
 export function cameraHeight(pitchDeg) {
   const span = CAMERA.MAX_PITCH_DEG - CAMERA.MIN_PITCH_DEG;
   const t = Math.max(0, Math.min(1, (pitchDeg - CAMERA.MIN_PITCH_DEG) / span));
   return CAMERA.HEIGHT_M - CAMERA.PITCH_HEIGHT_COMP_M + t * 2 * CAMERA.PITCH_HEIGHT_COMP_M;
 }
 
-/**
- * Re-express world-frame plan points relative to the robot: fwd along its
- * heading, right positive (camera x), both in metres on the floor.
- * @param {Array<{ x: number, y: number }>} points
- * @param {{ x: number, y: number, yaw: number }} pose robot pose in the same frame
- * @returns {Array<{ fwd: number, right: number }>}
- */
+/** @param {Array<{ x: number, y: number }>} points
+ * @param {{ x: number, y: number, yaw: number }} pose
+ * @returns {Array<{ fwd: number, right: number }>} */
 export function robotRelative(points, pose) {
   const c = Math.cos(-pose.yaw);
   const s = Math.sin(-pose.yaw);
@@ -64,19 +50,11 @@ export function robotRelative(points, pose) {
   });
 }
 
-/**
- * Pinhole-project robot-relative floor points into image pixels. Points behind
- * the camera or outside the frame are culled, and each cull splits the route:
- * joining the survivors into one run would draw a fabricated route across the
- * parts of the image the plan never crosses. Segments are runs of
- * consecutively visible points; startVisible reports whether the route's
- * first point survived as segments[0][0] — only such a leading segment truly
- * starts at the robot's feet and may be anchored to the bottom edge.
+/** Each culled point splits the route so disjoint visible runs are not bridged.
  * @param {Array<{ fwd: number, right: number }>} points
  * @param {number} pitchDeg head pitch, positive up
  * @param {number} vw @param {number} vh video frame size in pixels
- * @returns {{ segments: Array<Array<{ x: number, y: number, depth: number }>>, startVisible: boolean }}
- */
+ * @returns {{ segments: Array<Array<{ x: number, y: number, depth: number }>>, startVisible: boolean }} */
 export function projectToImage(points, pitchDeg, vw, vh) {
   const sx = vw / CAMERA.CALIB_W;
   const sy = vh / CAMERA.CALIB_H;
@@ -114,19 +92,12 @@ export function projectToImage(points, pitchDeg, vw, vh) {
   return { segments, startVisible };
 }
 
-/**
- * Build one segment's ribbon polygon: the projected centreline widened
- * perpendicular to its direction, tapering with depth. With anchorBottom the
- * start is extended down to the bottom edge so the leading segment begins at
- * the robot's feet; only a segment whose first point is the route's true
- * start (projectToImage's startVisible) may be anchored, or the extension
- * fabricates route below a mid-frame entry point.
+/** Only the true first visible segment may be anchored to the robot's feet.
  * @param {Array<{ x: number, y: number, depth: number }>} pts
  * @param {number} vw frame width, bounds the anchor extrapolation
  * @param {number} bottomY
  * @param {boolean} [anchorBottom]
- * @returns {Array<{ x: number, y: number }> | null}
- */
+ * @returns {Array<{ x: number, y: number }> | null} */
 export function ribbon(pts, vw, bottomY, anchorBottom = true) {
   if (pts.length < 2) return null;
 
@@ -168,8 +139,7 @@ export function ribbon(pts, vw, bottomY, anchorBottom = true) {
     const dy0 = p1.y - p0.y;
     if (dy0 !== 0 && p0.y < bottomY) {
       const t = (bottomY - p0.y) / dy0;
-      // A near-horizontal first link makes t explode; no real anchor lands
-      // far outside the frame.
+      // Clamp near-horizontal extrapolation.
       startX = Math.min(2 * vw, Math.max(-vw, p0.x + t * (p1.x - p0.x)));
       startY = bottomY;
     }
@@ -228,14 +198,12 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let staleTimer;
 
-  // Same pose composition as the map widget: anchor at the last /amcl_pose fix
-  // and add the odometry delta since (raw /odom is off by the whole map->odom
-  // correction on a real robot). No AMCL yet -> raw odom is the map frame.
+  // Compose map pose from the last AMCL fix plus subsequent odometry.
   /** @type {{ x: number, y: number, yaw: number } | null} */
   let odomPose = null;
   /** @type {{ x: number, y: number, yaw: number } | null} */
   let amclPose = null;
-  /** @type {{ x: number, y: number, yaw: number } | null} odom pose at the AMCL fix */
+  /** @type {{ x: number, y: number, yaw: number } | null} */
   let odomAtAmcl = null;
 
   let pitchDeg = 0;
@@ -255,7 +223,7 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     return { x: amclPose.x + dx * c - dy * s, y: amclPose.y + dx * s + dy * c, yaw: amclPose.yaw + dyaw };
   }
 
-  /** @param {any} msg pose-carrying message → {x, y, yaw} or null */
+  /** @param {any} msg */
   function poseOf(msg) {
     const p = msg?.pose?.pose;
     const x = p?.position?.x;
@@ -263,7 +231,7 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     const q = p?.orientation;
     if (typeof x !== "number" || typeof y !== "number" || !q) return null;
     const yaw = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
-    if (!Number.isFinite(yaw)) return null; // NaN poisons every point, and NaN compares defeat culling
+    if (!Number.isFinite(yaw)) return null;
     return { x, y, yaw };
   }
 
@@ -294,8 +262,7 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
       if (typeof pos?.x === "number" && typeof pos?.y === "number") pts.push({ x: pos.x, y: pos.y });
     }
     if (!pts.length) {
-      // Empty path = navigation finished/aborted — but only from the planner
-      // that owns the displayed route; the inactive one must not clear it.
+      // An inactive planner must not clear the displayed route.
       if (!activePlanTopic || topic === activePlanTopic) clearPlan();
       return;
     }
@@ -315,7 +282,7 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     schedule();
   }
 
-  /** @param {any} msg geometry_msgs/PoseWithCovarianceStamped (map frame) */
+  /** @param {any} msg */
   function onAmcl(msg) {
     const p = poseOf(msg);
     if (!p) return;
@@ -324,7 +291,7 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     schedule();
   }
 
-  /** @param {any} payload std_msgs/String carrying a HeadPosition JSON */
+  /** @param {any} payload */
   function onHead(payload) {
     if (typeof payload?.data !== "string") return;
     /** @type {HeadPosition} */
@@ -360,14 +327,11 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     }
     if (!polys.length) return;
 
-    // Draw in image pixels; the transform maps them onto the video's
-    // object-fit: contain rectangle inside the stage.
+    // Map image pixels onto the video's object-fit: contain rectangle.
     const cw = stage.clientWidth;
     const ch = stage.clientHeight;
     if (!cw || !ch) return;
-    // The backing store keeps the dpr captured at the last ResizeObserver
-    // fire; deriving the scale from it (not live devicePixelRatio) keeps the
-    // transform and the store agreed across a monitor move.
+    // Derive DPR from the backing store so monitor moves cannot desync it.
     const dpr = canvas.width / cw;
     const fit = Math.min(cw / vw, ch / vh);
     const offX = (cw - vw * fit) / 2;
@@ -391,8 +355,8 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     schedule();
   });
   resize.observe(stage);
-  video.addEventListener("resize", schedule); // videoWidth/Height became known
-  const unsubSession = session.onChange(schedule); // primary-camera swaps
+  video.addEventListener("resize", schedule);
+  const unsubSession = session.onChange(schedule);
 
   /** @type {Array<() => void>} */
   let unsubs = [];
@@ -400,7 +364,7 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
   try {
     enabled = localStorage.getItem(STORE_KEY) !== "0";
   } catch {
-    // Storage can be unavailable (private mode); overlay defaults on.
+    // Default on when storage is unavailable.
   }
 
   function apply() {
@@ -430,7 +394,7 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     try {
       localStorage.setItem(STORE_KEY, enabled ? "1" : "0");
     } catch {
-      // Storage can be unavailable (private mode); the toggle still applies.
+      // The toggle still applies when storage is unavailable.
     }
     apply();
   });
