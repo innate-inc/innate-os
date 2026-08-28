@@ -53,6 +53,66 @@ export function keepoutGridFromMessage(msg) {
   };
 }
 
+/** Compute the server-compatible identity of a localization map.
+ * @param {any} msg @returns {Promise<string | null>} */
+export async function mapFingerprintFromMessage(msg) {
+  const width = msg?.info?.width | 0;
+  const height = msg?.info?.height | 0;
+  const resolution = Number(msg?.info?.resolution);
+  const originX = Number(msg?.info?.origin?.position?.x ?? 0);
+  const originY = Number(msg?.info?.origin?.position?.y ?? 0);
+  const originYaw = yawOf(msg?.info?.origin?.orientation);
+  const frameId = msg?.header?.frame_id || "";
+  const cells = width * height;
+  if (
+    width <= 0 ||
+    height <= 0 ||
+    !(resolution > 0) ||
+    !Number.isFinite(originX) ||
+    !Number.isFinite(originY) ||
+    !Number.isFinite(originYaw) ||
+    !frameId ||
+    !Array.isArray(msg?.data) ||
+    msg.data.length < cells ||
+    !globalThis.crypto?.subtle
+  ) {
+    return null;
+  }
+
+  // Keep this byte-for-byte equal to mars_nav.keepout_mask.map_fingerprint:
+  // little-endian <IIdddd>, UTF-8 frame id, then occupancy values offset by 1.
+  const frame = new TextEncoder().encode(frameId);
+  const encoded = new Uint8Array(40 + frame.length + cells);
+  const view = new DataView(encoded.buffer);
+  view.setUint32(0, width, true);
+  view.setUint32(4, height, true);
+  view.setFloat64(8, resolution, true);
+  view.setFloat64(16, originX, true);
+  view.setFloat64(24, originY, true);
+  view.setFloat64(32, originYaw, true);
+  encoded.set(frame, 40);
+  for (let index = 0; index < cells; index++) encoded[40 + frame.length + index] = (Math.trunc(Number(msg.data[index])) + 1) & 0xff;
+
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", encoded));
+  return Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+/** @param {KeepoutGrid | null} grid @param {string | null} mapHash */
+export function keepoutGridForMap(grid, mapHash) {
+  return grid && mapHash && grid.mapHash === mapHash ? grid : null;
+}
+
+/** @param {KeepoutGrid | null} grid @param {{ mapHash: string, data: number[] } | null} expected */
+export function keepoutUpdateMatches(grid, expected) {
+  return (
+    !!grid &&
+    !!expected &&
+    grid.mapHash === expected.mapHash &&
+    grid.data.length === expected.data.length &&
+    grid.data.every((value, index) => value === expected.data[index])
+  );
+}
+
 /** @param {KeepoutGrid} grid @param {number} x @param {number} y */
 export function isKeepout(grid, x, y) {
   const local = worldToGrid(grid, x, y);

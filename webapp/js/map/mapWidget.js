@@ -31,7 +31,15 @@ import {
 } from "../constants.js";
 import { MEMORY_COLOR, SEARCH_REPLAY_FRESH_S, ageAlpha, ageText, headerSkew, memoryImageUrl, parseMemories, parseSearch, withAlpha } from "./memories.js";
 import { goalCellError } from "./goalValidation.js";
-import { isKeepout, keepoutGridFromMessage, keepoutMessage, paintKeepout } from "./keepoutMask.js";
+import {
+  isKeepout,
+  keepoutGridForMap,
+  keepoutGridFromMessage,
+  keepoutMessage,
+  keepoutUpdateMatches,
+  mapFingerprintFromMessage,
+  paintKeepout,
+} from "./keepoutMask.js";
 
 // The /map grid rides ONE session-lived subscription instead of one per mount.
 // The topic is latched, and rws replays the full grid — hundreds of KB of JSON
@@ -367,11 +375,20 @@ export function createMap(root, opts = {}) {
   const keepoutOffCtx = keepoutOff.getContext("2d");
   /** @type {import("./keepoutMask.js").KeepoutGrid | null} */
   let keepoutGrid = null;
+  /** @type {import("./keepoutMask.js").KeepoutGrid | null} latest latched editor state, even if it arrived before /map */
+  let latestKeepoutGrid = null;
+  /** @type {string | null} exact fingerprint of the displayed localization map */
+  let activeMapHash = null;
+  let mapFingerprintGeneration = 0;
   /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null} */
   let keepoutPlacement = null;
   /** @type {{ x: number, y: number } | null} */
   let keepoutStroke = null;
   let keepoutDirty = false;
+  /** @type {{ mapHash: string, data: number[], successText: string } | null} */
+  let keepoutSavePending = null;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let keepoutSaveTimer;
   const KEEPOUT_BRUSH_RADIUS_M = 0.25;
   /** @type {Array<{ x: number, y: number }>} map-frame breadcrumb trail */
   const trail = [];
@@ -824,12 +841,41 @@ export function createMap(root, opts = {}) {
     });
   }
 
+  function syncKeepoutForMap() {
+    keepoutGrid = keepoutGridForMap(latestKeepoutGrid, activeMapHash);
+    keepoutStroke = null;
+    keepoutDirty = false;
+    rasterizeKeepout();
+    const pending = keepoutSavePending;
+    if (!pending || !keepoutUpdateMatches(keepoutGrid, pending)) return;
+    const successText = pending.successText;
+    keepoutSavePending = null;
+    clearTimeout(keepoutSaveTimer);
+    setStatus("ok", successText, true);
+  }
+
+  /** Publish an edit, but report success only when the server republishes the exact accepted cells.
+   * @param {string} successText */
+  function publishKeepoutUpdate(successText) {
+    if (!keepoutGrid) return;
+    const message = keepoutMessage(keepoutGrid);
+    keepoutSavePending = { mapHash: keepoutGrid.mapHash, data: keepoutGrid.data.slice(), successText };
+    clearTimeout(keepoutSaveTimer);
+    keepoutSaveTimer = setTimeout(() => {
+      if (!keepoutSavePending) return;
+      keepoutSavePending = null;
+      setStatus("fail", "Keepout update was not accepted");
+    }, 3000);
+    ros.publish(KEEPOUT_EDIT_TOPIC, message);
+    setStatus("hint", "Saving keepout update…");
+  }
+
   /** @param {any} msg nav_msgs/OccupancyGrid */
   function onKeepout(msg) {
     const parsed = keepoutGridFromMessage(msg);
     if (!parsed) return;
-    keepoutGrid = parsed;
-    rasterizeKeepout();
+    latestKeepoutGrid = parsed;
+    syncKeepoutForMap();
     draw();
   }
 
@@ -866,7 +912,10 @@ export function createMap(root, opts = {}) {
       layerUnsubs.keepout();
       delete layerUnsubs.keepout;
       keepoutGrid = null;
+      latestKeepoutGrid = null;
       keepoutPlacement = null;
+      keepoutSavePending = null;
+      clearTimeout(keepoutSaveTimer);
     }
     if (layers.memories && !layerUnsubs.memsearch) {
       layerUnsubs.memsearch = ros.subscribe(MEMORY_SEARCH_TOPIC, onMemorySearch, 0, "std_msgs/msg/String");
@@ -984,7 +1033,22 @@ export function createMap(root, opts = {}) {
     grid = g;
     gridCells = msg.data;
     gridRev++;
+    // /map and the latched keepout state are independent topics. Blank the
+    // editor until their exact content hashes agree, regardless of which one
+    // arrives first during a map switch.
+    const fingerprintGeneration = ++mapFingerprintGeneration;
+    activeMapHash = null;
+    keepoutGrid = null;
+    keepoutPlacement = null;
+    keepoutStroke = null;
+    keepoutDirty = false;
     draw();
+    void mapFingerprintFromMessage(msg).then((mapHash) => {
+      if (fingerprintGeneration !== mapFingerprintGeneration) return;
+      activeMapHash = mapHash;
+      syncKeepoutForMap();
+      draw();
+    });
   }
 
   /** @param {any} msg pose-carrying message → {x, y, yaw} or null */
@@ -1825,8 +1889,7 @@ export function createMap(root, opts = {}) {
     if (keepoutStroke) {
       keepoutStroke = null;
       if (keepoutDirty && keepoutGrid) {
-        ros.publish(KEEPOUT_EDIT_TOPIC, keepoutMessage(keepoutGrid));
-        setStatus("ok", ui === "keepout" ? "Keepout zone saved" : "Keepout zone erased", true);
+        publishKeepoutUpdate(ui === "keepout" ? "Keepout zone saved" : "Keepout zone erased");
       }
       keepoutDirty = false;
       return;
@@ -1922,8 +1985,7 @@ export function createMap(root, opts = {}) {
     if (!keepoutGrid) return;
     keepoutGrid.data.fill(0);
     rasterizeKeepout();
-    ros.publish(KEEPOUT_EDIT_TOPIC, keepoutMessage(keepoutGrid));
-    setStatus("ok", "All keepout zones cleared", true);
+    publishKeepoutUpdate("All keepout zones cleared");
     draw();
   });
 
@@ -2020,8 +2082,15 @@ export function createMap(root, opts = {}) {
     gridRev++;
     costGrid = null;
     localGrid = null;
+    mapFingerprintGeneration++;
+    activeMapHash = null;
     keepoutGrid = null;
+    latestKeepoutGrid = null;
     keepoutPlacement = null;
+    keepoutStroke = null;
+    keepoutDirty = false;
+    keepoutSavePending = null;
+    clearTimeout(keepoutSaveTimer);
     scanMsg = null;
     plan = null;
     activePlanTopic = null;
@@ -2136,12 +2205,11 @@ export function createMap(root, opts = {}) {
       trail.length = 0;
       draw();
     },
-    /** The active map switched: the grid replays, but everything anchored to
-     * the old frame must not survive into the new one (see dropFrameState). */
+    /** The active map switched: frame state is dropped here. Keepouts are
+     * independently bound to the exact /map hash in onMap/onKeepout, avoiding
+     * any ordering dependency on the current-map notification. */
     mapChanged() {
       dropFrameState();
-      keepoutGrid = null;
-      keepoutPlacement = null;
       draw();
     },
     /** The robot's clock in epoch seconds (see memClockSkew) — memory stamps
@@ -2171,8 +2239,10 @@ export function createMap(root, opts = {}) {
       draw();
     },
     destroy() {
+      mapFingerprintGeneration++;
       clearTimeout(navStaleTimer);
       clearTimeout(statusClearTimer);
+      clearTimeout(keepoutSaveTimer);
       clearTimeout(memSearchCardTimer);
       cancelAnimationFrame(memAnimFrame);
       document.removeEventListener("keydown", onKeyDown);

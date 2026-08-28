@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { isKeepout, keepoutGridFromMessage, keepoutMessage, paintKeepout } from "../js/map/keepoutMask.js";
+import {
+  isKeepout,
+  keepoutGridForMap,
+  keepoutGridFromMessage,
+  keepoutMessage,
+  keepoutUpdateMatches,
+  mapFingerprintFromMessage,
+  paintKeepout,
+} from "../js/map/keepoutMask.js";
 
 function message(width = 8, height = 6, resolution = 0.5) {
   return {
@@ -42,5 +50,25 @@ const rotatedRoundTrip = keepoutGridFromMessage(keepoutMessage(rotated));
 assert.ok(rotatedRoundTrip);
 assert.ok(Math.abs(rotatedRoundTrip.originYaw - rotated.originYaw) < 1e-12);
 assert.deepEqual({ ...rotatedRoundTrip, originYaw: rotated.originYaw }, rotated);
+
+const localizationMap = {
+  header: { frame_id: "map" },
+  info: {
+    width: 2,
+    height: 2,
+    resolution: 0.5,
+    origin: { position: { x: -2, y: -1 }, orientation: { x: 0, y: 0, z: 0, w: 1 } },
+  },
+  data: [0, 100, -1, 42],
+};
+const localizationHash = await mapFingerprintFromMessage(localizationMap);
+assert.equal(localizationHash, "198e412bfd86ca78faf30d9ff7491cce2f9a0b25023bcd593b3024f44d7d7dc0");
+assert.equal(keepoutGridForMap(grid, localizationHash), null, "a new /map immediately rejects stale editor state");
+grid.mapHash = localizationHash;
+assert.equal(keepoutGridForMap(grid, localizationHash), grid, "editor state becomes usable only after its exact map arrives");
+const pendingUpdate = { mapHash: localizationHash, data: grid.data.slice() };
+assert.equal(keepoutUpdateMatches(grid, pendingUpdate), true, "the exact republished cells acknowledge an accepted edit");
+grid.data[0] = grid.data[0] === 100 ? 0 : 100;
+assert.equal(keepoutUpdateMatches(grid, pendingUpdate), false, "a different retained state cannot falsely acknowledge an edit");
 
 console.log("keepoutMask tests passed");
