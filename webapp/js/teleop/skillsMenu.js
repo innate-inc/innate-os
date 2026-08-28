@@ -43,9 +43,13 @@ function shortcutKbd(label) {
 /**
  * @param {HTMLElement} parent The bottom-bar overlay (shared with the TTS bar).
  * @param {import("../rosClient.js").RosClient} rosClient
+ * @param {{
+ *   onSkillStarted?: (run: {skillId: string, inputs: Record<string, any>}) => void,
+ *   onSkillCompleted?: (run: {skillId: string, inputs: Record<string, any>}) => void
+ * }} [opts]
  * @returns {{ destroy: () => void }}
  */
-export function createSkillsMenu(parent, rosClient) {
+export function createSkillsMenu(parent, rosClient, opts = {}) {
   const menu = document.createElement("div");
   menu.className = "skills-menu";
 
@@ -269,6 +273,7 @@ export function createSkillsMenu(parent, rosClient) {
         },
       },
     );
+    opts.onSkillStarted?.({ skillId: skill.id, inputs: built.inputs });
     run = { skillId: skill.id, cancel, text: "Running…", error: false, canceling: false, done: false };
     render();
     // Touch has no keyboard to hand back to, and focusing the search box there
@@ -298,6 +303,7 @@ export function createSkillsMenu(parent, rosClient) {
           canceling: false,
           done: true,
         };
+        if (ok) opts.onSkillCompleted?.({ skillId: skill.id, inputs: built.inputs });
         render();
       },
       (err) => {
