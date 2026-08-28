@@ -28,10 +28,6 @@ const ctx = {
   polygon: [],
   setTransform() {},
   clearRect() {},
-  save() {},
-  restore() {},
-  rect() {},
-  clip() {},
   beginPath() {
     this.polygon = [];
   },

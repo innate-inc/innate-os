@@ -28,7 +28,8 @@ export const CAMERA = {
 const RIBBON_FILL = "rgba(0, 255, 136, 0.85)";
 // The planner republishes while driving and stops on arrival.
 const NAV_STALE_MS = 4000;
-const NEAR_CLIP_M = 0.1;
+// A route starting farther than this from the robot is not connected to its feet.
+const ANCHOR_NEAR_M = 0.4;
 const STORE_KEY = "innate.trajOverlay";
 
 /** @param {number} pitchDeg @returns {number} height above the floor in metres */
@@ -51,13 +52,13 @@ export function robotRelative(points, pose) {
   });
 }
 
-/** Every ribbon point is a published pose: the route splits only at the near
- * plane, where projection is undefined, and off-frame points stay so the
- * canvas clip — not point culling — trims the ribbon to the video rect.
+/** Each culled point splits the route so disjoint visible runs are not bridged.
+ * startAtRobot: the first path point is visible and lies at the robot, so the
+ * leading segment may extend to the robot's feet without fabricating route.
  * @param {Array<{ fwd: number, right: number }>} points
  * @param {number} pitchDeg head pitch, positive up
  * @param {number} vw @param {number} vh video frame size in pixels
- * @returns {Array<Array<{ x: number, y: number, depth: number }>>} */
+ * @returns {{ segments: Array<Array<{ x: number, y: number, depth: number }>>, startAtRobot: boolean }} */
 export function projectToImage(points, pitchDeg, vw, vh) {
   const sx = vw / CAMERA.CALIB_W;
   const sy = vh / CAMERA.CALIB_H;
@@ -73,22 +74,35 @@ export function projectToImage(points, pitchDeg, vw, vh) {
   const segments = [];
   /** @type {Array<{ x: number, y: number, depth: number }> | null} */
   let seg = null;
-  for (const p of points) {
+  let startAtRobot = false;
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const rotY = -h * cp - p.fwd * sp;
     const rotZ = -h * sp + p.fwd * cp;
-    if (rotZ <= NEAR_CLIP_M) {
+    if (rotZ <= 0.1) {
       seg = null;
       continue;
     }
-    const rotY = -h * cp - p.fwd * sp;
+    const u = fx * (p.right / rotZ) + cx;
+    const v = fy * (-rotY / rotZ) + cy;
+    if (u < 0 || u > vw || v < 0 || v > vh) {
+      seg = null;
+      continue;
+    }
     if (!seg) segments.push((seg = []));
-    seg.push({ x: fx * (p.right / rotZ) + cx, y: fy * (-rotY / rotZ) + cy, depth: rotZ });
+    seg.push({ x: u, y: v, depth: rotZ });
+    if (i === 0 && Math.hypot(p.fwd, p.right) <= ANCHOR_NEAR_M) startAtRobot = true;
   }
-  return segments;
+  return { segments, startAtRobot };
 }
 
-/** @param {Array<{ x: number, y: number, depth: number }>} pts
+/** Only a segment whose route truly starts at the robot may anchor to its feet.
+ * @param {Array<{ x: number, y: number, depth: number }>} pts
+ * @param {number} vw frame width, bounds the anchor extrapolation
+ * @param {number} bottomY
+ * @param {boolean} [anchorBottom]
  * @returns {Array<{ x: number, y: number }> | null} */
-export function ribbon(pts) {
+export function ribbon(pts, vw, bottomY, anchorBottom = true) {
   if (pts.length < 2) return null;
 
   /** @param {number} depth */
@@ -120,6 +134,25 @@ export function ribbon(pts) {
   const left = [];
   /** @type {Array<{ x: number, y: number }>} */
   const right = [];
+
+  if (anchorBottom) {
+    const p0 = pts[0];
+    const p1 = pts[1];
+    let startX = p0.x;
+    let startY = p0.y;
+    const dy0 = p1.y - p0.y;
+    if (dy0 !== 0 && p0.y < bottomY) {
+      const t = (bottomY - p0.y) / dy0;
+      // Clamp near-horizontal extrapolation.
+      startX = Math.min(2 * vw, Math.max(-vw, p0.x + t * (p1.x - p0.x)));
+      startY = bottomY;
+    }
+    const start = { x: startX, y: startY };
+    const sp = perp(null, start, p0);
+    const shw = halfWidth(p0.depth);
+    left.push({ x: startX + sp.nx * shw, y: startY + sp.ny * shw });
+    right.push({ x: startX - sp.nx * shw, y: startY - sp.ny * shw });
+  }
 
   for (let i = 0; i < pts.length; i++) {
     const prev = i > 0 ? pts[i - 1] : null;
@@ -289,11 +322,11 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     const pose = planFrame === "odom" ? odomPose : mapPose();
     if (!pose) return;
 
-    const segments = projectToImage(robotRelative(plan, pose), pitchDeg, vw, vh);
+    const { segments, startAtRobot } = projectToImage(robotRelative(plan, pose), pitchDeg, vw, vh);
     /** @type {Array<Array<{ x: number, y: number }>>} */
     const polys = [];
-    for (const seg of segments) {
-      const poly = ribbon(seg);
+    for (let i = 0; i < segments.length; i++) {
+      const poly = ribbon(segments[i], vw, vh, i === 0 && startAtRobot);
       if (poly) polys.push(poly);
     }
     if (!polys.length) return;
@@ -309,11 +342,6 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     const offY = (ch - vh * fit) / 2;
     ctx.setTransform(dpr * fit, 0, 0, dpr * fit, dpr * offX, dpr * offY);
 
-    // Off-frame poses survive projection; the clip is what trims the ribbon.
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, vw, vh);
-    ctx.clip();
     ctx.fillStyle = RIBBON_FILL;
     for (const poly of polys) {
       ctx.beginPath();
@@ -322,7 +350,6 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
       ctx.closePath();
       ctx.fill();
     }
-    ctx.restore();
   }
 
   const resize = new ResizeObserver(() => {
