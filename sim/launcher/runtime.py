@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import functools
 import grp
 import hashlib
@@ -45,11 +46,18 @@ from config import (
     OS_CONTAINER_TMUX_CMD,
     OS_SESSION_LOG_PATH,
     OS_SESSION_READY_POLL_SECONDS,
+    PORT_BASE_ENV,
+    PUBLISHED_PORT_ENV,
     REPO_ROOT,
     ROS_INSTALL_STATE_PATH,
     SIM_ASSET_UNITS,
     SIM_ASSET_UNITS_AUTHORED,
     SIM_ASSET_UNITS_DERIVED,
+    SIM_FOXGLOVE_PORT,
+    SIM_HTTP_PORT,
+    SIM_HTTPS_PORT,
+    SIM_ROSBRIDGE_PORT,
+    SIM_UDP_PORT,
     TMUX_SESSION_NAME,
     VIEWER_BUILD_LOG_PATH,
     VIEWER_TREE_PATH,
@@ -57,6 +65,7 @@ from config import (
     WORLD_SERVER_MODEL_DIGEST_PATH,
     WORLD_SERVER_PID_PATH,
     WORLD_SERVER_PORT,
+    WORLD_STATE_PORT,
     DockerUnresponsiveError,
     StackError,
     compute_geometry_inputs_hash,
@@ -574,6 +583,8 @@ def os_compose_env(
     values = {
         "INNATE_OS_ENV_FILE": str(env_file),
         "INNATE_OS_CONTAINER_NAME": OS_CONTAINER_NAME,
+        "SIM_WORLD_STATE_PORT": str(WORLD_STATE_PORT),
+        **PUBLISHED_PORT_ENV,
     }
     if base_env:
         values.update(base_env)
@@ -845,7 +856,6 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
     if reuse_running_container:
         log("Innate OS dev container already running.")
     else:
-        refuse_if_another_checkout_is_running()
         up_cmd = docker_compose_cmd("up", "-d")
         if offline:
             # Reuse an image that is already local; never pull or build, which
@@ -1149,17 +1159,142 @@ def running_stack_from_another_checkout() -> tuple[str, str] | None:
     return None
 
 
-def refuse_if_another_checkout_is_running() -> None:
+# Every host port a running stack holds, in the order INNATE_SIM_PORT_BASE
+# lays them out. The container's own ports never move; only what is published.
+_PUBLISHED_HOST_PORTS = (
+    ("webapp (https)", SIM_HTTPS_PORT, False),
+    ("webapp (http)", SIM_HTTP_PORT, False),
+    ("rosbridge", SIM_ROSBRIDGE_PORT, False),
+    ("leader receiver", SIM_UDP_PORT, True),
+    ("foxglove bridge", SIM_FOXGLOVE_PORT, False),
+    ("world server", WORLD_SERVER_PORT, False),
+    ("world state stream", WORLD_STATE_PORT, False),
+)
+
+
+def _bind_refusal(port: int, *, udp: bool) -> int | None:
+    """errno from claiming the port the way Docker will (0.0.0.0, no
+    SO_REUSEADDR), or None when the bind succeeds."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("0.0.0.0", port))
+        except OSError as exc:
+            return exc.errno
+    return None
+
+
+def _tcp_listener_answers(port: int) -> bool:
+    with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", port), timeout=0.5):
+        return True
+    return False
+
+
+def _host_port_free(port: int, *, udp: bool) -> bool:
+    """Whether Docker can still publish this host port.
+
+    Only EADDRINUSE proves a collision. Linux refuses ports below 1024 to a
+    non-root binder while the Docker daemon that publishes them runs as root,
+    so that EACCES asks whether anything already answers there instead --
+    binding 443 must never be mistaken for 443 being taken.
+    """
+    refusal = _bind_refusal(port, udp=udp)
+    if refusal is None:
+        return True
+    if refusal == errno.EACCES and not udp:
+        return not _tcp_listener_answers(port)
+    return refusal != errno.EADDRINUSE
+
+
+def _container_published_ports(name: str) -> set[int]:
+    """Host ports a container publishes. Read rather than assumed: a container
+    started under a different port block still publishes the OLD ports, and
+    os_container_foxglove_port_current is what recreates it for that."""
+    try:
+        result = subprocess.run(
+            ["docker", "port", name],
+            text=True,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+            timeout=DOCKER_PROBE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    if result.returncode != 0:
+        return set()  # not running, or publishing nothing
+    published = (line.rpartition(":")[2].strip() for line in result.stdout.splitlines())
+    return {int(port) for port in published if port.isdigit()}
+
+
+def _own_world_server_alive() -> bool:
+    """Whether the world server THIS checkout started still answers. Its ports
+    are then not a collision -- ensure_world_server reuses or restarts it."""
+    try:
+        pid = int(WORLD_SERVER_PID_PATH.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return _world_server_ping(WORLD_SERVER_PORT, timeout=0.5)
+
+
+def _suggest_port_base() -> int | None:
+    """A base whose whole block is free, so the remedy names a base that will
+    work rather than echoing back the one that just failed."""
+    for base in range(8600, 9600, 10):
+        if all(_host_port_free(base + offset, udp=udp) for offset, (_, _, udp) in enumerate(_PUBLISHED_HOST_PORTS)):
+            return base
+    return None
+
+
+def _other_checkout_holding(ports: set[int]) -> tuple[str, str] | None:
+    """The other checkout's stack, but only when it actually publishes one of
+    these ports -- an unrelated listener must not be reported as a simulator."""
     found = running_stack_from_another_checkout()
-    if found is None:
+    if found is None or not ports & _container_published_ports(found[0]):
+        return None
+    return found
+
+
+def refuse_if_ports_taken() -> None:
+    """Refuse before anything claims a host port this stack needs.
+
+    Checked ahead of the world server, not just ahead of compose: a second
+    checkout sharing the port block would otherwise have its
+    _stop_stale_world_server SIGTERM the first one's physics before Docker ever
+    complained about 443.
+    """
+    ours = _container_published_ports(OS_CONTAINER_NAME)
+    if _own_world_server_alive():
+        ours |= {WORLD_SERVER_PORT, WORLD_STATE_PORT}
+    taken = [
+        (label, port)
+        for label, port, udp in _PUBLISHED_HOST_PORTS
+        if port not in ours and not _host_port_free(port, udp=udp)
+    ]
+    if not taken:
         return
-    container, checkout = found
+    listing = "\n".join(f"  {port:<5} {label}" for label, port in taken)
+    suggestion = _suggest_port_base()
+    move = (
+        f"move this checkout to a block that is free:\n  {PORT_BASE_ENV}={suggestion} {CLI_SIM} up"
+        if suggestion is not None
+        else f"set {PORT_BASE_ENV} to the start of seven free ports"
+    )
+    other = _other_checkout_holding({port for _, port in taken})
+    if other is None:
+        raise StackError(
+            f"These host ports are already in use:\n{listing}\n\n"
+            f"Stop whatever owns them (lsof -nP -iTCP:{taken[0][1]}), or {move}"
+        )
+    container, checkout = other
     where = f"  cd {checkout} && {CLI_SIM} down" if checkout else f"  docker stop {container}"
     raise StackError(
-        f"Another checkout's simulator is already running ({container}).\n"
-        "Each checkout keeps its own container and workspace build, but they share this machine's "
-        "ports (9090 and 9999 are not overridable), so only one can be up at a time.\n"
-        f"Stop that one first:\n{where}"
+        f"These host ports are already in use:\n{listing}\n\n"
+        f"Another checkout's simulator holds them ({container}). Stop it:\n{where}\n\n"
+        f"Or {move}"
     )
 
 
@@ -1379,7 +1514,7 @@ def _rosbridge_live(os_status: dict[str, bool]) -> bool:
     if not process_live:
         _rosbridge_ws_confirmed = False
     elif not _rosbridge_ws_confirmed:
-        _rosbridge_ws_confirmed = websocket_port_open(9090)
+        _rosbridge_ws_confirmed = websocket_port_open(SIM_ROSBRIDGE_PORT)
     return process_live and _rosbridge_ws_confirmed
 
 
@@ -1444,7 +1579,7 @@ def os_runtime_ready(config: dict[str, object]) -> bool:
         os_status["os_session_running"]
         and os_status["rosbridge_process_live"]
         and os_status["brain_process_live"]
-        and websocket_port_open(9090)
+        and websocket_port_open(SIM_ROSBRIDGE_PORT)
     )
 
 
@@ -1539,7 +1674,7 @@ def print_startup_checks(
         (
             bool(probe["rosbridge_live"]),
             "bridge",
-            "ws://localhost:9090 live" if probe["rosbridge_live"] else "not accepting connections",
+            f"ws://localhost:{SIM_ROSBRIDGE_PORT} live" if probe["rosbridge_live"] else "not accepting connections",
         ),
         (
             os_status["brain_process_live"],
@@ -2408,7 +2543,22 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
         env["MUJOCO_GL"] = mujoco_gl
     with WORLD_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:
         proc = subprocess.Popen(
-            [uv, "run", "--project", str(sim_repo), "python", "-c", bootstrap, "--bind", bind] + _render_scale_args(),
+            [
+                uv,
+                "run",
+                "--project",
+                str(sim_repo),
+                "python",
+                "-c",
+                bootstrap,
+                "--bind",
+                bind,
+                "--port",
+                str(WORLD_SERVER_PORT),
+                "--state-port",
+                str(WORLD_STATE_PORT),
+            ]
+            + _render_scale_args(),
             cwd=sim_repo.parent,
             env=env,
             stdin=subprocess.DEVNULL,
