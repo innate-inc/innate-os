@@ -115,10 +115,6 @@ services:
       - ros2_ws_install:/root/innate-os/ros2_ws/install
       - ros2_ws_log:/root/innate-os/ros2_ws/log
       - ccache:/root/.cache/ccache
-      # Saved maps and per-map keepout masks survive ordinary sim restarts.
-      # A new named volume is initialized from the image's bundled defaults;
-      # `./innate-sim clean` remains the explicit way to reset this state.
-      - innate_data:/root/innate-os/data
 
       # Persist ROS runtime node logs (~/.ros/log) to the host so per-node
       # stdout/stderr survives `docker compose down` on a failed startup.
@@ -158,7 +154,6 @@ volumes:
   ros2_ws_install:
   ros2_ws_log:
   ccache:
-  innate_data:
 
 networks:
   x11:

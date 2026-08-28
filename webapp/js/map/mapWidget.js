@@ -857,17 +857,54 @@ export function createMap(root, opts = {}) {
     });
   }
 
+  /** Repaint only the cells the brush segment could have touched — a full
+   * rasterizeKeepout per pointermove redraws every cell of a map-sized grid.
+   * @param {number} x0 @param {number} y0 @param {number} x1 @param {number} y1 world coords */
+  function repaintKeepoutSegment(x0, y0, x1, y1) {
+    const g = keepoutGrid;
+    if (!g || !keepoutPlacement || !keepoutOffCtx || keepoutOff.width !== g.width || keepoutOff.height !== g.height) {
+      rasterizeKeepout();
+      return;
+    }
+    const pad = KEEPOUT_BRUSH_RADIUS_M + g.resolution;
+    const a = gridCoordinates(g, x0, y0);
+    const b = gridCoordinates(g, x1, y1);
+    const colMin = Math.max(0, Math.floor((Math.min(a.x, b.x) - pad) / g.resolution));
+    const colMax = Math.min(g.width - 1, Math.ceil((Math.max(a.x, b.x) + pad) / g.resolution));
+    const rowMin = Math.max(0, Math.floor((Math.min(a.y, b.y) - pad) / g.resolution));
+    const rowMax = Math.min(g.height - 1, Math.ceil((Math.max(a.y, b.y) + pad) / g.resolution));
+    if (colMin > colMax || rowMin > rowMax) return;
+    const patch = keepoutOffCtx.createImageData(colMax - colMin + 1, rowMax - rowMin + 1);
+    for (let row = rowMin; row <= rowMax; row++) {
+      const patchRow = (rowMax - row) * patch.width; // canvas-top = highest world-y
+      for (let col = colMin; col <= colMax; col++) {
+        if (g.data[row * g.width + col] < 50) continue;
+        const di = (patchRow + col - colMin) * 4;
+        patch.data[di] = 255;
+        patch.data[di + 1] = 70;
+        patch.data[di + 2] = 94;
+        patch.data[di + 3] = 122;
+      }
+    }
+    keepoutOffCtx.putImageData(patch, colMin, g.height - 1 - rowMax);
+  }
+
   function syncKeepoutForMap() {
-    keepoutGrid = keepoutGridForMap(latestKeepoutGrid, activeMapHash);
+    const latest = keepoutGridForMap(latestKeepoutGrid, activeMapHash);
+    const pending = keepoutSavePending;
+    if (pending && keepoutUpdateMatches(latest, pending)) {
+      keepoutSavePending = null;
+      clearTimeout(keepoutSaveTimer);
+      setStatus("ok", pending.successText, true);
+    }
+    // A server echo landing mid-stroke must not clobber the cells being painted.
+    if (keepoutStroke && keepoutGrid && latest) return;
+    // Edit a copy: latestKeepoutGrid stays the server's truth, restored on a
+    // rejected edit (a red zone the robot doesn't have is worse than none).
+    keepoutGrid = latest && { ...latest, data: latest.data.slice() };
     keepoutStroke = null;
     keepoutDirty = false;
     rasterizeKeepout();
-    const pending = keepoutSavePending;
-    if (!pending || !keepoutUpdateMatches(keepoutGrid, pending)) return;
-    const successText = pending.successText;
-    keepoutSavePending = null;
-    clearTimeout(keepoutSaveTimer);
-    setStatus("ok", successText, true);
   }
 
   /** Publish an edit, but report success only when the server republishes the exact accepted cells.
@@ -880,6 +917,8 @@ export function createMap(root, opts = {}) {
     keepoutSaveTimer = setTimeout(() => {
       if (!keepoutSavePending) return;
       keepoutSavePending = null;
+      syncKeepoutForMap(); // roll the display back to the server's last accepted state
+      draw();
       setStatus("fail", "Keepout update was not accepted");
     }, 3000);
     ros.publish(KEEPOUT_EDIT_TOPIC, message);
@@ -1876,7 +1915,7 @@ export function createMap(root, opts = {}) {
       keepoutHoverPt = point;
       keepoutStroke = point;
       keepoutDirty = paintKeepout(keepoutGrid, point.x, point.y, point.x, point.y, KEEPOUT_BRUSH_RADIUS_M, ui === "keepout");
-      rasterizeKeepout();
+      repaintKeepoutSegment(point.x, point.y, point.x, point.y);
       draw();
       return;
     }
@@ -1899,19 +1938,13 @@ export function createMap(root, opts = {}) {
     if (keepoutStroke && keepoutGrid && (ui === "keepout" || ui === "keepout-erase")) {
       const { px, py } = eventToCanvas(e);
       const point = canvasToWorld(px, py);
+      const from = keepoutStroke;
       keepoutHoverPt = point;
       keepoutDirty =
-        paintKeepout(
-          keepoutGrid,
-          keepoutStroke.x,
-          keepoutStroke.y,
-          point.x,
-          point.y,
-          KEEPOUT_BRUSH_RADIUS_M,
-          ui === "keepout",
-        ) || keepoutDirty;
+        paintKeepout(keepoutGrid, from.x, from.y, point.x, point.y, KEEPOUT_BRUSH_RADIUS_M, ui === "keepout") ||
+        keepoutDirty;
       keepoutStroke = point;
-      rasterizeKeepout();
+      repaintKeepoutSegment(from.x, from.y, point.x, point.y);
       draw();
       return;
     }
@@ -2088,7 +2121,19 @@ export function createMap(root, opts = {}) {
   canvas.addEventListener("pointerdown", onPointerDown);
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerup", onPointerUp);
-  canvas.addEventListener("pointercancel", onPointerUp);
+  // A cancelled gesture (touch stolen by scroll/pinch, capture lost) aborts:
+  // it must never commit a goal, an initial pose, or a keepout edit.
+  canvas.addEventListener("pointercancel", () => {
+    goalDrag = null;
+    panDrag = null;
+    if (keepoutStroke) {
+      keepoutStroke = null;
+      keepoutDirty = false;
+      syncKeepoutForMap(); // discard the half-painted stroke, back to the server's state
+    }
+    render();
+    draw();
+  });
   canvas.addEventListener("pointerleave", () => {
     setMemHover(null);
     if (keepoutHoverPt) {

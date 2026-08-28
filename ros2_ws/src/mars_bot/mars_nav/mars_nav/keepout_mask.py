@@ -6,6 +6,7 @@ import json
 import os
 import struct
 import tempfile
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -27,7 +28,10 @@ class GridSpec:
         return self.width * self.height
 
 
-def map_fingerprint(spec: GridSpec, cells: list[int]) -> str:
+_OFFSET_BY_ONE = bytes.maketrans(bytes(range(256)), bytes((value + 1) & 0xFF for value in range(256)))
+
+
+def map_fingerprint(spec: GridSpec, cells: Sequence[int]) -> str:
     """Stable identity for map geometry + occupancy, excluding ROS stamps."""
     if len(cells) != spec.cells:
         raise ValueError(f"map has {len(cells)} cells, expected {spec.cells}")
@@ -44,7 +48,13 @@ def map_fingerprint(spec: GridSpec, cells: list[int]) -> str:
         )
     )
     digest.update(spec.frame_id.encode("utf-8"))
-    digest.update(bytes((int(value) + 1) & 0xFF for value in cells))
+    try:
+        # rclpy hands the grid over as array('b'): hash it at C speed — /map
+        # ticks at 2 Hz for the whole mapping session.
+        raw = bytes(memoryview(cells))
+    except TypeError:
+        raw = bytes(int(value) & 0xFF for value in cells)
+    digest.update(raw.translate(_OFFSET_BY_ONE))
     return digest.hexdigest()
 
 

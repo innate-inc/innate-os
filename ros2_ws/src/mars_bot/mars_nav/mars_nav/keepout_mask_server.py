@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Own the editable, persistent Nav2 keepout mask without modifying /map."""
 
-import copy
 import math
 import os
 from pathlib import Path
@@ -68,7 +67,12 @@ class KeepoutMaskServer(Node):
             self.create_client(ClearEntireCostmap, "/navigation/global_costmap/clear_entirely_global_costmap"),
             self.create_client(ClearEntireCostmap, "/local_costmap/clear_entirely_local_costmap"),
         ]
-        self._clear_timer = None
+        # One reusable debounce timer — create_timer per edit leaks entries in
+        # the executor's wait set for the life of the node.
+        self._clear_timer = self.create_timer(0.2, self._clear_costmaps_once)
+        self._clear_timer.cancel()
+        # Latched and immutable: republishing filter info makes nav2's
+        # KeepoutFilter tear down and recreate its mask subscription each time.
         self._publish_info()
 
     def _path(self) -> Path:
@@ -87,14 +91,19 @@ class KeepoutMaskServer(Node):
     def _publish_mask(self) -> None:
         if self._map is None or self._spec is None:
             return
-        msg = copy.deepcopy(self._map)
-        msg.header.stamp = self.get_clock().now().to_msg()
+        stamp = self.get_clock().now().to_msg()
+        msg = OccupancyGrid()
+        msg.header.stamp = stamp
+        msg.header.frame_id = self._spec.frame_id
+        msg.info = self._map.info
         msg.data = self._cells
         self._mask_pub.publish(msg)
-        state = copy.deepcopy(msg)
+        state = OccupancyGrid()
+        state.header.stamp = stamp
         state.header.frame_id = encode_edit_frame(self._spec.frame_id, self._map_hash)
+        state.info = self._map.info
+        state.data = self._cells
         self._state_pub.publish(state)
-        self._publish_info()
 
     def _on_map(self, msg: OccupancyGrid) -> None:
         try:
@@ -103,13 +112,15 @@ class KeepoutMaskServer(Node):
         except (TypeError, ValueError) as exc:
             self.get_logger().warning(f"Ignoring malformed /map for keepout mask: {exc}")
             return
-        self._map = copy.deepcopy(msg)
+        self._map = msg
         self._spec = spec
         if map_hash != self._map_hash:
             self._map_hash = map_hash
-            self._cells = load_mask(self._path(), map_hash, spec) or [0] * spec.cells
-            marked = sum(value >= 50 for value in self._cells)
-            self.get_logger().info(f"Loaded keepout mask {map_hash[:10]} ({marked} marked cells)")
+            loaded = load_mask(self._path(), map_hash, spec)
+            self._cells = loaded or [0] * spec.cells
+            if loaded is not None:
+                marked = sum(value >= 50 for value in loaded)
+                self.get_logger().info(f"Loaded keepout mask {map_hash[:10]} ({marked} marked cells)")
         self._publish_mask()
 
     def _on_edit(self, msg: OccupancyGrid) -> None:
@@ -142,14 +153,10 @@ class KeepoutMaskServer(Node):
         self._schedule_costmap_clear()
 
     def _schedule_costmap_clear(self) -> None:
-        if self._clear_timer is not None:
-            self._clear_timer.cancel()
-        self._clear_timer = self.create_timer(0.2, self._clear_costmaps_once)
+        self._clear_timer.reset()
 
     def _clear_costmaps_once(self) -> None:
-        if self._clear_timer is not None:
-            self._clear_timer.cancel()
-            self._clear_timer = None
+        self._clear_timer.cancel()
         for client in self._clear_clients:
             if client.service_is_ready():
                 client.call_async(ClearEntireCostmap.Request())

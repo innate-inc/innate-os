@@ -58,13 +58,14 @@ def test_keepout_subscription_requests_latched_state():
     assert qos.durability == QoSDurabilityPolicy.TRANSIENT_LOCAL
 
 
-def test_skill_map_composites_matching_keepout_cells():
+def test_skill_map_keeps_grid_raw_and_exposes_keepout_cells():
     provider = object.__new__(RobotStateProvider)
     provider.last_map = _grid([0, 0, -1, 100])
     provider.last_keepout_map = _grid([0, 100, 0, 0])
     provider._map_cache = None
 
-    assert provider.current_map().grid.tolist() == [[0, 100], [-1, 100]]
+    # grid stays the raw /map: memory coverage reads it as physical occupancy.
+    assert provider.current_map().grid.tolist() == [[0, 0], [-1, 100]]
     assert provider.current_map().keepout_grid.tolist() == [[0, 100], [0, 0]]
 
 
@@ -75,6 +76,7 @@ def test_skill_map_ignores_retained_mask_from_another_map_load():
     provider._map_cache = None
 
     assert provider.current_map().grid.tolist() == [[0, 0], [0, 0]]
+    assert provider.current_map().keepout_grid is None
 
 
 def test_direct_motion_checks_its_footprint_against_keepouts():

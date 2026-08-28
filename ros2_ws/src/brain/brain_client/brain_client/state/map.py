@@ -42,7 +42,9 @@ class Map(LegacyMapping):
     """The nav_msgs/OccupancyGrid message this was built from; provenance
     for the lazy ``grid``/legacy views. Excluded from ==/hash."""
     keepout_source: Any = field(default=None, repr=False, compare=False)
-    """Optional matching keepout OccupancyGrid, composited only for skill reads."""
+    """Optional matching keepout OccupancyGrid, exposed via ``keepout_grid``.
+    Never composited into ``grid``: memory coverage/selection read ``grid`` as
+    physical occupancy, and a nav preference must not read as a wall there."""
 
     @cached_property
     def grid(self) -> "np.ndarray | None":
@@ -51,11 +53,7 @@ class Map(LegacyMapping):
         actually looks at the cells."""
         if self.raw_source is None:
             return None
-        grid = np.array(self.raw_source.data, dtype=np.int8).reshape((self.height, self.width))
-        keepout = self.keepout_grid
-        if keepout is None:
-            return grid
-        return np.where(keepout >= 50, 100, grid).astype(np.int8)
+        return np.array(self.raw_source.data, dtype=np.int8).reshape((self.height, self.width))
 
     @cached_property
     def keepout_grid(self) -> "np.ndarray | None":

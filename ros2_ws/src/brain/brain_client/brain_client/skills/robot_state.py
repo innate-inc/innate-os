@@ -174,7 +174,6 @@ class RobotStateProvider:
         self._manipulation.stop()
         self.last_odom = None
         self.last_map = None
-        self.last_keepout_map = None
         self.last_head_position = None
         self.last_joint_states = None
         self.last_battery = None
@@ -194,8 +193,11 @@ class RobotStateProvider:
             self.last_map = msg
 
     def _on_keepout_map(self, msg: OccupancyGrid) -> None:
-        if self._active:
-            self.last_keepout_map = msg
+        # Kept across stop/start: the transient-local replay fires only when the
+        # subscription is first created, so clearing this on stop would leave the
+        # keepout check fail-open for every later skill session. A mask from an
+        # older map is rejected by Map._matches, never by staleness here.
+        self.last_keepout_map = msg
 
     def _on_joint_states(self, msg: JointState) -> None:
         if self._active:

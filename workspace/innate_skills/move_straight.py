@@ -11,7 +11,8 @@ from innate import Map, Mobility, Odometry, Pose, Skill, SkillOutput, SkillRetur
 MIN_SPEED = 0.05
 MAX_SPEED = 0.3
 DEFAULT_SPEED = 0.15
-ROBOT_CLEARANCE_M = 0.25
+# Circumscribed footprint radius: the front corners sit at hypot(0.25, 0.165).
+ROBOT_CLEARANCE_M = 0.30
 
 
 def _crosses_keepout(map_state: Map, pose: Pose, distance: float) -> bool:
@@ -21,19 +22,20 @@ def _crosses_keepout(map_state: Map, pose: Pose, distance: float) -> bool:
     step = max(0.02, map_state.resolution * 0.5)
     travel_steps = max(1, math.ceil(abs(distance) / step))
     footprint_steps = max(8, math.ceil(math.tau * ROBOT_CLEARANCE_M / step))
+    offsets = [(0.0, 0.0)] + [
+        (ROBOT_CLEARANCE_M * math.cos(angle), ROBOT_CLEARANCE_M * math.sin(angle))
+        for angle in (index * math.tau / footprint_steps for index in range(footprint_steps))
+    ]
     direction = math.copysign(1.0, distance)
     cos_map = math.cos(-map_state.origin_theta)
     sin_map = math.sin(-map_state.origin_theta)
-    for index in range(1, travel_steps + 1):
+    for index in range(travel_steps + 1):
         center_distance = direction * min(abs(distance), index * step)
         center_x = pose.x + center_distance * math.cos(pose.theta)
         center_y = pose.y + center_distance * math.sin(pose.theta)
-        for footprint_index in range(footprint_steps):
-            angle = footprint_index * math.tau / footprint_steps
-            x = center_x + ROBOT_CLEARANCE_M * math.cos(angle)
-            y = center_y + ROBOT_CLEARANCE_M * math.sin(angle)
-            dx = x - map_state.origin_x
-            dy = y - map_state.origin_y
+        for offset_x, offset_y in offsets:
+            dx = center_x + offset_x - map_state.origin_x
+            dy = center_y + offset_y - map_state.origin_y
             col = math.floor((dx * cos_map - dy * sin_map) / map_state.resolution)
             row = math.floor((dx * sin_map + dy * cos_map) / map_state.resolution)
             if 0 <= row < map_state.height and 0 <= col < map_state.width and mask[row, col] >= 50:
