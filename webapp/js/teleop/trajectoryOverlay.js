@@ -33,6 +33,9 @@ const SIM_VFOV_DEG = 68.5;
 // base_link — which is the ground-plane frame. Sitting on the pivot, it rises
 // by 0.3 mm across the pitch range, so the empirical swing above is not its.
 const SIM_HEIGHT_M = 0.2585;
+// The head camera streams 640-wide on hardware, which is the image space the
+// ribbon's width constants are tuned in — the sim borrows it as a nominal frame.
+const SIM_FRAME_W = 640;
 
 /** @typedef {{ fx: number, fy: number, cx: number, cy: number }} Lens pixel intrinsics */
 /** @typedef {{ lens: (vw: number, vh: number) => Lens, height: (pitchDeg: number) => number }} CameraModel */
@@ -361,10 +364,15 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Hardware streams frames sized independently of the stage (letterboxed
-    // below); the sim's canvas renders at the stage's own size.
-    const vw = video ? video.videoWidth : stage.clientWidth;
-    const vh = video ? video.videoHeight : stage.clientHeight;
+    // The sim's canvas has no frame size of its own — it renders at whatever
+    // the stage is. Project into a nominal frame the size hardware streams and
+    // let the fit below scale it up, so the ribbon's pixel-tuned width lands on
+    // screen at the same thickness under both stages. Matching the stage's
+    // aspect keeps the sim's fixed vertical FOV and widening horizontal one.
+    const vw = video ? video.videoWidth : SIM_FRAME_W;
+    const vh = video
+      ? video.videoHeight
+      : Math.round((SIM_FRAME_W * stage.clientHeight) / (stage.clientWidth || 1));
     if (!plan || !vw || !vh || primaryCameraName(session) !== "main") return;
     const pose = planFrame === "odom" ? odomPose : mapPose();
     if (!pose) return;
