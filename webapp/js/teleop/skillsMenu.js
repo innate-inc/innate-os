@@ -242,8 +242,8 @@ export function createSkillsMenu(parent, rosClient) {
 
   // ---- run lifecycle ------------------------------------------------------
 
-  /** @param {any} skill */
-  function startRun(skill) {
+  /** @param {any} skill @param {boolean} [closeOnStart] */
+  function startRun(skill, closeOnStart = false) {
     const built = buildInputs(skill);
     if ("error" in built) {
       run = { skillId: skill.id, cancel: () => {}, text: `${built.param}: ${built.error}`, error: true, canceling: false, done: true };
@@ -269,9 +269,12 @@ export function createSkillsMenu(parent, rosClient) {
     );
     run = { skillId: skill.id, cancel, text: "Running…", error: false, canceling: false, done: false };
     render();
-    // The launch re-render dropped focus to the body, where keys mean driving
-    // — keep the keyboard in skills control, ready for the next pick.
-    if (open) {
+    if (closeOnStart) {
+      setOpen(false);
+      btn.focus();
+    } else if (open) {
+      // The launch re-render dropped focus to the body, where keys mean driving
+      // — keep the keyboard in skills control, ready for the next pick.
       searchInput.focus();
       searchInput.select();
     }
@@ -383,7 +386,7 @@ export function createSkillsMenu(parent, rosClient) {
       }
       if (rosClient.state !== "connected") return;
       const skill = skills.find((s) => s.id === expandedId);
-      if (skill) startRun(skill);
+      if (skill) startRun(skill, true);
     } else if (e.key === " " && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && neutralFocus(e.target)) {
       e.preventDefault();
       if (!open) setOpen(true);
@@ -437,7 +440,7 @@ export function createSkillsMenu(parent, rosClient) {
       moveSelection(e.key === "ArrowDown" ? 1 : -1);
     } else if (e.key === "Enter" && !e.isComposing) {
       e.preventDefault();
-      activateSelection();
+      activateSelection(true);
     } else if (e.key === " " && searchInput.value === "") {
       // A space can't start a query, so it opens the selected row's dropdown.
       e.preventDefault();
@@ -574,7 +577,7 @@ export function createSkillsMenu(parent, rosClient) {
         focusFormControl(group, 1);
       } else if (e.key === "Enter" && !(run && !run.done)) {
         e.preventDefault();
-        startRun(skill);
+        startRun(skill, true);
       }
     });
   }
@@ -593,9 +596,17 @@ export function createSkillsMenu(parent, rosClient) {
     });
   }
 
-  function activateSelection() {
+  /** @param {boolean} [closeOnStart] */
+  function activateSelection(closeOnStart = false) {
     const button = /** @type {HTMLButtonElement | null} */ (listEl.querySelector(".skills-pop-item.selected"));
     if (!button) return;
+    const skill = skills.find((candidate) => candidate.id === button.dataset.skillId);
+    if (closeOnStart && skill && !hasParams(skill)) {
+      if (run && !run.done) return;
+      if (rosClient.state !== "connected") return;
+      startRun(skill, true);
+      return;
+    }
     button.click();
     requestAnimationFrame(() => {
       const input = listEl.querySelector(".skills-pop-row.expanded :is(.skill-input, .skill-choice, .skill-bool)");

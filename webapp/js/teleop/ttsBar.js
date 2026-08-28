@@ -1,9 +1,9 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// TTS bar — type, Enter, the robot says it. While focused, keyboard drive is
-// suppressed (the typing-context guard in keyboardDrive). Ctrl or Esc returns
-// focus to the page so WASD works again.
+// TTS bar — press T to focus, type, then Enter and the robot says it. While
+// focused, keyboard drive is suppressed (the typing-context guard in
+// keyboardDrive). Enter, Ctrl, or Esc returns focus to the page so WASD works.
 
 import { AGENT_STATUS_TOPIC, TTS_TOPIC } from "../constants.js";
 
@@ -26,12 +26,12 @@ export function createTtsBar(parent, rosClient) {
   input.autocomplete = "off";
   input.spellcheck = false;
   input.setAttribute("aria-label", "Text to speech");
-  input.setAttribute("aria-keyshortcuts", "/");
+  input.setAttribute("aria-keyshortcuts", "T");
 
   const focusHint = document.createElement("button");
   focusHint.type = "button";
   focusHint.className = "tts-key tts-focus-key";
-  focusHint.textContent = "/";
+  focusHint.textContent = "T";
   focusHint.setAttribute("aria-label", "Focus speech input");
   focusHint.setAttribute("aria-describedby", "tts-shortcut-tip");
   focusHint.onclick = () => input.focus();
@@ -41,7 +41,7 @@ export function createTtsBar(parent, rosClient) {
   shortcutTip.className = "tts-shortcut-tip";
   shortcutTip.setAttribute("role", "tooltip");
   shortcutTip.innerHTML = `
-    <kbd class="tts-tip-key">/</kbd><span>focus input</span>
+    <kbd class="tts-tip-key">T</kbd><span>focus input</span>
     <span aria-hidden="true">·</span>
     <kbd class="tts-tip-key">Ctrl</kbd><span>return to drive</span>
   `;
@@ -68,7 +68,7 @@ export function createTtsBar(parent, rosClient) {
 
   function send() {
     const text = input.value.trim();
-    if (!text) return;
+    if (!text) return false;
     rosClient.publish(TTS_TOPIC, { data: text });
     input.value = "";
     syncActions();
@@ -78,6 +78,7 @@ export function createTtsBar(parent, rosClient) {
       flashTimer = null;
       wrap.classList.remove("sent");
     }, SENT_FLASH_MS);
+    return true;
   }
 
   sendBtn.onclick = send;
@@ -93,7 +94,7 @@ export function createTtsBar(parent, rosClient) {
       input.blur();
       return;
     }
-    if (e.key === "Enter" && !e.isComposing) send();
+    if (e.key === "Enter" && !e.isComposing && send()) input.blur();
   });
   input.addEventListener("keyup", (e) => {
     if (e.key !== "Control") return;
@@ -106,7 +107,7 @@ export function createTtsBar(parent, rosClient) {
 
   /** @param {KeyboardEvent} e */
   function focusSpeechInput(e) {
-    if (e.key !== "/" || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key.toLowerCase() !== "t" || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
     const active = document.activeElement;
     const typing =
       active instanceof HTMLElement &&
