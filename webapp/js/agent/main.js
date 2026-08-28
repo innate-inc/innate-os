@@ -212,8 +212,9 @@ function buildAgentView(root) {
   // Watching the agent drive is where the projected route earns its keep. The
   // agent panel owns the right edge here, so the toggle joins the top-left
   // stack instead of a rail.
-  if (realVideo) {
-    parts.push(createTrajectoryOverlay(realVideo.el, realVideo.videoEl, cornerStack, ros, session));
+  const ribbonStage = realVideo?.el ?? feedFrame.querySelector(".video-stage");
+  if (ribbonStage instanceof HTMLElement) {
+    parts.push(createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, cornerStack, ros, session));
   }
 
   session.start();

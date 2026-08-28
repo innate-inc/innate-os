@@ -25,6 +25,45 @@ export const CAMERA = {
   FY_SCALE: 1.15,
 };
 
+// The sim renders the head camera as an ideal pinhole at the driver's vertical
+// FOV (mars_sim_driver/constants.py CAMERA_FOVY, mirrored by sim/viewer's
+// ROBOT_CAMERA_VFOV), so none of the real lens's calibration applies to it.
+const SIM_VFOV_DEG = 68.5;
+// mars.urdf puts the head camera on the head pivot itself, 0.2585 m above
+// base_link — which is the ground-plane frame. Sitting on the pivot, it rises
+// by 0.3 mm across the pitch range, so the empirical swing above is not its.
+const SIM_HEIGHT_M = 0.2585;
+
+/** @typedef {{ fx: number, fy: number, cx: number, cy: number }} Lens pixel intrinsics */
+/** @typedef {{ lens: (vw: number, vh: number) => Lens, height: (pitchDeg: number) => number }} CameraModel */
+
+/** The physical head camera: calibrated at 320x240, height measured on the robot. */
+export const REAL_CAMERA = {
+  lens: (/** @type {number} */ vw, /** @type {number} */ vh) => {
+    const sx = vw / CAMERA.CALIB_W;
+    const sy = vh / CAMERA.CALIB_H;
+    return {
+      fx: CAMERA.FX * sx,
+      fy: CAMERA.FY * sy * CAMERA.FY_SCALE,
+      cx: CAMERA.CX * sx,
+      cy: CAMERA.CY * sy,
+    };
+  },
+  height: cameraHeight,
+};
+
+/** The same camera as the sim renders it: both halves are exact, so neither
+ * the lens calibration nor the pitch-height fudge carries over. */
+export const SIM_CAMERA = {
+  // Three.js fixes the vertical FOV and widens horizontally with the aspect,
+  // which is square pixels — one focal length for both axes.
+  lens: (/** @type {number} */ vw, /** @type {number} */ vh) => {
+    const f = vh / 2 / Math.tan((SIM_VFOV_DEG * Math.PI) / 360);
+    return { fx: f, fy: f, cx: vw / 2, cy: vh / 2 };
+  },
+  height: () => SIM_HEIGHT_M,
+};
+
 const RIBBON_FILL = "rgba(0, 255, 136, 0.85)";
 // The planner republishes while driving and stops on arrival.
 const NAV_STALE_MS = 4000;
@@ -58,15 +97,11 @@ export function robotRelative(points, pose) {
  * @param {Array<{ fwd: number, right: number }>} points
  * @param {number} pitchDeg head pitch, positive up
  * @param {number} vw @param {number} vh video frame size in pixels
+ * @param {CameraModel} [camera] defaults to the physical head camera
  * @returns {{ segments: Array<Array<{ x: number, y: number, depth: number }>>, startAtRobot: boolean }} */
-export function projectToImage(points, pitchDeg, vw, vh) {
-  const sx = vw / CAMERA.CALIB_W;
-  const sy = vh / CAMERA.CALIB_H;
-  const fx = CAMERA.FX * sx;
-  const fy = CAMERA.FY * sy * CAMERA.FY_SCALE;
-  const cx = CAMERA.CX * sx;
-  const cy = CAMERA.CY * sy;
-  const h = cameraHeight(pitchDeg);
+export function projectToImage(points, pitchDeg, vw, vh, camera = REAL_CAMERA) {
+  const { fx, fy, cx, cy } = camera.lens(vw, vh);
+  const h = camera.height(pitchDeg);
   const pitch = (pitchDeg * Math.PI) / 180;
   const cp = Math.cos(pitch);
   const sp = Math.sin(pitch);
@@ -168,9 +203,19 @@ export function ribbon(pts, vw, bottomY, anchorBottom = true) {
   return left.concat(right);
 }
 
+/** SimSession names the primary camera with a bare string, WebRtcSession with
+ * an {index, name} pair — both call the head camera "main".
+ * @param {any} session @returns {string | undefined} */
+function primaryCameraName(session) {
+  const cam = session.primaryCamera;
+  return typeof cam === "string" ? cam : cam?.name;
+}
+
 /**
  * @param {HTMLElement} stage the .video-stage wrap the canvas lives in
- * @param {HTMLVideoElement} video the stage's video element (frame size + fit)
+ * @param {HTMLVideoElement | null} video the stage's video element (frame size
+ *   + fit) on hardware; null in sim, where a Three.js canvas renders the same
+ *   head camera at the stage's own size
  * @param {HTMLElement} rail right-edge overlay that hosts the toggle
  * @param {import("../rosClient.js").RosClient} ros
  * @param {import("../webrtcSession.js").WebRtcSession} session
@@ -316,13 +361,16 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const vw = video.videoWidth;
-    const vh = video.videoHeight;
-    if (!plan || !vw || !vh || session.primaryCamera.name !== "main") return;
+    // Hardware streams frames sized independently of the stage (letterboxed
+    // below); the sim's canvas renders at the stage's own size.
+    const vw = video ? video.videoWidth : stage.clientWidth;
+    const vh = video ? video.videoHeight : stage.clientHeight;
+    if (!plan || !vw || !vh || primaryCameraName(session) !== "main") return;
     const pose = planFrame === "odom" ? odomPose : mapPose();
     if (!pose) return;
 
-    const { segments, startAtRobot } = projectToImage(robotRelative(plan, pose), pitchDeg, vw, vh);
+    const camera = video ? REAL_CAMERA : SIM_CAMERA;
+    const { segments, startAtRobot } = projectToImage(robotRelative(plan, pose), pitchDeg, vw, vh, camera);
     /** @type {Array<Array<{ x: number, y: number }>>} */
     const polys = [];
     for (let i = 0; i < segments.length; i++) {
@@ -359,7 +407,9 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     schedule();
   });
   resize.observe(stage);
-  video.addEventListener("resize", schedule);
+  // The sim has no stream to change shape — its size follows the stage, which
+  // the ResizeObserver above already watches.
+  video?.addEventListener("resize", schedule);
   const unsubSession = session.onChange(schedule);
 
   /** @type {Array<() => void>} */
@@ -408,7 +458,7 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
       for (const unsub of unsubs) unsub();
       unsubSession();
       resize.disconnect();
-      video.removeEventListener("resize", schedule);
+      video?.removeEventListener("resize", schedule);
       clearTimeout(staleTimer);
       cancelAnimationFrame(raf);
       canvas.remove();

@@ -105,10 +105,13 @@ function buildCockpit(root) {
     createCameraSwitch(root, session, ros),
     keyboard,
   );
-  // Real video stage only: the sim's Three.js stage isn't the head camera, so
-  // the calibrated ground-ribbon projection would land nowhere meaningful.
-  if (realVideo) {
-    parts.push(createTrajectoryOverlay(realVideo.el, realVideo.videoEl, rightRail, ros, session));
+  // The sim's main view renders the same head camera (camera_optical_frame at
+  // the driver's FOV), so the ribbon projects there too — the overlay swaps the
+  // real lens's calibration for the render's ideal pinhole. Either stage keeps
+  // the .video-stage class, and both hide the ribbon off the main camera.
+  const ribbonStage = realVideo?.el ?? root.querySelector(".video-stage");
+  if (ribbonStage instanceof HTMLElement) {
+    parts.push(createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, rightRail, ros, session));
   }
 
   session.start();

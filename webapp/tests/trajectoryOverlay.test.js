@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 
-const { CAMERA, cameraHeight, robotRelative, projectToImage, ribbon } = await import(
+const { CAMERA, cameraHeight, robotRelative, projectToImage, ribbon, SIM_CAMERA } = await import(
   "../js/teleop/trajectoryOverlay.js"
 );
 
@@ -114,6 +114,23 @@ test("only a route that truly starts at the robot is anchored to its feet", () =
   const anchored = ribbon(near.segments[0], 640, 480, near.startAtRobot);
   assert.ok(anchored);
   close(Math.max(...anchored.map((p) => p.y)), 480, "a start at the robot reaches the feet");
+});
+
+test("the sim camera is an exact pinhole: centred, square-pixel, fixed height", () => {
+  const lens = SIM_CAMERA.lens(1600, 900);
+  close(lens.cx, 800, "principal point x");
+  close(lens.cy, 450, "principal point y");
+  close(lens.fx, lens.fy, "square pixels");
+  // The half-frame subtends half the render's vertical FOV.
+  close((Math.atan(450 / lens.fy) * 360) / Math.PI, 68.5, "vertical FOV");
+  // Riding the head pivot, the sim camera does not rise or fall with pitch.
+  close(SIM_CAMERA.height(-30), SIM_CAMERA.height(30), "height is pitch-independent");
+
+  // Straight ahead lands on the sim's optical axis; the real lens is off-centre.
+  const [[sim]] = projectToImage([{ fwd: 1, right: 0 }], 0, 1600, 900, SIM_CAMERA).segments;
+  close(sim.x, 800, "sim optical-axis column");
+  const [[real]] = projectToImage([{ fwd: 1, right: 0 }], 0, 1600, 900).segments;
+  assert.ok(Math.abs(real.x - 800) > 1, "the real lens's principal point is off-centre");
 });
 
 test("the ribbon is symmetric, tapers with distance, and needs two points", () => {

@@ -119,3 +119,29 @@ assert.equal(ctx.filled, 1, "a non-head camera must suppress drawing");
 overlay.destroy();
 assert.equal(handlers.size, 0, "destroy must drop every subscription");
 console.log("ok - overlay subscribes, draws, gates by camera, and cleans up");
+
+// Sim: no video element (the Three.js canvas fills the stage) and SimSession
+// names the primary camera with a bare string.
+const simStage = makeEl();
+const simSession = { primaryCamera: "orbit", onChange: () => () => {} };
+const simOverlay = createTrajectoryOverlay(simStage, null, makeEl(), ros, simSession);
+const plan = {
+  header: { frame_id: "map" },
+  poses: [1, 2, 3].map((x) => ({ pose: { position: { x, y: 0 } } })),
+};
+ros.emit("/odom", {
+  pose: { pose: { position: { x: 0, y: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } } },
+});
+ctx.filled = 0;
+ros.emit("/navigation/plan", plan);
+while (rafQueue.length) rafQueue.shift()();
+assert.equal(ctx.filled, 0, "the sim's orbit view must suppress drawing");
+
+simSession.primaryCamera = "main";
+ros.emit("/navigation/plan", plan);
+while (rafQueue.length) rafQueue.shift()();
+assert.equal(ctx.filled, 1, "the sim's head camera draws with no video element");
+
+simOverlay.destroy();
+assert.equal(handlers.size, 0, "sim destroy must drop every subscription");
+console.log("ok - overlay drives the sim stage off the canvas and a string camera name");
