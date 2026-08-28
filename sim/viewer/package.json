@@ -8,6 +8,7 @@
     "build:lib": "vite build --config vite.lib.config.ts",
     "pretest:environment": "npm run build:lib",
     "test:environment": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts",
+    "test": "node --experimental-strip-types --test test/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "split:apartment": "node tools/split-apartment.mjs"
   },

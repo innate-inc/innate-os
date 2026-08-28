@@ -5,6 +5,7 @@
 // for the /scan debug overlay. Architecture: sim/README.md.
 
 import type { SimScene } from "./scene";
+import type { DeformableFrame } from "./physics/deformableFrame";
 import { RosbridgePhysicsController } from "./physics/rosbridgeController";
 import { WorldStateController } from "./physics/worldStateController";
 import type {
@@ -127,6 +128,10 @@ export class SimSession {
   #props: PropInfo[] = [];
   #propListeners = new Set<(props: PropInfo[]) => void>();
   #propsDirty = false;
+  // IDF1 is not interpolated with the rigid timeline: retain one latest frame
+  // per deformable and upload it at most once per browser render tick.
+  #deformables = new Map<number, DeformableFrame>();
+  #deformablesDirty = new Set<number>();
 
   #environment: EnvironmentRoster | null = null;
   #environmentListeners = new Set<(roster: EnvironmentRoster) => void>();
@@ -229,6 +234,10 @@ export class SimSession {
       }
       for (const cb of this.#environmentListeners) cb(roster);
     };
+    this.#controller.onDeformableFrame = (frame) => {
+      this.#deformables.set(frame.id, frame);
+      this.#deformablesDirty.add(frame.id);
+    };
     this.#controller.onState = (s) => {
       const lag = Date.now() / 1000 - s.wall;
       if (lag < this.#lagMinS) this.#lagMinS = lag;
@@ -291,6 +300,8 @@ export class SimSession {
     this.#controller = null;
     this.#scanFeed?.dispose();
     this.#scanFeed = null;
+    this.#deformables.clear();
+    this.#deformablesDirty.clear();
     this.#started = false;
     this.#gotPose = false;
     this.#patch({ status: "idle", videoStream: null });
@@ -528,6 +539,11 @@ export class SimSession {
     }
     scene.setObjectPoses(objects);
     scene.setTrafficState(interpolateTraffic(a.traffic, b.traffic, u));
+    for (const id of this.#deformablesDirty) {
+      const frame = this.#deformables.get(id);
+      if (frame) scene.setDeformableFrame(frame);
+    }
+    this.#deformablesDirty.clear();
     if (this.#lidarOn && this.#scanDirty && this.#scan) {
       this.#scanDirty = false;
       scene.setLidarPoints(this.#scan);

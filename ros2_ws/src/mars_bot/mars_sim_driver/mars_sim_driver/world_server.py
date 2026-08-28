@@ -74,6 +74,14 @@ def _send_frame(conn: socket.socket, payload: bytes) -> None:
     conn.sendall(struct.pack(">I", len(payload)) + payload)
 
 
+def _encode_deformable_frame(deformable_id: int, sim_time: float, positions: np.ndarray) -> bytes:
+    """IDF1 browser frame: fixed header followed by little-endian float XYZ."""
+    xyz = np.asarray(positions, dtype="<f4")
+    if xyz.ndim != 2 or xyz.shape[1] != 3:
+        raise ValueError(f"deformable positions must be Nx3, got {xyz.shape}")
+    return struct.pack("<4sIdII", b"IDF1", deformable_id, sim_time, len(xyz), 0) + xyz.tobytes()
+
+
 # A product stays active this long after its last request (unwatched = free).
 PRODUCT_TTL_S = 3.0
 PRODUCTS = ("jpeg:main", "jpeg:wrist", "depth:main")
@@ -118,6 +126,7 @@ class WorldServer:
         # Observer state stream: newest ground-truth snapshot + a seq,
         # broadcast to every connected WebSocket (see serve_state).
         self.state_payload = "{}"
+        self.state_deformables: list[bytes] = []
         self.state_seq = 0
         self.roster_seq = 0
         self.state_cond = threading.Condition()
@@ -161,6 +170,7 @@ class WorldServer:
             joints = self.sim.joint_positions()
             objects = self.sim.object_poses()
             traffic = self.sim.traffic_state()
+            deformables = self.sim.deformable_frames()
             # Prop CENTRES for the judge (props.py center_offset): a distance
             # to the human has to mean its body, not the feet its origin sits
             # at. Gathered here because the judge runs without the sim.
@@ -199,8 +209,12 @@ class WorldServer:
                 "challenge": challenge,
             }
         )
+        deformable_payloads = [
+            _encode_deformable_frame(deformable_id, sim_time, positions) for deformable_id, positions in deformables
+        ]
         with self.state_cond:
             self.state_payload = payload
+            self.state_deformables = deformable_payloads
             self.state_seq += 1
             self.state_cond.notify_all()
 
@@ -223,14 +237,20 @@ class WorldServer:
         except Exception as exc:  # noqa: BLE001 -- a failed story transition must not take the server down
             print(f"[world-server] transition to {environment_id}/{challenge_id} failed: {exc!r}", flush=True)
 
-    def _serve_scenario_commands(self, ws) -> None:
+    def _serve_scenario_commands(self, ws, observer: dict[str, bool]) -> None:
         """Read the observer socket for stage commands. This is the sim's own
         scenery, not robot control: the ops place props (see props.py) and take
         them away again, without a full reset."""
         try:
             for raw in ws:
                 try:
-                    self._run_scenario_command(json.loads(raw))
+                    cmd = json.loads(raw)
+                    if cmd.get("op") == "subscribe_deformables":
+                        # Capability gate: old clients never receive binary
+                        # frames they would try to parse as JSON.
+                        observer["deformables"] = cmd.get("encoding") == "idf1"
+                        continue
+                    self._run_scenario_command(cmd)
                 except Exception as exc:  # noqa: BLE001 -- one bad command must not drop the connection
                     print(f"[world-server] ignoring stage command: {exc!r}", flush=True)
         except Exception:  # noqa: BLE001,S110 -- client gone, or junk on the wire
@@ -286,7 +306,8 @@ class WorldServer:
         client skips states instead of queueing lag), and accept the stage
         commands above on the way back."""
         self._start_opening_challenge()
-        threading.Thread(target=self._serve_scenario_commands, args=(ws,), daemon=True).start()
+        observer = {"deformables": False}
+        threading.Thread(target=self._serve_scenario_commands, args=(ws, observer), daemon=True).start()
         # Send roster metadata on connection and changes, not every physics tick.
         last_seq = last_roster = -1
         try:
@@ -295,11 +316,14 @@ class WorldServer:
                     self.state_cond.wait_for(
                         lambda seen=(last_seq, last_roster): (self.state_seq, self.roster_seq) != seen
                     )
-                    payload, last_seq = self.state_payload, self.state_seq
+                    payload, deformables, last_seq = self.state_payload, self.state_deformables, self.state_seq
                     roster_changed, last_roster = self.roster_seq != last_roster, self.roster_seq
                 if roster_changed:
                     ws.send(self.roster_frame())
                 ws.send(payload)
+                if observer["deformables"]:
+                    for frame in deformables:
+                        ws.send(frame)
         except Exception:  # noqa: BLE001,S110 -- client gone; the stream just ends
             pass
 
