@@ -25,9 +25,19 @@ from config import ASSETS_IMAGE_LAYERS as ORDER  # noqa: E402
 
 # ORDER must match the COPY order of the final stage in sim/Dockerfile.assets;
 # config.py owns the one copy the launcher also reads from.
+REQUIRED_PATHS = {
+    "work": {
+        "work/softbodies/soft_sock/cloth_data.npz",
+        "work/softbodies/soft_sock/texture_base_color.png",
+    },
+    "viewer": {
+        "viewer/models/soft_sock.glb",
+        "viewer/models/soft_sock_skin.bin",
+    },
+}
 
 
-def subtree_of(repo: str, digest: str, token: str) -> str:
+def subtree_of(repo: str, digest: str, token: str) -> tuple[str, set[str]]:
     """The single top-level directory a layer blob contains.
 
     Also enforces the one-disjoint-subtree-per-layer rule: two top-level names,
@@ -40,14 +50,14 @@ def subtree_of(repo: str, digest: str, token: str) -> str:
         oci.fetch_layer(repo, digest, buf, token, label=f"layer {digest[:19]}")
         buf.seek(0)
         with tarfile.open(fileobj=buf) as tar:
-            names = tar.getnames()
+            names = set(tar.getnames())
     whiteouts = [n for n in names if ".wh." in n]
     if whiteouts:
         sys.exit(f"layer {digest[:19]} has whiteouts ({whiteouts[:3]}): it is not standalone-extractable")
     tops = {name.split("/")[0] for name in names if name and not name.startswith(".")}
     if len(tops) != 1:
         sys.exit(f"layer {digest[:19]} holds {sorted(tops)}, expected exactly one subtree")
-    return tops.pop()
+    return tops.pop(), names
 
 
 def main() -> None:
@@ -98,13 +108,16 @@ def main() -> None:
     if len(digests) != len(ORDER):
         sys.exit(f"expected {len(ORDER)} layers {list(ORDER)}, got {len(digests)}; sim/Dockerfile.assets has drifted")
     for position, (digest, expected) in enumerate(zip(digests, ORDER, strict=True)):
-        found = subtree_of(repo, digest, token)
+        found, names = subtree_of(repo, digest, token)
         if found != expected:
             sys.exit(
                 f"layer {position} holds {found!r}, expected {expected!r}.\n"
                 "sim/launcher/runtime.py reads the geometry by position, so this would hand "
                 "every user the wrong subtree."
             )
+        missing = REQUIRED_PATHS.get(expected, set()) - names
+        if missing:
+            sys.exit(f"layer {position} ({expected}) is missing required paths: {sorted(missing)}")
         print(f"  layer {position}: {expected} ({digest[:19]})")
     print(f"{image}:{tag} layout OK")
 
