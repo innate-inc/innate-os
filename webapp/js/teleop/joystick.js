@@ -59,7 +59,7 @@ export function createJoystick(parent, driveController) {
     parent.style.setProperty("--joystick-throw", String(throwAmt));
     parent.style.setProperty("--joystick-strafe", String(strengthenVisualFeedback(p.dx / PAD_RADIUS)));
     parent.style.setProperty("--joystick-forward", String(strengthenVisualFeedback(-p.dy / PAD_RADIUS)));
-    // Scale from the visible pad — hit target may be larger and bottom-aligned.
+    // Scale from the visible pad so responsive CSS sizes preserve the same input range.
     const toCss = (pad.clientWidth || PAD_SIZE) / PAD_SIZE;
     knob.style.transform =
       `translate(${p.dx * toCss}px, ${p.dy * toCss}px) scale(${1 + throwAmt * 0.05})`;
