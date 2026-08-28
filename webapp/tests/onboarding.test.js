@@ -13,6 +13,7 @@ import {
   TELEOP_ONBOARDING_STEPS,
   isCylinderPickupCompletion,
   isWaveCompletion,
+  resolveAvailableStep,
 } from "../js/teleop/teleopOnboarding.js";
 
 assert.equal(ONBOARDING_SEEN_KEY, `innate.onboardingSeen.v${ONBOARDING_VERSION}`);
@@ -28,6 +29,9 @@ assert.match(TELEOP_ONBOARDING_STEPS.agent.body, /combine skills/);
 assert.ok(isWaveCompletion({ skillId: "innate-os/wave" }));
 assert.ok(isCylinderPickupCompletion({ skillId: "innate-os/pick_any_object", inputs: { prompt: "The Cylinder" } }));
 assert.ok(!isCylinderPickupCompletion({ skillId: "innate-os/pick_any_object", inputs: { prompt: "the sock" } }));
+assert.equal(resolveAvailableStep("talk", false), "pick");
+assert.equal(resolveAvailableStep("talk", true), "talk");
+assert.equal(resolveAvailableStep("talk", null), "talk");
 assert.equal(INTRO_NUDGE.title, "Meet MARS");
 assert.match(INTRO_NUDGE.body, /control room/);
 assert.match(FIRST_NUDGE.body, /Agent menu/);
