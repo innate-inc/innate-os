@@ -1,9 +1,9 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// TTS bar — press T to focus, type, then Enter and the robot says it. While
-// focused, keyboard drive is suppressed (the typing-context guard in
-// keyboardDrive). Enter, Ctrl, or Esc returns focus to the page so WASD works.
+// TTS bar — press Enter to focus, type, then Enter again and the robot says it.
+// While focused, keyboard drive is suppressed (the typing-context guard in
+// keyboardDrive). Sending, Ctrl, or Esc returns focus to the page so WASD works.
 
 import { AGENT_STATUS_TOPIC, TTS_TOPIC } from "../constants.js";
 
@@ -26,12 +26,12 @@ export function createTtsBar(parent, rosClient) {
   input.autocomplete = "off";
   input.spellcheck = false;
   input.setAttribute("aria-label", "Text to speech");
-  input.setAttribute("aria-keyshortcuts", "T");
+  input.setAttribute("aria-keyshortcuts", "Enter");
 
   const focusHint = document.createElement("button");
   focusHint.type = "button";
   focusHint.className = "tts-key tts-focus-key";
-  focusHint.textContent = "T";
+  focusHint.textContent = "↵";
   focusHint.setAttribute("aria-label", "Focus speech input");
   focusHint.setAttribute("aria-describedby", "tts-shortcut-tip");
   focusHint.onclick = () => input.focus();
@@ -41,7 +41,7 @@ export function createTtsBar(parent, rosClient) {
   shortcutTip.className = "tts-shortcut-tip";
   shortcutTip.setAttribute("role", "tooltip");
   shortcutTip.innerHTML = `
-    <kbd class="tts-tip-key">T</kbd><span>focus input</span>
+    <kbd class="tts-tip-key">Enter</kbd><span>focus input</span>
     <span aria-hidden="true">·</span>
     <kbd class="tts-tip-key">Ctrl</kbd><span>return to drive</span>
   `;
@@ -107,12 +107,17 @@ export function createTtsBar(parent, rosClient) {
 
   /** @param {KeyboardEvent} e */
   function focusSpeechInput(e) {
-    if (e.key.toLowerCase() !== "t" || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key !== "Enter" || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
     const active = document.activeElement;
+    const target = e.target;
+    const fromTyping =
+      target instanceof HTMLElement &&
+      (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
     const typing =
       active instanceof HTMLElement &&
       (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable);
-    if (input.disabled || typing) return;
+    const neutral = !active || active === document.body;
+    if (input.disabled || fromTyping || typing || !neutral) return;
     e.preventDefault();
     input.focus();
   }
