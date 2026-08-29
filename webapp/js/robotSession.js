@@ -35,7 +35,7 @@ export async function robotSessionFactory() {
       // @ts-ignore
       const mod = await import("/sim-viewer/sim-session.js");
       return {
-        createSession: () => /** @type {any} */ (mod.createSimSession()),
+        createSession: () => /** @type {any} */ (mod.createSimSession({ statePort: config.worldStatePort })),
         releaseSession: (session) => session.destroy(),
         createStage: (root, session) => mod.createSimStage(root, /** @type {any} */ (session)),
       };

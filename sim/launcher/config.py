@@ -39,15 +39,53 @@ OS_BUILD_LOG_PATH = LOG_DIR / "os-build.log"
 VIEWER_BUILD_LOG_PATH = LOG_DIR / "viewer-build.log"
 WORLD_SERVER_LOG_PATH = LOG_DIR / "world-server.log"
 WORLD_SERVER_PID_PATH = STATE_DIR / "world-server.pid"
+# Recorded, not inferred: after a port override the configuration and the
+# running server's ports are exactly what differ.
+WORLD_SERVER_PORTS_PATH = STATE_DIR / "world-server.ports"
 # Content digest of the model sources the running world server compiled
 # (see runtime._world_model_sources_digest); written next to the pid.
 WORLD_SERVER_MODEL_DIGEST_PATH = STATE_DIR / "world-server.model-digest"
-WORLD_SERVER_PORT = 8799
 OS_SESSION_LOG_PATH = LOG_DIR / "os-session.log"
 DOWN_LOG_PATH = LOG_DIR / "down.log"
 ROS_INSTALL_STATE_PATH = STATE_DIR / "ros-install.inputs.sha256"
 OS_SESSION_READY_POLL_SECONDS = 0.25
 GENERATED_OS_ENV_PATH = STATE_DIR / "innate-os.env"
+
+PORT_BASE_ENV = "INNATE_SIM_PORT_BASE"
+
+
+def _resolve_port(name: str, offset: int, classic: int) -> int:
+    """Own override, else PORT_BASE_ENV plus this port's offset, else `classic`.
+    Exits rather than raising: this runs at import, outside main()'s boundary."""
+    for source, raw, shift in (
+        (name, os.environ.get(name, "").strip(), 0),
+        (PORT_BASE_ENV, os.environ.get(PORT_BASE_ENV, "").strip(), offset),
+    ):
+        if not raw:
+            continue
+        if raw.isdigit() and 1 <= int(raw) + shift <= 65535:
+            return int(raw) + shift
+        print(f"Error: {source}={raw!r} is not a usable port for {name}.", file=sys.stderr)
+        raise SystemExit(1)
+    return classic
+
+
+SIM_HTTPS_PORT = _resolve_port("SIM_HTTPS_PORT", 0, 443)
+SIM_HTTP_PORT = _resolve_port("SIM_HTTP_PORT", 1, 80)
+SIM_ROSBRIDGE_PORT = _resolve_port("SIM_ROSBRIDGE_PORT", 2, 9090)
+SIM_UDP_PORT = _resolve_port("SIM_UDP_PORT", 3, 9999)
+SIM_FOXGLOVE_PORT = _resolve_port("SIM_FOXGLOVE_PORT", 4, 8765)
+WORLD_SERVER_PORT = _resolve_port("SIM_WORLD_PORT", 5, 8799)
+WORLD_STATE_PORT = _resolve_port("SIM_WORLD_STATE_PORT", 6, 8800)
+# Injected into compose's environment, so a base-only override reaches the
+# compose file without it knowing the base exists.
+PUBLISHED_PORT_ENV = {
+    "SIM_HTTPS_PORT": str(SIM_HTTPS_PORT),
+    "SIM_HTTP_PORT": str(SIM_HTTP_PORT),
+    "SIM_ROSBRIDGE_PORT": str(SIM_ROSBRIDGE_PORT),
+    "SIM_UDP_PORT": str(SIM_UDP_PORT),
+    "SIM_FOXGLOVE_PORT": str(SIM_FOXGLOVE_PORT),
+}
 # How brain_client reaches Gemini: through the Innate proxy with a service key,
 # straight at Google with a Gemini key, or not at all.
 INNATE_BACKEND = "innate"
@@ -653,9 +691,8 @@ def get_config() -> dict[str, object]:
         )
 
     merged_env = dict(raw_env)
+    # 9090 is rosbridge's port INSIDE the container, which no override moves.
     merged_env.setdefault("ROSBRIDGE_URI", "ws://localhost:9090")
-
-    foxglove_port = os.environ.get("SIM_FOXGLOVE_PORT", "").strip() or "8765"
 
     os_repo = require_path(REPO_ROOT, "innate-os repository")
     sim_repo = require_path(REPO_ROOT / "sim", "sim repository")
@@ -675,7 +712,9 @@ def get_config() -> dict[str, object]:
         "brain_backend": resolve_brain_backend(merged_env),
         "os_repo": os_repo,
         "sim_repo": sim_repo,
-        "foxglove_port": foxglove_port,
+        "foxglove_port": str(SIM_FOXGLOVE_PORT),
+        "webapp_url": "https://localhost" + ("" if SIM_HTTPS_PORT == 443 else f":{SIM_HTTPS_PORT}"),
+        "rosbridge_url": f"ws://localhost:{SIM_ROSBRIDGE_PORT}",
         "os_image": os_image,
         "os_image_auto": os_image_auto,
         "os_pull_image": os_pull_image if os_pull_image is not None else True,

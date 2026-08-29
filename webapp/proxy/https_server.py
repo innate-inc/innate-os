@@ -81,9 +81,10 @@ CERT_DIR = Path.home() / ".innate-webapp-tls"
 ROSBRIDGE_URL = "ws://127.0.0.1:9090"
 
 # /worldstate -> the sim world server's observer stream: host of
-# VIRTUAL_MARS_REMOTE (else in-container), always port 8800 (its default).
+# VIRTUAL_MARS_REMOTE (else in-container), on the port the launcher published.
 _WORLD_HOST = os.environ.get("VIRTUAL_MARS_REMOTE", "").strip().partition(":")[0] or "127.0.0.1"
-WORLD_STATE_URL = f"ws://{_WORLD_HOST}:8800"
+WORLD_STATE_PORT = int(os.environ.get("INNATE_WORLD_STATE_PORT", "").strip() or "8800")
+WORLD_STATE_URL = f"ws://{_WORLD_HOST}:{WORLD_STATE_PORT}"
 
 # Ping both legs of every relay so a peer that vanishes without a FIN (a robot's
 # WiFi dropping mid-teleop) is reaped in ~heartbeat seconds instead of lingering
@@ -360,6 +361,8 @@ async def config_handler(request: web.Request) -> web.Response:
         cfg = {}
     if WEBAPP_SIM_CONTROLS:
         cfg["simControls"] = True
+        # The 3D view prefers a direct loopback socket over this relay.
+        cfg["worldStatePort"] = WORLD_STATE_PORT
     return web.json_response(cfg, headers={"Cache-Control": "no-cache"})
 
 

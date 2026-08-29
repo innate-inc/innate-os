@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import functools
 import grp
 import hashlib
@@ -45,11 +46,18 @@ from config import (
     OS_CONTAINER_TMUX_CMD,
     OS_SESSION_LOG_PATH,
     OS_SESSION_READY_POLL_SECONDS,
+    PORT_BASE_ENV,
+    PUBLISHED_PORT_ENV,
     REPO_ROOT,
     ROS_INSTALL_STATE_PATH,
     SIM_ASSET_UNITS,
     SIM_ASSET_UNITS_AUTHORED,
     SIM_ASSET_UNITS_DERIVED,
+    SIM_FOXGLOVE_PORT,
+    SIM_HTTP_PORT,
+    SIM_HTTPS_PORT,
+    SIM_ROSBRIDGE_PORT,
+    SIM_UDP_PORT,
     TMUX_SESSION_NAME,
     VIEWER_BUILD_LOG_PATH,
     VIEWER_TREE_PATH,
@@ -57,6 +65,8 @@ from config import (
     WORLD_SERVER_MODEL_DIGEST_PATH,
     WORLD_SERVER_PID_PATH,
     WORLD_SERVER_PORT,
+    WORLD_SERVER_PORTS_PATH,
+    WORLD_STATE_PORT,
     DockerUnresponsiveError,
     StackError,
     compute_geometry_inputs_hash,
@@ -574,6 +584,8 @@ def os_compose_env(
     values = {
         "INNATE_OS_ENV_FILE": str(env_file),
         "INNATE_OS_CONTAINER_NAME": OS_CONTAINER_NAME,
+        "SIM_WORLD_STATE_PORT": str(WORLD_STATE_PORT),
+        **PUBLISHED_PORT_ENV,
     }
     if base_env:
         values.update(base_env)
@@ -798,18 +810,38 @@ def ensure_home_mount_sources() -> None:
             ssh_dir.mkdir(mode=0o700)
 
 
-def os_container_foxglove_port_current(config: dict[str, object]) -> bool:
-    """False when a running OS container publishes the Foxglove bridge on a host
-    port other than the one the launcher now advertises.
+def world_endpoint() -> str:
+    """The address the container reaches the host world server on."""
+    return f"host.docker.internal:{WORLD_SERVER_PORT}"
 
-    Checkouts that ran the brain in a cloud-agent container shifted the publish
-    to 8766 (the agent owned 8765); a running container's published ports cannot
-    be changed in place, so such a container has to be recreated. An unanswered
-    probe reports "current" -- a flaky answer must not cost a recreate.
-    """
+
+# Label, host port, and the container port published there -- None for the world
+# server, which runs outside Docker. Container ports never move; the host side does.
+_STACK_PORTS = (
+    ("webapp (https)", SIM_HTTPS_PORT, "443/tcp"),
+    ("webapp (http)", SIM_HTTP_PORT, "80/tcp"),
+    ("rosbridge", SIM_ROSBRIDGE_PORT, "9090/tcp"),
+    ("leader receiver", SIM_UDP_PORT, "9999/udp"),
+    ("foxglove bridge", SIM_FOXGLOVE_PORT, "8765/tcp"),
+    ("world server", WORLD_SERVER_PORT, None),
+    ("world state stream", WORLD_STATE_PORT, None),
+)
+
+
+# The world ports reach the container as env, not as a publish, so they need
+# their own drift check. Third field: what an ABSENT variable means, mirroring
+# the consumer's fallback, so a container predating it is not read as drift.
+_CONTAINER_ENV_PUBLISH = (
+    ("VIRTUAL_MARS_REMOTE", world_endpoint(), ""),
+    ("INNATE_WORLD_STATE_PORT", str(WORLD_STATE_PORT), "8800"),
+)
+
+
+def _container_env(name: str) -> dict[str, str] | None:
+    """The container's baked environment, or None when the probe cannot answer."""
     try:
         result = subprocess.run(
-            ["docker", "port", OS_CONTAINER_NAME, "8765"],
+            ["docker", "inspect", "-f", "{{json .Config.Env}}", name],
             text=True,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -817,11 +849,54 @@ def os_container_foxglove_port_current(config: dict[str, object]) -> bool:
             timeout=DOCKER_PROBE_TIMEOUT_S,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return True
+        return None
     if result.returncode != 0:
+        return None
+    try:
+        entries = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    pairs = (entry.partition("=") for entry in entries)
+    return {key: value for key, sep, value in pairs if sep}
+
+
+def _container_port_map(name: str) -> dict[str, set[int]] | None:
+    """`docker port` as {"443/tcp": {443}}. None is "unknown", never "drift"."""
+    try:
+        result = subprocess.run(
+            ["docker", "port", name],
+            text=True,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+            timeout=DOCKER_PROBE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    mapping: dict[str, set[int]] = {}
+    for line in result.stdout.splitlines():
+        spec, arrow, published = line.partition(" -> ")
+        host_port = published.rpartition(":")[2].strip()
+        if arrow and host_port.isdigit():
+            mapping.setdefault(spec.strip(), set()).add(int(host_port))
+    return mapping
+
+
+def os_container_current() -> bool:
+    """Whether the running container's publishes and world-server env still match
+    what the launcher resolves. Neither can be changed in place, so drift costs a
+    recreate; an unanswered probe reports current, since a flaky answer must not."""
+    published = _container_port_map(OS_CONTAINER_NAME)
+    if published is None:
         return True
-    published = str(config["foxglove_port"])
-    return any(line.strip().endswith(f":{published}") for line in result.stdout.splitlines())
+    if not all(host in published.get(spec, set()) for _, host, spec in _STACK_PORTS if spec):
+        return False
+    env = _container_env(OS_CONTAINER_NAME)
+    if env is None:
+        return True
+    return all(env.get(key, absent) == expected for key, expected, absent in _CONTAINER_ENV_PUBLISH)
 
 
 def retitle_step(message: str) -> None:
@@ -835,17 +910,13 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
     os_image = str(config["os_image"]).strip()
     os_image_auto = bool(config["os_image_auto"])
     reuse_running_container = container_running(OS_CONTAINER_NAME)
-    if reuse_running_container and not os_container_foxglove_port_current(config):
-        log(
-            "The running OS container publishes Foxglove on an older host port; "
-            f"recreating it to serve ws://localhost:{config['foxglove_port']}."
-        )
+    if reuse_running_container and not os_container_current():
+        log(f"The running OS container is bound to an older port block; recreating it to serve {config['webapp_url']}.")
         reuse_running_container = False
 
     if reuse_running_container:
         log("Innate OS dev container already running.")
     else:
-        refuse_if_another_checkout_is_running()
         up_cmd = docker_compose_cmd("up", "-d")
         if offline:
             # Reuse an image that is already local; never pull or build, which
@@ -1149,18 +1220,107 @@ def running_stack_from_another_checkout() -> tuple[str, str] | None:
     return None
 
 
-def refuse_if_another_checkout_is_running() -> None:
+def _bind_refusal(port: int, *, udp: bool) -> int | None:
+    """errno from claiming the port the way Docker will (0.0.0.0, no
+    SO_REUSEADDR), or None when the bind succeeds."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("0.0.0.0", port))
+        except OSError as exc:
+            return exc.errno
+    return None
+
+
+def _tcp_listener_answers(port: int) -> bool:
+    with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", port), timeout=0.5):
+        return True
+    return False
+
+
+def _host_port_free(port: int, *, udp: bool) -> bool:
+    """Whether Docker can still publish this host port. Only EADDRINUSE proves a
+    collision: Linux refuses ports below 1024 to a non-root binder while the
+    daemon that publishes them runs as root, so a free 443 refuses the probe."""
+    refusal = _bind_refusal(port, udp=udp)
+    if refusal is None:
+        return True
+    if refusal == errno.EACCES and not udp:
+        return not _tcp_listener_answers(port)
+    return refusal != errno.EADDRINUSE
+
+
+def _container_published_ports(name: str) -> set[int]:
+    """Host ports a container publishes -- the OLD ones if it outlived a port
+    change, which is the point: those are the ports it is really holding."""
+    published = _container_port_map(name)
+    return set() if published is None else {port for ports in published.values() for port in ports}
+
+
+def _own_world_server_ports() -> set[int]:
+    """Ports the world server this checkout started is holding, from the recorded
+    pair rather than the configuration (see WORLD_SERVER_PORTS_PATH). A live pid
+    is enough: a wedged server still holds them, and ensure_world_server stops it."""
+    try:
+        pid = int(WORLD_SERVER_PID_PATH.read_text(encoding="utf-8").strip())
+        ports = {int(port) for port in WORLD_SERVER_PORTS_PATH.read_text(encoding="utf-8").split()}
+    except (OSError, ValueError):
+        return set()
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return set()
+    return ports
+
+
+def _suggest_port_base() -> int | None:
+    """A base whose whole block is free, so the remedy cannot echo back the base
+    that just failed."""
+    for base in range(8600, 9600, 10):
+        if all(
+            _host_port_free(base + offset, udp=(spec or "").endswith("/udp"))
+            for offset, (_, _, spec) in enumerate(_STACK_PORTS)
+        ):
+            return base
+    return None
+
+
+def _other_checkout_holding(ports: set[int]) -> tuple[str, str] | None:
+    """The other checkout's stack, but only when it actually publishes one of
+    these ports -- an unrelated listener must not be reported as a simulator."""
     found = running_stack_from_another_checkout()
-    if found is None:
+    if found is None or not ports & _container_published_ports(found[0]):
+        return None
+    return found
+
+
+def refuse_if_ports_taken() -> None:
+    """Refuse before anything claims a host port this stack needs. Ahead of the
+    world server, not just ahead of compose: a second checkout sharing the block
+    would otherwise SIGTERM the first one's physics (_stop_stale_world_server)
+    before Docker ever complained about 443."""
+    ours = _container_published_ports(OS_CONTAINER_NAME) | _own_world_server_ports()
+    taken = [
+        (label, port)
+        for label, port, spec in _STACK_PORTS
+        if port not in ours and not _host_port_free(port, udp=(spec or "").endswith("/udp"))
+    ]
+    if not taken:
         return
-    container, checkout = found
-    where = f"  cd {checkout} && {CLI_SIM} down" if checkout else f"  docker stop {container}"
-    raise StackError(
-        f"Another checkout's simulator is already running ({container}).\n"
-        "Each checkout keeps its own container and workspace build, but they share this machine's "
-        "ports (9090 and 9999 are not overridable), so only one can be up at a time.\n"
-        f"Stop that one first:\n{where}"
+    listing = "\n".join(f"  {port:<5} {label}" for label, port in taken)
+    suggestion = _suggest_port_base()
+    move = (
+        f"move this checkout to a block that is free:\n  {PORT_BASE_ENV}={suggestion} {CLI_SIM} up"
+        if suggestion is not None
+        else f"set {PORT_BASE_ENV} to the start of seven free ports"
     )
+    other = _other_checkout_holding({port for _, port in taken})
+    if other is None:
+        culprit = f"Stop whatever owns them (lsof -nP -iTCP:{taken[0][1]}), or "
+    else:
+        container, checkout = other
+        stop = f"  cd {checkout} && {CLI_SIM} down" if checkout else f"  docker stop {container}"
+        culprit = f"Another checkout's simulator holds them ({container}). Stop it:\n{stop}\n\nOr "
+    raise StackError(f"These host ports are already in use:\n{listing}\n\n{culprit}{move}")
 
 
 def remove_legacy_shared_container() -> None:
@@ -1379,7 +1539,7 @@ def _rosbridge_live(os_status: dict[str, bool]) -> bool:
     if not process_live:
         _rosbridge_ws_confirmed = False
     elif not _rosbridge_ws_confirmed:
-        _rosbridge_ws_confirmed = websocket_port_open(9090)
+        _rosbridge_ws_confirmed = websocket_port_open(SIM_ROSBRIDGE_PORT)
     return process_live and _rosbridge_ws_confirmed
 
 
@@ -1444,7 +1604,7 @@ def os_runtime_ready(config: dict[str, object]) -> bool:
         os_status["os_session_running"]
         and os_status["rosbridge_process_live"]
         and os_status["brain_process_live"]
-        and websocket_port_open(9090)
+        and websocket_port_open(SIM_ROSBRIDGE_PORT)
     )
 
 
@@ -1475,10 +1635,9 @@ def wait_for_virtual_mars(config: dict[str, object], *, timeout_seconds: float =
 
 
 def runtime_already_running(config: dict[str, object]) -> bool:
-    """The running stack is both complete and current. A container from an older
-    checkout serves the Foxglove bridge on a host port the dashboard no longer
-    prints, and only a recreate can move it -- so that stack is not reusable."""
-    return os_runtime_ready(config) and os_container_foxglove_port_current(config)
+    """The running stack is both complete and current. A container on a stale port
+    block is not reusable however healthy it looks -- only a recreate moves it."""
+    return os_runtime_ready(config) and os_container_current()
 
 
 def format_startup_check(ok: bool, label: str, detail: str) -> str:
@@ -1539,7 +1698,7 @@ def print_startup_checks(
         (
             bool(probe["rosbridge_live"]),
             "bridge",
-            "ws://localhost:9090 live" if probe["rosbridge_live"] else "not accepting connections",
+            f"ws://localhost:{SIM_ROSBRIDGE_PORT} live" if probe["rosbridge_live"] else "not accepting connections",
         ),
         (
             os_status["brain_process_live"],
@@ -2258,7 +2417,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
         raise StackError(_UV_MISSING_MESSAGE)
 
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
-    endpoint = f"host.docker.internal:{WORLD_SERVER_PORT}"
+    endpoint = world_endpoint()
     bind = os.environ.get("INNATE_SIM_WORLD_BIND", "").strip() or _world_server_bind_addresses()
     if not bind:
         # Fail closed: no host-only bind must never widen to 0.0.0.0.
@@ -2272,7 +2431,11 @@ def ensure_world_server(config: dict[str, object]) -> str:
     if reply is not None:
         expected_binds = {b.strip() for b in bind.split(",") if b.strip()}
         actual_binds = reply.get("binds")
-        if reply.get("state_port") and actual_binds is not None and set(actual_binds) == expected_binds:
+        if (
+            reply.get("state_port") == WORLD_STATE_PORT
+            and actual_binds is not None
+            and set(actual_binds) == expected_binds
+        ):
             # The MuJoCo model is compiled at server start; a URDF or
             # world-module edit since then is not in the running physics.
             running_digest = ""
@@ -2288,6 +2451,11 @@ def ensure_world_server(config: dict[str, object]) -> str:
         # INNATE_SIM_WORLD_BIND=0.0.0.0 server) -- restart instead.
         elif not reply.get("state_port"):
             log("Host world server is outdated (no observer state stream) -- restarting it...")
+        elif reply["state_port"] != WORLD_STATE_PORT:
+            log(
+                f"Host world server streams observer state on port {reply['state_port']}, but the "
+                f"webapp and viewer were told {WORLD_STATE_PORT} -- restarting it..."
+            )
         elif actual_binds is None:
             log("Host world server predates bind reporting -- restarting it...")
         else:
@@ -2408,7 +2576,22 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
         env["MUJOCO_GL"] = mujoco_gl
     with WORLD_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:
         proc = subprocess.Popen(
-            [uv, "run", "--project", str(sim_repo), "python", "-c", bootstrap, "--bind", bind] + _render_scale_args(),
+            [
+                uv,
+                "run",
+                "--project",
+                str(sim_repo),
+                "python",
+                "-c",
+                bootstrap,
+                "--bind",
+                bind,
+                "--port",
+                str(WORLD_SERVER_PORT),
+                "--state-port",
+                str(WORLD_STATE_PORT),
+            ]
+            + _render_scale_args(),
             cwd=sim_repo.parent,
             env=env,
             stdin=subprocess.DEVNULL,
@@ -2416,6 +2599,7 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
             stderr=subprocess.STDOUT,
         )
     WORLD_SERVER_PID_PATH.write_text(f"{proc.pid}\n", encoding="utf-8")
+    WORLD_SERVER_PORTS_PATH.write_text(f"{WORLD_SERVER_PORT} {WORLD_STATE_PORT}\n", encoding="utf-8")
     # Patient while alive: the first run downloads the Python env (uv sync)
     # and builds the MuJoCo model, which takes minutes on slow machines --
     # killing a live process on a stopwatch misdiagnosed a Raspberry Pi's
@@ -2435,6 +2619,7 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
     with contextlib.suppress(ProcessLookupError, OSError):
         proc.kill()
     WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
+    WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)
     WORLD_SERVER_MODEL_DIGEST_PATH.unlink(missing_ok=True)
     return False
 
@@ -2490,6 +2675,7 @@ def stop_world_server() -> None:
         pass
     with contextlib.suppress(OSError):  # read-only fs: the kill still counts
         WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
+        WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)
         WORLD_SERVER_MODEL_DIGEST_PATH.unlink(missing_ok=True)
 
 
