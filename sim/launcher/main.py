@@ -143,6 +143,12 @@ def _environment_assets_are_current(
     active_identity: tuple[str, str] | None,
 ) -> bool:
     """Whether an asset install can take the no-mutation warm path safely."""
+    if pack.is_local:
+        try:
+            pack.validate_assets()
+        except StackError:
+            return False
+        return active_identity == (pack.id, pack.fingerprint)
     if active_identity != (pack.id, pack.fingerprint):
         return False
     # A content-addressed ref change may name a different layer even though the
@@ -164,6 +170,34 @@ def _environment_assets_are_current(
     except StackError:
         return False
     return True
+
+
+def _ensure_selected_environment_assets(
+    config: dict[str, object],
+    pack: EnvironmentPack,
+    *,
+    offline: bool,
+) -> None:
+    """Reconcile published layers, or use a complete local pack as installed."""
+    if pack.is_local:
+        pack.validate_assets()
+        log(f"Using installed local assets for {pack.display_name}.")
+        return
+
+    if offline:
+        log("Offline: skipping sim asset downloads.")
+    else:
+        try:
+            with live_step("assets", "Downloading the world geometry", "world geometry"):
+                ensure_sim_assets(config)
+        except StackError as exc:
+            raise StackError(
+                f"{exc}\n\n"
+                "This step needs internet access. Re-run with a connection, or re-run "
+                f"`{CLI_SIM} up --offline` to start with whatever is already downloaded."
+            ) from exc
+    with live_step("viewer", "Downloading the 3D view assets", "3D view assets"):
+        ensure_viewer_public_assets(config, offline=offline)
 
 
 def _stop_local_world_before_asset_refresh() -> None:
@@ -223,20 +257,7 @@ def _cmd_up_locked(
                 log("Stopping the physics world before reconciling environment assets...")
                 _stop_local_world_before_asset_refresh()
 
-        if offline:
-            log("Offline: skipping sim asset downloads.")
-        else:
-            try:
-                with live_step("assets", "Downloading the world geometry", "world geometry"):
-                    ensure_sim_assets(config)
-            except StackError as exc:
-                raise StackError(
-                    f"{exc}\n\n"
-                    "This step needs internet access. Re-run with a connection, or re-run "
-                    f"`{CLI_SIM} up --offline` to start with whatever is already downloaded."
-                ) from exc
-        with live_step("viewer", "Downloading the 3D view assets", "3D view assets"):
-            ensure_viewer_public_assets(config)
+        _ensure_selected_environment_assets(config, pack, offline=offline)
         with live_step("bundle", "Fetching the 3D viewer bundle", "3D viewer bundle"):
             ensure_sim_viewer_bundle(config, offline=offline)
 

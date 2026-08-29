@@ -122,3 +122,17 @@ def test_a_viewer_refresh_preserves_locally_licensed_environment_assets(monkeypa
 
     assert (destination / "file.txt").read_text() == "contents"
     assert local_scene.read_bytes() == b"licensed-local-scene"
+
+
+def test_offline_viewer_reuses_installed_files_without_registry_probe(monkeypatch, tmp_path):
+    destination = tmp_path / "viewer" / "public"
+    destination.mkdir(parents=True)
+    (destination / "installed.glb").write_bytes(b"already-here")
+    monkeypatch.setattr(
+        runtime.oci,
+        "manifest_for_image",
+        lambda _image: pytest.fail("offline startup queried the registry"),
+    )
+    monkeypatch.setattr(runtime, "log", lambda _message: None)
+
+    runtime.ensure_viewer_public_assets({"sim_repo": tmp_path}, offline=True)

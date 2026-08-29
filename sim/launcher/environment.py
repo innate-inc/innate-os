@@ -58,6 +58,11 @@ class EnvironmentPack:
     spawn_yaw_degrees: float
 
     @property
+    def is_local(self) -> bool:
+        """Whether this pack is an installed, unpublishable local environment."""
+        return self.manifest_path.parent.name == LOCAL_ENVIRONMENT_DIRECTORY
+
+    @property
     def collision_path(self) -> Path:
         return self.assets_root / self.collision_dir
 

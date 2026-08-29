@@ -216,9 +216,13 @@ def test_local_environment_is_discoverable_but_cannot_shadow_a_tracked_pack(tmp_
     local_directory.mkdir()
     (local_directory / "local-town.json").write_text(json.dumps(local), encoding="utf-8")
 
-    assert load_environment_pack(sim_repo, "local-town").manifest_path == local_directory / "local-town.json"
+    local_pack = load_environment_pack(sim_repo, "local-town")
+    assert local_pack.manifest_path == local_directory / "local-town.json"
+    assert local_pack.is_local
 
     shadow = manifest("test-room")
     shadow["display_name"] = "Shadowed"
     (local_directory / "test-room.json").write_text(json.dumps(shadow), encoding="utf-8")
-    assert load_environment_pack(sim_repo, "test-room").display_name == "Test Room"
+    tracked_pack = load_environment_pack(sim_repo, "test-room")
+    assert tracked_pack.display_name == "Test Room"
+    assert not tracked_pack.is_local

@@ -20,6 +20,7 @@ class FakePack:
     id = "gallery"
     display_name = "Gallery"
     fingerprint = "gallery-v2"
+    is_local = False
 
     def __init__(self, root: Path):
         self.assets_root = root / "assets"
@@ -27,6 +28,29 @@ class FakePack:
 
     def validate_assets(self) -> None:
         return None
+
+
+def test_installed_local_pack_never_queries_published_asset_layers(monkeypatch, tmp_path):
+    pack = FakePack(tmp_path)
+    pack.is_local = True
+    validations: list[str] = []
+    pack.validate_assets = lambda: validations.append("validated")
+    monkeypatch.setattr(
+        launcher_main,
+        "ensure_sim_assets",
+        lambda _config: pytest.fail("local pack queried the work asset image"),
+    )
+    monkeypatch.setattr(
+        launcher_main,
+        "ensure_viewer_public_assets",
+        lambda _config, **_kwargs: pytest.fail("local pack queried the viewer asset image"),
+    )
+    monkeypatch.setattr(launcher_main, "log", lambda _message: None)
+
+    launcher_main._ensure_selected_environment_assets({"sim_repo": tmp_path}, pack, offline=False)
+    launcher_main._ensure_selected_environment_assets({"sim_repo": tmp_path}, pack, offline=True)
+
+    assert validations == ["validated", "validated"]
 
 
 class Step:
@@ -119,7 +143,11 @@ def test_up_stops_a_partial_ros_session_before_asset_checks(monkeypatch, tmp_pat
         lambda: events.append("stop-world"),
     )
     monkeypatch.setattr(launcher_main, "ensure_sim_assets", lambda _config: events.append("sim-assets"))
-    monkeypatch.setattr(launcher_main, "ensure_viewer_public_assets", lambda _config: events.append("viewer-assets"))
+    monkeypatch.setattr(
+        launcher_main,
+        "ensure_viewer_public_assets",
+        lambda _config, **_kwargs: events.append("viewer-assets"),
+    )
     monkeypatch.setattr(launcher_main, "ensure_sim_viewer_bundle", lambda _config, **_kwargs: None)
     monkeypatch.setattr(launcher_main, "activate_environment", lambda _pack: False)
     monkeypatch.setattr(launcher_main, "build_os_env", lambda _config: tmp_path / "os.env")

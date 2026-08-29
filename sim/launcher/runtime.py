@@ -2226,19 +2226,27 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def ensure_viewer_public_assets(config: dict[str, object]) -> None:
+def ensure_viewer_public_assets(config: dict[str, object], *, offline: bool = False) -> None:
     """Install the models and physics the webapp serves at /models and /physics.
 
     The same image as the geometry, a different layer -- and on disk rather
     than mounted from the image, for the reasons in install_layer_subtree.
     """
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    destination = sim_repo / "viewer" / "public"
+    if offline:
+        if destination.is_dir() and any(destination.iterdir()):
+            log("Reusing the installed viewer assets offline.")
+            return
+        raise StackError(
+            "No viewer assets are installed for offline startup. Run `./innate-sim up` while online first."
+        )
     install_layer_subtree(
         assets_image_ref(config),
         ASSETS_IMAGE_LAYERS.index("viewer"),
         "viewer",
-        sim_repo / "viewer" / "public",
-        sim_repo / "viewer" / "public" / ".installed-tag",
+        destination,
+        destination / ".installed-tag",
         label="viewer assets",
         geometry_hash=compute_geometry_inputs_hash(config["os_repo"]),  # type: ignore[arg-type]
         preserve_children=("local-environments",),
