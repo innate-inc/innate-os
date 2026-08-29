@@ -100,6 +100,16 @@ export const MAP_COLORS = {
   keepout: "rgb(255 70 94 / 48%)",
 };
 
+// Keepout-zone visibility is ONE persisted preference across every surface
+// that renders this widget (Nav page, teleop map tile): hiding zones in one
+// place hides them everywhere. Display only — the robot still avoids them.
+const KEEPOUT_VISIBLE_KEY = "innate.map.keepoutZones";
+
+/** Whether keepout zones are currently shown on map views (shared, persisted). */
+export function keepoutZonesVisible() {
+  return localStorage.getItem(KEEPOUT_VISIBLE_KEY) !== "0";
+}
+
 // Robot marker radius in metres — matches the footprint half-width (0.165 m
 // in costmap.yaml), so the dot covers what the robot covers at every zoom.
 const ROBOT_RADIUS_M = 0.18;
@@ -207,11 +217,13 @@ function rasterizeGrid(msg, canvas, ctx, paint) {
 
 /**
  * @param {HTMLElement} root container the map fills (sized via ResizeObserver).
- * @param {{ zoom?: number, onZoomChange?: (meters: number) => void, layers?: Partial<Record<LayerName, boolean>>, keepoutEditing?: boolean }} [opts]
+ * @param {{ zoom?: number, onZoomChange?: (meters: number) => void, layers?: Partial<Record<LayerName, boolean>>, keepoutEditing?: boolean, onKeepoutZonesToggle?: (on: boolean) => void }} [opts]
  *   zoom = metres of real-world width to show, centred on the robot pose (keeps the map legible when
  *   small); enables scroll-to-zoom. Omit to fit the whole grid (the standalone page). onZoomChange
  *   fires after each wheel-zoom. layers turns on optional overlays (Nav page): live lidar scan,
- *   global/local costmaps, odometry trail — each adds its subscription only while enabled.
+ *   global/local costmaps, odometry trail — each adds its subscription only while enabled. The
+ *   keepout layer is governed by the shared keepoutZonesVisible() preference, not opts.layers;
+ *   onKeepoutZonesToggle fires when the widget's own Zones button (or setLayer) changes it.
  * @returns {{ destroy: () => void, refresh: () => void, setZoom: (meters: number) => void, setFollowRobot: (on: boolean) => void, setLayer: (name: LayerName, on: boolean) => void, setMappingMode: (on: boolean) => void, clearTrail: () => void, mapChanged: () => void, highlightMemory: (id: number | null) => void, focusMemory: (id: number) => void, robotNowS: () => number }}
  */
 export function createMap(root, opts = {}) {
@@ -240,6 +252,8 @@ export function createMap(root, opts = {}) {
       '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10.2l6.8-6.8a1.5 1.5 0 012.1 0l1.2 1.2a1.5 1.5 0 010 2.1L6.3 13H4.8z"/><path d="M7.5 13h5.8"/></svg>',
     clear:
       '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10M6 4V2.5h4V4m2 0l-.7 9H4.7L4 4"/></svg>',
+    zones:
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.8 8S4.2 3.8 8 3.8 14.2 8 14.2 8 11.8 12.2 8 12.2 1.8 8 1.8 8z"/><circle cx="8" cy="8" r="1.8"/></svg>',
   };
   /** @param {string} icon @param {string} label @param {string} [hint] */
   function makeButton(icon, label, hint = "") {
@@ -275,10 +289,13 @@ export function createMap(root, opts = {}) {
   keepoutBtn.title = "Paint a navigation keepout zone without changing the localization map";
   const eraseKeepoutBtn = makeButton(ICONS.erase, "Erase", "remove forbidden areas");
   const clearKeepoutBtn = makeButton(ICONS.clear, "Clear", "remove all forbidden areas");
+  const zonesBtn = makeButton(ICONS.zones, "Zones", "show or hide keepout zones");
+  zonesBtn.title = "Show or hide keepout zones on every map view (display only — the robot still avoids them)";
   const controlsRow = document.createElement("div");
   controlsRow.className = "map-controls-row";
   for (const btn of [backBtn, locateBtn, autoBtn, manualBtn, goBtn, stopBtn, centerBtn]) controlsRow.appendChild(btn);
   if (opts.keepoutEditing) controlsRow.append(keepoutBtn, eraseKeepoutBtn, clearKeepoutBtn);
+  controlsRow.appendChild(zonesBtn);
   // Live progress / outcome of the widget's own goals and locate calls.
   const statusEl = document.createElement("div");
   statusEl.className = "map-status mono";
@@ -359,7 +376,9 @@ export function createMap(root, opts = {}) {
 
   // ---- optional overlay layers (Nav page) ---------------------------------
   /** @type {Record<LayerName, boolean>} */
-  const layers = { scan: false, costmap: false, local: false, trail: false, memories: false, keepout: false, ...opts.layers };
+  // keepout is deliberately NOT taken from opts.layers: its visibility is the
+  // shared persisted preference, identical on every surface showing this widget.
+  const layers = { scan: false, costmap: false, local: false, trail: false, memories: false, ...opts.layers, keepout: keepoutZonesVisible() };
   /** @type {any} latest sensor_msgs/LaserScan */
   let scanMsg = null;
   // base_link -> base_laser from /tf_static (URDF); zero until it arrives.
@@ -1750,6 +1769,9 @@ export function createMap(root, opts = {}) {
     eraseKeepoutBtn.hidden = !opts.keepoutEditing || (ui !== "keepout" && ui !== "keepout-erase") || mappingMode;
     eraseKeepoutBtn.classList.toggle("is-active", ui === "keepout-erase");
     clearKeepoutBtn.hidden = !opts.keepoutEditing || (ui !== "keepout" && ui !== "keepout-erase") || mappingMode;
+    zonesBtn.hidden = mappingMode;
+    zonesBtn.classList.toggle("is-active", layers.keepout);
+    setHint(zonesBtn, layers.keepout ? "zones shown" : "zones hidden");
     const drawingKeepout = ui === "keepout" || ui === "keepout-erase";
     canvas.style.cursor =
       ui === "manual" || ui === "goto" || drawingKeepout
@@ -2068,16 +2090,36 @@ export function createMap(root, opts = {}) {
     setStatus("hint", "Click the destination, drag to set the final heading");
     setUi("goto");
   });
+  /** Flip the shared zones preference and everything that reflects it. */
+  function setKeepoutZonesVisible(on) {
+    localStorage.setItem(KEEPOUT_VISIBLE_KEY, on ? "1" : "0");
+    if (layers.keepout !== on) {
+      layers.keepout = on;
+      syncLayerSubs();
+    }
+    // Zones bind to the map by content hash; if the hash was never computed
+    // for the displayed map (a surface may skip it while zones are off),
+    // replay the latched map so display doesn't wait for the next /map.
+    if (on && activeMapHash === null && lastMapMsg) onMap(lastMapMsg);
+    if (!on && (ui === "keepout" || ui === "keepout-erase")) {
+      clearHint();
+      setUi("idle");
+    }
+    opts.onKeepoutZonesToggle?.(on);
+    render();
+    draw();
+  }
+  zonesBtn.addEventListener("click", () => setKeepoutZonesVisible(!layers.keepout));
+
   keepoutBtn.addEventListener("click", () => {
     if (ui === "keepout") {
       clearHint();
       setUi("idle");
       return;
     }
-    if (!layers.keepout) {
-      layers.keepout = true;
-      syncLayerSubs();
-    }
+    // Drawing needs the zones visible; turning them on here persists like the
+    // Zones button so the choice carries to every other map view.
+    if (!layers.keepout) setKeepoutZonesVisible(true);
     setStatus("hint", "Drag on the map to mark where the robot must not go");
     setUi("keepout");
   });
@@ -2384,8 +2426,14 @@ export function createMap(root, opts = {}) {
       draw();
     },
     /** Toggle an overlay layer (subscribes/unsubscribes its topics live).
-     * The trail survives an off/on toggle — hiding is not clearing (that's clearTrail). */
+     * The trail survives an off/on toggle — hiding is not clearing (that's
+     * clearTrail). The keepout layer routes through the shared persisted
+     * preference so every map surface follows. */
     setLayer(name, on) {
+      if (name === "keepout") {
+        setKeepoutZonesVisible(on);
+        return;
+      }
       if (layers[name] === on) return;
       layers[name] = on;
       syncLayerSubs();

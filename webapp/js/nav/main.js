@@ -30,7 +30,7 @@ import {
   PLAN_TOPICS,
   SCAN_TOPIC,
 } from "../constants.js";
-import { createMap, MAP_COLORS } from "../map/mapWidget.js";
+import { createMap, keepoutZonesVisible, MAP_COLORS } from "../map/mapWidget.js";
 import { createNavStore } from "./navStore.js";
 import { createMapsPanel } from "./mapsPanel.js";
 import { createMappingSession } from "./mappingSession.js";
@@ -122,18 +122,28 @@ function buildView(root) {
   // ---- store + scene ---------------------------------------------------------
   const store = createNavStore();
 
+  // The keepout chip mirrors the widget's shared persisted preference — the
+  // widget's own Zones button (here and on every other map view) is the same
+  // switch, so the two controls must never disagree.
+  const layerDefaults = LAYERS.map((l) => (l.key === "keepout" ? { ...l, on: keepoutZonesVisible() } : l));
+
+  /** @type {Map<string, HTMLButtonElement>} */
+  const chipEls = new Map();
+
   const savedZoom = Number(localStorage.getItem(ZOOM_KEY));
   const map = createMap(scene, {
     zoom: savedZoom > 0 ? savedZoom : DEFAULT_ZOOM_M,
     onZoomChange: (m) => localStorage.setItem(ZOOM_KEY, String(m)),
-    layers: Object.fromEntries(LAYERS.map(({ key, on }) => [key, on])),
+    layers: Object.fromEntries(layerDefaults.map(({ key, on }) => [key, on])),
     keepoutEditing: true,
+    onKeepoutZonesToggle: (on) => {
+      chipEls.get("keepout")?.classList.toggle("is-on", on);
+      legend.sync();
+    },
   });
 
   // ---- layer chips -----------------------------------------------------------
-  /** @type {Map<string, HTMLButtonElement>} */
-  const chipEls = new Map();
-  for (const { key, label, on, topic } of LAYERS) {
+  for (const { key, label, on, topic } of layerDefaults) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = `layer-chip${on ? " is-on" : ""}`;
