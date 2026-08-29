@@ -19,14 +19,10 @@ void MarsArmNode::controlTimerCallback() {
         auto [positions, velocities, loads] = robot_->readState();
         ts[2] = std::chrono::steady_clock::now();
 
-        // Convert raw load/current to effort values
+        // Normalize the mixed raw load/current registers to signed percent.
         std::vector<double> efforts;
         for (size_t j = 0; j < loads.size() && j < joint_configs_.size(); ++j) {
-            if (joint_configs_[j].current_limit > 0) {
-                efforts.push_back(static_cast<double>(loads[j]));  // mA
-            } else {
-                efforts.push_back(static_cast<double>(loads[j]) / 10.0);  // %
-            }
+            efforts.push_back(effortPercent(loads[j], joint_configs_[j]));
         }
         ts[3] = std::chrono::steady_clock::now();
 

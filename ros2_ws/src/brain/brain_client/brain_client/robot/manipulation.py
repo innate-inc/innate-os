@@ -515,6 +515,32 @@ class Manipulation:
 
     # --- streaming ---
 
+    def stream_to(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        *,
+        roll: float = 0.0,
+        pitch: float = 0.0,
+        yaw: float = 0.0,
+        grip: float | None = None,
+        max_speed: float | None = None,
+        ik_timeout: float = 0.5,
+    ) -> None:
+        """Continuously retarget the end-effector to a Cartesian pose.
+
+        This is the Cartesian counterpart to :meth:`stream_joints`: IK is
+        solved once and the resulting joint target enters the same bounded,
+        idle-timed-out stream. It returns immediately and is intentionally
+        unverified so a contact-aware skill can observe live actuator effort
+        and call :meth:`stream_stop` without waiting out a trajectory.
+        """
+        joints = self._solve_ik(x, y, z, roll, pitch, yaw, timeout=ik_timeout)
+        if joints is None:
+            raise ArmFailed(f"IK found no solution for streaming target ({x:.2f}, {y:.2f}, {z:.2f})")
+        self.stream_joints(joints + [self._grip_or(grip)], max_speed=max_speed)
+
     def stream_joints(self, joints: Sequence[float], *, max_speed: float | None = None) -> None:
         """Continuously retarget the arm (teleop-style streaming); returns at
         once.
