@@ -83,7 +83,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   // synchronously so the tiles have something to reparent, and the widget drops into it once the import
   // lands. It is persistent and reparents between a strip tile (small) and the stage (big) — never rebuilt.
   /** @type {HTMLElement | null} */ let mapHost = null;
-  /** @type {{ destroy: () => void, setZoom: (m: number) => void, refresh: () => void } | null} */ let mapWidget = null;
+  /** @type {{ destroy: () => void, setZoom: (m: number) => void, setFollowRobot: (on: boolean) => void, refresh: () => void } | null} */ let mapWidget = null;
   /** @type {"small" | "big"} which saved zoom is live: thumbnail vs full stage */ let mapMode = "small";
   let mapZoom = { ...MAP_ZOOM_DEFAULT };
 
@@ -216,6 +216,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
             // robot's spatial memory, and this is where you watch it happen.
             layers: { memories: true },
           });
+          placeMap();
         })
         .catch(() => {
           // A dropped fetch must not blank the map for the session: with the
@@ -233,8 +234,9 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   }
 
   // Park the map host where the current primary dictates: full stage (big) or inside its strip tile (small),
-  // and swap in that size's saved zoom. (As a thumbnail, a plain click still bubbles to the tile's promote
-  // handler — goal-mode is off and its control hidden — so the map stays clickable while also wheel-zoomable.)
+  // and swap in that size's saved zoom. A thumbnail is a live robot locator: the widget follows the pose
+  // and refuses grab-to-pan (dropping any pan retained from the full map), so a plain click falls through
+  // to the tile's promote handler while the map stays wheel-zoomable.
   function placeMap() {
     const big = primary === MAP_ID;
     mapMode = big ? "big" : "small";
@@ -244,6 +246,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
       if (big && parent.firstChild !== mapHost) parent.insertBefore(mapHost, parent.firstChild);
     }
     mapWidget?.setZoom(mapZoom[mapMode]);
+    mapWidget?.setFollowRobot(!big);
     // The host has just moved between the stage and its tile; redraw against
     // the box it landed in rather than waiting on a ResizeObserver tick.
     mapWidget?.refresh();
