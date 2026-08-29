@@ -24,7 +24,7 @@
 Start with [skills](#skills), [agents](#agents), [additional inputs](#additional-inputs), the [simulator](#simulator), or the [ROS reference](#ros-reference).
 
 > [!TIP]
-> Don't have a robot? You can still experiment with the simulator!
+> Don't have a robot? [Try MARS live in your browser](https://sim-demo.innate.bot) or run the simulator locally.
 
 <table>
   <tr>
@@ -37,8 +37,8 @@ Start with [skills](#skills), [agents](#agents), [additional inputs](#additional
       <sub>Mobile app</sub>
     </td>
     <td width="37%" align="center" valign="top">
-      <img src="docs/assets/readme/screenshot-simulator-card.png" alt="Innate simulator interface" height="300"><br>
-      <sub>Simulator</sub>
+      <a href="https://sim-demo.innate.bot"><img src="docs/assets/readme/screenshot-simulator-card.png" alt="Innate simulator interface" height="300"></a><br>
+      <sub><a href="https://sim-demo.innate.bot">Live simulator</a></sub>
     </td>
   </tr>
 </table>
@@ -84,7 +84,7 @@ The Innate mobile app is available on both iOS and Android. It allows you to con
     <td width="55%" valign="middle">
       <strong>Download the Innate Controller app</strong><br>
       Connect to MARS, drive the robot, run agents and skills, record training data, and manage maps from your phone.<br><br>
-      <a href="https://cdn.innate.bot/innate-app-latest-1.3.0.apk"><strong>Android APK (1.3.0)</strong></a><br>
+      <a href="https://cdn.innate.bot/innate-app-latest-1.4.0.apk"><strong>Android APK (1.4.0)</strong></a><br>
       <sub>Direct APK download.</sub><br><br>
       <a href="https://testflight.apple.com/join/YeChe4A7"><strong>iOS TestFlight</strong></a><br>
       <sub>Join the iOS beta.</sub><br><br>
@@ -259,10 +259,12 @@ Use the [simulator](#simulator) to test custom agents before running them on a p
 
 ## Simulator
 
+**[Try MARS now at sim-demo.innate.bot](https://sim-demo.innate.bot)** -- no install or robot required.
+
 Innate OS includes a MuJoCo digital twin of MARS that runs the **real robot software** -- the same navigation stack, skills, brain client, and webapp as the physical robot, with only the hardware drivers swapped for a simulated equivalent. Use it to build and test skills, agents, and input devices before you have a robot on your desk.
 
 <p align="center">
-  <img src="docs/assets/readme/sim.png" alt="Driving the simulated MARS robot through its apartment in the browser" width="85%">
+  <a href="https://sim-demo.innate.bot"><img src="docs/assets/readme/sim.png" alt="Driving the simulated MARS robot through its apartment in the browser" width="85%"></a>
 </p>
 
 ```bash
