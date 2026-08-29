@@ -88,6 +88,83 @@ def _safe_reset(directory: Path, expected_parent: Path) -> None:
     directory.mkdir(parents=True)
 
 
+def _cross_2d(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
+    return float((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
+
+
+def _triangulate_face(tokens: list[str], vertices: list[tuple[float, float, float]]) -> list[list[str]]:
+    """Ear-clip one planar OBJ polygon instead of using a concave-unsafe fan."""
+    if len(tokens) == 3:
+        return [tokens]
+
+    positions = np.asarray([vertices[int(token.split("/", 1)[0]) - 1] for token in tokens], dtype=np.float64)
+    normal = np.zeros(3, dtype=np.float64)
+    for point, following in zip(positions, np.roll(positions, -1, axis=0), strict=True):
+        normal += np.cross(point, following)
+    normal_length = float(np.linalg.norm(normal))
+    if normal_length < 1e-12:
+        return []
+    spatial_scale = max(float(np.ptp(positions, axis=0).max()), 1.0)
+    plane_distance = np.abs((positions - positions[0]) @ (normal / normal_length))
+    if float(plane_distance.max()) > spatial_scale * 1e-6:
+        # A few tiny bevel polygons in the source are intentionally folded in
+        # 3D. They have no single 2D interior, so retain their authored fan.
+        return [[tokens[0], tokens[index], tokens[index + 1]] for index in range(1, len(tokens) - 1)]
+
+    projected = np.delete(positions, int(np.argmax(np.abs(normal))), axis=1)
+    scale = max(float(np.ptp(projected[:, 0])), float(np.ptp(projected[:, 1])), 1.0)
+    epsilon = scale * scale * 1e-12
+    signed_area = sum(_cross_2d(projected[0], projected[i], projected[i + 1]) for i in range(1, len(tokens) - 1))
+    orientation = 1.0 if signed_area > 0 else -1.0
+    remaining = list(range(len(tokens)))
+    triangles: list[list[str]] = []
+
+    def inside_triangle(point: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> bool:
+        return (
+            orientation * _cross_2d(a, b, point) >= -epsilon
+            and orientation * _cross_2d(b, c, point) >= -epsilon
+            and orientation * _cross_2d(c, a, point) >= -epsilon
+        )
+
+    while len(remaining) > 3:
+        for offset, current in enumerate(remaining):
+            previous = remaining[offset - 1]
+            following = remaining[(offset + 1) % len(remaining)]
+            a, b, c = projected[[previous, current, following]]
+            if orientation * _cross_2d(a, b, c) <= epsilon:
+                continue
+            if any(
+                inside_triangle(projected[other], a, b, c)
+                for other in remaining
+                if other not in {previous, current, following}
+            ):
+                continue
+            triangles.append([tokens[previous], tokens[current], tokens[following]])
+            del remaining[offset]
+            break
+        else:
+            raise RuntimeError(f"cannot ear-clip OBJ polygon with {len(tokens)} vertices")
+
+    triangles.append([tokens[index] for index in remaining])
+    return triangles
+
+
+def _triangulate_obj(text: str) -> tuple[str, int]:
+    """Triangulate authored n-gons without bridging their concave cutouts."""
+    vertices = [tuple(map(float, line.split()[1:4])) for line in text.splitlines() if line.startswith("v ")]
+    output: list[str] = []
+    polygon_count = 0
+    for line in text.splitlines():
+        if not line.startswith("f "):
+            output.append(line)
+            continue
+        tokens = line.split()[1:]
+        triangles = _triangulate_face(tokens, vertices)
+        polygon_count += int(len(tokens) > 3)
+        output.extend("f " + " ".join(triangle) for triangle in triangles)
+    return "\n".join(output) + "\n", polygon_count
+
+
 def _load_authored_scene(source_obj: Path, source_mtl: Path) -> trimesh.Scene:
     if not source_obj.is_file() or not source_mtl.is_file():
         raise FileNotFoundError(
@@ -107,6 +184,9 @@ def _load_authored_scene(source_obj: Path, source_mtl: Path) -> trimesh.Scene:
         text, replacements = re.subn(r"(?m)^mtllib\s+.*$", "mtllib town.mtl", text, count=1)
         if replacements != 1:
             text = f"mtllib town.mtl\n{text}"
+        text, polygon_count = _triangulate_obj(text)
+        if polygon_count < 1_000:
+            raise RuntimeError(f"expected the authored town to contain many n-gons, found {polygon_count}")
         staged_obj.write_text(text, encoding="utf-8")
         loaded = trimesh.load(staged_obj, force="scene", process=False, maintain_order=True)
 
