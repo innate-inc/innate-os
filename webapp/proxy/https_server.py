@@ -93,8 +93,8 @@ WORLD_STATE_URL = f"ws://{_WORLD_HOST}:{WORLD_STATE_PORT}"
 # the 10s deadline was closing healthy sockets that share WiFi with the streams.
 WS_HEARTBEAT = 60.0
 
-# Cadence of the JS-visible keepalive (see _keepalive). The webapp is served by
-# this same process, so client and server always agree on it.
+# Cadence of the JS-visible keepalive (see _keepalive). This process serves the
+# webapp too, so client and server never disagree on it.
 WS_KEEPALIVE = 20.0
 _KEEPALIVE_FRAME = json.dumps({"op": "keepalive"})
 
@@ -448,12 +448,10 @@ async def _pump(src: "web.WebSocketResponse | aiohttp.ClientWebSocketResponse", 
 
 
 async def _keepalive(ws: web.WebSocketResponse) -> None:
-    """Emit a frame the *browser's JavaScript* can see, forever.
+    """Emit a frame the browser's *JavaScript* can see.
 
-    WebSocket ping/pong is invisible to page scripts, so an idle-but-healthy
-    socket and a half-open dead one look identical to rosClient — it cannot
-    distinguish them without something arriving on a schedule. rosClient treats
-    a long gap in these as a dead socket and reconnects (see WS_KEEPALIVE).
+    Ping/pong never reaches page scripts, so without this an idle socket and a
+    dead one are indistinguishable to rosClient, which reconnects on the gap.
     """
     while True:
         await asyncio.sleep(WS_KEEPALIVE)
@@ -472,8 +470,7 @@ async def ws_proxy(request: web.Request) -> web.WebSocketResponse:
     try:
         async with session.ws_connect(upstream_url, max_msg_size=0, heartbeat=WS_HEARTBEAT) as upstream:
             tasks = [asyncio.create_task(_pump(ws, upstream)), asyncio.create_task(_pump(upstream, ws))]
-            # Only the rosbridge leg: the sim viewer's world-state parser has no
-            # reason to tolerate a frame that isn't world state.
+            # Not /worldstate: the sim viewer parses only world state.
             if not worldstate:
                 tasks.append(asyncio.create_task(_keepalive(ws)))
             _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

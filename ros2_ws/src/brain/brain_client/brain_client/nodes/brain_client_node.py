@@ -522,13 +522,11 @@ class BrainClientNode(Node):
         )
 
     def _on_skill_status(self, msg: String) -> None:
-        """Record every skill run in the chat history, so a replayed transcript
-        keeps its cards.
+        """Record every skill run, so a replayed transcript keeps its cards.
 
-        The live topic is the only place an agent-run skill ever appears — the
-        runner leaves the echo to the skills server, which is a different
-        process and cannot reach this history. Both publishers can announce the
-        same run, so a run/status pair is recorded once.
+        An agent-run skill appears only here — the runner leaves the echo to the
+        skills server, a different process that cannot reach this history — and
+        both publishers can announce one run, so a run/status pair lands once.
         """
         try:
             payload = json.loads(msg.data)

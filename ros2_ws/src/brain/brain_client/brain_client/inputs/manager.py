@@ -24,9 +24,8 @@ from brain_client.inputs.loader import InputLoader
 from brain_client.inputs.types import InputDevice
 
 MIC_DEVICE_NAME = "micro"
-# A transcript with no letter or digit anywhere is room tone the recogniser
-# punctuated — a bare "." or "?". Publishing it would post a junk chat bubble
-# and spend an agent turn answering nobody.
+# Room tone the recogniser punctuated — a bare "." or "?". Publishing it posts
+# a junk bubble and spends an agent turn answering nobody.
 _HAS_CONTENT = re.compile(r"[^\W_]")
 
 

@@ -19,10 +19,9 @@ const RECONNECT_BASE_MS = 1_000;
 const MAX_ORPHANED_GOALS = 8;
 const RECONNECT_CAP_MS = 10_000;
 const SUB_RETRY_CAP_MS = 30_000;
-// A half-open socket (phone asleep, WiFi roamed) never fires onclose, so the
-// client would sit in "connected" on a dead pipe until the OS TCP timeout —
-// silently, since ping/pong is invisible to page scripts. The /ws proxy emits a
-// keepalive frame every 20s; three missed in a row means the socket is gone.
+// Ping/pong is invisible to page scripts, so a half-open socket (phone asleep,
+// WiFi roamed) reads as a healthy idle one until the OS TCP timeout. The /ws
+// proxy fills the silence every 20s; three missed means the socket is gone.
 const STALE_SOCKET_MS = 70_000;
 const STALE_CHECK_MS = 15_000;
 
@@ -95,6 +94,7 @@ export class RosClient {
   /** @type {number | null} */ #connectTimer = null;
   /** @type {number | null} */ #staleTimer = null;
   /** Timestamp of the newest frame off the socket; drives the stale check. */ #lastFrameAt = 0;
+  /** Whether this socket is one the keepalive reaches — see #dropIfStale. */ #keepaliveExpected = false;
   /** True once the current target IP has had a successful open; gates the
    * reconnect-forever loop so a typo'd address fails fast instead. */
   #everConnected = false;
@@ -114,17 +114,16 @@ export class RosClient {
         publishZero();
         return;
       }
-      // Background tabs get their timers throttled or frozen, so the periodic
-      // check can't be trusted to have run while away — verify on the spot.
+      // Background tabs freeze timers, so the periodic check may never have run.
       this.#dropIfStale();
     });
   }
 
-  /** Force a reconnect when the socket has gone silent past the keepalive
-   *  budget. Closing is enough: onclose runs the normal reconnect path, which
-   *  replays subscriptions and lets consumers refetch on "connected". */
+  /** Force a reconnect once the keepalive has gone missing — closing is enough,
+   *  onclose runs the normal replay-and-refetch path. */
   #dropIfStale() {
-    if (this.#state !== "connected" || Date.now() - this.#lastFrameAt < STALE_SOCKET_MS) return;
+    if (!this.#keepaliveExpected || this.#state !== "connected") return;
+    if (Date.now() - this.#lastFrameAt < STALE_SOCKET_MS) return;
     console.warn("[ros] socket silent past the keepalive budget — reconnecting");
     this.#teardownSocket();
     this.#handleClose();
@@ -353,6 +352,8 @@ export class RosClient {
     const ip = this.#ip;
     if (!ip) return;
     this.#setState(phase);
+    // A direct rws socket gets no keepalive and is legitimately silent when idle.
+    this.#keepaliveExpected = this.#isServingHost(ip);
     let ws;
     try {
       ws = new WebSocket(this.#urlFor(ip));
@@ -396,7 +397,9 @@ export class RosClient {
         this.#send({ op: "cancel_action_goal", id: goal.id, action: goal.action, goal_id: goal.goalId });
       }
       this.#lastFrameAt = Date.now();
-      this.#staleTimer = setInterval(() => this.#dropIfStale(), STALE_CHECK_MS);
+      if (this.#keepaliveExpected) {
+        this.#staleTimer = setInterval(() => this.#dropIfStale(), STALE_CHECK_MS);
+      }
       this.#setState("connected");
     };
 
