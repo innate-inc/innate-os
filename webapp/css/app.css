@@ -1285,7 +1285,6 @@ select.skill-input {
   --joystick-strafe: 0;
   --joystick-forward: 0;
   --joystick-forward-strength: abs(var(--joystick-forward));
-  --joystick-hit-size: 264px;
   --joystick-pad-size: 184px;
   left: 50%;
   bottom: 84px;
@@ -2203,22 +2202,21 @@ select.skill-input {
 
 .joystick-hit-target {
   display: grid;
-  grid-template-rows: 1fr var(--joystick-pad-size);
-  justify-items: center;
-  width: var(--joystick-hit-size);
-  height: var(--joystick-hit-size);
+  width: var(--joystick-pad-size);
+  height: var(--joystick-pad-size);
+  border-radius: 50%;
   touch-action: none;
-  cursor: default;
+  cursor: grab;
 }
 
-.joystick-hit-target.engaged,
-.joystick-hit-target.engaged .joystick-pad {
+.joystick-hit-target.engaged {
   cursor: grabbing;
 }
 
 .joystick-hit-target > * {
-  grid-area: 2 / 1;
+  grid-area: 1 / 1;
   place-self: center;
+  pointer-events: none;
 }
 
 .joystick-pad {
@@ -9558,7 +9556,6 @@ select.skill-input {
 
   /* Full-size joystick swallows half a phone screen. */
   .overlay-joystick {
-    --joystick-hit-size: 150px;
     --joystick-pad-size: 120px;
   }
 
@@ -10130,7 +10127,7 @@ select.skill-input {
      order alone keeps the joystick / WASD chips / head tilt painting on top
      (same trick as .cam-map-host.big). An explicit z-index here would let the
      opaque video cover the controls. */
-  /* Grow to 360px; on narrow scenes, stop at the centred 264px joystick hit target. */
+  /* Grow to 360px; on narrow scenes, stop before the centred joystick. */
   width: min(360px, calc(50% - 144px));
   aspect-ratio: 4 / 3;
   overflow: hidden;
