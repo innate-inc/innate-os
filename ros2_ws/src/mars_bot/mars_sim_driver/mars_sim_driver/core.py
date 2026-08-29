@@ -355,9 +355,19 @@ class VirtualMars:
         self._cmd_sim_time = self.data.time
 
     def set_joint_target(self, name: str, value: float) -> None:
-        if name in self._joints:
-            qadr, dadr, _home = self._joints[name]
-            self._joints[name] = (qadr, dadr, value)
+        if name not in self._joints:
+            return
+        qadr, dadr, _home = self._joints[name]
+        # Clamp into the joint's range: the gripper close is commanded as a
+        # position 0.6 rad past the mechanical stop (on hardware that means
+        # "squeeze at the current limit" and the stop is physical). The clamp
+        # keeps the squeeze — the error still saturates the torque ceiling —
+        # while the blades stop at the stop instead of scissoring through.
+        jid = self.model.joint(f"robot_{name}").id
+        if self.model.jnt_limited[jid]:
+            lo, hi = self.model.jnt_range[jid]
+            value = max(lo, min(hi, value))
+        self._joints[name] = (qadr, dadr, value)
 
     def joint_targets(self) -> dict[str, float]:
         return {name: target for name, (_q, _d, target) in self._joints.items()}
