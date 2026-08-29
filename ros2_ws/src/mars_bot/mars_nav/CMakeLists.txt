@@ -153,6 +153,7 @@ install(
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_grid_scoring test/test_grid_scoring.py)
   ament_add_pytest_test(test_map_metadata test/test_map_metadata.py)
 endif()
 
