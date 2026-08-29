@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections import deque
 
 import rclpy
 from brain_messages.srv import ForgetMemory, GetAvailableDirectives, GetChatHistory, ReloadSkillsAgents, ResetBrain
@@ -169,6 +170,7 @@ class BrainClientNode(Node):
     def _build_collaborators(self) -> None:
         cfg, state = self.config, self.state
         self.chat = ChatManager(self.get_logger(), self.chat_out_pub, self.task_status_pub, self._tts_handler)
+        self._recorded_skill_runs: deque[tuple[str, str]] = deque(maxlen=256)
         self.camera = CameraCapture(self, cfg)
         self.pose_tracker = PoseTracker(self, odom_topic=cfg.odom_topic, nav_mode_topic=cfg.current_nav_mode_topic)
         self.scan_health = ScanHealthMonitor(self, scan_topic=cfg.scan_topic, stale_after_sec=cfg.scan_stale_after_sec)
@@ -273,6 +275,7 @@ class BrainClientNode(Node):
         self.create_subscription(String, "/brain/set_directive", self._on_set_directive, 10)
         self.create_subscription(String, "/brain/set_active_skills", self._on_set_active_skills, 10)
         self.create_subscription(String, "/brain/manual_skill_event", self._on_manual_skill_event, 10)
+        self.create_subscription(String, "/brain/skill_status_update", self._on_skill_status, 10)
 
     def _create_services(self) -> None:
         self.create_service(GetChatHistory, "/brain/get_chat_history", self._svc_get_chat_history)
@@ -399,10 +402,12 @@ class BrainClientNode(Node):
         self.brain.on_custom_input(data)
 
     def _on_tts(self, msg: String) -> None:
+        """Speak a line a skill sent, and show it — emit, not speak: anything the
+        robot says aloud belongs in the transcript, or Skill.say goes unrecorded."""
         text = msg.data
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
-            self.chat.speak(text)
+            self.chat.emit(Sender.ROBOT, text)
 
     def _on_environment_speech(self, payload: dict) -> None:
         """Speak a simulated character: the line reaches the chat as the voice
@@ -517,15 +522,39 @@ class BrainClientNode(Node):
             skill_id=skill_id,
             reason=reason,
         )
+
+    def _on_skill_status(self, msg: String) -> None:
+        """Record every skill run, so a replayed transcript keeps its cards.
+
+        An agent-run skill appears only here — the runner leaves the echo to the
+        skills server, a different process that cannot reach this history — and
+        both publishers can announce one run, so a run/status pair lands once.
+        """
+        try:
+            payload = json.loads(msg.data)
+            status = str(payload["status"])
+        except (json.JSONDecodeError, TypeError, KeyError):
+            return
+        name = str(payload.get("primitive_name") or payload.get("skill_name") or "")
+        if not name:
+            return
+        skill_id = payload.get("skill_id")
+        primitive_id = payload.get("primitive_id")
+        key = (str(primitive_id or skill_id or name), status)
+        if key in self._recorded_skill_runs:
+            return
+        self._recorded_skill_runs.append(key)
+        reason = payload.get("reason")
         self.chat.history.append(
             {
                 "sender": "task_activated",
-                "text": primitive_name,
+                "text": name,
                 "timestamp": payload.get("timestamp", time.time()),
                 "taskStatus": status,
                 "primitiveId": primitive_id,
                 "skillId": skill_id,
                 **({"failureReason": reason} if reason else {}),
+                **({"args": payload["args"]} if payload.get("args") else {}),
             }
         )
 

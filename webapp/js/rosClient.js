@@ -19,6 +19,11 @@ const RECONNECT_BASE_MS = 1_000;
 const MAX_ORPHANED_GOALS = 8;
 const RECONNECT_CAP_MS = 10_000;
 const SUB_RETRY_CAP_MS = 30_000;
+// Ping/pong is invisible to page scripts, so a half-open socket (phone asleep,
+// WiFi roamed) reads as a healthy idle one until the OS TCP timeout. The /ws
+// proxy fills the silence every 20s; three missed means the socket is gone.
+const STALE_SOCKET_MS = 70_000;
+const STALE_CHECK_MS = 15_000;
 
 /**
  * True when a value carries no actual data: null/undefined, or an object/array
@@ -87,6 +92,9 @@ export class RosClient {
   #reconnectDelay = RECONNECT_BASE_MS;
   /** @type {number | null} */ #reconnectTimer = null;
   /** @type {number | null} */ #connectTimer = null;
+  /** @type {number | null} */ #staleTimer = null;
+  /** Timestamp of the newest frame off the socket; drives the stale check. */ #lastFrameAt = 0;
+  /** Whether this socket is one the keepalive reaches — see #dropIfStale. */ #keepaliveExpected = false;
   /** True once the current target IP has had a successful open; gates the
    * reconnect-forever loop so a typo'd address fails fast instead. */
   #everConnected = false;
@@ -102,8 +110,23 @@ export class RosClient {
     };
     window.addEventListener("pagehide", publishZero);
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden") publishZero();
+      if (document.visibilityState === "hidden") {
+        publishZero();
+        return;
+      }
+      // Background tabs freeze timers, so the periodic check may never have run.
+      this.#dropIfStale();
     });
+  }
+
+  /** Force a reconnect once the keepalive has gone missing — closing is enough,
+   *  onclose runs the normal replay-and-refetch path. */
+  #dropIfStale() {
+    if (!this.#keepaliveExpected || this.#state !== "connected") return;
+    if (Date.now() - this.#lastFrameAt < STALE_SOCKET_MS) return;
+    console.warn("[ros] socket silent past the keepalive budget — reconnecting");
+    this.#teardownSocket();
+    this.#handleClose();
   }
 
   /** @returns {ConnState} */
@@ -329,6 +352,8 @@ export class RosClient {
     const ip = this.#ip;
     if (!ip) return;
     this.#setState(phase);
+    // A direct rws socket gets no keepalive and is legitimately silent when idle.
+    this.#keepaliveExpected = this.#isServingHost(ip);
     let ws;
     try {
       ws = new WebSocket(this.#urlFor(ip));
@@ -371,6 +396,10 @@ export class RosClient {
       for (const goal of this.#orphanedGoals.splice(0)) {
         this.#send({ op: "cancel_action_goal", id: goal.id, action: goal.action, goal_id: goal.goalId });
       }
+      this.#lastFrameAt = Date.now();
+      if (this.#keepaliveExpected) {
+        this.#staleTimer = setInterval(() => this.#dropIfStale(), STALE_CHECK_MS);
+      }
       this.#setState("connected");
     };
 
@@ -391,6 +420,7 @@ export class RosClient {
 
   #handleClose() {
     this.#clearConnectTimer();
+    this.#clearStaleTimer();
     this.#ws = null;
     this.#rejectAllPending(new Error("Connection closed"));
     for (const sub of this.#subs.values()) {
@@ -417,6 +447,7 @@ export class RosClient {
 
   /** @param {string} raw */
   #handleFrame(raw) {
+    this.#lastFrameAt = Date.now();
     /** @type {any} */
     let data;
     try {
@@ -566,6 +597,7 @@ export class RosClient {
 
   #teardownSocket() {
     this.#clearConnectTimer();
+    this.#clearStaleTimer();
     const ws = this.#ws;
     this.#ws = null;
     if (ws) {
@@ -587,6 +619,13 @@ export class RosClient {
       this.#reconnectTimer = null;
     }
     this.#reconnectDelay = RECONNECT_BASE_MS;
+  }
+
+  #clearStaleTimer() {
+    if (this.#staleTimer !== null) {
+      clearInterval(this.#staleTimer);
+      this.#staleTimer = null;
+    }
   }
 
   #clearConnectTimer() {

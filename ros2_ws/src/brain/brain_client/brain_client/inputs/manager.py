@@ -12,6 +12,7 @@ pubs/subs/service and delegates here.
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
@@ -23,6 +24,7 @@ from brain_client.inputs.loader import InputLoader
 from brain_client.inputs.types import InputDevice
 
 MIC_DEVICE_NAME = "micro"
+_HAS_CONTENT = re.compile(r"[^\W_]")
 
 
 class InputDeviceManager:
@@ -72,6 +74,9 @@ class InputDeviceManager:
         try:
             text = data if isinstance(data, str) else data.get("text", "")
             if data_type == "chat_in":
+                if not _HAS_CONTENT.search(text):
+                    self._logger.debug(f"🔇 Dropped contentless transcript from '{device_name}': {text!r}")
+                    return
                 data_dict = {"text": text, "sender": "user", "timestamp": time.time()}
             else:
                 data_dict = {"text": data} if isinstance(data, str) else data.copy()
