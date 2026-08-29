@@ -93,6 +93,11 @@ WORLD_STATE_URL = f"ws://{_WORLD_HOST}:{WORLD_STATE_PORT}"
 # the 10s deadline was closing healthy sockets that share WiFi with the streams.
 WS_HEARTBEAT = 60.0
 
+# Cadence of the JS-visible keepalive (see _keepalive). The webapp is served by
+# this same process, so client and server always agree on it.
+WS_KEEPALIVE = 20.0
+_KEEPALIVE_FRAME = json.dumps({"op": "keepalive"})
+
 
 def _quiet_benign_disconnects() -> None:
     """Drop the traceback aiohttp logs when a client vanishes mid-request —
@@ -442,17 +447,35 @@ async def _pump(src: "web.WebSocketResponse | aiohttp.ClientWebSocketResponse", 
             break
 
 
+async def _keepalive(ws: web.WebSocketResponse) -> None:
+    """Emit a frame the *browser's JavaScript* can see, forever.
+
+    WebSocket ping/pong is invisible to page scripts, so an idle-but-healthy
+    socket and a half-open dead one look identical to rosClient — it cannot
+    distinguish them without something arriving on a schedule. rosClient treats
+    a long gap in these as a dead socket and reconnects (see WS_KEEPALIVE).
+    """
+    while True:
+        await asyncio.sleep(WS_KEEPALIVE)
+        await ws.send_str(_KEEPALIVE_FRAME)
+
+
 async def ws_proxy(request: web.Request) -> web.WebSocketResponse:
     """Bidirectional relay: /ws <-> rosbridge, /worldstate <-> the sim world
     server's observer stream. max_msg_size=0 lifts aiohttp's default cap for the
     large point-cloud / world-state frames."""
     ws = web.WebSocketResponse(max_msg_size=0, heartbeat=WS_HEARTBEAT)
     await ws.prepare(request)
-    upstream_url = WORLD_STATE_URL if request.path == "/worldstate" else ROSBRIDGE_URL
+    worldstate = request.path == "/worldstate"
+    upstream_url = WORLD_STATE_URL if worldstate else ROSBRIDGE_URL
     session = request.app[CLIENT]
     try:
         async with session.ws_connect(upstream_url, max_msg_size=0, heartbeat=WS_HEARTBEAT) as upstream:
             tasks = [asyncio.create_task(_pump(ws, upstream)), asyncio.create_task(_pump(upstream, ws))]
+            # Only the rosbridge leg: the sim viewer's world-state parser has no
+            # reason to tolerate a frame that isn't world state.
+            if not worldstate:
+                tasks.append(asyncio.create_task(_keepalive(ws)))
             _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()

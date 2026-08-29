@@ -44,9 +44,10 @@ const RING_C = 2 * Math.PI * RING_R;
 /**
  * Build the monitor into `root` (the Agent page's brain layer) and start its
  * feeds. `onRequestClose` is the monitor asking to flip back to the live view
- * (Escape with no inspector open). While hidden (`setVisible(false)`) the trace
- * feeds stay live so turn history keeps accumulating, but the animation loop
- * and the wire-heavy live-camera fallback pause.
+ * (Escape with no inspector open). While hidden (`setVisible(false)`) the cheap
+ * status feeds stay live, but the animation loop and the two wire-heavy
+ * subscriptions — the live-camera fallback and /brain/trace — pause, so turn
+ * history covers only the stretches the monitor was on screen.
  * @param {HTMLElement} root
  * @param {{ onRequestClose?: () => void }} [opts]
  * @returns {{ destroy: () => void, setVisible: (visible: boolean) => void }}
@@ -757,13 +758,18 @@ export function createBrainMonitor(root, opts = {}) {
   /** @type {(() => void) | null} */
   let camUnsub = null;
   /** @type {(() => void) | null} */
+  let traceUnsub = null;
+  /** @type {(() => void) | null} */
   let demoStop = null;
   let destroyed = false;
   const demoMode = new URLSearchParams(location.search).has("demo");
 
-  // The live-camera fallback pulls base64 JPEGs over rosbridge, on a page that
-  // already streams WebRTC video — so it runs only while the monitor is on
-  // screen (see setVisible), unlike the cheap trace/status feeds.
+  // Both of these are wire-heavy, so they run only while the monitor is on
+  // screen (see setVisible), unlike the cheap status feeds: trace carries the
+  // whole request body and its frames at ~1 MB per turn, and the camera
+  // fallback pulls base64 JPEGs on a page that already streams WebRTC video.
+  const subscribeTrace = () => ros.subscribe("/brain/trace", jsonHandler(onTrace), 0, "std_msgs/msg/String");
+
   const subscribeCam = () =>
     ros.subscribe(
       CAM_TOPIC,
@@ -784,7 +790,6 @@ export function createBrainMonitor(root, opts = {}) {
     });
   } else {
     unsubs = [
-      ros.subscribe("/brain/trace", jsonHandler(onTrace), 0, "std_msgs/msg/String"),
       ros.subscribe("/brain/agent_status", jsonHandler(onAgentStatus), 0, "std_msgs/msg/String"),
       ros.subscribe("/brain/websocket_status", jsonHandler(onBrainStatus), 0, "std_msgs/msg/String"),
       ros.subscribe("/brain/skill_status_update", jsonHandler(onSkill), 0, "std_msgs/msg/String"),
@@ -801,6 +806,7 @@ export function createBrainMonitor(root, opts = {}) {
       ),
     ];
     camUnsub = subscribeCam();
+    traceUnsub = subscribeTrace();
   }
 
   /** @param {boolean} v */
@@ -812,10 +818,15 @@ export function createBrainMonitor(root, opts = {}) {
       cancelAnimationFrame(raf);
       camUnsub?.();
       camUnsub = null;
+      traceUnsub?.();
+      traceUnsub = null;
       return;
     }
     raf = requestAnimationFrame(tickUI);
-    if (!demoMode) camUnsub = subscribeCam();
+    if (!demoMode) {
+      camUnsub = subscribeCam();
+      traceUnsub = subscribeTrace();
+    }
   }
 
   return {
@@ -828,6 +839,7 @@ export function createBrainMonitor(root, opts = {}) {
       for (const id of uiTimers) window.clearTimeout(id);
       window.removeEventListener("keydown", onKey);
       unsubs.forEach((u) => u());
+      traceUnsub?.();
       camUnsub?.();
       demoStop?.();
       document.querySelector(".connect-layer")?.classList.remove("br-hidden");
