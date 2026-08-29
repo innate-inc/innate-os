@@ -29,6 +29,7 @@ import {
 } from "../constants.js";
 import { MEMORY_COLOR, SEARCH_REPLAY_FRESH_S, ageAlpha, ageText, headerSkew, memoryImageUrl, parseMemories, parseSearch, withAlpha } from "./memories.js";
 import { goalCellError } from "./goalValidation.js";
+import { mapViewCenter } from "./framing.js";
 
 // The /map grid rides ONE session-lived subscription instead of one per mount.
 // The topic is latched, and rws replays the full grid — hundreds of KB of JSON
@@ -191,7 +192,7 @@ function rasterizeGrid(msg, canvas, ctx, paint) {
  *   small); enables scroll-to-zoom. Omit to fit the whole grid (the standalone page). onZoomChange
  *   fires after each wheel-zoom. layers turns on optional overlays (Nav page): live lidar scan,
  *   global/local costmaps, odometry trail — each adds its subscription only while enabled.
- * @returns {{ destroy: () => void, refresh: () => void, setZoom: (meters: number) => void, setLayer: (name: LayerName, on: boolean) => void, setMappingMode: (on: boolean) => void, clearTrail: () => void, mapChanged: () => void, highlightMemory: (id: number | null) => void, focusMemory: (id: number) => void, robotNowS: () => number }}
+ * @returns {{ destroy: () => void, refresh: () => void, setZoom: (meters: number) => void, setFollowRobot: (on: boolean) => void, setLayer: (name: LayerName, on: boolean) => void, setMappingMode: (on: boolean) => void, clearTrail: () => void, mapChanged: () => void, highlightMemory: (id: number | null) => void, focusMemory: (id: number) => void, robotNowS: () => number }}
  */
 export function createMap(root, opts = {}) {
   let zoomMeters = opts.zoom;
@@ -838,6 +839,9 @@ export function createMap(root, opts = {}) {
   // Grab-to-pan: while set, the view centres here instead of on the robot.
   /** @type {{ x: number, y: number } | null} */
   let panCenter = null;
+  // Thumbnail maps are glanceable robot locators, not independently pannable
+  // maps. The full map turns this off again so operators keep normal pan.
+  let followRobot = false;
   /** @type {{ px: number, py: number, center: { x: number, y: number }, moved: boolean } | null} */
   let panDrag = null;
   /** @type {{ x: number, y: number, yaw: number } | null} the active goal */
@@ -1089,7 +1093,7 @@ export function createMap(root, opts = {}) {
     // Centre on the pan point if the user grabbed the map, else follow the
     // robot; zoom mode shows a fixed real-world window (zoomMeters across).
     let scale, ox, oy;
-    const center = panCenter ?? (zoomMeters && pose ? pose : null);
+    const center = mapViewCenter(pose, panCenter, zoomMeters, followRobot);
     if (zoomMeters && center) {
       const cellsAcross = zoomMeters / grid.resolution;
       scale = Math.min(canvas.width, canvas.height) / cellsAcross;
@@ -1465,8 +1469,15 @@ export function createMap(root, opts = {}) {
     goBtn.classList.toggle("is-active", ui === "goto");
     setHint(goBtn, ui === "goto" ? "click & drag on the map" : "tap a point to navigate");
     stopBtn.hidden = !(ui === "idle" && navActive) || mappingMode;
-    centerBtn.hidden = panCenter === null;
-    canvas.style.cursor = ui === "manual" || ui === "goto" ? "crosshair" : memHover ? "pointer" : "grab";
+    centerBtn.hidden = followRobot || panCenter === null;
+    canvas.style.cursor =
+      ui === "manual" || ui === "goto"
+        ? "crosshair"
+        : memHover
+          ? "pointer"
+          : followRobot
+            ? "default"
+            : "grab";
   }
 
   /** @param {"idle" | "locate" | "manual" | "goto"} next */
@@ -1601,6 +1612,10 @@ export function createMap(root, opts = {}) {
   /** @param {PointerEvent} e */
   function onPointerDown(e) {
     if (!grid || !view) return;
+    // Leave the thumbnail's click to its parent tile (which promotes the map).
+    // Capturing it here would also let a small drag strand the corner map away
+    // from the robot again.
+    if (followRobot && ui === "idle") return;
     e.preventDefault();
     const { px, py } = eventToCanvas(e);
     canvas.setPointerCapture(e.pointerId);
@@ -1856,6 +1871,20 @@ export function createMap(root, opts = {}) {
         zoomMeters = meters;
         draw();
       }
+    },
+    /** Keep a compact map centred on each live robot pose. Full-size maps
+     * disable this again and retain their normal grab-to-pan interaction. */
+    setFollowRobot(on) {
+      if (followRobot === on && (!on || panCenter === null)) return;
+      followRobot = on;
+      panDrag = null;
+      if (on) {
+        panCenter = null;
+        setUi("idle");
+        closeMemPopup();
+      }
+      render();
+      draw();
     },
     /**
      * Enter/leave mapping mode: swaps the pose source to /mapping_pose,
