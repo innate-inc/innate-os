@@ -245,8 +245,8 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       if (!Array.isArray(entries) || !entries.length) return;
       lastSnapshot = raw;
       chat.replay(entries);
-    } catch {
-      // best-effort — the live stream still works without the backfill
+    } catch (err) {
+      console.warn("[chat] reconcile failed:", err);
     } finally {
       loadingHistory = false;
     }
