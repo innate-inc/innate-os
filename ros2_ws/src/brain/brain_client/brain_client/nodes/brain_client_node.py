@@ -402,10 +402,12 @@ class BrainClientNode(Node):
         self.brain.on_custom_input(data)
 
     def _on_tts(self, msg: String) -> None:
+        """Speak a line a skill sent, and show it — emit, not speak: anything the
+        robot says aloud belongs in the transcript, or Skill.say goes unrecorded."""
         text = msg.data
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
-            self.chat.speak(text)
+            self.chat.emit(Sender.ROBOT, text)
 
     def _on_environment_speech(self, payload: dict) -> None:
         """Speak a simulated character: the line reaches the chat as the voice
