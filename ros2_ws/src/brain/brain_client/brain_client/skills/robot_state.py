@@ -145,15 +145,19 @@ class RobotStateProvider:
             return
         feed_node = self._manipulation.node
         self._odom_sub = feed_node.create_subscription(OdometryMsg, "/odom", self._on_odom, 10)
-        self._map_sub = feed_node.create_subscription(OccupancyGrid, "/map", self._on_map, 1)
-        keepout_qos = QoSProfile(
+        # Both map feeds are latched and publish only on a map load or edit —
+        # a VOLATILE subscription created at skill start (long after) matches
+        # but never receives, leaving skills with self.map None for the whole
+        # session. TRANSIENT_LOCAL gets the retained message on match.
+        latched_map_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.RELIABLE,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1,
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
         )
+        self._map_sub = feed_node.create_subscription(OccupancyGrid, "/map", self._on_map, latched_map_qos)
         self._keepout_map_sub = feed_node.create_subscription(
-            OccupancyGrid, "/nav/keepout_filter_mask", self._on_keepout_map, keepout_qos
+            OccupancyGrid, "/nav/keepout_filter_mask", self._on_keepout_map, latched_map_qos
         )
         self._head_position_sub = feed_node.create_subscription(
             String, self._head_current_position_topic, self._on_head_position, 10
@@ -173,7 +177,6 @@ class RobotStateProvider:
         self._active = False
         self._manipulation.stop()
         self.last_odom = None
-        self.last_map = None
         self.last_head_position = None
         self.last_joint_states = None
         self.last_battery = None
@@ -188,15 +191,15 @@ class RobotStateProvider:
         if self._active:
             self.last_odom = msg
 
+    # Both latched map feeds are kept across stop/start and updated even while
+    # idle: the transient-local replay fires only when the subscription is
+    # first created, so clearing them on stop would leave every later skill
+    # session with no map at all. A mask from an older map is rejected by
+    # Map._matches, never by staleness here.
     def _on_map(self, msg: OccupancyGrid) -> None:
-        if self._active:
-            self.last_map = msg
+        self.last_map = msg
 
     def _on_keepout_map(self, msg: OccupancyGrid) -> None:
-        # Kept across stop/start: the transient-local replay fires only when the
-        # subscription is first created, so clearing this on stop would leave the
-        # keepout check fail-open for every later skill session. A mask from an
-        # older map is rejected by Map._matches, never by staleness here.
         self.last_keepout_map = msg
 
     def _on_joint_states(self, msg: JointState) -> None:
