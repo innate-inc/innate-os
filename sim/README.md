@@ -412,18 +412,14 @@ individual override that wins over the base:
 | +5 | world server RPC | `SIM_WORLD_PORT` | 8799 |
 | +6 | world state stream | `SIM_WORLD_STATE_PORT` | 8800 |
 
-Set nothing and you get exactly the ports above, so a single-checkout setup is
-unaffected. Export the variable in the second checkout's shell (or its
-direnv/`.envrc`) — it has to be set for every `./innate-sim` command in that
-checkout, not just `up`, since `down`, `status` and `logs` look for the same
-ports.
+Set nothing and you get exactly the ports above. The variable has to be set for
+every `./innate-sim` command in that checkout, not just `up` — `down`, `status`
+and `logs` look for the same ports — so export it or put it in an `.envrc`.
 
-Two stacks means two full ROS fleets plus two MuJoCo world servers rendering
-on the host. It works, but budget the RAM and the GPU.
-
-`./innate-sim up` refuses with the list of conflicting ports if anything else
-already holds one — naming a free block to move to — rather than letting Docker
-fail halfway or letting the second stack restart the first one's world server.
+Any number of checkouts can run at once this way; each is a full ROS fleet plus
+a MuJoCo world server rendering on the host, so the limit is your RAM and GPU.
+`./innate-sim up` refuses with the list of conflicting ports if anything already
+holds one, and names a free block to move to.
 
 ---
 

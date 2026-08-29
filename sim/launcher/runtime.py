@@ -815,13 +815,16 @@ def world_endpoint() -> str:
     return f"host.docker.internal:{WORLD_SERVER_PORT}"
 
 
-# Container ports never move; only the host side they are published on does.
-_CONTAINER_PORT_PUBLISH = (
-    ("443/tcp", SIM_HTTPS_PORT),
-    ("80/tcp", SIM_HTTP_PORT),
-    ("9090/tcp", SIM_ROSBRIDGE_PORT),
-    ("9999/udp", SIM_UDP_PORT),
-    ("8765/tcp", SIM_FOXGLOVE_PORT),
+# Label, host port, and the container port published there -- None for the world
+# server, which runs outside Docker. Container ports never move; the host side does.
+_STACK_PORTS = (
+    ("webapp (https)", SIM_HTTPS_PORT, "443/tcp"),
+    ("webapp (http)", SIM_HTTP_PORT, "80/tcp"),
+    ("rosbridge", SIM_ROSBRIDGE_PORT, "9090/tcp"),
+    ("leader receiver", SIM_UDP_PORT, "9999/udp"),
+    ("foxglove bridge", SIM_FOXGLOVE_PORT, "8765/tcp"),
+    ("world server", WORLD_SERVER_PORT, None),
+    ("world state stream", WORLD_STATE_PORT, None),
 )
 
 
@@ -888,7 +891,7 @@ def os_container_current() -> bool:
     published = _container_port_map(OS_CONTAINER_NAME)
     if published is None:
         return True
-    if not all(host in published.get(spec, set()) for spec, host in _CONTAINER_PORT_PUBLISH):
+    if not all(host in published.get(spec, set()) for _, host, spec in _STACK_PORTS if spec):
         return False
     env = _container_env(OS_CONTAINER_NAME)
     if env is None:
@@ -1217,17 +1220,6 @@ def running_stack_from_another_checkout() -> tuple[str, str] | None:
     return None
 
 
-_PUBLISHED_HOST_PORTS = (
-    ("webapp (https)", SIM_HTTPS_PORT, False),
-    ("webapp (http)", SIM_HTTP_PORT, False),
-    ("rosbridge", SIM_ROSBRIDGE_PORT, False),
-    ("leader receiver", SIM_UDP_PORT, True),
-    ("foxglove bridge", SIM_FOXGLOVE_PORT, False),
-    ("world server", WORLD_SERVER_PORT, False),
-    ("world state stream", WORLD_STATE_PORT, False),
-)
-
-
 def _bind_refusal(port: int, *, udp: bool) -> int | None:
     """errno from claiming the port the way Docker will (0.0.0.0, no
     SO_REUSEADDR), or None when the bind succeeds."""
@@ -1284,7 +1276,10 @@ def _suggest_port_base() -> int | None:
     """A base whose whole block is free, so the remedy cannot echo back the base
     that just failed."""
     for base in range(8600, 9600, 10):
-        if all(_host_port_free(base + offset, udp=udp) for offset, (_, _, udp) in enumerate(_PUBLISHED_HOST_PORTS)):
+        if all(
+            _host_port_free(base + offset, udp=(spec or "").endswith("/udp"))
+            for offset, (_, _, spec) in enumerate(_STACK_PORTS)
+        ):
             return base
     return None
 
@@ -1306,8 +1301,8 @@ def refuse_if_ports_taken() -> None:
     ours = _container_published_ports(OS_CONTAINER_NAME) | _own_world_server_ports()
     taken = [
         (label, port)
-        for label, port, udp in _PUBLISHED_HOST_PORTS
-        if port not in ours and not _host_port_free(port, udp=udp)
+        for label, port, spec in _STACK_PORTS
+        if port not in ours and not _host_port_free(port, udp=(spec or "").endswith("/udp"))
     ]
     if not taken:
         return
@@ -1320,17 +1315,12 @@ def refuse_if_ports_taken() -> None:
     )
     other = _other_checkout_holding({port for _, port in taken})
     if other is None:
-        raise StackError(
-            f"These host ports are already in use:\n{listing}\n\n"
-            f"Stop whatever owns them (lsof -nP -iTCP:{taken[0][1]}), or {move}"
-        )
-    container, checkout = other
-    where = f"  cd {checkout} && {CLI_SIM} down" if checkout else f"  docker stop {container}"
-    raise StackError(
-        f"These host ports are already in use:\n{listing}\n\n"
-        f"Another checkout's simulator holds them ({container}). Stop it:\n{where}\n\n"
-        f"Or {move}"
-    )
+        culprit = f"Stop whatever owns them (lsof -nP -iTCP:{taken[0][1]}), or "
+    else:
+        container, checkout = other
+        stop = f"  cd {checkout} && {CLI_SIM} down" if checkout else f"  docker stop {container}"
+        culprit = f"Another checkout's simulator holds them ({container}). Stop it:\n{stop}\n\nOr "
+    raise StackError(f"These host ports are already in use:\n{listing}\n\n{culprit}{move}")
 
 
 def remove_legacy_shared_container() -> None:
