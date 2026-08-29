@@ -21,6 +21,10 @@ from mars_arm.urdf import treeFromUrdfModel  # local parser in urdf.py
 
 
 class KDLIKNode(Node):
+    # Cartesian error (m + 0.1 * rad) under which a seed's solution is taken
+    # as-is instead of being outvoted by another seed's marginally better fit.
+    CONTINUITY_SCORE = 0.005
+
     def __init__(self):
         super().__init__("kdl_ik_from_file")
 
@@ -204,14 +208,16 @@ class KDLIKNode(Node):
         # Log the target frame before IK
         target_pos = target_frame.p
         target_rot = target_frame.M.GetRPY()
-        self.get_logger().info(
+        self.get_logger().debug(
             f"IK Target (absolute w.r.t. base) - Pos (x,y,z): ({target_pos.x():.4f}, {target_pos.y():.4f}, {target_pos.z():.4f}), "
             f"RPY: ({target_rot[0]:.4f}, {target_rot[1]:.4f}, {target_rot[2]:.4f})"
         )
 
-        # Multi-start IK: try from current position and from zeros, pick best
         start_time = time.perf_counter()
 
+        # Multi-start IK: the current posture first, and only if that lands
+        # short, a zero-seeded solve as well. A streamed target hops between
+        # elbow branches if both seeds get a vote on every step.
         seeds = [
             ("current", self.current_q),
             ("zeros", kdl.JntArray(self.chain.getNrOfJoints())),  # initialized to zeros
@@ -227,6 +233,8 @@ class KDLIKNode(Node):
                 best_solution = q_out
                 best_score = score
                 best_seed_name = seed_name
+            if best_score < self.CONTINUITY_SCORE:
+                break
 
         solve_time_ms = (time.perf_counter() - start_time) * 1000
 
@@ -234,7 +242,7 @@ class KDLIKNode(Node):
             self.get_logger().error(f"KDL IK failed from all seeds (took {solve_time_ms:.2f} ms)")
             return
 
-        self.get_logger().info(
+        self.get_logger().debug(
             f"KDL IK solved (seed={best_seed_name}, score={best_score:.4f}, took {solve_time_ms:.2f} ms)"
         )
 
