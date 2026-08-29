@@ -8,12 +8,14 @@ from geometry_msgs.msg import PoseStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from rclpy.qos import DurabilityPolicy, QoSProfile
 
-from innate import Odometry, Skill, SkillCancelled, SkillFailed, SkillReturn, resource
+from innate import Map, Odometry, Pose, Skill, SkillCancelled, SkillFailed, SkillReturn, resource
 
 # Frame local (robot-relative) goals are resolved into before being sent to
 # Nav2. Must match the mapfree costmap's global_frame (mars_nav costmap.yaml)
 # and Odometry.frame_id, which is what resolves them.
 LOCAL_GOAL_FIXED_FRAME = "odom"
+APPROACH_SEARCH_STEPS = 5
+MIN_APPROACH_PROGRESS_M = 0.15
 
 
 def resolve_local_goal(base_x, base_y, base_yaw, x, y, theta):
@@ -22,6 +24,40 @@ def resolve_local_goal(base_x, base_y, base_yaw, x, y, theta):
     gx = base_x + x * math.cos(base_yaw) - y * math.sin(base_yaw)
     gy = base_y + x * math.sin(base_yaw) + y * math.cos(base_yaw)
     return gx, gy, base_yaw + theta
+
+
+def _map_cell(map_state: Map, x: float, y: float) -> tuple[int, int] | None:
+    """Return the occupancy-grid cell containing a map-frame point."""
+    dx = x - map_state.origin_x
+    dy = y - map_state.origin_y
+    cos_map = math.cos(-map_state.origin_theta)
+    sin_map = math.sin(-map_state.origin_theta)
+    col = math.floor((dx * cos_map - dy * sin_map) / map_state.resolution)
+    row = math.floor((dx * sin_map + dy * cos_map) / map_state.resolution)
+    if 0 <= row < map_state.height and 0 <= col < map_state.width:
+        return row, col
+    return None
+
+
+def _map_goal_issue(map_state: Map | None, x: float, y: float) -> str | None:
+    """Return a cause we can prove from the map, without guessing at Nav2 errors."""
+    if map_state is None or map_state.grid is None:
+        return None
+    cell = _map_cell(map_state, x, y)
+    if cell is None:
+        return "the target is outside the current map"
+    row, col = cell
+    keepouts = map_state.keepout_grid
+    if keepouts is not None and keepouts[row, col] >= 50:
+        return "the target is inside a keepout zone"
+    if map_state.grid[row, col] >= 50:
+        return "the target is an occupied map cell"
+    return None
+
+
+def _has_keepouts(map_state: Map | None) -> bool:
+    keepouts = map_state.keepout_grid if map_state is not None else None
+    return keepouts is not None and bool((keepouts >= 50).any())
 
 
 class Nav2Controller:
@@ -49,27 +85,115 @@ class Nav2Controller:
         self.logger.info(f"Resolved local goal ({x}, {y}, {theta}) to ({gx:.3f}, {gy:.3f}, {gyaw:.3f})")
         return gx, gy, gyaw, LOCAL_GOAL_FIXED_FRAME
 
+    def _pose_stamped(self, x: float, y: float, yaw: float, frame: str) -> PoseStamped:
+        pose = PoseStamped()
+        pose.header.frame_id = frame
+        pose.header.stamp = self.navigator.get_clock().now().to_msg()
+        pose.pose.position.x = x
+        pose.pose.position.y = y
+        pose.pose.orientation.z = math.sin(yaw / 2.0)
+        pose.pose.orientation.w = math.cos(yaw / 2.0)
+        return pose
+
+    def _start_xy(self, local_frame: bool) -> tuple[float, float] | None:
+        state = self.skill.odom if local_frame else getattr(self.skill, "pose", None)
+        if state is None:
+            return None
+        return float(state.x), float(state.y)
+
+    def _closest_reachable_approach(
+        self,
+        path_navigator: BasicNavigator,
+        goal_x: float,
+        goal_y: float,
+        goal_yaw: float,
+        goal_frame: str,
+        local_frame: bool,
+    ) -> tuple[float, float, float] | None:
+        """Find a reachable approach on the current-pose-to-goal line.
+
+        This is a bounded best-effort hint for the agent, not a command. Five
+        bisection probes cap the extra planner work while locating the approach
+        to roughly 1/32 of the original distance.
+        """
+        start = self._start_xy(local_frame)
+        if start is None:
+            return None
+        start_x, start_y = start
+        total_distance = math.hypot(goal_x - start_x, goal_y - start_y)
+        if total_distance < MIN_APPROACH_PROGRESS_M:
+            return None
+
+        reachable_fraction = 0.0
+        blocked_fraction = 1.0
+        for _ in range(APPROACH_SEARCH_STEPS):
+            fraction = (reachable_fraction + blocked_fraction) / 2.0
+            candidate_x = start_x + fraction * (goal_x - start_x)
+            candidate_y = start_y + fraction * (goal_y - start_y)
+            candidate = self._pose_stamped(candidate_x, candidate_y, goal_yaw, goal_frame)
+            if path_navigator.getPath(candidate, candidate, use_start=False) is None:
+                blocked_fraction = fraction
+            else:
+                reachable_fraction = fraction
+
+        progressed = reachable_fraction * total_distance
+        if progressed < MIN_APPROACH_PROGRESS_M:
+            return None
+        approach_x = start_x + reachable_fraction * (goal_x - start_x)
+        approach_y = start_y + reachable_fraction * (goal_y - start_y)
+        return approach_x, approach_y, total_distance - progressed
+
+    def _no_path_detail(
+        self,
+        path_navigator: BasicNavigator,
+        goal_x: float,
+        goal_y: float,
+        goal_yaw: float,
+        goal_frame: str,
+        local_frame: bool,
+    ) -> str:
+        map_state = getattr(self.skill, "map", None) if not local_frame else None
+        issue = _map_goal_issue(map_state, goal_x, goal_y)
+        if issue is not None:
+            reason = issue
+        elif _has_keepouts(map_state):
+            reason = "active keepout zones may cut off the route"
+        else:
+            reason = "the route may be blocked or the target may be unreachable"
+
+        detail = f"the planner found no path because {reason}"
+        approach = self._closest_reachable_approach(path_navigator, goal_x, goal_y, goal_yaw, goal_frame, local_frame)
+        if approach is None:
+            start = self._start_xy(local_frame)
+            if start is not None:
+                remaining = math.hypot(goal_x - start[0], goal_y - start[1])
+                detail += (
+                    f". The robot did not move and remains at ({start[0]:.2f}, {start[1]:.2f}), "
+                    f"{remaining:.2f}m from the target"
+                )
+            else:
+                detail += ". The robot did not move"
+        else:
+            approach_x, approach_y, remaining = approach
+            detail += (
+                f". A reachable approach on the direct line is ({approach_x:.2f}, {approach_y:.2f}) "
+                f"in the {goal_frame} frame, {remaining:.2f}m short of the target. "
+                "The robot did not move there; navigate to that pose explicitly if approaching is appropriate"
+            )
+        return detail
+
     def go_to_position(self, x: float, y: float, theta: float, local_frame: bool) -> None:
         """Navigate to the goal, blocking until Nav2 finishes. Raises
         SkillFailed with a human-readable reason; a skill cancel unwinds as
         SkillCancelled with the Nav2 task cancelled."""
         goal_x, goal_y, goal_yaw, goal_frame = self._resolve_goal(x, y, theta, local_frame)
 
-        goal_pose = PoseStamped()
-        goal_pose.header.frame_id = goal_frame
-        goal_pose.header.stamp = self.navigator.get_clock().now().to_msg()
-        goal_pose.pose.position.x = goal_x
-        goal_pose.pose.position.y = goal_y
-        goal_pose.pose.orientation.z = math.sin(goal_yaw / 2.0)
-        goal_pose.pose.orientation.w = math.cos(goal_yaw / 2.0)
+        goal_pose = self._pose_stamped(goal_x, goal_y, goal_yaw, goal_frame)
         self._commanded_goal_pub.publish(goal_pose)
 
         path_navigator = self.navigator_mapfree if local_frame else self.navigator_navigation
         if path_navigator.getPath(goal_pose, goal_pose, use_start=False) is None:
-            raise SkillFailed(
-                f"the planner found no path to ({goal_x:.2f}, {goal_y:.2f}) in the {goal_frame} frame "
-                "— the goal may be unreachable, blocked, or outside the map"
-            )
+            raise SkillFailed(self._no_path_detail(path_navigator, goal_x, goal_y, goal_yaw, goal_frame, local_frame))
 
         self.navigator.goToPose(goal_pose, behavior_tree="mapfree" if local_frame else "navigation")
 
@@ -78,6 +202,7 @@ class Nav2Controller:
         last_recoveries = 0
         last_progress_log = 0.0
         said_close_to_goal = False
+        last_pose = None
         while not self.navigator.isTaskComplete():
             try:
                 self.skill.sleep(0.1)
@@ -92,6 +217,8 @@ class Nav2Controller:
             # navigator's global frame while our goal may be in another.
             distance = feedback.distance_remaining
             last_recoveries = feedback.number_of_recoveries
+            current = feedback.current_pose.pose.position
+            last_pose = (current.x, current.y)
             if distance > 0.0:
                 last_distance = distance
                 if initial_distance < 0.0:
@@ -119,9 +246,19 @@ class Nav2Controller:
         detail = f"Nav2 reported {getattr(result, 'name', result)}"
         if last_distance >= 0.0:
             detail += f" with {last_distance:.2f}m still to go"
+        if last_pose is not None:
+            detail += f"; the robot stopped at ({last_pose[0]:.2f}, {last_pose[1]:.2f}) in the {goal_frame} frame"
         if last_recoveries > 0:
             detail += f" after {last_recoveries} recovery attempt{'s' if last_recoveries != 1 else ''}"
-        raise SkillFailed(detail + " — the route may be blocked or the robot may be stuck")
+        map_state = getattr(self.skill, "map", None) if not local_frame else None
+        issue = _map_goal_issue(map_state, goal_x, goal_y)
+        if issue is not None:
+            detail += f"; {issue}"
+        elif _has_keepouts(map_state):
+            detail += "; active keepout zones may block the route"
+        else:
+            detail += "; the route may be blocked or the robot may be stuck"
+        raise SkillFailed(detail + ". The target was not reached")
 
     def destroy(self):
         """Destroy the navigator nodes so their graph entities disappear now,
@@ -147,6 +284,10 @@ class NavigateToPosition(Skill):
 
     odom: Odometry
     """Resolves local_frame goals; see Nav2Controller._resolve_goal."""
+    map: Map | None
+    """Classifies absolute-map planning failures, including keepout targets."""
+    pose: Pose | None
+    """Reports the current map pose and seeds closest-approach planning."""
 
     @resource
     def controller(self) -> Iterator[Nav2Controller]:
