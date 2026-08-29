@@ -35,6 +35,7 @@ try:
 except ImportError:  # view-only feature; the sim must not die without it
     ws_serve = None
 
+from .beacon import SimBeacon
 from .challenges import ChallengeChatBridge, ChallengeEngine, SkillEventBridge
 from .core import CAMERA_HEIGHT, CAMERA_WIDTH, VirtualMars, encode_jpeg, release_freed_heap
 
@@ -80,6 +81,7 @@ class WorldServer:
         # leftover INNATE_SIM_WORLD_BIND=0.0.0.0 server must not outlive the
         # run that asked for it).
         self.binds: list[str] | None = None
+        self.beacon_port: int | None = None  # rosbridge port the LAN beacon announces
         # Latest rendered frame per product; RPCs return the freshest frame
         # instead of rendering inline, so a GL stall degrades freshness,
         # never liveness.
@@ -317,7 +319,7 @@ class WorldServer:
     def handle(self, req: dict) -> tuple[dict, bytes | None]:
         op = req.get("op")
         if op == "ping":
-            return {"ok": True, "state_port": self.state_port, "binds": self.binds}, None
+            return {"ok": True, "state_port": self.state_port, "binds": self.binds, "beacon": self.beacon_port}, None
         if op == "state":
             with self.lock:
                 x, y, yaw = self.sim.pose()
@@ -458,6 +460,10 @@ def main() -> None:
         print(f"[world-server] observer state stream on port {args.state_port} ({', '.join(binds)})", flush=True)
 
     threading.Thread(target=server.physics_loop, daemon=True).start()
+    beacon = SimBeacon.from_env()
+    server.beacon_port = beacon.rosbridge_port if beacon is not None else None
+    if beacon is not None:
+        beacon.start()
     SkillEventBridge(server.challenges)  # robot skill events for challenge goals (best-effort)
     ChallengeChatBridge(server.challenges)  # robot speech <-> environment replies (best-effort)
 

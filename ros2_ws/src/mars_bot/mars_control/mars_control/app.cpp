@@ -1317,6 +1317,9 @@ class AppControl : public rclcpp::Node {
             data_to_publish_dict["update_running"] = check_update_running();
 
             data_to_publish_dict["supports_webrtc_audio"] = true;
+            // Same rule as the innate CLI's is_sim_mode(): the sim runs in a
+            // container. The app skips WebRTC (no streamer in sim) and tags us.
+            data_to_publish_dict["simulation"] = std::filesystem::exists("/.dockerenv");
             data_to_publish_dict["supports_digital_skills"] = true;
 
             if (!data_to_publish_dict.empty()) {

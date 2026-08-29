@@ -2435,6 +2435,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
             reply.get("state_port") == WORLD_STATE_PORT
             and actual_binds is not None
             and set(actual_binds) == expected_binds
+            and reply.get("beacon") == _beacon_port_wanted()
         ):
             # The MuJoCo model is compiled at server start; a URDF or
             # world-module edit since then is not in the running physics.
@@ -2458,11 +2459,13 @@ def ensure_world_server(config: dict[str, object]) -> str:
             )
         elif actual_binds is None:
             log("Host world server predates bind reporting -- restarting it...")
-        else:
+        elif set(actual_binds) != expected_binds:
             log(
                 f"Host world server listens on {','.join(actual_binds)} but the current policy "
                 f"wants {bind} -- restarting it..."
             )
+        else:
+            log("Host world server announces a different simulator (or none) to the app -- restarting it...")
         _stop_stale_world_server()
 
     ensure_state_dir()
@@ -2564,6 +2567,31 @@ def _render_scale_args() -> list[str]:
     return ["--render-scale", str(scale)]
 
 
+def _beacon_port_wanted() -> int | None:
+    """The rosbridge port the world server's beacon should announce; None when
+    the beacon is switched off (INNATE_SIM_BEACON=0)."""
+    if os.environ.get("INNATE_SIM_BEACON", "1").strip() in ("0", "false", "no"):
+        return None
+    return SIM_ROSBRIDGE_PORT
+
+
+def _beacon_env(repo_root: Path) -> dict[str, str]:
+    """What the world server's LAN discovery beacon announces (mars_sim_driver
+    beacon.py): the ports the controller app needs, the robot's name file, and
+    the checkout's version."""
+    described = subprocess.run(
+        ["git", "-C", str(repo_root), "describe", "--tags", "--always", "--dirty"],
+        capture_output=True,
+        text=True,
+    )
+    return {
+        "INNATE_SIM_BEACON_ROSBRIDGE_PORT": str(SIM_ROSBRIDGE_PORT),
+        "INNATE_SIM_BEACON_WEBAPP_PORT": str(SIM_HTTPS_PORT),
+        "INNATE_SIM_BEACON_ROBOT_INFO": str(repo_root / "data" / "robot_info.json"),
+        "INNATE_SIM_BEACON_VERSION": described.stdout.strip() if described.returncode == 0 else "",
+    }
+
+
 def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | None) -> bool:
     """One world-server start attempt; True once it answers pings."""
     bootstrap = (
@@ -2572,6 +2600,7 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
     )
     env = os.environ.copy()
     env["VIRTUAL_MARS_ASSETS"] = str(sim_repo / "assets")
+    env.update(_beacon_env(sim_repo.parent))
     if mujoco_gl:
         env["MUJOCO_GL"] = mujoco_gl
     with WORLD_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:
