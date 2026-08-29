@@ -135,8 +135,8 @@ export class SimSession {
     // Local browsers connect straight to the world server (loopback is
     // mixed-content-exempt in Chrome/Firefox, and skips the container
     // relay's latency tail); Safari and remote browsers fall back to the
-    // proxied route. statePort arrives from /config.json -- the world
-    // server's host port moves with INNATE_SIM_PORT_BASE.
+    // proxied route. statePort arrives from /config.json: only the server
+    // knows which port the world server was published on.
     this.#stateUrls = opts.stateUrl
       ? [opts.stateUrl]
       : ["localhost", "127.0.0.1"].includes(location.hostname)

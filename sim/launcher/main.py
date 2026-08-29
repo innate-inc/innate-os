@@ -128,8 +128,6 @@ def cmd_up(
             log("Innate sim runtime is already running. Opening dashboard...")
             show_runtime_dashboard(config, watch=watch)
             return
-        # Before the downloads and before the world server: a port this stack
-        # cannot claim must fail in a second, not after a multi-gigabyte fetch.
         refuse_if_ports_taken()
 
         os_env_file = build_os_env(config)

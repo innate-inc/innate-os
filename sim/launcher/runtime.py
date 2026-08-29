@@ -811,13 +811,11 @@ def ensure_home_mount_sources() -> None:
 
 
 def world_endpoint() -> str:
-    """The address the container reaches the host world server on (see
-    _world_server_bind_addresses for which host address that resolves to)."""
+    """The address the container reaches the host world server on."""
     return f"host.docker.internal:{WORLD_SERVER_PORT}"
 
 
-# Container port -> the host port this launcher now publishes it on. Container
-# ports never move; only the published side does.
+# Container ports never move; only the host side they are published on does.
 _CONTAINER_PORT_PUBLISH = (
     ("443/tcp", SIM_HTTPS_PORT),
     ("80/tcp", SIM_HTTP_PORT),
@@ -827,11 +825,9 @@ _CONTAINER_PORT_PUBLISH = (
 )
 
 
-# Container env the port block decides. Neither appears in the published ports,
-# so a world-port change alone would otherwise leave a reused container talking
-# to the old server. The third field is what an ABSENT variable means: it
-# mirrors the consumer's own fallback, so a container from before the variable
-# existed is not read as drift.
+# The world ports reach the container as env, not as a publish, so they need
+# their own drift check. Third field: what an ABSENT variable means, mirroring
+# the consumer's fallback, so a container predating it is not read as drift.
 _CONTAINER_ENV_PUBLISH = (
     ("VIRTUAL_MARS_REMOTE", world_endpoint(), ""),
     ("INNATE_WORLD_STATE_PORT", str(WORLD_STATE_PORT), "8800"),
@@ -862,8 +858,7 @@ def _container_env(name: str) -> dict[str, str] | None:
 
 
 def _container_port_map(name: str) -> dict[str, set[int]] | None:
-    """`docker port` as {"443/tcp": {443}}, or None when the probe could not
-    answer -- not running, or a wedged daemon. None is "unknown", never "drift"."""
+    """`docker port` as {"443/tcp": {443}}. None is "unknown", never "drift"."""
     try:
         result = subprocess.run(
             ["docker", "port", name],
@@ -887,18 +882,9 @@ def _container_port_map(name: str) -> dict[str, set[int]] | None:
 
 
 def os_container_current() -> bool:
-    """False when the running OS container publishes a service on a host port,
-    or carries a world-server address, other than what the launcher now
-    resolves.
-
-    Neither a running container's published ports nor its environment can be
-    changed in place, so drift in either costs a recreate. Three ways to drift:
-    checkouts that ran the brain in a cloud-agent container shifted Foxglove to
-    8766 (the agent owned 8765), an INNATE_SIM_PORT_BASE change moves all five
-    publishes at once, and a world-port change moves only the environment. An
-    unanswered probe reports "current" -- a flaky answer must not cost a
-    recreate.
-    """
+    """Whether the running container's publishes and world-server env still match
+    what the launcher resolves. Neither can be changed in place, so drift costs a
+    recreate; an unanswered probe reports current, since a flaky answer must not."""
     published = _container_port_map(OS_CONTAINER_NAME)
     if published is None:
         return True
@@ -1231,8 +1217,6 @@ def running_stack_from_another_checkout() -> tuple[str, str] | None:
     return None
 
 
-# Every host port a running stack holds, in the order INNATE_SIM_PORT_BASE
-# lays them out. The container's own ports never move; only what is published.
 _PUBLISHED_HOST_PORTS = (
     ("webapp (https)", SIM_HTTPS_PORT, False),
     ("webapp (http)", SIM_HTTP_PORT, False),
@@ -1262,13 +1246,9 @@ def _tcp_listener_answers(port: int) -> bool:
 
 
 def _host_port_free(port: int, *, udp: bool) -> bool:
-    """Whether Docker can still publish this host port.
-
-    Only EADDRINUSE proves a collision. Linux refuses ports below 1024 to a
-    non-root binder while the Docker daemon that publishes them runs as root,
-    so that EACCES asks whether anything already answers there instead --
-    binding 443 must never be mistaken for 443 being taken.
-    """
+    """Whether Docker can still publish this host port. Only EADDRINUSE proves a
+    collision: Linux refuses ports below 1024 to a non-root binder while the
+    daemon that publishes them runs as root, so a free 443 refuses the probe."""
     refusal = _bind_refusal(port, udp=udp)
     if refusal is None:
         return True
@@ -1278,22 +1258,16 @@ def _host_port_free(port: int, *, udp: bool) -> bool:
 
 
 def _container_published_ports(name: str) -> set[int]:
-    """Host ports a container publishes. Read rather than assumed: a container
-    started under a different port block still publishes the OLD ones, and
-    os_container_current is what recreates it for that."""
+    """Host ports a container publishes -- the OLD ones if it outlived a port
+    change, which is the point: those are the ports it is really holding."""
     published = _container_port_map(name)
     return set() if published is None else {port for ports in published.values() for port in ports}
 
 
 def _own_world_server_ports() -> set[int]:
-    """The ports the world server THIS checkout started is holding, so the guard
-    exempts what it will replace rather than what it was configured to want.
-
-    Read from the recorded pair, never from the current configuration: a port
-    override is precisely the case where the two disagree, and inferring from
-    the configuration exempts a newly requested port nobody owns while flagging
-    the running server's own port as a collision. A live pid is enough -- a
-    wedged server still holds its ports, and ensure_world_server stops it."""
+    """Ports the world server this checkout started is holding, from the recorded
+    pair rather than the configuration (see WORLD_SERVER_PORTS_PATH). A live pid
+    is enough: a wedged server still holds them, and ensure_world_server stops it."""
     try:
         pid = int(WORLD_SERVER_PID_PATH.read_text(encoding="utf-8").strip())
         ports = {int(port) for port in WORLD_SERVER_PORTS_PATH.read_text(encoding="utf-8").split()}
@@ -1307,8 +1281,8 @@ def _own_world_server_ports() -> set[int]:
 
 
 def _suggest_port_base() -> int | None:
-    """A base whose whole block is free, so the remedy names a base that will
-    work rather than echoing back the one that just failed."""
+    """A base whose whole block is free, so the remedy cannot echo back the base
+    that just failed."""
     for base in range(8600, 9600, 10):
         if all(_host_port_free(base + offset, udp=udp) for offset, (_, _, udp) in enumerate(_PUBLISHED_HOST_PORTS)):
             return base
@@ -1325,13 +1299,10 @@ def _other_checkout_holding(ports: set[int]) -> tuple[str, str] | None:
 
 
 def refuse_if_ports_taken() -> None:
-    """Refuse before anything claims a host port this stack needs.
-
-    Checked ahead of the world server, not just ahead of compose: a second
-    checkout sharing the port block would otherwise have its
-    _stop_stale_world_server SIGTERM the first one's physics before Docker ever
-    complained about 443.
-    """
+    """Refuse before anything claims a host port this stack needs. Ahead of the
+    world server, not just ahead of compose: a second checkout sharing the block
+    would otherwise SIGTERM the first one's physics (_stop_stale_world_server)
+    before Docker ever complained about 443."""
     ours = _container_published_ports(OS_CONTAINER_NAME) | _own_world_server_ports()
     taken = [
         (label, port)
@@ -1674,10 +1645,8 @@ def wait_for_virtual_mars(config: dict[str, object], *, timeout_seconds: float =
 
 
 def runtime_already_running(config: dict[str, object]) -> bool:
-    """The running stack is both complete and current. A container started under
-    a different port block still publishes the ports the dashboard no longer
-    prints, and only a recreate can move them -- so it is not reusable, however
-    healthy it looks."""
+    """The running stack is both complete and current. A container on a stale port
+    block is not reusable however healthy it looks -- only a recreate moves it."""
     return os_runtime_ready(config) and os_container_current()
 
 

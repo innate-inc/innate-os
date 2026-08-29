@@ -39,10 +39,8 @@ OS_BUILD_LOG_PATH = LOG_DIR / "os-build.log"
 VIEWER_BUILD_LOG_PATH = LOG_DIR / "viewer-build.log"
 WORLD_SERVER_LOG_PATH = LOG_DIR / "world-server.log"
 WORLD_SERVER_PID_PATH = STATE_DIR / "world-server.pid"
-# The two host ports the running world server was STARTED with, recorded rather
-# than inferred: after a port override the configured ports and the running
-# server's ports are exactly what differ, so the collision guard cannot ask the
-# configuration which ports are already ours.
+# Recorded, not inferred: after a port override the configuration and the
+# running server's ports are exactly what differ.
 WORLD_SERVER_PORTS_PATH = STATE_DIR / "world-server.ports"
 # Content digest of the model sources the running world server compiled
 # (see runtime._world_model_sources_digest); written next to the pid.
@@ -53,17 +51,12 @@ ROS_INSTALL_STATE_PATH = STATE_DIR / "ros-install.inputs.sha256"
 OS_SESSION_READY_POLL_SECONDS = 0.25
 GENERATED_OS_ENV_PATH = STATE_DIR / "innate-os.env"
 
-# Every host port the sim publishes, as one movable block: a second checkout
-# runs alongside a first with `INNATE_SIM_PORT_BASE=8500 ./innate-sim up`, or
-# one port at a time with the individual overrides. The defaults are the
-# classic ports, so a single-checkout setup sees no change.
 PORT_BASE_ENV = "INNATE_SIM_PORT_BASE"
 
 
 def _resolve_port(name: str, offset: int, classic: int) -> int:
-    """One published host port: its own override wins, then PORT_BASE_ENV plus
-    this port's offset within the block, then the classic port. Exits rather
-    than raising -- this runs at import, outside main()'s StackError boundary."""
+    """Own override, else PORT_BASE_ENV plus this port's offset, else `classic`.
+    Exits rather than raising: this runs at import, outside main()'s boundary."""
     for source, raw, shift in (
         (name, os.environ.get(name, "").strip(), 0),
         (PORT_BASE_ENV, os.environ.get(PORT_BASE_ENV, "").strip(), offset),
@@ -84,8 +77,8 @@ SIM_UDP_PORT = _resolve_port("SIM_UDP_PORT", 3, 9999)
 SIM_FOXGLOVE_PORT = _resolve_port("SIM_FOXGLOVE_PORT", 4, 8765)
 WORLD_SERVER_PORT = _resolve_port("SIM_WORLD_PORT", 5, 8799)
 WORLD_STATE_PORT = _resolve_port("SIM_WORLD_STATE_PORT", 6, 8800)
-# Resolved here and injected into compose's environment, so a base-only
-# override reaches the compose file without it knowing the base exists.
+# Injected into compose's environment, so a base-only override reaches the
+# compose file without it knowing the base exists.
 PUBLISHED_PORT_ENV = {
     "SIM_HTTPS_PORT": str(SIM_HTTPS_PORT),
     "SIM_HTTP_PORT": str(SIM_HTTP_PORT),
@@ -698,8 +691,7 @@ def get_config() -> dict[str, object]:
         )
 
     merged_env = dict(raw_env)
-    # Container-side: 9090 is rosbridge's port INSIDE the container, which the
-    # published-port block never moves.
+    # 9090 is rosbridge's port INSIDE the container, which no override moves.
     merged_env.setdefault("ROSBRIDGE_URI", "ws://localhost:9090")
 
     os_repo = require_path(REPO_ROOT, "innate-os repository")
