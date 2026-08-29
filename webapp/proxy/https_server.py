@@ -93,8 +93,6 @@ WORLD_STATE_URL = f"ws://{_WORLD_HOST}:{WORLD_STATE_PORT}"
 # the 10s deadline was closing healthy sockets that share WiFi with the streams.
 WS_HEARTBEAT = 60.0
 
-# Cadence of the JS-visible keepalive (see _keepalive). This process serves the
-# webapp too, so client and server never disagree on it.
 WS_KEEPALIVE = 20.0
 _KEEPALIVE_FRAME = json.dumps({"op": "keepalive"})
 

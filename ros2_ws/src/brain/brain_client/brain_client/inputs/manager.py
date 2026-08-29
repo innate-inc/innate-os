@@ -24,8 +24,6 @@ from brain_client.inputs.loader import InputLoader
 from brain_client.inputs.types import InputDevice
 
 MIC_DEVICE_NAME = "micro"
-# Room tone the recogniser punctuated — a bare "." or "?". Publishing it posts
-# a junk bubble and spends an agent turn answering nobody.
 _HAS_CONTENT = re.compile(r"[^\W_]")
 
 

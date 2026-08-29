@@ -764,9 +764,8 @@ export function createBrainMonitor(root, opts = {}) {
   let destroyed = false;
   const demoMode = new URLSearchParams(location.search).has("demo");
 
-  // On screen only (see setVisible), unlike the cheap status feeds: trace
-  // carries the whole request body and its frames at ~1 MB per turn, and the
-  // camera fallback pulls base64 JPEGs onto a page already streaming WebRTC.
+  // Both cost ~1 MB per turn on the wire, so they follow the monitor on screen
+  // (see setVisible) rather than run all session like the status feeds.
   const subscribeTrace = () => ros.subscribe("/brain/trace", jsonHandler(onTrace), 0, "std_msgs/msg/String");
 
   const subscribeCam = () =>

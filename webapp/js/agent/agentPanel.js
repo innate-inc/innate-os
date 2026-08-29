@@ -23,8 +23,6 @@ import {
 import { createChatStream } from "./chatStream.js";
 import { createDirectiveControls } from "./directiveControls.js";
 
-// Free in the steady state (see loadHistory), so this only has to beat a
-// reader's patience with a missing message.
 const HISTORY_RECONCILE_MS = 30_000;
 
 const CHAT_EXAMPLES = [
@@ -231,9 +229,8 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   });
 
   // ---- history backfill ---------------------------------------------------
-  // Live topics carry only what arrives after we subscribe, so any gap leaves a
-  // hole nothing fills. Reconcile against the brain's record rather than trust
-  // the socket — in sync costs no DOM work, cheap enough to run on a timer.
+  // A topic delivers only what arrives after we subscribe, so a gap in delivery
+  // is permanent — the brain's record is the only thing that can close it.
   let loadingHistory = false;
   let newestRenderedTs = 0;
 
@@ -264,8 +261,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     if (s === "connected") void loadHistory();
   });
 
-  // A reconnect is not the only way to miss one, and the stale-socket watchdog
-  // needs 70s to be sure — so also reconcile on return, and slowly while read.
   const onVisible = () => {
     if (document.visibilityState === "visible") void loadHistory();
   };
