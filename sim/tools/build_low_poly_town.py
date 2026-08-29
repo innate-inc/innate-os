@@ -41,6 +41,7 @@ PACK_ROOT = Path("local-environments") / PACK_ID
 ROAD_SURFACE_Y = 0.489483
 ROAD_MARKING_SOURCE_Y = 0.543620586
 ROAD_MARKING_LIFT = 0.002
+BASE_SLAB_CLEARANCE = 0.01
 # The rendered sidewalks are about 10 cm above the road after the town is
 # grounded. Keep the collision proxy faithful to that visible step so MARS
 # does not encounter the previous, artificial 22 cm curb.
@@ -148,6 +149,31 @@ def _lift_road_markings(scene: trimesh.Scene) -> None:
     if len(candidates) != 1:
         raise RuntimeError(f"expected one flat white road-marking mesh, found {len(candidates)}")
     candidates[0].apply_translation((0.0, ROAD_MARKING_LIFT, 0.0))
+
+
+def _lower_base_slab(scene: trimesh.Scene) -> None:
+    """Move the hidden town slab below coplanar asphalt and landscaping."""
+    candidates: list[trimesh.Trimesh] = []
+    for mesh in scene.geometry.values():
+        material = getattr(mesh.visual, "material", None)
+        if (
+            str(getattr(material, "name", "")).casefold() == "gray"
+            and mesh.extents[0] > 25.0
+            and mesh.extents[2] > 25.0
+            and abs(float(mesh.bounds[1, 1])) < 0.0002
+        ):
+            candidates.append(mesh)
+
+    if len(candidates) != 1:
+        raise RuntimeError(f"expected one full-town gray base slab, found {len(candidates)}")
+    candidates[0].apply_translation((0.0, -BASE_SLAB_CLEARANCE, 0.0))
+
+
+def _apply_flat_shading(scene: trimesh.Scene) -> None:
+    """Replace the OBJ's corrupt shared normals with low-poly face normals."""
+    for mesh in scene.geometry.values():
+        mesh.unmerge_vertices()
+        mesh.vertex_normals = np.repeat(mesh.face_normals, 3, axis=0)
 
 
 def _prepare_daylight_materials(scene: trimesh.Scene) -> None:
@@ -414,7 +440,9 @@ def build(source_obj: Path, source_mtl: Path) -> None:
         directory.mkdir(parents=True)
 
     scene = _load_authored_scene(source_obj, source_mtl)
+    _lower_base_slab(scene)
     _lift_road_markings(scene)
+    _apply_flat_shading(scene)
     _prepare_daylight_materials(scene)
     _write_browser_scene(scene, viewer_pack_root)
     material_count = _write_mujoco_visuals(scene, visual_root)
