@@ -29,7 +29,7 @@ Start with [skills](#skills), [agents](#agents), [additional inputs](#additional
 <table>
   <tr>
     <td width="64%" align="center" valign="top">
-      <img src="docs/assets/readme/screenshot-webapp-card.png" alt="Innate web app control interface" width="100%"><br>
+      <img src="docs/assets/readme/screenshot-webapp-card.png" alt="Innate web app Agent page on MARS the 3rd" width="100%"><br>
       <sub>Web app</sub>
     </td>
     <td width="36%" rowspan="2" align="center" valign="middle">
@@ -39,7 +39,7 @@ Start with [skills](#skills), [agents](#agents), [additional inputs](#additional
   </tr>
   <tr>
     <td width="64%" align="center" valign="top">
-      <a href="https://sim-demo.innate.bot"><img src="docs/assets/readme/screenshot-simulator-card.png" alt="Innate simulator interface" width="100%"></a><br>
+      <a href="https://sim-demo.innate.bot"><img src="docs/assets/readme/screenshot-simulator-card.png" alt="Teleop on a simulated MARS robot" width="100%"></a><br>
       <sub><a href="https://sim-demo.innate.bot">Live simulator</a></sub>
     </td>
   </tr>
@@ -67,9 +67,9 @@ _Innate OS is developed for MARS; if you want to port it to your robot, we are h
 
 ### Web app
 
-With the Innate web app, you can control the robot in real time. Use the virtual joystick controls to drive the base, move the arm, and trigger skills manually.
+With the Innate web app, you can run agents, inspect what MARS sees, and control the robot in real time. The Agent page below is connected to a physical MARS the 3rd.
 
-<img src="docs/assets/readme/screenshot-webapp-card.png" alt="Innate web app" height="300">
+<img src="docs/assets/readme/screenshot-webapp-card.png" alt="Innate web app Agent page on MARS the 3rd" height="300">
 
 It is available at `https://<robot-address>` which can either be its IP or hostname.
 
