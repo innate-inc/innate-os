@@ -68,6 +68,19 @@ APPROACH_PARAMS = {
 }
 
 FOLLOW_TIMEOUT_S = 20.0
+# How far past the first measured range the base may ever drive. Vision cannot
+# bound the endgame: a container filling the frame reads as a stable "2 cm
+# short" long after the bumper is against it — the detected floor-contact
+# pixel is up its wall, not on the floor — and the servo drives on until it
+# tips the thing over (measured: crate at 57 deg, base 0.07 m past the wall,
+# every late detection still saying 0.25 m). Odometry is the honest bound.
+TRAVEL_MARGIN_M = 0.08
+# The endgame reading plateaus ~2 cm long of the park: with the target a hand
+# away, its detected floor-contact row sits a few pixels up the wall, and at
+# ~1.2 cm/row that is a standoff the accept band rejects forever. Within this
+# slack the run is effectively parked — the reach clamp absorbs the standoff —
+# so settle for the measured spot instead of failing a completed approach.
+PLATEAU_SLACK_M = 0.05
 # Self-tracking guard: a pixel glued in place through real base motion is not
 # on the floor — it is on the robot (the arm or the carried object in frame),
 # or on a box the bumper is pushing along, and the servo would chase it
@@ -248,9 +261,10 @@ class _FloorApproach(Skill):
         frac = self._p["accept_frac"]
         return (c[0], c[1]), (hu, hv), (hu * frac, hv * frac)
 
-    def _follow_into_box(self, seed_px):
+    def _follow_into_box(self, seed_px, max_forward=None):
         """Optical-flow base servo into the sweet box. No Gemini.
-        Returns ('in_box'|'lost'|'timeout'|'noframe', px|None)."""
+        Returns ('in_box'|'lost'|'timeout'|'noframe'|'budget', px|None);
+        'budget' means max_forward metres of odometry were spent."""
         raw = self.main_image
         prev = vision.b64_to_gray(raw) if raw else None
         if prev is None:
@@ -262,6 +276,7 @@ class _FloorApproach(Skill):
         sweet = self._debug_sweet()
         t0 = time.monotonic()
         anchor, anchor_odo = (u, v), self._odom_xyt()
+        seg_start = anchor_odo
         while time.monotonic() - t0 < FOLLOW_TIMEOUT_S:
             # Only track NEW frames: the camera runs slower than this loop,
             # and a stale frame re-tracked would count one observation twice.
@@ -315,6 +330,17 @@ class _FloorApproach(Skill):
                 self._debug("follow", track_px=[u, v], note="static: tracking the robot itself", sweet=sweet)
                 return "lost", None
 
+            now_odo = self._odom_xyt()
+            if (
+                max_forward is not None
+                and seg_start is not None
+                and now_odo is not None
+                and math.hypot(now_odo[0] - seg_start[0], now_odo[1] - seg_start[1]) >= max_forward
+            ):
+                self.mobility.stop()
+                self._debug("follow", track_px=[u, v], note="odometry budget spent", sweet=sweet)
+                return "budget", (u, v)
+
             # Deadband = accept (inner) box; right -> -wz, too close (low) -> -vx.
             wz = self.mobility.servo_vel(
                 u - cu, self._p["follow_gain_ang"], self._p["rot_wz_min"], self._p["rot_wz_max"], accept[0]
@@ -354,6 +380,16 @@ class _FloorApproach(Skill):
             seed = floor_to_pixel(xy[0], xy[1], self._p["tilt_deg"])
         _fallback_xy = xy
         lost = 0
+        start_odo = self._odom_xyt()
+        budget = max(0.0, xy[0] - self._p["sweet_x"]) + TRAVEL_MARGIN_M
+
+        def _traveled():
+            now = self._odom_xyt()
+            if start_odo is None or now is None:
+                return 0.0
+            return math.hypot(now[0] - start_odo[0], now[1] - start_odo[1])
+
+        last_y = xy[1]
         for _attempt in range(int(self._p["box_steps"])):
             if seed is None:
                 xy, seed = self._localize_retry(prompt)
@@ -367,7 +403,19 @@ class _FloorApproach(Skill):
             (cu, cv), _half, accept = self._sweet_box()
             if xy is not None and inside_box(seed, cu, cv, accept[0], accept[1]):
                 return xy
-            result, _pt = self._follow_into_box(seed)
+            spent = _traveled()
+            if spent >= budget:
+                # The base has covered everything the first measurement said
+                # there was, so it IS at the park — believe the wheels over a
+                # vision endgame that can only see the target's wall.
+                self.mobility.stop()
+                self.logger.info(f"[{self.name}] odometry budget spent ({spent:.2f} of {budget:.2f} m): parked")
+                self._debug("localize", note="parked by odometry", target_xy=[self._p["sweet_x"], last_y])
+                return (self._p["sweet_x"], last_y)
+            result, _pt = self._follow_into_box(seed, max_forward=budget - spent)
+            if result == "budget":
+                seed, xy = _pt, None
+                continue
             if result == "noframe":
                 return self._position_stepwise(prompt, xy)
             if result == "lost":
@@ -388,6 +436,13 @@ class _FloorApproach(Skill):
             if xy2 is not None and inside_box(px2, cu, cv, accept[0], accept[1]):
                 return xy2
             xy, seed = xy2, (px2 if xy2 is not None else None)
+            if xy is not None:
+                last_y = xy[1]
+        if xy is not None and xy[0] <= self._p["sweet_x"] + PLATEAU_SLACK_M:
+            self.mobility.stop()
+            self.logger.info(f"[{self.name}] settling for the measured park at {xy[0]:.3f} m")
+            self._debug("localize", note="parked within slack", target_xy=list(xy))
+            return xy
         self._position_failed(prompt)
 
     def _position_stepwise(self, prompt, xy):
