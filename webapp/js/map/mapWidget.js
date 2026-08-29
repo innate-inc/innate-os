@@ -410,6 +410,10 @@ export function createMap(root, opts = {}) {
   /** @type {string | null} map-load epoch paired with candidateMapHash */
   let candidateMapEpoch = null;
   let mapSelectionPending = false;
+  // The displayed grid is an equal-content reload whose notification has not
+  // arrived: only the very next mapChanged() may adopt it. One-shot, because a
+  // later switch announces a different map that this grid must not stand in for.
+  let reloadAwaitingNotification = false;
   let robotSelectionPending = false;
   let mapGenerationAtSelectionChange = 0;
   let mapFingerprintGeneration = 0;
@@ -1114,6 +1118,7 @@ export function createMap(root, opts = {}) {
     const mapEpoch = mapEpochFromMessage(msg);
     candidateMapHash = null;
     candidateMapEpoch = null;
+    reloadAwaitingNotification = false;
     activeMapHash = null;
     keepoutGrid = null;
     keepoutPlacement = null;
@@ -1135,14 +1140,18 @@ export function createMap(root, opts = {}) {
           selectedMapEpoch,
         )
       ) {
-        const earlyEqualReload =
+        // Adopting an equal-content reload used to be recorded by holding
+        // selectedMapEpoch at the previous value, which left the selection
+        // describing two different moments — and a later notification-first
+        // switch read that gap as evidence for the map already on screen.
+        reloadAwaitingNotification =
           !mapSelectionPending &&
           mapHash === selectedMapHash &&
           !!mapEpoch &&
           !!selectedMapEpoch &&
           mapEpoch !== selectedMapEpoch;
         selectedMapHash = mapHash;
-        if (!earlyEqualReload) selectedMapEpoch = mapEpoch;
+        selectedMapEpoch = mapEpoch;
         mapSelectionPending = false;
         activeMapHash = mapHash;
         syncKeepoutForMap();
@@ -2251,6 +2260,7 @@ export function createMap(root, opts = {}) {
     candidateMapHash = null;
     candidateMapEpoch = null;
     mapSelectionPending = false;
+    reloadAwaitingNotification = false;
     robotSelectionPending = true;
     keepoutGrid = null;
     latestKeepoutGrid = null;
@@ -2397,7 +2407,15 @@ export function createMap(root, opts = {}) {
       clearTimeout(keepoutSaveTimer);
       if (
         candidateMapHash &&
-        shouldActivateMapFingerprint(candidateMapHash, selectedMapHash, true, false, candidateMapEpoch, selectedMapEpoch)
+        (reloadAwaitingNotification ||
+          shouldActivateMapFingerprint(
+            candidateMapHash,
+            selectedMapHash,
+            true,
+            false,
+            candidateMapEpoch,
+            selectedMapEpoch,
+          ))
       ) {
         selectedMapHash = candidateMapHash;
         selectedMapEpoch = candidateMapEpoch;
@@ -2405,6 +2423,7 @@ export function createMap(root, opts = {}) {
         activeMapHash = candidateMapHash;
         syncKeepoutForMap();
       }
+      reloadAwaitingNotification = false;
       draw();
     },
     /** The robot's clock in epoch seconds (see memClockSkew) — memory stamps
