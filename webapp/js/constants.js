@@ -98,6 +98,9 @@ export const NAV_POLICY_ACTION_TYPE = "innate_cloud_msgs/action/NavigateInstruct
 // Probe the policy server without starting a run: the ROBOT asks, because it is
 // the one that has to reach it (innate_cloud_msgs/srv/CheckPolicyServer).
 export const NAV_POLICY_CHECK_SERVICE = "/nav_policy/check_server";
+// Sim only: place the robot (geometry_msgs/Pose2D, theta in radians). The nav
+// benchmark starts every scenario from the pose the scenario specifies.
+export const SIM_SET_POSE_TOPIC = "/virtual_mars/set_pose";
 // The policy node itself, for the speed/ramp knobs the policy page tunes live
 // (rcl_interfaces get_parameters / set_parameters, all PARAMETER_DOUBLE).
 export const NAV_POLICY_NODE = "/innate_nav_node";

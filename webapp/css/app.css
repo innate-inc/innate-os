@@ -11114,7 +11114,9 @@ select.skill-input {
 .policy-status { font-size: 12px; opacity: 0.75; min-height: 1.2em; }
 .policy-status.bad { color: #ff8a80; opacity: 1; }
 
-.policy-side { min-height: 0; overflow-y: auto; }
+/* Column, not a scroll box: the benchmark list inside owns the scrolling so
+   the clocks above it stay visible while you page through 40 scenarios. */
+.policy-side { min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
 .policy-panel { display: flex; flex-direction: column; gap: 8px; }
 .policy-panel-head {
   font-size: 11px;
@@ -11136,6 +11138,64 @@ select.skill-input {
 .policy-clock b { display: block; font-size: 15px; font-variant-numeric: tabular-nums; }
 .policy-clock span { font-size: 10.5px; opacity: 0.55; }
 .policy-flags { display: flex; flex-wrap: wrap; gap: 5px; }
+/* The benchmark list is long by design — 40 scenarios — so it scrolls inside
+   the column rather than pushing the clocks off the page. */
+.policy-bench { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.bench-note { font-size: 11px; opacity: 0.55; margin-bottom: 6px; }
+.bench-list { overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 3px; }
+.bench-row {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  padding: 5px 6px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  border-left: 2px solid transparent;
+}
+.bench-row.running { border-left-color: #ffd700; }
+.bench-row.pass { border-left-color: #00ff88; }
+.bench-row.fail { border-left-color: #ff8a80; }
+.bench-run {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 7px;
+  cursor: pointer;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.09);
+}
+.bench-body { min-width: 0; }
+.bench-instruction { font-size: 11.5px; line-height: 1.3; }
+.bench-meta { font-size: 10.5px; opacity: 0.55; font-variant-numeric: tabular-nums; }
+/* The benchmark list is long by design — 40 scenarios — so it scrolls inside
+   the column rather than pushing the clocks off the page. */
+.policy-bench { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.bench-note { font-size: 11px; opacity: 0.55; margin-bottom: 6px; }
+.bench-list { overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 3px; }
+.bench-row {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  padding: 5px 6px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  border-left: 2px solid transparent;
+}
+.bench-row.running { border-left-color: #ffd700; }
+.bench-row.pass { border-left-color: #00ff88; }
+.bench-row.fail { border-left-color: #ff8a80; }
+.bench-run {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 7px;
+  cursor: pointer;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.09);
+}
+.bench-body { min-width: 0; }
+.bench-instruction { font-size: 11.5px; line-height: 1.3; }
+.bench-meta { font-size: 10.5px; opacity: 0.55; font-variant-numeric: tabular-nums; }
 .policy-flag {
   font-size: 10.5px;
   padding: 3px 7px;

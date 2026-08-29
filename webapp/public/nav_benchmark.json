@@ -1,0 +1,687 @@
+{
+ "name": "sim apartment nav benchmark",
+ "note": "Spawn pose and goal are world coordinates in the sim apartment. Scenarios come in sets that share a spawn and differ only in the instruction, so following the instruction is what separates them. Generated from the map's navigable area: every spawn and goal has clearance and every pair is connected.",
+ "goal_radius_m": 0.75,
+ "scenarios": [
+  {
+   "id": "s00",
+   "spawn": [
+    -2.24,
+    5.94,
+    -98.5
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "radius": 0.75,
+   "path_m": 2.0,
+   "turn": "left",
+   "turn_deg": 104.5,
+   "instruction": "Turn left and drive to the end."
+  },
+  {
+   "id": "s01",
+   "spawn": [
+    -2.24,
+    5.94,
+    -98.5
+   ],
+   "goal": [
+    -3.39,
+    1.19
+   ],
+   "radius": 0.75,
+   "path_m": 5.95,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Drive straight forward and stop when you get there."
+  },
+  {
+   "id": "s02",
+   "spawn": [
+    -2.34,
+    4.89,
+    -170.5
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "radius": 0.75,
+   "path_m": 2.9,
+   "turn": "right",
+   "turn_deg": -108.4,
+   "instruction": "Go right and keep going until you have to stop."
+  },
+  {
+   "id": "s03",
+   "spawn": [
+    -2.34,
+    4.89,
+    -170.5
+   ],
+   "goal": [
+    -4.24,
+    0.14
+   ],
+   "radius": 0.75,
+   "path_m": 6.0,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Go straight ahead and stop at the end of the way."
+  },
+  {
+   "id": "s04",
+   "spawn": [
+    -5.39,
+    4.74,
+    -56.3
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "radius": 0.75,
+   "path_m": 5.85,
+   "turn": "left",
+   "turn_deg": 62.0,
+   "instruction": "Turn left and follow the passage."
+  },
+  {
+   "id": "s05",
+   "spawn": [
+    -5.39,
+    4.74,
+    -56.3
+   ],
+   "goal": [
+    -3.74,
+    -1.06
+   ],
+   "radius": 0.75,
+   "path_m": 5.9,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Continue straight ahead."
+  },
+  {
+   "id": "s06",
+   "spawn": [
+    -4.34,
+    4.74,
+    -126.3
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "radius": 0.75,
+   "path_m": 4.8,
+   "turn": "left",
+   "turn_deg": 126.3,
+   "instruction": "Turn left and drive to the end."
+  },
+  {
+   "id": "s07",
+   "spawn": [
+    -4.34,
+    4.74,
+    -126.3
+   ],
+   "goal": [
+    -6.44,
+    4.74
+   ],
+   "radius": 0.75,
+   "path_m": 2.1,
+   "turn": "right",
+   "turn_deg": -59.5,
+   "instruction": "Turn right and follow the passage."
+  },
+  {
+   "id": "s08",
+   "spawn": [
+    -4.34,
+    4.74,
+    -126.3
+   ],
+   "goal": [
+    -3.74,
+    -1.06
+   ],
+   "radius": 0.75,
+   "path_m": 5.9,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Continue straight ahead."
+  },
+  {
+   "id": "s09",
+   "spawn": [
+    -3.34,
+    4.64,
+    -159.4
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "radius": 0.75,
+   "path_m": 3.8,
+   "turn": "back",
+   "turn_deg": 175.0,
+   "instruction": "Turn around and drive back the way you came."
+  },
+  {
+   "id": "s10",
+   "spawn": [
+    -3.34,
+    4.64,
+    -159.4
+   ],
+   "goal": [
+    -6.44,
+    4.74
+   ],
+   "radius": 0.75,
+   "path_m": 3.1,
+   "turn": "right",
+   "turn_deg": -32.4,
+   "instruction": "Turn right and follow the passage."
+  },
+  {
+   "id": "s11",
+   "spawn": [
+    -3.34,
+    4.64,
+    -159.4
+   ],
+   "goal": [
+    -4.74,
+    -0.76
+   ],
+   "radius": 0.75,
+   "path_m": 5.9,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Continue straight ahead."
+  },
+  {
+   "id": "s12",
+   "spawn": [
+    -4.69,
+    3.79,
+    45.0
+   ],
+   "goal": [
+    -6.44,
+    4.74
+   ],
+   "radius": 0.75,
+   "path_m": 1.75,
+   "turn": "left",
+   "turn_deg": 90.0,
+   "instruction": "Turn left and drive to the end."
+  },
+  {
+   "id": "s13",
+   "spawn": [
+    -4.69,
+    3.79,
+    45.0
+   ],
+   "goal": [
+    -3.74,
+    -1.06
+   ],
+   "radius": 0.75,
+   "path_m": 4.95,
+   "turn": "right",
+   "turn_deg": -128.7,
+   "instruction": "Turn right and follow the passage."
+  },
+  {
+   "id": "s14",
+   "spawn": [
+    -4.69,
+    3.79,
+    45.0
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "radius": 0.75,
+   "path_m": 5.15,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Continue straight ahead."
+  },
+  {
+   "id": "s15",
+   "spawn": [
+    -2.64,
+    3.34,
+    -160.6
+   ],
+   "goal": [
+    -0.84,
+    1.39
+   ],
+   "radius": 0.75,
+   "path_m": 2.75,
+   "turn": "back",
+   "turn_deg": 154.2,
+   "instruction": "Turn around and drive back the way you came."
+  },
+  {
+   "id": "s16",
+   "spawn": [
+    -2.64,
+    3.34,
+    -160.6
+   ],
+   "goal": [
+    -3.39,
+    1.19
+   ],
+   "radius": 0.75,
+   "path_m": 2.15,
+   "turn": "left",
+   "turn_deg": 27.5,
+   "instruction": "Turn left and follow the passage."
+  },
+  {
+   "id": "s17",
+   "spawn": [
+    -2.64,
+    3.34,
+    -160.6
+   ],
+   "goal": [
+    -2.24,
+    5.94
+   ],
+   "radius": 0.75,
+   "path_m": 5.4,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Continue straight ahead."
+  },
+  {
+   "id": "s18",
+   "spawn": [
+    -1.59,
+    3.34,
+    177.0
+   ],
+   "goal": [
+    -0.84,
+    1.39
+   ],
+   "radius": 0.75,
+   "path_m": 1.95,
+   "turn": "left",
+   "turn_deg": 126.7,
+   "instruction": "Turn left and drive to the end."
+  },
+  {
+   "id": "s19",
+   "spawn": [
+    -1.59,
+    3.34,
+    177.0
+   ],
+   "goal": [
+    -4.74,
+    -0.76
+   ],
+   "radius": 0.75,
+   "path_m": 5.95,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Drive straight forward and stop when you get there."
+  },
+  {
+   "id": "s20",
+   "spawn": [
+    -0.54,
+    3.34,
+    174.3
+   ],
+   "goal": [
+    -0.84,
+    1.39
+   ],
+   "radius": 0.75,
+   "path_m": 1.95,
+   "turn": "left",
+   "turn_deg": 59.5,
+   "instruction": "Go left and keep going until you have to stop."
+  },
+  {
+   "id": "s21",
+   "spawn": [
+    -0.54,
+    3.34,
+    174.3
+   ],
+   "goal": [
+    -6.44,
+    4.74
+   ],
+   "radius": 0.75,
+   "path_m": 5.9,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Go straight ahead and stop at the end of the way."
+  },
+  {
+   "id": "s22",
+   "spawn": [
+    -4.09,
+    2.99,
+    130.9
+   ],
+   "goal": [
+    -3.39,
+    1.19
+   ],
+   "radius": 0.75,
+   "path_m": 2.05,
+   "turn": "back",
+   "turn_deg": -173.4,
+   "instruction": "Turn around and go to the far end behind you."
+  },
+  {
+   "id": "s23",
+   "spawn": [
+    -4.09,
+    2.99,
+    130.9
+   ],
+   "goal": [
+    -3.74,
+    -1.06
+   ],
+   "radius": 0.75,
+   "path_m": 4.15,
+   "turn": "left",
+   "turn_deg": 111.2,
+   "instruction": "Go left and keep going until you have to stop."
+  },
+  {
+   "id": "s24",
+   "spawn": [
+    -4.09,
+    2.99,
+    130.9
+   ],
+   "goal": [
+    -0.84,
+    1.39
+   ],
+   "radius": 0.75,
+   "path_m": 4.2,
+   "turn": "right",
+   "turn_deg": -127.9,
+   "instruction": "Turn right and drive to the end."
+  },
+  {
+   "id": "s25",
+   "spawn": [
+    -4.09,
+    2.99,
+    130.9
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "radius": 0.75,
+   "path_m": 5.95,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Drive straight forward and stop when you get there."
+  },
+  {
+   "id": "s26",
+   "spawn": [
+    -3.39,
+    2.24,
+    122.0
+   ],
+   "goal": [
+    -0.84,
+    1.39
+   ],
+   "radius": 0.75,
+   "path_m": 3.55,
+   "turn": "right",
+   "turn_deg": -75.0,
+   "instruction": "Go right and keep going until you have to stop."
+  },
+  {
+   "id": "s27",
+   "spawn": [
+    -3.39,
+    2.24,
+    122.0
+   ],
+   "goal": [
+    -2.24,
+    5.94
+   ],
+   "radius": 0.75,
+   "path_m": 4.9,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Go straight ahead and stop at the end of the way."
+  },
+  {
+   "id": "s28",
+   "spawn": [
+    -4.54,
+    2.04,
+    -99.5
+   ],
+   "goal": [
+    -2.24,
+    5.94
+   ],
+   "radius": 0.75,
+   "path_m": 5.05,
+   "turn": "back",
+   "turn_deg": -167.2,
+   "instruction": "Turn around and go to the far end behind you."
+  },
+  {
+   "id": "s29",
+   "spawn": [
+    -4.54,
+    2.04,
+    -99.5
+   ],
+   "goal": [
+    -1.89,
+    -0.66
+   ],
+   "radius": 0.75,
+   "path_m": 5.1,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Continue straight ahead."
+  },
+  {
+   "id": "s30",
+   "spawn": [
+    -4.69,
+    1.04,
+    87.0
+   ],
+   "goal": [
+    -0.99,
+    -1.66
+   ],
+   "radius": 0.75,
+   "path_m": 5.3,
+   "turn": "back",
+   "turn_deg": -165.7,
+   "instruction": "Turn around and drive back the way you came."
+  },
+  {
+   "id": "s31",
+   "spawn": [
+    -4.69,
+    1.04,
+    87.0
+   ],
+   "goal": [
+    -0.84,
+    1.39
+   ],
+   "radius": 0.75,
+   "path_m": 5.85,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Drive straight forward and stop when you get there."
+  },
+  {
+   "id": "s32",
+   "spawn": [
+    -4.24,
+    0.14,
+    109.4
+   ],
+   "goal": [
+    -1.59,
+    -2.46
+   ],
+   "radius": 0.75,
+   "path_m": 5.2,
+   "turn": "back",
+   "turn_deg": 156.7,
+   "instruction": "Turn around and keep going."
+  },
+  {
+   "id": "s33",
+   "spawn": [
+    -4.24,
+    0.14,
+    109.4
+   ],
+   "goal": [
+    -2.34,
+    4.89
+   ],
+   "radius": 0.75,
+   "path_m": 6.0,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Go straight ahead and stop at the end of the way."
+  },
+  {
+   "id": "s34",
+   "spawn": [
+    -1.89,
+    -0.66,
+    -160.6
+   ],
+   "goal": [
+    -1.59,
+    -2.46
+   ],
+   "radius": 0.75,
+   "path_m": 2.05,
+   "turn": "left",
+   "turn_deg": 121.9,
+   "instruction": "Turn left and follow the passage."
+  },
+  {
+   "id": "s35",
+   "spawn": [
+    -1.89,
+    -0.66,
+    -160.6
+   ],
+   "goal": [
+    -4.54,
+    2.04
+   ],
+   "radius": 0.75,
+   "path_m": 5.1,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Continue straight ahead."
+  },
+  {
+   "id": "s36",
+   "spawn": [
+    -0.84,
+    -0.66,
+    177.0
+   ],
+   "goal": [
+    -1.59,
+    -2.46
+   ],
+   "radius": 0.75,
+   "path_m": 1.9,
+   "turn": "left",
+   "turn_deg": 72.5,
+   "instruction": "Turn left and drive to the end."
+  },
+  {
+   "id": "s37",
+   "spawn": [
+    -0.84,
+    -0.66,
+    177.0
+   ],
+   "goal": [
+    -4.69,
+    1.04
+   ],
+   "radius": 0.75,
+   "path_m": 5.2,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Drive straight forward and stop when you get there."
+  },
+  {
+   "id": "s38",
+   "spawn": [
+    -4.74,
+    -0.76,
+    81.0
+   ],
+   "goal": [
+    -1.59,
+    -2.46
+   ],
+   "radius": 0.75,
+   "path_m": 4.9,
+   "turn": "right",
+   "turn_deg": -92.3,
+   "instruction": "Go right and keep going until you have to stop."
+  },
+  {
+   "id": "s39",
+   "spawn": [
+    -4.74,
+    -0.76,
+    81.0
+   ],
+   "goal": [
+    -1.59,
+    3.34
+   ],
+   "radius": 0.75,
+   "path_m": 5.95,
+   "turn": "straight",
+   "turn_deg": 0.0,
+   "instruction": "Go straight ahead and stop at the end of the way."
+  }
+ ]
+}

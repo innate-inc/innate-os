@@ -44,7 +44,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import TransformStamped, Twist
+from geometry_msgs.msg import Pose2D, TransformStamped, Twist
 from nav_msgs.msg import Odometry
 from PIL import Image as PILImage
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -195,6 +195,9 @@ class VirtualMarsNode(Node):
         # Sim-only. Bool, not Empty: rws cannot deserialize a zero-field message
         # from a browser and takes this subscriber down with it.
         self.create_subscription(Bool, "/virtual_mars/reset", self._on_reset, 10)
+        # Sim-only: place the robot at an arbitrary pose (Pose2D theta is
+        # radians). The nav benchmark starts every scenario this way.
+        self.create_subscription(Pose2D, "/virtual_mars/set_pose", self._on_set_pose, 10)
 
         services = ReentrantCallbackGroup()  # goto services block; don't starve timers
         if GotoJS is not None:
@@ -289,6 +292,11 @@ class VirtualMarsNode(Node):
         with self._lock:
             self._fail_active_traj()
             self.sim.reset()
+
+    def _on_set_pose(self, msg: Pose2D) -> None:
+        with self._lock:
+            self._fail_active_traj()
+            self.sim.reset_to(float(msg.x), float(msg.y), float(msg.theta))
 
     def _on_head_position(self, msg: Int32) -> None:
         deg = max(HEAD_MIN_DEG, min(HEAD_MAX_DEG, float(msg.data)))

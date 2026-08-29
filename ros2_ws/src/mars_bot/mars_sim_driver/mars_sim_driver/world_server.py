@@ -352,6 +352,10 @@ class WorldServer:
             with self.lock:
                 self.sim.reset()
             return {"ok": True}, None
+        if op == "set_pose":                       # sim-only; see core.reset_to
+            with self.lock:
+                self.sim.reset_to(float(req["x"]), float(req["y"]), float(req["yaw"]))
+            return {"ok": True}, None
         if op == "lidar":
             with self.lock:
                 ranges = self.sim.lidar_scan(int(req["n_rays"]), float(req["max_range"]))

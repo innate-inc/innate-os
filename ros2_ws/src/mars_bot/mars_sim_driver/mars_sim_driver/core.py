@@ -343,11 +343,20 @@ class VirtualMars:
         release_freed_heap()
 
     def reset(self) -> None:
+        self.reset_to(SPAWN_X, SPAWN_Y, math.radians(SPAWN_YAW_DEG))
+
+    def reset_to(self, x: float, y: float, yaw: float) -> None:
+        """Reset the world and put the robot at an arbitrary pose.
+
+        Sim-only, like reset(): a benchmark has to start every scenario from a
+        pose it chose, and driving there first would leave the robot with a
+        different history and a different arrival than the scenario specifies.
+        """
         self.world_epoch += 1
         mujoco.mj_resetData(self.model, self.data)
-        self.data.qpos[self._base["x"][0]] = SPAWN_X
-        self.data.qpos[self._base["y"][0]] = SPAWN_Y
-        self.data.qpos[self._base["yaw"][0]] = math.radians(SPAWN_YAW_DEG)
+        self.data.qpos[self._base["x"][0]] = x
+        self.data.qpos[self._base["y"][0]] = y
+        self.data.qpos[self._base["yaw"][0]] = yaw
         for qadr, _dadr, home in self._joints.values():
             self.data.qpos[qadr] = home
         mq, _md, source, mult = self._mimic

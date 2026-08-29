@@ -171,6 +171,14 @@ class RemoteWorld:
         with self._state_lock:
             self._state_at = 0.0
 
+    def reset_to(self, x: float, y: float, yaw: float) -> None:
+        """Reset with the robot placed where the caller asks. Sim-only: it is
+        how a benchmark starts each scenario from the pose that scenario
+        specifies rather than from wherever the last run ended."""
+        self._state_ch.call({"op": "set_pose", "x": float(x), "y": float(y), "yaw": float(yaw)})
+        with self._state_lock:
+            self._state_at = 0.0
+
     # --- sensors ---
 
     def lidar_scan(self, n_rays: int, max_range: float) -> np.ndarray:

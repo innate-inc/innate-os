@@ -27,6 +27,7 @@ import {
   NAV_POLICY_STATUS_TOPIC,
 } from "../constants.js";
 import { createMap } from "../map/mapWidget.js";
+import { createBenchmark } from "./benchmark.js";
 import { createObsBar } from "./obsBar.js";
 import { createStatusPanel } from "./statusPanel.js";
 import { createTuningPanel } from "./tuningPanel.js";
@@ -91,6 +92,7 @@ export function mount(stage) {
     const side = /** @type {HTMLElement} */ (root.querySelector(".policy-side"));
     const panel = createStatusPanel(side);
     const tuning = createTuningPanel(side);
+    const bench = createBenchmark(side, ros);
     // The stage only draws what the session streams it; without this the scene
     // mounts empty and the orbit camera has nothing to orbit.
     session.start();
@@ -188,6 +190,7 @@ export function mount(stage) {
         session.destroy();
         map.destroy();
         panel.destroy();
+        bench.destroy();
         tuning.destroy();
         obsBar.destroy();
       },
