@@ -4,6 +4,7 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
@@ -52,6 +53,31 @@ const HIDDEN_FRAME_LINKS: string[] = ["ee_link", "head_camera_left", "head_camer
 // Arm links painted orange. Every URDF link actually shares the matt_black
 // material, so we override by link name rather than by material.
 const ORANGE_LINKS = new Set(["link1", "link3", "link5"]);
+
+// The dome capping each barrel in head.STL is the lens's cover glass. Splitting
+// by position is the only handle on it: an STL carries no materials, and every
+// URDF link declares one matt_black. Measured on the mesh, the dome spans
+// x=60.07..63.07 at r<=7.50 and the wall behind it starts at r=8.75.
+const CAM_LINK = "head";
+const CAM_GLASS_MIN_X = 0.059;
+const CAM_GLASS_RADIUS = 0.008;
+// Millimetre features, so a micron welds only float noise.
+const CAM_WELD_M = 1e-6;
+// RoomEnvironment is Y-up; this scene is Z-up, so its bright side would
+// otherwise reflect in from one side.
+const CAM_ENV_ROTATION = new THREE.Euler(-Math.PI / 2, 0, 0);
+
+// Inside the barrel. The wall already renders from within (shell is
+// DoubleSide); only the lens and a disc over the 7.00mm hole are missing.
+const CAM_BACK_X = 0.0563;
+const CAM_BACK_RADIUS = 0.0074;
+const CAM_LENS_X = 0.059; // just behind the dome's base at x=60.07
+const CAM_LENS_RADIUS = 0.0045;
+const CAM_LENS_SPHERE = 0.02; // the curve it is a cap of: ~0.5mm of bulge
+const CAM_CENTRES: [number, number][] = [
+  [0.0297, -0.000275],
+  [-0.0303, -0.000275],
+];
 
 // Room streaming order: the spaces the operator looks at first load first.
 // Matched as substrings of the room name (from the source glb, Portuguese:
@@ -147,6 +173,9 @@ export class SimScene {
   private followPrevXY: [number, number] = [0, 0];
   private glossyMaterialCache = new Map<THREE.Material, THREE.MeshStandardMaterial>();
   private orange?: THREE.MeshStandardMaterial;
+  private optic?: THREE.MeshStandardMaterial;
+  private glass?: THREE.MeshStandardMaterial;
+  private cameraEnv?: THREE.Texture;
   private robotCameras = new Map<CameraView, THREE.PerspectiveCamera>();
   private activeView: CameraView = "orbit";
   private lidarPoints?: THREE.Points;
@@ -669,6 +698,7 @@ export class SimScene {
       });
     });
 
+    let camerasSplit = false;
     robot.traverse((obj) => {
       if (obj.userData.collider) return;
       if (obj instanceof THREE.Mesh) {
@@ -677,13 +707,22 @@ export class SimScene {
         const linkName = nearestLinkName(obj);
         if (linkName && ORANGE_LINKS.has(linkName)) {
           obj.material = this.orangeMaterial();
+        } else if (Array.isArray(obj.material)) {
+          obj.material = obj.material.map((m) => this.toGlossyMaterial(m));
         } else {
-          obj.material = Array.isArray(obj.material)
-            ? obj.material.map((m) => this.toGlossyMaterial(m))
-            : this.toGlossyMaterial(obj.material);
+          const shell = this.toGlossyMaterial(obj.material);
+          if (linkName === CAM_LINK && splitCameraGroups(obj.geometry)) {
+            obj.material = [shell, this.glassMaterial()];
+            camerasSplit = true;
+          } else {
+            obj.material = shell;
+          }
         }
       }
     });
+    const head = robot.links[CAM_LINK];
+    if (camerasSplit && head !== undefined) head.add(this.buildCameraModule());
+
     this.robotRoot.add(robot);
     this.robot = robot;
     if (this.robotBox) {
@@ -962,6 +1001,67 @@ export class SimScene {
     return this.orange;
   }
 
+  // Rough on purpose: a near-mirror lens reflects the environment's bright
+  // panels as a hard comma, and two of those read as cartoon eyes.
+  private opticMaterial(): THREE.MeshStandardMaterial {
+    if (!this.optic) {
+      this.optic = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(0.012, 0.012, 0.014),
+        metalness: 0,
+        roughness: 0.22,
+        envMap: this.cameraEnvironment(),
+        envMapRotation: CAM_ENV_ROTATION,
+        envMapIntensity: 0.9,
+        side: THREE.DoubleSide, // see orangeMaterial
+      });
+    }
+    return this.optic;
+  }
+
+  // opacity trades against the highlight: three attenuates specular by it too.
+  private glassMaterial(): THREE.MeshStandardMaterial {
+    if (!this.glass) {
+      this.glass = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(0.03, 0.03, 0.035),
+        metalness: 0,
+        roughness: 0.06,
+        envMap: this.cameraEnvironment(),
+        envMapRotation: CAM_ENV_ROTATION,
+        envMapIntensity: 1.6,
+        transparent: true,
+        opacity: 0.45,
+        side: THREE.FrontSide, // a cover: back faces would tint it twice
+      });
+    }
+    return this.glass;
+  }
+
+  // Scoped here, not scene-wide (see addLights), but a dielectric passes only
+  // ~4% head-on so these two are unreadable without it. Blurred to a wash.
+  private cameraEnvironment(): THREE.Texture {
+    if (!this.cameraEnv) {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      this.cameraEnv = pmrem.fromScene(new RoomEnvironment(), 0.8).texture;
+      pmrem.dispose();
+    }
+    return this.cameraEnv;
+  }
+
+  /** What sits inside each barrel, behind the STL's own glass dome. */
+  private buildCameraModule(): THREE.Group {
+    const module = new THREE.Group();
+    for (const [y, z] of CAM_CENTRES) {
+      const back = new THREE.Mesh(barrelBackGeometry(), this.opticMaterial());
+      back.position.set(CAM_BACK_X, y, z);
+      const lens = new THREE.Mesh(lensCapGeometry(), this.opticMaterial());
+      lens.position.set(CAM_LENS_X, y, z);
+      back.receiveShadow = true;
+      lens.receiveShadow = true;
+      module.add(back, lens);
+    }
+    return module;
+  }
+
   // Swap the URDF's flat MeshPhong for PBR: moderate metalness for a soft
   // sheen (pure metal with no env map reads near-black), rough enough to
   // stay matte.
@@ -1054,6 +1154,7 @@ export class SimScene {
   dispose(): void {
     this.props.clearPlacementPreview();
     this.placeholderMat?.dispose();
+    this.cameraEnv?.dispose(); // a PMREM render target, not a loaded image
     this.controls.dispose();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
@@ -1120,6 +1221,71 @@ function isValidRoom(room: unknown): boolean {
   const finite3 = (a: unknown): boolean =>
     Array.isArray(a) && a.length >= 3 && a.slice(0, 3).every((n) => typeof n === "number" && Number.isFinite(n));
   return typeof r?.file === "string" && finite3(r?.bbox?.min) && finite3(r?.bbox?.max);
+}
+
+/** Closes the hole under the barrel, so the glass does not see into the head. */
+function barrelBackGeometry(): THREE.BufferGeometry {
+  const geometry = new THREE.CircleGeometry(CAM_BACK_RADIUS, 48);
+  geometry.rotateY(Math.PI / 2);
+  return geometry;
+}
+
+/** A shallow spherical cap, apex on the origin, bulging along +X. */
+function lensCapGeometry(): THREE.BufferGeometry {
+  const opening = Math.asin(CAM_LENS_RADIUS / CAM_LENS_SPHERE);
+  const geometry = new THREE.SphereGeometry(CAM_LENS_SPHERE, 48, 12, 0, Math.PI * 2, 0, opening);
+  geometry.rotateZ(-Math.PI / 2); // the cap sits on the +Y pole; point it at +X
+  geometry.translate(-CAM_LENS_SPHERE, 0, 0);
+  return geometry;
+}
+
+/** Split the head mesh into shell / glass groups; group index is the caller's
+ * material array order. */
+function splitCameraGroups(geometry: THREE.BufferGeometry): boolean {
+  const position = geometry.getAttribute("position");
+  if (geometry.index !== null || !(position instanceof THREE.BufferAttribute)) return false;
+
+  const shell: number[] = [];
+  const glass: number[] = [];
+  for (let triangle = 0; triangle < position.count / 3; triangle++) {
+    (isDomeTriangle(position, triangle) ? glass : shell).push(triangle);
+  }
+  if (glass.length === 0) return false;
+
+  // Indexing beats reordering the buffers, and welding the dome's vertices --
+  // only its own, so the crease where it meets the rim survives -- lets one
+  // computeVertexNormals smooth it while every flat facet keeps its normal.
+  const welded = new Map<string, number>();
+  const index: number[] = [];
+  for (const triangle of shell) index.push(triangle * 3, triangle * 3 + 1, triangle * 3 + 2);
+  for (const triangle of glass) {
+    for (let vertex = triangle * 3; vertex < triangle * 3 + 3; vertex++) {
+      const key = [position.getX(vertex), position.getY(vertex), position.getZ(vertex)]
+        .map((v) => Math.round(v / CAM_WELD_M))
+        .join(":");
+      const first = welded.get(key);
+      if (first === undefined) welded.set(key, vertex);
+      index.push(first ?? vertex);
+    }
+  }
+  geometry.setIndex(index);
+  geometry.clearGroups();
+  geometry.addGroup(0, shell.length * 3, 0);
+  geometry.addGroup(shell.length * 3, glass.length * 3, 1);
+  geometry.computeVertexNormals();
+  return true;
+}
+
+/** All three vertices inside ONE dome -- testing them against the pair instead
+ * admits the triangles bridging the eyes, which render as a bar. */
+function isDomeTriangle(position: THREE.BufferAttribute, triangle: number): boolean {
+  return CAM_CENTRES.some(([cy, cz]) => {
+    for (let vertex = triangle * 3; vertex < triangle * 3 + 3; vertex++) {
+      if (position.getX(vertex) < CAM_GLASS_MIN_X) return false;
+      if (Math.hypot(position.getY(vertex) - cy, position.getZ(vertex) - cz) > CAM_GLASS_RADIUS) return false;
+    }
+    return true;
+  });
 }
 
 /** Walk up the parent chain to the URDFLink a mesh belongs to, returning its name. */
