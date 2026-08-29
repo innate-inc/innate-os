@@ -32,6 +32,7 @@ from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
+from mars_nav.map_metadata import TRINARY_FREE_THRESHOLD, repair_legacy_trinary_map
 from mars_nav.service_utils import call_service, get_node_state, transition_node
 
 # TODO: move this into launch file?
@@ -339,6 +340,14 @@ class ModeManager(Node):
             yaml_files = glob.glob(yaml_pattern)
 
             for yaml_file in yaml_files:
+                try:
+                    if repair_legacy_trinary_map(yaml_file):
+                        self.get_logger().warning(
+                            f"Repaired legacy trinary map threshold in '{os.path.basename(yaml_file)}' "
+                            f"(0.25 -> {TRINARY_FREE_THRESHOLD:.3f}); unknown gray cells will no longer load as free"
+                        )
+                except (OSError, ValueError) as e:
+                    self.get_logger().warning(f"Could not check map metadata '{yaml_file}': {e}")
                 # Extract just the filename
                 map_name = os.path.basename(yaml_file)
                 map_files.append(map_name)
@@ -1193,6 +1202,8 @@ class ModeManager(Node):
                 "--ros-args",
                 "-p",
                 "save_map_timeout:=5000.0",
+                "-p",
+                f"free_thresh_default:={TRINARY_FREE_THRESHOLD:.3f}",
             ]
 
             # Run the map saver command
