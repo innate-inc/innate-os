@@ -42,6 +42,8 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
+from mars_nav.grid_scoring import endpoint_mismatch_scores, occupancy_masks
+
 
 class GridLocalizer(Node):
     """GPU-accelerated grid localization lifecycle node."""
@@ -59,6 +61,8 @@ class GridLocalizer(Node):
     map_received: bool = False
     map_free = None
     map_free_gpu = None
+    map_occupied = None
+    map_occupied_gpu = None
     resolution = None
     origin = None
     map_h = None
@@ -113,6 +117,8 @@ class GridLocalizer(Node):
         self.map_received = False
         self.map_free = None
         self.map_free_gpu = None
+        self.map_occupied = None
+        self.map_occupied_gpu = None
         self.resolution = None
         self.origin = None
 
@@ -245,7 +251,10 @@ class GridLocalizer(Node):
         if self.map_free_gpu is not None:
             del self.map_free_gpu
             self.map_free_gpu = None
-            cp.get_default_memory_pool().free_all_blocks()
+        if self.map_occupied_gpu is not None:
+            del self.map_occupied_gpu
+            self.map_occupied_gpu = None
+        cp.get_default_memory_pool().free_all_blocks()
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
         """Inactive → Unconfigured: Destroy all resources and free GPU memory."""
@@ -298,11 +307,18 @@ class GridLocalizer(Node):
                 self.get_logger().info("Freeing old GPU map memory")
                 del self.map_free_gpu
                 self.map_free_gpu = None
+            if self.map_occupied_gpu is not None:
+                del self.map_occupied_gpu
+                self.map_occupied_gpu = None
             cp.get_default_memory_pool().free_all_blocks()
 
             if self.map_free is not None:
                 del self.map_free
                 self.map_free = None
+
+            if self.map_occupied is not None:
+                del self.map_occupied
+                self.map_occupied = None
 
             if self.free_pixels is not None:
                 del self.free_pixels
@@ -327,16 +343,14 @@ class GridLocalizer(Node):
         # -1: unknown, 0: free, 100: occupied
         data = np.array(msg.data, dtype=np.int8).reshape((msg.info.height, msg.info.width))
 
-        # grid_localizer expects self.map_free where 1.0=free, 0.0=occupied
-        # and row 0 = top of image (due to coordinate conversion logic)
+        # Keep known-free and occupied distinct. Unknown cells are neither:
+        # they cannot host candidate poses and must not count as obstacle hits.
+        map_free_binary, map_occupied_binary = occupancy_masks(data)
 
-        # 1. Create binary free map (0 is free in OccupancyGrid)
-        # Treat unknown (-1) as occupied for safety
-        map_free_binary = (data == 0).astype(np.float32)
-
-        # 2. Flip vertically to match "image coordinates" expected by _generate_candidates_for_batch
+        # Flip vertically to match "image coordinates" expected by _generate_candidates_for_batch
         # (which uses map_h - pix_y)
         self.map_free = np.flipud(map_free_binary)
+        self.map_occupied = np.flipud(map_occupied_binary)
 
         self.map_h, self.map_w = self.map_free.shape
 
@@ -351,6 +365,7 @@ class GridLocalizer(Node):
 
         # Move map to GPU
         self.map_free_gpu = cp.asarray(self.map_free)
+        self.map_occupied_gpu = cp.asarray(self.map_occupied)
 
         # Record time map was received to allow for a startup delay
         self.map_received_time = self.get_clock().now()
@@ -743,24 +758,13 @@ class GridLocalizer(Node):
 
         pix_x = (pos_x_gpu[:, None] + ranges_gpu[None, :] * cos_world - self.origin[0]) * inv_res
         del cos_world
-        cp.clip(pix_x, 0, self.map_w - 1, out=pix_x)
-
         pix_y = self.map_h - (pos_y_gpu[:, None] + ranges_gpu[None, :] * sin_world - self.origin[1]) * inv_res
         del sin_world, pos_x_gpu, pos_y_gpu
-        cp.clip(pix_y, 0, self.map_h - 1, out=pix_y)
 
-        # Convert to int for indexing
-        pix_x_int = pix_x.astype(cp.int32)
-        pix_y_int = pix_y.astype(cp.int32)
+        # Lower is better: only an in-bounds occupied endpoint is a match.
+        # Unknown and out-of-bounds endpoints are mismatches, never fake walls.
+        scores = endpoint_mismatch_scores(self.map_occupied_gpu, pix_x, pix_y, xp=cp)
         del pix_x, pix_y
-
-        # Score: lower = better (endpoints hitting obstacles = 0 in map_free)
-        hit_free = self.map_free_gpu[pix_y_int, pix_x_int]
-        del pix_x_int, pix_y_int
-
-        # Mean across beams, keep on GPU
-        scores = cp.mean(hit_free, axis=1)
-        del hit_free
 
         return scores  # Return CuPy array, caller handles transfer
 

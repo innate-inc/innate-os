@@ -151,6 +151,12 @@ install(
   DESTINATION share/ament_index/resource_index/packages
 )
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_grid_scoring test/test_grid_scoring.py)
+  ament_add_pytest_test(test_map_metadata test/test_map_metadata.py)
+endif()
+
 # Export dependencies for downstream packages
 ament_export_include_directories(include)
 ament_export_libraries(dynamic_goal_checker)
