@@ -60,6 +60,25 @@ def _has_keepouts(map_state: Map | None) -> bool:
     return keepouts is not None and bool((keepouts >= 50).any())
 
 
+def _keepout_distance_ahead(map_state: Map | None, x0: float, y0: float, x1: float, y1: float) -> float | None:
+    """How far along the straight line to the target the first keepout cell
+    sits, or None if that line stays clear. A geometric fact about the direct
+    line, not a claim about the planner's own route."""
+    keepouts = map_state.keepout_grid if map_state is not None else None
+    if keepouts is None:
+        return None
+    distance = math.hypot(x1 - x0, y1 - y0)
+    if distance <= 0.0:
+        return None
+    steps = max(1, math.ceil(distance / (map_state.resolution * 0.5)))
+    for step in range(steps + 1):
+        fraction = step / steps
+        cell = _map_cell(map_state, x0 + (x1 - x0) * fraction, y0 + (y1 - y0) * fraction)
+        if cell is not None and keepouts[cell] >= 50:
+            return fraction * distance
+    return None
+
+
 class Nav2Controller:
     def __init__(self, skill):
         self.skill = skill
@@ -153,9 +172,15 @@ class Nav2Controller:
         local_frame: bool,
     ) -> str:
         map_state = getattr(self.skill, "map", None) if not local_frame else None
+        start = self._start_xy(local_frame)
         issue = _map_goal_issue(map_state, goal_x, goal_y)
+        blocked_at = (
+            _keepout_distance_ahead(map_state, start[0], start[1], goal_x, goal_y) if start is not None else None
+        )
         if issue is not None:
             reason = issue
+        elif blocked_at is not None:
+            reason = f"a keepout zone crosses the direct line to the target, {blocked_at:.2f}m ahead"
         elif _has_keepouts(map_state):
             reason = "active keepout zones may cut off the route"
         else:
@@ -164,7 +189,6 @@ class Nav2Controller:
         detail = f"the planner found no path because {reason}"
         approach = self._closest_reachable_approach(path_navigator, goal_x, goal_y, goal_yaw, goal_frame, local_frame)
         if approach is None:
-            start = self._start_xy(local_frame)
             if start is not None:
                 remaining = math.hypot(goal_x - start[0], goal_y - start[1])
                 detail += (
