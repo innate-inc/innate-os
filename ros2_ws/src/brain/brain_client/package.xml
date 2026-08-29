@@ -12,7 +12,6 @@
 
   <!-- Core ROS dependencies -->
   <depend>rclpy</depend>
-  <depend>rcl_interfaces</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 
