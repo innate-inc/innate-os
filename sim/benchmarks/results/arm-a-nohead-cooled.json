@@ -1,0 +1,965 @@
+{
+ "label": "arm-a-nohead-cooled",
+ "results": [
+  {
+   "id": "s00",
+   "instruction": "Turn left and drive to the end.",
+   "turn": "left",
+   "final_xy": [
+    -4.204,
+    3.155
+   ],
+   "path_m": 2.0,
+   "spawn": [
+    -2.24,
+    5.94,
+    -98.5
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "final_dist_m": 4.845,
+   "best_dist_m": 2.0,
+   "travelled_m": 4.65,
+   "duration_s": 46.9,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s01",
+   "instruction": "Drive straight forward and stop when you get there.",
+   "turn": "straight",
+   "final_xy": [
+    -4.416,
+    -0.505
+   ],
+   "path_m": 5.95,
+   "spawn": [
+    -2.24,
+    5.94,
+    -98.5
+   ],
+   "goal": [
+    -3.39,
+    1.19
+   ],
+   "final_dist_m": 1.982,
+   "best_dist_m": 0.894,
+   "travelled_m": 7.98,
+   "duration_s": 35.0,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s02",
+   "instruction": "Go right and keep going until you have to stop.",
+   "turn": "right",
+   "final_xy": [
+    -4.418,
+    -0.364
+   ],
+   "path_m": 2.9,
+   "spawn": [
+    -2.34,
+    4.89,
+    -170.5
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "final_dist_m": 7.563,
+   "best_dist_m": 2.348,
+   "travelled_m": 6.8,
+   "duration_s": 22.2,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s03",
+   "instruction": "Go straight ahead and stop at the end of the way.",
+   "turn": "straight",
+   "final_xy": [
+    -4.324,
+    -0.474
+   ],
+   "path_m": 6.0,
+   "spawn": [
+    -2.34,
+    4.89,
+    -170.5
+   ],
+   "goal": [
+    -4.24,
+    0.14
+   ],
+   "final_dist_m": 0.62,
+   "best_dist_m": 0.055,
+   "travelled_m": 6.71,
+   "duration_s": 23.1,
+   "outcome": "stopped",
+   "success": true,
+   "oracle": true
+  },
+  {
+   "id": "s04",
+   "instruction": "Turn left and follow the passage.",
+   "turn": "left",
+   "final_xy": [
+    -3.153,
+    4.441
+   ],
+   "path_m": 5.85,
+   "spawn": [
+    -5.39,
+    4.74,
+    -56.3
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "final_dist_m": 3.276,
+   "best_dist_m": 3.276,
+   "travelled_m": 2.29,
+   "duration_s": 11.5,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s05",
+   "instruction": "Continue straight ahead.",
+   "turn": "straight",
+   "final_xy": [
+    -3.263,
+    2.736
+   ],
+   "path_m": 5.9,
+   "spawn": [
+    -5.39,
+    4.74,
+    -56.3
+   ],
+   "goal": [
+    -3.74,
+    -1.06
+   ],
+   "final_dist_m": 3.826,
+   "best_dist_m": 3.818,
+   "travelled_m": 2.98,
+   "duration_s": 12.2,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s06",
+   "instruction": "Turn left and drive to the end.",
+   "turn": "left",
+   "final_xy": [
+    -1.115,
+    -1.83
+   ],
+   "path_m": 4.8,
+   "spawn": [
+    -4.34,
+    4.74,
+    -126.3
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "final_dist_m": 7.819,
+   "best_dist_m": 4.272,
+   "travelled_m": 9.51,
+   "duration_s": 56.1,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s07",
+   "instruction": "Turn right and follow the passage.",
+   "turn": "right",
+   "final_xy": [
+    -3.874,
+    4.449
+   ],
+   "path_m": 2.1,
+   "spawn": [
+    -4.34,
+    4.74,
+    -126.3
+   ],
+   "goal": [
+    -6.44,
+    4.74
+   ],
+   "final_dist_m": 2.583,
+   "best_dist_m": 0.052,
+   "travelled_m": 5.01,
+   "duration_s": 37.9,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": true
+  },
+  {
+   "id": "s08",
+   "instruction": "Continue straight ahead.",
+   "turn": "straight",
+   "final_xy": [
+    -1.423,
+    -1.577
+   ],
+   "path_m": 5.9,
+   "spawn": [
+    -4.34,
+    4.74,
+    -126.3
+   ],
+   "goal": [
+    -3.74,
+    -1.06
+   ],
+   "final_dist_m": 2.374,
+   "best_dist_m": 0.064,
+   "travelled_m": 9.43,
+   "duration_s": 44.4,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": true
+  },
+  {
+   "id": "s09",
+   "instruction": "Turn around and drive back the way you came.",
+   "turn": "back",
+   "final_xy": [
+    -4.183,
+    3.125
+   ],
+   "path_m": 3.8,
+   "spawn": [
+    -3.34,
+    4.64,
+    -159.4
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "final_dist_m": 4.845,
+   "best_dist_m": 3.362,
+   "travelled_m": 1.91,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s10",
+   "instruction": "Turn right and follow the passage.",
+   "turn": "right",
+   "final_xy": [
+    -0.174,
+    5.349
+   ],
+   "path_m": 3.1,
+   "spawn": [
+    -3.34,
+    4.64,
+    -159.4
+   ],
+   "goal": [
+    -6.44,
+    4.74
+   ],
+   "final_dist_m": 6.295,
+   "best_dist_m": 3.101,
+   "travelled_m": 4.86,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s11",
+   "instruction": "Continue straight ahead.",
+   "turn": "straight",
+   "final_xy": [
+    -6.36,
+    4.26
+   ],
+   "path_m": 5.9,
+   "spawn": [
+    -3.34,
+    4.64,
+    -159.4
+   ],
+   "goal": [
+    -4.74,
+    -0.76
+   ],
+   "final_dist_m": 5.275,
+   "best_dist_m": 5.078,
+   "travelled_m": 3.04,
+   "duration_s": 18.6,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s12",
+   "instruction": "Turn left and drive to the end.",
+   "turn": "left",
+   "final_xy": [
+    -5.686,
+    4.284
+   ],
+   "path_m": 1.75,
+   "spawn": [
+    -4.69,
+    3.79,
+    45.0
+   ],
+   "goal": [
+    -6.44,
+    4.74
+   ],
+   "final_dist_m": 0.881,
+   "best_dist_m": 0.881,
+   "travelled_m": 1.13,
+   "duration_s": 9.3,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s13",
+   "instruction": "Turn right and follow the passage.",
+   "turn": "right",
+   "final_xy": [
+    -4.421,
+    -0.334
+   ],
+   "path_m": 4.95,
+   "spawn": [
+    -4.69,
+    3.79,
+    45.0
+   ],
+   "goal": [
+    -3.74,
+    -1.06
+   ],
+   "final_dist_m": 0.995,
+   "best_dist_m": 0.995,
+   "travelled_m": 4.2,
+   "duration_s": 17.8,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s14",
+   "instruction": "Continue straight ahead.",
+   "turn": "straight",
+   "final_xy": [
+    -3.082,
+    4.461
+   ],
+   "path_m": 5.15,
+   "spawn": [
+    -4.69,
+    3.79,
+    45.0
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "final_dist_m": 3.203,
+   "best_dist_m": 3.203,
+   "travelled_m": 2.37,
+   "duration_s": 30.9,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s15",
+   "instruction": "Turn around and drive back the way you came.",
+   "turn": "back",
+   "final_xy": [
+    -4.373,
+    0.452
+   ],
+   "path_m": 2.75,
+   "spawn": [
+    -2.64,
+    3.34,
+    -160.6
+   ],
+   "goal": [
+    -0.84,
+    1.39
+   ],
+   "final_dist_m": 3.656,
+   "best_dist_m": 2.383,
+   "travelled_m": 4.53,
+   "duration_s": 69.9,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s16",
+   "instruction": "Turn left and follow the passage.",
+   "turn": "left",
+   "final_xy": [
+    -4.365,
+    -0.128
+   ],
+   "path_m": 2.15,
+   "spawn": [
+    -2.64,
+    3.34,
+    -160.6
+   ],
+   "goal": [
+    -3.39,
+    1.19
+   ],
+   "final_dist_m": 1.639,
+   "best_dist_m": 0.855,
+   "travelled_m": 5.15,
+   "duration_s": 37.6,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s17",
+   "instruction": "Continue straight ahead.",
+   "turn": "straight",
+   "final_xy": [
+    -5.569,
+    4.344
+   ],
+   "path_m": 5.4,
+   "spawn": [
+    -2.64,
+    3.34,
+    -160.6
+   ],
+   "goal": [
+    -2.24,
+    5.94
+   ],
+   "final_dist_m": 3.692,
+   "best_dist_m": 2.63,
+   "travelled_m": 4.03,
+   "duration_s": 68.0,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s18",
+   "instruction": "Turn left and drive to the end.",
+   "turn": "left",
+   "final_xy": [
+    -1.22,
+    -1.216
+   ],
+   "path_m": 1.95,
+   "spawn": [
+    -1.59,
+    3.34,
+    177.0
+   ],
+   "goal": [
+    -0.84,
+    1.39
+   ],
+   "final_dist_m": 2.634,
+   "best_dist_m": 2.089,
+   "travelled_m": 10.16,
+   "duration_s": 57.0,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s19",
+   "instruction": "Drive straight forward and stop when you get there.",
+   "turn": "straight",
+   "final_xy": [
+    -4.406,
+    -0.509
+   ],
+   "path_m": 5.95,
+   "spawn": [
+    -1.59,
+    3.34,
+    177.0
+   ],
+   "goal": [
+    -4.74,
+    -0.76
+   ],
+   "final_dist_m": 0.418,
+   "best_dist_m": 0.418,
+   "travelled_m": 5.87,
+   "duration_s": 20.7,
+   "outcome": "stopped",
+   "success": true,
+   "oracle": true
+  },
+  {
+   "id": "s20",
+   "instruction": "Go left and keep going until you have to stop.",
+   "turn": "left",
+   "final_xy": [
+    -4.383,
+    -0.28
+   ],
+   "path_m": 1.95,
+   "spawn": [
+    -0.54,
+    3.34,
+    174.3
+   ],
+   "goal": [
+    -0.84,
+    1.39
+   ],
+   "final_dist_m": 3.917,
+   "best_dist_m": 1.911,
+   "travelled_m": 6.67,
+   "duration_s": 23.4,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s21",
+   "instruction": "Go straight ahead and stop at the end of the way.",
+   "turn": "straight",
+   "final_xy": [
+    -4.727,
+    2.677
+   ],
+   "path_m": 5.9,
+   "spawn": [
+    -0.54,
+    3.34,
+    174.3
+   ],
+   "goal": [
+    -6.44,
+    4.74
+   ],
+   "final_dist_m": 2.682,
+   "best_dist_m": 2.682,
+   "travelled_m": 4.32,
+   "duration_s": 19.8,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s22",
+   "instruction": "Turn around and go to the far end behind you.",
+   "turn": "back",
+   "final_xy": [
+    -3.919,
+    -0.875
+   ],
+   "path_m": 2.05,
+   "spawn": [
+    -4.09,
+    2.99,
+    130.9
+   ],
+   "goal": [
+    -3.39,
+    1.19
+   ],
+   "final_dist_m": 2.131,
+   "best_dist_m": 0.976,
+   "travelled_m": 4.1,
+   "duration_s": 47.8,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s23",
+   "instruction": "Go left and keep going until you have to stop.",
+   "turn": "left",
+   "final_xy": [
+    -6.178,
+    4.56
+   ],
+   "path_m": 4.15,
+   "spawn": [
+    -4.09,
+    2.99,
+    130.9
+   ],
+   "goal": [
+    -3.74,
+    -1.06
+   ],
+   "final_dist_m": 6.126,
+   "best_dist_m": 4.065,
+   "travelled_m": 2.7,
+   "duration_s": 14.8,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s24",
+   "instruction": "Turn right and drive to the end.",
+   "turn": "right",
+   "final_xy": [
+    -5.804,
+    4.472
+   ],
+   "path_m": 4.2,
+   "spawn": [
+    -4.09,
+    2.99,
+    130.9
+   ],
+   "goal": [
+    -0.84,
+    1.39
+   ],
+   "final_dist_m": 5.843,
+   "best_dist_m": 3.623,
+   "travelled_m": 2.42,
+   "duration_s": 9.7,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s25",
+   "instruction": "Drive straight forward and stop when you get there.",
+   "turn": "straight",
+   "final_xy": [
+    -3.96,
+    3.14
+   ],
+   "path_m": 5.95,
+   "spawn": [
+    -4.09,
+    2.99,
+    130.9
+   ],
+   "goal": [
+    -0.24,
+    5.94
+   ],
+   "final_dist_m": 4.656,
+   "best_dist_m": 4.573,
+   "travelled_m": 6.33,
+   "duration_s": 31.3,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s26",
+   "instruction": "Go right and keep going until you have to stop.",
+   "turn": "right",
+   "final_xy": [
+    -5.661,
+    4.306
+   ],
+   "path_m": 3.55,
+   "spawn": [
+    -3.39,
+    2.24,
+    122.0
+   ],
+   "goal": [
+    -0.84,
+    1.39
+   ],
+   "final_dist_m": 5.634,
+   "best_dist_m": 2.688,
+   "travelled_m": 3.2,
+   "duration_s": 23.4,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s27",
+   "instruction": "Go straight ahead and stop at the end of the way.",
+   "turn": "straight",
+   "final_xy": [
+    -6.193,
+    4.364
+   ],
+   "path_m": 4.9,
+   "spawn": [
+    -3.39,
+    2.24,
+    122.0
+   ],
+   "goal": [
+    -2.24,
+    5.94
+   ],
+   "final_dist_m": 4.255,
+   "best_dist_m": 3.163,
+   "travelled_m": 3.73,
+   "duration_s": 16.3,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s28",
+   "instruction": "Turn around and go to the far end behind you.",
+   "turn": "back",
+   "final_xy": [
+    -4.315,
+    0.722
+   ],
+   "path_m": 5.05,
+   "spawn": [
+    -4.54,
+    2.04,
+    -99.5
+   ],
+   "goal": [
+    -2.24,
+    5.94
+   ],
+   "final_dist_m": 5.615,
+   "best_dist_m": 4.525,
+   "travelled_m": 2.56,
+   "duration_s": 29.9,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s29",
+   "instruction": "Continue straight ahead.",
+   "turn": "straight",
+   "final_xy": [
+    -1.276,
+    -2.578
+   ],
+   "path_m": 5.1,
+   "spawn": [
+    -4.54,
+    2.04,
+    -99.5
+   ],
+   "goal": [
+    -1.89,
+    -0.66
+   ],
+   "final_dist_m": 2.014,
+   "best_dist_m": 0.312,
+   "travelled_m": 8.33,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": true
+  },
+  {
+   "id": "s30",
+   "instruction": "Turn around and drive back the way you came.",
+   "turn": "back",
+   "final_xy": [
+    -3.95,
+    2.754
+   ],
+   "path_m": 5.3,
+   "spawn": [
+    -4.69,
+    1.04,
+    87.0
+   ],
+   "goal": [
+    -0.99,
+    -1.66
+   ],
+   "final_dist_m": 5.315,
+   "best_dist_m": 4.569,
+   "travelled_m": 2.35,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s31",
+   "instruction": "Drive straight forward and stop when you get there.",
+   "turn": "straight",
+   "final_xy": [
+    -6.016,
+    4.384
+   ],
+   "path_m": 5.85,
+   "spawn": [
+    -4.69,
+    1.04,
+    87.0
+   ],
+   "goal": [
+    -0.84,
+    1.39
+   ],
+   "final_dist_m": 5.98,
+   "best_dist_m": 3.494,
+   "travelled_m": 4.69,
+   "duration_s": 14.4,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s32",
+   "instruction": "Turn around and keep going.",
+   "turn": "back",
+   "final_xy": [
+    -1.758,
+    -1.218
+   ],
+   "path_m": 5.2,
+   "spawn": [
+    -4.24,
+    0.14,
+    109.4
+   ],
+   "goal": [
+    -1.59,
+    -2.46
+   ],
+   "final_dist_m": 1.254,
+   "best_dist_m": 1.24,
+   "travelled_m": 3.32,
+   "duration_s": 32.7,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s33",
+   "instruction": "Go straight ahead and stop at the end of the way.",
+   "turn": "straight",
+   "final_xy": [
+    -5.984,
+    4.406
+   ],
+   "path_m": 6.0,
+   "spawn": [
+    -4.24,
+    0.14,
+    109.4
+   ],
+   "goal": [
+    -2.34,
+    4.89
+   ],
+   "final_dist_m": 3.676,
+   "best_dist_m": 2.378,
+   "travelled_m": 5.42,
+   "duration_s": 15.7,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s34",
+   "instruction": "Turn left and follow the passage.",
+   "turn": "left",
+   "final_xy": [
+    -2.666,
+    -1.171
+   ],
+   "path_m": 2.05,
+   "spawn": [
+    -1.89,
+    -0.66,
+    -160.6
+   ],
+   "goal": [
+    -1.59,
+    -2.46
+   ],
+   "final_dist_m": 1.679,
+   "best_dist_m": 1.461,
+   "travelled_m": 1.39,
+   "duration_s": 78.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s35",
+   "instruction": "Continue straight ahead.",
+   "turn": "straight",
+   "final_xy": [
+    -2.07,
+    -0.883
+   ],
+   "path_m": 5.1,
+   "spawn": [
+    -1.89,
+    -0.66,
+    -160.6
+   ],
+   "goal": [
+    -4.54,
+    2.04
+   ],
+   "final_dist_m": 3.827,
+   "best_dist_m": 3.783,
+   "travelled_m": 0.41,
+   "duration_s": 77.5,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s36",
+   "outcome": "error: TimeoutError('timed out')",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s37",
+   "outcome": "error: TimeoutError('timed out')",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s38",
+   "outcome": "error: TimeoutError('timed out')",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "s39",
+   "outcome": "error: TimeoutError('timed out')",
+   "success": false,
+   "oracle": false
+  }
+ ]
+}
