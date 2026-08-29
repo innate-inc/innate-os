@@ -29,7 +29,7 @@ Start with [skills](#skills), [agents](#agents), [additional inputs](#additional
 <table>
   <tr>
     <td width="64%" align="center" valign="top">
-      <img src="docs/assets/readme/screenshot-webapp-agent-mars-3.png" alt="Innate web app Agent page on MARS the 3rd" width="100%"><br>
+      <img src="docs/assets/readme/screenshot-webapp-agent-real-mars.png" alt="Innate web app Agent page on a physical MARS robot" width="100%"><br>
       <sub>Web app</sub>
     </td>
     <td width="36%" rowspan="2" align="center" valign="middle">
@@ -67,9 +67,9 @@ _Innate OS is developed for MARS; if you want to port it to your robot, we are h
 
 ### Web app
 
-With the Innate web app, you can run agents, inspect what MARS sees, and control the robot in real time. The Agent page below is connected to a physical MARS the 3rd.
+With the Innate web app, you can run agents, inspect what MARS sees, and control the robot in real time. The Agent page below is connected to a physical MARS.
 
-<img src="docs/assets/readme/screenshot-webapp-agent-mars-3.png" alt="Innate web app Agent page on MARS the 3rd" height="300">
+<img src="docs/assets/readme/screenshot-webapp-agent-real-mars.png" alt="Innate web app Agent page on a physical MARS robot" height="300">
 
 It is available at `https://<robot-address>` which can either be its IP or hostname.
 
