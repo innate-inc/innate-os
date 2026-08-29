@@ -269,7 +269,10 @@ def build_world_xml(
 <mujoco model="apartment">
   <!-- implicitfast damps the single-step impulse spikes hull seams can
        produce -- what makes 1200+ hulls stable at all. -->
-  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"
+          cone="elliptic" impratio="10"/>
+  <!-- cone/impratio: soft contacts let a grasped object creep out of the closed
+       claw no matter the friction (MuJoCo docs, "Preventing slip"). -->
   <visual>
     <global azimuth="{azimuth}" elevation="{elevation}" offwidth="1280" offheight="960"/>
   </visual>
