@@ -232,23 +232,18 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   // A topic delivers only what arrives after we subscribe, so a gap in delivery
   // is permanent — the brain's record is the only thing that can close it.
   let loadingHistory = false;
-  let newestRenderedTs = 0;
-
-  /** @param {number} ts */
-  function markRendered(ts) {
-    if (ts > newestRenderedTs) newestRenderedTs = ts;
-  }
+  let lastSnapshot = "";
 
   async function loadHistory() {
     if (loadingHistory) return;
     loadingHistory = true;
     try {
       const res = await rosClient.callService(GET_CHAT_HISTORY_SERVICE, {});
-      const entries = JSON.parse(res?.history ?? "[]");
+      const raw = String(res?.history ?? "");
+      if (raw === lastSnapshot) return;
+      const entries = JSON.parse(raw || "[]");
       if (!Array.isArray(entries) || !entries.length) return;
-      const newest = entries.reduce((max, e) => Math.max(max, Number(e?.timestamp) || 0), 0);
-      if (newest <= newestRenderedTs) return; // in sync — replaying would only jump the scroll
-      markRendered(newest);
+      lastSnapshot = raw;
       chat.replay(entries);
     } catch {
       // best-effort — the live stream still works without the backfill
@@ -280,9 +275,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     if (String(payload?.sender ?? "") !== "user") return;
     const text = String(payload?.text ?? "");
     if (!text) return;
-    const ts = Number(payload?.timestamp) || Date.now() / 1000;
-    markRendered(ts);
-    chat.addMessage("user", text, ts);
+    chat.addMessage("user", text, Number(payload?.timestamp) || Date.now() / 1000);
   }, undefined, "std_msgs/msg/String");
 
   const unsubOut = rosClient.subscribe(CHAT_OUT_TOPIC, (m) => {
@@ -296,9 +289,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const sender = String(payload?.sender ?? "");
     const text = String(payload?.text ?? "");
     if (!sender || !text) return;
-    const ts = Number(payload?.timestamp) || Date.now() / 1000;
-    markRendered(ts);
-    chat.routeChatOut(sender, text, ts);
+    chat.routeChatOut(sender, text, Number(payload?.timestamp) || Date.now() / 1000);
   }, undefined, "std_msgs/msg/String");
 
   const unsubSkill = rosClient.subscribe(SKILL_STATUS_UPDATE_TOPIC, (m) => {
@@ -315,7 +306,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const key = String(payload?.primitive_id ?? payload?.skill_id ?? name);
     const reason = typeof payload?.reason === "string" ? payload.reason : "";
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
-    markRendered(ts);
     chat.addSkillRun(key, name, status, ts, reason, payload?.args);
   }, undefined, "std_msgs/msg/String");
 
