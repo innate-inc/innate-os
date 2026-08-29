@@ -39,6 +39,8 @@ PACK_ROOT = Path("local-environments") / PACK_ID
 # coordinate. OBJ/glTF export maps Blender Z to glTF Y, so subtracting it puts
 # the asphalt at simulator ground level without changing the horizontal frame.
 ROAD_SURFACE_Y = 0.489483
+ROAD_MARKING_SOURCE_Y = 0.543620586
+ROAD_MARKING_LIFT = 0.002
 
 MAP_RESOLUTION = 0.05
 MAP_ORIGIN_X = -15.0
@@ -124,6 +126,24 @@ def _write_obj(mesh: trimesh.Trimesh, path: Path) -> None:
     lines = [*(f"v {x:.8g} {y:.8g} {z:.8g}" for x, y, z in compact.vertices)]
     lines.extend(f"f {a + 1} {b + 1} {c + 1}" for a, b, c in compact.faces)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _lift_road_markings(scene: trimesh.Scene) -> None:
+    """Separate the coplanar white markings from the asphalt depth plane."""
+    candidates: list[trimesh.Trimesh] = []
+    expected_height = ROAD_MARKING_SOURCE_Y - ROAD_SURFACE_Y
+    for mesh in scene.geometry.values():
+        material = getattr(mesh.visual, "material", None)
+        if (
+            str(getattr(material, "name", "")).casefold() == "white"
+            and mesh.extents[1] < 0.0002
+            and abs(float(mesh.centroid[1]) - expected_height) < 0.0002
+        ):
+            candidates.append(mesh)
+
+    if len(candidates) != 1:
+        raise RuntimeError(f"expected one flat white road-marking mesh, found {len(candidates)}")
+    candidates[0].apply_translation((0.0, ROAD_MARKING_LIFT, 0.0))
 
 
 def _prepare_daylight_materials(scene: trimesh.Scene) -> None:
@@ -390,6 +410,7 @@ def build(source_obj: Path, source_mtl: Path) -> None:
         directory.mkdir(parents=True)
 
     scene = _load_authored_scene(source_obj, source_mtl)
+    _lift_road_markings(scene)
     _prepare_daylight_materials(scene)
     _write_browser_scene(scene, viewer_pack_root)
     material_count = _write_mujoco_visuals(scene, visual_root)
