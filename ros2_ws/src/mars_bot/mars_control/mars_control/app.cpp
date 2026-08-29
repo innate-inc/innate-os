@@ -1459,7 +1459,7 @@ class AppControl : public rclcpp::Node {
      * scale instead of the raw register scale, so e.g. 30% is clearly
      * audible rather than ~-70dB (INN-467).
      */
-    void apply_alsa_volume(int percent) {
+    bool apply_alsa_volume(int percent) {
         // Remap 0-100 onto the audible [AUDIBLE_FLOOR, 100] band; the speaker is
         // silent across the lower range even with -M. 0 still mutes.
         constexpr int AUDIBLE_FLOOR = 55;
@@ -1475,7 +1475,9 @@ class AppControl : public rclcpp::Node {
         int ret = std::system(cmd.c_str());
         if (ret != 0) {
             RCLCPP_WARN(this->get_logger(), "amixer sset Master failed (rc=%d)", ret);
+            return false;
         }
+        return true;
     }
 
     /**
@@ -1494,16 +1496,29 @@ class AppControl : public rclcpp::Node {
 
         try {
             json robot_info = get_robot_info();
+            const int previous_volume = robot_info.value("volume_percent", 80);
+
+            // Do not persist a value the audio device rejected. Otherwise the
+            // service reports success and the bad value is retried at startup.
+            if (!apply_alsa_volume(vol)) {
+                response->success = false;
+                response->message = "Failed to apply speaker volume";
+                return;
+            }
+
             robot_info["volume_percent"] = vol;
 
             if (!set_robot_info(robot_info)) {
+                // Keep runtime and persisted state aligned when the file write
+                // fails after ALSA has already accepted the new level.
+                if (!apply_alsa_volume(previous_volume)) {
+                    RCLCPP_ERROR(this->get_logger(), "Failed to restore previous speaker volume %d%%",
+                                 previous_volume);
+                }
                 response->success = false;
                 response->message = "Failed to save robot_info.json";
                 return;
             }
-
-            // Apply to ALSA immediately (affects in-progress playback)
-            apply_alsa_volume(vol);
 
             response->success = true;
             response->message = "Volume set to " + std::to_string(vol) + "%";
