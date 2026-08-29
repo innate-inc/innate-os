@@ -38,7 +38,6 @@
 #include <memory>
 #include <regex>
 #include <sstream>
-#include <thread>
 #include <cerrno>
 #include <poll.h>
 #include <signal.h>
@@ -445,13 +444,11 @@ class AppControl : public rclcpp::Node {
         _load_app_config();
 
         // Everything that shells out (robot info, hostname sync, the admin services)
-        // runs in this group, spun by its own executor thread (see main): a hung
+        // runs in this group on a separate executor worker (see main): a hung
         // external helper must never starve the drive smoother — a wedged avahi-daemon
         // once blocked avahi-resolve for seconds per call and drove the 50 Hz timer to
         // ~0.2 Hz. Mutually exclusive, so robot_info.json access stays serialised.
-        // Not auto-added with the node — main assigns it to the slow executor.
-        slow_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive,
-                                                  /*automatically_add_to_executor_with_node=*/false);
+        slow_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
         // Declare parameters
         std::string mars_root = get_mars_root();
@@ -628,10 +625,6 @@ class AppControl : public rclcpp::Node {
         }
 
         RCLCPP_INFO(this->get_logger(), "AppControl node started. [C++]");
-    }
-
-    rclcpp::CallbackGroup::SharedPtr slow_group() const {
-        return slow_group_;
     }
 
    private:
@@ -1636,29 +1629,18 @@ class AppControl : public rclcpp::Node {
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<mars_control::AppControl>();
-    // Two single-threaded executors rather than one multi-threaded one: the slow
-    // group's shell-outs can block without ever starving the drive smoother, the
-    // drive path keeps a dedicated thread, and each thread owns its own exception
-    // boundary — a throw on a MultiThreadedExecutor worker thread would bypass any
-    // try in main and land in std::terminate.
-    rclcpp::executors::SingleThreadedExecutor drive_executor;
-    rclcpp::executors::SingleThreadedExecutor slow_executor;
-    drive_executor.add_node(node);
-    slow_executor.add_callback_group(node->slow_group(), node->get_node_base_interface());
-    std::thread slow_thread([&slow_executor, &node]() {
-        try {
-            slow_executor.spin();
-        } catch (const std::exception& e) {
-            RCLCPP_ERROR(node->get_logger(), "Unhandled exception in app node (slow group): %s", e.what());
-        }
-        rclcpp::shutdown();  // one side dying must take the whole node down, not half of it
-    });
+    // The callback groups keep drive work and blocking system helpers mutually
+    // exclusive within themselves; two executor workers let one group continue
+    // while the other is busy. A manually-added second executor left the slow
+    // group's timers and services undispatched on the fleet's Humble rclcpp build,
+    // which removed /robot/info and made /set_volume time out indefinitely.
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
+    executor.add_node(node);
     try {
-        drive_executor.spin();
+        executor.spin();
     } catch (const std::exception& e) {
         RCLCPP_ERROR(node->get_logger(), "Unhandled exception in app node: %s", e.what());
     }
     rclcpp::shutdown();
-    slow_thread.join();
     return 0;
 }
