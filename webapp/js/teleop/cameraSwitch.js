@@ -43,16 +43,6 @@ const MAP_ID = "__map__"; // sentinel "view" id for the nav map (never a real ca
 const MAP_ZOOM_DEFAULT = { small: 6, big: 16 }; // tighter as a thumbnail, wider on the full stage
 
 /**
- * The persistent map changes interaction as it moves between stage and PiP.
- * @param {string} primary
- * @returns {{ big: boolean, mode: "small" | "big", followRobot: boolean }}
- */
-export function mapPresentation(primary) {
-  const big = primary === MAP_ID;
-  return { big, mode: big ? "big" : "small", followRobot: !big };
-}
-
-/**
  * @param {HTMLElement} parent cockpit root — owns the strip and (when big) the map layer.
  * @param {import("../webrtcSession.js").WebRtcSession} session
  * @param {import("../rosClient.js").RosClient} ros
@@ -226,7 +216,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
             // robot's spatial memory, and this is where you watch it happen.
             layers: { memories: true },
           });
-          applyMapPresentation();
+          placeMap();
         })
         .catch(() => {
           // A dropped fetch must not blank the map for the session: with the
@@ -244,27 +234,22 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   }
 
   // Park the map host where the current primary dictates: full stage (big) or inside its strip tile (small),
-  // and swap in that size's saved zoom. (As a thumbnail, a plain click still bubbles to the tile's promote
-  // handler — goal-mode is off and its control hidden — so the map stays clickable while also wheel-zoomable.)
-  function applyMapPresentation() {
-    const { big, mode, followRobot } = mapPresentation(primary);
-    mapMode = mode;
+  // and swap in that size's saved zoom. A thumbnail is a live robot locator: the widget follows the pose
+  // and refuses grab-to-pan (dropping any pan retained from the full map), so a plain click falls through
+  // to the tile's promote handler while the map stays wheel-zoomable.
+  function placeMap() {
+    const big = primary === MAP_ID;
+    mapMode = big ? "big" : "small";
     parent.classList.toggle("cam-map-primary", big);
     if (mapHost) {
       mapHost.classList.toggle("big", big);
       if (big && parent.firstChild !== mapHost) parent.insertBefore(mapHost, parent.firstChild);
     }
-    // A thumbnail is a live robot locator. Clear any pan retained from the
-    // full map and keep following subsequent pose updates while it is small.
-    mapWidget?.setFollowRobot(followRobot);
     mapWidget?.setZoom(mapZoom[mapMode]);
+    mapWidget?.setFollowRobot(!big);
     // The host has just moved between the stage and its tile; redraw against
     // the box it landed in rather than waiting on a ResizeObserver tick.
     mapWidget?.refresh();
-  }
-
-  function placeMap() {
-    applyMapPresentation();
   }
 
   // Rebuild the strip's tiles — every view EXCEPT the primary (which is the big stage).

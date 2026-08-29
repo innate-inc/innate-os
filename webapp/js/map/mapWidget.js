@@ -29,7 +29,6 @@ import {
 } from "../constants.js";
 import { MEMORY_COLOR, SEARCH_REPLAY_FRESH_S, ageAlpha, ageText, headerSkew, memoryImageUrl, parseMemories, parseSearch, withAlpha } from "./memories.js";
 import { goalCellError } from "./goalValidation.js";
-import { mapViewCenter } from "./framing.js";
 
 // The /map grid rides ONE session-lived subscription instead of one per mount.
 // The topic is latched, and rws replays the full grid — hundreds of KB of JSON
@@ -1093,7 +1092,7 @@ export function createMap(root, opts = {}) {
     // Centre on the pan point if the user grabbed the map, else follow the
     // robot; zoom mode shows a fixed real-world window (zoomMeters across).
     let scale, ox, oy;
-    const center = mapViewCenter(pose, panCenter, zoomMeters, followRobot);
+    const center = panCenter ?? (zoomMeters && pose ? pose : null);
     if (zoomMeters && center) {
       const cellsAcross = zoomMeters / grid.resolution;
       scale = Math.min(canvas.width, canvas.height) / cellsAcross;
@@ -1471,13 +1470,7 @@ export function createMap(root, opts = {}) {
     stopBtn.hidden = !(ui === "idle" && navActive) || mappingMode;
     centerBtn.hidden = followRobot || panCenter === null;
     canvas.style.cursor =
-      ui === "manual" || ui === "goto"
-        ? "crosshair"
-        : memHover
-          ? "pointer"
-          : followRobot
-            ? "default"
-            : "grab";
+      ui === "manual" || ui === "goto" ? "crosshair" : memHover || followRobot ? "pointer" : "grab";
   }
 
   /** @param {"idle" | "locate" | "manual" | "goto"} next */
@@ -1612,11 +1605,11 @@ export function createMap(root, opts = {}) {
   /** @param {PointerEvent} e */
   function onPointerDown(e) {
     if (!grid || !view) return;
+    e.preventDefault(); // even when refusing below: a drag must not start a text selection over the strip
     // Leave the thumbnail's click to its parent tile (which promotes the map).
     // Capturing it here would also let a small drag strand the corner map away
     // from the robot again.
     if (followRobot && ui === "idle") return;
-    e.preventDefault();
     const { px, py } = eventToCanvas(e);
     canvas.setPointerCapture(e.pointerId);
     if (ui === "manual" || ui === "goto") {
@@ -1632,6 +1625,9 @@ export function createMap(root, opts = {}) {
 
   /** @param {PointerEvent} e */
   function onPointerMove(e) {
+    // Mirror onPointerDown: no hover either — the thumbnail hides mem-cards,
+    // yet each hovered dot would still fetch its memory image.
+    if (followRobot && ui === "idle") return;
     if (goalDrag) {
       const { px, py } = eventToCanvas(e);
       goalDrag.cur = canvasToWorld(px, py);
@@ -1881,6 +1877,7 @@ export function createMap(root, opts = {}) {
       if (on) {
         panCenter = null;
         setUi("idle");
+        setMemHover(null);
         closeMemPopup();
       }
       render();
