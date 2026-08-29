@@ -28,16 +28,18 @@ Start with [skills](#skills), [agents](#agents), [additional inputs](#additional
 
 <table>
   <tr>
-    <td width="37%" align="center" valign="top">
-      <img src="docs/assets/readme/screenshot-webapp-card.png" alt="Innate web app control interface" height="300"><br>
+    <td width="64%" align="center" valign="top">
+      <img src="docs/assets/readme/screenshot-webapp-card.png" alt="Innate web app control interface" width="100%"><br>
       <sub>Web app</sub>
     </td>
-    <td width="26%" align="center" valign="top">
-      <img src="docs/assets/readme/screenshot-mobile-card.png" alt="Innate mobile app running an agent" height="300"><br>
+    <td width="36%" rowspan="2" align="center" valign="middle">
+      <img src="docs/assets/readme/screenshot-mobile-card.png" alt="Innate mobile app running an agent" width="100%"><br>
       <sub>Mobile app</sub>
     </td>
-    <td width="37%" align="center" valign="top">
-      <a href="https://sim-demo.innate.bot"><img src="docs/assets/readme/screenshot-simulator-card.png" alt="Innate simulator interface" height="300"></a><br>
+  </tr>
+  <tr>
+    <td width="64%" align="center" valign="top">
+      <a href="https://sim-demo.innate.bot"><img src="docs/assets/readme/screenshot-simulator-card.png" alt="Innate simulator interface" width="100%"></a><br>
       <sub><a href="https://sim-demo.innate.bot">Live simulator</a></sub>
     </td>
   </tr>
