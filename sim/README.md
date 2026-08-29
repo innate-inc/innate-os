@@ -1,8 +1,10 @@
 # The Innate Simulator
 
 <p align="center">
-  <img src="../docs/assets/readme/sim.png" alt="Driving the simulated MARS robot through its apartment in the browser" width="85%">
+  <a href="https://sim-demo.innate.bot"><img src="../docs/assets/readme/sim.png" alt="Driving the simulated MARS robot through its apartment in the browser" width="85%"></a>
 </p>
+
+**[Try MARS now at sim-demo.innate.bot](https://sim-demo.innate.bot)** -- no install or robot required.
 
 A complete simulation of the [MARS](https://innate.bot) home robot that runs
 on your laptop — **no robot required**. It is a true digital twin: the same
