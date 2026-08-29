@@ -41,6 +41,10 @@ PACK_ROOT = Path("local-environments") / PACK_ID
 ROAD_SURFACE_Y = 0.489483
 ROAD_MARKING_SOURCE_Y = 0.543620586
 ROAD_MARKING_LIFT = 0.002
+# The rendered sidewalks are about 10 cm above the road after the town is
+# grounded. Keep the collision proxy faithful to that visible step so MARS
+# does not encounter the previous, artificial 22 cm curb.
+CURB_COLLISION_HEIGHT = 0.10
 
 MAP_RESOLUTION = 0.05
 MAP_ORIGIN_X = -15.0
@@ -249,10 +253,10 @@ def _box_mesh(
 
 def _collision_proxies() -> list[tuple[str, trimesh.Trimesh]]:
     proxies = [
-        ("southwest-curb", _box_mesh(-14.04, -4.30, -14.02, -4.28, -0.05, 0.22)),
-        ("southeast-curb", _box_mesh(4.56, 14.30, -14.02, -4.28, -0.05, 0.22)),
-        ("northwest-curb", _box_mesh(-14.04, -4.30, 4.58, 14.32, -0.05, 0.22)),
-        ("northeast-curb", _box_mesh(4.56, 14.30, 4.58, 14.32, -0.05, 0.22)),
+        ("southwest-curb", _box_mesh(-14.04, -4.30, -14.02, -4.28, -0.05, CURB_COLLISION_HEIGHT)),
+        ("southeast-curb", _box_mesh(4.56, 14.30, -14.02, -4.28, -0.05, CURB_COLLISION_HEIGHT)),
+        ("northwest-curb", _box_mesh(-14.04, -4.30, 4.58, 14.32, -0.05, CURB_COLLISION_HEIGHT)),
+        ("northeast-curb", _box_mesh(4.56, 14.30, 4.58, 14.32, -0.05, CURB_COLLISION_HEIGHT)),
         ("west-boundary", _box_mesh(-14.35, -14.04, -14.32, 14.62, -0.05, 0.75)),
         ("east-boundary", _box_mesh(14.30, 14.61, -14.32, 14.62, -0.05, 0.75)),
         ("south-boundary", _box_mesh(-14.04, 14.30, -14.33, -14.02, -0.05, 0.75)),
