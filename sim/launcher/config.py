@@ -39,6 +39,11 @@ OS_BUILD_LOG_PATH = LOG_DIR / "os-build.log"
 VIEWER_BUILD_LOG_PATH = LOG_DIR / "viewer-build.log"
 WORLD_SERVER_LOG_PATH = LOG_DIR / "world-server.log"
 WORLD_SERVER_PID_PATH = STATE_DIR / "world-server.pid"
+# The two host ports the running world server was STARTED with, recorded rather
+# than inferred: after a port override the configured ports and the running
+# server's ports are exactly what differ, so the collision guard cannot ask the
+# configuration which ports are already ours.
+WORLD_SERVER_PORTS_PATH = STATE_DIR / "world-server.ports"
 # Content digest of the model sources the running world server compiled
 # (see runtime._world_model_sources_digest); written next to the pid.
 WORLD_SERVER_MODEL_DIGEST_PATH = STATE_DIR / "world-server.model-digest"

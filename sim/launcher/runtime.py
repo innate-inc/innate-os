@@ -65,6 +65,7 @@ from config import (
     WORLD_SERVER_MODEL_DIGEST_PATH,
     WORLD_SERVER_PID_PATH,
     WORLD_SERVER_PORT,
+    WORLD_SERVER_PORTS_PATH,
     WORLD_STATE_PORT,
     DockerUnresponsiveError,
     StackError,
@@ -1284,18 +1285,25 @@ def _container_published_ports(name: str) -> set[int]:
     return set() if published is None else {port for ports in published.values() for port in ports}
 
 
-def _own_world_server_alive() -> bool:
-    """Whether the world server THIS checkout started still answers. Its ports
-    are then not a collision -- ensure_world_server reuses or restarts it."""
+def _own_world_server_ports() -> set[int]:
+    """The ports the world server THIS checkout started is holding, so the guard
+    exempts what it will replace rather than what it was configured to want.
+
+    Read from the recorded pair, never from the current configuration: a port
+    override is precisely the case where the two disagree, and inferring from
+    the configuration exempts a newly requested port nobody owns while flagging
+    the running server's own port as a collision. A live pid is enough -- a
+    wedged server still holds its ports, and ensure_world_server stops it."""
     try:
         pid = int(WORLD_SERVER_PID_PATH.read_text(encoding="utf-8").strip())
+        ports = {int(port) for port in WORLD_SERVER_PORTS_PATH.read_text(encoding="utf-8").split()}
     except (OSError, ValueError):
-        return False
+        return set()
     try:
         os.kill(pid, 0)
     except OSError:
-        return False
-    return _world_server_ping(WORLD_SERVER_PORT, timeout=0.5)
+        return set()
+    return ports
 
 
 def _suggest_port_base() -> int | None:
@@ -1324,9 +1332,7 @@ def refuse_if_ports_taken() -> None:
     _stop_stale_world_server SIGTERM the first one's physics before Docker ever
     complained about 443.
     """
-    ours = _container_published_ports(OS_CONTAINER_NAME)
-    if _own_world_server_alive():
-        ours |= {WORLD_SERVER_PORT, WORLD_STATE_PORT}
+    ours = _container_published_ports(OS_CONTAINER_NAME) | _own_world_server_ports()
     taken = [
         (label, port)
         for label, port, udp in _PUBLISHED_HOST_PORTS
@@ -2634,6 +2640,7 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
             stderr=subprocess.STDOUT,
         )
     WORLD_SERVER_PID_PATH.write_text(f"{proc.pid}\n", encoding="utf-8")
+    WORLD_SERVER_PORTS_PATH.write_text(f"{WORLD_SERVER_PORT} {WORLD_STATE_PORT}\n", encoding="utf-8")
     # Patient while alive: the first run downloads the Python env (uv sync)
     # and builds the MuJoCo model, which takes minutes on slow machines --
     # killing a live process on a stopwatch misdiagnosed a Raspberry Pi's
@@ -2653,6 +2660,7 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
     with contextlib.suppress(ProcessLookupError, OSError):
         proc.kill()
     WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
+    WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)
     WORLD_SERVER_MODEL_DIGEST_PATH.unlink(missing_ok=True)
     return False
 
@@ -2708,6 +2716,7 @@ def stop_world_server() -> None:
         pass
     with contextlib.suppress(OSError):  # read-only fs: the kill still counts
         WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
+        WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)
         WORLD_SERVER_MODEL_DIGEST_PATH.unlink(missing_ok=True)
 
 
