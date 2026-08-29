@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
+from innate_skills.change_volume import ChangeVolume
 from innate_skills.check_battery import CheckBattery
 from innate_skills.close_gripper import CloseGripper
 from innate_skills.head_emotion import HeadEmotion
-from innate_skills.modify_settings import ModifySettings
 from innate_skills.navigate_to_position import NavigateToPosition
 from innate_skills.open_gripper import OpenGripper
 from innate_skills.pick_any_object import PickAnyObject
@@ -38,7 +38,7 @@ class DemoAgent(Agent):
             CloseGripper,
             SearchMemory,
             HeadEmotion,
-            ModifySettings,
+            ChangeVolume,
             CheckBattery,
         ]
 

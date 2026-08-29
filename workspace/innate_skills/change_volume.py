@@ -7,7 +7,7 @@ from mars_msgs.srv import SetVolume
 from innate import Skill, SkillReturn
 
 
-class ModifySettings(Skill):
+class ChangeVolume(Skill):
     """Set the robot speaker volume. `speaker_volume` must be an integer from
     0 to 100. The change applies immediately and persists across restarts."""
 
