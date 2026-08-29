@@ -32,9 +32,7 @@ def normalize_legacy_trinary_metadata(text: str) -> tuple[str, bool]:
     if abs(float(threshold_match.group(2)) - _LEGACY_TRINARY_FREE_THRESHOLD) > 1e-9:
         return text, False
 
-    replacement = (
-        f"{threshold_match.group(1)}{TRINARY_FREE_THRESHOLD:.3f}{threshold_match.group(3)}"
-    )
+    replacement = f"{threshold_match.group(1)}{TRINARY_FREE_THRESHOLD:.3f}{threshold_match.group(3)}"
     start, end = threshold_match.span()
     return text[:start] + replacement + text[end:], True
 
