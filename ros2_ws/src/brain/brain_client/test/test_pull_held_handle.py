@@ -23,9 +23,9 @@ PullHeldHandle = importlib.import_module("workspace.innate_skills.arm.pull_held_
 
 @dataclass
 class _Pose:
-    x: float = 0.2
-    y: float = 0.0
-    z: float = 0.2
+    x: float = 0.3626
+    y: float = -0.0529
+    z: float = 0.2102
     rpy: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     @property
@@ -67,7 +67,7 @@ def test_pull_held_handle_runs_bounded_stream_stops_and_records_decisions(tmp_pa
     skill._finish_debug_run(status="success", message=result)
 
     assert "Pulled the held handle 0.01 m" in result
-    assert skill.manipulation.pose.x == pytest.approx(0.212)
+    assert skill.manipulation.pose.x == pytest.approx(0.3506)
     assert skill.manipulation.stops == 1
     events = [json.loads(line) for line in (skill.debug_directory / "events.jsonl").read_text().splitlines()]
     event_names = [event["event"] for event in events]
@@ -104,11 +104,11 @@ def test_pull_held_handle_locks_starting_orientation_and_counts_axis_progress(tm
     )
     skill.sleep = lambda _seconds: None
 
-    result = skill.execute(distance_m=0.012, direction_x=1.0)
+    result = skill.execute(distance_m=0.012)
 
     assert "0.01 m" in result
-    assert skill.manipulation.pose.x == pytest.approx(0.212)
-    assert skill.manipulation.pose.y == pytest.approx(0.004)
+    assert skill.manipulation.pose.x == pytest.approx(0.3506)
+    assert skill.manipulation.pose.y == pytest.approx(-0.0489)
     assert all(command[3]["roll"] == 0.1 for command in skill.manipulation.commands)
     assert all(command[3]["pitch"] == 0.2 for command in skill.manipulation.commands)
     assert all(command[3]["yaw"] == 0.3 for command in skill.manipulation.commands)
@@ -121,7 +121,7 @@ def test_pull_held_handle_accepts_submillimeter_completion_remainder(tmp_path, m
 
     class SlightlyUndertrackingManipulation(_Manipulation):
         def stream_to(self, x, y, z, **_kwargs):
-            self.pose = _Pose(x - 0.0002, y, z)
+            self.pose = _Pose(x + 0.0002, y, z)
 
     skill.manipulation = SlightlyUndertrackingManipulation()
     skill.joint_states = JointStates(
@@ -133,10 +133,10 @@ def test_pull_held_handle_accepts_submillimeter_completion_remainder(tmp_path, m
     )
     skill.sleep = lambda _seconds: None
 
-    result = skill.execute(distance_m=0.01, direction_x=1.0)
+    result = skill.execute(distance_m=0.01)
 
     assert "Pulled the held handle 0.01 m" in result
-    assert skill.manipulation.pose.x == pytest.approx(0.2098)
+    assert skill.manipulation.pose.x == pytest.approx(0.3528)
 
 
 def test_pull_held_handle_stops_on_vertical_drift(tmp_path, monkeypatch):
@@ -159,12 +159,31 @@ def test_pull_held_handle_stops_on_vertical_drift(tmp_path, monkeypatch):
     skill.sleep = lambda _seconds: None
 
     with pytest.raises(SkillFailed, match="drift exceeded"):
-        skill.execute(distance_m=0.01, direction_x=1.0)
+        skill.execute(distance_m=0.01)
 
     events = [json.loads(line) for line in (skill.debug_directory / "events.jsonl").read_text().splitlines()]
     stop = next(event for event in events if event["event"] == "safety_stop")
     assert stop["reason"] == "trajectory_drift"
     assert stop["vertical_drift_m"] > stop["vertical_drift_limit_m"]
+
+
+def test_pull_held_handle_rejects_nonready_or_outward_start(tmp_path, monkeypatch):
+    monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
+    skill = PullHeldHandle(logging.getLogger("pull-geometry-test"))
+    skill._configure_debug_run(run_id="geometry-run", skill_id="innate-os/pull-held-handle", inputs={})
+    skill.manipulation = _Manipulation()
+    skill.joint_states = JointStates(
+        name=("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"),
+        position=(0.0,) * 6,
+        velocity=(0.0,) * 6,
+        effort=(0.0,) * 6,
+        received_at=time.monotonic(),
+    )
+
+    with pytest.raises(SkillFailed, match="pull inward"):
+        skill.execute(distance_m=0.01, direction_x=1.0)
+
+    assert skill.manipulation.stops == 1
 
 
 def test_stale_feedback_brakes_before_recording_failure(tmp_path, monkeypatch):
