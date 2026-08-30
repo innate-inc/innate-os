@@ -449,6 +449,9 @@ class AppControl : public rclcpp::Node {
         // once blocked avahi-resolve for seconds per call and drove the 50 Hz timer to
         // ~0.2 Hz. Mutually exclusive, so robot_info.json access stays serialised.
         slow_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+        // User-facing audio settings must not queue behind robot-info/hostname
+        // helpers. Their own group keeps bounded ALSA work off the drive thread.
+        settings_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
         // Declare parameters
         std::string mars_root = get_mars_root();
@@ -601,13 +604,13 @@ class AppControl : public rclcpp::Node {
         set_volume_srv_ = this->create_service<mars_msgs::srv::SetVolume>(
             "/set_volume",
             std::bind(&AppControl::set_volume_callback, this, std::placeholders::_1, std::placeholders::_2),
-            rmw_qos_profile_services_default, slow_group_);
+            rmw_qos_profile_services_default, settings_group_);
 
         // Service for enabling/disabling the robot microphone
         set_microphone_srv_ = this->create_service<std_srvs::srv::SetBool>(
             "/set_microphone",
             std::bind(&AppControl::set_microphone_callback, this, std::placeholders::_1, std::placeholders::_2),
-            rmw_qos_profile_services_default, slow_group_);
+            rmw_qos_profile_services_default, settings_group_);
 
         // Latched publisher for microphone state
         mic_enabled_pub_ =
@@ -1471,7 +1474,8 @@ class AppControl : public rclcpp::Node {
         } else {
             mixer_percent = AUDIBLE_FLOOR + (100 - AUDIBLE_FLOOR) * percent / 100;
         }
-        std::string cmd = "amixer -M sset Master " + std::to_string(mixer_percent) + "% 2>/dev/null";
+        std::string cmd =
+            "timeout --signal=KILL 3s amixer -M sset Master " + std::to_string(mixer_percent) + "% 2>/dev/null";
         int ret = std::system(cmd.c_str());
         if (ret != 0) {
             RCLCPP_WARN(this->get_logger(), "amixer sset Master failed (rc=%d)", ret);
@@ -1583,8 +1587,10 @@ class AppControl : public rclcpp::Node {
     double _last_update_check_time = 0.0;
     double _update_check_interval = 300.0;  // Check for updates every 5 minutes
 
-    // See the constructor: the group every shell-out callback lives in.
+    // See the constructor: slow system helpers and bounded audio settings stay
+    // off the drive callback group and out of each other's way.
     rclcpp::CallbackGroup::SharedPtr slow_group_;
+    rclcpp::CallbackGroup::SharedPtr settings_group_;
 
     // Subscribers
     rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr joystick_sub_;
@@ -1649,11 +1655,12 @@ int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<mars_control::AppControl>();
     // The callback groups keep drive work and blocking system helpers mutually
-    // exclusive within themselves; two executor workers let one group continue
-    // while the other is busy. A manually-added second executor left the slow
-    // group's timers and services undispatched on the fleet's Humble rclcpp build,
-    // which removed /robot/info and made /set_volume time out indefinitely.
-    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
+    // exclusive within themselves; three executor workers let drive, slow system
+    // helpers, and bounded audio settings continue independently. A manually-added
+    // second executor left the slow group's timers and services undispatched on the
+    // fleet's Humble rclcpp build, which removed /robot/info and made /set_volume
+    // time out indefinitely.
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 3);
     executor.add_node(node);
     try {
         executor.spin();
