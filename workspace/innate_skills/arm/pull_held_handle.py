@@ -16,7 +16,10 @@ _TARE_SAMPLES = 10
 _TARE_PERIOD_S = 0.04
 _CONTROL_PERIOD_S = 0.02
 _STEP_M = 0.006
-_STEP_TIMEOUT_S = 1.2
+# Near the forward-zero singularity, a small Cartesian step can require a
+# larger joint-space transition and a temporary downward arc. Keep the strict
+# pose/velocity settle criteria, but allow the real arm to finish that motion.
+_STEP_TIMEOUT_S = 3.0
 _MIN_PROGRESS_M = 0.001
 _COMPLETION_TOLERANCE_M = 0.0005
 _SETTLE_POSITION_TOLERANCE_M = 0.003
