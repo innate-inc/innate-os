@@ -979,14 +979,33 @@ export function createMap(root, opts = {}) {
   /** @type {string | null} */
   let activePlanTopic = null;
 
+  // The map<-odom correction implied by the composed (map-frame) pose vs raw
+  // odom — identity until AMCL's first fix, when the frames coincide.
+  function mapFromOdom() {
+    if (!pose || !odomPose) return { theta: 0, tx: 0, ty: 0 };
+    const theta = pose.yaw - odomPose.yaw;
+    const c = Math.cos(theta);
+    const s = Math.sin(theta);
+    return { theta, tx: pose.x - (odomPose.x * c - odomPose.y * s), ty: pose.y - (odomPose.x * s + odomPose.y * c) };
+  }
+
   /** @param {string} topic @param {any} msg nav_msgs/Path */
   function onPlan(topic, msg) {
     const poses = msg?.poses;
     if (!Array.isArray(poses)) return;
+    // The mapfree planner's costmap is in the ODOM frame (costmap.yaml), so its
+    // route — and the goal marker taken from its endpoint — needs the map<-odom
+    // correction before it can share the map canvas.
+    const frameId = typeof msg?.header?.frame_id === "string" ? msg.header.frame_id : "";
+    const { theta, tx, ty } = frameId.includes("odom") ? mapFromOdom() : { theta: 0, tx: 0, ty: 0 };
+    const c = Math.cos(theta);
+    const s = Math.sin(theta);
     const pts = [];
     for (const ps of poses) {
       const pos = ps?.pose?.position;
-      if (typeof pos?.x === "number" && typeof pos?.y === "number") pts.push({ x: pos.x, y: pos.y });
+      if (typeof pos?.x === "number" && typeof pos?.y === "number") {
+        pts.push({ x: tx + pos.x * c - pos.y * s, y: ty + pos.x * s + pos.y * c });
+      }
     }
     if (pts.length) {
       activePlanTopic = topic;
@@ -998,7 +1017,7 @@ export function createMap(root, opts = {}) {
         const end = poses[poses.length - 1]?.pose;
         const q = end?.orientation;
         if (q) {
-          const yaw = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
+          const yaw = theta + Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
           goalMarker = { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y, yaw };
         }
       }
@@ -1128,20 +1147,9 @@ export function createMap(root, opts = {}) {
       ctx.drawImage(costOff, topLeft.px, topLeft.py, costGrid.width * cellPx, costGrid.height * cellPx);
     }
 
-    // Local costmap: its coordinates are in the ODOM frame, so place it via
-    // the map<-odom correction implied by the composed (map-frame) pose vs
-    // raw odom — identity until AMCL's first fix, when the frames coincide.
+    // Local costmap: its coordinates are in the ODOM frame.
     if (layers.local && localGrid) {
-      let theta = 0;
-      let tx = 0;
-      let ty = 0;
-      if (pose && odomPose) {
-        theta = pose.yaw - odomPose.yaw;
-        const c = Math.cos(theta);
-        const s = Math.sin(theta);
-        tx = pose.x - (odomPose.x * c - odomPose.y * s);
-        ty = pose.y - (odomPose.x * s + odomPose.y * c);
-      }
+      const { theta, tx, ty } = mapFromOdom();
       const c = Math.cos(theta);
       const s = Math.sin(theta);
       // The image's top-left corner (max-y edge, matching the row flip) in
