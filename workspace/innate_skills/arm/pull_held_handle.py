@@ -16,14 +16,19 @@ _TARE_SAMPLES = 10
 _TARE_PERIOD_S = 0.04
 _CONTROL_PERIOD_S = 0.02
 _STEP_M = 0.006
-_STEP_TIMEOUT_S = 0.45
+_STEP_TIMEOUT_S = 1.2
 _MIN_PROGRESS_M = 0.001
 _COMPLETION_TOLERANCE_M = 0.0005
+_SETTLE_POSITION_TOLERANCE_M = 0.003
+_SETTLE_MAX_JOINT_SPEED_RAD_S = 0.02
+_SETTLE_SAMPLES = 3
 _MAX_STALLED_STEPS = 3
 _MAX_SECONDS = 30.0
 _STREAM_MAX_JOINT_SPEED = 0.35
 _MAX_CROSS_TRACK_M = 0.03
 _MAX_VERTICAL_DRIFT_M = 0.01
+_MOTION_MAX_CROSS_TRACK_M = 0.05
+_MOTION_MAX_VERTICAL_DRIFT_M = 0.03
 _MIN_BASE_Z_M = 0.003
 _READY_MIN_X_M = 0.28
 _READY_MAX_X_M = 0.40
@@ -179,11 +184,16 @@ class PullHeldHandle(Skill):
                 "step_timeout_s": _STEP_TIMEOUT_S,
                 "min_progress_m": _MIN_PROGRESS_M,
                 "completion_tolerance_m": _COMPLETION_TOLERANCE_M,
+                "settle_position_tolerance_m": _SETTLE_POSITION_TOLERANCE_M,
+                "settle_max_joint_speed_rad_s": _SETTLE_MAX_JOINT_SPEED_RAD_S,
+                "settle_samples": _SETTLE_SAMPLES,
                 "max_stalled_steps": _MAX_STALLED_STEPS,
                 "max_seconds": _MAX_SECONDS,
                 "stream_max_joint_speed": _STREAM_MAX_JOINT_SPEED,
                 "max_cross_track_m": _MAX_CROSS_TRACK_M,
                 "max_vertical_drift_m": _MAX_VERTICAL_DRIFT_M,
+                "motion_max_cross_track_m": _MOTION_MAX_CROSS_TRACK_M,
+                "motion_max_vertical_drift_m": _MOTION_MAX_VERTICAL_DRIFT_M,
                 "min_base_z_m": _MIN_BASE_Z_M,
             },
             starting_pose=self._pose_data(starting_pose),
@@ -261,6 +271,9 @@ class PullHeldHandle(Skill):
                 moved = 0.0
                 cross_track = 0.0
                 vertical_drift = 0.0
+                target_error = math.inf
+                settle_samples = 0
+                settled = False
                 while time.monotonic() - step_started < _STEP_TIMEOUT_S:
                     self.sleep(_CONTROL_PERIOD_S)
                     live_effort = self._effort(max_effort)
@@ -270,6 +283,15 @@ class PullHeldHandle(Skill):
                     current_progress = max(0.0, pull_progress(starting_position, current.position, direction))
                     moved = max(0.0, current_progress - before_progress)
                     cross_track, vertical_drift = pull_drift(starting_position, current.position, direction)
+                    target_error = math.dist(target, current.position)
+                    arm_velocity = tuple(float(value) for value in self.joint_states.velocity[:ARM_JOINTS])
+                    max_joint_speed = max((abs(value) for value in arm_velocity), default=math.inf)
+                    sample_settled = (
+                        target_error <= _SETTLE_POSITION_TOLERANCE_M
+                        and max_joint_speed <= _SETTLE_MAX_JOINT_SPEED_RAD_S
+                    )
+                    settle_samples = settle_samples + 1 if sample_settled else 0
+                    settled = settle_samples >= _SETTLE_SAMPLES
                     self.debug_event(
                         "step_observation",
                         step=step_index,
@@ -282,6 +304,11 @@ class PullHeldHandle(Skill):
                         axis_progress_m=current_progress,
                         cross_track_m=cross_track,
                         vertical_drift_m=vertical_drift,
+                        target_error_m=target_error,
+                        max_joint_speed_rad_s=max_joint_speed,
+                        sample_settled=sample_settled,
+                        settle_samples=settle_samples,
+                        settled=settled,
                     )
                     if current.z < _MIN_BASE_Z_M:
                         self._stop_and_fail(
@@ -291,14 +318,14 @@ class PullHeldHandle(Skill):
                             minimum_z_m=_MIN_BASE_Z_M,
                             axis_progress_m=current_progress,
                         )
-                    if cross_track > _MAX_CROSS_TRACK_M or vertical_drift > _MAX_VERTICAL_DRIFT_M:
+                    if cross_track > _MOTION_MAX_CROSS_TRACK_M or vertical_drift > _MOTION_MAX_VERTICAL_DRIFT_M:
                         self._stop_and_fail(
-                            "Wrist drift exceeded the pull corridor",
-                            reason="trajectory_drift",
+                            "Wrist drift exceeded the in-motion safety envelope",
+                            reason="motion_envelope",
                             cross_track_m=cross_track,
-                            cross_track_limit_m=_MAX_CROSS_TRACK_M,
+                            cross_track_limit_m=_MOTION_MAX_CROSS_TRACK_M,
                             vertical_drift_m=vertical_drift,
-                            vertical_drift_limit_m=_MAX_VERTICAL_DRIFT_M,
+                            vertical_drift_limit_m=_MOTION_MAX_VERTICAL_DRIFT_M,
                             axis_progress_m=current_progress,
                         )
                     if live_delta > max_effort_delta:
@@ -308,8 +335,32 @@ class PullHeldHandle(Skill):
                             effort_delta=live_delta,
                             limit=max_effort_delta,
                         )
-                    if moved >= step * 0.8:
+                    if settled:
+                        if cross_track > _MAX_CROSS_TRACK_M or vertical_drift > _MAX_VERTICAL_DRIFT_M:
+                            self._stop_and_fail(
+                                "Settled wrist pose exceeded the pull corridor",
+                                reason="trajectory_drift",
+                                cross_track_m=cross_track,
+                                cross_track_limit_m=_MAX_CROSS_TRACK_M,
+                                vertical_drift_m=vertical_drift,
+                                vertical_drift_limit_m=_MAX_VERTICAL_DRIFT_M,
+                                axis_progress_m=current_progress,
+                                target_error_m=target_error,
+                            )
                         break
+
+                if not settled:
+                    self._stop_and_fail(
+                        "Arm did not settle at the pull target",
+                        reason="settle_timeout",
+                        step=step_index,
+                        target=list(target),
+                        target_error_m=target_error,
+                        cross_track_m=cross_track,
+                        vertical_drift_m=vertical_drift,
+                        settle_samples=settle_samples,
+                        timeout_s=_STEP_TIMEOUT_S,
+                    )
 
                 traveled = max(traveled, before_progress + moved)
                 completed = traveled + _COMPLETION_TOLERANCE_M >= distance_m
@@ -333,6 +384,8 @@ class PullHeldHandle(Skill):
                     traveled_m=traveled,
                     cross_track_m=cross_track,
                     vertical_drift_m=vertical_drift,
+                    target_error_m=target_error,
+                    settle_samples=settle_samples,
                     completed=completed,
                     stalled_steps=stalled_steps,
                     peak_effort_delta=peak_delta,

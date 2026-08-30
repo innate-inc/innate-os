@@ -18,7 +18,8 @@ from brain_client.skills.types import SkillFailed
 from brain_client.state.joint_states import JointStates
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
-PullHeldHandle = importlib.import_module("workspace.innate_skills.arm.pull_held_handle").PullHeldHandle
+pull_held_handle = importlib.import_module("workspace.innate_skills.arm.pull_held_handle")
+PullHeldHandle = pull_held_handle.PullHeldHandle
 
 
 @dataclass
@@ -139,16 +140,31 @@ def test_pull_held_handle_accepts_submillimeter_completion_remainder(tmp_path, m
     assert skill.manipulation.pose.x == pytest.approx(0.3528)
 
 
-def test_pull_held_handle_stops_on_vertical_drift(tmp_path, monkeypatch):
+def test_pull_held_handle_allows_transient_drift_then_settles(tmp_path, monkeypatch):
     monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
-    skill = PullHeldHandle(logging.getLogger("pull-drift-test"))
-    skill._configure_debug_run(run_id="drift-run", skill_id="innate-os/pull-held-handle", inputs={})
+    skill = PullHeldHandle(logging.getLogger("pull-settle-test"))
+    skill._configure_debug_run(run_id="settle-run", skill_id="innate-os/pull-held-handle", inputs={})
 
-    class VerticallyDriftingManipulation(_Manipulation):
+    class TransientlyDriftingManipulation(_Manipulation):
+        def __init__(self):
+            super().__init__()
+            self._samples = []
+
         def stream_to(self, x, y, z, **_kwargs):
-            self.pose = _Pose(x, y, z - 0.02)
+            target = _Pose(x, y, z)
+            self._samples = [_Pose(x, y, z + 0.02), target, target, target]
 
-    skill.manipulation = VerticallyDriftingManipulation()
+        @property
+        def pose(self):
+            if self._samples:
+                self._pose = self._samples.pop(0)
+            return self._pose
+
+        @pose.setter
+        def pose(self, value):
+            self._pose = value
+
+    skill.manipulation = TransientlyDriftingManipulation()
     skill.joint_states = JointStates(
         name=("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"),
         position=(0.0,) * 6,
@@ -158,13 +174,68 @@ def test_pull_held_handle_stops_on_vertical_drift(tmp_path, monkeypatch):
     )
     skill.sleep = lambda _seconds: None
 
-    with pytest.raises(SkillFailed, match="drift exceeded"):
+    result = skill.execute(distance_m=0.01)
+
+    events = [json.loads(line) for line in (skill.debug_directory / "events.jsonl").read_text().splitlines()]
+    observations = [event for event in events if event["event"] == "step_observation"]
+    assert "Pulled the held handle 0.01 m" in result
+    assert max(event["vertical_drift_m"] for event in observations) == pytest.approx(0.02)
+    assert any(event["settled"] for event in observations)
+
+
+def test_pull_held_handle_stops_on_hard_motion_envelope(tmp_path, monkeypatch):
+    monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
+    skill = PullHeldHandle(logging.getLogger("pull-envelope-test"))
+    skill._configure_debug_run(run_id="envelope-run", skill_id="innate-os/pull-held-handle", inputs={})
+
+    class ExcessivelyDriftingManipulation(_Manipulation):
+        def stream_to(self, x, y, z, **_kwargs):
+            self.pose = _Pose(x, y, z - 0.04)
+
+    skill.manipulation = ExcessivelyDriftingManipulation()
+    skill.joint_states = JointStates(
+        name=("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"),
+        position=(0.0,) * 6,
+        velocity=(0.0,) * 6,
+        effort=(0.0,) * 6,
+        received_at=time.monotonic(),
+    )
+    skill.sleep = lambda _seconds: None
+
+    with pytest.raises(SkillFailed, match="safety envelope"):
         skill.execute(distance_m=0.01)
 
     events = [json.loads(line) for line in (skill.debug_directory / "events.jsonl").read_text().splitlines()]
     stop = next(event for event in events if event["event"] == "safety_stop")
-    assert stop["reason"] == "trajectory_drift"
-    assert stop["vertical_drift_m"] > stop["vertical_drift_limit_m"]
+    assert stop["reason"] == "motion_envelope"
+
+
+def test_pull_held_handle_fails_if_target_never_settles(tmp_path, monkeypatch):
+    monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
+    monkeypatch.setattr(pull_held_handle, "_STEP_TIMEOUT_S", 0.05)
+    skill = PullHeldHandle(logging.getLogger("pull-timeout-test"))
+    skill._configure_debug_run(run_id="timeout-run", skill_id="innate-os/pull-held-handle", inputs={})
+
+    class NeverSettlingManipulation(_Manipulation):
+        def stream_to(self, x, y, z, **_kwargs):
+            self.pose = _Pose(x, y, z + 0.02)
+
+    skill.manipulation = NeverSettlingManipulation()
+    skill.joint_states = JointStates(
+        name=("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"),
+        position=(0.0,) * 6,
+        velocity=(0.0,) * 6,
+        effort=(0.0,) * 6,
+        received_at=time.monotonic(),
+    )
+    skill.sleep = time.sleep
+
+    with pytest.raises(SkillFailed, match="did not settle"):
+        skill.execute(distance_m=0.01)
+
+    events = [json.loads(line) for line in (skill.debug_directory / "events.jsonl").read_text().splitlines()]
+    stop = next(event for event in events if event["event"] == "safety_stop")
+    assert stop["reason"] == "settle_timeout"
 
 
 def test_pull_held_handle_rejects_nonready_or_outward_start(tmp_path, monkeypatch):
