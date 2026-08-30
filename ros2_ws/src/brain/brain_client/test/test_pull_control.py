@@ -1,9 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 
+import importlib
+import sys
+from pathlib import Path
+
 import pytest
 
-from workspace.innate_skills.arm.pull_control import PullGuidance, load_delta, normalize
+sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
+pull_control = importlib.import_module("workspace.innate_skills.arm.pull_control")
+PullGuidance = pull_control.PullGuidance
+load_delta = pull_control.load_delta
+normalize = pull_control.normalize
 
 
 def test_pull_guidance_slows_and_reverses_when_resistance_worsens():

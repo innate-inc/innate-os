@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 
+import importlib
 import json
 import logging
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -13,7 +16,9 @@ pytest.importorskip("rclpy")
 from brain_client.skills import debug_runs
 from brain_client.skills.types import SkillFailed
 from brain_client.state.joint_states import JointStates
-from workspace.innate_skills.arm.pull_held_handle import PullHeldHandle
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
+PullHeldHandle = importlib.import_module("workspace.innate_skills.arm.pull_held_handle").PullHeldHandle
 
 
 @dataclass
