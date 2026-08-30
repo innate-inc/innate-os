@@ -36,6 +36,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <regex>
 #include <sstream>
 #include <cerrno>
@@ -685,6 +686,7 @@ class AppControl : public rclcpp::Node {
      * Returns the parsed JSON object.
      */
     json get_robot_info() {
+        std::lock_guard<std::recursive_mutex> lock(robot_info_mutex_);
         std::string robot_info_file_path = get_robot_info_path();
 
         // Ensure data directory exists
@@ -742,6 +744,7 @@ class AppControl : public rclcpp::Node {
      * Returns true on success, false on failure.
      */
     bool set_robot_info(const json& robot_info) {
+        std::lock_guard<std::recursive_mutex> lock(robot_info_mutex_);
         try {
             std::string robot_info_file_path = get_robot_info_path();
             std::ofstream out_file(robot_info_file_path);
@@ -1369,6 +1372,7 @@ class AppControl : public rclcpp::Node {
      */
     void set_robot_name_callback(const std::shared_ptr<mars_msgs::srv::SetRobotName::Request> request,
                                  std::shared_ptr<mars_msgs::srv::SetRobotName::Response> response) {
+        std::lock_guard<std::recursive_mutex> lock(robot_info_mutex_);
         try {
             // Load current robot_info
             json robot_info = get_robot_info();
@@ -1491,6 +1495,7 @@ class AppControl : public rclcpp::Node {
      */
     void set_volume_callback(const std::shared_ptr<mars_msgs::srv::SetVolume::Request> request,
                              std::shared_ptr<mars_msgs::srv::SetVolume::Response> response) {
+        std::lock_guard<std::recursive_mutex> lock(robot_info_mutex_);
         int vol = request->volume_percent;
         if (vol < 0 || vol > 100) {
             response->success = false;
@@ -1552,6 +1557,7 @@ class AppControl : public rclcpp::Node {
      */
     void set_microphone_callback(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
                                  std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
+        std::lock_guard<std::recursive_mutex> lock(robot_info_mutex_);
         try {
             json robot_info = get_robot_info();
             robot_info["microphone_enabled"] = request->data;
@@ -1591,6 +1597,7 @@ class AppControl : public rclcpp::Node {
     // off the drive callback group and out of each other's way.
     rclcpp::CallbackGroup::SharedPtr slow_group_;
     rclcpp::CallbackGroup::SharedPtr settings_group_;
+    std::recursive_mutex robot_info_mutex_;
 
     // Subscribers
     rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr joystick_sub_;

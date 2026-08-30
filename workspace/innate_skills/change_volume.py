@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
+import time
+
 from mars_msgs.srv import SetVolume
 
 from innate import Skill, SkillReturn
@@ -12,18 +14,26 @@ class ChangeVolume(Skill):
     def execute(self, speaker_volume: int) -> SkillReturn:
         volume = self._integer(speaker_volume, "speaker_volume", 0, 100)
         response = self._call(SetVolume, "/set_volume", SetVolume.Request(volume_percent=volume))
+        if response is None:
+            return (
+                "The volume request is still processing; its final state is not confirmed "
+                "and the speaker volume may update shortly."
+            )
         if not response.success:
             self.fail(response.message or "The robot rejected the volume change.")
         return response.message or f"Speaker volume set to {volume}%"
 
-    def _call(self, service_type, name: str, request):
+    def _call(self, service_type, name: str, request, timeout: float = 6.0):
         if self.node is None:
             self.fail("Robot settings are unavailable: skill node is not running")
         client = self.node.create_client(service_type, name)
         if not client.wait_for_service(timeout_sec=2.0):
             self.fail(f"Robot settings service {name} is unavailable")
         future = client.call_async(request)
+        deadline = time.monotonic() + timeout
         while not future.done():
+            if time.monotonic() >= deadline:
+                return None
             self.sleep(0.02)
         try:
             response = future.result()
