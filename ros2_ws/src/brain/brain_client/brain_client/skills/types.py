@@ -23,6 +23,7 @@ from typing_extensions import Self
 from brain_client.common.dynamic_loader import class_name_to_snake_case
 from brain_client.common.logging import UniversalLogger
 from brain_client.common.script_paths import Source
+from brain_client.skills.debug_runs import SkillDebugRun
 
 if TYPE_CHECKING:
     from brain_client.skills.invoker import SkillInvoker
@@ -727,6 +728,9 @@ def _index_feed_declarations(cls) -> None:
 class Skill(ABC):
     # Stamped by the loader to "shipped" or "user" based on origin directory.
     source: Source = "user"
+    # Opt-in persistent trace. Skills that call debug_event() are also traced
+    # lazily, but this guarantees construction/preflight failures are exportable.
+    debug_enabled = False
 
     # Every subclass registers itself here at definition time, PyTorch-style:
     # defining a Skill is what makes the robot know it — no file scanning.
@@ -754,6 +758,8 @@ class Skill(ABC):
         self._tts_status_sub = None
         self._tts_playing = None  # last /tts/is_playing value
         self._storage = None
+        self._debug_run: SkillDebugRun | None = None
+        self._debug_context: dict | None = None
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -849,7 +855,60 @@ class Skill(ABC):
 
     def fail(self, message: str) -> NoReturn:
         """End the run as a FAILURE with ``message``."""
+        self.debug_event("failure_requested", message=message)
         raise SkillFailed(message)
+
+    def _configure_debug_run(self, *, run_id: str | None, skill_id: str, inputs: dict) -> None:
+        """Server hook: retain correlation metadata; create files lazily."""
+        if run_id:
+            self._debug_context = {"run_id": run_id, "skill_id": skill_id, "inputs": dict(inputs)}
+            if self.debug_enabled:
+                self.debug_event("debug_enabled")
+
+    @property
+    def run_id(self) -> str | None:
+        """The status/event run id, available while this instance is executing."""
+        context = vars(self).get("_debug_context")
+        return context["run_id"] if context else None
+
+    @property
+    def debug_directory(self) -> Path | None:
+        """Directory containing this run's trace, once debug_event() was used."""
+        debug_run = vars(self).get("_debug_run")
+        return debug_run.directory if debug_run else None
+
+    def debug_event(self, event: str, **fields) -> None:
+        """Append structured state/decision data to this run's export bundle."""
+        context = vars(self).get("_debug_context")
+        if context is None:
+            return  # direct unit calls and legacy runners have no correlated run
+        debug_run = vars(self).get("_debug_run")
+        if debug_run is None:
+            try:
+                debug_run = self._debug_run = SkillDebugRun(
+                    run_id=context["run_id"],
+                    skill_id=context["skill_id"],
+                    skill_name=self.name,
+                    inputs=context["inputs"],
+                )
+            except Exception as error:
+                # Observability must never prevent the physical safety path.
+                self.logger.error(f"[{self.name}] could not start debug trace: {error}")
+                self._debug_context = None
+                return
+        try:
+            debug_run.event(event, **fields)
+        except Exception as error:
+            self.logger.error(f"[{self.name}] could not write debug trace: {error}")
+
+    def _finish_debug_run(self, *, status: str, message: str) -> None:
+        debug_run = vars(self).get("_debug_run")
+        if debug_run is None:
+            return
+        try:
+            debug_run.finish(status=status, message=message)
+        except Exception as error:
+            self.logger.error(f"[{self.name}] could not finalize debug trace: {error}")
 
     def _cancel_latch(self) -> threading.Event:
         # created lazily — some skills skip super().__init__()
@@ -928,6 +987,7 @@ class Skill(ABC):
         skills = getattr(self, "skills", None)
         if skills is not None:
             skills.cancel()
+        self.debug_event("cancellation_requested")
 
     def _halt_interfaces(self) -> None:
         """Call halt() on every injected interface that has one, children
@@ -1099,6 +1159,7 @@ class Skill(ABC):
 
     def feedback(self, message: str, image_b64: str | None = None) -> None:
         """Stream a progress update to whoever launched the skill."""
+        self.debug_event("feedback", message=message, has_image=bool(image_b64))
         self.logger.info(f"Skill feedback [{self.name}]: {message}")
         if self._feedback_callback:
             try:

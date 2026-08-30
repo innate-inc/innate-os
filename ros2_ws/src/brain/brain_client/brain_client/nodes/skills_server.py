@@ -283,7 +283,7 @@ class SkillsActionServer(Node):
         self._publish_skill_status(run_id, skill_type, name, "running", args=inputs)
         try:
             if entry is not None:
-                result = self._execute_code_skill(goal_handle, skill_type, inputs, entry)
+                result = self._execute_code_skill(goal_handle, skill_type, inputs, entry, run_id)
             elif physical is not None:
                 result = self._execute_physical_skill(goal_handle, skill_type, physical)
             else:
@@ -367,7 +367,9 @@ class SkillsActionServer(Node):
         except Exception as e:
             self.get_logger().error(f"Error destroying run node: {e}")
 
-    def _instantiate_for_run(self, entry, run_node, invoker, publish_feedback):
+    def _instantiate_for_run(
+        self, entry, run_node, invoker, publish_feedback, *, run_id=None, skill_id=None, inputs=None
+    ):
         """Fresh, fully wired instance for one run; caller owns disposal."""
 
         def wire(skill_class):
@@ -376,6 +378,7 @@ class SkillsActionServer(Node):
             self.robot_state.inject_required_interfaces(skill)
             skill.set_feedback_callback(publish_feedback)
             skill.skills = invoker
+            skill._configure_debug_run(run_id=run_id, skill_id=skill_id or entry.display_name, inputs=inputs or {})
             return skill
 
         skill = wire(entry.skill_class)
@@ -390,7 +393,7 @@ class SkillsActionServer(Node):
             # SkillCancelled is a BaseException; must not escape the caller's finally.
             self.get_logger().error(f"Error shutting down {type(skill).__name__} run instance: {e}")
 
-    def _execute_code_skill(self, goal_handle, skill_type, inputs, entry):
+    def _execute_code_skill(self, goal_handle, skill_type, inputs, entry, run_id):
         def _publish_feedback(update_message: str, image_b64: str | None = None):
             feedback_msg = ExecuteSkill.Feedback()
             feedback_msg.feedback = update_message
@@ -402,7 +405,15 @@ class SkillsActionServer(Node):
         try:
             run_node = self._create_run_node()
             invoker = SkillInvoker(self, goal_handle, _publish_feedback, run_node)
-            skill = self._instantiate_for_run(entry, run_node, invoker, _publish_feedback)
+            skill = self._instantiate_for_run(
+                entry,
+                run_node,
+                invoker,
+                _publish_feedback,
+                run_id=run_id,
+                skill_id=skill_type,
+                inputs=inputs,
+            )
         except Exception as e:
             if run_node is not None:
                 self._destroy_run_node(run_node)
@@ -414,6 +425,8 @@ class SkillsActionServer(Node):
             cancel_raced_start = self._pending_cancel_goal is goal_handle
         if cancel_raced_start:
             skill.cancel()
+        output = None
+        execution_error = None
         try:
             self._publish_initial_feedback(goal_handle)
             self.robot_state.start_subscriptions()
@@ -429,9 +442,14 @@ class SkillsActionServer(Node):
                 image_b64=base64.b64encode(output.image).decode() if output.image else "",
             )
         except Exception as e:
+            execution_error = str(e)
             self.get_logger().error(f"Error executing skill: {str(e)}")
             return self._abort_result(goal_handle, skill_type, str(e))
         finally:
+            if output is not None:
+                skill._finish_debug_run(status=output.status.value, message=output.message)
+            elif execution_error is not None:
+                skill._finish_debug_run(status=SkillResult.FAILURE.value, message=execution_error)
             with self._skill_execution_lock:
                 self._active_code_skill = None
             # Motion never outlives a run; dispose while interfaces are live —
