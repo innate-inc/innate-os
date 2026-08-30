@@ -18,6 +18,7 @@ _CONTROL_PERIOD_S = 0.02
 _STEP_M = 0.006
 _STEP_TIMEOUT_S = 0.45
 _MIN_PROGRESS_M = 0.001
+_COMPLETION_TOLERANCE_M = 0.0005
 _MAX_STALLED_STEPS = 3
 _MAX_SECONDS = 30.0
 _STREAM_MAX_JOINT_SPEED = 0.35
@@ -142,6 +143,7 @@ class PullHeldHandle(Skill):
                 "step_m": _STEP_M,
                 "step_timeout_s": _STEP_TIMEOUT_S,
                 "min_progress_m": _MIN_PROGRESS_M,
+                "completion_tolerance_m": _COMPLETION_TOLERANCE_M,
                 "max_stalled_steps": _MAX_STALLED_STEPS,
                 "max_seconds": _MAX_SECONDS,
                 "stream_max_joint_speed": _STREAM_MAX_JOINT_SPEED,
@@ -166,7 +168,7 @@ class PullHeldHandle(Skill):
 
         try:
             step_index = 0
-            while traveled < distance_m:
+            while traveled + _COMPLETION_TOLERANCE_M < distance_m:
                 if time.monotonic() - started > _MAX_SECONDS:
                     self._stop_and_fail("Contact-aware pull timed out", reason="timeout", traveled_m=traveled)
 
@@ -275,9 +277,12 @@ class PullHeldHandle(Skill):
                         break
 
                 traveled = max(traveled, before_progress + moved)
+                completed = traveled + _COMPLETION_TOLERANCE_M >= distance_m
+                if completed:
+                    traveled = min(traveled, distance_m)
                 if moved < _MIN_PROGRESS_M:
-                    stalled_steps += 1
-                    if stalled_steps >= _MAX_STALLED_STEPS:
+                    stalled_steps = 0 if completed else stalled_steps + 1
+                    if not completed and stalled_steps >= _MAX_STALLED_STEPS:
                         self._stop_and_fail(
                             "Handle stopped moving under the allowed effort",
                             reason="stalled",
@@ -293,6 +298,7 @@ class PullHeldHandle(Skill):
                     traveled_m=traveled,
                     cross_track_m=cross_track,
                     vertical_drift_m=vertical_drift,
+                    completed=completed,
                     stalled_steps=stalled_steps,
                     peak_effort_delta=peak_delta,
                 )

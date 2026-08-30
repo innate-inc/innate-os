@@ -114,6 +114,31 @@ def test_pull_held_handle_locks_starting_orientation_and_counts_axis_progress(tm
     assert all(command[3]["yaw"] == 0.3 for command in skill.manipulation.commands)
 
 
+def test_pull_held_handle_accepts_submillimeter_completion_remainder(tmp_path, monkeypatch):
+    monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
+    skill = PullHeldHandle(logging.getLogger("pull-tolerance-test"))
+    skill._configure_debug_run(run_id="tolerance-run", skill_id="innate-os/pull-held-handle", inputs={})
+
+    class SlightlyUndertrackingManipulation(_Manipulation):
+        def stream_to(self, x, y, z, **_kwargs):
+            self.pose = _Pose(x - 0.0002, y, z)
+
+    skill.manipulation = SlightlyUndertrackingManipulation()
+    skill.joint_states = JointStates(
+        name=("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"),
+        position=(0.0,) * 6,
+        velocity=(0.0,) * 6,
+        effort=(0.0,) * 6,
+        received_at=time.monotonic(),
+    )
+    skill.sleep = lambda _seconds: None
+
+    result = skill.execute(distance_m=0.01, direction_x=1.0)
+
+    assert "Pulled the held handle 0.01 m" in result
+    assert skill.manipulation.pose.x == pytest.approx(0.2098)
+
+
 def test_pull_held_handle_stops_on_vertical_drift(tmp_path, monkeypatch):
     monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
     skill = PullHeldHandle(logging.getLogger("pull-drift-test"))
