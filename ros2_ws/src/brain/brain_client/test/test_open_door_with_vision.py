@@ -11,6 +11,7 @@ import pytest
 
 pytest.importorskip("rclpy")
 
+from brain_client.skills import debug_runs
 from brain_client.skills.types import SkillOutput
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
@@ -50,6 +51,18 @@ def test_camera_ray_is_normalized_and_transformed_to_odom():
     assert origin[1] == pytest.approx(2.0 + 0.0025, abs=0.002)
     assert math.sqrt(sum(value * value for value in direction)) == pytest.approx(1.0)
     assert direction[1] > 0.99
+
+
+def test_detection_exports_exact_camera_frame(tmp_path, monkeypatch):
+    monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
+    monkeypatch.setattr(module.gemlib, "ask_image", lambda *_args, **_kwargs: '[{"grasp_point":[500,500]}]')
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-frame-test"))
+    skill._configure_debug_run(run_id="frame-run", skill_id="innate-os/open_door_with_vision", inputs={})
+    image = type("Frame", (), {"jpeg": b"exact-jpeg"})()
+
+    assert skill._detect(image, "head") == pytest.approx((320, 240))
+    assert (skill.debug_directory / "00_head_detection.jpg").read_bytes() == b"exact-jpeg"
 
 
 class _Mobility:

@@ -67,6 +67,7 @@ class OpenDoorWithVision(Skill):
     odom: Odometry
     debug_enabled = True
     _handle_description = "the protruding handle directly ahead"
+    _frame_index = 0
 
     @resource
     def _proxy(self):
@@ -79,6 +80,14 @@ class OpenDoorWithVision(Skill):
         return pose
 
     def _detect(self, image, camera: str):
+        frame_name = f"{self._frame_index:02d}_{camera}_detection.jpg"
+        self._frame_index += 1
+        directory = self.debug_directory
+        if directory is not None:
+            try:
+                (directory / frame_name).write_bytes(image.jpeg)
+            except Exception as error:  # noqa: BLE001 - observability must not block safety
+                self.logger.warning(f"[OpenDoorWithVision] could not save {frame_name}: {error}")
         text = gemlib.ask_image(
             self._proxy,
             image,
@@ -95,16 +104,20 @@ class OpenDoorWithVision(Skill):
         if not candidates:
             self.fail(f"Could not identify a graspable handle in the {camera} camera")
         u, v, _grip = candidates[0]
-        self.debug_event("handle_detection", camera=camera, pixel=[u, v], response=text)
+        self.debug_event("handle_detection", camera=camera, pixel=[u, v], response=text, frame=frame_name)
         return u, v
 
     def _rotate(self, radians):
+        before = self._odom_xyt()
         if not self.mobility.rotate_by(self._odom_xyt, radians, logger=self.logger):
             self.fail("Base rotation failed during handle triangulation")
+        self.debug_event("base_rotation", requested_rad=radians, before=list(before), after=list(self._odom_xyt()))
 
     def _drive(self, metres):
+        before = self._odom_xyt()
         if not self.mobility.drive(self._odom_xyt, metres, logger=self.logger):
             self.fail("Base motion failed during handle triangulation")
+        self.debug_event("base_translation", requested_m=metres, before=list(before), after=list(self._odom_xyt()))
 
     def _triangulate_handle(self):
         self.sleep(0.8)
@@ -146,8 +159,18 @@ class OpenDoorWithVision(Skill):
         self._rotate(math.atan2(relative[1], relative[0]))
         relative = odom_point_to_base(point, self._odom_xyt())
         self._drive(math.hypot(relative[0], relative[1]) - _APPROACH_RANGE_M)
-        relative = odom_point_to_base(point, self._odom_xyt())
-        if not 0.28 <= relative[0] <= 0.40 or abs(relative[1]) > 0.05:
+        final_odom = self._odom_xyt()
+        relative = odom_point_to_base(point, final_odom)
+        accepted = 0.28 <= relative[0] <= 0.40 and abs(relative[1]) <= 0.05
+        self.debug_event(
+            "base_position_result",
+            odom=list(final_odom),
+            handle_base=list(relative),
+            accepted=accepted,
+            x_bounds_m=[0.28, 0.40],
+            max_abs_y_m=0.05,
+        )
+        if not accepted:
             self.fail("Base could not place the handle inside the arm's safe workspace")
         self.debug_event("base_positioned", handle_base=list(relative))
         return relative
@@ -222,6 +245,7 @@ class OpenDoorWithVision(Skill):
         if not handle_description.strip():
             self.fail("handle_description must not be empty")
         self._handle_description = handle_description.strip()
+        self._frame_index = 0
         try:
             self.debug_event(
                 "acquisition_started",
