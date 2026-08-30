@@ -47,6 +47,15 @@ def pixel_to_floor(u, v, head_tilt_deg):
     return (x, y) if x > 0 else None
 
 
+def pixel_ray(u, v, head_tilt_deg):
+    """Pixel -> normalized ray ``(origin, direction)`` in ``base_link``."""
+    cam, fwd, right, down = _cam_pose(head_tilt_deg)
+    xo, yo = (u - CX) / FX, (v - CY) / FX
+    direction = tuple(fwd[i] + xo * right[i] + yo * down[i] for i in range(3))
+    norm = math.sqrt(sum(value * value for value in direction))
+    return cam, tuple(value / norm for value in direction)
+
+
 def floor_to_pixel(x, y, head_tilt_deg):
     """Floor (x,y) -> pixel, or None. Inverse of pixel_to_floor."""
     cam, fwd, right, down = _cam_pose(head_tilt_deg)
