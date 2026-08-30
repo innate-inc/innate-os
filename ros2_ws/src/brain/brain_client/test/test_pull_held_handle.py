@@ -74,7 +74,7 @@ def test_pull_held_handle_runs_bounded_stream_stops_and_records_decisions(tmp_pa
     event_names = [event["event"] for event in events]
     assert "tare_sample" in event_names
     assert event_names.count("step_decision") == 2
-    assert event_names.count("step_observation") == 2
+    assert event_names.count("step_observation") == 6
     assert event_names[-1] == "run_finished"
     decisions = [event for event in events if event["event"] == "step_decision"]
     assert all(event["target_rpy"] == [0.0, 0.0, 0.0] for event in decisions)
@@ -228,7 +228,7 @@ def test_pull_held_handle_fails_if_target_never_settles(tmp_path, monkeypatch):
         effort=(0.0,) * 6,
         received_at=time.monotonic(),
     )
-    skill.sleep = time.sleep
+    skill.sleep = lambda seconds: time.sleep(seconds) if seconds == pull_held_handle._CONTROL_PERIOD_S else None
 
     with pytest.raises(SkillFailed, match="did not settle"):
         skill.execute(distance_m=0.01)
