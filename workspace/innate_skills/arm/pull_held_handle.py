@@ -276,6 +276,11 @@ class PullHeldHandle(Skill):
                 settled = False
                 while time.monotonic() - step_started < _STEP_TIMEOUT_S:
                     self.sleep(_CONTROL_PERIOD_S)
+                    # The teleop-style stream intentionally expires quickly
+                    # unless its producer proves it is still alive. Preserve
+                    # the solved joint target while this skill observes the
+                    # arm settling; do not rerun IK on every control sample.
+                    self.manipulation.stream_keepalive()
                     live_effort = self._effort(max_effort)
                     live_delta = load_delta(live_effort, baseline)
                     peak_delta = max(peak_delta, live_delta)

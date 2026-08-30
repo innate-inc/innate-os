@@ -5,6 +5,7 @@ import importlib
 import json
 import logging
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,8 @@ import pytest
 
 pytest.importorskip("rclpy")
 
+from brain_client.robot.exceptions import ArmFailed
+from brain_client.robot.manipulation import Manipulation
 from brain_client.skills import debug_runs
 from brain_client.skills.types import SkillFailed
 from brain_client.state.joint_states import JointStates
@@ -20,6 +23,34 @@ from brain_client.state.joint_states import JointStates
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 pull_held_handle = importlib.import_module("workspace.innate_skills.arm.pull_held_handle")
 PullHeldHandle = pull_held_handle.PullHeldHandle
+
+
+class _LiveThread:
+    def is_alive(self):
+        return True
+
+
+def test_stream_keepalive_refreshes_active_target_without_changing_it():
+    manipulation = Manipulation.__new__(Manipulation)
+    manipulation._stream_lock = threading.Lock()
+    manipulation._stream_target = [1.0] * 6
+    manipulation._stream_thread = _LiveThread()
+    manipulation._stream_stamp = 0.0
+
+    manipulation.stream_keepalive()
+
+    assert manipulation._stream_stamp > 0.0
+    assert manipulation._stream_target == [1.0] * 6
+
+
+def test_stream_keepalive_rejects_inactive_stream():
+    manipulation = Manipulation.__new__(Manipulation)
+    manipulation._stream_lock = threading.Lock()
+    manipulation._stream_target = None
+    manipulation._stream_thread = None
+
+    with pytest.raises(ArmFailed, match="inactive"):
+        manipulation.stream_keepalive()
 
 
 @dataclass
@@ -38,12 +69,16 @@ class _Manipulation:
     def __init__(self):
         self.pose = _Pose()
         self.stops = 0
+        self.keepalives = 0
 
     def stream_to(self, x, y, z, **_kwargs):
         self.pose = _Pose(x, y, z)
 
     def stream_stop(self):
         self.stops += 1
+
+    def stream_keepalive(self):
+        self.keepalives += 1
 
 
 def test_pull_held_handle_runs_bounded_stream_stops_and_records_decisions(tmp_path, monkeypatch):
@@ -70,6 +105,7 @@ def test_pull_held_handle_runs_bounded_stream_stops_and_records_decisions(tmp_pa
     assert "Pulled the held handle 0.01 m" in result
     assert skill.manipulation.pose.x == pytest.approx(0.3506)
     assert skill.manipulation.stops == 1
+    assert skill.manipulation.keepalives == 6
     events = [json.loads(line) for line in (skill.debug_directory / "events.jsonl").read_text().splitlines()]
     event_names = [event["event"] for event in events]
     assert "tare_sample" in event_names

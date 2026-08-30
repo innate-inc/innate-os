@@ -602,6 +602,24 @@ class Manipulation:
                 self._grip_target = float(self._stream_cmd[5])
             self._stream_target = None
 
+    def stream_keepalive(self) -> None:
+        """Keep the current stream target active without changing it.
+
+        Use this while observing an unverified streamed motion whose settling
+        window is longer than :attr:`STREAM_IDLE_S`. Unlike calling
+        :meth:`stream_to` again, this does not rerun IK or replace the joint
+        target. Raises if the stream has already stopped or timed out.
+        """
+        with self._stream_lock:
+            active = (
+                self._stream_target is not None
+                and self._stream_thread is not None
+                and self._stream_thread.is_alive()
+            )
+            if not active:
+                raise ArmFailed("cannot keep alive an inactive arm stream")
+            self._stream_stamp = time.monotonic()
+
     def _stream_run(self) -> None:
         dt = 1.0 / self.STREAM_RATE_HZ
         while True:
