@@ -67,7 +67,7 @@ def test_pull_held_handle_runs_bounded_stream_stops_and_records_decisions(tmp_pa
     skill._finish_debug_run(status="success", message=result)
 
     assert "Pulled the held handle 0.01 m" in result
-    assert skill.manipulation.pose.x == pytest.approx(0.188)
+    assert skill.manipulation.pose.x == pytest.approx(0.212)
     assert skill.manipulation.stops == 1
     events = [json.loads(line) for line in (skill.debug_directory / "events.jsonl").read_text().splitlines()]
     event_names = [event["event"] for event in events]
@@ -75,6 +75,71 @@ def test_pull_held_handle_runs_bounded_stream_stops_and_records_decisions(tmp_pa
     assert event_names.count("step_decision") == 2
     assert event_names.count("step_observation") == 2
     assert event_names[-1] == "run_finished"
+    decisions = [event for event in events if event["event"] == "step_decision"]
+    assert all(event["target_rpy"] == [0.0, 0.0, 0.0] for event in decisions)
+
+
+def test_pull_held_handle_locks_starting_orientation_and_counts_axis_progress(tmp_path, monkeypatch):
+    monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
+    skill = PullHeldHandle(logging.getLogger("pull-axis-test"))
+    skill._configure_debug_run(run_id="axis-run", skill_id="innate-os/pull-held-handle", inputs={})
+
+    class DriftingManipulation(_Manipulation):
+        def __init__(self):
+            super().__init__()
+            self.pose = _Pose(rpy=(0.1, 0.2, 0.3))
+            self.commands = []
+
+        def stream_to(self, x, y, z, **kwargs):
+            self.commands.append((x, y, z, kwargs))
+            self.pose = _Pose(x, y + 0.002, z, rpy=(0.8, 0.9, 1.0))
+
+    skill.manipulation = DriftingManipulation()
+    skill.joint_states = JointStates(
+        name=("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"),
+        position=(0.0,) * 6,
+        velocity=(0.0,) * 6,
+        effort=(0.0,) * 6,
+        received_at=time.monotonic(),
+    )
+    skill.sleep = lambda _seconds: None
+
+    result = skill.execute(distance_m=0.012, direction_x=1.0)
+
+    assert "0.01 m" in result
+    assert skill.manipulation.pose.x == pytest.approx(0.212)
+    assert skill.manipulation.pose.y == pytest.approx(0.004)
+    assert all(command[3]["roll"] == 0.1 for command in skill.manipulation.commands)
+    assert all(command[3]["pitch"] == 0.2 for command in skill.manipulation.commands)
+    assert all(command[3]["yaw"] == 0.3 for command in skill.manipulation.commands)
+
+
+def test_pull_held_handle_stops_on_vertical_drift(tmp_path, monkeypatch):
+    monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
+    skill = PullHeldHandle(logging.getLogger("pull-drift-test"))
+    skill._configure_debug_run(run_id="drift-run", skill_id="innate-os/pull-held-handle", inputs={})
+
+    class VerticallyDriftingManipulation(_Manipulation):
+        def stream_to(self, x, y, z, **_kwargs):
+            self.pose = _Pose(x, y, z - 0.02)
+
+    skill.manipulation = VerticallyDriftingManipulation()
+    skill.joint_states = JointStates(
+        name=("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"),
+        position=(0.0,) * 6,
+        velocity=(0.0,) * 6,
+        effort=(0.0,) * 6,
+        received_at=time.monotonic(),
+    )
+    skill.sleep = lambda _seconds: None
+
+    with pytest.raises(SkillFailed, match="drift exceeded"):
+        skill.execute(distance_m=0.01, direction_x=1.0)
+
+    events = [json.loads(line) for line in (skill.debug_directory / "events.jsonl").read_text().splitlines()]
+    stop = next(event for event in events if event["event"] == "safety_stop")
+    assert stop["reason"] == "trajectory_drift"
+    assert stop["vertical_drift_m"] > stop["vertical_drift_limit_m"]
 
 
 def test_stale_feedback_brakes_before_recording_failure(tmp_path, monkeypatch):

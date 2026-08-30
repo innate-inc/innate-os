@@ -9,7 +9,7 @@ import time
 from innate import JointStates, Manipulation, Skill, SkillReturn
 from innate.exceptions import ArmFailed, ArmUnhealthy
 
-from .pull_control import ARM_JOINTS, PullGuidance, load_delta, normalize
+from .pull_control import ARM_JOINTS, PullGuidance, load_delta, normalize, pull_drift, pull_progress
 
 _STATE_MAX_AGE_S = 0.25
 _TARE_SAMPLES = 10
@@ -21,15 +21,19 @@ _MIN_PROGRESS_M = 0.001
 _MAX_STALLED_STEPS = 3
 _MAX_SECONDS = 30.0
 _STREAM_MAX_JOINT_SPEED = 0.35
+_MAX_CROSS_TRACK_M = 0.03
+_MAX_VERTICAL_DRIFT_M = 0.01
+_MIN_BASE_Z_M = 0.003
 
 
 class PullHeldHandle(Skill):
     """Pull a door, drawer, or cabinet handle that is already held by the
-    gripper. The starting pull direction is expressed in base_link; toward
-    the robot is usually x=-1. The skill tares gravity/load at the starting
-    pose, moves in tiny Cartesian increments, slows and steers when resistance
-    rises, and stops on stale feedback, excessive effort, lack of progress,
-    timeout, cancellation, or the requested travel distance.
+    gripper. The starting pull direction is expressed in base_link; positive X
+    moves away from the base and is the MARS default. The skill tares
+    gravity/load at the starting pose, locks the starting wrist orientation,
+    moves in tiny Cartesian increments, slows and steers when resistance rises,
+    and stops on stale feedback, excessive effort, trajectory drift, lack of
+    progress, timeout, cancellation, or the requested travel distance.
 
     This is an experimental contact skill. Keep the first trials short and
     supervise the robot with an unobstructed emergency-stop path.
@@ -97,7 +101,7 @@ class PullHeldHandle(Skill):
     def execute(
         self,
         distance_m: float = 0.20,
-        direction_x: float = -1.0,
+        direction_x: float = 1.0,
         direction_y: float = 0.0,
         direction_z: float = 0.0,
         max_effort_delta: float = 25.0,
@@ -113,6 +117,17 @@ class PullHeldHandle(Skill):
             direction = normalize(direction_x, direction_y, direction_z)
         except ValueError as error:
             self.fail(str(error))
+
+        starting_pose = self.manipulation.pose
+        starting_position = starting_pose.position
+        locked_rpy = starting_pose.rpy
+        if starting_pose.z < _MIN_BASE_Z_M:
+            self._stop_and_fail(
+                "Starting wrist pose is below the base-plane clearance",
+                reason="base_clearance",
+                z_m=starting_pose.z,
+                minimum_z_m=_MIN_BASE_Z_M,
+            )
 
         self.debug_event(
             "controller_started",
@@ -130,8 +145,12 @@ class PullHeldHandle(Skill):
                 "max_stalled_steps": _MAX_STALLED_STEPS,
                 "max_seconds": _MAX_SECONDS,
                 "stream_max_joint_speed": _STREAM_MAX_JOINT_SPEED,
+                "max_cross_track_m": _MAX_CROSS_TRACK_M,
+                "max_vertical_drift_m": _MAX_VERTICAL_DRIFT_M,
+                "min_base_z_m": _MIN_BASE_Z_M,
             },
-            starting_pose=self._pose_data(self.manipulation.pose),
+            starting_pose=self._pose_data(starting_pose),
+            locked_rpy=list(locked_rpy),
         )
 
         soft_delta = min(10.0, max_effort_delta * 0.45)
@@ -165,12 +184,13 @@ class PullHeldHandle(Skill):
                 heading, scale = guidance.command(delta)
                 step = min(_STEP_M * scale, distance_m - traveled)
                 before = self.manipulation.pose
+                before_progress = max(0.0, pull_progress(starting_position, before.position, direction))
                 target = (
                     before.x + heading[0] * step,
                     before.y + heading[1] * step,
                     before.z + heading[2] * step,
                 )
-                roll, pitch, yaw = before.rpy
+                roll, pitch, yaw = locked_rpy
                 self.debug_event(
                     "step_decision",
                     step=step_index,
@@ -186,6 +206,7 @@ class PullHeldHandle(Skill):
                     commanded_step_m=step,
                     before=self._pose_data(before),
                     target=list(target),
+                    target_rpy=list(locked_rpy),
                 )
                 self.feedback(
                     f"Step {step_index + 1}: {traveled:.3f}/{distance_m:.3f} m, "
@@ -201,13 +222,17 @@ class PullHeldHandle(Skill):
 
                 step_started = time.monotonic()
                 moved = 0.0
+                cross_track = 0.0
+                vertical_drift = 0.0
                 while time.monotonic() - step_started < _STEP_TIMEOUT_S:
                     self.sleep(_CONTROL_PERIOD_S)
                     live_effort = self._effort(max_effort)
                     live_delta = load_delta(live_effort, baseline)
                     peak_delta = max(peak_delta, live_delta)
                     current = self.manipulation.pose
-                    moved = math.dist(before.position, current.position)
+                    current_progress = max(0.0, pull_progress(starting_position, current.position, direction))
+                    moved = max(0.0, current_progress - before_progress)
+                    cross_track, vertical_drift = pull_drift(starting_position, current.position, direction)
                     self.debug_event(
                         "step_observation",
                         step=step_index,
@@ -216,8 +241,29 @@ class PullHeldHandle(Skill):
                         joints=self._joint_data(live_effort),
                         effort_delta=live_delta,
                         current=self._pose_data(current),
-                        moved_m=moved,
+                        axis_step_progress_m=moved,
+                        axis_progress_m=current_progress,
+                        cross_track_m=cross_track,
+                        vertical_drift_m=vertical_drift,
                     )
+                    if current.z < _MIN_BASE_Z_M:
+                        self._stop_and_fail(
+                            "Wrist reached the base-plane clearance",
+                            reason="base_clearance",
+                            z_m=current.z,
+                            minimum_z_m=_MIN_BASE_Z_M,
+                            axis_progress_m=current_progress,
+                        )
+                    if cross_track > _MAX_CROSS_TRACK_M or vertical_drift > _MAX_VERTICAL_DRIFT_M:
+                        self._stop_and_fail(
+                            "Wrist drift exceeded the pull corridor",
+                            reason="trajectory_drift",
+                            cross_track_m=cross_track,
+                            cross_track_limit_m=_MAX_CROSS_TRACK_M,
+                            vertical_drift_m=vertical_drift,
+                            vertical_drift_limit_m=_MAX_VERTICAL_DRIFT_M,
+                            axis_progress_m=current_progress,
+                        )
                     if live_delta > max_effort_delta:
                         self._stop_and_fail(
                             f"Contact load limit reached ({live_delta:.1f} > {max_effort_delta:.1f} percentage points)",
@@ -228,7 +274,7 @@ class PullHeldHandle(Skill):
                     if moved >= step * 0.8:
                         break
 
-                traveled += moved
+                traveled = max(traveled, before_progress + moved)
                 if moved < _MIN_PROGRESS_M:
                     stalled_steps += 1
                     if stalled_steps >= _MAX_STALLED_STEPS:
@@ -245,6 +291,8 @@ class PullHeldHandle(Skill):
                     step=step_index,
                     moved_m=moved,
                     traveled_m=traveled,
+                    cross_track_m=cross_track,
+                    vertical_drift_m=vertical_drift,
                     stalled_steps=stalled_steps,
                     peak_effort_delta=peak_delta,
                 )

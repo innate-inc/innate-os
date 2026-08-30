@@ -22,6 +22,28 @@ def load_delta(effort: tuple[float, ...], baseline: tuple[float, ...]) -> float:
     return max(abs(value - tare) for value, tare in zip(effort[:ARM_JOINTS], baseline, strict=True))
 
 
+def pull_progress(
+    start: tuple[float, float, float],
+    current: tuple[float, float, float],
+    direction: tuple[float, float, float],
+) -> float:
+    """Signed displacement along the requested, normalized pull axis."""
+    displacement = tuple(value - origin for value, origin in zip(current, start, strict=True))
+    return sum(value * axis for value, axis in zip(displacement, direction, strict=True))
+
+
+def pull_drift(
+    start: tuple[float, float, float],
+    current: tuple[float, float, float],
+    direction: tuple[float, float, float],
+) -> tuple[float, float]:
+    """Return perpendicular and unexpected vertical drift from the pull axis."""
+    progress = pull_progress(start, current, direction)
+    displacement = tuple(value - origin for value, origin in zip(current, start, strict=True))
+    residual = tuple(value - progress * axis for value, axis in zip(displacement, direction, strict=True))
+    return math.sqrt(sum(value * value for value in residual)), abs(residual[2])
+
+
 @dataclass
 class PullGuidance:
     """Small bounded steering heuristic for following a constrained pull."""
