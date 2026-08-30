@@ -1511,12 +1511,16 @@ class AppControl : public rclcpp::Node {
             if (!set_robot_info(robot_info)) {
                 // Keep runtime and persisted state aligned when the file write
                 // fails after ALSA has already accepted the new level.
-                if (!apply_alsa_volume(previous_volume)) {
-                    RCLCPP_ERROR(this->get_logger(), "Failed to restore previous speaker volume %d%%",
-                                 previous_volume);
+                const bool restored = apply_alsa_volume(previous_volume);
+                if (!restored) {
+                    RCLCPP_ERROR(this->get_logger(), "Failed to restore previous speaker volume %d%%", previous_volume);
                 }
                 response->success = false;
-                response->message = "Failed to save robot_info.json";
+                response->message = restored ? "Failed to save speaker volume; restored previous volume " +
+                                                   std::to_string(previous_volume) + "%"
+                                             : "Speaker volume may be " + std::to_string(vol) +
+                                                   "% but was not saved; failed to restore previous volume " +
+                                                   std::to_string(previous_volume) + "%";
                 return;
             }
 
