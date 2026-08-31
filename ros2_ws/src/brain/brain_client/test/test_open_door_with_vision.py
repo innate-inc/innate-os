@@ -596,7 +596,7 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
     monkeypatch.setattr(
         skill,
         "_retreat_and_push_left",
-        lambda distance: order.append(("retreat_and_push_left", distance)),
+        lambda retreat, left: order.append(("retreat_and_push_left", retreat, left)),
     )
 
     result = skill.execute(pull_distance_m=0.03)
@@ -608,9 +608,10 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         ("grasp", 1, (0.35, 0.0, 0.2)),
         ("retry", 2),
         ("grasp", 2, (0.36, 0.0, 0.2)),
-        ("retreat_and_push_left", 0.03),
+        ("retreat_and_push_left", 0.03, 0.03),
     ]
     assert "backed up 0.03 m" in result
+    assert "same 0.03 m left sweep" in result
     assert skill.mobility.stops == 1
     assert skill.manipulation.stops == 1
     assert skill.manipulation.setup[:2] == ["torque_on", "gripper_open"]
@@ -632,6 +633,7 @@ def test_post_grasp_retreat_preloads_releases_and_pushes_left(monkeypatch):
     class PushManipulation:
         def __init__(self):
             self.actions = []
+            self.pose = SimpleNamespace(x=module._JOINT1_ORIGIN_X_M + 0.30, y=module._JOINT1_ORIGIN_Y_M, z=0.20)
 
         def stream_joints(self, joints, **kwargs):
             self.actions.append(("stream", list(joints), kwargs))
@@ -647,15 +649,24 @@ def test_post_grasp_retreat_preloads_releases_and_pushes_left(monkeypatch):
 
     skill.manipulation = PushManipulation()
 
-    skill._retreat_and_push_left(0.05)
+    skill._retreat_and_push_left(0.20, 0.20)
 
-    assert drives == [-0.05]
+    assert drives == [-0.20]
     streams = [action for action in skill.manipulation.actions if action[0] == "stream"]
     assert len(streams) == 2
-    assert streams[0][1] == pytest.approx([0.35, -0.20, 0.30, -0.40, 0.50])
+    expected_joint1 = 0.10 + math.asin(0.20 / 0.30)
+    assert streams[0][1] == pytest.approx([expected_joint1, -0.20, 0.30, -0.40, 0.50])
     assert streams[1][1] == pytest.approx(streams[0][1])
-    assert streams[0][2]["max_speed"] == pytest.approx(0.15)
+    assert streams[0][2]["max_speed"] == pytest.approx(0.25)
     assert skill.manipulation.actions[11][0] == "open"
     assert sum(action[0] == "keepalive" for action in skill.manipulation.actions) == 60
     assert skill.manipulation.actions[-1] == ("stop",)
     assert [event for event, _fields in events].count("left_push_tick") == 60
+    started = next(fields for event, fields in events if event == "left_push_started")
+    assert started["requested_left_distance_m"] == pytest.approx(0.20)
+    assert started["actual_left_distance_m"] == pytest.approx(0.20)
+    assert started["joint1_radius_m"] == pytest.approx(0.30)
+
+
+def test_door_defaults_to_twenty_centimetres_back_and_left(monkeypatch):
+    assert OpenDoorWithVision.execute.__defaults__[-1] == pytest.approx(0.20)

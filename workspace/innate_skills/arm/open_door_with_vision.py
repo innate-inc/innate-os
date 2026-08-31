@@ -60,9 +60,10 @@ _HEAD_METRIC_SAMPLES = 3
 _GRASP_ATTEMPTS = 2
 _VISION_MODEL = "gemini-3.6-flash"
 _VISION_REASONING_EFFORT = "minimal"
-_LEFT_PUSH_DELTA_RAD = 0.25
-_LEFT_PUSH_SPEED_RAD_S = 0.15
+_LEFT_PUSH_SPEED_RAD_S = 0.25
 _JOINT1_LEFT_LIMIT_RAD = 1.5708
+_JOINT1_ORIGIN_X_M = 0.086
+_JOINT1_ORIGIN_Y_M = -0.05285
 _LEFT_PUSH_PRELOAD_S = 1.0
 _LEFT_PUSH_AFTER_RELEASE_S = 5.0
 _LEFT_PUSH_KEEPALIVE_S = 0.10
@@ -104,6 +105,24 @@ def _wrist_action_pose(position, action):
         max(-0.10, min(0.10, y)),
         max(_MIN_HANDLE_Z_M, min(_MAX_HANDLE_Z_M, z)),
     )
+
+
+def _joint1_target_for_left_distance(current_joint1, ee_x, ee_y, left_distance_m):
+    """Map a base-frame left displacement onto joint 1's circular sweep."""
+    radial_x = ee_x - _JOINT1_ORIGIN_X_M
+    radial_y = ee_y - _JOINT1_ORIGIN_Y_M
+    radius = math.hypot(radial_x, radial_y)
+    if radius <= 0.05 or radial_x <= 0.0:
+        raise ValueError("Gripper pose cannot define a forward joint-1 sweep")
+    phase = math.atan2(radial_y, radial_x)
+    requested_radial_y = radial_y + left_distance_m
+    reachable_radial_y = min(radius, requested_radial_y)
+    target_phase = math.asin(reachable_radial_y / radius)
+    requested_delta = max(0.0, target_phase - phase)
+    target_joint1 = min(_JOINT1_LEFT_LIMIT_RAD, current_joint1 + requested_delta)
+    actual_delta = target_joint1 - current_joint1
+    actual_left_distance = radius * math.sin(phase + actual_delta) - radial_y
+    return target_joint1, max(0.0, actual_left_distance), radius
 
 
 class OpenDoorWithVision(Skill):
@@ -546,7 +565,7 @@ class OpenDoorWithVision(Skill):
             self.sleep(_LEFT_PUSH_KEEPALIVE_S)
             self.debug_event("left_push_tick", phase=phase, tick=tick, elapsed_s=(tick + 1) * _LEFT_PUSH_KEEPALIVE_S)
 
-    def _retreat_and_push_left(self, retreat_distance_m):
+    def _retreat_and_push_left(self, retreat_distance_m, left_distance_m):
         """Back away holding the handle, then release into a left arm sweep."""
         self.feedback("Backing away with the handle")
         self._drive(-retreat_distance_m)
@@ -557,12 +576,21 @@ class OpenDoorWithVision(Skill):
         left_target = list(joints)
         if not -_JOINT1_LEFT_LIMIT_RAD <= left_target[0] <= _JOINT1_LEFT_LIMIT_RAD:
             self.fail("Joint 1 feedback is outside its configured range")
-        left_target[0] = min(_JOINT1_LEFT_LIMIT_RAD, left_target[0] + _LEFT_PUSH_DELTA_RAD)
+        pose = self.manipulation.pose
+        try:
+            left_target[0], actual_left_distance_m, joint1_radius_m = _joint1_target_for_left_distance(
+                left_target[0], pose.x, pose.y, left_distance_m
+            )
+        except ValueError as error:
+            self.fail(str(error))
         self.debug_event(
             "left_push_started",
             starting_joints=list(joints),
             target_joints=left_target,
             joint1_delta_rad=left_target[0] - joints[0],
+            requested_left_distance_m=left_distance_m,
+            actual_left_distance_m=actual_left_distance_m,
+            joint1_radius_m=joint1_radius_m,
             max_speed_rad_s=_LEFT_PUSH_SPEED_RAD_S,
             preload_s=_LEFT_PUSH_PRELOAD_S,
             after_release_s=_LEFT_PUSH_AFTER_RELEASE_S,
@@ -587,7 +615,7 @@ class OpenDoorWithVision(Skill):
         handle_description: str = "the protruding handle directly ahead",
         handle_color: str = "yellow",
         handle_height_m: float = 0.10,
-        pull_distance_m: float = 0.05,
+        pull_distance_m: float = 0.20,
     ) -> SkillReturn:
         """Locate, grasp, and pull a frontal protruding handle."""
         if self._proxy is None:
@@ -612,6 +640,7 @@ class OpenDoorWithVision(Skill):
                 handle_description=self._handle_description,
                 handle_color=self._handle_color,
                 pull_distance_m=pull_distance_m,
+                left_push_distance_m=pull_distance_m,
                 handle_height_m=handle_height_m,
                 localization="known_vertical_size",
             )
@@ -628,8 +657,11 @@ class OpenDoorWithVision(Skill):
                 if attempt == _GRASP_ATTEMPTS:
                     self.fail(f"The gripper missed the handle after {_GRASP_ATTEMPTS} verified attempts")
                 pregrasp = self._prepare_grasp_retry(target, attempt + 1)
-            self._retreat_and_push_left(pull_distance_m)
-            return f"Located and grasped the handle, backed up {pull_distance_m:.2f} m, and pushed the door left"
+            self._retreat_and_push_left(pull_distance_m, pull_distance_m)
+            return (
+                f"Located and grasped the handle, backed up {pull_distance_m:.2f} m, "
+                f"and requested the same {pull_distance_m:.2f} m left sweep"
+            )
         except (ArmFailed, ArmUnhealthy) as error:
             self.fail(str(error))
         finally:
