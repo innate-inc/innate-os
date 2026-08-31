@@ -172,6 +172,10 @@ mapfree:
           "obstacle_layer", 
           "inflation_layer",
           ]
+        # Robot-relative navigation still runs in odom, but it must plan around
+        # the same map-frame keepouts enforced by the shared local controller.
+        # KeepoutFilter transforms the mask into this rolling costmap frame.
+        filters: ["keepout_filter", "keepout_inflation"]
         obstacle_layer:
           plugin: "nav2_costmap_2d::ObstacleLayer"
           enabled: True
@@ -190,6 +194,16 @@ mapfree:
           plugin: "nav2_costmap_2d::InflationLayer"
           cost_scaling_factor: 10.0
           inflation_radius: 0.35
+        keepout_filter:
+          plugin: "nav2_costmap_2d::KeepoutFilter"
+          enabled: True
+          filter_info_topic: "/nav/keepout_filter_info"
+        keepout_inflation:
+          plugin: "nav2_costmap_2d::InflationLayer"
+          cost_scaling_factor: 10.0
+          # Match the controller's keepout clearance so every planned path is
+          # executable by the local costmap rather than failing at the boundary.
+          inflation_radius: 0.25
         always_send_full_costmap: False
         voxel_layer:
           # NOTE: silently inert without stereo calibration — see the comment
