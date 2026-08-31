@@ -278,6 +278,23 @@ def test_base_accepts_sub_motion_threshold_range_error(monkeypatch):
     assert target == pytest.approx((0.37006072129054975, 0.012904473272164273, 0.21725490235201467))
 
 
+def test_base_corrects_residual_lateral_error_after_driving(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-base-correction-test"))
+    point = (0.35, 0.103, 0.22)
+    correction = math.atan2(point[1], point[0])
+    odometry = iter([(0.0, 0.0, 0.0)] * 3 + [(0.0, 0.0, correction)])
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: next(odometry))
+    rotations = []
+    monkeypatch.setattr(skill, "_rotate", rotations.append)
+    monkeypatch.setattr(skill, "_drive", lambda _metres: None)
+
+    target = skill._position_base(point)
+
+    assert rotations == pytest.approx([correction, correction])
+    assert target == pytest.approx((math.hypot(point[0], point[1]), 0.0, point[2]))
+
+
 def test_wrist_decision_parser_requires_allowed_action_and_box():
     valid = '[{"box_2d":[200,450,800,550],"grasp_point":[500,500],"action":"forward","reason":"too far"}]'
 

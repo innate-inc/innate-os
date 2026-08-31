@@ -279,6 +279,8 @@ class OpenDoorWithVision(Skill):
         self._rotate(math.atan2(relative[1], relative[0]))
         relative = odom_point_to_base(point, self._odom_xyt())
         self._drive(math.hypot(relative[0], relative[1]) - _APPROACH_RANGE_M)
+        relative = odom_point_to_base(point, self._odom_xyt())
+        self._rotate(math.atan2(relative[1], relative[0]))
         final_odom = self._odom_xyt()
         relative = odom_point_to_base(point, final_odom)
         accepted = _BASE_HANDLE_X_BOUNDS_M[0] <= relative[0] <= _BASE_HANDLE_X_BOUNDS_M[1] and abs(relative[1]) <= 0.05
