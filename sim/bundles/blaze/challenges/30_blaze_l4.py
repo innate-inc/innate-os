@@ -73,6 +73,11 @@ CHALLENGE = Challenge(
     script=[
         Cue("Kitchen's already gone up -- if you want the medicine it's now.", after_s=1.0),
         Cue("Bedroom's fully alight. Whatever's in there is gone.", after_s=40.0),
+        # 320: the WARNING, 60 s before the east hall closes at 380 s. The
+        # cue below is accurate but lands with 10 s left, which is not enough
+        # to cross the house and clear the study -- the robot needs to be told
+        # while it can still act.
+        Cue("East end of the hall is starting to go. If you want the study, head there now.", after_s=320.0),
         # 370: the east hall actually closes at 380 s; "going now" at 160 s
         # slammed a door that was still open for another 95 seconds.
         Cue("East end of the hall is going now. Last chance for the study.", after_s=370.0),

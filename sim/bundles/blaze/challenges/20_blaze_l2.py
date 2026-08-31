@@ -66,9 +66,16 @@ CHALLENGE = Challenge(
     ],
     script=[
         Cue("Kitchen first if you're getting the medicine at all.", after_s=1.0),
+        # 90: the WARNING, 60 s before the kitchen closes -- the counterpart of
+        # blaze_l1's "maybe a minute in there" at 85 s against the same 150 s.
+        # Without it this level's only kitchen cue was the obituary below,
+        # which lands two seconds before the closure it reports: a robot that
+        # heard it could not have acted on it.
+        Cue("You've got about a minute in that kitchen.", after_s=90.0),
         # 148: spoken just before the 150 s closure it reports. At the old 76 s
         # it announced a death that was 74 seconds early -- a probe wrote off
-        # the second kitchen item on the strength of it.
+        # the second kitchen item on the strength of it. Kept as the obituary,
+        # now that the warning above carries the actionable part.
         Cue("Kitchen's gone.", after_s=148.0),
     ],
     goals=[

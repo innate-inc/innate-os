@@ -344,6 +344,13 @@ async def _episode(
                             + (f" (DELIVERY FAILED: {err})" if err else ""),
                             flush=True,
                         )
+                        if err and not ep.blocked:
+                            # The challenge promised this line -- a fire
+                            # warning, a correction, a second order -- and the
+                            # robot never heard it. Scoring the episode now
+                            # measures the transport, not the robot. Same rule
+                            # the brief follows above.
+                            ep.blocked = f"harness: narrator line not delivered ({err[:60]})"
 
             if last:
                 goals = last.get("goals", [])

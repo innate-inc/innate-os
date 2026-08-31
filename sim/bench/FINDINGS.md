@@ -231,15 +231,28 @@ on this system are indicative, not precise.
 
 Stated here rather than discovered later.
 
-1. **No ASR.** Narrator lines arrive as text. `bridge_stutter` measures what the
+1. **An oracle pass is not proof that the ROBOT'S action set can do it.**
+   The scripted oracle drives with A* waypoints and, for carry tasks,
+   `put` teleports the held prop to its destination -- `oracles.py` says so
+   in its own header, and `planner_agent.py` calls `mars.drop_prop_at`
+   rather than the arm. The measured agent gets only `turn`, `forward`,
+   reach-limited `pick` and fixed-offset `place`. So VALID means "the world
+   permits this outcome and chance cannot reach it", NOT "a perfect agent
+   using the eight actions could complete it". The strong-agent probe is
+   the closest thing to the second claim, and it certified 36 of 45. For
+   the multi-item carry challenges, action-level solvability is inferred,
+   not demonstrated -- the honest gap in this benchmark's validity story,
+   and the thing a second executor-bound gate should close.
+
+2. **No ASR.** Narrator lines arrive as text. `bridge_stutter` measures what the
    language model does with disfluent *text*; the real stack's speech front end
    is upstream of everything here and is not exercised by any challenge.
 
-2. **The blind control is not a vision result.** `CodexBackend` is text-only
+3. **The blind control is not a vision result.** `CodexBackend` is text-only
    because the Codex CLI takes no images. Its scores answer "what is reachable
    from the brief alone" and must not be quoted as perception numbers.
 
-3. **"1 in 8" / "1 in 32" on the Bridge is a guessing floor, not environmental
+4. **"1 in 8" / "1 in 32" on the Bridge is a guessing floor, not environmental
    randomness -- corrected after actually checking the challenge source.**
    `bridge_three`/`bridge_five`'s left/right route (`ROUTE = (...)` in each
    challenge file) is a FIXED sequence, identical every episode, stated
@@ -255,22 +268,22 @@ Stated here rather than discovered later.
    found consistent, repeatable failures on both, not scattered chance
    losses).
 
-4. **RHAE has no human baseline.** ARC-AGI-3's efficiency score is
+5. **RHAE has no human baseline.** ARC-AGI-3's efficiency score is
    `min(1, h/a)²` where `h` is the second-best *human's* action count. No human
    data has been collected, so the derived plan's step count stands in. It is a
    score against a reference plan, not against a person, and is labelled as such.
 
-5. **`fail_if` is evaluated at 10 Hz.** A robot moving faster than ~2 m/s could
+6. **`fail_if` is evaluated at 10 Hz.** A robot moving faster than ~2 m/s could
    in principle cross an 18 cm elimination band between ticks. Nothing in this
    sim moves that fast (V_MAX is 0.30 m/s), but the band width is a function of
    speed and would need revisiting if it changed.
 
-6. **The oracle proves solvability, not sanity.** It is deaf by construction and
+7. **The oracle proves solvability, not sanity.** It is deaf by construction and
    plans straight to the final state. It cannot tell you a challenge is
    confusing, ambiguous, or badly worded — only that some agent could satisfy
    the goals. Every challenge here still needs a human to read it.
 
-7. **Rooms have no ceiling geom, and their walls are separate boxes, not a
+8. **Rooms have no ceiling geom, and their walls are separate boxes, not a
    sealed shell.** At most camera angles this is invisible (the background
    above wall-height is a flat black "sky," same as any open-air view). At a
    narrow band of oblique angles near a wall corner, the seam between two
