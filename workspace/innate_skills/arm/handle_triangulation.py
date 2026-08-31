@@ -132,6 +132,96 @@ def vertical_handle_target(box, physical_height_m, *, fx, fy, cx, cy, camera_ori
     ), optical_range
 
 
+def rpy_rotation(roll: float, pitch: float, yaw: float):
+    """Rotation matrix for an RPY-oriented frame, using ``Rz * Ry * Rx``."""
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    return (
+        (cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr),
+        (sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr),
+        (-sp, cp * sr, cp * cr),
+    )
+
+
+def _matmul(left, right):
+    return tuple(
+        tuple(sum(left[row][index] * right[index][column] for index in range(3)) for column in range(3))
+        for row in range(3)
+    )
+
+
+def _rotate(rotation, vector):
+    return tuple(sum(rotation[row][column] * vector[column] for column in range(3)) for row in range(3))
+
+
+def camera_pose_from_ee(ee_position, ee_rpy, *, translation_in_ee, rpy_in_ee):
+    """Return a rigidly mounted camera's origin and orientation in base_link."""
+    ee_rotation = rpy_rotation(*ee_rpy)
+    offset = _rotate(ee_rotation, translation_in_ee)
+    origin = tuple(ee_position[index] + offset[index] for index in range(3))
+    return origin, _matmul(ee_rotation, rpy_rotation(*rpy_in_ee))
+
+
+def vertical_handle_from_camera_box(
+    box,
+    physical_height_m,
+    *,
+    fx,
+    fy,
+    cx,
+    cy,
+    camera_origin,
+    camera_rotation,
+    max_endpoint_residual_m: float = 0.04,
+):
+    """Recover a vertical segment from its image endpoints and known height.
+
+    ``camera_rotation`` transforms camera-frame vectors into ``base_link``.
+    Camera axes are forward, left, up, matching the MARS camera convention.
+    Unlike :func:`vertical_handle_target`, this works for a pitched wrist
+    camera and an arbitrarily oriented end effector.
+
+    Returns ``(midpoint, endpoint_residual, top_ray_range, bottom_ray_range)``.
+    """
+    x, y, width, height = validate_vertical_box(box)
+    if not math.isfinite(physical_height_m) or physical_height_m <= 0.0:
+        raise ValueError("physical handle height must be positive")
+    if min(fx, fy) <= 0.0:
+        raise ValueError("camera focal lengths must be positive")
+
+    u = x + width / 2.0
+
+    def base_ray(v):
+        camera_ray = (1.0, -(u - cx) / fx, -(v - cy) / fy)
+        norm = math.sqrt(sum(value * value for value in camera_ray))
+        return _rotate(camera_rotation, tuple(value / norm for value in camera_ray))
+
+    top_ray = base_ray(y)
+    bottom_ray = base_ray(y + height)
+    # Solve t_top * d_top - t_bottom * d_bottom ~= (0, 0, H).
+    first = top_ray
+    second = tuple(-value for value in bottom_ray)
+    cross = sum(first[index] * second[index] for index in range(3))
+    rhs_first = first[2] * physical_height_m
+    rhs_second = second[2] * physical_height_m
+    determinant = 1.0 - cross * cross
+    if determinant <= 1e-6:
+        raise ValueError("handle endpoints do not provide usable metric geometry")
+    top_range = (rhs_first - cross * rhs_second) / determinant
+    bottom_range = (rhs_second - cross * rhs_first) / determinant
+    if top_range <= 0.0 or bottom_range <= 0.0:
+        raise ValueError("known-size handle estimate is behind the wrist camera")
+
+    top = tuple(camera_origin[index] + top_range * top_ray[index] for index in range(3))
+    bottom = tuple(camera_origin[index] + bottom_range * bottom_ray[index] for index in range(3))
+    residual = math.dist(top, (bottom[0], bottom[1], bottom[2] + physical_height_m))
+    if residual > max_endpoint_residual_m:
+        raise ValueError(f"wrist handle geometry disagrees by {residual:.3f} m")
+    midpoint = tuple((top[index] + bottom[index]) / 2.0 for index in range(3))
+    return midpoint, residual, top_range, bottom_range
+
+
 def handle_from_floor_edge(handle_px, left_floor_px, right_floor_px, head_tilt_deg):
     """Intersect a handle pixel ray with the vertical plane above a floor edge.
 

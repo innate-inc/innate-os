@@ -84,6 +84,44 @@ def test_known_vertical_height_projects_to_metric_target():
     assert point == pytest.approx((0.40810, -0.01670, 0.20855), abs=0.0001)
 
 
+def test_wrist_camera_recovers_known_vertical_handle_with_mount_pitch():
+    focal = 480.0 / (2.0 * math.tan(math.radians(80.0) / 2.0))
+    camera_origin, camera_rotation = geometry.camera_pose_from_ee(
+        (0.32, -0.01, 0.21),
+        (0.0, 0.0, 0.0),
+        translation_in_ee=(-0.058058, 0.0, 0.05052),
+        rpy_in_ee=(0.0, 0.43633, 0.0),
+    )
+    # Synthetic projection of a 100 mm vertical handle centered at this point.
+    expected = (0.428, -0.01, 0.207)
+    inverse = tuple(zip(*camera_rotation, strict=True))
+
+    def project(point):
+        relative = tuple(point[index] - camera_origin[index] for index in range(3))
+        forward, left, up = (sum(inverse[row][column] * relative[column] for column in range(3)) for row in range(3))
+        return 320.0 - focal * left / forward, 240.0 - focal * up / forward
+
+    top_u, top_v = project((expected[0], expected[1], expected[2] + 0.05))
+    bottom_u, bottom_v = project((expected[0], expected[1], expected[2] - 0.05))
+    box = (top_u - 5.0, top_v, 10.0, bottom_v - top_v)
+
+    point, residual, top_range, bottom_range = geometry.vertical_handle_from_camera_box(
+        box,
+        0.10,
+        fx=focal,
+        fy=focal,
+        cx=320.0,
+        cy=240.0,
+        camera_origin=camera_origin,
+        camera_rotation=camera_rotation,
+    )
+
+    assert point == pytest.approx(expected, abs=1e-6)
+    assert residual == pytest.approx(0.0, abs=1e-8)
+    assert top_range > 0.0
+    assert bottom_range > 0.0
+
+
 def test_metric_box_rejects_clipped_handle():
     with pytest.raises(ValueError, match="full top and bottom"):
         geometry.validate_vertical_box((330.0, 2.0, 12.0, 100.0))
@@ -169,12 +207,25 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
     order = []
     monkeypatch.setattr(skill, "_localize_handle", lambda: order.append("localize") or (1.0, 0.0, 0.2))
     monkeypatch.setattr(skill, "_position_base", lambda _point: order.append("position") or (0.44, 0.0, 0.2))
-    monkeypatch.setattr(skill, "_wrist_align", lambda target: order.append("align") or (0.28, target[1], target[2]))
-    monkeypatch.setattr(skill, "_grasp", lambda _pregrasp, _handle_x: order.append("grasp"))
+    monkeypatch.setattr(
+        skill,
+        "_wrist_align",
+        lambda target: order.append("align") or ((0.34, target[1], target[2]), (0.421, target[1], target[2])),
+    )
+    monkeypatch.setattr(
+        skill,
+        "_grasp",
+        lambda pregrasp, handle_x: order.append(("grasp", pregrasp, handle_x)),
+    )
 
     result = skill.execute(pull_distance_m=0.03)
 
-    assert order == ["localize", "position", "align", "grasp"]
+    assert order == [
+        "localize",
+        "position",
+        "align",
+        ("grasp", (0.34, 0.0, 0.2), 0.421),
+    ]
     assert "0.03 m" in result
     assert skill.skills.calls == [
         (

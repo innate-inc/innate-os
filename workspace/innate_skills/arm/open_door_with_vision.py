@@ -23,9 +23,11 @@ from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
 
 from .handle_triangulation import (
+    camera_pose_from_ee,
     odom_point_to_base,
     stable_vertical_box,
     validate_vertical_box,
+    vertical_handle_from_camera_box,
     vertical_handle_target,
 )
 
@@ -35,19 +37,23 @@ _MAX_RANGE_M = 1.50
 _MIN_HANDLE_Z_M = 0.10
 _MAX_HANDLE_Z_M = 0.30
 _APPROACH_RANGE_M = 0.44
-_PREGRASP_X_M = 0.22
+_WRIST_STAGING_X_M = 0.32
 _FINGERTIP_OFFSET_M = 0.05
+_VISUAL_CLEARANCE_M = 0.03
 _APPROACH_PAST_HANDLE_M = 0.01
-_WRIST_U = 320.0
-_WRIST_V = 350.0
-_WRIST_DEADBAND_PX = 45.0
-_WRIST_GAIN_M_PER_100PX = 0.025
-_WRIST_MAX_STEP_M = 0.02
+_WRIST_MAX_STEP_M = 0.025
 _WRIST_STEPS = 5
-_WRIST_FY_PX = 461.0  # 480 / (2 tan(55 deg / 2)); nominal UC684 vertical FOV
-_WRIST_STOP_RANGE_M = 0.18
-_WRIST_RANGE_DEADBAND_M = 0.015
-_WRIST_RANGE_MAX_STEP_M = 0.025
+# The real wrist module has no CameraInfo calibration. Keep this aligned with
+# the repository's 80-degree wrist-camera model until per-robot K is measured.
+_WRIST_FY_PX = 480.0 / (2.0 * math.tan(math.radians(80.0) / 2.0))
+_WRIST_FX_PX = _WRIST_FY_PX
+_WRIST_CX_PX = 320.0
+_WRIST_CY_PX = 240.0
+_WRIST_TARGET_DEADBAND_M = 0.012
+# URDF camera transform expressed relative to ee_link. Both fixed joints are
+# defined from link5, so the camera sits 58 mm behind and 51 mm above the EE.
+_WRIST_CAMERA_IN_EE = (-0.058058, 0.0, 0.05052)
+_WRIST_CAMERA_RPY_IN_EE = (0.0, 0.43633, 0.0)
 _GRIP_STRENGTH = 0.35
 _EMPTY_GRIPPER_J6 = -0.085
 _TARE_SAMPLES = 6
@@ -245,38 +251,67 @@ class OpenDoorWithVision(Skill):
         return relative
 
     def _wrist_align(self, target):
-        x = _PREGRASP_X_M
+        x = _WRIST_STAGING_X_M
         y, z = target[1], target[2]
         self.manipulation.torque_on()
         self.manipulation.gripper_open(duration=1.0)
         self.manipulation.move_to(x, y, z, duration=2.0)
         for step in range(_WRIST_STEPS):
             self.sleep(0.5)
-            box, optical_range = self._measure_handle("wrist", _WRIST_FY_PX)
-            u, v = box[0] + box[2] / 2.0, box[1] + box[3] / 2.0
-            err_u, err_v = u - _WRIST_U, v - _WRIST_V
-            range_error = optical_range - _WRIST_STOP_RANGE_M
+            box, approximate_range = self._measure_handle("wrist", _WRIST_FY_PX)
+            measured = self.manipulation.pose
+            camera_origin, camera_rotation = camera_pose_from_ee(
+                measured.position,
+                measured.rpy,
+                translation_in_ee=_WRIST_CAMERA_IN_EE,
+                rpy_in_ee=_WRIST_CAMERA_RPY_IN_EE,
+            )
+            try:
+                observed, residual, top_range, bottom_range = vertical_handle_from_camera_box(
+                    box,
+                    self._handle_height_m,
+                    fx=_WRIST_FX_PX,
+                    fy=_WRIST_FY_PX,
+                    cx=_WRIST_CX_PX,
+                    cy=_WRIST_CY_PX,
+                    camera_origin=camera_origin,
+                    camera_rotation=camera_rotation,
+                )
+            except ValueError as error:
+                self.fail(str(error))
+            desired = (
+                observed[0] - _FINGERTIP_OFFSET_M - _VISUAL_CLEARANCE_M,
+                observed[1],
+                observed[2],
+            )
+            error = tuple(desired[index] - measured.position[index] for index in range(3))
             self.debug_event(
                 "wrist_alignment",
                 step=step,
-                pixel=[u, v],
                 box=list(box),
-                optical_range_m=optical_range,
-                range_error_m=range_error,
-                error=[err_u, err_v],
-                pose=[x, y, z],
+                approximate_optical_range_m=approximate_range,
+                camera_origin=list(camera_origin),
+                observed_handle_base=list(observed),
+                endpoint_residual_m=residual,
+                endpoint_ray_ranges_m=[top_range, bottom_range],
+                measured_ee=list(measured.position),
+                desired_ee=list(desired),
+                error_m=list(error),
             )
-            if optical_range < _WRIST_STOP_RANGE_M - _WRIST_RANGE_DEADBAND_M:
-                self.fail("Wrist camera is already too close to see the complete handle safely")
-            centered = abs(err_u) <= _WRIST_DEADBAND_PX and abs(err_v) <= _WRIST_DEADBAND_PX
-            if centered and abs(range_error) <= _WRIST_RANGE_DEADBAND_M:
-                return x, y, z
-            dx = max(0.0, min(_WRIST_RANGE_MAX_STEP_M, range_error))
-            dy = max(-_WRIST_MAX_STEP_M, min(_WRIST_MAX_STEP_M, -_WRIST_GAIN_M_PER_100PX * err_u / 100.0))
-            dz = max(-_WRIST_MAX_STEP_M, min(_WRIST_MAX_STEP_M, -_WRIST_GAIN_M_PER_100PX * err_v / 100.0))
-            x = min(0.40, x + dx)
-            y += dy
-            z = max(_MIN_HANDLE_Z_M, min(_MAX_HANDLE_Z_M, z + dz))
+            if max(abs(value) for value in error) <= _WRIST_TARGET_DEADBAND_M:
+                self.debug_event(
+                    "wrist_alignment_complete",
+                    measured_ee=list(measured.position),
+                    refined_handle_base=list(observed),
+                )
+                return tuple(measured.position), observed
+
+            def bounded(value):
+                return max(-_WRIST_MAX_STEP_M, min(_WRIST_MAX_STEP_M, value))
+
+            x = max(_WRIST_STAGING_X_M, min(0.40, measured.x + bounded(error[0])))
+            y = max(-0.10, min(0.10, measured.y + bounded(error[1])))
+            z = max(_MIN_HANDLE_Z_M, min(_MAX_HANDLE_Z_M, measured.z + bounded(error[2])))
             self.manipulation.move_to(x, y, z, duration=0.7)
         self.fail("Wrist camera could not align the gripper with the handle")
 
@@ -331,7 +366,9 @@ class OpenDoorWithVision(Skill):
             self.fail("pull_distance_m must be between 0.01 and 0.20")
         if not handle_description.strip():
             self.fail("handle_description must not be empty")
-        if not any(color in handle_color.lower() for color in ("red", "orange", "yellow", "green", "blue", "purple", "pink")):
+        if not any(
+            color in handle_color.lower() for color in ("red", "orange", "yellow", "green", "blue", "purple", "pink")
+        ):
             self.fail("handle_color must name a vivid red, orange, yellow, green, blue, purple, or pink color")
         if not 0.03 <= handle_height_m <= 0.25:
             self.fail("handle_height_m must be between 0.03 and 0.25")
@@ -354,8 +391,8 @@ class OpenDoorWithVision(Skill):
             self.manipulation.move_joints(_SEARCH_ARM, duration=3.0)
             point = self._localize_handle()
             target = self._position_base(point)
-            pregrasp = self._wrist_align(target)
-            self._grasp(pregrasp, target[0])
+            pregrasp, refined_target = self._wrist_align(target)
+            self._grasp(pregrasp, refined_target[0])
             if self.skills is None:
                 self.fail("Skill composition is unavailable for the pull handoff")
             result = self.skills.run(
