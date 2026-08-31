@@ -54,7 +54,7 @@ from std_msgs.msg import Empty, Float64MultiArray, Int32, Int64, String
 from std_srvs.srv import Trigger
 from tf2_ros import TransformBroadcaster
 
-from .constants import CAMERA_FOVY, CAMERA_HEIGHT, CAMERA_WIDTH
+from .constants import CAMERA_CX, CAMERA_CY, CAMERA_FX, CAMERA_FY, CAMERA_HEIGHT, CAMERA_WIDTH
 from .remote_world import RemoteWorld
 
 try:
@@ -86,10 +86,10 @@ DEPTH_MAX_M = 2.0
 
 ARM_JOINTS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
 
-# Pinhole intrinsics implied by the render (square pixels, principal point
-# centered): fy from the vertical FOV, fx = fy.
-FOCAL = CAMERA_HEIGHT / (2 * math.tan(math.radians(CAMERA_FOVY) / 2))
-CX, CY = CAMERA_WIDTH / 2, CAMERA_HEIGHT / 2
+# The real camera's intrinsics, which the render reproduces: not square
+# pixels, not a centred principal point, and camera_info must say so.
+FX, FY = CAMERA_FX, CAMERA_FY
+CX, CY = CAMERA_CX, CAMERA_CY
 
 WORLD_DEFAULT_ENDPOINT = "127.0.0.1:8799"
 
@@ -564,10 +564,11 @@ class VirtualMarsNode(Node):
         if want_points:
             step = max(1, POINTS_SUBSAMPLE // img_scale)
             vs, us = _points_grid(depth.shape[0], depth.shape[1], step)
-            f, cx, cy = FOCAL / img_scale, CX / img_scale, CY / img_scale
+            fx, fy = FX / img_scale, FY / img_scale
+            cx, cy = CX / img_scale, CY / img_scale
             z = np.where(invalid, np.nan, depth)[::step, ::step].astype(np.float32)
-            x = (us - cx) / f * z
-            y = (vs - cy) / f * z
+            x = (us - cx) / fx * z
+            y = (vs - cy) / fy * z
             cloud = np.stack([x, y, z], axis=-1)
 
             msg = PointCloud2()
@@ -591,9 +592,9 @@ class VirtualMarsNode(Node):
         msg.width, msg.height = CAMERA_WIDTH, CAMERA_HEIGHT
         msg.distortion_model = "plumb_bob"
         msg.d = [0.0] * 5
-        msg.k = [FOCAL, 0.0, CX, 0.0, FOCAL, CY, 0.0, 0.0, 1.0]
+        msg.k = [FX, 0.0, CX, 0.0, FY, CY, 0.0, 0.0, 1.0]
         msg.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-        msg.p = [FOCAL, 0.0, CX, 0.0, 0.0, FOCAL, CY, 0.0, 0.0, 0.0, 1.0, 0.0]
+        msg.p = [FX, 0.0, CX, 0.0, 0.0, FY, CY, 0.0, 0.0, 0.0, 1.0, 0.0]
         self._caminfo_pub.publish(msg)
 
     def _publish_joint_states(self) -> None:
