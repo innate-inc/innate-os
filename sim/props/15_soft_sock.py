@@ -39,10 +39,12 @@ PROP = SoftProp(
     # establish the constraint before a narrow fingertip crosses the shell.
     radius=0.001,
     contact_margin=0.001,
-    # Ten times the generic cloth default is the stiffest tested setting that
-    # still settles within three simulated seconds; higher values kept the
-    # coarse cage visibly buzzing after contact.
-    bend_stiffness=5.0e-6,
+    # Keep enough rest-dihedral force to stop the coarse cage collapsing into
+    # arbitrary creases, but let a handled sock retain folds instead of
+    # springing back like rubber.  Extra damping removes the resulting flutter
+    # without making the edge-length constraints softer.
+    bend_stiffness=1.0e-6,
+    bend_damping_ratio=0.15,
     rest_z=0.001,
     drop_z=0.35,
     # The authored sock is ~20 cm long, so keep it clear of the chassis when
