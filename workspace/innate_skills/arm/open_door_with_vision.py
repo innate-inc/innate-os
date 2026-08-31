@@ -23,11 +23,9 @@ from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
 
 from .handle_triangulation import (
-    camera_pose_from_ee,
     odom_point_to_base,
     stable_vertical_box,
     validate_vertical_box,
-    vertical_handle_from_camera_box,
     vertical_handle_target,
 )
 
@@ -36,29 +34,15 @@ _MIN_RANGE_M = 0.20
 _MAX_RANGE_M = 1.50
 _MIN_HANDLE_Z_M = 0.10
 _MAX_HANDLE_Z_M = 0.30
-_APPROACH_RANGE_M = 0.37
-_BASE_HANDLE_X_BOUNDS_M = (0.35, 0.395)
+_APPROACH_RANGE_M = 0.35
+_BASE_HANDLE_X_BOUNDS_M = (0.33, 0.38)
 _WRIST_STAGING_X_M = 0.32
 _VISUAL_CLEARANCE_M = 0.03
-_WRIST_DEPTH_CORRECTION_M = 0.015
-_MAX_GRASP_HANDLE_X_M = 0.39
 _MAX_EE_X_M = 0.40
-_APPROACH_PAST_HANDLE_M = 0.01
-_WRIST_MAX_STEP_M = 0.025
-_WRIST_STEPS = 5
-_WRIST_U_PX = 320.0
-_WRIST_LATERAL_CAPTURE_M = 0.015
-# The real wrist module has no CameraInfo calibration. Keep this aligned with
-# the repository's 80-degree wrist-camera model until per-robot K is measured.
-_WRIST_FY_PX = 480.0 / (2.0 * math.tan(math.radians(80.0) / 2.0))
-_WRIST_FX_PX = _WRIST_FY_PX
-_WRIST_CX_PX = 320.0
-_WRIST_CY_PX = 240.0
-_WRIST_XZ_DEADBAND_M = 0.008
-# URDF camera transform expressed relative to ee_link. Both fixed joints are
-# defined from link5, so the camera sits 58 mm behind and 51 mm above the EE.
-_WRIST_CAMERA_IN_EE = (-0.058058, 0.0, 0.05052)
-_WRIST_CAMERA_RPY_IN_EE = (0.0, 0.43633, 0.0)
+_WRIST_ACTION_STEP_M = 0.005
+_WRIST_ACTION_STEPS = 12
+_WRIST_CONTENT_ATTEMPTS = 2
+_WRIST_ACTIONS = frozenset({"FORWARD", "BACK", "LEFT", "RIGHT", "UP", "DOWN", "GRASP", "ABORT"})
 _GRIP_STRENGTH = 0.35
 _EMPTY_GRIPPER_J6 = -0.085
 _TARE_SAMPLES = 6
@@ -79,27 +63,41 @@ _VISION_MODEL = "gemini-3.6-flash"
 _VISION_REASONING_EFFORT = "minimal"
 
 
-def _fuse_handle_target(head_target, wrist_target):
-    """Use wrist Y/Z while bounding its uncalibrated monocular depth."""
-    wrist_x = max(
-        head_target[0] - _WRIST_DEPTH_CORRECTION_M,
-        min(head_target[0] + _WRIST_DEPTH_CORRECTION_M, wrist_target[0]),
-    )
-    return min(_MAX_GRASP_HANDLE_X_M, wrist_x), wrist_target[1], wrist_target[2]
+def _parse_wrist_decision(text):
+    """Return a strict VLM action, optional box, and short reason."""
+    detections = vision.parse_dets(text)
+    if not detections:
+        return None
+    detection = detections[0]
+    action = str(detection.get("action", "")).strip().upper()
+    if action not in _WRIST_ACTIONS:
+        return None
+    boxes = vision.parse_det_boxes(text)
+    if action != "ABORT" and not boxes:
+        return None
+    reason = str(detection.get("reason", "")).strip()
+    return action, (boxes[0] if boxes else None), reason
 
 
-def _wrist_lateral_correction(u_px, optical_range_m):
-    """Image-right handle error requires a negative base-Y gripper move."""
-    correction = -(u_px - _WRIST_U_PX) * optical_range_m / _WRIST_FX_PX
-    return max(-_WRIST_MAX_STEP_M, min(_WRIST_MAX_STEP_M, correction))
-
-
-def _wrist_capture_ready(error, lateral_correction_m):
-    """Whether the handle is safely inside the gripper's capture corridor."""
+def _wrist_action_pose(position, action):
+    """Map one semantic image-space action to a bounded 5 mm base-frame move."""
+    x, y, z = position
+    if action == "FORWARD":
+        x += _WRIST_ACTION_STEP_M
+    elif action == "BACK":
+        x -= _WRIST_ACTION_STEP_M
+    elif action == "LEFT":
+        y += _WRIST_ACTION_STEP_M
+    elif action == "RIGHT":
+        y -= _WRIST_ACTION_STEP_M
+    elif action == "UP":
+        z += _WRIST_ACTION_STEP_M
+    elif action == "DOWN":
+        z -= _WRIST_ACTION_STEP_M
     return (
-        abs(error[0]) <= _WRIST_XZ_DEADBAND_M
-        and abs(error[2]) <= _WRIST_XZ_DEADBAND_M
-        and abs(lateral_correction_m) <= _WRIST_LATERAL_CAPTURE_M
+        max(_WRIST_STAGING_X_M, min(_MAX_EE_X_M, x)),
+        max(-0.10, min(0.10, y)),
+        max(_MIN_HANDLE_Z_M, min(_MAX_HANDLE_Z_M, z)),
     )
 
 
@@ -107,10 +105,10 @@ class OpenDoorWithVision(Skill):
     """Find and grasp a frontal protruding bar/lever handle, then pull it.
 
     A tight detection of a known-height, vivid vertical handle provides metric
-    monocular range. The head camera positions the base; the wrist camera then
-    refines range and alignment. This experimental skill rejects clipped or
-    unstable detections, unreachable geometry, excessive approach load, and an
-    unverified grasp.
+    monocular range. The head camera positions the base; a bounded wrist-camera
+    action loop then visually guides the gripper. This experimental skill
+    rejects clipped or unstable metric detections, unreachable geometry,
+    excessive approach load, and an unverified grasp.
     """
 
     manipulation: Manipulation
@@ -300,80 +298,129 @@ class OpenDoorWithVision(Skill):
         self.debug_event("base_positioned", handle_base=list(relative))
         return relative
 
+    def _request_wrist_decision(self, image, *, previous_image, previous_action, step):
+        frame_name = self._save_frame(image, "wrist", f"action_{step}")
+        images = [image] if previous_image is None else [previous_image, image]
+        history = (
+            "This is the first wrist-camera frame; there is no previous action."
+            if previous_image is None
+            else f"Image 1 is the previous frame. Image 2 is the current frame after action {previous_action}."
+        )
+        prompt = (
+            f"Guide a robot gripper to grasp {self._handle_description!r}, the vivid "
+            f"{self._handle_color} vertical handle. {history} "
+            "Inspect the current frame and choose exactly ONE next action. "
+            "FORWARD advances the open fingers toward the cabinet/handle. BACK retreats when too close or unsafe. "
+            "LEFT or RIGHT moves the gripper in that direction in the CURRENT IMAGE. UP or DOWN likewise moves "
+            "in the current image. Choose GRASP only when the handle is visibly between the two finger closing "
+            "paths and at the correct depth to be trapped by closing. Choose ABORT if the handle is absent, "
+            "ambiguous, occluded beyond safe guidance, or motion is unsafe. Do not use pixel thresholds or "
+            "estimate coordinates for motion; judge the physical next action visually. Return ONLY a JSON list "
+            'with one object: [{"box_2d":[ymin,xmin,ymax,xmax],"grasp_point":[y,x],'
+            '"action":"FORWARD|BACK|LEFT|RIGHT|UP|DOWN|GRASP|ABORT","reason":"short"}], '
+            "coordinates normalized 0-1000. The box must tightly enclose the physical handle. For ABORT only, "
+            "box_2d and grasp_point may be omitted."
+        )
+        for content_attempt in range(1, _WRIST_CONTENT_ATTEMPTS + 1):
+            text = gemlib.ask_image(
+                self._proxy,
+                images,
+                prompt,
+                logger=self.logger,
+                reasoning_effort=_VISION_REASONING_EFFORT,
+                model=_VISION_MODEL,
+            )
+            self.debug_event(
+                "wrist_action_response",
+                step=step,
+                content_attempt=content_attempt,
+                response=text,
+                frame=frame_name,
+                previous_action=previous_action,
+            )
+            decision = _parse_wrist_decision(text)
+            if decision is not None:
+                action, box, reason = decision
+                self.debug_event(
+                    "wrist_action_parse",
+                    step=step,
+                    content_attempt=content_attempt,
+                    action=action,
+                    box=list(box) if box is not None else None,
+                    reason=reason,
+                    frame=frame_name,
+                )
+                return action, box, reason
+            self.debug_event(
+                "wrist_action_parse_rejected",
+                step=step,
+                content_attempt=content_attempt,
+                reason="missing or invalid action/box JSON",
+                frame=frame_name,
+            )
+        self.fail("Wrist VLM did not return a valid bounded action")
+
     def _wrist_align(self, target, *, restage=True):
         if restage:
             self.manipulation.torque_on()
             self.manipulation.gripper_open(duration=1.0)
             self.manipulation.move_to(_WRIST_STAGING_X_M, target[1], target[2], duration=2.0)
-        for step in range(_WRIST_STEPS):
-            self.sleep(0.5)
-            box, approximate_range = self._measure_handle("wrist", _WRIST_FY_PX)
-            measured = self.manipulation.pose
-            camera_origin, camera_rotation = camera_pose_from_ee(
-                measured.position,
-                measured.rpy,
-                translation_in_ee=_WRIST_CAMERA_IN_EE,
-                rpy_in_ee=_WRIST_CAMERA_RPY_IN_EE,
-            )
-            try:
-                wrist_observed, residual, top_range, bottom_range = vertical_handle_from_camera_box(
-                    box,
-                    self._handle_height_m,
-                    fx=_WRIST_FX_PX,
-                    fy=_WRIST_FY_PX,
-                    cx=_WRIST_CX_PX,
-                    cy=_WRIST_CY_PX,
-                    camera_origin=camera_origin,
-                    camera_rotation=camera_rotation,
-                )
-            except ValueError as error:
-                self.fail(str(error))
-            observed = _fuse_handle_target(target, wrist_observed)
-            u = box[0] + box[2] / 2.0
-            u_error = u - _WRIST_U_PX
-            lateral_correction = _wrist_lateral_correction(u, approximate_range)
-            desired = (
-                observed[0] - _VISUAL_CLEARANCE_M,
-                measured.y + lateral_correction,
-                observed[2],
-            )
-            error = tuple(desired[index] - measured.position[index] for index in range(3))
-            self.debug_event(
-                "wrist_alignment",
+        baseline_samples = []
+        for _ in range(_TARE_SAMPLES):
+            baseline_samples.append(self._effort())
+            self.sleep(0.04)
+        baseline = tuple(statistics.median(sample[j] for sample in baseline_samples) for j in range(5))
+        previous_image = None
+        previous_action = None
+        for step in range(_WRIST_ACTION_STEPS):
+            self.sleep(0.4)
+            image = self.wrist_image if previous_image is None else self._next_image("wrist", previous_image)
+            action, box, reason = self._request_wrist_decision(
+                image,
+                previous_image=previous_image,
+                previous_action=previous_action,
                 step=step,
-                box=list(box),
-                approximate_optical_range_m=approximate_range,
-                camera_origin=list(camera_origin),
-                wrist_handle_base_raw=list(wrist_observed),
-                fused_handle_base=list(observed),
-                head_handle_base=list(target),
-                handle_u_px=u,
-                handle_u_error_px=u_error,
-                lateral_correction_m=lateral_correction,
-                endpoint_residual_m=residual,
-                endpoint_ray_ranges_m=[top_range, bottom_range],
-                measured_ee=list(measured.position),
-                desired_ee=list(desired),
-                error_m=list(error),
             )
-            if _wrist_capture_ready(error, lateral_correction):
+            measured = self.manipulation.pose
+            self.debug_event(
+                "wrist_action_decision",
+                step=step,
+                action=action,
+                reason=reason,
+                box=list(box) if box is not None else None,
+                measured_ee=list(measured.position),
+            )
+            if action == "ABORT":
+                self.fail(f"Wrist VLM aborted handle approach: {reason or 'unsafe or ambiguous view'}")
+            if action == "GRASP":
                 self.debug_event(
-                    "wrist_alignment_complete",
+                    "wrist_action_complete",
+                    step=step,
                     measured_ee=list(measured.position),
-                    refined_handle_base=list(observed),
-                    lateral_error_m=lateral_correction,
-                    lateral_capture_limit_m=_WRIST_LATERAL_CAPTURE_M,
+                    reason=reason,
                 )
-                return tuple(measured.position), observed
-
-            def bounded(value):
-                return max(-_WRIST_MAX_STEP_M, min(_WRIST_MAX_STEP_M, value))
-
-            x = max(_WRIST_STAGING_X_M, min(0.40, measured.x + bounded(error[0])))
-            y = max(-0.10, min(0.10, measured.y + bounded(error[1])))
-            z = max(_MIN_HANDLE_Z_M, min(_MAX_HANDLE_Z_M, measured.z + bounded(error[2])))
-            self.manipulation.move_to(x, y, z, duration=0.7)
-        self.fail("Wrist camera could not align the gripper with the handle")
+                return tuple(measured.position)
+            next_pose = _wrist_action_pose(measured.position, action)
+            if all(abs(next_pose[index] - measured.position[index]) < 1e-6 for index in range(3)):
+                self.fail(f"Wrist VLM requested {action}, but that motion is at a safety limit")
+            self.check_cancelled()
+            self.manipulation.move_to(*next_pose, duration=0.5, tolerance_xy=None, tolerance_z=None)
+            effort = self._effort()
+            delta = max(abs(effort[j] - baseline[j]) for j in range(5))
+            self.debug_event(
+                "wrist_action_motion",
+                step=step,
+                action=action,
+                requested_pose=list(next_pose),
+                measured_pose=list(self.manipulation.pose.position),
+                effort=list(effort),
+                effort_delta=delta,
+            )
+            if delta > _EFFORT_DELTA_LIMIT:
+                self.fail("Unexpected contact load during VLM-guided handle approach")
+            previous_image = image
+            previous_action = action
+        self.fail("Wrist VLM did not reach a safe grasp decision")
 
     def _effort(self):
         age = time.monotonic() - self.joint_states.received_at
@@ -384,27 +431,8 @@ class OpenDoorWithVision(Skill):
             self.fail("Arm effort feedback is unavailable during handle approach")
         return values
 
-    def _grasp(self, pregrasp, handle_x, attempt):
-        baseline_samples = []
-        for _ in range(_TARE_SAMPLES):
-            baseline_samples.append(self._effort())
-            self.sleep(0.04)
-        baseline = tuple(statistics.median(sample[j] for sample in baseline_samples) for j in range(5))
-        x, y, z = pregrasp
-        # ee_link is already at the fingertip plane: the finger joint's 44 mm
-        # offset plus its 47.7 mm pad matches ee_link's 91.838 mm URDF offset.
-        final_x = handle_x + _APPROACH_PAST_HANDLE_M
-        if final_x > _MAX_EE_X_M + 1e-6:
-            self.fail("Refined handle depth is beyond the arm's verified grasp reach")
-        final_x = max(x, final_x)
-        while x + 1e-6 < final_x:
-            x = min(final_x, x + 0.005)
-            self.manipulation.move_to(x, y, z, duration=0.35, tolerance_xy=None, tolerance_z=None)
-            effort = self._effort()
-            delta = max(abs(effort[j] - baseline[j]) for j in range(5))
-            self.debug_event("grasp_approach", pose=[x, y, z], effort=list(effort), effort_delta=delta)
-            if delta > _EFFORT_DELTA_LIMIT:
-                self.fail("Unexpected contact load while approaching the handle")
+    def _grasp(self, pregrasp, attempt):
+        self.debug_event("grasp_close_started", attempt=attempt, pose=list(pregrasp))
         self.check_cancelled()
         self.manipulation.gripper_close(_GRIP_STRENGTH, duration=1.0)
         time.sleep(0.5)
@@ -494,13 +522,13 @@ class OpenDoorWithVision(Skill):
             self.manipulation.move_joints(_SEARCH_ARM, duration=3.0)
             point = self._localize_handle()
             target = self._position_base(point)
-            pregrasp, refined_target = self._wrist_align(target)
+            pregrasp = self._wrist_align(target)
             for attempt in range(1, _GRASP_ATTEMPTS + 1):
-                if self._grasp(pregrasp, refined_target[0], attempt):
+                if self._grasp(pregrasp, attempt):
                     break
                 if attempt == _GRASP_ATTEMPTS:
                     self.fail(f"The gripper missed the handle after {_GRASP_ATTEMPTS} verified attempts")
-                pregrasp, refined_target = self._prepare_grasp_retry(target, attempt + 1)
+                pregrasp = self._prepare_grasp_retry(target, attempt + 1)
             if self.skills is None:
                 self.fail("Skill composition is unavailable for the pull handoff")
             result = self.skills.run(

@@ -7,6 +7,7 @@ import logging
 import math
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -179,6 +180,51 @@ def test_detection_exports_raw_response_before_parse_failure(tmp_path, monkeypat
     assert parsed["boxes"] == []
 
 
+def test_wrist_decision_retries_malformed_content_and_logs_raw_responses(tmp_path, monkeypatch):
+    responses = iter(
+        [
+            "not-json",
+            '[{"box_2d":[200,450,800,550],"grasp_point":[500,500],"action":"RIGHT","reason":"align"}]',
+        ]
+    )
+    requests = []
+
+    def ask_image(_proxy, images, prompt, **kwargs):
+        requests.append((images, prompt, kwargs))
+        return next(responses)
+
+    monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
+    monkeypatch.setattr(module.gemlib, "ask_image", ask_image)
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-action-response-test"))
+    skill._configure_debug_run(run_id="action-response-run", skill_id="innate-os/open_door_with_vision", inputs={})
+    previous = type("Frame", (), {"jpeg": b"previous"})()
+    current = type("Frame", (), {"jpeg": b"current"})()
+
+    action, box, reason = skill._request_wrist_decision(
+        current,
+        previous_image=previous,
+        previous_action="FORWARD",
+        step=3,
+    )
+
+    assert (action, box, reason) == ("RIGHT", (288.0, 96.0, 64.0, 288.0), "align")
+    assert len(requests) == 2
+    assert requests[0][0] == [previous, current]
+    assert "Image 2 is the current frame after action FORWARD" in requests[0][1]
+    assert requests[0][2]["reasoning_effort"] == "minimal"
+    assert requests[0][2]["model"] == "gemini-3.6-flash"
+    assert (skill.debug_directory / "00_wrist_action_3.jpg").read_bytes() == b"current"
+    events = [json.loads(line) for line in (skill.debug_directory / "events.jsonl").read_text().splitlines()]
+    raw = [event for event in events if event["event"] == "wrist_action_response"]
+    assert [event["response"] for event in raw] == [
+        "not-json",
+        '[{"box_2d":[200,450,800,550],"grasp_point":[500,500],"action":"RIGHT","reason":"align"}]',
+    ]
+    assert raw[0]["content_attempt"] == 1
+    assert raw[1]["content_attempt"] == 2
+
+
 def test_gemini_image_request_forwards_reasoning_effort():
     captured = {}
 
@@ -223,30 +269,85 @@ def test_base_accepts_sub_motion_threshold_range_error(monkeypatch):
     monkeypatch.setattr(skill, "_rotate", lambda _radians: None)
     monkeypatch.setattr(skill, "_drive", lambda _metres: None)
 
-    target = skill._position_base((0.39006072129054975, 0.012904473272164273, 0.21725490235201467))
+    target = skill._position_base((0.37006072129054975, 0.012904473272164273, 0.21725490235201467))
 
-    assert target == pytest.approx((0.39006072129054975, 0.012904473272164273, 0.21725490235201467))
-
-
-def test_wrist_depth_is_bounded_by_head_range_and_grasp_reserve():
-    target = module._fuse_handle_target((0.38, 0.01, 0.22), (0.48, 0.02, 0.27))
-
-    assert target == pytest.approx((0.39, 0.02, 0.27))
+    assert target == pytest.approx((0.37006072129054975, 0.012904473272164273, 0.21725490235201467))
 
 
-def test_wrist_image_right_error_moves_gripper_in_negative_y():
-    assert module._wrist_lateral_correction(373.0, 0.104) == pytest.approx(-0.01927, abs=0.0001)
-    # This was the first observation in the live divergent run. The correction
-    # must oppose the error and saturate at the per-step safety limit.
-    assert module._wrist_lateral_correction(389.5, 0.1430104) == pytest.approx(-0.025)
+def test_wrist_decision_parser_requires_allowed_action_and_box():
+    valid = '[{"box_2d":[200,450,800,550],"grasp_point":[500,500],"action":"forward","reason":"too far"}]'
+
+    action, box, reason = module._parse_wrist_decision(valid)
+
+    assert action == "FORWARD"
+    assert box == (288, 96, 64, 288)
+    assert reason == "too far"
+    assert module._parse_wrist_decision('[{"action":"SIDEWAYS","box_2d":[200,450,800,550]}]') is None
+    assert module._parse_wrist_decision('[{"action":"GRASP"}]') is None
+    assert module._parse_wrist_decision('[{"action":"ABORT","reason":"not visible"}]') == (
+        "ABORT",
+        None,
+        "not visible",
+    )
 
 
-def test_wrist_capture_gate_uses_metric_corridor_not_pixel_cutoff():
-    # Final observation from the live run: 11.5 px from image center, but only
-    # 5.3 mm laterally and safely inside the open gripper's capture corridor.
-    error = (-0.0032695, 0.0053488, 0.0039719)
-    assert module._wrist_capture_ready(error, 0.0053488)
-    assert not module._wrist_capture_ready(error, 0.016)
+def test_wrist_actions_are_five_millimetres_and_bounded():
+    start = (0.35, 0.01, 0.20)
+
+    assert module._wrist_action_pose(start, "FORWARD") == pytest.approx((0.355, 0.01, 0.20))
+    assert module._wrist_action_pose(start, "BACK") == pytest.approx((0.345, 0.01, 0.20))
+    assert module._wrist_action_pose(start, "LEFT") == pytest.approx((0.35, 0.015, 0.20))
+    assert module._wrist_action_pose(start, "RIGHT") == pytest.approx((0.35, 0.005, 0.20))
+    assert module._wrist_action_pose((0.40, 0.10, 0.30), "FORWARD") == pytest.approx((0.40, 0.10, 0.30))
+
+
+class _ActionManipulation:
+    def __init__(self):
+        self.position = [0.35, 0.01, 0.20]
+        self.moves = []
+
+    @property
+    def pose(self):
+        return SimpleNamespace(
+            position=tuple(self.position),
+            x=self.position[0],
+            y=self.position[1],
+            z=self.position[2],
+        )
+
+    def move_to(self, x, y, z, **_kwargs):
+        self.position[:] = [x, y, z]
+        self.moves.append((x, y, z))
+
+
+def test_wrist_loop_executes_semantic_actions_until_grasp(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-action-test"))
+    skill.manipulation = _ActionManipulation()
+    skill.wrist_image = object()
+    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(skill, "_effort", lambda: (0.0, 0.0, 0.0, 0.0, 0.0))
+    monkeypatch.setattr(skill, "_next_image", lambda _camera, _previous: object())
+    decisions = iter(
+        [
+            ("FORWARD", (280.0, 80.0, 80.0, 320.0), "advance"),
+            ("RIGHT", (280.0, 80.0, 80.0, 320.0), "move right"),
+            ("GRASP", (280.0, 80.0, 80.0, 320.0), "between fingers"),
+        ]
+    )
+    history = []
+
+    def decide(_image, *, previous_image, previous_action, step):
+        history.append((previous_image is not None, previous_action, step))
+        return next(decisions)
+
+    monkeypatch.setattr(skill, "_request_wrist_decision", decide)
+
+    result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
+
+    assert result == pytest.approx((0.355, 0.005, 0.20))
+    assert skill.manipulation.moves == pytest.approx([(0.355, 0.01, 0.20), (0.355, 0.005, 0.20)])
+    assert history == [(False, None, 0), (True, "FORWARD", 1), (True, "RIGHT", 2)]
 
 
 class _Mobility:
@@ -303,19 +404,19 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
 
     def retry(target, attempt):
         order.append(("retry", attempt))
-        return (0.36, target[1], target[2]), (0.38, target[1], target[2])
+        return (0.36, target[1], target[2])
 
     monkeypatch.setattr(skill, "_localize_handle", lambda: order.append("localize") or (1.0, 0.0, 0.2))
     monkeypatch.setattr(skill, "_position_base", lambda _point: order.append("position") or (0.44, 0.0, 0.2))
     monkeypatch.setattr(
         skill,
         "_wrist_align",
-        lambda target: order.append("align") or ((0.35, target[1], target[2]), (0.38, target[1], target[2])),
+        lambda target: order.append("align") or (0.35, target[1], target[2]),
     )
     monkeypatch.setattr(
         skill,
         "_grasp",
-        lambda pregrasp, handle_x, attempt: order.append(("grasp", attempt, pregrasp, handle_x)) or attempt == 2,
+        lambda pregrasp, attempt: order.append(("grasp", attempt, pregrasp)) or attempt == 2,
     )
     monkeypatch.setattr(skill, "_prepare_grasp_retry", retry)
 
@@ -325,9 +426,9 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         "localize",
         "position",
         "align",
-        ("grasp", 1, (0.35, 0.0, 0.2), 0.38),
+        ("grasp", 1, (0.35, 0.0, 0.2)),
         ("retry", 2),
-        ("grasp", 2, (0.36, 0.0, 0.2), 0.38),
+        ("grasp", 2, (0.36, 0.0, 0.2)),
     ]
     assert "0.03 m" in result
     assert skill.skills.calls == [
