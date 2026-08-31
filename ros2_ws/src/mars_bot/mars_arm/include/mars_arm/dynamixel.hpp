@@ -44,6 +44,7 @@ class Dynamixel {
     // Torque control
     void enableTorque(int motor_id);
     void disableTorque(int motor_id);
+    bool isTorqueEnabled(int motor_id);
 
     // Configuration
     void setOperatingMode(int motor_id, OperatingMode mode);
