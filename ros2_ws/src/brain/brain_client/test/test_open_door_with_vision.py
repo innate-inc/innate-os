@@ -459,6 +459,38 @@ def test_wrist_loop_continues_past_twelve_actions(monkeypatch):
     assert result == pytest.approx((0.35, 0.01, 0.210))
 
 
+def test_forward_near_full_extension_retracts_arm_and_creeps_base(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-base-creep-test"))
+    skill.manipulation = _ActionManipulation()
+    skill.manipulation.position[:] = [0.37, 0.01, 0.20]
+    skill.wrist_image = object()
+    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(skill, "_effort", lambda: (1.0, 2.0, 3.0, 4.0, 5.0))
+    monkeypatch.setattr(skill, "_next_image", lambda _camera, _previous: object())
+    decisions = iter(
+        [
+            ("FORWARD", (280.0, 80.0, 80.0, 320.0), "advance with base"),
+            ("GRASP", (280.0, 80.0, 80.0, 320.0), "shaft enclosed"),
+        ]
+    )
+    monkeypatch.setattr(skill, "_request_wrist_decision", lambda *_args, **_kwargs: next(decisions))
+    drives = []
+    monkeypatch.setattr(skill, "_drive", drives.append)
+    events = []
+    monkeypatch.setattr(skill, "debug_event", lambda event, **fields: events.append((event, fields)))
+
+    result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
+
+    assert skill.manipulation.moves == pytest.approx([(0.33, 0.01, 0.20)])
+    assert drives == pytest.approx([0.05])
+    assert result == pytest.approx((0.33, 0.01, 0.20))
+    creep = next(fields for event, fields in events if event == "wrist_base_creep")
+    assert creep["arm_retraction_m"] == pytest.approx(0.04)
+    assert creep["base_advance_m"] == pytest.approx(0.05)
+    assert creep["net_forward_m"] == pytest.approx(0.01)
+
+
 def test_grasp_uses_firm_strength_and_rejects_tip_pinch(monkeypatch):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-grasp-test"))
@@ -481,6 +513,22 @@ def test_grasp_uses_firm_strength_and_rejects_tip_pinch(monkeypatch):
     assert closes == [(0.60, {"duration": 1.0})]
     assert "opposite sides" in request["prompt"]
     assert "Answer NO if the fingers merely pinch the terminal tip/end" in request["prompt"]
+
+
+def test_grasp_retry_retracts_from_current_pose_after_base_creep(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-retry-retreat-test"))
+    manipulation = _ActionManipulation()
+    manipulation.position[:] = [0.39, 0.01, 0.20]
+    manipulation.gripper_open = lambda **_kwargs: None
+    skill.manipulation = manipulation
+    monkeypatch.setattr(skill, "debug_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(skill, "_wrist_align", lambda target, **_kwargs: target)
+
+    target = (0.20, 0.01, 0.20)  # Deliberately stale after a base advance.
+    assert skill._prepare_grasp_retry(target, 2) == target
+    assert len(manipulation.moves) == 1
+    assert manipulation.moves[0] == pytest.approx((0.35, 0.01, 0.20))
 
 
 class _Mobility:

@@ -37,9 +37,11 @@ _MAX_HANDLE_Z_M = 0.30
 _APPROACH_RANGE_M = 0.35
 _BASE_HANDLE_X_BOUNDS_M = (0.33, 0.38)
 _WRIST_STAGING_X_M = 0.32
-_VISUAL_CLEARANCE_M = 0.03
 _MAX_EE_X_M = 0.40
 _WRIST_ACTION_STEP_M = 0.010
+_WRIST_COMFORT_X_M = 0.37
+_WRIST_BASE_CREEP_M = 0.05
+_WRIST_CREEP_RETRACT_M = 0.04
 _WRIST_CONTENT_ATTEMPTS = 2
 _WRIST_ACTIONS = frozenset({"FORWARD", "BACK", "LEFT", "RIGHT", "UP", "DOWN", "GRASP", "ABORT"})
 _GRIP_STRENGTH = 0.60
@@ -407,6 +409,37 @@ class OpenDoorWithVision(Skill):
                     reason=reason,
                 )
                 return tuple(measured.position)
+            if action == "FORWARD" and commanded_pose[0] >= _WRIST_COMFORT_X_M:
+                self.check_cancelled()
+                retreat_pose = (
+                    max(_WRIST_STAGING_X_M, commanded_pose[0] - _WRIST_CREEP_RETRACT_M),
+                    commanded_pose[1],
+                    commanded_pose[2],
+                )
+                settled = self.manipulation.move_to(
+                    *retreat_pose,
+                    duration=0.8,
+                    tolerance_xy=None,
+                    tolerance_z=None,
+                )
+                measured_pose = tuple(settled.position)
+                self._drive(_WRIST_BASE_CREEP_M)
+                self.debug_event(
+                    "wrist_base_creep",
+                    step=step,
+                    action=action,
+                    previous_commanded_pose=list(commanded_pose),
+                    requested_arm_pose=list(retreat_pose),
+                    measured_arm_pose=list(measured_pose),
+                    arm_retraction_m=commanded_pose[0] - retreat_pose[0],
+                    base_advance_m=_WRIST_BASE_CREEP_M,
+                    net_forward_m=_WRIST_BASE_CREEP_M - (commanded_pose[0] - retreat_pose[0]),
+                    effort=list(self._effort()),
+                )
+                commanded_pose = retreat_pose
+                previous_image = image
+                previous_action = action
+                continue
             next_pose = _wrist_action_pose(commanded_pose, action)
             if all(abs(next_pose[index] - commanded_pose[index]) < 1e-6 for index in range(3)):
                 self.fail(f"Wrist VLM requested {action}, but that motion is at a safety limit")
@@ -484,7 +517,7 @@ class OpenDoorWithVision(Skill):
     def _prepare_grasp_retry(self, target, attempt):
         self.manipulation.gripper_open(duration=1.0)
         measured = self.manipulation.pose
-        retreat_x = max(_WRIST_STAGING_X_M, min(measured.x, target[0] - _VISUAL_CLEARANCE_M))
+        retreat_x = max(_WRIST_STAGING_X_M, measured.x - _WRIST_CREEP_RETRACT_M)
         self.manipulation.move_to(retreat_x, measured.y, measured.z, duration=0.8)
         self.debug_event(
             "grasp_retry_started",
