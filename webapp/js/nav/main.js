@@ -120,7 +120,12 @@ function buildView(root) {
   scene.appendChild(mapPill);
 
   // ---- store + scene ---------------------------------------------------------
-  const store = createNavStore();
+  let onMapChangeRequested = (/** @type {string} */ _name) => {};
+  let onMapChangeCancelled = (/** @type {string} */ _name) => {};
+  const store = createNavStore({
+    onMapChangeRequested: (name) => onMapChangeRequested(name),
+    onMapChangeCancelled: (name) => onMapChangeCancelled(name),
+  });
 
   // The keepout chip mirrors the widget's shared persisted preference — the
   // widget's own Zones button (here and on every other map view) is the same
@@ -141,6 +146,8 @@ function buildView(root) {
       legend.sync();
     },
   });
+  onMapChangeRequested = (name) => map.expectMapChange(name);
+  onMapChangeCancelled = (name) => map.cancelExpectedMapChange(name);
 
   // ---- layer chips -----------------------------------------------------------
   for (const { key, label, on, topic } of layerDefaults) {
@@ -238,7 +245,7 @@ function buildView(root) {
     if (s.currentMap !== lastMap) {
       // Trail and AMCL anchor drawn against the previous map are nonsense in
       // the new frame — reset both.
-      if (lastMap) map.mapChanged();
+      if (lastMap) map.mapChanged(s.currentMap);
       lastMap = s.currentMap;
     }
   });

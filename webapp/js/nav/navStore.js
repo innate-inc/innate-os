@@ -51,8 +51,9 @@ export const MAP_NAME_RE = /^[A-Za-z0-9_-]*[A-Za-z0-9][A-Za-z0-9_-]*$/;
  *   saveAndActivate: (name: string, overwrite: boolean) => Promise<boolean>,
  *   destroy: () => void,
  * }}
+ * @param {{ onMapChangeRequested?: (name: string) => void, onMapChangeCancelled?: (name: string) => void }} [opts]
  */
-export function createNavStore() {
+export function createNavStore({ onMapChangeRequested = () => {}, onMapChangeCancelled = () => {} } = {}) {
   /** @type {NavState} */
   const state = { mode: "", maps: [], currentMap: "", busy: null, status: null };
   /** @type {Set<(state: NavState) => void>} */
@@ -146,8 +147,11 @@ export function createNavStore() {
     },
 
     /** @param {string} name map filename, e.g. "home.yaml" */
-    changeMap(name) {
-      return call(NAV_CHANGE_MAP_SERVICE, { map_name: name }, `Switching to ${name}`);
+    async changeMap(name) {
+      onMapChangeRequested(name);
+      const ok = await call(NAV_CHANGE_MAP_SERVICE, { map_name: name }, `Switching to ${name}`);
+      if (!ok) onMapChangeCancelled(name);
+      return ok;
     },
 
     /**
@@ -172,7 +176,12 @@ export function createNavStore() {
     async saveAndActivate(name, overwrite) {
       if (!(await call(NAV_SAVE_MAP_SERVICE, { map_name: name, overwrite }, `Saving ${name}`))) return false;
       if (!(await call(NAV_CHANGE_MODE_SERVICE, { mode: "navigation" }, "Returning to navigation"))) return false;
-      if (!(await call(NAV_CHANGE_MAP_SERVICE, { map_name: `${name}.yaml` }, `Loading ${name}`))) return false;
+      const mapName = `${name}.yaml`;
+      onMapChangeRequested(mapName);
+      if (!(await call(NAV_CHANGE_MAP_SERVICE, { map_name: mapName }, `Loading ${name}`))) {
+        onMapChangeCancelled(mapName);
+        return false;
+      }
       set({ status: { kind: "ok", text: `Saved ${name}.yaml — use Locate if the robot isn't where the map thinks` } });
       return true;
     },

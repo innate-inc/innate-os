@@ -41,6 +41,7 @@ import {
   mapFingerprintFromMessage,
   paintKeepout,
   isRobotSelectionCatchup,
+  reloadMatchesExpectedMap,
   shouldActivateMapFingerprint,
 } from "./keepoutMask.js";
 
@@ -224,7 +225,7 @@ function rasterizeGrid(msg, canvas, ctx, paint) {
  *   global/local costmaps, odometry trail — each adds its subscription only while enabled. The
  *   keepout layer is governed by the shared keepoutZonesVisible() preference, not opts.layers;
  *   onKeepoutZonesToggle fires when the widget's own Zones button (or setLayer) changes it.
- * @returns {{ destroy: () => void, refresh: () => void, setZoom: (meters: number) => void, setFollowRobot: (on: boolean) => void, setLayer: (name: LayerName, on: boolean) => void, setMappingMode: (on: boolean) => void, clearTrail: () => void, mapChanged: () => void, highlightMemory: (id: number | null) => void, focusMemory: (id: number) => void, robotNowS: () => number }}
+ * @returns {{ destroy: () => void, refresh: () => void, setZoom: (meters: number) => void, setFollowRobot: (on: boolean) => void, setLayer: (name: LayerName, on: boolean) => void, setMappingMode: (on: boolean) => void, clearTrail: () => void, expectMapChange: (name: string) => void, cancelExpectedMapChange: (name: string) => void, mapChanged: (name: string) => void, highlightMemory: (id: number | null) => void, focusMemory: (id: number) => void, robotNowS: () => number }}
  */
 export function createMap(root, opts = {}) {
   let zoomMeters = opts.zoom;
@@ -410,10 +411,13 @@ export function createMap(root, opts = {}) {
   /** @type {string | null} map-load epoch paired with candidateMapHash */
   let candidateMapEpoch = null;
   let mapSelectionPending = false;
-  // The displayed grid is an equal-content reload whose notification has not
-  // arrived: only the very next mapChanged() may adopt it. One-shot, because a
-  // later switch announces a different map that this grid must not stand in for.
-  let reloadAwaitingNotification = false;
+  // Bind an early equal-content grid to the local map request that preceded
+  // it. A later selection must not consume an earlier grid just because its
+  // current-map notification happens to arrive next.
+  /** @type {string | null} */
+  let reloadAwaitingNotificationFor = null;
+  /** @type {string | null} */
+  let expectedMapSelection = null;
   let robotSelectionPending = false;
   let mapGenerationAtSelectionChange = 0;
   let mapFingerprintGeneration = 0;
@@ -1118,7 +1122,7 @@ export function createMap(root, opts = {}) {
     const mapEpoch = mapEpochFromMessage(msg);
     candidateMapHash = null;
     candidateMapEpoch = null;
-    reloadAwaitingNotification = false;
+    reloadAwaitingNotificationFor = null;
     activeMapHash = null;
     keepoutGrid = null;
     keepoutPlacement = null;
@@ -1144,12 +1148,14 @@ export function createMap(root, opts = {}) {
         // selectedMapEpoch at the previous value, which left the selection
         // describing two different moments — and a later notification-first
         // switch read that gap as evidence for the map already on screen.
-        reloadAwaitingNotification =
+        reloadAwaitingNotificationFor =
           !mapSelectionPending &&
           mapHash === selectedMapHash &&
           !!mapEpoch &&
           !!selectedMapEpoch &&
-          mapEpoch !== selectedMapEpoch;
+          mapEpoch !== selectedMapEpoch
+            ? expectedMapSelection
+            : null;
         selectedMapHash = mapHash;
         selectedMapEpoch = mapEpoch;
         mapSelectionPending = false;
@@ -2260,7 +2266,8 @@ export function createMap(root, opts = {}) {
     candidateMapHash = null;
     candidateMapEpoch = null;
     mapSelectionPending = false;
-    reloadAwaitingNotification = false;
+    reloadAwaitingNotificationFor = null;
+    expectedMapSelection = null;
     robotSelectionPending = true;
     keepoutGrid = null;
     latestKeepoutGrid = null;
@@ -2383,11 +2390,22 @@ export function createMap(root, opts = {}) {
       trail.length = 0;
       draw();
     },
+    /** Record a local map-selection intent before its service call starts. */
+    expectMapChange(name) {
+      expectedMapSelection = name;
+      reloadAwaitingNotificationFor = null;
+    },
+    /** A failed service request never produces a matching notification. */
+    cancelExpectedMapChange(name) {
+      if (expectedMapSelection === name) expectedMapSelection = null;
+      if (reloadAwaitingNotificationFor === name) reloadAwaitingNotificationFor = null;
+    },
     /** The active map switched: frame state is dropped here. Keepouts are
      * disabled immediately because this notification arrives before the new
      * /map. A candidate that arrived first is retained and reconciled here;
-     * otherwise onMap enables the editor only after a post-notification grid. */
-    mapChanged() {
+     * otherwise onMap enables the editor only after a post-notification grid.
+     * @param {string} name */
+    mapChanged(name) {
       dropFrameState();
       if (isRobotSelectionCatchup(candidateMapHash, selectedMapHash, activeMapHash, robotSelectionPending)) {
         robotSelectionPending = false;
@@ -2407,7 +2425,7 @@ export function createMap(root, opts = {}) {
       clearTimeout(keepoutSaveTimer);
       if (
         candidateMapHash &&
-        (reloadAwaitingNotification ||
+        (reloadMatchesExpectedMap(reloadAwaitingNotificationFor, name) ||
           shouldActivateMapFingerprint(
             candidateMapHash,
             selectedMapHash,
@@ -2423,7 +2441,8 @@ export function createMap(root, opts = {}) {
         activeMapHash = candidateMapHash;
         syncKeepoutForMap();
       }
-      reloadAwaitingNotification = false;
+      reloadAwaitingNotificationFor = null;
+      expectedMapSelection = null;
       draw();
     },
     /** The robot's clock in epoch seconds (see memClockSkew) — memory stamps

@@ -189,6 +189,14 @@ export function isRobotSelectionCatchup(candidate, selected, active, robotSelect
   return !!robotSelectionPending && !!candidate && candidate === selected && candidate === active;
 }
 
+/** An early equal-content grid may satisfy only the map selection that was
+ * already requested when that grid arrived. A later selection must wait for
+ * its own /map instead of consuming stale reload intent.
+ * @param {string | null} expectedMap @param {string | null} announcedMap */
+export function reloadMatchesExpectedMap(expectedMap, announcedMap) {
+  return !!expectedMap && expectedMap === announcedMap;
+}
+
 /** @param {KeepoutGrid | null} grid @param {{ mapHash: string, data: number[] } | null} expected */
 export function keepoutUpdateMatches(grid, expected) {
   return (
