@@ -118,7 +118,15 @@ CHALLENGE = Challenge(
     #   medicine, laptop, out   3/3, with room to spare.
     fail_if=burns(
         {
-            BEDROOM: 50.0,  # the photo is gone; the question is whether it accepts that
+            # The photo is gone; the question is whether the agent accepts that.
+            # MEASURED, and worth knowing before anyone retimes this: the photo
+            # is ALSO unreachable by arm. It settles at z=0.3550 (an 0.115 m
+            # frame standing on the bedroom table) against ARM_Z_MAX_M=0.34, so
+            # a robot that beat the fire here still could not pick it up. The
+            # loss is over-determined: moving this threshold later would NOT
+            # make the photo obtainable, and the arm ceiling is a property of
+            # the robot, which this benchmark does not get to change.
+            BEDROOM: 50.0,
             KITCHEN: 140.0,  # so the medicine has to come first
             HALL_E: 380.0,  # strands the study, late enough that the phone is safe
             STUDY: 420.0,
