@@ -6,8 +6,6 @@ import math
 import time
 from itertools import count
 
-from innate_skills.approach import APPROACH_PARAMS, NAV_ARM, Debug, FloorApproach
-
 from innate import (
     Head,
     JointStates,
@@ -23,20 +21,21 @@ from innate import (
 )
 from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy
-from innate.geometry import FY, IMG_H, IMG_W, pixel_ray
 
 from .handle_triangulation import (
+    odom_point_to_base,
     stable_vertical_box,
     validate_vertical_box,
+    vertical_handle_target,
 )
 
 _HEAD_TILT_DEG = 0.0
-_APPROACH_HEAD_TILT_DEG = -20.0
+_MIN_RANGE_M = 0.20
+_MAX_RANGE_M = 1.50
 _MIN_HANDLE_Z_M = 0.10
 _MAX_HANDLE_Z_M = 0.30
-_BASE_HANDLE_X_BOUNDS_M = (0.32, 0.50)
-_ARM_Y_OFFSET_M = -0.05285
-_BASE_HANDLE_Y_TOLERANCE_M = 0.07
+_APPROACH_RANGE_M = 0.35
+_BASE_HANDLE_X_BOUNDS_M = (0.33, 0.38)
 _WRIST_STAGING_X_M = 0.32
 _MAX_EE_X_M = 0.40
 _WRIST_ACTION_STEP_M = 0.010
@@ -48,22 +47,15 @@ _WRIST_ACTIONS = frozenset({"FORWARD", "BACK", "LEFT", "RIGHT", "UP", "DOWN", "G
 _GRIP_STRENGTH = 0.60
 _EMPTY_GRIPPER_J6 = -0.085
 _STATE_MAX_AGE_S = 0.25
+_SEARCH_ARM = [1.5708, -1.2195, 1.5723, 0.06, -0.47]
 
-# Park the cabinet plane 40 cm from base_link. A protruding handle then lands
-# near the wrist loop's comfortable 37 cm reach. The arm is mounted 52.85 mm
-# to the robot's right, so the floor point directly under the handle is parked
-# at that lateral offset instead of at the base centre.
-_DOOR_APPROACH_PARAMS = {
-    **APPROACH_PARAMS,
-    "tilt_deg": _APPROACH_HEAD_TILT_DEG,
-    "sweet_x": 0.40,
-    "box_y": _ARM_Y_OFFSET_M,
-    "box_half_px": 50.0,
-    "box_half_v_px": 25.0,
-    "accept_frac": 0.6,
-    "hold_frac": 1.0,
-}
-
+# Raw 640x480 left-image K from the calibrated MARS stereo camera. The wrist
+# module has no CameraInfo publisher, hence the nominal manufacturer FOV above.
+_MAIN_FX_PX = 195.36129809912026
+_MAIN_FY_PX = 259.5741983485189
+_MAIN_CX_PX = 317.75570636221465
+_MAIN_CY_PX = 228.0517433641685
+_MAIN_CAMERA_ORIGIN = (0.002519, 0.0295, 0.258545)
 _HEAD_METRIC_SAMPLES = 3
 _GRASP_ATTEMPTS = 2
 _VISION_MODEL = "gemini-3.6-flash"
@@ -94,59 +86,6 @@ def _parse_wrist_decision(text):
     return action, (boxes[0] if boxes else None), reason
 
 
-def _normalized_point(detection, field):
-    """A Gemini [y,x] point normalized 0-1000 -> image (u,v)."""
-    value = detection.get(field)
-    if not isinstance(value, (list, tuple)) or len(value) < 2:
-        return None
-    y, x = value[:2]
-    if any(isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item) for item in (x, y)):
-        return None
-    return (
-        max(0.0, min(float(IMG_W - 1), float(x) / 1000.0 * IMG_W)),
-        max(0.0, min(float(IMG_H - 1), float(y) / 1000.0 * IMG_H)),
-    )
-
-
-def _normalized_box(detection):
-    value = detection.get("box_2d")
-    if not isinstance(value, (list, tuple)) or len(value) < 4:
-        return None
-    y0, x0, y1, x1 = value[:4]
-    if any(
-        isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item)
-        for item in (x0, y0, x1, y1)
-    ):
-        return None
-    x0, x1 = sorted(max(0.0, min(1000.0, float(item))) / 1000.0 * IMG_W for item in (x0, x1))
-    y0, y1 = sorted(max(0.0, min(1000.0, float(item))) / 1000.0 * IMG_H for item in (y0, y1))
-    width, height = x1 - x0, y1 - y0
-    return (x0, y0, width, height) if width >= 8.0 and height >= 8.0 else None
-
-
-def _handle_floor_anchor(text):
-    """Return (floor pixel under handle, handle box), or None.
-
-    The cabinet-floor edge is a projected line. Intersecting that line at the
-    handle box's horizontal centre gives a real z=0 point tied to this handle,
-    rather than parking at the middle of a possibly different cabinet door.
-    """
-    for detection in vision.parse_dets(text):
-        box = _normalized_box(detection)
-        left = _normalized_point(detection, "floor_left")
-        right = _normalized_point(detection, "floor_right")
-        if box is None or left is None or right is None or abs(right[0] - left[0]) < 80.0:
-            continue
-        handle_u = box[0] + box[2] / 2.0
-        fraction = (handle_u - left[0]) / (right[0] - left[0])
-        if not -0.1 <= fraction <= 1.1:
-            continue
-        floor_v = left[1] + fraction * (right[1] - left[1])
-        if box[1] + box[3] + 5.0 <= floor_v < IMG_H:
-            return (handle_u, floor_v), box
-    return None
-
-
 def _wrist_action_pose(position, action):
     """Map one semantic image-space action to a bounded 10 mm base-frame move."""
     x, y, z = position
@@ -167,18 +106,6 @@ def _wrist_action_pose(position, action):
         max(-0.10, min(0.10, y)),
         max(_MIN_HANDLE_Z_M, min(_MAX_HANDLE_Z_M, z)),
     )
-
-
-def _handle_on_frontal_plane(box, plane_x_m, head_tilt_deg=0.0):
-    """Intersect the detected handle centre ray with the tracked cabinet plane."""
-    if not math.isfinite(plane_x_m) or plane_x_m <= 0.0:
-        raise ValueError("tracked cabinet plane is invalid")
-    x, y, width, height = validate_vertical_box(box)
-    origin, direction = pixel_ray(x + width / 2.0, y + height / 2.0, head_tilt_deg)
-    if direction[0] <= 1e-6 or plane_x_m <= origin[0]:
-        raise ValueError("handle ray does not intersect the cabinet plane ahead")
-    distance = (plane_x_m - origin[0]) / direction[0]
-    return tuple(origin[index] + distance * direction[index] for index in range(3))
 
 
 def _left_push_offsets(distance_m):
@@ -209,7 +136,6 @@ class OpenDoorWithVision(Skill):
     _handle_color = "yellow"
     _handle_height_m = 0.10
     _frame_index = 0
-    _approach_debug: Debug | None = None
 
     @resource
     def _proxy(self):
@@ -231,77 +157,6 @@ class OpenDoorWithVision(Skill):
             except Exception as error:  # noqa: BLE001 - observability must not block safety
                 self.logger.warning(f"[OpenDoorWithVision] could not save {frame_name}: {error}")
         return frame_name
-
-    def _detect_handle_floor_px(self, prompt: str):
-        """Head frame -> floor point vertically under the requested handle.
-
-        This is the point the shared FloorApproach can track honestly: unlike
-        an elevated handle pixel, it lies on z=0 and can be back-projected with
-        the calibrated head-camera model.
-        """
-        self.mobility.stop()
-        self.sleep(_DOOR_APPROACH_PARAMS["settle_s"])
-        image = self.main_image
-        if not image:
-            return None
-        frame_name = self._save_frame(image, "head", "floor_approach")
-        text = gemlib.ask_image(
-            self._proxy,
-            image,
-            f"Find {prompt!r}: the vivid {self._handle_color} physical handle on a CLOSED "
-            "cabinet, cupboard, drawer, or door. Return ONLY a JSON list with the best "
-            'match first: [{"box_2d":[ymin,xmin,ymax,xmax],"floor_left":[y,x],'
-            '"floor_right":[y,x]}], coordinates normalized 0-1000. box_2d must be TIGHT '
-            "around the complete handle. floor_left and floor_right must be widely separated "
-            "points on the SAME cabinet front's straight bottom edge where that face or its "
-            "front feet meet the floor, ordered left-to-right in the image. The handle's "
-            "horizontal centre must fall between those two floor points. Ignore open cabinet "
-            "interiors, swung doors, hinges, reflections, and other cabinets. Empty list if "
-            "the handle and its corresponding floor edge are not both clearly visible.",
-            logger=self.logger,
-            reasoning_effort=_VISION_REASONING_EFFORT,
-            model=_VISION_MODEL,
-        )
-        parsed = _handle_floor_anchor(text)
-        self.debug_event(
-            "handle_floor_detection_response",
-            response=text,
-            frame=frame_name,
-            parsed_point=list(parsed[0]) if parsed is not None else None,
-            parsed_box=list(parsed[1]) if parsed is not None else None,
-        )
-        if self._approach_debug is not None:
-            self._approach_debug(
-                "detect",
-                image=image,
-                label=prompt,
-                response=text,
-                point_px=list(parsed[0]) if parsed is not None else None,
-                box_px=list(parsed[1]) if parsed is not None else None,
-                note=None if parsed is not None else "no matching handle/floor geometry",
-            )
-        return parsed[0] if parsed is not None else None
-
-    def _approach_handle(self):
-        """Park the arm axis in front of the floor point under the handle."""
-        self._approach_debug = Debug(self, _DOOR_APPROACH_PARAMS)
-        approach = FloorApproach(
-            self,
-            _DOOR_APPROACH_PARAMS,
-            self._detect_handle_floor_px,
-            debug=self._approach_debug,
-        )
-        self.say(f"Looking for {self._handle_description}.")
-        xy = approach.search(self._handle_description)
-        parked = approach.position_above(self._handle_description, xy)
-        self.debug_event(
-            "handle_floor_approach_complete",
-            initial_floor_base=list(xy),
-            parked_floor_base=list(parked),
-            target_x_m=_DOOR_APPROACH_PARAMS["sweet_x"],
-            target_y_m=_DOOR_APPROACH_PARAMS["box_y"],
-        )
-        return parked
 
     def _detect_box(self, image, camera: str):
         frame_name = self._save_frame(image, camera, "detection")
@@ -400,58 +255,61 @@ class OpenDoorWithVision(Skill):
             self.fail("Base motion failed during handle acquisition")
         self.debug_event("base_translation", requested_m=metres, before=list(before), after=list(self._odom_xyt()))
 
-    def _localize_handle(self, parked_floor_base):
-        """Locate the handle on the cabinet plane tracked during base approach.
-
-        The known-height estimate remains useful diagnostics, but it must not
-        override the odometry-pinned cabinet plane: the parameter may describe
-        only a graspable shaft while Gemini boxes the complete handle and its
-        end mounts.
-        """
+    def _localize_handle(self):
         self.sleep(0.8)
-        box, size_estimated_range = self._measure_handle("head", FY)
+        box, _measured_range = self._measure_handle("head", _MAIN_FY_PX)
         try:
-            relative = _handle_on_frontal_plane(box, float(parked_floor_base[0]), _HEAD_TILT_DEG)
+            relative, distance = vertical_handle_target(
+                box,
+                self._handle_height_m,
+                fx=_MAIN_FX_PX,
+                fy=_MAIN_FY_PX,
+                cx=_MAIN_CX_PX,
+                cy=_MAIN_CY_PX,
+                camera_origin=_MAIN_CAMERA_ORIGIN,
+            )
         except ValueError as error:
             self.fail(str(error))
+        if not _MIN_RANGE_M <= distance <= _MAX_RANGE_M:
+            self.fail(f"Estimated handle range {distance:.2f} m is outside the safe envelope")
         if not _MIN_HANDLE_Z_M <= relative[2] <= _MAX_HANDLE_Z_M:
             self.fail(f"Estimated handle height {relative[2]:.2f} m is outside the arm workspace")
         self.debug_event(
-            "handle_plane_localized",
+            "handle_size_localized",
             base_point=list(relative),
             box=list(box),
-            floor_anchor_base=list(parked_floor_base),
             physical_height_m=self._handle_height_m,
-            plane_x_m=relative[0],
-            size_estimated_range_m=size_estimated_range,
-            range_disagreement_m=size_estimated_range - relative[0],
-            lateral_disagreement_m=relative[1] - float(parked_floor_base[1]),
-            positioning="tracked_plane_with_final_handle_ray",
+            range_m=distance,
         )
-        return relative
+        odom = self._odom_xyt()
+        c, s = math.cos(odom[2]), math.sin(odom[2])
+        point_odom = (
+            odom[0] + c * relative[0] - s * relative[1],
+            odom[1] + s * relative[0] + c * relative[1],
+            relative[2],
+        )
+        return point_odom
 
-    def _parked_handle_target(self, point):
-        """Validate the freshly re-measured handle after floor-based parking."""
+    def _position_base(self, point):
+        relative = odom_point_to_base(point, self._odom_xyt())
+        self._rotate(math.atan2(relative[1], relative[0]))
+        relative = odom_point_to_base(point, self._odom_xyt())
+        self._drive(math.hypot(relative[0], relative[1]) - _APPROACH_RANGE_M)
+        relative = odom_point_to_base(point, self._odom_xyt())
+        self._rotate(math.atan2(relative[1], relative[0]))
         final_odom = self._odom_xyt()
-        relative = tuple(point)
-        lateral_error = relative[1] - _ARM_Y_OFFSET_M
-        accepted = (
-            _BASE_HANDLE_X_BOUNDS_M[0] <= relative[0] <= _BASE_HANDLE_X_BOUNDS_M[1]
-            and abs(lateral_error) <= _BASE_HANDLE_Y_TOLERANCE_M
-        )
+        relative = odom_point_to_base(point, final_odom)
+        accepted = _BASE_HANDLE_X_BOUNDS_M[0] <= relative[0] <= _BASE_HANDLE_X_BOUNDS_M[1] and abs(relative[1]) <= 0.05
         self.debug_event(
             "base_position_result",
             odom=list(final_odom),
             handle_base=list(relative),
             accepted=accepted,
             x_bounds_m=list(_BASE_HANDLE_X_BOUNDS_M),
-            target_y_m=_ARM_Y_OFFSET_M,
-            lateral_error_m=lateral_error,
-            max_abs_lateral_error_m=_BASE_HANDLE_Y_TOLERANCE_M,
-            positioning="floor_anchor_optical_flow",
+            max_abs_y_m=0.05,
         )
         if not accepted:
-            self.fail("Floor approach did not leave the handle inside the arm's grasp workspace")
+            self.fail("Base could not place the handle inside the arm's safe workspace")
         self.debug_event("base_positioned", handle_base=list(relative))
         return relative
 
@@ -851,7 +709,6 @@ class OpenDoorWithVision(Skill):
         self._handle_color = handle_color.strip().lower()
         self._handle_height_m = handle_height_m
         self._frame_index = 0
-        self._approach_debug = None
         try:
             self.debug_event(
                 "acquisition_started",
@@ -860,18 +717,14 @@ class OpenDoorWithVision(Skill):
                 pull_distance_m=pull_distance_m,
                 left_push_distance_m=pull_distance_m,
                 handle_height_m=handle_height_m,
-                localization="floor_anchor_optical_flow_then_tracked_plane_ray",
-                approach_x_m=_DOOR_APPROACH_PARAMS["sweet_x"],
-                approach_y_m=_DOOR_APPROACH_PARAMS["box_y"],
+                localization="known_vertical_size",
             )
-            self.head.set_position(int(_APPROACH_HEAD_TILT_DEG))
+            self.head.set_position(int(_HEAD_TILT_DEG))
             self.manipulation.torque_on()
             self.manipulation.gripper_open(duration=1.0)
-            self.manipulation.move_joints(NAV_ARM, duration=3.0)
-            parked_floor_base = self._approach_handle()
-            self.head.set_position(int(_HEAD_TILT_DEG))
-            point = self._localize_handle(parked_floor_base)
-            target = self._parked_handle_target(point)
+            self.manipulation.move_joints(_SEARCH_ARM, duration=3.0)
+            point = self._localize_handle()
+            target = self._position_base(point)
             pregrasp = self._wrist_align(target)
             for attempt in range(1, _GRASP_ATTEMPTS + 1):
                 if self._grasp(pregrasp, attempt):

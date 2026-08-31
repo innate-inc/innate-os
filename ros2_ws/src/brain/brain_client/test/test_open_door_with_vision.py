@@ -142,38 +142,6 @@ def test_metric_box_rejects_unstable_height():
         )
 
 
-def test_handle_floor_anchor_projects_under_handle_on_sloped_edge():
-    response = '[{"box_2d":[250,450,650,550],"floor_left":[800,100],"floor_right":[700,900]}]'
-
-    floor, box = module._handle_floor_anchor(response)
-
-    assert box == (288, 120, 64, 192)
-    assert floor == pytest.approx((320.0, 360.0))
-
-
-def test_handle_floor_anchor_keeps_box_and_floor_points_from_same_detection():
-    response = (
-        '[{"box_2d":[250,450,650,550]},{"box_2d":[250,450,650,550],"floor_left":[800,100],"floor_right":[700,900]}]'
-    )
-
-    floor, _box = module._handle_floor_anchor(response)
-
-    assert floor == pytest.approx((320.0, 360.0))
-
-
-@pytest.mark.parametrize(
-    "response",
-    [
-        "[]",
-        '[{"box_2d":[250,450,650,550]}]',
-        '[{"box_2d":[250,450,650,550],"floor_left":[800,480],"floor_right":[800,520]}]',
-        '[{"box_2d":[700,450,900,550],"floor_left":[600,100],"floor_right":[600,900]}]',
-    ],
-)
-def test_handle_floor_anchor_rejects_missing_or_inconsistent_geometry(response):
-    assert module._handle_floor_anchor(response) is None
-
-
 def test_detection_exports_exact_camera_frame(tmp_path, monkeypatch):
     request = {}
 
@@ -192,28 +160,6 @@ def test_detection_exports_exact_camera_frame(tmp_path, monkeypatch):
     assert request["reasoning_effort"] == "minimal"
     assert request["model"] == "gemini-3.6-flash"
     assert (skill.debug_directory / "00_head_detection.jpg").read_bytes() == b"exact-jpeg"
-
-
-def test_floor_detector_uses_fast_vlm_and_returns_point_under_handle(monkeypatch):
-    request = {}
-
-    def ask_image(*_args, **kwargs):
-        request.update(kwargs)
-        return '[{"box_2d":[250,450,650,550],"floor_left":[800,100],"floor_right":[700,900]}]'
-
-    monkeypatch.setattr(module.gemlib, "ask_image", ask_image)
-    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
-    skill = OpenDoorWithVision(logging.getLogger("door-floor-detection-test"))
-    skill.mobility = _Mobility()
-    skill.main_image = type("Frame", (), {"jpeg": b"exact-jpeg"})()
-    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
-
-    point = skill._detect_handle_floor_px("the yellow handle")
-
-    assert point == pytest.approx((320.0, 360.0))
-    assert request["reasoning_effort"] == "minimal"
-    assert request["model"] == "gemini-3.6-flash"
-    assert skill.mobility.stops == 1
 
 
 def test_detection_exports_raw_response_before_parse_failure(tmp_path, monkeypatch):
@@ -328,96 +274,33 @@ def test_gemini_image_request_forwards_reasoning_effort():
     assert captured["model"] == "gemini-3.6-flash"
 
 
-def test_floor_approach_targets_arm_axis_at_grasp_standoff():
-    assert module._DOOR_APPROACH_PARAMS["sweet_x"] == pytest.approx(0.40)
-    assert module._DOOR_APPROACH_PARAMS["box_y"] == pytest.approx(-0.05285)
-    assert module._DOOR_APPROACH_PARAMS["tilt_deg"] == pytest.approx(-20.0)
-
-
-def test_tracked_plane_overrides_wrong_known_size_range(monkeypatch):
-    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
-    skill = OpenDoorWithVision(logging.getLogger("door-plane-range-test"))
-    skill._handle_height_m = 0.10
-    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
-    # Reproduces the live MARS 47 disagreement: the complete visible handle is
-    # 104 px tall, which makes a 100 mm size estimate say 0.25 m, while the
-    # odometry-pinned floor approach tracked the cabinet plane at 0.459 m.
-    monkeypatch.setattr(
-        skill,
-        "_measure_handle",
-        lambda _camera, _fy: ((358.0, 228.5, 17.0, 104.0), 0.2496),
-    )
-
-    target = skill._localize_handle((0.45915, -0.10446))
-
-    assert target[0] == pytest.approx(0.45915)
-    assert target[1] == pytest.approx(-0.0786, abs=0.002)
-    assert target[2] == pytest.approx(0.2042, abs=0.002)
-
-
-def test_shared_floor_approach_is_used_for_handle_parking(monkeypatch):
-    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
-    skill = OpenDoorWithVision(logging.getLogger("door-floor-approach-test"))
-    calls = []
-
-    class Approach:
-        def __init__(self, host, params, detect, debug):
-            calls.append(("init", host, params, detect, debug))
-
-        def search(self, prompt):
-            calls.append(("search", prompt))
-            return (0.8, 0.1)
-
-        def position_above(self, prompt, xy):
-            calls.append(("position", prompt, xy))
-            return (0.40, -0.05285)
-
-    debug = object()
-    monkeypatch.setattr(module, "Debug", lambda _host, _params: debug)
-    monkeypatch.setattr(module, "FloorApproach", Approach)
-    monkeypatch.setattr(skill, "say", lambda text, **_kwargs: calls.append(("say", text)))
-
-    parked = skill._approach_handle()
-
-    assert parked == pytest.approx((0.40, -0.05285))
-    assert calls[0][0] == "init"
-    assert calls[0][2] is module._DOOR_APPROACH_PARAMS
-    assert calls[0][3] == skill._detect_handle_floor_px
-    assert calls[0][4] is debug
-    assert calls[2:] == [
-        ("search", "the protruding handle directly ahead"),
-        ("position", "the protruding handle directly ahead", (0.8, 0.1)),
-    ]
-
-
-def test_parked_handle_accepts_arm_offset_target(monkeypatch):
+def test_base_accepts_sub_motion_threshold_range_error(monkeypatch):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-base-test"))
     monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.0, 0.0, 0.0))
+    monkeypatch.setattr(skill, "_rotate", lambda _radians: None)
+    monkeypatch.setattr(skill, "_drive", lambda _metres: None)
 
-    target = skill._parked_handle_target((0.38, -0.05285, 0.21725490235201467))
+    target = skill._position_base((0.37006072129054975, 0.012904473272164273, 0.21725490235201467))
 
-    assert target == pytest.approx((0.38, -0.05285, 0.21725490235201467))
+    assert target == pytest.approx((0.37006072129054975, 0.012904473272164273, 0.21725490235201467))
 
 
-def test_parked_handle_accepts_live_floor_approach_distance(monkeypatch):
+def test_base_corrects_residual_lateral_error_after_driving(monkeypatch):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
-    skill = OpenDoorWithVision(logging.getLogger("door-live-floor-distance-test"))
-    monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.47, 0.06, 0.11))
+    skill = OpenDoorWithVision(logging.getLogger("door-base-correction-test"))
+    point = (0.35, 0.103, 0.22)
+    correction = math.atan2(point[1], point[0])
+    odometry = iter([(0.0, 0.0, 0.0)] * 3 + [(0.0, 0.0, correction)])
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: next(odometry))
+    rotations = []
+    monkeypatch.setattr(skill, "_rotate", rotations.append)
+    monkeypatch.setattr(skill, "_drive", lambda _metres: None)
 
-    target = skill._parked_handle_target((0.45915, -0.0786, 0.2042))
+    target = skill._position_base(point)
 
-    assert target == pytest.approx((0.45915, -0.0786, 0.2042))
-
-
-@pytest.mark.parametrize("point", [(0.55, -0.05285, 0.22), (0.38, 0.10, 0.22)])
-def test_parked_handle_rejects_target_outside_grasp_workspace(monkeypatch, point):
-    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
-    skill = OpenDoorWithVision(logging.getLogger("door-base-reject-test"))
-    monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.0, 0.0, 0.0))
-
-    with pytest.raises(SkillFailed, match="Floor approach did not leave the handle"):
-        skill._parked_handle_target(point)
+    assert rotations == pytest.approx([correction, correction])
+    assert target == pytest.approx((math.hypot(point[0], point[1]), 0.0, point[2]))
 
 
 def test_wrist_decision_parser_requires_allowed_action_and_box():
@@ -699,18 +582,8 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         order.append(("retry", attempt))
         return (0.36, target[1], target[2])
 
-    parked = (0.40, -0.05285)
-    monkeypatch.setattr(skill, "_approach_handle", lambda: order.append("approach") or parked)
-    monkeypatch.setattr(
-        skill,
-        "_localize_handle",
-        lambda floor: order.append(("localize", floor)) or (0.38, -0.05285, 0.2),
-    )
-    monkeypatch.setattr(
-        skill,
-        "_parked_handle_target",
-        lambda _point: order.append("validate_park") or (0.38, -0.05285, 0.2),
-    )
+    monkeypatch.setattr(skill, "_localize_handle", lambda: order.append("localize") or (1.0, 0.0, 0.2))
+    monkeypatch.setattr(skill, "_position_base", lambda _point: order.append("position") or (0.44, 0.0, 0.2))
     monkeypatch.setattr(
         skill,
         "_wrist_align",
@@ -731,13 +604,12 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
     result = skill.execute(pull_distance_m=0.40)
 
     assert order == [
-        "approach",
-        ("localize", parked),
-        "validate_park",
+        "localize",
+        "position",
         "align",
-        ("grasp", 1, (0.35, -0.05285, 0.2)),
+        ("grasp", 1, (0.35, 0.0, 0.2)),
         ("retry", 2),
-        ("grasp", 2, (0.36, -0.05285, 0.2)),
+        ("grasp", 2, (0.36, 0.0, 0.2)),
         ("retreat_and_push_left", 0.40, 0.40),
     ]
     assert "pulled back 0.40 m arm-first toward x=0.25 m with a straight backward base remainder" in result
@@ -747,7 +619,7 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
     assert skill.mobility.stops == 1
     assert skill.manipulation.stops == 1
     assert skill.manipulation.setup[:2] == ["torque_on", "gripper_open"]
-    assert skill.head.positions == [-20, 0, 0]
+    assert skill.head.positions == [0, 0]
 
 
 def test_post_grasp_retreat_pulls_left_before_half_release_and_final_retreat(monkeypatch):
