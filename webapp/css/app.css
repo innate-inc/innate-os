@@ -1296,7 +1296,7 @@ select.skill-input {
 }
 
 /* Bottom-center bar: holds the speak pill + the Skills menu as separate pills.
-   Transparent itself — each child carries its own glass (see .tts-bar). */
+   Transparent itself — each child carries its own surface treatment. */
 .overlay-tts {
   left: 50%;
   bottom: 18px;
@@ -5649,23 +5649,20 @@ select.episodes-tool {
   min-width: 230px;
   padding: 0 16px;
   font: inherit;
-  color: var(--text);
-  background: var(--ctl-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--hairline-strong);
+  color: #fff;
+  background: var(--blue);
+  border: 1px solid var(--blue);
   border-radius: 999px;
-  box-shadow: var(--ctl-sheen);
   cursor: pointer;
-  transition: border-color 150ms ease, background 150ms ease;
+  transition: border-color 150ms ease;
 }
 
 .skills-menu-btn:hover {
-  background: var(--ctl-glass-hover);
+  border-color: rgb(255 255 255 / 32%);
 }
 
 .skills-menu.open .skills-menu-btn {
-  border-color: var(--ctl-edge-accent);
+  border-color: rgb(255 255 255 / 52%);
 }
 
 /* Status dot: grey when idle, green (pulsing) while a skill runs. */
@@ -5699,16 +5696,15 @@ select.episodes-tool {
   text-overflow: ellipsis;
   white-space: nowrap;
   padding-left: 9px;
-  border-left: 1px solid var(--hairline);
+  border-left: 1px solid rgb(255 255 255 / 28%);
   font-size: 12px;
-  /* Brighter than --muted: the pill floats over the live camera feed, where
-     plain grey washes out on light backgrounds. */
-  color: var(--ctl-text);
+  /* Keep secondary status readable against the solid brand-blue field. */
+  color: rgb(255 255 255 / 76%);
   text-align: left;
 }
 
 .skills-menu-active.on {
-  color: var(--text);
+  color: #fff;
 }
 
 /* Shortcut hint at the button's far edge, beside the chevron it shares a job
@@ -5718,8 +5714,8 @@ select.episodes-tool {
   padding: 2px 5px;
   font-size: 10px;
   letter-spacing: 0;
-  color: var(--muted);
-  border: 1px solid var(--hairline);
+  color: rgb(255 255 255 / 76%);
+  border: 1px solid rgb(255 255 255 / 28%);
   border-radius: 4px;
   opacity: 0.55;
   transition: opacity 150ms ease;
@@ -5732,7 +5728,7 @@ select.episodes-tool {
 .skills-menu-chevron {
   flex: 0 0 auto;
   font-size: 11px;
-  color: var(--muted);
+  color: rgb(255 255 255 / 76%);
   transition: transform 150ms ease;
 }
 
