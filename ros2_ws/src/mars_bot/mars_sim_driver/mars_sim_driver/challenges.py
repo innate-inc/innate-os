@@ -283,6 +283,19 @@ class Answered(Predicate):
     # Phrases that make a token a non-answer. "not 3" and "I don't know,
     # maybe 3?" both used to score as the answer 3: whole-word matching stops
     # "3" matching "30" but says nothing about the clause around it.
+    # Hedges that disown the answer when they FOLLOW it.
+    _TRAILING_HEDGES = (
+        "i think",
+        "i guess",
+        "not sure",
+        "unsure",
+        "maybe",
+        "perhaps",
+        "possibly",
+        "don't know",
+        "do not know",
+    )
+
     _NEGATORS = (
         "not ",
         "n't ",
@@ -322,10 +335,16 @@ class Answered(Predicate):
             m = re.search(rf"(?<![\w]){re.escape(token)}(?![\w])", low)
             if not m:
                 continue
-            # Only the run-up matters: "3, not 4" answers 3; "not 3" does not.
+            # The run-up: "3, not 4" answers 3; "not 3" does not.
             lead = low[: m.start()]
             clause = lead.rsplit(",", 1)[-1].rsplit(";", 1)[-1]
             if any(neg in clause for neg in self._NEGATORS):
+                continue
+            # What follows: an alternative ("3 or 4") or a trailing hedge
+            # ("3, I think") is not an answer either. A trailing bare negation
+            # is fine -- it negates the OTHER value, as in "3, not 4".
+            tail = low[m.end() :]
+            if re.match(r"\s*(or|/)\s*\w", tail) or any(h in tail for h in self._TRAILING_HEDGES):
                 continue
             return True
         return False
@@ -1521,11 +1540,17 @@ class SkillEventBridge:
                                 self.engine.post_event(json.loads(frame["msg"]["data"]))
                             elif frame.get("topic") == self.CHAT_TOPIC:
                                 said = json.loads(frame["msg"]["data"])
-                                # Only the ROBOT's own speech. chat_out also
-                                # carries system notices ("Brain recovered"),
-                                # and letting one of those satisfy a goal would
-                                # mean a restart could answer a question.
-                                if said.get("sender") not in (None, "system", "user"):
+                                # Only the ROBOT's own speech, and `sender ==
+                                # "robot"` is the whole test. chat_out carries
+                                # robot | robot_thoughts | system |
+                                # skill_output: an exclusion list let the inner
+                                # monologue and every tool result answer the
+                                # question for it, so a thought containing the
+                                # right number scored as the robot saying it.
+                                # live_runner.py already counts utterances this
+                                # way; the judge did not, which is the worse
+                                # half of the same bug.
+                                if said.get("sender") == "robot":
                                     text = str(said.get("text", ""))
                                     if text.strip():
                                         self.engine.post_event({"type": "answer", "value": text})
