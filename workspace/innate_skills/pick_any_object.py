@@ -11,7 +11,7 @@ import math
 import re
 import time
 
-from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, base_to_odom, inside_box
+from innate_skills.approach import APPROACH_PARAMS, NAV_ARM, FloorApproach, ask_head, base_to_odom, inside_box
 
 from innate import (
     Head,
@@ -41,11 +41,6 @@ SOFT_GRIP_MIN = 0.5
 # Post-pick carry pose (j1-5). j6 comes from close_strength, not this pose.
 # j2 = -0.50: the coupling limit at j1~0.05 clamps past it and logs forever.
 CARRY_ARM = [0.0537, -0.50, 0.4157, 0.9434, -0.0077]
-
-# Search/approach pose (j1-5). REST's j4 = -0.3 pitches the gripper UP into the
-# head camera, over the very floor patch the object sits on; the same fold with
-# the wrist flattened and rolled clears the frame.
-NAV_ARM = [1.5708, -1.2195, 1.5723, 0.06, -0.47]
 
 # Pick parameters, tuned on hardware; the find/position half is APPROACH_PARAMS.
 # Grasping at the 0.40 reach edge stalls the wrist and overloads servo 2.

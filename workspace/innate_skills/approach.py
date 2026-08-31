@@ -6,10 +6,13 @@ host, its params (where to park) and a detect callable (which pixel of the
 target touches the floor), so pick and drop share one hardware-tuned approach.
 """
 
+import json
 import math
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol
+
+from std_msgs.msg import String
 
 from innate import gemini as gemlib
 from innate import vision
@@ -17,6 +20,8 @@ from innate.exceptions import SkillFailed
 from innate.geometry import FX, FY, HEAD_ORIGIN, IMG_H, IMG_W, floor_to_pixel, pixel_to_floor
 
 if TYPE_CHECKING:
+    from rclpy.node import Node
+
     from innate import MainImage, Mobility, Odometry
     from innate_proxy import ProxyClient
 
@@ -38,6 +43,7 @@ class ApproachHost(Protocol):
     mobility: "Mobility"
     main_image: "MainImage | None"
     odom: "Odometry | None"
+    node: "Node | None"
 
     @property
     def logger(self) -> _Logger: ...
@@ -46,6 +52,22 @@ class ApproachHost(Protocol):
     def sleep(self, seconds: float) -> None: ...
     def say(self, text: str, wait: bool = False) -> None: ...
 
+
+# Debug telemetry for the /approach page. A record carries the JPEG the vision
+# model actually saw (~55 kB of base64) so it rides only the Gemini looks; the
+# flow servo emits image-less ticks the page overlays on the last frame, or
+# rosbridge stalls under a 30 Hz image stream.
+DEBUG_TOPIC = "/brain/approach_debug"
+DEBUG_TICK_MIN_S = 0.1
+# Only the servo loop is throttled. Throttling by "carries no image" instead
+# dropped every one-off stage record that happened to land within 100 ms of
+# the detection before it — which is all of them.
+DEBUG_THROTTLED_STAGES = ("follow",)
+
+# Search/approach pose (j1-5). REST's j4 = -0.3 pitches the gripper UP into the
+# head camera, over the very floor patch the target sits on; the same fold with
+# the wrist flattened and rolled clears the frame.
+NAV_ARM = [1.5708, -1.2195, 1.5723, 0.06, -0.47]
 
 APPROACH_PARAMS = {
     "tilt_deg": -20.0,
@@ -131,6 +153,41 @@ def odom_to_base(o: "OdomXYT | None", wxy: FloorXY) -> "FloorXY | None":
     return (c * dx + s * dy, -s * dx + c * dy)
 
 
+class Debug:
+    """Best-effort telemetry to the approach debug page. Every call is a JSON
+    record on one topic; nothing here may raise, because a tuning instrument
+    must not be able to fail a run."""
+
+    def __init__(self, host: ApproachHost, params: dict):
+        self.host = host
+        self.p = params
+        self._node = None
+        self._pub = None
+        self._last = 0.0
+
+    def __call__(self, stage: str, *, image: str | None = None, **fields: object) -> None:
+        now = time.monotonic()
+        if stage in DEBUG_THROTTLED_STAGES and now - self._last < DEBUG_TICK_MIN_S:
+            return
+        self._last = now
+        node = self.host.node
+        if node is None:
+            return
+        # Rebuilt per node, not cached once: the run's throwaway node is
+        # destroyed at run end, and a publisher held across runs is bound to a
+        # dead node -> InvalidHandle.
+        if self._pub is None or self._node is not node:
+            self._node = node
+            self._pub = node.create_publisher(String, DEBUG_TOPIC, 10)
+        record = {"skill": self.host.name, "stage": stage, "t": now, "tilt_deg": self.p["tilt_deg"], **fields}
+        if image is not None:
+            record["image"] = image
+        try:
+            self._pub.publish(String(data=json.dumps(record)))
+        except Exception as e:  # noqa: BLE001 — a debug page must never break the skill
+            self.host.logger.warning(f"[{self.host.name}] debug publish failed: {e}")
+
+
 def inside_box(px, cu, cv, half_u, half_v=None):
     return abs(px[0] - cu) <= half_u and abs(px[1] - cv) <= (half_u if half_v is None else half_v)
 
@@ -138,10 +195,29 @@ def inside_box(px, cu, cv, half_u, half_v=None):
 class FloorApproach:
     """Head-camera localize + base servo for one run of a hosting skill."""
 
-    def __init__(self, host: ApproachHost, params: dict, detect: Detect):
+    def __init__(self, host: ApproachHost, params: dict, detect: Detect, debug: "Debug | None" = None):
         self.host = host
         self.p = params
         self.detect = detect
+        # Shared with the hosting skill when it passes its own, so both halves
+        # of a run publish through one node-bound publisher.
+        self.debug = debug or Debug(host, params)
+
+    def _sweet_debug(self):
+        """The sweet box as the page draws it, or None when it is off-image —
+        _sweet_box raises there, and this caller is only reporting."""
+        try:
+            (cu, cv), hold, accept = self._sweet_box()
+        except SkillFailed:
+            return None
+        return {
+            "center_px": [cu, cv],
+            "outer_px": hold[0],
+            "outer_v_px": hold[1],
+            "accept_px": accept[0],
+            "accept_v_px": accept[1],
+            "xy": [self.p["sweet_x"], self.p["box_y"]],
+        }
 
     # --- localize ---
 
@@ -155,6 +231,7 @@ class FloorApproach:
             self.host.logger.info(
                 f"[{self.host.name}] px=({px[0]:.0f},{px[1]:.0f}) -> base_link ({xy[0]:.3f},{xy[1]:.3f})"
             )
+        self.debug("localize", point_px=list(px), target_xy=list(xy) if xy else None, sweet=self._sweet_debug())
         return xy, px
 
     def _localize_retry(self, prompt):
@@ -235,6 +312,7 @@ class FloorApproach:
         grid = vision.grid_pts(u, v)
         in_box = 0
         (cu, cv), _half, accept = self._sweet_box()
+        sweet = self._sweet_debug()
         t0 = time.monotonic()
         anchor, anchor_odo = (u, v), self.odom_xyt()
         seg_start = anchor_odo
@@ -257,11 +335,13 @@ class FloorApproach:
             prev = gray
             if tracked is None:
                 self.host.mobility.stop()
+                self.debug("follow", note="lost", sweet=sweet)
                 return "lost", None
             u, v = tracked
             grid = vision.grid_pts(u, v)
             if not (0 <= u < IMG_W and 0 <= v < IMG_H):
                 self.host.mobility.stop()
+                self.debug("follow", note="off-image", sweet=sweet)
                 return "lost", None
 
             if inside_box((u, v), cu, cv, accept[0], accept[1]):
@@ -269,6 +349,7 @@ class FloorApproach:
                 self.host.mobility.stop()
                 anchor, anchor_odo = (u, v), self.odom_xyt()
                 if in_box >= 3:
+                    self.debug("follow", track_px=[u, v], note="in_box", sweet=sweet)
                     return "in_box", (u, v)
                 self.host.sleep(0.03)
                 continue
@@ -278,11 +359,13 @@ class FloorApproach:
             if floor_est is None:
                 # Above the horizon: not a floor point any more.
                 self.host.mobility.stop()
+                self.debug("follow", track_px=[u, v], note="no floor under track", sweet=sweet)
                 return "lost", None
             if math.hypot(u - anchor[0], v - anchor[1]) >= STATIC_MIN_PX:
                 anchor, anchor_odo = (u, v), self.odom_xyt()
             elif _min_px_shift(anchor_odo, self.odom_xyt(), floor_est) >= 3 * STATIC_MIN_PX:
                 self.host.mobility.stop()
+                self.debug("follow", track_px=[u, v], note="static: tracking the robot itself", sweet=sweet)
                 return "lost", None
 
             now_odo = self.odom_xyt()
@@ -293,6 +376,7 @@ class FloorApproach:
                 and math.hypot(now_odo[0] - seg_start[0], now_odo[1] - seg_start[1]) >= max_forward
             ):
                 self.host.mobility.stop()
+                self.debug("follow", track_px=[u, v], note="odometry budget spent", sweet=sweet)
                 return "budget", (u, v)
 
             # Deadband = accept (inner) box; right -> -wz, too close (low) -> -vx.
@@ -303,8 +387,10 @@ class FloorApproach:
                 v - cv, self.p["follow_gain_lin"], self.p["drive_v_min"], self.p["drive_v_max"], accept[1]
             )
             self.host.mobility.send_cmd_vel(vx, wz, 0.15)
+            self.debug("follow", track_px=[u, v], cmd=[vx, wz], sweet=sweet)
             self.host.sleep(0.03)
         self.host.mobility.stop()
+        self.debug("follow", note="timeout", sweet=sweet)
         return "timeout", None
 
     def _position_failed(self, prompt):
@@ -366,6 +452,7 @@ class FloorApproach:
             self.host.logger.info(
                 f"[{self.host.name}] odometry budget spent: dead-reckoned park at ({near:.2f}, {y:+.2f})"
             )
+            self.debug("localize", note="parked by odometry", target_xy=[near, y], sweet=self._sweet_debug())
             return (near, y)
 
         for _attempt in range(int(self.p["box_steps"])):
@@ -410,6 +497,7 @@ class FloorApproach:
         if xy is not None and xy[0] <= self.p["sweet_x"] + PLATEAU_SLACK_M:
             self.host.mobility.stop()
             self.host.logger.info(f"[{self.host.name}] settling for the measured park at {xy[0]:.3f} m")
+            self.debug("localize", note="parked within slack", target_xy=list(xy), sweet=self._sweet_debug())
             return xy
         self._position_failed(prompt)
 
