@@ -73,6 +73,11 @@ CHALLENGE = Challenge(
     script=[
         Cue("Kitchen's already gone up -- if you want the medicine it's now.", after_s=1.0),
         Cue("Bedroom's fully alight. Whatever's in there is gone.", after_s=40.0),
+        # 265: the EARLY warning. 115 s of lead, and "a couple of minutes" is
+        # true when spoken (115 s remain of the 380 s). The study lies through
+        # the east hall, so a robot starting from the porch needs to cross the
+        # house and come back -- 60 s does not cover that at 8 s per call.
+        Cue("East hall's got a couple of minutes left. The study's through it.", after_s=265.0),
         # 320: the WARNING, 60 s before the east hall closes at 380 s. The
         # cue below is accurate but lands with 10 s left, which is not enough
         # to cross the house and clear the study -- the robot needs to be told

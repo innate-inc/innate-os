@@ -66,6 +66,12 @@ CHALLENGE = Challenge(
     ],
     script=[
         Cue("Kitchen first if you're getting the medicine at all.", after_s=1.0),
+        # 50: the EARLY warning. 100 s of lead, and "under two minutes" is true
+        # when spoken (100 s remain of the 150 s). At the probe backend's 8 s
+        # of sim time per model call, 60 s of lead buys about seven decisions,
+        # which does not cover the drive out -- a measured action-only run of
+        # this round trip took 144 s with no think charge at all.
+        Cue("Kitchen's got under two minutes in it.", after_s=50.0),
         # 90: the WARNING, 60 s before the kitchen closes -- the counterpart of
         # blaze_l1's "maybe a minute in there" at 85 s against the same 150 s.
         # Without it this level's only kitchen cue was the obituary below,
