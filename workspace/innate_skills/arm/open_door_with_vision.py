@@ -68,9 +68,6 @@ _POST_RELEASE_RETREAT_M = 0.10
 _POST_RELEASE_GRIPPER_PERCENT = 50.0
 _ARM_PULL_TARGET_X_M = 0.25
 _ARM_PULL_DURATION_S = 2.0
-_BACK_LEFT_RADIUS_M = 0.30
-_BACK_LEFT_ODOM_TOLERANCE_M = 0.01
-_BACK_LEFT_LOOP_S = 0.08
 
 
 def _parse_wrist_decision(text):
@@ -257,66 +254,6 @@ class OpenDoorWithVision(Skill):
         if not self.mobility.drive(self._odom_xyt, metres, logger=self.logger):
             self.fail("Base motion failed during handle acquisition")
         self.debug_event("base_translation", requested_m=metres, before=list(before), after=list(self._odom_xyt()))
-
-    def _drive_back_left(self, metres):
-        """Reverse on an odometry-closed arc whose displacement is robot-left."""
-        distance_m = abs(metres)
-        if distance_m <= 1e-6:
-            return
-        before = self._odom_xyt()
-        previous = before
-        travelled_m = 0.0
-        tolerance_m = min(_BACK_LEFT_ODOM_TOLERANCE_M, distance_m * 0.25)
-        timeout_s = max(5.0, 1.5 * distance_m / 0.04)
-        started_at = time.monotonic()
-        completed = False
-        self.debug_event(
-            "base_back_left_started",
-            requested_path_m=distance_m,
-            radius_m=_BACK_LEFT_RADIUS_M,
-            before=list(before),
-        )
-        try:
-            while time.monotonic() - started_at < timeout_s:
-                self.check_cancelled()
-                current = self._odom_xyt()
-                travelled_m += math.hypot(current[0] - previous[0], current[1] - previous[1])
-                previous = current
-                remaining_m = distance_m - travelled_m
-                if remaining_m <= tolerance_m:
-                    completed = True
-                    break
-                speed_m_s = max(0.04, min(0.10, 0.3 * remaining_m))
-                # Reverse + clockwise yaw traces toward robot-left. Positive
-                # yaw while reversing would move the chassis toward its right.
-                self.mobility.send_cmd_vel(
-                    linear_x=-speed_m_s,
-                    angular_z=-speed_m_s / _BACK_LEFT_RADIUS_M,
-                    duration=0.15,
-                )
-                self.sleep(_BACK_LEFT_LOOP_S)
-        finally:
-            self.mobility.stop()
-
-        after = self._odom_xyt()
-        world_dx = after[0] - before[0]
-        world_dy = after[1] - before[1]
-        forward_m = math.cos(before[2]) * world_dx + math.sin(before[2]) * world_dy
-        left_m = -math.sin(before[2]) * world_dx + math.cos(before[2]) * world_dy
-        yaw_delta_rad = math.atan2(math.sin(after[2] - before[2]), math.cos(after[2] - before[2]))
-        self.debug_event(
-            "base_back_left_complete" if completed else "base_back_left_timeout",
-            requested_path_m=distance_m,
-            measured_path_m=travelled_m,
-            measured_backward_m=-forward_m,
-            measured_left_m=left_m,
-            measured_yaw_delta_rad=yaw_delta_rad,
-            radius_m=_BACK_LEFT_RADIUS_M,
-            before=list(before),
-            after=list(after),
-        )
-        if not completed:
-            self.fail("Base backward-left arc failed during the door pull")
 
     def _localize_handle(self):
         self.sleep(0.8)
@@ -671,8 +608,8 @@ class OpenDoorWithVision(Skill):
         )
 
         if base_remainder_m > 1e-6:
-            self.feedback("Completing the handle pull on a backward-left base arc")
-            self._drive_back_left(base_remainder_m)
+            self.feedback("Completing the handle pull straight backward with the base")
+            self._drive(-base_remainder_m)
 
         origin = self.manipulation.pose
         offsets = _left_push_offsets(left_distance_m)
@@ -746,7 +683,7 @@ class OpenDoorWithVision(Skill):
             gripper_percent=_POST_RELEASE_GRIPPER_PERCENT,
             following_retreat_m=_POST_RELEASE_RETREAT_M,
         )
-        self._drive_back_left(_POST_RELEASE_RETREAT_M)
+        self._drive(-_POST_RELEASE_RETREAT_M)
 
     def execute(
         self,
@@ -798,9 +735,9 @@ class OpenDoorWithVision(Skill):
             self._retreat_and_push_left(pull_distance_m, pull_distance_m)
             return (
                 f"Located and grasped the handle, pulled back {pull_distance_m:.2f} m arm-first toward "
-                f"x={_ARM_PULL_TARGET_X_M:.2f} m with a backward-left base remainder, "
+                f"x={_ARM_PULL_TARGET_X_M:.2f} m with a straight backward base remainder, "
                 f"pulled left up to {pull_distance_m:.2f} m while gripping, opened halfway, "
-                f"and followed another {_POST_RELEASE_RETREAT_M:.2f} m backward-left arc"
+                f"and backed up another {_POST_RELEASE_RETREAT_M:.2f} m"
             )
         except (ArmFailed, ArmUnhealthy) as error:
             self.fail(str(error))

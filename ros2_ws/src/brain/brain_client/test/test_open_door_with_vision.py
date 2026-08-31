@@ -301,47 +301,6 @@ def test_base_corrects_residual_lateral_error_after_driving(monkeypatch):
     assert target == pytest.approx((math.hypot(point[0], point[1]), 0.0, point[2]))
 
 
-def test_backward_left_arc_uses_reverse_clockwise_motion_and_measures_left(monkeypatch):
-    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
-    skill = OpenDoorWithVision(logging.getLogger("door-back-left-test"))
-    radius = module._BACK_LEFT_RADIUS_M
-
-    def arc_pose(angle):
-        return (radius * math.sin(angle), radius * (1.0 - math.cos(angle)), angle)
-
-    poses = iter([arc_pose(0.0), arc_pose(-0.1), arc_pose(-0.2), arc_pose(-0.3), arc_pose(-0.3)])
-    monkeypatch.setattr(skill, "_odom_xyt", lambda: next(poses))
-    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(skill, "check_cancelled", lambda: None)
-    events = []
-    monkeypatch.setattr(skill, "debug_event", lambda event, **fields: events.append((event, fields)))
-
-    class ArcMobility:
-        def __init__(self):
-            self.commands = []
-            self.stops = 0
-
-        def send_cmd_vel(self, **kwargs):
-            self.commands.append(kwargs)
-
-        def stop(self):
-            self.stops += 1
-
-    skill.mobility = ArcMobility()
-
-    skill._drive_back_left(0.09)
-
-    assert skill.mobility.stops == 1
-    assert skill.mobility.commands
-    assert all(command["linear_x"] < 0.0 for command in skill.mobility.commands)
-    assert all(command["angular_z"] < 0.0 for command in skill.mobility.commands)
-    completed = next(fields for event, fields in events if event == "base_back_left_complete")
-    assert completed["measured_path_m"] == pytest.approx(0.09, abs=0.001)
-    assert completed["measured_backward_m"] > 0.0
-    assert completed["measured_left_m"] > 0.0
-    assert completed["measured_yaw_delta_rad"] < 0.0
-
-
 def test_wrist_decision_parser_requires_allowed_action_and_box():
     valid = '[{"box_2d":[200,450,800,550],"grasp_point":[500,500],"action":"forward","reason":"too far"}]'
 
@@ -651,10 +610,10 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         ("grasp", 2, (0.36, 0.0, 0.2)),
         ("retreat_and_push_left", 0.03, 0.03),
     ]
-    assert "pulled back 0.03 m arm-first toward x=0.25 m with a backward-left base remainder" in result
+    assert "pulled back 0.03 m arm-first toward x=0.25 m with a straight backward base remainder" in result
     assert "pulled left up to 0.03 m while gripping" in result
     assert "opened halfway" in result
-    assert "followed another 0.10 m backward-left arc" in result
+    assert "backed up another 0.10 m" in result
     assert skill.mobility.stops == 1
     assert skill.manipulation.stops == 1
     assert skill.manipulation.setup[:2] == ["torque_on", "gripper_open"]
@@ -666,7 +625,7 @@ def test_post_grasp_retreat_pulls_left_before_half_release_and_final_retreat(mon
     skill = OpenDoorWithVision(logging.getLogger("door-left-push-test"))
     drives = []
     events = []
-    monkeypatch.setattr(skill, "_drive_back_left", drives.append)
+    monkeypatch.setattr(skill, "_drive", drives.append)
     sleeps = []
     monkeypatch.setattr(skill, "sleep", sleeps.append)
     monkeypatch.setattr(skill, "check_cancelled", lambda: None)
@@ -701,7 +660,7 @@ def test_post_grasp_retreat_pulls_left_before_half_release_and_final_retreat(mon
 
     skill._retreat_and_push_left(0.30, 0.30)
 
-    assert drives == pytest.approx([0.20, 0.10])
+    assert drives == pytest.approx([-0.20, -0.10])
     arm_pull = skill.manipulation.actions[0]
     assert arm_pull[0] == "move_to"
     assert arm_pull[1] == pytest.approx((0.25, -0.04, 0.20))
@@ -749,7 +708,7 @@ def test_post_grasp_left_pull_stops_at_ik_reach_boundary(monkeypatch):
     skill = OpenDoorWithVision(logging.getLogger("door-left-reach-test"))
     drives = []
     events = []
-    monkeypatch.setattr(skill, "_drive_back_left", drives.append)
+    monkeypatch.setattr(skill, "_drive", drives.append)
     monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
     monkeypatch.setattr(skill, "check_cancelled", lambda: None)
     monkeypatch.setattr(skill, "feedback", lambda _message: None)
@@ -785,7 +744,7 @@ def test_post_grasp_left_pull_stops_at_ik_reach_boundary(monkeypatch):
 
     skill._retreat_and_push_left(0.30, 0.30)
 
-    assert drives == pytest.approx([0.20, 0.10])
+    assert drives == pytest.approx([-0.20, -0.10])
     streams = [action for action in skill.manipulation.actions if action[0] == "stream_to"]
     assert [action[1][1] for action in streams] == pytest.approx([0.01, 0.02])
     limit = next(fields for event, fields in events if event == "left_push_reach_limit")
