@@ -42,7 +42,7 @@ _MAX_EE_X_M = 0.40
 _WRIST_ACTION_STEP_M = 0.010
 _WRIST_CONTENT_ATTEMPTS = 2
 _WRIST_ACTIONS = frozenset({"FORWARD", "BACK", "LEFT", "RIGHT", "UP", "DOWN", "GRASP", "ABORT"})
-_GRIP_STRENGTH = 0.35
+_GRIP_STRENGTH = 0.60
 _EMPTY_GRIPPER_J6 = -0.085
 _STATE_MAX_AGE_S = 0.25
 _SEARCH_ARM = [1.5708, -1.2195, 1.5723, 0.06, -0.47]
@@ -316,9 +316,12 @@ class OpenDoorWithVision(Skill):
             "the gripper/end effector itself should lower to a smaller Z. Because the wrist camera is attached to "
             "the gripper, raising the gripper normally makes the stationary handle appear LOWER in the next image, "
             "and lowering the gripper normally makes the handle appear HIGHER. Never choose UP or DOWN based on "
-            "the direction you want the handle to move in the image. Choose GRASP only when the handle is visibly "
-            "between the two finger closing "
-            "paths and at the correct depth to be trapped by closing. Choose ABORT if the handle is absent, "
+            "the direction you want the handle to move in the image. Choose GRASP only when both fingers have "
+            "passed on opposite sides of the handle SHAFT and a substantial shaft section is deep inside the "
+            "finger pocket, behind the pointed fingertips. Closing must contact opposite sidewalls of the shaft. "
+            "Do NOT choose GRASP when only the rounded free end or tip lies between the fingertips; that is a weak "
+            "tip pinch. For this vertical handle, move the gripper UP when needed to surround a higher shaft section "
+            "instead of pinching its bottom end. Choose ABORT if the handle is absent, "
             "ambiguous, occluded beyond safe guidance, or motion is unsafe. Do not use pixel thresholds or "
             "estimate coordinates for motion; judge the physical next action visually. Return ONLY a JSON list "
             'with one object: [{"box_2d":[ymin,xmin,ymax,xmax],"grasp_point":[y,x],'
@@ -451,7 +454,10 @@ class OpenDoorWithVision(Skill):
                 self._proxy,
                 image,
                 f"The robot just closed its two black gripper fingers on {self._handle_description!r}. "
-                f"Is the {self._handle_color} physical handle visibly trapped BETWEEN the two fingers? "
+                f"Is a SHAFT section of the {self._handle_color} physical handle visibly enclosed with the two "
+                "fingers contacting opposite sides, clearly away from its rounded free end? Answer NO if the "
+                "fingers merely pinch the terminal tip/end, contact the same side, or the shaft is not deep inside "
+                "the finger pocket. "
                 "Answer only YES or NO.",
                 logger=self.logger,
                 reasoning_effort=_VISION_REASONING_EFFORT,

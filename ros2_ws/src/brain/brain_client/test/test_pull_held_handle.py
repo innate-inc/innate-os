@@ -92,7 +92,7 @@ def test_pull_held_handle_runs_bounded_stream_stops_and_records_decisions(tmp_pa
     skill.manipulation = _Manipulation()
     skill.joint_states = JointStates(
         name=("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"),
-        position=(0.0,) * 6,
+        position=(0.04, 0.86, 0.34, -1.32, -0.04, 0.0),
         velocity=(0.0,) * 6,
         effort=(5.0, -4.0, 3.0, 2.0, 1.0, 40.0),
         received_at=time.monotonic(),

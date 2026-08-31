@@ -39,15 +39,13 @@ _READY_MAX_ABS_Y_M = 0.15
 _READY_MIN_Z_M = 0.10
 _READY_MAX_Z_M = 0.30
 _READY_MAX_DIRECTION_X = -0.5
-_READY_MAX_JOINT_ABS_RAD = 0.35
 
 
 class PullHeldHandle(Skill):
     """Pull a door, drawer, or cabinet handle that is already held by the
-    gripper. Before grasping, use ``innate-os/arm_zero_position`` to place the
-    unladen arm in its forward-ready posture. This skill then starts near that
-    posture and pulls inward along negative base_link X by default; it never
-    repositions an already attached arm. The skill tares gravity/load at the
+    gripper. It starts from a Cartesian pose in the arm's forward workspace and
+    pulls inward along negative base_link X by default; it never repositions an
+    already attached arm. The skill tares gravity/load at the
     held pose, locks the starting wrist orientation, moves in tiny Cartesian
     increments, slows and steers when resistance rises, and stops on stale
     feedback, excessive effort, trajectory drift, lack of progress, timeout,
@@ -140,17 +138,12 @@ class PullHeldHandle(Skill):
         starting_position = starting_pose.position
         locked_rpy = starting_pose.rpy
         starting_joints = tuple(float(value) for value in self.joint_states.position[:ARM_JOINTS])
-        ready_joints = (
-            len(starting_joints) == ARM_JOINTS
-            and all(math.isfinite(value) for value in starting_joints)
-            and max(abs(value) for value in starting_joints) <= _READY_MAX_JOINT_ABS_RAD
-        )
         ready_pose = (
             _READY_MIN_X_M <= starting_pose.x <= _READY_MAX_X_M
             and abs(starting_pose.y) <= _READY_MAX_ABS_Y_M
             and _READY_MIN_Z_M <= starting_pose.z <= _READY_MAX_Z_M
         )
-        if not ready_pose or not ready_joints or direction[0] > _READY_MAX_DIRECTION_X:
+        if not ready_pose or direction[0] > _READY_MAX_DIRECTION_X:
             self._stop_and_fail(
                 "Held-handle pull must start from the forward-ready pose and pull inward",
                 reason="invalid_start_geometry",
@@ -162,7 +155,6 @@ class PullHeldHandle(Skill):
                     "max_abs_y_m": _READY_MAX_ABS_Y_M,
                     "z_m": [_READY_MIN_Z_M, _READY_MAX_Z_M],
                     "max_direction_x": _READY_MAX_DIRECTION_X,
-                    "max_joint_abs_rad": _READY_MAX_JOINT_ABS_RAD,
                 },
             )
         if starting_pose.z < _MIN_BASE_Z_M:

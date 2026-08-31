@@ -216,6 +216,9 @@ def test_wrist_decision_retries_malformed_content_and_logs_raw_responses(tmp_pat
     assert "choose UP only when the gripper/end effector itself should rise to a higher Z" in requests[0][1]
     assert "raising the gripper normally makes the stationary handle appear LOWER" in requests[0][1]
     assert "Never choose UP or DOWN based on the direction you want the handle to move" in requests[0][1]
+    assert "opposite sides of the handle SHAFT" in requests[0][1]
+    assert "Do NOT choose GRASP when only the rounded free end or tip" in requests[0][1]
+    assert "move the gripper UP when needed to surround a higher shaft section" in requests[0][1]
     assert requests[0][2]["reasoning_effort"] == "minimal"
     assert requests[0][2]["model"] == "gemini-3.6-flash"
     assert (skill.debug_directory / "00_wrist_action_3.jpg").read_bytes() == b"current"
@@ -454,6 +457,30 @@ def test_wrist_loop_continues_past_twelve_actions(monkeypatch):
 
     assert len(skill.manipulation.moves) == 13
     assert result == pytest.approx((0.35, 0.01, 0.210))
+
+
+def test_grasp_uses_firm_strength_and_rejects_tip_pinch(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-grasp-test"))
+    closes = []
+    skill.manipulation = SimpleNamespace(gripper_close=lambda strength, **kwargs: closes.append((strength, kwargs)))
+    skill.joint_states = SimpleNamespace(position=(0.0, 0.0, 0.0, 0.0, 0.0, 0.01))
+    skill.wrist_image = object()
+    request = {}
+
+    def ask_image(_proxy, _image, prompt, **_kwargs):
+        request["prompt"] = prompt
+        return "NO"
+
+    monkeypatch.setattr(module.gemlib, "ask_image", ask_image)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(skill, "_save_frame", lambda *_args: "verification.jpg")
+    monkeypatch.setattr(skill, "debug_event", lambda *_args, **_kwargs: None)
+
+    assert not skill._grasp((0.40, 0.0, 0.20), 1)
+    assert closes == [(0.60, {"duration": 1.0})]
+    assert "opposite sides" in request["prompt"]
+    assert "Answer NO if the fingers merely pinch the terminal tip/end" in request["prompt"]
 
 
 class _Mobility:
