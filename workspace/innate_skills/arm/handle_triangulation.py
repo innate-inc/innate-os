@@ -62,6 +62,76 @@ def odom_point_to_base(point, odom_xyt):
     return (c * dx + s * dy, -s * dx + c * dy, point[2])
 
 
+def validate_vertical_box(box, *, min_height_px: float = 24.0, edge_margin_px: float = 4.0):
+    """Validate a tight ``(x, y, width, height)`` box for a vertical handle.
+
+    Known-size ranging is only valid when both physical endpoints are visible.
+    A clipped, squat, or tiny box is therefore rejected instead of producing a
+    confidently wrong range.
+    """
+    if not isinstance(box, (list, tuple)) or len(box) != 4:
+        raise ValueError("handle detection did not contain a bounding box")
+    x, y, width, height = (float(value) for value in box)
+    if not all(math.isfinite(value) for value in (x, y, width, height)):
+        raise ValueError("handle bounding box is invalid")
+    if height < min_height_px:
+        raise ValueError(f"handle is too small for metric ranging ({height:.0f} px tall)")
+    if width <= 0.0 or height < 1.5 * width:
+        raise ValueError("detected handle is not a vertical component")
+    clipped = (
+        x < edge_margin_px
+        or y < edge_margin_px
+        or x + width > 640.0 - edge_margin_px
+        or y + height > 480.0 - edge_margin_px
+    )
+    if clipped:
+        raise ValueError("the full top and bottom of the handle are not visible")
+    return x, y, width, height
+
+
+def stable_vertical_box(
+    boxes,
+    *,
+    max_height_spread_fraction: float = 0.15,
+    max_center_spread_px: float = 24.0,
+):
+    """Median box from repeated observations, rejecting unstable tracking."""
+    if len(boxes) < 3:
+        raise ValueError("fewer than three valid handle observations")
+    valid = [validate_vertical_box(box) for box in boxes]
+    heights = [box[3] for box in valid]
+    centers = [(box[0] + box[2] / 2.0, box[1] + box[3] / 2.0) for box in valid]
+    median_height = sorted(heights)[len(heights) // 2]
+    if (max(heights) - min(heights)) / median_height > max_height_spread_fraction:
+        raise ValueError("handle size estimate is unstable")
+    median_u = sorted(center[0] for center in centers)[len(centers) // 2]
+    median_v = sorted(center[1] for center in centers)[len(centers) // 2]
+    if max(math.hypot(center[0] - median_u, center[1] - median_v) for center in centers) > max_center_spread_px:
+        raise ValueError("handle position estimate is unstable")
+    median_width = sorted(box[2] for box in valid)[len(valid) // 2]
+    return median_u - median_width / 2.0, median_v - median_height / 2.0, median_width, median_height
+
+
+def vertical_handle_target(box, physical_height_m, *, fx, fy, cx, cy, camera_origin):
+    """Project a known-height vertical box into ``base_link``.
+
+    The camera is assumed level and forward-facing.  The returned optical
+    range is the distance along its forward axis, not Euclidean range.
+    """
+    x, y, width, height = validate_vertical_box(box)
+    if not math.isfinite(physical_height_m) or physical_height_m <= 0.0:
+        raise ValueError("physical handle height must be positive")
+    if min(fx, fy) <= 0.0:
+        raise ValueError("camera focal lengths must be positive")
+    optical_range = fy * physical_height_m / height
+    u, v = x + width / 2.0, y + height / 2.0
+    return (
+        camera_origin[0] + optical_range,
+        camera_origin[1] - (u - cx) * optical_range / fx,
+        camera_origin[2] - (v - cy) * optical_range / fy,
+    ), optical_range
+
+
 def handle_from_floor_edge(handle_px, left_floor_px, right_floor_px, head_tilt_deg):
     """Intersect a handle pixel ray with the vertical plane above a floor edge.
 

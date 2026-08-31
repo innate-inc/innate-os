@@ -69,15 +69,50 @@ def test_localizes_handle_from_cabinet_floor_edge():
     assert abs(abs(plane_yaw) - math.pi / 2.0) < 0.01
 
 
+def test_known_vertical_height_projects_to_metric_target():
+    point, optical_range = geometry.vertical_handle_target(
+        (335.0, 228.0, 10.0, 64.0),
+        0.10,
+        fx=195.36129809912026,
+        fy=259.5741983485189,
+        cx=317.75570636221465,
+        cy=228.0517433641685,
+        camera_origin=(0.002519, 0.0295, 0.258545),
+    )
+
+    assert optical_range == pytest.approx(0.4055847)
+    assert point == pytest.approx((0.40810, -0.01670, 0.20855), abs=0.0001)
+
+
+def test_metric_box_rejects_clipped_handle():
+    with pytest.raises(ValueError, match="full top and bottom"):
+        geometry.validate_vertical_box((330.0, 2.0, 12.0, 100.0))
+
+
+def test_metric_box_rejects_unstable_height():
+    with pytest.raises(ValueError, match="size estimate is unstable"):
+        geometry.stable_vertical_box(
+            [
+                (330.0, 200.0, 12.0, 80.0),
+                (330.0, 190.0, 12.0, 100.0),
+                (330.0, 205.0, 12.0, 70.0),
+            ]
+        )
+
+
 def test_detection_exports_exact_camera_frame(tmp_path, monkeypatch):
     monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
-    monkeypatch.setattr(module.gemlib, "ask_image", lambda *_args, **_kwargs: '[{"grasp_point":[500,500]}]')
+    monkeypatch.setattr(
+        module.gemlib,
+        "ask_image",
+        lambda *_args, **_kwargs: '[{"box_2d":[200,450,800,550],"grasp_point":[500,500]}]',
+    )
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-frame-test"))
     skill._configure_debug_run(run_id="frame-run", skill_id="innate-os/open_door_with_vision", inputs={})
     image = type("Frame", (), {"jpeg": b"exact-jpeg"})()
 
-    assert skill._detect(image, "head") == pytest.approx((320, 240))
+    assert skill._detect_box(image, "head") == pytest.approx((288, 96, 64, 288))
     assert (skill.debug_directory / "00_head_detection.jpg").read_bytes() == b"exact-jpeg"
 
 
@@ -132,8 +167,8 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
     skill.head = _Head()
     skill.skills = _Skills()
     order = []
-    monkeypatch.setattr(skill, "_localize_handle", lambda: order.append("localize") or ((1.0, 0.0, 0.2), 0.0))
-    monkeypatch.setattr(skill, "_position_base", lambda _point, _yaw: order.append("position") or (0.34, 0.0, 0.2))
+    monkeypatch.setattr(skill, "_localize_handle", lambda: order.append("localize") or (1.0, 0.0, 0.2))
+    monkeypatch.setattr(skill, "_position_base", lambda _point: order.append("position") or (0.44, 0.0, 0.2))
     monkeypatch.setattr(skill, "_wrist_align", lambda target: order.append("align") or (0.28, target[1], target[2]))
     monkeypatch.setattr(skill, "_grasp", lambda _pregrasp, _handle_x: order.append("grasp"))
 
