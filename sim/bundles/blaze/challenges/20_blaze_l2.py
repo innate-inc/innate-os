@@ -83,6 +83,12 @@ CHALLENGE = Challenge(
         # the second kitchen item on the strength of it. Kept as the obituary,
         # now that the warning above carries the actionable part.
         Cue("Kitchen's gone.", after_s=148.0),
+        # The phone is in the study and every route to it crosses the east
+        # hall, which is lethal at 380 s here exactly as it is in l4 -- and
+        # until now this level never mentioned it. Two warnings, both true
+        # when spoken: 115 s of hall left at 265 s, 60 s at 320 s.
+        Cue("East hall's got a couple of minutes left. The study's through it.", after_s=265.0),
+        Cue("East end of the hall is starting to go. If the phone matters, now.", after_s=320.0),
     ],
     goals=[
         Goal("Medicine on the porch", InRect("blaze_medicine", *PORCH)),
