@@ -334,6 +334,27 @@ def test_floor_approach_targets_arm_axis_at_grasp_standoff():
     assert module._DOOR_APPROACH_PARAMS["tilt_deg"] == pytest.approx(-20.0)
 
 
+def test_tracked_plane_overrides_wrong_known_size_range(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-plane-range-test"))
+    skill._handle_height_m = 0.10
+    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
+    # Reproduces the live MARS 47 disagreement: the complete visible handle is
+    # 104 px tall, which makes a 100 mm size estimate say 0.25 m, while the
+    # odometry-pinned floor approach tracked the cabinet plane at 0.459 m.
+    monkeypatch.setattr(
+        skill,
+        "_measure_handle",
+        lambda _camera, _fy: ((358.0, 228.5, 17.0, 104.0), 0.2496),
+    )
+
+    target = skill._localize_handle((0.45915, -0.10446))
+
+    assert target[0] == pytest.approx(0.45915)
+    assert target[1] == pytest.approx(-0.0786, abs=0.002)
+    assert target[2] == pytest.approx(0.2042, abs=0.002)
+
+
 def test_shared_floor_approach_is_used_for_handle_parking(monkeypatch):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-floor-approach-test"))
@@ -379,7 +400,17 @@ def test_parked_handle_accepts_arm_offset_target(monkeypatch):
     assert target == pytest.approx((0.38, -0.05285, 0.21725490235201467))
 
 
-@pytest.mark.parametrize("point", [(0.50, -0.05285, 0.22), (0.38, 0.10, 0.22)])
+def test_parked_handle_accepts_live_floor_approach_distance(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-live-floor-distance-test"))
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.47, 0.06, 0.11))
+
+    target = skill._parked_handle_target((0.45915, -0.0786, 0.2042))
+
+    assert target == pytest.approx((0.45915, -0.0786, 0.2042))
+
+
+@pytest.mark.parametrize("point", [(0.55, -0.05285, 0.22), (0.38, 0.10, 0.22)])
 def test_parked_handle_rejects_target_outside_grasp_workspace(monkeypatch, point):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-base-reject-test"))
@@ -668,8 +699,13 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         order.append(("retry", attempt))
         return (0.36, target[1], target[2])
 
-    monkeypatch.setattr(skill, "_approach_handle", lambda: order.append("approach") or (0.40, -0.05285))
-    monkeypatch.setattr(skill, "_localize_handle", lambda: order.append("localize") or (0.38, -0.05285, 0.2))
+    parked = (0.40, -0.05285)
+    monkeypatch.setattr(skill, "_approach_handle", lambda: order.append("approach") or parked)
+    monkeypatch.setattr(
+        skill,
+        "_localize_handle",
+        lambda floor: order.append(("localize", floor)) or (0.38, -0.05285, 0.2),
+    )
     monkeypatch.setattr(
         skill,
         "_parked_handle_target",
@@ -696,7 +732,7 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
 
     assert order == [
         "approach",
-        "localize",
+        ("localize", parked),
         "validate_park",
         "align",
         ("grasp", 1, (0.35, -0.05285, 0.2)),

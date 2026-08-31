@@ -23,22 +23,18 @@ from innate import (
 )
 from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy
-from innate.geometry import IMG_H, IMG_W
+from innate.geometry import FY, IMG_H, IMG_W, pixel_ray
 
 from .handle_triangulation import (
-    odom_point_to_base,
     stable_vertical_box,
     validate_vertical_box,
-    vertical_handle_target,
 )
 
 _HEAD_TILT_DEG = 0.0
 _APPROACH_HEAD_TILT_DEG = -20.0
-_MIN_RANGE_M = 0.20
-_MAX_RANGE_M = 1.50
 _MIN_HANDLE_Z_M = 0.10
 _MAX_HANDLE_Z_M = 0.30
-_BASE_HANDLE_X_BOUNDS_M = (0.32, 0.43)
+_BASE_HANDLE_X_BOUNDS_M = (0.32, 0.50)
 _ARM_Y_OFFSET_M = -0.05285
 _BASE_HANDLE_Y_TOLERANCE_M = 0.07
 _WRIST_STAGING_X_M = 0.32
@@ -68,13 +64,6 @@ _DOOR_APPROACH_PARAMS = {
     "hold_frac": 1.0,
 }
 
-# Raw 640x480 left-image K from the calibrated MARS stereo camera. The wrist
-# module has no CameraInfo publisher, hence the nominal manufacturer FOV above.
-_MAIN_FX_PX = 195.36129809912026
-_MAIN_FY_PX = 259.5741983485189
-_MAIN_CX_PX = 317.75570636221465
-_MAIN_CY_PX = 228.0517433641685
-_MAIN_CAMERA_ORIGIN = (0.002519, 0.0295, 0.258545)
 _HEAD_METRIC_SAMPLES = 3
 _GRASP_ATTEMPTS = 2
 _VISION_MODEL = "gemini-3.6-flash"
@@ -178,6 +167,18 @@ def _wrist_action_pose(position, action):
         max(-0.10, min(0.10, y)),
         max(_MIN_HANDLE_Z_M, min(_MAX_HANDLE_Z_M, z)),
     )
+
+
+def _handle_on_frontal_plane(box, plane_x_m, head_tilt_deg=0.0):
+    """Intersect the detected handle centre ray with the tracked cabinet plane."""
+    if not math.isfinite(plane_x_m) or plane_x_m <= 0.0:
+        raise ValueError("tracked cabinet plane is invalid")
+    x, y, width, height = validate_vertical_box(box)
+    origin, direction = pixel_ray(x + width / 2.0, y + height / 2.0, head_tilt_deg)
+    if direction[0] <= 1e-6 or plane_x_m <= origin[0]:
+        raise ValueError("handle ray does not intersect the cabinet plane ahead")
+    distance = (plane_x_m - origin[0]) / direction[0]
+    return tuple(origin[index] + distance * direction[index] for index in range(3))
 
 
 def _left_push_offsets(distance_m):
@@ -399,45 +400,40 @@ class OpenDoorWithVision(Skill):
             self.fail("Base motion failed during handle acquisition")
         self.debug_event("base_translation", requested_m=metres, before=list(before), after=list(self._odom_xyt()))
 
-    def _localize_handle(self):
+    def _localize_handle(self, parked_floor_base):
+        """Locate the handle on the cabinet plane tracked during base approach.
+
+        The known-height estimate remains useful diagnostics, but it must not
+        override the odometry-pinned cabinet plane: the parameter may describe
+        only a graspable shaft while Gemini boxes the complete handle and its
+        end mounts.
+        """
         self.sleep(0.8)
-        box, _measured_range = self._measure_handle("head", _MAIN_FY_PX)
+        box, size_estimated_range = self._measure_handle("head", FY)
         try:
-            relative, distance = vertical_handle_target(
-                box,
-                self._handle_height_m,
-                fx=_MAIN_FX_PX,
-                fy=_MAIN_FY_PX,
-                cx=_MAIN_CX_PX,
-                cy=_MAIN_CY_PX,
-                camera_origin=_MAIN_CAMERA_ORIGIN,
-            )
+            relative = _handle_on_frontal_plane(box, float(parked_floor_base[0]), _HEAD_TILT_DEG)
         except ValueError as error:
             self.fail(str(error))
-        if not _MIN_RANGE_M <= distance <= _MAX_RANGE_M:
-            self.fail(f"Estimated handle range {distance:.2f} m is outside the safe envelope")
         if not _MIN_HANDLE_Z_M <= relative[2] <= _MAX_HANDLE_Z_M:
             self.fail(f"Estimated handle height {relative[2]:.2f} m is outside the arm workspace")
         self.debug_event(
-            "handle_size_localized",
+            "handle_plane_localized",
             base_point=list(relative),
             box=list(box),
+            floor_anchor_base=list(parked_floor_base),
             physical_height_m=self._handle_height_m,
-            range_m=distance,
+            plane_x_m=relative[0],
+            size_estimated_range_m=size_estimated_range,
+            range_disagreement_m=size_estimated_range - relative[0],
+            lateral_disagreement_m=relative[1] - float(parked_floor_base[1]),
+            positioning="tracked_plane_with_final_handle_ray",
         )
-        odom = self._odom_xyt()
-        c, s = math.cos(odom[2]), math.sin(odom[2])
-        point_odom = (
-            odom[0] + c * relative[0] - s * relative[1],
-            odom[1] + s * relative[0] + c * relative[1],
-            relative[2],
-        )
-        return point_odom
+        return relative
 
     def _parked_handle_target(self, point):
         """Validate the freshly re-measured handle after floor-based parking."""
         final_odom = self._odom_xyt()
-        relative = odom_point_to_base(point, final_odom)
+        relative = tuple(point)
         lateral_error = relative[1] - _ARM_Y_OFFSET_M
         accepted = (
             _BASE_HANDLE_X_BOUNDS_M[0] <= relative[0] <= _BASE_HANDLE_X_BOUNDS_M[1]
@@ -864,7 +860,7 @@ class OpenDoorWithVision(Skill):
                 pull_distance_m=pull_distance_m,
                 left_push_distance_m=pull_distance_m,
                 handle_height_m=handle_height_m,
-                localization="floor_anchor_optical_flow_then_known_vertical_size",
+                localization="floor_anchor_optical_flow_then_tracked_plane_ray",
                 approach_x_m=_DOOR_APPROACH_PARAMS["sweet_x"],
                 approach_y_m=_DOOR_APPROACH_PARAMS["box_y"],
             )
@@ -872,9 +868,9 @@ class OpenDoorWithVision(Skill):
             self.manipulation.torque_on()
             self.manipulation.gripper_open(duration=1.0)
             self.manipulation.move_joints(NAV_ARM, duration=3.0)
-            self._approach_handle()
+            parked_floor_base = self._approach_handle()
             self.head.set_position(int(_HEAD_TILT_DEG))
-            point = self._localize_handle()
+            point = self._localize_handle(parked_floor_base)
             target = self._parked_handle_target(point)
             pregrasp = self._wrist_align(target)
             for attempt in range(1, _GRASP_ATTEMPTS + 1):
