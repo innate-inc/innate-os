@@ -624,19 +624,25 @@ def test_post_grasp_retreat_preloads_releases_and_pushes_left(monkeypatch):
     drives = []
     events = []
     monkeypatch.setattr(skill, "_drive", drives.append)
-    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
+    sleeps = []
+    monkeypatch.setattr(skill, "sleep", sleeps.append)
     monkeypatch.setattr(skill, "check_cancelled", lambda: None)
     monkeypatch.setattr(skill, "feedback", lambda _message: None)
     monkeypatch.setattr(skill, "debug_event", lambda event, **fields: events.append((event, fields)))
-    skill.joint_states = SimpleNamespace(position=(0.10, -0.20, 0.30, -0.40, 0.50, -0.60))
 
     class PushManipulation:
         def __init__(self):
             self.actions = []
-            self.pose = SimpleNamespace(x=module._JOINT1_ORIGIN_X_M + 0.30, y=module._JOINT1_ORIGIN_Y_M, z=0.20)
+            self.pose = SimpleNamespace(x=0.35, y=-0.04, z=0.20, position=(0.35, -0.04, 0.20), rpy=(0.1, 0.2, 0.3))
 
-        def stream_joints(self, joints, **kwargs):
-            self.actions.append(("stream", list(joints), kwargs))
+        def move_to(self, x, y, z, **kwargs):
+            self.actions.append(("move_to", (x, y, z), kwargs))
+            self.pose = SimpleNamespace(x=x, y=y, z=z, position=(x, y, z), rpy=(0.1, 0.2, 0.3))
+            return self.pose
+
+        def stream_to(self, x, y, z, **kwargs):
+            self.actions.append(("stream_to", (x, y, z), kwargs))
+            self.pose = SimpleNamespace(x=x, y=y, z=z, position=(x, y, z), rpy=(0.1, 0.2, 0.3))
 
         def stream_keepalive(self):
             self.actions.append(("keepalive",))
@@ -652,20 +658,39 @@ def test_post_grasp_retreat_preloads_releases_and_pushes_left(monkeypatch):
     skill._retreat_and_push_left(0.20, 0.20)
 
     assert drives == [-0.20]
-    streams = [action for action in skill.manipulation.actions if action[0] == "stream"]
-    assert len(streams) == 2
-    expected_joint1 = 0.10 + math.asin(0.20 / 0.30)
-    assert streams[0][1] == pytest.approx([expected_joint1, -0.20, 0.30, -0.40, 0.50])
-    assert streams[1][1] == pytest.approx(streams[0][1])
-    assert streams[0][2]["max_speed"] == pytest.approx(0.25)
-    assert skill.manipulation.actions[11][0] == "open"
-    assert sum(action[0] == "keepalive" for action in skill.manipulation.actions) == 60
+    preload = skill.manipulation.actions[0]
+    assert preload[0] == "move_to"
+    assert preload[1] == pytest.approx((0.35, -0.03, 0.20))
+    assert preload[2] == {
+        "roll": 0.1,
+        "pitch": 0.2,
+        "yaw": 0.3,
+        "duration": 1.0,
+        "tolerance_xy": None,
+        "tolerance_z": None,
+    }
+    assert skill.manipulation.actions[1][0] == "open"
+    streams = [action for action in skill.manipulation.actions if action[0] == "stream_to"]
+    assert len(streams) == 19
+    assert [action[1][0] for action in streams] == pytest.approx([0.35] * 19)
+    assert [action[1][1] for action in streams] == pytest.approx(
+        [-0.04 + offset for offset in (0.01 * step for step in range(2, 21))]
+    )
+    assert [action[1][2] for action in streams] == pytest.approx([0.20] * 19)
+    assert all(action[2]["max_speed"] == pytest.approx(0.25) for action in streams)
+    assert all(action[2]["roll"] == pytest.approx(0.1) for action in streams)
+    assert all(action[2]["pitch"] == pytest.approx(0.2) for action in streams)
+    assert all(action[2]["yaw"] == pytest.approx(0.3) for action in streams)
+    assert sum(sleeps) == pytest.approx(5.0)
     assert skill.manipulation.actions[-1] == ("stop",)
-    assert [event for event, _fields in events].count("left_push_tick") == 60
+    assert [event for event, _fields in events].count("left_push_step") == 19
     started = next(fields for event, fields in events if event == "left_push_started")
+    assert started["strategy"] == "cartesian_ik_positive_y"
+    assert started["origin_pose"] == pytest.approx([0.35, -0.04, 0.20])
+    assert started["final_target"] == pytest.approx([0.35, 0.16, 0.20])
     assert started["requested_left_distance_m"] == pytest.approx(0.20)
-    assert started["actual_left_distance_m"] == pytest.approx(0.20)
-    assert started["joint1_radius_m"] == pytest.approx(0.30)
+    completed = next(fields for event, fields in events if event == "left_push_complete")
+    assert completed["measured_left_distance_m"] == pytest.approx(0.20)
 
 
 def test_door_defaults_to_twenty_centimetres_back_and_left(monkeypatch):

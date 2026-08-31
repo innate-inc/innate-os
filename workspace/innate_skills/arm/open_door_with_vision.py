@@ -61,9 +61,7 @@ _GRASP_ATTEMPTS = 2
 _VISION_MODEL = "gemini-3.6-flash"
 _VISION_REASONING_EFFORT = "minimal"
 _LEFT_PUSH_SPEED_RAD_S = 0.25
-_JOINT1_LEFT_LIMIT_RAD = 1.5708
-_JOINT1_ORIGIN_X_M = 0.086
-_JOINT1_ORIGIN_Y_M = -0.05285
+_LEFT_PUSH_STEP_M = 0.010
 _LEFT_PUSH_PRELOAD_S = 1.0
 _LEFT_PUSH_AFTER_RELEASE_S = 5.0
 _LEFT_PUSH_KEEPALIVE_S = 0.10
@@ -107,22 +105,10 @@ def _wrist_action_pose(position, action):
     )
 
 
-def _joint1_target_for_left_distance(current_joint1, ee_x, ee_y, left_distance_m):
-    """Map a base-frame left displacement onto joint 1's circular sweep."""
-    radial_x = ee_x - _JOINT1_ORIGIN_X_M
-    radial_y = ee_y - _JOINT1_ORIGIN_Y_M
-    radius = math.hypot(radial_x, radial_y)
-    if radius <= 0.05 or radial_x <= 0.0:
-        raise ValueError("Gripper pose cannot define a forward joint-1 sweep")
-    phase = math.atan2(radial_y, radial_x)
-    requested_radial_y = radial_y + left_distance_m
-    reachable_radial_y = min(radius, requested_radial_y)
-    target_phase = math.asin(reachable_radial_y / radius)
-    requested_delta = max(0.0, target_phase - phase)
-    target_joint1 = min(_JOINT1_LEFT_LIMIT_RAD, current_joint1 + requested_delta)
-    actual_delta = target_joint1 - current_joint1
-    actual_left_distance = radius * math.sin(phase + actual_delta) - radial_y
-    return target_joint1, max(0.0, actual_left_distance), radius
+def _left_push_offsets(distance_m):
+    """Return positive-Y offsets no farther than 10 mm apart."""
+    steps = math.ceil(distance_m / _LEFT_PUSH_STEP_M)
+    return tuple(min(distance_m, step * _LEFT_PUSH_STEP_M) for step in range(1, steps + 1))
 
 
 class OpenDoorWithVision(Skill):
@@ -558,57 +544,95 @@ class OpenDoorWithVision(Skill):
         return self._wrist_align(target, restage=False)
 
     def _hold_left_push(self, duration_s, phase):
-        ticks = math.ceil(duration_s / _LEFT_PUSH_KEEPALIVE_S)
-        for tick in range(ticks):
+        remaining_s = duration_s
+        tick = 0
+        elapsed_s = 0.0
+        while remaining_s > 1e-9:
             self.check_cancelled()
             self.manipulation.stream_keepalive()
-            self.sleep(_LEFT_PUSH_KEEPALIVE_S)
-            self.debug_event("left_push_tick", phase=phase, tick=tick, elapsed_s=(tick + 1) * _LEFT_PUSH_KEEPALIVE_S)
+            sleep_s = min(_LEFT_PUSH_KEEPALIVE_S, remaining_s)
+            self.sleep(sleep_s)
+            remaining_s -= sleep_s
+            elapsed_s += sleep_s
+            self.debug_event("left_push_tick", phase=phase, tick=tick, elapsed_s=elapsed_s)
+            tick += 1
 
     def _retreat_and_push_left(self, retreat_distance_m, left_distance_m):
-        """Back away holding the handle, then release into a left arm sweep."""
+        """Back away holding the handle, then release into a Cartesian left sweep."""
         self.feedback("Backing away with the handle")
         self._drive(-retreat_distance_m)
 
-        joints = tuple(float(value) for value in self.joint_states.position[:5])
-        if len(joints) != 5 or not all(math.isfinite(value) for value in joints):
-            self.fail("Arm joint feedback is unavailable for the left door push")
-        left_target = list(joints)
-        if not -_JOINT1_LEFT_LIMIT_RAD <= left_target[0] <= _JOINT1_LEFT_LIMIT_RAD:
-            self.fail("Joint 1 feedback is outside its configured range")
-        pose = self.manipulation.pose
-        try:
-            left_target[0], actual_left_distance_m, joint1_radius_m = _joint1_target_for_left_distance(
-                left_target[0], pose.x, pose.y, left_distance_m
-            )
-        except ValueError as error:
-            self.fail(str(error))
+        origin = self.manipulation.pose
+        offsets = _left_push_offsets(left_distance_m)
+        preload_offset_m = offsets[0]
+        preload_target = (origin.x, origin.y + preload_offset_m, origin.z)
+        final_target = (origin.x, origin.y + left_distance_m, origin.z)
         self.debug_event(
             "left_push_started",
-            starting_joints=list(joints),
-            target_joints=left_target,
-            joint1_delta_rad=left_target[0] - joints[0],
+            strategy="cartesian_ik_positive_y",
+            origin_pose=list(origin.position),
+            origin_rpy=list(origin.rpy),
+            preload_target=list(preload_target),
+            final_target=list(final_target),
             requested_left_distance_m=left_distance_m,
-            actual_left_distance_m=actual_left_distance_m,
-            joint1_radius_m=joint1_radius_m,
+            step_m=_LEFT_PUSH_STEP_M,
             max_speed_rad_s=_LEFT_PUSH_SPEED_RAD_S,
             preload_s=_LEFT_PUSH_PRELOAD_S,
             after_release_s=_LEFT_PUSH_AFTER_RELEASE_S,
         )
 
-        # Five values preserve the standing gripper force while joint 1 loads
-        # the door toward robot-left.
-        self.manipulation.stream_joints(left_target, max_speed=_LEFT_PUSH_SPEED_RAD_S)
-        self._hold_left_push(_LEFT_PUSH_PRELOAD_S, "grasped_preload")
+        # A completed Cartesian preload establishes contact without allowing
+        # joint 1's circular sweep to retract the gripper from the door.
+        settled = self.manipulation.move_to(
+            *preload_target,
+            roll=origin.rpy[0],
+            pitch=origin.rpy[1],
+            yaw=origin.rpy[2],
+            duration=_LEFT_PUSH_PRELOAD_S,
+            tolerance_xy=None,
+            tolerance_z=None,
+        )
+        self.debug_event(
+            "left_push_preload_complete",
+            requested_pose=list(preload_target),
+            measured_pose=list(settled.position),
+        )
 
         self.feedback("Releasing the handle and pushing the door left")
         self.manipulation.gripper_open(duration=1.0)
-        # Opening is a discrete command and stops streaming, so resume the same
-        # joint-1 target and maintain it for the requested five seconds.
-        self.manipulation.stream_joints(left_target, max_speed=_LEFT_PUSH_SPEED_RAD_S)
-        self._hold_left_push(_LEFT_PUSH_AFTER_RELEASE_S, "released_push")
+
+        # The preload consumed the first 10 mm. Stream the remaining Cartesian
+        # IK targets over five seconds. For a 10 mm total request, re-stream the
+        # preload target so contact is still maintained after opening the claw.
+        released_offsets = offsets[1:] or offsets[-1:]
+        hold_s = _LEFT_PUSH_AFTER_RELEASE_S / len(released_offsets)
+        for step, offset_m in enumerate(released_offsets, start=1):
+            self.check_cancelled()
+            target = (origin.x, origin.y + offset_m, origin.z)
+            self.manipulation.stream_to(
+                *target,
+                roll=origin.rpy[0],
+                pitch=origin.rpy[1],
+                yaw=origin.rpy[2],
+                max_speed=_LEFT_PUSH_SPEED_RAD_S,
+            )
+            self.debug_event(
+                "left_push_step",
+                step=step,
+                target_pose=list(target),
+                requested_left_offset_m=offset_m,
+                hold_s=hold_s,
+            )
+            self._hold_left_push(hold_s, "released_push")
         self.manipulation.stream_stop()
-        self.debug_event("left_push_complete", target_joints=left_target)
+        final_pose = self.manipulation.pose
+        self.debug_event(
+            "left_push_complete",
+            requested_pose=list(final_target),
+            measured_pose=list(final_pose.position),
+            requested_left_distance_m=left_distance_m,
+            measured_left_distance_m=final_pose.y - origin.y,
+        )
 
     def execute(
         self,
