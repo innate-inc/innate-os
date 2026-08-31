@@ -1081,8 +1081,14 @@ class ChallengeEngine:
                 for goal in challenge.goals:
                     try:
                         goal.predicate.observe(state, events)
-                    except Exception as exc:  # noqa: BLE001 -- one bad predicate, not the run
+                    except Exception as exc:  # noqa: BLE001
+                        # A goal that cannot be evaluated has not failed, and
+                        # scoring the rest of the run pretends otherwise. Fail
+                        # the episode and name the judge as the cause.
                         print(f"[challenges] observe failed on {goal.label!r}: {exc!r}", flush=True)
+                        self.state = "failed"
+                        self.reason = f"judge error observing {goal.label!r}: {exc!r}"
+                        self._record(challenge.id, "failed", None)
                 if challenge.fail_if is not None:
                     try:
                         # Before the goals: a tick that both eliminates the

@@ -143,8 +143,8 @@ def main() -> int:
     ap.add_argument(
         "--random-cap",
         type=float,
-        default=240.0,
-        help="sim-seconds budget for random rollouts (0 = the challenge's own limit)",
+        default=0.0,
+        help="sim-seconds budget for random rollouts (0 = the challenge's own limit, the default)",
     )
     ap.add_argument(
         "--challenges",

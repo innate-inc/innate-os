@@ -59,10 +59,12 @@ def gate_verdict(req: str, oracle: dict | None, rnd: list[dict]) -> tuple[str, s
         return "INCOMPLETE", "not all agents ran"
     if trivial:
         return "INVALID", f"random passed {passes}/{len(rnd)} -- measures nothing"
+    # A floor worth stating: chance passed sometimes, just not usually.
+    floor = f"random passed {passes}/{len(rnd)}" if passes else ""
     if not oracle["passed"]:
         why = oracle.get("error") or oracle.get("reason") or f"oracle {oracle['goals_done']}/{oracle['goals_total']}"
         return "INVALID", why
-    return "VALID", ""
+    return "VALID", floor
 
 
 @dataclass(frozen=True)
