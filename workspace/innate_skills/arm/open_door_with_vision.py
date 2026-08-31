@@ -37,6 +37,7 @@ _MAX_RANGE_M = 1.50
 _MIN_HANDLE_Z_M = 0.10
 _MAX_HANDLE_Z_M = 0.30
 _APPROACH_RANGE_M = 0.44
+_BASE_HANDLE_X_BOUNDS_M = (0.40, 0.46)
 _WRIST_STAGING_X_M = 0.32
 _FINGERTIP_OFFSET_M = 0.05
 _VISUAL_CLEARANCE_M = 0.03
@@ -236,13 +237,13 @@ class OpenDoorWithVision(Skill):
         self._drive(math.hypot(relative[0], relative[1]) - _APPROACH_RANGE_M)
         final_odom = self._odom_xyt()
         relative = odom_point_to_base(point, final_odom)
-        accepted = 0.41 <= relative[0] <= 0.45 and abs(relative[1]) <= 0.05
+        accepted = _BASE_HANDLE_X_BOUNDS_M[0] <= relative[0] <= _BASE_HANDLE_X_BOUNDS_M[1] and abs(relative[1]) <= 0.05
         self.debug_event(
             "base_position_result",
             odom=list(final_odom),
             handle_base=list(relative),
             accepted=accepted,
-            x_bounds_m=[0.41, 0.45],
+            x_bounds_m=list(_BASE_HANDLE_X_BOUNDS_M),
             max_abs_y_m=0.05,
         )
         if not accepted:

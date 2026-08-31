@@ -154,6 +154,18 @@ def test_detection_exports_exact_camera_frame(tmp_path, monkeypatch):
     assert (skill.debug_directory / "00_head_detection.jpg").read_bytes() == b"exact-jpeg"
 
 
+def test_base_accepts_sub_motion_threshold_range_error(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-base-test"))
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.0, 0.0, 0.0))
+    monkeypatch.setattr(skill, "_rotate", lambda _radians: None)
+    monkeypatch.setattr(skill, "_drive", lambda _metres: None)
+
+    target = skill._position_base((0.45006072129054975, 0.012904473272164273, 0.21725490235201467))
+
+    assert target == pytest.approx((0.45006072129054975, 0.012904473272164273, 0.21725490235201467))
+
+
 class _Mobility:
     def __init__(self):
         self.stops = 0
