@@ -21,6 +21,7 @@ BUILTIN: dict[str, str] = {
     "codex-blind": "backends:CodexBlindBackend",  # the control: same model, no camera
     "gemini": "backends:GeminiBackend",  # sees, inline; needs GEMINI_API_KEY
     "nemotron_stack": "backends_v2:NemotronStackBackend",  # AGENT_SPEC.md's agent
+    "guess": "guess_backend:GuessBackend",  # blurts plausible answers; never looks
 }
 
 

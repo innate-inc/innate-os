@@ -42,8 +42,20 @@ CHALLENGE = Challenge(
         "Honestly."
     ),
     setup=[],
+    # MEASURED GUESSING FLOOR: a baseline that blurts plausible answers and
+    # never looks (`--agents brain:guess`) still passes this about 1 run in 3,
+    # and lengthening the approach hold further starts failing the oracle
+    # instead. Both goals are individually reachable by accident in a small
+    # cafe: a random walk crosses the customer's circle, and "how can I help"
+    # is a real offer of help whenever it is said. Read a single pass here the
+    # way the bridge controls are read -- against their stated floor, not as
+    # proof of anything on its own.
     goals=[
-        Goal("Come over to the customer", Hold(InCircle("robot", 0.0, 0.20, 0.55), seconds=2.0)),
+        # 5 s, not 2: a random walk crossing the cafe holds a 0.55 m circle for
+        # two seconds in passing, and a guessing baseline passed this
+        # challenge 1 run in 3 without ever looking at the customer. A robot
+        # that came over to someone waving has no reason to leave.
+        Goal("Come over to the customer", Hold(InCircle("robot", 0.0, 0.20, 0.55), seconds=5.0)),
         Goal(
             "Offer to help",
             Said(

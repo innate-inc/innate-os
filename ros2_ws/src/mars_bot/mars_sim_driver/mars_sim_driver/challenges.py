@@ -319,6 +319,17 @@ class Answered(Predicate):
         "or ",
     )
 
+    #: distinct wrong answers on the structured channel before the robot is
+    #: judged to be enumerating rather than answering. The widest challenge in
+    #: this suite asks two questions, so an honest run yields at most one.
+    _GUESS_LIMIT: int = 3
+    #: distinct wrong answers seen this episode. A field, not a reset-only
+    #: attribute, so update() is safe on a predicate nobody reset.
+    _wrong: set = field(default_factory=set)
+
+    def reset(self) -> None:
+        self._wrong = set()
+
     def _says_it(self, text: str) -> bool:
         """An accepted spelling appears in free speech as a whole word, and is
         not negated or hedged.
@@ -354,8 +365,25 @@ class Answered(Predicate):
         for ev in events:
             kind = ev.get("type")
             if kind == "answer":
+                # A WRONG answer on the structured channel disqualifies a later
+                # right one. `answer` means "answer a question you were asked",
+                # so using it is a claim -- and a robot that claims 1, then 2,
+                # then 3 has enumerated, not answered. Measured: without this,
+                # a baseline that blurts guesses and never looks passes 4 of the
+                # 7 counter speech challenges. Free speech is deliberately not
+                # counted as an attempt: a robot may say many things while
+                # working, and only this channel is a commitment.
+                value = self._norm(ev.get(self.key))
+                if value and value not in wanted and not self._says_it(str(ev.get(self.key, ""))):
+                    # Not disqualifying on its own: a challenge that asks two
+                    # questions gets the OTHER question's answer on this same
+                    # channel, and that is not a guess. Enumeration is what
+                    # produces many distinct wrong values.
+                    self._wrong.add(value)
+                if len(self._wrong) >= self._GUESS_LIMIT:
+                    continue
                 # The structured channel: the whole value must be the answer.
-                if self._norm(ev.get(self.key)) in wanted:
+                if value in wanted:
                     return True
                 # An agent that put a sentence in the answer channel still
                 # answered. Fall through to the same text rule as speech.
@@ -363,7 +391,11 @@ class Answered(Predicate):
                     return True
             elif kind == "say":
                 # Speech. From the robot's side this IS answering, and which
-                # envelope a stack uses is its own business.
+                # envelope a stack uses is its own business -- but a robot that
+                # has already guessed wrong on the answer channel does not get
+                # to win on this one.
+                if len(self._wrong) >= self._GUESS_LIMIT:
+                    continue
                 if self._says_it(str(ev.get("text", ""))):
                     return True
         return False
