@@ -10,10 +10,12 @@ import math
 HEAD_ORIGIN = (-0.040751, -0.0002, 0.25882)  # base_link -> head joint (URDF)
 CAM_IN_HEAD = (0.04327, 0.0297, -0.000275)  # head -> left camera optical
 IMG_W, IMG_H = 640, 480
-HFOV_DEG = 70.0
 
-FX = IMG_W / (2.0 * math.tan(math.radians(HFOV_DEG) / 2.0))
-CX, CY = IMG_W / 2.0, IMG_H / 2.0
+# Left-eye factory intrinsics (1280x720, fx~=fy~=400.8) through the driver's
+# NON-UNIFORM resize to 640x480, so FX != FY. Tape-measured 2026-08-28: the old
+# 70 deg model read 0.156 m as 0.33. Tune FY first — it dominates range.
+FX, FY = 200.3, 267.3
+CX, CY = 319.1, 248.7
 
 
 def _head_rot(tilt_rad):
@@ -36,7 +38,7 @@ def _cam_pose(head_tilt_deg):
 def pixel_to_floor(u, v, head_tilt_deg):
     """Pixel (u,v) -> floor (x,y) in base_link, or None."""
     cam, fwd, right, down = _cam_pose(head_tilt_deg)
-    xo, yo = (u - CX) / FX, (v - CY) / FX
+    xo, yo = (u - CX) / FX, (v - CY) / FY
     d = tuple(fwd[i] + xo * right[i] + yo * down[i] for i in range(3))
     if d[2] >= -1e-6:
         return None
@@ -54,4 +56,17 @@ def floor_to_pixel(x, y, head_tilt_deg):
         return None
     b = sum(D[i] * right[i] for i in range(3))
     c = sum(D[i] * down[i] for i in range(3))
-    return (CX + (b / a) * FX, CY + (c / a) * FX)
+    return (CX + (b / a) * FX, CY + (c / a) * FY)
+
+
+def pixel_to_height(u, v, head_tilt_deg, x):
+    """Height (base_link z) where pixel (u,v)'s ray crosses the vertical line
+    at forward distance ``x``, or None. Reads the rim height of a box whose
+    floor-contact edge has already been localized to ``x``."""
+    cam, fwd, right, down = _cam_pose(head_tilt_deg)
+    xo, yo = (u - CX) / FX, (v - CY) / FY
+    d = tuple(fwd[i] + xo * right[i] + yo * down[i] for i in range(3))
+    if abs(d[0]) < 1e-6:
+        return None
+    t = (x - cam[0]) / d[0]
+    return cam[2] + t * d[2] if t > 0 else None

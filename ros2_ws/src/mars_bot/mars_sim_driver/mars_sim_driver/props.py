@@ -57,10 +57,14 @@ class Prop:
     mesh_scale: float = 1.0  # 0.01 for a centimetre-unit scan
     texture: str | None = None  # defaults to "<mesh stem>_basecolor.png"
     # How the prop collides: a primitive ("box"/"sphere"/"cylinder", sized by
-    # `size`), "hull" (the visual mesh's own convex hull), or "pieces" (the
-    # convex decomposition sitting next to the mesh as <stem>_collision_*.obj).
+    # `size`), "open_box" (a floor and four walls of thickness `wall` inside
+    # the `size` half-extents, hollow above -- the one shape a mesh cannot
+    # give, since MuJoCo hulls every mesh collider solid), "hull" (the visual
+    # mesh's own convex hull), or "pieces" (the convex decomposition sitting
+    # next to the mesh as <stem>_collision_*.obj).
     collision: str = "box"
     size: tuple[float, ...] = (0.02, 0.02, 0.02)
+    wall: float = 0.012
 
     # -- contact model --
     density: float = 700.0
@@ -105,6 +109,8 @@ class Prop:
             self.title = self.name.replace("_", " ").capitalize()
         if self.drop_z is None:
             self.drop_z = self.rest_z
+        if self.collision == "open_box" and len(self.size) != 3:
+            raise ValueError(f"{self.name}: an open_box needs three half-extents, got {self.size}")
 
     # -- resolved asset paths --
 
@@ -148,10 +154,29 @@ class Prop:
 
     def _primitive_geom(self, name: str, group: int, physical: bool) -> str:
         shape = self.collision
+        if shape == "open_box":
+            return self._open_box_geoms(name, group, physical)
         if shape not in ("box", "sphere", "cylinder"):
             shape = self._PRIMITIVE_FOR_SIZE.get(len(self.size), "box")
         size = " ".join(f"{s:g}" for s in self.size)
         return self._geom(name, f'type="{shape}" size="{size}"', group, physical)
+
+    def _open_box_geoms(self, name: str, group: int, physical: bool) -> str:
+        hx, hy, hz = self.size
+        w = min(self.wall, hx, hy, hz)
+        slabs = {
+            "floor": ((hx, hy, w / 2), (0, 0, -hz + w / 2)),
+            "xneg": ((w / 2, hy, hz), (-hx + w / 2, 0, 0)),
+            "xpos": ((w / 2, hy, hz), (hx - w / 2, 0, 0)),
+            "yneg": ((hx - w, w / 2, hz), (0, -hy + w / 2, 0)),
+            "ypos": ((hx - w, w / 2, hz), (0, hy - w / 2, 0)),
+        }
+        out = ""
+        for part, (half, pos) in slabs.items():
+            size = " ".join(f"{s:g}" for s in half)
+            at = " ".join(f"{c:g}" for c in pos)
+            out += self._geom(f"{name}_{part}", f'type="box" size="{size}" pos="{at}"', group, physical)
+        return out
 
     def _geom(self, name: str, shape: str, group: int, physical: bool) -> str:
         """One geom. `physical` false makes it a pure visual surface: no
@@ -199,10 +224,17 @@ class Prop:
             # visible and collidable, all from one geom.
             geoms = self._primitive_geom(f"{self.name}_geom", visual_group, physical=True)
         else:
-            material = f' material="mat_{self.name}"' if self.texture_path is not None else self._fill(visual_group)
+            # _fill already carries group=; a textured prop swaps rgba for a
+            # material and has to bring its own, or an untextured mesh emits
+            # group= twice and MuJoCo rejects the whole model.
+            material = (
+                f' material="mat_{self.name}" group="{visual_group}"'
+                if self.texture_path is not None
+                else self._fill(visual_group)
+            )
             geoms = (
                 f'\n      <geom name="{self.name}_visual" mesh="{self.name}" type="mesh"{material}'
-                f' contype="0" conaffinity="0" density="0" group="{visual_group}"/>'
+                f' contype="0" conaffinity="0" density="0"/>'
             )
             pieces = self.collision_pieces
             if pieces:
@@ -236,6 +268,7 @@ class Prop:
             "group": self.group,
             "collision": self.collision,
             "size": list(self.size),
+            "wall": self.wall,
             "rgba": list(self.rgba),
             "viewer": self.viewer,
         }

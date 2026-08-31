@@ -142,8 +142,10 @@ const TOP_FALLBACK_HEIGHT_M = 12;
 export type CameraView = "orbit" | "main" | "arm";
 // Track mars_sim_driver/constants.py: per-camera FOVs matching what the
 // driver renders (the head and wrist are different physical lenses), so the
-// operator's preview frames exactly what the robot consumes.
-const ROBOT_CAMERA_VFOV: Record<"main" | "arm", number> = { main: 68.5, arm: 80 };
+// operator's preview frames what the robot consumes. main is the head's real
+// ~84 deg vertical; its 116 deg horizontal cannot be matched by a square-pixel
+// three.js camera, so the preview runs narrower sideways than the real frame.
+const ROBOT_CAMERA_VFOV: Record<"main" | "arm", number> = { main: 83.9, arm: 80 };
 // Don't shrink to fix the near-clipped gripper: the origin sits inside the
 // wrist housing, so a smaller near renders the housing interior instead.
 const ROBOT_CAMERA_NEAR = 0.03;

@@ -11,6 +11,8 @@ import math
 import re
 import time
 
+from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, base_to_odom, inside_box
+
 from innate import (
     Head,
     JointStates,
@@ -27,7 +29,7 @@ from innate import (
 )
 from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
-from innate.geometry import IMG_H, IMG_W, floor_to_pixel, pixel_to_floor
+from innate.geometry import pixel_to_floor
 
 GRIPPER_EMPTY_J6 = -0.085
 VERIFY_BACKUP_M = 0.15
@@ -45,11 +47,10 @@ CARRY_ARM = [0.0537, -0.50, 0.4157, 0.9434, -0.0077]
 # the wrist flattened and rolled clears the frame.
 NAV_ARM = [1.5708, -1.2195, 1.5723, 0.06, -0.47]
 
-# Pick parameters, tuned on hardware.
+# Pick parameters, tuned on hardware; the find/position half is APPROACH_PARAMS.
+# Grasping at the 0.40 reach edge stalls the wrist and overloads servo 2.
 PARAMS = {
-    # FIND / LOCALIZE
-    "tilt_deg": -20.0,
-    "settle_s": 1.2,
+    **APPROACH_PARAMS,
     # Objects don't teleport: a match farther than this from the last sighting
     # is a different instance (e.g. an identical twin), not the target. The
     # allowance grows with the range the memory was taken at, because
@@ -59,24 +60,6 @@ PARAMS = {
     # range, so a flat gate would reject the very object it is protecting.
     "mem_gate_m": 0.35,
     "mem_gate_frac": 0.4,
-    # POSITION. sweet_x ceiling is 0.43 (reach clamp); 0.37 grasps at ~0.32 —
-    # grasping at the 0.40 reach edge stalls the wrist and overloads servo 2.
-    "sweet_x": 0.37,
-    "box_y": 0.0,
-    "box_half_px": 40.0,
-    "accept_frac": 0.5,
-    "box_steps": 6.0,
-    "bearing_go_deg": 4.0,
-    "follow_gain_ang": 0.3,
-    "follow_gain_lin": 0.06,
-    "rot_tol_deg": 2.5,
-    "rot_kp": 1.2,
-    "rot_wz_max": 0.5,
-    "rot_wz_min": 0.15,
-    "drive_tol_m": 0.015,
-    "drive_kp": 0.3,
-    "drive_v_max": 0.10,
-    "drive_v_min": 0.04,
     # WRIST ALIGN (0 wrist_steps = blind grasp)
     "wrist_steps": 2.0,
     "wrist_stop_z": 0.05,
@@ -130,10 +113,6 @@ MEM_COAST_LIMIT = 2
 WRIST_SEARCH_ARM = [0.1473, -0.0706, -0.4449, 1.3376, -0.0491]
 
 
-def _inside_box(px, cu, cv, half):
-    return abs(px[0] - cu) <= half and abs(px[1] - cv) <= half
-
-
 class _BlobTracker:
     """CamShift color-blob tracker seeded from a Gemini box."""
 
@@ -171,39 +150,30 @@ class PickAnyObject(Skill):
     manipulation: Manipulation
     mobility: Mobility
     head: Head
-    # `| None` — best effort, every read is guarded: positioning falls back
-    # to stepwise re-detection without head frames, the wrist stage degrades
-    # to the blind grasp without wrist frames.
+    # `| None` — best effort: the approach falls back to stepwise re-detection
+    # without head frames, the wrist stage to the blind grasp without wrist ones.
     main_image: MainImage | None
     wrist_image: WristImage | None
     joint_states: JointStates | None
     odom: Odometry | None
 
     _p = PARAMS
+
+    @resource
+    def _proxy(self):
+        return gemlib.make_client()
+
     _grip_strength: float | None = None
     _holding = False  # fingers committed on an object this run
     # (odom x, odom y, range from the base at that sighting)
     _last_seen: tuple[float, float, float] | None = None
     _coasts = 0  # consecutive looks the memory gate rejected
 
-    @resource
-    def _proxy(self):
-        return gemlib.make_client()
-
-    def _base_to_odom(self, xy):
-        """base_link floor point -> odom frame, or None without odometry."""
-        o = self._odom_xyt()
-        if o is None:
-            return None
-        ox, oy, th = o
-        c, s = math.cos(th), math.sin(th)
-        return (ox + c * xy[0] - s * xy[1], oy + s * xy[0] + c * xy[1])
-
     def _sighting(self, cand):
         """Candidate pixel -> (odom x, odom y, range from the base), or None
         when it doesn't back-project or odometry is missing."""
         xy = pixel_to_floor(cand[0], cand[1], self._p["tilt_deg"])
-        wxy = self._base_to_odom(xy) if xy else None
+        wxy = base_to_odom(self.mobility.odom_xyt(self.odom), xy) if xy else None
         return (wxy[0], wxy[1], math.hypot(xy[0], xy[1])) if wxy else None
 
     def _memory_dist(self, cand):
@@ -256,14 +226,9 @@ class PickAnyObject(Skill):
     def _detect_px(self, prompt):
         """Head frame -> grasp pixel of the remembered target, or None. Also
         records Gemini's per-object grip_strength for the close."""
-        self.mobility.stop()
-        self.sleep(self._p["settle_s"])
-        img = self.main_image
-        if not img:
-            return None
-        text = gemlib.ask_image(
+        text, img = ask_head(
+            self,
             self._proxy,
-            img,
             f"Find '{prompt}' lying on the floor in this image. Match precisely — "
             "not paper/packaging when asked for clothing, and NOT anything held "
             "by the robot arm. Return ONLY a JSON list of ALL matches (every "
@@ -277,7 +242,7 @@ class PickAnyObject(Skill):
             "objects (metal, hard plastic, wood, ceramic) need 0.30-0.40 — "
             "squeezing them harder stalls the gripper servo. "
             "Empty list if not present.",
-            logger=self.logger,
+            self._p["settle_s"],
         )
         cands = vision.parse_det_cands(text)
         cand = self._choose_cand(cands) if cands else None
@@ -291,48 +256,6 @@ class PickAnyObject(Skill):
         if seen is not None:
             self._last_seen = seen
         return (u, v)
-
-    def _localize_px(self, prompt):
-        """Detect + back-project -> ((x,y)|None, pixel|None)."""
-        px = self._detect_px(prompt)
-        if px is None:
-            return None, None
-        xy = pixel_to_floor(px[0], px[1], self._p["tilt_deg"])
-        if xy:
-            self.logger.info(f"[PickAnyObject] px=({px[0]:.0f},{px[1]:.0f}) -> base_link ({xy[0]:.3f},{xy[1]:.3f})")
-        return xy, px
-
-    def _localize_retry(self, prompt):
-        """One retry: a single "not visible" is noise, not absence."""
-        xy, px = self._localize_px(prompt)
-        if px is None:
-            xy, px = self._localize_px(prompt)
-        return xy, px
-
-    def _odom_xyt(self):
-        return self.mobility.odom_xyt(self.odom)
-
-    def _rotate_by(self, angle):
-        return self.mobility.rotate_by(
-            self._odom_xyt,
-            angle,
-            kp=self._p["rot_kp"],
-            wz_max=self._p["rot_wz_max"],
-            wz_min=self._p["rot_wz_min"],
-            tolerance=math.radians(self._p["rot_tol_deg"]),
-            logger=self.logger,
-        )
-
-    def _drive(self, dist):
-        return self.mobility.drive(
-            self._odom_xyt,
-            dist,
-            kp=self._p["drive_kp"],
-            v_max=self._p["drive_v_max"],
-            v_min=self._p["drive_v_min"],
-            tolerance=self._p["drive_tol_m"],
-            logger=self.logger,
-        )
 
     def _rest_arm(self, keep_grip):
         """Best-effort teardown: carry if holding, else fold to rest. Never
@@ -348,150 +271,6 @@ class PickAnyObject(Skill):
         except Exception as e:  # noqa: BLE001 — teardown must not mask the run result
             self.logger.warning(f"[PickAnyObject] rest-arm failed: {e}")
 
-    def _search(self, prompt):
-        """Scan: straight, right 30°, left 60°. First hit wins. (+yaw=left)"""
-        for i, turn in enumerate((0.0, -math.radians(30), math.radians(60))):
-            if turn:
-                if i == 1:
-                    self.say("Scanning around for it.")
-                # Best-effort: a rotate cut short (timeout / odom loss) still
-                # changed the view, and the localize below measures from
-                # wherever the base actually ended up.
-                self._rotate_by(turn)
-            xy, _px = self._localize_px(prompt)
-            if xy is not None:
-                return xy
-        raise SkillFailed(f"Could not find '{prompt}' on the floor, even after scanning")
-
-    def _sweet_box(self):
-        """(center_px, outer_half, accept_half). Stop only inside accept."""
-        c = floor_to_pixel(self._p["sweet_x"], self._p["box_y"], self._p["tilt_deg"])
-        if c is None or not (0 <= c[0] < IMG_W and 0 <= c[1] < IMG_H):
-            raise SkillFailed("pick box off-image — check tilt_deg/sweet_x")
-        half = self._p["box_half_px"]
-        return (c[0], c[1]), half, half * self._p["accept_frac"]
-
-    def _follow_into_box(self, seed_px):
-        """Optical-flow base servo into pick box. No Gemini.
-        Returns ('in_box'|'lost'|'timeout'|'noframe', px|None)."""
-        raw = self.main_image
-        prev = vision.b64_to_gray(raw) if raw else None
-        if prev is None:
-            return "noframe", None
-        u, v = seed_px
-        grid = vision.grid_pts(u, v)
-        in_box = 0
-        (cu, cv), _half, accept = self._sweet_box()
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < FOLLOW_TIMEOUT_S:
-            # Only track NEW frames: the camera runs slower than this loop,
-            # and a stale frame re-tracked would count one observation twice.
-            # Compare by identity, not content: the provider builds one Image
-            # per ROS message, and in sim consecutive frames of a static scene
-            # are byte-identical, so `==` would deadlock waiting for a change.
-            img = self.main_image
-            if not img or img is raw:
-                self.sleep(0.03)
-                continue
-            gray = vision.b64_to_gray(img)
-            raw = img
-            if gray is None:
-                self.sleep(0.03)
-                continue
-            tracked = vision.track_point(prev, gray, grid)
-            prev = gray
-            if tracked is None:
-                self.mobility.stop()
-                return "lost", None
-            u, v = tracked
-            grid = vision.grid_pts(u, v)
-            if not (0 <= u < IMG_W and 0 <= v < IMG_H):
-                self.mobility.stop()
-                return "lost", None
-
-            if _inside_box((u, v), cu, cv, accept):
-                in_box += 1
-                self.mobility.stop()
-                if in_box >= 3:
-                    return "in_box", (u, v)
-                self.sleep(0.03)
-                continue
-            in_box = 0
-
-            # Deadband = accept (inner) box; right -> -wz, too close (low) -> -vx.
-            wz = self.mobility.servo_vel(
-                u - cu, self._p["follow_gain_ang"], self._p["rot_wz_min"], self._p["rot_wz_max"], accept
-            )
-            vx = self.mobility.servo_vel(
-                v - cv, self._p["follow_gain_lin"], self._p["drive_v_min"], self._p["drive_v_max"], accept
-            )
-            self.mobility.send_cmd_vel(vx, wz, 0.15)
-            self.sleep(0.03)
-        self.mobility.stop()
-        return "timeout", None
-
-    def _position_failed(self, prompt):
-        raise SkillFailed(f"Could not centre '{prompt}' in the pick box")
-
-    def _position_above(self, prompt, xy):
-        """Flow-follow into pick box; Gemini reseed/confirm. Stepwise if no cam.
-        Raises SkillFailed if the object cannot be centred."""
-        if not self.main_image:
-            return self._position_stepwise(prompt, xy)
-
-        seed = floor_to_pixel(xy[0], xy[1], self._p["tilt_deg"])
-        for _attempt in range(int(self._p["box_steps"])):
-            if seed is None:
-                seed = self._detect_px(prompt) or self._detect_px(prompt)
-                if seed is None:
-                    self._position_failed(prompt)
-            result, _pt = self._follow_into_box(seed)
-            if result == "noframe":
-                return self._position_stepwise(prompt, xy)
-            if result == "lost":
-                seed = None
-                continue
-            xy2, px2 = self._localize_retry(prompt)
-            if px2 is None:
-                self._position_failed(prompt)
-            (cu, cv), _half, accept = self._sweet_box()
-            if xy2 is not None and _inside_box(px2, cu, cv, accept):
-                return xy2
-            seed = px2 if xy2 is not None else None
-        self._position_failed(prompt)
-
-    def _position_stepwise(self, prompt, xy):
-        """No-camera fallback: turn OR drive, re-detect, repeat.
-        Raises SkillFailed if the object cannot be centred."""
-        target_bearing = math.atan2(self._p["box_y"], self._p["sweet_x"])
-        target_range = math.hypot(self._p["sweet_x"], self._p["box_y"])
-        px = floor_to_pixel(xy[0], xy[1], self._p["tilt_deg"])
-        for _step in range(int(self._p["box_steps"])):
-            if px is None:
-                xy, px = self._localize_retry(prompt)
-                if px is None:
-                    self._position_failed(prompt)
-            (cu, cv), _half, accept = self._sweet_box()
-            if xy is not None and _inside_box(px, cu, cv, accept):
-                return xy
-            if xy is None:
-                px = None
-                continue
-            bearing_err = math.atan2(xy[1], xy[0]) - target_bearing
-            if abs(bearing_err) > math.radians(self._p["bearing_go_deg"]):
-                moved = self._rotate_by(bearing_err)
-            else:
-                moved = self._drive(math.hypot(xy[0], xy[1]) - target_range)
-            if not moved:
-                # Odom loss or a stuck base: this closed-odometry stepper
-                # cannot make progress, so burning the remaining steps (a
-                # Gemini localize each) would just end in a misleading
-                # "could not centre".
-                raise SkillFailed("Base positioning failed (odometry lost or motion timed out)")
-            px = None
-        self._position_failed(prompt)
-
-    # GRASP: search pose -> seed -> servo down -> blind push -> close/twist/lift
     def _wrist_seed(self, prompt):
         """Wrist Gemini box -> (center_px, box) or (None, None)."""
         self.sleep(self._p["wrist_settle_s"])
@@ -620,7 +399,7 @@ class PickAnyObject(Skill):
 
             err_u = px[0] - p["wrist_box_u"]
             err_v = px[1] - p["wrist_box_v"]
-            inside = _inside_box(px, p["wrist_box_u"], p["wrist_box_v"], p["wrist_half_px"])
+            inside = inside_box(px, p["wrist_box_u"], p["wrist_box_v"], p["wrist_half_px"])
             centered = centered + 1 if inside else 0
             if streak < 2:
                 continue  # watch one more frame before trusting it
@@ -798,11 +577,11 @@ class PickAnyObject(Skill):
         self.check_cancelled()  # last exit before the fingers commit
         self._close_twist_lift(x, y)
 
-    def _grasp_verified(self, prompt):
+    def _grasp_verified(self, prompt, approach: FloorApproach):
         """Back up, then check floor clear + gripper not open. Gemini gets both
         cameras: the wrist view can show the object in the fingers, so a held
         object isn't mistaken for a dropped one."""
-        self._drive(-VERIFY_BACKUP_M)
+        approach.drive(-VERIFY_BACKUP_M)
         self.sleep(self._p["settle_s"])
         js = self.joint_states
         j6 = js.position[5] if js is not None and len(js.position) > 5 else None
@@ -876,14 +655,15 @@ class PickAnyObject(Skill):
             # (5-joint move: the claw keeps whatever it currently holds).
             self.manipulation.move_joints(NAV_ARM, duration=3.0)
 
+            approach = FloorApproach(self, self._p, self._detect_px)
             self.say(f"Looking for {prompt}.")
-            xy = self._search(prompt)
-            xy = self._position_above(prompt, xy)
+            xy = approach.search(prompt)
+            xy = approach.position_above(prompt, xy)
             self.say("Picking it up.")
             self._grasp_at(prompt, xy)
             # _close_twist_lift latched self._holding the moment the fingers
             # committed — only a verified miss clears it.
-            if not self._grasp_verified(prompt):
+            if not self._grasp_verified(prompt, approach):
                 self._holding = False
                 self.say("I couldn't get a grip on it.")
                 raise SkillFailed(f"Grasp missed — '{prompt}' is still on the floor (verified after backing up)")

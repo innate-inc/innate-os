@@ -3,6 +3,7 @@
 from innate_skills.change_volume import ChangeVolume
 from innate_skills.check_battery import CheckBattery
 from innate_skills.close_gripper import CloseGripper
+from innate_skills.drop_in_box import DropInBox
 from innate_skills.head_emotion import HeadEmotion
 from innate_skills.navigate_to_position import NavigateToPosition
 from innate_skills.open_gripper import OpenGripper
@@ -40,6 +41,7 @@ class DemoAgent(Agent):
             HeadEmotion,
             ChangeVolume,
             CheckBattery,
+            DropInBox,
         ]
 
     def get_inputs(self) -> list[InputRef]:
