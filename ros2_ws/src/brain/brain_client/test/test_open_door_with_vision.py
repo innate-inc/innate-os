@@ -599,7 +599,7 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         lambda retreat, left: order.append(("retreat_and_push_left", retreat, left)),
     )
 
-    result = skill.execute(pull_distance_m=0.03)
+    result = skill.execute(pull_distance_m=0.40)
 
     assert order == [
         "localize",
@@ -608,10 +608,10 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         ("grasp", 1, (0.35, 0.0, 0.2)),
         ("retry", 2),
         ("grasp", 2, (0.36, 0.0, 0.2)),
-        ("retreat_and_push_left", 0.03, 0.03),
+        ("retreat_and_push_left", 0.40, 0.40),
     ]
-    assert "pulled back 0.03 m arm-first toward x=0.25 m with a straight backward base remainder" in result
-    assert "pulled left up to 0.03 m while gripping" in result
+    assert "pulled back 0.40 m arm-first toward x=0.25 m with a straight backward base remainder" in result
+    assert "pulled left up to 0.40 m while gripping" in result
     assert "opened halfway" in result
     assert "backed up another 0.10 m" in result
     assert skill.mobility.stops == 1

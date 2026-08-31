@@ -695,8 +695,8 @@ class OpenDoorWithVision(Skill):
         """Locate, grasp, and pull a frontal protruding handle."""
         if self._proxy is None:
             self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
-        if not 0.01 <= pull_distance_m <= 0.30:
-            self.fail("pull_distance_m must be between 0.01 and 0.30")
+        if not 0.01 <= pull_distance_m <= 0.40:
+            self.fail("pull_distance_m must be between 0.01 and 0.40")
         if not handle_description.strip():
             self.fail("handle_description must not be empty")
         if not any(
