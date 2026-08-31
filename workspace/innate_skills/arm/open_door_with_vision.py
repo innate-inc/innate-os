@@ -724,7 +724,7 @@ class OpenDoorWithVision(Skill):
         handle_description: str = "the protruding handle directly ahead",
         handle_color: str = "yellow",
         handle_height_m: float = 0.10,
-        pull_distance_m: float = 0.30,
+        pull_distance_m: float = 0.40,
     ) -> SkillReturn:
         """Locate, grasp, and pull a frontal protruding handle."""
         if self._proxy is None:

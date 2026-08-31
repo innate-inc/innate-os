@@ -800,4 +800,4 @@ def test_post_grasp_left_pull_stops_at_ik_reach_boundary(monkeypatch):
 
 
 def test_door_defaults_to_thirty_centimetres_back_and_left(monkeypatch):
-    assert OpenDoorWithVision.execute.__defaults__[-1] == pytest.approx(0.30)
+    assert OpenDoorWithVision.execute.__defaults__[-1] == pytest.approx(0.40)
