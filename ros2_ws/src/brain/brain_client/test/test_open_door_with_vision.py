@@ -161,9 +161,15 @@ def test_base_accepts_sub_motion_threshold_range_error(monkeypatch):
     monkeypatch.setattr(skill, "_rotate", lambda _radians: None)
     monkeypatch.setattr(skill, "_drive", lambda _metres: None)
 
-    target = skill._position_base((0.45006072129054975, 0.012904473272164273, 0.21725490235201467))
+    target = skill._position_base((0.39006072129054975, 0.012904473272164273, 0.21725490235201467))
 
-    assert target == pytest.approx((0.45006072129054975, 0.012904473272164273, 0.21725490235201467))
+    assert target == pytest.approx((0.39006072129054975, 0.012904473272164273, 0.21725490235201467))
+
+
+def test_wrist_depth_is_bounded_by_head_range_and_grasp_reserve():
+    target = module._fuse_handle_target((0.38, 0.01, 0.22), (0.48, 0.02, 0.27))
+
+    assert target == pytest.approx((0.39, 0.02, 0.27))
 
 
 class _Mobility:
@@ -222,7 +228,7 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
     monkeypatch.setattr(
         skill,
         "_wrist_align",
-        lambda target: order.append("align") or ((0.34, target[1], target[2]), (0.421, target[1], target[2])),
+        lambda target: order.append("align") or ((0.35, target[1], target[2]), (0.38, target[1], target[2])),
     )
     monkeypatch.setattr(
         skill,
@@ -236,7 +242,7 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         "localize",
         "position",
         "align",
-        ("grasp", (0.34, 0.0, 0.2), 0.421),
+        ("grasp", (0.35, 0.0, 0.2), 0.38),
     ]
     assert "0.03 m" in result
     assert skill.skills.calls == [

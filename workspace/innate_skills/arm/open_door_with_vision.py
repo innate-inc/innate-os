@@ -36,11 +36,13 @@ _MIN_RANGE_M = 0.20
 _MAX_RANGE_M = 1.50
 _MIN_HANDLE_Z_M = 0.10
 _MAX_HANDLE_Z_M = 0.30
-_APPROACH_RANGE_M = 0.44
-_BASE_HANDLE_X_BOUNDS_M = (0.40, 0.46)
+_APPROACH_RANGE_M = 0.37
+_BASE_HANDLE_X_BOUNDS_M = (0.35, 0.395)
 _WRIST_STAGING_X_M = 0.32
-_FINGERTIP_OFFSET_M = 0.05
 _VISUAL_CLEARANCE_M = 0.03
+_WRIST_DEPTH_CORRECTION_M = 0.015
+_MAX_GRASP_HANDLE_X_M = 0.39
+_MAX_EE_X_M = 0.40
 _APPROACH_PAST_HANDLE_M = 0.01
 _WRIST_MAX_STEP_M = 0.025
 _WRIST_STEPS = 5
@@ -70,6 +72,15 @@ _MAIN_CX_PX = 317.75570636221465
 _MAIN_CY_PX = 228.0517433641685
 _MAIN_CAMERA_ORIGIN = (0.002519, 0.0295, 0.258545)
 _METRIC_SAMPLES = 3
+
+
+def _fuse_handle_target(head_target, wrist_target):
+    """Use wrist Y/Z while bounding its uncalibrated monocular depth."""
+    wrist_x = max(
+        head_target[0] - _WRIST_DEPTH_CORRECTION_M,
+        min(head_target[0] + _WRIST_DEPTH_CORRECTION_M, wrist_target[0]),
+    )
+    return min(_MAX_GRASP_HANDLE_X_M, wrist_x), wrist_target[1], wrist_target[2]
 
 
 class OpenDoorWithVision(Skill):
@@ -268,7 +279,7 @@ class OpenDoorWithVision(Skill):
                 rpy_in_ee=_WRIST_CAMERA_RPY_IN_EE,
             )
             try:
-                observed, residual, top_range, bottom_range = vertical_handle_from_camera_box(
+                wrist_observed, residual, top_range, bottom_range = vertical_handle_from_camera_box(
                     box,
                     self._handle_height_m,
                     fx=_WRIST_FX_PX,
@@ -280,11 +291,8 @@ class OpenDoorWithVision(Skill):
                 )
             except ValueError as error:
                 self.fail(str(error))
-            desired = (
-                observed[0] - _FINGERTIP_OFFSET_M - _VISUAL_CLEARANCE_M,
-                observed[1],
-                observed[2],
-            )
+            observed = _fuse_handle_target(target, wrist_observed)
+            desired = (observed[0] - _VISUAL_CLEARANCE_M, observed[1], observed[2])
             error = tuple(desired[index] - measured.position[index] for index in range(3))
             self.debug_event(
                 "wrist_alignment",
@@ -292,7 +300,9 @@ class OpenDoorWithVision(Skill):
                 box=list(box),
                 approximate_optical_range_m=approximate_range,
                 camera_origin=list(camera_origin),
-                observed_handle_base=list(observed),
+                wrist_handle_base_raw=list(wrist_observed),
+                fused_handle_base=list(observed),
+                head_handle_base=list(target),
                 endpoint_residual_m=residual,
                 endpoint_ray_ranges_m=[top_range, bottom_range],
                 measured_ee=list(measured.position),
@@ -332,9 +342,12 @@ class OpenDoorWithVision(Skill):
             self.sleep(0.04)
         baseline = tuple(statistics.median(sample[j] for sample in baseline_samples) for j in range(5))
         x, y, z = pregrasp
-        # x is the EE link, while the fingertips extend ahead of it. Move the
-        # fingers just beyond the estimated handle plane, never the wrist.
-        final_x = max(x, min(0.40, handle_x - _FINGERTIP_OFFSET_M + _APPROACH_PAST_HANDLE_M))
+        # ee_link is already at the fingertip plane: the finger joint's 44 mm
+        # offset plus its 47.7 mm pad matches ee_link's 91.838 mm URDF offset.
+        final_x = handle_x + _APPROACH_PAST_HANDLE_M
+        if final_x > _MAX_EE_X_M + 1e-6:
+            self.fail("Refined handle depth is beyond the arm's verified grasp reach")
+        final_x = max(x, final_x)
         while x + 1e-6 < final_x:
             x = min(final_x, x + 0.005)
             self.manipulation.move_to(x, y, z, duration=0.35, tolerance_xy=None, tolerance_z=None)
