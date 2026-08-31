@@ -98,6 +98,10 @@ workspace/.training_pending/
 # Per-machine challenge state, written at runtime.
 workspace/challenges.json
 
+# Gemini usage telemetry, appended at runtime by the brain transport
+# (sim/bench/spend.py reads it; absent means no calls yet).
+workspace/gemini_usage.jsonl
+
 # Per-skill persistent key-value stores (Skill.storage, skills/types.py).
 workspace/skill_storage/
 
@@ -137,6 +141,16 @@ sim/viewer/public/
 sim/viewer/assets/
 sim/.sim-assets.tmp*
 
+# generated world caches, per-bundle (hash-keyed, rebuilt on demand)
+.model_cache/
+# episode camera frames and per-worker progress: evidence kept locally, too heavy for the repo
+sim/bench/results/frames/
+sim/bench/results/progress/
+workspace/run_frames/
+__pycache__/
+.pytest_cache/
+sim/bench/results/claude_probe/bridge/
 # boot sounds: WAV assets fetched by post_update.sh from GCS (too heavy for git)
 config/sounds/*.wav
 config/sounds/motor_voices/*.wav
+

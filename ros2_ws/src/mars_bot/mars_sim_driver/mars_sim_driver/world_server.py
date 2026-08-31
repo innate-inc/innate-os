@@ -235,7 +235,20 @@ class WorldServer:
         # viewer builds its models and buttons from the props; the challenge
         # panel gets titles and briefs here and progress from the stream.
         with contextlib.suppress(Exception):  # noqa: BLE001 -- client gone before the first frame
-            ws.send(json.dumps({"props": self.sim.prop_manifest(), "challenges": self.challenges.roster()}))
+            # "rooms" carries primitive-authored world geometry (statics.py).
+            # The apartment is a mesh the viewer loads from the asset bundle,
+            # so the roster never had to describe the world; an authored room
+            # ships no mesh, and without this the 3D view is an empty white box
+            # while the sim is running the map perfectly well.
+            ws.send(
+                json.dumps(
+                    {
+                        "props": self.sim.prop_manifest(),
+                        "challenges": self.challenges.roster(),
+                        "rooms": self.sim.room_manifest(),
+                    }
+                )
+            )
         last_seq = -1
         try:
             while True:
@@ -452,7 +465,14 @@ def main() -> None:
         print("[world-server] `websockets` not installed -- observer state stream disabled", flush=True)
     else:
         for bind in binds:
-            state_server = ws_serve(server.serve_state, bind, args.state_port)
+            # ping_interval=None: the physics thread can hold this process for
+            # longer than the 20 s keepalive default while it steps and renders,
+            # and the server then closes a perfectly healthy observer with
+            # "keepalive ping timeout". Three live benchmark episodes died at
+            # ~42 s that way (20 s ping + 20 s timeout) and were scored as agent
+            # failures. This is a localhost stream between two processes that
+            # already have a heartbeat in the state messages themselves.
+            state_server = ws_serve(server.serve_state, bind, args.state_port, ping_interval=None)
             threading.Thread(target=state_server.serve_forever, daemon=True).start()
         server.state_port = args.state_port
         print(f"[world-server] observer state stream on port {args.state_port} ({', '.join(binds)})", flush=True)

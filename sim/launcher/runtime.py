@@ -2366,8 +2366,53 @@ def _world_server_bind_addresses() -> str:
     )
     parts = gateway.split(".")
     if len(parts) == 4 and all(p.isdigit() and int(p) <= 255 for p in parts):
-        return f"127.0.0.1,{gateway}"
+        # ...but only if this machine can actually assign it. Under Docker
+        # Desktop's WSL2 integration the engine and every container live in the
+        # `docker-desktop` distro while the launcher runs in another one, so
+        # `docker network inspect` truthfully reports a gateway that belongs to
+        # a different network namespace. Binding it fails EADDRNOTAVAIL, and
+        # because the bind happens after the GL self-test in the same
+        # subprocess, the backend ladder blames rendering and tells you to
+        # install libraries you already have.
+        if _assignable_here(gateway):
+            return f"127.0.0.1,{gateway}"
+        local = _own_interface_address()
+        if local:
+            # The address containers can actually reach this distro on. Under
+            # Docker Desktop that is a host-only virtual switch (172.x, not
+            # LAN-routable) -- the same safety property the gateway bind
+            # relied on, so nothing is exposed beyond the host.
+            return f"127.0.0.1,{local}"
     return ""
+
+
+def _assignable_here(addr: str) -> bool:
+    """Whether this machine can bind `addr` at all. Asks the kernel rather than
+    inferring from platform or interface names."""
+    import socket as _socket
+
+    try:
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+            s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+            s.bind((addr, 0))
+        return True
+    except OSError:
+        return False
+
+
+def _own_interface_address() -> str:
+    """This host's primary non-loopback IPv4, or "". No traffic is sent: a
+    connected UDP socket only asks the routing table which source address
+    would be used."""
+    import socket as _socket
+
+    try:
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))  # TEST-NET-1: reserved, never routed
+            addr = s.getsockname()[0]
+        return addr if addr and not addr.startswith("127.") else ""
+    except OSError:
+        return ""
 
 
 def world_server_running() -> bool:
@@ -2571,7 +2616,12 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
         "from mars_sim_driver.world_server import main; main()"
     )
     env = os.environ.copy()
-    env["VIRTUAL_MARS_ASSETS"] = str(sim_repo / "assets")
+    # An explicit VIRTUAL_MARS_ASSETS wins. The default is the apartment
+    # bundle, and hard-coding it made the world server ignore an asset bundle
+    # chosen by the caller -- which is how you point the live stack at a
+    # different world (sim/bundles/<map>) without editing the launcher. The
+    # benchmark needs exactly that: same stack, same brain, a different room.
+    env["VIRTUAL_MARS_ASSETS"] = os.environ.get("VIRTUAL_MARS_ASSETS", "").strip() or str(sim_repo / "assets")
     if mujoco_gl:
         env["MUJOCO_GL"] = mujoco_gl
     with WORLD_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:

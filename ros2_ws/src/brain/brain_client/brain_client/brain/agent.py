@@ -24,6 +24,7 @@ import base64
 import contextlib
 import json
 import math
+import os
 import time
 import uuid
 from datetime import datetime
@@ -47,6 +48,7 @@ from brain_client.brain.utils import (
     parse_view_point,
     resolve_timezone,
 )
+from brain_client.perception import pose as pose_math
 from brain_client.perception.scan_health import ScanHealthReporter
 from brain_client.transport.chat import Sender
 
@@ -76,6 +78,23 @@ _MAX_EVENT_IMAGES = 4  # newest event images sent per turn; older ones arrive as
 _MAX_RERUNS = 2  # nonstop user speech cannot starve the loop
 _EVENT_TURN_GAP = 1.0  # floor between event-driven turns (feedback chatter); user speech skips it
 _DROP_EVENTS_AFTER = 3  # failed turns before the peeked events are dropped (the batch may be the poison)
+
+
+# How long an idle brain sleeps before asking the model again. `_pause` wakes on
+# any event, so this is a ceiling, not a latency -- see sim/bench/FINDINGS.md
+# (patch_idle_block).
+#
+# TWENTY SECONDS, NOT AN HOUR, and that is not a tuning preference. The "is it
+# idle?" test is "did the last turn call only wait, with nothing running" --
+# which is exactly the state of a robot that has got STUCK mid-task, not just
+# one with nothing to do. Observed live: the brain gave up on a shelf pick,
+# expressed head_emotion(sad), called wait, and went silent for the remaining
+# 167s of the episode. The shipped brain keeps turning every ~4s and has a
+# chance to re-look and recover; an hour-long ceiling removes that recovery
+# path entirely, which is a change to the agent under test rather than a
+# saving around it. At 20s an idle robot still costs ~5x less than the stock
+# poll while keeping the behaviour being measured.
+_IDLE_BLOCK_S = 20.0
 
 
 class BrainAgent:
@@ -147,6 +166,7 @@ class BrainAgent:
         self._runtime = LoopThread("brain-agent")
         self._new_event = asyncio.Event()  # something was queued (loop thread; set via runtime.post)
         self._user_spoke = asyncio.Event()  # like _new_event, but only user speech sets it
+        self._turn_calls: list[str] = []  # tool names used by the turn in flight
 
         # Set by the composition root: gates only the HEAVY traces (request
         # bodies, frames) — hundreds of KB per turn, otherwise serialized and
@@ -233,6 +253,7 @@ class BrainAgent:
             while True:
                 await self._await_camera()
                 self._user_spoke.clear()
+                self._turn_calls = []  # what this turn actually did; see below
                 turn = asyncio.ensure_future(self._turn(context))
                 spoke = asyncio.ensure_future(self._user_spoke.wait())
                 await asyncio.wait((turn, spoke), return_when=asyncio.FIRST_COMPLETED)
@@ -244,7 +265,15 @@ class BrainAgent:
                 await turn
                 reruns = 0
                 if not self._events:
-                    await self._pause(self._interval())
+                    # A turn that did nothing but `wait`, with an empty queue
+                    # and nothing running, has no reason to be repeated on a
+                    # timer: the next turn would send the same prompt and get
+                    # the same answer, and pay for it. Sleep against a long
+                    # ceiling instead; any event still wakes this immediately,
+                    # through the same `_pause` it always used.
+                    idle = bool(self._turn_calls) and all(n == WAIT for n in self._turn_calls)
+                    quiet = idle and not self._state.primitive_running
+                    await self._pause(_IDLE_BLOCK_S if quiet else self._interval())
                 else:
                     await self._pause(_EVENT_TURN_GAP, user_only=True)
         except Exception as error:
@@ -509,6 +538,9 @@ class BrainAgent:
         would orphan the model's function calls in history.
         """
         self._logger.info(f"[Brain] Tool call: {call.name}({call.args})")
+        # Recorded so the loop can tell a turn that acted from one that only
+        # waited. Appended before dispatch so a call that raises still counts.
+        self._turn_calls.append(call.name)
         try:
             return self._dispatch(call)
         except Exception as error:
@@ -579,9 +611,11 @@ class BrainAgent:
         if floor is None:
             return "rejected — that point is at or above the horizon; point at the floor"
         inputs = self._adjust_nav_goal(_NAV_TO_POSITION, grounding.approach_goal(*floor))
+        inputs = self._maybe_map_frame(inputs)
         self._logger.info(
             f"[Brain] go_to_point_in_view ({v_norm:.0f},{u_norm:.0f}) -> floor ({floor[0]:.2f}, {floor[1]:.2f})m, "
             f"goal ({inputs['x']:.2f}, {inputs['y']:.2f}, {inputs['theta_degrees']:.0f}°) "
+            f"{'local' if inputs.get('local_frame') else 'MAP'} frame "
             f"pitch={self._pitch_at_capture:.0f}°"
         )
         self._start_skill(_NAV_TO_POSITION, inputs)
@@ -589,6 +623,33 @@ class BrainAgent:
             f"driving to the floor point {math.hypot(*floor):.1f}m away (stopping ~{grounding.STANDOFF_M}m short) "
             "— you will get an event when it finishes"
         )
+
+    def _maybe_map_frame(self, inputs: dict) -> dict:
+        """Under BENCH_MAP_FRAME_GOALS, plan a grounded goal against the map.
+
+        A local-frame goal goes through the mapfree behaviour tree and its
+        rolling costmap, which has no static layer -- so the map the robot is
+        localised against is not consulted at all. Converting here hands the
+        same point to the map-frame planner instead. Off by default; see
+        sim/bench/FINDINGS.md (patch_map_frame_goals) for why both arms exist.
+
+        Refuses when there is no map frame to convert into. A goal invented
+        from a pose that does not exist is worse than a keyhole plan.
+        """
+        # Explicit truthy set, NOT "anything that is not one of four falsey
+        # spellings". That blacklist enabled the experiment for
+        # BENCH_MAP_FRAME_GOALS=off, =no, =none and =FALSE -- so someone
+        # disabling it in the most natural way silently got the experimental
+        # arm and would have reported it as the control.
+        if os.environ.get("BENCH_MAP_FRAME_GOALS", "").strip().lower() not in ("1", "true", "yes", "on"):
+            return inputs
+        if self._pose.is_mapfree:
+            return inputs
+        map_pose = self._pose.map_pose_xyt()
+        if map_pose is None:
+            self._logger.warn("[Brain] BENCH_MAP_FRAME_GOALS set but no map pose; keeping the local goal")
+            return inputs
+        return pose_math.local_to_absolute_nav_command(inputs, map_pose)
 
     def _start_skill(self, skill_id: str, inputs: dict) -> None:
         self._gaze.pause()

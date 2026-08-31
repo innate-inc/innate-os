@@ -12,6 +12,7 @@ service surface, and spins. The agent loop itself lives in
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections import deque
@@ -180,7 +181,19 @@ class BrainClientNode(Node):
         # localized (brain active or not); skills recall over it through the
         # /brain/search_memory action — the agent itself knows nothing of it.
         self.memory_store = MemoryStore(get_innate_os_root() / "data")
-        rest = pick_rest(self._proxy)
+        # No backend reachable (or none wanted): withhold the REST client and
+        # the whole memory tier stays unbuilt -- no search skill that can only
+        # fail, no background uploads to an endpoint that is not there. The
+        # turn transport is chosen separately and is unaffected.
+        # See sim/bench/FINDINGS.md (patch_memory_off).
+        # Explicit truthy set: a blacklist of falsey spellings treated
+        # BRAIN_DISABLE_MEMORY=off as "disable memory", which is the opposite
+        # of what anyone writing it means.
+        if os.environ.get("BRAIN_DISABLE_MEMORY", "").strip().lower() in ("1", "true", "yes", "on"):
+            rest = None
+            self.get_logger().info("🧠 Spatial memory disabled (BRAIN_DISABLE_MEMORY)")
+        else:
+            rest = pick_rest(self._proxy)
         self.memory_search = (
             MemorySearch(self.memory_store, rest, model=cfg.gemini_model, logger=self.get_logger())
             if rest is not None

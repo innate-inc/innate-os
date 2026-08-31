@@ -116,6 +116,7 @@ _PALETTE = [
 
 if TYPE_CHECKING:
     from .props import PropRegistry
+    from .statics import RoomRegistry
 
 
 def repo_root() -> Path:
@@ -213,14 +214,29 @@ def build_world_xml(
     visual_rooms: dict[str, Path] | None = None,
     texture_max: int | None = None,
     props: "PropRegistry | None" = None,
+    statics: "RoomRegistry | None" = None,
 ) -> str:
     """The apartment environment MJCF (floor plane + decomposed room hulls,
     optionally the textured visual rooms in their own geom group, plus every
     droppable prop parked off-map -- see props.py).
-    texture_max caps the visual textures' resolution (see capped_texture_path)."""
+    texture_max caps the visual textures' resolution (see capped_texture_path).
+    statics adds primitive-authored rooms alongside the meshes -- see statics.py."""
     prop_assets = props.assets_xml(VISUAL_GROUP) if props else ""
     prop_bodies = props.bodies_xml(VISUAL_GROUP, COLLISION_GROUP) if props else ""
     collision_group = COLLISION_GROUP if visual_rooms else 0
+    # Authored rooms are already z-up, so they sit in the worldbody as their own
+    # fixed bodies rather than under "apartment" and its Y-up correction quat.
+    static_bodies = statics.bodies_xml(VISUAL_GROUP, collision_group) if statics else ""
+
+    # A static room brings its own floor at z=0, which the ground plane would
+    # both z-fight with and duplicate. Drop the plane out of the way; it stays
+    # as the catch-all for anything that leaves the map.
+    #
+    # The floor MUST stay at exactly z=0. add_planar_base gives the robot x, y
+    # and yaw only -- no z -- so a floor even 2 mm proud is a penetration the
+    # base can never rise out of, and the contact pins it: commanded to spin at
+    # 1 rad/s it managed 2 degrees in 1.5 s.
+    ground_z = -0.5 if statics else 0.0
 
     mesh_lines = []
     geom_lines = []
@@ -287,12 +303,12 @@ def build_world_xml(
          avoid dark cones at the apartment perimeter. -->
     <light type="directional" pos="4 -3 6" dir="-4 3 -6" diffuse="1 1 1"/>
     <light type="directional" castshadow="false" pos="-4 3 3" dir="4 -3 -3" diffuse="0.67 0.8 1"/>
-    <geom name="ground" type="plane" size="20 20 0.1" friction="0.9 0.01 0.001" margin="0.007"
+    <geom name="ground" type="plane" size="20 20 0.1" pos="0 0 {ground_z}" friction="0.9 0.01 0.001" margin="0.007"
           solref="0.01 1" rgba="0.35 0.35 0.35 1" group="{collision_group}"/>
     <body name="apartment" quat="0.7071068 0.7071068 0 0">
 {chr(10).join(geom_lines)}
 {chr(10).join(visual_geom_lines)}
-    </body>{prop_bodies}{robot_body}
+    </body>{static_bodies}{prop_bodies}{robot_body}
   </worldbody>
 </mujoco>
 """
