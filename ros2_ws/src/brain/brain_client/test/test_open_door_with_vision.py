@@ -212,6 +212,10 @@ def test_wrist_decision_retries_malformed_content_and_logs_raw_responses(tmp_pat
     assert len(requests) == 2
     assert requests[0][0] == [previous, current]
     assert "Image 2 is the current frame after action FORWARD" in requests[0][1]
+    assert "UP and DOWN describe the physical GRIPPER motion in the robot base frame" in requests[0][1]
+    assert "choose UP only when the gripper/end effector itself should rise to a higher Z" in requests[0][1]
+    assert "raising the gripper normally makes the stationary handle appear LOWER" in requests[0][1]
+    assert "Never choose UP or DOWN based on the direction you want the handle to move" in requests[0][1]
     assert requests[0][2]["reasoning_effort"] == "minimal"
     assert requests[0][2]["model"] == "gemini-3.6-flash"
     assert (skill.debug_directory / "00_wrist_action_3.jpg").read_bytes() == b"current"
