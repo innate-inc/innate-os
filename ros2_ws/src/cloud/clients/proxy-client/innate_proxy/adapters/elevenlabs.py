@@ -71,7 +71,12 @@ class ProxyElevenLabsClient:
             audio_format: str = "pcm_24000",
             language_code: str | None = None,
             commit_strategy: str = "manual",
+            vad_threshold: float | None = None,
+            vad_silence_threshold_secs: float | None = None,
+            min_speech_duration_ms: int | None = None,
+            min_silence_duration_ms: int | None = None,
             keyterms: list[str] | None = None,
+            no_verbatim: bool | None = None,
             filter_background_audio: bool | None = None,
             on_message: Callable | None = None,
             on_open: Callable | None = None,
@@ -80,9 +85,9 @@ class ProxyElevenLabsClient:
         ) -> SyncRealtimeConnection:
             """Return a :class:`SyncRealtimeConnection` (call ``.start()`` to connect).
 
-            Vendor-VAD commit params are gone on purpose: server endpointing
-            measured ~0.6 s slower and trims words on this mic — every caller
-            endpoints locally and commits manually.
+            The endpointing params (``vad_*``, ``min_*``) only bite under
+            ``commit_strategy="vad"``, where Scribe cuts utterances itself;
+            under ``"manual"`` the caller owns the commit and Scribe ignores them.
             """
             ws_url = self._build_ws_url(
                 {
@@ -90,7 +95,12 @@ class ProxyElevenLabsClient:
                     "audio_format": audio_format,
                     "language_code": language_code,
                     "commit_strategy": commit_strategy,
+                    "vad_threshold": vad_threshold,
+                    "vad_silence_threshold_secs": vad_silence_threshold_secs,
+                    "min_speech_duration_ms": min_speech_duration_ms,
+                    "min_silence_duration_ms": min_silence_duration_ms,
                     "keyterms": keyterms or None,
+                    "no_verbatim": no_verbatim,
                     "filter_background_audio": filter_background_audio,
                 }
             )

@@ -118,6 +118,11 @@ const VAD_ENGINE_OPTIONS = [
   { value: "energy", label: "Energy threshold" },
 ];
 
+const COMMIT_STRATEGY_OPTIONS = [
+  { value: "vad", label: "On ElevenLabs (Scribe VAD)" },
+  { value: "manual", label: "On the robot (local VAD)" },
+];
+
 /** @type {SettingsPage[]} */
 export const SETTINGS_PAGES = [
   {
@@ -347,6 +352,11 @@ export const SETTINGS_PAGES = [
           { path: ["input_manager_node", P, "stt_vad_silence_secs"], label: "Silence to end turn", default: 0.5, type: "float", unit: "s", doc: "Silence that closes an utterance (every backend)", subsection: "Speech to text" },
           { path: ["input_manager_node", P, "stt_agc_max_db"], label: "Mic gain ceiling", default: 24, type: "float", unit: "dB", doc: "Software AGC max boost toward -6 dBFS peak; 0 disables", subsection: "Speech to text" },
           { path: ["input_manager_node", P, "stt_filter_background_audio"], label: "Filter background", default: true, type: "bool", doc: "Scribe realtime: server-side gate against nearby conversations and ambient noise", subsection: "Speech to text" },
+          { path: ["input_manager_node", P, "stt_commit_strategy"], label: "Endpoint utterances", default: "vad", type: "string", options: COMMIT_STRATEGY_OPTIONS, doc: "Scribe realtime: who decides an utterance ended. On ElevenLabs (the default), the knobs below replace the local VAD ones and the voice panel loses its level meter", subsection: "Scribe realtime VAD" },
+          { path: ["input_manager_node", P, "stt_realtime_vad_threshold"], label: "Scribe VAD threshold", default: 0.4, type: "float", doc: "Speech probability; only used when ElevenLabs endpoints", subsection: "Scribe realtime VAD" },
+          { path: ["input_manager_node", P, "stt_realtime_vad_silence_secs"], label: "Scribe silence to end turn", default: 0.5, type: "float", unit: "s", doc: "0.3-3.0 s; only used when ElevenLabs endpoints", subsection: "Scribe realtime VAD" },
+          { path: ["input_manager_node", P, "stt_realtime_min_speech_ms"], label: "Scribe min speech", default: 100, type: "int", unit: "ms", doc: "Shortest run of speech that opens an utterance; only used when ElevenLabs endpoints", subsection: "Scribe realtime VAD" },
+          { path: ["input_manager_node", P, "stt_realtime_min_silence_ms"], label: "Scribe min silence", default: 100, type: "int", unit: "ms", doc: "Shortest gap that counts as silence; only used when ElevenLabs endpoints", subsection: "Scribe realtime VAD" },
         ],
       },
       {

@@ -14,11 +14,13 @@ Three backends, selected by the ``stt_backend`` setting:
 - ``elevenlabs_batch`` — ElevenLabs Scribe batch, one POST per utterance
 - ``gemini``           — Gemini generateContent, one call per utterance
 
-Scribe realtime streams over a warm WebSocket and commits utterances from the
-same local endpointing the batch backends use — Silero VAD by default, an RMS
-energy threshold as fallback (``stt_vad_engine``). Measured 2026-08 on this
-mic: vendor-side VAD lands transcripts ~0.6 s later at any silence setting
-and trims real words on noisy audio, so every backend endpoints locally.
+Scribe realtime streams over a warm WebSocket and lets Scribe's own VAD cut
+the utterances (the ``stt_realtime_*`` knobs). Its predecessor endpointed on
+the robot because vendor VAD then landed transcripts ~0.6 s late and trimmed
+words; scribe_v2_realtime does not, so the vendor owns it as of 2026-08.
+``stt_commit_strategy: "manual"`` is the rollback — the local endpointer the
+batch backends still use, Silero by default with an RMS energy threshold as
+fallback (``stt_vad_engine``).
 Batch backends ship each utterance whole (see
 ``brain_client.inputs.batch_stt``) and are the automatic fallback when the
 realtime socket will not come back. Every ElevenLabs path biases toward the
@@ -77,6 +79,17 @@ DEFAULT_STT_BACKEND = "elevenlabs"
 VAD_ENGINES = frozenset({"silero", "energy"})
 DEFAULT_VAD_ENGINE = "silero"
 
+# Who cuts the utterance on the realtime backend: "vad" is Scribe's own (the
+# stt_realtime_* knobs), "manual" the local endpointer the batch backends use.
+COMMIT_STRATEGIES = frozenset({"manual", "vad"})
+DEFAULT_COMMIT_STRATEGY = "vad"
+# Scribe's own VAD, used only under commit_strategy="vad". The vendor clamps
+# the silence window to 0.3-3.0 s.
+DEFAULT_REALTIME_VAD_THRESHOLD = 0.4
+DEFAULT_REALTIME_SILENCE_SECS = 0.5
+DEFAULT_REALTIME_MIN_SPEECH_MS = 100
+DEFAULT_REALTIME_MIN_SILENCE_MS = 100
+
 # One vad_status frame per this many mic chunks (20 ms each) — 5 Hz on the wire.
 VAD_STATUS_EVERY_CHUNKS = 10
 
@@ -115,6 +128,17 @@ ELEVENLABS_ERROR_TYPES = frozenset(
         "transcriber_error",
     }
 )
+
+
+# A commit that caught only a click, a breath, or the tail of the robot's own
+# speech transcribes as bare punctuation, which then leads the next real
+# transcript (". Can you hear me?"). Vendor VAD cuts often enough for it to be
+# routine; a transcript that is *only* punctuation carries nothing and is dropped.
+_LEADING_PUNCTUATION = re.compile(r"^[\s.,;:!?…-]+")
+
+
+def _strip_leading_punctuation(text: str) -> str:
+    return _LEADING_PUNCTUATION.sub("", text).strip()
 
 
 def _scribe_previous_text(keyterms: "list[str]") -> str:
@@ -463,8 +487,9 @@ class MicroInput(InputDevice):
     def _send_vad_status(self) -> None:
         """One vad_status frame for the webapp's voice panel.
 
-        Every backend endpoints locally now; a frame with no detector fields
-        only happens in the moment before a session finishes connecting.
+        The level meter is the local detector's, so a session that let Scribe
+        endpoint sends the counters without it — the panel reads every field
+        as optional.
         """
         client, detector = self.client, self._vad_detector
         if client is None:
@@ -474,56 +499,46 @@ class MicroInput(InputDevice):
             "backend": self._backend,
             "engine": self._vad_engine,
             "last_transcript": self._last_transcript,
+            **self._endpointing_status(client),
         }
-        status = self._endpointing_status(client)
-        if detector is None or status is None:
-            self.send_data(frame, data_type="telemetry")
-            return
         if self._agc is not None:
             frame["gain_db"] = round(self._agc.gain_db, 1)
-        self.send_data(
-            {
-                **frame,
+        if detector is not None:
+            frame |= {
                 "threshold": detector.threshold,
                 "level": round(detector.level, 4),
                 "voiced": detector.voiced,
                 "ducking": self._is_robot_talking,
-                **status,
-            },
-            data_type="telemetry",
-        )
+            }
+        self.send_data(frame, data_type="telemetry")
 
-    def _endpointing_status(self, client) -> "dict | None":
-        """Utterance counters for the panel; None until a session is connected.
+    def _endpointing_status(self, client) -> dict:
+        """Utterance counters for the panel; the open-utterance fields need a local endpointer.
 
         ``client`` is the caller's captured reference — re-reading self.client
         here would race the reconnect thread nulling it.
         """
         if self._backend in BATCH_BACKENDS:
             return client.status()
+        counters = {"utterances": self._utterance_count, "failures": self._failure_count}
         if self._endpointer is None:
-            return None
+            return counters
         return {
+            **counters,
             "utterance_open": self._endpointer.in_speech,
             "utterance_secs": round(self._endpointer.utterance_secs, 2),
-            "utterances": self._utterance_count,
-            "failures": self._failure_count,
         }
 
     def _connect_elevenlabs(self) -> str:
-        """Open a Scribe realtime session committed by the local endpointer. Returns the model id."""
+        """Open a Scribe realtime session, endpointed here or by the vendor. Returns the model id."""
         self.logger.info("🔗 Connecting to ElevenLabs Scribe via proxy...")
 
         cfg = self.proxy.config
         model = cfg.get("elevenlabs_stt_model", "scribe_v2_realtime")
-        silence_secs = float(cfg.get("stt_vad_silence_secs", 0.5))
         filter_background = bool(cfg.get("stt_filter_background_audio", True))
         keyterms = self._realtime_keyterms()
+        strategy = self._commit_strategy(cfg)
 
-        is_voiced, engine = self._make_vad(cfg)
-        # Recreated on every (re)connect: a half-open utterance must not leak
-        # across sockets.
-        self._endpointer = Endpointer(sample_rate=DEFAULT_SAMPLE_RATE, is_voiced=is_voiced, silence_secs=silence_secs)
         self._streamed_bytes = 0
         self._commit_at = 0.0
         self._sent_keyterms = keyterms
@@ -531,24 +546,65 @@ class MicroInput(InputDevice):
         # currently collapses the repeated keyterms query params to one.
         self._scribe_context = _scribe_previous_text(keyterms)
         self._scribe_first_chunk = True
+        vad_params, endpointing = self._vendor_endpointing(cfg) if strategy == "vad" else self._local_endpointing(cfg)
 
         self.logger.info(
-            f"📤 Scribe config: model={model}, commit=manual/{engine}, silence={silence_secs}s, "
+            f"📤 Scribe config: model={model}, commit={strategy}/{self._vad_engine} ({endpointing}), "
             f"keyterms={len(keyterms)}, filter_background={filter_background}"
         )
         self.client = self.proxy.elevenlabs.realtime.connect_sync(
             model_id=model,
             audio_format=ELEVENLABS_AUDIO_FORMAT,
             language_code=self._stt_language(),
-            commit_strategy="manual",
+            commit_strategy=strategy,
             keyterms=keyterms,
             filter_background_audio=filter_background,
             on_message=self._on_elevenlabs_message,
             on_open=self._on_elevenlabs_open,
             on_error=self._on_ws_error,
             on_close=self._on_ws_close,
+            no_verbatim=True,
+            **vad_params,
         )
         return model
+
+    def _commit_strategy(self, cfg: dict) -> str:
+        strategy = str(cfg.get("stt_commit_strategy") or DEFAULT_COMMIT_STRATEGY).strip().lower()
+        if strategy in COMMIT_STRATEGIES:
+            return strategy
+        self.logger.error(
+            f"❌ Unknown stt_commit_strategy {strategy!r} — using {DEFAULT_COMMIT_STRATEGY!r} "
+            f"(options: {sorted(COMMIT_STRATEGIES)})"
+        )
+        return DEFAULT_COMMIT_STRATEGY
+
+    def _local_endpointing(self, cfg: dict) -> "tuple[dict, str]":
+        """Cut utterances here and commit them: no vendor VAD params, plus a log summary."""
+        silence_secs = float(cfg.get("stt_vad_silence_secs", 0.5))
+        is_voiced, _ = self._make_vad(cfg)
+        # Recreated on every (re)connect: a half-open utterance must not leak
+        # across sockets.
+        self._endpointer = Endpointer(sample_rate=DEFAULT_SAMPLE_RATE, is_voiced=is_voiced, silence_secs=silence_secs)
+        return {}, f"silence={silence_secs}s"
+
+    def _vendor_endpointing(self, cfg: dict) -> "tuple[dict, str]":
+        """Let Scribe cut the utterances: its VAD params, plus a log summary.
+
+        No local detector is built — nothing would feed it — and every commit
+        path keys off ``_endpointer is None`` to stay off the wire: under
+        commit_strategy="vad" a commit frame is the vendor's to send, not ours.
+        """
+        self._endpointer = None
+        self._vad_detector, self._vad_engine = None, "vendor"
+        params = {
+            "vad_threshold": float(cfg.get("stt_realtime_vad_threshold", DEFAULT_REALTIME_VAD_THRESHOLD)),
+            "vad_silence_threshold_secs": float(
+                cfg.get("stt_realtime_vad_silence_secs", DEFAULT_REALTIME_SILENCE_SECS)
+            ),
+            "min_speech_duration_ms": int(cfg.get("stt_realtime_min_speech_ms", DEFAULT_REALTIME_MIN_SPEECH_MS)),
+            "min_silence_duration_ms": int(cfg.get("stt_realtime_min_silence_ms", DEFAULT_REALTIME_MIN_SILENCE_MS)),
+        }
+        return params, ", ".join(f"{k}={v}" for k, v in params.items())
 
     def _realtime_keyterms(self) -> list[str]:
         terms = self._stt_keyterms()
@@ -688,7 +744,7 @@ class MicroInput(InputDevice):
         if self._backend in BATCH_BACKENDS or self.client is None:
             return
         self._send_scribe_audio(b"\x00" * nbytes, commit=False)
-        if self._safety_commit_due() and (self._endpointer is None or not self._endpointer.in_speech):
+        if self._endpointer is not None and self._safety_commit_due() and not self._endpointer.in_speech:
             self._commit_scribe()
 
     def _start_audio_thread(self):
@@ -860,6 +916,7 @@ class MicroInput(InputDevice):
 
     def _on_transcript(self, text: str) -> None:
         """Called when transcript is ready."""
+        text = _strip_leading_punctuation(text)
         if text:
             self.logger.info(f"🎤 Transcript: {text}")
 

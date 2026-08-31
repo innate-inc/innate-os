@@ -57,6 +57,11 @@ class InputManagerNode(Node):
         self.declare_parameter("stt_keyterms", list(DEFAULT_KEYTERMS))
         self.declare_parameter("stt_vad_threshold", 0.2)
         self.declare_parameter("stt_vad_silence_secs", 0.5)
+        self.declare_parameter("stt_commit_strategy", "vad")
+        self.declare_parameter("stt_realtime_vad_threshold", 0.4)
+        self.declare_parameter("stt_realtime_vad_silence_secs", 0.5)
+        self.declare_parameter("stt_realtime_min_speech_ms", 100)
+        self.declare_parameter("stt_realtime_min_silence_ms", 100)
         self.declare_parameter("stt_energy_threshold", 0.01)
         self.declare_parameter("elevenlabs_batch_stt_model", "scribe_v2")
         self.declare_parameter("gemini_stt_model", "gemini-3.6-flash")
@@ -71,6 +76,11 @@ class InputManagerNode(Node):
             "stt_keyterms": self.get_parameter("stt_keyterms").value,
             "stt_vad_threshold": self.get_parameter("stt_vad_threshold").value,
             "stt_vad_silence_secs": self.get_parameter("stt_vad_silence_secs").value,
+            "stt_commit_strategy": self.get_parameter("stt_commit_strategy").value,
+            "stt_realtime_vad_threshold": self.get_parameter("stt_realtime_vad_threshold").value,
+            "stt_realtime_vad_silence_secs": self.get_parameter("stt_realtime_vad_silence_secs").value,
+            "stt_realtime_min_speech_ms": self.get_parameter("stt_realtime_min_speech_ms").value,
+            "stt_realtime_min_silence_ms": self.get_parameter("stt_realtime_min_silence_ms").value,
             "stt_energy_threshold": self.get_parameter("stt_energy_threshold").value,
             "elevenlabs_batch_stt_model": self.get_parameter("elevenlabs_batch_stt_model").value,
             "gemini_stt_model": self.get_parameter("gemini_stt_model").value,

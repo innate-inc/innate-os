@@ -223,9 +223,13 @@
 # backends cut utterances on the robot and send each one whole:
 # "elevenlabs_batch" (Scribe) or "gemini"; batch is also the automatic
 # fallback when the realtime socket will not come back.
-# "elevenlabs" streams over a warm WebSocket but endpoints with the same
-# local detector — measured 2026-08, vendor-side VAD is ~0.6 s slower and
-# trims words on this mic, so every backend endpoints locally.
+# "elevenlabs" streams over a warm WebSocket and lets Scribe's own VAD cut the
+# utterances, tuned by the stt_realtime_* knobs. Its predecessor endpointed on
+# the robot because vendor VAD then ran ~0.6 s slow and trimmed words;
+# scribe_v2_realtime does not. stt_commit_strategy: "manual" is the rollback to
+# the local detector. Under "vad" that detector does not run at all, so the
+# stt_vad_* knobs and the voice panel's level meter go quiet — the batch
+# backends still endpoint locally either way.
 # stt_vad_engine picks "silero" (neural, ignores fan/motor noise) or "energy"
 # (bare RMS threshold, the pre-Silero behavior and the fallback if the model
 # can't load). stt_vad_threshold / stt_vad_silence_secs tune that local
@@ -250,6 +254,11 @@
 #     stt_energy_threshold: 0.01    # energy engine: RMS (0-1) that counts as speech
 #     stt_vad_threshold: 0.2        # silero: lower = more sensitive to speech
 #     stt_vad_silence_secs: 0.5     # silence that closes an utterance (every backend)
+#     stt_commit_strategy: "vad"    # Scribe realtime: "vad" (Scribe's own) or "manual" (local endpointer)
+#     stt_realtime_vad_threshold: 0.4       # commit_strategy "vad" only: speech probability
+#     stt_realtime_vad_silence_secs: 0.5    # commit_strategy "vad" only: 0.3-3.0 s
+#     stt_realtime_min_speech_ms: 100       # commit_strategy "vad" only: shortest speech that opens
+#     stt_realtime_min_silence_ms: 100      # commit_strategy "vad" only: shortest gap that counts
 #     stt_agc_max_db: 24.0          # software mic gain ceiling; 0.0 disables the AGC (a bare 0 is an int and rejected)
 #     stt_filter_background_audio: true     # Scribe realtime server-side noise gate
 #     elevenlabs_batch_stt_model: "scribe_v2"
