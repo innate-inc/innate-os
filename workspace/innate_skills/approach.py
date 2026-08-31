@@ -324,8 +324,15 @@ class FloorApproach:
             xy2, px2 = self._localize_retry(prompt)
             if px2 is None:
                 self._position_failed(prompt)
-            if xy2 is not None:
-                xy = xy2
+            if xy2 is None:
+                # Keeping the pre-rotation xy would pin target_odo below against
+                # the POST-rotation pose, putting the world target a whole turn
+                # off — and the base would dead-reckon to it.
+                raise SkillFailed(
+                    f"Turned toward '{prompt}', but it no longer back-projects onto the "
+                    "floor ahead — it does not look like something resting on the floor"
+                )
+            xy = xy2
             seed = px2
         else:
             seed = floor_to_pixel(xy[0], xy[1], self.p["tilt_deg"])
