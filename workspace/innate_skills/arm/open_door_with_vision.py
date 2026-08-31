@@ -62,9 +62,10 @@ _VISION_MODEL = "gemini-3.6-flash"
 _VISION_REASONING_EFFORT = "minimal"
 _LEFT_PUSH_SPEED_RAD_S = 0.25
 _LEFT_PUSH_STEP_M = 0.010
-_LEFT_PUSH_PRELOAD_S = 1.0
-_LEFT_PUSH_AFTER_RELEASE_S = 5.0
+_LEFT_PUSH_DURATION_S = 5.0
 _LEFT_PUSH_KEEPALIVE_S = 0.10
+_POST_RELEASE_RETREAT_M = 0.10
+_POST_RELEASE_GRIPPER_PERCENT = 50.0
 
 
 def _parse_wrist_decision(text):
@@ -558,72 +559,64 @@ class OpenDoorWithVision(Skill):
             tick += 1
 
     def _retreat_and_push_left(self, retreat_distance_m, left_distance_m):
-        """Back away holding the handle, then release into a Cartesian left sweep."""
+        """Retreat, sweep left while gripping, half-release, then retreat again."""
         self.feedback("Backing away with the handle")
         self._drive(-retreat_distance_m)
 
         origin = self.manipulation.pose
         offsets = _left_push_offsets(left_distance_m)
-        preload_offset_m = offsets[0]
-        preload_target = (origin.x, origin.y + preload_offset_m, origin.z)
         final_target = (origin.x, origin.y + left_distance_m, origin.z)
         self.debug_event(
             "left_push_started",
             strategy="cartesian_ik_positive_y",
             origin_pose=list(origin.position),
             origin_rpy=list(origin.rpy),
-            preload_target=list(preload_target),
             final_target=list(final_target),
             requested_left_distance_m=left_distance_m,
             step_m=_LEFT_PUSH_STEP_M,
             max_speed_rad_s=_LEFT_PUSH_SPEED_RAD_S,
-            preload_s=_LEFT_PUSH_PRELOAD_S,
-            after_release_s=_LEFT_PUSH_AFTER_RELEASE_S,
+            duration_s=_LEFT_PUSH_DURATION_S,
+            gripper_state="closed",
         )
 
-        # A completed Cartesian preload establishes contact without allowing
-        # joint 1's circular sweep to retract the gripper from the door.
-        settled = self.manipulation.move_to(
-            *preload_target,
-            roll=origin.rpy[0],
-            pitch=origin.rpy[1],
-            yaw=origin.rpy[2],
-            duration=_LEFT_PUSH_PRELOAD_S,
-            tolerance_xy=None,
-            tolerance_z=None,
-        )
-        self.debug_event(
-            "left_push_preload_complete",
-            requested_pose=list(preload_target),
-            measured_pose=list(settled.position),
-        )
-
-        self.feedback("Releasing the handle and pushing the door left")
-        self.manipulation.gripper_open(duration=1.0)
-
-        # The preload consumed the first 10 mm. Stream the remaining Cartesian
-        # IK targets over five seconds. For a 10 mm total request, re-stream the
-        # preload target so contact is still maintained after opening the claw.
-        released_offsets = offsets[1:] or offsets[-1:]
-        hold_s = _LEFT_PUSH_AFTER_RELEASE_S / len(released_offsets)
-        for step, offset_m in enumerate(released_offsets, start=1):
+        # Keep the claw closed through the entire Cartesian sweep. Only an IK
+        # no-solution response marks the reachable boundary; transport, torque,
+        # or stream failures still abort through the normal ArmFailed path.
+        hold_s = _LEFT_PUSH_DURATION_S / len(offsets)
+        last_requested_offset_m = 0.0
+        for step, offset_m in enumerate(offsets, start=1):
             self.check_cancelled()
             target = (origin.x, origin.y + offset_m, origin.z)
-            self.manipulation.stream_to(
-                *target,
-                roll=origin.rpy[0],
-                pitch=origin.rpy[1],
-                yaw=origin.rpy[2],
-                max_speed=_LEFT_PUSH_SPEED_RAD_S,
-            )
+            try:
+                self.manipulation.stream_to(
+                    *target,
+                    roll=origin.rpy[0],
+                    pitch=origin.rpy[1],
+                    yaw=origin.rpy[2],
+                    max_speed=_LEFT_PUSH_SPEED_RAD_S,
+                )
+            except ArmFailed as error:
+                if not str(error).startswith("IK found no solution for streaming target"):
+                    raise
+                self.debug_event(
+                    "left_push_reach_limit",
+                    step=step,
+                    failed_target=list(target),
+                    failed_offset_m=offset_m,
+                    last_requested_offset_m=last_requested_offset_m,
+                    error=str(error),
+                )
+                break
+            last_requested_offset_m = offset_m
             self.debug_event(
                 "left_push_step",
                 step=step,
                 target_pose=list(target),
                 requested_left_offset_m=offset_m,
                 hold_s=hold_s,
+                gripper_state="closed",
             )
-            self._hold_left_push(hold_s, "released_push")
+            self._hold_left_push(hold_s, "grasped_left_pull")
         self.manipulation.stream_stop()
         final_pose = self.manipulation.pose
         self.debug_event(
@@ -631,21 +624,31 @@ class OpenDoorWithVision(Skill):
             requested_pose=list(final_target),
             measured_pose=list(final_pose.position),
             requested_left_distance_m=left_distance_m,
+            last_requested_left_distance_m=last_requested_offset_m,
             measured_left_distance_m=final_pose.y - origin.y,
         )
+
+        self.feedback("Opening the gripper halfway and backing away")
+        self.manipulation.gripper_open(percent=_POST_RELEASE_GRIPPER_PERCENT, duration=1.0)
+        self.debug_event(
+            "handle_half_released",
+            gripper_percent=_POST_RELEASE_GRIPPER_PERCENT,
+            following_retreat_m=_POST_RELEASE_RETREAT_M,
+        )
+        self._drive(-_POST_RELEASE_RETREAT_M)
 
     def execute(
         self,
         handle_description: str = "the protruding handle directly ahead",
         handle_color: str = "yellow",
         handle_height_m: float = 0.10,
-        pull_distance_m: float = 0.20,
+        pull_distance_m: float = 0.30,
     ) -> SkillReturn:
         """Locate, grasp, and pull a frontal protruding handle."""
         if self._proxy is None:
             self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
-        if not 0.01 <= pull_distance_m <= 0.20:
-            self.fail("pull_distance_m must be between 0.01 and 0.20")
+        if not 0.01 <= pull_distance_m <= 0.30:
+            self.fail("pull_distance_m must be between 0.01 and 0.30")
         if not handle_description.strip():
             self.fail("handle_description must not be empty")
         if not any(
@@ -684,7 +687,8 @@ class OpenDoorWithVision(Skill):
             self._retreat_and_push_left(pull_distance_m, pull_distance_m)
             return (
                 f"Located and grasped the handle, backed up {pull_distance_m:.2f} m, "
-                f"and requested the same {pull_distance_m:.2f} m left sweep"
+                f"pulled left up to {pull_distance_m:.2f} m while gripping, opened halfway, "
+                f"and backed up another {_POST_RELEASE_RETREAT_M:.2f} m"
             )
         except (ArmFailed, ArmUnhealthy) as error:
             self.fail(str(error))
