@@ -67,6 +67,7 @@ PARAMS = {
     "box_half_px": 50.0,
     "box_half_v_px": 25.0,
     "accept_frac": 0.6,
+    "hold_frac": 1.0,
     # Reach past the near face. 0.03 draped a sock on the rim; the reach
     # clamp trims tall rims down to drop_inset_min at worst.
     "drop_inset": 0.08,

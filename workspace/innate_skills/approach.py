@@ -54,12 +54,14 @@ APPROACH_PARAMS = {
     # calibration (the old model read ranges ~2x long); same pixel target.
     "sweet_x": 0.285,
     "box_y": 0.0,
-    # frac 1.0 collapses hold onto accept: pick's ±20 px park is the grasp
-    # capture window, tuned on hardware, and a looser hold band would let a
-    # Gemini re-read certify a park the gripper cannot reach from.
-    "box_half_px": 20.0,
-    "box_half_v_px": 20.0,
-    "accept_frac": 1.0,
+    "box_half_px": 40.0,
+    "box_half_v_px": 40.0,
+    "accept_frac": 0.5,
+    # Equal to accept_frac, so by default the two boxes coincide and a skill
+    # tests one box exactly as it did before `hold` existed. Pick keeps that:
+    # its ±20 px park is the grasp capture window, and a looser hold band
+    # would let a Gemini re-read certify a park the gripper cannot reach from.
+    "hold_frac": 0.5,
     "box_steps": 6.0,
     "bearing_go_deg": 4.0,
     "follow_gain_ang": 0.3,
@@ -218,8 +220,8 @@ class FloorApproach:
         if c is None or not (0 <= c[0] < IMG_W and 0 <= c[1] < IMG_H):
             raise SkillFailed("approach box off-image — check tilt_deg/sweet_x")
         hu, hv = self.p["box_half_px"], self.p["box_half_v_px"]
-        frac = self.p["accept_frac"]
-        return (c[0], c[1]), (hu, hv), (hu * frac, hv * frac)
+        hold, accept = self.p["hold_frac"], self.p["accept_frac"]
+        return (c[0], c[1]), (hu * hold, hv * hold), (hu * accept, hv * accept)
 
     def _follow_into_box(self, seed_px, max_forward=None):
         """Optical-flow base servo into the sweet box. No Gemini.
