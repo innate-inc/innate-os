@@ -7933,10 +7933,12 @@ select.skill-input {
   .agent-cockpit .video-stage video {
     display: block;
     height: auto;
+    /* max-height clamps the box wider than the frame's aspect; cover then zooms
+       into it rather than leaving a black band beside the feed. */
     max-height: 100%;
     border: 1px solid transparent;
     border-radius: 18px;
-    object-position: left top;
+    object-fit: cover;
   }
 
   .agent-cockpit .video-stage.video-ready video {

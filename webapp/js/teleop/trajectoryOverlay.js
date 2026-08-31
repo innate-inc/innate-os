@@ -456,13 +456,15 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
     }
     if (!polys.length) return;
 
-    // Map image pixels onto the video's object-fit: contain rectangle.
+    // Map image pixels onto the rectangle the frame actually occupies — which
+    // fit the stage paints it under decides whether it letterboxes or crops.
     const cw = stage.clientWidth;
     const ch = stage.clientHeight;
     if (!cw || !ch) return;
     // Derive DPR from the backing store so monitor moves cannot desync it.
     const dpr = canvas.width / cw;
-    const fit = Math.min(cw / vw, ch / vh);
+    const cover = video !== null && getComputedStyle(video).objectFit === "cover";
+    const fit = cover ? Math.max(cw / vw, ch / vh) : Math.min(cw / vw, ch / vh);
     const offX = (cw - vw * fit) / 2;
     const offY = (ch - vh * fit) / 2;
     ctx.setTransform(dpr * fit, 0, 0, dpr * fit, dpr * offX, dpr * offY);
