@@ -66,6 +66,8 @@ _LEFT_PUSH_DURATION_S = 5.0
 _LEFT_PUSH_KEEPALIVE_S = 0.10
 _POST_RELEASE_RETREAT_M = 0.10
 _POST_RELEASE_GRIPPER_PERCENT = 50.0
+_ARM_PULL_TARGET_X_M = 0.25
+_ARM_PULL_DURATION_S = 2.0
 
 
 def _parse_wrist_decision(text):
@@ -559,9 +561,55 @@ class OpenDoorWithVision(Skill):
             tick += 1
 
     def _retreat_and_push_left(self, retreat_distance_m, left_distance_m):
-        """Retreat, sweep left while gripping, half-release, then retreat again."""
-        self.feedback("Backing away with the handle")
-        self._drive(-retreat_distance_m)
+        """Retract arm then base, sweep left, half-release, and retreat again."""
+        pull_origin = self.manipulation.pose
+        arm_target_x = max(_ARM_PULL_TARGET_X_M, pull_origin.x - retreat_distance_m)
+        arm_requested_retraction_m = max(0.0, pull_origin.x - arm_target_x)
+        self.debug_event(
+            "arm_pull_started",
+            origin_pose=list(pull_origin.position),
+            origin_rpy=list(pull_origin.rpy),
+            target_pose=[arm_target_x, pull_origin.y, pull_origin.z],
+            requested_total_pull_m=retreat_distance_m,
+            requested_arm_retraction_m=arm_requested_retraction_m,
+            compact_target_x_m=_ARM_PULL_TARGET_X_M,
+        )
+
+        if arm_requested_retraction_m > 1e-6:
+            self.feedback("Pulling the handle back with the arm")
+            settled = self.manipulation.move_to(
+                arm_target_x,
+                pull_origin.y,
+                pull_origin.z,
+                roll=pull_origin.rpy[0],
+                pitch=pull_origin.rpy[1],
+                yaw=pull_origin.rpy[2],
+                duration=_ARM_PULL_DURATION_S,
+                tolerance_xy=None,
+                tolerance_z=None,
+            )
+        else:
+            settled = pull_origin
+
+        arm_retraction_m = min(retreat_distance_m, max(0.0, pull_origin.x - settled.x))
+        base_remainder_m = max(0.0, retreat_distance_m - arm_retraction_m)
+        joint_positions = tuple(self.joint_states.position)
+        joint2_rad = float(joint_positions[1]) if len(joint_positions) > 1 else None
+        if joint2_rad is not None and not math.isfinite(joint2_rad):
+            joint2_rad = None
+        self.debug_event(
+            "arm_pull_complete",
+            requested_pose=[arm_target_x, pull_origin.y, pull_origin.z],
+            measured_pose=list(settled.position),
+            measured_arm_retraction_m=arm_retraction_m,
+            base_remainder_m=base_remainder_m,
+            measured_joint2_rad=joint2_rad,
+            measured_joint2_deg=math.degrees(joint2_rad) if joint2_rad is not None else None,
+        )
+
+        if base_remainder_m > 1e-6:
+            self.feedback("Completing the handle pull with the base")
+            self._drive(-base_remainder_m)
 
         origin = self.manipulation.pose
         offsets = _left_push_offsets(left_distance_m)
@@ -686,7 +734,8 @@ class OpenDoorWithVision(Skill):
                 pregrasp = self._prepare_grasp_retry(target, attempt + 1)
             self._retreat_and_push_left(pull_distance_m, pull_distance_m)
             return (
-                f"Located and grasped the handle, backed up {pull_distance_m:.2f} m, "
+                f"Located and grasped the handle, pulled back {pull_distance_m:.2f} m arm-first toward "
+                f"x={_ARM_PULL_TARGET_X_M:.2f} m, "
                 f"pulled left up to {pull_distance_m:.2f} m while gripping, opened halfway, "
                 f"and backed up another {_POST_RELEASE_RETREAT_M:.2f} m"
             )

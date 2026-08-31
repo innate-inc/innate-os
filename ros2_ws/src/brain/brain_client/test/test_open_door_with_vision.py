@@ -610,7 +610,7 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         ("grasp", 2, (0.36, 0.0, 0.2)),
         ("retreat_and_push_left", 0.03, 0.03),
     ]
-    assert "backed up 0.03 m" in result
+    assert "pulled back 0.03 m arm-first toward x=0.25 m" in result
     assert "pulled left up to 0.03 m while gripping" in result
     assert "opened halfway" in result
     assert "backed up another 0.10 m" in result
@@ -631,11 +631,17 @@ def test_post_grasp_retreat_pulls_left_before_half_release_and_final_retreat(mon
     monkeypatch.setattr(skill, "check_cancelled", lambda: None)
     monkeypatch.setattr(skill, "feedback", lambda _message: None)
     monkeypatch.setattr(skill, "debug_event", lambda event, **fields: events.append((event, fields)))
+    skill.joint_states = SimpleNamespace(position=(0.1, 0.02, 0.3, 0.4, 0.5, -0.6))
 
     class PushManipulation:
         def __init__(self):
             self.actions = []
             self.pose = SimpleNamespace(x=0.35, y=-0.04, z=0.20, position=(0.35, -0.04, 0.20), rpy=(0.1, 0.2, 0.3))
+
+        def move_to(self, x, y, z, **kwargs):
+            self.actions.append(("move_to", (x, y, z), kwargs))
+            self.pose = SimpleNamespace(x=x, y=y, z=z, position=(x, y, z), rpy=(0.1, 0.2, 0.3))
+            return self.pose
 
         def stream_to(self, x, y, z, **kwargs):
             self.actions.append(("stream_to", (x, y, z), kwargs))
@@ -654,10 +660,21 @@ def test_post_grasp_retreat_pulls_left_before_half_release_and_final_retreat(mon
 
     skill._retreat_and_push_left(0.30, 0.30)
 
-    assert drives == [-0.30, -0.10]
+    assert drives == pytest.approx([-0.20, -0.10])
+    arm_pull = skill.manipulation.actions[0]
+    assert arm_pull[0] == "move_to"
+    assert arm_pull[1] == pytest.approx((0.25, -0.04, 0.20))
+    assert arm_pull[2] == {
+        "roll": 0.1,
+        "pitch": 0.2,
+        "yaw": 0.3,
+        "duration": 2.0,
+        "tolerance_xy": None,
+        "tolerance_z": None,
+    }
     streams = [action for action in skill.manipulation.actions if action[0] == "stream_to"]
     assert len(streams) == 30
-    assert [action[1][0] for action in streams] == pytest.approx([0.35] * 30)
+    assert [action[1][0] for action in streams] == pytest.approx([0.25] * 30)
     assert [action[1][1] for action in streams] == pytest.approx(
         [-0.04 + offset for offset in (0.01 * step for step in range(1, 31))]
     )
@@ -672,13 +689,18 @@ def test_post_grasp_retreat_pulls_left_before_half_release_and_final_retreat(mon
     assert [event for event, _fields in events].count("left_push_step") == 30
     started = next(fields for event, fields in events if event == "left_push_started")
     assert started["strategy"] == "cartesian_ik_positive_y"
-    assert started["origin_pose"] == pytest.approx([0.35, -0.04, 0.20])
-    assert started["final_target"] == pytest.approx([0.35, 0.26, 0.20])
+    assert started["origin_pose"] == pytest.approx([0.25, -0.04, 0.20])
+    assert started["final_target"] == pytest.approx([0.25, 0.26, 0.20])
     assert started["requested_left_distance_m"] == pytest.approx(0.30)
     assert started["gripper_state"] == "closed"
     completed = next(fields for event, fields in events if event == "left_push_complete")
     assert completed["measured_left_distance_m"] == pytest.approx(0.30)
     assert completed["last_requested_left_distance_m"] == pytest.approx(0.30)
+    arm_completed = next(fields for event, fields in events if event == "arm_pull_complete")
+    assert arm_completed["measured_arm_retraction_m"] == pytest.approx(0.10)
+    assert arm_completed["base_remainder_m"] == pytest.approx(0.20)
+    assert arm_completed["measured_joint2_rad"] == pytest.approx(0.02)
+    assert arm_completed["measured_joint2_deg"] == pytest.approx(math.degrees(0.02))
 
 
 def test_post_grasp_left_pull_stops_at_ik_reach_boundary(monkeypatch):
@@ -691,11 +713,17 @@ def test_post_grasp_left_pull_stops_at_ik_reach_boundary(monkeypatch):
     monkeypatch.setattr(skill, "check_cancelled", lambda: None)
     monkeypatch.setattr(skill, "feedback", lambda _message: None)
     monkeypatch.setattr(skill, "debug_event", lambda event, **fields: events.append((event, fields)))
+    skill.joint_states = SimpleNamespace(position=(0.0, 0.0, 0.0, 0.0, 0.0, -0.6))
 
     class ReachLimitedManipulation:
         def __init__(self):
             self.actions = []
             self.pose = SimpleNamespace(x=0.35, y=0.0, z=0.20, position=(0.35, 0.0, 0.20), rpy=(0.0, 0.0, 0.0))
+
+        def move_to(self, x, y, z, **kwargs):
+            self.actions.append(("move_to", (x, y, z), kwargs))
+            self.pose = SimpleNamespace(x=x, y=y, z=z, position=(x, y, z), rpy=(0.0, 0.0, 0.0))
+            return self.pose
 
         def stream_to(self, x, y, z, **kwargs):
             if y > 0.02:
@@ -716,7 +744,7 @@ def test_post_grasp_left_pull_stops_at_ik_reach_boundary(monkeypatch):
 
     skill._retreat_and_push_left(0.30, 0.30)
 
-    assert drives == [-0.30, -0.10]
+    assert drives == pytest.approx([-0.20, -0.10])
     streams = [action for action in skill.manipulation.actions if action[0] == "stream_to"]
     assert [action[1][1] for action in streams] == pytest.approx([0.01, 0.02])
     limit = next(fields for event, fields in events if event == "left_push_reach_limit")
