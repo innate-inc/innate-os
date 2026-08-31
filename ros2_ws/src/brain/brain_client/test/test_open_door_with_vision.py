@@ -418,6 +418,27 @@ def test_wrist_loop_logs_but_does_not_abort_on_large_tracking_error(monkeypatch)
     assert all("effort" in event for event in motion_events)
 
 
+def test_wrist_loop_continues_past_twelve_actions(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-unbounded-actions-test"))
+    skill.manipulation = _ActionManipulation()
+    skill.wrist_image = object()
+    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(skill, "_effort", lambda: (0.0, 0.0, 0.0, 0.0, 0.0))
+    monkeypatch.setattr(skill, "_next_image", lambda _camera, _previous: object())
+    box = (280.0, 80.0, 80.0, 320.0)
+    decisions = iter(
+        [(action, box, "continue") for action in ("UP", "DOWN") * 6]
+        + [("UP", box, "continue"), ("GRASP", box, "between fingers")]
+    )
+    monkeypatch.setattr(skill, "_request_wrist_decision", lambda *_args, **_kwargs: next(decisions))
+
+    result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
+
+    assert len(skill.manipulation.moves) == 13
+    assert result == pytest.approx((0.35, 0.01, 0.205))
+
+
 class _Mobility:
     def __init__(self):
         self.stops = 0

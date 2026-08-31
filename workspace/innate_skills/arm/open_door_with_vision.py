@@ -4,6 +4,7 @@
 
 import math
 import time
+from itertools import count
 
 from innate import (
     Head,
@@ -39,7 +40,6 @@ _WRIST_STAGING_X_M = 0.32
 _VISUAL_CLEARANCE_M = 0.03
 _MAX_EE_X_M = 0.40
 _WRIST_ACTION_STEP_M = 0.005
-_WRIST_ACTION_STEPS = 12
 _WRIST_CONTENT_ATTEMPTS = 2
 _WRIST_ACTIONS = frozenset({"FORWARD", "BACK", "LEFT", "RIGHT", "UP", "DOWN", "GRASP", "ABORT"})
 _GRIP_STRENGTH = 0.35
@@ -373,7 +373,7 @@ class OpenDoorWithVision(Skill):
             commanded_pose = tuple(self.manipulation.pose.position)
         previous_image = None
         previous_action = None
-        for step in range(_WRIST_ACTION_STEPS):
+        for step in count():
             self.sleep(0.4)
             image = self.wrist_image if previous_image is None else self._next_image("wrist", previous_image)
             action, box, reason = self._request_wrist_decision(
@@ -424,7 +424,6 @@ class OpenDoorWithVision(Skill):
             commanded_pose = next_pose
             previous_image = image
             previous_action = action
-        self.fail("Wrist VLM did not reach a safe grasp decision")
 
     def _effort(self):
         age = time.monotonic() - self.joint_states.received_at
