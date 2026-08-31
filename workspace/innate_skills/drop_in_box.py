@@ -113,7 +113,8 @@ class DropInBox(Skill):
     this fails immediately if the gripper is empty. Only works for containers
     low enough for the arm to reach over — roughly shoebox height.
     Call this only if the box is actually visible, otherwise search for it
-    first by looking around."""
+    first by looking around. Set verbose=True to have the robot say what it is
+    doing as it goes; by default it works silently."""
 
     manipulation: Manipulation
     mobility: Mobility
@@ -389,8 +390,8 @@ class DropInBox(Skill):
         # is no longer held, which is as much as this skill promised.
         return missed is not True
 
-    def execute(self, prompt: str = "the box") -> SkillReturn:
-        """Drop whatever the gripper holds into `prompt`."""
+    def execute(self, prompt: str = "the box", verbose: bool = False) -> SkillReturn:
+        """Drop whatever the gripper holds into `prompt`, narrating the steps if `verbose`."""
         if self._proxy is None:
             self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
 
@@ -414,17 +415,17 @@ class DropInBox(Skill):
                 self.fail("I'm not holding anything to put away (or can't confirm it without a wrist view)")
 
             self._carry_pose(self._p["travel_joints"])
-            approach = FloorApproach(self, self._p, self._detect_px)
-            self.say(f"Looking for {prompt}.")
+            approach = FloorApproach(self, self._p, self._detect_px, verbose)
+            approach.narrate(f"Looking for {prompt}.")
             xy = approach.search(prompt)
             xy = approach.position_above(prompt, xy)
-            self.say("Dropping it in.")
+            approach.narrate("Dropping it in.")
             _x, _y, released_z = self._release_at(xy[0], xy[1])
 
             if not self._landed(prompt, approach):
-                self.say("It missed the box.")
+                approach.narrate("It missed the box.")
                 raise SkillFailed(f"Released, but the object did not land in '{prompt}'")
-            self.say("Done.")
+            approach.narrate("Done.")
             rim = f"{self._rim_z:.2f}" if self._rim_z is not None else "?"
             return f"Dropped the object into '{prompt}' (rim ~{rim} m, released at z={released_z:.2f})"
         except ArmFailed as e:

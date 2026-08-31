@@ -138,10 +138,17 @@ def inside_box(px, cu, cv, half_u, half_v=None):
 class FloorApproach:
     """Head-camera localize + base servo for one run of a hosting skill."""
 
-    def __init__(self, host: ApproachHost, params: dict, detect: Detect):
+    def __init__(self, host: ApproachHost, params: dict, detect: Detect, verbose: bool = False):
         self.host = host
         self.p = params
         self.detect = detect
+        self.verbose = verbose
+
+    def narrate(self, text: str) -> None:
+        """Say `text` only when the run asked for commentary. The hosting skill
+        narrates through here too, so one flag covers the whole run."""
+        if self.verbose:
+            self.host.say(text)
 
     # --- localize ---
 
@@ -169,7 +176,7 @@ class FloorApproach:
         for i, turn in enumerate((0.0, -math.radians(30), math.radians(60))):
             if turn:
                 if i == 1:
-                    self.host.say("Scanning around for it.")
+                    self.narrate("Scanning around for it.")
                 # Best-effort: a rotate cut short (timeout / odom loss) still
                 # changed the view, and the localize below measures from
                 # wherever the base actually ended up.

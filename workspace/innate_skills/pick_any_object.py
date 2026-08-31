@@ -145,7 +145,8 @@ class PickAnyObject(Skill):
     (e.g. prompt='the white sock', 'a red cup'). The robot localizes the
     object metrically with the head camera, drives above it, grasps, and
     verifies the grasp by backing up and checking the floor. The arm is
-    returned to rest either way."""
+    returned to rest either way. Set verbose=True to have the robot say what
+    it is doing as it goes; by default it works silently."""
 
     manipulation: Manipulation
     mobility: Mobility
@@ -639,8 +640,8 @@ class PickAnyObject(Skill):
         )
         return held
 
-    def execute(self, prompt: str = "the sock") -> SkillReturn:
-        """Pick up `prompt` from the floor."""
+    def execute(self, prompt: str = "the sock", verbose: bool = False) -> SkillReturn:
+        """Pick up `prompt` from the floor, narrating the steps if `verbose`."""
         if self._proxy is None:
             self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
 
@@ -655,19 +656,19 @@ class PickAnyObject(Skill):
             # (5-joint move: the claw keeps whatever it currently holds).
             self.manipulation.move_joints(NAV_ARM, duration=3.0)
 
-            approach = FloorApproach(self, self._p, self._detect_px)
-            self.say(f"Looking for {prompt}.")
+            approach = FloorApproach(self, self._p, self._detect_px, verbose)
+            approach.narrate(f"Looking for {prompt}.")
             xy = approach.search(prompt)
             xy = approach.position_above(prompt, xy)
-            self.say("Picking it up.")
+            approach.narrate("Picking it up.")
             self._grasp_at(prompt, xy)
             # _close_twist_lift latched self._holding the moment the fingers
             # committed — only a verified miss clears it.
             if not self._grasp_verified(prompt, approach):
                 self._holding = False
-                self.say("I couldn't get a grip on it.")
+                approach.narrate("I couldn't get a grip on it.")
                 raise SkillFailed(f"Grasp missed — '{prompt}' is still on the floor (verified after backing up)")
-            self.say("Got it.")
+            approach.narrate("Got it.")
             return f"Picked up '{prompt}' (verified: floor clear after backing up)"
         except ArmFailed as e:
             # A clean arm give-up is a skill failure, not a crash. SkillFailed
