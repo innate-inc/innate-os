@@ -154,7 +154,8 @@ def test_detection_exports_exact_camera_frame(tmp_path, monkeypatch):
     image = type("Frame", (), {"jpeg": b"exact-jpeg"})()
 
     assert skill._detect_box(image, "head") == pytest.approx((288, 96, 64, 288))
-    assert request["reasoning_effort"] == "low"
+    assert request["reasoning_effort"] == "minimal"
+    assert request["model"] == "gemini-3.6-flash"
     assert (skill.debug_directory / "00_head_detection.jpg").read_bytes() == b"exact-jpeg"
 
 
@@ -200,8 +201,19 @@ def test_gemini_image_request_forwards_reasoning_effort():
             captured.update(kwargs["json"])
             return Stream()
 
-    assert module.gemlib.ask_image(Client(), "jpeg", "find it", retries=1, reasoning_effort="low") == "[]"
-    assert captured["reasoning_effort"] == "low"
+    assert (
+        module.gemlib.ask_image(
+            Client(),
+            "jpeg",
+            "find it",
+            retries=1,
+            reasoning_effort="minimal",
+            model="gemini-3.6-flash",
+        )
+        == "[]"
+    )
+    assert captured["reasoning_effort"] == "minimal"
+    assert captured["model"] == "gemini-3.6-flash"
 
 
 def test_base_accepts_sub_motion_threshold_range_error(monkeypatch):

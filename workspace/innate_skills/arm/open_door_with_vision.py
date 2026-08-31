@@ -75,7 +75,8 @@ _MAIN_CY_PX = 228.0517433641685
 _MAIN_CAMERA_ORIGIN = (0.002519, 0.0295, 0.258545)
 _HEAD_METRIC_SAMPLES = 3
 _GRASP_ATTEMPTS = 2
-_VISION_REASONING_EFFORT = "low"
+_VISION_MODEL = "gemini-3.6-flash"
+_VISION_REASONING_EFFORT = "minimal"
 
 
 def _fuse_handle_target(head_target, wrist_target):
@@ -162,6 +163,7 @@ class OpenDoorWithVision(Skill):
             "vertical handle, including its physical top and bottom.",
             logger=self.logger,
             reasoning_effort=_VISION_REASONING_EFFORT,
+            model=_VISION_MODEL,
         )
         self.debug_event(
             "handle_detection_response",
@@ -420,6 +422,7 @@ class OpenDoorWithVision(Skill):
                 "Answer only YES or NO.",
                 logger=self.logger,
                 reasoning_effort=_VISION_REASONING_EFFORT,
+                model=_VISION_MODEL,
             )
             if j6_held
             else "SKIPPED: claw position proves an empty close"
