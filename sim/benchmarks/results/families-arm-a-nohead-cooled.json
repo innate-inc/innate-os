@@ -1,0 +1,1993 @@
+{
+ "label": "arm-a-nohead-cooled",
+ "results": [
+  {
+   "id": "pn00",
+   "instruction": "Go to (3.7, 4.5) in your egocentric frame: 5.9 m away, 51 degrees to your left.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -3.285,
+    1.852
+   ],
+   "path_m": 7.0,
+   "spawn": [
+    -0.54,
+    3.34,
+    173.7
+   ],
+   "goals": [
+    [
+     -4.74,
+     -0.76
+    ]
+   ],
+   "final_dist_m": 2.99,
+   "best_dist_m": 3.13,
+   "travelled_m": 3.57,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn01",
+   "instruction": "Go to (4.6, -3.7) in your egocentric frame: 5.9 m away, 39 degrees to your right.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -4.595,
+    4.197
+   ],
+   "path_m": 7.0,
+   "spawn": [
+    -4.74,
+    -0.76,
+    83.3
+   ],
+   "goals": [
+    [
+     -0.54,
+     3.34
+    ]
+   ],
+   "final_dist_m": 4.144,
+   "best_dist_m": 3.305,
+   "travelled_m": 8.36,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn02",
+   "instruction": "Go to (6.0, -1.3) in your egocentric frame: 6.1 m away, 13 degrees to your right.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -4.858,
+    -1.565
+   ],
+   "path_m": 6.95,
+   "spawn": [
+    -2.24,
+    5.94,
+    -96.3
+   ],
+   "goals": [
+    [
+     -4.24,
+     0.14
+    ]
+   ],
+   "final_dist_m": 1.813,
+   "best_dist_m": 0.096,
+   "travelled_m": 13.14,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": true
+  },
+  {
+   "id": "pn03",
+   "instruction": "Go to (5.1, -3.4) in your egocentric frame: 6.1 m away, 34 degrees to your right.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -5.647,
+    2.897
+   ],
+   "path_m": 6.95,
+   "spawn": [
+    -4.24,
+    0.14,
+    104.9
+   ],
+   "goals": [
+    [
+     -2.24,
+     5.94
+    ]
+   ],
+   "final_dist_m": 4.568,
+   "best_dist_m": 2.185,
+   "travelled_m": 7.94,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn04",
+   "instruction": "Go to (6.0, 1.9) in your egocentric frame: 6.3 m away, 18 degrees to your left.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -1.204,
+    2.912
+   ],
+   "path_m": 6.9,
+   "spawn": [
+    -0.24,
+    5.94,
+    173.3
+   ],
+   "goals": [
+    [
+     -6.44,
+     4.74
+    ]
+   ],
+   "final_dist_m": 5.546,
+   "best_dist_m": 2.321,
+   "travelled_m": 11.08,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn05",
+   "instruction": "Go to (3.8, 4.4) in your egocentric frame: 5.8 m away, 49 degrees to your left.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -2.243,
+    3.072
+   ],
+   "path_m": 6.9,
+   "spawn": [
+    -0.24,
+    5.94,
+    173.3
+   ],
+   "goals": [
+    [
+     -4.54,
+     2.04
+    ]
+   ],
+   "final_dist_m": 2.518,
+   "best_dist_m": 1.121,
+   "travelled_m": 8.74,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn06",
+   "instruction": "Go to (3.4, 5.1) in your egocentric frame: 6.1 m away, 56 degrees to your left.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -3.9,
+    4.452
+   ],
+   "path_m": 6.9,
+   "spawn": [
+    -2.34,
+    4.89,
+    -169.4
+   ],
+   "goals": [
+    [
+     -4.74,
+     -0.76
+    ]
+   ],
+   "final_dist_m": 5.28,
+   "best_dist_m": 5.181,
+   "travelled_m": 3.68,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn07",
+   "instruction": "Go to (6.3, 0.5) in your egocentric frame: 6.3 m away, 5 degrees to your left.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -0.067,
+    4.085
+   ],
+   "path_m": 6.9,
+   "spawn": [
+    -6.44,
+    4.74,
+    6.3
+   ],
+   "goals": [
+    [
+     -0.24,
+     5.94
+    ]
+   ],
+   "final_dist_m": 1.863,
+   "best_dist_m": 0.099,
+   "travelled_m": 8.81,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": true
+  },
+  {
+   "id": "pn08",
+   "instruction": "Go to (3.9, -4.3) in your egocentric frame: 5.8 m away, 48 degrees to your right.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -3.861,
+    2.69
+   ],
+   "path_m": 6.9,
+   "spawn": [
+    -4.54,
+    2.04,
+    90.0
+   ],
+   "goals": [
+    [
+     -0.24,
+     5.94
+    ]
+   ],
+   "final_dist_m": 4.866,
+   "best_dist_m": 4.84,
+   "travelled_m": 3.69,
+   "duration_s": 54.5,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn09",
+   "instruction": "Go to (5.9, -1.7) in your egocentric frame: 6.1 m away, 16 degrees to your right.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -4.813,
+    0.786
+   ],
+   "path_m": 6.9,
+   "spawn": [
+    -4.74,
+    -0.76,
+    83.3
+   ],
+   "goals": [
+    [
+     -2.34,
+     4.89
+    ]
+   ],
+   "final_dist_m": 4.792,
+   "best_dist_m": 2.662,
+   "travelled_m": 6.04,
+   "duration_s": 49.7,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn10",
+   "instruction": "Go to (4.6, 2.5) in your egocentric frame: 5.3 m away, 29 degrees to your left.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -2.403,
+    4.762
+   ],
+   "path_m": 6.85,
+   "spawn": [
+    -4.69,
+    3.79,
+    -86.6
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ]
+   ],
+   "final_dist_m": 5.446,
+   "best_dist_m": 4.749,
+   "travelled_m": 6.11,
+   "duration_s": 37.2,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn11",
+   "instruction": "Go to (0.9, -5.2) in your egocentric frame: 5.3 m away, 80 degrees to your right.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -1.295,
+    -1.173
+   ],
+   "path_m": 6.85,
+   "spawn": [
+    -1.89,
+    -0.66,
+    -158.2
+   ],
+   "goals": [
+    [
+     -4.69,
+     3.79
+    ]
+   ],
+   "final_dist_m": 6.013,
+   "best_dist_m": 5.258,
+   "travelled_m": 2.26,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn12",
+   "instruction": "Go to (1.6, -4.6) in your egocentric frame: 4.9 m away, 71 degrees to your right.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -4.015,
+    4.404
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -3.39,
+    2.24,
+    121.0
+   ],
+   "goals": [
+    [
+     -0.24,
+     5.94
+    ]
+   ],
+   "final_dist_m": 4.076,
+   "best_dist_m": 4.084,
+   "travelled_m": 3.05,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn13",
+   "instruction": "Go to (-3.3, 0.3) in your egocentric frame: 3.3 m away, 175 degrees to your left.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -3.994,
+    2.66
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -3.39,
+    2.24,
+    122.7
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ]
+   ],
+   "final_dist_m": 3.931,
+   "best_dist_m": 3.328,
+   "travelled_m": 0.89,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn14",
+   "instruction": "Go to (-0.8, 3.5) in your egocentric frame: 3.6 m away, 103 degrees to your left.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -4.067,
+    2.014
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -0.84,
+    1.39,
+    96.7
+   ],
+   "goals": [
+    [
+     -4.24,
+     0.14
+    ]
+   ],
+   "final_dist_m": 1.882,
+   "best_dist_m": 2.077,
+   "travelled_m": 5.27,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn15",
+   "instruction": "Go to (0.3, -3.6) in your egocentric frame: 3.6 m away, 85 degrees to your right.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -4.98,
+    -0.928
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -4.24,
+    0.14,
+    104.9
+   ],
+   "goals": [
+    [
+     -0.84,
+     1.39
+    ]
+   ],
+   "final_dist_m": 4.745,
+   "best_dist_m": 3.612,
+   "travelled_m": 1.88,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn16",
+   "instruction": "Go to (0.3, -3.2) in your egocentric frame: 3.3 m away, 84 degrees to your right.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -1.5,
+    -1.191
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -1.89,
+    -0.66,
+    -158.2
+   ],
+   "goals": [
+    [
+     -3.39,
+     2.24
+    ]
+   ],
+   "final_dist_m": 3.917,
+   "best_dist_m": 3.214,
+   "travelled_m": 2.17,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn17",
+   "instruction": "Go to (3.0, -5.6) in your egocentric frame: 6.4 m away, 62 degrees to your right.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -4.757,
+    3.021
+   ],
+   "path_m": 6.7,
+   "spawn": [
+    -6.44,
+    4.74,
+    -3.4
+   ],
+   "goals": [
+    [
+     -3.74,
+     -1.06
+    ]
+   ],
+   "final_dist_m": 4.206,
+   "best_dist_m": 4.468,
+   "travelled_m": 2.84,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn18",
+   "instruction": "Go to (5.8, -2.6) in your egocentric frame: 6.4 m away, 24 degrees to your right.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -2.326,
+    -3.043
+   ],
+   "path_m": 6.7,
+   "spawn": [
+    -3.74,
+    -1.06,
+    139.4
+   ],
+   "goals": [
+    [
+     -6.44,
+     4.74
+    ]
+   ],
+   "final_dist_m": 8.804,
+   "best_dist_m": 6.362,
+   "travelled_m": 5.82,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "pn19",
+   "instruction": "Go to (0.5, 4.9) in your egocentric frame: 5.0 m away, 84 degrees to your left.",
+   "turn": "",
+   "family": "pointnav",
+   "category": "",
+   "final_xy": [
+    -4.02,
+    2.225
+   ],
+   "path_m": 6.65,
+   "spawn": [
+    -0.89,
+    2.39,
+    135.0
+   ],
+   "goals": [
+    [
+     -4.74,
+     -0.76
+    ]
+   ],
+   "final_dist_m": 3.071,
+   "best_dist_m": 3.121,
+   "travelled_m": 4.31,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on00",
+   "instruction": "Find the toilet.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "toilet",
+   "final_xy": [
+    -3.801,
+    4.481
+   ],
+   "path_m": 7.9,
+   "spawn": [
+    -0.24,
+    5.94,
+    173.3
+   ],
+   "goals": [
+    [
+     -4.69,
+     1.04
+    ]
+   ],
+   "final_dist_m": 3.554,
+   "best_dist_m": 3.59,
+   "travelled_m": 6.1,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on01",
+   "instruction": "Find the bed.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "bed",
+   "final_xy": [
+    -2.821,
+    -1.086
+   ],
+   "path_m": 7.85,
+   "spawn": [
+    -0.99,
+    -1.66,
+    123.7
+   ],
+   "goals": [
+    [
+     -2.24,
+     5.94
+    ],
+    [
+     -2.34,
+     4.89
+    ],
+    [
+     -0.89,
+     2.39
+    ],
+    [
+     -3.39,
+     2.24
+    ],
+    [
+     -0.84,
+     1.39
+    ],
+    [
+     -3.39,
+     1.19
+    ]
+   ],
+   "final_dist_m": 2.346,
+   "best_dist_m": 2.346,
+   "travelled_m": 1.91,
+   "duration_s": 15.9,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on02",
+   "instruction": "Find the kitchen counter.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "kitchen counter",
+   "final_xy": [
+    -3.938,
+    2.902
+   ],
+   "path_m": 7.85,
+   "spawn": [
+    -4.69,
+    3.79,
+    -86.6
+   ],
+   "goals": [
+    [
+     -0.84,
+     -0.66
+    ],
+    [
+     -0.99,
+     -1.66
+    ],
+    [
+     -0.54,
+     -2.56
+    ]
+   ],
+   "final_dist_m": 4.721,
+   "best_dist_m": 4.721,
+   "travelled_m": 5.23,
+   "duration_s": 44.8,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on03",
+   "instruction": "Find the dining table.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "dining table",
+   "final_xy": [
+    -3.379,
+    4.401
+   ],
+   "path_m": 7.8,
+   "spawn": [
+    -5.39,
+    4.74,
+    -57.3
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ],
+    [
+     -0.84,
+     -0.66
+    ],
+    [
+     -0.99,
+     -1.66
+    ],
+    [
+     -1.59,
+     -2.46
+    ],
+    [
+     -0.54,
+     -2.56
+    ]
+   ],
+   "final_dist_m": 5.276,
+   "best_dist_m": 5.275,
+   "travelled_m": 2.09,
+   "duration_s": 9.2,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on04",
+   "instruction": "Find the dining table.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "dining table",
+   "final_xy": [
+    -4.342,
+    -0.42
+   ],
+   "path_m": 7.8,
+   "spawn": [
+    -4.34,
+    4.74,
+    -135.0
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ],
+    [
+     -0.84,
+     -0.66
+    ],
+    [
+     -0.99,
+     -1.66
+    ],
+    [
+     -1.59,
+     -2.46
+    ],
+    [
+     -0.54,
+     -2.56
+    ]
+   ],
+   "final_dist_m": 2.464,
+   "best_dist_m": 2.464,
+   "travelled_m": 5.18,
+   "duration_s": 17.5,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on05",
+   "instruction": "Find the dining table.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "dining table",
+   "final_xy": [
+    -5.451,
+    4.169
+   ],
+   "path_m": 7.8,
+   "spawn": [
+    -3.39,
+    1.19,
+    96.3
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ],
+    [
+     -0.84,
+     -0.66
+    ],
+    [
+     -0.99,
+     -1.66
+    ],
+    [
+     -1.59,
+     -2.46
+    ],
+    [
+     -0.54,
+     -2.56
+    ]
+   ],
+   "final_dist_m": 6.0,
+   "best_dist_m": 2.382,
+   "travelled_m": 3.95,
+   "duration_s": 35.6,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on06",
+   "instruction": "Find the refrigerator.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "refrigerator",
+   "final_xy": [
+    -3.861,
+    4.469
+   ],
+   "path_m": 7.8,
+   "spawn": [
+    -5.39,
+    4.74,
+    -57.3
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ],
+    [
+     -0.99,
+     -1.66
+    ]
+   ],
+   "final_dist_m": 5.495,
+   "best_dist_m": 5.474,
+   "travelled_m": 1.8,
+   "duration_s": 12.2,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on07",
+   "instruction": "Find the refrigerator.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "refrigerator",
+   "final_xy": [
+    -4.328,
+    -0.492
+   ],
+   "path_m": 7.8,
+   "spawn": [
+    -4.34,
+    4.74,
+    -135.0
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ],
+    [
+     -0.99,
+     -1.66
+    ]
+   ],
+   "final_dist_m": 2.443,
+   "best_dist_m": 2.443,
+   "travelled_m": 5.25,
+   "duration_s": 17.3,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on08",
+   "instruction": "Find the refrigerator.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "refrigerator",
+   "final_xy": [
+    -5.338,
+    4.158
+   ],
+   "path_m": 7.8,
+   "spawn": [
+    -3.39,
+    1.19,
+    96.3
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ],
+    [
+     -0.99,
+     -1.66
+    ]
+   ],
+   "final_dist_m": 5.925,
+   "best_dist_m": 2.382,
+   "travelled_m": 3.83,
+   "duration_s": 35.9,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on09",
+   "instruction": "Find the oven.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "oven",
+   "final_xy": [
+    -3.039,
+    4.441
+   ],
+   "path_m": 7.8,
+   "spawn": [
+    -5.39,
+    4.74,
+    -57.3
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ],
+    [
+     -1.59,
+     -2.46
+    ]
+   ],
+   "final_dist_m": 5.229,
+   "best_dist_m": 5.229,
+   "travelled_m": 2.44,
+   "duration_s": 9.2,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on10",
+   "instruction": "Find the oven.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "oven",
+   "final_xy": [
+    -1.218,
+    -1.232
+   ],
+   "path_m": 7.8,
+   "spawn": [
+    -4.34,
+    4.74,
+    -135.0
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ],
+    [
+     -1.59,
+     -2.46
+    ]
+   ],
+   "final_dist_m": 0.882,
+   "best_dist_m": 0.373,
+   "travelled_m": 8.86,
+   "duration_s": 54.0,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": true
+  },
+  {
+   "id": "on11",
+   "instruction": "Find the oven.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "oven",
+   "final_xy": [
+    -5.326,
+    4.152
+   ],
+   "path_m": 7.8,
+   "spawn": [
+    -3.39,
+    1.19,
+    96.3
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ],
+    [
+     -1.59,
+     -2.46
+    ]
+   ],
+   "final_dist_m": 5.913,
+   "best_dist_m": 2.382,
+   "travelled_m": 3.84,
+   "duration_s": 44.5,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on12",
+   "instruction": "Find the bed.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "bed",
+   "final_xy": [
+    -4.791,
+    -1.401
+   ],
+   "path_m": 7.75,
+   "spawn": [
+    -0.84,
+    -0.66,
+    173.7
+   ],
+   "goals": [
+    [
+     -2.24,
+     5.94
+    ],
+    [
+     -2.34,
+     4.89
+    ],
+    [
+     -0.89,
+     2.39
+    ],
+    [
+     -3.39,
+     2.24
+    ],
+    [
+     -0.84,
+     1.39
+    ],
+    [
+     -3.39,
+     1.19
+    ]
+   ],
+   "final_dist_m": 2.946,
+   "best_dist_m": 2.049,
+   "travelled_m": 4.08,
+   "duration_s": 21.5,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on13",
+   "instruction": "Find the kitchen counter.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "kitchen counter",
+   "final_xy": [
+    -5.48,
+    4.181
+   ],
+   "path_m": 7.75,
+   "spawn": [
+    -3.39,
+    2.24,
+    122.7
+   ],
+   "goals": [
+    [
+     -0.84,
+     -0.66
+    ],
+    [
+     -0.99,
+     -1.66
+    ],
+    [
+     -0.54,
+     -2.56
+    ]
+   ],
+   "final_dist_m": 6.706,
+   "best_dist_m": 3.862,
+   "travelled_m": 2.92,
+   "duration_s": 27.6,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on14",
+   "instruction": "Find the kitchen counter.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "kitchen counter",
+   "final_xy": [
+    -0.747,
+    -2.273
+   ],
+   "path_m": 7.05,
+   "spawn": [
+    -4.09,
+    2.99,
+    -118.1
+   ],
+   "goals": [
+    [
+     -0.84,
+     -0.66
+    ],
+    [
+     -0.99,
+     -1.66
+    ],
+    [
+     -0.54,
+     -2.56
+    ]
+   ],
+   "final_dist_m": 0.353,
+   "best_dist_m": 0.152,
+   "travelled_m": 8.39,
+   "duration_s": 41.7,
+   "outcome": "stopped",
+   "success": true,
+   "oracle": true
+  },
+  {
+   "id": "on15",
+   "instruction": "Find the sofa.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "sofa",
+   "final_xy": [
+    -4.328,
+    -0.238
+   ],
+   "path_m": 6.95,
+   "spawn": [
+    -2.24,
+    5.94,
+    -96.3
+   ],
+   "goals": [
+    [
+     -4.74,
+     -0.76
+    ],
+    [
+     -3.74,
+     -1.06
+    ],
+    [
+     -4.24,
+     0.14
+    ]
+   ],
+   "final_dist_m": 0.388,
+   "best_dist_m": 0.086,
+   "travelled_m": 7.51,
+   "duration_s": 48.3,
+   "outcome": "stopped",
+   "success": true,
+   "oracle": true
+  },
+  {
+   "id": "on16",
+   "instruction": "Find the armchair.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "armchair",
+   "final_xy": [
+    -4.35,
+    -0.143
+   ],
+   "path_m": 6.95,
+   "spawn": [
+    -2.24,
+    5.94,
+    -96.3
+   ],
+   "goals": [
+    [
+     -4.24,
+     0.14
+    ],
+    [
+     -4.74,
+     -0.76
+    ],
+    [
+     -3.74,
+     -1.06
+    ]
+   ],
+   "final_dist_m": 0.304,
+   "best_dist_m": 0.071,
+   "travelled_m": 7.61,
+   "duration_s": 52.3,
+   "outcome": "stopped",
+   "success": true,
+   "oracle": true
+  },
+  {
+   "id": "on17",
+   "instruction": "Find the bed.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "bed",
+   "final_xy": [
+    -2.184,
+    -1.766
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -1.89,
+    -0.66,
+    -158.2
+   ],
+   "goals": [
+    [
+     -2.24,
+     5.94
+    ],
+    [
+     -2.34,
+     4.89
+    ],
+    [
+     -0.89,
+     2.39
+    ],
+    [
+     -3.39,
+     2.24
+    ],
+    [
+     -0.84,
+     1.39
+    ],
+    [
+     -3.39,
+     1.19
+    ]
+   ],
+   "final_dist_m": 3.193,
+   "best_dist_m": 2.303,
+   "travelled_m": 1.6,
+   "duration_s": 26.9,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on18",
+   "instruction": "Find the sofa.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "sofa",
+   "final_xy": [
+    -4.788,
+    2.668
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -0.84,
+    1.39,
+    96.7
+   ],
+   "goals": [
+    [
+     -4.74,
+     -0.76
+    ],
+    [
+     -3.74,
+     -1.06
+    ],
+    [
+     -4.24,
+     0.14
+    ]
+   ],
+   "final_dist_m": 2.587,
+   "best_dist_m": 2.584,
+   "travelled_m": 5.05,
+   "duration_s": 31.1,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "on19",
+   "instruction": "Find the armchair.",
+   "turn": "",
+   "family": "objectnav",
+   "category": "armchair",
+   "final_xy": [
+    -4.349,
+    -0.066
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -0.84,
+    1.39,
+    96.7
+   ],
+   "goals": [
+    [
+     -4.24,
+     0.14
+    ],
+    [
+     -4.74,
+     -0.76
+    ],
+    [
+     -3.74,
+     -1.06
+    ]
+   ],
+   "final_dist_m": 0.233,
+   "best_dist_m": 0.041,
+   "travelled_m": 7.1,
+   "duration_s": 43.8,
+   "outcome": "stopped",
+   "success": true,
+   "oracle": true
+  },
+  {
+   "id": "vl00",
+   "instruction": "Go forward, turn left, turn left, then stop by the sofa.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -4.379,
+    -0.451
+   ],
+   "path_m": 7.0,
+   "spawn": [
+    -0.54,
+    3.34,
+    173.7
+   ],
+   "goals": [
+    [
+     -4.74,
+     -0.76
+    ]
+   ],
+   "final_dist_m": 0.476,
+   "best_dist_m": 0.476,
+   "travelled_m": 6.92,
+   "duration_s": 25.1,
+   "outcome": "stopped",
+   "success": true,
+   "oracle": true
+  },
+  {
+   "id": "vl01",
+   "instruction": "Go forward, turn right, then stop.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -5.565,
+    4.519
+   ],
+   "path_m": 7.0,
+   "spawn": [
+    -4.74,
+    -0.76,
+    83.3
+   ],
+   "goals": [
+    [
+     -0.54,
+     3.34
+    ]
+   ],
+   "final_dist_m": 5.162,
+   "best_dist_m": 3.659,
+   "travelled_m": 6.34,
+   "duration_s": 20.5,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl02",
+   "instruction": "Go forward, turn right, turn left, then stop by the sofa.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -4.418,
+    -0.555
+   ],
+   "path_m": 6.95,
+   "spawn": [
+    -2.24,
+    5.94,
+    -96.3
+   ],
+   "goals": [
+    [
+     -4.24,
+     0.14
+    ]
+   ],
+   "final_dist_m": 0.717,
+   "best_dist_m": 0.105,
+   "travelled_m": 8.16,
+   "duration_s": 48.2,
+   "outcome": "stopped",
+   "success": true,
+   "oracle": true
+  },
+  {
+   "id": "vl03",
+   "instruction": "Go forward, turn right, then stop by the bed.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -5.852,
+    4.43
+   ],
+   "path_m": 6.95,
+   "spawn": [
+    -4.24,
+    0.14,
+    104.9
+   ],
+   "goals": [
+    [
+     -2.24,
+     5.94
+    ]
+   ],
+   "final_dist_m": 3.915,
+   "best_dist_m": 3.09,
+   "travelled_m": 5.24,
+   "duration_s": 15.3,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl04",
+   "instruction": "Go forward, turn left, turn right, then stop.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -0.868,
+    -2.647
+   ],
+   "path_m": 6.9,
+   "spawn": [
+    -0.24,
+    5.94,
+    173.3
+   ],
+   "goals": [
+    [
+     -6.44,
+     4.74
+    ]
+   ],
+   "final_dist_m": 9.253,
+   "best_dist_m": 2.365,
+   "travelled_m": 14.48,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl05",
+   "instruction": "Go forward, turn left, turn right, then stop.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -1.159,
+    -1.332
+   ],
+   "path_m": 6.9,
+   "spawn": [
+    -0.24,
+    5.94,
+    173.3
+   ],
+   "goals": [
+    [
+     -4.54,
+     2.04
+    ]
+   ],
+   "final_dist_m": 4.776,
+   "best_dist_m": 0.256,
+   "travelled_m": 13.2,
+   "duration_s": 77.1,
+   "outcome": "timeout",
+   "success": false,
+   "oracle": true
+  },
+  {
+   "id": "vl06",
+   "instruction": "Go forward, turn left, then stop by the sofa.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -3.903,
+    4.459
+   ],
+   "path_m": 6.9,
+   "spawn": [
+    -2.34,
+    4.89,
+    -169.4
+   ],
+   "goals": [
+    [
+     -4.74,
+     -0.76
+    ]
+   ],
+   "final_dist_m": 5.286,
+   "best_dist_m": 4.979,
+   "travelled_m": 7.24,
+   "duration_s": 40.1,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl07",
+   "instruction": "Go forward, turn left, turn right, then stop.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -3.002,
+    4.623
+   ],
+   "path_m": 6.9,
+   "spawn": [
+    -6.44,
+    4.74,
+    6.3
+   ],
+   "goals": [
+    [
+     -0.24,
+     5.94
+    ]
+   ],
+   "final_dist_m": 3.06,
+   "best_dist_m": 3.06,
+   "travelled_m": 3.49,
+   "duration_s": 14.8,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl08",
+   "instruction": "Go forward, turn right, turn left, then stop.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -2.923,
+    4.628
+   ],
+   "path_m": 6.9,
+   "spawn": [
+    -4.54,
+    2.04,
+    90.0
+   ],
+   "goals": [
+    [
+     -0.24,
+     5.94
+    ]
+   ],
+   "final_dist_m": 2.987,
+   "best_dist_m": 2.987,
+   "travelled_m": 7.61,
+   "duration_s": 34.6,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl09",
+   "instruction": "Go forward, turn right, then stop by the bed.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -5.865,
+    4.344
+   ],
+   "path_m": 6.9,
+   "spawn": [
+    -4.74,
+    -0.76,
+    83.3
+   ],
+   "goals": [
+    [
+     -2.34,
+     4.89
+    ]
+   ],
+   "final_dist_m": 3.567,
+   "best_dist_m": 2.416,
+   "travelled_m": 6.17,
+   "duration_s": 18.2,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl10",
+   "instruction": "Go forward, turn left, then stop by the dining table.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -0.859,
+    -2.543
+   ],
+   "path_m": 6.85,
+   "spawn": [
+    -4.69,
+    3.79,
+    -86.6
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ]
+   ],
+   "final_dist_m": 2.147,
+   "best_dist_m": 0.339,
+   "travelled_m": 9.33,
+   "duration_s": 39.6,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": true
+  },
+  {
+   "id": "vl11",
+   "instruction": "Go forward, turn right, turn right, then stop.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -2.849,
+    -1.335
+   ],
+   "path_m": 6.85,
+   "spawn": [
+    -1.89,
+    -0.66,
+    -158.2
+   ],
+   "goals": [
+    [
+     -4.69,
+     3.79
+    ]
+   ],
+   "final_dist_m": 5.445,
+   "best_dist_m": 5.257,
+   "travelled_m": 1.69,
+   "duration_s": 26.7,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl12",
+   "instruction": "Go forward, turn right, turn right, then stop.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -5.773,
+    4.375
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -3.39,
+    2.24,
+    121.0
+   ],
+   "goals": [
+    [
+     -0.24,
+     5.94
+    ]
+   ],
+   "final_dist_m": 5.75,
+   "best_dist_m": 4.702,
+   "travelled_m": 3.35,
+   "duration_s": 13.7,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl13",
+   "instruction": "Go forward, turn left, turn left, then stop by the dining table.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -6.083,
+    4.391
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -3.39,
+    2.24,
+    122.7
+   ],
+   "goals": [
+    [
+     -1.89,
+     -0.66
+    ]
+   ],
+   "final_dist_m": 6.565,
+   "best_dist_m": 3.265,
+   "travelled_m": 3.63,
+   "duration_s": 14.5,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl14",
+   "instruction": "Go forward, turn left, turn left, then stop by the sofa.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -4.613,
+    2.746
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -0.84,
+    1.39,
+    96.7
+   ],
+   "goals": [
+    [
+     -4.24,
+     0.14
+    ]
+   ],
+   "final_dist_m": 2.633,
+   "best_dist_m": 2.633,
+   "travelled_m": 4.89,
+   "duration_s": 26.9,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl15",
+   "instruction": "Go forward, turn right, turn right, then stop by the bed.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -5.756,
+    4.368
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -4.24,
+    0.14,
+    104.9
+   ],
+   "goals": [
+    [
+     -0.84,
+     1.39
+    ]
+   ],
+   "final_dist_m": 5.747,
+   "best_dist_m": 3.45,
+   "travelled_m": 5.17,
+   "duration_s": 15.3,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl16",
+   "instruction": "Go forward, turn right, turn right, then stop by the bed.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -5.575,
+    4.515
+   ],
+   "path_m": 6.75,
+   "spawn": [
+    -1.89,
+    -0.66,
+    -158.2
+   ],
+   "goals": [
+    [
+     -3.39,
+     2.24
+    ]
+   ],
+   "final_dist_m": 3.154,
+   "best_dist_m": 0.863,
+   "travelled_m": 9.35,
+   "duration_s": 49.1,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl17",
+   "instruction": "Go forward, turn right, then stop by the sofa.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -3.135,
+    4.415
+   ],
+   "path_m": 6.7,
+   "spawn": [
+    -6.44,
+    4.74,
+    -3.4
+   ],
+   "goals": [
+    [
+     -3.74,
+     -1.06
+    ]
+   ],
+   "final_dist_m": 5.508,
+   "best_dist_m": 5.5,
+   "travelled_m": 3.34,
+   "duration_s": 12.0,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": false
+  },
+  {
+   "id": "vl18",
+   "instruction": "Go forward, turn right, turn left, then stop.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -5.851,
+    4.3
+   ],
+   "path_m": 6.7,
+   "spawn": [
+    -3.74,
+    -1.06,
+    139.4
+   ],
+   "goals": [
+    [
+     -6.44,
+     4.74
+    ]
+   ],
+   "final_dist_m": 0.735,
+   "best_dist_m": 0.735,
+   "travelled_m": 6.78,
+   "duration_s": 36.6,
+   "outcome": "stopped",
+   "success": true,
+   "oracle": true
+  },
+  {
+   "id": "vl19",
+   "instruction": "Go forward, turn left, turn left, then stop by the sofa.",
+   "turn": "",
+   "family": "r2r",
+   "category": "",
+   "final_xy": [
+    -1.005,
+    -2.027
+   ],
+   "path_m": 6.65,
+   "spawn": [
+    -0.89,
+    2.39,
+    135.0
+   ],
+   "goals": [
+    [
+     -4.74,
+     -0.76
+    ]
+   ],
+   "final_dist_m": 3.944,
+   "best_dist_m": 0.44,
+   "travelled_m": 11.02,
+   "duration_s": 45.2,
+   "outcome": "stopped",
+   "success": false,
+   "oracle": true
+  }
+ ]
+}
