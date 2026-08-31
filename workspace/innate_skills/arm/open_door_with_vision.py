@@ -22,11 +22,9 @@ from innate import (
 from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
 
-from .handle_triangulation import camera_ray_odom, odom_point_to_base, triangulate_rays
+from .handle_triangulation import handle_from_floor_edge, odom_point_to_base
 
 _HEAD_TILT_DEG = 0.0
-_DOGLEG_ANGLE_RAD = math.radians(30.0)
-_DOGLEG_REVERSE_M = -0.12
 _MIN_RANGE_M = 0.20
 _MAX_RANGE_M = 1.50
 _MIN_HANDLE_Z_M = 0.10
@@ -107,6 +105,58 @@ class OpenDoorWithVision(Skill):
         self.debug_event("handle_detection", camera=camera, pixel=[u, v], response=text, frame=frame_name)
         return u, v
 
+    @staticmethod
+    def _normalized_pixel(value, field):
+        if not isinstance(value, (list, tuple)) or len(value) < 2:
+            raise ValueError(f"Gemini did not return {field}")
+        y, x = value[:2]
+        if not all(isinstance(item, (int, float)) and math.isfinite(item) for item in (x, y)):
+            raise ValueError(f"Gemini returned invalid {field}")
+        return max(0.0, min(640.0, float(x) / 1000.0 * 640.0)), max(0.0, min(480.0, float(y) / 1000.0 * 480.0))
+
+    def _detect_cabinet_geometry(self, image):
+        frame_name = f"{self._frame_index:02d}_head_cabinet_geometry.jpg"
+        self._frame_index += 1
+        directory = self.debug_directory
+        if directory is not None:
+            try:
+                (directory / frame_name).write_bytes(image.jpeg)
+            except Exception as error:  # noqa: BLE001 - observability must not block safety
+                self.logger.warning(f"[OpenDoorWithVision] could not save {frame_name}: {error}")
+        text = gemlib.ask_image(
+            self._proxy,
+            image,
+            f"Find {self._handle_description!r} on the front of one flat cabinet, drawer unit, "
+            "or door. Also find that SAME unit's two front bottom corners where its front face "
+            "or front feet meet the floor. Return ONLY a JSON list containing one object: "
+            '[{"handle_point":[y,x],"floor_left":[y,x],"floor_right":[y,x]}], '
+            "coordinates normalized 0-1000. floor_left and floor_right must be widely separated "
+            "points on the same straight front floor edge, ordered in the image. Empty list if "
+            "the handle or both floor corners are not clearly visible.",
+            logger=self.logger,
+        )
+        detections = vision.parse_dets(text)
+        if not detections:
+            self.fail("Could not identify the handle and both cabinet floor corners")
+        detection = detections[0]
+        try:
+            handle = self._normalized_pixel(detection.get("handle_point"), "handle_point")
+            left = self._normalized_pixel(detection.get("floor_left"), "floor_left")
+            right = self._normalized_pixel(detection.get("floor_right"), "floor_right")
+        except ValueError as error:
+            self.fail(str(error))
+        if abs(right[0] - left[0]) < 80.0:
+            self.fail("Detected cabinet floor corners are not far enough apart")
+        self.debug_event(
+            "cabinet_geometry_detection",
+            frame=frame_name,
+            handle_pixel=list(handle),
+            floor_left_pixel=list(left),
+            floor_right_pixel=list(right),
+            response=text,
+        )
+        return handle, left, right
+
     def _rotate(self, radians):
         before = self._odom_xyt()
         if not self.mobility.rotate_by(self._odom_xyt, radians, logger=self.logger):
@@ -119,46 +169,49 @@ class OpenDoorWithVision(Skill):
             self.fail("Base motion failed during handle triangulation")
         self.debug_event("base_translation", requested_m=metres, before=list(before), after=list(self._odom_xyt()))
 
-    def _triangulate_handle(self):
+    def _localize_handle(self):
         self.sleep(0.8)
-        first_pose = self._odom_xyt()
-        first_px = self._detect(self.main_image, "head")
-        first_ray = camera_ray_odom(*first_px, _HEAD_TILT_DEG, first_pose)
-
-        self._rotate(_DOGLEG_ANGLE_RAD)
-        self._drive(_DOGLEG_REVERSE_M)
-        self._rotate(-_DOGLEG_ANGLE_RAD)
-        self.sleep(0.8)
-
-        second_pose = self._odom_xyt()
-        second_px = self._detect(self.main_image, "head")
-        second_ray = camera_ray_odom(*second_px, _HEAD_TILT_DEG, second_pose)
+        handle_px, left_px, right_px = self._detect_cabinet_geometry(self.main_image)
         try:
-            point, gap, angle = triangulate_rays(first_ray, second_ray)
+            relative, left, right, plane_yaw = handle_from_floor_edge(handle_px, left_px, right_px, _HEAD_TILT_DEG)
         except ValueError as error:
             self.fail(str(error))
-        relative = odom_point_to_base(point, second_pose)
         distance = math.hypot(relative[0], relative[1])
         if not _MIN_RANGE_M <= distance <= _MAX_RANGE_M:
             self.fail(f"Triangulated handle range {distance:.2f} m is outside the safe envelope")
         if not _MIN_HANDLE_Z_M <= relative[2] <= _MAX_HANDLE_Z_M:
             self.fail(f"Triangulated handle height {relative[2]:.2f} m is outside the arm workspace")
         self.debug_event(
-            "handle_triangulated",
-            odom_point=list(point),
+            "handle_plane_localized",
             base_point=list(relative),
-            ray_gap_m=gap,
-            ray_angle_deg=angle,
-            first_pose=list(first_pose),
-            second_pose=list(second_pose),
+            floor_left_base=list(left),
+            floor_right_base=list(right),
+            plane_yaw_rad=plane_yaw,
+            range_m=distance,
         )
-        return point
+        odom = self._odom_xyt()
+        c, s = math.cos(odom[2]), math.sin(odom[2])
+        point_odom = (
+            odom[0] + c * relative[0] - s * relative[1],
+            odom[1] + s * relative[0] + c * relative[1],
+            relative[2],
+        )
+        normals = (plane_yaw - math.pi / 2.0, plane_yaw + math.pi / 2.0)
+        approach_yaw_base = max(
+            normals,
+            key=lambda yaw: math.cos(yaw) * relative[0] + math.sin(yaw) * relative[1],
+        )
+        approach_yaw_odom = math.atan2(math.sin(odom[2] + approach_yaw_base), math.cos(odom[2] + approach_yaw_base))
+        return point_odom, approach_yaw_odom
 
-    def _position_base(self, point):
+    def _position_base(self, point, approach_yaw):
         relative = odom_point_to_base(point, self._odom_xyt())
         self._rotate(math.atan2(relative[1], relative[0]))
         relative = odom_point_to_base(point, self._odom_xyt())
         self._drive(math.hypot(relative[0], relative[1]) - _APPROACH_RANGE_M)
+        current_yaw = self._odom_xyt()[2]
+        yaw_error = math.atan2(math.sin(approach_yaw - current_yaw), math.cos(approach_yaw - current_yaw))
+        self._rotate(yaw_error)
         final_odom = self._odom_xyt()
         relative = odom_point_to_base(point, final_odom)
         accepted = 0.28 <= relative[0] <= 0.40 and abs(relative[1]) <= 0.05
@@ -251,15 +304,14 @@ class OpenDoorWithVision(Skill):
                 "acquisition_started",
                 handle_description=self._handle_description,
                 pull_distance_m=pull_distance_m,
-                dogleg_angle_deg=math.degrees(_DOGLEG_ANGLE_RAD),
-                dogleg_reverse_m=_DOGLEG_REVERSE_M,
+                localization="cabinet_floor_edge_plane",
             )
             self.head.set_position(int(_HEAD_TILT_DEG))
             self.manipulation.torque_on()
             self.manipulation.gripper_open(duration=1.0)
             self.manipulation.move_joints(_SEARCH_ARM, duration=3.0)
-            point = self._triangulate_handle()
-            target = self._position_base(point)
+            point, approach_yaw = self._localize_handle()
+            target = self._position_base(point, approach_yaw)
             pregrasp = self._wrist_align(target)
             self._grasp(pregrasp, target[0])
             if self.skills is None:

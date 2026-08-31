@@ -53,6 +53,20 @@ def test_camera_ray_is_normalized_and_transformed_to_odom():
     assert direction[1] > 0.99
 
 
+def test_localizes_handle_from_cabinet_floor_edge():
+    point, left, right, plane_yaw = geometry.handle_from_floor_edge(
+        (320.0, 273.5),
+        (176.7, 388.0),
+        (463.3, 388.0),
+        0.0,
+    )
+
+    assert point == pytest.approx((0.8, 0.0, 0.2), abs=0.003)
+    assert left[0] == pytest.approx(0.8, abs=0.003)
+    assert right[0] == pytest.approx(0.8, abs=0.003)
+    assert abs(abs(plane_yaw) - math.pi / 2.0) < 0.01
+
+
 def test_detection_exports_exact_camera_frame(tmp_path, monkeypatch):
     monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
     monkeypatch.setattr(module.gemlib, "ask_image", lambda *_args, **_kwargs: '[{"grasp_point":[500,500]}]')
@@ -116,14 +130,14 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
     skill.head = _Head()
     skill.skills = _Skills()
     order = []
-    monkeypatch.setattr(skill, "_triangulate_handle", lambda: order.append("triangulate") or (1.0, 0.0, 0.2))
-    monkeypatch.setattr(skill, "_position_base", lambda _point: order.append("position") or (0.34, 0.0, 0.2))
+    monkeypatch.setattr(skill, "_localize_handle", lambda: order.append("localize") or ((1.0, 0.0, 0.2), 0.0))
+    monkeypatch.setattr(skill, "_position_base", lambda _point, _yaw: order.append("position") or (0.34, 0.0, 0.2))
     monkeypatch.setattr(skill, "_wrist_align", lambda target: order.append("align") or (0.28, target[1], target[2]))
     monkeypatch.setattr(skill, "_grasp", lambda _pregrasp, _handle_x: order.append("grasp"))
 
     result = skill.execute(pull_distance_m=0.03)
 
-    assert order == ["triangulate", "position", "align", "grasp"]
+    assert order == ["localize", "position", "align", "grasp"]
     assert "0.03 m" in result
     assert skill.skills.calls == [
         (

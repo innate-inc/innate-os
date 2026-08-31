@@ -4,7 +4,7 @@
 
 import math
 
-from innate.geometry import pixel_ray
+from innate.geometry import pixel_ray, pixel_to_floor
 
 
 def camera_ray_odom(u: float, v: float, head_tilt_deg: float, odom_xyt: tuple[float, float, float]):
@@ -60,3 +60,31 @@ def odom_point_to_base(point, odom_xyt):
     dx, dy = point[0] - x, point[1] - y
     c, s = math.cos(yaw), math.sin(yaw)
     return (c * dx + s * dy, -s * dx + c * dy, point[2])
+
+
+def handle_from_floor_edge(handle_px, left_floor_px, right_floor_px, head_tilt_deg):
+    """Intersect a handle pixel ray with the vertical plane above a floor edge.
+
+    The two edge pixels must identify separated points on the same straight
+    cabinet/door front where it meets the floor. Returns
+    ``(handle_xyz, left_xy, right_xy, plane_yaw)`` in ``base_link``.
+    """
+    left = pixel_to_floor(*left_floor_px, head_tilt_deg)
+    right = pixel_to_floor(*right_floor_px, head_tilt_deg)
+    if left is None or right is None:
+        raise ValueError("cabinet floor corners do not project onto the floor")
+    edge = (right[0] - left[0], right[1] - left[1])
+    width = math.hypot(*edge)
+    if width < 0.15:
+        raise ValueError(f"cabinet floor edge is too short ({width:.2f} m)")
+
+    normal = (-edge[1] / width, edge[0] / width)
+    origin, direction = pixel_ray(*handle_px, head_tilt_deg)
+    denominator = normal[0] * direction[0] + normal[1] * direction[1]
+    if abs(denominator) < 1e-4:
+        raise ValueError("handle ray is parallel to the cabinet plane")
+    distance = (normal[0] * (left[0] - origin[0]) + normal[1] * (left[1] - origin[1])) / denominator
+    if distance <= 0.0:
+        raise ValueError("cabinet plane is behind the camera")
+    point = tuple(origin[i] + distance * direction[i] for i in range(3))
+    return point, left, right, math.atan2(edge[1], edge[0])
