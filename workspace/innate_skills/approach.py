@@ -54,9 +54,12 @@ APPROACH_PARAMS = {
     # calibration (the old model read ranges ~2x long); same pixel target.
     "sweet_x": 0.285,
     "box_y": 0.0,
-    "box_half_px": 40.0,
-    "box_half_v_px": 40.0,
-    "accept_frac": 0.5,
+    # frac 1.0 collapses hold onto accept: pick's ±20 px park is the grasp
+    # capture window, tuned on hardware, and a looser hold band would let a
+    # Gemini re-read certify a park the gripper cannot reach from.
+    "box_half_px": 20.0,
+    "box_half_v_px": 20.0,
+    "accept_frac": 1.0,
     "box_steps": 6.0,
     "bearing_go_deg": 4.0,
     "follow_gain_ang": 0.3,
@@ -204,9 +207,13 @@ class FloorApproach:
     # --- position the base ---
 
     def _sweet_box(self):
-        """(centre, (outer_u, outer_v), (accept_u, accept_v)); stop only inside
-        accept. Two axes, two tolerances: near the park one image row is ~cm of
-        RANGE but sub-mm of bearing, so one box cannot serve both."""
+        """(centre, (hold_u, hold_v), (accept_u, accept_v)). Two boxes because
+        two things measure the park: `accept` is the flow servo's deadband,
+        tight because a tracked pixel is precise; `hold` is what a Gemini
+        re-read must fall inside to count as parked, loose because a detector
+        whose box edge jitters tens of pixels cannot resolve millimetres.
+        Two axes as well: near the park one image row is ~cm of RANGE but
+        sub-mm of bearing, so one tolerance cannot serve both."""
         c = floor_to_pixel(self.p["sweet_x"], self.p["box_y"], self.p["tilt_deg"])
         if c is None or not (0 <= c[0] < IMG_W and 0 <= c[1] < IMG_H):
             raise SkillFailed("approach box off-image — check tilt_deg/sweet_x")
@@ -359,8 +366,8 @@ class FloorApproach:
                     self._position_failed(prompt)
             # Arrival checked BEFORE servoing: a tracker that dies on a
             # parked base must not burn the step budget re-seeding.
-            (cu, cv), _half, accept = self._sweet_box()
-            if xy is not None and inside_box(seed, cu, cv, accept[0], accept[1]):
+            (cu, cv), hold, _accept = self._sweet_box()
+            if xy is not None and inside_box(seed, cu, cv, hold[0], hold[1]):
                 return xy
             rem = _remaining()
             if rem is not None and rem[0] <= stop_x:
@@ -383,10 +390,12 @@ class FloorApproach:
                 seed = None
                 continue
             lost = 0
+            # The flow servo already parked this within `accept`; re-demanding
+            # that of a Gemini box edge only re-servos on detector noise.
             xy2, px2 = self._localize_retry(prompt)
             if px2 is None:
                 self._position_failed(prompt)
-            if xy2 is not None and inside_box(px2, cu, cv, accept[0], accept[1]):
+            if xy2 is not None and inside_box(px2, cu, cv, hold[0], hold[1]):
                 return xy2
             xy, seed = xy2, (px2 if xy2 is not None else None)
         if xy is not None and xy[0] <= self.p["sweet_x"] + PLATEAU_SLACK_M:
@@ -406,8 +415,8 @@ class FloorApproach:
                 xy, px = self._localize_retry(prompt)
                 if px is None:
                     self._position_failed(prompt)
-            (cu, cv), _half, accept = self._sweet_box()
-            if xy is not None and inside_box(px, cu, cv, accept[0], accept[1]):
+            (cu, cv), hold, _accept = self._sweet_box()
+            if xy is not None and inside_box(px, cu, cv, hold[0], hold[1]):
                 return xy
             if xy is None:
                 px = None

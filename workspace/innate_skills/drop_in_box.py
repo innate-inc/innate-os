@@ -26,7 +26,7 @@ from innate import (
 )
 from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
-from innate.geometry import IMG_H, IMG_W, pixel_to_floor, pixel_to_height
+from innate.geometry import IMG_H, IMG_W, floor_to_pixel, pixel_to_floor, pixel_to_height
 
 # Arm reach as a sphere about the shoulder (URDF: joint2 at (0.086, 0.0845),
 # 0.326 m of link past it). It predicts a 0.407 m floor-height limit — where
@@ -51,17 +51,21 @@ CLIP_MARGIN_PX = 3.0
 
 PARAMS = {
     **APPROACH_PARAMS,
-    # -12 sees floor from 0.19 m out — just short of the 0.23 park, so a
-    # clipped detection cannot self-certify as parked.
+    # -12 sees floor from 0.19 m out, so the 0.23 park sits 40 px above the
+    # frame bottom; past it the contact line leaves frame (see _park_if_clipped).
     "tilt_deg": -12.0,
     # Near floor edge parks here. Close on purpose: at 0.33 the reach clamp
     # trimmed every release to a rim hug; still clear of the body (the
     # shoulder at 0.086 is the frontmost part).
     "sweet_x": 0.23,
-    # Bearing loose (a close container runs off the frame edges), range tight
-    # (the bumper-to-reach window is ~5 cm; the 7 px accept is ~1.5 cm).
+    # Bearing loose (a close container runs off the frame edges). Range was
+    # 12 px — a 16 mm accept band the servo cannot resolve: the feed is 7.5 Hz
+    # and drive_v_min 0.04 m/s, so its smallest blind step is ~6 mm and it
+    # limit-cycled instead of parking. 25 px gives a 34 mm deadband (~6 steps)
+    # and a 57 mm hold band, both well inside the 0.15-0.30 m park that
+    # _release_x tolerates at every rim in the band.
     "box_half_px": 50.0,
-    "box_half_v_px": 12.0,
+    "box_half_v_px": 25.0,
     "accept_frac": 0.6,
     # Reach past the near face. 0.03 draped a sock on the rim; the reach
     # clamp trims tall rims down to drop_inset_min at worst.
@@ -163,7 +167,22 @@ class DropInBox(Skill):
         self._box_top_v = float(y)
         px = (self._box_u, min(float(IMG_H - 1), float(y + h)))
         self._measure_rim(px)
-        return px
+        return self._park_if_clipped(px, float(y + h))
+
+    def _park_if_clipped(self, px: tuple[float, float], contact_v: float) -> tuple[float, float]:
+        """A floor-contact row at or past the frame bottom means the container
+        is nearer than the 0.19 m this tilt can see — at or past the park, not
+        somewhere measurable. Clamped to the last row it back-projects to a
+        fixed 0.19 that reads 'too close' forever, walking the base backwards
+        and burning a step each time; report the park row and keep only the
+        bearing this detection can still see."""
+        if contact_v < IMG_H - 1:
+            return px
+        park = floor_to_pixel(self._p["sweet_x"], self._p["box_y"], self._p["tilt_deg"])
+        if park is None:
+            return px
+        self.logger.info(f"[DropInBox] contact row clipped at v={contact_v:.0f}; treating as parked")
+        return (px[0], park[1])
 
     def _measure_rim(self, px: tuple[float, float]) -> None:
         """Bank the rim height while the container is still whole in frame:
