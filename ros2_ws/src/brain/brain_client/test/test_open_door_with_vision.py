@@ -56,10 +56,12 @@ def test_camera_ray_is_normalized_and_transformed_to_odom():
 
 
 def test_localizes_handle_from_cabinet_floor_edge():
+    # Synthetic projection of a handle at x=0.8 m, z=0.2 m and two points
+    # spanning the same cabinet/floor edge, using the calibrated head camera.
     point, left, right, plane_yaw = geometry.handle_from_floor_edge(
-        (320.0, 273.5),
-        (176.7, 388.0),
-        (463.3, 388.0),
+        (319.1, 268.3231),
+        (226.0430, 335.3592),
+        (411.9058, 335.3592),
         0.0,
     )
 

@@ -50,7 +50,7 @@ def pixel_to_floor(u, v, head_tilt_deg):
 def pixel_ray(u, v, head_tilt_deg):
     """Pixel -> normalized ray ``(origin, direction)`` in ``base_link``."""
     cam, fwd, right, down = _cam_pose(head_tilt_deg)
-    xo, yo = (u - CX) / FX, (v - CY) / FX
+    xo, yo = (u - CX) / FX, (v - CY) / FY
     direction = tuple(fwd[i] + xo * right[i] + yo * down[i] for i in range(3))
     norm = math.sqrt(sum(value * value for value in direction))
     return cam, tuple(value / norm for value in direction)
