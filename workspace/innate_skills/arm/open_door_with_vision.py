@@ -20,7 +20,7 @@ from innate import (
     vision,
 )
 from innate import gemini as gemlib
-from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
+from innate.exceptions import ArmFailed, ArmUnhealthy
 
 from .handle_triangulation import (
     odom_point_to_base,
@@ -60,6 +60,12 @@ _HEAD_METRIC_SAMPLES = 3
 _GRASP_ATTEMPTS = 2
 _VISION_MODEL = "gemini-3.6-flash"
 _VISION_REASONING_EFFORT = "minimal"
+_LEFT_PUSH_DELTA_RAD = 0.25
+_LEFT_PUSH_SPEED_RAD_S = 0.15
+_JOINT1_LEFT_LIMIT_RAD = 1.5708
+_LEFT_PUSH_PRELOAD_S = 1.0
+_LEFT_PUSH_AFTER_RELEASE_S = 5.0
+_LEFT_PUSH_KEEPALIVE_S = 0.10
 
 
 def _parse_wrist_decision(text):
@@ -321,6 +327,11 @@ class OpenDoorWithVision(Skill):
             "the direction you want the handle to move in the image. Choose GRASP only when both fingers have "
             "passed on opposite sides of the handle SHAFT and a substantial shaft section is deep inside the "
             "finger pocket, behind the pointed fingertips. Closing must contact opposite sidewalls of the shaft. "
+            "Before GRASP, raise the gripper until the physical TOP END of the vertical handle is just visible "
+            "above or behind the gripper/finger pocket. The top should be peeking into view; it must not remain "
+            "fully hidden below or behind the gripper. If the expected handle or its top is hidden by the gripper, "
+            "assume the gripper is too low and choose UP to reveal it. Do not ABORT merely because the gripper "
+            "temporarily occludes the handle while doing this vertical alignment. "
             "Do NOT choose GRASP when only the rounded free end or tip lies between the fingertips; that is a weak "
             "tip pinch. For this vertical handle, move the gripper UP when needed to surround a higher shaft section "
             "instead of pinching its bottom end. Choose ABORT if the handle is absent, "
@@ -527,6 +538,50 @@ class OpenDoorWithVision(Skill):
         )
         return self._wrist_align(target, restage=False)
 
+    def _hold_left_push(self, duration_s, phase):
+        ticks = math.ceil(duration_s / _LEFT_PUSH_KEEPALIVE_S)
+        for tick in range(ticks):
+            self.check_cancelled()
+            self.manipulation.stream_keepalive()
+            self.sleep(_LEFT_PUSH_KEEPALIVE_S)
+            self.debug_event("left_push_tick", phase=phase, tick=tick, elapsed_s=(tick + 1) * _LEFT_PUSH_KEEPALIVE_S)
+
+    def _retreat_and_push_left(self, retreat_distance_m):
+        """Back away holding the handle, then release into a left arm sweep."""
+        self.feedback("Backing away with the handle")
+        self._drive(-retreat_distance_m)
+
+        joints = tuple(float(value) for value in self.joint_states.position[:5])
+        if len(joints) != 5 or not all(math.isfinite(value) for value in joints):
+            self.fail("Arm joint feedback is unavailable for the left door push")
+        left_target = list(joints)
+        if not -_JOINT1_LEFT_LIMIT_RAD <= left_target[0] <= _JOINT1_LEFT_LIMIT_RAD:
+            self.fail("Joint 1 feedback is outside its configured range")
+        left_target[0] = min(_JOINT1_LEFT_LIMIT_RAD, left_target[0] + _LEFT_PUSH_DELTA_RAD)
+        self.debug_event(
+            "left_push_started",
+            starting_joints=list(joints),
+            target_joints=left_target,
+            joint1_delta_rad=left_target[0] - joints[0],
+            max_speed_rad_s=_LEFT_PUSH_SPEED_RAD_S,
+            preload_s=_LEFT_PUSH_PRELOAD_S,
+            after_release_s=_LEFT_PUSH_AFTER_RELEASE_S,
+        )
+
+        # Five values preserve the standing gripper force while joint 1 loads
+        # the door toward robot-left.
+        self.manipulation.stream_joints(left_target, max_speed=_LEFT_PUSH_SPEED_RAD_S)
+        self._hold_left_push(_LEFT_PUSH_PRELOAD_S, "grasped_preload")
+
+        self.feedback("Releasing the handle and pushing the door left")
+        self.manipulation.gripper_open(duration=1.0)
+        # Opening is a discrete command and stops streaming, so resume the same
+        # joint-1 target and maintain it for the requested five seconds.
+        self.manipulation.stream_joints(left_target, max_speed=_LEFT_PUSH_SPEED_RAD_S)
+        self._hold_left_push(_LEFT_PUSH_AFTER_RELEASE_S, "released_push")
+        self.manipulation.stream_stop()
+        self.debug_event("left_push_complete", target_joints=left_target)
+
     def execute(
         self,
         handle_description: str = "the protruding handle directly ahead",
@@ -573,19 +628,8 @@ class OpenDoorWithVision(Skill):
                 if attempt == _GRASP_ATTEMPTS:
                     self.fail(f"The gripper missed the handle after {_GRASP_ATTEMPTS} verified attempts")
                 pregrasp = self._prepare_grasp_retry(target, attempt + 1)
-            if self.skills is None:
-                self.fail("Skill composition is unavailable for the pull handoff")
-            result = self.skills.run(
-                "innate-os/pull_held_handle",
-                timeout=35.0,
-                distance_m=pull_distance_m,
-                direction_x=-1.0,
-                direction_y=0.0,
-                direction_z=0.0,
-            )
-            if not result.ok:
-                raise SkillFailed(result.message)
-            return f"Located, grasped, and pulled the handle {pull_distance_m:.2f} m"
+            self._retreat_and_push_left(pull_distance_m)
+            return f"Located and grasped the handle, backed up {pull_distance_m:.2f} m, and pushed the door left"
         except (ArmFailed, ArmUnhealthy) as error:
             self.fail(str(error))
         finally:

@@ -14,7 +14,7 @@ import pytest
 pytest.importorskip("rclpy")
 
 from brain_client.skills import debug_runs
-from brain_client.skills.types import SkillFailed, SkillOutput
+from brain_client.skills.types import SkillFailed
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 geometry = importlib.import_module("workspace.innate_skills.arm.handle_triangulation")
@@ -219,6 +219,9 @@ def test_wrist_decision_retries_malformed_content_and_logs_raw_responses(tmp_pat
     assert "opposite sides of the handle SHAFT" in requests[0][1]
     assert "Do NOT choose GRASP when only the rounded free end or tip" in requests[0][1]
     assert "move the gripper UP when needed to surround a higher shaft section" in requests[0][1]
+    assert "TOP END of the vertical handle is just visible" in requests[0][1]
+    assert "assume the gripper is too low and choose UP" in requests[0][1]
+    assert "Do not ABORT merely because the gripper temporarily occludes the handle" in requests[0][1]
     assert requests[0][2]["reasoning_effort"] == "minimal"
     assert requests[0][2]["model"] == "gemini-3.6-flash"
     assert (skill.debug_directory / "00_wrist_action_3.jpg").read_bytes() == b"current"
@@ -565,22 +568,12 @@ class _Head:
         self.positions.append(value)
 
 
-class _Skills:
-    def __init__(self):
-        self.calls = []
-
-    def run(self, skill_id, **inputs):
-        self.calls.append((skill_id, inputs))
-        return SkillOutput("pulled")
-
-
 def test_full_skill_acquires_before_pull_handoff(monkeypatch):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("open-door-test"))
     skill.mobility = _Mobility()
     skill.manipulation = _Manipulation()
     skill.head = _Head()
-    skill.skills = _Skills()
     order = []
 
     def retry(target, attempt):
@@ -600,6 +593,11 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         lambda pregrasp, attempt: order.append(("grasp", attempt, pregrasp)) or attempt == 2,
     )
     monkeypatch.setattr(skill, "_prepare_grasp_retry", retry)
+    monkeypatch.setattr(
+        skill,
+        "_retreat_and_push_left",
+        lambda distance: order.append(("retreat_and_push_left", distance)),
+    )
 
     result = skill.execute(pull_distance_m=0.03)
 
@@ -610,21 +608,54 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         ("grasp", 1, (0.35, 0.0, 0.2)),
         ("retry", 2),
         ("grasp", 2, (0.36, 0.0, 0.2)),
+        ("retreat_and_push_left", 0.03),
     ]
-    assert "0.03 m" in result
-    assert skill.skills.calls == [
-        (
-            "innate-os/pull_held_handle",
-            {
-                "timeout": 35.0,
-                "distance_m": 0.03,
-                "direction_x": -1.0,
-                "direction_y": 0.0,
-                "direction_z": 0.0,
-            },
-        )
-    ]
+    assert "backed up 0.03 m" in result
     assert skill.mobility.stops == 1
     assert skill.manipulation.stops == 1
     assert skill.manipulation.setup[:2] == ["torque_on", "gripper_open"]
     assert skill.head.positions == [0, 0]
+
+
+def test_post_grasp_retreat_preloads_releases_and_pushes_left(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-left-push-test"))
+    drives = []
+    events = []
+    monkeypatch.setattr(skill, "_drive", drives.append)
+    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(skill, "check_cancelled", lambda: None)
+    monkeypatch.setattr(skill, "feedback", lambda _message: None)
+    monkeypatch.setattr(skill, "debug_event", lambda event, **fields: events.append((event, fields)))
+    skill.joint_states = SimpleNamespace(position=(0.10, -0.20, 0.30, -0.40, 0.50, -0.60))
+
+    class PushManipulation:
+        def __init__(self):
+            self.actions = []
+
+        def stream_joints(self, joints, **kwargs):
+            self.actions.append(("stream", list(joints), kwargs))
+
+        def stream_keepalive(self):
+            self.actions.append(("keepalive",))
+
+        def gripper_open(self, **kwargs):
+            self.actions.append(("open", kwargs))
+
+        def stream_stop(self):
+            self.actions.append(("stop",))
+
+    skill.manipulation = PushManipulation()
+
+    skill._retreat_and_push_left(0.05)
+
+    assert drives == [-0.05]
+    streams = [action for action in skill.manipulation.actions if action[0] == "stream"]
+    assert len(streams) == 2
+    assert streams[0][1] == pytest.approx([0.35, -0.20, 0.30, -0.40, 0.50])
+    assert streams[1][1] == pytest.approx(streams[0][1])
+    assert streams[0][2]["max_speed"] == pytest.approx(0.15)
+    assert skill.manipulation.actions[11][0] == "open"
+    assert sum(action[0] == "keepalive" for action in skill.manipulation.actions) == 60
+    assert skill.manipulation.actions[-1] == ("stop",)
+    assert [event for event, _fields in events].count("left_push_tick") == 60
