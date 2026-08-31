@@ -43,6 +43,7 @@ MAX_BASE_ANGULAR_SPEED = 6.0
 
 DRIVEN_JOINTS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint_head"]
 MIMIC_JOINT = ("joint6M", "joint6", -1.0)  # (name, source, multiplier)
+GRIPPER_CLOSED_ON_AIR_RAD = -0.085  # hardware encoder, jaws shut on nothing
 
 # --- contact tuning (see tune_contacts) ----------------------------------
 #
@@ -356,6 +357,14 @@ def tune_contacts(robot_spec: mujoco.MjSpec) -> None:
             geom.solimp = FINGER_SOLIMP
 
     robot_spec.add_exclude(bodyname1=FINGER_LINKS[0], bodyname2=FINGER_LINKS[1])
+
+    # The real claw's hard stop sits past nominal zero: closed on air the
+    # encoder reads GRIPPER_CLOSED_ON_AIR_RAD (pick's GRIPPER_EMPTY_J6).
+    # Unclamped, the -0.6 close target scissors the blades through each other.
+    j6 = robot_spec.joint(MIMIC_JOINT[1])
+    j6m = robot_spec.joint(MIMIC_JOINT[0])
+    j6.range = [GRIPPER_CLOSED_ON_AIR_RAD, j6.range[1]]
+    j6m.range = [j6m.range[0], -GRIPPER_CLOSED_ON_AIR_RAD]
 
     mimic_name, source_name, _mult = MIMIC_JOINT
     for name in (source_name, mimic_name):

@@ -21,7 +21,14 @@ import numpy as np
 from PIL import Image
 
 from . import world
-from .constants import CAMERA_FOVY, CAMERA_HEIGHT, CAMERA_WIDTH, WRIST_CAMERA_FOVY
+from .constants import (
+    CAMERA_FX,
+    CAMERA_FY,
+    CAMERA_HEIGHT,
+    CAMERA_PRINCIPAL_PIXEL,
+    CAMERA_WIDTH,
+    WRIST_CAMERA_FOVY,
+)
 from .drive_limits import clamp_cmd_vel
 from .props import PropRegistry
 from .world import ARM_HOME, SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG
@@ -252,9 +259,16 @@ class VirtualMars:
             for cam_name, (body_name, forward, up) in CAMERAS.items():
                 cam = world_spec.body(body_name).add_camera()
                 cam.name = cam_name
-                # Per-camera FOV: the head and wrist cameras are different
-                # physical lenses (see constants.py).
-                cam.fovy = WRIST_CAMERA_FOVY if cam_name == "wrist" else CAMERA_FOVY
+                # The head renders the measured lens (anisotropic focal,
+                # off-centre principal point — no fovy can express it). The
+                # wrist keeps a fovy: its servo constants are tuned against one.
+                if cam_name == "wrist":
+                    cam.fovy = WRIST_CAMERA_FOVY
+                else:
+                    cam.resolution = [CAMERA_WIDTH, CAMERA_HEIGHT]
+                    cam.focal_pixel = [CAMERA_FX, CAMERA_FY]
+                    cam.principal_pixel = list(CAMERA_PRINCIPAL_PIXEL)
+                    cam.sensor_size = [0.0064, 0.0048]  # any size; the pixel forms override it
                 cam.quat = _camera_quat(forward, up)
 
             self.model = world_spec.compile()
@@ -339,9 +353,17 @@ class VirtualMars:
         self._cmd_sim_time = self.data.time
 
     def set_joint_target(self, name: str, value: float) -> None:
-        if name in self._joints:
-            qadr, dadr, _home = self._joints[name]
-            self._joints[name] = (qadr, dadr, value)
+        if name not in self._joints:
+            return
+        qadr, dadr, _home = self._joints[name]
+        # The gripper close is commanded 0.6 rad past the mechanical stop
+        # (hardware squeezes at its current limit there). Clamped, the error
+        # still saturates the torque ceiling; the blades stop at the stop.
+        jid = self.model.joint(f"robot_{name}").id
+        if self.model.jnt_limited[jid]:
+            lo, hi = self.model.jnt_range[jid]
+            value = max(lo, min(hi, value))
+        self._joints[name] = (qadr, dadr, value)
 
     def joint_targets(self) -> dict[str, float]:
         return {name: target for name, (_q, _d, target) in self._joints.items()}
