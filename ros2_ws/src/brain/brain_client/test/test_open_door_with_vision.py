@@ -303,6 +303,50 @@ def test_base_corrects_residual_lateral_error_after_driving(monkeypatch):
     assert target == pytest.approx((math.hypot(point[0], point[1]), 0.0, point[2]))
 
 
+def test_initial_handle_detection_retries_with_two_centimetre_forward_creeps(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-initial-retry-test"))
+    attempts = []
+    drives = []
+
+    def localize():
+        attempts.append(len(attempts) + 1)
+        if len(attempts) < 3:
+            raise SkillFailed("Could not identify a graspable handle in the head camera")
+        return (0.8, 0.1, 0.2)
+
+    monkeypatch.setattr(skill, "_localize_handle", localize)
+    monkeypatch.setattr(skill, "_drive", drives.append)
+    monkeypatch.setattr(skill, "feedback", lambda _message: None)
+
+    point = skill._localize_handle_with_retries()
+
+    assert point == pytest.approx((0.8, 0.1, 0.2))
+    assert attempts == [1, 2, 3]
+    assert drives == pytest.approx([0.02, 0.02])
+
+
+def test_initial_handle_detection_times_out_after_five_attempts(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-initial-timeout-test"))
+    attempts = []
+    drives = []
+
+    def localize():
+        attempts.append(len(attempts) + 1)
+        raise SkillFailed("Could not identify a graspable handle in the head camera")
+
+    monkeypatch.setattr(skill, "_localize_handle", localize)
+    monkeypatch.setattr(skill, "_drive", drives.append)
+    monkeypatch.setattr(skill, "feedback", lambda _message: None)
+
+    with pytest.raises(SkillFailed, match="after 5 attempts"):
+        skill._localize_handle_with_retries()
+
+    assert attempts == [1, 2, 3, 4, 5]
+    assert drives == pytest.approx([0.02, 0.02, 0.02, 0.02])
+
+
 def test_wrist_decision_parser_requires_allowed_action_and_box():
     valid = '[{"box_2d":[200,450,800,550],"grasp_point":[500,500],"action":"forward","reason":"too far"}]'
 

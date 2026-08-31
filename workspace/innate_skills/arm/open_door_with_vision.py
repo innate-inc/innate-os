@@ -20,7 +20,7 @@ from innate import (
     vision,
 )
 from innate import gemini as gemlib
-from innate.exceptions import ArmFailed, ArmUnhealthy
+from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
 
 from .handle_triangulation import (
     odom_point_to_base,
@@ -57,6 +57,8 @@ _MAIN_CX_PX = 317.75570636221465
 _MAIN_CY_PX = 228.0517433641685
 _MAIN_CAMERA_ORIGIN = (0.002519, 0.0295, 0.258545)
 _HEAD_METRIC_SAMPLES = 3
+_INITIAL_HANDLE_ATTEMPTS = 5
+_INITIAL_RETRY_FORWARD_M = 0.02
 _GRASP_ATTEMPTS = 2
 _VISION_MODEL = "gemini-3.6-flash"
 _VISION_REASONING_EFFORT = "minimal"
@@ -289,6 +291,38 @@ class OpenDoorWithVision(Skill):
             relative[2],
         )
         return point_odom
+
+    def _localize_handle_with_retries(self):
+        """Retry an initially missing head-camera handle while creeping forward."""
+        missing_message = "Could not identify a graspable handle in the head camera"
+        for attempt in range(1, _INITIAL_HANDLE_ATTEMPTS + 1):
+            self.check_cancelled()
+            try:
+                return self._localize_handle()
+            except SkillFailed as error:
+                if str(error) != missing_message:
+                    raise
+                if attempt == _INITIAL_HANDLE_ATTEMPTS:
+                    self.debug_event(
+                        "initial_handle_detection_exhausted",
+                        attempts=attempt,
+                        forward_moves=attempt - 1,
+                        forward_distance_m=(attempt - 1) * _INITIAL_RETRY_FORWARD_M,
+                    )
+                    self.fail(f"{missing_message} after {attempt} attempts")
+                self.debug_event(
+                    "initial_handle_detection_retry",
+                    failed_attempt=attempt,
+                    next_attempt=attempt + 1,
+                    forward_move_m=_INITIAL_RETRY_FORWARD_M,
+                )
+                self.feedback(
+                    f"Handle not found on attempt {attempt}; moving forward "
+                    f"{_INITIAL_RETRY_FORWARD_M * 100:.0f} cm and trying again"
+                )
+                self._drive(_INITIAL_RETRY_FORWARD_M)
+
+        raise AssertionError("initial handle retry loop did not return or fail")
 
     def _position_base(self, point):
         relative = odom_point_to_base(point, self._odom_xyt())
@@ -723,7 +757,7 @@ class OpenDoorWithVision(Skill):
             self.manipulation.torque_on()
             self.manipulation.gripper_open(duration=1.0)
             self.manipulation.move_joints(_SEARCH_ARM, duration=3.0)
-            point = self._localize_handle()
+            point = self._localize_handle_with_retries()
             target = self._position_base(point)
             pregrasp = self._wrist_align(target)
             for attempt in range(1, _GRASP_ATTEMPTS + 1):
