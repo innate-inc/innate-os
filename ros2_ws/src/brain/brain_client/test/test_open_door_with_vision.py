@@ -306,9 +306,10 @@ def test_wrist_actions_are_five_millimetres_and_bounded():
 
 
 class _ActionManipulation:
-    def __init__(self):
+    def __init__(self, *, z_lag=0.0):
         self.position = [0.35, 0.01, 0.20]
         self.moves = []
+        self.z_lag = z_lag
 
     @property
     def pose(self):
@@ -320,8 +321,9 @@ class _ActionManipulation:
         )
 
     def move_to(self, x, y, z, **_kwargs):
-        self.position[:] = [x, y, z]
         self.moves.append((x, y, z))
+        self.position[:] = [x, y, z - self.z_lag]
+        return self.pose
 
 
 def test_wrist_loop_executes_semantic_actions_until_grasp(monkeypatch):
@@ -352,6 +354,57 @@ def test_wrist_loop_executes_semantic_actions_until_grasp(monkeypatch):
     assert result == pytest.approx((0.355, 0.005, 0.20))
     assert skill.manipulation.moves == pytest.approx([(0.355, 0.01, 0.20), (0.355, 0.005, 0.20)])
     assert history == [(False, None, 0), (True, "FORWARD", 1), (True, "RIGHT", 2)]
+
+
+def test_wrist_loop_accumulates_commands_without_adopting_measured_z_lag(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-commanded-pose-test"))
+    skill.manipulation = _ActionManipulation(z_lag=0.002)
+    skill.wrist_image = object()
+    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(skill, "_effort", lambda: (0.0, 0.0, 0.0, 0.0, 0.0))
+    monkeypatch.setattr(skill, "_next_image", lambda _camera, _previous: object())
+    decisions = iter(
+        [
+            ("UP", (280.0, 80.0, 80.0, 320.0), "raise"),
+            ("UP", (280.0, 80.0, 80.0, 320.0), "raise again"),
+            ("RIGHT", (280.0, 80.0, 80.0, 320.0), "move right"),
+            ("GRASP", (280.0, 80.0, 80.0, 320.0), "between fingers"),
+        ]
+    )
+    monkeypatch.setattr(skill, "_request_wrist_decision", lambda *_args, **_kwargs: next(decisions))
+
+    result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
+
+    expected_moves = [
+        (0.35, 0.01, 0.205),
+        (0.35, 0.01, 0.210),
+        (0.35, 0.005, 0.210),
+    ]
+    assert len(skill.manipulation.moves) == len(expected_moves)
+    for actual, expected in zip(skill.manipulation.moves, expected_moves, strict=True):
+        assert actual == pytest.approx(expected)
+    assert result == pytest.approx((0.35, 0.005, 0.208))
+
+
+def test_wrist_loop_fails_instead_of_adopting_large_tracking_error(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-tracking-test"))
+    skill.manipulation = _ActionManipulation(z_lag=0.020)
+    skill.wrist_image = object()
+    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(skill, "_effort", lambda: (0.0, 0.0, 0.0, 0.0, 0.0))
+    monkeypatch.setattr(
+        skill,
+        "_request_wrist_decision",
+        lambda *_args, **_kwargs: ("UP", (280.0, 80.0, 80.0, 320.0), "raise"),
+    )
+
+    with pytest.raises(SkillFailed, match="did not track.*20 mm error"):
+        skill._wrist_align((0.35, 0.01, 0.20), restage=False)
+
+    assert len(skill.manipulation.moves) == 1
+    assert skill.manipulation.moves[0] == pytest.approx((0.35, 0.01, 0.205))
 
 
 class _Mobility:

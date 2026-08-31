@@ -42,6 +42,7 @@ _MAX_EE_X_M = 0.40
 _WRIST_ACTION_STEP_M = 0.005
 _WRIST_ACTION_STEPS = 12
 _WRIST_CONTENT_ATTEMPTS = 2
+_WRIST_TRACKING_TOLERANCE_M = 0.010
 _WRIST_ACTIONS = frozenset({"FORWARD", "BACK", "LEFT", "RIGHT", "UP", "DOWN", "GRASP", "ABORT"})
 _GRIP_STRENGTH = 0.35
 _EMPTY_GRIPPER_J6 = -0.085
@@ -370,7 +371,10 @@ class OpenDoorWithVision(Skill):
         if restage:
             self.manipulation.torque_on()
             self.manipulation.gripper_open(duration=1.0)
-            self.manipulation.move_to(_WRIST_STAGING_X_M, target[1], target[2], duration=2.0)
+            commanded_pose = (_WRIST_STAGING_X_M, target[1], target[2])
+            self.manipulation.move_to(*commanded_pose, duration=2.0)
+        else:
+            commanded_pose = tuple(self.manipulation.pose.position)
         baseline_samples = []
         for _ in range(_TARE_SAMPLES):
             baseline_samples.append(self._effort())
@@ -395,6 +399,7 @@ class OpenDoorWithVision(Skill):
                 reason=reason,
                 box=list(box) if box is not None else None,
                 measured_ee=list(measured.position),
+                commanded_ee=list(commanded_pose),
             )
             if action == "ABORT":
                 self.fail(f"Wrist VLM aborted handle approach: {reason or 'unsafe or ambiguous view'}")
@@ -406,11 +411,14 @@ class OpenDoorWithVision(Skill):
                     reason=reason,
                 )
                 return tuple(measured.position)
-            next_pose = _wrist_action_pose(measured.position, action)
-            if all(abs(next_pose[index] - measured.position[index]) < 1e-6 for index in range(3)):
+            next_pose = _wrist_action_pose(commanded_pose, action)
+            if all(abs(next_pose[index] - commanded_pose[index]) < 1e-6 for index in range(3)):
                 self.fail(f"Wrist VLM requested {action}, but that motion is at a safety limit")
             self.check_cancelled()
-            self.manipulation.move_to(*next_pose, duration=0.5, tolerance_xy=None, tolerance_z=None)
+            settled = self.manipulation.move_to(*next_pose, duration=0.5, tolerance_xy=None, tolerance_z=None)
+            measured_pose = tuple(settled.position)
+            tracking_error = tuple(measured_pose[index] - next_pose[index] for index in range(3))
+            max_tracking_error = max(abs(error) for error in tracking_error)
             effort = self._effort()
             delta = max(abs(effort[j] - baseline[j]) for j in range(5))
             self.debug_event(
@@ -418,12 +426,18 @@ class OpenDoorWithVision(Skill):
                 step=step,
                 action=action,
                 requested_pose=list(next_pose),
-                measured_pose=list(self.manipulation.pose.position),
+                measured_pose=list(measured_pose),
+                tracking_error_m=list(tracking_error),
+                max_tracking_error_m=max_tracking_error,
+                tracking_tolerance_m=_WRIST_TRACKING_TOLERANCE_M,
                 effort=list(effort),
                 effort_delta=delta,
             )
+            if max_tracking_error > _WRIST_TRACKING_TOLERANCE_M:
+                self.fail(f"Arm did not track the commanded wrist pose ({max_tracking_error * 1000.0:.0f} mm error)")
             if delta > _EFFORT_DELTA_LIMIT:
                 self.fail("Unexpected contact load during VLM-guided handle approach")
+            commanded_pose = next_pose
             previous_image = image
             previous_action = action
         self.fail("Wrist VLM did not reach a safe grasp decision")
