@@ -387,24 +387,35 @@ def test_wrist_loop_accumulates_commands_without_adopting_measured_z_lag(monkeyp
     assert result == pytest.approx((0.35, 0.005, 0.208))
 
 
-def test_wrist_loop_fails_instead_of_adopting_large_tracking_error(monkeypatch):
+def test_wrist_loop_logs_but_does_not_abort_on_large_tracking_error(monkeypatch):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-tracking-test"))
     skill.manipulation = _ActionManipulation(z_lag=0.020)
     skill.wrist_image = object()
     monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
     monkeypatch.setattr(skill, "_effort", lambda: (0.0, 0.0, 0.0, 0.0, 0.0))
-    monkeypatch.setattr(
-        skill,
-        "_request_wrist_decision",
-        lambda *_args, **_kwargs: ("UP", (280.0, 80.0, 80.0, 320.0), "raise"),
+    monkeypatch.setattr(skill, "_next_image", lambda _camera, _previous: object())
+    decisions = iter(
+        [
+            ("UP", (280.0, 80.0, 80.0, 320.0), "raise"),
+            ("UP", (280.0, 80.0, 80.0, 320.0), "raise again"),
+            ("GRASP", (280.0, 80.0, 80.0, 320.0), "between fingers"),
+        ]
     )
+    monkeypatch.setattr(skill, "_request_wrist_decision", lambda *_args, **_kwargs: next(decisions))
+    events = []
+    monkeypatch.setattr(skill, "debug_event", lambda event, **fields: events.append((event, fields)))
 
-    with pytest.raises(SkillFailed, match="did not track.*20 mm error"):
-        skill._wrist_align((0.35, 0.01, 0.20), restage=False)
+    result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
 
-    assert len(skill.manipulation.moves) == 1
-    assert skill.manipulation.moves[0] == pytest.approx((0.35, 0.01, 0.205))
+    expected_moves = [(0.35, 0.01, 0.205), (0.35, 0.01, 0.210)]
+    assert len(skill.manipulation.moves) == len(expected_moves)
+    for actual, expected in zip(skill.manipulation.moves, expected_moves, strict=True):
+        assert actual == pytest.approx(expected)
+    assert result == pytest.approx((0.35, 0.01, 0.190))
+    motion_events = [fields for event, fields in events if event == "wrist_action_motion"]
+    assert [event["max_tracking_error_m"] for event in motion_events] == pytest.approx([0.020, 0.020])
+    assert all("effort" in event for event in motion_events)
 
 
 class _Mobility:

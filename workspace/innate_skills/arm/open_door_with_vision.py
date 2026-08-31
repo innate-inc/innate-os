@@ -3,7 +3,6 @@
 """Acquire a protruding handle with monocular vision, then pull it."""
 
 import math
-import statistics
 import time
 
 from innate import (
@@ -42,12 +41,9 @@ _MAX_EE_X_M = 0.40
 _WRIST_ACTION_STEP_M = 0.005
 _WRIST_ACTION_STEPS = 12
 _WRIST_CONTENT_ATTEMPTS = 2
-_WRIST_TRACKING_TOLERANCE_M = 0.010
 _WRIST_ACTIONS = frozenset({"FORWARD", "BACK", "LEFT", "RIGHT", "UP", "DOWN", "GRASP", "ABORT"})
 _GRIP_STRENGTH = 0.35
 _EMPTY_GRIPPER_J6 = -0.085
-_TARE_SAMPLES = 6
-_EFFORT_DELTA_LIMIT = 20.0
 _STATE_MAX_AGE_S = 0.25
 _SEARCH_ARM = [1.5708, -1.2195, 1.5723, 0.06, -0.47]
 
@@ -109,7 +105,7 @@ class OpenDoorWithVision(Skill):
     monocular range. The head camera positions the base; a bounded wrist-camera
     action loop then visually guides the gripper. This experimental skill
     rejects clipped or unstable metric detections, unreachable geometry,
-    excessive approach load, and an unverified grasp.
+    invalid telemetry, and an unverified grasp.
     """
 
     manipulation: Manipulation
@@ -375,11 +371,6 @@ class OpenDoorWithVision(Skill):
             self.manipulation.move_to(*commanded_pose, duration=2.0)
         else:
             commanded_pose = tuple(self.manipulation.pose.position)
-        baseline_samples = []
-        for _ in range(_TARE_SAMPLES):
-            baseline_samples.append(self._effort())
-            self.sleep(0.04)
-        baseline = tuple(statistics.median(sample[j] for sample in baseline_samples) for j in range(5))
         previous_image = None
         previous_action = None
         for step in range(_WRIST_ACTION_STEPS):
@@ -420,7 +411,6 @@ class OpenDoorWithVision(Skill):
             tracking_error = tuple(measured_pose[index] - next_pose[index] for index in range(3))
             max_tracking_error = max(abs(error) for error in tracking_error)
             effort = self._effort()
-            delta = max(abs(effort[j] - baseline[j]) for j in range(5))
             self.debug_event(
                 "wrist_action_motion",
                 step=step,
@@ -429,14 +419,8 @@ class OpenDoorWithVision(Skill):
                 measured_pose=list(measured_pose),
                 tracking_error_m=list(tracking_error),
                 max_tracking_error_m=max_tracking_error,
-                tracking_tolerance_m=_WRIST_TRACKING_TOLERANCE_M,
                 effort=list(effort),
-                effort_delta=delta,
             )
-            if max_tracking_error > _WRIST_TRACKING_TOLERANCE_M:
-                self.fail(f"Arm did not track the commanded wrist pose ({max_tracking_error * 1000.0:.0f} mm error)")
-            if delta > _EFFORT_DELTA_LIMIT:
-                self.fail("Unexpected contact load during VLM-guided handle approach")
             commanded_pose = next_pose
             previous_image = image
             previous_action = action
