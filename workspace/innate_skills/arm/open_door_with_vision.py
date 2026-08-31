@@ -46,13 +46,15 @@ _MAX_EE_X_M = 0.40
 _APPROACH_PAST_HANDLE_M = 0.01
 _WRIST_MAX_STEP_M = 0.025
 _WRIST_STEPS = 5
+_WRIST_U_PX = 320.0
+_WRIST_U_DEADBAND_PX = 10.0
 # The real wrist module has no CameraInfo calibration. Keep this aligned with
 # the repository's 80-degree wrist-camera model until per-robot K is measured.
 _WRIST_FY_PX = 480.0 / (2.0 * math.tan(math.radians(80.0) / 2.0))
 _WRIST_FX_PX = _WRIST_FY_PX
 _WRIST_CX_PX = 320.0
 _WRIST_CY_PX = 240.0
-_WRIST_TARGET_DEADBAND_M = 0.012
+_WRIST_XZ_DEADBAND_M = 0.008
 # URDF camera transform expressed relative to ee_link. Both fixed joints are
 # defined from link5, so the camera sits 58 mm behind and 51 mm above the EE.
 _WRIST_CAMERA_IN_EE = (-0.058058, 0.0, 0.05052)
@@ -71,7 +73,9 @@ _MAIN_FY_PX = 259.5741983485189
 _MAIN_CX_PX = 317.75570636221465
 _MAIN_CY_PX = 228.0517433641685
 _MAIN_CAMERA_ORIGIN = (0.002519, 0.0295, 0.258545)
-_METRIC_SAMPLES = 3
+_HEAD_METRIC_SAMPLES = 3
+_GRASP_ATTEMPTS = 2
+_VISION_REASONING_EFFORT = "low"
 
 
 def _fuse_handle_target(head_target, wrist_target):
@@ -81,6 +85,12 @@ def _fuse_handle_target(head_target, wrist_target):
         min(head_target[0] + _WRIST_DEPTH_CORRECTION_M, wrist_target[0]),
     )
     return min(_MAX_GRASP_HANDLE_X_M, wrist_x), wrist_target[1], wrist_target[2]
+
+
+def _wrist_lateral_correction(u_px, optical_range_m):
+    """Image-right handle error requires a positive base-Y gripper move."""
+    correction = (u_px - _WRIST_U_PX) * optical_range_m / _WRIST_FX_PX
+    return max(-_WRIST_MAX_STEP_M, min(_WRIST_MAX_STEP_M, correction))
 
 
 class OpenDoorWithVision(Skill):
@@ -142,6 +152,7 @@ class OpenDoorWithVision(Skill):
             "The box must be TIGHT around the complete vivid-colored "
             "vertical handle, including its physical top and bottom.",
             logger=self.logger,
+            reasoning_effort=_VISION_REASONING_EFFORT,
         )
         boxes = vision.parse_det_boxes(text)
         if not boxes:
@@ -165,7 +176,8 @@ class OpenDoorWithVision(Skill):
     def _measure_handle(self, camera: str, focal_y_px: float):
         boxes = []
         previous = None
-        for sample in range(_METRIC_SAMPLES):
+        samples = _HEAD_METRIC_SAMPLES if camera == "head" else 1
+        for sample in range(samples):
             image = self.main_image if camera == "head" else self.wrist_image
             if sample:
                 image = self._next_image(camera, previous)
@@ -179,10 +191,13 @@ class OpenDoorWithVision(Skill):
                 box=list(box),
                 source="gemini_tight_box",
             )
-        try:
-            box = stable_vertical_box(boxes)
-        except ValueError as error:
-            self.fail(str(error))
+        if samples == 1:
+            box = boxes[0]
+        else:
+            try:
+                box = stable_vertical_box(boxes)
+            except ValueError as error:
+                self.fail(str(error))
         optical_range = focal_y_px * self._handle_height_m / box[3]
         self.debug_event(
             "metric_handle_result",
@@ -262,12 +277,11 @@ class OpenDoorWithVision(Skill):
         self.debug_event("base_positioned", handle_base=list(relative))
         return relative
 
-    def _wrist_align(self, target):
-        x = _WRIST_STAGING_X_M
-        y, z = target[1], target[2]
-        self.manipulation.torque_on()
-        self.manipulation.gripper_open(duration=1.0)
-        self.manipulation.move_to(x, y, z, duration=2.0)
+    def _wrist_align(self, target, *, restage=True):
+        if restage:
+            self.manipulation.torque_on()
+            self.manipulation.gripper_open(duration=1.0)
+            self.manipulation.move_to(_WRIST_STAGING_X_M, target[1], target[2], duration=2.0)
         for step in range(_WRIST_STEPS):
             self.sleep(0.5)
             box, approximate_range = self._measure_handle("wrist", _WRIST_FY_PX)
@@ -292,7 +306,14 @@ class OpenDoorWithVision(Skill):
             except ValueError as error:
                 self.fail(str(error))
             observed = _fuse_handle_target(target, wrist_observed)
-            desired = (observed[0] - _VISUAL_CLEARANCE_M, observed[1], observed[2])
+            u = box[0] + box[2] / 2.0
+            u_error = u - _WRIST_U_PX
+            lateral_correction = _wrist_lateral_correction(u, approximate_range)
+            desired = (
+                observed[0] - _VISUAL_CLEARANCE_M,
+                measured.y + lateral_correction,
+                observed[2],
+            )
             error = tuple(desired[index] - measured.position[index] for index in range(3))
             self.debug_event(
                 "wrist_alignment",
@@ -303,13 +324,21 @@ class OpenDoorWithVision(Skill):
                 wrist_handle_base_raw=list(wrist_observed),
                 fused_handle_base=list(observed),
                 head_handle_base=list(target),
+                handle_u_px=u,
+                handle_u_error_px=u_error,
+                lateral_correction_m=lateral_correction,
                 endpoint_residual_m=residual,
                 endpoint_ray_ranges_m=[top_range, bottom_range],
                 measured_ee=list(measured.position),
                 desired_ee=list(desired),
                 error_m=list(error),
             )
-            if max(abs(value) for value in error) <= _WRIST_TARGET_DEADBAND_M:
+            aligned = (
+                abs(error[0]) <= _WRIST_XZ_DEADBAND_M
+                and abs(error[2]) <= _WRIST_XZ_DEADBAND_M
+                and abs(u_error) <= _WRIST_U_DEADBAND_PX
+            )
+            if aligned:
                 self.debug_event(
                     "wrist_alignment_complete",
                     measured_ee=list(measured.position),
@@ -335,7 +364,7 @@ class OpenDoorWithVision(Skill):
             self.fail("Arm effort feedback is unavailable during handle approach")
         return values
 
-    def _grasp(self, pregrasp, handle_x):
+    def _grasp(self, pregrasp, handle_x, attempt):
         baseline_samples = []
         for _ in range(_TARE_SAMPLES):
             baseline_samples.append(self._effort())
@@ -361,10 +390,49 @@ class OpenDoorWithVision(Skill):
         time.sleep(0.5)
         positions = self.joint_states.position
         j6 = float(positions[5]) if len(positions) > 5 else None
-        held = j6 is not None and j6 > _EMPTY_GRIPPER_J6 + 0.02
-        self.debug_event("grasp_verified", gripper_position=j6, held=held)
-        if not held:
-            self.fail("The gripper closed without capturing the handle")
+        j6_held = j6 is not None and j6 > _EMPTY_GRIPPER_J6 + 0.02
+        image = self.wrist_image
+        frame_name = self._save_frame(image, "wrist", f"grasp_verification_{attempt}")
+        verdict = (
+            gemlib.ask_image(
+                self._proxy,
+                image,
+                f"The robot just closed its two black gripper fingers on {self._handle_description!r}. "
+                f"Is the {self._handle_color} physical handle visibly trapped BETWEEN the two fingers? "
+                "Answer only YES or NO.",
+                logger=self.logger,
+                reasoning_effort=_VISION_REASONING_EFFORT,
+            )
+            if j6_held
+            else "SKIPPED: claw position proves an empty close"
+        )
+        normalized = (verdict or "").strip().upper()
+        visual_held = normalized.startswith("YES") and not normalized.startswith("NO")
+        held = j6_held and visual_held
+        self.debug_event(
+            "grasp_verified",
+            attempt=attempt,
+            gripper_position=j6,
+            j6_held=j6_held,
+            visual_response=verdict,
+            visual_held=visual_held,
+            frame=frame_name,
+            held=held,
+        )
+        return held
+
+    def _prepare_grasp_retry(self, target, attempt):
+        self.manipulation.gripper_open(duration=1.0)
+        measured = self.manipulation.pose
+        retreat_x = max(_WRIST_STAGING_X_M, min(measured.x, target[0] - _VISUAL_CLEARANCE_M))
+        self.manipulation.move_to(retreat_x, measured.y, measured.z, duration=0.8)
+        self.debug_event(
+            "grasp_retry_started",
+            attempt=attempt,
+            retreat_pose=[retreat_x, measured.y, measured.z],
+            reason="verified_miss",
+        )
+        return self._wrist_align(target, restage=False)
 
     def execute(
         self,
@@ -406,7 +474,12 @@ class OpenDoorWithVision(Skill):
             point = self._localize_handle()
             target = self._position_base(point)
             pregrasp, refined_target = self._wrist_align(target)
-            self._grasp(pregrasp, refined_target[0])
+            for attempt in range(1, _GRASP_ATTEMPTS + 1):
+                if self._grasp(pregrasp, refined_target[0], attempt):
+                    break
+                if attempt == _GRASP_ATTEMPTS:
+                    self.fail(f"The gripper missed the handle after {_GRASP_ATTEMPTS} verified attempts")
+                pregrasp, refined_target = self._prepare_grasp_retry(target, attempt + 1)
             if self.skills is None:
                 self.fail("Skill composition is unavailable for the pull handoff")
             result = self.skills.run(

@@ -139,19 +139,48 @@ def test_metric_box_rejects_unstable_height():
 
 
 def test_detection_exports_exact_camera_frame(tmp_path, monkeypatch):
+    request = {}
+
+    def ask_image(*_args, **kwargs):
+        request.update(kwargs)
+        return '[{"box_2d":[200,450,800,550],"grasp_point":[500,500]}]'
+
     monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
-    monkeypatch.setattr(
-        module.gemlib,
-        "ask_image",
-        lambda *_args, **_kwargs: '[{"box_2d":[200,450,800,550],"grasp_point":[500,500]}]',
-    )
+    monkeypatch.setattr(module.gemlib, "ask_image", ask_image)
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-frame-test"))
     skill._configure_debug_run(run_id="frame-run", skill_id="innate-os/open_door_with_vision", inputs={})
     image = type("Frame", (), {"jpeg": b"exact-jpeg"})()
 
     assert skill._detect_box(image, "head") == pytest.approx((288, 96, 64, 288))
+    assert request["reasoning_effort"] == "low"
     assert (skill.debug_directory / "00_head_detection.jpg").read_bytes() == b"exact-jpeg"
+
+
+def test_gemini_image_request_forwards_reasoning_effort():
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"[]"}}]}'
+
+    class Stream:
+        def __enter__(self):
+            return Response()
+
+        def __exit__(self, *_args):
+            return False
+
+    class Client:
+        def request_stream(self, _service, _endpoint, **kwargs):
+            captured.update(kwargs["json"])
+            return Stream()
+
+    assert module.gemlib.ask_image(Client(), "jpeg", "find it", retries=1, reasoning_effort="low") == "[]"
+    assert captured["reasoning_effort"] == "low"
 
 
 def test_base_accepts_sub_motion_threshold_range_error(monkeypatch):
@@ -170,6 +199,10 @@ def test_wrist_depth_is_bounded_by_head_range_and_grasp_reserve():
     target = module._fuse_handle_target((0.38, 0.01, 0.22), (0.48, 0.02, 0.27))
 
     assert target == pytest.approx((0.39, 0.02, 0.27))
+
+
+def test_wrist_image_right_error_moves_gripper_right():
+    assert module._wrist_lateral_correction(373.0, 0.104) == pytest.approx(0.01927, abs=0.0001)
 
 
 class _Mobility:
@@ -223,6 +256,11 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
     skill.head = _Head()
     skill.skills = _Skills()
     order = []
+
+    def retry(target, attempt):
+        order.append(("retry", attempt))
+        return (0.36, target[1], target[2]), (0.38, target[1], target[2])
+
     monkeypatch.setattr(skill, "_localize_handle", lambda: order.append("localize") or (1.0, 0.0, 0.2))
     monkeypatch.setattr(skill, "_position_base", lambda _point: order.append("position") or (0.44, 0.0, 0.2))
     monkeypatch.setattr(
@@ -233,8 +271,9 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
     monkeypatch.setattr(
         skill,
         "_grasp",
-        lambda pregrasp, handle_x: order.append(("grasp", pregrasp, handle_x)),
+        lambda pregrasp, handle_x, attempt: order.append(("grasp", attempt, pregrasp, handle_x)) or attempt == 2,
     )
+    monkeypatch.setattr(skill, "_prepare_grasp_retry", retry)
 
     result = skill.execute(pull_distance_m=0.03)
 
@@ -242,7 +281,9 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         "localize",
         "position",
         "align",
-        ("grasp", (0.35, 0.0, 0.2), 0.38),
+        ("grasp", 1, (0.35, 0.0, 0.2), 0.38),
+        ("retry", 2),
+        ("grasp", 2, (0.36, 0.0, 0.2), 0.38),
     ]
     assert "0.03 m" in result
     assert skill.skills.calls == [
