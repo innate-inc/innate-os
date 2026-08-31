@@ -45,14 +45,15 @@ UNSUPPORTED_ENDPOINT_STATUSES = (404, 405, 501)
 # response at all. Expiring ours first turns that race into a reconnect, and one
 # retry covers the case where it happens anyway -- see sim/bench/FINDINGS.md
 # (patch_stream_retry).
-_KEEPALIVE_EXPIRY_S = 30.0
 _STREAM_ATTEMPTS = 2
+# ONLY errors that can be raised before the request is transmitted. A
+# ReadError, WriteError or RemoteProtocolError can all surface after the
+# server has already received -- and possibly acted on -- the request, so
+# retrying those could duplicate a cache creation or an upload. A failure to
+# establish the connection cannot: nothing was sent.
 _RETRYABLE_CONNECT = (
-    httpx.RemoteProtocolError,
     httpx.ConnectError,
     httpx.ConnectTimeout,
-    httpx.ReadError,
-    httpx.WriteError,
 )
 
 
@@ -195,7 +196,6 @@ def direct_transport(api_key: str) -> Transport:
     client = httpx.Client(
         headers={"x-goog-api-key": api_key},
         timeout=90.0,
-        limits=httpx.Limits(keepalive_expiry=_KEEPALIVE_EXPIRY_S),
     )
 
     def stream(model: str, body: dict) -> Iterator[dict]:
@@ -265,14 +265,13 @@ def proxy_rest(proxy: ProxyClient) -> GeminiRest:
 def direct_rest(api_key: str) -> GeminiRest:
     """Non-streaming Gemini calls directly against Google with GEMINI_API_KEY."""
     # Own client: a context-cache upload carries a few MB of frames and needs a
-    # longer timeout than the per-chunk streaming client. Same early keepalive
-    # expiry as the stream client, and for a stronger reason: this one can sit
-    # idle for a minute between uploads, so its pooled connection is the more
-    # likely of the two to have been closed at the far end already.
+    # longer timeout than the per-chunk streaming client. Connection pooling is
+    # httpx's default -- this client can sit idle for a minute between uploads,
+    # so a stale pooled connection is likely, and the connect-only retry below
+    # is what handles it rather than a tuned expiry.
     client = httpx.Client(
         headers={"x-goog-api-key": api_key},
         timeout=120.0,
-        limits=httpx.Limits(keepalive_expiry=_KEEPALIVE_EXPIRY_S),
     )
 
     def _rest_send(send):

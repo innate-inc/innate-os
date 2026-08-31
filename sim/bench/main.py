@@ -133,7 +133,13 @@ def main() -> int:
     ap.add_argument("--map", action="append")
     ap.add_argument("--agents", default="oracle,random")
     ap.add_argument("--workers", type=int, default=0, help="0 = cpu_count - 2")
-    ap.add_argument("--seeds", type=int, default=1, help="random-agent rollouts per challenge")
+    ap.add_argument(
+        "--seeds",
+        type=int,
+        default=3,
+        help="random-agent rollouts per challenge; the gate judges the pass RATE, "
+        "so one rollout cannot establish that chance fails",
+    )
     ap.add_argument(
         "--random-cap",
         type=float,

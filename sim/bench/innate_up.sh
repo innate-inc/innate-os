@@ -18,8 +18,22 @@ set -uo pipefail
 # home-directory-bound even after the callers were fixed.
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 1
 
-export INNATE_OS_IMAGE="innate-os-sim-clean-innate:inputs-3acfd3403d107c7672ea0cefd1539c6f4eaa8714f484f0743a4b6138a040ebc3"
-export INNATE_SIM_ASSETS_IMAGE="ghcr.io/innate-inc/innate-os-sim-assets:inputs-2dcc207e745947d540d9866e1028f41f6ccc6065c154c7298ce4ec468ad86f5b"
-export INNATE_SIM_VIEWER_BUNDLE_IMAGE="ghcr.io/innate-inc/innate-os-sim-viewer:inputs-553758957ded0d4525107c394e69e8a70aeaf3c16376becd691b0a3a991301b4"
+
+
+# Use a locally-built image ONLY if it is really there, and only if the
+# caller has not chosen one. On any other machine these tags do not
+# exist, and pinning them turns "no such image" into what looks like a
+# launcher bug; unset, the launcher resolves images as it always does.
+pin_if_present() {
+  local var="$1" tag="$2"
+  [ -n "${!var:-}" ] && return 0
+  if docker image inspect "$tag" >/dev/null 2>&1; then
+    export "$var=$tag"
+  fi
+}
+
+pin_if_present INNATE_OS_IMAGE "innate-os-sim-clean-innate:inputs-3acfd3403d107c7672ea0cefd1539c6f4eaa8714f484f0743a4b6138a040ebc3"
+pin_if_present INNATE_SIM_ASSETS_IMAGE "ghcr.io/innate-inc/innate-os-sim-assets:inputs-2dcc207e745947d540d9866e1028f41f6ccc6065c154c7298ce4ec468ad86f5b"
+pin_if_present INNATE_SIM_VIEWER_BUNDLE_IMAGE "ghcr.io/innate-inc/innate-os-sim-viewer:inputs-553758957ded0d4525107c394e69e8a70aeaf3c16376becd691b0a3a991301b4"
 
 exec ./innate-sim "$@"

@@ -280,20 +280,54 @@ class Answered(Predicate):
     def _norm(v) -> str:
         return str(v).strip().lower()
 
+    # Phrases that make a token a non-answer. "not 3" and "I don't know,
+    # maybe 3?" both used to score as the answer 3: whole-word matching stops
+    # "3" matching "30" but says nothing about the clause around it.
+    _NEGATORS = (
+        "not ",
+        "n't ",
+        "no ",
+        "isn't",
+        "aren't",
+        "wasn't",
+        "cannot",
+        "can't",
+        "don't know",
+        "do not know",
+        "unsure",
+        "not sure",
+        "maybe",
+        "might be",
+        "i think",
+        "possibly",
+        "perhaps",
+        "guess",
+        "could be",
+        "or ",
+    )
+
     def _says_it(self, text: str) -> bool:
-        """An accepted spelling appears in free speech as a whole word.
+        """An accepted spelling appears in free speech as a whole word, and is
+        not negated or hedged.
 
         Whole-word, so "3" does not match "30" and "four" does not match
-        "fourteen". See sim/bench/FINDINGS.md (patch_answer) for the known
-        weakness: a hedge that contains the right token passes.
+        "fourteen". Then the clause leading up to the token is checked: an
+        answer the robot disowned in the same breath is not an answer.
         """
         low = f" {text.strip().lower()} "
         for a in self.accept:
             token = str(a).strip().lower()
             if not token:
                 continue
-            if re.search(rf"(?<![\w]){re.escape(token)}(?![\w])", low):
-                return True
+            m = re.search(rf"(?<![\w]){re.escape(token)}(?![\w])", low)
+            if not m:
+                continue
+            # Only the run-up matters: "3, not 4" answers 3; "not 3" does not.
+            lead = low[: m.start()]
+            clause = lead.rsplit(",", 1)[-1].rsplit(";", 1)[-1]
+            if any(neg in clause for neg in self._NEGATORS):
+                continue
+            return True
         return False
 
     def update(self, state: WorldState, events: list[dict]) -> bool:
@@ -711,6 +745,7 @@ class ChallengeEngine:
         self.sim = sim
         self.sim_lock = sim_lock
         self._height_warned = False
+        self._reset_failed = False
         # Tracked source dir plus anything the asset bundle shipped, like the
         # props (core.VirtualMars): a pack can carry its scenarios with it.
         #
@@ -850,8 +885,16 @@ class ChallengeEngine:
                 for goal in challenge.goals:
                     try:
                         goal.predicate.reset()
-                    except Exception:  # noqa: BLE001,S110 -- challenge bug; judged as-is
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        # A predicate that cannot reset may still hold the last
+                        # episode's state, so anything scored after this is
+                        # measuring the previous run. Say so loudly rather than
+                        # carry it silently into a number.
+                        print(
+                            f"[challenges] reset failed for {challenge.id} goal {goal.label!r}: {exc!r}",
+                            flush=True,
+                        )
+                        self._reset_failed = True
                 if challenge.fail_if is not None:
                     try:
                         challenge.fail_if.reset()
@@ -1032,7 +1075,13 @@ class ChallengeEngine:
                             self.reason = challenge.fail_reason
                             self._record(challenge.id, "failed", None)
                     except Exception as exc:  # noqa: BLE001
+                        # A broken elimination predicate cannot be stepped over:
+                        # doing so lets an eliminated robot go on to pass. Fail
+                        # the run and say it was the judge, not the robot.
                         print(f"[challenges] fail_if error on {challenge.id}: {exc!r}", flush=True)
+                        self.state = "failed"
+                        self.reason = f"judge error in fail_if: {exc!r}"
+                        self._record(challenge.id, "failed", None)
                 # A guard, not a raised ValueError: upstream removed the
                 # raise/catch so a real ValueError from a scenario fails the
                 # run instead of reading as "all goals done". An eliminated
@@ -1117,12 +1166,20 @@ class ChallengeEngine:
                         self.state, self.reason = "failed", f"challenge error: {exc!r}"
                         self._record(challenge.id, "failed", None)
                 if self.state == "running":
-                    if all(self.goal_done):
-                        self.state = "passed"
-                        self._record(challenge.id, "passed", self.elapsed_s)
-                    elif challenge.time_limit_s is not None and self.elapsed_s > challenge.time_limit_s:
+                    # The DEADLINE IS READ FIRST. Evaluating goals first meant
+                    # a final goal becoming true at limit + epsilon scored a
+                    # pass, on a suite where the clock is often the difficulty.
+                    # Reaching here with every goal done AND the clock past the
+                    # limit can only mean the last goal landed late: an earlier
+                    # tick would already have passed the run. The boundary is
+                    # inclusive -- alive AT the limit, dead past it -- matching
+                    # the fire schedules.
+                    if challenge.time_limit_s is not None and self.elapsed_s > challenge.time_limit_s:
                         self.state, self.reason = "failed", "time limit"
                         self._record(challenge.id, "failed", None)
+                    elif all(self.goal_done):
+                        self.state = "passed"
+                        self._record(challenge.id, "passed", self.elapsed_s)
             return self._block(challenge)
 
     # -- narrator + metrics (called from tick(), already under _mutex) --

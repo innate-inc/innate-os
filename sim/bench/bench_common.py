@@ -44,15 +44,21 @@ def gate_verdict(req: str, oracle: dict | None, rnd: list[dict]) -> tuple[str, s
     the weaker half of the rule only and reported NEEDS-ARM rather than folded
     into VALID.
     """
-    trivial = any(e["passed"] for e in rnd)
+    # A RATE, not an existence check. One pass in several is a guessing
+    # floor -- bridge_three documents its own as 1 in 8 -- and marking a
+    # deliberate control INVALID for one lucky roll measures the dice, not
+    # the challenge. A majority means chance reliably beats it. With one
+    # seed this is exactly the old rule.
+    passes = sum(1 for e in rnd if e["passed"])
+    trivial = bool(rnd) and passes * 2 > len(rnd)
     if req in ("arm", "unknown"):
         if trivial:
-            return "INVALID", "random passed"
+            return "INVALID", f"random passed {passes}/{len(rnd)}"
         return "NEEDS-ARM", f"no auto-plan ({req}); solvability unproven"
     if not rnd or oracle is None:
         return "INCOMPLETE", "not all agents ran"
     if trivial:
-        return "INVALID", "random passed -- measures nothing"
+        return "INVALID", f"random passed {passes}/{len(rnd)} -- measures nothing"
     if not oracle["passed"]:
         why = oracle.get("error") or oracle.get("reason") or f"oracle {oracle['goals_done']}/{oracle['goals_total']}"
         return "INVALID", why
