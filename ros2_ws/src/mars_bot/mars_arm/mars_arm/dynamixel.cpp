@@ -92,10 +92,6 @@ bool Dynamixel::isTorqueEnabled(int motor_id) {
     uint8_t dxl_error = 0;
     checkComm(packet_handler_->read1ByteTxRx(port_handler_, motor_id, ADDR_TORQUE_ENABLE, &enabled, &dxl_error),
               motor_id, "read torque enable");
-    if (dxl_error != 0) {
-        throw std::runtime_error("Motor " + std::to_string(motor_id) +
-                                 " reported an error while reading torque enable");
-    }
     return enabled != 0;
 }
 
