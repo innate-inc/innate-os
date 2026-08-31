@@ -16,7 +16,8 @@ services:
     ports:
       # novnc's browser view of the container X display (optional; the sim
       # renders headless). Override the published side when 8080 is taken:
-      # NOVNC_PORT=8081 ./innate-sim up.
+      # NOVNC_PORT=8081 ./innate-sim up. Outside the INNATE_SIM_PORT_BASE block:
+      # the x11 profile is off by default, so it never collides.
       - "${NOVNC_PORT:-8080}:8080"
     networks:
       - x11
@@ -55,14 +56,20 @@ services:
       # (innate foxglove status) can print the address that actually works
       # from the host. Must match the ports entry below.
       - SIM_FOXGLOVE_PORT=${SIM_FOXGLOVE_PORT:-8765}
+      # A HOST port: the world server runs outside the container, and the
+      # webapp proxy relays /worldstate to it.
+      - INNATE_WORLD_STATE_PORT=${SIM_WORLD_STATE_PORT:-8800}
     ports:
+      # The launcher fills every published side in from INNATE_SIM_PORT_BASE
+      # (sim/README.md "Running two checkouts at once").
+      #
       # rosbridge (rws). Loopback by default: publishing on 0.0.0.0 invites
       # internet probes that open, send nothing, and disconnect, spamming the
       # rws log. Set SIM_ROSBRIDGE_BIND=0.0.0.0 to let LAN devices (e.g. a
       # phone/laptop opening the sim viewer) reach it.
-      - "9090:9090"
+      - "${SIM_ROSBRIDGE_PORT:-9090}:9090"
       # UDP leader receiver.
-      - "9999:9999/udp"
+      - "${SIM_UDP_PORT:-9999}:9999/udp"
       # webapp front door (replaces the deprecated sim/frontend UI): the in-container
       # python server binds 443 (https) + 80 (http), both serving the full app.
       # Override the published side (e.g. SIM_HTTPS_PORT=8443 ./innate-sim up) to

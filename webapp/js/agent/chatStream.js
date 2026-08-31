@@ -460,6 +460,8 @@ export function createChatStream(opts = {}) {
    *  wholesale rather than trying to merge.
    *  @param {any[]} entries */
   function replay(entries) {
+    const wasAtBottom = atBottom();
+    const priorTop = stream.scrollTop;
     stream.replaceChildren();
     for (const timer of compactEnterTimers) clearTimeout(timer);
     compactEnterTimers.clear();
@@ -475,7 +477,8 @@ export function createChatStream(opts = {}) {
       replayingHistory = false;
       stream.classList.remove("replaying");
     }
-    stream.scrollTop = stream.scrollHeight;
+    // A reconcile can land while the reader is up in the scrollback.
+    stream.scrollTop = wasAtBottom ? stream.scrollHeight : priorTop;
   }
 
   return {

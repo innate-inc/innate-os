@@ -36,9 +36,9 @@
 #include <chrono>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <regex>
 #include <sstream>
-#include <thread>
 #include <cerrno>
 #include <poll.h>
 #include <signal.h>
@@ -445,13 +445,14 @@ class AppControl : public rclcpp::Node {
         _load_app_config();
 
         // Everything that shells out (robot info, hostname sync, the admin services)
-        // runs in this group, spun by its own executor thread (see main): a hung
+        // runs in this group on a separate executor worker (see main): a hung
         // external helper must never starve the drive smoother — a wedged avahi-daemon
         // once blocked avahi-resolve for seconds per call and drove the 50 Hz timer to
         // ~0.2 Hz. Mutually exclusive, so robot_info.json access stays serialised.
-        // Not auto-added with the node — main assigns it to the slow executor.
-        slow_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive,
-                                                  /*automatically_add_to_executor_with_node=*/false);
+        slow_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+        // User-facing audio settings must not queue behind robot-info/hostname
+        // helpers. Their own group keeps bounded ALSA work off the drive thread.
+        settings_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
         // Declare parameters
         std::string mars_root = get_mars_root();
@@ -604,13 +605,13 @@ class AppControl : public rclcpp::Node {
         set_volume_srv_ = this->create_service<mars_msgs::srv::SetVolume>(
             "/set_volume",
             std::bind(&AppControl::set_volume_callback, this, std::placeholders::_1, std::placeholders::_2),
-            rmw_qos_profile_services_default, slow_group_);
+            rmw_qos_profile_services_default, settings_group_);
 
         // Service for enabling/disabling the robot microphone
         set_microphone_srv_ = this->create_service<std_srvs::srv::SetBool>(
             "/set_microphone",
             std::bind(&AppControl::set_microphone_callback, this, std::placeholders::_1, std::placeholders::_2),
-            rmw_qos_profile_services_default, slow_group_);
+            rmw_qos_profile_services_default, settings_group_);
 
         // Latched publisher for microphone state
         mic_enabled_pub_ =
@@ -628,10 +629,6 @@ class AppControl : public rclcpp::Node {
         }
 
         RCLCPP_INFO(this->get_logger(), "AppControl node started. [C++]");
-    }
-
-    rclcpp::CallbackGroup::SharedPtr slow_group() const {
-        return slow_group_;
     }
 
    private:
@@ -689,6 +686,7 @@ class AppControl : public rclcpp::Node {
      * Returns the parsed JSON object.
      */
     json get_robot_info() {
+        std::lock_guard<std::recursive_mutex> lock(robot_info_mutex_);
         std::string robot_info_file_path = get_robot_info_path();
 
         // Ensure data directory exists
@@ -746,6 +744,7 @@ class AppControl : public rclcpp::Node {
      * Returns true on success, false on failure.
      */
     bool set_robot_info(const json& robot_info) {
+        std::lock_guard<std::recursive_mutex> lock(robot_info_mutex_);
         try {
             std::string robot_info_file_path = get_robot_info_path();
             std::ofstream out_file(robot_info_file_path);
@@ -1373,6 +1372,7 @@ class AppControl : public rclcpp::Node {
      */
     void set_robot_name_callback(const std::shared_ptr<mars_msgs::srv::SetRobotName::Request> request,
                                  std::shared_ptr<mars_msgs::srv::SetRobotName::Response> response) {
+        std::lock_guard<std::recursive_mutex> lock(robot_info_mutex_);
         try {
             // Load current robot_info
             json robot_info = get_robot_info();
@@ -1466,7 +1466,7 @@ class AppControl : public rclcpp::Node {
      * scale instead of the raw register scale, so e.g. 30% is clearly
      * audible rather than ~-70dB (INN-467).
      */
-    void apply_alsa_volume(int percent) {
+    bool apply_alsa_volume(int percent) {
         // Remap 0-100 onto the audible [AUDIBLE_FLOOR, 100] band; the speaker is
         // silent across the lower range even with -M. 0 still mutes.
         constexpr int AUDIBLE_FLOOR = 55;
@@ -1478,11 +1478,14 @@ class AppControl : public rclcpp::Node {
         } else {
             mixer_percent = AUDIBLE_FLOOR + (100 - AUDIBLE_FLOOR) * percent / 100;
         }
-        std::string cmd = "amixer -M sset Master " + std::to_string(mixer_percent) + "% 2>/dev/null";
+        std::string cmd =
+            "timeout --signal=KILL 3s amixer -M sset Master " + std::to_string(mixer_percent) + "% 2>/dev/null";
         int ret = std::system(cmd.c_str());
         if (ret != 0) {
             RCLCPP_WARN(this->get_logger(), "amixer sset Master failed (rc=%d)", ret);
+            return false;
         }
+        return true;
     }
 
     /**
@@ -1492,6 +1495,7 @@ class AppControl : public rclcpp::Node {
      */
     void set_volume_callback(const std::shared_ptr<mars_msgs::srv::SetVolume::Request> request,
                              std::shared_ptr<mars_msgs::srv::SetVolume::Response> response) {
+        std::lock_guard<std::recursive_mutex> lock(robot_info_mutex_);
         int vol = request->volume_percent;
         if (vol < 0 || vol > 100) {
             response->success = false;
@@ -1501,16 +1505,33 @@ class AppControl : public rclcpp::Node {
 
         try {
             json robot_info = get_robot_info();
-            robot_info["volume_percent"] = vol;
+            const int previous_volume = robot_info.value("volume_percent", 80);
 
-            if (!set_robot_info(robot_info)) {
+            // Do not persist a value the audio device rejected. Otherwise the
+            // service reports success and the bad value is retried at startup.
+            if (!apply_alsa_volume(vol)) {
                 response->success = false;
-                response->message = "Failed to save robot_info.json";
+                response->message = "Failed to apply speaker volume";
                 return;
             }
 
-            // Apply to ALSA immediately (affects in-progress playback)
-            apply_alsa_volume(vol);
+            robot_info["volume_percent"] = vol;
+
+            if (!set_robot_info(robot_info)) {
+                // Keep runtime and persisted state aligned when the file write
+                // fails after ALSA has already accepted the new level.
+                const bool restored = apply_alsa_volume(previous_volume);
+                if (!restored) {
+                    RCLCPP_ERROR(this->get_logger(), "Failed to restore previous speaker volume %d%%", previous_volume);
+                }
+                response->success = false;
+                response->message = restored ? "Failed to save speaker volume; restored previous volume " +
+                                                   std::to_string(previous_volume) + "%"
+                                             : "Speaker volume may be " + std::to_string(vol) +
+                                                   "% but was not saved; failed to restore previous volume " +
+                                                   std::to_string(previous_volume) + "%";
+                return;
+            }
 
             response->success = true;
             response->message = "Volume set to " + std::to_string(vol) + "%";
@@ -1536,6 +1557,7 @@ class AppControl : public rclcpp::Node {
      */
     void set_microphone_callback(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
                                  std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
+        std::lock_guard<std::recursive_mutex> lock(robot_info_mutex_);
         try {
             json robot_info = get_robot_info();
             robot_info["microphone_enabled"] = request->data;
@@ -1571,8 +1593,11 @@ class AppControl : public rclcpp::Node {
     double _last_update_check_time = 0.0;
     double _update_check_interval = 300.0;  // Check for updates every 5 minutes
 
-    // See the constructor: the group every shell-out callback lives in.
+    // See the constructor: slow system helpers and bounded audio settings stay
+    // off the drive callback group and out of each other's way.
     rclcpp::CallbackGroup::SharedPtr slow_group_;
+    rclcpp::CallbackGroup::SharedPtr settings_group_;
+    std::recursive_mutex robot_info_mutex_;
 
     // Subscribers
     rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr joystick_sub_;
@@ -1636,29 +1661,19 @@ class AppControl : public rclcpp::Node {
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<mars_control::AppControl>();
-    // Two single-threaded executors rather than one multi-threaded one: the slow
-    // group's shell-outs can block without ever starving the drive smoother, the
-    // drive path keeps a dedicated thread, and each thread owns its own exception
-    // boundary — a throw on a MultiThreadedExecutor worker thread would bypass any
-    // try in main and land in std::terminate.
-    rclcpp::executors::SingleThreadedExecutor drive_executor;
-    rclcpp::executors::SingleThreadedExecutor slow_executor;
-    drive_executor.add_node(node);
-    slow_executor.add_callback_group(node->slow_group(), node->get_node_base_interface());
-    std::thread slow_thread([&slow_executor, &node]() {
-        try {
-            slow_executor.spin();
-        } catch (const std::exception& e) {
-            RCLCPP_ERROR(node->get_logger(), "Unhandled exception in app node (slow group): %s", e.what());
-        }
-        rclcpp::shutdown();  // one side dying must take the whole node down, not half of it
-    });
+    // The callback groups keep drive work and blocking system helpers mutually
+    // exclusive within themselves; three executor workers let drive, slow system
+    // helpers, and bounded audio settings continue independently. A manually-added
+    // second executor left the slow group's timers and services undispatched on the
+    // fleet's Humble rclcpp build, which removed /robot/info and made /set_volume
+    // time out indefinitely.
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 3);
+    executor.add_node(node);
     try {
-        drive_executor.spin();
+        executor.spin();
     } catch (const std::exception& e) {
         RCLCPP_ERROR(node->get_logger(), "Unhandled exception in app node: %s", e.what());
     }
     rclcpp::shutdown();
-    slow_thread.join();
     return 0;
 }

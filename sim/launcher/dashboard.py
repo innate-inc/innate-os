@@ -914,7 +914,7 @@ def render_status(
     # What to do, then where -- an instruction reads better than a URL with a
     # caption after it. The editor row is only offered when one is installed.
     destinations = [
-        (GREEN, "▸", "Open simulator in browser", "https://localhost"),
+        (GREEN, "▸", "Open simulator in browser", str(config["webapp_url"])),
         (CYAN, "✎", "Edit code in", checkout),
     ]
     editor = detect_editor()
@@ -931,7 +931,7 @@ def render_status(
     print_dashboard_line(
         "   ".join(
             [
-                f"{DIM}rosbridge{NC} ws://localhost:9090",
+                f"{DIM}rosbridge{NC} {config['rosbridge_url']}",
                 f"{DIM}foxglove{NC} ws://localhost:{config['foxglove_port']}",
                 f"{DIM}logs{NC} {options.cli_sim} logs startup",
                 f"{DIM}shell{NC} {options.cli_sim} sh",

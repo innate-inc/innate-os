@@ -18,6 +18,7 @@
 // only decides how long to wait for one.
 
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { PropModels } from "./propModels";
 
@@ -108,6 +109,8 @@ export interface PropInfo {
   group: string | null;
   collision: string;
   size: number[];
+  /** Wall thickness of an "open_box" (props.py `wall`). */
+  wall: number;
   rgba: number[];
   viewer: PropViewerDef;
 }
@@ -125,6 +128,7 @@ interface PlacementPreview {
 function primitiveGeometry(info: PropInfo): THREE.BufferGeometry {
   const s = info.size;
   let shape = info.collision;
+  if (shape === "open_box") return openBoxGeometry(s, info.wall);
   if (shape !== "box" && shape !== "sphere" && shape !== "cylinder") {
     shape = s.length === 1 ? "sphere" : s.length === 2 ? "cylinder" : "box";
   }
@@ -140,6 +144,23 @@ function primitiveGeometry(info: PropInfo): THREE.BufferGeometry {
   }
   // MuJoCo box sizes are half-extents.
   return new THREE.BoxGeometry(s[0] * 2, s[1] * 2, s[2] * 2);
+}
+
+/** Floor plus four walls, hollow above — the same five box geoms props.py
+ * writes for an open_box, so a crate reads as something to drop into rather
+ * than a solid block. */
+function openBoxGeometry(s: number[], wall: number): THREE.BufferGeometry {
+  const [hx, hy, hz] = s;
+  const w = Math.min(wall, hx, hy, hz);
+  const slab = (sx: number, sy: number, sz: number, x: number, y: number, z: number) =>
+    new THREE.BoxGeometry(sx, sy, sz).translate(x, y, z);
+  return mergeGeometries([
+    slab(hx * 2, hy * 2, w, 0, 0, -hz + w / 2),
+    slab(w, hy * 2, hz * 2, -hx + w / 2, 0, 0),
+    slab(w, hy * 2, hz * 2, hx - w / 2, 0, 0),
+    slab((hx - w) * 2, w, hz * 2, 0, -hy + w / 2, 0),
+    slab((hx - w) * 2, w, hz * 2, 0, hy - w / 2, 0),
+  ]);
 }
 
 /**

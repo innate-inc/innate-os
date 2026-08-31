@@ -654,6 +654,14 @@ select.skill-input {
   visibility: hidden;
 }
 
+.traj-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 .video-status {
   position: absolute;
   inset: 0;
@@ -1277,7 +1285,6 @@ select.skill-input {
   --joystick-strafe: 0;
   --joystick-forward: 0;
   --joystick-forward-strength: abs(var(--joystick-forward));
-  --joystick-hit-size: 264px;
   --joystick-pad-size: 184px;
   left: 50%;
   bottom: 84px;
@@ -1289,7 +1296,7 @@ select.skill-input {
 }
 
 /* Bottom-center bar: holds the speak pill + the Skills menu as separate pills.
-   Transparent itself — each child carries its own glass (see .tts-bar). */
+   Transparent itself — each child carries its own surface treatment. */
 .overlay-tts {
   left: 50%;
   bottom: 18px;
@@ -1373,7 +1380,6 @@ select.skill-input {
 .cam-tile {
   position: relative;
   width: var(--pip-w);
-  filter: saturate(0.22);
   background: rgb(8 8 10 / 34%);
   backdrop-filter: blur(10px) saturate(1.08);
   -webkit-backdrop-filter: blur(10px) saturate(1.08);
@@ -1387,7 +1393,6 @@ select.skill-input {
   transform-origin: center;
   -webkit-tap-highlight-color: transparent;
   transition:
-    filter 180ms ease,
     transform 160ms cubic-bezier(0.455, 0.03, 0.515, 0.955),
     border-color 150ms ease;
 }
@@ -1395,7 +1400,6 @@ select.skill-input {
 @media (hover: hover) and (pointer: fine) {
   .cam-tile:hover {
     z-index: 1;
-    filter: saturate(1);
     border-color: rgb(255 255 255 / 48%);
     transform: translateY(-3px);
   }
@@ -1411,7 +1415,6 @@ select.skill-input {
 }
 
 .cam-tile:focus-visible {
-  filter: saturate(1);
   outline: 2px solid rgb(255 255 255 / 72%);
   outline-offset: 3px;
 }
@@ -2199,22 +2202,21 @@ select.skill-input {
 
 .joystick-hit-target {
   display: grid;
-  grid-template-rows: 1fr var(--joystick-pad-size);
-  justify-items: center;
-  width: var(--joystick-hit-size);
-  height: var(--joystick-hit-size);
+  width: var(--joystick-pad-size);
+  height: var(--joystick-pad-size);
+  border-radius: 50%;
   touch-action: none;
-  cursor: default;
+  cursor: grab;
 }
 
-.joystick-hit-target.engaged,
-.joystick-hit-target.engaged .joystick-pad {
+.joystick-hit-target.engaged {
   cursor: grabbing;
 }
 
 .joystick-hit-target > * {
-  grid-area: 2 / 1;
+  grid-area: 1 / 1;
   place-self: center;
+  pointer-events: none;
 }
 
 .joystick-pad {
@@ -5647,23 +5649,20 @@ select.episodes-tool {
   min-width: 230px;
   padding: 0 16px;
   font: inherit;
-  color: var(--text);
-  background: var(--ctl-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--hairline-strong);
+  color: #fff;
+  background: var(--blue);
+  border: 1px solid var(--blue);
   border-radius: 999px;
-  box-shadow: var(--ctl-sheen);
   cursor: pointer;
-  transition: border-color 150ms ease, background 150ms ease;
+  transition: border-color 150ms ease;
 }
 
 .skills-menu-btn:hover {
-  background: var(--ctl-glass-hover);
+  border-color: rgb(255 255 255 / 32%);
 }
 
 .skills-menu.open .skills-menu-btn {
-  border-color: var(--ctl-edge-accent);
+  border-color: rgb(255 255 255 / 52%);
 }
 
 /* Status dot: grey when idle, green (pulsing) while a skill runs. */
@@ -5697,16 +5696,15 @@ select.episodes-tool {
   text-overflow: ellipsis;
   white-space: nowrap;
   padding-left: 9px;
-  border-left: 1px solid var(--hairline);
+  border-left: 1px solid rgb(255 255 255 / 28%);
   font-size: 12px;
-  /* Brighter than --muted: the pill floats over the live camera feed, where
-     plain grey washes out on light backgrounds. */
-  color: var(--ctl-text);
+  /* Keep secondary status readable against the solid brand-blue field. */
+  color: rgb(255 255 255 / 76%);
   text-align: left;
 }
 
 .skills-menu-active.on {
-  color: var(--text);
+  color: #fff;
 }
 
 /* Shortcut hint at the button's far edge, beside the chevron it shares a job
@@ -5716,8 +5714,8 @@ select.episodes-tool {
   padding: 2px 5px;
   font-size: 10px;
   letter-spacing: 0;
-  color: var(--muted);
-  border: 1px solid var(--hairline);
+  color: rgb(255 255 255 / 76%);
+  border: 1px solid rgb(255 255 255 / 28%);
   border-radius: 4px;
   opacity: 0.55;
   transition: opacity 150ms ease;
@@ -5730,7 +5728,7 @@ select.episodes-tool {
 .skills-menu-chevron {
   flex: 0 0 auto;
   font-size: 11px;
-  color: var(--muted);
+  color: rgb(255 255 255 / 76%);
   transition: transform 150ms ease;
 }
 
@@ -9554,7 +9552,6 @@ select.skill-input {
 
   /* Full-size joystick swallows half a phone screen. */
   .overlay-joystick {
-    --joystick-hit-size: 150px;
     --joystick-pad-size: 120px;
   }
 
@@ -10126,7 +10123,7 @@ select.skill-input {
      order alone keeps the joystick / WASD chips / head tilt painting on top
      (same trick as .cam-map-host.big). An explicit z-index here would let the
      opaque video cover the controls. */
-  /* Grow to 360px; on narrow scenes, stop at the centred 264px joystick hit target. */
+  /* Grow to 360px; on narrow scenes, stop before the centred joystick. */
   width: min(360px, calc(50% - 144px));
   aspect-ratio: 4 / 3;
   overflow: hidden;

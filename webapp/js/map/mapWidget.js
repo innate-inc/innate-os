@@ -191,7 +191,7 @@ function rasterizeGrid(msg, canvas, ctx, paint) {
  *   small); enables scroll-to-zoom. Omit to fit the whole grid (the standalone page). onZoomChange
  *   fires after each wheel-zoom. layers turns on optional overlays (Nav page): live lidar scan,
  *   global/local costmaps, odometry trail — each adds its subscription only while enabled.
- * @returns {{ destroy: () => void, refresh: () => void, setZoom: (meters: number) => void, setLayer: (name: LayerName, on: boolean) => void, setMappingMode: (on: boolean) => void, clearTrail: () => void, mapChanged: () => void, highlightMemory: (id: number | null) => void, focusMemory: (id: number) => void, robotNowS: () => number }}
+ * @returns {{ destroy: () => void, refresh: () => void, setZoom: (meters: number) => void, setFollowRobot: (on: boolean) => void, setLayer: (name: LayerName, on: boolean) => void, setMappingMode: (on: boolean) => void, clearTrail: () => void, mapChanged: () => void, highlightMemory: (id: number | null) => void, focusMemory: (id: number) => void, robotNowS: () => number }}
  */
 export function createMap(root, opts = {}) {
   let zoomMeters = opts.zoom;
@@ -838,6 +838,9 @@ export function createMap(root, opts = {}) {
   // Grab-to-pan: while set, the view centres here instead of on the robot.
   /** @type {{ x: number, y: number } | null} */
   let panCenter = null;
+  // Thumbnail maps are glanceable robot locators, not independently pannable
+  // maps. The full map turns this off again so operators keep normal pan.
+  let followRobot = false;
   /** @type {{ px: number, py: number, center: { x: number, y: number }, moved: boolean } | null} */
   let panDrag = null;
   /** @type {{ x: number, y: number, yaw: number } | null} the active goal */
@@ -976,14 +979,33 @@ export function createMap(root, opts = {}) {
   /** @type {string | null} */
   let activePlanTopic = null;
 
+  // The map<-odom correction implied by the composed (map-frame) pose vs raw
+  // odom — identity until AMCL's first fix, when the frames coincide.
+  function mapFromOdom() {
+    if (!pose || !odomPose) return { theta: 0, tx: 0, ty: 0 };
+    const theta = pose.yaw - odomPose.yaw;
+    const c = Math.cos(theta);
+    const s = Math.sin(theta);
+    return { theta, tx: pose.x - (odomPose.x * c - odomPose.y * s), ty: pose.y - (odomPose.x * s + odomPose.y * c) };
+  }
+
   /** @param {string} topic @param {any} msg nav_msgs/Path */
   function onPlan(topic, msg) {
     const poses = msg?.poses;
     if (!Array.isArray(poses)) return;
+    // The mapfree planner's costmap is in the ODOM frame (costmap.yaml), so its
+    // route — and the goal marker taken from its endpoint — needs the map<-odom
+    // correction before it can share the map canvas.
+    const frameId = typeof msg?.header?.frame_id === "string" ? msg.header.frame_id : "";
+    const { theta, tx, ty } = frameId.includes("odom") ? mapFromOdom() : { theta: 0, tx: 0, ty: 0 };
+    const c = Math.cos(theta);
+    const s = Math.sin(theta);
     const pts = [];
     for (const ps of poses) {
       const pos = ps?.pose?.position;
-      if (typeof pos?.x === "number" && typeof pos?.y === "number") pts.push({ x: pos.x, y: pos.y });
+      if (typeof pos?.x === "number" && typeof pos?.y === "number") {
+        pts.push({ x: tx + pos.x * c - pos.y * s, y: ty + pos.x * s + pos.y * c });
+      }
     }
     if (pts.length) {
       activePlanTopic = topic;
@@ -995,7 +1017,7 @@ export function createMap(root, opts = {}) {
         const end = poses[poses.length - 1]?.pose;
         const q = end?.orientation;
         if (q) {
-          const yaw = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
+          const yaw = theta + Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
           goalMarker = { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y, yaw };
         }
       }
@@ -1125,20 +1147,9 @@ export function createMap(root, opts = {}) {
       ctx.drawImage(costOff, topLeft.px, topLeft.py, costGrid.width * cellPx, costGrid.height * cellPx);
     }
 
-    // Local costmap: its coordinates are in the ODOM frame, so place it via
-    // the map<-odom correction implied by the composed (map-frame) pose vs
-    // raw odom — identity until AMCL's first fix, when the frames coincide.
+    // Local costmap: its coordinates are in the ODOM frame.
     if (layers.local && localGrid) {
-      let theta = 0;
-      let tx = 0;
-      let ty = 0;
-      if (pose && odomPose) {
-        theta = pose.yaw - odomPose.yaw;
-        const c = Math.cos(theta);
-        const s = Math.sin(theta);
-        tx = pose.x - (odomPose.x * c - odomPose.y * s);
-        ty = pose.y - (odomPose.x * s + odomPose.y * c);
-      }
+      const { theta, tx, ty } = mapFromOdom();
       const c = Math.cos(theta);
       const s = Math.sin(theta);
       // The image's top-left corner (max-y edge, matching the row flip) in
@@ -1465,8 +1476,9 @@ export function createMap(root, opts = {}) {
     goBtn.classList.toggle("is-active", ui === "goto");
     setHint(goBtn, ui === "goto" ? "click & drag on the map" : "tap a point to navigate");
     stopBtn.hidden = !(ui === "idle" && navActive) || mappingMode;
-    centerBtn.hidden = panCenter === null;
-    canvas.style.cursor = ui === "manual" || ui === "goto" ? "crosshair" : memHover ? "pointer" : "grab";
+    centerBtn.hidden = followRobot || panCenter === null;
+    canvas.style.cursor =
+      ui === "manual" || ui === "goto" ? "crosshair" : memHover || followRobot ? "pointer" : "grab";
   }
 
   /** @param {"idle" | "locate" | "manual" | "goto"} next */
@@ -1601,7 +1613,11 @@ export function createMap(root, opts = {}) {
   /** @param {PointerEvent} e */
   function onPointerDown(e) {
     if (!grid || !view) return;
-    e.preventDefault();
+    e.preventDefault(); // even when refusing below: a drag must not start a text selection over the strip
+    // Leave the thumbnail's click to its parent tile (which promotes the map).
+    // Capturing it here would also let a small drag strand the corner map away
+    // from the robot again.
+    if (followRobot && ui === "idle") return;
     const { px, py } = eventToCanvas(e);
     canvas.setPointerCapture(e.pointerId);
     if (ui === "manual" || ui === "goto") {
@@ -1617,6 +1633,9 @@ export function createMap(root, opts = {}) {
 
   /** @param {PointerEvent} e */
   function onPointerMove(e) {
+    // Mirror onPointerDown: no hover either — the thumbnail hides mem-cards,
+    // yet each hovered dot would still fetch its memory image.
+    if (followRobot && ui === "idle") return;
     if (goalDrag) {
       const { px, py } = eventToCanvas(e);
       goalDrag.cur = canvasToWorld(px, py);
@@ -1856,6 +1875,21 @@ export function createMap(root, opts = {}) {
         zoomMeters = meters;
         draw();
       }
+    },
+    /** Keep a compact map centred on each live robot pose. Full-size maps
+     * disable this again and retain their normal grab-to-pan interaction. */
+    setFollowRobot(on) {
+      if (followRobot === on && (!on || panCenter === null)) return;
+      followRobot = on;
+      panDrag = null;
+      if (on) {
+        panCenter = null;
+        setUi("idle");
+        setMemHover(null);
+        closeMemPopup();
+      }
+      render();
+      draw();
     },
     /**
      * Enter/leave mapping mode: swaps the pose source to /mapping_pose,

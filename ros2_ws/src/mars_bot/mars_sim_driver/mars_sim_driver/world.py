@@ -14,6 +14,9 @@ from typing import TYPE_CHECKING
 
 import mujoco
 
+from .drive_limits import MAX_LINEAR as MAX_LINEAR
+from .drive_limits import MAX_YAW as MAX_YAW
+
 # Matches sim/viewer's spawn (scene.ts SPAWN_*) and the webapp map origin.
 SPAWN_X = -4.34
 SPAWN_Y = -0.17
@@ -25,9 +28,6 @@ SPAWN_YAW_DEG = -89.8
 KP_FORWARD = 200.0
 KP_LATERAL = 40.0
 KP_YAW = 3.0
-
-MAX_LINEAR = 0.4
-MAX_YAW = 1.0
 
 # Position hold for the stopped base (core._station_keeping). HOLD_SETTLE_S
 # outlasts a skill's per-camera-frame cmd_vel gaps.
@@ -43,6 +43,7 @@ MAX_BASE_ANGULAR_SPEED = 6.0
 
 DRIVEN_JOINTS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint_head"]
 MIMIC_JOINT = ("joint6M", "joint6", -1.0)  # (name, source, multiplier)
+GRIPPER_CLOSED_ON_AIR_RAD = -0.085  # hardware encoder, jaws shut on nothing
 
 # --- contact tuning (see tune_contacts) ----------------------------------
 #
@@ -285,7 +286,10 @@ def build_world_xml(
 <mujoco model="apartment">
   <!-- implicitfast damps the single-step impulse spikes hull seams can
        produce -- what makes 1200+ hulls stable at all. -->
-  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"
+          cone="elliptic" impratio="10"/>
+  <!-- cone/impratio: soft contacts let a grasped object creep out of the closed
+       claw no matter the friction (MuJoCo docs, "Preventing slip"). -->
   <visual>
     <global azimuth="{azimuth}" elevation="{elevation}" offwidth="1280" offheight="960"/>
   </visual>
@@ -369,6 +373,14 @@ def tune_contacts(robot_spec: mujoco.MjSpec) -> None:
             geom.solimp = FINGER_SOLIMP
 
     robot_spec.add_exclude(bodyname1=FINGER_LINKS[0], bodyname2=FINGER_LINKS[1])
+
+    # The real claw's hard stop sits past nominal zero: closed on air the
+    # encoder reads GRIPPER_CLOSED_ON_AIR_RAD (pick's GRIPPER_EMPTY_J6).
+    # Unclamped, the -0.6 close target scissors the blades through each other.
+    j6 = robot_spec.joint(MIMIC_JOINT[1])
+    j6m = robot_spec.joint(MIMIC_JOINT[0])
+    j6.range = [GRIPPER_CLOSED_ON_AIR_RAD, j6.range[1]]
+    j6m.range = [j6m.range[0], -GRIPPER_CLOSED_ON_AIR_RAD]
 
     mimic_name, source_name, _mult = MIMIC_JOINT
     for name in (source_name, mimic_name):

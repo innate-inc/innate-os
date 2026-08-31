@@ -55,6 +55,7 @@ from runtime import (
     open_os_container_shell,
     prefetch_runtime,
     print_startup_checks,
+    refuse_if_ports_taken,
     remove_superseded_containers,
     runtime_already_running,
     stop_world_server,
@@ -127,6 +128,7 @@ def cmd_up(
             log("Innate sim runtime is already running. Opening dashboard...")
             show_runtime_dashboard(config, watch=watch)
             return
+        refuse_if_ports_taken()
 
         os_env_file = build_os_env(config)
         if offline:

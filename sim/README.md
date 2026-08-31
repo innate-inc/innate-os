@@ -1,8 +1,10 @@
 # The Innate Simulator
 
 <p align="center">
-  <img src="../docs/assets/readme/sim.png" alt="Driving the simulated MARS robot through its apartment in the browser" width="85%">
+  <a href="https://sim-demo.innate.bot"><img src="../docs/assets/readme/sim.png" alt="Driving the simulated MARS robot through its apartment in the browser" width="85%"></a>
 </p>
+
+**[Try MARS now at sim-demo.innate.bot](https://sim-demo.innate.bot)** -- no install or robot required.
 
 A complete simulation of the [MARS](https://innate.bot) home robot that runs
 on your laptop — **no robot required**. It is a true digital twin: the same
@@ -151,7 +153,8 @@ which key it thinks with:
 Rerun `./innate-sim setup` anytime to switch.
 
 **Open [https://localhost](https://localhost)** (accept the self-signed
-certificate) — you are looking at the robot's web app. Drive with the
+certificate; a different `INNATE_SIM_PORT_BASE` moves it — the dashboard
+prints the URL) — you are looking at the robot's web app. Drive with the
 joystick or WASD, switch between the 3D view, the robot's cameras, and the
 map, trigger skills, and chat with the agent. Add `?simperf` to the URL for
 a frame-time / latency HUD.
@@ -385,6 +388,40 @@ Prefer your own ROS tooling? A rosbridge server is also available at
   (the wire format stays 640×480). On machines stuck with software rendering
   (`software-speed` in the dashboard's World field), `2` makes each frame
   ~4× cheaper and noticeably lowers end-to-end latency.
+
+### Running two checkouts at once
+
+Each checkout already gets its own container, its own compose project and its
+own workspace build (all keyed to the checkout's path), but the ports a stack
+publishes belong to the machine. `INNATE_SIM_PORT_BASE` moves all seven at
+once, so a second checkout runs alongside the first:
+
+```bash
+cd ~/dev/innate-os-2
+INNATE_SIM_PORT_BASE=8600 ./innate-sim up   # webapp at https://localhost:8600
+```
+
+The block is laid out in a fixed order, and every port also takes an
+individual override that wins over the base:
+
+| Offset | Service | Override | Default |
+|---|---|---|---|
+| +0 | webapp (https) | `SIM_HTTPS_PORT` | 443 |
+| +1 | webapp (http) | `SIM_HTTP_PORT` | 80 |
+| +2 | rosbridge | `SIM_ROSBRIDGE_PORT` | 9090 |
+| +3 | leader receiver (UDP) | `SIM_UDP_PORT` | 9999 |
+| +4 | Foxglove bridge | `SIM_FOXGLOVE_PORT` | 8765 |
+| +5 | world server RPC | `SIM_WORLD_PORT` | 8799 |
+| +6 | world state stream | `SIM_WORLD_STATE_PORT` | 8800 |
+
+Set nothing and you get exactly the ports above. The variable has to be set for
+every `./innate-sim` command in that checkout, not just `up` — `down`, `status`
+and `logs` look for the same ports — so export it or put it in an `.envrc`.
+
+Any number of checkouts can run at once this way; each is a full ROS fleet plus
+a MuJoCo world server rendering on the host, so the limit is your RAM and GPU.
+`./innate-sim up` refuses with the list of conflicting ports if anything already
+holds one, and names a free block to move to.
 
 ---
 

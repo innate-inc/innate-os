@@ -129,17 +129,18 @@ export class SimSession {
   #challengeJson = "";
   #challengeListeners = new Set<(view: ChallengeView) => void>();
 
-  constructor(opts: { stateUrl?: string; rosUrl?: string } = {}) {
+  constructor(opts: { stateUrl?: string; statePort?: number; rosUrl?: string } = {}) {
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     const proxied = `${scheme}://${location.host}/worldstate`;
     // Local browsers connect straight to the world server (loopback is
     // mixed-content-exempt in Chrome/Firefox, and skips the container
     // relay's latency tail); Safari and remote browsers fall back to the
-    // proxied route.
+    // proxied route. statePort arrives from /config.json: only the server
+    // knows which port the world server was published on.
     this.#stateUrls = opts.stateUrl
       ? [opts.stateUrl]
       : ["localhost", "127.0.0.1"].includes(location.hostname)
-        ? ["ws://127.0.0.1:8800", proxied]
+        ? [`ws://127.0.0.1:${opts.statePort ?? 8800}`, proxied]
         : [proxied];
     this.#rosUrl = opts.rosUrl ?? `${scheme}://${location.host}/ws`;
   }
@@ -511,7 +512,9 @@ export class SimSession {
   }
 }
 
-export function createSimSession(opts: { stateUrl?: string; rosUrl?: string } = {}): SimSession {
+export function createSimSession(
+  opts: { stateUrl?: string; statePort?: number; rosUrl?: string } = {},
+): SimSession {
   return new SimSession(opts);
 }
 

@@ -81,9 +81,10 @@ CERT_DIR = Path.home() / ".innate-webapp-tls"
 ROSBRIDGE_URL = "ws://127.0.0.1:9090"
 
 # /worldstate -> the sim world server's observer stream: host of
-# VIRTUAL_MARS_REMOTE (else in-container), always port 8800 (its default).
+# VIRTUAL_MARS_REMOTE (else in-container), on the port the launcher published.
 _WORLD_HOST = os.environ.get("VIRTUAL_MARS_REMOTE", "").strip().partition(":")[0] or "127.0.0.1"
-WORLD_STATE_URL = f"ws://{_WORLD_HOST}:8800"
+WORLD_STATE_PORT = int(os.environ.get("INNATE_WORLD_STATE_PORT", "").strip() or "8800")
+WORLD_STATE_URL = f"ws://{_WORLD_HOST}:{WORLD_STATE_PORT}"
 
 # Ping both legs of every relay so a peer that vanishes without a FIN (a robot's
 # WiFi dropping mid-teleop) is reaped in ~heartbeat seconds instead of lingering
@@ -91,6 +92,9 @@ WORLD_STATE_URL = f"ws://{_WORLD_HOST}:8800"
 # aiohttp derives the pong deadline as heartbeat/2, so this allows 30s: at 20s
 # the 10s deadline was closing healthy sockets that share WiFi with the streams.
 WS_HEARTBEAT = 60.0
+
+WS_KEEPALIVE = 20.0
+_KEEPALIVE_FRAME = json.dumps({"op": "keepalive"})
 
 
 def _quiet_benign_disconnects() -> None:
@@ -360,6 +364,8 @@ async def config_handler(request: web.Request) -> web.Response:
         cfg = {}
     if WEBAPP_SIM_CONTROLS:
         cfg["simControls"] = True
+        # The 3D view prefers a direct loopback socket over this relay.
+        cfg["worldStatePort"] = WORLD_STATE_PORT
     return web.json_response(cfg, headers={"Cache-Control": "no-cache"})
 
 
@@ -439,17 +445,32 @@ async def _pump(src: "web.WebSocketResponse | aiohttp.ClientWebSocketResponse", 
             break
 
 
+async def _keepalive(ws: web.WebSocketResponse) -> None:
+    """Emit a frame the browser's *JavaScript* can see.
+
+    Ping/pong never reaches page scripts, so without this an idle socket and a
+    dead one are indistinguishable to rosClient, which reconnects on the gap.
+    """
+    while True:
+        await asyncio.sleep(WS_KEEPALIVE)
+        await ws.send_str(_KEEPALIVE_FRAME)
+
+
 async def ws_proxy(request: web.Request) -> web.WebSocketResponse:
     """Bidirectional relay: /ws <-> rosbridge, /worldstate <-> the sim world
     server's observer stream. max_msg_size=0 lifts aiohttp's default cap for the
     large point-cloud / world-state frames."""
     ws = web.WebSocketResponse(max_msg_size=0, heartbeat=WS_HEARTBEAT)
     await ws.prepare(request)
-    upstream_url = WORLD_STATE_URL if request.path == "/worldstate" else ROSBRIDGE_URL
+    worldstate = request.path == "/worldstate"
+    upstream_url = WORLD_STATE_URL if worldstate else ROSBRIDGE_URL
     session = request.app[CLIENT]
     try:
         async with session.ws_connect(upstream_url, max_msg_size=0, heartbeat=WS_HEARTBEAT) as upstream:
             tasks = [asyncio.create_task(_pump(ws, upstream)), asyncio.create_task(_pump(upstream, ws))]
+            # Not /worldstate: the sim viewer parses only world state.
+            if not worldstate:
+                tasks.append(asyncio.create_task(_keepalive(ws)))
             _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()

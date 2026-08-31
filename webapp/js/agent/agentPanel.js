@@ -23,6 +23,8 @@ import {
 import { createChatStream } from "./chatStream.js";
 import { createDirectiveControls } from "./directiveControls.js";
 
+const HISTORY_RECONCILE_MS = 30_000;
+
 const CHAT_EXAMPLES = [
   "What can you see?",
   "What do you remember here?",
@@ -227,21 +229,24 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   });
 
   // ---- history backfill ---------------------------------------------------
-  // Live topics only carry messages from after we subscribe, so a fresh page
-  // load starts blank and every dropped socket leaves a hole the live stream
-  // never fills. The brain keeps the full conversation: refetch it on *every*
-  // connect and replay through the same renderers, then keep appending live.
+  // A topic delivers only what arrives after we subscribe, so a gap in delivery
+  // is permanent — the brain's record is the only thing that can close it.
   let loadingHistory = false;
+  let lastSnapshot = "";
 
   async function loadHistory() {
     if (loadingHistory) return;
     loadingHistory = true;
     try {
       const res = await rosClient.callService(GET_CHAT_HISTORY_SERVICE, {});
-      const entries = JSON.parse(res?.history ?? "[]");
-      if (Array.isArray(entries) && entries.length) chat.replay(entries);
-    } catch {
-      // best-effort — the live stream still works without the backfill
+      const raw = String(res?.history ?? "");
+      if (raw === lastSnapshot) return;
+      const entries = JSON.parse(raw || "[]");
+      if (!Array.isArray(entries) || !entries.length) return;
+      lastSnapshot = raw;
+      chat.replay(entries);
+    } catch (err) {
+      console.warn("[chat] reconcile failed:", err);
     } finally {
       loadingHistory = false;
     }
@@ -250,6 +255,12 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   const unsubConn = rosClient.onStateChange((s) => {
     if (s === "connected") void loadHistory();
   });
+
+  const onVisible = () => {
+    if (document.visibilityState === "visible") void loadHistory();
+  };
+  document.addEventListener("visibilitychange", onVisible);
+  const historyPoll = setInterval(onVisible, HISTORY_RECONCILE_MS);
 
   // ---- live subscriptions -------------------------------------------------
   const unsubIn = rosClient.subscribe(CHAT_IN_TOPIC, (m) => {
@@ -278,8 +289,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const sender = String(payload?.sender ?? "");
     const text = String(payload?.text ?? "");
     if (!sender || !text) return;
-    const ts = Number(payload?.timestamp) || Date.now() / 1000;
-    chat.routeChatOut(sender, text, ts);
+    chat.routeChatOut(sender, text, Number(payload?.timestamp) || Date.now() / 1000);
   }, undefined, "std_msgs/msg/String");
 
   const unsubSkill = rosClient.subscribe(SKILL_STATUS_UPDATE_TOPIC, (m) => {
@@ -295,7 +305,8 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     if (!name || !status) return;
     const key = String(payload?.primitive_id ?? payload?.skill_id ?? name);
     const reason = typeof payload?.reason === "string" ? payload.reason : "";
-    chat.addSkillRun(key, name, status, Number(payload?.timestamp) || Date.now() / 1000, reason, payload?.args);
+    const ts = Number(payload?.timestamp) || Date.now() / 1000;
+    chat.addSkillRun(key, name, status, ts, reason, payload?.args);
   }, undefined, "std_msgs/msg/String");
 
   return {
@@ -308,6 +319,8 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       clearInterval(placeholderInterval);
       if (placeholderSwapTimer) clearTimeout(placeholderSwapTimer);
       chat.destroy();
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(historyPoll);
       unsubConn();
       unsubIn();
       unsubOut();
