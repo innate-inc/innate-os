@@ -47,7 +47,7 @@ _APPROACH_PAST_HANDLE_M = 0.01
 _WRIST_MAX_STEP_M = 0.025
 _WRIST_STEPS = 5
 _WRIST_U_PX = 320.0
-_WRIST_U_DEADBAND_PX = 10.0
+_WRIST_LATERAL_CAPTURE_M = 0.015
 # The real wrist module has no CameraInfo calibration. Keep this aligned with
 # the repository's 80-degree wrist-camera model until per-robot K is measured.
 _WRIST_FY_PX = 480.0 / (2.0 * math.tan(math.radians(80.0) / 2.0))
@@ -91,6 +91,15 @@ def _wrist_lateral_correction(u_px, optical_range_m):
     """Image-right handle error requires a negative base-Y gripper move."""
     correction = -(u_px - _WRIST_U_PX) * optical_range_m / _WRIST_FX_PX
     return max(-_WRIST_MAX_STEP_M, min(_WRIST_MAX_STEP_M, correction))
+
+
+def _wrist_capture_ready(error, lateral_correction_m):
+    """Whether the handle is safely inside the gripper's capture corridor."""
+    return (
+        abs(error[0]) <= _WRIST_XZ_DEADBAND_M
+        and abs(error[2]) <= _WRIST_XZ_DEADBAND_M
+        and abs(lateral_correction_m) <= _WRIST_LATERAL_CAPTURE_M
+    )
 
 
 class OpenDoorWithVision(Skill):
@@ -345,16 +354,13 @@ class OpenDoorWithVision(Skill):
                 desired_ee=list(desired),
                 error_m=list(error),
             )
-            aligned = (
-                abs(error[0]) <= _WRIST_XZ_DEADBAND_M
-                and abs(error[2]) <= _WRIST_XZ_DEADBAND_M
-                and abs(u_error) <= _WRIST_U_DEADBAND_PX
-            )
-            if aligned:
+            if _wrist_capture_ready(error, lateral_correction):
                 self.debug_event(
                     "wrist_alignment_complete",
                     measured_ee=list(measured.position),
                     refined_handle_base=list(observed),
+                    lateral_error_m=lateral_correction,
+                    lateral_capture_limit_m=_WRIST_LATERAL_CAPTURE_M,
                 )
                 return tuple(measured.position), observed
 

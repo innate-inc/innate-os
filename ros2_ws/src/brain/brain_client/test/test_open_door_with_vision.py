@@ -229,6 +229,14 @@ def test_wrist_image_right_error_moves_gripper_in_negative_y():
     assert module._wrist_lateral_correction(389.5, 0.1430104) == pytest.approx(-0.025)
 
 
+def test_wrist_capture_gate_uses_metric_corridor_not_pixel_cutoff():
+    # Final observation from the live run: 11.5 px from image center, but only
+    # 5.3 mm laterally and safely inside the open gripper's capture corridor.
+    error = (-0.0032695, 0.0053488, 0.0039719)
+    assert module._wrist_capture_ready(error, 0.0053488)
+    assert not module._wrist_capture_ready(error, 0.016)
+
+
 class _Mobility:
     def __init__(self):
         self.stops = 0
