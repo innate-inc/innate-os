@@ -135,7 +135,7 @@ RAW_FILES = {
     ),
     SIM / "viewer" / "public" / "models" / "soft_sock_skin.bin": (
         f"{_RAW_RELEASE}/soft_sock_skin.bin",
-        "9e1030c242368f66c21cf5d209e0a6901dc8c38a570ed9e8670d57b79b9634c0",
+        "fa0b010711c695afc62aa7d0c4e038ab4fe80fd69a1e45295f4585c7f4c46abe",
     ),
 }
 

@@ -236,45 +236,84 @@ def _export_glb(
     path.write_bytes(scene.export(file_type="glb"))
 
 
+def _localized_affine_weights(
+    render_vertices: np.ndarray,
+    control_vertices: np.ndarray,
+    neighbor_count: int,
+) -> tuple[np.ndarray, float, int]:
+    """Blend nearby controls while reproducing every affine transform.
+
+    The former polyharmonic RBF solve coupled every render vertex to every
+    control.  It was continuous, but a local pinch visibly pulled the whole
+    sock like jelly.  These moving-least-squares coordinates use a compact
+    Wendland kernel and expand the neighborhood only when the local surface is
+    too nearly planar to satisfy the affine constraints robustly.
+    """
+    control_count = len(control_vertices)
+    if not 4 <= neighbor_count <= control_count:
+        raise ValueError(f"skin neighborhood must be between 4 and {control_count}, got {neighbor_count}")
+    scale = float(np.max(np.ptp(control_vertices, axis=0)))
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError("control vertices must span a finite, non-zero volume")
+    weights = np.zeros((len(render_vertices), control_count), dtype=np.float64)
+    worst_condition = 0.0
+    largest_neighborhood = 0
+
+    for render_index, render in enumerate(render_vertices):
+        distances = np.linalg.norm(control_vertices - render, axis=1)
+        ordered = np.argsort(distances)
+        solved = False
+        neighborhood_sizes = list(range(neighbor_count, control_count + 1, 4))
+        if neighborhood_sizes[-1] != control_count:
+            neighborhood_sizes.append(control_count)
+        for count in neighborhood_sizes:
+            indices = ordered[:count]
+            offsets = (control_vertices[indices] - render) / scale
+            # Keep the outermost weight near zero so swapping one neighbor for
+            # another does not introduce a visible seam across render edges.
+            support = max(float(distances[indices[-1]]) * 1.15, 1.0e-9)
+            radial_distance = np.minimum(distances[indices] / support, 1.0)
+            radial = (1.0 - radial_distance) ** 4 * (4.0 * radial_distance + 1.0)
+            basis = np.column_stack((np.ones(count), offsets))
+            moment = basis.T @ (radial[:, None] * basis)
+            condition = float(np.linalg.cond(moment))
+            if not np.isfinite(condition) or condition > 1.0e10:
+                if count < control_count:
+                    continue
+                raise RuntimeError(f"render vertex {render_index} has an ill-conditioned affine neighborhood")
+            coefficients = np.linalg.solve(moment, np.asarray((1.0, 0.0, 0.0, 0.0)))
+            local_weights = radial * (basis @ coefficients)
+            residual = basis.T @ local_weights - np.asarray((1.0, 0.0, 0.0, 0.0))
+            if np.max(np.abs(residual)) > 1.0e-8:
+                if count < control_count:
+                    continue
+                raise RuntimeError(f"render vertex {render_index} affine residual is {np.max(np.abs(residual))}")
+            weights[render_index, indices] = local_weights
+            worst_condition = max(worst_condition, condition)
+            largest_neighborhood = max(largest_neighborhood, count)
+            solved = True
+            break
+        if not solved:
+            raise RuntimeError(f"could not construct a stable local skin map for render vertex {render_index}")
+    return weights, worst_condition, largest_neighborhood
+
+
 def _export_skin(
     path: Path,
     render_vertices: np.ndarray,
     control_vertices: np.ndarray,
     control_faces: np.ndarray,
-) -> tuple[float, float]:
-    """Write a smooth radial-basis deformation map (ISK2).
-
-    Per-triangle nearest bindings are discontinuous: neighboring render
-    vertices can follow unrelated cage faces and tear apart as those faces
-    fold.  A polyharmonic RBF map is continuous over the whole sock and its
-    affine tail reproduces translations, rotations, and rest geometry.
-    """
+    neighbor_count: int,
+) -> tuple[float, float, float, int, float]:
+    """Write a localized, affine-preserving deformation map (ISK2)."""
     del control_faces  # topology drives physics; smooth skinning uses its vertices
-    scale = float(np.max(np.ptp(control_vertices, axis=0)))
-    controls = control_vertices / scale
-    renders = render_vertices / scale
-    distances = np.linalg.norm(controls[:, None, :] - controls[None, :, :], axis=2)
-    kernel = distances**3
-    affine = np.column_stack((np.ones(len(controls)), controls))
-    system = np.block(
-        [
-            [kernel + np.eye(len(controls)) * 1.0e-10, affine],
-            [affine.T, np.zeros((4, 4))],
-        ]
+    weights, worst_condition, largest_neighborhood = _localized_affine_weights(
+        render_vertices, control_vertices, neighbor_count
     )
-    rhs = np.vstack((np.eye(len(controls)), np.zeros((4, len(controls)))))
-    coefficients = np.linalg.solve(system, rhs)
-    evaluation = np.column_stack(
-        (
-            np.linalg.norm(renders[:, None, :] - controls[None, :, :], axis=2) ** 3,
-            np.ones(len(renders)),
-            renders,
-        )
-    )
-    weights = evaluation @ coefficients
     reconstructed = weights @ control_vertices
     rest_error = float(np.max(np.linalg.norm(reconstructed - render_vertices, axis=1)))
     partition_error = float(np.max(np.abs(weights.sum(axis=1) - 1.0)))
+    largest_weight_l1 = float(np.max(np.sum(np.abs(weights), axis=1)))
 
     header = b"ISK2" + np.asarray((len(render_vertices), len(control_vertices), 0), dtype="<u4").tobytes()
     payload = (
@@ -285,7 +324,7 @@ def _export_skin(
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
-    return rest_error, partition_error
+    return rest_error, partition_error, worst_condition, largest_neighborhood, largest_weight_l1
 
 
 def main() -> None:
@@ -297,6 +336,7 @@ def main() -> None:
     parser.add_argument("--viewer-skin", type=Path, required=True)
     parser.add_argument("--control-rings", type=int, default=9)
     parser.add_argument("--control-segments", type=int, default=12)
+    parser.add_argument("--skin-neighbors", type=int, default=20)
     parser.add_argument("--texture-size", type=int, default=1024)
     parser.add_argument("--palette", choices=("authored", "two-tone-gray"), default="two-tone-gray")
     args = parser.parse_args()
@@ -354,7 +394,9 @@ def main() -> None:
         output_texture,
         args.texture_size,
     )
-    skin_error, skin_partition_error = _export_skin(args.viewer_skin.resolve(), source_vertices, vertices, faces)
+    skin_error, skin_partition_error, skin_condition, skin_neighborhood, skin_weight_l1 = _export_skin(
+        args.viewer_skin.resolve(), source_vertices, vertices, faces, args.skin_neighbors
+    )
     diagnostics = {
         "source_vertices": len(source_vertices),
         "source_triangles": len(source_faces),
@@ -371,6 +413,10 @@ def main() -> None:
         "render_triangles": len(source_faces),
         "skin_rest_max_error_m": skin_error,
         "skin_partition_max_error": skin_partition_error,
+        "skin_requested_neighbors": args.skin_neighbors,
+        "skin_largest_neighborhood": skin_neighborhood,
+        "skin_worst_moment_condition": skin_condition,
+        "skin_largest_weight_l1": skin_weight_l1,
         "viewer_glb_bytes": args.viewer_glb.resolve().stat().st_size,
         "viewer_skin_bytes": args.viewer_skin.resolve().stat().st_size,
         "physics_texture_bytes": (physics_dir / "texture_base_color.png").stat().st_size,
