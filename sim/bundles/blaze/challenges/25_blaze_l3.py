@@ -69,7 +69,7 @@ CHALLENGE = Challenge(
         # 145, not 165: at 165 the warning arrived in the same observation as a
         # west-shelf pick, 19 s -- under two actions -- before the 190 s
         # closure. A warning must leave room to act on it: 45 s is four.
-        Cue("Kitchen's about to go -- get out of there NOW.", after_s=145.0),
+        Cue("Kitchen's about to go -- get out of there NOW.", after_s=285.0),
     ],
     goals=[
         Goal("Medicine on the porch", InRect("blaze_medicine", *PORCH)),
@@ -86,7 +86,11 @@ CHALLENGE = Challenge(
     # 150 s the second trip was a photo finish (~5 s of margin) for the
     # fastest turn-based line -- and the design note on l2 says the right
     # order should never be a photo finish.
-    fail_if=burns({KITCHEN: 190.0, HALL_E: 270.0, STUDY: 290.0}),
+    # KITCHEN 330, not 190: two objects in the kitchen and one carry slot
+    # means two entries, and a measured action-only run (real pick/place,
+    # zero think charge, A* route) was cut off at exactly 190.0 s on the
+    # second trip. The oracle cleared it only by teleporting the carry.
+    fail_if=burns({KITCHEN: 330.0, HALL_E: 270.0, STUDY: 290.0}),
     fail_reason="cut off by the fire",
     time_limit_s=480,
 )
