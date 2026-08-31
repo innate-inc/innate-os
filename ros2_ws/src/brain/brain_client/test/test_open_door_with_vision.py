@@ -295,13 +295,13 @@ def test_wrist_decision_parser_requires_allowed_action_and_box():
     )
 
 
-def test_wrist_actions_are_five_millimetres_and_bounded():
+def test_wrist_actions_are_ten_millimetres_and_bounded():
     start = (0.35, 0.01, 0.20)
 
-    assert module._wrist_action_pose(start, "FORWARD") == pytest.approx((0.355, 0.01, 0.20))
-    assert module._wrist_action_pose(start, "BACK") == pytest.approx((0.345, 0.01, 0.20))
-    assert module._wrist_action_pose(start, "LEFT") == pytest.approx((0.35, 0.015, 0.20))
-    assert module._wrist_action_pose(start, "RIGHT") == pytest.approx((0.35, 0.005, 0.20))
+    assert module._wrist_action_pose(start, "FORWARD") == pytest.approx((0.36, 0.01, 0.20))
+    assert module._wrist_action_pose(start, "BACK") == pytest.approx((0.34, 0.01, 0.20))
+    assert module._wrist_action_pose(start, "LEFT") == pytest.approx((0.35, 0.02, 0.20))
+    assert module._wrist_action_pose(start, "RIGHT") == pytest.approx((0.35, 0.00, 0.20))
     assert module._wrist_action_pose((0.40, 0.10, 0.30), "FORWARD") == pytest.approx((0.40, 0.10, 0.30))
 
 
@@ -351,8 +351,8 @@ def test_wrist_loop_executes_semantic_actions_until_grasp(monkeypatch):
 
     result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
 
-    assert result == pytest.approx((0.355, 0.005, 0.20))
-    assert skill.manipulation.moves == pytest.approx([(0.355, 0.01, 0.20), (0.355, 0.005, 0.20)])
+    assert result == pytest.approx((0.36, 0.00, 0.20))
+    assert skill.manipulation.moves == pytest.approx([(0.36, 0.01, 0.20), (0.36, 0.00, 0.20)])
     assert history == [(False, None, 0), (True, "FORWARD", 1), (True, "RIGHT", 2)]
 
 
@@ -377,14 +377,14 @@ def test_wrist_loop_accumulates_commands_without_adopting_measured_z_lag(monkeyp
     result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
 
     expected_moves = [
-        (0.35, 0.01, 0.205),
         (0.35, 0.01, 0.210),
-        (0.35, 0.005, 0.210),
+        (0.35, 0.01, 0.220),
+        (0.35, 0.00, 0.220),
     ]
     assert len(skill.manipulation.moves) == len(expected_moves)
     for actual, expected in zip(skill.manipulation.moves, expected_moves, strict=True):
         assert actual == pytest.approx(expected)
-    assert result == pytest.approx((0.35, 0.005, 0.208))
+    assert result == pytest.approx((0.35, 0.00, 0.218))
 
 
 def test_wrist_loop_logs_but_does_not_abort_on_large_tracking_error(monkeypatch):
@@ -408,11 +408,11 @@ def test_wrist_loop_logs_but_does_not_abort_on_large_tracking_error(monkeypatch)
 
     result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
 
-    expected_moves = [(0.35, 0.01, 0.205), (0.35, 0.01, 0.210)]
+    expected_moves = [(0.35, 0.01, 0.210), (0.35, 0.01, 0.220)]
     assert len(skill.manipulation.moves) == len(expected_moves)
     for actual, expected in zip(skill.manipulation.moves, expected_moves, strict=True):
         assert actual == pytest.approx(expected)
-    assert result == pytest.approx((0.35, 0.01, 0.190))
+    assert result == pytest.approx((0.35, 0.01, 0.200))
     motion_events = [fields for event, fields in events if event == "wrist_action_motion"]
     assert [event["max_tracking_error_m"] for event in motion_events] == pytest.approx([0.020, 0.020])
     assert all("effort" in event for event in motion_events)
@@ -436,7 +436,7 @@ def test_wrist_loop_continues_past_twelve_actions(monkeypatch):
     result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
 
     assert len(skill.manipulation.moves) == 13
-    assert result == pytest.approx((0.35, 0.01, 0.205))
+    assert result == pytest.approx((0.35, 0.01, 0.210))
 
 
 class _Mobility:

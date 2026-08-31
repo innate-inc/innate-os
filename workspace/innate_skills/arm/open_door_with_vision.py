@@ -39,7 +39,7 @@ _BASE_HANDLE_X_BOUNDS_M = (0.33, 0.38)
 _WRIST_STAGING_X_M = 0.32
 _VISUAL_CLEARANCE_M = 0.03
 _MAX_EE_X_M = 0.40
-_WRIST_ACTION_STEP_M = 0.005
+_WRIST_ACTION_STEP_M = 0.010
 _WRIST_CONTENT_ATTEMPTS = 2
 _WRIST_ACTIONS = frozenset({"FORWARD", "BACK", "LEFT", "RIGHT", "UP", "DOWN", "GRASP", "ABORT"})
 _GRIP_STRENGTH = 0.35
@@ -77,7 +77,7 @@ def _parse_wrist_decision(text):
 
 
 def _wrist_action_pose(position, action):
-    """Map one semantic image-space action to a bounded 5 mm base-frame move."""
+    """Map one semantic image-space action to a bounded 10 mm base-frame move."""
     x, y, z = position
     if action == "FORWARD":
         x += _WRIST_ACTION_STEP_M
