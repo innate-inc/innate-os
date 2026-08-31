@@ -63,6 +63,18 @@ class Ros:
             "op": "send_action_goal", "id": goal_id, "action": ACTION,
             "action_type": ACTION_TYPE, "args": {"instruction": instruction, "server": server},
             "feedback": False, "goal_id": goal_id}))
+    def set_family(self, family):
+        """The nav action carries an instruction, not a task family, and the
+        family decides the history window (uniform vs latest). So it is set on
+        the node between scenarios rather than smuggled into the wording."""
+        self.ws.send(json.dumps({
+            "op": "call_service", "id": f"fam_{family}",
+            "service": "/innate_nav_node/set_parameters",
+            "args": {"parameters": [{"name": "task_family", "value": {
+                "type": 4, "bool_value": False, "integer_value": 0,
+                "double_value": 0.0, "string_value": family}}]}}))
+        time.sleep(0.6)
+
     def cancel(self, goal_id):
         try:
             self.ws.send(json.dumps({"op": "cancel_action_goal", "id": goal_id,
@@ -75,13 +87,21 @@ class Ros:
         except Exception: pass
 
 
+def goals_of(sc):
+    """Scenarios carry a list: objectnav is satisfied by ANY instance of the
+    category, so "find the bed" counts either bedroom."""
+    return [tuple(g) for g in sc.get("goals", [sc["goal"]] if "goal" in sc else [])]
+
+
 def run_one(world, sc, timeout_s, server=""):
     sx, sy, syaw = sc["spawn"]
-    gx, gy = sc["goal"]
+    goals = goals_of(sc)
+    gx, gy = goals[0]
     world.set_pose(sx, sy, syaw)
     time.sleep(1.5)                      # let the physics settle after a teleport
 
     ros = Ros()
+    ros.set_family(sc.get("family", "r2r"))
     t0 = time.time()
     while ros.odom is None and time.time() - t0 < 15: time.sleep(0.1)
     if ros.odom is None:
@@ -97,7 +117,7 @@ def run_one(world, sc, timeout_s, server=""):
             x, y, _ = ros.odom
             if not traj or (x - traj[-1][0])**2 + (y - traj[-1][1])**2 > 1e-4:
                 traj.append((x, y))
-            best = min(best, math.hypot(x - gx, y - gy))
+            best = min(best, min(math.hypot(x - a, y - b) for a, b in goals))
         if ros.result is not None: break
         time.sleep(0.1)
     timed_out = ros.result is None
@@ -108,11 +128,13 @@ def run_one(world, sc, timeout_s, server=""):
     x, y, _ = ros.odom if ros.odom else (sx, sy, 0)
     ros.close()
 
-    final = math.hypot(x - gx, y - gy)
+    final = min(math.hypot(x - a, y - b) for a, b in goals)
     length = sum(math.dist(traj[i], traj[i+1]) for i in range(len(traj)-1)) if len(traj) > 1 else 0.0
-    return dict(id=sc["id"], instruction=sc["instruction"], turn=sc["turn"],
+    return dict(id=sc["id"], instruction=sc["instruction"],
+                turn=sc.get("turn", ""), family=sc.get("family", "r2r"),
+                category=sc.get("category", ""),
                 final_xy=[round(x, 3), round(y, 3)],
-                path_m=sc["path_m"], spawn=sc["spawn"], goal=sc["goal"],
+                path_m=sc["path_m"], spawn=sc["spawn"], goals=[list(g) for g in goals],
                 final_dist_m=round(final, 3), best_dist_m=round(best, 3),
                 travelled_m=round(length, 2), duration_s=round(dur, 1),
                 outcome="timeout" if timed_out else "stopped",
@@ -140,7 +162,7 @@ def main():
         except Exception as exc:                       # one bad scenario must not end the sweep
             r = dict(id=sc["id"], outcome=f"error: {exc!r}", success=False, oracle=False)
         results.append(r)
-        print(f"  [{i:>2}/{len(scen)}] {sc['id']} {sc['turn']:8} "
+        print(f"  [{i:>2}/{len(scen)}] {sc['id']} {sc.get('family','r2r'):9} "
               f"{r.get('outcome','?'):8} final {r.get('final_dist_m','-')} m "
               f"{'OK' if r.get('success') else '  '}", flush=True)
         json.dump({"label": a.label, "results": results}, open(a.out, "w"), indent=1)

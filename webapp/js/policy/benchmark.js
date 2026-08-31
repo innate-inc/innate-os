@@ -21,6 +21,7 @@ import {
 
 const SETTLE_MS = 1500;
 const TURN_LABEL = { straight: "straight", left: "left", right: "right", back: "turn around" };
+const FAMILY_LABEL = { pointnav: "pointnav", objectnav: "objectnav", r2r: "vln" };
 
 /** @param {any} ros @param {HTMLElement} parent */
 export function createBenchmark(parent, ros) {
@@ -46,7 +47,9 @@ export function createBenchmark(parent, ros) {
     if (p) pose = { x: p.x, y: p.y };
   }, 100, "nav_msgs/msg/Odometry");
 
-  const dist = (gx, gy) => (pose ? Math.hypot(pose.x - gx, pose.y - gy) : NaN);
+  /** Nearest acceptable goal — objectnav counts any instance of the category. */
+  const dist = (goals) =>
+    pose ? Math.min(...goals.map(([gx, gy]) => Math.hypot(pose.x - gx, pose.y - gy))) : NaN;
 
   /** @param {any} sc @param {HTMLElement} row @param {HTMLElement} out */
   async function run(sc, row, out) {
@@ -61,13 +64,20 @@ export function createBenchmark(parent, ros) {
 
     let best = Infinity;
     const tick = setInterval(() => {
-      const d = dist(sc.goal[0], sc.goal[1]);
+      const d = dist(sc.goals);
       if (!Number.isNaN(d)) {
         best = Math.min(best, d);
         out.textContent = `${d.toFixed(2)} m away (best ${best.toFixed(2)})`;
       }
     }, 200);
 
+    // The family selects the history window, and the action carries only the
+    // instruction — so it is set on the node before the goal goes out.
+    await ros.callService("/innate_nav_node/set_parameters", {
+      parameters: [{ name: "task_family", value: {
+        type: 4, bool_value: false, integer_value: 0, double_value: 0,
+        string_value: sc.family || "r2r" } }],
+    }).catch(() => {});
     out.textContent = "driving…";
     const { promise, cancel } = ros.sendActionGoal(
       NAV_POLICY_ACTION, NAV_POLICY_ACTION_TYPE,
@@ -80,7 +90,7 @@ export function createBenchmark(parent, ros) {
     }
     clearInterval(tick);
     active = null;
-    const final = dist(sc.goal[0], sc.goal[1]);
+    const final = dist(sc.goals);
     const ok = final <= radius;
     row.classList.remove("running");
     row.classList.toggle("pass", ok);
@@ -106,7 +116,10 @@ export function createBenchmark(parent, ros) {
           </div>`;
         /** @type {HTMLElement} */ (row.querySelector(".bench-instruction")).textContent = sc.instruction;
         const meta = /** @type {HTMLElement} */ (row.querySelector(".bench-meta"));
-        meta.textContent = `${sc.id} · ${TURN_LABEL[sc.turn] ?? sc.turn} · ${sc.path_m} m`;
+        const kind = FAMILY_LABEL[sc.family] ?? sc.family;
+        const detail = sc.suite === "paired" ? (TURN_LABEL[sc.turn] ?? sc.turn) : kind;
+        meta.textContent = `${sc.id} · ${detail} · ${sc.path_m} m`
+          + (sc.goals.length > 1 ? ` · ${sc.goals.length} valid spots` : "");
         row.querySelector(".bench-run")?.addEventListener("click", () => run(sc, row, meta));
         list.appendChild(row);
       }

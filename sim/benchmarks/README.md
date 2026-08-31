@@ -1,6 +1,25 @@
 # Navigation benchmark (sim)
 
-40 scenarios in the sim apartment. A scenario is a spawn pose, an instruction,
+100 scenarios in the sim apartment, in two suites.
+
+**Families** (`build_families.py`) — 20 each for the three task families the
+policy serves, with ground truth the sim can verify:
+
+| family | instruction | ground truth |
+|---|---|---|
+| pointnav | ego-frame coordinates, the trained template | the goal IS the instruction, so it is exact |
+| objectnav | `Find the {category}.` | every viewpoint the object is visible and close from; any instance counts |
+| VLN (r2r) | turn-by-turn route ending at a landmark | the route's end |
+
+The family is set on the node before each goal, because the nav action carries
+an instruction and not a family — and the family is what selects the history
+window (pointnav uses `latest`, the others `uniform`).
+
+Object viewpoints were labelled from a 104-view survey of every station at four
+headings; the apartment is anonymous collision hulls, so there are no semantic
+object names in the scene to score against.
+
+**Paired** — 40 scenarios in the sim apartment. A scenario is a spawn pose, an instruction,
 and a goal; the runner places the robot, sends the instruction to the policy,
 and scores where it stopped.
 
