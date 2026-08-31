@@ -63,6 +63,23 @@ CHALLENGE = Challenge(
     id="bridge_stutter",
     title="Five gates, said badly",
     category=3,
+    # CONFOUNDED, and measured: this is not a clean disfluency control.
+    # bridge_five puts its route IN THE BRIEF, and Observation.as_text()
+    # re-emits "TASK: {brief}" every single turn -- so there the route is
+    # permanent. Here the brief withholds it and the route arrives as script
+    # cues, which BrainAgent._observe drains rather than copies
+    # ("heard, self._heard = self._heard, []"), so each line is visible for
+    # exactly ONE turn. Checked against a real episode in
+    # results/sonnet_probe/bridge: the route appears in turns 2 and 3 and is
+    # absent from turn 4 onward, on an episode that ran to about turn 21.
+    # Every shipped backend builds a fresh prompt per turn, so the route is
+    # structurally unavailable when the gates are actually reached.
+    #
+    # The pair therefore varies persistence AND fluency at once. To isolate
+    # disfluency the route would have to persist here too -- put the
+    # disfluent wording in the brief. Left as-is because that changes what
+    # this challenge measures, and the reported numbers were taken with it
+    # as it stands.
     brief=(
         "This corridor has five gates, each with a door on the left and a door "
         "on the right. Wait -- I'll tell you the route. Take the wrong door and "

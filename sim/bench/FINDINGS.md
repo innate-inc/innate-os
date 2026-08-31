@@ -244,15 +244,28 @@ Stated here rather than discovered later.
    not demonstrated -- the honest gap in this benchmark's validity story,
    and the thing a second executor-bound gate should close.
 
-2. **No ASR.** Narrator lines arrive as text. `bridge_stutter` measures what the
-   language model does with disfluent *text*; the real stack's speech front end
-   is upstream of everything here and is not exercised by any challenge.
+2. **No ASR.** Narrator lines arrive as text. The real stack's speech front
+   end is upstream of everything here and is not exercised by any challenge.
 
-3. **The blind control is not a vision result.** `CodexBackend` is text-only
+3. **`bridge_stutter` is not a clean disfluency control.** It was built as the
+   disfluent twin of `bridge_five` -- same map, same route, same failure rule
+   -- so that the pair would price disfluency. It also changes PERSISTENCE,
+   which was not intended. `bridge_five` puts its route in the brief, and the
+   observation re-emits the brief every turn, so there the route is permanent.
+   `bridge_stutter` withholds it and delivers it as script cues, which the
+   agent loop drains rather than copies, so each line is visible for exactly
+   one turn. Checked against a real episode: the route appears in turns 2-3
+   and is absent from turn 4 onward, on a run of about 21 turns. Every shipped
+   backend builds a fresh prompt per turn, so by the time the gates are
+   reached the route is structurally unavailable. Its score therefore prices
+   cross-turn memory at least as much as disfluency, and the two cannot be
+   separated from the number as it stands.
+
+4. **The blind control is not a vision result.** `CodexBackend` is text-only
    because the Codex CLI takes no images. Its scores answer "what is reachable
    from the brief alone" and must not be quoted as perception numbers.
 
-4. **"1 in 8" / "1 in 32" on the Bridge is a guessing floor, not environmental
+5. **"1 in 8" / "1 in 32" on the Bridge is a guessing floor, not environmental
    randomness -- corrected after actually checking the challenge source.**
    `bridge_three`/`bridge_five`'s left/right route (`ROUTE = (...)` in each
    challenge file) is a FIXED sequence, identical every episode, stated
@@ -268,22 +281,22 @@ Stated here rather than discovered later.
    found consistent, repeatable failures on both, not scattered chance
    losses).
 
-5. **RHAE has no human baseline.** ARC-AGI-3's efficiency score is
+6. **RHAE has no human baseline.** ARC-AGI-3's efficiency score is
    `min(1, h/a)²` where `h` is the second-best *human's* action count. No human
    data has been collected, so the derived plan's step count stands in. It is a
    score against a reference plan, not against a person, and is labelled as such.
 
-6. **`fail_if` is evaluated at 10 Hz.** A robot moving faster than ~2 m/s could
+7. **`fail_if` is evaluated at 10 Hz.** A robot moving faster than ~2 m/s could
    in principle cross an 18 cm elimination band between ticks. Nothing in this
    sim moves that fast (V_MAX is 0.30 m/s), but the band width is a function of
    speed and would need revisiting if it changed.
 
-7. **The oracle proves solvability, not sanity.** It is deaf by construction and
+8. **The oracle proves solvability, not sanity.** It is deaf by construction and
    plans straight to the final state. It cannot tell you a challenge is
    confusing, ambiguous, or badly worded — only that some agent could satisfy
    the goals. Every challenge here still needs a human to read it.
 
-8. **Rooms have no ceiling geom, and their walls are separate boxes, not a
+9. **Rooms have no ceiling geom, and their walls are separate boxes, not a
    sealed shell.** At most camera angles this is invisible (the background
    above wall-height is a flat black "sky," same as any open-air view). At a
    narrow band of oblique angles near a wall corner, the seam between two

@@ -36,11 +36,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _zones import (  # noqa: E402
     DOCUMENTS,
-    HALL_E,
     KITCHEN,
     MEDICINE,
     PORCH,
-    STUDY,
     TOWELS,
     burns,
 )
@@ -90,7 +88,12 @@ CHALLENGE = Challenge(
     # means two entries, and a measured action-only run (real pick/place,
     # zero think charge, A* route) was cut off at exactly 190.0 s on the
     # second trip. The oracle cleared it only by teleporting the carry.
-    fail_if=burns({KITCHEN: 330.0, HALL_E: 270.0, STUDY: 290.0}),
+    # HALL_E and STUDY are gone from this level, not just retimed. Both
+    # objects are in the kitchen, so neither is on the route; neither was
+    # ever cued; and once KITCHEN moved to 330 they closed BEFORE the room
+    # the fire started in, which is incoherent. They only killed a robot
+    # that went looking, without warning, on a level about the kitchen.
+    fail_if=burns({KITCHEN: 330.0}),
     fail_reason="cut off by the fire",
     time_limit_s=480,
 )
