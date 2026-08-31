@@ -201,8 +201,11 @@ def test_wrist_depth_is_bounded_by_head_range_and_grasp_reserve():
     assert target == pytest.approx((0.39, 0.02, 0.27))
 
 
-def test_wrist_image_right_error_moves_gripper_right():
-    assert module._wrist_lateral_correction(373.0, 0.104) == pytest.approx(0.01927, abs=0.0001)
+def test_wrist_image_right_error_moves_gripper_in_negative_y():
+    assert module._wrist_lateral_correction(373.0, 0.104) == pytest.approx(-0.01927, abs=0.0001)
+    # This was the first observation in the live divergent run. The correction
+    # must oppose the error and saturate at the per-step safety limit.
+    assert module._wrist_lateral_correction(389.5, 0.1430104) == pytest.approx(-0.025)
 
 
 class _Mobility:

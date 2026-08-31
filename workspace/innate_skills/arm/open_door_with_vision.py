@@ -88,8 +88,8 @@ def _fuse_handle_target(head_target, wrist_target):
 
 
 def _wrist_lateral_correction(u_px, optical_range_m):
-    """Image-right handle error requires a positive base-Y gripper move."""
-    correction = (u_px - _WRIST_U_PX) * optical_range_m / _WRIST_FX_PX
+    """Image-right handle error requires a negative base-Y gripper move."""
+    correction = -(u_px - _WRIST_U_PX) * optical_range_m / _WRIST_FX_PX
     return max(-_WRIST_MAX_STEP_M, min(_WRIST_MAX_STEP_M, correction))
 
 
