@@ -154,7 +154,19 @@ class OpenDoorWithVision(Skill):
             logger=self.logger,
             reasoning_effort=_VISION_REASONING_EFFORT,
         )
+        self.debug_event(
+            "handle_detection_response",
+            camera=camera,
+            response=text,
+            frame=frame_name,
+        )
         boxes = vision.parse_det_boxes(text)
+        self.debug_event(
+            "handle_detection_parse",
+            camera=camera,
+            boxes=[list(box) for box in boxes],
+            frame=frame_name,
+        )
         if not boxes:
             self.fail(f"Could not identify a graspable handle in the {camera} camera")
         try:

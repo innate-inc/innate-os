@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Innate Inc
 
 import importlib
+import json
 import logging
 import math
 import sys
@@ -12,7 +13,7 @@ import pytest
 pytest.importorskip("rclpy")
 
 from brain_client.skills import debug_runs
-from brain_client.skills.types import SkillOutput
+from brain_client.skills.types import SkillFailed, SkillOutput
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 geometry = importlib.import_module("workspace.innate_skills.arm.handle_triangulation")
@@ -155,6 +156,26 @@ def test_detection_exports_exact_camera_frame(tmp_path, monkeypatch):
     assert skill._detect_box(image, "head") == pytest.approx((288, 96, 64, 288))
     assert request["reasoning_effort"] == "low"
     assert (skill.debug_directory / "00_head_detection.jpg").read_bytes() == b"exact-jpeg"
+
+
+def test_detection_exports_raw_response_before_parse_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(debug_runs, "get_workspace_dir", lambda: tmp_path)
+    monkeypatch.setattr(module.gemlib, "ask_image", lambda *_args, **_kwargs: "not-json")
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("door-response-test"))
+    skill._configure_debug_run(run_id="response-run", skill_id="innate-os/open_door_with_vision", inputs={})
+    image = type("Frame", (), {"jpeg": b"exact-jpeg"})()
+
+    with pytest.raises(SkillFailed, match="Could not identify"):
+        skill._detect_box(image, "wrist")
+
+    events = [json.loads(line) for line in (skill.debug_directory / "events.jsonl").read_text().splitlines()]
+    response = next(event for event in events if event["event"] == "handle_detection_response")
+    parsed = next(event for event in events if event["event"] == "handle_detection_parse")
+    assert response["camera"] == "wrist"
+    assert response["response"] == "not-json"
+    assert response["frame"] == "00_wrist_detection.jpg"
+    assert parsed["boxes"] == []
 
 
 def test_gemini_image_request_forwards_reasoning_effort():
