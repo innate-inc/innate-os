@@ -130,10 +130,14 @@ def proxy_transport(proxy: ProxyClient) -> Transport:
 # rather than guessed -- but the metering is best effort in every direction: a
 # failed write is swallowed so the brain is unaffected, which means a total is
 # a floor, not a guaranteed-complete sum.
-_USAGE_LOG = os.environ.get("GEMINI_USAGE_LOG", "/root/innate-os/workspace/gemini_usage.jsonl")
+# Opt-in: no path, no writes. The benchmark sets GEMINI_USAGE_LOG so it can
+# report cost; a normal robot writes nothing and keeps no record.
+_USAGE_LOG = os.environ.get("GEMINI_USAGE_LOG", "")
 
 
 def _meter_usage(model: str, chunk: dict) -> None:
+    if not _USAGE_LOG:
+        return
     usage = chunk.get("usageMetadata") if isinstance(chunk, dict) else None
     if not usage:
         return

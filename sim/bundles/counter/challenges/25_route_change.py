@@ -42,8 +42,14 @@ CHALLENGE = Challenge(
         ),
     ],
     goals=[
-        Goal("Take up post at the left seat", Hold(InCircle("robot", -0.90, 0.20, 0.55), seconds=2.0)),
-        Goal("Move to the right seat", Hold(InCircle("robot", 0.90, 0.20, 0.55), seconds=4.0)),
+        # 5 s and 8 s, not 2 s and 4 s. Under the elliptic contact solver the
+        # random agent started passing this outright -- 1 run in 12 -- because
+        # a two-second hold in a 0.55 m circle is inside a random walk's dwell
+        # time while it crosses the room. "Wait by the seat" is what the brief
+        # already asks for, so requiring an actual wait costs a competent agent
+        # nothing and costs chance almost everything.
+        Goal("Take up post at the left seat", Hold(InCircle("robot", -0.90, 0.20, 0.55), seconds=5.0)),
+        Goal("Move to the right seat", Hold(InCircle("robot", 0.90, 0.20, 0.55), seconds=8.0)),
     ],
     time_limit_s=360,
 )

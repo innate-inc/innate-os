@@ -29,6 +29,7 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import sys
 import threading
 import time
@@ -51,8 +52,23 @@ JITTER_M = 0.002
 PRICES = {"gemini-3.6-flash": (0.75e-6, 3.75e-6), "gemini-3.5-flash": (1.50e-6, 9.00e-6)}
 DEFAULT_PRICE = (0.75e-6, 3.75e-6)
 
-DEFAULT_URL = "ws://127.0.0.1:8800"
-DEFAULT_ROSBRIDGE = "ws://127.0.0.1:9090"
+
+def _port(name: str, offset: int, classic: int) -> int:
+    """A port the same way sim/launcher/config.py resolves it: an explicit
+    override, else INNATE_SIM_PORT_BASE plus this port's offset, else the
+    classic default. Hardcoding these attached the benchmark to whatever was
+    on 8800/9090, which on a shifted base is a different simulation."""
+    for raw, shift in (
+        (os.environ.get(name, "").strip(), 0),
+        (os.environ.get("INNATE_SIM_PORT_BASE", "").strip(), offset),
+    ):
+        if raw.isdigit() and 1 <= int(raw) + shift <= 65535:
+            return int(raw) + shift
+    return classic
+
+
+DEFAULT_URL = f"ws://127.0.0.1:{_port('SIM_WORLD_STATE_PORT', 6, 8800)}"
+DEFAULT_ROSBRIDGE = f"ws://127.0.0.1:{_port('SIM_ROSBRIDGE_PORT', 2, 9090)}"
 CHAT_IN = "/brain/chat_in"
 # The helpers live beside this file in the repo. They were read from $HOME,
 # which silently used whatever stale copy happened to be there.

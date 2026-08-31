@@ -17,7 +17,9 @@ ENDPOINT = "/v1/chat/completions"
 MODEL = "gemini-3.5-flash"
 
 
-_USAGE_LOG = os.environ.get("GEMINI_USAGE_LOG", "/root/innate-os/workspace/gemini_usage.jsonl")
+# Opt-in: no path, no writes. The benchmark sets GEMINI_USAGE_LOG so it can
+# report cost; a normal robot writes nothing and keeps no record.
+_USAGE_LOG = os.environ.get("GEMINI_USAGE_LOG", "")
 
 
 def _meter_vision(model: str, data: dict) -> None:
@@ -29,6 +31,8 @@ def _meter_vision(model: str, data: dict) -> None:
     """
     usage = data.get("usage") if isinstance(data, dict) else None
     if not usage:
+        return
+    if not _USAGE_LOG:
         return
     try:
         row = {

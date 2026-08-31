@@ -2376,7 +2376,14 @@ def _world_server_bind_addresses() -> str:
         # install libraries you already have.
         if _assignable_here(gateway):
             return f"127.0.0.1,{gateway}"
-        local = _own_interface_address()
+        # Guessing here is only safe if the address is genuinely host-only,
+        # and nothing checks that: on remote Docker or unusual networking the
+        # primary interface can be LAN-routable, which would publish an
+        # unauthenticated simulator port. Default to failing into the
+        # explicit INNATE_SIM_WORLD_BIND path below, which already exists and
+        # already tells the operator what to set. Opt in only if you know the
+        # interface is host-only.
+        local = _own_interface_address() if os.environ.get("INNATE_SIM_ALLOW_HOST_BIND") == "1" else ""
         if local:
             # The address containers can actually reach this distro on. Under
             # Docker Desktop that is a host-only virtual switch (172.x, not

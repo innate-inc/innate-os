@@ -94,7 +94,12 @@ _DROP_EVENTS_AFTER = 3  # failed turns before the peeked events are dropped (the
 # path entirely, which is a change to the agent under test rather than a
 # saving around it. At 20s an idle robot still costs ~5x less than the stock
 # poll while keeping the behaviour being measured.
-_IDLE_BLOCK_S = 20.0
+# Opt-in, and OFF by default: unset means the shipped interval, unchanged.
+# The benchmark sets BENCH_IDLE_BLOCK_S=20 because an idle brain that is
+# actually stuck mid-task should still get a chance to re-look, but that
+# is the benchmark's choice to make about its own runs, not a change to
+# how the robot behaves for anyone else.
+_IDLE_BLOCK_S = float(os.environ.get("BENCH_IDLE_BLOCK_S") or 0.0)
 
 
 class BrainAgent:
@@ -273,7 +278,7 @@ class BrainAgent:
                     # through the same `_pause` it always used.
                     idle = bool(self._turn_calls) and all(n == WAIT for n in self._turn_calls)
                     quiet = idle and not self._state.primitive_running
-                    await self._pause(_IDLE_BLOCK_S if quiet else self._interval())
+                    await self._pause(_IDLE_BLOCK_S if (quiet and _IDLE_BLOCK_S > 0) else self._interval())
                 else:
                     await self._pause(_EVENT_TURN_GAP, user_only=True)
         except Exception as error:

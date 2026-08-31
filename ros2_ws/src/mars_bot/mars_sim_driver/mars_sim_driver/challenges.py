@@ -40,6 +40,7 @@ import hashlib
 import importlib.util
 import json
 import math
+import os
 import re
 import socket
 import sys
@@ -675,6 +676,19 @@ def load_challenges(roots: list[Path]) -> dict[str, Challenge]:
 # --- engine ---
 
 
+def _rosbridge_default() -> str:
+    """The sim stack's rosbridge, honouring INNATE_SIM_PORT_BASE the way
+    sim/launcher/config.py does. Hardcoding 9090 attaches to whatever is on
+    that port, which on a shifted base is another simulation."""
+    for raw, shift in (
+        (os.environ.get("SIM_ROSBRIDGE_PORT", "").strip(), 0),
+        (os.environ.get("INNATE_SIM_PORT_BASE", "").strip(), 2),
+    ):
+        if raw.isdigit() and 1 <= int(raw) + shift <= 65535:
+            return f"ws://127.0.0.1:{int(raw) + shift}"
+    return "ws://127.0.0.1:9090"
+
+
 class ChallengeEngine:
     """Judges one active challenge at a time against the observer state feed.
 
@@ -1278,7 +1292,7 @@ class ChallengeChatBridge:
             finished.set()
             watchdog.join()
 
-    def __init__(self, engine: ChallengeEngine, url: str = "ws://127.0.0.1:9090"):
+    def __init__(self, engine: ChallengeEngine, url: str = _rosbridge_default()):
         self.engine = engine
         self.url = url
         self._subscribed = threading.Event()
@@ -1419,7 +1433,7 @@ class SkillEventBridge:
     TOPIC = "/brain/skill_status_update"
     CHAT_TOPIC = "/brain/chat_out"
 
-    def __init__(self, engine: ChallengeEngine, url: str = "ws://127.0.0.1:9090"):
+    def __init__(self, engine: ChallengeEngine, url: str = _rosbridge_default()):
         self.engine = engine
         self.url = url
         threading.Thread(target=self._run, daemon=True).start()

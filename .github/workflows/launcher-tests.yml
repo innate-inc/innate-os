@@ -25,3 +25,24 @@ jobs:
         run: |
           pip install pytest pyyaml
           python -m pytest tests/ -q
+
+  bench-tests:
+    # The benchmark's own suite. Offline by construction: no API key, no
+    # network, no Docker -- so it belongs on every PR rather than in a
+    # developer's memory. MUJOCO_GL=osmesa keeps the one world-building test
+    # headless.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run the benchmark test suite
+        env:
+          MUJOCO_GL: osmesa
+        run: |
+          pip install pytest mujoco numpy pillow
+          python -m pytest sim/bench -q

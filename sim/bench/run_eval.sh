@@ -34,6 +34,10 @@ BUNDLES="${*:-counter pantry workshop gallery rounds household bridge blaze}"
 
 echo "=== full benchmark, maps: $BUNDLES" | tee "$LOG"
 echo "=== caps: cat1 ${CAP_1}s, cat2 ${CAP_2}s, cat3 ${CAP_3}s" | tee -a "$LOG"
+# The benchmark asks for the two things it needs from the robot, rather
+# than the robot doing them for everyone. Unset, both are off upstream.
+export GEMINI_USAGE_LOG="${GEMINI_USAGE_LOG:-/root/innate-os/workspace/gemini_usage.jsonl}"
+export BENCH_IDLE_BLOCK_S="${BENCH_IDLE_BLOCK_S:-20}"
 rm -f workspace/gemini_usage.jsonl
 
 for BUNDLE in $BUNDLES; do

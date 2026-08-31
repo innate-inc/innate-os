@@ -56,6 +56,11 @@ services:
       # (innate foxglove status) can print the address that actually works
       # from the host. Must match the ports entry below.
       - SIM_FOXGLOVE_PORT=${SIM_FOXGLOVE_PORT:-8765}
+      # Benchmark opt-ins. Both EMPTY by default, and both are read as
+      # "off" when empty, so a normal run behaves exactly as it did:
+      # no usage file is written and the idle interval is unchanged.
+      - GEMINI_USAGE_LOG=${GEMINI_USAGE_LOG:-}
+      - BENCH_IDLE_BLOCK_S=${BENCH_IDLE_BLOCK_S:-}
       # A HOST port: the world server runs outside the container, and the
       # webapp proxy relays /worldstate to it.
       - INNATE_WORLD_STATE_PORT=${SIM_WORLD_STATE_PORT:-8800}
