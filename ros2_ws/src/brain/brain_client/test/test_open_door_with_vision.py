@@ -61,7 +61,9 @@ def test_localizes_handle_from_cabinet_floor_edge():
         0.0,
     )
 
-    assert point == pytest.approx((0.8, 0.0, 0.2), abs=0.003)
+    # The optical center ray starts at the camera's +29.5 mm base_link Y
+    # offset; center pixel therefore intersects the plane on that same line.
+    assert point == pytest.approx((0.8, 0.0295, 0.2), abs=0.003)
     assert left[0] == pytest.approx(0.8, abs=0.003)
     assert right[0] == pytest.approx(0.8, abs=0.003)
     assert abs(abs(plane_yaw) - math.pi / 2.0) < 0.01
