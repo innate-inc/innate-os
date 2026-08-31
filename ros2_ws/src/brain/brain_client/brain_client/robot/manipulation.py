@@ -612,9 +612,7 @@ class Manipulation:
         """
         with self._stream_lock:
             active = (
-                self._stream_target is not None
-                and self._stream_thread is not None
-                and self._stream_thread.is_alive()
+                self._stream_target is not None and self._stream_thread is not None and self._stream_thread.is_alive()
             )
             if not active:
                 raise ArmFailed("cannot keep alive an inactive arm stream")
