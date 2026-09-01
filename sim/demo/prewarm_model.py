@@ -18,6 +18,7 @@ Three ways to bake a cache the runtime then misses, all silent:
 
 import os
 import sys
+import time
 from pathlib import Path
 
 from mars_sim_driver import core, world
@@ -27,6 +28,8 @@ from mars_sim_driver.world_server import DEPTH_WH
 
 INSTALL_ROOT = Path("/root/innate-os/ros2_ws/install")
 SCALE_MARKER = "render_scale"
+# A cache hit loads a ~250MB .mjb; a miss recompiles. Nothing lands between.
+CACHE_HIT_CEILING_S = 10.0
 
 
 def main() -> int:
@@ -43,12 +46,17 @@ def main() -> int:
     scale = int(os.environ.get("INNATE_SIM_RENDER_SCALE", "1"))
     assets = Path(os.environ["VIRTUAL_MARS_ASSETS"])
 
-    # Exactly what world_server.main() builds, so the cache key matches.
-    sim = VirtualMars(
-        render_wh=(CAMERA_WIDTH // scale, CAMERA_HEIGHT // scale),
-        depth_render_wh=DEPTH_WH,
-    )
-    print(f"compiled world at render scale {scale}: {sim.model.nbody} bodies, {sim.model.ngeom} geoms")
+    def build() -> float:
+        # Exactly what world_server.main() builds, so the cache key matches.
+        start = time.monotonic()
+        VirtualMars(
+            render_wh=(CAMERA_WIDTH // scale, CAMERA_HEIGHT // scale),
+            depth_render_wh=DEPTH_WH,
+        )
+        return time.monotonic() - start
+
+    compiled = build()
+    print(f"world at render scale {scale}: first build {compiled:.1f}s")
 
     cache_dir = assets / ".model_cache"
     cached = sorted(cache_dir.glob("world-*.mjb"))
@@ -57,6 +65,19 @@ def main() -> int:
         return 1
     for path in cached:
         print(f"model cache: {path} ({path.stat().st_size / 1e6:.0f} MB)")
+
+    # Building a second time is the only honest proof: a .mjb sitting at some
+    # other key would satisfy the glob above while the runtime still compiles
+    # from scratch. A cache hit is a ~50ms load, so anything slow means miss.
+    reload_s = build()
+    print(f"cache reload: {reload_s:.2f}s")
+    if reload_s > CACHE_HIT_CEILING_S:
+        print(
+            f"ERROR: rebuilding took {reload_s:.1f}s, so the cache is not being hit -- "
+            "every session would pay this on boot.",
+            file=sys.stderr,
+        )
+        return 1
 
     # entrypoint.sh reads this to refuse a render scale the cache was not baked for.
     (cache_dir / SCALE_MARKER).write_text(f"{scale}\n", encoding="utf-8")
