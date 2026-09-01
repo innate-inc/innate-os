@@ -171,9 +171,35 @@ ORACLES: dict[str, list[tuple]] = {
 }
 
 
-# The plans whose goal is reached by teleporting a prop rather than by driving
-# the arm. Derived from the table above so it cannot drift out of date: adding
-# a `put` to a plan adds it here, and the gate downgrades its claim on its own.
-TELEPORT_ASSISTED: frozenset[str] = frozenset(
-    cid for cid, steps in ORACLES.items() if any(s and s[0] == "put" for s in steps)
-)
+# The steps that move a prop without driving the arm.
+TELEPORTING_OPS = ("put", "put_near")
+
+
+def plan_for(ch):
+    """The plan that will actually run for `ch`: the hand-written one where it
+    exists, otherwise the one derived from the goals.
+
+    A hand plan wins because it encodes which SIDE of a bench to stand on and
+    how to line up on a narrow doorway, which reading the goals cannot tell
+    you. Both go through the same follower, so a hand plan is a set of hints
+    rather than a different mechanism.
+    """
+    import autoplan
+
+    return ORACLES.get(ch.id) or autoplan.plan_for(ch)
+
+
+def teleport_assisted(ch) -> bool:
+    """Does the plan reach its goal by teleporting a prop rather than by
+    driving the arm?
+
+    Asked of the plan that runs, not of the hand-written table: autoplan emits
+    `put`/`put_near` for carry goals, so deriving this from ORACLES alone
+    missed most of them and let the gate print an unqualified VALID for a
+    challenge whose manipulation was never exercised.
+    """
+    try:
+        steps = plan_for(ch)
+    except Exception:  # noqa: BLE001 -- no plan is not a teleporting plan
+        return False
+    return any(s and s[0] in TELEPORTING_OPS for s in (steps or ()))

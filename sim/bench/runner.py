@@ -146,12 +146,14 @@ def run_episode(
     ch = engine.challenges.get(challenge_id)
     if ch is None:
         blank.error = f"challenge {challenge_id!r} not under {ch_root}"
+        blank.blocked = f"harness: {blank.error}"
         blank.wall_s = round(time.time() - wall0, 1)
         return blank
 
     agent = make_agent(ch)
     if agent is None:
         blank.error = "no agent"
+        blank.blocked = "harness: no agent could be built"
         return blank
 
     blank.agent = agent.name
@@ -173,7 +175,11 @@ def run_episode(
     if not engine.start(challenge_id):
         blank.agent = agent.name
         blank.goals_total = len(ch.goals)
-        blank.error = "engine.start refused"
+        # The judge knows why it refused -- a predicate whose reset raised,
+        # say -- and that reason is the finding. Reporting a bare refusal here
+        # turned a bug in the judge into a robot that failed the task.
+        blank.error = f"engine.start refused: {engine.reason}" if engine.reason else "engine.start refused"
+        blank.blocked = f"harness: {blank.error}"
         blank.wall_s = round(time.time() - wall0, 1)
         return blank
 

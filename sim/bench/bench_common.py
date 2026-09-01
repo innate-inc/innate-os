@@ -50,6 +50,17 @@ def gate_verdict(req: str, oracle: dict | None, rnd: list[dict], teleported: boo
     robot can pick the thing up -- so the verdict says so instead of letting
     VALID imply manipulation nobody tested.
     """
+    # An episode the harness blocked never ran, so it is not evidence either
+    # way. Counting a blocked oracle as a failed one blames the challenge for
+    # our crash; counting a blocked random rollout as a failed one makes the
+    # control look stronger the less of it survived.
+    if oracle is not None and oracle.get("blocked"):
+        return "INCOMPLETE", f"oracle blocked -- {oracle['blocked']}"
+    ran = [e for e in rnd if not e.get("blocked")]
+    if rnd and not ran:
+        return "INCOMPLETE", f"every random rollout blocked -- {rnd[0]['blocked']}"
+    rnd = ran
+
     # A RATE, not an existence check. One pass in several is a guessing
     # floor -- bridge_three documents its own as 1 in 8 -- and marking a
     # deliberate control INVALID for one lucky roll measures the dice, not

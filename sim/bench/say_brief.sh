@@ -25,8 +25,14 @@ if [ -z "$OS_CONTAINER" ]; then
   echo "no innate-dev* container is running" >&2
   exit 1
 fi
-docker cp "$PAYLOAD" "$OS_CONTAINER":"$PAYLOAD" >/dev/null
+if ! docker cp "$PAYLOAD" "$OS_CONTAINER":"$PAYLOAD" >/dev/null 2>&1; then
+  echo "could not copy the brief payload into $OS_CONTAINER" >&2
+  exit 1
+fi
 # RMW_IMPLEMENTATION: exec shells do not inherit it, so without this the
 # publish goes to a DDS graph nobody is on -- it succeeds, and the brain never
 # hears the brief. Same silent no-op the rosbridge path had.
 docker exec -e RMW_IMPLEMENTATION=rmw_zenoh_cpp "$OS_CONTAINER" bash -lc 'source /opt/ros/humble/setup.bash; source /root/innate-os/ros2_ws/install/setup.bash; python3 "$1"' _ "$PAYLOAD" >/dev/null
+SAY_RC=$?
+docker exec "$OS_CONTAINER" rm -f "$PAYLOAD" >/dev/null 2>&1 || true
+exit "$SAY_RC"

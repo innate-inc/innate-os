@@ -1,18 +1,27 @@
 """VALID must not imply manipulation the oracle never performed.
 
-Three scripted plans reach their goal with `put`, which teleports the carried
-prop. That proves the goal logic and the route, which is what those plans are
-for; it does not prove the arm can do it. The verdict has to carry that
-difference, and the flag has to keep tracking the plans rather than a list
-someone has to remember to update.
+`put` and `put_near` move a prop without driving the arm. A plan that reaches
+its goal that way proves the goal logic and the route -- which is what these
+plans are for -- but not that the robot can pick the thing up, so the verdict
+has to carry the difference.
+
+The flag has to come from the plan that RUNS. Deriving it from the
+hand-written ORACLES table alone found three challenges and missed eighteen,
+because autoplan emits `put`/`put_near` for carry goals and most of these
+challenges have no hand plan at all.
 """
+
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ros2_ws/src/mars_bot/mars_sim_driver"))
 
+import pytest
 from bench_common import gate_verdict
-from oracles import ORACLES, TELEPORT_ASSISTED
+from mars_sim_driver.challenges import load_challenges
+from oracles import ORACLES, plan_for, teleport_assisted
+from runner import sources
 
 ORACLE_PASS = {"passed": True, "goals_done": 2, "goals_total": 2}
 RANDOM_FAIL = [{"passed": False}]
@@ -38,7 +47,45 @@ def test_teleport_flag_never_rescues_a_failing_oracle():
     assert gate_verdict("nav", bad, RANDOM_FAIL, True)[0] == "INVALID"
 
 
-def test_flag_is_derived_from_the_plans():
-    expected = {cid for cid, steps in ORACLES.items() if any(s and s[0] == "put" for s in steps)}
-    assert TELEPORT_ASSISTED == expected
-    assert expected, "no plan uses put -- this test would pass vacuously"
+@pytest.fixture(scope="module")
+def challenges():
+    out = {}
+    for _name, (_assets, root) in sources().items():
+        out.update(load_challenges([root]))
+    return out
+
+
+def test_an_auto_planned_carry_is_flagged(challenges):
+    """The case the ORACLES-only version got wrong: no hand plan, but the
+    derived plan teleports."""
+    ch = challenges["pantry_stocktake"]
+    assert ch.id not in ORACLES, "this challenge grew a hand plan; pick another"
+    assert any(s[0] in ("put", "put_near") for s in plan_for(ch))
+    assert teleport_assisted(ch)
+
+
+def test_a_pure_navigation_challenge_is_not_flagged(challenges):
+    ch = challenges["gallery_ring_tour"]
+    assert not any(s[0] in ("put", "put_near") for s in plan_for(ch))
+    assert not teleport_assisted(ch)
+
+
+def test_the_flag_matches_the_plan_for_every_challenge(challenges):
+    """Whole-suite agreement, so a new challenge cannot quietly opt out."""
+    flagged = set()
+    for cid, ch in challenges.items():
+        try:
+            steps = plan_for(ch)
+        except Exception:
+            assert not teleport_assisted(ch), f"{cid}: flagged with no plan"
+            continue
+        # autoplan returns None for a challenge it cannot plan (SkillDone,
+        # unmodelled goals); no plan is not a teleporting plan.
+        expect = any(s and s[0] in ("put", "put_near") for s in (steps or ()))
+        assert teleport_assisted(ch) == expect, cid
+        if expect:
+            flagged.add(cid)
+    # Reading only the hand-written table found 3 of these.
+    assert len(flagged) > len([c for c in flagged if c in ORACLES]), (
+        "no auto-planned challenge teleports -- this test would pass vacuously"
+    )

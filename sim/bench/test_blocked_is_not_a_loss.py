@@ -5,6 +5,7 @@ be able to say "the robot failed this" and "we failed to ask it" as different
 sentences. These pin the second one -- a blocked episode leaves the numerator
 AND the denominator, and its absence is stated rather than silent.
 """
+
 import sys
 from pathlib import Path
 
@@ -18,9 +19,15 @@ CATS = {"a": 2, "b": 2}
 
 def ep(challenge, agent, passed, blocked=""):
     return {
-        "challenge": challenge, "agent": agent, "passed": passed, "blocked": blocked,
-        "goals_done": 2 if passed else 0, "goals_total": 2,
-        "elapsed_s": 10.0, "turns": 5, "path_len_m": 3.0,
+        "challenge": challenge,
+        "agent": agent,
+        "passed": passed,
+        "blocked": blocked,
+        "goals_done": 2 if passed else 0,
+        "goals_total": 2,
+        "elapsed_s": 10.0,
+        "turns": 5,
+        "path_len_m": 3.0,
     }
 
 

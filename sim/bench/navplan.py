@@ -253,38 +253,68 @@ def _simplify(cells: list[tuple[int, int]], nav: NavMap) -> list[tuple[int, int]
 
 
 def _clear_line(a: tuple[int, int], b: tuple[int, int], nav: NavMap) -> bool:
-    """True when every cell the segment touches is free.
+    """True when every cell the segment between two cell centres touches is free.
 
     Supercover, not sampled: stepping along the line and rounding misses the
     cells a diagonal only clips, so a segment threading the corner between two
-    blocked cells would land every sample on the free cells either side and
+    blocked cells would put every sample on the free cells either side and
     report clear -- letting the simplifier shortcut through a gap the robot
-    does not fit through. At a diagonal step this checks both orthogonal
-    neighbours and refuses if either is blocked, which is the conservative
-    direction for a path the robot has to drive.
+    does not fit through.
+
+    It is also not "both neighbours at every diagonal step", which is the
+    stricter thing that is easy to mistake for this: (0,0)->(1,2) crosses into
+    column 2 at row 1.25 and never enters (0,2), so refusing on a blocked
+    (0,2) would reject a shortcut that is genuinely clear. Comparing the error
+    before and after a step says which side the segment actually passed, and
+    both cells count only when it goes exactly through the corner.
     """
     r0, c0 = a
     r1, c1 = b
-    dr, dc = abs(r1 - r0), abs(c1 - c0)
-    sr = 1 if r1 > r0 else -1
-    sc = 1 if c1 > c0 else -1
+    if not nav.free(r0, c0):
+        return False
+    dr, dc = r1 - r0, c1 - c0
+    rstep = 1 if dr >= 0 else -1
+    cstep = 1 if dc >= 0 else -1
+    dr, dc = abs(dr), abs(dc)
+    ddr, ddc = 2 * dr, 2 * dc
     r, c = r0, c0
-    err = dr - dc
-    while True:
-        if not nav.free(r, c):
-            return False
-        if (r, c) == (r1, c1):
-            return True
-        e2 = 2 * err
-        if e2 > -dc and e2 < dr:  # diagonal: the segment clips both neighbours
-            if not (nav.free(r + sr, c) and nav.free(r, c + sc)):
+
+    if ddc >= ddr:  # column is the driving axis
+        err = prev = dc
+        for _ in range(dc):
+            c += cstep
+            err += ddr
+            if err > ddc:
+                r += rstep
+                err -= ddc
+                if err + prev < ddc:
+                    if not nav.free(r - rstep, c):
+                        return False
+                elif err + prev > ddc:
+                    if not nav.free(r, c - cstep):
+                        return False
+                elif not (nav.free(r - rstep, c) and nav.free(r, c - cstep)):
+                    return False  # exact corner: it touches both
+            if not nav.free(r, c):
                 return False
-            err += dr - dc
-            r += sr
-            c += sc
-        elif e2 > -dc:
-            err -= dc
-            r += sr
-        else:
-            err += dr
-            c += sc
+            prev = err
+    else:  # row is the driving axis
+        err = prev = dr
+        for _ in range(dr):
+            r += rstep
+            err += ddc
+            if err > ddr:
+                c += cstep
+                err -= ddr
+                if err + prev < ddr:
+                    if not nav.free(r, c - cstep):
+                        return False
+                elif err + prev > ddr:
+                    if not nav.free(r - rstep, c):
+                        return False
+                elif not (nav.free(r, c - cstep) and nav.free(r - rstep, c)):
+                    return False
+            if not nav.free(r, c):
+                return False
+            prev = err
+    return True

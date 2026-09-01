@@ -127,11 +127,25 @@ if [ -z "$OS_CONTAINER" ]; then
   echo "no innate-dev* container is running" >&2
   exit 1
 fi
-docker cp "$PRIME" "$OS_CONTAINER":"$PRIME" >/dev/null
+if ! docker cp "$PRIME" "$OS_CONTAINER":"$PRIME" >/dev/null; then
+  echo "could not copy the prime payload into $OS_CONTAINER" >&2
+  exit 1
+fi
 # RMW_IMPLEMENTATION is essential: exec shells do not inherit it, and every
 # ros2 service call then times out against the Zenoh graph -- which reads as
 # 'brain refused to activate' and leaves the model with only the wait tool.
-docker exec -e RMW_IMPLEMENTATION=rmw_zenoh_cpp "$OS_CONTAINER" bash -lc 'source /opt/ros/humble/setup.bash; source /root/innate-os/ros2_ws/install/setup.bash; python3 "$1"' _ "$PRIME" 2>&1 | tail -4
+# Its own status, captured before the pipe and the echoes below can replace
+# it: `docker exec ... | tail` reports tail's status, so priming could fail
+# and this script still exit 0, which is the silent no-op it warns about.
+PRIME_OUT="$(docker exec -e RMW_IMPLEMENTATION=rmw_zenoh_cpp "$OS_CONTAINER" bash -lc 'source /opt/ros/humble/setup.bash; source /root/innate-os/ros2_ws/install/setup.bash; python3 "$1"' _ "$PRIME" 2>&1)"
+PRIME_RC=$?
+docker exec "$OS_CONTAINER" rm -f "$PRIME" >/dev/null 2>&1 || true
+printf '%s
+' "$PRIME_OUT" | tail -4
+if [ "$PRIME_RC" -ne 0 ]; then
+  echo "priming failed (exit $PRIME_RC) -- the brain is not active" >&2
+  exit "$PRIME_RC"
+fi
 
 echo
 echo "--- brain log ---"

@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bench_common import VERDICTS, blocked_count, format_scorecard, gate_verdict, scorecard  # noqa: E402
-from oracles import TELEPORT_ASSISTED  # noqa: E402
+from oracles import teleport_assisted  # noqa: E402
 from runner import Episode, run_episode, sources  # noqa: E402
 
 
@@ -50,6 +50,7 @@ def discover() -> dict[str, list[tuple[str, str]]]:
         found = load_challenges([root])
         out[name] = sorted((cid, autoplan.classify(ch)) for cid, ch in found.items())
         CATEGORY_OF.update({cid: ch.category for cid, ch in found.items()})
+        TELEPORTS.update({cid: teleport_assisted(ch) for cid, ch in found.items()})
     return out
 
 
@@ -64,6 +65,10 @@ RESULTS_DIR = Path(__file__).resolve().parent / "results"
 # than a return value because discover() already has a shape every caller
 # depends on, and the categories are wanted in exactly one place.
 CATEGORY_OF: dict[str, int] = {}
+
+# challenge id -> whether its plan reaches the goal by teleporting a prop,
+# filled by discover() alongside the categories and for the same reason.
+TELEPORTS: dict[str, bool] = {}
 
 
 def _one(job):
@@ -113,9 +118,9 @@ def _one(job):
         # SIDE of a bench to stand on and how to line up on a 0.45 m doorway,
         # which no amount of reading the goal tells you. Both run through the
         # same A* follower, so a hand plan is a sequence of hints, not a route.
-        from oracles import ORACLES
+        from oracles import plan_for
 
-        steps = ORACLES.get(ch.id) or autoplan.plan_for(ch)
+        steps = plan_for(ch)
         if steps is None:
             raise ValueError(f"no auto-plan: {autoplan.classify(ch)}")
         return PlannerAgent(steps)
@@ -124,8 +129,25 @@ def _one(job):
         wh = (640, 480) if agent_name.startswith("brain") else (160, 120)
         return run_episode(map_name, challenge_id, make, max_sim_s=cap, render_wh=wh)
     except Exception as exc:  # noqa: BLE001 -- one bad episode must not sink the sweep
+        # Blocked, not failed. Nothing reached the judge, so there is no
+        # verdict to report: the agent could not be built, or the sim died
+        # under it. The cause stays in `error`, so an exception thrown by the
+        # agent under test is still visible -- it is just not scored as the
+        # robot losing a challenge it was never asked.
+        detail = f"{type(exc).__name__}: {exc}"
         return Episode(
-            map_name, challenge_id, agent_name, False, 0, 0, 0.0, "", 0.0, 0, error=f"{type(exc).__name__}: {exc}"
+            map_name,
+            challenge_id,
+            agent_name,
+            False,
+            0,
+            0,
+            0.0,
+            "",
+            0.0,
+            0,
+            error=detail,
+            blocked=f"harness: episode did not run ({detail[:80]})",
         )
 
 
@@ -288,7 +310,7 @@ def main() -> int:
             eps = [r for r in rows if r["challenge"] == cid]
             oracle = next((r for r in eps if r["agent"] == "oracle"), None)
             rnd = [r for r in eps if r["agent"] == "random"]
-            verdict, why = gate_verdict(req, oracle, rnd, cid in TELEPORT_ASSISTED)
+            verdict, why = gate_verdict(req, oracle, rnd, TELEPORTS.get(cid, False))
             tally[verdict] += 1
             if verdict == "VALID":
                 valid_ids.add(cid)
@@ -302,6 +324,13 @@ def main() -> int:
         card = scorecard(rows, CATEGORY_OF, valid_ids, a)
         blocked = blocked_count(rows, a, valid_ids)
         if card is None:
+            # No scorecard because nothing of this agent's survived. Say it:
+            # an agent whose every episode was blocked is the loudest result
+            # in the run, and skipping the section printed it as nothing.
+            if blocked:
+                print()
+                print(f"=== scorecard: {a} ===")
+                print(f"  no score -- all {blocked} episode(s) blocked by the harness")
             continue
         print(f"\n=== scorecard: {a} ===")
         for line in format_scorecard(*card, blocked):

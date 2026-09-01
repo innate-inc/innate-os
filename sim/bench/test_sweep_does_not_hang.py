@@ -10,6 +10,7 @@ it comes back.
 --result-timeout 0.001 stands in for the dead worker: no result can arrive that
 fast, which is the same situation as a result that never arrives at all.
 """
+
 import json
 import os
 import subprocess
@@ -26,9 +27,12 @@ pytestmark = pytest.mark.skipif(not VENV.exists(), reason="needs sim/.venv (mujo
 def run(*extra, timeout=240):
     env = {**os.environ, "MUJOCO_GL": "osmesa"}
     return subprocess.run(
-        [str(VENV), str(BENCH / "main.py"),
-         "--agents", "oracle", "--challenges", "gallery_ring_tour", *extra],
-        capture_output=True, text=True, timeout=timeout, env=env, cwd=str(BENCH.parents[1]),
+        [str(VENV), str(BENCH / "main.py"), "--agents", "oracle", "--challenges", "gallery_ring_tour", *extra],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env,
+        cwd=str(BENCH.parents[1]),
     )
 
 

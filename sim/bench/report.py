@@ -36,7 +36,7 @@ from bench_common import (  # noqa: E402
     gate_verdict,
     scorecard,
 )
-from oracles import TELEPORT_ASSISTED  # noqa: E402
+from oracles import teleport_assisted  # noqa: E402
 
 RESULTS = Path(__file__).resolve().parent / "results"
 
@@ -58,6 +58,7 @@ def main() -> int:
 
     rows = []
     seen: dict[str, str] = {}
+    loaded: list[tuple[str, float, list]] = []
     provenance: list[tuple[str, int, float]] = []
     for f in files:
         try:
@@ -77,8 +78,24 @@ def main() -> int:
             print(f"skipping {f.name}: {exc}")
             continue
         seen[digest] = f.name
-        rows.extend(eps)
-        provenance.append((f.name, len(eps), f.stat().st_mtime))
+        loaded.append((f.name, f.stat().st_mtime, eps))
+
+    # One file per challenge: the newest that contains it. Appending them all
+    # let an old sweep and a new one both describe the same challenge, and the
+    # gate then read whichever row it happened to meet first.
+    loaded.sort(key=lambda r: r[1])
+    owner: dict[str, str] = {}
+    for name, _mtime, eps in loaded:
+        for e in eps:
+            owner[e["challenge"]] = name
+    superseded: dict[str, set[str]] = {}
+    for name, mtime, eps in loaded:
+        kept = [e for e in eps if owner[e["challenge"]] == name]
+        for e in eps:
+            if owner[e["challenge"]] != name:
+                superseded.setdefault(name, set()).add(e["challenge"])
+        rows.extend(kept)
+        provenance.append((name, len(kept), mtime))
 
     # Where the numbers came from. Per-map files accumulate, so re-running one
     # map leaves the rest of the report quoting an older sweep; that is fine as
@@ -86,6 +103,10 @@ def main() -> int:
     print(f"=== {len(rows)} episodes from {len(provenance)} file(s) ===")
     for name, n, mtime in sorted(provenance, key=lambda r: r[2]):
         print(f"  {time.strftime('%Y-%m-%d %H:%M', time.localtime(mtime))}  {name:<28} {n:>4} episodes")
+    for name in sorted(superseded):
+        lost = sorted(superseded[name])
+        shown = ", ".join(lost[:4]) + (f" and {len(lost) - 4} more" if len(lost) > 4 else "")
+        print(f"  {name}: {len(lost)} challenge(s) superseded by a newer file -- {shown}")
     if provenance:
         span = max(r[2] for r in provenance) - min(r[2] for r in provenance)
         if span > 86400:
@@ -96,10 +117,11 @@ def main() -> int:
     from mars_sim_driver.challenges import load_challenges
     from runner import sources
 
-    cat = {}
+    cat, teleports = {}, {}
     for _name, (_assets, root) in sources().items():
         for cid, ch in load_challenges([root]).items():
             cat[cid] = ch.category
+            teleports[cid] = teleport_assisted(ch)
 
     # --- gate ---------------------------------------------------------------
     by_ch: dict[str, list] = {}
@@ -114,7 +136,7 @@ def main() -> int:
         rnd = [e for e in eps if e["agent"] == "random"]
         # autoplan's classification rides every row main.py writes (Episode.needs).
         req = next((e.get("needs", "") for e in eps if e.get("needs")), "")
-        verdict, why = gate_verdict(req, oracle, rnd, cid in TELEPORT_ASSISTED)
+        verdict, why = gate_verdict(req, oracle, rnd, teleports.get(cid, False))
         tally[verdict] += 1
         if verdict == "VALID":
             valid.add(cid)
@@ -132,6 +154,10 @@ def main() -> int:
         card = scorecard(rows, cat, valid, agent)
         blocked = blocked_count(rows, agent, valid)
         if card is None:
+            if blocked:
+                print()
+                print(f"=== {agent} ===")
+                print(f"  no score -- all {blocked} episode(s) blocked by the harness")
             continue
         print(f"\n=== {agent} ===")
         for line in format_scorecard(*card, blocked):
