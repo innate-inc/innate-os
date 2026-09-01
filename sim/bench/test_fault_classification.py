@@ -6,10 +6,9 @@ next would be reported 1/1 instead of 1/2 -- the benchmark flattering the
 system it exists to measure. The line is `engine.start`: before it the robot
 was never asked anything, after it the run is the run.
 """
+
 import sys
 from pathlib import Path
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ros2_ws/src/mars_bot/mars_sim_driver"))
@@ -76,8 +75,7 @@ def test_a_judge_that_refuses_to_start_is_blocked_and_says_why(monkeypatch):
         return False
 
     monkeypatch.setattr(ChallengeEngine, "start", refuse)
-    e = runner.run_episode("gallery", "gallery_ring_tour",
-                           lambda ch: _StubAgent(), agent_name="oracle")
+    e = runner.run_episode("gallery", "gallery_ring_tour", lambda ch: _StubAgent(), agent_name="oracle")
     assert e.blocked.startswith("harness:"), e.blocked
     assert "predicate could not be reset" in e.blocked, e.blocked
     assert e.goals_total > 0, "the challenge's goal count was lost"

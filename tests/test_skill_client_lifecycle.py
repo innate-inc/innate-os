@@ -12,6 +12,7 @@ Checked against the source rather than by importing: these modules pull in
 rclpy, which is not available off the robot, and the property being pinned is
 structural -- the factory yields and closes, or it does not.
 """
+
 import ast
 from pathlib import Path
 
@@ -46,10 +47,10 @@ def test_the_teardown_closes_the_client(path, name):
     tries = [n for n in ast.walk(fn) if isinstance(n, ast.Try) and n.finalbody]
     assert tries, f"{path.name}:{name} has no finally, so a raising body skips the close"
     closes = [
-        n for t in tries for n in ast.walk(ast.Module(body=t.finalbody, type_ignores=[]))
-        if isinstance(n, ast.Call) and (
-            getattr(n.func, "attr", "") == "close" or getattr(n.func, "id", "") == "close"
-        )
+        n
+        for t in tries
+        for n in ast.walk(ast.Module(body=t.finalbody, type_ignores=[]))
+        if isinstance(n, ast.Call) and (getattr(n.func, "attr", "") == "close" or getattr(n.func, "id", "") == "close")
     ]
     assert closes, f"{path.name}:{name} never calls close() in its teardown"
 
@@ -58,9 +59,7 @@ def test_the_client_actually_has_a_close_to_call():
     """The teardown above is only real if the object it closes has close()."""
     src = (REPO_ROOT / "ros2_ws/src/brain/brain_client/innate/gemini.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
-    direct = next(
-        n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "_DirectClient"
-    )
+    direct = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "_DirectClient")
     methods = {n.name for n in direct.body if isinstance(n, ast.FunctionDef)}
     assert "close" in methods, "_DirectClient has no close(); the skill teardown closes nothing"
 
@@ -70,19 +69,14 @@ def test_the_client_is_reused_rather_than_made_per_call():
     src = (REPO_ROOT / "ros2_ws/src/brain/brain_client/innate/gemini.py").read_text(encoding="utf-8")
     assert src.count("httpx.Client(") == 1, "more than one place constructs a client"
     tree = ast.parse(src)
-    direct = next(
-        n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "_DirectClient"
-    )
+    direct = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "_DirectClient")
     stream = next(n for n in direct.body if isinstance(n, ast.FunctionDef) and n.name == "request_stream")
     # Constructing it here is fine -- lazily, once -- as long as the result is
     # kept on the instance. A bare httpx.Client(...) that is used and dropped
     # is the leak: one connection pool per vision call.
     for node in ast.walk(stream):
         if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "Client":
-            parent = next(
-                (n for n in ast.walk(stream)
-                 if isinstance(n, ast.Assign) and n.value is node), None
-            )
+            parent = next((n for n in ast.walk(stream) if isinstance(n, ast.Assign) and n.value is node), None)
             assert parent is not None, "a client is built and not stored"
             target = parent.targets[0]
             assert isinstance(target, ast.Attribute) and target.attr == "_client", (

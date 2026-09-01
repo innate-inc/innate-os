@@ -98,6 +98,67 @@ def test_files_covering_different_challenges_are_all_used(results, capsys):
     assert "superseded" not in out, "unrelated files were treated as a conflict"
 
 
+def test_an_exact_timestamp_tie_is_not_broken_by_filename(results, capsys):
+    """Neither file is newer. Picking the lexicographically later name would
+    let RENAMING a file change a challenge from VALID to INVALID."""
+    same = 1_500_000
+    write(
+        results / "bench_a.json",
+        [ep("gallery_ring_tour", "oracle", True), ep("gallery_ring_tour", "random", False)],
+        same,
+    )
+    write(
+        results / "bench_z.json",
+        [ep("gallery_ring_tour", "oracle", False), ep("gallery_ring_tour", "random", False)],
+        same,
+    )
+    out = run(capsys)
+    assert "AMBIGUOUS gallery_ring_tour" in out, out
+    assert "bench_a.json and bench_z.json" in out, out
+    # Not scored either way: no rows survive, so no verdict is invented.
+    assert "VALID 0" in out and "INVALID 0" in out, out
+
+
+def test_renaming_a_tied_file_cannot_change_the_verdict(results, capsys):
+    """The same two files under swapped names must reach the same conclusion."""
+    same = 1_500_000
+    passing = [ep("gallery_ring_tour", "oracle", True), ep("gallery_ring_tour", "random", False)]
+    failing = [ep("gallery_ring_tour", "oracle", False), ep("gallery_ring_tour", "random", False)]
+    write(results / "bench_a.json", passing, same)
+    write(results / "bench_z.json", failing, same)
+    first = run(capsys)
+    for f in results.glob("*.json"):
+        f.unlink()
+    write(results / "bench_a.json", failing, same)
+    write(results / "bench_z.json", passing, same)
+    second = run(capsys)
+    assert ("AMBIGUOUS" in first) and ("AMBIGUOUS" in second)
+    assert ("VALID 1" in first) == ("VALID 1" in second), (first, second)
+
+
+def test_only_the_superseded_challenge_is_displaced(results, capsys):
+    """A file that owns one challenge and loses another keeps the one it owns."""
+    write(
+        results / "bench_a.json",
+        [
+            ep("gallery_ring_tour", "oracle", True),
+            ep("gallery_ring_tour", "random", False),
+            ep("gallery_count_ring", "oracle", True),
+            ep("gallery_count_ring", "random", False),
+        ],
+        1_000_000,
+    )
+    write(
+        results / "bench_b.json",
+        [ep("gallery_ring_tour", "oracle", False), ep("gallery_ring_tour", "random", False)],
+        2_000_000,
+    )
+    out = run(capsys)
+    assert "4 episodes" in out, out
+    assert "gallery_count_ring" not in out.split("superseded")[-1].split(chr(10))[0]
+    assert "VALID 1" in out and "INVALID 1" in out, out
+
+
 def test_separate_sweeps_are_called_a_composite(results, capsys):
     write(
         results / "bench_a.json",
