@@ -196,6 +196,15 @@ search-coverage probe into a contrast probe.
   question a failure raises -- whether a point is genuinely off the navigable
   floor or obstacle inflation swallowed it -- by printing the raw cell, the
   inflated cell and the distance to the nearest usable one.
+- **A worker occasionally dies under full parallelism.** Roughly one full
+  45-challenge sweep in four loses a single episode: every worker drops to zero
+  CPU and no result arrives. It is not challenge-specific -- the episodes it
+  has taken run in three seconds on their own -- and there is no OOM; it looks
+  like the offscreen renderer failing under 22-way concurrency. The sweep
+  survives it: after silence longer than six times its slowest episode (floor
+  300 s, `--result-timeout` to override) it stops waiting, reports the lost
+  episodes as blocked, and the gate marks their challenges INCOMPLETE rather
+  than scoring a verdict from partial evidence. Before that it hung forever.
 - **Oracle step counts are not difficulty.** `household_tour` takes 15,602
   steps against `rounds_all_doors`'s 1,862; that is a statement about the
   reference plan, not the map.

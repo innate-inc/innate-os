@@ -46,6 +46,55 @@ def sources() -> dict[str, tuple[Path | None, Path]]:
     return out
 
 
+# Episode fields by the primitive they have to be. Anything else is a value
+# that survives this process and not the next one.
+_TEXT = ("map", "challenge", "agent", "reason", "needs", "error", "blocked")
+_WHOLE = (
+    "goals_done",
+    "goals_total",
+    "steps",
+    "model_calls",
+    "tokens_in",
+    "tokens_out",
+    "turns",
+    "utterances",
+    "camera_errors",
+    "heard",
+)
+_REAL = ("elapsed_s", "wall_s", "cost_usd", "path_len_m")
+_MAYBE_REAL = ("first_utterance_s", "tempt_min_m")  # None means "never happened"
+
+
+def _as_primitive(name: str, value):
+    """One field, coerced to what the wire can carry. Never raises: a bad
+    value must not cost the episode that carries it."""
+    if name in _TEXT:
+        if isinstance(value, str):
+            return value
+        if value is None:
+            return ""
+        try:
+            return str(value)
+        except BaseException:  # noqa: BLE001 -- a __str__ that raises
+            return "<unprintable>"
+    if name == "passed":
+        return bool(value)
+    if name in _WHOLE or name in _REAL or name in _MAYBE_REAL:
+        if value is None and name in _MAYBE_REAL:
+            return None
+        cast = int if name in _WHOLE else float
+        try:
+            return cast(value)
+        except BaseException:  # noqa: BLE001
+            return None if name in _MAYBE_REAL else cast(0)
+    if name == "goal_times_s":
+        try:
+            return [_as_primitive("elapsed_s", t) for t in value]
+        except BaseException:  # noqa: BLE001 -- not iterable
+            return []
+    return value
+
+
 @dataclass
 class Episode:
     map: str
@@ -90,9 +139,31 @@ class Episode:
     camera_errors: int = 0
     heard: int = 0  # narrator lines delivered this episode
 
+    def __setattr__(self, name: str, value) -> None:
+        """Coerce on assignment, so every field is a primitive however it got
+        there.
+
+        An Episode crosses a process boundary. A field holding an arbitrary
+        object -- a lambda from a buggy agent's `name` or `failed_reason` --
+        does not cost that episode: it fails in the pool's result feeder, which
+        aborts the sweep. Converting at each return site missed three paths,
+        and __post_init__ would still miss the ones that build a blank episode
+        and fill it in afterwards.
+        """
+        object.__setattr__(self, name, _as_primitive(name, value))
+
     def as_row(self) -> str:
         mark = "BLOK" if self.blocked else ("PASS" if self.passed else "fail")
         if self.blocked:
+            # A blocked episode is usually one that never ran, but an
+            # unreadable score blocks a run that did -- printing that as "not
+            # attempted" hides the measurements it actually produced.
+            if self.steps:
+                return (
+                    f"{mark:>4}  {self.map:<10} {self.challenge:<28} {self.agent:<7} "
+                    f"{self.goals_done}/{self.goals_total}  sim {self.elapsed_s:6.1f}s  "
+                    f"not scored -- {self.blocked}"
+                )
             return (
                 f"{mark:>4}  {self.map:<10} {self.challenge:<28} {self.agent:<7} "
                 f"  -/-   not attempted -- {self.blocked}"
@@ -114,6 +185,29 @@ class Episode:
 # This is not a security boundary. An agent sharing the interpreter can still
 # os._exit() its worker, and the sweep survives that through --result-timeout.
 # It closes the accidental path, which is the one that actually happens.
+def describe(exc: BaseException) -> str:
+    """ "Type: message", without trusting the message to render.
+
+    `f"{exc}"` runs the exception's own __str__, so one that cannot render
+    itself raised from inside the handler that had just caught it -- turning a
+    guarded failure into an unguarded one that reached the last-resort path and
+    was scored against the robot.
+    """
+    name = type(exc).__name__
+    try:
+        text = str(exc)
+    except BaseException:  # noqa: BLE001
+        return f"{name}: <unprintable>"
+    return f"{name}: {text}" if text else name
+
+
+def _opt_float(v):
+    """A float, or None. Everything leaving run_episode has to be a primitive:
+    a value that is not costs the whole sweep rather than one episode, because
+    it fails in the pool's result feeder instead of here."""
+    return None if v is None else float(v)
+
+
 USER_OWNS_INTERRUPT = True
 AGENT_OWNS_INTERRUPT = False
 
@@ -246,7 +340,7 @@ def run_episode(
     except BaseException as exc:  # noqa: BLE001 -- setup, so every failure is ours
         if user_owns_interrupt and isinstance(exc, KeyboardInterrupt):
             raise  # the user asked to stop; that is not a result
-        detail = f"{type(exc).__name__}: {exc}"
+        detail = describe(exc)
         return Episode(
             map_name,
             challenge_id,
@@ -374,7 +468,7 @@ def run_episode(
         # user and must not be swallowed.
         if user_owns_interrupt and isinstance(exc, KeyboardInterrupt):
             raise
-        crash = f"{type(exc).__name__}: {exc}"
+        crash = describe(exc)
         reason = reason or f"agent crashed: {crash}"
 
     # Every read below is optional and several of them are the agent's own
@@ -400,7 +494,7 @@ def run_episode(
         except BaseException as exc:  # noqa: BLE001
             if user_owns_interrupt and isinstance(exc, KeyboardInterrupt):
                 raise
-            note = f"{what} failed: {type(exc).__name__}: {exc}"
+            note = f"{what} failed: {describe(exc)}"
             crash = f"{crash}; also {note}" if crash else note
             if authoritative:
                 lost.append(what)
@@ -414,8 +508,10 @@ def run_episode(
             "path_len_m": float(got.get("path_len_m") or 0.0),
             "goal_times_s": [float(t) for t in (got.get("goal_times_s") or [])],
             "utterances": int(got.get("utterances") or 0),
-            "first_utterance_s": got.get("first_utterance_s"),
-            "tempt_min_m": got.get("tempt_min_m"),
+            # None is meaningful for both -- never spoke, never approached --
+            # so they are converted only when present.
+            "first_utterance_s": _opt_float(got.get("first_utterance_s")),
+            "tempt_min_m": _opt_float(got.get("tempt_min_m")),
         }
 
     empty = {

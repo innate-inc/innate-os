@@ -142,7 +142,7 @@ def _run_one(map_name: str, cid: str, bridge: Path, out: Path) -> int:
     log = out / "log.jsonl"
 
     from brain_agent import BrainAgent
-    from runner import run_episode
+    from runner import AGENT_OWNS_INTERRUPT, run_episode
 
     def make(ch):
         agent = BrainAgent(ClaudeBridgeBackend(bridge, log, map_name, cid))
@@ -154,7 +154,19 @@ def _run_one(map_name: str, cid: str, bridge: Path, out: Path) -> int:
         agent.max_turns = max(40, int((ch.time_limit_s or 400) / 9))
         return agent
 
-    ep = run_episode(map_name, cid, make, max_sim_s=None, render_wh=(640, 480), agent_name="brain:claude")
+    # This runs in a child process the bridge spawned per episode, so an
+    # interrupt from agent code here is not the user: letting it exit kills the
+    # child before the episode row is written, and the parent records only a
+    # non-zero return code with no episode at all.
+    ep = run_episode(
+        map_name,
+        cid,
+        make,
+        max_sim_s=None,
+        render_wh=(640, 480),
+        agent_name="brain:claude",
+        user_owns_interrupt=AGENT_OWNS_INTERRUPT,
+    )
     with (out / "episodes.jsonl").open("a") as fh:
         fh.write(json.dumps(asdict(ep)) + "\n")
     with log.open("a") as fh:

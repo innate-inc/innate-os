@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bench_common import VERDICTS, blocked_count, format_scorecard, gate_verdict, scorecard  # noqa: E402
 from oracles import teleport_assisted  # noqa: E402
-from runner import AGENT_OWNS_INTERRUPT, Episode, run_episode, sources  # noqa: E402
+from runner import AGENT_OWNS_INTERRUPT, Episode, describe, run_episode, sources  # noqa: E402
 
 
 def discover() -> dict[str, list[tuple[str, str]]]:
@@ -170,7 +170,7 @@ def _one(job):
             "",
             0.0,
             0,
-            error=f"{type(exc).__name__}: {exc}",
+            error=describe(exc),
         )
 
 
@@ -182,8 +182,9 @@ def main() -> int:
     ap.add_argument(
         "--result-timeout",
         type=float,
-        default=900.0,
-        help="give up waiting after this many seconds of no result at all (a dead worker)",
+        default=0.0,
+        help="seconds of total silence before concluding a worker died "
+        "(0 = scale it to the slowest episode so far, floor 300s)",
     )
     ap.add_argument(
         "--seeds",
@@ -295,10 +296,14 @@ def main() -> int:
     with mp.Pool(workers, maxtasksperchild=1, initializer=_ignore_sigint) as pool:
         stream = pool.imap_unordered(_one, jobs)
         for _ in range(len(jobs)):
+            # Scaled to this run: six times the slowest episode yet is silence
+            # no healthy pool produces, and it is minutes for an oracle sweep
+            # and an hour for one where each episode waits on a model.
+            budget = args.result_timeout or max(300.0, 6.0 * max((r.wall_s for r in results), default=0.0))
             try:
-                e = stream.next(timeout=args.result_timeout)
+                e = stream.next(timeout=budget)
             except mp.TimeoutError:
-                lost = f"no result for {args.result_timeout:g}s -- a worker died"
+                lost = f"no result for {budget:g}s -- a worker died"
                 break
             e.needs = needs_arm.get(e.challenge, "")
             results.append(e)
