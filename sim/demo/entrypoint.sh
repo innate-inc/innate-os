@@ -11,8 +11,11 @@ set -euo pipefail
 
 # Only what the world server needs -- it links no rclpy, so the Zenoh/RMW env
 # (config/dds/setup_dds.zsh) belongs to the tmux shells, which get it from .zshrc.
+# ROS's setup.bash reads AMENT_TRACE_SETUP_FILES while unset, which -u makes fatal.
+set +u
 source /opt/ros/humble/setup.bash
 source /root/innate-os/ros2_ws/install/setup.bash
+set -u
 
 : "${INNATE_DEMO_LEASE_SECONDS:=600}"
 : "${INNATE_SIM_RENDER_SCALE:=2}"
