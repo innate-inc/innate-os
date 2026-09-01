@@ -225,7 +225,7 @@ def cmd_up(
 def cmd_down(config: dict[str, object]) -> None:
     remove_superseded_containers()
     down_os(config)
-    stop_world_server(config["sim_repo"])  # type: ignore[arg-type]
+    stop_world_server()
     log("Innate sim runtime is down.")
 
 
@@ -245,7 +245,7 @@ def cmd_clean(config: dict[str, object], *, assume_yes: bool = False) -> None:
         warn("Aborted. Nothing was deleted.")
         return
 
-    stop_world_server(config["sim_repo"])  # type: ignore[arg-type]
+    stop_world_server()
     clean_runtime(config)
     success("Innate sim runtime cleaned (containers and volumes removed).")
 

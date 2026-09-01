@@ -2223,10 +2223,10 @@ def _world_server_ping(port: int, timeout: float = 2.0) -> bool:
     return _world_server_ping_reply(port, timeout) is not None
 
 
-def _stop_stale_world_server(sim_repo: Path) -> None:
-    """SIGTERM whatever owns the RPC port (the command-line match only covers
-    servers launched for this checkout)."""
-    stop_world_server(sim_repo)
+def _stop_stale_world_server() -> None:
+    """SIGTERM whatever owns the RPC port (stop_world_server only covers a
+    server still listening on this checkout's ports)."""
+    stop_world_server()
     out = subprocess.run(
         ["lsof", "-ti", f"tcp:{WORLD_SERVER_PORT}", "-sTCP:LISTEN"], capture_output=True, text=True, check=False
     )
@@ -2468,7 +2468,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
                 f"Host world server listens on {','.join(actual_binds)} but the current policy "
                 f"wants {bind} -- restarting it..."
             )
-        _stop_stale_world_server(sim_repo)
+        _stop_stale_world_server()
 
     ensure_state_dir()
     attempts: list[tuple[str, str, str]] = []  # (backend label, backend, that attempt's log output)
@@ -2669,43 +2669,34 @@ def _gl_failure_hint(attempt_log: str, backend: str | None) -> str:
     return "no output -- see the full log"
 
 
-def _mentions_path(command: str, root: str) -> bool:
-    """Whether root appears in command as a whole argument, or the head of one.
+def _world_server_pids(ports: list[int]) -> set[int]:
+    """Live world-server processes, found by the ports they are listening on.
 
-    ps joins argv with spaces and quotes nothing, so a checkout whose path
-    contains one cannot be recovered by splitting. Both ends of the match can
-    still be checked without it: an argument starts the line or follows a
-    space, and the path ends at a separator -- which rejects /mnt/repo/sim for
-    /repo/sim at the front, and /repo/sim-old for /repo/sim at the back.
+    Not by their command line: ps joins argv with spaces and quotes nothing, so
+    no amount of care tells an argument boundary from a space inside a checkout
+    path. The ports are per-checkout and are the thing `down` has to free, so
+    they identify the server exactly -- and unlike the pid file they survive an
+    interrupted `up`. The module check keeps an unrelated squatter on the port
+    from being signalled.
     """
-    at = command.find(root)
-    while at != -1:
-        starts_arg = at == 0 or command[at - 1] in " \t="
-        rest = command[at + len(root) :]
-        if starts_arg and (rest == "" or rest[0] in "/ \t"):
-            return True
-        at = command.find(root, at + 1)
-    return False
-
-
-def _world_server_pids(sim_repo: Path) -> set[int]:
-    """Every live world-server process launched for this checkout (uv and the
-    python it spawned), matched by command line. The pid file alone is not
-    enough: an interrupted `up` can strand it pointing at a dead attempt while
-    a live server keeps the ports, and `down` must kill what actually runs."""
-    out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, check=False)
-    root = str(sim_repo)
     pids: set[int] = set()
-    for line in out.stdout.splitlines():
-        pid_str, _, command = line.strip().partition(" ")
-        # The bootstrap module path, not "world_server": anything that merely
-        # mentions the function (this launcher included) must never match.
-        if "mars_sim_driver.world_server" not in command or not _mentions_path(command, root):
-            continue
-        with contextlib.suppress(ValueError):
-            pids.add(int(pid_str))
+    for port in ports:
+        found = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"], capture_output=True, text=True, check=False
+        )
+        for pid_str in found.stdout.split():
+            with contextlib.suppress(ValueError):
+                pids.add(int(pid_str))
     pids.discard(os.getpid())
-    return pids
+    return {pid for pid in pids if _is_world_server(pid)}
+
+
+def _is_world_server(pid: int) -> bool:
+    """Whether pid is running the world server's bootstrap -- the module path,
+    not "world_server", so anything merely mentioning the function (this
+    launcher included) cannot match."""
+    out = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, check=False)
+    return "mars_sim_driver.world_server" in out.stdout
 
 
 def _world_ports_free(ports: list[int], timeout_s: float) -> bool:
@@ -2717,12 +2708,12 @@ def _world_ports_free(ports: list[int], timeout_s: float) -> bool:
     return False
 
 
-def stop_world_server(sim_repo: Path) -> None:
-    targets = _world_server_pids(sim_repo)
+def stop_world_server() -> None:
     try:
         ports = [int(port) for port in WORLD_SERVER_PORTS_PATH.read_text().split()]
     except (OSError, ValueError):
         ports = [WORLD_SERVER_PORT, WORLD_STATE_PORT]
+    targets = _world_server_pids(ports)
     if targets:
         for pid in targets:
             with contextlib.suppress(OSError):
@@ -2733,7 +2724,7 @@ def stop_world_server(sim_repo: Path) -> None:
         if _world_ports_free(ports, 15.0):
             log("Stopped host world server.")
         else:
-            for pid in _world_server_pids(sim_repo):
+            for pid in _world_server_pids(ports):
                 with contextlib.suppress(OSError):
                     os.kill(pid, signal.SIGKILL)
             if _world_ports_free(ports, 5.0):
