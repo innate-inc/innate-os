@@ -59,8 +59,8 @@ CHALLENGE = Challenge(
     category=3,
     brief=(
         "Full stocktake, in this order. Count the jars and tell me how many. "
-        "Then count the cartons and tell me how many. Then shelve the carton "
-        "from the delivery bench with the other cartons. And one thing is in "
+        "Then count the cartons on the shelves and tell me how many. Then "
+        "shelve the carton from the delivery bench with the others. And one thing is in "
         "the wrong bay -- put it back where it goes."
     ),
     setup=[

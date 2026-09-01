@@ -949,8 +949,21 @@ class ChallengeEngine:
                 if challenge.fail_if is not None:
                     try:
                         challenge.fail_if.reset()
-                    except Exception:  # noqa: BLE001,S110
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        print(
+                            f"[challenges] fail_if reset failed for {challenge.id}: {exc!r}",
+                            flush=True,
+                        )
+                        self._reset_failed = True
+                if self._reset_failed:
+                    # Something could not clear its state, so this episode would
+                    # be scoring the previous one. Refuse to start rather than
+                    # produce a number from an instrument that is still dirty.
+                    self._reset_failed = False
+                    self.state = "failed"
+                    self.reason = "judge error: a predicate could not be reset"
+                    self._record(challenge.id, "failed", None)
+                    return
                 self.state = "running"
                 self.reason = ""
                 self.goal_done = [False] * len(challenge.goals)

@@ -62,15 +62,27 @@ class _DirectClient:
 
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
+        self._client = None
 
     def is_available(self) -> bool:
         return True
 
     def request_stream(self, _service, endpoint, method="POST", **kwargs):
+        # ONE client for the life of this object. Building one per call leaked
+        # a connection pool every time -- and a grasp-heavy episode makes three
+        # vision calls per attempt. This object is long-lived (make_client
+        # returns it and the skill holds it), so a single client is the right
+        # shape as well as the cheap one.
         import httpx
 
-        client = httpx.Client(timeout=180.0)
-        return client.stream(method, self.base_url + endpoint, **kwargs)
+        if self._client is None:
+            self._client = httpx.Client(timeout=180.0)
+        return self._client.stream(method, self.base_url + endpoint, **kwargs)
+
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
+            self._client = None
 
 
 def make_client():

@@ -8,7 +8,10 @@ CHALLENGE = Challenge(
     id="gallery_ladder_reach",
     title="Top of the ladder",
     category=1,
-    brief="Five mugs sit at different heights. Go to the highest one and stay in front of it.",
+    # TWO mugs, because the setup drops two. The brief said five, which is a
+    # claim about a world that does not exist -- an agent asked for the
+    # highest of five sees two and has to decide which of us is wrong.
+    brief="Two mugs sit at different heights. Go to the highest one and stay in front of it.",
     setup=[Drop("gallery_mug_h50", 3.0, 3.2), Drop("gallery_mug_h00", -3.0, 3.2)],
     # 0.6, not 0.45: every other stand-near goal in the suite uses 0.55-0.75,
     # and 0.45 to a mug atop a plinth means the base is nearly touching it. A
