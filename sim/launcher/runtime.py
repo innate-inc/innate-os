@@ -2669,6 +2669,23 @@ def _gl_failure_hint(attempt_log: str, backend: str | None) -> str:
     return "no output -- see the full log"
 
 
+def _mentions_path(command: str, root: str) -> bool:
+    """Whether root appears in command as a whole path component.
+
+    ps joins argv with spaces and quotes nothing, so a checkout whose path
+    contains one cannot be recovered by splitting -- but the end of the match
+    still can be checked: a real mention ends at a separator, where
+    /repo/sim-old would carry on into another component.
+    """
+    at = command.find(root)
+    while at != -1:
+        rest = command[at + len(root) :]
+        if rest == "" or rest[0] in "/ \t":
+            return True
+        at = command.find(root, at + 1)
+    return False
+
+
 def _world_server_pids(sim_repo: Path) -> set[int]:
     """Every live world-server process launched for this checkout (uv and the
     python it spawned), matched by command line. The pid file alone is not
@@ -2681,12 +2698,7 @@ def _world_server_pids(sim_repo: Path) -> set[int]:
         pid_str, _, command = line.strip().partition(" ")
         # The bootstrap module path, not "world_server": anything that merely
         # mentions the function (this launcher included) must never match.
-        if "mars_sim_driver.world_server" not in command:
-            continue
-        # Whole path components: uv carries the checkout as --project's value,
-        # its python as a path beneath it. A substring test would reach into a
-        # sibling checkout whose path merely starts the same way.
-        if not any(arg == root or arg.startswith(f"{root}/") for arg in shlex.split(command)):
+        if "mars_sim_driver.world_server" not in command or not _mentions_path(command, root):
             continue
         with contextlib.suppress(ValueError):
             pids.add(int(pid_str))
