@@ -28,6 +28,20 @@ FROM ${ROS_IMAGE} AS demo
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# The rendering libraries sim/README.md tells a Linux host to install. They are
+# absent from the dev image because the dev sim renders on the host; hosting the
+# world in here moves that prerequisite in here too. `import mujoco` builds the
+# MUJOCO_GL context at import time, so a missing libOSMesa fails the build, not
+# the first render. libegl1/libgl1/libopengl0 are for the MUJOCO_GL=egl path on
+# a GPU instance.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        libosmesa6 \
+        libegl1 \
+        libgl1 \
+        libopengl0
+
 # The dev image deliberately ships no MuJoCo -- its driver node is a pure RPC
 # client and the world runs on the host. The demo hosts the world itself, so it
 # needs the physics. numpy/pillow/websockets are already in the base; the pin
