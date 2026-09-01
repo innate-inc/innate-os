@@ -1307,8 +1307,7 @@ def refuse_if_ports_taken() -> None:
     taken = [
         (label, port)
         for label, port, spec in _STACK_PORTS
-        if port not in ours
-        and not _host_port_free(port, udp=(spec or "").endswith("/udp"), reuse=spec is None)
+        if port not in ours and not _host_port_free(port, udp=(spec or "").endswith("/udp"), reuse=spec is None)
     ]
     if not taken:
         return
@@ -2676,12 +2675,18 @@ def _world_server_pids(sim_repo: Path) -> set[int]:
     enough: an interrupted `up` can strand it pointing at a dead attempt while
     a live server keeps the ports, and `down` must kill what actually runs."""
     out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, check=False)
+    root = str(sim_repo)
     pids: set[int] = set()
     for line in out.stdout.splitlines():
         pid_str, _, command = line.strip().partition(" ")
         # The bootstrap module path, not "world_server": anything that merely
         # mentions the function (this launcher included) must never match.
-        if "mars_sim_driver.world_server" not in command or str(sim_repo) not in command:
+        if "mars_sim_driver.world_server" not in command:
+            continue
+        # Whole path components: uv carries the checkout as --project's value,
+        # its python as a path beneath it. A substring test would reach into a
+        # sibling checkout whose path merely starts the same way.
+        if not any(arg == root or arg.startswith(f"{root}/") for arg in shlex.split(command)):
             continue
         with contextlib.suppress(ValueError):
             pids.add(int(pid_str))

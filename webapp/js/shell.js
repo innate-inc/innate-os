@@ -153,7 +153,7 @@ export function initShell(navigate) {
   });
 
   document.body.prepend(rail);
-  installRailRibbon(rail);
+  const closeRailDrawer = installRailRibbon(rail);
 
   // Sim deployments hide robot-data workflows (SIM_SECTIONS) — rebuild the
   // rail without them once the (env-driven) config says we're in sim mode.
@@ -188,6 +188,9 @@ export function initShell(navigate) {
   function setActive(key) {
     activeKey = key;
     applyActive();
+    // Every navigation lands here -- a rail link, a number key, the browser's
+    // back button -- and the drawer must not be left over the page it opened.
+    closeRailDrawer();
     agentIndicator.el.style.display = key === "agent" ? "none" : "";
     const section = SECTIONS.find((s) => s.key === key);
     document.title = section ? `Innate · ${section.label}` : "Innate";
@@ -204,6 +207,7 @@ export function initShell(navigate) {
  * so this only has to keep the state consistent.
  *
  * @param {HTMLElement} rail
+ * @returns {() => void} closes the drawer, for the shell to call on navigation
  */
 function installRailRibbon(rail) {
   const ribbon = document.createElement("button");
@@ -258,4 +262,6 @@ function installRailRibbon(rail) {
   });
 
   document.body.append(scrim, ribbon);
+
+  return () => setOpen(false);
 }
