@@ -37,6 +37,7 @@ from bench_common import (  # noqa: E402
     scorecard,
 )
 from oracles import teleport_assisted  # noqa: E402
+from runner import describe  # noqa: E402
 
 RESULTS = Path(__file__).resolve().parent / "results"
 
@@ -64,7 +65,7 @@ def main() -> int:
         try:
             text = f.read_text()
         except Exception as exc:  # noqa: BLE001
-            print(f"skipping {f.name}: {exc}")
+            print(f"skipping {f.name}: {describe(exc)}")
             continue
         # A copy of a results file matches the glob too, and every episode in
         # it would count twice -- in the numerator and the denominator both.
@@ -75,7 +76,7 @@ def main() -> int:
         try:
             eps = json.loads(text)
         except Exception as exc:  # noqa: BLE001
-            print(f"skipping {f.name}: {exc}")
+            print(f"skipping {f.name}: {describe(exc)}")
             continue
         seen[digest] = f.name
         loaded.append((f.name, f.stat().st_mtime_ns, eps))

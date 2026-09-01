@@ -71,7 +71,13 @@ CATEGORY_OF: dict[str, int] = {}
 TELEPORTS: dict[str, bool] = {}
 
 
-def result_budget(seen: list[float], override: float = 0.0) -> float:
+# What to wait when an agent has produced nothing yet to scale from. A
+# model-backed episode can outlast any floor worth having, and the cost of
+# guessing high is one slow recovery.
+UNMEASURED_WAIT_S = 1800.0
+
+
+def result_budget(seen: dict[str, list[float]], expected: set[str], override: float = 0.0) -> float:
     """How long total silence may last before the pool is presumed dead.
 
     Scaled to this run rather than fixed: six times the slowest episode so far
@@ -79,14 +85,18 @@ def result_budget(seen: list[float], override: float = 0.0) -> float:
     sweep and an hour for one where every episode waits on a model. A flat
     number is wrong in both directions.
 
-    Before the first result there is nothing to scale from, and a model-backed
-    first episode can outlast any floor worth having -- so wait long once.
-    Erring long costs a slow recovery; erring short aborts a working sweep.
+    Keyed by AGENT, because that is what the durations differ by. A mixed sweep
+    returns an oracle in seconds while a model-backed episode is still running,
+    and scaling off the oracle would declare the working sweep dead. While any
+    expected agent has produced no episode at all there is nothing to scale
+    from, so the wait is the long prior: erring long costs a slow recovery,
+    erring short aborts a run that was fine.
     """
     if override:
         return override
-    slowest = max(seen, default=0.0)
-    return max(300.0, 6.0 * slowest) if slowest else 1800.0
+    budgets = [UNMEASURED_WAIT_S] if any(not seen.get(a) for a in expected) else []
+    budgets += [max(300.0, 6.0 * max(times)) for a, times in seen.items() if a in expected and times]
+    return max(budgets, default=UNMEASURED_WAIT_S)
 
 
 def _ignore_sigint():
@@ -308,13 +318,17 @@ def main() -> int:
     results = []
     args.out.parent.mkdir(parents=True, exist_ok=True)
     lost = ""
+    # Per agent, because an oracle finishing in seconds says nothing about how
+    # long a model-backed episode of the same challenge should take.
+    expected_agents = {j[2] for j in jobs}
+    seen_by_agent: dict[str, list[float]] = {}
     # Workers ignore SIGINT so Ctrl-C stays the parent's: a worker that dies on
     # an interrupt is invisible to Pool, and the parent would see only the
     # result timeout and mark every unfinished episode blocked.
     with mp.Pool(workers, maxtasksperchild=1, initializer=_ignore_sigint) as pool:
         stream = pool.imap_unordered(_one, jobs)
         for _ in range(len(jobs)):
-            budget = result_budget([r.wall_s for r in results], args.result_timeout)
+            budget = result_budget(seen_by_agent, expected_agents, args.result_timeout)
             try:
                 e = stream.next(timeout=budget)
             except mp.TimeoutError:
@@ -322,6 +336,7 @@ def main() -> int:
                 break
             e.needs = needs_arm.get(e.challenge, "")
             results.append(e)
+            seen_by_agent.setdefault(e.agent, []).append(e.wall_s)
             print(f"[{len(results):>3}/{len(jobs)}] {e.as_row()}", flush=True)
             args.out.write_text(json.dumps([asdict(r) for r in results], indent=1))
         if lost:

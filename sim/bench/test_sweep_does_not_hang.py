@@ -59,18 +59,31 @@ def test_the_wait_is_generous_before_anything_has_finished():
     recovery; erring short aborts a working sweep."""
     from main import result_budget
 
-    assert result_budget([]) >= 1800.0
+    assert result_budget({}, {"oracle"}) >= 1800.0
 
 
-def test_the_wait_shrinks_to_the_run_once_it_has_measured_one():
+def test_a_fast_agent_does_not_shorten_the_wait_for_a_slow_one():
+    """The case this got wrong: an oracle returns in five seconds while a
+    model-backed episode of the same challenge is still running, and scaling
+    off the oracle would declare the working sweep dead."""
     from main import result_budget
 
-    assert result_budget([10.0, 45.0, 12.0]) == 300.0, "an oracle sweep should not wait 15 minutes"
-    assert result_budget([600.0]) == 3600.0, "a model-backed sweep needs room"
+    assert result_budget({"oracle": [5.1]}, {"oracle", "brain:codex"}) >= 1800.0, (
+        "a fast agent's timing was used to bound an agent nobody has measured"
+    )
+
+
+def test_the_wait_shrinks_once_every_agent_has_been_measured():
+    from main import result_budget
+
+    assert result_budget({"oracle": [10.0, 45.0]}, {"oracle"}) == 300.0
+    assert result_budget({"brain:x": [600.0]}, {"brain:x"}) == 3600.0
+    # The slowest agent sets it, not the average.
+    assert result_budget({"oracle": [10.0], "brain:x": [600.0]}, {"oracle", "brain:x"}) == 3600.0
 
 
 def test_an_explicit_timeout_wins():
     from main import result_budget
 
-    assert result_budget([600.0], override=30.0) == 30.0
-    assert result_budget([], override=0.001) == 0.001
+    assert result_budget({"brain:x": [600.0]}, {"brain:x"}, override=30.0) == 30.0
+    assert result_budget({}, {"oracle"}, override=0.001) == 0.001

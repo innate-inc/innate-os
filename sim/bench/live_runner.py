@@ -318,6 +318,10 @@ async def _episode(
                 if not started:
                     same = active.get("id") in (None, challenge_id)
                     if active.get("state") == "running" and same:
+                        # The run has begun. Recorded here rather than inferred
+                        # from a measurement, because a live episode can reach
+                        # this point and be blocked before any of them moves.
+                        ep.started = True
                         started = True
                         # Only once the scene is actually up: instructing before
                         # the drops land tells the robot to fetch something that

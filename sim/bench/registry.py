@@ -15,6 +15,8 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
+from runner import describe
+
 BUILTIN: dict[str, str] = {
     "echo": "backends:EchoBackend",  # offline test double
     "codex": "backends:CodexBackend",  # sees, by being handed a file path
@@ -41,7 +43,7 @@ def resolve(spec: str) -> Any:
     try:
         mod = importlib.import_module(mod_name)
     except ImportError as exc:
-        raise ValueError(f"backend {spec!r}: cannot import {mod_name!r} ({exc})") from exc
+        raise ValueError(f"backend {spec!r}: cannot import {mod_name!r} ({describe(exc)})") from exc
     try:
         return getattr(mod, cls_name)
     except AttributeError as exc:

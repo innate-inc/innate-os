@@ -212,7 +212,9 @@ def test_a_broken_exception_in_finalisation_does_not_lose_the_episode():
 
 
 def test_a_run_that_happened_is_not_printed_as_not_attempted():
-    ran = Episode("m", "c", "a", False, 2, 4, 9.0, "", 1.0, 500, blocked="harness: could not read engine.state")
+    ran = Episode(
+        "m", "c", "a", False, 2, 4, 9.0, "", 1.0, 500, blocked="harness: could not read engine.state", started=True
+    )
     assert "not scored" in ran.as_row() and "not attempted" not in ran.as_row()
     assert "2/4" in ran.as_row(), "the measurements it produced were hidden"
 
@@ -246,27 +248,84 @@ def test_goal_times_cannot_be_mutated_back_onto_the_wire():
 
 def test_a_live_episode_that_ran_is_not_printed_as_not_attempted():
     """The live runner never sets `steps`, so deciding on that alone printed a
-    real attempt -- one that drove and scored goals -- as never made."""
+    real attempt -- one that drove and scored goals -- as never made. Deciding
+    on any measurement was still a heuristic: a live episode can reach
+    `running` and be blocked before one of them moves."""
     live = Episode(
-        "live", "c", "brain", False, 2, 4, 9.0, "", 1.0, 0, blocked="harness: brief not delivered", path_len_m=3.0
+        "live",
+        "c",
+        "brain",
+        False,
+        2,
+        4,
+        9.0,
+        "",
+        1.0,
+        0,
+        blocked="harness: brief not delivered",
+        path_len_m=3.0,
+        started=True,
     )
     assert "not scored" in live.as_row() and "not attempted" not in live.as_row()
     assert "2/4" in live.as_row()
 
 
+def test_a_started_episode_with_nothing_measured_yet_still_counts_as_run():
+    """The case the measurement heuristic could not see: it began, and was
+    blocked before anything moved."""
+    e = Episode(
+        "live", "c", "brain", False, 0, 2, 0.0, "", 1.0, 0, blocked="harness: brief not delivered", started=True
+    )
+    assert "not scored" in e.as_row() and "not attempted" not in e.as_row()
+
+
+def test_a_refusal_before_the_run_is_still_not_attempted():
+    """A start refusal fills in goals_total, so that alone cannot decide it."""
+    e = Episode("m", "c", "a", False, 0, 4, 0.0, "", 1.0, 0, blocked="harness: engine.start refused", started=False)
+    assert "not attempted" in e.as_row()
+
+
 def test_the_guards_that_record_an_exception_all_use_describe():
-    """describe() existed for one commit while two callers still interpolated
-    the exception directly, which is where the sweep actually aborts."""
+    """describe() exists because an exception's __str__ can raise. A handler
+    that formats the caught exception itself raises from inside the handler,
+    which is how a sweep aborts instead of losing one episode.
+
+    Read from the syntax tree, not by matching one spelling: the previous
+    version of this test rejected `type(exc).__name__` and stayed green while
+    two sites interpolated the exception directly.
+    """
+    import ast
     import pathlib
 
     here = pathlib.Path(__file__).resolve().parent
-    # Every module, and the interpolation in any form -- the site this missed
-    # first time round wrote it inside a longer message.
+    offenders = []
     for path in sorted(here.glob("*.py")):
         if path.name.startswith("test_") or path.name == "runner.py":
-            continue  # runner.py is where describe() is defined
-        text = path.read_text(encoding="utf-8")
-        assert "type(exc).__name__" not in text, (
-            f"{path.name} formats an exception by hand; one whose __str__ raises would "
-            "raise from inside the handler that caught it -- use runner.describe()"
-        )
+            continue  # runner.py defines describe()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for handler in (n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler) and n.name):
+            caught = handler.name
+
+            def renders(node, caught=caught):
+                """Does this expression turn the caught exception into text
+                without going through describe()?"""
+                if isinstance(node, ast.Call):
+                    if getattr(node.func, "id", "") == "describe":
+                        return False
+                    if getattr(node.func, "id", "") in ("str", "repr"):
+                        return any(isinstance(a, ast.Name) and a.id == caught for a in node.args)
+                return False
+
+            for node in ast.walk(handler):
+                if isinstance(node, ast.FormattedValue):
+                    inner = node.value
+                    if isinstance(inner, ast.Name) and inner.id == caught:
+                        offenders.append(f"{path.name}:{node.lineno} interpolates `{caught}`")
+                    elif any(renders(n) for n in ast.walk(inner)):
+                        offenders.append(f"{path.name}:{node.lineno} renders `{caught}`")
+                elif renders(node):
+                    offenders.append(f"{path.name}:{node.lineno} renders `{caught}`")
+    assert not offenders, (
+        "these guards render the exception they caught; one whose __str__ raises would "
+        "raise from inside the handler -- use runner.describe():" + "".join(chr(10) + "  " + o for o in offenders)
+    )

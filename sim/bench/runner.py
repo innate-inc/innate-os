@@ -121,6 +121,12 @@ class Episode:
     # one -- nineteen confident zeros from a capability that was never wired up
     # read as an agent that cannot follow instructions. See capabilities.py.
     blocked: str = ""
+    # Set once the challenge is actually running. A blocked episode is usually
+    # one that never started, but an unreadable score blocks a run that did,
+    # and a live episode can reach `running` and be blocked before any
+    # measurement moves -- so this is recorded rather than inferred from a step
+    # count the live runner never sets.
+    started: bool = False
     # Filled on the LIVE path by live_runner's probe and usage attribution.
     # The in-process runner leaves them at zero (it fills turns/path_len_m
     # itself); the live path could not, so every live failure looked the same
@@ -163,10 +169,8 @@ class Episode:
         if self.blocked:
             # A blocked episode is usually one that never ran, but an
             # unreadable score blocks a run that did -- printing that as "not
-            # attempted" hides the measurements it actually produced. Asked as
-            # "is there anything to show", because the live runner scores real
-            # episodes without ever setting `steps`.
-            if self.steps or self.goals_done or self.elapsed_s or self.path_len_m:
+            # attempted" would hide the measurements it produced.
+            if self.started:
                 return (
                     f"{mark:>4}  {self.map:<10} {self.challenge:<28} {self.agent:<7} "
                     f"{self.goals_done}/{self.goals_total}  sim {self.elapsed_s:6.1f}s  "
@@ -367,6 +371,7 @@ def run_episode(
         return ready
     mars, sim_lock, engine, ch, agent, nav = ready
 
+    started = True
     # Past here it is the run, and the run is the agent's. A crash below is a
     # failed challenge, not a harness fault -- and the goals, time and distance
     # measured up to it are real, so the episode is finalised from the engine
@@ -561,6 +566,7 @@ def run_episode(
         reason=why,
         error=crash,
         blocked=blocked,
+        started=started,
         wall_s=round(time.time() - wall0, 1),
         steps=steps,
         turns=turns,
