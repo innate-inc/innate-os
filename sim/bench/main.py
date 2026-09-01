@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bench_common import VERDICTS, blocked_count, format_scorecard, gate_verdict, scorecard  # noqa: E402
 from oracles import teleport_assisted  # noqa: E402
-from runner import Episode, run_episode, sources  # noqa: E402
+from runner import AGENT_OWNS_INTERRUPT, Episode, run_episode, sources  # noqa: E402
 
 
 def discover() -> dict[str, list[tuple[str, str]]]:
@@ -142,7 +142,17 @@ def _one(job):
 
     try:
         wh = (640, 480) if agent_name.startswith("brain") else (160, 120)
-        return run_episode(map_name, challenge_id, make, max_sim_s=cap, render_wh=wh, agent_name=agent_name)
+        # In a worker the parent owns the terminal, so a KeyboardInterrupt
+        # here came from the code under test and must not escape.
+        return run_episode(
+            map_name,
+            challenge_id,
+            make,
+            max_sim_s=cap,
+            render_wh=wh,
+            agent_name=agent_name,
+            user_owns_interrupt=AGENT_OWNS_INTERRUPT,
+        )
     except BaseException as exc:  # noqa: BLE001 -- one bad episode must not sink the sweep
         # A last resort only: run_episode classifies setup versus run and sets
         # `blocked` itself, so anything still escaping is unexpected and is

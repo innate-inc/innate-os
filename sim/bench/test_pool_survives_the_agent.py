@@ -9,6 +9,7 @@ These run a real Pool rather than monkeypatching the classification, because
 the classification is what is under test. Fork start method: the worker
 inherits the patches made here.
 """
+
 import multiprocessing as mp
 import sys
 from pathlib import Path
@@ -56,6 +57,24 @@ def test_an_agent_cannot_rename_its_way_out(monkeypatch):
     monkeypatch.setattr(PlannerAgent, "act", act)
     e = through_a_pool()
     assert e.blocked == "", "a renamed worker talked its way into dying"
+    assert "KeyboardInterrupt" in e.error
+
+
+def test_an_agent_cannot_forge_the_multiprocessing_parent_marker(monkeypatch):
+    """parent_process() reads a module global, so clearing it made the second
+    version of this check believe the worker was the root process. The policy
+    is now the caller's argument, which nothing in here can reach."""
+    import multiprocessing.process as mpp
+
+    from planner_agent import PlannerAgent
+
+    def act(self, *a, **k):
+        mpp._parent_process = None
+        raise KeyboardInterrupt("from the agent, with the marker cleared")
+
+    monkeypatch.setattr(PlannerAgent, "act", act)
+    e = through_a_pool()
+    assert e.blocked == "", "forged multiprocessing state killed the worker"
     assert "KeyboardInterrupt" in e.error
 
 

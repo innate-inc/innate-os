@@ -104,26 +104,18 @@ class Episode:
         )
 
 
-def _user_interrupt(exc: BaseException) -> bool:
-    """Is this a Ctrl-C from the terminal, rather than from the code under test?
-
-    Only the root process has no parent, and only its main thread is where the
-    terminal's interrupt is delivered. Sweep workers install their own SIGINT
-    handler, so a KeyboardInterrupt raised inside one came from the agent -- and
-    letting that escape kills the worker, which Pool never notices and the
-    parent can only see as a timeout.
-
-    Deliberately NOT `current_process().name == "MainProcess"`: that name is an
-    ordinary mutable attribute, and code running in the worker can set it.
-    """
-    import multiprocessing as mp
-    import threading
-
-    return (
-        isinstance(exc, KeyboardInterrupt)
-        and mp.parent_process() is None
-        and threading.current_thread() is threading.main_thread()
-    )
+# Who owns Ctrl-C is a policy the CALLER knows, not a fact to be discovered.
+# Two previous attempts read it out of the interpreter -- current_process().name
+# and then parent_process() -- and both are ordinary mutable state that code
+# under test can set, letting an agent have its own KeyboardInterrupt re-raised
+# and kill the pool worker. Pool never notices; the parent sees only the result
+# timeout and marks unrelated queued episodes blocked.
+#
+# This is not a security boundary. An agent sharing the interpreter can still
+# os._exit() its worker, and the sweep survives that through --result-timeout.
+# It closes the accidental path, which is the one that actually happens.
+USER_OWNS_INTERRUPT = True
+AGENT_OWNS_INTERRUPT = False
 
 
 class _Ready(NamedTuple):
@@ -234,18 +226,25 @@ def run_episode(
     max_sim_s: float | None = None,
     render_wh: tuple[int, int] = (160, 120),
     agent_name: str = "?",
+    user_owns_interrupt: bool = USER_OWNS_INTERRUPT,
 ) -> Episode:
     """Run one challenge to completion, timeout, or agent exhaustion.
 
     make_agent(challenge) -> agent, because an auto-planned oracle cannot be
     built until the Challenge object has been loaded, and loading it needs the
     engine that this function creates.
+
+    `user_owns_interrupt` says whether a KeyboardInterrupt reaching this
+    function is the terminal's. True for a direct caller, where Ctrl-C is
+    control flow and must not become a result. False in a sweep worker, where
+    the parent owns the terminal and an interrupt can only have come from the
+    code under test -- letting that escape kills the worker.
     """
     wall0 = time.time()
     try:
         ready = _prepare(map_name, challenge_id, make_agent, render_wh, agent_name, wall0)
     except BaseException as exc:  # noqa: BLE001 -- setup, so every failure is ours
-        if _user_interrupt(exc):
+        if user_owns_interrupt and isinstance(exc, KeyboardInterrupt):
             raise  # the user asked to stop; that is not a result
         detail = f"{type(exc).__name__}: {exc}"
         return Episode(
@@ -373,7 +372,7 @@ def run_episode(
         # is not this: sweep workers ignore SIGINT (main.py), so in a worker
         # only the agent can produce one, and in the main process it is the
         # user and must not be swallowed.
-        if _user_interrupt(exc):
+        if user_owns_interrupt and isinstance(exc, KeyboardInterrupt):
             raise
         crash = f"{type(exc).__name__}: {exc}"
         reason = reason or f"agent crashed: {crash}"
@@ -383,16 +382,41 @@ def run_episode(
     # A failure here must not discard the episode that produced it: falling
     # through would hand _one an exception and it would fabricate the zeros
     # this guard exists to prevent.
-    def read(what, fn, default):
+    lost: list[str] = []
+
+    def read(what, fn, default, authoritative=False):
+        """Read one field of the finished episode without risking the episode.
+
+        Several of these are the agent's own code -- `turns` is already a
+        property -- and a raise here used to escape run_episode entirely, so
+        the caller fabricated an all-zero result for a run that had really
+        happened. `authoritative` marks the values the SCORE depends on:
+        defaulting those would turn an observed pass into a robot failure, so
+        instead the episode is blocked and not scored at all.
+        """
         nonlocal crash
         try:
             return fn()
         except BaseException as exc:  # noqa: BLE001
-            if _user_interrupt(exc):
+            if user_owns_interrupt and isinstance(exc, KeyboardInterrupt):
                 raise
             note = f"{what} failed: {type(exc).__name__}: {exc}"
             crash = f"{crash}; also {note}" if crash else note
+            if authoritative:
+                lost.append(what)
             return default
+
+    def metrics():
+        """Normalise inside the guard: metrics() returning None or a mapping
+        missing a key used to raise a KeyError one line later, outside it."""
+        got = engine.metrics() or {}
+        return {
+            "path_len_m": float(got.get("path_len_m") or 0.0),
+            "goal_times_s": [float(t) for t in (got.get("goal_times_s") or [])],
+            "utterances": int(got.get("utterances") or 0),
+            "first_utterance_s": got.get("first_utterance_s"),
+            "tempt_min_m": got.get("tempt_min_m"),
+        }
 
     empty = {
         "path_len_m": 0.0,
@@ -401,26 +425,34 @@ def run_episode(
         "first_utterance_s": None,
         "tempt_min_m": None,
     }
-    # Read everything BEFORE building the Episode: arguments are evaluated left
-    # to right, so passing `error=crash` inline captured the value before the
-    # reads after it could append to it, and a finalisation failure went into a
-    # variable nobody looked at again.
-    m = read("engine.metrics", engine.metrics, empty)
-    name = read("agent.name", lambda: agent.name, agent_name)
-    passed = read("engine.state", lambda: engine.state == "passed", False)
-    done = read("engine.goal_done", lambda: sum(1 for g in engine.goal_done if g), 0)
-    elapsed = read("engine.elapsed_s", lambda: round(engine.elapsed_s, 1), 0.0)
-    why = reason or read("engine.reason", lambda: engine.reason, "")
+    # Read into locals BEFORE building the Episode: arguments evaluate left to
+    # right, so passing `error=crash` inline captured it before the reads after
+    # it could append, and a finalisation failure went into a variable nobody
+    # read again. Every value is converted to a primitive here too -- a
+    # non-pickleable agent.name left this function cleanly and then failed in
+    # the pool's result feeder, which aborts the whole sweep rather than
+    # costing one episode.
+    m = read("engine.metrics", metrics, empty)
+    name = read("agent.name", lambda: str(agent.name), agent_name)
+    passed = read("engine.state", lambda: engine.state == "passed", False, authoritative=True)
+    done = read("engine.goal_done", lambda: sum(1 for g in engine.goal_done if g), 0, authoritative=True)
+    total = read("challenge goals", lambda: len(ch.goals), 0, authoritative=True)
+    elapsed = read("engine.elapsed_s", lambda: round(float(engine.elapsed_s), 1), 0.0)
+    why = reason or read("engine.reason", lambda: str(engine.reason), "")
     blocked = read("agent.blocked_reason", lambda: str(getattr(agent, "blocked_reason", "")), "")
     turns = read("agent.turns", lambda: int(getattr(agent, "turns", 0)), 0)
     cameras = read("agent.camera_errors", lambda: int(getattr(agent, "camera_errors", 0)), 0)
+    if lost and not blocked:
+        # The score cannot be computed from what survived, and a default would
+        # be a verdict nobody reached.
+        blocked = f"harness: could not read {', '.join(lost)}"
     return Episode(
         map=map_name,
         challenge=challenge_id,
         agent=name,
         passed=passed,
         goals_done=done,
-        goals_total=len(ch.goals),
+        goals_total=total,
         elapsed_s=elapsed,
         reason=why,
         error=crash,

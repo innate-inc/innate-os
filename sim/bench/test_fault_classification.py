@@ -20,7 +20,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ros2_ws/src/mars_bot/mars_sim_driver"))
 
-from runner import run_episode
+from runner import AGENT_OWNS_INTERRUPT, run_episode
 
 MAP, CID = "gallery", "gallery_ring_tour"
 
@@ -141,35 +141,42 @@ def test_a_crash_in_agent_reset_is_still_the_agents():
     assert "reset exploded" in e.error
 
 
-def test_a_keyboardinterrupt_from_the_agent_is_that_agents_failure(monkeypatch):
-    """Inside a worker an interrupt can only have come from the code under
-    test -- workers install their own SIGINT handler. Letting it escape kills
-    the worker, and the parent can only see a timeout, which then marks
-    unrelated queued episodes blocked."""
-    import multiprocessing as mp
-
-    # What makes a process a worker is having a PARENT, which nothing inside it
-    # can change. current_process().name is an ordinary mutable attribute.
-    monkeypatch.setattr(mp, "parent_process", lambda: object())
-    e = run_episode(MAP, CID, lambda ch: _Crashing(oracle_for(ch), exc=KeyboardInterrupt), agent_name="oracle")
+def test_a_keyboardinterrupt_from_the_agent_is_that_agents_failure():
+    """In a worker the parent owns the terminal, so an interrupt here came from
+    the code under test. Letting it escape kills the worker, and the parent can
+    only see a timeout -- which then marks unrelated queued episodes blocked."""
+    e = run_episode(
+        MAP,
+        CID,
+        lambda ch: _Crashing(oracle_for(ch), exc=KeyboardInterrupt),
+        agent_name="oracle",
+        user_owns_interrupt=AGENT_OWNS_INTERRUPT,
+    )
     assert e.blocked == "", e.blocked
     assert "KeyboardInterrupt" in e.error
 
 
-def test_renaming_the_process_cannot_win_an_interrupt(monkeypatch):
-    """The old check read current_process().name, which code in the worker can
-    set to "MainProcess" -- so an agent could get its interrupt re-raised and
-    kill the worker on purpose."""
+def test_the_policy_is_the_callers_not_something_the_agent_can_forge(monkeypatch):
+    """Two earlier versions read this out of the interpreter --
+    current_process().name, then parent_process() -- and both are ordinary
+    mutable state the agent can set to claim the interrupt is the user's."""
     import multiprocessing as mp
+    import multiprocessing.process as mpp
 
-    monkeypatch.setattr(mp, "parent_process", lambda: object())
+    monkeypatch.setattr(mpp, "_parent_process", None, raising=False)
     monkeypatch.setattr(mp.current_process(), "name", "MainProcess", raising=False)
-    e = run_episode(MAP, CID, lambda ch: _Crashing(oracle_for(ch), exc=KeyboardInterrupt), agent_name="oracle")
-    assert e.blocked == "", "a renamed process talked its way into killing the worker"
+    e = run_episode(
+        MAP,
+        CID,
+        lambda ch: _Crashing(oracle_for(ch), exc=KeyboardInterrupt),
+        agent_name="oracle",
+        user_owns_interrupt=AGENT_OWNS_INTERRUPT,
+    )
+    assert e.blocked == "", "forged interpreter state talked its way into killing the worker"
 
 
 def test_a_real_ctrl_c_in_the_root_process_still_propagates():
-    """In the root process an interrupt is the user, and not a result."""
+    """The default is the direct caller, where Ctrl-C is control flow."""
     with pytest.raises(KeyboardInterrupt):
         run_episode(MAP, CID, lambda ch: _Crashing(oracle_for(ch), exc=KeyboardInterrupt), agent_name="oracle")
 
@@ -183,6 +190,80 @@ def test_a_ctrl_c_during_setup_also_propagates():
 
     with pytest.raises(KeyboardInterrupt):
         run_episode(MAP, CID, boom, agent_name="oracle")
+
+
+def test_metrics_returning_nothing_does_not_discard_the_episode(monkeypatch):
+    """It used to raise a KeyError one line outside the guard."""
+    from mars_sim_driver.challenges import ChallengeEngine
+
+    for bad in ({}, None):
+        monkeypatch.setattr(ChallengeEngine, "metrics", lambda self, _b=bad: _b)
+        e = run_episode(MAP, CID, oracle_for, agent_name="oracle")
+        assert e.goals_total > 0 and e.steps > 0, f"metrics()={bad!r} erased the episode: {e}"
+        assert e.passed, "a completed run was reported as a failure"
+
+
+def test_an_unreadable_score_blocks_rather_than_failing_the_robot(monkeypatch):
+    """Defaulting `passed` to False would turn an observed pass into a robot
+    failure. The episode is blocked instead, so nothing is scored from it.
+
+    Armed only once finalisation begins -- metrics() is the first thing read
+    there -- because `state` is also read all through the run, and breaking it
+    earlier just blocks at setup, which is a different path."""
+    from mars_sim_driver.challenges import ChallengeEngine
+
+    armed = {"yes": False}
+    real_metrics = ChallengeEngine.metrics
+
+    def metrics(self):
+        armed["yes"] = True
+        return real_metrics(self)
+
+    class Boom:
+        """A DATA descriptor: `state` is set on the instance, and a plain
+        __get__ would lose to the instance dict."""
+
+        def __get__(self, obj, owner=None):
+            if obj is None:
+                return self
+            if armed["yes"]:
+                raise RuntimeError("state unreadable")
+            return obj.__dict__.get("_state", "idle")
+
+        def __set__(self, obj, value):
+            obj.__dict__["_state"] = value
+
+    monkeypatch.setattr(ChallengeEngine, "metrics", metrics)
+    monkeypatch.setattr(ChallengeEngine, "state", Boom(), raising=False)
+    e = run_episode(MAP, CID, oracle_for, agent_name="oracle")
+    assert e.blocked.startswith("harness:"), f"an unreadable score was charged to the robot: {e}"
+    assert "engine.state" in e.blocked, e.blocked
+    assert not e.passed
+    # The run really happened, so what WAS measurable is still reported.
+    assert e.steps > 0 and e.goals_total > 0, e
+
+
+def test_a_non_pickleable_agent_name_cannot_abort_the_sweep():
+    """It left run_episode cleanly and then failed in the pool's result feeder,
+    which loses far more than one episode."""
+    import pickle
+
+    class Weird:
+        done = True
+
+        @property
+        def name(self):
+            return lambda: "not a string"
+
+        def reset(self, *a, **k):
+            pass
+
+        def act(self, *a, **k):
+            pass
+
+    e = run_episode(MAP, CID, lambda ch: Weird(), agent_name="oracle")
+    assert isinstance(e.agent, str), f"agent name is {type(e.agent)}, not a string"
+    pickle.dumps(e)
 
 
 def test_a_failing_metrics_call_does_not_discard_the_episode(monkeypatch):
