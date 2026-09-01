@@ -171,3 +171,29 @@ def test_separate_sweeps_are_called_a_composite(results, capsys):
         1_000_000 + 90_000,
     )
     assert "composite of separate sweeps" in run(capsys)
+
+
+def test_a_newer_full_sweep_beats_older_per_map_files(results, capsys):
+    """The defect this replaced: a special case dropped main.py's default
+    output whenever any per-map file existed, on the unchecked assumption that
+    those covered the same challenges. After a full sweep they do not -- the
+    default file was the only one holding every challenge -- so the report
+    printed a two-week-old partial run and silently lost the rest.
+    """
+    write(
+        results / "bench_counter.json", [ep("counter_a", "oracle", False), ep("counter_a", "random", False)], 1_000_000
+    )
+    write(
+        results / "bench_results.json",
+        [
+            ep("counter_a", "oracle", True),
+            ep("counter_a", "random", False),
+            ep("gallery_ring_tour", "oracle", True),
+            ep("gallery_ring_tour", "random", False),
+        ],
+        2_000_000,
+    )
+    out = run(capsys)
+    assert "4 episodes" in out, out
+    assert "2 challenges" in out, "the challenges only the newer file had were dropped"
+    assert "VALID 2" in out, "the older partial sweep decided the verdicts"

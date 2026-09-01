@@ -44,15 +44,12 @@ RESULTS = Path(__file__).resolve().parent / "results"
 
 def main() -> int:
     files = sorted(RESULTS.glob("bench_*.json"))
-    # main.py's default --out is bench_results.json, which the glob also
-    # matches -- so a default-out sweep re-running challenges already saved
-    # per-map would count every episode twice, inflating numerator and
-    # denominator together. When per-map files exist, the default file is
-    # skipped loudly; when it is all there is, it is used as-is.
-    per_map = [f for f in files if f.name != "bench_results.json"]
-    if per_map and len(per_map) != len(files):
-        print("skipping bench_results.json (main.py's default --out): per-map files cover the same challenges")
-        files = per_map
+    # No special case for main.py's default --out (bench_results.json): the
+    # per-challenge ownership below already resolves an overlap, and does it by
+    # date rather than by filename. Dropping the default file whenever any
+    # per-map file existed assumed those covered the same challenges, which is
+    # not checked -- and when a full sweep had just written the default file,
+    # it reported a stale partial one instead.
     if not files:
         print(f"no bench_*.json in {RESULTS}")
         return 1
