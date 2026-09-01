@@ -272,6 +272,12 @@ def _usage_between(t0: float, t1: float) -> tuple[int, int, int, float]:
     return calls, tin, tout, round(cost, 4)
 
 
+class _LiveHarnessFault(Exception):
+    """Something on OUR side of the live stack failed: the roster, the state
+    stream, the start request. The robot was never asked, or its answer never
+    reached us, so the episode is blocked rather than lost."""
+
+
 async def _episode(
     url: str, challenge_id: str, timeout_s: float, poll_s: float = 0.5, rosbridge: str | None = None, brief: str = ""
 ) -> Episode:
@@ -291,11 +297,12 @@ async def _episode(
             roster = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
             ids = {c["id"] for c in roster.get("challenges", [])}
             if challenge_id not in ids:
-                ep.error = f"{challenge_id!r} not on the live server's roster"
-                ep.wall_s = round(time.time() - wall0, 1)
-                return ep
+                raise _LiveHarnessFault(f"{challenge_id!r} not on the live server's roster")
 
             await ws.send(json.dumps({"op": "start_challenge", "id": challenge_id}))
+            # Asked but not yet confirmed. If the stream dies here, whether the
+            # challenge started is not something this end can know.
+            ep.started = None
             deadline = time.time() + timeout_s
             last = None
             # The stream is latest-wins and the server keeps publishing the
@@ -310,9 +317,8 @@ async def _episode(
             while time.time() < deadline:
                 try:
                     msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=poll_s + 5))
-                except asyncio.TimeoutError:
-                    ep.error = "state stream went quiet"
-                    break
+                except asyncio.TimeoutError as quiet:
+                    raise _LiveHarnessFault("state stream went quiet") from quiet
                 block = (msg or {}).get("challenge") or {}
                 active = block.get("active") or block
                 if not active or "state" not in active:
@@ -338,8 +344,7 @@ async def _episode(
                                 # zero -- `scored` below drops blocked episodes.
                                 ep.blocked = f"harness: brief not delivered ({err[:80]})"
                     elif time.time() > grace:
-                        ep.error = "challenge never entered 'running' (start refused?)"
-                        break
+                        raise _LiveHarnessFault("challenge never entered 'running' (start refused?)")
                     else:
                         continue
                 last = active
@@ -384,7 +389,7 @@ async def _episode(
                 if last.get("state") == "running":
                     ep.reason = "harness timeout (challenge still running)"
             else:
-                ep.error = ep.error or "no challenge block on the stream"
+                raise _LiveHarnessFault(ep.error or "no challenge block on the stream")
 
             # Leave the stack clean for the next episode.
             with_suppress = json.dumps({"op": "abort_challenge"})
@@ -392,8 +397,19 @@ async def _episode(
                 await ws.send(with_suppress)
             except Exception:  # noqa: BLE001 -- best effort; the run is already recorded
                 pass
+    except _LiveHarnessFault as fault:
+        # Ours. `scored` drops blocked episodes, so this never becomes a zero
+        # against the robot.
+        # These carry a plain string we wrote, so there is no __str__ to
+        # distrust and the message reads without the class name in front.
+        why = fault.args[0] if fault.args else describe(fault)
+        ep.error = str(why)
+        ep.blocked = f"harness: {ep.error}"
     except Exception as exc:  # noqa: BLE001 -- one bad episode must not sink the sweep
+        # A transport failure is ours too: either the robot was never asked or
+        # its answer never reached us. Either way there is no verdict here.
         ep.error = describe(exc)
+        ep.blocked = f"harness: live stream failed ({ep.error[:80]})"
 
     if probe:
         probe.stop()
