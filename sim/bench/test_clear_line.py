@@ -73,6 +73,36 @@ def test_matches_the_geometry_on_every_pair_in_a_5x5():
     assert not wrong, f"{len(wrong)} disagreements, e.g. {wrong[:4]}"
 
 
+def test_matches_the_geometry_on_non_square_grids():
+    """The nav grid is not square, and a traversal that hardcodes the driving
+    axis one way is easy to get right on a square and wrong on a strip."""
+    for shape in ((4, 7), (7, 3)):
+        h, w = shape
+        cells = list(product(range(h), range(w)))
+        for blocked in cells:
+            grid = np.zeros(shape, dtype=bool)
+            grid[blocked] = True
+            m = nav(grid)
+            for a, b in product(cells, repeat=2):
+                if a == blocked or b == blocked:
+                    continue
+                assert _clear_line(a, b, m) == (not touches(a, b, blocked)), (shape, a, b, blocked)
+
+
+def test_is_symmetric():
+    """A path is clear or it is not; which end you start from cannot decide it.
+    Bresenham-derived walks disagree here easily, and the simplifier calls this
+    with whichever pair of waypoints it happens to hold."""
+    n = 5
+    cells = list(product(range(n), repeat=2))
+    for blocked in cells:
+        grid = np.zeros((n, n), dtype=bool)
+        grid[blocked] = True
+        m = nav(grid)
+        for a, b in product(cells, repeat=2):
+            assert _clear_line(a, b, m) == _clear_line(b, a, m), (a, b, blocked)
+
+
 def test_the_case_that_caught_the_over_strict_version():
     #  (0,0)->(1,2) crosses into column 2 at row 1.25, so it never enters (0,2)
     m = nav([[0, 0, 1], [0, 0, 0]])
