@@ -1,0 +1,30 @@
+# Sidecar for sim/demo/Dockerfile. The root .dockerignore is `**` plus a narrow
+# allowlist for the ROS images, which excludes most of what this stage COPYs.
+#
+# Exclude everything, then admit exactly the tracked trees. The generated
+# geometry and the viewer bundle are NOT here on purpose -- they come from the
+# published asset/viewer images, the same source the launcher installs from.
+**
+
+!ros2_ws/**
+!scripts/**
+!config/**
+!workspace/**
+!webapp/**
+!sim/props/**
+!sim/demo/**
+
+# Secrets and local state must never enter a public demo image.
+.env
+**/.env
+**/.git
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+ros2_ws/build/**
+ros2_ws/install/**
+ros2_ws/log/**
+config/settings.yaml
+config/ssh/**
+config/security/**

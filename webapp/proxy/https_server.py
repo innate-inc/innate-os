@@ -77,6 +77,10 @@ ROOT = Path(__file__).resolve().parent.parent
 # Position + FPS/queue) surface without editing the committed (robot-default)
 # config.json. Overlaid onto /config.json at request time.
 WEBAPP_SIM_CONTROLS = os.environ.get("WEBAPP_SIM_CONTROLS", "").strip().lower() in ("1", "true", "yes")
+# Drops the two routes that mutate the running stack (settings write, restart).
+# Set by the public sim demo, where every visitor is unauthenticated: nothing
+# else in the app writes, so this leaves the surface read-only.
+WEBAPP_READONLY = os.environ.get("INNATE_WEBAPP_READONLY", "").strip().lower() in ("1", "true", "yes")
 CERT_DIR = Path.home() / ".innate-webapp-tls"
 ROSBRIDGE_URL = "ws://127.0.0.1:9090"
 
@@ -510,8 +514,9 @@ def build_app() -> web.Application:
     app.router.add_get("/run/info", run_info_response)
     app.router.add_get("/run/log", run_log_response)
     app.router.add_get("/settings.json", settings_get)
-    app.router.add_post("/settings.json", settings_apply)
-    app.router.add_get("/restart", restart_handler)
+    if not WEBAPP_READONLY:
+        app.router.add_post("/settings.json", settings_apply)
+        app.router.add_get("/restart", restart_handler)
     # Before the catch-all; the bare /armsdk page route stays on the SPA shell.
     app.router.add_get("/armsdk/model/{tail:.*}", armsdk_model)
     # Prefix routes must precede the catch-all so /models/foo.glb doesn't fall to
