@@ -30,6 +30,9 @@ export function isTypingContext() {
   );
 }
 
+// How far the ribbon must travel before it counts as a pull, not a tap.
+const RIBBON_PULL_PX = 18;
+
 /**
  * Build the persistent app chrome once — the icon rail, robot speech playback,
  * and the "agent running" indicator — and return a controller
@@ -150,6 +153,7 @@ export function initShell(navigate) {
   });
 
   document.body.prepend(rail);
+  installRailRibbon(rail);
 
   // Sim deployments hide robot-data workflows (SIM_SECTIONS) — rebuild the
   // rail without them once the (env-driven) config says we're in sim mode.
@@ -192,3 +196,66 @@ export function initShell(navigate) {
   return { setActive };
 }
 
+/**
+ * Phone navigation: the rail is off-screen and a ribbon on the left edge pulls
+ * it in. Tap it, or drag it out — a drag past the threshold opens without
+ * waiting for the release, which is what makes it feel like a curtain rather
+ * than a button. Desktop keeps the always-there rail; the CSS decides which,
+ * so this only has to keep the state consistent.
+ *
+ * @param {HTMLElement} rail
+ */
+function installRailRibbon(rail) {
+  const ribbon = document.createElement("button");
+  ribbon.type = "button";
+  ribbon.className = "rail-ribbon";
+  ribbon.setAttribute("aria-label", "Open navigation");
+  ribbon.setAttribute("aria-expanded", "false");
+  ribbon.innerHTML = '<span class="rail-ribbon-grip" aria-hidden="true"></span>';
+
+  const scrim = document.createElement("div");
+  scrim.className = "rail-scrim";
+
+  /** @param {boolean} open */
+  const setOpen = (open) => {
+    document.body.classList.toggle("rail-open", open);
+    ribbon.setAttribute("aria-expanded", String(open));
+    ribbon.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
+  };
+
+  let drag = /** @type {{ id: number, x: number, opened: boolean } | null} */ (null);
+  ribbon.addEventListener("pointerdown", (e) => {
+    if (!e.isPrimary || e.button !== 0) return;
+    drag = { id: e.pointerId, x: e.clientX, opened: false };
+    ribbon.setPointerCapture(e.pointerId);
+  });
+  ribbon.addEventListener("pointermove", (e) => {
+    if (!drag || e.pointerId !== drag.id || drag.opened) return;
+    if (e.clientX - drag.x < RIBBON_PULL_PX) return;
+    drag.opened = true;
+    setOpen(true);
+  });
+  const endDrag = (/** @type {PointerEvent} */ e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const opened = drag.opened;
+    drag = null;
+    if (opened) e.preventDefault(); // the pull already opened it; no click toggle
+  };
+  ribbon.addEventListener("pointerup", endDrag);
+  ribbon.addEventListener("pointercancel", endDrag);
+  ribbon.addEventListener("click", () => {
+    if (drag?.opened) return;
+    setOpen(!document.body.classList.contains("rail-open"));
+  });
+
+  scrim.addEventListener("click", () => setOpen(false));
+  // Picking a section is the end of the errand the menu was opened for.
+  rail.addEventListener("click", (e) => {
+    if (/** @type {Element} */ (e.target).closest(".rail-link")) setOpen(false);
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") setOpen(false);
+  });
+
+  document.body.append(scrim, ribbon);
+}

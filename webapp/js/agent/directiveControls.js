@@ -20,7 +20,7 @@ import {
  *   onAgentName: (name: string) => void,
  *   onBrainActive: (active: boolean, justStarted: boolean) => void,
  * }} opts
- * @returns {{ el: HTMLElement, ensureRunning: () => Promise<void>, destroy: () => void }}
+ * @returns {{ el: HTMLElement, toggleEl: HTMLButtonElement, ensureRunning: () => Promise<void>, destroy: () => void }}
  */
 export function createDirectiveControls(agentState, opts) {
   const controls = document.createElement("div");
@@ -278,6 +278,9 @@ export function createDirectiveControls(agentState, opts) {
 
   return {
     el: controls,
+    // The compact sheet parks this in its header; one button, moved, so the
+    // start/stop state stays in one place.
+    toggleEl: toggleBtn,
     ensureRunning,
     destroy() {
       document.removeEventListener("click", onDirectiveOutsideClick);

@@ -69,7 +69,36 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   strip.setAttribute("role", "group");
   strip.setAttribute("aria-label", "Camera views");
   strip.hidden = true; // shown once we learn the camera roster
-  (opts.stripParent ?? parent).append(strip);
+
+  // On a narrow stage three tiles are a third of the height, so there they
+  // fold behind this button and the page below them gets the room.
+  const camsToggle = document.createElement("button");
+  camsToggle.type = "button";
+  camsToggle.className = "cam-strip-toggle";
+  camsToggle.title = "Camera views";
+  camsToggle.hidden = true;
+  camsToggle.innerHTML =
+    '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M3 8.8A2.3 2.3 0 0 1 5.3 6.5h1.4a1.5 1.5 0 0 0 1.25-.67l.6-.9a1.5 1.5 0 0 1 1.25-.68h4.4a1.5 1.5 0 0 1 1.25.68l.6.9a1.5 1.5 0 0 0 1.25.67h1.4A2.3 2.3 0 0 1 21 8.8v7.9a2.3 2.3 0 0 1-2.3 2.3H5.3A2.3 2.3 0 0 1 3 16.7z"/>' +
+    '<circle cx="12" cy="12.5" r="3.3"/></svg>';
+  (opts.stripParent ?? parent).append(camsToggle, strip);
+
+  // Collapsible only where the room is tight; wide stages keep the tiles up.
+  const tightStage = window.matchMedia("(max-width: 780px)");
+  let camsOpen = false;
+  function renderCamsToggle() {
+    const collapsible = tightStage.matches;
+    camsToggle.hidden = strip.hidden || !collapsible;
+    strip.classList.toggle("collapsed", collapsible && !camsOpen);
+    camsToggle.classList.toggle("is-on", camsOpen);
+    camsToggle.setAttribute("aria-expanded", String(camsOpen));
+    camsToggle.setAttribute("aria-label", camsOpen ? "Hide camera views" : "Show camera views");
+  }
+  camsToggle.addEventListener("click", () => {
+    camsOpen = !camsOpen;
+    renderCamsToggle();
+  });
+  tightStage.addEventListener("change", renderCamsToggle);
 
   /** @type {string[]} */ let roster = []; // camera names in m-line order
   /** @type {Set<string>} */ let enabledCams = new Set();
@@ -255,6 +284,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   // Rebuild the strip's tiles — every view EXCEPT the primary (which is the big stage).
   function renderStructure() {
     strip.hidden = roster.length === 0;
+    renderCamsToggle();
     tiles = new Map();
     ensureMap();
     if (strip.hidden) {
@@ -409,6 +439,8 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
       mapHost?.remove();
       mapHost = null; // an import still in flight must not build into the removed host
       parent.classList.remove("cam-map-primary");
+      tightStage.removeEventListener("change", renderCamsToggle);
+      camsToggle.remove();
       strip.remove();
     },
   };

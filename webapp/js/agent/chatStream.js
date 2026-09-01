@@ -27,9 +27,6 @@ import {
 const SKILL_GROUP_MIN = 3;
 
 /**
- * @param {{ onActiveSkill?: (name: string | null) => void }} [opts]
- *   onActiveSkill reports the skill currently running so the panel can update
- *   its "active skill" chip — that chip lives in the control panel, not here.
  * @returns {{
  *   head: HTMLElement,
  *   wrap: HTMLElement,
@@ -42,7 +39,7 @@ const SKILL_GROUP_MIN = 3;
  *   destroy: () => void,
  * }}
  */
-export function createChatStream(opts = {}) {
+export function createChatStream() {
   // ---- live stream (thoughts + chat + skill runs) -------------------------
   const streamLabel = document.createElement("p");
   streamLabel.className = "microlabel agent-stream-label";
@@ -336,13 +333,8 @@ export function createChatStream(opts = {}) {
     const wasAtBottom = atBottom();
     const cls = ["running", "completed", "failed", "interrupted"].includes(status) ? status : "running";
     const displayName = skillDisplayName(name);
-    if (cls === "running") {
-      runningSkill = displayName;
-      opts.onActiveSkill?.(displayName);
-    } else if (runningSkill === displayName) {
-      runningSkill = "";
-      opts.onActiveSkill?.(null);
-    }
+    if (cls === "running") runningSkill = displayName;
+    else if (runningSkill === displayName) runningSkill = "";
 
     let run = skillRuns.get(key);
     if (!run) {
