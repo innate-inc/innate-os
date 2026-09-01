@@ -114,6 +114,37 @@ class Nav2Controller:
         pose.pose.orientation.w = math.cos(yaw / 2.0)
         return pose
 
+    def _map_frame_goal(self, x: float, y: float, theta: float, local_frame: bool) -> tuple[float, float] | None:
+        """The goal as a point in the map frame, where the map and keepout mask live.
+
+        A local goal is commanded in odom, but the same body-relative offset
+        composed with the localizer's map pose names the same floor point —
+        without this a local goal is refused by a keepout it is never told about.
+        """
+        if not local_frame:
+            return x, y
+        pose = getattr(self.skill, "pose", None)
+        if pose is None:
+            return None
+        gx, gy, _ = resolve_local_goal(pose.x, pose.y, pose.theta, x, y, theta)
+        return gx, gy
+
+    def _blocking_cause(self, map_goal: tuple[float, float] | None) -> str | None:
+        """A cause proven from the map and keepout grids, in the map frame."""
+        map_state = getattr(self.skill, "map", None)
+        if map_state is None or map_goal is None:
+            return None
+        issue = _map_goal_issue(map_state, *map_goal)
+        if issue is not None:
+            return issue
+        pose = getattr(self.skill, "pose", None)
+        blocked_at = _keepout_distance_ahead(map_state, pose.x, pose.y, *map_goal) if pose is not None else None
+        if blocked_at is not None:
+            return f"a keepout zone crosses the direct line to the target, {blocked_at:.2f}m ahead"
+        if _has_keepouts(map_state):
+            return "active keepout zones may cut off the route"
+        return None
+
     def _start_xy(self, local_frame: bool) -> tuple[float, float] | None:
         state = self.skill.odom if local_frame else getattr(self.skill, "pose", None)
         if state is None:
@@ -171,22 +202,10 @@ class Nav2Controller:
         goal_yaw: float,
         goal_frame: str,
         local_frame: bool,
+        map_goal: tuple[float, float] | None,
     ) -> str:
-        map_state = getattr(self.skill, "map", None) if not local_frame else None
         start = self._start_xy(local_frame)
-        issue = _map_goal_issue(map_state, goal_x, goal_y)
-        blocked_at = (
-            _keepout_distance_ahead(map_state, start[0], start[1], goal_x, goal_y) if start is not None else None
-        )
-        if issue is not None:
-            reason = issue
-        elif blocked_at is not None:
-            reason = f"a keepout zone crosses the direct line to the target, {blocked_at:.2f}m ahead"
-        elif _has_keepouts(map_state):
-            reason = "active keepout zones may cut off the route"
-        else:
-            reason = "the route may be blocked or the target may be unreachable"
-
+        reason = self._blocking_cause(map_goal) or "the route may be blocked or the target may be unreachable"
         detail = f"the planner found no path because {reason}"
         approach = self._closest_reachable_approach(path_navigator, goal_x, goal_y, goal_yaw, goal_frame, local_frame)
         if approach is None:
@@ -212,13 +231,16 @@ class Nav2Controller:
         SkillFailed with a human-readable reason; a skill cancel unwinds as
         SkillCancelled with the Nav2 task cancelled."""
         goal_x, goal_y, goal_yaw, goal_frame = self._resolve_goal(x, y, theta, local_frame)
+        map_goal = self._map_frame_goal(x, y, theta, local_frame)
 
         goal_pose = self._pose_stamped(goal_x, goal_y, goal_yaw, goal_frame)
         self._commanded_goal_pub.publish(goal_pose)
 
         path_navigator = self.navigator_mapfree if local_frame else self.navigator_navigation
         if path_navigator.getPath(goal_pose, goal_pose, use_start=False) is None:
-            raise SkillFailed(self._no_path_detail(path_navigator, goal_x, goal_y, goal_yaw, goal_frame, local_frame))
+            raise SkillFailed(
+                self._no_path_detail(path_navigator, goal_x, goal_y, goal_yaw, goal_frame, local_frame, map_goal)
+            )
 
         self.navigator.goToPose(goal_pose, behavior_tree="mapfree" if local_frame else "navigation")
 
@@ -275,14 +297,8 @@ class Nav2Controller:
             detail += f"; the robot stopped at ({last_pose[0]:.2f}, {last_pose[1]:.2f}) in the {last_pose[2]} frame"
         if last_recoveries > 0:
             detail += f" after {last_recoveries} recovery attempt{'s' if last_recoveries != 1 else ''}"
-        map_state = getattr(self.skill, "map", None) if not local_frame else None
-        issue = _map_goal_issue(map_state, goal_x, goal_y)
-        if issue is not None:
-            detail += f"; {issue}"
-        elif _has_keepouts(map_state):
-            detail += "; active keepout zones may block the route"
-        else:
-            detail += "; the route may be blocked or the robot may be stuck"
+        cause = self._blocking_cause(map_goal)
+        detail += f"; {cause}" if cause is not None else "; the route may be blocked or the robot may be stuck"
         raise SkillFailed(detail + ". The target was not reached")
 
     def destroy(self):
@@ -310,9 +326,9 @@ class NavigateToPosition(Skill):
     odom: Odometry
     """Resolves local_frame goals; see Nav2Controller._resolve_goal."""
     map: Map | None
-    """Classifies absolute-map planning failures, including keepout targets."""
+    """Classifies planning failures, including keepout targets, in either frame."""
     pose: Pose | None
-    """Reports the current map pose and seeds closest-approach planning."""
+    """Places local goals on the map for diagnosis; seeds closest-approach planning."""
 
     @resource
     def controller(self) -> Iterator[Nav2Controller]:
