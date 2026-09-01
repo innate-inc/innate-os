@@ -2115,7 +2115,9 @@ export function createMap(root, opts = {}) {
     // Zones bind to the map by content hash; if the hash was never computed
     // for the displayed map (a surface may skip it while zones are off),
     // replay the latched map so display doesn't wait for the next /map.
-    if (on && activeMapHash === null && lastMapMsg) onMap(lastMapMsg);
+    // Never mid-switch: the cached grid is the OLD map, and replaying it
+    // through onMap would adopt it as the pending selection.
+    if (on && activeMapHash === null && !mapSelectionPending && lastMapMsg) onMap(lastMapMsg);
     if (!on && (ui === "keepout" || ui === "keepout-erase")) {
       clearHint();
       setUi("idle");

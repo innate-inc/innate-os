@@ -146,6 +146,7 @@ class Nav2Controller:
         reachable_fraction = 0.0
         blocked_fraction = 1.0
         for _ in range(APPROACH_SEARCH_STEPS):
+            self.skill.check_cancelled()
             fraction = (reachable_fraction + blocked_fraction) / 2.0
             candidate_x = start_x + fraction * (goal_x - start_x)
             candidate_y = start_y + fraction * (goal_y - start_y)
@@ -241,8 +242,8 @@ class Nav2Controller:
             # navigator's global frame while our goal may be in another.
             distance = feedback.distance_remaining
             last_recoveries = feedback.number_of_recoveries
-            current = feedback.current_pose.pose.position
-            last_pose = (current.x, current.y)
+            current = feedback.current_pose
+            last_pose = (current.pose.position.x, current.pose.position.y, current.header.frame_id or "map")
             if distance > 0.0:
                 last_distance = distance
                 if initial_distance < 0.0:
@@ -271,7 +272,7 @@ class Nav2Controller:
         if last_distance >= 0.0:
             detail += f" with {last_distance:.2f}m still to go"
         if last_pose is not None:
-            detail += f"; the robot stopped at ({last_pose[0]:.2f}, {last_pose[1]:.2f}) in the {goal_frame} frame"
+            detail += f"; the robot stopped at ({last_pose[0]:.2f}, {last_pose[1]:.2f}) in the {last_pose[2]} frame"
         if last_recoveries > 0:
             detail += f" after {last_recoveries} recovery attempt{'s' if last_recoveries != 1 else ''}"
         map_state = getattr(self.skill, "map", None) if not local_frame else None

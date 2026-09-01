@@ -148,7 +148,10 @@ class KeepoutMaskServer(Node):
             self.get_logger().warning(f"Ignoring invalid keepout edit: {exc}")
             return
         self._cells = cells
-        save_mask(self._path(), self._map_hash, self._spec, cells)
+        try:
+            save_mask(self._path(), self._map_hash, self._spec, cells)
+        except OSError as exc:
+            self.get_logger().error(f"Keepout edit applied but not persisted ({exc}); it will not survive a restart")
         self._publish_mask()
         self._schedule_costmap_clear()
 
