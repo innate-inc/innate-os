@@ -2224,8 +2224,8 @@ def _world_server_ping(port: int, timeout: float = 2.0) -> bool:
 
 
 def _stop_stale_world_server() -> None:
-    """SIGTERM whatever owns the RPC port (stop_world_server only covers a
-    server still listening on this checkout's ports)."""
+    """SIGTERM whatever owns the RPC port. `up` is about to bind it, so unlike
+    stop_world_server this does not wait for evidence that we started it."""
     stop_world_server()
     out = subprocess.run(
         ["lsof", "-ti", f"tcp:{WORLD_SERVER_PORT}", "-sTCP:LISTEN"], capture_output=True, text=True, check=False
@@ -2709,11 +2709,15 @@ def _world_ports_free(ports: list[int], timeout_s: float) -> bool:
 
 
 def stop_world_server() -> None:
+    # Only the ports this checkout recorded when it started a server. The
+    # configured ports are no evidence of ownership -- a checkout that never
+    # started one would take them as licence to kill whoever holds the
+    # defaults, which is another checkout's sim.
     try:
         ports = [int(port) for port in WORLD_SERVER_PORTS_PATH.read_text().split()]
     except (OSError, ValueError):
-        ports = [WORLD_SERVER_PORT, WORLD_STATE_PORT]
-    targets = _world_server_pids(ports)
+        ports = []
+    targets = _world_server_pids(ports) if ports else set()
     if targets:
         for pid in targets:
             with contextlib.suppress(OSError):
