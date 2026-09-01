@@ -336,7 +336,12 @@ def main() -> int:
                 break
             e.needs = needs_arm.get(e.challenge, "")
             results.append(e)
-            seen_by_agent.setdefault(e.agent, []).append(e.wall_s)
+            # Only an episode that RAN is a sample. A setup failure returns in
+            # a tenth of a second, and counting it as this agent measured would
+            # drop the wait to the floor while a real episode of the same agent
+            # is still going.
+            if not e.blocked:
+                seen_by_agent.setdefault(e.agent, []).append(e.wall_s)
             print(f"[{len(results):>3}/{len(jobs)}] {e.as_row()}", flush=True)
             args.out.write_text(json.dumps([asdict(r) for r in results], indent=1))
         if lost:
@@ -355,10 +360,17 @@ def main() -> int:
             if got.get((cid, agent_name), 0) > 0:
                 got[(cid, agent_name)] -= 1
                 continue
+            # started is left None: the worker died holding the answer, and
+            # recording False would claim the episode never began when it may
+            # well have been most of the way through.
             results.append(Episode(map_name, cid, agent_name, False, 0, 0, 0.0, "", 0.0, 0, blocked=f"harness: {lost}"))
             missing += 1
         print()
-        print(f"!! {lost}: {missing} episode(s) never ran; the rest are reported and marked blocked", flush=True)
+        print(
+            f"!! {lost}: {missing} episode(s) produced no result; they are reported as blocked "
+            "-- whether they had started is not knowable from here",
+            flush=True,
+        )
         args.out.write_text(json.dumps([asdict(r) for r in results], indent=1))
 
     # --- validity gate ---

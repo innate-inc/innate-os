@@ -40,7 +40,8 @@ def test_a_dead_worker_ends_the_sweep_instead_of_hanging(tmp_path):
     out = tmp_path / "r.json"
     r = run("--result-timeout", "0.001", "--out", str(out))
     assert "a worker died" in r.stdout, r.stdout[-2000:]
-    assert "1 episode(s) never ran" in r.stdout, r.stdout[-2000:]
+    assert "1 episode(s) produced no result" in r.stdout, r.stdout[-2000:]
+    assert "not knowable" in r.stdout, "the harness claimed to know it never started"
     # The lost episode is recorded, and recorded as OUR fault.
     eps = json.loads(out.read_text())
     assert len(eps) == 1 and eps[0]["blocked"].startswith("harness:"), eps

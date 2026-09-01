@@ -218,8 +218,31 @@ def test_a_run_that_happened_is_not_printed_as_not_attempted():
     assert "not scored" in ran.as_row() and "not attempted" not in ran.as_row()
     assert "2/4" in ran.as_row(), "the measurements it produced were hidden"
 
-    never = Episode("m", "c", "a", False, 0, 0, 0.0, "", 1.0, 0, blocked="harness: setup failed")
+    # started=False, because a setup failure is a thing we KNOW never began.
+    never = Episode("m", "c", "a", False, 0, 0, 0.0, "", 1.0, 0, blocked="harness: setup failed", started=False)
     assert "not attempted" in never.as_row()
+
+    # And a job whose worker died is neither: nobody watched it end.
+    unknown = Episode("m", "c", "a", False, 0, 0, 0.0, "", 1.0, 0, blocked="harness: a worker died")
+    assert unknown.started is None
+    assert "no result" in unknown.as_row(), unknown.as_row()
+    assert "not attempted" not in unknown.as_row(), "claimed to know it never started"
+
+
+def test_started_is_coerced_like_every_other_field():
+    """It was added after the coercer and fell through it: a numpy bool left
+    the episode unserialisable while the class promised otherwise."""
+
+    class BadBool:
+        def __bool__(self):
+            raise RuntimeError("broken bool")
+
+    assert Episode("m", "c", "a", False, 0, 0, 0.0, "", 0.0, 0, started=BadBool()).started is False
+    assert Episode("m", "c", "a", False, 0, 0, 0.0, "", 0.0, 0, started=1).started is True
+    assert Episode("m", "c", "a", False, 0, 0, 0.0, "", 0.0, 0).started is None, (
+        "unknown must stay unknown -- it is the honest answer for a lost worker"
+    )
+    assert survives_transport(Episode("m", "c", "a", False, 0, 0, 0.0, "", 0.0, 0, started=lambda: 1))
 
 
 def test_a_value_whose_truthiness_raises_is_still_a_bool():
@@ -285,47 +308,114 @@ def test_a_refusal_before_the_run_is_still_not_attempted():
     assert "not attempted" in e.as_row()
 
 
-def test_the_guards_that_record_an_exception_all_use_describe():
-    """describe() exists because an exception's __str__ can raise. A handler
-    that formats the caught exception itself raises from inside the handler,
-    which is how a sweep aborts instead of losing one episode.
+def _renders_caught_exception(source: str) -> list[str]:
+    """Lines where a caught exception is turned into text without describe().
 
-    Read from the syntax tree, not by matching one spelling: the previous
-    version of this test rejected `type(exc).__name__` and stayed green while
-    two sites interpolated the exception directly.
+    Every form that calls its __str__ counts, because that is what raises: an
+    f-string, %-formatting, .format, format(), str/repr, or handing it to
+    print. Names assigned FROM the caught exception are tainted too -- an alias
+    renders exactly the same.
     """
     import ast
+
+    found = []
+    tree = ast.parse(source)
+    for handler in (n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler) and n.name):
+        tainted = {handler.name}
+        for node in ast.walk(handler):  # aliases, before looking for renders
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name):
+                if node.value.id in tainted:
+                    tainted |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+
+        def names(node, tainted=tainted):
+            """Tainted names in this expression, NOT counting ones already
+            inside a describe() call -- `f"{describe(exc)}"` is the fix, not
+            the defect -- and not counting `type(exc).__name__`, which reads the
+            class and never calls the instance's __str__."""
+            found, stack = set(), [node]
+            while stack:
+                n = stack.pop()
+                if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "describe":
+                    continue
+                if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "type":
+                    continue  # type(exc).__name__ never calls __str__
+                if isinstance(n, ast.Name) and n.id in tainted:
+                    found.add(n.id)
+                stack.extend(ast.iter_child_nodes(n))
+            return found
+
+        for node in ast.walk(handler):
+            where = None
+            if isinstance(node, ast.FormattedValue) and names(node.value):
+                where = "interpolated"
+            elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod) and names(node.right):
+                where = "%-formatted"
+            elif isinstance(node, ast.Call):
+                fn = node.func
+                name = getattr(fn, "id", "") or getattr(fn, "attr", "")
+                if name == "describe":
+                    continue
+                if name in ("str", "repr", "format", "print") and any(names(a) for a in node.args):
+                    where = f"passed to {name}()"
+                elif name == "format" and isinstance(fn, ast.Attribute) and any(names(a) for a in node.args):
+                    where = "str.format"
+            if where:
+                found.append(f"line {node.lineno}: {where}")
+    return found
+
+
+def test_the_guards_that_record_an_exception_all_use_describe():
+    """describe() exists because an exception's __str__ can raise. A handler
+    that renders the exception it caught raises from inside itself, which is
+    how a sweep aborts rather than losing one episode.
+
+    Read from the syntax tree: an earlier version matched one spelling and
+    stayed green while two sites used another.
+    """
     import pathlib
 
     here = pathlib.Path(__file__).resolve().parent
     offenders = []
     for path in sorted(here.glob("*.py")):
-        if path.name.startswith("test_") or path.name == "runner.py":
-            continue  # runner.py defines describe()
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for handler in (n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler) and n.name):
-            caught = handler.name
-
-            def renders(node, caught=caught):
-                """Does this expression turn the caught exception into text
-                without going through describe()?"""
-                if isinstance(node, ast.Call):
-                    if getattr(node.func, "id", "") == "describe":
-                        return False
-                    if getattr(node.func, "id", "") in ("str", "repr"):
-                        return any(isinstance(a, ast.Name) and a.id == caught for a in node.args)
-                return False
-
-            for node in ast.walk(handler):
-                if isinstance(node, ast.FormattedValue):
-                    inner = node.value
-                    if isinstance(inner, ast.Name) and inner.id == caught:
-                        offenders.append(f"{path.name}:{node.lineno} interpolates `{caught}`")
-                    elif any(renders(n) for n in ast.walk(inner)):
-                        offenders.append(f"{path.name}:{node.lineno} renders `{caught}`")
-                elif renders(node):
-                    offenders.append(f"{path.name}:{node.lineno} renders `{caught}`")
+        if path.name.startswith("test_"):
+            continue
+        source = path.read_text(encoding="utf-8")
+        if path.name == "runner.py":
+            # Only describe() itself may touch the exception, not the file.
+            source = source.replace(source[source.index("def describe(") : source.index("def _opt_float(")], "")
+        offenders += [f"{path.name} {w}" for w in _renders_caught_exception(source)]
     assert not offenders, (
         "these guards render the exception they caught; one whose __str__ raises would "
         "raise from inside the handler -- use runner.describe():" + "".join(chr(10) + "  " + o for o in offenders)
     )
+
+
+def _handler(*body: str) -> str:
+    """A try/except with the given lines in the handler."""
+    return chr(10).join(("try:", "    f()", "except Exception as exc:", *("    " + b for b in body)))
+
+
+def test_the_scanner_recognises_the_forms_that_defeated_it():
+    """The check is only worth its green if it fails on the real patterns."""
+    unsafe = (
+        _handler("x = f'{exc}'"),
+        _handler("msg = exc", "x = f'{msg}'"),
+        _handler("x = 'failed: %s' % exc"),
+        _handler("x = '{}'.format(exc)"),
+        _handler("x = str(exc)"),
+        _handler("x = repr(exc)"),
+        _handler("print(exc)"),
+        _handler("x = f'a {format(exc)} b'"),
+    )
+    for snippet in unsafe:
+        assert _renders_caught_exception(snippet), "scanner missed:" + chr(10) + snippet
+
+    safe = (
+        _handler("x = describe(exc)"),
+        _handler("x = f'{describe(exc)}'"),
+        _handler("raise ValueError('nope') from exc"),
+        chr(10).join(("try:", "    f()", "except Exception:", "    x = 'lost it'")),
+    )
+    safe += (_handler("x = f'upstream {type(exc).__name__}'"),)
+    for snippet in safe:
+        assert not _renders_caught_exception(snippet), "scanner false-positived:" + chr(10) + snippet

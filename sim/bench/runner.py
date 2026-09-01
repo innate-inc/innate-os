@@ -77,7 +77,10 @@ def _as_primitive(name: str, value):
             return str(value)
         except BaseException:  # noqa: BLE001 -- a __str__ that raises
             return "<unprintable>"
-    if name == "passed":
+    if name in ("passed", "started"):
+        # started is tri-state: None means nobody can say.
+        if value is None and name == "started":
+            return None
         try:
             return bool(value)
         except BaseException:  # noqa: BLE001 -- a __bool__ that raises
@@ -121,12 +124,12 @@ class Episode:
     # one -- nineteen confident zeros from a capability that was never wired up
     # read as an agent that cannot follow instructions. See capabilities.py.
     blocked: str = ""
-    # Set once the challenge is actually running. A blocked episode is usually
-    # one that never started, but an unreadable score blocks a run that did,
-    # and a live episode can reach `running` and be blocked before any
-    # measurement moves -- so this is recorded rather than inferred from a step
-    # count the live runner never sets.
-    started: bool = False
+    # True once the challenge is actually running, False when we know it never
+    # got that far, None when nobody can say -- a worker that died took the
+    # answer with it. Recorded rather than inferred from a step count, which
+    # the live runner never sets, or from measurements, which a live episode
+    # can be blocked before moving.
+    started: bool | None = None
     # Filled on the LIVE path by live_runner's probe and usage attribution.
     # The in-process runner leaves them at zero (it fills turns/path_len_m
     # itself); the live path could not, so every live failure looked the same
@@ -170,6 +173,13 @@ class Episode:
             # A blocked episode is usually one that never ran, but an
             # unreadable score blocks a run that did -- printing that as "not
             # attempted" would hide the measurements it produced.
+            if self.started is None:
+                # A worker that died took the answer with it; saying "not
+                # attempted" would be a claim about a run nobody watched end.
+                return (
+                    f"{mark:>4}  {self.map:<10} {self.challenge:<28} {self.agent:<7} "
+                    f"  ?/?   no result -- {self.blocked}"
+                )
             if self.started:
                 return (
                     f"{mark:>4}  {self.map:<10} {self.challenge:<28} {self.agent:<7} "
@@ -263,7 +273,9 @@ def _prepare(map_name, challenge_id, make_agent, render_wh, agent_name, wall0):
     # Named up front: a challenge that is not under its root fails before any
     # agent is built, and reporting that as "?" loses the one thing the reader
     # needs -- which agent was asked.
-    blank = Episode(map_name, challenge_id, agent_name, False, 0, 0, 0.0, "", 0.0, 0)
+    # started=False, not None: every path that returns this one is before the
+    # challenge was started, and that is a thing we know rather than a gap.
+    blank = Episode(map_name, challenge_id, agent_name, False, 0, 0, 0.0, "", 0.0, 0, started=False)
 
     # Renders are the expensive part of a headless episode and nothing here
     # looks at pixels, so keep the offscreen buffers small.
