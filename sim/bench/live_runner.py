@@ -38,7 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from runner import Episode  # noqa: E402
+from runner import Episode, describe  # noqa: E402
 
 # Steps at or above this are a teleport or a dropped frame, not driving: the
 # world reset between challenges puts the robot back at spawn. Clamped rather
@@ -94,7 +94,7 @@ def prime(reset: bool = False) -> str:
         )
         return "" if r.returncode == 0 else (r.stderr or r.stdout or "")[-200:]
     except Exception as exc:  # noqa: BLE001
-        return f"{type(exc).__name__}: {exc}"
+        return describe(exc)
 
 
 async def instruct(text: str) -> str:
@@ -119,7 +119,7 @@ async def instruct(text: str) -> str:
         r = subprocess.run(["bash", str(SAY_SH)], input=text, capture_output=True, text=True, timeout=120)
         return "" if r.returncode == 0 else (r.stderr or r.stdout or "")[-200:]
     except Exception as exc:  # noqa: BLE001
-        return f"{type(exc).__name__}: {exc}"
+        return describe(exc)
 
 
 class _LiveProbe(threading.Thread):
@@ -222,9 +222,9 @@ class _LiveProbe(threading.Thread):
                     except Exception as exc:  # noqa: BLE001
                         self.dropped_frames += 1
                         if self.error is None:
-                            self.error = f"{type(exc).__name__}: {exc}"[:80]
+                            self.error = describe(exc)[:80]
         except Exception as exc:  # noqa: BLE001 -- never fail an episode over telemetry
-            self.error = f"{type(exc).__name__}: {exc}"
+            self.error = describe(exc)
 
     def stop(self) -> None:
         self._finished.set()
@@ -387,7 +387,7 @@ async def _episode(
             except Exception:  # noqa: BLE001 -- best effort; the run is already recorded
                 pass
     except Exception as exc:  # noqa: BLE001 -- one bad episode must not sink the sweep
-        ep.error = f"{type(exc).__name__}: {exc}"
+        ep.error = describe(exc)
 
     if probe:
         probe.stop()
@@ -482,7 +482,7 @@ def _blocked_here(ids: list[str]) -> dict[str, str]:
         # check exists to prevent. Say so loudly rather than return a
         # clean-looking empty dict.
         print(
-            f"!!! capability check FAILED ({type(exc).__name__}: {exc}) -- "
+            f"!!! capability check FAILED ({describe(exc)}) -- "
             "cannot tell which challenges are attemptable; scores from this "
             "run may include challenges that were never runnable here",
             flush=True,

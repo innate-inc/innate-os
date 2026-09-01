@@ -17,7 +17,7 @@ import os
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -78,7 +78,10 @@ def _as_primitive(name: str, value):
         except BaseException:  # noqa: BLE001 -- a __str__ that raises
             return "<unprintable>"
     if name == "passed":
-        return bool(value)
+        try:
+            return bool(value)
+        except BaseException:  # noqa: BLE001 -- a __bool__ that raises
+            return False
     if name in _WHOLE or name in _REAL or name in _MAYBE_REAL:
         if value is None and name in _MAYBE_REAL:
             return None
@@ -88,10 +91,13 @@ def _as_primitive(name: str, value):
         except BaseException:  # noqa: BLE001
             return None if name in _MAYBE_REAL else cast(0)
     if name == "goal_times_s":
+        # A TUPLE, so the guarantee survives the assignment: a list stays
+        # mutable, and one append of the wrong thing puts it back on the wire.
+        # JSON still writes an array.
         try:
-            return [_as_primitive("elapsed_s", t) for t in value]
+            return tuple(_as_primitive("elapsed_s", t) for t in value)
         except BaseException:  # noqa: BLE001 -- not iterable
-            return []
+            return ()
     return value
 
 
@@ -129,7 +135,7 @@ class Episode:
     # -- wrong rooms; these are what "where does it break" is actually read off.
     turns: int = 0  # agent decisions taken (its own count)
     path_len_m: float = 0.0  # distance actually driven, integrated
-    goal_times_s: list = field(default_factory=list)
+    goal_times_s: tuple = ()
     utterances: int = 0
     first_utterance_s: float | None = None
     tempt_min_m: float | None = None  # closest approach to what an ambient cue named
@@ -157,8 +163,10 @@ class Episode:
         if self.blocked:
             # A blocked episode is usually one that never ran, but an
             # unreadable score blocks a run that did -- printing that as "not
-            # attempted" hides the measurements it actually produced.
-            if self.steps:
+            # attempted" hides the measurements it actually produced. Asked as
+            # "is there anything to show", because the live runner scores real
+            # episodes without ever setting `steps`.
+            if self.steps or self.goals_done or self.elapsed_s or self.path_len_m:
                 return (
                     f"{mark:>4}  {self.map:<10} {self.challenge:<28} {self.agent:<7} "
                     f"{self.goals_done}/{self.goals_total}  sim {self.elapsed_s:6.1f}s  "

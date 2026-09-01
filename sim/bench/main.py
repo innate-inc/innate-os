@@ -71,6 +71,24 @@ CATEGORY_OF: dict[str, int] = {}
 TELEPORTS: dict[str, bool] = {}
 
 
+def result_budget(seen: list[float], override: float = 0.0) -> float:
+    """How long total silence may last before the pool is presumed dead.
+
+    Scaled to this run rather than fixed: six times the slowest episode so far
+    is silence no healthy pool produces, and that is minutes for an oracle
+    sweep and an hour for one where every episode waits on a model. A flat
+    number is wrong in both directions.
+
+    Before the first result there is nothing to scale from, and a model-backed
+    first episode can outlast any floor worth having -- so wait long once.
+    Erring long costs a slow recovery; erring short aborts a working sweep.
+    """
+    if override:
+        return override
+    slowest = max(seen, default=0.0)
+    return max(300.0, 6.0 * slowest) if slowest else 1800.0
+
+
 def _ignore_sigint():
     """Pool initializer: leave Ctrl-C to the parent process.
 
@@ -296,10 +314,7 @@ def main() -> int:
     with mp.Pool(workers, maxtasksperchild=1, initializer=_ignore_sigint) as pool:
         stream = pool.imap_unordered(_one, jobs)
         for _ in range(len(jobs)):
-            # Scaled to this run: six times the slowest episode yet is silence
-            # no healthy pool produces, and it is minutes for an oracle sweep
-            # and an hour for one where each episode waits on a model.
-            budget = args.result_timeout or max(300.0, 6.0 * max((r.wall_s for r in results), default=0.0))
+            budget = result_budget([r.wall_s for r in results], args.result_timeout)
             try:
                 e = stream.next(timeout=budget)
             except mp.TimeoutError:

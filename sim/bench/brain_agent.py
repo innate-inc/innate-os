@@ -35,6 +35,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from runner import describe
+
 V_MAX = 0.30
 W_MAX = 1.2
 # How close the gripper reaches. Matches the arm's real envelope rather than
@@ -285,7 +287,7 @@ class BrainAgent:
                 # episode rather than inferred from a low score.
                 self.camera_errors += 1
                 if not self.camera_error_note:
-                    self.camera_error_note = f"{type(exc).__name__}: {exc}"
+                    self.camera_error_note = describe(exc)
                 image = None
         pose = mars.pose() if getattr(self.backend, "wants_pose", False) else None
         return Observation(
@@ -314,7 +316,7 @@ class BrainAgent:
                 # to say so. Recorded as its own action so it never looks like
                 # the agent chose to stop.
                 box["action"] = "_error"
-                box["args"] = {"detail": f"{type(exc).__name__}: {exc}"}
+                box["args"] = {"detail": describe(exc)}
 
         self._pending = box
         self._thread = threading.Thread(target=run, daemon=True)

@@ -51,3 +51,26 @@ def test_the_gate_calls_it_incomplete_not_a_failure(tmp_path):
     r = run("--result-timeout", "0.001", "--out", str(tmp_path / "r.json"))
     assert "INCOMPLETE=1" in r.stdout, r.stdout[-800:]
     assert "INVALID=1" not in r.stdout, "a harness fault was scored against the challenge"
+
+
+def test_the_wait_is_generous_before_anything_has_finished():
+    """With no result yet there is nothing to scale from, and a model-backed
+    first episode can outlast any floor worth having. Erring long costs a slow
+    recovery; erring short aborts a working sweep."""
+    from main import result_budget
+
+    assert result_budget([]) >= 1800.0
+
+
+def test_the_wait_shrinks_to_the_run_once_it_has_measured_one():
+    from main import result_budget
+
+    assert result_budget([10.0, 45.0, 12.0]) == 300.0, "an oracle sweep should not wait 15 minutes"
+    assert result_budget([600.0]) == 3600.0, "a model-backed sweep needs room"
+
+
+def test_an_explicit_timeout_wins():
+    from main import result_budget
+
+    assert result_budget([600.0], override=30.0) == 30.0
+    assert result_budget([], override=0.001) == 0.001

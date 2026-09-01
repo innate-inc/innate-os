@@ -47,6 +47,7 @@ from pathlib import Path
 
 from backends import _coerce, _last_json_object  # reused, not duplicated
 from reach_tool import can_reach, standoff_for
+from runner import describe
 
 # The robot's real, stated physical properties (camera mounting height, field
 # of view) -- not simulator ground truth, not benchmark content. Any MARS
@@ -452,7 +453,7 @@ class NemotronStackBackend:
             try:
                 result = self._call(system, obs, prompt, want_image=True)
             except Exception as exc:  # noqa: BLE001 -- a grounding failure must not crash the turn
-                result = {"found": False, "error": f"{type(exc).__name__}: {exc}"}
+                result = {"found": False, "error": describe(exc)}
                 break
             if result.get("confidence") != "low":
                 break

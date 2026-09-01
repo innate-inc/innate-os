@@ -10,6 +10,7 @@ start-refusal path.
 The other half is that describing a failure must not fail: an exception whose
 __str__ raises used to raise from inside the handler that had caught it.
 """
+
 import json
 import pickle
 import sys
@@ -42,19 +43,35 @@ def oracle_for(ch):
 
 # --- the coercion boundary ------------------------------------------------
 
+
 def test_arbitrary_objects_never_reach_the_wire():
     """One Episode built entirely out of things that cannot be pickled."""
     weird = lambda: None  # noqa: E731
     ep = Episode(
-        map=weird, challenge=weird, agent=weird, passed=weird, goals_done=weird,
-        goals_total=weird, elapsed_s=weird, reason=weird, wall_s=weird, steps=weird,
-        error=weird, blocked=weird, turns=weird, path_len_m=weird,
-        goal_times_s=weird, utterances=weird, first_utterance_s=weird,
-        tempt_min_m=weird, camera_errors=weird, heard=weird,
+        map=weird,
+        challenge=weird,
+        agent=weird,
+        passed=weird,
+        goals_done=weird,
+        goals_total=weird,
+        elapsed_s=weird,
+        reason=weird,
+        wall_s=weird,
+        steps=weird,
+        error=weird,
+        blocked=weird,
+        turns=weird,
+        path_len_m=weird,
+        goal_times_s=weird,
+        utterances=weird,
+        first_utterance_s=weird,
+        tempt_min_m=weird,
+        camera_errors=weird,
+        heard=weird,
     )
     assert survives_transport(ep)
     assert isinstance(ep.agent, str) and isinstance(ep.goals_done, int)
-    assert isinstance(ep.elapsed_s, float) and ep.goal_times_s == []
+    assert isinstance(ep.elapsed_s, float) and ep.goal_times_s == ()
 
 
 def test_a_field_that_cannot_even_be_printed_is_still_a_string():
@@ -68,10 +85,23 @@ def test_a_field_that_cannot_even_be_printed_is_still_a_string():
 
 
 def test_ordinary_values_are_left_alone():
-    ep = Episode("gallery", "x", "oracle", True, 2, 4, 12.5, "done", 1.5, 99,
-                 goal_times_s=[1.0, 2.0], first_utterance_s=3.5, tempt_min_m=None)
+    ep = Episode(
+        "gallery",
+        "x",
+        "oracle",
+        True,
+        2,
+        4,
+        12.5,
+        "done",
+        1.5,
+        99,
+        goal_times_s=[1.0, 2.0],
+        first_utterance_s=3.5,
+        tempt_min_m=None,
+    )
     assert (ep.map, ep.agent, ep.passed, ep.goals_done) == ("gallery", "oracle", True, 2)
-    assert ep.goal_times_s == [1.0, 2.0] and ep.first_utterance_s == 3.5
+    assert ep.goal_times_s == (1.0, 2.0) and ep.first_utterance_s == 3.5
     assert ep.tempt_min_m is None, "None is meaningful -- it never approached"
 
 
@@ -120,15 +150,23 @@ def test_a_start_refusal_also_sanitises(monkeypatch):
 def test_unconvertible_metrics_do_not_abort_the_sweep(monkeypatch):
     from mars_sim_driver.challenges import ChallengeEngine
 
-    monkeypatch.setattr(ChallengeEngine, "metrics", lambda self: {
-        "path_len_m": lambda: 1, "goal_times_s": [lambda: 2], "utterances": lambda: 3,
-        "first_utterance_s": lambda: 4, "tempt_min_m": lambda: 5,
-    })
+    monkeypatch.setattr(
+        ChallengeEngine,
+        "metrics",
+        lambda self: {
+            "path_len_m": lambda: 1,
+            "goal_times_s": [lambda: 2],
+            "utterances": lambda: 3,
+            "first_utterance_s": lambda: 4,
+            "tempt_min_m": lambda: 5,
+        },
+    )
     ep = run_episode(MAP, CID, oracle_for, agent_name="oracle")
     assert survives_transport(ep)
 
 
 # --- describing a failure -------------------------------------------------
+
 
 def test_describe_survives_an_exception_that_cannot_render():
     class Broken(Exception):
@@ -172,6 +210,7 @@ def test_a_broken_exception_in_finalisation_does_not_lose_the_episode():
 
 # --- presentation ---------------------------------------------------------
 
+
 def test_a_run_that_happened_is_not_printed_as_not_attempted():
     ran = Episode("m", "c", "a", False, 2, 4, 9.0, "", 1.0, 500, blocked="harness: could not read engine.state")
     assert "not scored" in ran.as_row() and "not attempted" not in ran.as_row()
@@ -179,3 +218,55 @@ def test_a_run_that_happened_is_not_printed_as_not_attempted():
 
     never = Episode("m", "c", "a", False, 0, 0, 0.0, "", 1.0, 0, blocked="harness: setup failed")
     assert "not attempted" in never.as_row()
+
+
+def test_a_value_whose_truthiness_raises_is_still_a_bool():
+    """bool() was the one conversion left outside the guard, in a coercer
+    whose docstring says it never raises."""
+
+    class BadBool:
+        def __bool__(self):
+            raise RuntimeError("broken bool")
+
+    ep = Episode("m", "c", "a", BadBool(), 0, 0, 0.0, "", 0.0, 0)
+    assert ep.passed is False
+    assert survives_transport(ep)
+
+
+def test_goal_times_cannot_be_mutated_back_onto_the_wire():
+    """A list stays mutable, so the guarantee held only until someone
+    appended to it."""
+    ep = Episode("m", "c", "a", False, 0, 0, 0.0, "", 0.0, 0, goal_times_s=[1.0, 2.0])
+    assert isinstance(ep.goal_times_s, tuple), "a mutable list is one append from unpicklable"
+    with pytest.raises(AttributeError):
+        ep.goal_times_s.append(lambda: None)
+    assert survives_transport(ep)
+    assert json.loads(json.dumps(asdict(ep)))["goal_times_s"] == [1.0, 2.0], "JSON still writes an array"
+
+
+def test_a_live_episode_that_ran_is_not_printed_as_not_attempted():
+    """The live runner never sets `steps`, so deciding on that alone printed a
+    real attempt -- one that drove and scored goals -- as never made."""
+    live = Episode(
+        "live", "c", "brain", False, 2, 4, 9.0, "", 1.0, 0, blocked="harness: brief not delivered", path_len_m=3.0
+    )
+    assert "not scored" in live.as_row() and "not attempted" not in live.as_row()
+    assert "2/4" in live.as_row()
+
+
+def test_the_guards_that_record_an_exception_all_use_describe():
+    """describe() existed for one commit while two callers still interpolated
+    the exception directly, which is where the sweep actually aborts."""
+    import pathlib
+
+    here = pathlib.Path(__file__).resolve().parent
+    # Every module, and the interpolation in any form -- the site this missed
+    # first time round wrote it inside a longer message.
+    for path in sorted(here.glob("*.py")):
+        if path.name.startswith("test_") or path.name == "runner.py":
+            continue  # runner.py is where describe() is defined
+        text = path.read_text(encoding="utf-8")
+        assert "type(exc).__name__" not in text, (
+            f"{path.name} formats an exception by hand; one whose __str__ raises would "
+            "raise from inside the handler that caught it -- use runner.describe()"
+        )
