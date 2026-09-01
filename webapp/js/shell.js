@@ -188,8 +188,8 @@ export function initShell(navigate) {
   function setActive(key) {
     activeKey = key;
     applyActive();
-    // Every navigation lands here -- a rail link, a number key, the browser's
-    // back button -- and the drawer must not be left over the page it opened.
+    // Every navigation lands here, and none may leave the drawer over the
+    // page it just opened -- a number key and Back produce no rail click.
     closeRailDrawer();
     agentIndicator.el.style.display = key === "agent" ? "none" : "";
     const section = SECTIONS.find((s) => s.key === key);
@@ -200,11 +200,9 @@ export function initShell(navigate) {
 }
 
 /**
- * Phone navigation: the rail is off-screen and a ribbon on the left edge pulls
- * it in. Tap it, or drag it out — a drag past the threshold opens without
- * waiting for the release, which is what makes it feel like a curtain rather
- * than a button. Desktop keeps the always-there rail; the CSS decides which,
- * so this only has to keep the state consistent.
+ * Phone navigation: the rail waits off-screen and a ribbon pulls it in. A drag
+ * opens on the threshold rather than the release, so it reads as a curtain.
+ * The CSS decides which layout applies; this only keeps the state consistent.
  *
  * @param {HTMLElement} rail
  * @returns {() => void} closes the drawer, for the shell to call on navigation

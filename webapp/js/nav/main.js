@@ -160,10 +160,9 @@ function buildView(root) {
 
   const legend = createLegend(scene, chipEls);
 
-  // Header chips are all-or-nothing: half a row of them, or a row wrapped onto
-  // two lines and still overflowing, is worse than none. Revealing to measure
-  // and re-hiding inside one callback never reaches a paint, and what fits
-  // depends only on the header and title widths, so this cannot oscillate.
+  // All-or-nothing: a half row, or one wrapped and still overflowing, is worse
+  // than none. Measuring inside one callback never reaches a paint, and what
+  // fits depends only on the header and title, so this cannot oscillate.
   const fitChips = () => {
     chips.classList.remove("is-crowded");
     const spare = head.clientWidth - heading.offsetWidth - CHIP_ROOM_PX;

@@ -263,12 +263,8 @@ export class SimScene {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.target.set(0, 0, 0.4);
-    // Everything OrbitControls does is measured from controls.target: zoom
-    // stops minDistance short of it, and pan scales with the distance to it,
-    // so close in, a drag crawls. zoomToCursor moves the target toward what
-    // the pointer is over, so the point you are working on becomes the point
-    // the camera orbits -- you are never stuck circling something you cannot
-    // get past, and pan keeps its footing.
+    // Zoom stops minDistance short of the target and pan scales with the
+    // distance to it, so without this you can only ever approach one point.
     this.controls.zoomToCursor = true;
     this.controls.minDistance = 0.15;
     this.controls.maxDistance = 30;
@@ -1123,10 +1119,8 @@ export class SimScene {
       y + forwardY * INITIAL_ORBIT_POSITION.forward + leftY * INITIAL_ORBIT_POSITION.left,
       INITIAL_ORBIT_POSITION.height,
     );
-    // Three.js fixes the vertical FOV and narrows horizontally with the
-    // aspect, so a portrait stage crops the arm and pushes the head to the
-    // top edge -- pull back by the aspect deficit to keep the whole robot
-    // framed and centered.
+    // The vertical FOV is fixed and the horizontal narrows with the aspect,
+    // so a portrait stage would crop the arm.
     const pullback = Math.max(1, 1 / this.camera.aspect);
     this.camera.position.copy(target).addScaledVector(perch.sub(target), pullback);
     this.controls.target.copy(target);
@@ -1192,10 +1186,8 @@ export class SimScene {
     }
   }
 
-  /** How much of the canvas's right edge something else is sitting on (the
-   * Agent page's chat dock, which floats over a full-bleed feed). The scene
-   * still renders the whole canvas -- only the framing moves, so the robot
-   * centres in what is actually visible. */
+  /** How much of the canvas's right edge page chrome covers. Only the framing
+   * moves; the whole canvas still renders. */
   setSafeInsets(insets: { right?: number }): void {
     const right = Math.max(0, insets.right ?? 0);
     if (right === this.safeInsetRight) return;
@@ -1203,14 +1195,10 @@ export class SimScene {
     this.applyViewOffset();
   }
 
-  /** Bias the orbit framing off dead centre: sideways for whatever covers the
-   * right edge, upward on a portrait stage whose lower half the sheets and the
-   * joystick own. Robot cameras are untouched -- they frame what the robot
-   * sees, not what fits around our panels. */
+  /** Bias the framing off dead centre: sideways for whatever covers the right
+   * edge, upward on a portrait stage. Robot cameras are untouched. */
   private applyViewOffset(): void {
     const { width, height } = this.viewSize();
-    // Half the covered strip: that moves the centre of the free area to the
-    // centre of the frame.
     const offsetX = this.safeInsetRight / 2;
     const offsetY = height > width * 1.2 ? height * 0.1 : 0;
     if (offsetX === 0 && offsetY === 0) {
@@ -1256,11 +1244,9 @@ export class SimScene {
   }
 }
 
-/** What the orbit camera should point at for a whole-apartment view: the flat's
- * centre, but on the floor rather than the centre of its bounding box. Zoom
- * dollies toward the target and stops minDistance short of it, so a target at
- * mid-wall height (the box spans floor to ceiling) is a barrier the camera
- * cannot get under -- you stop a metre or two up with the floor out of reach. */
+/** The flat's centre, on the floor. The bounding box spans floor to ceiling, so
+ * its centre is mid-air -- and zoom stops minDistance short of the target, which
+ * would leave the camera stuck a metre up. */
 function layoutFocus(bounds: THREE.Box3): THREE.Vector3 {
   const focus = bounds.getCenter(new THREE.Vector3());
   focus.z = bounds.min.z;

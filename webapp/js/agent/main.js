@@ -41,10 +41,8 @@ const config = await getConfig();
 // WebRTC for real robots, the Three.js SimSession in simulation (see
 // robotSession.js).
 const { createSession, releaseSession, createStage } = await robotSessionFactory();
-// Two different thresholds, both mirrored in app.css. The dock floats over the
-// feed rather than taking a column from it, so it earns its keep well below the
-// width the Brain monitor -- a desktop-sized instrument -- needs; only past the
-// narrower one does the panel become a bottom sheet.
+// Two thresholds, both mirrored in app.css: the dock floats over the feed
+// rather than taking a column, so it survives far below what the monitor needs.
 const COMPACT_LAYOUT_QUERY = "(max-width: 820px)";
 const BRAIN_MONITOR_QUERY = "(max-width: 1280px)";
 
@@ -192,10 +190,8 @@ function buildAgentView(root) {
   const compactLayout = window.matchMedia(COMPACT_LAYOUT_QUERY);
   const monitorTooNarrow = window.matchMedia(BRAIN_MONITOR_QUERY);
 
-  // The dock floats over a full-bleed feed, so the sim frames the robot in the
-  // middle of the canvas -- which is behind the dock. Hand the scene the strip
-  // it cannot use and it centres on what is left. Video stages ignore this:
-  // a real camera's framing is the robot's to decide.
+  // The dock floats over the feed, so the canvas's centre is behind it. Video
+  // stages ignore this: a real camera's framing is the robot's to decide.
   const dockPanel = /** @type {HTMLElement | null} */ (root.querySelector(".agent-panel"));
   const setSafeInsets = /** @type {{ setSafeInsets?: (i: { right?: number }) => void }} */ (
     videoStage
@@ -203,9 +199,8 @@ function buildAgentView(root) {
   const reportSafeArea = () => {
     const feed = feedFrame.querySelector(".video-stage");
     if (!setSafeInsets || !dockPanel || !(feed instanceof HTMLElement)) return;
-    // Against the canvas, not the cockpit: past 1400px the feed is a framed
-    // panel beside the dock rather than under it, so nothing is covered and
-    // biasing the framing would push the robot off-centre the other way.
+    // Against the canvas, not the cockpit: past 1400px the feed sits beside
+    // the dock rather than under it, so nothing is covered.
     const canvas = feed.getBoundingClientRect();
     const dock = dockPanel.getBoundingClientRect();
     const covered = compactLayout.matches ? 0 : Math.max(0, canvas.right - dock.left);
@@ -214,8 +209,8 @@ function buildAgentView(root) {
 
   const applyLayout = () => {
     root.classList.toggle("agent-compact", compactLayout.matches);
-    // The monitor's toggle is hidden at this width, so a resize while it is
-    // open would strand the page on a stage it can no longer leave.
+    // Its toggle is hidden at this width, so an open monitor would strand the
+    // page on a stage it cannot leave.
     if (monitorTooNarrow.matches) setView("live");
     panel.setCompact(compactLayout.matches);
     reportSafeArea();

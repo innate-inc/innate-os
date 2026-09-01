@@ -181,8 +181,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   // Where start/stop lives on the dock, so the sheet can hand it back.
   const toggleHome = directives.toggleEl.nextElementSibling;
   sheet = createAgentSheet(panel, {
-    // Opened from closed the stream has never been scrolled, so it would show
-    // the oldest turn rather than what the agent just said.
+    // Never scrolled while closed, so it would open on the oldest turn.
     onOpen: () => {
       if (stream instanceof HTMLElement) stream.scrollTop = stream.scrollHeight;
     },
@@ -313,12 +312,10 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     stopMic,
     micMount,
     setCompact(on) {
-      // Compact drops the control panel's own header, so the sheet's header
-      // carries the name and hosts the one start/stop button.
+      // Compact drops the control panel's header for the sheet's.
       if (on) sheet.actionSlot.append(directives.toggleEl);
       else directives.el.insertBefore(directives.toggleEl, toggleHome);
-      // Its switch is hidden at this width, so the mode must not be left on
-      // whatever a wider visit chose.
+      // Its switch is hidden here, so a wider visit's choice must not stick.
       if (on) chat.setMode("compact");
       sheet.setEnabled(on);
     },

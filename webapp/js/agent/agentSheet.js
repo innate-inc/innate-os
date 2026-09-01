@@ -1,9 +1,7 @@
 // @ts-check
-// The Agent panel's compact form. On stages too narrow for the right-edge dock
-// the panel docks to the bottom instead, as a sheet with three heights: closed
-// (its header alone — that header is the button that opens it), half the stage,
-// and the whole stage. Drag the header between them; tap it to toggle
-// closed/half. The heights themselves live in CSS so a resize needs no JS.
+// The Agent panel's compact form: a bottom sheet with three heights — closed
+// (its header alone, which is the button that opens it), half, and the whole
+// stage. The heights live in CSS, so a resize needs no JS.
 
 // Match --agent-sheet-closed and --agent-sheet-half-min; the drag needs the
 // rest heights as numbers to snap to.
@@ -16,8 +14,8 @@ const STATES = /** @type {const} */ (["closed", "half", "full"]);
 
 /**
  * @param {HTMLElement} panel the .agent-panel element
- * @param {{ onOpen?: () => void }} [opts] onOpen fires whenever the sheet
- *   leaves the closed state, so the chat can jump to its newest message.
+ * @param {{ onOpen?: () => void }} [opts] onOpen fires on leaving the closed
+ *   state, so the chat can jump to its newest message.
  * @returns {{
  *   destroy: () => void,
  *   setEnabled: (on: boolean) => void,
@@ -35,8 +33,7 @@ export function createAgentSheet(panel, opts = {}) {
   header.hidden = true;
   header.innerHTML =
     '<button type="button" class="agent-sheet-grab">' +
-    // Inside the grab so pulling the grip itself drags; still absolutely
-    // positioned, so it centres on the header rather than on this button.
+    // Inside the grab so pulling the grip drags; absolute, so still centred.
     '<span class="agent-sheet-grip" aria-hidden="true"></span>' +
     '<svg class="agent-sheet-glyph" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<path d="M12 3.5l1.7 6.8 6.8 1.7-6.8 1.7L12 20.5l-1.7-6.8L3.5 12l6.8-1.7z"/></svg>' +
@@ -66,8 +63,7 @@ export function createAgentSheet(panel, opts = {}) {
   }
 
   const stageHeight = () => panel.parentElement?.clientHeight || window.innerHeight;
-  // Mirrors the CSS: full is the stage less its insets, half is half the stage
-  // but never below the composer's floor.
+  // Mirrors the CSS, including half's floor.
   const snapHeights = () => {
     const full = Math.max(CLOSED_PX, stageHeight() - 28);
     return {

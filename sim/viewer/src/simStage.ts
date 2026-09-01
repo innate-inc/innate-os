@@ -51,9 +51,8 @@ const PLACEMENT_HINT: Record<PlacementState["kind"], string> = {
   rotating: "Drag to rotate · Release to place.",
 };
 
-// Touch has no hover, so a prop cannot follow the pointer to show where it
-// would land -- and the panel is over the very scene you are aiming at. There
-// the panel steps aside on selection and this stands in for its hint.
+// Touch has no hover to preview the drop with, and the panel covers the scene
+// being aimed at, so there it steps aside and this replaces its hint.
 const TOUCH_PLACEMENT_HINT: Partial<Record<PlacementState["kind"], string>> = {
   following: "Tap to place it",
   rotating: "Drag to rotate · Release to place",
@@ -64,9 +63,8 @@ export function createSimStage(
   session: SimSession,
 ): { audioEl: null; setSafeInsets: (insets: { right?: number }) => void; destroy: () => void } {
   const wrap = document.createElement("div");
-  // Reuse the webapp's stage styling/CSS ladder; its position:absolute+inset:0
-  // must survive -- overriding it once made the wrap size itself off the canvas
-  // buffer's aspect ratio, so the stage never tracked a window resize.
+  // The class's position:absolute+inset:0 must survive: overriding it once had
+  // the wrap size itself off the canvas buffer, ignoring window resizes.
   wrap.className = "video-stage";
   const canvas = document.createElement("canvas");
   canvas.style.width = "100%";
@@ -474,9 +472,8 @@ export function createSimStage(
     const h = wrap.clientHeight;
     if (!w || !h) return; // hidden (map primary): keep the last real size
     scene.setRenderSize(w, h, Math.min(devicePixelRatio, 2));
-    // setSize wiped the drawing buffer (the spec clears a resized canvas), and
-    // the browser paints before the next rAF -- render now or the stage
-    // flashes black on every resize step.
+    // setSize cleared the buffer (the spec clears a resized canvas) and the
+    // browser paints before the next rAF, so the stage would flash black.
     scene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
     scene.render();
   };
@@ -577,7 +574,6 @@ export function createSimStage(
 
   return {
     audioEl: null, // sim has no robot mic; the pages skip the mic toggle in sim mode
-    // The page knows what it floats over the feed; the scene only applies it.
     setSafeInsets: (insets) => scene.setSafeInsets(insets),
     destroy() {
       disposed = true;

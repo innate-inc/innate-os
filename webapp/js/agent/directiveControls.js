@@ -278,8 +278,7 @@ export function createDirectiveControls(agentState, opts) {
 
   return {
     el: controls,
-    // The compact sheet parks this in its header; one button, moved, so the
-    // start/stop state stays in one place.
+    // The compact sheet parks this in its header; moved, not duplicated.
     toggleEl: toggleBtn,
     ensureRunning,
     destroy() {
