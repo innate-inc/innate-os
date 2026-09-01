@@ -2699,6 +2699,33 @@ def _is_world_server(pid: int) -> bool:
     return "mars_sim_driver.world_server" in out.stdout
 
 
+def _started_before(pid: int, when: float) -> bool:
+    """Whether pid has been running since before `when`.
+
+    The ports record can outlive the server that wrote it -- a crash leaves it
+    behind -- and another checkout may then bind those same ports. It would be
+    a stranger that started after the record was written, so its age tells the
+    two apart. Unreadable age is treated as ours: failing to stop our own
+    server leaves the ports held, which is the louder failure.
+    """
+    out = subprocess.run(["ps", "-p", str(pid), "-o", "etime="], capture_output=True, text=True, check=False)
+    field = out.stdout.strip()
+    if not field:
+        return True
+    # [[DD-]hh:]mm:ss
+    days, _, clock = field.rpartition("-")
+    parts = [float(part) for part in clock.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0.0)
+    seconds = parts[0] * 3600 + parts[1] * 60 + parts[2] + (float(days) * 86400 if days else 0)
+    return time.time() - seconds <= when + WORLD_PORTS_RECORD_GRACE_S
+
+
+# ps reports whole seconds and the record is written just after the spawn, so
+# a server of ours can look a moment younger than its own record.
+WORLD_PORTS_RECORD_GRACE_S = 5.0
+
+
 def _world_ports_free(ports: list[int], timeout_s: float) -> bool:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -2718,6 +2745,12 @@ def stop_world_server() -> None:
     except (OSError, ValueError):
         ports = []
     targets = _world_server_pids(ports) if ports else set()
+    # The record is written the moment the server starts, so anything older
+    # than it was already running and anything much newer took the ports after
+    # it died: neither is ours to stop.
+    with contextlib.suppress(OSError):
+        recorded_at = WORLD_SERVER_PORTS_PATH.stat().st_mtime
+        targets = {pid for pid in targets if _started_before(pid, recorded_at)}
     if targets:
         for pid in targets:
             with contextlib.suppress(OSError):
