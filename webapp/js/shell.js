@@ -251,6 +251,9 @@ function installRailRibbon(rail) {
   });
 
   scrim.addEventListener("click", () => setOpen(false));
+  // Back and forward between two routes sharing a key (/agent and /brain) never
+  // reach setActive, since the router has nothing to re-render.
+  window.addEventListener("popstate", () => setOpen(false));
   // Picking a section is the end of the errand the menu was opened for.
   rail.addEventListener("click", (e) => {
     if (/** @type {Element} */ (e.target).closest(".rail-link")) setOpen(false);
