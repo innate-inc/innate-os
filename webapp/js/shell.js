@@ -140,6 +140,8 @@ export function initShell(navigate) {
   renderNav(null);
   rail.append(nav, footNav);
 
+  const closeRailDrawer = installRailRibbon(rail);
+
   // Number keys 1..N jump between sections (the number shows in each tooltip).
   // Guarded so it never fires while typing in a field or as part of a
   // browser/OS combo like Cmd+1 (tab switch). A removed link (sim-mode filter)
@@ -149,11 +151,14 @@ export function initShell(navigate) {
     const section = SECTIONS[Number(e.key) - 1];
     if (!section) return;
     const link = rail.querySelector(`.rail-link[data-section="${section.key}"]`);
-    if (link) navigate(pathForKey(section.key));
+    if (!link) return;
+    // The key for the section already open dedupes inside navigate, so nothing
+    // downstream would close the drawer.
+    closeRailDrawer();
+    navigate(pathForKey(section.key));
   });
 
   document.body.prepend(rail);
-  const closeRailDrawer = installRailRibbon(rail);
 
   // Sim deployments hide robot-data workflows (SIM_SECTIONS) — rebuild the
   // rail without them once the (env-driven) config says we're in sim mode.

@@ -2670,17 +2670,19 @@ def _gl_failure_hint(attempt_log: str, backend: str | None) -> str:
 
 
 def _mentions_path(command: str, root: str) -> bool:
-    """Whether root appears in command as a whole path component.
+    """Whether root appears in command as a whole argument, or the head of one.
 
     ps joins argv with spaces and quotes nothing, so a checkout whose path
-    contains one cannot be recovered by splitting -- but the end of the match
-    still can be checked: a real mention ends at a separator, where
-    /repo/sim-old would carry on into another component.
+    contains one cannot be recovered by splitting. Both ends of the match can
+    still be checked without it: an argument starts the line or follows a
+    space, and the path ends at a separator -- which rejects /mnt/repo/sim for
+    /repo/sim at the front, and /repo/sim-old for /repo/sim at the back.
     """
     at = command.find(root)
     while at != -1:
+        starts_arg = at == 0 or command[at - 1] in " \t="
         rest = command[at + len(root) :]
-        if rest == "" or rest[0] in "/ \t":
+        if starts_arg and (rest == "" or rest[0] in "/ \t"):
             return True
         at = command.find(root, at + 1)
     return False
