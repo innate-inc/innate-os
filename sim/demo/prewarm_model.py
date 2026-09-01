@@ -28,8 +28,6 @@ from mars_sim_driver.world_server import DEPTH_WH
 
 INSTALL_ROOT = Path("/root/innate-os/ros2_ws/install")
 SCALE_MARKER = "render_scale"
-# A cache hit loads a ~250MB .mjb; a miss recompiles. Nothing lands between.
-CACHE_HIT_CEILING_S = 10.0
 
 
 def main() -> int:
@@ -60,21 +58,28 @@ def main() -> int:
 
     cache_dir = assets / ".model_cache"
     cached = sorted(cache_dir.glob("world-*.mjb"))
-    if not cached:
-        print("ERROR: no .mjb written -- every session would compile on boot.", file=sys.stderr)
+    if len(cached) != 1:
+        names = [p.name for p in cached] or ["<none>"]
+        print(
+            f"ERROR: expected exactly one .mjb, found {len(cached)}: {names}.\n"
+            "Cannot tell which one the runtime would resolve to.",
+            file=sys.stderr,
+        )
         return 1
-    for path in cached:
-        print(f"model cache: {path} ({path.stat().st_size / 1e6:.0f} MB)")
+    print(f"model cache: {cached[0]} ({cached[0].stat().st_size / 1e6:.0f} MB)")
 
     # Building a second time is the only honest proof: a .mjb sitting at some
     # other key would satisfy the glob above while the runtime still compiles
-    # from scratch. A cache hit is a ~50ms load, so anything slow means miss.
+    # from scratch. VirtualMars writes the binary only on the compile path, so
+    # an untouched file is the hit -- elapsed time is not, because a cold
+    # compile is ~1s on a big build host and no ceiling separates the two.
+    baked = cached[0].stat().st_mtime_ns
     reload_s = build()
     print(f"cache reload: {reload_s:.2f}s")
-    if reload_s > CACHE_HIT_CEILING_S:
+    after = sorted(cache_dir.glob("world-*.mjb"))
+    if [p.name for p in after] != [cached[0].name] or after[0].stat().st_mtime_ns != baked:
         print(
-            f"ERROR: rebuilding took {reload_s:.1f}s, so the cache is not being hit -- "
-            "every session would pay this on boot.",
+            "ERROR: the second build rewrote the cache, so the runtime misses it and every session would recompile.",
             file=sys.stderr,
         )
         return 1
