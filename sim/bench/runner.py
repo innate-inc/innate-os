@@ -104,6 +104,28 @@ class Episode:
         )
 
 
+def _user_interrupt(exc: BaseException) -> bool:
+    """Is this a Ctrl-C from the terminal, rather than from the code under test?
+
+    Only the root process has no parent, and only its main thread is where the
+    terminal's interrupt is delivered. Sweep workers install their own SIGINT
+    handler, so a KeyboardInterrupt raised inside one came from the agent -- and
+    letting that escape kills the worker, which Pool never notices and the
+    parent can only see as a timeout.
+
+    Deliberately NOT `current_process().name == "MainProcess"`: that name is an
+    ordinary mutable attribute, and code running in the worker can set it.
+    """
+    import multiprocessing as mp
+    import threading
+
+    return (
+        isinstance(exc, KeyboardInterrupt)
+        and mp.parent_process() is None
+        and threading.current_thread() is threading.main_thread()
+    )
+
+
 class _Ready(NamedTuple):
     """What the run needs once setup has succeeded."""
 
@@ -223,6 +245,8 @@ def run_episode(
     try:
         ready = _prepare(map_name, challenge_id, make_agent, render_wh, agent_name, wall0)
     except BaseException as exc:  # noqa: BLE001 -- setup, so every failure is ours
+        if _user_interrupt(exc):
+            raise  # the user asked to stop; that is not a result
         detail = f"{type(exc).__name__}: {exc}"
         return Episode(
             map_name,
@@ -349,30 +373,62 @@ def run_episode(
         # is not this: sweep workers ignore SIGINT (main.py), so in a worker
         # only the agent can produce one, and in the main process it is the
         # user and must not be swallowed.
-        import multiprocessing as _mp
-
-        if isinstance(exc, KeyboardInterrupt) and _mp.current_process().name == "MainProcess":
+        if _user_interrupt(exc):
             raise
         crash = f"{type(exc).__name__}: {exc}"
         reason = reason or f"agent crashed: {crash}"
 
-    done = sum(1 for g in engine.goal_done if g)
-    m = engine.metrics()
+    # Every read below is optional and several of them are the agent's own
+    # code -- `turns` is already a property, and `blocked_reason` could be one.
+    # A failure here must not discard the episode that produced it: falling
+    # through would hand _one an exception and it would fabricate the zeros
+    # this guard exists to prevent.
+    def read(what, fn, default):
+        nonlocal crash
+        try:
+            return fn()
+        except BaseException as exc:  # noqa: BLE001
+            if _user_interrupt(exc):
+                raise
+            note = f"{what} failed: {type(exc).__name__}: {exc}"
+            crash = f"{crash}; also {note}" if crash else note
+            return default
+
+    empty = {
+        "path_len_m": 0.0,
+        "goal_times_s": [],
+        "utterances": 0,
+        "first_utterance_s": None,
+        "tempt_min_m": None,
+    }
+    # Read everything BEFORE building the Episode: arguments are evaluated left
+    # to right, so passing `error=crash` inline captured the value before the
+    # reads after it could append to it, and a finalisation failure went into a
+    # variable nobody looked at again.
+    m = read("engine.metrics", engine.metrics, empty)
+    name = read("agent.name", lambda: agent.name, agent_name)
+    passed = read("engine.state", lambda: engine.state == "passed", False)
+    done = read("engine.goal_done", lambda: sum(1 for g in engine.goal_done if g), 0)
+    elapsed = read("engine.elapsed_s", lambda: round(engine.elapsed_s, 1), 0.0)
+    why = reason or read("engine.reason", lambda: engine.reason, "")
+    blocked = read("agent.blocked_reason", lambda: str(getattr(agent, "blocked_reason", "")), "")
+    turns = read("agent.turns", lambda: int(getattr(agent, "turns", 0)), 0)
+    cameras = read("agent.camera_errors", lambda: int(getattr(agent, "camera_errors", 0)), 0)
     return Episode(
         map=map_name,
         challenge=challenge_id,
-        agent=agent.name,
-        passed=engine.state == "passed",
+        agent=name,
+        passed=passed,
         goals_done=done,
         goals_total=len(ch.goals),
-        elapsed_s=round(engine.elapsed_s, 1),
-        reason=reason or engine.reason,
+        elapsed_s=elapsed,
+        reason=why,
         error=crash,
-        blocked=str(getattr(agent, "blocked_reason", "")),
+        blocked=blocked,
         wall_s=round(time.time() - wall0, 1),
         steps=steps,
-        turns=int(getattr(agent, "turns", 0)),
-        camera_errors=int(getattr(agent, "camera_errors", 0)),
+        turns=turns,
+        camera_errors=cameras,
         path_len_m=m["path_len_m"],
         goal_times_s=m["goal_times_s"],
         utterances=m["utterances"],

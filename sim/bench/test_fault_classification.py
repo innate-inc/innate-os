@@ -141,16 +141,84 @@ def test_a_crash_in_agent_reset_is_still_the_agents():
     assert "reset exploded" in e.error
 
 
-def test_a_keyboardinterrupt_from_the_agent_does_not_block_in_a_worker(monkeypatch):
-    """In a pool worker SIGINT is ignored, so an interrupt here came from the
-    code under test. Letting it escape kills the worker, and the parent can
-    only see a timeout -- which marks unrelated episodes blocked."""
+def test_a_keyboardinterrupt_from_the_agent_is_that_agents_failure(monkeypatch):
+    """Inside a worker an interrupt can only have come from the code under
+    test -- workers install their own SIGINT handler. Letting it escape kills
+    the worker, and the parent can only see a timeout, which then marks
+    unrelated queued episodes blocked."""
     import multiprocessing as mp
 
-    monkeypatch.setattr(mp, "current_process", lambda: type("P", (), {"name": "Worker-1"})())
+    # What makes a process a worker is having a PARENT, which nothing inside it
+    # can change. current_process().name is an ordinary mutable attribute.
+    monkeypatch.setattr(mp, "parent_process", lambda: object())
     e = run_episode(MAP, CID, lambda ch: _Crashing(oracle_for(ch), exc=KeyboardInterrupt), agent_name="oracle")
     assert e.blocked == "", e.blocked
     assert "KeyboardInterrupt" in e.error
+
+
+def test_renaming_the_process_cannot_win_an_interrupt(monkeypatch):
+    """The old check read current_process().name, which code in the worker can
+    set to "MainProcess" -- so an agent could get its interrupt re-raised and
+    kill the worker on purpose."""
+    import multiprocessing as mp
+
+    monkeypatch.setattr(mp, "parent_process", lambda: object())
+    monkeypatch.setattr(mp.current_process(), "name", "MainProcess", raising=False)
+    e = run_episode(MAP, CID, lambda ch: _Crashing(oracle_for(ch), exc=KeyboardInterrupt), agent_name="oracle")
+    assert e.blocked == "", "a renamed process talked its way into killing the worker"
+
+
+def test_a_real_ctrl_c_in_the_root_process_still_propagates():
+    """In the root process an interrupt is the user, and not a result."""
+    with pytest.raises(KeyboardInterrupt):
+        run_episode(MAP, CID, lambda ch: _Crashing(oracle_for(ch), exc=KeyboardInterrupt), agent_name="oracle")
+
+
+def test_a_ctrl_c_during_setup_also_propagates():
+    """Setup is often the expensive part; an interrupt there is control flow,
+    not a blocked episode."""
+
+    def boom(ch):
+        raise KeyboardInterrupt("ctrl-c during setup")
+
+    with pytest.raises(KeyboardInterrupt):
+        run_episode(MAP, CID, boom, agent_name="oracle")
+
+
+def test_a_failing_metrics_call_does_not_discard_the_episode(monkeypatch):
+    """Finalisation is part of the guarded run: a metrics() that raises after a
+    crash must not throw away the crash and the measurements with it."""
+    from mars_sim_driver.challenges import ChallengeEngine
+
+    monkeypatch.setattr(ChallengeEngine, "metrics", lambda self: (_ for _ in ()).throw(RuntimeError("metrics failed")))
+    e = run_episode(MAP, CID, lambda ch: _Crashing(oracle_for(ch), after=200), agent_name="oracle")
+    assert e.blocked == "", e.blocked
+    assert "act crashed" in e.error, f"the original crash was lost: {e.error}"
+    assert "metrics failed" in e.error, f"the finalisation failure was hidden: {e.error}"
+    assert e.goals_total > 0 and e.steps > 0, f"measurements were fabricated: {e}"
+
+
+def test_an_agent_property_that_raises_does_not_escape():
+    """`turns` is already a property and `blocked_reason` could be; a raise
+    from one used to escape run_episode entirely."""
+
+    class BadProp:
+        name = "bad"
+        done = True
+
+        def reset(self, *a, **k):
+            pass
+
+        def act(self, *a, **k):
+            pass
+
+        @property
+        def blocked_reason(self):
+            raise RuntimeError("property exploded")
+
+    e = run_episode(MAP, CID, lambda ch: BadProp(), agent_name="oracle")
+    assert "property exploded" in e.error
+    assert e.goals_total > 0, "the episode was discarded by a bad property"
 
 
 def test_a_healthy_episode_is_untouched():

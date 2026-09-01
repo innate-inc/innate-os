@@ -169,20 +169,21 @@ def main() -> int:
         card = scorecard(rows, cat, valid, agent)
         blocked = blocked_count(rows, agent, valid)
         if card is None:
-            # Every challenge, not just the VALID ones: a blocked oracle makes
-            # its own challenge INCOMPLETE, so scoping this to VALID reports
-            # zero for exactly the agent that lost everything.
+            # No scorecard is not nothing to say: the agent still ran, or was
+            # still blocked, and either way it must not vanish from its own
+            # report. "all blocked" is claimed only when it is true.
+            total = sum(1 for e in rows if e["agent"] == agent)
             blocked = blocked_count(rows, agent)
-            ran = sum(1 for e in rows if e["agent"] == agent) - blocked
-            if blocked:
+            if total:
                 print()
                 print(f"=== {agent} ===")
-                # "all blocked" only when it is: a scorecard is also absent
-                # when the agent simply had no episode on a VALID challenge.
-                if ran:
-                    print(f"  no score -- no unblocked episode on a VALID challenge ({blocked} blocked, {ran} ran)")
-                else:
+                if blocked == total:
                     print(f"  no score -- all {blocked} episode(s) blocked by the harness")
+                else:
+                    print(
+                        f"  no score -- no unblocked episode on a VALID challenge"
+                        f" ({blocked} blocked, {total - blocked} ran)"
+                    )
             continue
         print(f"\n=== {agent} ===")
         for line in format_scorecard(*card, blocked):

@@ -72,10 +72,18 @@ TELEPORTS: dict[str, bool] = {}
 
 
 def _ignore_sigint():
-    """Pool initializer: leave Ctrl-C to the parent process."""
+    """Pool initializer: leave Ctrl-C to the parent process.
+
+    A no-op HANDLER rather than SIG_IGN. POSIX preserves an ignored
+    disposition across exec, so SIG_IGN would be inherited by every model CLI
+    a backend launches -- and on Ctrl-C the parent terminates the worker while
+    its subprocess survives both the signal and its parent, still burning API
+    calls as an orphan. A caught handler resets to the default on exec, so the
+    child dies with the terminal while the worker itself still survives.
+    """
     import signal
 
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, lambda *_: None)
 
 
 def _one(job):
@@ -332,23 +340,21 @@ def main() -> int:
         card = scorecard(rows, CATEGORY_OF, valid_ids, a)
         blocked = blocked_count(rows, a, valid_ids)
         if card is None:
-            # Every challenge, not just the VALID ones: a blocked oracle makes
-            # its own challenge INCOMPLETE, so scoping this to VALID reports
-            # zero for exactly the agent that lost everything.
+            # No scorecard is not nothing to say: the agent still ran, or was
+            # still blocked, and either way it must not vanish from its own
+            # report. "all blocked" is claimed only when it is true.
+            total = sum(1 for e in rows if e["agent"] == a)
             blocked = blocked_count(rows, a)
-            ran = sum(1 for e in rows if e["agent"] == a) - blocked
-            # No scorecard because nothing of this agent's survived. Say it:
-            # an agent whose every episode was blocked is the loudest result
-            # in the run, and skipping the section printed it as nothing.
-            if blocked:
+            if total:
                 print()
                 print(f"=== scorecard: {a} ===")
-                # "all blocked" only when it is: a scorecard is also absent
-                # when the agent simply had no episode on a VALID challenge.
-                if ran:
-                    print(f"  no score -- no unblocked episode on a VALID challenge ({blocked} blocked, {ran} ran)")
-                else:
+                if blocked == total:
                     print(f"  no score -- all {blocked} episode(s) blocked by the harness")
+                else:
+                    print(
+                        f"  no score -- no unblocked episode on a VALID challenge"
+                        f" ({blocked} blocked, {total - blocked} ran)"
+                    )
             continue
         print(f"\n=== scorecard: {a} ===")
         for line in format_scorecard(*card, blocked):
