@@ -225,6 +225,8 @@ export class SimScene {
 
   /** Fixed render size (offscreen use, e.g. SimSession); null = track the window. */
   private fixedSize: { width: number; height: number } | null = null;
+  /** Canvas width covered on the right by page chrome (see setSafeInsets). */
+  private safeInsetRight = 0;
 
   constructor(canvas: HTMLCanvasElement, opts: { fixedSize?: { width: number; height: number } } = {}) {
     this.fixedSize = opts.fixedSize ?? null;
@@ -261,7 +263,14 @@ export class SimScene {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.target.set(0, 0, 0.4);
-    this.controls.minDistance = 0.5;
+    // Everything OrbitControls does is measured from controls.target: zoom
+    // stops minDistance short of it, and pan scales with the distance to it,
+    // so close in, a drag crawls. zoomToCursor moves the target toward what
+    // the pointer is over, so the point you are working on becomes the point
+    // the camera orbits -- you are never stuck circling something you cannot
+    // get past, and pan keeps its footing.
+    this.controls.zoomToCursor = true;
+    this.controls.minDistance = 0.15;
     this.controls.maxDistance = 30;
     this.controls.update();
     // Grabbing the camera is a statement that you want it: a drag or a wheel
@@ -577,7 +586,7 @@ export class SimScene {
     this.layoutBounds = bounds;
     if (this.spawned) return;
 
-    const center = bounds.getCenter(new THREE.Vector3());
+    const center = layoutFocus(bounds);
     const size = bounds.getSize(new THREE.Vector3());
     // Pull back far enough that the widest horizontal extent fits the vertical
     // FOV (the horizontal one is wider on any landscape stage), with margin.
@@ -855,7 +864,7 @@ export class SimScene {
    * the robot). */
   private flyToOverview(): void {
     const bounds = this.layoutBounds;
-    const center = bounds?.getCenter(new THREE.Vector3()) ?? new THREE.Vector3(...this.robotXY, 0);
+    const center = bounds ? layoutFocus(bounds) : new THREE.Vector3(...this.robotXY, 0);
     let distance = TOP_FALLBACK_HEIGHT_M;
     if (bounds) {
       const size = bounds.getSize(new THREE.Vector3());
@@ -1104,16 +1113,23 @@ export class SimScene {
     const forwardY = Math.sin(yaw);
     const leftX = -forwardY;
     const leftY = forwardX;
-    this.camera.position.set(
-      x + forwardX * INITIAL_ORBIT_POSITION.forward + leftX * INITIAL_ORBIT_POSITION.left,
-      y + forwardY * INITIAL_ORBIT_POSITION.forward + leftY * INITIAL_ORBIT_POSITION.left,
-      INITIAL_ORBIT_POSITION.height,
-    );
-    this.controls.target.set(
+    const target = new THREE.Vector3(
       x + forwardX * INITIAL_ORBIT_TARGET.forward + leftX * INITIAL_ORBIT_TARGET.left,
       y + forwardY * INITIAL_ORBIT_TARGET.forward + leftY * INITIAL_ORBIT_TARGET.left,
       INITIAL_ORBIT_TARGET.height,
     );
+    const perch = new THREE.Vector3(
+      x + forwardX * INITIAL_ORBIT_POSITION.forward + leftX * INITIAL_ORBIT_POSITION.left,
+      y + forwardY * INITIAL_ORBIT_POSITION.forward + leftY * INITIAL_ORBIT_POSITION.left,
+      INITIAL_ORBIT_POSITION.height,
+    );
+    // Three.js fixes the vertical FOV and narrows horizontally with the
+    // aspect, so a portrait stage crops the arm and pushes the head to the
+    // top edge -- pull back by the aspect deficit to keep the whole robot
+    // framed and centered.
+    const pullback = Math.max(1, 1 / this.camera.aspect);
+    this.camera.position.copy(target).addScaledVector(perch.sub(target), pullback);
+    this.controls.target.copy(target);
     this.controls.update();
     this.renderer.domElement.style.visibility = "";
 
@@ -1169,14 +1185,39 @@ export class SimScene {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
-    // Portrait stages (phones): bias the orbit framing so the robot reads in
-    // the upper half -- webapp sheets/joystick cover the lower half.
-    if (height > width * 1.2) this.camera.setViewOffset(width, height, 0, height * 0.22, width, height);
-    else this.camera.clearViewOffset();
+    this.applyViewOffset();
     for (const cam of this.robotCameras.values()) {
       cam.aspect = width / height;
       cam.updateProjectionMatrix();
     }
+  }
+
+  /** How much of the canvas's right edge something else is sitting on (the
+   * Agent page's chat dock, which floats over a full-bleed feed). The scene
+   * still renders the whole canvas -- only the framing moves, so the robot
+   * centres in what is actually visible. */
+  setSafeInsets(insets: { right?: number }): void {
+    const right = Math.max(0, insets.right ?? 0);
+    if (right === this.safeInsetRight) return;
+    this.safeInsetRight = right;
+    this.applyViewOffset();
+  }
+
+  /** Bias the orbit framing off dead centre: sideways for whatever covers the
+   * right edge, upward on a portrait stage whose lower half the sheets and the
+   * joystick own. Robot cameras are untouched -- they frame what the robot
+   * sees, not what fits around our panels. */
+  private applyViewOffset(): void {
+    const { width, height } = this.viewSize();
+    // Half the covered strip: that moves the centre of the free area to the
+    // centre of the frame.
+    const offsetX = this.safeInsetRight / 2;
+    const offsetY = height > width * 1.2 ? height * 0.1 : 0;
+    if (offsetX === 0 && offsetY === 0) {
+      this.camera.clearViewOffset();
+      return;
+    }
+    this.camera.setViewOffset(width, height, offsetX, offsetY, width, height);
   }
 
   /** Render the active view into a sub-rectangle of the canvas (logical px,
@@ -1213,6 +1254,17 @@ export class SimScene {
       cam.updateProjectionMatrix();
     }
   }
+}
+
+/** What the orbit camera should point at for a whole-apartment view: the flat's
+ * centre, but on the floor rather than the centre of its bounding box. Zoom
+ * dollies toward the target and stops minDistance short of it, so a target at
+ * mid-wall height (the box spans floor to ceiling) is a barrier the camera
+ * cannot get under -- you stop a metre or two up with the floor out of reach. */
+function layoutFocus(bounds: THREE.Box3): THREE.Vector3 {
+  const focus = bounds.getCenter(new THREE.Vector3());
+  focus.z = bounds.min.z;
+  return focus;
 }
 
 /** Runtime guard against a malformed manifest (untrusted JSON): file is a

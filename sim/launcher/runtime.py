@@ -1220,10 +1220,14 @@ def running_stack_from_another_checkout() -> tuple[str, str] | None:
     return None
 
 
-def _bind_refusal(port: int, *, udp: bool) -> int | None:
-    """errno from claiming the port the way Docker will (0.0.0.0, no
-    SO_REUSEADDR), or None when the bind succeeds."""
+def _bind_refusal(port: int, *, udp: bool, reuse: bool = False) -> int | None:
+    """errno from claiming the port the way its consumer will, or None when the
+    bind succeeds. Docker publishes without SO_REUSEADDR; the host world server
+    sets it (socket.create_server), so its probe must too -- a just-stopped
+    server's TIME_WAIT remnants otherwise read as a live collision for ~30s."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as probe:
+        if reuse:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("0.0.0.0", port))
         except OSError as exc:
@@ -1237,11 +1241,12 @@ def _tcp_listener_answers(port: int) -> bool:
     return False
 
 
-def _host_port_free(port: int, *, udp: bool) -> bool:
-    """Whether Docker can still publish this host port. Only EADDRINUSE proves a
-    collision: Linux refuses ports below 1024 to a non-root binder while the
-    daemon that publishes them runs as root, so a free 443 refuses the probe."""
-    refusal = _bind_refusal(port, udp=udp)
+def _host_port_free(port: int, *, udp: bool, reuse: bool = False) -> bool:
+    """Whether the port's consumer can still claim it (reuse: see
+    _bind_refusal). Only EADDRINUSE proves a collision: Linux refuses ports
+    below 1024 to a non-root binder while the daemon that publishes them runs
+    as root, so a free 443 refuses the probe."""
+    refusal = _bind_refusal(port, udp=udp, reuse=reuse)
     if refusal is None:
         return True
     if refusal == errno.EACCES and not udp:
@@ -1302,7 +1307,8 @@ def refuse_if_ports_taken() -> None:
     taken = [
         (label, port)
         for label, port, spec in _STACK_PORTS
-        if port not in ours and not _host_port_free(port, udp=(spec or "").endswith("/udp"))
+        if port not in ours
+        and not _host_port_free(port, udp=(spec or "").endswith("/udp"), reuse=spec is None)
     ]
     if not taken:
         return
@@ -2218,10 +2224,10 @@ def _world_server_ping(port: int, timeout: float = 2.0) -> bool:
     return _world_server_ping_reply(port, timeout) is not None
 
 
-def _stop_stale_world_server() -> None:
-    """SIGTERM whatever owns the RPC port (the PID file only covers servers
-    this checkout started)."""
-    stop_world_server()
+def _stop_stale_world_server(sim_repo: Path) -> None:
+    """SIGTERM whatever owns the RPC port (the command-line match only covers
+    servers launched for this checkout)."""
+    stop_world_server(sim_repo)
     out = subprocess.run(
         ["lsof", "-ti", f"tcp:{WORLD_SERVER_PORT}", "-sTCP:LISTEN"], capture_output=True, text=True, check=False
     )
@@ -2463,7 +2469,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
                 f"Host world server listens on {','.join(actual_binds)} but the current policy "
                 f"wants {bind} -- restarting it..."
             )
-        _stop_stale_world_server()
+        _stop_stale_world_server(sim_repo)
 
     ensure_state_dir()
     attempts: list[tuple[str, str, str]] = []  # (backend label, backend, that attempt's log output)
@@ -2664,15 +2670,57 @@ def _gl_failure_hint(attempt_log: str, backend: str | None) -> str:
     return "no output -- see the full log"
 
 
-def stop_world_server() -> None:
-    if not WORLD_SERVER_PID_PATH.exists():
-        return
+def _world_server_pids(sim_repo: Path) -> set[int]:
+    """Every live world-server process launched for this checkout (uv and the
+    python it spawned), matched by command line. The pid file alone is not
+    enough: an interrupted `up` can strand it pointing at a dead attempt while
+    a live server keeps the ports, and `down` must kill what actually runs."""
+    out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, check=False)
+    pids: set[int] = set()
+    for line in out.stdout.splitlines():
+        pid_str, _, command = line.strip().partition(" ")
+        # The bootstrap module path, not "world_server": anything that merely
+        # mentions the function (this launcher included) must never match.
+        if "mars_sim_driver.world_server" not in command or str(sim_repo) not in command:
+            continue
+        with contextlib.suppress(ValueError):
+            pids.add(int(pid_str))
+    pids.discard(os.getpid())
+    return pids
+
+
+def _world_ports_free(ports: list[int], timeout_s: float) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if all(_host_port_free(port, udp=False, reuse=True) for port in ports):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def stop_world_server(sim_repo: Path) -> None:
+    targets = _world_server_pids(sim_repo)
     try:
-        pid = int(WORLD_SERVER_PID_PATH.read_text().strip())
-        os.kill(pid, signal.SIGTERM)
-        log("Stopped host world server.")
-    except (ValueError, OSError):
-        pass
+        ports = [int(port) for port in WORLD_SERVER_PORTS_PATH.read_text().split()]
+    except (OSError, ValueError):
+        ports = [WORLD_SERVER_PORT, WORLD_STATE_PORT]
+    if targets:
+        for pid in targets:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGTERM)
+        # An immediate `up` re-checks the port block: return only after
+        # MuJoCo's teardown has actually released the sockets, or the next
+        # run refuses on "world state stream already in use".
+        if _world_ports_free(ports, 15.0):
+            log("Stopped host world server.")
+        else:
+            for pid in _world_server_pids(sim_repo):
+                with contextlib.suppress(OSError):
+                    os.kill(pid, signal.SIGKILL)
+            if _world_ports_free(ports, 5.0):
+                log("Stopped host world server (forced).")
+            else:
+                warn(f"Something else holds the world ports (lsof -nP -iTCP:{ports[-1]}); `{CLI_SIM} up` may refuse.")
     with contextlib.suppress(OSError):  # read-only fs: the kill still counts
         WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
         WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)
