@@ -2761,7 +2761,10 @@ def stop_world_server() -> None:
         if _world_ports_free(ports, 15.0):
             log("Stopped host world server.")
         else:
-            for pid in _world_server_pids(ports):
+            # Escalate to the same pids, not to whoever holds the ports now: if
+            # ours died during the wait and a stranger took them, that stranger
+            # is not ours to kill.
+            for pid in targets:
                 with contextlib.suppress(OSError):
                     os.kill(pid, signal.SIGKILL)
             if _world_ports_free(ports, 5.0):
