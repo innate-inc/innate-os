@@ -169,3 +169,11 @@ ORACLES: dict[str, list[tuple]] = {
         ("wait", 1.0),
     ],
 }
+
+
+# The plans whose goal is reached by teleporting a prop rather than by driving
+# the arm. Derived from the table above so it cannot drift out of date: adding
+# a `put` to a plan adds it here, and the gate downgrades its claim on its own.
+TELEPORT_ASSISTED: frozenset[str] = frozenset(
+    cid for cid, steps in ORACLES.items() if any(s and s[0] == "put" for s in steps)
+)

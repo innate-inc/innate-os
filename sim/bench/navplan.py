@@ -253,15 +253,38 @@ def _simplify(cells: list[tuple[int, int]], nav: NavMap) -> list[tuple[int, int]
 
 
 def _clear_line(a: tuple[int, int], b: tuple[int, int], nav: NavMap) -> bool:
-    """Supercover line check between two cells."""
+    """True when every cell the segment touches is free.
+
+    Supercover, not sampled: stepping along the line and rounding misses the
+    cells a diagonal only clips, so a segment threading the corner between two
+    blocked cells would land every sample on the free cells either side and
+    report clear -- letting the simplifier shortcut through a gap the robot
+    does not fit through. At a diagonal step this checks both orthogonal
+    neighbours and refuses if either is blocked, which is the conservative
+    direction for a path the robot has to drive.
+    """
     r0, c0 = a
     r1, c1 = b
-    n = max(abs(r1 - r0), abs(c1 - c0))
-    if n == 0:
-        return True
-    for i in range(n + 1):
-        r = round(r0 + (r1 - r0) * i / n)
-        c = round(c0 + (c1 - c0) * i / n)
+    dr, dc = abs(r1 - r0), abs(c1 - c0)
+    sr = 1 if r1 > r0 else -1
+    sc = 1 if c1 > c0 else -1
+    r, c = r0, c0
+    err = dr - dc
+    while True:
         if not nav.free(r, c):
             return False
-    return True
+        if (r, c) == (r1, c1):
+            return True
+        e2 = 2 * err
+        if e2 > -dc and e2 < dr:  # diagonal: the segment clips both neighbours
+            if not (nav.free(r + sr, c) and nav.free(r, c + sc)):
+                return False
+            err += dr - dc
+            r += sr
+            c += sc
+        elif e2 > -dc:
+            err -= dc
+            r += sr
+        else:
+            err += dr
+            c += sc

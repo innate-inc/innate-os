@@ -176,6 +176,23 @@ search-coverage probe into a contrast probe.
   (`backends_v2.py`, `brain:nemotron_stack`) ran the full 45-challenge suite
   in-process — scores, methodology caveats and before/after re-runs in
   `NEMOTRON_STACK_RESULTS.md`.
+- **Three oracles reach their goal by teleport.** `put` models a successful
+  place without driving the arm, so `gallery_fetch_mug`, `household_fetch_mug`
+  and `workshop_fetch_gauge` are certified for goal logic and route, not for
+  manipulation. The gate says so on the verdict line rather than leaving VALID
+  to imply it; the set is derived from the plans (`oracles.TELEPORT_ASSISTED`),
+  so adding a `put` to a plan adds the caveat automatically.
+- **No visual replay of a bundle run.** The suite is headless by design and the
+  numbers come from the judge, not from watching. Upstream's sim viewer renders
+  the apartment's decomposed meshes; the authored rooms here are MuJoCo
+  primitives, which it does not draw, so pointing it at a bundle shows an empty
+  world rather than an error. To inspect a specific run: `debug_one.py <map>
+  <challenge>` traces one episode with the agent `main.py` would have built,
+  printing the goals and their predicates, the plan it chose, and then pose,
+  current step and goal state per tick; `check_points.py` answers the other
+  question a failure raises -- whether a point is genuinely off the navigable
+  floor or obstacle inflation swallowed it -- by printing the raw cell, the
+  inflated cell and the distance to the nearest usable one.
 - **Oracle step counts are not difficulty.** `household_tour` takes 15,602
   steps against `rounds_all_doors`'s 1,862; that is a statement about the
   reference plan, not the map.

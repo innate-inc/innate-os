@@ -85,7 +85,9 @@ fi
 echo "roster gate: pick=$([ -n "$SERVICE_KEY$BASE_URL" ] && echo yes || echo no)" \
      "memory=$([ -n "$NO_MEMORY" ] && echo off || echo on)"
 
-cat > /tmp/prime.py <<PY
+PRIME="/tmp/prime.$$.py"
+trap 'rm -f "$PRIME"' EXIT
+cat > "$PRIME" <<PY
 import json, subprocess, time
 
 RESET = $RESET
@@ -125,11 +127,11 @@ if [ -z "$OS_CONTAINER" ]; then
   echo "no innate-dev* container is running" >&2
   exit 1
 fi
-docker cp /tmp/prime.py "$OS_CONTAINER":/tmp/prime.py >/dev/null
+docker cp "$PRIME" "$OS_CONTAINER":"$PRIME" >/dev/null
 # RMW_IMPLEMENTATION is essential: exec shells do not inherit it, and every
 # ros2 service call then times out against the Zenoh graph -- which reads as
 # 'brain refused to activate' and leaves the model with only the wait tool.
-docker exec -e RMW_IMPLEMENTATION=rmw_zenoh_cpp "$OS_CONTAINER" bash -lc 'source /opt/ros/humble/setup.bash; source /root/innate-os/ros2_ws/install/setup.bash; python3 /tmp/prime.py' 2>&1 | tail -4
+docker exec -e RMW_IMPLEMENTATION=rmw_zenoh_cpp "$OS_CONTAINER" bash -lc 'source /opt/ros/humble/setup.bash; source /root/innate-os/ros2_ws/install/setup.bash; python3 "$1"' _ "$PRIME" 2>&1 | tail -4
 
 echo
 echo "--- brain log ---"

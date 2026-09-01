@@ -6,8 +6,12 @@
 # (grep "User message" == 0), while this path has worked every time. A silent
 # publish is the worst possible failure here -- the agent just sits there and
 # the whole sweep scores zero for a reason nothing reports.
+# A per-invocation path: two live runs on one host would otherwise stage
+# over each other's payload, in the container as well as here.
+PAYLOAD="/tmp/say_payload.$$.py"
+trap 'rm -f "$PAYLOAD"' EXIT
 TEXT="$(cat)"
-python3 - "$TEXT" > /tmp/say_payload.py <<'PY'
+python3 - "$TEXT" > "$PAYLOAD" <<'PY'
 import json, sys
 msg = json.dumps({"text": sys.argv[1]})
 print("import subprocess, json")
@@ -21,8 +25,8 @@ if [ -z "$OS_CONTAINER" ]; then
   echo "no innate-dev* container is running" >&2
   exit 1
 fi
-docker cp /tmp/say_payload.py "$OS_CONTAINER":/tmp/say_payload.py >/dev/null
+docker cp "$PAYLOAD" "$OS_CONTAINER":"$PAYLOAD" >/dev/null
 # RMW_IMPLEMENTATION: exec shells do not inherit it, so without this the
 # publish goes to a DDS graph nobody is on -- it succeeds, and the brain never
 # hears the brief. Same silent no-op the rosbridge path had.
-docker exec -e RMW_IMPLEMENTATION=rmw_zenoh_cpp "$OS_CONTAINER" bash -lc 'source /opt/ros/humble/setup.bash; source /root/innate-os/ros2_ws/install/setup.bash; python3 /tmp/say_payload.py' >/dev/null 2>&1
+docker exec -e RMW_IMPLEMENTATION=rmw_zenoh_cpp "$OS_CONTAINER" bash -lc 'source /opt/ros/humble/setup.bash; source /root/innate-os/ros2_ws/install/setup.bash; python3 "$1"' _ "$PAYLOAD" >/dev/null

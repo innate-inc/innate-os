@@ -173,6 +173,7 @@ class BrainAgent:
         self.turns = 0
         self.log: list[Turn] = []
         self.failed_reason = ""
+        self.blocked_reason = ""
         self._post = None
         self._brief = ""
         self._heard: list[str] = []
@@ -208,6 +209,7 @@ class BrainAgent:
         self.turns = 0
         self.log = []
         self.failed_reason = ""
+        self.blocked_reason = ""
         self._brief = challenge.brief
         self._heard = []
         self._carrying = None
@@ -326,6 +328,8 @@ class BrainAgent:
 
         if action == "_error":
             self.failed_reason = f"backend error: {args.get('detail', '')}"
+            # Not a robot failure: the harness never got a decision to execute.
+            self.blocked_reason = f"harness: {self.failed_reason}"
             self._done = True
             result = self.failed_reason
         elif action == "turn":

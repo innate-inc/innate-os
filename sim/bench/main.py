@@ -35,7 +35,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bench_common import VERDICTS, format_scorecard, gate_verdict, scorecard  # noqa: E402
+from bench_common import VERDICTS, blocked_count, format_scorecard, gate_verdict, scorecard  # noqa: E402
+from oracles import TELEPORT_ASSISTED  # noqa: E402
 from runner import Episode, run_episode, sources  # noqa: E402
 
 
@@ -134,6 +135,12 @@ def main() -> int:
     ap.add_argument("--agents", default="oracle,random")
     ap.add_argument("--workers", type=int, default=0, help="0 = cpu_count - 2")
     ap.add_argument(
+        "--result-timeout",
+        type=float,
+        default=900.0,
+        help="give up waiting after this many seconds of no result at all (a dead worker)",
+    )
+    ap.add_argument(
         "--seeds",
         type=int,
         default=3,
@@ -228,14 +235,48 @@ def main() -> int:
 
     # imap_unordered, not map: results stream as they land and are written out
     # incrementally, so a sweep that is killed part-way still leaves data.
+    #
+    # With a timeout, because Pool does not notice a worker that dies
+    # abnormally: the iterator would block forever on a result that is never
+    # coming, and the sweep hangs one episode short with every worker idle.
+    # No episode can take longer than its own limit, so silence for much
+    # longer than that means the pool is gone, not busy.
     results = []
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    lost = ""
     with mp.Pool(workers, maxtasksperchild=1) as pool:
-        for e in pool.imap_unordered(_one, jobs):
+        stream = pool.imap_unordered(_one, jobs)
+        for _ in range(len(jobs)):
+            try:
+                e = stream.next(timeout=args.result_timeout)
+            except mp.TimeoutError:
+                lost = f"no result for {args.result_timeout:g}s -- a worker died"
+                break
             e.needs = needs_arm.get(e.challenge, "")
             results.append(e)
             print(f"[{len(results):>3}/{len(jobs)}] {e.as_row()}", flush=True)
             args.out.write_text(json.dumps([asdict(r) for r in results], indent=1))
+        if lost:
+            pool.terminate()
+
+    if lost:
+        # imap_unordered does not say which job it lost, so the jobs with no
+        # result are the missing ones. They are recorded rather than dropped:
+        # a challenge silently absent from the gate would read as one that was
+        # never written.
+        missing = 0
+        got: dict[tuple[str, str], int] = {}
+        for e in results:
+            got[(e.challenge, e.agent)] = got.get((e.challenge, e.agent), 0) + 1
+        for map_name, cid, agent_name, _seed, _cap in jobs:
+            if got.get((cid, agent_name), 0) > 0:
+                got[(cid, agent_name)] -= 1
+                continue
+            results.append(Episode(map_name, cid, agent_name, False, 0, 0, 0.0, "", 0.0, 0, blocked=f"harness: {lost}"))
+            missing += 1
+        print()
+        print(f"!! {lost}: {missing} episode(s) never ran; the rest are reported and marked blocked", flush=True)
+        args.out.write_text(json.dumps([asdict(r) for r in results], indent=1))
 
     # --- validity gate ---
     rows = [asdict(e) for e in results]
@@ -247,7 +288,7 @@ def main() -> int:
             eps = [r for r in rows if r["challenge"] == cid]
             oracle = next((r for r in eps if r["agent"] == "oracle"), None)
             rnd = [r for r in eps if r["agent"] == "random"]
-            verdict, why = gate_verdict(req, oracle, rnd)
+            verdict, why = gate_verdict(req, oracle, rnd, cid in TELEPORT_ASSISTED)
             tally[verdict] += 1
             if verdict == "VALID":
                 valid_ids.add(cid)
@@ -259,10 +300,11 @@ def main() -> int:
     # would mix "the agent failed" with "nobody could".
     for a in sorted({r["agent"] for r in rows} - {"random"}):
         card = scorecard(rows, CATEGORY_OF, valid_ids, a)
+        blocked = blocked_count(rows, a, valid_ids)
         if card is None:
             continue
         print(f"\n=== scorecard: {a} ===")
-        for line in format_scorecard(*card):
+        for line in format_scorecard(*card, blocked):
             print(line)
 
     print("\n=== scores (oracle) ===")

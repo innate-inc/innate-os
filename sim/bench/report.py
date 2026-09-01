@@ -18,8 +18,10 @@ every map writes its own results file, and this stitches them together.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -29,10 +31,12 @@ from bench_common import (  # noqa: E402
     CATEGORY_NAMES,
     CATEGORY_ORDER,
     VERDICTS,
+    blocked_count,
     format_scorecard,
     gate_verdict,
     scorecard,
 )
+from oracles import TELEPORT_ASSISTED  # noqa: E402
 
 RESULTS = Path(__file__).resolve().parent / "results"
 
@@ -53,11 +57,39 @@ def main() -> int:
         return 1
 
     rows = []
+    seen: dict[str, str] = {}
+    provenance: list[tuple[str, int, float]] = []
     for f in files:
         try:
-            rows.extend(json.loads(f.read_text()))
+            text = f.read_text()
         except Exception as exc:  # noqa: BLE001
             print(f"skipping {f.name}: {exc}")
+            continue
+        # A copy of a results file matches the glob too, and every episode in
+        # it would count twice -- in the numerator and the denominator both.
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        if digest in seen:
+            print(f"skipping {f.name}: byte-identical to {seen[digest]}")
+            continue
+        try:
+            eps = json.loads(text)
+        except Exception as exc:  # noqa: BLE001
+            print(f"skipping {f.name}: {exc}")
+            continue
+        seen[digest] = f.name
+        rows.extend(eps)
+        provenance.append((f.name, len(eps), f.stat().st_mtime))
+
+    # Where the numbers came from. Per-map files accumulate, so re-running one
+    # map leaves the rest of the report quoting an older sweep; that is fine as
+    # long as nobody reads the total as one run.
+    print(f"=== {len(rows)} episodes from {len(provenance)} file(s) ===")
+    for name, n, mtime in sorted(provenance, key=lambda r: r[2]):
+        print(f"  {time.strftime('%Y-%m-%d %H:%M', time.localtime(mtime))}  {name:<28} {n:>4} episodes")
+    if provenance:
+        span = max(r[2] for r in provenance) - min(r[2] for r in provenance)
+        if span > 86400:
+            print(f"  NOTE: these span {span / 86400:.1f} days -- a composite of separate sweeps, not one run")
 
     # Categories come from the challenge files, not from the results, so a
     # results file written before categories existed still reports correctly.
@@ -82,14 +114,15 @@ def main() -> int:
         rnd = [e for e in eps if e["agent"] == "random"]
         # autoplan's classification rides every row main.py writes (Episode.needs).
         req = next((e.get("needs", "") for e in eps if e.get("needs")), "")
-        verdict, why = gate_verdict(req, oracle, rnd)
+        verdict, why = gate_verdict(req, oracle, rnd, cid in TELEPORT_ASSISTED)
         tally[verdict] += 1
         if verdict == "VALID":
             valid.add(cid)
         else:
             flagged.append((cid, verdict, why))
 
-    print(f"=== {len(by_ch)} challenges from {len(files)} map file(s) ===")
+    print()
+    print(f"=== validity gate: {len(by_ch)} challenges ===")
     print("  " + "   ".join(f"{k} {v}" for k, v in tally.items()))
     for cid, verdict, why in sorted(flagged):
         print(f"    {verdict:<10} {cid:<28} {why}")
@@ -97,10 +130,11 @@ def main() -> int:
     # --- per-category, per-agent -------------------------------------------
     for agent in sorted({r["agent"] for r in rows} - {"random"}):
         card = scorecard(rows, cat, valid, agent)
+        blocked = blocked_count(rows, agent, valid)
         if card is None:
             continue
         print(f"\n=== {agent} ===")
-        for line in format_scorecard(*card):
+        for line in format_scorecard(*card, blocked):
             print(line)
         # A blind episode is not a result. Say so loudly and next to the score
         # it would otherwise silently depress -- the whole point of counting

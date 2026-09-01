@@ -33,7 +33,7 @@ def median(xs: list[float]) -> float | None:
     return xs[mid] if len(xs) % 2 else (xs[mid - 1] + xs[mid]) / 2.0
 
 
-def gate_verdict(req: str, oracle: dict | None, rnd: list[dict]) -> tuple[str, str]:
+def gate_verdict(req: str, oracle: dict | None, rnd: list[dict], teleported: bool = False) -> tuple[str, str]:
     """(verdict, why) for one challenge under the validity gate.
 
     A challenge counts (VALID) only if the oracle PASSES -- it is solvable, so
@@ -43,6 +43,12 @@ def gate_verdict(req: str, oracle: dict | None, rnd: list[dict]) -> tuple[str, s
     no scripted oracle could witness solvability, so the challenge is held to
     the weaker half of the rule only and reported NEEDS-ARM rather than folded
     into VALID.
+
+    `teleported` says the oracle reached its goal with a `put`, which models a
+    successful place without driving the arm. Such a run still proves the goal
+    logic and the geometry, which is what it was written for, but not that the
+    robot can pick the thing up -- so the verdict says so instead of letting
+    VALID imply manipulation nobody tested.
     """
     # A RATE, not an existence check. One pass in several is a guessing
     # floor -- bridge_three documents its own as 1 in 8 -- and marking a
@@ -64,6 +70,9 @@ def gate_verdict(req: str, oracle: dict | None, rnd: list[dict]) -> tuple[str, s
     if not oracle["passed"]:
         why = oracle.get("error") or oracle.get("reason") or f"oracle {oracle['goals_done']}/{oracle['goals_total']}"
         return "INVALID", why
+    if teleported:
+        caveat = "oracle placed by teleport -- goal logic and route proven, arm not"
+        return "VALID", f"{floor}; {caveat}" if floor else caveat
     return "VALID", floor
 
 
@@ -96,7 +105,10 @@ def scorecard(
     a ratio is None when there were none.
     """
     ref = {e["challenge"]: e for e in rows if e["agent"] == "oracle" and e["passed"]}
-    mine = [e for e in rows if e["agent"] == agent and e["challenge"] in valid]
+    # A blocked episode never ran: the harness failed before the robot was
+    # asked anything. Counting it as a loss would blame the robot for our bug,
+    # so it leaves the denominator too and `blocked_count` reports it instead.
+    mine = [e for e in rows if e["agent"] == agent and e["challenge"] in valid and not e.get("blocked")]
     if not mine:
         return None
 
@@ -135,9 +147,19 @@ def scorecard(
     return out, total
 
 
-def format_scorecard(rows: list[ScoreRow], total: tuple[int, int, int, int]) -> list[str]:
+def blocked_count(rows: list[dict], agent: str, valid: set[str]) -> int:
+    """How many of `agent`'s VALID-challenge episodes the harness blocked."""
+    return sum(1 for e in rows if e["agent"] == agent and e["challenge"] in valid and e.get("blocked"))
+
+
+def format_scorecard(rows: list[ScoreRow], total: tuple[int, int, int, int], blocked: int = 0) -> list[str]:
     """The scorecard as printable lines: a header, one line per category and
-    a total line. Callers put their own title above it."""
+    a total line. Callers put their own title above it.
+
+    `blocked` is stated rather than folded in: those episodes are missing from
+    every number above, and a reader who is not told that would read the
+    remainder as the whole benchmark.
+    """
 
     def x(m: float | None) -> str:
         return f"{m:.2f}x" if m is not None else "-"
@@ -150,4 +172,6 @@ def format_scorecard(rows: list[ScoreRow], total: tuple[int, int, int, int]) -> 
         )
     passed, n, done, avail = total
     lines.append(f"  {'-' * 38} {passed:>3}/{n:<3} {done:>4}/{avail:<4}")
+    if blocked:
+        lines.append(f"  {blocked} episode(s) not scored -- the harness blocked them, not the robot")
     return lines

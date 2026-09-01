@@ -278,6 +278,7 @@ def run_episode(
         goals_total=len(ch.goals),
         elapsed_s=round(engine.elapsed_s, 1),
         reason=reason or engine.reason,
+        blocked=str(getattr(agent, "blocked_reason", "")),
         wall_s=round(time.time() - wall0, 1),
         steps=steps,
         turns=int(getattr(agent, "turns", 0)),
