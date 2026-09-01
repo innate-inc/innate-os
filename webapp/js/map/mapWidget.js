@@ -37,12 +37,8 @@ import {
   keepoutGridFromMessage,
   keepoutMessage,
   keepoutUpdateMatches,
-  mapEpochFromMessage,
-  mapFingerprintFromMessage,
+  mapIdentity,
   paintKeepout,
-  isRobotSelectionCatchup,
-  reloadMatchesExpectedMap,
-  shouldActivateMapFingerprint,
 } from "./keepoutMask.js";
 
 // The /map grid rides ONE session-lived subscription instead of one per mount.
@@ -225,7 +221,7 @@ function rasterizeGrid(msg, canvas, ctx, paint) {
  *   global/local costmaps, odometry trail — each adds its subscription only while enabled. The
  *   keepout layer is governed by the shared keepoutZonesVisible() preference, not opts.layers;
  *   onKeepoutZonesToggle fires when the widget's own Zones button (or setLayer) changes it.
- * @returns {{ destroy: () => void, refresh: () => void, setZoom: (meters: number) => void, setFollowRobot: (on: boolean) => void, setLayer: (name: LayerName, on: boolean) => void, setMappingMode: (on: boolean) => void, clearTrail: () => void, expectMapChange: (name: string) => void, cancelExpectedMapChange: (name: string) => void, mapChanged: (name: string) => void, highlightMemory: (id: number | null) => void, focusMemory: (id: number) => void, robotNowS: () => number }}
+ * @returns {{ destroy: () => void, refresh: () => void, setZoom: (meters: number) => void, setFollowRobot: (on: boolean) => void, setLayer: (name: LayerName, on: boolean) => void, setMappingMode: (on: boolean) => void, clearTrail: () => void, mapChanged: () => void, highlightMemory: (id: number | null) => void, focusMemory: (id: number) => void, robotNowS: () => number }}
  */
 export function createMap(root, opts = {}) {
   let zoomMeters = opts.zoom;
@@ -400,27 +396,12 @@ export function createMap(root, opts = {}) {
   let keepoutGrid = null;
   /** @type {import("./keepoutMask.js").KeepoutGrid | null} latest latched editor state, even if it arrived before /map */
   let latestKeepoutGrid = null;
-  /** @type {string | null} exact fingerprint of the displayed localization map */
-  let activeMapHash = null;
-  /** @type {string | null} fingerprint paired with the last current-map notification */
-  let selectedMapHash = null;
-  /** @type {string | null} map-load epoch paired with selectedMapHash */
-  let selectedMapEpoch = null;
-  /** @type {string | null} most recently completed /map fingerprint, even if its notification has not arrived */
-  let candidateMapHash = null;
-  /** @type {string | null} map-load epoch paired with candidateMapHash */
-  let candidateMapEpoch = null;
-  let mapSelectionPending = false;
-  // Bind an early equal-content grid to the local map request that preceded
-  // it. A later selection must not consume an earlier grid just because its
-  // current-map notification happens to arrive next.
-  /** @type {string | null} */
-  let reloadAwaitingNotificationFor = null;
-  /** @type {string | null} */
-  let expectedMapSelection = null;
-  let robotSelectionPending = false;
-  let mapGenerationAtSelectionChange = 0;
-  let mapFingerprintGeneration = 0;
+  // Which map is on screen, and which map a mask belongs to, are both read
+  // from nav2's per-load info.map_load_time (see mapIdentity) — the one key
+  // the two independent latched topics share. Nothing here infers identity
+  // from arrival order, so /map and the mask may land in either order.
+  /** @type {string | null} identity of the displayed localization map */
+  let displayedMapId = null;
   /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null} */
   let keepoutPlacement = null;
   /** @type {{ x: number, y: number } | null} */
@@ -917,7 +898,7 @@ export function createMap(root, opts = {}) {
   }
 
   function syncKeepoutForMap() {
-    const latest = keepoutGridForMap(latestKeepoutGrid, activeMapHash);
+    const latest = keepoutGridForMap(latestKeepoutGrid, displayedMapId, grid);
     const pending = keepoutSavePending;
     if (pending && keepoutUpdateMatches(latest, pending)) {
       keepoutSavePending = null;
@@ -1115,55 +1096,19 @@ export function createMap(root, opts = {}) {
     grid = g;
     gridCells = msg.data;
     gridRev++;
-    // /map and the latched keepout state are independent topics. Blank the
-    // editor until their exact content hashes agree, regardless of which one
-    // arrives first during a map switch.
-    const fingerprintGeneration = ++mapFingerprintGeneration;
-    const mapEpoch = mapEpochFromMessage(msg);
-    candidateMapHash = null;
-    candidateMapEpoch = null;
-    reloadAwaitingNotificationFor = null;
-    activeMapHash = null;
-    keepoutGrid = null;
-    keepoutPlacement = null;
+    const mapId = mapIdentity(msg);
+    if (mapId !== displayedMapId) {
+      // A save still awaiting its echo belongs to the map being replaced; it can
+      // never be confirmed now, and must not surface as a rejection.
+      keepoutSavePending = null;
+      clearTimeout(keepoutSaveTimer);
+      keepoutHoverPt = null;
+    }
+    displayedMapId = mapId;
     keepoutStroke = null;
     keepoutDirty = false;
+    syncKeepoutForMap();
     draw();
-    void mapFingerprintFromMessage(msg).then((mapHash) => {
-      if (fingerprintGeneration !== mapFingerprintGeneration) return;
-      candidateMapHash = mapHash;
-      candidateMapEpoch = mapEpoch;
-      if (
-        mapHash &&
-        shouldActivateMapFingerprint(
-          mapHash,
-          selectedMapHash,
-          mapSelectionPending,
-          fingerprintGeneration > mapGenerationAtSelectionChange,
-          mapEpoch,
-          selectedMapEpoch,
-        )
-      ) {
-        // Adopting an equal-content reload used to be recorded by holding
-        // selectedMapEpoch at the previous value, which left the selection
-        // describing two different moments — and a later notification-first
-        // switch read that gap as evidence for the map already on screen.
-        reloadAwaitingNotificationFor =
-          !mapSelectionPending &&
-          mapHash === selectedMapHash &&
-          !!mapEpoch &&
-          !!selectedMapEpoch &&
-          mapEpoch !== selectedMapEpoch
-            ? expectedMapSelection
-            : null;
-        selectedMapHash = mapHash;
-        selectedMapEpoch = mapEpoch;
-        mapSelectionPending = false;
-        activeMapHash = mapHash;
-        syncKeepoutForMap();
-      }
-      draw();
-    });
   }
 
   /** @param {any} msg pose-carrying message → {x, y, yaw} or null */
@@ -2112,12 +2057,6 @@ export function createMap(root, opts = {}) {
       layers.keepout = on;
       syncLayerSubs();
     }
-    // Zones bind to the map by content hash; if the hash was never computed
-    // for the displayed map (a surface may skip it while zones are off),
-    // replay the latched map so display doesn't wait for the next /map.
-    // Never mid-switch: the cached grid is the OLD map, and replaying it
-    // through onMap would adopt it as the pending selection.
-    if (on && activeMapHash === null && !mapSelectionPending && lastMapMsg) onMap(lastMapMsg);
     if (!on && (ui === "keepout" || ui === "keepout-erase")) {
       clearHint();
       setUi("idle");
@@ -2261,16 +2200,7 @@ export function createMap(root, opts = {}) {
     gridRev++;
     costGrid = null;
     localGrid = null;
-    mapFingerprintGeneration++;
-    activeMapHash = null;
-    selectedMapHash = null;
-    selectedMapEpoch = null;
-    candidateMapHash = null;
-    candidateMapEpoch = null;
-    mapSelectionPending = false;
-    reloadAwaitingNotificationFor = null;
-    expectedMapSelection = null;
-    robotSelectionPending = true;
+    displayedMapId = null;
     keepoutGrid = null;
     latestKeepoutGrid = null;
     keepoutPlacement = null;
@@ -2392,59 +2322,11 @@ export function createMap(root, opts = {}) {
       trail.length = 0;
       draw();
     },
-    /** Record a local map-selection intent before its service call starts. */
-    expectMapChange(name) {
-      expectedMapSelection = name;
-      reloadAwaitingNotificationFor = null;
-    },
-    /** A failed service request never produces a matching notification. */
-    cancelExpectedMapChange(name) {
-      if (expectedMapSelection === name) expectedMapSelection = null;
-      if (reloadAwaitingNotificationFor === name) reloadAwaitingNotificationFor = null;
-    },
-    /** The active map switched: frame state is dropped here. Keepouts are
-     * disabled immediately because this notification arrives before the new
-     * /map. A candidate that arrived first is retained and reconciled here;
-     * otherwise onMap enables the editor only after a post-notification grid.
-     * @param {string} name */
-    mapChanged(name) {
+    /** The active map switched: everything anchored to the old frame is
+     * dropped (see dropFrameState). The keepout layer needs nothing here — it
+     * re-joins on the next /map by identity, whenever that arrives. */
+    mapChanged() {
       dropFrameState();
-      if (isRobotSelectionCatchup(candidateMapHash, selectedMapHash, activeMapHash, robotSelectionPending)) {
-        robotSelectionPending = false;
-        draw();
-        return;
-      }
-      robotSelectionPending = false;
-      mapSelectionPending = true;
-      mapGenerationAtSelectionChange = mapFingerprintGeneration;
-      activeMapHash = null;
-      keepoutGrid = null;
-      keepoutPlacement = null;
-      keepoutStroke = null;
-      keepoutHoverPt = null;
-      keepoutDirty = false;
-      keepoutSavePending = null;
-      clearTimeout(keepoutSaveTimer);
-      if (
-        candidateMapHash &&
-        (reloadMatchesExpectedMap(reloadAwaitingNotificationFor, name) ||
-          shouldActivateMapFingerprint(
-            candidateMapHash,
-            selectedMapHash,
-            true,
-            false,
-            candidateMapEpoch,
-            selectedMapEpoch,
-          ))
-      ) {
-        selectedMapHash = candidateMapHash;
-        selectedMapEpoch = candidateMapEpoch;
-        mapSelectionPending = false;
-        activeMapHash = candidateMapHash;
-        syncKeepoutForMap();
-      }
-      reloadAwaitingNotificationFor = null;
-      expectedMapSelection = null;
       draw();
     },
     /** The robot's clock in epoch seconds (see memClockSkew) — memory stamps
@@ -2480,7 +2362,6 @@ export function createMap(root, opts = {}) {
       draw();
     },
     destroy() {
-      mapFingerprintGeneration++;
       clearTimeout(navStaleTimer);
       clearTimeout(statusClearTimer);
       clearTimeout(keepoutSaveTimer);
