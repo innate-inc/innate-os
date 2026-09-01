@@ -19,6 +19,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "ros2_ws" / "src" / "mars_bot" / "mars_sim_driver"))
@@ -103,25 +104,24 @@ class Episode:
         )
 
 
-class HarnessFault(Exception):
-    """Raised when the episode could not be set up -- our fault, not the
-    robot's. Everything after `engine.start` succeeds is the run itself and is
-    scored, so this is deliberately narrow."""
+class _Ready(NamedTuple):
+    """What the run needs once setup has succeeded."""
+
+    mars: object
+    sim_lock: threading.Lock
+    engine: object
+    ch: object
+    agent: object
+    nav: object
 
 
-def run_episode(
-    map_name: str,
-    challenge_id: str,
-    make_agent,
-    max_sim_s: float | None = None,
-    render_wh: tuple[int, int] = (160, 120),
-    agent_name: str = "?",
-) -> Episode:
-    """Run one challenge to completion, timeout, or agent exhaustion.
+def _prepare(map_name, challenge_id, make_agent, render_wh, agent_name, wall0):
+    """Build the world, the judge and the agent, and start the challenge.
 
-    make_agent(challenge) -> agent, because an auto-planned oracle cannot be
-    built until the Challenge object has been loaded, and loading it needs the
-    engine that this function creates.
+    Everything here is the harness's own work: the robot has not been asked
+    anything yet, so a failure is ours and the episode must not be scored.
+    Returns a finished (blocked) Episode when it cannot proceed, otherwise a
+    _Ready for the run to use.
     """
     assets, ch_root = sources()[map_name]
     if assets is not None:
@@ -129,8 +129,15 @@ def run_episode(
     else:
         os.environ.pop("VIRTUAL_MARS_ASSETS", None)
 
+    from mars_sim_driver import core as _core
+    from mars_sim_driver import world as _world
     from mars_sim_driver.challenges import ChallengeEngine
     from mars_sim_driver.core import VirtualMars
+
+    # core.ASSETS_DIR is read once at import. If something imported the sim
+    # before this ran, the line above changed the environment and nothing else,
+    # and the world would be built without this bundle's props.
+    _core.ASSETS_DIR = _world.default_assets_dir()
 
     wall0 = time.time()
     # Named up front: a challenge that is not under its root fails before any
@@ -160,12 +167,9 @@ def run_episode(
         blank.wall_s = round(time.time() - wall0, 1)
         return blank
 
-    try:
-        agent = make_agent(ch)
-    except Exception as exc:  # noqa: BLE001
-        # Constructing the agent is setup: a missing key, a bad backend name,
-        # an oracle with no plan. The robot was never asked anything.
-        raise HarnessFault(f"agent could not be built: {type(exc).__name__}: {exc}") from exc
+    # Any failure in here is setup, so it needs no special exception type:
+    # run_episode blocks everything _prepare raises.
+    agent = make_agent(ch)
     if agent is None:
         blank.error = "no agent"
         blank.blocked = "harness: no agent could be built"
@@ -198,95 +202,159 @@ def run_episode(
         blank.wall_s = round(time.time() - wall0, 1)
         return blank
 
-    if nav is not None:
-        agent.reset(mars, ch, nav=nav)
-    else:
-        agent.reset(mars, ch)
-    # Agents that answer questions rather than move need a way to say so.
-    if hasattr(agent, "bind_events"):
-        agent.bind_events(engine.post_event)
+    return _Ready(mars, sim_lock, engine, ch, agent, nav)
 
-    # The narrator speaks INTO the agent. An agent with no ear still runs --
-    # the engine keeps the transcript and fires the cues either way -- which is
-    # what lets a deaf oracle gate a scripted challenge for solvability while
-    # the scripted content is only scored against agents that can hear.
-    heard = []
 
-    def _deliver(line: dict) -> None:
-        heard.append(line)
-        hear = getattr(agent, "hear", None)
-        if hear is not None:
-            hear(line)
+def run_episode(
+    map_name: str,
+    challenge_id: str,
+    make_agent,
+    max_sim_s: float | None = None,
+    render_wh: tuple[int, int] = (160, 120),
+    agent_name: str = "?",
+) -> Episode:
+    """Run one challenge to completion, timeout, or agent exhaustion.
 
-    engine.set_cue_sink(_deliver)
+    make_agent(challenge) -> agent, because an auto-planned oracle cannot be
+    built until the Challenge object has been loaded, and loading it needs the
+    engine that this function creates.
+    """
+    wall0 = time.time()
+    try:
+        ready = _prepare(map_name, challenge_id, make_agent, render_wh, agent_name, wall0)
+    except BaseException as exc:  # noqa: BLE001 -- setup, so every failure is ours
+        detail = f"{type(exc).__name__}: {exc}"
+        return Episode(
+            map_name,
+            challenge_id,
+            agent_name,
+            False,
+            0,
+            0,
+            0.0,
+            "",
+            round(time.time() - wall0, 1),
+            0,
+            error=detail,
+            blocked=f"harness: setup failed ({detail[:100]})",
+        )
+    if isinstance(ready, Episode):
+        return ready
+    mars, sim_lock, engine, ch, agent, nav = ready
 
-    limit = max_sim_s or ch.time_limit_s or 600.0
-    t0 = float(mars.data.time)
-    steps = 0
+    # Past here it is the run, and the run is the agent's. A crash below is a
+    # failed challenge, not a harness fault -- and the goals, time and distance
+    # measured up to it are real, so the episode is finalised from the engine
+    # rather than rebuilt from zeros.
+    # Initialised out here because the finalisation below reads them whether
+    # the run completed or crashed -- including a crash in agent.reset, before
+    # the loop has assigned anything.
+    crash = ""
     reason = ""
-
-    # Sim time is the currency every time limit is
-    # denominated in, and headless the sim runs ~10x real time -- so without
-    # this, one second of model latency costs the agent ten seconds of world.
-    _think_budget = {"wall0": None, "sim0": None}
-
-    while True:
-        agent.act(mars, float(mars.data.time) - t0)
-
-        if getattr(agent, "thinking", False):
-            if _think_budget["wall0"] is None:
-                _think_budget["wall0"] = time.time()
-                _think_budget["sim0"] = float(mars.data.time)
-            spent_wall = time.time() - _think_budget["wall0"]
-            spent_sim = float(mars.data.time) - _think_budget["sim0"]
-            # A backend may declare a NOMINAL per-call think charge. The 1:1
-            # wall rule is right when the call latency IS the model's latency;
-            # for the file-bridge probe the wall time is mostly orchestration
-            # (a subagent polling files), and charging it measures the
-            # plumbing, not the robot: one 295 s deliberation ate 70% of a
-            # 420 s challenge that the agent was actually solving. With
-            # think_charge_s set, each call advances sim by at most that many
-            # seconds -- a realistic strong-model latency -- however long the
-            # call really takes.
-            charge = getattr(getattr(agent, "backend", None), "think_charge_s", None)
-            wall_cap = getattr(getattr(agent, "backend", None), "think_wall_cap_s", THINK_WALL_CAP_S)
-            # A hung backend would otherwise spin here forever: sim time is
-            # pinned to the wall clock while thinking, so the challenge time
-            # limit -- which is denominated in SIM seconds -- can never fire.
-            # The loop would hold a worker until something outside killed it.
-            if spent_wall > wall_cap:
-                reason = f"agent stalled: {spent_wall:.0f}s in one model call"
-                break
-            if spent_sim >= (spent_wall if charge is None else min(spent_wall, charge)):
-                # The world has kept pace with the thinking. Yield rather than
-                # spin: the model call is on another thread and wants the CPU
-                # far more than this loop does.
-                time.sleep(0.002)
-                continue
+    steps = 0
+    heard: list[dict] = []
+    try:
+        if nav is not None:
+            agent.reset(mars, ch, nav=nav)
         else:
-            _think_budget["wall0"] = None
+            agent.reset(mars, ch)
+        # Agents that answer questions rather than move need a way to say so.
+        if hasattr(agent, "bind_events"):
+            agent.bind_events(engine.post_event)
 
-        mars.step(CONTROL_DT)
-        steps += 1
+        # The narrator speaks INTO the agent. An agent with no ear still runs --
+        # the engine keeps the transcript and fires the cues either way -- which is
+        # what lets a deaf oracle gate a scripted challenge for solvability while
+        # the scripted content is only scored against agents that can hear.
 
-        if steps % JUDGE_EVERY == 0:
-            with sim_lock:
-                t = float(mars.data.time)
-                pose = mars.pose()
-                centers = mars.object_centers()
-                epoch = engine.world_epoch
-            engine.tick(t, pose, centers, epoch)
+        def _deliver(line: dict) -> None:
+            heard.append(line)
+            hear = getattr(agent, "hear", None)
+            if hear is not None:
+                hear(line)
 
-            if engine.state != "running":
-                break
-            if t - t0 > limit:
-                reason = "time limit"
-                break
-            # An agent out of plan will never do anything else; burning the
-            # remaining sim time proves nothing and costs minutes across a sweep.
-            if getattr(agent, "done", False):
-                reason = getattr(agent, "failed_reason", "") or "agent finished its plan"
-                break
+        engine.set_cue_sink(_deliver)
+
+        limit = max_sim_s or ch.time_limit_s or 600.0
+        t0 = float(mars.data.time)
+
+        # Sim time is the currency every time limit is
+        # denominated in, and headless the sim runs ~10x real time -- so without
+        # this, one second of model latency costs the agent ten seconds of world.
+        _think_budget = {"wall0": None, "sim0": None}
+
+        while True:
+            agent.act(mars, float(mars.data.time) - t0)
+
+            if getattr(agent, "thinking", False):
+                if _think_budget["wall0"] is None:
+                    _think_budget["wall0"] = time.time()
+                    _think_budget["sim0"] = float(mars.data.time)
+                spent_wall = time.time() - _think_budget["wall0"]
+                spent_sim = float(mars.data.time) - _think_budget["sim0"]
+                # A backend may declare a NOMINAL per-call think charge. The 1:1
+                # wall rule is right when the call latency IS the model's latency;
+                # for the file-bridge probe the wall time is mostly orchestration
+                # (a subagent polling files), and charging it measures the
+                # plumbing, not the robot: one 295 s deliberation ate 70% of a
+                # 420 s challenge that the agent was actually solving. With
+                # think_charge_s set, each call advances sim by at most that many
+                # seconds -- a realistic strong-model latency -- however long the
+                # call really takes.
+                charge = getattr(getattr(agent, "backend", None), "think_charge_s", None)
+                wall_cap = getattr(getattr(agent, "backend", None), "think_wall_cap_s", THINK_WALL_CAP_S)
+                # A hung backend would otherwise spin here forever: sim time is
+                # pinned to the wall clock while thinking, so the challenge time
+                # limit -- which is denominated in SIM seconds -- can never fire.
+                # The loop would hold a worker until something outside killed it.
+                if spent_wall > wall_cap:
+                    reason = f"agent stalled: {spent_wall:.0f}s in one model call"
+                    break
+                if spent_sim >= (spent_wall if charge is None else min(spent_wall, charge)):
+                    # The world has kept pace with the thinking. Yield rather than
+                    # spin: the model call is on another thread and wants the CPU
+                    # far more than this loop does.
+                    time.sleep(0.002)
+                    continue
+            else:
+                _think_budget["wall0"] = None
+
+            mars.step(CONTROL_DT)
+            steps += 1
+
+            if steps % JUDGE_EVERY == 0:
+                with sim_lock:
+                    t = float(mars.data.time)
+                    pose = mars.pose()
+                    centers = mars.object_centers()
+                    epoch = engine.world_epoch
+                engine.tick(t, pose, centers, epoch)
+
+                if engine.state != "running":
+                    break
+                if t - t0 > limit:
+                    reason = "time limit"
+                    break
+                # An agent out of plan will never do anything else; burning the
+                # remaining sim time proves nothing and costs minutes across a sweep.
+                if getattr(agent, "done", False):
+                    reason = getattr(agent, "failed_reason", "") or "agent finished its plan"
+                    break
+
+    except BaseException as exc:  # noqa: BLE001
+        # Including KeyboardInterrupt and SystemExit: raised HERE they came
+        # from the code under test, and letting one escape kills the pool
+        # worker, which the parent can only see as a timeout -- so unrelated
+        # queued episodes get marked blocked too. A real Ctrl-C in the parent
+        # is not this: sweep workers ignore SIGINT (main.py), so in a worker
+        # only the agent can produce one, and in the main process it is the
+        # user and must not be swallowed.
+        import multiprocessing as _mp
+
+        if isinstance(exc, KeyboardInterrupt) and _mp.current_process().name == "MainProcess":
+            raise
+        crash = f"{type(exc).__name__}: {exc}"
+        reason = reason or f"agent crashed: {crash}"
 
     done = sum(1 for g in engine.goal_done if g)
     m = engine.metrics()
@@ -299,6 +367,7 @@ def run_episode(
         goals_total=len(ch.goals),
         elapsed_s=round(engine.elapsed_s, 1),
         reason=reason or engine.reason,
+        error=crash,
         blocked=str(getattr(agent, "blocked_reason", "")),
         wall_s=round(time.time() - wall0, 1),
         steps=steps,

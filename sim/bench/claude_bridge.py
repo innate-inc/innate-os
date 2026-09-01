@@ -154,7 +154,7 @@ def _run_one(map_name: str, cid: str, bridge: Path, out: Path) -> int:
         agent.max_turns = max(40, int((ch.time_limit_s or 400) / 9))
         return agent
 
-    ep = run_episode(map_name, cid, make, max_sim_s=None, render_wh=(640, 480))
+    ep = run_episode(map_name, cid, make, max_sim_s=None, render_wh=(640, 480), agent_name="brain:claude")
     with (out / "episodes.jsonl").open("a") as fh:
         fh.write(json.dumps(asdict(ep)) + "\n")
     with log.open("a") as fh:

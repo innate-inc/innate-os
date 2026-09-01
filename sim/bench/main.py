@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bench_common import VERDICTS, blocked_count, format_scorecard, gate_verdict, scorecard  # noqa: E402
 from oracles import teleport_assisted  # noqa: E402
-from runner import Episode, HarnessFault, run_episode, sources  # noqa: E402
+from runner import Episode, run_episode, sources  # noqa: E402
 
 
 def discover() -> dict[str, list[tuple[str, str]]]:
@@ -69,6 +69,13 @@ CATEGORY_OF: dict[str, int] = {}
 # challenge id -> whether its plan reaches the goal by teleporting a prop,
 # filled by discover() alongside the categories and for the same reason.
 TELEPORTS: dict[str, bool] = {}
+
+
+def _ignore_sigint():
+    """Pool initializer: leave Ctrl-C to the parent process."""
+    import signal
+
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def _one(job):
@@ -128,27 +135,12 @@ def _one(job):
     try:
         wh = (640, 480) if agent_name.startswith("brain") else (160, 120)
         return run_episode(map_name, challenge_id, make, max_sim_s=cap, render_wh=wh, agent_name=agent_name)
-    except HarnessFault as exc:
-        # Setup failed, so the robot was never asked anything: no verdict
-        # exists and this leaves the score entirely.
-        return Episode(
-            map_name,
-            challenge_id,
-            agent_name,
-            False,
-            0,
-            0,
-            0.0,
-            "",
-            0.0,
-            0,
-            error=str(exc),
-            blocked=f"harness: {exc}",
-        )
-    except Exception as exc:  # noqa: BLE001 -- one bad episode must not sink the sweep
-        # NOT blocked. Past setup this is the run, and an agent that crashes
-        # part-way through has failed the challenge. Excusing it would take the
-        # episode out of the denominator, so crashing would improve the score.
+    except BaseException as exc:  # noqa: BLE001 -- one bad episode must not sink the sweep
+        # A last resort only: run_episode classifies setup versus run and sets
+        # `blocked` itself, so anything still escaping is unexpected and is
+        # reported as an error rather than quietly excused from the score.
+        if isinstance(exc, KeyboardInterrupt):
+            raise
         return Episode(
             map_name,
             challenge_id,
@@ -279,7 +271,10 @@ def main() -> int:
     results = []
     args.out.parent.mkdir(parents=True, exist_ok=True)
     lost = ""
-    with mp.Pool(workers, maxtasksperchild=1) as pool:
+    # Workers ignore SIGINT so Ctrl-C stays the parent's: a worker that dies on
+    # an interrupt is invisible to Pool, and the parent would see only the
+    # result timeout and mark every unfinished episode blocked.
+    with mp.Pool(workers, maxtasksperchild=1, initializer=_ignore_sigint) as pool:
         stream = pool.imap_unordered(_one, jobs)
         for _ in range(len(jobs)):
             try:
@@ -341,13 +336,19 @@ def main() -> int:
             # its own challenge INCOMPLETE, so scoping this to VALID reports
             # zero for exactly the agent that lost everything.
             blocked = blocked_count(rows, a)
+            ran = sum(1 for e in rows if e["agent"] == a) - blocked
             # No scorecard because nothing of this agent's survived. Say it:
             # an agent whose every episode was blocked is the loudest result
             # in the run, and skipping the section printed it as nothing.
             if blocked:
                 print()
                 print(f"=== scorecard: {a} ===")
-                print(f"  no score -- all {blocked} episode(s) blocked by the harness")
+                # "all blocked" only when it is: a scorecard is also absent
+                # when the agent simply had no episode on a VALID challenge.
+                if ran:
+                    print(f"  no score -- no unblocked episode on a VALID challenge ({blocked} blocked, {ran} ran)")
+                else:
+                    print(f"  no score -- all {blocked} episode(s) blocked by the harness")
             continue
         print(f"\n=== scorecard: {a} ===")
         for line in format_scorecard(*card, blocked):

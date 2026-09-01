@@ -176,12 +176,15 @@ search-coverage probe into a contrast probe.
   (`backends_v2.py`, `brain:nemotron_stack`) ran the full 45-challenge suite
   in-process — scores, methodology caveats and before/after re-runs in
   `NEMOTRON_STACK_RESULTS.md`.
-- **Three oracles reach their goal by teleport.** `put` models a successful
-  place without driving the arm, so `gallery_fetch_mug`, `household_fetch_mug`
-  and `workshop_fetch_gauge` are certified for goal logic and route, not for
-  manipulation. The gate says so on the verdict line rather than leaving VALID
-  to imply it; the set is derived from the plans (`oracles.TELEPORT_ASSISTED`),
-  so adding a `put` to a plan adds the caveat automatically.
+- **20 of the 45 oracles reach their goal by teleport.** `put` and `put_near`
+  model a successful place without driving the arm, so those challenges are
+  certified for goal logic and route, not for manipulation. The gate says so on
+  the verdict line rather than leaving VALID to imply it, and the flag comes
+  from the plan that actually runs (`oracles.teleport_assisted`, which resolves
+  the hand-written plan or the derived one exactly as the runner does) -- so a
+  new carry challenge carries the caveat without anyone remembering to add it.
+  Deriving this from the hand-written table alone found three and missed
+  seventeen, because most of these challenges have no hand plan at all.
 - **No visual replay of a bundle run.** The suite is headless by design and the
   numbers come from the judge, not from watching. Upstream's sim viewer renders
   the apartment's decomposed meshes; the authored rooms here are MuJoCo
