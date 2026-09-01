@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bench_common import VERDICTS, blocked_count, format_scorecard, gate_verdict, scorecard  # noqa: E402
 from oracles import teleport_assisted  # noqa: E402
-from runner import Episode, run_episode, sources  # noqa: E402
+from runner import Episode, HarnessFault, run_episode, sources  # noqa: E402
 
 
 def discover() -> dict[str, list[tuple[str, str]]]:
@@ -127,14 +127,10 @@ def _one(job):
 
     try:
         wh = (640, 480) if agent_name.startswith("brain") else (160, 120)
-        return run_episode(map_name, challenge_id, make, max_sim_s=cap, render_wh=wh)
-    except Exception as exc:  # noqa: BLE001 -- one bad episode must not sink the sweep
-        # Blocked, not failed. Nothing reached the judge, so there is no
-        # verdict to report: the agent could not be built, or the sim died
-        # under it. The cause stays in `error`, so an exception thrown by the
-        # agent under test is still visible -- it is just not scored as the
-        # robot losing a challenge it was never asked.
-        detail = f"{type(exc).__name__}: {exc}"
+        return run_episode(map_name, challenge_id, make, max_sim_s=cap, render_wh=wh, agent_name=agent_name)
+    except HarnessFault as exc:
+        # Setup failed, so the robot was never asked anything: no verdict
+        # exists and this leaves the score entirely.
         return Episode(
             map_name,
             challenge_id,
@@ -146,8 +142,25 @@ def _one(job):
             "",
             0.0,
             0,
-            error=detail,
-            blocked=f"harness: episode did not run ({detail[:80]})",
+            error=str(exc),
+            blocked=f"harness: {exc}",
+        )
+    except Exception as exc:  # noqa: BLE001 -- one bad episode must not sink the sweep
+        # NOT blocked. Past setup this is the run, and an agent that crashes
+        # part-way through has failed the challenge. Excusing it would take the
+        # episode out of the denominator, so crashing would improve the score.
+        return Episode(
+            map_name,
+            challenge_id,
+            agent_name,
+            False,
+            0,
+            0,
+            0.0,
+            "",
+            0.0,
+            0,
+            error=f"{type(exc).__name__}: {exc}",
         )
 
 
@@ -324,6 +337,10 @@ def main() -> int:
         card = scorecard(rows, CATEGORY_OF, valid_ids, a)
         blocked = blocked_count(rows, a, valid_ids)
         if card is None:
+            # Every challenge, not just the VALID ones: a blocked oracle makes
+            # its own challenge INCOMPLETE, so scoping this to VALID reports
+            # zero for exactly the agent that lost everything.
+            blocked = blocked_count(rows, a)
             # No scorecard because nothing of this agent's survived. Say it:
             # an agent whose every episode was blocked is the loudest result
             # in the run, and skipping the section printed it as nothing.

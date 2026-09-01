@@ -15,8 +15,10 @@ python3 - "$TEXT" > "$PAYLOAD" <<'PY'
 import json, sys
 msg = json.dumps({"text": sys.argv[1]})
 print("import subprocess, json")
+# check=True: a publish that fails must fail the script. Without it Docker
+# succeeds, the shell sees 0, and the brain simply never hears the brief.
 print(f"subprocess.run(['ros2','topic','pub','--once','/brain/chat_in','std_msgs/String',"
-      f"{json.dumps(json.dumps({'data': msg}))}], timeout=40)")
+      f"{json.dumps(json.dumps({'data': msg}))}], timeout=40, check=True)")
 PY
 # Upstream gives each checkout its own stack, so the container carries a
 # per-checkout suffix. Discover it rather than hardcoding `innate-dev`.

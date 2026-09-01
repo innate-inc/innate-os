@@ -10,6 +10,7 @@ refusal has to reach the report as OUR fault, because the whole point of this
 benchmark is telling a broken harness apart from a robot that cannot do the
 task.
 """
+
 import sys
 import threading
 import types
@@ -71,7 +72,10 @@ def _engine(tmp_path, challenge):
 
 def _challenge(predicate, fail_if=None):
     return Challenge(
-        id="dirty", title="Dirty", brief="brief", setup=[],
+        id="dirty",
+        title="Dirty",
+        brief="brief",
+        setup=[],
         goals=[Goal("first", predicate), Goal("second", Clean())],
         fail_if=fail_if,
     )
@@ -98,9 +102,7 @@ def test_the_refusal_does_not_leak_into_the_next_start(tmp_path):
     """_reset_failed is cleared, so a later healthy challenge still runs."""
     engine, _sim = _engine(tmp_path, _challenge(Dirty()))
     assert engine.start("dirty") is not True
-    engine.challenges["ok"] = Challenge(
-        id="ok", title="OK", brief="b", setup=[], goals=[Goal("g", Clean())]
-    )
+    engine.challenges["ok"] = Challenge(id="ok", title="OK", brief="b", setup=[], goals=[Goal("g", Clean())])
     assert engine.start("ok"), "a healthy challenge was refused by the previous failure"
     assert engine.state == "running"
     assert engine.reason == ""

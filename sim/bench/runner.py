@@ -103,12 +103,19 @@ class Episode:
         )
 
 
+class HarnessFault(Exception):
+    """Raised when the episode could not be set up -- our fault, not the
+    robot's. Everything after `engine.start` succeeds is the run itself and is
+    scored, so this is deliberately narrow."""
+
+
 def run_episode(
     map_name: str,
     challenge_id: str,
     make_agent,
     max_sim_s: float | None = None,
     render_wh: tuple[int, int] = (160, 120),
+    agent_name: str = "?",
 ) -> Episode:
     """Run one challenge to completion, timeout, or agent exhaustion.
 
@@ -126,7 +133,10 @@ def run_episode(
     from mars_sim_driver.core import VirtualMars
 
     wall0 = time.time()
-    blank = Episode(map_name, challenge_id, "?", False, 0, 0, 0.0, "", 0.0, 0)
+    # Named up front: a challenge that is not under its root fails before any
+    # agent is built, and reporting that as "?" loses the one thing the reader
+    # needs -- which agent was asked.
+    blank = Episode(map_name, challenge_id, agent_name, False, 0, 0, 0.0, "", 0.0, 0)
 
     # Renders are the expensive part of a headless episode and nothing here
     # looks at pixels, so keep the offscreen buffers small.
@@ -150,7 +160,12 @@ def run_episode(
         blank.wall_s = round(time.time() - wall0, 1)
         return blank
 
-    agent = make_agent(ch)
+    try:
+        agent = make_agent(ch)
+    except Exception as exc:  # noqa: BLE001
+        # Constructing the agent is setup: a missing key, a bad backend name,
+        # an oracle with no plan. The robot was never asked anything.
+        raise HarnessFault(f"agent could not be built: {type(exc).__name__}: {exc}") from exc
     if agent is None:
         blank.error = "no agent"
         blank.blocked = "harness: no agent could be built"

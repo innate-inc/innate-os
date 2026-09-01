@@ -92,11 +92,25 @@ import json, subprocess, time
 
 RESET = $RESET
 
+FAILED = []
+
+
 def run(args, t=45):
+    """Run one ros2 command, remembering failures instead of hiding them.
+
+    Returning the error as a STRING made every caller print it and carry on,
+    so the script exited 0 with an un-primed brain -- indistinguishable from a
+    robot that will not move. Collected here and re-raised at the end, so the
+    remaining steps still run and the caller still learns it failed.
+    """
     try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=t).stdout.strip()
+        r = subprocess.run(args, capture_output=True, text=True, timeout=t)
     except Exception as e:
+        FAILED.append(f"{args[1] if len(args) > 1 else args[0]}: {e}")
         return f"(failed: {e})"
+    if r.returncode != 0:
+        FAILED.append(f"{' '.join(args[:4])} -> exit {r.returncode}: {(r.stderr or r.stdout).strip()[:120]}")
+    return r.stdout.strip()
 
 if RESET:
     # Clear the conversation, then re-activate: reset_brain leaves it inactive.
@@ -119,6 +133,9 @@ payload = json.dumps({"agent_id": "empty_directive", "skills": SKILLS})
 run(["ros2", "topic", "pub", "--once", "/brain/set_active_skills",
      "std_msgs/String", json.dumps({"data": payload})])
 print("skills enabled:", len(SKILLS), "->", ", ".join(s.split("/")[-1] for s in SKILLS))
+
+if FAILED:
+    raise SystemExit("priming failed -- " + "; ".join(FAILED))
 PY
 # Upstream gives each checkout its own stack, so the container carries a
 # per-checkout suffix. Discover it rather than hardcoding `innate-dev`.

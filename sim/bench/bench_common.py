@@ -56,10 +56,13 @@ def gate_verdict(req: str, oracle: dict | None, rnd: list[dict], teleported: boo
     # control look stronger the less of it survived.
     if oracle is not None and oracle.get("blocked"):
         return "INCOMPLETE", f"oracle blocked -- {oracle['blocked']}"
-    ran = [e for e in rnd if not e.get("blocked")]
-    if rnd and not ran:
-        return "INCOMPLETE", f"every random rollout blocked -- {rnd[0]['blocked']}"
-    rnd = ran
+    lost = [e for e in rnd if e.get("blocked")]
+    if lost:
+        # Not just when they ALL vanish. The rule is that every random rollout
+        # failed; with some of them missing we do not know that, and letting
+        # the survivors certify the challenge makes the gate more confident the
+        # less evidence it has.
+        return "INCOMPLETE", f"{len(lost)}/{len(rnd)} random rollouts blocked -- {lost[0]['blocked']}"
 
     # A RATE, not an existence check. One pass in several is a guessing
     # floor -- bridge_three documents its own as 1 in 8 -- and marking a
@@ -158,9 +161,17 @@ def scorecard(
     return out, total
 
 
-def blocked_count(rows: list[dict], agent: str, valid: set[str]) -> int:
-    """How many of `agent`'s VALID-challenge episodes the harness blocked."""
-    return sum(1 for e in rows if e["agent"] == agent and e["challenge"] in valid and e.get("blocked"))
+def blocked_count(rows: list[dict], agent: str, valid: set[str] | None = None) -> int:
+    """How many of `agent`'s episodes the harness blocked.
+
+    Restricted to VALID challenges when `valid` is given, which is what the
+    scorecard needs. Pass None to count them all -- a blocked oracle makes its
+    own challenge INCOMPLETE, so counting only VALID ones would report zero for
+    exactly the agent whose every episode was lost.
+    """
+    return sum(
+        1 for e in rows if e["agent"] == agent and (valid is None or e["challenge"] in valid) and e.get("blocked")
+    )
 
 
 def format_scorecard(rows: list[ScoreRow], total: tuple[int, int, int, int], blocked: int = 0) -> list[str]:

@@ -78,24 +78,34 @@ def main() -> int:
             print(f"skipping {f.name}: {exc}")
             continue
         seen[digest] = f.name
-        loaded.append((f.name, f.stat().st_mtime, eps))
+        loaded.append((f.name, f.stat().st_mtime_ns, eps))
 
     # One file per challenge: the newest that contains it. Appending them all
     # let an old sweep and a new one both describe the same challenge, and the
     # gate then read whichever row it happened to meet first.
     loaded.sort(key=lambda r: r[1])
-    owner: dict[str, str] = {}
-    for name, _mtime, eps in loaded:
+    newest: dict[str, int] = {}
+    holders: dict[str, list[str]] = {}
+    for name, mtime, eps in loaded:
         for e in eps:
-            owner[e["challenge"]] = name
+            cid = e["challenge"]
+            if cid not in newest or mtime > newest[cid]:
+                newest[cid], holders[cid] = mtime, [name]
+            elif mtime == newest[cid] and name not in holders[cid]:
+                holders[cid].append(name)
+    # A tie is not a tiebreak: neither file is newer, and breaking it by name
+    # would let RENAMING a file change a challenge from VALID to INVALID.
+    ambiguous = {cid: names for cid, names in holders.items() if len(names) > 1}
+    owner = {cid: names[0] for cid, names in holders.items() if len(names) == 1}
     superseded: dict[str, set[str]] = {}
     for name, mtime, eps in loaded:
-        kept = [e for e in eps if owner[e["challenge"]] == name]
+        kept = [e for e in eps if owner.get(e["challenge"]) == name]
         for e in eps:
-            if owner[e["challenge"]] != name:
-                superseded.setdefault(name, set()).add(e["challenge"])
+            cid = e["challenge"]
+            if cid not in ambiguous and owner.get(cid) != name:
+                superseded.setdefault(name, set()).add(cid)
         rows.extend(kept)
-        provenance.append((name, len(kept), mtime))
+        provenance.append((name, len(kept), mtime / 1e9))
 
     # Where the numbers came from. Per-map files accumulate, so re-running one
     # map leaves the rest of the report quoting an older sweep; that is fine as
@@ -103,6 +113,11 @@ def main() -> int:
     print(f"=== {len(rows)} episodes from {len(provenance)} file(s) ===")
     for name, n, mtime in sorted(provenance, key=lambda r: r[2]):
         print(f"  {time.strftime('%Y-%m-%d %H:%M', time.localtime(mtime))}  {name:<28} {n:>4} episodes")
+    for cid in sorted(ambiguous):
+        print(
+            f"  AMBIGUOUS {cid}: {' and '.join(sorted(ambiguous[cid]))} share a timestamp"
+            f" -- neither is newer, so it is not scored"
+        )
     for name in sorted(superseded):
         lost = sorted(superseded[name])
         shown = ", ".join(lost[:4]) + (f" and {len(lost) - 4} more" if len(lost) > 4 else "")
@@ -154,6 +169,10 @@ def main() -> int:
         card = scorecard(rows, cat, valid, agent)
         blocked = blocked_count(rows, agent, valid)
         if card is None:
+            # Every challenge, not just the VALID ones: a blocked oracle makes
+            # its own challenge INCOMPLETE, so scoping this to VALID reports
+            # zero for exactly the agent that lost everything.
+            blocked = blocked_count(rows, agent)
             if blocked:
                 print()
                 print(f"=== {agent} ===")
