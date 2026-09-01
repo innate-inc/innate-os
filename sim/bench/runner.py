@@ -378,6 +378,7 @@ def run_episode(
             0,
             error=detail,
             blocked=f"harness: setup failed ({detail[:100]})",
+            started=False,
         )
     if isinstance(ready, Episode):
         return ready

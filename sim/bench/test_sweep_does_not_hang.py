@@ -88,3 +88,26 @@ def test_an_explicit_timeout_wins():
 
     assert result_budget({"brain:x": [600.0]}, {"brain:x"}, override=30.0) == 30.0
     assert result_budget({}, {"oracle"}, override=0.001) == 0.001
+
+
+def test_a_blocked_episode_is_not_a_timing_sample():
+    """A setup failure returns in a tenth of a second. Counting that as this
+    agent measured drops the wait to the floor while a real episode of the same
+    agent is still running -- which is the recovery firing on a healthy sweep."""
+    import sys
+    from pathlib import Path as _P
+
+    sys.path.insert(0, str(_P(__file__).resolve().parents[2] / "ros2_ws/src/mars_bot/mars_sim_driver"))
+    from main import record_timing, result_budget
+    from runner import Episode
+
+    seen: dict[str, list[float]] = {}
+    blocked = Episode("m", "c", "brain:x", False, 0, 0, 0.0, "", 0.1, 0, blocked="harness: setup failed")
+    record_timing(seen, blocked)
+    assert seen == {}, "a blocked episode was recorded as a measurement"
+    assert result_budget(seen, {"brain:x"}) >= 1800.0, "the wait collapsed on a failure that never ran"
+
+    ran = Episode("m", "c", "brain:x", False, 0, 0, 0.0, "", 240.0, 10)
+    record_timing(seen, ran)
+    assert seen == {"brain:x": [240.0]}
+    assert result_budget(seen, {"brain:x"}) == 1440.0

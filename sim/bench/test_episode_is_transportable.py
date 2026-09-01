@@ -309,58 +309,49 @@ def test_a_refusal_before_the_run_is_still_not_attempted():
 
 
 def _renders_caught_exception(source: str) -> list[str]:
-    """Lines where a caught exception is turned into text without describe().
+    """Uses of a caught exception that could call its __str__.
 
-    Every form that calls its __str__ counts, because that is what raises: an
-    f-string, %-formatting, .format, format(), str/repr, or handing it to
-    print. Names assigned FROM the caught exception are tainted too -- an alias
-    renders exactly the same.
+    Stated as a whitelist rather than by chasing aliases: annotated assignment,
+    walrus, tuple unpacking, `self.error = exc`, a dict holding it -- each is
+    another route to a render the scanner would have to follow, and it only has
+    to miss one. Inside a handler the caught name may appear only where it
+    cannot be turned into text:
+
+      describe(exc)            the safe formatter
+      raise ... from exc       chaining, which does not render it here
+      raise exc                re-raising
+      type(exc) / exc.attr     reading the class or a field, not the text
+      isinstance(exc, ...)     a check
+
+    Anything else -- including simply binding it to another name -- is
+    reported, because from there it can be rendered anywhere.
     """
     import ast
 
+    SAFE_CALLS = {"describe", "type", "isinstance"}
     found = []
     tree = ast.parse(source)
+    parent = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[child] = node
+
     for handler in (n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler) and n.name):
-        tainted = {handler.name}
-        for node in ast.walk(handler):  # aliases, before looking for renders
-            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name):
-                if node.value.id in tainted:
-                    tainted |= {t.id for t in node.targets if isinstance(t, ast.Name)}
-
-        def names(node, tainted=tainted):
-            """Tainted names in this expression, NOT counting ones already
-            inside a describe() call -- `f"{describe(exc)}"` is the fix, not
-            the defect -- and not counting `type(exc).__name__`, which reads the
-            class and never calls the instance's __str__."""
-            found, stack = set(), [node]
-            while stack:
-                n = stack.pop()
-                if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "describe":
-                    continue
-                if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "type":
-                    continue  # type(exc).__name__ never calls __str__
-                if isinstance(n, ast.Name) and n.id in tainted:
-                    found.add(n.id)
-                stack.extend(ast.iter_child_nodes(n))
-            return found
-
+        caught = handler.name
         for node in ast.walk(handler):
-            where = None
-            if isinstance(node, ast.FormattedValue) and names(node.value):
-                where = "interpolated"
-            elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod) and names(node.right):
-                where = "%-formatted"
-            elif isinstance(node, ast.Call):
-                fn = node.func
-                name = getattr(fn, "id", "") or getattr(fn, "attr", "")
-                if name == "describe":
-                    continue
-                if name in ("str", "repr", "format", "print") and any(names(a) for a in node.args):
-                    where = f"passed to {name}()"
-                elif name == "format" and isinstance(fn, ast.Attribute) and any(names(a) for a in node.args):
-                    where = "str.format"
-            if where:
-                found.append(f"line {node.lineno}: {where}")
+            if not (isinstance(node, ast.Name) and node.id == caught and isinstance(node.ctx, ast.Load)):
+                continue
+            up = parent.get(node)
+            if isinstance(up, ast.Call) and getattr(up.func, "id", "") in SAFE_CALLS and node in up.args:
+                continue
+            if isinstance(up, ast.Raise):  # `raise exc` or `raise X from exc`
+                continue
+            if isinstance(up, ast.Attribute):
+                # Reading a field -- exc.code, error.headers, exc.__class__ --
+                # never calls __str__. What matters is handing the exception
+                # ITSELF to something that renders it.
+                continue
+            found.append(f"line {node.lineno}: `{caught}` used where it could be rendered")
     return found
 
 
@@ -396,16 +387,32 @@ def _handler(*body: str) -> str:
 
 
 def test_the_scanner_recognises_the_forms_that_defeated_it():
-    """The check is only worth its green if it fails on the real patterns."""
+    """The check is only worth its green if it fails on the real patterns.
+
+    The first version chased aliases and missed most of these; stating the rule
+    as a whitelist means an alias is caught at the moment it is created, before
+    there is anything to chase.
+    """
     unsafe = (
         _handler("x = f'{exc}'"),
+        _handler("x = f'{exc!s}'"),
+        _handler("x = f'{exc!r}'"),
         _handler("msg = exc", "x = f'{msg}'"),
+        _handler("msg: Exception = exc", "print(msg)"),
+        _handler("msg, other = exc, None", "print(msg)"),
+        _handler("self.error = exc"),
+        _handler("box = {'e': exc}"),
+        _handler("box = [exc]"),
+        _handler("if (m := exc):", "    print(m)"),
         _handler("x = 'failed: %s' % exc"),
         _handler("x = '{}'.format(exc)"),
+        _handler("x = '{e}'.format(e=exc)"),
         _handler("x = str(exc)"),
         _handler("x = repr(exc)"),
         _handler("print(exc)"),
+        _handler("logging.exception('failed', exc)"),
         _handler("x = f'a {format(exc)} b'"),
+        _handler("return exc"),
     )
     for snippet in unsafe:
         assert _renders_caught_exception(snippet), "scanner missed:" + chr(10) + snippet
@@ -414,8 +421,35 @@ def test_the_scanner_recognises_the_forms_that_defeated_it():
         _handler("x = describe(exc)"),
         _handler("x = f'{describe(exc)}'"),
         _handler("raise ValueError('nope') from exc"),
+        _handler("raise exc"),
+        _handler("x = f'{type(exc).__name__}'"),
+        _handler("x = f'{exc.__class__.__name__}'"),
+        _handler("if exc.code not in (429, 500):", "    raise"),
+        _handler("payload = exc.read()"),
+        _handler("if isinstance(exc, OSError):", "    pass"),
         chr(10).join(("try:", "    f()", "except Exception:", "    x = 'lost it'")),
     )
-    safe += (_handler("x = f'upstream {type(exc).__name__}'"),)
     for snippet in safe:
         assert not _renders_caught_exception(snippet), "scanner false-positived:" + chr(10) + snippet
+
+
+def test_every_pre_start_return_knows_it_never_started():
+    """None means nobody can say, so a path that WAS watching must not use it
+    -- it makes the report vaguer than the evidence."""
+    import ast
+    import pathlib
+
+    here = pathlib.Path(__file__).resolve().parent
+    # Every Episode(...) built outside the finalisation should be explicit
+    # about `started`, one way or the other.
+    vague = []
+    for name in ("runner.py", "live_runner.py"):
+        tree = ast.parse((here / name).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "Episode":
+                if not any(k.arg == "started" for k in node.keywords):
+                    vague.append(f"{name}:{node.lineno}")
+    assert not vague, (
+        "these build an Episode without saying whether it started, so it defaults to "
+        "unknown on a path that knows: " + ", ".join(vague)
+    )

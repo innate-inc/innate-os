@@ -281,7 +281,9 @@ async def _episode(
     probe = _LiveProbe(rosbridge) if rosbridge else None
     if probe:
         probe.start()
-    ep = Episode("live", challenge_id, "system", False, 0, 0, 0.0, "", 0.0, 0)
+    # started=False until the stream shows this challenge running (below): we
+    # are watching, so "it never started" is something we would know.
+    ep = Episode("live", challenge_id, "system", False, 0, 0, 0.0, "", 0.0, 0, started=False)
     try:
         async with websockets.connect(url, max_size=None, ping_interval=None, open_timeout=15) as ws:
             # First frame is the roster (props + challenges), sent once per
@@ -422,7 +424,7 @@ async def _sweep(
             # Not attempted, and deliberately not scored. Running it would burn
             # a full timeout and hand back a zero that reads as an agent
             # failure, which is the opposite of what happened.
-            ep = Episode("live", cid, "system", False, 0, 0, 0.0, "", 0.0, 0, blocked=why)
+            ep = Episode("live", cid, "system", False, 0, 0, 0.0, "", 0.0, 0, blocked=why, started=False)
             results.append(ep)
             print(f"[{n:>3}/{len(ids)}] {ep.as_row()}", flush=True)
             out.write_text(json.dumps([asdict(r) for r in results], indent=1))

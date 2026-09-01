@@ -77,6 +77,18 @@ TELEPORTS: dict[str, bool] = {}
 UNMEASURED_WAIT_S = 1800.0
 
 
+def record_timing(seen: dict[str, list[float]], ep) -> None:
+    """Remember how long this episode took, if it is worth remembering.
+
+    Only an episode that RAN is a sample. A setup failure returns in a tenth of
+    a second, and counting that as "this agent has been measured" would drop
+    the wait to the floor while a real episode of the same agent is still
+    going -- the premature recovery the per-agent scaling exists to prevent.
+    """
+    if not ep.blocked:
+        seen.setdefault(ep.agent, []).append(ep.wall_s)
+
+
 def result_budget(seen: dict[str, list[float]], expected: set[str], override: float = 0.0) -> float:
     """How long total silence may last before the pool is presumed dead.
 
@@ -336,12 +348,7 @@ def main() -> int:
                 break
             e.needs = needs_arm.get(e.challenge, "")
             results.append(e)
-            # Only an episode that RAN is a sample. A setup failure returns in
-            # a tenth of a second, and counting it as this agent measured would
-            # drop the wait to the floor while a real episode of the same agent
-            # is still going.
-            if not e.blocked:
-                seen_by_agent.setdefault(e.agent, []).append(e.wall_s)
+            record_timing(seen_by_agent, e)
             print(f"[{len(results):>3}/{len(jobs)}] {e.as_row()}", flush=True)
             args.out.write_text(json.dumps([asdict(r) for r in results], indent=1))
         if lost:
