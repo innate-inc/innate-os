@@ -21,6 +21,7 @@ import {
   AMCL_POSE_TOPIC,
   COMMANDED_GOAL_TOPIC,
   GLOBAL_COSTMAP_TOPIC,
+  KEEPOUT_STATE_TOPIC,
   LOCAL_COSTMAP_TOPIC,
   MEMORY_POSITIONS_TOPIC,
   MEMORY_SEARCH_TOPIC,
@@ -52,6 +53,7 @@ const PIN_ICON =
 
 /** @type {Array<{ key: import("../map/mapWidget.js").LayerName, label: string, on: boolean, topic: string }>} */
 const LAYERS = [
+  { key: "keepout", label: "Keepout zones", on: true, topic: KEEPOUT_STATE_TOPIC },
   { key: "scan", label: "LIDAR", on: true, topic: SCAN_TOPIC },
   { key: "costmap", label: "Global costmap", on: false, topic: GLOBAL_COSTMAP_TOPIC },
   { key: "local", label: "Local costmap", on: false, topic: LOCAL_COSTMAP_TOPIC },
@@ -120,16 +122,23 @@ function buildView(root) {
   // ---- store + scene ---------------------------------------------------------
   const store = createNavStore();
 
+  /** @type {Map<string, HTMLButtonElement>} */
+  const chipEls = new Map();
+
   const savedZoom = Number(localStorage.getItem(ZOOM_KEY));
   const map = createMap(scene, {
     zoom: savedZoom > 0 ? savedZoom : DEFAULT_ZOOM_M,
     onZoomChange: (m) => localStorage.setItem(ZOOM_KEY, String(m)),
     layers: Object.fromEntries(LAYERS.map(({ key, on }) => [key, on])),
+    keepoutEditing: true,
+    // Drawing a zone turns the layer back on inside the widget; the chip follows.
+    onKeepoutZonesToggle: (on) => {
+      chipEls.get("keepout")?.classList.toggle("is-on", on);
+      legend.sync();
+    },
   });
 
   // ---- layer chips -----------------------------------------------------------
-  /** @type {Map<string, HTMLButtonElement>} */
-  const chipEls = new Map();
   for (const { key, label, on, topic } of LAYERS) {
     const chip = document.createElement("button");
     chip.type = "button";
@@ -299,6 +308,7 @@ function createLegend(scene, chipEls) {
   row(["scan"], dot(MAP_COLORS.scan), "lidar", SCAN_TOPIC);
   row(["trail"], line(MAP_COLORS.trail), "path traveled", ODOM_TOPIC);
   row(["memories"], dot(MAP_COLORS.memory), "remembered view", `${MEMORY_POSITIONS_TOPIC} · ${MEMORY_SEARCH_TOPIC}`);
+  row(["keepout"], dot(MAP_COLORS.keepout), "keepout zone", KEEPOUT_STATE_TOPIC);
   row(["costmap", "local"], '<span class="legend-swatch legend-cost"></span>', "cost low → lethal", `${GLOBAL_COSTMAP_TOPIC} · ${LOCAL_COSTMAP_TOPIC}`);
 
   function sync() {

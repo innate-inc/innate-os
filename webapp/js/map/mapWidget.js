@@ -26,9 +26,20 @@ import {
   MEMORY_POSITIONS_TOPIC,
   MEMORY_SEARCH_TOPIC,
   FORGET_MEMORY_SERVICE,
+  KEEPOUT_STATE_TOPIC,
+  KEEPOUT_EDIT_TOPIC,
 } from "../constants.js";
 import { MEMORY_COLOR, SEARCH_REPLAY_FRESH_S, ageAlpha, ageText, headerSkew, memoryImageUrl, parseMemories, parseSearch, withAlpha } from "./memories.js";
 import { goalCellError } from "./goalValidation.js";
+import {
+  isKeepout,
+  keepoutGridForMap,
+  keepoutGridFromMessage,
+  keepoutMessage,
+  keepoutUpdateMatches,
+  mapIdentity,
+  paintKeepout,
+} from "./keepoutMask.js";
 
 // The /map grid rides ONE session-lived subscription instead of one per mount.
 // The topic is latched, and rws replays the full grid — hundreds of KB of JSON
@@ -83,6 +94,7 @@ export const MAP_COLORS = {
   costLethal: "rgb(217 106 90 / 82%)",
   costInscribed: "rgb(232 163 61 / 75%)",
   costInflation: "rgb(77 124 254 / 45%)",
+  keepout: "rgb(255 70 94 / 48%)",
 };
 
 // Robot marker radius in metres — matches the footprint half-width (0.165 m
@@ -124,7 +136,7 @@ const TRAIL_MAX_POINTS = 600;
 const TRAIL_JUMP_M = 1;
 
 /**
- * @typedef {"scan" | "costmap" | "local" | "trail" | "memories"} LayerName
+ * @typedef {"scan" | "costmap" | "local" | "trail" | "memories" | "keepout"} LayerName
  */
 
 // ---- spatial-memory layer tuning -------------------------------------------
@@ -156,7 +168,7 @@ const MEM_SEARCH_CARD_MS = 14_000; // the verdict card auto-dismisses
  * @param {HTMLCanvasElement} canvas 1px-per-cell offscreen buffer, resized to fit.
  * @param {CanvasRenderingContext2D | null} ctx the canvas's 2d context.
  * @param {(v: number, px: Uint8ClampedArray, di: number) => void} paint
- * @returns {{ width: number, height: number, resolution: number, originX: number, originY: number } | null}
+ * @returns {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null}
  *   the grid's world placement, or null if the message isn't a usable grid.
  */
 function rasterizeGrid(msg, canvas, ctx, paint) {
@@ -175,22 +187,30 @@ function rasterizeGrid(msg, canvas, ctx, paint) {
     }
   }
   ctx.putImageData(img, 0, 0);
+  const q = info.origin?.orientation ?? {};
+  const qx = Number(q.x ?? 0);
+  const qy = Number(q.y ?? 0);
+  const qz = Number(q.z ?? 0);
+  const qw = Number(q.w ?? 1);
   return {
     width,
     height,
     resolution: info.resolution || 0.05,
     originX: info.origin?.position?.x ?? 0,
     originY: info.origin?.position?.y ?? 0,
+    originYaw: Math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz)),
   };
 }
 
 /**
  * @param {HTMLElement} root container the map fills (sized via ResizeObserver).
- * @param {{ zoom?: number, onZoomChange?: (meters: number) => void, layers?: Partial<Record<LayerName, boolean>> }} [opts]
+ * @param {{ zoom?: number, onZoomChange?: (meters: number) => void, layers?: Partial<Record<LayerName, boolean>>, keepoutEditing?: boolean, onKeepoutZonesToggle?: (on: boolean) => void }} [opts]
  *   zoom = metres of real-world width to show, centred on the robot pose (keeps the map legible when
  *   small); enables scroll-to-zoom. Omit to fit the whole grid (the standalone page). onZoomChange
  *   fires after each wheel-zoom. layers turns on optional overlays (Nav page): live lidar scan,
- *   global/local costmaps, odometry trail — each adds its subscription only while enabled.
+ *   global/local costmaps, odometry trail, keepout zones — each adds its subscription only while
+ *   enabled. Keepout zones are on unless opts.layers says otherwise; onKeepoutZonesToggle fires
+ *   when drawing turns them back on, so a host chip can follow.
  * @returns {{ destroy: () => void, refresh: () => void, setZoom: (meters: number) => void, setFollowRobot: (on: boolean) => void, setLayer: (name: LayerName, on: boolean) => void, setMappingMode: (on: boolean) => void, clearTrail: () => void, mapChanged: () => void, highlightMemory: (id: number | null) => void, focusMemory: (id: number) => void, robotNowS: () => number }}
  */
 export function createMap(root, opts = {}) {
@@ -213,6 +233,12 @@ export function createMap(root, opts = {}) {
     stop: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="4" y="4" width="8" height="8" rx="1"/></svg>',
     center:
       '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="4.5"/><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none"/><path d="M8 .8v2.4M8 12.8v2.4M.8 8h2.4M12.8 8h2.4"/></svg>',
+    keepout:
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l2.2-.5L13 4.7 10.3 2 2.5 9.8 2 12z"/><path d="M9.5 3l2.7 2.7"/></svg>',
+    erase:
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10.2l6.8-6.8a1.5 1.5 0 012.1 0l1.2 1.2a1.5 1.5 0 010 2.1L6.3 13H4.8z"/><path d="M7.5 13h5.8"/></svg>',
+    clear:
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10M6 4V2.5h4V4m2 0l-.7 9H4.7L4 4"/></svg>',
   };
   /** @param {string} icon @param {string} label @param {string} [hint] */
   function makeButton(icon, label, hint = "") {
@@ -244,9 +270,14 @@ export function createMap(root, opts = {}) {
   stopBtn.title = CANCEL_NAVIGATION_SERVICE;
   const centerBtn = makeButton(ICONS.center, "Recenter", "follow the robot");
   centerBtn.title = "Recenter the view on the robot (view only — no ROS call)";
+  const keepoutBtn = makeButton(ICONS.keepout, "Keep Out", "draw forbidden areas");
+  keepoutBtn.title = "Paint a navigation keepout zone without changing the localization map";
+  const eraseKeepoutBtn = makeButton(ICONS.erase, "Erase", "remove forbidden areas");
+  const clearKeepoutBtn = makeButton(ICONS.clear, "Clear", "remove all forbidden areas");
   const controlsRow = document.createElement("div");
   controlsRow.className = "map-controls-row";
   for (const btn of [backBtn, locateBtn, autoBtn, manualBtn, goBtn, stopBtn, centerBtn]) controlsRow.appendChild(btn);
+  if (opts.keepoutEditing) controlsRow.append(keepoutBtn, eraseKeepoutBtn, clearKeepoutBtn);
   // Live progress / outcome of the widget's own goals and locate calls.
   const statusEl = document.createElement("div");
   statusEl.className = "map-status mono";
@@ -256,6 +287,9 @@ export function createMap(root, opts = {}) {
   controls.appendChild(controlsRow);
   controls.appendChild(statusEl);
   root.appendChild(controls);
+  const unadvertiseKeepoutEdit = opts.keepoutEditing
+    ? ros.advertise(KEEPOUT_EDIT_TOPIC, "nav_msgs/msg/OccupancyGrid")
+    : null;
 
   let goalGen = 0; // ignore settlements of superseded goals
   /** @type {ReturnType<typeof setTimeout> | undefined} */
@@ -277,7 +311,7 @@ export function createMap(root, opts = {}) {
   const off = document.createElement("canvas");
   const offCtx = off.getContext("2d");
 
-  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number } | null} */
+  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null} */
   let grid = null;
   /** @type {number[] | null} raw occupancy cells (row-major from the origin) for line-of-sight tests */
   let gridCells = null;
@@ -324,7 +358,9 @@ export function createMap(root, opts = {}) {
 
   // ---- optional overlay layers (Nav page) ---------------------------------
   /** @type {Record<LayerName, boolean>} */
-  const layers = { scan: false, costmap: false, local: false, trail: false, memories: false, ...opts.layers };
+  // Zones are shown by default on every surface: the robot enforces them, so a
+  // map view that hides them by default would misrepresent where it can drive.
+  const layers = { scan: false, costmap: false, local: false, trail: false, memories: false, keepout: true, ...opts.layers };
   /** @type {any} latest sensor_msgs/LaserScan */
   let scanMsg = null;
   // base_link -> base_laser from /tf_static (URDF); zero until it arrives.
@@ -332,16 +368,40 @@ export function createMap(root, opts = {}) {
   // Costmaps rendered like the map: 1px-per-cell offscreen + world placement.
   const costOff = document.createElement("canvas");
   const costOffCtx = costOff.getContext("2d");
-  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number } | null} */
+  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null} */
   let costGrid = null;
   // The controller's rolling local costmap — same rendering, odom frame.
   const localOff = document.createElement("canvas");
   const localOffCtx = localOff.getContext("2d");
-  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number } | null} */
+  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null} */
   let localGrid = null;
+  const keepoutOff = document.createElement("canvas");
+  const keepoutOffCtx = keepoutOff.getContext("2d");
+  /** @type {import("./keepoutMask.js").KeepoutGrid | null} */
+  let keepoutGrid = null;
+  /** @type {import("./keepoutMask.js").KeepoutGrid | null} latest latched editor state, even if it arrived before /map */
+  let latestKeepoutGrid = null;
+  // Which map is on screen, and which map a mask belongs to, are both read
+  // from nav2's per-load info.map_load_time (see mapIdentity) — the one key
+  // the two independent latched topics share. Nothing here infers identity
+  // from arrival order, so /map and the mask may land in either order.
+  /** @type {string | null} identity of the displayed localization map */
+  let displayedMapId = null;
+  /** @type {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw: number } | null} */
+  let keepoutPlacement = null;
+  /** @type {{ x: number, y: number } | null} */
+  let keepoutStroke = null;
+  /** @type {{ x: number, y: number } | null} cursor preview at the brush's true world-space radius */
+  let keepoutHoverPt = null;
+  let keepoutDirty = false;
+  /** @type {{ mapHash: string, data: number[], successText: string } | null} */
+  let keepoutSavePending = null;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let keepoutSaveTimer;
+  const KEEPOUT_BRUSH_RADIUS_M = 0.25;
   /** @type {Array<{ x: number, y: number }>} map-frame breadcrumb trail */
   const trail = [];
-  /** @type {Partial<Record<"scan" | "costmap" | "local" | "tf" | "memsearch", () => void>>} live layer subscriptions */
+  /** @type {Partial<Record<"scan" | "costmap" | "local" | "keepout" | "tf" | "memsearch", () => void>>} live layer subscriptions */
   const layerUnsubs = {};
 
   // ---- spatial-memory layer state -----------------------------------------
@@ -776,6 +836,97 @@ export function createMap(root, opts = {}) {
     draw();
   }
 
+  function rasterizeKeepout() {
+    if (!keepoutGrid) {
+      keepoutPlacement = null;
+      return;
+    }
+    keepoutPlacement = rasterizeGrid(keepoutMessage(keepoutGrid), keepoutOff, keepoutOffCtx, (value, px, di) => {
+      if (value < 50) return;
+      px[di] = 255;
+      px[di + 1] = 70;
+      px[di + 2] = 94;
+      px[di + 3] = 122;
+    });
+  }
+
+  /** Repaint only the cells the brush segment could have touched — a full
+   * rasterizeKeepout per pointermove redraws every cell of a map-sized grid.
+   * @param {number} x0 @param {number} y0 @param {number} x1 @param {number} y1 world coords */
+  function repaintKeepoutSegment(x0, y0, x1, y1) {
+    const g = keepoutGrid;
+    if (!g || !keepoutPlacement || !keepoutOffCtx || keepoutOff.width !== g.width || keepoutOff.height !== g.height) {
+      rasterizeKeepout();
+      return;
+    }
+    const pad = KEEPOUT_BRUSH_RADIUS_M + g.resolution;
+    const a = gridCoordinates(g, x0, y0);
+    const b = gridCoordinates(g, x1, y1);
+    const colMin = Math.max(0, Math.floor((Math.min(a.x, b.x) - pad) / g.resolution));
+    const colMax = Math.min(g.width - 1, Math.ceil((Math.max(a.x, b.x) + pad) / g.resolution));
+    const rowMin = Math.max(0, Math.floor((Math.min(a.y, b.y) - pad) / g.resolution));
+    const rowMax = Math.min(g.height - 1, Math.ceil((Math.max(a.y, b.y) + pad) / g.resolution));
+    if (colMin > colMax || rowMin > rowMax) return;
+    const patch = keepoutOffCtx.createImageData(colMax - colMin + 1, rowMax - rowMin + 1);
+    for (let row = rowMin; row <= rowMax; row++) {
+      const patchRow = (rowMax - row) * patch.width; // canvas-top = highest world-y
+      for (let col = colMin; col <= colMax; col++) {
+        if (g.data[row * g.width + col] < 50) continue;
+        const di = (patchRow + col - colMin) * 4;
+        patch.data[di] = 255;
+        patch.data[di + 1] = 70;
+        patch.data[di + 2] = 94;
+        patch.data[di + 3] = 122;
+      }
+    }
+    keepoutOffCtx.putImageData(patch, colMin, g.height - 1 - rowMax);
+  }
+
+  function syncKeepoutForMap() {
+    const latest = keepoutGridForMap(latestKeepoutGrid, displayedMapId, grid);
+    const pending = keepoutSavePending;
+    if (pending && keepoutUpdateMatches(latest, pending)) {
+      keepoutSavePending = null;
+      clearTimeout(keepoutSaveTimer);
+      setStatus("ok", pending.successText, true);
+    }
+    // A server echo landing mid-stroke must not clobber the cells being painted.
+    if (keepoutStroke && keepoutGrid && latest) return;
+    // Edit a copy: latestKeepoutGrid stays the server's truth, restored on a
+    // rejected edit (a red zone the robot doesn't have is worse than none).
+    keepoutGrid = latest && { ...latest, data: latest.data.slice() };
+    keepoutStroke = null;
+    keepoutDirty = false;
+    rasterizeKeepout();
+  }
+
+  /** Publish an edit, but report success only when the server republishes the exact accepted cells.
+   * @param {string} successText */
+  function publishKeepoutUpdate(successText) {
+    if (!keepoutGrid) return;
+    const message = keepoutMessage(keepoutGrid);
+    keepoutSavePending = { mapHash: keepoutGrid.mapHash, data: keepoutGrid.data.slice(), successText };
+    clearTimeout(keepoutSaveTimer);
+    keepoutSaveTimer = setTimeout(() => {
+      if (!keepoutSavePending) return;
+      keepoutSavePending = null;
+      syncKeepoutForMap(); // roll the display back to the server's last accepted state
+      draw();
+      setStatus("fail", "Keepout update was not accepted");
+    }, 3000);
+    ros.publish(KEEPOUT_EDIT_TOPIC, message);
+    setStatus("hint", "Saving keepout update…");
+  }
+
+  /** @param {any} msg nav_msgs/OccupancyGrid */
+  function onKeepout(msg) {
+    const parsed = keepoutGridFromMessage(msg);
+    if (!parsed) return;
+    latestKeepoutGrid = parsed;
+    syncKeepoutForMap();
+    draw();
+  }
+
   // Subscribe/unsubscribe to match the enabled layers, so an off layer costs
   // no bandwidth (the costmap especially — a map-sized grid as JSON).
   function syncLayerSubs() {
@@ -803,6 +954,17 @@ export function createMap(root, opts = {}) {
       delete layerUnsubs.local;
       localGrid = null;
     }
+    if (layers.keepout && !layerUnsubs.keepout) {
+      layerUnsubs.keepout = ros.subscribe(KEEPOUT_STATE_TOPIC, onKeepout, 250, "nav_msgs/msg/OccupancyGrid");
+    } else if (!layers.keepout && layerUnsubs.keepout) {
+      layerUnsubs.keepout();
+      delete layerUnsubs.keepout;
+      keepoutGrid = null;
+      latestKeepoutGrid = null;
+      keepoutPlacement = null;
+      keepoutSavePending = null;
+      clearTimeout(keepoutSaveTimer);
+    }
     if (layers.memories && !layerUnsubs.memsearch) {
       layerUnsubs.memsearch = ros.subscribe(MEMORY_SEARCH_TOPIC, onMemorySearch, 0, "std_msgs/msg/String");
     } else if (!layers.memories && layerUnsubs.memsearch) {
@@ -825,7 +987,7 @@ export function createMap(root, opts = {}) {
 
   // "manual"/"goto" arm the map for a press-drag: click sets the position,
   // drag sets the heading.
-  /** @type {"idle" | "locate" | "manual" | "goto"} */
+  /** @type {"idle" | "locate" | "manual" | "goto" | "keepout" | "keepout-erase"} */
   let ui = "idle";
   let locating = false; // auto-locate service call in flight
   let navigating = false; // a goal sent from this widget is in flight
@@ -853,6 +1015,22 @@ export function createMap(root, opts = {}) {
 
   const dpr = () => window.devicePixelRatio || 1;
 
+  /** @param {{ originX: number, originY: number, originYaw: number }} g @param {number} x @param {number} y */
+  function gridCoordinates(g, x, y) {
+    const dx = x - g.originX;
+    const dy = y - g.originY;
+    const c = Math.cos(g.originYaw);
+    const s = Math.sin(g.originYaw);
+    return { x: c * dx + s * dy, y: -s * dx + c * dy };
+  }
+
+  /** @param {{ originX: number, originY: number, originYaw: number }} g @param {number} x @param {number} y */
+  function gridPoint(g, x, y) {
+    const c = Math.cos(g.originYaw);
+    const s = Math.sin(g.originYaw);
+    return { x: g.originX + c * x - s * y, y: g.originY + s * x + c * y };
+  }
+
   function fit() {
     const r = root.getBoundingClientRect();
     const d = dpr();
@@ -867,8 +1045,9 @@ export function createMap(root, opts = {}) {
   function worldToCanvas(x, y) {
     const g = /** @type {NonNullable<typeof grid>} */ (grid);
     const v = /** @type {NonNullable<typeof view>} */ (view);
-    const col = (x - g.originX) / g.resolution;
-    const rowFromBottom = (y - g.originY) / g.resolution;
+    const local = gridCoordinates(g, x, y);
+    const col = local.x / g.resolution;
+    const rowFromBottom = local.y / g.resolution;
     return { px: v.ox + col * v.scale, py: v.oy + (g.height - rowFromBottom) * v.scale };
   }
 
@@ -878,7 +1057,7 @@ export function createMap(root, opts = {}) {
     const v = /** @type {NonNullable<typeof view>} */ (view);
     const col = (px - v.ox) / v.scale;
     const rowFromBottom = g.height - (py - v.oy) / v.scale;
-    return { x: g.originX + col * g.resolution, y: g.originY + rowFromBottom * g.resolution };
+    return gridPoint(g, col * g.resolution, rowFromBottom * g.resolution);
   }
 
   /** @param {PointerEvent} e → canvas-pixel coords */
@@ -902,6 +1081,18 @@ export function createMap(root, opts = {}) {
     grid = g;
     gridCells = msg.data;
     gridRev++;
+    const mapId = mapIdentity(msg);
+    if (mapId !== displayedMapId) {
+      // A save still awaiting its echo belongs to the map being replaced; it can
+      // never be confirmed now, and must not surface as a rejection.
+      keepoutSavePending = null;
+      clearTimeout(keepoutSaveTimer);
+      keepoutHoverPt = null;
+    }
+    displayedMapId = mapId;
+    keepoutStroke = null;
+    keepoutDirty = false;
+    syncKeepoutForMap();
     draw();
   }
 
@@ -1127,8 +1318,9 @@ export function createMap(root, opts = {}) {
       return;
     }
     if (center) {
-      const col = (center.x - grid.originX) / grid.resolution;
-      const rowFromBottom = (center.y - grid.originY) / grid.resolution;
+      const local = gridCoordinates(grid, center.x, center.y);
+      const col = local.x / grid.resolution;
+      const rowFromBottom = local.y / grid.resolution;
       ox = canvas.width / 2 - col * scale;
       oy = canvas.height / 2 - (grid.height - rowFromBottom) * scale;
     } else {
@@ -1139,12 +1331,31 @@ export function createMap(root, opts = {}) {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(off, ox, oy, grid.width * scale, grid.height * scale);
 
+    // Keepout zones are a separate Nav2 mask, deliberately overlaid on the
+    // immutable localization map. Red means the planner and controller may
+    // not enter; the browser paints this exact grid through the edit topic.
+    if (layers.keepout && keepoutPlacement) {
+      const topLeftWorld = gridPoint(keepoutPlacement, 0, keepoutPlacement.height * keepoutPlacement.resolution);
+      const topLeft = worldToCanvas(topLeftWorld.x, topLeftWorld.y);
+      const cellPx = (keepoutPlacement.resolution / grid.resolution) * scale;
+      ctx.save();
+      ctx.translate(topLeft.px, topLeft.py);
+      ctx.rotate(-(keepoutPlacement.originYaw - grid.originYaw));
+      ctx.drawImage(keepoutOff, 0, 0, keepoutPlacement.width * cellPx, keepoutPlacement.height * cellPx);
+      ctx.restore();
+    }
+
     // Costmap overlay, aligned by world coords (its origin/size differ from the
     // map's). scale is px per map cell, so convert via the resolution ratio.
     if (layers.costmap && costGrid) {
-      const topLeft = worldToCanvas(costGrid.originX, costGrid.originY + costGrid.height * costGrid.resolution);
+      const topLeftWorld = gridPoint(costGrid, 0, costGrid.height * costGrid.resolution);
+      const topLeft = worldToCanvas(topLeftWorld.x, topLeftWorld.y);
       const cellPx = (costGrid.resolution / grid.resolution) * scale;
-      ctx.drawImage(costOff, topLeft.px, topLeft.py, costGrid.width * cellPx, costGrid.height * cellPx);
+      ctx.save();
+      ctx.translate(topLeft.px, topLeft.py);
+      ctx.rotate(-(costGrid.originYaw - grid.originYaw));
+      ctx.drawImage(costOff, 0, 0, costGrid.width * cellPx, costGrid.height * cellPx);
+      ctx.restore();
     }
 
     // Local costmap: its coordinates are in the ODOM frame.
@@ -1153,15 +1364,17 @@ export function createMap(root, opts = {}) {
       const c = Math.cos(theta);
       const s = Math.sin(theta);
       // The image's top-left corner (max-y edge, matching the row flip) in
-      // odom, carried into the map frame, then a canvas rotation of -theta
-      // (canvas y points down, so world CCW is canvas CW).
-      const tlx = localGrid.originX;
-      const tly = localGrid.originY + localGrid.height * localGrid.resolution;
-      const { px, py } = worldToCanvas(tx + tlx * c - tly * s, ty + tlx * s + tly * c);
+      // odom, carried into the map frame, then rotated relative to the map
+      // grid axes (canvas y points down, so world CCW is canvas clockwise).
+      const topLeftOdom = gridPoint(localGrid, 0, localGrid.height * localGrid.resolution);
+      const { px, py } = worldToCanvas(
+        tx + topLeftOdom.x * c - topLeftOdom.y * s,
+        ty + topLeftOdom.x * s + topLeftOdom.y * c,
+      );
       const cellPx = (localGrid.resolution / grid.resolution) * scale;
       ctx.save();
       ctx.translate(px, py);
-      ctx.rotate(-theta);
+      ctx.rotate(-(theta + localGrid.originYaw - grid.originYaw));
       ctx.drawImage(localOff, 0, 0, localGrid.width * cellPx, localGrid.height * cellPx);
       ctx.restore();
     }
@@ -1222,6 +1435,23 @@ export function createMap(root, opts = {}) {
     }
 
     drawMemorySearch();
+
+    // Preview the exact floor area the keepout brush will affect before the
+    // pointer is pressed. The radius stays world-sized as the map zooms.
+    if (keepoutHoverPt && keepoutGrid && (ui === "keepout" || ui === "keepout-erase")) {
+      const { px, py } = worldToCanvas(keepoutHoverPt.x, keepoutHoverPt.y);
+      const radiusPx = (KEEPOUT_BRUSH_RADIUS_M / grid.resolution) * scale;
+      ctx.save();
+      ctx.strokeStyle = ui === "keepout" ? "rgb(255 70 94 / 95%)" : "rgb(255 255 255 / 90%)";
+      ctx.fillStyle = ui === "keepout" ? "rgb(255 70 94 / 12%)" : "rgb(8 8 10 / 22%)";
+      ctx.lineWidth = Math.max(1.5 * dpr(), 1);
+      if (ui === "keepout-erase") ctx.setLineDash([4 * dpr(), 3 * dpr()]);
+      ctx.beginPath();
+      ctx.arc(px, py, radiusPx, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // Ghost dot under the cursor while manual/goto is armed, until the press
     // starts the real drag.
@@ -1329,8 +1559,9 @@ export function createMap(root, opts = {}) {
   function occAt(x, y) {
     const g = grid;
     if (!g || !gridCells) return 0;
-    const col = Math.floor((x - g.originX) / g.resolution);
-    const row = Math.floor((y - g.originY) / g.resolution);
+    const local = gridCoordinates(g, x, y);
+    const col = Math.floor(local.x / g.resolution);
+    const row = Math.floor(local.y / g.resolution);
     if (col < 0 || col >= g.width || row < 0 || row >= g.height) return 0;
     const v = gridCells[row * g.width + col];
     return v > 0 ? v : 0;
@@ -1477,11 +1708,22 @@ export function createMap(root, opts = {}) {
     setHint(goBtn, ui === "goto" ? "click & drag on the map" : "tap a point to navigate");
     stopBtn.hidden = !(ui === "idle" && navActive) || mappingMode;
     centerBtn.hidden = followRobot || panCenter === null;
+    keepoutBtn.hidden = !opts.keepoutEditing || (ui !== "idle" && ui !== "keepout" && ui !== "keepout-erase") || mappingMode;
+    keepoutBtn.classList.toggle("is-active", ui === "keepout");
+    setHint(keepoutBtn, ui === "keepout" ? "drag to forbid" : "draw forbidden areas");
+    eraseKeepoutBtn.hidden = !opts.keepoutEditing || (ui !== "keepout" && ui !== "keepout-erase") || mappingMode;
+    eraseKeepoutBtn.classList.toggle("is-active", ui === "keepout-erase");
+    clearKeepoutBtn.hidden = !opts.keepoutEditing || (ui !== "keepout" && ui !== "keepout-erase") || mappingMode;
+    const drawingKeepout = ui === "keepout" || ui === "keepout-erase";
     canvas.style.cursor =
-      ui === "manual" || ui === "goto" ? "crosshair" : memHover || followRobot ? "pointer" : "grab";
+      ui === "manual" || ui === "goto" || drawingKeepout
+        ? "crosshair"
+        : memHover || followRobot
+          ? "pointer"
+          : "grab";
   }
 
-  /** @param {"idle" | "locate" | "manual" | "goto"} next */
+  /** @param {"idle" | "locate" | "manual" | "goto" | "keepout" | "keepout-erase"} next */
   function setUi(next) {
     ui = next;
     if (ui !== "idle") {
@@ -1492,6 +1734,10 @@ export function createMap(root, opts = {}) {
       goalDrag = null;
       hoverPt = null;
       draw();
+    }
+    if (ui !== "keepout" && ui !== "keepout-erase") {
+      keepoutStroke = null;
+      keepoutHoverPt = null;
     }
     render();
   }
@@ -1547,6 +1793,10 @@ export function createMap(root, opts = {}) {
     const invalid = goalCellError(grid, gridCells, x, y, OCC_THRESH);
     if (invalid) {
       setStatus("fail", invalid);
+      return;
+    }
+    if (keepoutGrid && isKeepout(keepoutGrid, x, y)) {
+      setStatus("fail", "That destination is inside a keepout zone");
       return;
     }
     const qz = Math.sin(yaw / 2);
@@ -1620,6 +1870,19 @@ export function createMap(root, opts = {}) {
     if (followRobot && ui === "idle") return;
     const { px, py } = eventToCanvas(e);
     canvas.setPointerCapture(e.pointerId);
+    if (ui === "keepout" || ui === "keepout-erase") {
+      if (!keepoutGrid) {
+        setStatus("fail", "Wait for the keepout layer before editing zones");
+        return;
+      }
+      const point = canvasToWorld(px, py);
+      keepoutHoverPt = point;
+      keepoutStroke = point;
+      keepoutDirty = paintKeepout(keepoutGrid, point.x, point.y, point.x, point.y, KEEPOUT_BRUSH_RADIUS_M, ui === "keepout");
+      repaintKeepoutSegment(point.x, point.y, point.x, point.y);
+      draw();
+      return;
+    }
     if (ui === "manual" || ui === "goto") {
       const w = canvasToWorld(px, py);
       hoverPt = null; // the drag's own dot takes over
@@ -1636,6 +1899,26 @@ export function createMap(root, opts = {}) {
     // Mirror onPointerDown: no hover either — the thumbnail hides mem-cards,
     // yet each hovered dot would still fetch its memory image.
     if (followRobot && ui === "idle") return;
+    if (keepoutStroke && keepoutGrid && (ui === "keepout" || ui === "keepout-erase")) {
+      const { px, py } = eventToCanvas(e);
+      const point = canvasToWorld(px, py);
+      const from = keepoutStroke;
+      keepoutHoverPt = point;
+      keepoutDirty =
+        paintKeepout(keepoutGrid, from.x, from.y, point.x, point.y, KEEPOUT_BRUSH_RADIUS_M, ui === "keepout") ||
+        keepoutDirty;
+      keepoutStroke = point;
+      repaintKeepoutSegment(from.x, from.y, point.x, point.y);
+      draw();
+      return;
+    }
+    if (!panDrag && (ui === "keepout" || ui === "keepout-erase")) {
+      if (!grid || !view) return;
+      const { px, py } = eventToCanvas(e);
+      keepoutHoverPt = canvasToWorld(px, py);
+      draw();
+      return;
+    }
     if (goalDrag) {
       const { px, py } = eventToCanvas(e);
       goalDrag.cur = canvasToWorld(px, py);
@@ -1671,6 +1954,14 @@ export function createMap(root, opts = {}) {
 
   /** @param {PointerEvent} e */
   function onPointerUp(e) {
+    if (keepoutStroke) {
+      keepoutStroke = null;
+      if (keepoutDirty && keepoutGrid) {
+        publishKeepoutUpdate(ui === "keepout" ? "Keepout zone saved" : "Keepout zone erased");
+      }
+      keepoutDirty = false;
+      return;
+    }
     if (panDrag) {
       const clicked = !panDrag.moved;
       panDrag = null;
@@ -1741,6 +2032,41 @@ export function createMap(root, opts = {}) {
     setStatus("hint", "Click the destination, drag to set the final heading");
     setUi("goto");
   });
+  /** Show or hide the zones, and everything that reflects that. */
+  function setKeepoutVisible(on) {
+    if (layers.keepout !== on) {
+      layers.keepout = on;
+      syncLayerSubs();
+    }
+    if (!on && (ui === "keepout" || ui === "keepout-erase")) {
+      clearHint();
+      setUi("idle");
+    }
+    opts.onKeepoutZonesToggle?.(on);
+    render();
+    draw();
+  }
+  keepoutBtn.addEventListener("click", () => {
+    if (ui === "keepout") {
+      clearHint();
+      setUi("idle");
+      return;
+    }
+    if (!layers.keepout) setKeepoutVisible(true); // can't draw what isn't shown
+    setStatus("hint", "Drag on the map to mark where the robot must not go");
+    setUi("keepout");
+  });
+  eraseKeepoutBtn.addEventListener("click", () => {
+    setStatus("hint", "Drag over a keepout zone to erase it");
+    setUi(ui === "keepout-erase" ? "keepout" : "keepout-erase");
+  });
+  clearKeepoutBtn.addEventListener("click", () => {
+    if (!keepoutGrid) return;
+    keepoutGrid.data.fill(0);
+    rasterizeKeepout();
+    publishKeepoutUpdate("All keepout zones cleared");
+    draw();
+  });
 
   // Stop cancels every active navigation goal server-side, then drops the
   // local goal marker and route.
@@ -1770,8 +2096,25 @@ export function createMap(root, opts = {}) {
   canvas.addEventListener("pointerdown", onPointerDown);
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerup", onPointerUp);
+  // A cancelled gesture (touch stolen by scroll/pinch, capture lost) aborts:
+  // it must never commit a goal, an initial pose, or a keepout edit.
+  canvas.addEventListener("pointercancel", () => {
+    goalDrag = null;
+    panDrag = null;
+    if (keepoutStroke) {
+      keepoutStroke = null;
+      keepoutDirty = false;
+      syncKeepoutForMap(); // discard the half-painted stroke, back to the server's state
+    }
+    render();
+    draw();
+  });
   canvas.addEventListener("pointerleave", () => {
     setMemHover(null);
+    if (keepoutHoverPt) {
+      keepoutHoverPt = null;
+      draw();
+    }
     if (!hoverPt) return;
     hoverPt = null;
     draw();
@@ -1834,6 +2177,14 @@ export function createMap(root, opts = {}) {
     gridRev++;
     costGrid = null;
     localGrid = null;
+    displayedMapId = null;
+    keepoutGrid = null;
+    latestKeepoutGrid = null;
+    keepoutPlacement = null;
+    keepoutStroke = null;
+    keepoutDirty = false;
+    keepoutSavePending = null;
+    clearTimeout(keepoutSaveTimer);
     scanMsg = null;
     plan = null;
     activePlanTopic = null;
@@ -1948,8 +2299,9 @@ export function createMap(root, opts = {}) {
       trail.length = 0;
       draw();
     },
-    /** The active map switched: the grid replays, but everything anchored to
-     * the old frame must not survive into the new one (see dropFrameState). */
+    /** The active map switched: everything anchored to the old frame is
+     * dropped (see dropFrameState). The keepout layer needs nothing here — it
+     * re-joins on the next /map by identity, whenever that arrives. */
     mapChanged() {
       dropFrameState();
       draw();
@@ -1973,8 +2325,13 @@ export function createMap(root, opts = {}) {
       draw();
     },
     /** Toggle an overlay layer (subscribes/unsubscribes its topics live).
-     * The trail survives an off/on toggle — hiding is not clearing (that's clearTrail). */
+     * The trail survives an off/on toggle — hiding is not clearing (that's
+     * clearTrail). Hiding zones also leaves the keepout editor. */
     setLayer(name, on) {
+      if (name === "keepout") {
+        setKeepoutVisible(on);
+        return;
+      }
       if (layers[name] === on) return;
       layers[name] = on;
       syncLayerSubs();
@@ -1983,6 +2340,7 @@ export function createMap(root, opts = {}) {
     destroy() {
       clearTimeout(navStaleTimer);
       clearTimeout(statusClearTimer);
+      clearTimeout(keepoutSaveTimer);
       clearTimeout(memSearchCardTimer);
       cancelAnimationFrame(memAnimFrame);
       document.removeEventListener("keydown", onKeyDown);
@@ -1995,6 +2353,7 @@ export function createMap(root, opts = {}) {
       unsubGoal();
       unsubMemories();
       unsubMappingPose?.();
+      unadvertiseKeepoutEdit?.();
       for (const unsub of Object.values(layerUnsubs)) unsub();
       canvas.remove();
       controls.remove();

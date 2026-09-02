@@ -136,6 +136,7 @@ install(PROGRAMS
   mars_nav/grid_localizer.py
   mars_nav/odom_to_tf_node.py
   mars_nav/cmd_vel_mux.py
+  mars_nav/keepout_mask_server.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
