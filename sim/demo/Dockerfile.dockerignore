@@ -12,6 +12,7 @@
 !workspace/**
 !webapp/**
 !sim/props/**
+!sim/challenges/**
 !sim/demo/**
 
 # Secrets and local state must never enter a public demo image.

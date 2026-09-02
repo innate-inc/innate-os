@@ -59,6 +59,7 @@ COPY config /root/innate-os/config
 COPY workspace /root/innate-os/workspace
 COPY webapp /root/innate-os/webapp
 COPY sim/props /root/innate-os/sim/props
+COPY sim/challenges /root/innate-os/sim/challenges
 COPY sim/demo /root/innate-os/sim/demo
 
 # Generated geometry + the viewer bundle, straight off the images the launcher
