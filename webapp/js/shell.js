@@ -232,7 +232,8 @@ function installRailRibbon(rail) {
 
   let drag = /** @type {{ id: number, x: number, opened: boolean } | null} */ (null);
   // A pull ends in a click too (preventDefault on pointerup does not stop it),
-  // and that click must not toggle shut what the pull just opened.
+  // and that click must not toggle shut what the pull just opened. A cancelled
+  // pull sends no click, so arming the flag there would swallow the next one.
   let swallowClick = false;
   ribbon.addEventListener("pointerdown", (e) => {
     if (!e.isPrimary || e.button !== 0) return;
@@ -248,7 +249,7 @@ function installRailRibbon(rail) {
   });
   const endDrag = (/** @type {PointerEvent} */ e) => {
     if (!drag || e.pointerId !== drag.id) return;
-    swallowClick = drag.opened;
+    swallowClick = drag.opened && e.type === "pointerup";
     drag = null;
   };
   ribbon.addEventListener("pointerup", endDrag);

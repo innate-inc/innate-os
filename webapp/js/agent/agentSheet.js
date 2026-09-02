@@ -98,7 +98,7 @@ export function createAgentSheet(panel, opts = {}) {
     panel.classList.remove("sheet-dragging");
     panel.style.height = "";
     if (!dragged) return; // a tap: the click handler owns it
-    swallowClick = true;
+    swallowClick = event.type === "pointerup"; // a cancelled drag sends no click to swallow
     const snaps = snapHeights();
     const nearest = STATES.reduce((best, name) =>
       Math.abs(snaps[name] - height) < Math.abs(snaps[best] - height) ? name : best,
