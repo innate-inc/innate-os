@@ -2,7 +2,11 @@
 <div align="center">
 
 <p>
-  <img src="docs/assets/readme/innate-os-repo-intro.png" alt="Innate OS" width="80%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/innate-os-repo-intro-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/innate-os-repo-intro.png">
+    <img src="docs/assets/readme/innate-os-repo-intro.png" alt="Innate OS" width="80%">
+  </picture>
 </p>
 
 **The lightweight agentic operating system for general-purpose robots**
