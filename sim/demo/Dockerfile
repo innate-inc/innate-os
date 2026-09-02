@@ -73,6 +73,27 @@ COPY --from=viewer /bundle /root/innate-os/sim/viewer/dist-lib
 # build context; the dev sim gets it as a bind mount.
 RUN mkdir -p /root/innate-os/data/maps
 
+# Skill assets (replay episodes) are declared in each skill's metadata.json and
+# fetched by post_update.sh on hardware, ensure_skill_assets() for the dev sim.
+# The demo runs neither, so a replay skill like wave shipped with no episode:
+# in_training, and the launcher hides it. Bake them in -- a session container
+# has no reason to reach the internet at boot.
+RUN python3 - <<'PY'
+import json, urllib.request
+from pathlib import Path
+
+workspace = Path("/root/innate-os/workspace")
+for meta_file in sorted(workspace.glob("*_skills/*/metadata.json")):
+    downloads = json.loads(meta_file.read_text()).get("downloads") or {}
+    for name, url in downloads.items():
+        dest = meta_file.parent / name
+        if dest.exists():
+            continue
+        print(f"fetching {dest.relative_to(workspace)}", flush=True)
+        with urllib.request.urlopen(url, timeout=300) as response:
+            dest.write_bytes(response.read())
+PY
+
 # Reuse the install tree sim/Dockerfile.ros-prebuilt baked into the base -- but
 # only when it was built from THIS source. The base tracks main; a demo built
 # off a branch would otherwise ship main's binaries against the branch's source
