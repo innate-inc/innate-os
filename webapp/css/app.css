@@ -10921,3 +10921,40 @@ select.skill-input {
     border-top: 1px solid var(--hairline);
   }
 }
+
+/* ---- narrow page headers -------------------------------------------------- */
+/* The header rows are single-line flex built for a desk window: Training's
+   search + filter + train button, and Profiling's status + tools, both run off
+   the right edge on a phone. Let them wrap, and give Training's tools a line of
+   their own to share. */
+
+@media (max-width: 780px) {
+  .page-head,
+  .training-head {
+    flex-wrap: wrap;
+  }
+
+  .training-tools {
+    width: 100%;
+  }
+
+  .training-tools .episodes-search {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Profiling's run controls are a nested row, so wrapping the header alone
+     still leaves them one unshrinkable item. */
+  .prof-rollout {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Profiling reads ACT step latencies against a millisecond budget against
+     dense tables — a desk tool with no phone form. The route still answers;
+     the rail just stops offering it. */
+  .rail-link[data-section="profiling"] {
+    display: none;
+  }
+}
