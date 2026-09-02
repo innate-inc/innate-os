@@ -145,19 +145,20 @@ class RobotStateProvider:
             return
         feed_node = self._manipulation.node
         self._odom_sub = feed_node.create_subscription(OdometryMsg, "/odom", self._on_odom, 10)
-        # Both map feeds are latched and publish only on a map load or edit —
-        # a VOLATILE subscription created at skill start (long after) matches
-        # but never receives, leaving skills with self.map None for the whole
-        # session. TRANSIENT_LOCAL gets the retained message on match.
-        latched_map_qos = QoSProfile(
+        # These feeds are latched and publish only on a map load or edit, or
+        # (amcl) on a localizer update — a VOLATILE subscription created at
+        # skill start (long after) matches but never receives, leaving skills
+        # with self.map / self.pose None for the whole session.
+        # TRANSIENT_LOCAL gets the retained message on match.
+        latched_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.RELIABLE,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1,
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
         )
-        self._map_sub = feed_node.create_subscription(OccupancyGrid, "/map", self._on_map, latched_map_qos)
+        self._map_sub = feed_node.create_subscription(OccupancyGrid, "/map", self._on_map, latched_qos)
         self._keepout_map_sub = feed_node.create_subscription(
-            OccupancyGrid, "/nav/keepout_filter_mask", self._on_keepout_map, latched_map_qos
+            OccupancyGrid, "/nav/keepout_filter_mask", self._on_keepout_map, latched_qos
         )
         self._head_position_sub = feed_node.create_subscription(
             String, self._head_current_position_topic, self._on_head_position, 10
@@ -165,7 +166,7 @@ class RobotStateProvider:
         self._joint_states_sub = feed_node.create_subscription(JointState, "/joint_states", self._on_joint_states, 10)
         self._battery_sub = feed_node.create_subscription(BatteryState, "/battery_state", self._on_battery, 10)
         self._amcl_pose_sub = feed_node.create_subscription(
-            PoseWithCovarianceStamped, "/amcl_pose", self._on_amcl_pose, 10
+            PoseWithCovarianceStamped, "/amcl_pose", self._on_amcl_pose, latched_qos
         )
         # the lidar driver publishes with sensor-data QoS (best effort); a
         # reliable subscription would never match it
@@ -180,7 +181,6 @@ class RobotStateProvider:
         self.last_head_position = None
         self.last_joint_states = None
         self.last_battery = None
-        self.last_amcl_pose = None
         self.last_scan = None
         self._lidar_cache = None
         self._map_cache = None
@@ -191,11 +191,12 @@ class RobotStateProvider:
         if self._active:
             self.last_odom = msg
 
-    # Both latched map feeds are kept across stop/start and updated even while
-    # idle: the transient-local replay fires only when the subscription is
-    # first created, so clearing them on stop would leave every later skill
-    # session with no map at all. A mask from an older map is rejected by
-    # Map._matches, never by staleness here.
+    # The latched feeds are kept across stop/start and updated even while idle:
+    # the transient-local replay fires only when the subscription is first
+    # created, so clearing them on stop would leave every later skill session
+    # with no map, and no pose until the localizer next publishes — which is
+    # what silenced navigate_to_position's keepout diagnosis. A mask from an
+    # older map is rejected by Map._matches, never by staleness here.
     def _on_map(self, msg: OccupancyGrid) -> None:
         self.last_map = msg
 
@@ -211,8 +212,7 @@ class RobotStateProvider:
             self.last_battery = msg
 
     def _on_amcl_pose(self, msg: PoseWithCovarianceStamped) -> None:
-        if self._active:
-            self.last_amcl_pose = msg
+        self.last_amcl_pose = msg
 
     def _on_scan(self, msg: LaserScan) -> None:
         if self._active:

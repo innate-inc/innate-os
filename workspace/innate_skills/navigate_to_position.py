@@ -114,33 +114,43 @@ class Nav2Controller:
         pose.pose.orientation.w = math.cos(yaw / 2.0)
         return pose
 
-    def _map_frame_goal(self, x: float, y: float, theta: float, local_frame: bool) -> tuple[float, float] | None:
-        """The goal as a point in the map frame, where the map and keepout mask live.
+    def _map_frame_goal(self, goal_x: float, goal_y: float, goal_frame: str) -> tuple[float, float] | None:
+        """The commanded goal as a point in the map frame, where the map and
+        keepout mask live.
 
-        A local goal is commanded in odom, but the same body-relative offset
-        composed with the localizer's map pose names the same floor point —
-        without this a local goal is refused by a keepout it is never told about.
+        Read at diagnosis time, never latched at goal time: `pose` is cleared
+        between skill runs, so at goal time it is routinely still None and a
+        latched map goal would be None for the whole run.
         """
-        if not local_frame:
-            return x, y
+        if goal_frame != LOCAL_GOAL_FIXED_FRAME:
+            return goal_x, goal_y
         pose = getattr(self.skill, "pose", None)
-        if pose is None:
+        odom = self.skill.odom
+        if pose is None or odom is None:
             return None
-        gx, gy, _ = resolve_local_goal(pose.x, pose.y, pose.theta, x, y, theta)
-        return gx, gy
+        # the odom goal is fixed, so composing it with the odom->map offset read
+        # now stays correct after the recoveries have moved the robot
+        angle = pose.theta - odom.theta
+        dx, dy = goal_x - odom.x, goal_y - odom.y
+        return (
+            pose.x + dx * math.cos(angle) - dy * math.sin(angle),
+            pose.y + dx * math.sin(angle) + dy * math.cos(angle),
+        )
 
-    def _blocking_cause(self, map_goal: tuple[float, float] | None) -> str | None:
+    def _blocking_cause(self, goal_x: float, goal_y: float, goal_frame: str) -> str | None:
         """A cause proven from the map and keepout grids, in the map frame."""
         map_state = getattr(self.skill, "map", None)
-        if map_state is None or map_goal is None:
+        if map_state is None:
             return None
-        issue = _map_goal_issue(map_state, *map_goal)
-        if issue is not None:
-            return issue
+        map_goal = self._map_frame_goal(goal_x, goal_y, goal_frame)
         pose = getattr(self.skill, "pose", None)
-        blocked_at = _keepout_distance_ahead(map_state, pose.x, pose.y, *map_goal) if pose is not None else None
-        if blocked_at is not None:
-            return f"a keepout zone crosses the direct line to the target, {blocked_at:.2f}m ahead"
+        if map_goal is not None:
+            issue = _map_goal_issue(map_state, *map_goal)
+            if issue is not None:
+                return issue
+            blocked_at = _keepout_distance_ahead(map_state, pose.x, pose.y, *map_goal) if pose is not None else None
+            if blocked_at is not None:
+                return f"a keepout zone crosses the direct line to the target, {blocked_at:.2f}m ahead"
         if _has_keepouts(map_state):
             return "active keepout zones may cut off the route"
         return None
@@ -202,10 +212,12 @@ class Nav2Controller:
         goal_yaw: float,
         goal_frame: str,
         local_frame: bool,
-        map_goal: tuple[float, float] | None,
     ) -> str:
         start = self._start_xy(local_frame)
-        reason = self._blocking_cause(map_goal) or "the route may be blocked or the target may be unreachable"
+        reason = (
+            self._blocking_cause(goal_x, goal_y, goal_frame)
+            or "the route may be blocked or the target may be unreachable"
+        )
         detail = f"the planner found no path because {reason}"
         approach = self._closest_reachable_approach(path_navigator, goal_x, goal_y, goal_yaw, goal_frame, local_frame)
         if approach is None:
@@ -231,16 +243,13 @@ class Nav2Controller:
         SkillFailed with a human-readable reason; a skill cancel unwinds as
         SkillCancelled with the Nav2 task cancelled."""
         goal_x, goal_y, goal_yaw, goal_frame = self._resolve_goal(x, y, theta, local_frame)
-        map_goal = self._map_frame_goal(x, y, theta, local_frame)
 
         goal_pose = self._pose_stamped(goal_x, goal_y, goal_yaw, goal_frame)
         self._commanded_goal_pub.publish(goal_pose)
 
         path_navigator = self.navigator_mapfree if local_frame else self.navigator_navigation
         if path_navigator.getPath(goal_pose, goal_pose, use_start=False) is None:
-            raise SkillFailed(
-                self._no_path_detail(path_navigator, goal_x, goal_y, goal_yaw, goal_frame, local_frame, map_goal)
-            )
+            raise SkillFailed(self._no_path_detail(path_navigator, goal_x, goal_y, goal_yaw, goal_frame, local_frame))
 
         self.navigator.goToPose(goal_pose, behavior_tree="mapfree" if local_frame else "navigation")
 
@@ -297,7 +306,7 @@ class Nav2Controller:
             detail += f"; the robot stopped at ({last_pose[0]:.2f}, {last_pose[1]:.2f}) in the {last_pose[2]} frame"
         if last_recoveries > 0:
             detail += f" after {last_recoveries} recovery attempt{'s' if last_recoveries != 1 else ''}"
-        cause = self._blocking_cause(map_goal)
+        cause = self._blocking_cause(goal_x, goal_y, goal_frame)
         detail += f"; {cause}" if cause is not None else "; the route may be blocked or the robot may be stuck"
         raise SkillFailed(detail + ". The target was not reached")
 
