@@ -266,9 +266,12 @@ function installRailRibbon(rail) {
   // Back and forward between two routes sharing a key (/agent and /brain) never
   // reach setActive, since the router has nothing to re-render.
   window.addEventListener("popstate", () => setOpen(false));
-  // Picking a section is the end of the errand the menu was opened for.
+  // Picking a section is the end of the errand the menu was opened for. The
+  // wordmark counts: it links home, and closing here covers the routes that
+  // never reach setActive — navigate() dedupes a same-path click, and setActive
+  // dedupes on the section key, so from /, /agent or /brain it does nothing.
   rail.addEventListener("click", (e) => {
-    if (/** @type {Element} */ (e.target).closest(".rail-link")) setOpen(false);
+    if (/** @type {Element} */ (e.target).closest(".rail-link, .rail-mark")) setOpen(false);
   });
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") setOpen(false);
