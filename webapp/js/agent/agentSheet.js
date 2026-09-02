@@ -32,7 +32,8 @@ export function createAgentSheet(panel, opts = {}) {
   header.className = "agent-sheet-header";
   header.hidden = true;
   header.innerHTML =
-    '<button type="button" class="agent-sheet-grab">' +
+    // data-activate: a drag surface keeps the native click (see shell.js's ribbon).
+    '<button type="button" class="agent-sheet-grab" data-activate="release">' +
     // Inside the grab so pulling the grip drags; absolute, so still centred.
     '<span class="agent-sheet-grip" aria-hidden="true"></span>' +
     '<svg class="agent-sheet-glyph" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +

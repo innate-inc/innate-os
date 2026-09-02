@@ -216,6 +216,10 @@ function installRailRibbon(rail) {
   const ribbon = document.createElement("button");
   ribbon.type = "button";
   ribbon.className = "rail-ribbon";
+  // A drag surface, so it keeps the native click: press-activate fires on
+  // pointerdown and then swallows the release, which would leave the pull's
+  // swallowClick set with no click left to consume it.
+  ribbon.dataset.activate = "release";
   ribbon.setAttribute("aria-label", "Open navigation");
   ribbon.setAttribute("aria-expanded", "false");
   ribbon.innerHTML = '<span class="rail-ribbon-grip" aria-hidden="true"></span>';
