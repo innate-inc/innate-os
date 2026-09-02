@@ -231,8 +231,12 @@ function installRailRibbon(rail) {
   };
 
   let drag = /** @type {{ id: number, x: number, opened: boolean } | null} */ (null);
+  // A pull ends in a click too (preventDefault on pointerup does not stop it),
+  // and that click must not toggle shut what the pull just opened.
+  let swallowClick = false;
   ribbon.addEventListener("pointerdown", (e) => {
     if (!e.isPrimary || e.button !== 0) return;
+    swallowClick = false;
     drag = { id: e.pointerId, x: e.clientX, opened: false };
     ribbon.setPointerCapture(e.pointerId);
   });
@@ -244,14 +248,16 @@ function installRailRibbon(rail) {
   });
   const endDrag = (/** @type {PointerEvent} */ e) => {
     if (!drag || e.pointerId !== drag.id) return;
-    const opened = drag.opened;
+    swallowClick = drag.opened;
     drag = null;
-    if (opened) e.preventDefault(); // the pull already opened it; no click toggle
   };
   ribbon.addEventListener("pointerup", endDrag);
   ribbon.addEventListener("pointercancel", endDrag);
   ribbon.addEventListener("click", () => {
-    if (drag?.opened) return;
+    if (swallowClick) {
+      swallowClick = false;
+      return;
+    }
     setOpen(!document.body.classList.contains("rail-open"));
   });
 

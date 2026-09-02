@@ -1282,7 +1282,7 @@ def _suggest_port_base() -> int | None:
     that just failed."""
     for base in range(8600, 9600, 10):
         if all(
-            _host_port_free(base + offset, udp=(spec or "").endswith("/udp"))
+            _host_port_free(base + offset, udp=(spec or "").endswith("/udp"), reuse=spec is None)
             for offset, (_, _, spec) in enumerate(_STACK_PORTS)
         ):
             return base
@@ -2613,6 +2613,11 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
     next_note = time.monotonic() + 15.0
     while time.monotonic() < deadline:
         if _world_server_ping(WORLD_SERVER_PORT):
+            # Stamped now, not at the spawn: `down` tells our server from a
+            # later squatter by age against this record, and uv only starts
+            # the python that binds after syncing the env -- minutes on a
+            # first run -- so the spawn-time stamp would disown our own server.
+            WORLD_SERVER_PORTS_PATH.touch()
             return True
         if proc.poll() is not None:
             return False  # exited on its own: a real failure, log captured
@@ -2721,8 +2726,8 @@ def _started_before(pid: int, when: float) -> bool:
     return time.time() - seconds <= when + WORLD_PORTS_RECORD_GRACE_S
 
 
-# ps reports whole seconds and the record is written just after the spawn, so
-# a server of ours can look a moment younger than its own record.
+# ps reports whole seconds, so a server of ours can look a moment younger than
+# its own record.
 WORLD_PORTS_RECORD_GRACE_S = 5.0
 
 
@@ -2745,9 +2750,8 @@ def stop_world_server() -> None:
     except (OSError, ValueError):
         ports = []
     targets = _world_server_pids(ports) if ports else set()
-    # The record is written the moment the server starts, so anything older
-    # than it was already running and anything much newer took the ports after
-    # it died: neither is ours to stop.
+    # The record is stamped once the server answers, so a holder that started
+    # after it took the ports after ours died: not ours to stop.
     with contextlib.suppress(OSError):
         recorded_at = WORLD_SERVER_PORTS_PATH.stat().st_mtime
         targets = {pid for pid in targets if _started_before(pid, recorded_at)}

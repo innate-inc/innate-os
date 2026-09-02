@@ -1237,6 +1237,7 @@ export class SimScene {
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.applyViewOffset();
     for (const cam of this.robotCameras.values()) {
       cam.aspect = w / h;
       cam.updateProjectionMatrix();

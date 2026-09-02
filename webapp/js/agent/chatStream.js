@@ -107,9 +107,6 @@ export function createChatStream() {
    *  list: HTMLElement | null,
    * } | null} */
   let skillStreak = null;
-  // Name shown in the panel's active-skill chip, so a finishing run only
-  // clears the chip when it is the run that set it.
-  let runningSkill = "";
 
   /** @param {"compact" | "detailed"} mode */
   function setStreamMode(mode) {
@@ -333,8 +330,6 @@ export function createChatStream() {
     const wasAtBottom = atBottom();
     const cls = ["running", "completed", "failed", "interrupted"].includes(status) ? status : "running";
     const displayName = skillDisplayName(name);
-    if (cls === "running") runningSkill = displayName;
-    else if (runningSkill === displayName) runningSkill = "";
 
     let run = skillRuns.get(key);
     if (!run) {
