@@ -196,19 +196,50 @@ def seg_model(hsv, box):
     return (255.0 * ratio / ratio.max()).astype(np.uint8)
 
 
-def seg_track(hsv, model, window, min_score=25.0):
-    """Back-project + CamShift -> (center|None, window, score).
-    Numpy bin lookup (cv2.calcBackProject broken for 3-D hist here)."""
+# Blob shape: major-axis angle in image coordinates (radians from +u toward
+# +v, i.e. clockwise on screen, in [0, pi)) and major/minor elongation
+# (1 = round).
+Axis = tuple[float, float]
+
+
+def _blob_axis(bp, window) -> Axis | None:
+    """Minimum-area rectangle of the thresholded blob under the window
+    centre. CamShift's own ellipse is not usable: its window hugs only part
+    of a blob that outgrows it, and the ellipse then follows the window."""
+    x, y, w, h = window
+    x0, y0 = max(0, x - w), max(0, y - h)
+    roi = bp[y0 : y + 2 * h, x0 : x + 2 * w]
+    _thr, mask = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    n, labels, stats, _cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if n < 2:
+        return None
+    u = min(x + w // 2 - x0, labels.shape[1] - 1)
+    v = min(y + h // 2 - y0, labels.shape[0] - 1)
+    label = labels[v, u] or 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    pts = np.column_stack(np.nonzero(labels == label))[:, ::-1].astype(np.float32)
+    _center, (rw, rh), angle_deg = cv2.minAreaRect(pts)
+    major, minor, theta_deg = (rw, rh, angle_deg) if rw >= rh else (rh, rw, angle_deg + 90.0)
+    return math.radians(theta_deg) % math.pi, major / max(minor, 1.0)
+
+
+def backproject(hsv, model):
+    """Per-pixel object likelihood (uint8) from a seg_model LUT. Numpy bin
+    lookup (cv2.calcBackProject broken for 3-D hist here)."""
     ih = (hsv[:, :, 0].astype(np.int32) * _SEG_BINS[0]) // 180
     i_s = (hsv[:, :, 1].astype(np.int32) * _SEG_BINS[1]) // 256
     iv = (hsv[:, :, 2].astype(np.int32) * _SEG_BINS[2]) // 256
-    bp = model[np.clip(ih, 0, _SEG_BINS[0] - 1), i_s, iv]
+    return model[np.clip(ih, 0, _SEG_BINS[0] - 1), i_s, iv]
+
+
+def seg_track(hsv, model, window, min_score=25.0):
+    """Back-project + CamShift -> (center|None, window, score, axis|None)."""
+    bp = backproject(hsv, model)
     crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 1)
     _rot, window = cv2.CamShift(bp, window, crit)
     x, y, w, h = window
     if w < 4 or h < 4 or w * h > 0.4 * IMG_W * IMG_H:
-        return None, window, 0.0
+        return None, window, 0.0, None
     score = float(bp[y : y + h, x : x + w].mean())
     if score < min_score:
-        return None, window, score
-    return (x + w / 2.0, y + h / 2.0), window, score
+        return None, window, score, None
+    return (x + w / 2.0, y + h / 2.0), window, score, _blob_axis(bp, window)
