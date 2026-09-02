@@ -7,9 +7,11 @@
 # Dropped vs the dev sim:
 #   foxglove_bridge        -- ws:8765 is never published to a demo visitor
 #   udp_leader_receiver    -- leader-arm teleop needs hardware on the operator side
-#   innate_console         -- the terminal console is not exposed
 # Kept: rosbridge, app, sim driver, nav, brain, behavior, input manager, arm IK,
-# uninavid (the VLN demo), webapp.
+# uninavid (the VLN demo), webapp, innate_console.
+#
+# innate_console pipes every pane's stdout to the visitor's Logging page. No node
+# may print a secret: the demo's INNATE_SERVICE_KEY would land in the browser.
 
 set -e
 
@@ -54,5 +56,9 @@ fi
 tmux new-window -t "$SESSION_NAME" -n webapp
 tmux send-keys -t "${SESSION_NAME}:webapp" \
   "cd ~/innate-os/webapp && while true; do WEBAPP_SIM_CONTROLS=1 INNATE_WEBAPP_READONLY=1 python3 proxy/https_server.py; sleep 2; done" C-m
+
+# Last: it taps every pane with tmux pipe-pane, so they have to exist first.
+tmux new-window -t "$SESSION_NAME" -n console
+tmux send-keys -t "${SESSION_NAME}:console" "ros2 launch innate_console console.launch.py" C-m
 
 echo "demo stack started in tmux session '$SESSION_NAME'."
