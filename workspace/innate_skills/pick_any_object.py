@@ -111,6 +111,11 @@ WRIST_CAM_ABOVE_EE = 0.07
 MIN_ELONGATION = 1.3
 ROLL_MAX = 1.5
 AXIS_MIN_Z = 0.07
+# Rolls under ROLL_MIN are not worth leaving the hardware-tuned unrolled
+# grasp for. ROLL_SIGN is verified in sim only: a mirrored wrist camera (as
+# the Gemini prompts below describe the real one) needs -1.
+ROLL_MIN = 0.1
+ROLL_SIGN = 1.0
 # Rolled fingers are level only with the tool axis vertical: at arm_pitch
 # 1.30 a 90 deg roll drops one fingertip 3 cm below the other, which lands on
 # the object and stalls the descent with the other pad above it.
@@ -331,20 +336,25 @@ class PickAnyObject(Skill):
             self.sleep(0.04)
         return None, last_b64
 
-    def _wrist_done(self, x, y, z, reason, axis: vision.Axis | None = None):
+    def _wrist_done(
+        self, x: float, y: float, z: float, reason: str, axis: vision.Axis | None = None
+    ) -> tuple[float, float, float, float]:
         roll = self._grasp_roll(axis)
         self.logger.info(f"[PickAnyObject] wrist stage: {reason} (z={z:.3f}, roll={math.degrees(roll):+.0f} deg)")
         return x, y, z, roll
 
     @staticmethod
     def _grasp_roll(axis: vision.Axis | None) -> float:
-        """Wrist roll that turns the fingers onto the blob's minor axis. The
-        wrist camera rolls with the fingers, which close along image u, so
-        the blob's image angle is already relative to the jaw: roll = angle
-        from v (verified in sim; negate here if a wrist camera is mirrored)."""
+        """Wrist roll that turns the fingers onto the blob's minor axis, or
+        0.0 for the tuned unrolled grasp. The wrist camera rolls with the
+        fingers, which close along image u, so the blob's image angle is
+        already relative to the jaw: roll = angle from v."""
         if axis is None or axis[1] < MIN_ELONGATION:
             return 0.0
-        return max(-ROLL_MAX, min(ROLL_MAX, axis[0] - math.pi / 2))
+        roll = ROLL_SIGN * (axis[0] - math.pi / 2)
+        if abs(roll) < ROLL_MIN:
+            return 0.0
+        return max(-ROLL_MAX, min(ROLL_MAX, roll))
 
     def _wrist_reseed(self, prompt, raw):
         """Persistent tracking loss: one Gemini look + a fresh color model,
@@ -407,7 +417,7 @@ class PickAnyObject(Skill):
                 break
 
             px = tracker.update(hsv)
-            if px is not None and z >= AXIS_MIN_Z:
+            if px is not None and z >= AXIS_MIN_Z and tracker.axis is not None:
                 axis = tracker.axis
             if px is None:
                 streak = centered = 0
@@ -481,19 +491,24 @@ class PickAnyObject(Skill):
         self.manipulation.move_joints(pose, duration=self._p["hover_s"])
         self.sleep(0.3)
 
-    def _grasp_pitch(self, roll):
-        return ROLLED_PITCH if roll else self._p["arm_pitch"]
+    def _grasp_orientation(self, x: float, y: float, roll: float) -> tuple[float, float, float]:
+        """(roll, pitch, yaw) for the descent and close. Unrolled is the
+        hardware-tuned grasp. Rolled needs the tool vertical, and then the
+        yaw must be the arm's own bearing: RPY is gimbal-locked at pitch
+        pi/2, and a yaw-0 target makes the solver dump the whole base
+        rotation into j5 (j5 = roll + j1). Out of the vertical pitch's
+        reach, the tuned grasp is kept rather than a descent that never
+        starts (follow's IK failure reads as a contact stall)."""
+        p = self._p
+        if roll == 0.0:
+            return 0.0, p["arm_pitch"], 0.0
+        yaw = math.atan2(y, x)
+        if not self.manipulation.reachable(x, y, p["floor_z"], roll=roll, pitch=ROLLED_PITCH, yaw=yaw):
+            self.logger.warning(f"[PickAnyObject] rolled grasp unreachable at ({x:.2f}, {y:.2f}); grasping unrolled")
+            return 0.0, p["arm_pitch"], 0.0
+        return roll, ROLLED_PITCH, yaw
 
-    def _grasp_yaw(self):
-        """The arm's own base yaw, so the IK target is exactly reachable. A
-        yaw-0 target is not: the solver spreads that error over the wrist,
-        and with the tool vertical all of it lands in j5 (j5 = roll + j1)."""
-        try:
-            return self._arm_joints()[0]
-        except LookupError:
-            return 0.0
-
-    def _push_to_floor(self, x, y, z_from, roll, yaw):
+    def _push_to_floor(self, x: float, y: float, z_from: float, roll: float, pitch: float, yaw: float) -> None:
         """Blind descent to floor as ONE multi-waypoint trajectory — the
         rung-by-rung version decelerated at every rung and looked choppy.
         Contact just stalls the final segments; abort if still high."""
@@ -503,7 +518,6 @@ class PickAnyObject(Skill):
         if rungs:
             # grip=GRIPPER_OPEN re-asserts an open claw even if it drifted
             # shut during the wrist descent (never re-seed from measured).
-            pitch = self._grasp_pitch(roll)
             waypoints = [Waypoint(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=p["descend_s"]) for z in rungs]
             try:
                 self.manipulation.follow(waypoints, grip=self.manipulation.GRIPPER_OPEN)
@@ -531,14 +545,13 @@ class PickAnyObject(Skill):
             raise LookupError("joint states missing or short")
         return list(js.position[:6])
 
-    def _close_twist_lift(self, x, y, roll, yaw):
+    def _close_twist_lift(self, x: float, y: float, roll: float, pitch: float, yaw: float) -> None:
         """Close, joint-space twist+lift (IK would unwind j5). Uses time.sleep
         on purpose: the fingers have committed, and a cancel must not unwind
         mid-grip — the run finishes this and the teardown carries the object.
         Closing on air reaches ~GRIPPER_EMPTY_J6, which _grasp_verified's j6
         check catches."""
         p = self._p
-        pitch = self._grasp_pitch(roll)
         if p["close_lift_m"] > 0:
             try:
                 ee_z = self.manipulation.pose.z
@@ -575,7 +588,9 @@ class PickAnyObject(Skill):
         try:
             if soft:
                 j = self._arm_joints()
-                j[4] = max(-1.4, min(1.4, j[4] + p["twist_rad"]))
+                # A rolled wrist can already sit near the +1.4 stop: twist the way that has room.
+                twist = p["twist_rad"] if j[4] + p["twist_rad"] <= 1.4 else -p["twist_rad"]
+                j[4] = max(-1.4, min(1.4, j[4] + twist))
                 j[5] = grip
                 self.manipulation.move_joints(j, duration=1.0)
                 time.sleep(0.3)
@@ -598,7 +613,11 @@ class PickAnyObject(Skill):
             # and would zero the grip preload. move_to verifies by FK and
             # recover-retries, so the arm is confirmed off the floor (or the
             # run fails cleanly and teardown carries with the grip kept).
-            self.manipulation.move_to(x, y, 0.22, roll=roll, pitch=pitch, yaw=yaw, duration=2.0, tolerance_xy=0.10)
+            # arm_pitch, not the grasp pitch: the vertical tool axis is out of
+            # reach at 0.22 m and stops mattering once the object is held.
+            self.manipulation.move_to(
+                x, y, 0.22, roll=roll, pitch=p["arm_pitch"], yaw=yaw, duration=2.0, tolerance_xy=0.10
+            )
 
     def _grasp_at(self, prompt, xy):
         """Full grasp at floor xy (base_link)."""
@@ -616,10 +635,10 @@ class PickAnyObject(Skill):
             z, roll = p["hover_z"], 0.0
             self.manipulation.move_to(x, y, z, pitch=p["arm_pitch"], duration=p["hover_s"])
 
-        yaw = self._grasp_yaw()
-        self._push_to_floor(x, y, z, roll, yaw)
+        roll, pitch, yaw = self._grasp_orientation(x, y, roll)
+        self._push_to_floor(x, y, z, roll, pitch, yaw)
         self.check_cancelled()  # last exit before the fingers commit
-        self._close_twist_lift(x, y, roll, yaw)
+        self._close_twist_lift(x, y, roll, pitch, yaw)
 
     def _grasp_verified(self, prompt, approach: FloorApproach):
         """Back up, then check floor clear + gripper not open. Gemini gets both
