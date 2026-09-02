@@ -10951,10 +10951,13 @@ select.skill-input {
 }
 
 @media (max-width: 640px) {
-  /* Profiling reads ACT step latencies against a millisecond budget against
-     dense tables — a desk tool with no phone form. The route still answers;
-     the rail just stops offering it. */
-  .rail-link[data-section="profiling"] {
-    display: none;
+  /* Narrower than this the three tools share a line only by squeezing the
+     search down to a few characters, so it takes one of its own. */
+  .training-tools {
+    flex-wrap: wrap;
+  }
+
+  .training-tools .episodes-search {
+    flex-basis: 100%;
   }
 }
