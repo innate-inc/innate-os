@@ -1220,10 +1220,14 @@ def running_stack_from_another_checkout() -> tuple[str, str] | None:
     return None
 
 
-def _bind_refusal(port: int, *, udp: bool) -> int | None:
-    """errno from claiming the port the way Docker will (0.0.0.0, no
-    SO_REUSEADDR), or None when the bind succeeds."""
+def _bind_refusal(port: int, *, udp: bool, reuse: bool = False) -> int | None:
+    """errno from claiming the port the way its consumer will, or None when the
+    bind succeeds. Docker publishes without SO_REUSEADDR; the host world server
+    sets it (socket.create_server), so its probe must too -- a just-stopped
+    server's TIME_WAIT remnants otherwise read as a live collision for ~30s."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as probe:
+        if reuse:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("0.0.0.0", port))
         except OSError as exc:
@@ -1237,11 +1241,12 @@ def _tcp_listener_answers(port: int) -> bool:
     return False
 
 
-def _host_port_free(port: int, *, udp: bool) -> bool:
-    """Whether Docker can still publish this host port. Only EADDRINUSE proves a
-    collision: Linux refuses ports below 1024 to a non-root binder while the
-    daemon that publishes them runs as root, so a free 443 refuses the probe."""
-    refusal = _bind_refusal(port, udp=udp)
+def _host_port_free(port: int, *, udp: bool, reuse: bool = False) -> bool:
+    """Whether the port's consumer can still claim it (reuse: see
+    _bind_refusal). Only EADDRINUSE proves a collision: Linux refuses ports
+    below 1024 to a non-root binder while the daemon that publishes them runs
+    as root, so a free 443 refuses the probe."""
+    refusal = _bind_refusal(port, udp=udp, reuse=reuse)
     if refusal is None:
         return True
     if refusal == errno.EACCES and not udp:
@@ -1277,7 +1282,7 @@ def _suggest_port_base() -> int | None:
     that just failed."""
     for base in range(8600, 9600, 10):
         if all(
-            _host_port_free(base + offset, udp=(spec or "").endswith("/udp"))
+            _host_port_free(base + offset, udp=(spec or "").endswith("/udp"), reuse=spec is None)
             for offset, (_, _, spec) in enumerate(_STACK_PORTS)
         ):
             return base
@@ -1302,7 +1307,7 @@ def refuse_if_ports_taken() -> None:
     taken = [
         (label, port)
         for label, port, spec in _STACK_PORTS
-        if port not in ours and not _host_port_free(port, udp=(spec or "").endswith("/udp"))
+        if port not in ours and not _host_port_free(port, udp=(spec or "").endswith("/udp"), reuse=spec is None)
     ]
     if not taken:
         return
@@ -2219,8 +2224,8 @@ def _world_server_ping(port: int, timeout: float = 2.0) -> bool:
 
 
 def _stop_stale_world_server() -> None:
-    """SIGTERM whatever owns the RPC port (the PID file only covers servers
-    this checkout started)."""
+    """SIGTERM whatever owns the RPC port. `up` is about to bind it, so unlike
+    stop_world_server this does not wait for evidence that we started it."""
     stop_world_server()
     out = subprocess.run(
         ["lsof", "-ti", f"tcp:{WORLD_SERVER_PORT}", "-sTCP:LISTEN"], capture_output=True, text=True, check=False
@@ -2608,6 +2613,11 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
     next_note = time.monotonic() + 15.0
     while time.monotonic() < deadline:
         if _world_server_ping(WORLD_SERVER_PORT):
+            # Stamped now, not at the spawn: `down` tells our server from a
+            # later squatter by age against this record, and uv only starts
+            # the python that binds after syncing the env -- minutes on a
+            # first run -- so the spawn-time stamp would disown our own server.
+            WORLD_SERVER_PORTS_PATH.touch()
             return True
         if proc.poll() is not None:
             return False  # exited on its own: a real failure, log captured
@@ -2664,15 +2674,107 @@ def _gl_failure_hint(attempt_log: str, backend: str | None) -> str:
     return "no output -- see the full log"
 
 
+def _world_server_pids(ports: list[int]) -> set[int]:
+    """Live world-server processes, found by the ports they are listening on.
+
+    Not by their command line: ps joins argv with spaces and quotes nothing, so
+    no amount of care tells an argument boundary from a space inside a checkout
+    path. The ports are per-checkout and are the thing `down` has to free, so
+    they identify the server exactly -- and unlike the pid file they survive an
+    interrupted `up`. The module check keeps an unrelated squatter on the port
+    from being signalled.
+    """
+    pids: set[int] = set()
+    for port in ports:
+        found = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"], capture_output=True, text=True, check=False
+        )
+        for pid_str in found.stdout.split():
+            with contextlib.suppress(ValueError):
+                pids.add(int(pid_str))
+    pids.discard(os.getpid())
+    return {pid for pid in pids if _is_world_server(pid)}
+
+
+def _is_world_server(pid: int) -> bool:
+    """Whether pid is running the world server's bootstrap -- the module path,
+    not "world_server", so anything merely mentioning the function (this
+    launcher included) cannot match."""
+    out = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, check=False)
+    return "mars_sim_driver.world_server" in out.stdout
+
+
+def _started_before(pid: int, when: float) -> bool:
+    """Whether pid has been running since before `when`.
+
+    The ports record can outlive the server that wrote it -- a crash leaves it
+    behind -- and another checkout may then bind those same ports. It would be
+    a stranger that started after the record was written, so its age tells the
+    two apart. Unreadable age is treated as ours: failing to stop our own
+    server leaves the ports held, which is the louder failure.
+    """
+    out = subprocess.run(["ps", "-p", str(pid), "-o", "etime="], capture_output=True, text=True, check=False)
+    field = out.stdout.strip()
+    if not field:
+        return True
+    # [[DD-]hh:]mm:ss
+    days, _, clock = field.rpartition("-")
+    parts = [float(part) for part in clock.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0.0)
+    seconds = parts[0] * 3600 + parts[1] * 60 + parts[2] + (float(days) * 86400 if days else 0)
+    return time.time() - seconds <= when + WORLD_PORTS_RECORD_GRACE_S
+
+
+# ps reports whole seconds, so a server of ours can look a moment younger than
+# its own record.
+WORLD_PORTS_RECORD_GRACE_S = 5.0
+
+
+def _world_ports_free(ports: list[int], timeout_s: float) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if all(_host_port_free(port, udp=False, reuse=True) for port in ports):
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def stop_world_server() -> None:
-    if not WORLD_SERVER_PID_PATH.exists():
-        return
+    # Only the ports this checkout recorded when it started a server. The
+    # configured ports are no evidence of ownership -- a checkout that never
+    # started one would take them as licence to kill whoever holds the
+    # defaults, which is another checkout's sim.
     try:
-        pid = int(WORLD_SERVER_PID_PATH.read_text().strip())
-        os.kill(pid, signal.SIGTERM)
-        log("Stopped host world server.")
-    except (ValueError, OSError):
-        pass
+        ports = [int(port) for port in WORLD_SERVER_PORTS_PATH.read_text().split()]
+    except (OSError, ValueError):
+        ports = []
+    targets = _world_server_pids(ports) if ports else set()
+    # The record is stamped once the server answers, so a holder that started
+    # after it took the ports after ours died: not ours to stop.
+    with contextlib.suppress(OSError):
+        recorded_at = WORLD_SERVER_PORTS_PATH.stat().st_mtime
+        targets = {pid for pid in targets if _started_before(pid, recorded_at)}
+    if targets:
+        for pid in targets:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGTERM)
+        # An immediate `up` re-checks the port block: return only after
+        # MuJoCo's teardown has actually released the sockets, or the next
+        # run refuses on "world state stream already in use".
+        if _world_ports_free(ports, 15.0):
+            log("Stopped host world server.")
+        else:
+            # Escalate to the same pids, not to whoever holds the ports now: if
+            # ours died during the wait and a stranger took them, that stranger
+            # is not ours to kill.
+            for pid in targets:
+                with contextlib.suppress(OSError):
+                    os.kill(pid, signal.SIGKILL)
+            if _world_ports_free(ports, 5.0):
+                log("Stopped host world server (forced).")
+            else:
+                warn(f"Something else holds the world ports (lsof -nP -iTCP:{ports[-1]}); `{CLI_SIM} up` may refuse.")
     with contextlib.suppress(OSError):  # read-only fs: the kill still counts
         WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
         WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)

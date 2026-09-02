@@ -30,6 +30,9 @@ export function isTypingContext() {
   );
 }
 
+// How far the ribbon must travel before it counts as a pull, not a tap.
+const RIBBON_PULL_PX = 18;
+
 /**
  * Build the persistent app chrome once — the icon rail, robot speech playback,
  * and the "agent running" indicator — and return a controller
@@ -137,6 +140,8 @@ export function initShell(navigate) {
   renderNav(null);
   rail.append(nav, footNav);
 
+  const closeRailDrawer = installRailRibbon(rail);
+
   // Number keys 1..N jump between sections (the number shows in each tooltip).
   // Guarded so it never fires while typing in a field or as part of a
   // browser/OS combo like Cmd+1 (tab switch). A removed link (sim-mode filter)
@@ -146,7 +151,11 @@ export function initShell(navigate) {
     const section = SECTIONS[Number(e.key) - 1];
     if (!section) return;
     const link = rail.querySelector(`.rail-link[data-section="${section.key}"]`);
-    if (link) navigate(pathForKey(section.key));
+    if (!link) return;
+    // The key for the section already open dedupes inside navigate, so nothing
+    // downstream would close the drawer.
+    closeRailDrawer();
+    navigate(pathForKey(section.key));
   });
 
   document.body.prepend(rail);
@@ -184,6 +193,9 @@ export function initShell(navigate) {
   function setActive(key) {
     activeKey = key;
     applyActive();
+    // Every navigation lands here, and none may leave the drawer over the
+    // page it just opened -- a number key and Back produce no rail click.
+    closeRailDrawer();
     agentIndicator.el.style.display = key === "agent" ? "none" : "";
     const section = SECTIONS.find((s) => s.key === key);
     document.title = section ? `Innate · ${section.label}` : "Innate";
@@ -192,3 +204,84 @@ export function initShell(navigate) {
   return { setActive };
 }
 
+/**
+ * Phone navigation: the rail waits off-screen and a ribbon pulls it in. A drag
+ * opens on the threshold rather than the release, so it reads as a curtain.
+ * The CSS decides which layout applies; this only keeps the state consistent.
+ *
+ * @param {HTMLElement} rail
+ * @returns {() => void} closes the drawer, for the shell to call on navigation
+ */
+function installRailRibbon(rail) {
+  const ribbon = document.createElement("button");
+  ribbon.type = "button";
+  ribbon.className = "rail-ribbon";
+  // A drag surface, so it keeps the native click: press-activate fires on
+  // pointerdown and then swallows the release, which would leave the pull's
+  // swallowClick set with no click left to consume it.
+  ribbon.dataset.activate = "release";
+  ribbon.setAttribute("aria-label", "Open navigation");
+  ribbon.setAttribute("aria-expanded", "false");
+  ribbon.innerHTML = '<span class="rail-ribbon-grip" aria-hidden="true"></span>';
+
+  const scrim = document.createElement("div");
+  scrim.className = "rail-scrim";
+
+  /** @param {boolean} open */
+  const setOpen = (open) => {
+    document.body.classList.toggle("rail-open", open);
+    ribbon.setAttribute("aria-expanded", String(open));
+    ribbon.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
+  };
+
+  let drag = /** @type {{ id: number, x: number, opened: boolean } | null} */ (null);
+  // A pull ends in a click too (preventDefault on pointerup does not stop it),
+  // and that click must not toggle shut what the pull just opened. A cancelled
+  // pull sends no click, so arming the flag there would swallow the next one.
+  let swallowClick = false;
+  ribbon.addEventListener("pointerdown", (e) => {
+    if (!e.isPrimary || e.button !== 0) return;
+    swallowClick = false;
+    drag = { id: e.pointerId, x: e.clientX, opened: false };
+    ribbon.setPointerCapture(e.pointerId);
+  });
+  ribbon.addEventListener("pointermove", (e) => {
+    if (!drag || e.pointerId !== drag.id || drag.opened) return;
+    if (e.clientX - drag.x < RIBBON_PULL_PX) return;
+    drag.opened = true;
+    setOpen(true);
+  });
+  const endDrag = (/** @type {PointerEvent} */ e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    swallowClick = drag.opened && e.type === "pointerup";
+    drag = null;
+  };
+  ribbon.addEventListener("pointerup", endDrag);
+  ribbon.addEventListener("pointercancel", endDrag);
+  ribbon.addEventListener("click", () => {
+    if (swallowClick) {
+      swallowClick = false;
+      return;
+    }
+    setOpen(!document.body.classList.contains("rail-open"));
+  });
+
+  scrim.addEventListener("click", () => setOpen(false));
+  // Back and forward between two routes sharing a key (/agent and /brain) never
+  // reach setActive, since the router has nothing to re-render.
+  window.addEventListener("popstate", () => setOpen(false));
+  // Picking a section is the end of the errand the menu was opened for. The
+  // wordmark counts: it links home, and closing here covers the routes that
+  // never reach setActive — navigate() dedupes a same-path click, and setActive
+  // dedupes on the section key, so from /, /agent or /brain it does nothing.
+  rail.addEventListener("click", (e) => {
+    if (/** @type {Element} */ (e.target).closest(".rail-link, .rail-mark")) setOpen(false);
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") setOpen(false);
+  });
+
+  document.body.append(scrim, ribbon);
+
+  return () => setOpen(false);
+}

@@ -225,6 +225,8 @@ export class SimScene {
 
   /** Fixed render size (offscreen use, e.g. SimSession); null = track the window. */
   private fixedSize: { width: number; height: number } | null = null;
+  /** Canvas width covered on the right by page chrome (see setSafeInsets). */
+  private safeInsetRight = 0;
 
   constructor(canvas: HTMLCanvasElement, opts: { fixedSize?: { width: number; height: number } } = {}) {
     this.fixedSize = opts.fixedSize ?? null;
@@ -261,7 +263,10 @@ export class SimScene {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.target.set(0, 0, 0.4);
-    this.controls.minDistance = 0.5;
+    // Zoom stops minDistance short of the target and pan scales with the
+    // distance to it, so without this you can only ever approach one point.
+    this.controls.zoomToCursor = true;
+    this.controls.minDistance = 0.15;
     this.controls.maxDistance = 30;
     this.controls.update();
     // Grabbing the camera is a statement that you want it: a drag or a wheel
@@ -577,7 +582,7 @@ export class SimScene {
     this.layoutBounds = bounds;
     if (this.spawned) return;
 
-    const center = bounds.getCenter(new THREE.Vector3());
+    const center = layoutFocus(bounds);
     const size = bounds.getSize(new THREE.Vector3());
     // Pull back far enough that the widest horizontal extent fits the vertical
     // FOV (the horizontal one is wider on any landscape stage), with margin.
@@ -855,7 +860,7 @@ export class SimScene {
    * the robot). */
   private flyToOverview(): void {
     const bounds = this.layoutBounds;
-    const center = bounds?.getCenter(new THREE.Vector3()) ?? new THREE.Vector3(...this.robotXY, 0);
+    const center = bounds ? layoutFocus(bounds) : new THREE.Vector3(...this.robotXY, 0);
     let distance = TOP_FALLBACK_HEIGHT_M;
     if (bounds) {
       const size = bounds.getSize(new THREE.Vector3());
@@ -1104,16 +1109,21 @@ export class SimScene {
     const forwardY = Math.sin(yaw);
     const leftX = -forwardY;
     const leftY = forwardX;
-    this.camera.position.set(
-      x + forwardX * INITIAL_ORBIT_POSITION.forward + leftX * INITIAL_ORBIT_POSITION.left,
-      y + forwardY * INITIAL_ORBIT_POSITION.forward + leftY * INITIAL_ORBIT_POSITION.left,
-      INITIAL_ORBIT_POSITION.height,
-    );
-    this.controls.target.set(
+    const target = new THREE.Vector3(
       x + forwardX * INITIAL_ORBIT_TARGET.forward + leftX * INITIAL_ORBIT_TARGET.left,
       y + forwardY * INITIAL_ORBIT_TARGET.forward + leftY * INITIAL_ORBIT_TARGET.left,
       INITIAL_ORBIT_TARGET.height,
     );
+    const perch = new THREE.Vector3(
+      x + forwardX * INITIAL_ORBIT_POSITION.forward + leftX * INITIAL_ORBIT_POSITION.left,
+      y + forwardY * INITIAL_ORBIT_POSITION.forward + leftY * INITIAL_ORBIT_POSITION.left,
+      INITIAL_ORBIT_POSITION.height,
+    );
+    // The vertical FOV is fixed and the horizontal narrows with the aspect,
+    // so a portrait stage would crop the arm.
+    const pullback = Math.max(1, 1 / this.camera.aspect);
+    this.camera.position.copy(target).addScaledVector(perch.sub(target), pullback);
+    this.controls.target.copy(target);
     this.controls.update();
     this.renderer.domElement.style.visibility = "";
 
@@ -1169,14 +1179,33 @@ export class SimScene {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
-    // Portrait stages (phones): bias the orbit framing so the robot reads in
-    // the upper half -- webapp sheets/joystick cover the lower half.
-    if (height > width * 1.2) this.camera.setViewOffset(width, height, 0, height * 0.22, width, height);
-    else this.camera.clearViewOffset();
+    this.applyViewOffset();
     for (const cam of this.robotCameras.values()) {
       cam.aspect = width / height;
       cam.updateProjectionMatrix();
     }
+  }
+
+  /** How much of the canvas's right edge page chrome covers. Only the framing
+   * moves; the whole canvas still renders. */
+  setSafeInsets(insets: { right?: number }): void {
+    const right = Math.max(0, insets.right ?? 0);
+    if (right === this.safeInsetRight) return;
+    this.safeInsetRight = right;
+    this.applyViewOffset();
+  }
+
+  /** Bias the framing off dead centre: sideways for whatever covers the right
+   * edge, upward on a portrait stage. Robot cameras are untouched. */
+  private applyViewOffset(): void {
+    const { width, height } = this.viewSize();
+    const offsetX = this.safeInsetRight / 2;
+    const offsetY = height > width * 1.2 ? height * 0.1 : 0;
+    if (offsetX === 0 && offsetY === 0) {
+      this.camera.clearViewOffset();
+      return;
+    }
+    this.camera.setViewOffset(width, height, offsetX, offsetY, width, height);
   }
 
   /** Render the active view into a sub-rectangle of the canvas (logical px,
@@ -1208,11 +1237,21 @@ export class SimScene {
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.applyViewOffset();
     for (const cam of this.robotCameras.values()) {
       cam.aspect = w / h;
       cam.updateProjectionMatrix();
     }
   }
+}
+
+/** The flat's centre, on the floor. The bounding box spans floor to ceiling, so
+ * its centre is mid-air -- and zoom stops minDistance short of the target, which
+ * would leave the camera stuck a metre up. */
+function layoutFocus(bounds: THREE.Box3): THREE.Vector3 {
+  const focus = bounds.getCenter(new THREE.Vector3());
+  focus.z = bounds.min.z;
+  return focus;
 }
 
 /** Runtime guard against a malformed manifest (untrusted JSON): file is a

@@ -66,6 +66,9 @@ export function mount(stage) {
   return mountPage(stage, "nav-page", buildView);
 }
 
+// The header's own padding plus its title/chips gap: what the chips cannot use.
+const CHIP_ROOM_PX = 54;
+
 /**
  * @param {HTMLElement} root
  * @returns {{ destroy: () => void }}
@@ -166,6 +169,17 @@ function buildView(root) {
 
   const legend = createLegend(scene, chipEls);
 
+  // All-or-nothing: a half row, or one wrapped and still overflowing, is worse
+  // than none. Measuring inside one callback never reaches a paint, and what
+  // fits depends only on the header and title, so this cannot oscillate.
+  const fitChips = () => {
+    chips.classList.remove("is-crowded");
+    const spare = head.clientWidth - heading.offsetWidth - CHIP_ROOM_PX;
+    chips.classList.toggle("is-crowded", chips.scrollWidth > spare);
+  };
+  const chipFitObserver = new ResizeObserver(fitChips);
+  chipFitObserver.observe(head);
+
   /** @param {string} key @param {boolean} on */
   function forceLayer(key, on) {
     const chip = chipEls.get(key);
@@ -264,6 +278,7 @@ function buildView(root) {
       dismissAllConfirms();
       kitGen++; // cancel any in-flight drive-kit mount
       driveKit?.destroy();
+      chipFitObserver.disconnect();
       for (const part of parts) part.destroy();
       unsubStore();
       store.destroy();

@@ -51,10 +51,21 @@ const PLACEMENT_HINT: Record<PlacementState["kind"], string> = {
   rotating: "Drag to rotate · Release to place.",
 };
 
-export function createSimStage(parent: HTMLElement, session: SimSession): { audioEl: null; destroy: () => void } {
+// Touch has no hover to preview the drop with, and the panel covers the scene
+// being aimed at, so there it steps aside and this replaces its hint.
+const TOUCH_PLACEMENT_HINT: Partial<Record<PlacementState["kind"], string>> = {
+  following: "Tap to place it",
+  rotating: "Drag to rotate · Release to place",
+};
+
+export function createSimStage(
+  parent: HTMLElement,
+  session: SimSession,
+): { audioEl: null; setSafeInsets: (insets: { right?: number }) => void; destroy: () => void } {
   const wrap = document.createElement("div");
-  wrap.className = "video-stage"; // reuse the webapp's stage styling/CSS ladder
-  wrap.style.position = "relative";
+  // The class's position:absolute+inset:0 must survive: overriding it once had
+  // the wrap size itself off the canvas buffer, ignoring window resizes.
+  wrap.className = "video-stage";
   const canvas = document.createElement("canvas");
   canvas.style.width = "100%";
   canvas.style.height = "100%";
@@ -172,11 +183,20 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
   modeSwitch.append(robotButton, spotButton);
   const placementHint = document.createElement("p");
   placementHint.className = "sim-placement-hint";
+  // Lives on the stage, not in the panel, so it survives the panel closing.
+  const placementToast = document.createElement("p");
+  placementToast.className = "sim-placement-toast";
+  placementToast.hidden = true;
+  wrap.appendChild(placementToast);
+  const coarsePointer = window.matchMedia("(hover: none)");
   let placement: PlacementState = { kind: "choose-prop" };
   const selectedProp = (): string | null =>
     placement.kind === "following" || placement.kind === "rotating" ? placement.prop : null;
   const refreshPlacementHint = () => {
     placementHint.textContent = PLACEMENT_HINT[placement.kind];
+    const toast = TOUCH_PLACEMENT_HINT[placement.kind];
+    placementToast.hidden = !toast || !coarsePointer.matches;
+    placementToast.textContent = toast ?? "";
   };
   const refreshPlacementUi = () => {
     const choosingSpot = placement.kind !== "near-robot";
@@ -375,6 +395,8 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
     placement = next;
     scene.clearPropPlacementPreview();
     const prop = selectedProp();
+    // Get out of the way of the tap that places it.
+    if (prop !== null && coarsePointer.matches) setSetupOpen(false);
     scene.setPlacementMode(prop !== null);
     canvas.style.cursor = prop ? "crosshair" : "";
     for (const [propName, chip] of propChips) {
@@ -450,6 +472,10 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
     const h = wrap.clientHeight;
     if (!w || !h) return; // hidden (map primary): keep the last real size
     scene.setRenderSize(w, h, Math.min(devicePixelRatio, 2));
+    // setSize cleared the buffer (the spec clears a resized canvas) and the
+    // browser paints before the next rAF, so the stage would flash black.
+    scene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
+    scene.render();
   };
   const observer = new ResizeObserver(resize);
   observer.observe(wrap);
@@ -548,6 +574,7 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
 
   return {
     audioEl: null, // sim has no robot mic; the pages skip the mic toggle in sim mode
+    setSafeInsets: (insets) => scene.setSafeInsets(insets),
     destroy() {
       disposed = true;
       queue.cancel(); // stop pulling new downloads for a stage that's gone
