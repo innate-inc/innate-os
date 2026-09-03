@@ -92,32 +92,32 @@ function buildCockpit(root) {
    *   placePropAtRobot?: (name: string) => void,
    * }} */ (/** @type {unknown} */ (session));
   /** @type {(() => void) | null} */
-  let stopCylinderPrep = null;
-  const prepareCylinder = () => {
-    stopCylinderPrep?.();
-    stopCylinderPrep = null;
+  let stopLegoPrep = null;
+  const prepareLego = () => {
+    stopLegoPrep?.();
+    stopLegoPrep = null;
     if (!config.simControls || !simProps.onProps || !simProps.placePropAtRobot) return;
     let placed = false;
     let subscribed = false;
     let unsubscribe = () => {};
     unsubscribe = simProps.onProps((props) => {
-      if (placed || !props.some((prop) => prop.name === "can")) return;
+      if (placed || !props.some((prop) => prop.name === "lego")) return;
       placed = true;
-      simProps.placePropAtRobot?.("can");
+      simProps.placePropAtRobot?.("lego");
       if (subscribed) {
         unsubscribe();
-        stopCylinderPrep = null;
+        stopLegoPrep = null;
       }
     });
     // onProps fires synchronously when the roster has already arrived.
     subscribed = true;
     if (placed) {
       unsubscribe();
-      stopCylinderPrep = null;
+      stopLegoPrep = null;
     }
-    else stopCylinderPrep = unsubscribe;
+    else stopLegoPrep = unsubscribe;
   };
-  const onboarding = createTeleopOnboarding(root, { prepareCylinder });
+  const onboarding = createTeleopOnboarding(root, { prepareLego });
   const parts = [videoStage, ...(telemetry ? [telemetry] : [])];
   // Keep the listen control in the same place on sim and hardware. The sim
   // starts listening by default; hardware remains opt-in for privacy.
@@ -169,7 +169,7 @@ function buildCockpit(root) {
       // Confirm dialogs (speed picker) live on document.body — sweep them so
       // navigating away doesn't leave one floating over the next page.
       dismissAllConfirms();
-      stopCylinderPrep?.();
+      stopLegoPrep?.();
       for (const part of parts) part.destroy();
       if (config.simControls) setTtsAudioEnabled(true);
       releaseSession(session);
