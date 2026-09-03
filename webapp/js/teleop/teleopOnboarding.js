@@ -118,6 +118,20 @@ export function paddedSpotlightRect(rect, viewport, padding = 14) {
   return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
 }
 
+/**
+ * Join adjacent interface pieces before rounding the spotlight. This avoids an
+ * inward scallop where, for example, the Skills menu meets its trigger button.
+ * @param {{left: number, right: number, top: number, bottom: number}[]} rects
+ */
+export function boundingSpotlightRect(rects) {
+  return {
+    left: Math.min(...rects.map((rect) => rect.left)),
+    right: Math.max(...rects.map((rect) => rect.right)),
+    top: Math.min(...rects.map((rect) => rect.top)),
+    bottom: Math.max(...rects.map((rect) => rect.bottom)),
+  };
+}
+
 let maskId = 0;
 
 /**
@@ -258,7 +272,10 @@ export function createTeleopOnboarding(root, { prepareCylinder } = {}) {
       const height = card.offsetHeight || 190;
       card.style.left = `${Math.max(76, popRect.left - width - 16)}px`;
       card.style.top = `${Math.max(12, Math.min(window.innerHeight - height - 12, popRect.top))}px`;
-      updateSpotlight([target, skillsPop, card]);
+      updateSpotlightRects([
+        boundingSpotlightRect([target.getBoundingClientRect(), popRect]),
+        card.getBoundingClientRect(),
+      ]);
       return;
     }
     card.style.width = "";
@@ -329,6 +346,11 @@ export function createTeleopOnboarding(root, { prepareCylinder } = {}) {
 
   /** @param {HTMLElement[]} subjects */
   function updateSpotlight(subjects) {
+    updateSpotlightRects(subjects.map((subject) => subject.getBoundingClientRect()));
+  }
+
+  /** @param {{left: number, right: number, top: number, bottom: number}[]} subjects */
+  function updateSpotlightRects(subjects) {
     sizeSpotlightMask();
     const viewport = { width: window.innerWidth, height: window.innerHeight };
     spotlightHoles.forEach((hole, index) => {
@@ -338,7 +360,7 @@ export function createTeleopOnboarding(root, { prepareCylinder } = {}) {
         hole.setAttribute("height", "0");
         return;
       }
-      const rect = paddedSpotlightRect(subject.getBoundingClientRect(), viewport);
+      const rect = paddedSpotlightRect(subject, viewport);
       hole.setAttribute("x", String(rect.left));
       hole.setAttribute("y", String(rect.top));
       hole.setAttribute("width", String(rect.width));

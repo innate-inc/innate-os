@@ -11,6 +11,7 @@ import { FIRST_NUDGE, INTRO_NUDGE, J3SO_NUDGE, REPLY_NUDGE, SWITCH_NUDGE } from 
 import {
   TELEOP_ONBOARDING_PROGRESS_KEY,
   TELEOP_ONBOARDING_STEPS,
+  boundingSpotlightRect,
   isPickupCompletion,
   isWaveCompletion,
   paddedSpotlightRect,
@@ -65,6 +66,13 @@ assert.deepEqual(
     { width: 390, height: 720 },
   ),
   { left: 0, top: 0, width: 390, height: 720 },
+);
+assert.deepEqual(
+  boundingSpotlightRect([
+    { left: 712, right: 992, top: 108, bottom: 648 },
+    { left: 762, right: 992, top: 658, bottom: 702 },
+  ]),
+  { left: 712, right: 992, top: 108, bottom: 702 },
 );
 assert.equal(resolvePreviousStep("wave", null), "intro");
 assert.equal(resolvePreviousStep("pick", true), "talk");
