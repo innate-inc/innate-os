@@ -154,7 +154,8 @@ function studBrickGeometry([hx, hy, hz]: number[]): THREE.BufferGeometry {
   const columns = 3;
   const rows = 2;
   const studRadius = Math.min(hx / columns, hy / rows) * 0.6;
-  const studHeight = studRadius * 1.25;
+  // A standard stud is about 4.8mm wide and 1.8mm tall.
+  const studHeight = studRadius * 0.75;
   const pieces: THREE.BufferGeometry[] = [new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2)];
   for (let column = 0; column < columns; column += 1) {
     for (let row = 0; row < rows; row += 1) {
