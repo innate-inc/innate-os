@@ -126,7 +126,7 @@ def test_up_stops_a_partial_ros_session_before_asset_checks(monkeypatch, tmp_pat
     monkeypatch.setattr(launcher_main, "request_environment_control_daemon_stop", lambda: None)
     monkeypatch.setattr(launcher_main, "wait_for_environment_control_daemon_stop", lambda _pid: None)
     monkeypatch.setattr(launcher_main, "remove_superseded_containers", lambda: None)
-    monkeypatch.setattr(launcher_main, "refuse_if_another_checkout_is_running", lambda: None)
+    monkeypatch.setattr(launcher_main, "refuse_if_ports_taken", lambda: None)
     monkeypatch.setattr(launcher_main, "_active_environment_identity", lambda _config: (pack.id, pack.fingerprint))
     monkeypatch.setattr(
         launcher_main,
@@ -180,7 +180,7 @@ def test_assets_refresh_preserves_live_pack_and_quiesces_before_mutation(monkeyp
     overrides: list[str | None] = []
 
     monkeypatch.setattr(launcher_main, "get_config", lambda: config)
-    monkeypatch.setattr(launcher_main, "refuse_if_another_checkout_is_running", lambda: None)
+    monkeypatch.setattr(launcher_main, "refuse_if_ports_taken", lambda: None)
     monkeypatch.setattr(
         launcher_main,
         "collect_os_process_status",

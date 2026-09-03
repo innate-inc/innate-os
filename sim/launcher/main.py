@@ -489,7 +489,7 @@ def cmd_assets(config: dict[str, object]) -> None:
     # Docker) needs sim/assets without bringing the stack up. If a world server
     # is running, reconcile it like `up` would: its MuJoCo model was compiled
     # from the previous bundle and must not keep serving stale collision data.
-    refuse_if_another_checkout_is_running()
+    refuse_if_ports_taken()
     active_identity = _active_environment_identity(config)
     os_status = collect_os_process_status(config)
     os_session_was_running = bool(os_status["os_session_running"])
