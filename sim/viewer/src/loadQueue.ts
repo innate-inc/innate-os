@@ -25,16 +25,23 @@ export class LoadQueue {
   readonly #limit: number;
   readonly #onProgress?: (p: LoadProgress) => void;
   #active = 0;
-  #pending: Array<() => void> = [];
+  #pending: Array<{ run: () => void; reject: (error: Error) => void }> = [];
   #loaded = 0;
   #estimated = 0; // seeded denominator, before any Content-Length is known
   #nextId = 0;
+  #cancelled = false;
   #jobLoaded = new Map<number, number>(); // last loaded bytes reported, per job
   #jobTotal = new Map<number, number>(); // real size once its Content-Length lands
 
   constructor(limit = 2, onProgress?: (p: LoadProgress) => void) {
     this.#limit = Math.max(1, limit);
     this.#onProgress = onProgress;
+  }
+
+  /** True after teardown. Active network requests may still finish, but none
+   * of their queue promises or progress reports can escape after this point. */
+  get cancelled(): boolean {
+    return this.#cancelled;
   }
 
   /** Seed the denominator so the bar has a width before any bytes arrive. */
@@ -50,33 +57,52 @@ export class LoadQueue {
    * even when two jobs fetch the same URL.
    */
   add<T>(job: (report: ByteReport) => Promise<T>): Promise<T> {
+    if (this.#cancelled) return Promise.reject(new Error("load queue cancelled"));
     const id = this.#nextId++;
     return new Promise<T>((resolve, reject) => {
       const run = () => {
+        if (this.#cancelled) {
+          reject(new Error("load queue cancelled"));
+          return;
+        }
         this.#active++;
         const report: ByteReport = (loaded, total) => this.#report(id, loaded, total);
         // Promise.resolve().then guards a job that throws *synchronously* -- it
         // becomes a rejection, so the slot is still released in finally.
         Promise.resolve()
-          .then(() => job(report))
-          .then(resolve, reject)
+          .then(() => {
+            if (this.#cancelled) throw new Error("load queue cancelled");
+            return job(report);
+          })
+          .then(
+            (value) => {
+              if (this.#cancelled) reject(new Error("load queue cancelled"));
+              else resolve(value);
+            },
+            reject,
+          )
           .finally(() => {
             this.#active--;
-            this.#pending.shift()?.();
+            if (!this.#cancelled) this.#pending.shift()?.run();
           });
       };
       if (this.#active < this.#limit) run();
-      else this.#pending.push(run);
+      else this.#pending.push({ run, reject });
     });
   }
 
-  /** Drop all not-yet-started jobs -- teardown, so an abandoned stage stops
-   * queuing new downloads. In-flight jobs (≤ limit) still finish. */
+  /** Reject queued consumers and stop starting downloads. Active browser
+   * requests may finish, but their results and progress are ignored. */
   cancel(): void {
-    this.#pending.length = 0;
+    if (this.#cancelled) return;
+    this.#cancelled = true;
+    const error = new Error("load queue cancelled");
+    const pending = this.#pending.splice(0);
+    for (const job of pending) job.reject(error);
   }
 
   #report(id: number, loaded: number, total: number): void {
+    if (this.#cancelled) return;
     const prev = this.#jobLoaded.get(id) ?? 0;
     this.#loaded += loaded - prev;
     this.#jobLoaded.set(id, loaded);

@@ -1,12 +1,75 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 """Front-door behaviour: static caching, SPA fallback, path guards, the config
-overlay, the restart guard, the /ws + /worldstate proxy, and /settings.
+overlay, simulator-environment routing, the restart guard, the /ws + /worldstate proxy, and /settings.
 
 Pins the contract the aiohttp rewrite must keep. Part of the fast (no-ROS)
 pytest bucket."""
 
+import gzip
+import json
+import stat
+import uuid
+from urllib.parse import parse_qs, urlsplit
+
 from conftest import fake_ws_upstream, make_app_root, serve, sync
+
+CONTROL_NOW = 1_800_000_000.0
+
+
+def make_environment_control(tmp_path):
+    requests = tmp_path / "control/requests"
+    status = tmp_path / "control/status"
+    status.mkdir(parents=True)
+    requests.mkdir(parents=True)
+    catalog = {
+        "schema_version": 1,
+        "active": {"id": "apartment", "display_name": "Apartment", "fingerprint": "a" * 64},
+        "environments": [
+            {"id": "apartment", "display_name": "Apartment"},
+            {"id": "gallery", "display_name": "Gallery"},
+        ],
+        "switch": None,
+    }
+    (status / "heartbeat.json").write_text(json.dumps({"schema_version": 1, "pid": 1234, "updated_at": CONTROL_NOW}))
+    (status / "catalog.json").write_text(json.dumps(catalog))
+    return requests, status, catalog
+
+
+def control_overrides(requests, status):
+    return {
+        "WEBAPP_SIM_CONTROLS": True,
+        "SIM_ENVIRONMENT_MUTATION_ENABLED": True,
+        "SIM_ENVIRONMENT_ALLOWED_HOSTS": {"localhost", "127.0.0.1"},
+        "SIM_ENVIRONMENT_REQUESTS_DIR": requests,
+        "SIM_ENVIRONMENT_STATUS_DIR": status,
+        "SIM_ENVIRONMENT_TIME": lambda: CONTROL_NOW,
+    }
+
+
+def make_sim_viewer(tmp_path):
+    viewer = tmp_path / "sim/viewer"
+    public = viewer / "public"
+    for directory in (public / "environments/gallery/collisions", public / "environments/gallery/rooms"):
+        directory.mkdir(parents=True)
+    (public / "environments/gallery/gallery.glb").write_bytes(b"ACTIVE GALLERY")
+    (public / "environments/gallery/collisions/hulls.f32").write_bytes(b"ACTIVE HULLS")
+    (public / "environments/gallery/rooms/manifest.json").write_text('{"rooms": []}')
+    (public / "environments/gallery/rooms/room.glb").write_bytes(b"ACTIVE ROOM")
+    descriptor_path = tmp_path / "sim/assets/.active-environment.json"
+    descriptor_path.parent.mkdir(parents=True)
+    descriptor = {
+        "schema_version": 1,
+        "id": "gallery",
+        "display_name": "Gallery",
+        "fingerprint": "gallery-v1",
+        "viewer": {
+            "type": "glb",
+            "model": "environments/gallery/gallery.glb",
+            "collision_dir": "environments/gallery/collisions",
+        },
+    }
+    return viewer, descriptor_path, descriptor
 
 
 @sync
@@ -145,14 +208,154 @@ async def test_path_guards(tmp_path):
 @sync
 async def test_config_env_overlay(tmp_path):
     root = make_app_root(tmp_path)
-    async with serve(ROOT=root, WEBAPP_SIM_CONTROLS=True) as (s, base):
+    async with serve(ROOT=root, WEBAPP_SIM_CONTROLS=True, SIM_ENVIRONMENT_MUTATION_ENABLED=True) as (s, base):
         r = await s.get(base + "/config.json")
         assert r.headers["Cache-Control"] == "no-cache"
         cfg = await r.json()
         assert cfg["base"] is True and cfg["simControls"] is True
+        assert cfg["simEnvironmentControls"] is True
+        lan = await s.get(base + "/config.json", headers={"Host": "robot.local"})
+        assert (await lan.json())["simEnvironmentControls"] is False
+    async with serve(ROOT=root, WEBAPP_SIM_CONTROLS=True, SIM_ENVIRONMENT_MUTATION_ENABLED=False) as (s, base):
+        cfg = await (await s.get(base + "/config.json")).json()
+        assert cfg["simEnvironmentControls"] is False
+        blocked = await s.post(
+            base + "/sim-environment/switch",
+            json={"id": "gallery"},
+            headers={"X-Requested-By": "innate-webapp", "Origin": base},
+        )
+        assert blocked.status == 403
     async with serve(ROOT=root, WEBAPP_SIM_CONTROLS=False) as (s, base):
         cfg = await (await s.get(base + "/config.json")).json()
         assert "simControls" not in cfg
+
+
+@sync
+async def test_sim_environment_assets_and_local_control_round_trip(tmp_path):
+    root = make_app_root(tmp_path)
+    viewer, descriptor_path, descriptor = make_sim_viewer(tmp_path)
+    descriptor_path.write_text(json.dumps(descriptor))
+    overrides = {
+        "ROOT": root,
+        "SIM_VIEWER_ROOT": viewer,
+        "ACTIVE_ENVIRONMENT_PATH": descriptor_path,
+    }
+    async with serve(**overrides) as (session, base):
+        manifest = await session.get(base + "/sim-environment/manifest.json")
+        assert manifest.headers["Cache-Control"] == "no-store, max-age=0"
+        assert await manifest.json() == descriptor
+
+        first = await session.get(base + "/sim-environment/scene.glb", allow_redirects=False)
+        first_location = first.headers["Location"]
+        assert parse_qs(urlsplit(first_location).query)["fingerprint"] == ["gallery-v1"]
+        assert await (await session.get(base + first_location)).read() == b"ACTIVE GALLERY"
+
+        descriptor["fingerprint"] = "gallery-v2"
+        descriptor_path.write_text(json.dumps(descriptor))
+        assert (await session.get(base + first_location, allow_redirects=False)).status == 412
+
+        descriptor["fingerprint"] = "gallery-v3"
+        descriptor["viewer"] = {
+            "type": "split-glb",
+            "manifest": "environments/gallery/rooms/manifest.json",
+            "base_dir": "environments/gallery/rooms",
+            "collision_dir": "environments/gallery/collisions",
+        }
+        descriptor_path.write_text(json.dumps(descriptor))
+        for path in ("/sim-environment/layout.json", "/sim-environment/rooms/room.glb"):
+            bound = await session.get(base + path, allow_redirects=False)
+            assert bound.status == 307
+            assert parse_qs(urlsplit(bound.headers["Location"]).query)["fingerprint"] == ["gallery-v3"]
+            assert (await session.get(base + bound.headers["Location"])).status == 200
+
+    requests, status, catalog = make_environment_control(tmp_path)
+    async with serve(ROOT=root, **control_overrides(requests, status)) as (session, base):
+        assert (await (await session.get(base + "/config.json")).json())["simEnvironmentControls"] is True
+        response = await session.get(base + "/sim-environments.json")
+        assert response.status == 200
+        assert response.headers["Cache-Control"] == "no-store, max-age=0"
+        assert await response.json() == catalog
+
+        headers = {"X-Requested-By": "innate-webapp", "Origin": base}
+        switch_body = {"id": "gallery"}
+        for forbidden_headers in (
+            {"X-Requested-By": "innate-webapp", "Host": "evil.example", "Origin": "http://evil.example"},
+            {"X-Requested-By": "innate-webapp", "Origin": "http://evil.example"},
+        ):
+            forbidden = await session.post(
+                base + "/sim-environment/switch", json=switch_body, headers=forbidden_headers
+            )
+            assert forbidden.status == 403
+        invalid = await session.post(base + "/sim-environment/switch", json={"id": "../bad"}, headers=headers)
+        assert invalid.status == 400
+
+        # The cap applies after request decompression, not to Content-Length.
+        compressed = gzip.compress(json.dumps({"padding": "x" * 5000}).encode())
+        gzipped = await session.post(
+            base + "/sim-environment/switch",
+            data=compressed,
+            headers={**headers, "Content-Type": "application/json", "Content-Encoding": "gzip"},
+        )
+        assert gzipped.status == 413
+
+        heartbeat_path = status / "heartbeat.json"
+        heartbeat_path.write_text(json.dumps({"schema_version": 1, "updated_at": float("nan")}))
+        unavailable = await session.post(base + "/sim-environment/switch", json=switch_body, headers=headers)
+        assert unavailable.status == 503
+        heartbeat_path.write_text(json.dumps({"schema_version": 1, "updated_at": CONTROL_NOW}))
+
+        (status / "stopping").touch()
+        stopping = await session.post(base + "/sim-environment/switch", json=switch_body, headers=headers)
+        assert stopping.status == 503
+        (status / "stopping").unlink()
+
+        queued = await session.post(base + "/sim-environment/switch", json=switch_body, headers=headers)
+        assert queued.status == 202
+        current = requests / "current.json"
+        assert stat.S_IMODE(current.stat().st_mode) == 0o644
+        accepted = await queued.json()
+        request_id = accepted["request_id"]
+        assert str(uuid.UUID(request_id)) == request_id
+        assert json.loads(current.read_text()) == {"request_id": request_id, "id": "gallery"}
+        assert accepted["target"] == {"id": "gallery", "display_name": "Gallery"}
+
+        # The catalog can lag the accepted mailbox by one controller poll. GET
+        # must expose the server-generated UUID immediately.
+        overlaid = await session.get(base + "/sim-environments.json")
+        assert overlaid.status == 200
+        assert (await overlaid.json())["switch"] == {
+            "request_id": request_id,
+            "target": {"id": "gallery", "display_name": "Gallery"},
+            "state": "queued",
+            "message": "Waiting for the simulator environment controller...",
+        }
+        conflict = await session.post(base + "/sim-environment/switch", json={"id": "apartment"}, headers=headers)
+        assert conflict.status == 409
+
+        (status / "stopping").touch()
+        stopping_catalog = await session.get(base + "/sim-environments.json")
+        assert stopping_catalog.status == 503
+        assert (await stopping_catalog.json())["switch"]["state"] == "queued"
+        (status / "stopping").unlink()
+
+        catalog["switch"] = {
+            "request_id": request_id,
+            "target": {"id": "gallery", "display_name": "Gallery"},
+            "state": "running",
+            "message": "Starting navigation…",
+        }
+        (status / "catalog.json").write_text(json.dumps(catalog))
+        (status / "heartbeat.json").write_text(json.dumps({"schema_version": 1, "updated_at": CONTROL_NOW - 10}))
+        abandoned = await session.get(base + "/sim-environments.json")
+        assert abandoned.status == 503
+        assert (await abandoned.json())["switch"]["state"] == "running"
+
+        # A stale running controller is fail-closed. Once it publishes a
+        # terminal catalog, that result remains readable without its heartbeat.
+        current.unlink()
+        catalog["switch"].update({"state": "ready", "message": "Gallery is ready."})
+        (status / "catalog.json").write_text(json.dumps(catalog))
+        assert (await session.get(base + "/sim-environments.json")).status == 200
 
 
 @sync

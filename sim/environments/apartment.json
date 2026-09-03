@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "id": "apartment",
+  "display_name": "Apartment",
+  "coordinate_system": "gltf-y-up-meters",
+  "physics": {
+    "collision_dir": "apartment_split_v2",
+    "visual_dir": "apartment_visual"
+  },
+  "viewer": {
+    "type": "split-glb",
+    "manifest": "models/apartment/manifest.json",
+    "base_dir": "models/apartment",
+    "collision_dir": "physics/apartment_collisions_v2"
+  },
+  "navigation": {
+    "map_yaml": "map/sim_apartment.yaml",
+    "map_image": "map/sim_apartment.pgm"
+  },
+  "spawn": {
+    "x": -4.34,
+    "y": -0.17,
+    "yaw_degrees": -89.8
+  },
+  "attribution": {
+    "name": "Appartement",
+    "author": "SrMonteiro",
+    "license": "CC BY 4.0",
+    "source": "https://sketchfab.com/3d-models/appartement-6a7a5fe208344b2e8123a88923dbd5b3"
+  }
+}

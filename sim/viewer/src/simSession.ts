@@ -7,7 +7,13 @@
 import type { SimScene } from "./scene";
 import { RosbridgePhysicsController } from "./physics/rosbridgeController";
 import { WorldStateController } from "./physics/worldStateController";
-import type { ChallengeActive, ChallengeBlock, ChallengeInfo, ChallengeProgress } from "./physics/worldStateController";
+import type {
+  ChallengeActive,
+  ChallengeBlock,
+  ChallengeInfo,
+  ChallengeProgress,
+  WorldEnvironment,
+} from "./physics/worldStateController";
 import type { PropInfo } from "./props";
 
 /** One roster row as a renderer wants it: what the challenge is, plus how it
@@ -18,6 +24,10 @@ export interface ChallengeEntry extends ChallengeInfo, ChallengeProgress {}
 export interface ChallengeView {
   list: ChallengeEntry[];
   active: ChallengeActive | null;
+}
+
+export interface SimEnvironmentState extends WorldEnvironment {
+  connected: boolean;
 }
 
 const NO_PROGRESS: ChallengeProgress = { passed: false, best_time_s: null, attempts: 0 };
@@ -84,6 +94,7 @@ export class SimSession {
   // Ground-truth snapshots on the sim clock.
   #samples: {
     t: number;
+    worldEpoch: number;
     x: number;
     y: number;
     yaw: number;
@@ -96,6 +107,10 @@ export class SimSession {
   #playT: number | null = null;
   #live = false;
   #spawned = false;
+  #renderScene: SimScene | null = null;
+  #environment: WorldEnvironment | null = null;
+  #environmentConnected = false;
+  #environmentListeners = new Set<(environment: SimEnvironmentState) => void>();
 
   // True server->browser delivery lag (shared wall clock); ?simperf HUD.
   #lagRecent: number[] = [];
@@ -182,19 +197,37 @@ export class SimSession {
    * loopback first when local, then the proxied route). */
   #connectState(i: number): void {
     const url = this.#stateUrls[i];
-    this.#controller = new WorldStateController(url);
-    this.#controller.onProps = (props) => {
+    const controller = new WorldStateController(url);
+    this.#controller = controller;
+    controller.onConnectionChange = (connected) => {
+      if (this.#controller !== controller) return;
+      if (!connected && this.#environmentConnected) this.#clearWorldGeneration();
+      this.#environmentConnected = connected;
+      this.#publishEnvironment();
+    };
+    controller.onEnvironment = (environment) => {
+      if (this.#controller !== controller) return;
+      if (
+        this.#environment?.id !== environment.id ||
+        this.#environment?.fingerprint !== environment.fingerprint
+      ) {
+        this.#clearWorldGeneration();
+      }
+      this.#environment = environment;
+      this.#publishEnvironment();
+    };
+    controller.onProps = (props) => {
       this.#props = props;
       this.#propsDirty = true; // handed to the scene on the next tick
       for (const cb of this.#propListeners) cb(props);
     };
-    this.#controller.onChallenges = (challenges) => {
+    controller.onChallenges = (challenges) => {
       // Arrives ahead of the stream, so the merge below has titles and briefs
       // before the first block; on a reconnect it just replaces them.
       this.#challengeInfo = challenges;
       this.#challengeJson = "";
     };
-    this.#controller.onState = (s) => {
+    controller.onState = (s) => {
       const lag = Date.now() / 1000 - s.wall;
       if (lag < this.#lagMinS) this.#lagMinS = lag;
       this.#lagRecent.push(lag);
@@ -208,23 +241,41 @@ export class SimSession {
       this.#lastArrival = now;
 
       const last = this.#samples[this.#samples.length - 1];
-      if (last === undefined || s.t > last.t) {
-        this.#samples.push({ t: s.t, x: s.x, y: s.y, yaw: s.yaw, joints: s.joints, objects: s.objects });
+      const sample = {
+        t: s.t,
+        worldEpoch: s.worldEpoch,
+        x: s.x,
+        y: s.y,
+        yaw: s.yaw,
+        joints: s.joints,
+        objects: s.objects,
+      };
+      if (last !== undefined && s.worldEpoch !== last.worldEpoch) {
+        // Any reset is a hard generation boundary even if it happened before
+        // the old sim clock advanced by the legacy 0.5-second heuristic.
+        this.#samples = [sample];
+        this.#playT = null;
+        this.#spawned = false;
+      } else if (last === undefined || s.t > last.t) {
+        this.#samples.push(sample);
         if (this.#samples.length > 60) this.#samples.shift();
       } else if (s.t < last.t - 0.5) {
         // Sim clock jumped backwards (world-server restart): restart playback.
-        this.#samples = [{ t: s.t, x: s.x, y: s.y, yaw: s.yaw, joints: s.joints, objects: s.objects }];
+        this.#samples = [sample];
         this.#playT = null;
+        this.#spawned = false;
       }
       this.#live = true;
       if (s.challenge) this.#publishChallenge(s.challenge);
       if (!this.#gotPose) {
         this.#gotPose = true;
+        this.#publishEnvironment();
         this.#maybeStreaming();
       }
     };
-    this.#controller.init().catch((err) => {
-      this.#controller?.dispose();
+    controller.init().catch((err) => {
+      if (this.#controller !== controller) return;
+      controller.dispose();
       if (i + 1 < this.#stateUrls.length) {
         console.warn(`[sim-session] ${url} unavailable, falling back:`, err);
         this.#connectState(i + 1);
@@ -235,19 +286,56 @@ export class SimSession {
     });
   }
 
+  /** Invalidate every dynamic value owned by one world-server process. This
+   * runs on transport loss as well as environment identity changes because a
+   * restarted process begins world_epoch at zero again. */
+  #clearWorldGeneration(): void {
+    this.#renderScene?.clearWorldState();
+    this.#samples = [];
+    this.#gaps = [];
+    this.#lastArrival = 0;
+    this.#playT = null;
+    this.#live = false;
+    this.#gotPose = false;
+    // The next generation cannot report streaming until its matching scene has
+    // passed prepareScene() and the stage explicitly marks it ready again.
+    this.#stageReady = false;
+    this.#spawned = false;
+    this.#props = [];
+    this.#propsDirty = true;
+    this.#overlaysDirty = true;
+    for (const cb of this.#propListeners) cb([]);
+    this.#challengeInfo = [];
+    this.#challenge = { list: [], active: null };
+    this.#challengeJson = "";
+    for (const cb of this.#challengeListeners) cb(this.#challenge);
+    this.#scan = null;
+    this.#scanDirty = false;
+    this.#lagRecent = [];
+    this.#lagMinS = Infinity;
+    if (this.#started) this.#patch({ status: "connecting", ...this.#videoArrays() });
+  }
+
   stop(): void {
     this.#controller?.dispose();
     this.#controller = null;
     this.#scanFeed?.dispose();
     this.#scanFeed = null;
     this.#started = false;
-    this.#gotPose = false;
-    this.#patch({ status: "idle", videoStream: null });
+    this.#clearWorldGeneration();
+    this.#environmentConnected = false;
+    this.#publishEnvironment();
+    this.#patch({ status: "idle", videoStream: null, ...this.#videoArrays() });
   }
 
   destroy(): void {
     this.stop();
     this.#listeners.clear();
+    this.#environmentListeners.clear();
+    this.#propListeners.clear();
+    this.#challengeListeners.clear();
+    this.#thumbCanvases = [];
+    this.#thumbContexts = [];
   }
 
   /** Toggle the /scan hit-point overlay (stage "lidar" chip). The rosbridge
@@ -307,6 +395,19 @@ export class SimSession {
     this.#propListeners.add(cb);
     if (this.#props.length) cb(this.#props);
     return () => this.#propListeners.delete(cb);
+  }
+
+  /** Subscribe to the physics world's environment identity and connection. */
+  onEnvironment(cb: (environment: SimEnvironmentState) => void): () => void {
+    this.#environmentListeners.add(cb);
+    if (this.#environment) cb({ ...this.#environment, connected: this.#environmentConnected && this.#gotPose });
+    return () => this.#environmentListeners.delete(cb);
+  }
+
+  #publishEnvironment(): void {
+    if (!this.#environment) return;
+    const state = { ...this.#environment, connected: this.#environmentConnected && this.#gotPose };
+    for (const cb of this.#environmentListeners) cb(state);
   }
 
   /** Whether any manipulation prop is currently in the world. Read from
@@ -387,6 +488,28 @@ export class SimSession {
     this.#patch({ status: "error" });
   }
 
+  /** Install one fully loaded scene only when it belongs to the connected
+   * physics world. Environment-owned extensions (traffic in the town pack)
+   * extend this one-time gate rather than making the render loop transactional. */
+  prepareScene(scene: SimScene): boolean {
+    if (
+      !this.#environment ||
+      !this.#environmentConnected ||
+      !this.#gotPose ||
+      scene.environmentFingerprint !== this.#environment.fingerprint
+    ) {
+      return false;
+    }
+    if (scene !== this.#renderScene) {
+      this.#renderScene = scene;
+      this.#spawned = false;
+      this.#propsDirty = true;
+      this.#overlaysDirty = true;
+    }
+    this.tick(scene, 0);
+    return true;
+  }
+
   /** Playback delay behind the newest sample: 2x the p90 inter-arrival gap
    * (clamped) -- ~30ms locally, growing only as the transport demands. */
   #delayS(): number {
@@ -399,6 +522,15 @@ export class SimSession {
   /** Per-frame: clamped interpolation on the sim clock, #delayS behind the
    * newest sample; a delivery gap holds the last pose, never extrapolates. */
   tick(scene: SimScene, dt: number): void {
+    if (this.#propsDirty) {
+      this.#propsDirty = false;
+      scene.setPropManifest(this.#props);
+    }
+    if (this.#overlaysDirty) {
+      this.#overlaysDirty = false;
+      scene.setLidarVisible(this.#lidarOn);
+      scene.setCollisionHullsVisible(this.#hullsOn);
+    }
     if (!this.#live || this.#samples.length === 0) return;
     const first = this.#samples[0];
     if (!this.#spawned) {
@@ -446,17 +578,7 @@ export class SimSession {
         ...q.map((v) => v / norm),
       ];
     }
-    if (this.#propsDirty) {
-      this.#propsDirty = false;
-      scene.setPropManifest(this.#props);
-    }
     scene.setObjectPoses(objects);
-
-    if (this.#overlaysDirty) {
-      this.#overlaysDirty = false;
-      scene.setLidarVisible(this.#lidarOn);
-      scene.setCollisionHullsVisible(this.#hullsOn);
-    }
     if (this.#lidarOn && this.#scanDirty && this.#scan) {
       this.#scanDirty = false;
       scene.setLidarPoints(this.#scan);

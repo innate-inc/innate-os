@@ -173,6 +173,42 @@ If something stops you anyway, we want to hear about it —
 ./innate-sim clean       # remove containers/volumes (keeps .env + config)
 ```
 
+### Environment packs
+
+The apartment is the default. Select another installed pack at launch, or from
+**Scene setup → Environment** in the running 3D view:
+
+```bash
+./innate-sim up --environment apartment
+```
+
+The page stays mounted during a switch. Driving remains paused until MuJoCo,
+Nav2/ROS, and the replacement Three.js scene report one pack fingerprint. A
+failed switch restores the previous pack or leaves the runtime stopped.
+
+Set a persistent default in `sim/config.toml`:
+
+```toml
+[simulation]
+environment = "apartment"
+```
+
+Each `sim/environments/<name>.json` manifest binds one coherent world:
+
+- MuJoCo collision/visual meshes and a Nav2 map under `sim/assets/`
+- a browser GLB (or progressive room manifest) and collision overlay under
+  `sim/viewer/public/`
+- the robot's initial x/y/yaw pose
+
+The launcher fingerprints the manifest and installed asset layers in
+`sim/assets/.active-environment.json`; the host, browser, and container all use
+that descriptor. Local packs live in `sim/environments.local/` and must include
+`attribution.generated_assets_sha256` so rebuilt assets advance the identity.
+
+New scenes use meters and glTF Y-up. Add their generated physics, viewer, and
+map outputs plus one manifest; preserve the source license and attribution.
+Use `viewer.type = "glb"` for one model or `"split-glb"` for progressive rooms.
+
 ## Build skills and agents
 
 The simulator shares the repository's [`workspace/`](../workspace/) with the

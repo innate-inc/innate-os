@@ -214,6 +214,7 @@ def build_world_xml(
     visual_rooms: dict[str, Path] | None = None,
     texture_max: int | None = None,
     props: "PropRegistry | None" = None,
+    spawn_pose: tuple[float, float, float] = (SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG),
 ) -> str:
     """The apartment environment MJCF (floor plane + decomposed room hulls,
     optionally the textured visual rooms in their own geom group, plus every
@@ -264,7 +265,7 @@ def build_world_xml(
         else ""
     )
 
-    lx, ly, lz, azimuth, elevation, extent = spawn_camera_view(SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG)
+    lx, ly, lz, azimuth, elevation, extent = spawn_camera_view(*spawn_pose)
 
     return f"""
 <mujoco model="apartment">

@@ -2,6 +2,11 @@
 # Copy to sim/config.toml or let `./innate-sim setup` create it automatically.
 # Leave values commented to use the built-in defaults.
 
+[simulation]
+# Static world selected for the next `./innate-sim up`. A command-line
+# `--environment NAME` overrides this for one launch.
+# environment = "apartment"
+
 [os]
 # Optional prebuilt Innate OS image. By default ("auto") the launcher tries a
 # content-addressed prebuilt image matching this checkout; failing that, the

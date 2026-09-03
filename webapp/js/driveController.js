@@ -23,6 +23,7 @@ const HEARTBEAT_MS = 150;
 // resting value still goes out within this window rather than waiting for the
 // next heartbeat — that tail was the bulk of the felt drive latency.
 const CHANGE_PUBLISH_MIN_GAP_MS = 16;
+const SIM_ENVIRONMENT_SWITCH_EVENT = "innate:sim-environment-switch-state";
 
 /** @param {number} v */
 const round3 = (v) => Math.round(v * 1000) / 1000;
@@ -39,12 +40,30 @@ export class DriveController {
   /** @type {number | null} */ #changeTimer = null;
   #lastPublishAt = 0;
   /** @type {Set<(state: DriveState) => void>} */ #listeners = new Set();
+  #environmentSwitching = false;
+  /** @type {Set<DriveSource>} */ #needsRelease = new Set();
 
   constructor() {
+    // A controller created while the persistent sim stage is switching must
+    // inherit the lock even though it missed the event that began it.
+    this.#environmentSwitching =
+      document.documentElement?.classList?.contains("sim-environment-switching") === true;
     window.addEventListener("blur", () => this.haltAll());
     window.addEventListener("pagehide", () => this.haltAll());
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "hidden") this.haltAll();
+    });
+    document.addEventListener(SIM_ENVIRONMENT_SWITCH_EVENT, (event) => {
+      if (!(event instanceof CustomEvent) || typeof event.detail !== "boolean") return;
+      const active = event.detail;
+      if (active === this.#environmentSwitching) return;
+      this.#environmentSwitching = active;
+      if (active) {
+        for (const source of /** @type {DriveSource[]} */ (["joystick", "keyboard"])) {
+          if (this.#inputs[source].engaged) this.#needsRelease.add(source);
+        }
+        this.haltAll();
+      }
     });
     ros.onStateChange((state) => {
       if (state !== "connected") this.haltAll();
@@ -60,6 +79,17 @@ export class DriveController {
    * @param {boolean} engaged
    */
   setInput(source, x, y, engaged) {
+    if (this.#environmentSwitching) {
+      // A key held across the restart must return to neutral before it can move
+      // the newly spawned robot.
+      if (engaged) this.#needsRelease.add(source);
+      else this.#needsRelease.delete(source);
+      return;
+    }
+    if (this.#needsRelease.has(source)) {
+      if (!engaged) this.#needsRelease.delete(source);
+      return;
+    }
     const input = this.#inputs[source];
     input.x = x;
     input.y = y;

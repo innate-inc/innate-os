@@ -7315,6 +7315,74 @@ select.skill-input {
   color: rgb(255 255 255 / 50%);
 }
 
+.sim-environment-picker {
+  gap: 7px;
+}
+
+.sim-environment-picker__controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.sim-environment-picker select {
+  min-width: 0;
+}
+
+.sim-environment-transition {
+  position: fixed;
+  z-index: 2147483000;
+  color: rgb(255 255 255 / 94%);
+  background: rgb(0 0 0 / 82%);
+  backdrop-filter: blur(8px);
+}
+
+.sim-environment-transition[hidden] {
+  display: none;
+}
+
+.sim-environment-transition__card {
+  padding: 30px;
+  gap: 12px;
+  text-align: center;
+  align-items: center;
+}
+
+.sim-environment-transition h2,
+.sim-environment-transition p {
+  margin: 0;
+}
+
+.sim-environment-transition h2 {
+  font-size: 18px;
+}
+
+.sim-environment-transition__message {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sim-environment-transition__hint {
+  color: rgb(255 255 255 / 56%);
+  font-size: 11px;
+}
+
+.sim-environment-transition__spinner {
+  width: 28px;
+  height: 28px;
+}
+
+.sim-environment-transition__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.sim-environment-transition.is-failed .sim-environment-transition__card {
+  border-color: var(--ctl-edge-danger);
+}
+
 .sim-scene-toggle {
   display: grid;
   width: 56px;

@@ -49,8 +49,8 @@ from config import (
     PORT_BASE_ENV,
     PUBLISHED_PORT_ENV,
     REPO_ROOT,
+    ROS_ENVIRONMENT_STATE_PATH,
     ROS_INSTALL_STATE_PATH,
-    SIM_ASSET_UNITS,
     SIM_ASSET_UNITS_AUTHORED,
     SIM_ASSET_UNITS_DERIVED,
     SIM_FOXGLOVE_PORT,
@@ -58,6 +58,7 @@ from config import (
     SIM_HTTPS_PORT,
     SIM_ROSBRIDGE_PORT,
     SIM_UDP_PORT,
+    SIM_WEBAPP_BIND,
     TMUX_SESSION_NAME,
     VIEWER_BUILD_LOG_PATH,
     VIEWER_TREE_PATH,
@@ -97,6 +98,7 @@ from dashboard import (
     live_step,
     render_progress_bar,
 )
+from environment import EnvironmentPack
 
 DOCKER_INSTALL_URL = "https://docs.docker.com/get-started/get-docker/"
 COMPOSE_INSTALL_URL = "https://docs.docker.com/compose/install/linux/"
@@ -834,6 +836,8 @@ _STACK_PORTS = (
 _CONTAINER_ENV_PUBLISH = (
     ("VIRTUAL_MARS_REMOTE", world_endpoint(), ""),
     ("INNATE_WORLD_STATE_PORT", str(WORLD_STATE_PORT), "8800"),
+    ("INNATE_SIM_WEBAPP_BIND", SIM_WEBAPP_BIND, "127.0.0.1"),
+    ("INNATE_SIM_CONTROL_SCHEMA", "1", ""),
 )
 
 
@@ -905,15 +909,30 @@ def retitle_step(message: str) -> None:
         step.retitle(message)
 
 
-def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline: bool = False) -> None:
+def ensure_os_container(
+    config: dict[str, object],
+    os_env_file: Path,
+    *,
+    offline: bool = False,
+    preserve_container: bool = False,
+) -> None:
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     os_image = str(config["os_image"]).strip()
     os_image_auto = bool(config["os_image_auto"])
     reuse_running_container = container_running(OS_CONTAINER_NAME)
+    if preserve_container and not reuse_running_container:
+        raise StackError(
+            "The simulator container stopped during the environment switch. "
+            "Refusing to recreate it because that would tear down the open web page."
+        )
     if reuse_running_container and not os_container_current():
+        if preserve_container:
+            raise StackError(
+                "The running simulator container uses outdated host ports. "
+                "Run `./innate-sim up` once before switching environments in the browser."
+            )
         log(f"The running OS container is bound to an older port block; recreating it to serve {config['webapp_url']}.")
         reuse_running_container = False
-
     if reuse_running_container:
         log("Innate OS dev container already running.")
     else:
@@ -1056,7 +1075,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
         f"nohup zsh -lc {shlex.quote(launch_script)} "
         ">/tmp/innate-os-session.log 2>&1 </dev/null & "
         f"for _ in {{1..60}}; do "
-        f"tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1 && "
+        f"tmux has-session -t {_tmux_exact_session_shell_target(TMUX_SESSION_NAME)} >/dev/null 2>&1 && "
         "echo 'ROS tmux session launch started.' && exit 0; "
         "sleep 0.05; "
         "done; "
@@ -1071,6 +1090,76 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
         log_path=OS_SESSION_LOG_PATH,
         failure_message="Innate OS tmux session launch failed.",
     )
+    environment = config.get("environment")
+    if isinstance(environment, EnvironmentPack):
+        ensure_state_dir()
+        ROS_ENVIRONMENT_STATE_PATH.write_text(f"{environment.fingerprint}\n", encoding="utf-8")
+
+
+def ros_environment_is_current(config: dict[str, object]) -> bool:
+    environment = config.get("environment")
+    if not isinstance(environment, EnvironmentPack):
+        return False
+    try:
+        return ROS_ENVIRONMENT_STATE_PATH.read_text(encoding="utf-8").strip() == environment.fingerprint
+    except OSError:
+        return False
+
+
+def stop_os_session(config: dict[str, object]) -> None:
+    """Stop ROS/tmux while keeping this checkout's container and build cache."""
+    if not container_running(OS_CONTAINER_NAME):
+        return
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    try:
+        result = subprocess.run(
+            os_compose_zsh_cmd(
+                f"tmux kill-session -t {_tmux_exact_session_shell_target(TMUX_SESSION_NAME)} 2>/dev/null || true"
+            ),
+            cwd=os_repo,
+            env=os_compose_env(),
+            text=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=PROBE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise StackError("Timed out stopping the previous ROS session before switching environments.") from exc
+    if result.returncode != 0:
+        raise StackError("Could not stop the previous ROS session before switching simulator environments.")
+    with contextlib.suppress(OSError):
+        ROS_ENVIRONMENT_STATE_PATH.unlink(missing_ok=True)
+
+
+def restart_webapp_session(config: dict[str, object]) -> None:
+    """Reload proxy code in its existing pane without disturbing ROS."""
+    if not container_running(OS_CONTAINER_NAME):
+        raise StackError("Could not refresh the simulator webapp because its container is not running.")
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    command = (
+        "cd ~/innate-os/webapp && while true; do WEBAPP_SIM_CONTROLS=1 python3 proxy/https_server.py; sleep 2; done"
+    )
+    try:
+        result = subprocess.run(
+            os_compose_zsh_cmd(
+                f"tmux respawn-pane -k -t {_tmux_exact_session_shell_target(f'{TMUX_SESSION_NAME}:console-webapp.1')} "
+                f"{shlex.quote(command)}"
+            ),
+            cwd=os_repo,
+            env=os_compose_env(),
+            text=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=PROBE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise StackError("Timed out refreshing the simulator webapp proxy.") from exc
+    if result.returncode != 0:
+        raise StackError("Could not refresh the simulator webapp proxy.")
 
 
 def down_os(config: dict[str, object], *, remove_volumes: bool = False) -> None:
@@ -1394,6 +1483,16 @@ def os_compose_zsh_cmd(command: str) -> list[str]:
     return os_compose_exec_cmd("zsh", "-lc", command)
 
 
+def _tmux_exact_session_shell_target(session: str) -> str:
+    """Return an always-quoted exact tmux session target for a shell command.
+
+    zsh expands an unquoted leading ``=`` as a command path, so ``shlex.quote``
+    is insufficient here: POSIX considers ``=`` safe and leaves it bare.
+    """
+    exact = f"={session}"
+    return "'" + exact.replace("'", "'\"'\"'") + "'"
+
+
 def os_compose_zsh_interactive_cmd(command: str) -> list[str]:
     """Interactive zsh so ~/.zshrc runs: that's where ROS + the zenoh RMW env
     come from -- `ros2` in a plain -lc shell probes an empty default-DDS graph."""
@@ -1505,7 +1604,7 @@ def collect_os_process_status(config: dict[str, object]) -> dict[str, bool]:
     compose_env = os_compose_env()
     output = capture_command_output(
         os_compose_zsh_cmd(
-            f"tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1; "
+            f"tmux has-session -t {_tmux_exact_session_shell_target(TMUX_SESSION_NAME)} >/dev/null 2>&1; "
             "echo tmux=$?; "
             "pgrep -f '[r]ws_server|[r]osbridge_websocket' >/dev/null; echo rosbridge=$?; "
             "pgrep -f '[b]rain_client_node.py' >/dev/null; echo brain=$?; "
@@ -1640,8 +1739,7 @@ def wait_for_virtual_mars(config: dict[str, object], *, timeout_seconds: float =
 
 
 def runtime_already_running(config: dict[str, object]) -> bool:
-    """The running stack is both complete and current. A container on a stale port
-    block is not reusable however healthy it looks -- only a recreate moves it."""
+    """Whether the complete stack uses this checkout's ports and control schema."""
     return os_runtime_ready(config) and os_container_current()
 
 
@@ -1735,7 +1833,8 @@ def capture_os_brain_logs(config: dict[str, object], lines: int = 18) -> list[st
         os_compose_exec_cmd(
             "sh",
             "-c",
-            f"if ! tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} >/dev/null 2>&1; then "
+            f"if ! tmux has-session -t {_tmux_exact_session_shell_target(TMUX_SESSION_NAME)} "
+            ">/dev/null 2>&1; then "
             "echo __INNATE_NO_TMUX_SESSION__; "
             "exit 0; "
             "fi; "
@@ -1765,13 +1864,12 @@ def health_score(level: str) -> float:
     return 20.0
 
 
-# The subtrees the host installs out of the asset image's `work` layer are
-# config.SIM_ASSET_UNITS, shared with ci/seed_asset_context.py. Each is
-# replaced atomically on refresh, and all land under sim/assets/ for the world
-# server, which runs on the HOST and writes into them (.model_cache, capped
-# textures) -- so they cannot be mounted read-only off the image instead.
-# The viewer's dirs are absent because compose does exactly that with them
-# (sim/docker-compose.dev.yml).
+# Every direct child of the asset image's `work` layer is installed under
+# sim/assets/. SIM_ASSET_UNITS still defines the compatibility floor (required
+# generated apartment data plus optional authored props), while environment
+# packs can add roots without a matching launcher edit. The world server runs
+# on the HOST and writes derived caches beside these roots, so they cannot be
+# mounted read-only off the image instead.
 
 
 def assets_image_ref(config: dict[str, object]) -> str:
@@ -1792,7 +1890,99 @@ def assets_image_ref(config: dict[str, object]) -> str:
     return override or resolve_assets_image(config["os_repo"])  # type: ignore[arg-type]
 
 
-def ensure_sim_assets(config: dict[str, object]) -> None:
+def _marker_parts(path: Path) -> list[str]:
+    try:
+        return path.read_text(encoding="utf-8").split()
+    except (OSError, UnicodeError):
+        return []
+
+
+def _directory_has_payload(path: Path, marker_name: str = ".installed-tag") -> bool:
+    try:
+        return path.is_dir() and any(child.name != marker_name for child in path.iterdir())
+    except OSError:
+        return False
+
+
+def viewer_bundle_install_is_current(config: dict[str, object]) -> bool:
+    """Accept either this checkout's published bundle or its exact local fallback."""
+    if os.environ.get("INNATE_SIM_VIEWER_BUNDLE_IMAGE", "").strip():
+        return False
+    sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    bundle = sim_repo / "viewer" / "dist-lib"
+    parts = _marker_parts(bundle / ".installed-tag")
+    if not _directory_has_payload(bundle) or len(parts) < 2:
+        return False
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    valid_refs = {viewer_image_ref(config), resolve_local_viewer_image(os_repo)}
+    if parts[1] not in valid_refs:
+        return False
+    config["viewer_bundle_image"] = parts[1]
+    return True
+
+
+def _physics_assets_are_current(pack: EnvironmentPack | None) -> bool:
+    if pack is None:
+        return True
+    try:
+        pack.validate_physics_assets()
+        return True
+    except StackError:
+        return False
+
+
+def simulator_install_is_current(config: dict[str, object], pack: EnvironmentPack) -> bool:
+    """Cheaply prove a warm runtime still describes this checkout."""
+    sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    try:
+        if ROS_INSTALL_STATE_PATH.read_text(encoding="utf-8").strip() != compute_ros_install_validation_hash(os_repo):
+            return False
+    except OSError:
+        return False
+    if not viewer_bundle_install_is_current(config):
+        return False
+    if pack.is_local:
+        try:
+            pack.validate_assets()
+        except StackError:
+            return False
+        return True
+
+    if os.environ.get("INNATE_SIM_ASSETS_IMAGE", "").strip():
+        return False
+    expected_ref = assets_image_ref(config)
+    geometry_hash = compute_geometry_inputs_hash(os_repo)
+    for marker in (sim_repo / "assets/.assets-tag", sim_repo / "viewer/public/.installed-tag"):
+        parts = _marker_parts(marker)
+        if parts[1:2] != [expected_ref] and parts[2:3] != [geometry_hash]:
+            return False
+    try:
+        pack.validate_assets()
+    except StackError:
+        return False
+    return all((sim_repo / "assets" / unit).is_dir() for unit in SIM_ASSET_UNITS_DERIVED)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Replace a small state file without exposing a partial write."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _remove_asset_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def ensure_sim_assets(config: dict[str, object], pack: EnvironmentPack | None = None) -> None:
     """Install the sim geometry out of the asset image this checkout implies.
 
     The generated geometry (collision hulls, room meshes, nav map) is not in
@@ -1825,6 +2015,7 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
     # Recovering a hand-deleted authored unit means deleting .assets-tag.
     parts = marker.read_text().split() if marker.exists() else []
     installed = all((sim_repo / "assets" / unit).is_dir() for unit in SIM_ASSET_UNITS_DERIVED)
+    installed = installed and _physics_assets_are_current(pack)
 
     # Ref match => digest match, so the warm path stays off the network: the
     # ref is content-addressed and ci/build_assets_image.sh never rebuilds an
@@ -1862,7 +2053,7 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
     if parts[:1] == [digest] and installed:
         # Same geometry under a new ref (or an old digest-only marker):
         # remember the ref so the next run skips the probe above.
-        marker.write_text(f"{digest} {image} {geometry_hash}\n")
+        _atomic_write_text(marker, f"{digest} {image} {geometry_hash}\n")
         return
 
     log(f"Downloading sim assets {digest[7:19]} (~85 MB, one-time)...")
@@ -1903,42 +2094,71 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
         except OSError as exc:
             raise StackError(f"Failed to stamp sim asset mtimes under {staging}: {exc}") from exc
 
-        for unit in SIM_ASSET_UNITS:
-            src = work / unit
-            if not src.is_dir():
-                continue
-            dest = sim_repo / "assets" / unit
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.rmtree(dest, ignore_errors=True)
-            shutil.move(str(src), str(dest))
-        # Every compiled world is now unreachable (see the re-stamp above) and
-        # nothing else ever prunes them, at ~168 MB each. .model_cache sits
-        # OUTSIDE the units, so the per-unit replacement leaves it behind.
+        # No running process may observe a partial refresh. Removing the old
+        # marker first also makes an interrupted install retry instead of
+        # claiming that a mixed tree is current.
+        marker.unlink(missing_ok=True)
+        for source in sorted(work.iterdir(), key=lambda path: path.name):
+            if source.name == "local-environments":
+                continue  # local licensed packs are never owned by OCI layers
+            if source.name.startswith(".") or source.is_symlink() or not (source.is_dir() or source.is_file()):
+                raise StackError(f"The sim asset layer contains an unsafe work root: {source.name!r}.")
+            destination = sim_repo / "assets" / source.name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            _remove_asset_path(destination)
+            shutil.move(str(source), str(destination))
+        # Every compiled world is now unreachable (see the re-stamp above).
+        # .model_cache sits outside the layer-owned roots, so clear the bounded
+        # cache on an asset-generation change rather than retaining dead MJBs.
         shutil.rmtree(sim_repo / "assets" / ".model_cache", ignore_errors=True)
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(f"{digest} {image} {geometry_hash}\n")
+        _atomic_write_text(marker, f"{digest} {image} {geometry_hash}\n")
         log(f"Sim assets {digest[7:19]} installed.")
+        if pack is not None:
+            pack.validate_physics_assets()
     finally:
         blob.unlink(missing_ok=True)
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def ensure_viewer_public_assets(config: dict[str, object]) -> None:
+def ensure_viewer_public_assets(
+    config: dict[str, object],
+    *,
+    offline: bool = False,
+    pack: EnvironmentPack | None = None,
+) -> None:
     """Install the models and physics the webapp serves at /models and /physics.
 
     The same image as the geometry, a different layer -- and on disk rather
     than mounted from the image, for the reasons in install_layer_subtree.
     """
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    destination = sim_repo / "viewer" / "public"
+    selected_assets_present = True
+    if pack is not None:
+        try:
+            pack.validate_viewer_assets()
+        except StackError:
+            selected_assets_present = False
+    if offline:
+        if _directory_has_payload(destination) and selected_assets_present:
+            log("Reusing the installed viewer assets offline.")
+            return
+        raise StackError(
+            "No viewer assets are installed for offline startup. Run `./innate-sim up` while online first."
+        )
     install_layer_subtree(
         assets_image_ref(config),
         ASSETS_IMAGE_LAYERS.index("viewer"),
         "viewer",
-        sim_repo / "viewer" / "public",
-        sim_repo / "viewer" / "public" / ".installed-tag",
+        destination,
+        destination / ".installed-tag",
         label="viewer assets",
         geometry_hash=compute_geometry_inputs_hash(config["os_repo"]),  # type: ignore[arg-type]
+        preserve_children=("local-environments",),
+        force_refresh=not selected_assets_present,
     )
+    if pack is not None:
+        pack.validate_viewer_assets()
 
 
 def install_layer_subtree(
@@ -1950,6 +2170,8 @@ def install_layer_subtree(
     *,
     label: str,
     geometry_hash: str | None = None,
+    preserve_children: tuple[str, ...] = (),
+    force_refresh: bool = False,
 ) -> None:
     """Put one subtree of one image layer on disk, idempotently.
 
@@ -1971,7 +2193,7 @@ def install_layer_subtree(
     """
     parts = marker.read_text().split() if marker.exists() else []
     populated = destination.is_dir() and any(destination.iterdir())
-    if parts[1:2] == [image] and populated:
+    if not force_refresh and parts[1:2] == [image] and populated:
         return
 
     try:
@@ -1982,7 +2204,7 @@ def install_layer_subtree(
             return
         raise
     digest = manifest["layers"][layer_index]["digest"]
-    if parts[:1] == [digest] and populated:
+    if not force_refresh and parts[:1] == [digest] and populated:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(f"{digest} {image} {geometry_hash or ''}\n")
         return
@@ -2003,8 +2225,37 @@ def install_layer_subtree(
         if not source.is_dir():
             raise StackError(f"{shorten_docker_image_ref(image)} layer {digest[7:19]} has no {subtree}/ subtree.")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.rmtree(destination, ignore_errors=True)
-        shutil.move(str(source), str(destination))
+        preserve_root = destination.parent / f".{destination.name}.preserve-{os.getpid()}"
+        shutil.rmtree(preserve_root, ignore_errors=True)
+        preserved: dict[str, Path] = {}
+        try:
+            for child_name in preserve_children:
+                child = destination / child_name
+                if child.exists() or child.is_symlink():
+                    preserve_root.mkdir(parents=True, exist_ok=True)
+                    backup = preserve_root / child_name
+                    os.replace(child, backup)
+                    preserved[child_name] = backup
+
+            shutil.rmtree(destination, ignore_errors=True)
+            shutil.move(str(source), str(destination))
+            for child_name, backup in preserved.items():
+                target = destination / child_name
+                if target.exists() or target.is_symlink():
+                    _remove_asset_path(target)
+                os.replace(backup, target)
+        except Exception:
+            destination.mkdir(parents=True, exist_ok=True)
+            for child_name, backup in preserved.items():
+                if not (backup.exists() or backup.is_symlink()):
+                    continue
+                target = destination / child_name
+                if target.exists() or target.is_symlink():
+                    _remove_asset_path(target)
+                os.replace(backup, target)
+            raise
+        finally:
+            shutil.rmtree(preserve_root, ignore_errors=True)
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(f"{digest} {image} {geometry_hash or ''}\n")
         log(f"{label} {digest[7:19]} installed.")
@@ -2056,6 +2307,8 @@ def ensure_sim_viewer_bundle(config: dict[str, object], *, offline: bool = False
     marker = destination / ".installed-tag"
 
     override = os.environ.get("INNATE_SIM_VIEWER_BUNDLE_IMAGE", "").strip()
+    if not override and viewer_bundle_install_is_current(config):
+        return
     if not override and not viewer_bundle_built_locally():
         image = resolve_viewer_image(config["os_repo"])  # type: ignore[arg-type]
         try:
@@ -2094,7 +2347,7 @@ def _extract_bundle_from_image(config: dict[str, object], image: str, destinatio
     image_id = capture_command_output(
         ["docker", "image", "inspect", image, "--format", "{{.Id}}"], cwd=os_repo, env=env
     )
-    if marker.exists() and marker.read_text().split()[:1] == [image_id] and destination.is_dir():
+    if marker.exists() and marker.read_text().split()[:1] == [image_id] and _directory_has_payload(destination):
         return
 
     # The command is never run -- but `docker create` refuses without one, and
@@ -2380,13 +2633,25 @@ def world_server_running() -> bool:
     return _world_server_ping_reply(WORLD_SERVER_PORT) is not None
 
 
+def world_environment_is_current(config: dict[str, object]) -> bool:
+    """Whether the live MuJoCo process advertises the selected pack identity."""
+    environment = config.get("environment")
+    if not isinstance(environment, EnvironmentPack):
+        return False
+    reply = _world_server_ping_reply(WORLD_SERVER_PORT)
+    return bool(
+        reply is not None
+        and reply.get("environment_id") == environment.id
+        and reply.get("environment_fingerprint") == environment.fingerprint
+    )
+
+
 def _world_model_sources_digest(config: dict[str, object]) -> str:
     """Content digest of the sources compiled into the world server's MuJoCo
-    model: the robot description, the driver's model-building modules, and
-    the installed apartment bundle (its .assets-tag marker is derived from
-    the bundle tarball's sha256, so the tag names the content). A running
-    server that compiled different content is serving stale physics -- by
-    CONTENT, not mtime, so no copy, checkout or asset refresh can fool it."""
+    model: the robot description, the driver's model-building modules, the
+    selected environment manifest, and the installed OCI work-layer digest.
+    A server compiled from different content is stale by identity, not mtime,
+    so copying a checkout or refreshing assets cannot fool the reuse check."""
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
     mars_bot = os_repo / "ros2_ws" / "src" / "mars_bot"
@@ -2395,6 +2660,9 @@ def _world_model_sources_digest(config: dict[str, object]) -> str:
     candidates += sorted((mars_bot / "mars_sim" / "meshes").glob("*"))
     candidates += [driver / name for name in ("world.py", "core.py", "constants.py")]
     candidates += [sim_repo / "assets" / ".assets-tag"]
+    environment = config.get("environment")
+    if isinstance(environment, EnvironmentPack):
+        candidates += [environment.manifest_path]
     digest = hashlib.sha256()
     for f in candidates:
         with contextlib.suppress(OSError):
@@ -2403,10 +2671,10 @@ def _world_model_sources_digest(config: dict[str, object]) -> str:
     return digest.hexdigest()
 
 
-def ensure_world_server(config: dict[str, object]) -> str:
+def ensure_world_server(config: dict[str, object]) -> tuple[str, bool]:
     """Start the host world server (physics + rendering, outside Docker --
-    see mars_sim_driver/world_server.py) and return the endpoint the
-    container must use.
+    see mars_sim_driver/world_server.py). Return the endpoint the container
+    must use and whether the server was started or restarted.
 
     The world ALWAYS runs on the host: in-container software GL measured
     ~105ms/frame with physics starving the ROS stack (multi-second teleop
@@ -2422,6 +2690,9 @@ def ensure_world_server(config: dict[str, object]) -> str:
         raise StackError(_UV_MISSING_MESSAGE)
 
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    environment = config.get("environment")
+    if not isinstance(environment, EnvironmentPack):
+        raise StackError("No simulator environment was selected before starting the world server.")
     endpoint = world_endpoint()
     bind = os.environ.get("INNATE_SIM_WORLD_BIND", "").strip() or _world_server_bind_addresses()
     if not bind:
@@ -2436,10 +2707,15 @@ def ensure_world_server(config: dict[str, object]) -> str:
     if reply is not None:
         expected_binds = {b.strip() for b in bind.split(",") if b.strip()}
         actual_binds = reply.get("binds")
+        environment_matches = (
+            reply.get("environment_id") == environment.id
+            and reply.get("environment_fingerprint") == environment.fingerprint
+        )
         if (
             reply.get("state_port") == WORLD_STATE_PORT
             and actual_binds is not None
             and set(actual_binds) == expected_binds
+            and environment_matches
         ):
             # The MuJoCo model is compiled at server start; a URDF or
             # world-module edit since then is not in the running physics.
@@ -2447,13 +2723,19 @@ def ensure_world_server(config: dict[str, object]) -> str:
             with contextlib.suppress(OSError):
                 running_digest = WORLD_SERVER_MODEL_DIGEST_PATH.read_text(encoding="utf-8").strip()
             if _world_model_sources_digest(config) == running_digest:
-                log("Host world server already running.")
-                return endpoint
+                log(f"Host world server already running with {environment.display_name}.")
+                return endpoint, False
             log("Host world server compiled different robot/world sources -- restarting it...")
         # Reusing a mismatched server would either starve the webapp's 3D
         # view (pre-stream builds) or keep listeners open that the current
         # bind policy would never create (e.g. a leftover
         # INNATE_SIM_WORLD_BIND=0.0.0.0 server) -- restart instead.
+        elif not environment_matches:
+            previous = reply.get("environment_id")
+            if previous:
+                log(f"Host world server uses environment {previous!r}; switching to {environment.id!r}...")
+            else:
+                log("Host world server predates environment packs -- restarting it...")
         elif not reply.get("state_port"):
             log("Host world server is outdated (no observer state stream) -- restarting it...")
         elif reply["state_port"] != WORLD_STATE_PORT:
@@ -2484,11 +2766,11 @@ def ensure_world_server(config: dict[str, object]) -> str:
             warn("Falling back to software rendering (OSMesa) -- works on any machine, but renders are slow.")
         log(f"Starting host world server ({label} rendering)...")
         log_offset = WORLD_SERVER_LOG_PATH.stat().st_size if WORLD_SERVER_LOG_PATH.exists() else 0
-        if _start_world_server(uv, sim_repo, bind=bind, mujoco_gl=backend):
+        if _start_world_server(uv, sim_repo, environment=environment, bind=bind, mujoco_gl=backend):
             # Record what this server compiled, for the reuse check above.
             WORLD_SERVER_MODEL_DIGEST_PATH.write_text(_world_model_sources_digest(config) + "\n", encoding="utf-8")
             log("Host world server ready.")
-            return endpoint
+            return endpoint, True
         attempt_log = ""
         with contextlib.suppress(OSError):
             attempt_log = WORLD_SERVER_LOG_PATH.read_text(errors="replace")[log_offset:]
@@ -2569,7 +2851,14 @@ def _render_scale_args() -> list[str]:
     return ["--render-scale", str(scale)]
 
 
-def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | None) -> bool:
+def _start_world_server(
+    uv: str,
+    sim_repo: Path,
+    *,
+    environment: EnvironmentPack,
+    bind: str,
+    mujoco_gl: str | None,
+) -> bool:
     """One world-server start attempt; True once it answers pings."""
     bootstrap = (
         "import sys; sys.path.insert(0, 'ros2_ws/src/mars_bot/mars_sim_driver'); "
@@ -2580,6 +2869,22 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
     if mujoco_gl:
         env["MUJOCO_GL"] = mujoco_gl
     with WORLD_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:
+        world_args = [
+            "--collision-dir",
+            str(environment.collision_path),
+            "--visual-dir",
+            str(environment.visual_path),
+            "--spawn-x",
+            str(environment.spawn_x),
+            "--spawn-y",
+            str(environment.spawn_y),
+            "--spawn-yaw-degrees",
+            str(environment.spawn_yaw_degrees),
+            "--environment-id",
+            environment.id,
+            "--environment-fingerprint",
+            environment.fingerprint,
+        ]
         proc = subprocess.Popen(
             [
                 uv,
@@ -2595,6 +2900,7 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
                 str(WORLD_SERVER_PORT),
                 "--state-port",
                 str(WORLD_STATE_PORT),
+                *world_args,
             ]
             + _render_scale_args(),
             cwd=sim_repo.parent,
@@ -2612,7 +2918,12 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
     deadline = time.monotonic() + 900.0
     next_note = time.monotonic() + 15.0
     while time.monotonic() < deadline:
-        if _world_server_ping(WORLD_SERVER_PORT):
+        reply = _world_server_ping_reply(WORLD_SERVER_PORT)
+        if (
+            reply is not None
+            and reply.get("environment_id") == environment.id
+            and reply.get("environment_fingerprint") == environment.fingerprint
+        ):
             # Stamped now, not at the spawn: `down` tells our server from a
             # later squatter by age against this record, and uv only starts
             # the python that binds after syncing the env -- minutes on a
@@ -2779,6 +3090,20 @@ def stop_world_server() -> None:
         WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
         WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)
         WORLD_SERVER_MODEL_DIGEST_PATH.unlink(missing_ok=True)
+
+
+def stop_world_server_and_wait(*, timeout_seconds: float = 5.0) -> None:
+    """Stop this checkout's host world and prove the shared port was released."""
+    stop_world_server()
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not world_server_running():
+            return
+        time.sleep(0.1)
+    raise StackError(
+        "A host world server is still running after this checkout asked it to stop. "
+        "Refusing to change environments underneath a live physics process."
+    )
 
 
 def ensure_skill_assets(config: dict[str, object]) -> None:

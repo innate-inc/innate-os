@@ -59,6 +59,10 @@ services:
       # A HOST port: the world server runs outside the container, and the
       # webapp proxy relays /worldstate to it.
       - INNATE_WORLD_STATE_PORT=${SIM_WORLD_STATE_PORT:-8800}
+      # Environment mutation is enabled only when this is loopback.
+      - INNATE_SIM_WEBAPP_BIND=${SIM_WEBAPP_BIND:-127.0.0.1}
+      # A running container without this marker predates the control mounts.
+      - INNATE_SIM_CONTROL_SCHEMA=1
     ports:
       # The launcher fills every published side in from INNATE_SIM_PORT_BASE
       # (sim/README.md "Running two checkouts at once").
@@ -74,8 +78,8 @@ services:
       # python server binds 443 (https) + 80 (http), both serving the full app.
       # Override the published side (e.g. SIM_HTTPS_PORT=8443 ./innate-sim up) to
       # publish on a non-privileged port; the container always binds 443/80.
-      - "${SIM_HTTPS_PORT:-443}:443"
-      - "${SIM_HTTP_PORT:-80}:80"
+      - "${SIM_WEBAPP_BIND:-127.0.0.1}:${SIM_HTTPS_PORT:-443}:443"
+      - "${SIM_WEBAPP_BIND:-127.0.0.1}:${SIM_HTTP_PORT:-80}:80"
       # Foxglove bridge websocket (auto-started by launch_sim_in_tmux.zsh).
       # Loopback by default, like rosbridge; SIM_FOXGLOVE_BIND=0.0.0.0 opens it
       # to the LAN.
@@ -108,6 +112,11 @@ services:
       # (runtime.install_layer_subtree).
       - ../sim/viewer/public:/root/innate-os/sim/viewer/public:ro
       - ../sim/viewer/dist-lib:/root/innate-os/sim/viewer/dist-lib:ro
+      # Browser environment switches use a narrow file mailbox instead of a
+      # Docker socket or an exposed host-control port. The proxy can create one
+      # request; controller-owned catalog/job status remains read-only here.
+      - ./launcher/.state/environment-control/requests:/run/innate-sim-control/requests:rw
+      - ./launcher/.state/environment-control/status:/run/innate-sim-control/status:ro
       - ${INNATE_OS_ENV_FILE:-../.env}:/root/innate-os/.env:ro
 
       # 2) Keep build/install/log folders as Docker named volumes, so they won't pollute your host

@@ -13,11 +13,17 @@ import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
+import {
+  environmentAssetUrl,
+  isValidManifestRoom,
+  resolveEnvironmentSource,
+  shouldRestartTopCameraTween,
+  type EnvironmentSource,
+  type ManifestRoom,
+} from "./environmentSource";
 import { LoadQueue, queuedGLB } from "./loadQueue";
 import { PropLibrary, type PropInfo } from "./props";
 
-const APARTMENT_URL = "/models/appartement.glb";
-const APARTMENT_MANIFEST_URL = "/models/apartment/manifest.json";
 // /robot is the mars_sim ROS package itself (served straight from ros2_ws, see
 // webapp/proxy/https_server.py), so the URDF sits at its real path inside it.
 const ROBOT_URDF_URL = "/robot/urdf/mars.urdf";
@@ -28,12 +34,6 @@ interface ApartmentManifest {
   rooms: ManifestRoom[];
   total: number;
 }
-interface ManifestRoom {
-  file: string;
-  name: string;
-  bytes: number;
-  bbox: { min: number[]; max: number[] };
-}
 
 /** The apartment's wireframe skeleton: parent group (already in the scene,
  * carrying the Y-up -> Z-up rotation) plus one placeholder box per room, drawn
@@ -43,6 +43,9 @@ export interface ApartmentLayout {
   rooms: { room: ManifestRoom; box: LineSegments2 }[];
   /** No manifest: streamApartment falls back to the monolith glb. */
   monolith: boolean;
+  sceneUrl?: string;
+  roomBaseUrl?: string;
+  fingerprint: string;
 }
 // These URDF links carry no real body geometry — just small marker spheres
 // used to visualize the end-effector / camera optical frames (e.g. in
@@ -187,6 +190,8 @@ export class SimScene {
   private robotXY: [number, number] = [0, 0];
   private hullsGroup?: THREE.Group;
   private hullsPromise?: Promise<void>;
+  private environmentSourcePromise?: Promise<EnvironmentSource>;
+  private loadedEnvironmentFingerprint?: string;
   private hullsVisible = false;
   // Shared fat-line material for placeholder boxes (LineBasicMaterial's
   // linewidth is ignored by WebGL). resolution is refreshed each render().
@@ -228,8 +233,15 @@ export class SimScene {
   /** Canvas width covered on the right by page chrome (see setSafeInsets). */
   private safeInsetRight = 0;
 
-  constructor(canvas: HTMLCanvasElement, opts: { fixedSize?: { width: number; height: number } } = {}) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    opts: { fixedSize?: { width: number; height: number }; environmentSource?: EnvironmentSource } = {},
+  ) {
     this.fixedSize = opts.fixedSize ?? null;
+    if (opts.environmentSource) {
+      this.environmentSourcePromise = Promise.resolve(opts.environmentSource);
+      this.loadedEnvironmentFingerprint = opts.environmentSource.fingerprint;
+    }
     const w = this.fixedSize?.width ?? window.innerWidth;
     const h = this.fixedSize?.height ?? window.innerHeight;
     // Pre-pose orbit framing would flash before spawnAt replaces it.
@@ -445,12 +457,14 @@ export class SimScene {
   private async loadCollisionHulls(): Promise<void> {
     const group = new THREE.Group();
     group.rotation.x = Math.PI / 2;
-    const baseUrl = "/physics/apartment_collisions_v2/";
+    const source = await this.environmentSource();
+    const baseUrl = source.collisionBaseUrl;
+    const assetUrl = (relative: string) => environmentAssetUrl(`${baseUrl}${relative}`, source.fingerprint);
     const material = this.hullMaterial;
 
     // Fast path: one binary triangle soup (float32 xyz), one fetch, no
     // parsing -- build_viewer_physics.py writes it next to the per-hull OBJs.
-    const bin = await fetch(`${baseUrl}hulls.f32`);
+    const bin = await fetch(assetUrl("hulls.f32"));
     if (bin.ok) {
       const positions = new Float32Array(await bin.arrayBuffer());
       const geometry = new THREE.BufferGeometry();
@@ -458,11 +472,11 @@ export class SimScene {
       group.add(new THREE.Mesh(geometry, material));
     } else {
       // Older bundles: fetch + parse every hull OBJ individually (slow).
-      const manifest: string[] = await (await fetch(`${baseUrl}manifest.json`)).json();
+      const manifest: string[] = await (await fetch(assetUrl("manifest.json"))).json();
       const loader = new OBJLoader();
       await Promise.all(
         manifest.map(async (filename) => {
-          const obj = await loader.loadAsync(`${baseUrl}${filename}`);
+          const obj = await loader.loadAsync(assetUrl(filename));
           obj.traverse((child) => {
             if (child instanceof THREE.Mesh) child.material = material;
           });
@@ -473,6 +487,16 @@ export class SimScene {
     group.visible = this.hullsVisible; // honor toggles made while loading
     this.hullsGroup = group;
     this.scene.add(group);
+  }
+
+  private environmentSource(): Promise<EnvironmentSource> {
+    return (this.environmentSourcePromise ??= resolveEnvironmentSource());
+  }
+
+  /** Identity of the geometry this scene loaded, used to keep a hidden hot-
+   * swap candidate from receiving the previous world's rosters. */
+  get environmentFingerprint(): string | undefined {
+    return this.loadedEnvironmentFingerprint;
   }
 
   /**
@@ -488,20 +512,21 @@ export class SimScene {
     group.rotation.x = Math.PI / 2;
     this.scene.add(group);
 
-    let manifest: ApartmentManifest | null = null;
-    try {
-      const res = await fetch(APARTMENT_MANIFEST_URL);
-      if (res.ok) manifest = (await res.json()) as ApartmentManifest;
-    } catch {
-      /* no manifest -- fall through to the monolith */
+    const source = await this.environmentSource();
+    this.loadedEnvironmentFingerprint = source.fingerprint;
+    if (source.mode === "glb") {
+      return { group, rooms: [], monolith: true, sceneUrl: source.sceneUrl, fingerprint: source.fingerprint };
     }
-    if (!manifest || !Array.isArray(manifest.rooms)) return { group, rooms: [], monolith: true };
+    const response = await fetch(environmentAssetUrl(source.manifestUrl, source.fingerprint));
+    if (!response.ok) throw new Error(`environment manifest returned HTTP ${response.status}`);
+    const manifest = (await response.json()) as ApartmentManifest;
+    if (!Array.isArray(manifest.rooms)) throw new Error("environment manifest is malformed");
 
     // Skip a malformed room rather than throwing -- a bad bbox would build a
     // Box3 from Vector3(undefined) and error the whole (visual-only) session.
     const rooms = manifest.rooms
       .filter((room) => {
-        if (isValidRoom(room)) return true;
+        if (isValidManifestRoom(room)) return true;
         console.warn("[sim-viewer] skipping malformed manifest room:", room);
         return false;
       })
@@ -516,42 +541,51 @@ export class SimScene {
         group.add(box);
         return { room, box };
       });
-    return { group, rooms, monolith: false };
+    return {
+      group,
+      rooms,
+      monolith: false,
+      roomBaseUrl: source.roomBaseUrl,
+      fingerprint: source.fingerprint,
+    };
   }
 
   /**
    * Phase two: stream each room's glb through the queue and swap its
-   * placeholder box out on arrival. A room that fails is non-fatal (visual
-   * only): log it, drop its box, and let the rest of the apartment and the
-   * session carry on.
+   * placeholder box out on arrival. Every descriptor-backed environment is a
+   * complete scene: a missing required mesh fails the load.
    */
   async streamApartment(queue: LoadQueue, layout: ApartmentLayout): Promise<void> {
     const loader = new GLTFLoader();
     const { group } = layout;
 
     if (layout.monolith) {
-      // Dev-only fallback: a checkout that never ran the split. The published
-      // bundle always ships the manifest and never the monolith, so in prod
-      // this path only runs if the manifest fetch itself failed -- non-fatal,
-      // the sim just runs without the visual environment (robot still works).
-      try {
-        const root = await queuedGLB(queue, loader, APARTMENT_URL);
-        this.dressRoom(root);
-        group.add(root);
-      } catch (err) {
-        console.error("[sim-viewer] apartment unavailable (no manifest, no monolith):", err);
-      }
+      if (!layout.sceneUrl) throw new Error("environment model is missing");
+      const root = await queuedGLB(queue, loader, environmentAssetUrl(layout.sceneUrl, layout.fingerprint));
+      if (queue.cancelled) throw new Error("load queue cancelled");
+      this.dressRoom(root);
+      group.add(root);
       return;
     }
 
+    if (layout.rooms.length === 0) {
+      throw new Error("environment room manifest contains no valid rooms");
+    }
+
+    if (!layout.roomBaseUrl) throw new Error("environment room base is missing");
+    const roomBaseUrl = layout.roomBaseUrl;
     const loadRoom = ({ room, box }: ApartmentLayout["rooms"][number]) =>
-      queuedGLB(queue, loader, `/models/apartment/${room.file}`)
+      queuedGLB(queue, loader, environmentAssetUrl(`${roomBaseUrl}${room.file}`, layout.fingerprint))
         .then((root) => {
+          if (queue.cancelled) throw new Error("load queue cancelled");
           this.dressRoom(root);
           group.add(root);
         })
-        .catch((err) => console.error(`[sim-viewer] apartment room '${room.file}' failed to load:`, err))
         .finally(() => {
+          // cancel() rejects active queue promises before their browser fetches
+          // necessarily finish. The owning scene may already be disposed when
+          // this continuation runs, so leave its graph and geometry untouched.
+          if (queue.cancelled) return;
           group.remove(box);
           box.geometry.dispose(); // material is shared -- disposed in dispose()
         });
@@ -682,12 +716,14 @@ export class SimScene {
     loader.parseCollision = true; // the collisions overlay draws these
 
     const robot = await loader.loadAsync(ROBOT_URDF_URL); // loadMeshCb enqueued every STL during parse
-    return { done: this.finishRobot(robot, meshLoads) };
+    if (queue.cancelled) throw new Error("load queue cancelled");
+    return { done: this.finishRobot(robot, meshLoads, queue) };
   }
 
   /** Attach + restyle the robot once its queued STL meshes have all loaded. */
-  private async finishRobot(robot: URDFRobot, meshLoads: Promise<void>[]): Promise<URDFRobot> {
+  private async finishRobot(robot: URDFRobot, meshLoads: Promise<void>[], queue: LoadQueue): Promise<URDFRobot> {
     await Promise.all(meshLoads);
+    if (queue.cancelled) throw new Error("load queue cancelled");
 
     for (const name of HIDDEN_FRAME_LINKS) {
       const link = robot.links[name];
@@ -843,7 +879,17 @@ export class SimScene {
   /** Pick how the orbit camera behaves; see CameraMode. "top" flies out to the
    * apartment framing, after which it is an ordinary orbit you can drag. */
   setCameraMode(mode: CameraMode): void {
-    if (mode === this.cameraMode) return;
+    if (mode === this.cameraMode) {
+      // A new world generation installs its first pose with spawnAt(), which
+      // deliberately cancels any camera tween. Re-applying Top after that pose
+      // must rebuild the one-shot overview tween even though the selected mode
+      // itself did not change (same-scene rollback/reconnect).
+      if (shouldRestartTopCameraTween(mode, this.cameraTween !== undefined)) {
+        this.cameraClock.getDelta();
+        this.flyToOverview();
+      }
+      return;
+    }
     this.cameraMode = mode;
     this.cameraTween = undefined;
     this.cameraClock.getDelta(); // drop the gap since the last frame, or the first step is a jump
@@ -992,6 +1038,15 @@ export class SimScene {
   setObjectPoses(poses: Record<string, number[]>): void {
     this.props.setPoses(poses);
     this.updateShadowVolume(); // the props moved; the box may need to grow or shrink
+  }
+
+  /** Immediately hide dynamic state while an environment identity changes;
+   * the replacement scene is revealed only after its own roster/state land. */
+  clearWorldState(): void {
+    this.robotRoot.visible = false;
+    this.spawned = false;
+    this.props.setManifest([]);
+    this.setLidarVisible(false);
   }
 
   // Orange accent for the arm links (see ORANGE_LINKS). Cached so every mesh
@@ -1262,16 +1317,6 @@ function layoutFocus(bounds: THREE.Box3): THREE.Vector3 {
   const focus = bounds.getCenter(new THREE.Vector3());
   focus.z = bounds.min.z;
   return focus;
-}
-
-/** Runtime guard against a malformed manifest (untrusted JSON): file is a
- * string and bbox is two arrays of >=3 finite numbers -- else we'd build a Box3
- * from Vector3(undefined) and get NaN geometry. */
-function isValidRoom(room: unknown): boolean {
-  const r = room as { file?: unknown; bbox?: { min?: unknown; max?: unknown } } | null;
-  const finite3 = (a: unknown): boolean =>
-    Array.isArray(a) && a.length >= 3 && a.slice(0, 3).every((n) => typeof n === "number" && Number.isFinite(n));
-  return typeof r?.file === "string" && finite3(r?.bbox?.min) && finite3(r?.bbox?.max);
 }
 
 /** Closes the hole under the barrel, so the glass does not see into the head. */

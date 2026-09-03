@@ -13,7 +13,12 @@ import * as THREE from "three";
 import { SimScene, type CameraMode, type CameraView } from "./scene";
 import type { PropInfo } from "./props";
 import { LoadQueue } from "./loadQueue";
-import { THUMB_H, THUMB_W, type SimSession } from "./simSession";
+import { THUMB_H, THUMB_W, type SimEnvironmentState, type SimSession } from "./simSession";
+import {
+  environmentIdentitiesReady,
+  resolveEnvironmentSource,
+  type EnvironmentSource,
+} from "./environmentSource";
 
 // One PiP tile refresh per N rendered frames, round-robin: ~30fps per tile
 // at most half an extra scene render per frame.
@@ -30,7 +35,50 @@ const MIN_FRAME_MS = 1000 / 62;
 // are a contract with webapp/js/agent/challengePanel.js.
 const PANEL_OPEN_EVENT = "innate:panel-open";
 const PANEL_ID = "sim-scene-setup";
+const SWITCH_STATE_EVENT = "innate:sim-environment-switch-state";
+const CATALOG_FETCH_TIMEOUT_MS = 5_000;
+const SWITCH_FETCH_TIMEOUT_MS = 10_000;
 
+export interface EnvironmentSummary {
+  id: string;
+  display_name: string;
+  fingerprint?: string;
+}
+
+interface EnvironmentSwitch {
+  request_id: string;
+  target: EnvironmentSummary;
+  state: "queued" | "running" | "ready" | "failed";
+  message: string;
+}
+
+interface EnvironmentCatalog {
+  schema_version: 1;
+  active: EnvironmentSummary | null;
+  environments: EnvironmentSummary[];
+  switch: EnvironmentSwitch | null;
+}
+
+async function fetchWithTimeout<T>(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  read: (response: Response) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    return await read(response);
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("The simulator did not respond in time.");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The single safety gate shared by initial load, hot swap, and reconnect. */
 const VIEW_FOR: Record<string, CameraView> = { main: "main", arm: "arm", orbit: "orbit" };
 const ROTATION_DRAG_PX = 6;
 const PROP_FORWARD_ANGLE = Math.PI / 2;
@@ -79,7 +127,7 @@ export function createSimStage(
   // The class's position:absolute+inset:0 must survive: overriding it once had
   // the wrap size itself off the canvas buffer, ignoring window resizes.
   wrap.className = "video-stage";
-  const canvas = document.createElement("canvas");
+  let canvas = document.createElement("canvas");
   canvas.style.width = "100%";
   canvas.style.height = "100%";
   canvas.style.display = "block";
@@ -100,6 +148,70 @@ export function createSimStage(
   setupHeader.className = "sim-scene-header";
   setupHeader.innerHTML = "<strong>Scene setup</strong><small>Add and place objects</small>";
   setupBody.appendChild(setupHeader);
+
+  const environmentSection = document.createElement("section");
+  environmentSection.className = "sim-scene-section modal-field sim-environment-picker";
+  const environmentLabel = document.createElement("label");
+  environmentLabel.className = "modal-field-label";
+  environmentLabel.htmlFor = "sim-environment-select";
+  environmentLabel.textContent = "Environment";
+  const environmentControls = document.createElement("div");
+  environmentControls.className = "sim-environment-picker__controls";
+  const environmentSelect = document.createElement("select");
+  environmentSelect.id = "sim-environment-select";
+  environmentSelect.className = "modal-select";
+  environmentSelect.setAttribute("aria-label", "Simulator environment");
+  environmentSelect.disabled = true;
+  const environmentApply = document.createElement("button");
+  environmentApply.type = "button";
+  environmentApply.className = "skill-confirm compact";
+  environmentApply.textContent = "Switch";
+  environmentApply.disabled = true;
+  environmentControls.append(environmentSelect, environmentApply);
+  environmentSection.append(environmentLabel, environmentControls);
+  setupBody.appendChild(environmentSection);
+
+  environmentSection.hidden = true;
+  let environmentControlsEnabled = false;
+  let activeEnvironmentId = "";
+  let environmentInterlocked = false;
+  let environmentSelectionDirty = false;
+  let environmentOptionsKey = "";
+  const refreshEnvironmentApply = () => {
+    environmentSelect.disabled =
+      !environmentControlsEnabled || environmentInterlocked || !activeEnvironmentId || environmentSelect.options.length === 0;
+    environmentApply.disabled =
+      !environmentControlsEnabled ||
+      environmentInterlocked ||
+      !activeEnvironmentId ||
+      !environmentSelect.value ||
+      environmentSelect.value === activeEnvironmentId;
+  };
+  const acceptEnvironmentCatalog = (catalog: EnvironmentCatalog) => {
+    if (!catalog || catalog.schema_version !== 1 || !Array.isArray(catalog.environments)) return;
+    const selected = environmentSelect.value;
+    const optionsKey = catalog.environments.map(({ id, display_name }) => `${id}\0${display_name}`).join("\0");
+    if (optionsKey !== environmentOptionsKey) {
+      environmentOptionsKey = optionsKey;
+      environmentSelect.replaceChildren(...catalog.environments.map(({ id, display_name }) => new Option(display_name, id)));
+    }
+    activeEnvironmentId = catalog.active?.id ?? "";
+    if (!activeEnvironmentId) environmentSelectionDirty = false;
+    environmentSelect.value =
+      environmentSelectionDirty && selected && catalog.environments.some(({ id }) => id === selected)
+        ? selected
+        : activeEnvironmentId || selected || catalog.environments[0]?.id || "";
+    environmentSelectionDirty = Boolean(activeEnvironmentId) && environmentSelect.value !== activeEnvironmentId;
+    refreshEnvironmentApply();
+  };
+  environmentSelect.onchange = () => {
+    environmentSelectionDirty = environmentSelect.value !== activeEnvironmentId;
+    refreshEnvironmentApply();
+  };
+  environmentApply.onclick = () => {
+    if (!environmentSelect.value || environmentApply.disabled) return;
+    void requestEnvironment(environmentSelect.value);
+  };
 
   const setupToggle = document.createElement("button");
   setupToggle.type = "button";
@@ -251,6 +363,10 @@ export function createSimStage(
     return button;
   });
   let cameraMode = 0;
+  // Page chrome belongs to the shared stage, not to a particular SimScene.
+  // Keep it here so a hot-swapped scene gets the same usable viewport before
+  // its first frame is revealed.
+  let safeInsetRight = 0;
   const refreshCameraSwitch = () => {
     cameraButtons.forEach((button, index) => setChipOn(button, index === cameraMode));
   };
@@ -355,7 +471,35 @@ export function createSimStage(
   loading.append(bar, loadingLabel, readout);
   wrap.appendChild(loading);
 
-  const setLoading = (text: string) => (loadingLabel.textContent = text);
+  const transition = document.createElement("div");
+  transition.className = "modal-backdrop sim-environment-transition";
+  transition.hidden = true;
+  transition.innerHTML = `
+    <div class="modal sim-environment-transition__card" role="dialog" aria-modal="true">
+      <div class="chat-agent-spinner sim-environment-transition__spinner" aria-hidden="true"></div><h2></h2>
+      <p class="sim-environment-transition__message"></p>
+      <p class="sim-environment-transition__hint"></p>
+      <div class="sim-environment-transition__actions">
+        <button class="skill-confirm compact" type="button">Try again</button>
+        <button class="skill-confirm compact" type="button">Return to previous</button>
+        <button class="skill-confirm compact" type="button">Continue</button>
+      </div>
+    </div>`;
+  const transitionSpinner = transition.querySelector<HTMLElement>(".sim-environment-transition__spinner")!;
+  const transitionTitle = transition.querySelector<HTMLHeadingElement>("h2")!;
+  const transitionMessage = transition.querySelector<HTMLElement>(".sim-environment-transition__message")!;
+  const transitionHint = transition.querySelector<HTMLElement>(".sim-environment-transition__hint")!;
+  const [retryEnvironmentButton, returnEnvironmentButton, continueEnvironmentButton] =
+    [...transition.querySelectorAll<HTMLButtonElement>("button")];
+  document.body.appendChild(transition);
+
+  const setLoading = (text: string) => {
+    loading.hidden = false;
+    loading.style.opacity = "1";
+    barFill.style.background = "#7dffc4";
+    loadingLabel.style.color = "rgba(255,255,255,.6)";
+    loadingLabel.textContent = text;
+  };
   const mb = (bytes: number) => (bytes / 1e6).toFixed(1);
   const setProgress = (loaded: number, total: number) => {
     barFill.style.width = `${total > 0 ? Math.min(100, (loaded / total) * 100) : 0}%`;
@@ -368,19 +512,13 @@ export function createSimStage(
   };
   const hideLoading = () => {
     loading.style.opacity = "0";
-    loading.style.pointerEvents = "none"; // never shield the stage while fading
-    loading.addEventListener("transitionend", () => loading.remove(), { once: true });
-    // transitionend never fires under prefers-reduced-motion (the webapp
-    // disables all transitions) or when the fade starts pre-paint -- without
-    // this fallback the invisible overlay stayed and ate every click.
-    setTimeout(() => loading.remove(), 700);
+    loading.hidden = true;
   };
   // The scrim fades when the download finishes (see the load sequence below);
   // here we only surface load failures.
   const unsubscribe = session.onChange((s) => {
     if (s.status === "error") {
       failLoading("simulation view failed to load — see the browser console");
-      unsubscribe();
     }
   });
 
@@ -407,16 +545,19 @@ export function createSimStage(
     debugStack.prepend(perfEl);
   }
 
-  const scene = new SimScene(canvas, { fixedSize: { width: parent.clientWidth || 1280, height: parent.clientHeight || 720 } });
+  let scene = new SimScene(canvas, {
+    fixedSize: { width: parent.clientWidth || 1280, height: parent.clientHeight || 720 },
+  });
   scene.followCamera = true;
   // The scene takes chase off when the camera is dragged, so the switch has to
   // follow the scene rather than be the only thing that knows the mode.
-  scene.onCameraModeChange = (mode) => {
+  const bindCameraMode = (target: SimScene) => (target.onCameraModeChange = (mode) => {
     const index = CAMERA_MODES.indexOf(mode);
     if (index < 0) return;
     cameraMode = index;
     refreshCameraSwitch();
-  };
+  });
+  bindCameraMode(scene);
 
   function setPlacement(next: PlacementState): void {
     if (placement.kind === "rotating" && canvas.hasPointerCapture(placement.drag.pointerId)) {
@@ -440,7 +581,7 @@ export function createSimStage(
   const yawFromDirection = (direction: THREE.Vector3): number =>
     Math.atan2(direction.y, direction.x) - PROP_FORWARD_ANGLE;
 
-  canvas.addEventListener("pointerdown", (e) => {
+  const onCanvasPointerDown = (e: PointerEvent) => {
     if (placement.kind !== "following" || e.button !== 0) return;
     const origin = scene.screenToFloor(e.clientX, e.clientY);
     if (!origin) return;
@@ -458,8 +599,8 @@ export function createSimStage(
     canvas.setPointerCapture(e.pointerId);
     scene.showPropPlacementPreview(placement.prop, origin.x, origin.y, 0);
     refreshPlacementUi();
-  });
-  canvas.addEventListener("pointermove", (e) => {
+  };
+  const onCanvasPointerMove = (e: PointerEvent) => {
     if (placement.kind === "near-robot" || placement.kind === "choose-prop") return;
     if (placement.kind === "rotating" && e.pointerId !== placement.drag.pointerId) return;
     const cur = scene.screenToFloor(e.clientX, e.clientY);
@@ -479,10 +620,21 @@ export function createSimStage(
       placement.drag.origin.y,
       placement.drag.yaw,
     );
-  });
-  canvas.addEventListener("pointerleave", () => {
+  };
+  const onCanvasPointerLeave = () => {
     if (placement.kind === "following") scene.clearPropPlacementPreview();
-  });
+  };
+  const bindCanvasPlacement = (target: HTMLCanvasElement) => {
+    target.addEventListener("pointerdown", onCanvasPointerDown);
+    target.addEventListener("pointermove", onCanvasPointerMove);
+    target.addEventListener("pointerleave", onCanvasPointerLeave);
+  };
+  const unbindCanvasPlacement = (target: HTMLCanvasElement) => {
+    target.removeEventListener("pointerdown", onCanvasPointerDown);
+    target.removeEventListener("pointermove", onCanvasPointerMove);
+    target.removeEventListener("pointerleave", onCanvasPointerLeave);
+  };
+  bindCanvasPlacement(canvas);
   // On window, not canvas: releasing outside the canvas must still finish (or
   // cancel) the drag rather than leaving the prop armed and the preview behind.
   const finishDrop = (e: PointerEvent) => {
@@ -517,6 +669,7 @@ export function createSimStage(
   let lastTime = performance.now();
   let disposed = false;
   let attached = true;
+  let scenePlayable = false;
 
   // rAF is throttled for a hidden tab but not for a detached canvas, so a
   // parked stage would render full-rate into nothing.
@@ -535,11 +688,11 @@ export function createSimStage(
     if (now - lastTime < MIN_FRAME_MS - 1) return; // 120Hz display -> render every other vsync
     const dt = Math.min((now - lastTime) / 1000, 0.1);
     lastTime = now;
-    session.tick(scene, dt);
+    if (scenePlayable) session.tick(scene, dt);
 
     // Thumbnails first (scissor corner renders, blitted out), one tile per
     // slot -- see THUMB_FRAME_DIV.
-    if (!bare && frame % THUMB_FRAME_DIV === 0) {
+    if (scenePlayable && !bare && frame % THUMB_FRAME_DIV === 0) {
       const live = session.liveThumbnails();
       if (live.length) {
         const { index, name } = live[thumbCursor++ % live.length];
@@ -573,51 +726,405 @@ export function createSimStage(
     }
   };
 
-  // One shared bounded queue drives real byte progress for the whole load;
-  // seed an estimate so the bar has a width before Content-Lengths arrive
-  // (apartment ~35 MB + robot ~7 MB), refined as real sizes land.
-  const queue = new LoadQueue(2, ({ loaded, total }) => setProgress(loaded, total));
+  const loadSceneAssets = async (targetScene: SimScene, targetQueue: LoadQueue): Promise<string> => {
+    const layout = await targetScene.loadApartmentLayout();
+    targetScene.frameLayout(layout);
+    const { done: robotDone } = await targetScene.loadRobot(targetQueue);
+    await Promise.all([robotDone, targetScene.streamApartment(targetQueue, layout)]);
+    targetScene.prefetchPropModels();
+    return layout.fingerprint;
+  };
+
+  let queue = new LoadQueue(2, ({ loaded, total }) => setProgress(loaded, total));
   queue.setEstimatedTotal(42e6);
-  (async () => {
-    try {
-      // Start rendering + accept poses right away: the worldstate socket is
-      // already connecting (session.start), so the robot's placeholder box
-      // snaps to its real spawn pose while the STLs stream, then the mesh
-      // replaces it. Bail at each await if the stage was destroyed mid-load
-      // (SPA remount) -- else we'd mutate a disposed scene.
-      session.stageReady();
-      startLoop();
-      // The apartment manifest first (a few KB, unqueued): it draws every
-      // room's placeholder box and frames the camera on them, so the first
-      // frames show the apartment's wireframe layout rather than an empty
-      // void while the meshes are still being fetched.
-      setLoading("loading layout...");
-      const layout = await scene.loadApartmentLayout();
-      if (disposed) return;
-      scene.frameLayout(layout);
-      setLoading("loading robot and apartment...");
-      // Await once: the robot's STLs are now in the shared queue. Enqueue the
-      // apartment rooms after, so they land behind the robot (deterministic
-      // robot-first, no timing guess).
-      const { done: robotDone } = await scene.loadRobot(queue);
-      if (disposed) return;
-      const apartment = scene.streamApartment(queue, layout);
-      // Await twice: the rest of both loads.
-      await Promise.all([robotDone, apartment]);
-      if (disposed) return;
-      hideLoading();
-      // Only now parse the prop models, so they queue behind the robot and
-      // apartment and stay out of the progress bar -- but land well before
-      // anyone clicks a prop chip. See PropLibrary.prefetchModels.
-      scene.prefetchPropModels();
-    } catch (err) {
-      if (!disposed) session.stageError(err);
+  let latestCatalog: EnvironmentCatalog | null = null;
+  let latestWorld: SimEnvironmentState | null = null;
+  let currentSceneFingerprint: string | null = null;
+  let loadingFingerprint: string | null = null;
+  let loadVersion = 0;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollInFlight = false;
+  let requestVersion = 0;
+  let requestInFlight = false;
+  let requestedEnvironmentId: string | null = null;
+  let previousEnvironment: EnvironmentSummary | null = null;
+  let failedLoadTarget: EnvironmentSummary | null = null;
+  let localFailureMessage: string | null = null;
+  let acknowledgedFailure: string | null = null;
+
+  const switchRunning = (): boolean => {
+    const state = latestCatalog?.switch?.state;
+    return state === "queued" || state === "running";
+  };
+
+  const setInterlocked = (active: boolean) => {
+    if (environmentInterlocked === active) return;
+    environmentInterlocked = active;
+    document.documentElement.classList.toggle("sim-environment-switching", active);
+    const app = document.getElementById("stage");
+    if (app instanceof HTMLElement) app.inert = active;
+    document.dispatchEvent(new CustomEvent(SWITCH_STATE_EVENT, { detail: active }));
+    refreshEnvironmentApply();
+  };
+
+  const showTransition = (
+    title: string,
+    message: string,
+    options: { failed?: boolean; retry?: boolean; previous?: boolean; continue?: boolean } = {},
+  ) => {
+    transition.hidden = false;
+    transition.classList.toggle("is-failed", Boolean(options.failed));
+    transitionSpinner.hidden = Boolean(options.failed);
+    transitionTitle.textContent = title;
+    transitionMessage.textContent = message;
+    transitionHint.textContent = options.failed
+      ? "The page is still open. Driving stays disabled until a verified environment is ready."
+      : "The page stays open while the simulator and 3D view change together.";
+    retryEnvironmentButton.hidden = !options.retry;
+    returnEnvironmentButton.hidden = !options.previous;
+    continueEnvironmentButton.hidden = !options.continue;
+  };
+
+  const hideTransition = () => {
+    transition.hidden = true;
+  };
+
+  const errorText = (error: unknown): string =>
+    error instanceof Error && error.message ? error.message : "The simulator environment could not be changed.";
+
+  const showFailure = (message: string) => {
+    const canContinue = scenePlayable && environmentIdentitiesReady(
+      latestCatalog?.active ?? null,
+      latestWorld,
+      currentSceneFingerprint,
+    );
+    const installed = (id: string | undefined): boolean =>
+      Boolean(id && latestCatalog?.environments.some((environment) => environment.id === id));
+    const retryId = requestedEnvironmentId ?? latestCatalog?.switch?.target.id;
+    const canReturn = Boolean(
+      previousEnvironment &&
+        previousEnvironment.id !== latestCatalog?.active?.id &&
+        installed(previousEnvironment.id),
+    );
+    showTransition("Environment switch failed", message, {
+      failed: true,
+      retry: Boolean(failedLoadTarget || (environmentControlsEnabled && installed(retryId))),
+      previous: environmentControlsEnabled && canReturn,
+      continue: canContinue,
+    });
+    setInterlocked(true);
+  };
+
+  const prepareCurrentScene = () => {
+    const active = latestCatalog?.active ?? null;
+    if (!environmentIdentitiesReady(active, latestWorld, currentSceneFingerprint)) {
+      scenePlayable = false;
+      setInterlocked(true);
+      if (!failedLoadTarget && !switchRunning()) {
+        showTransition("Connecting environment", "Waiting for the matching simulator world and its first pose…");
+      }
+      return;
     }
-  })();
+
+    if (!scenePlayable) {
+      try {
+        if (!session.prepareScene(scene)) return;
+      } catch (error) {
+        failedLoadTarget = active;
+        localFailureMessage = errorText(error);
+        showFailure(localFailureMessage);
+        return;
+      }
+      // The first pose frames the robot and cancels camera tweens. Restore the
+      // user's selected mode only after that pose has been installed.
+      scene.setCameraMode(CAMERA_MODES[cameraMode]);
+      scenePlayable = true;
+      session.stageReady();
+      resize();
+      hideLoading();
+    }
+    const failedSwitch = latestCatalog?.switch?.state === "failed" ? latestCatalog.switch : null;
+    if (failedSwitch && failedSwitch.request_id !== acknowledgedFailure) {
+      showFailure(failedSwitch.message || "The previous environment was restored.");
+    } else if (localFailureMessage) {
+      showFailure(localFailureMessage);
+    } else if (switchRunning()) {
+      const pending = latestCatalog?.switch;
+      showTransition("Changing environment", pending?.message || "Restarting the simulator…");
+      setInterlocked(true);
+    } else {
+      failedLoadTarget = null;
+      hideTransition();
+      setInterlocked(false);
+    }
+  };
+
+  const loadEnvironment = async (target: EnvironmentSummary, force = false) => {
+    if (!target.fingerprint) {
+      showFailure("The selected environment does not have a published asset fingerprint.");
+      return;
+    }
+    if (!force && currentSceneFingerprint === target.fingerprint) {
+      prepareCurrentScene();
+      return;
+    }
+    if (!force && loadingFingerprint === target.fingerprint) return;
+
+    const version = ++loadVersion;
+    loadingFingerprint = target.fingerprint;
+    failedLoadTarget = null;
+    localFailureMessage = null;
+    scenePlayable = false;
+    setInterlocked(true);
+    setLoading(`loading ${target.display_name.toLowerCase()}…`);
+    showTransition("Loading environment", `Preparing ${target.display_name}…`);
+
+    try {
+      // Resolve the tiny descriptor first. The current renderer remains the
+      // only WebGL scene until the replacement is known to be the requested pack.
+      const source: EnvironmentSource = await resolveEnvironmentSource();
+      if (disposed || version !== loadVersion) return;
+      if (source.fingerprint !== target.fingerprint) {
+        throw new Error("The environment assets changed while the scene was loading.");
+      }
+
+      clearPlacementSelection();
+      const previousCanvas = canvas;
+      const previousScene = scene;
+      const previousQueue = queue;
+      unbindCanvasPlacement(previousCanvas);
+      previousQueue.cancel();
+      previousScene.dispose();
+      currentSceneFingerprint = null;
+
+      const nextCanvas = document.createElement("canvas");
+      nextCanvas.style.cssText = "width:100%;height:100%;display:block";
+      const nextQueue = new LoadQueue(2, ({ loaded, total }) => {
+        if (version === loadVersion) setProgress(loaded, total);
+      });
+      nextQueue.setEstimatedTotal(42e6);
+      const nextScene = new SimScene(nextCanvas, {
+        fixedSize: { width: wrap.clientWidth || 1280, height: wrap.clientHeight || 720 },
+        environmentSource: source,
+      });
+      nextScene.followCamera = true;
+      bindCameraMode(nextScene);
+      nextScene.setSafeInsets({ right: safeInsetRight });
+      nextScene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
+
+      previousCanvas.replaceWith(nextCanvas);
+      canvas = nextCanvas;
+      scene = nextScene;
+      queue = nextQueue;
+      bindCanvasPlacement(canvas);
+
+      const fingerprint = await loadSceneAssets(nextScene, nextQueue);
+      if (disposed || version !== loadVersion || scene !== nextScene) return;
+      if (fingerprint !== target.fingerprint) {
+        throw new Error("The environment assets changed while the scene was loading.");
+      }
+      currentSceneFingerprint = fingerprint;
+      loadingFingerprint = null;
+      prepareCurrentScene();
+    } catch (error) {
+      if (disposed || version !== loadVersion) return;
+      loadingFingerprint = null;
+      failedLoadTarget = target;
+      localFailureMessage = errorText(error);
+      failLoading("environment failed to load");
+      showFailure(localFailureMessage);
+    }
+  };
+
+  const acceptCatalogState = (catalog: EnvironmentCatalog) => {
+    if (!catalog || catalog.schema_version !== 1 || !Array.isArray(catalog.environments)) return;
+    latestCatalog = catalog;
+    acceptEnvironmentCatalog(catalog);
+    // A catalog request that began before the POST may still contain the old
+    // terminal state. Keep the page locked until a post-request poll arrives.
+    if (requestInFlight) return;
+    const operation = catalog.switch;
+    if (operation?.state === "queued" || operation?.state === "running") {
+      if (catalog.active) previousEnvironment = catalog.active;
+      requestedEnvironmentId = operation.target.id;
+      localFailureMessage = null;
+      setInterlocked(true);
+      showTransition("Changing environment", operation.message || "Restarting the simulator…");
+      return;
+    }
+
+    const active = catalog.active;
+    if (!active?.fingerprint) {
+      showFailure(operation?.message || "No verified simulator environment is active.");
+      return;
+    }
+    if (loadingFingerprint && loadingFingerprint !== active.fingerprint) {
+      loadVersion += 1;
+      loadingFingerprint = null;
+      queue.cancel();
+    }
+    if (currentSceneFingerprint !== active.fingerprint) {
+      if (failedLoadTarget?.fingerprint === active.fingerprint) {
+        showFailure(localFailureMessage || "The environment scene failed to load.");
+        return;
+      }
+      void loadEnvironment(active);
+      return;
+    }
+    prepareCurrentScene();
+  };
+
+  const scheduleCatalogPoll = (delayMs: number) => {
+    if (disposed) return;
+    if (pollTimer !== null) clearTimeout(pollTimer);
+    pollTimer = setTimeout(() => {
+      pollTimer = null;
+      void pollCatalog();
+    }, delayMs);
+  };
+
+  async function pollCatalog(): Promise<void> {
+    if (disposed || pollInFlight) return;
+    const version = requestVersion;
+    pollInFlight = true;
+    try {
+      const result = await fetchWithTimeout(
+        "/sim-environments.json",
+        { cache: "no-store" },
+        CATALOG_FETCH_TIMEOUT_MS,
+        async (response) => {
+          if (!response.ok && response.status !== 503) {
+            throw new Error(`environment status returned HTTP ${response.status}`);
+          }
+          return {
+            catalog: await response.json() as EnvironmentCatalog,
+            controllerUnavailable: !response.ok,
+          };
+        },
+      );
+      if (!disposed && version === requestVersion) {
+        acceptCatalogState(result.catalog);
+        if (result.controllerUnavailable) {
+          setInterlocked(true);
+          showTransition("Waiting for simulator", "The environment controller is temporarily unavailable.");
+        }
+      }
+    } catch (error) {
+      if (!disposed && version === requestVersion && !failedLoadTarget) {
+        setInterlocked(true);
+        showTransition("Waiting for simulator", errorText(error));
+      }
+    } finally {
+      pollInFlight = false;
+      scheduleCatalogPoll(version === requestVersion ? (document.visibilityState === "hidden" ? 2000 : 750) : 0);
+    }
+  }
+
+  async function requestEnvironment(id: string, rememberPrevious = true): Promise<void> {
+    if (!environmentControlsEnabled || !id || requestInFlight) return;
+    const target = latestCatalog?.environments.find((environment) => environment.id === id);
+    if (!target) return;
+    if (rememberPrevious && latestCatalog?.active) previousEnvironment = latestCatalog.active;
+    requestVersion += 1;
+    requestInFlight = true;
+    requestedEnvironmentId = id;
+    failedLoadTarget = null;
+    localFailureMessage = null;
+    setInterlocked(true);
+    showTransition("Changing environment", `Requesting ${target.display_name}…`);
+    let responseStatus: number | null = null;
+    try {
+      await fetchWithTimeout(
+        "/sim-environment/switch",
+        {
+          method: "POST",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json", "X-Requested-By": "innate-webapp" },
+          body: JSON.stringify({ id }),
+        },
+        SWITCH_FETCH_TIMEOUT_MS,
+        async (response) => {
+          responseStatus = response.status;
+          const body = await response.json().catch(() => ({})) as { error?: string };
+          if (!response.ok) {
+            throw new Error(body.error || `environment switch returned HTTP ${response.status}`);
+          }
+        },
+      );
+      requestInFlight = false;
+      requestVersion += 1;
+      scheduleCatalogPoll(0);
+    } catch (error) {
+      requestInFlight = false;
+      // Discard every catalog response that could have captured state before
+      // this POST completed (including polls begun while it was in flight).
+      requestVersion += 1;
+      if (disposed) return;
+      if (responseStatus !== null && [400, 403, 404, 413].includes(responseStatus)) {
+        localFailureMessage = errorText(error);
+        showFailure(localFailureMessage);
+        return;
+      }
+      showTransition(
+        "Waiting for simulator",
+        `${errorText(error)} Checking the authoritative environment status…`,
+      );
+      setInterlocked(true);
+      scheduleCatalogPoll(0);
+    }
+  }
+
+  retryEnvironmentButton.onclick = () => {
+    const active = latestCatalog?.active;
+    if (failedLoadTarget && active && active.fingerprint === failedLoadTarget.fingerprint) {
+      void loadEnvironment(active, true);
+      return;
+    }
+    const id = requestedEnvironmentId ?? latestCatalog?.switch?.target.id;
+    if (id) void requestEnvironment(id, false);
+  };
+  returnEnvironmentButton.onclick = () => {
+    if (previousEnvironment) void requestEnvironment(previousEnvironment.id, false);
+  };
+  continueEnvironmentButton.onclick = () => {
+    if (switchRunning()) return;
+    acknowledgedFailure = latestCatalog?.switch?.request_id ?? "local";
+    failedLoadTarget = null;
+    localFailureMessage = null;
+    prepareCurrentScene();
+  };
+
+  const unsubscribeEnvironment = session.onEnvironment((environment) => {
+    latestWorld = environment;
+    if (!environmentIdentitiesReady(latestCatalog?.active ?? null, environment, currentSceneFingerprint)) {
+      scenePlayable = false;
+      setInterlocked(true);
+    }
+    prepareCurrentScene();
+  });
+
+  setInterlocked(true);
+  showTransition("Starting simulator", "Loading the active environment…");
+  startLoop();
+  void fetch("/config.json", { cache: "no-store" })
+    .then(async (response): Promise<{ simEnvironmentControls?: boolean }> =>
+      response.ok ? response.json() : {},
+    )
+    .then((config) => {
+      environmentControlsEnabled = config.simEnvironmentControls === true;
+      environmentSection.hidden = !environmentControlsEnabled;
+      refreshEnvironmentApply();
+    })
+    .catch(() => {});
+  scheduleCatalogPoll(0);
 
   return {
     audioEl: null, // sim has no robot mic; the pages skip the mic toggle in sim mode
-    setSafeInsets: (insets) => scene.setSafeInsets(insets),
+    setSafeInsets: (insets) => {
+      safeInsetRight = Math.max(0, insets.right ?? 0);
+      scene.setSafeInsets({ right: safeInsetRight });
+    },
     attach(next: HTMLElement) {
       attached = true;
       next.appendChild(wrap);
@@ -634,12 +1141,15 @@ export function createSimStage(
       // The agent page lifts this into its own layout; take it back before
       // that page clears its DOM.
       wrap.appendChild(debugStack);
+      safeInsetRight = 0;
       scene.setSafeInsets({ right: 0 }); // the agent dock's inset must not follow the stage
       clearPlacementSelection(); // an armed prop must not follow the pointer either
       wrap.remove();
     },
     destroy() {
       disposed = true;
+      loadVersion += 1;
+      if (pollTimer !== null) clearTimeout(pollTimer);
       queue.cancel(); // stop pulling new downloads for a stage that's gone
       unsubscribe();
       unsubscribeProps();
@@ -650,7 +1160,11 @@ export function createSimStage(
       window.removeEventListener("pointercancel", cancelDrop);
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
       document.removeEventListener("pointerdown", onOutsidePointer, true);
+      unsubscribeEnvironment();
+      unbindCanvasPlacement(canvas);
       scene.dispose();
+      setInterlocked(false);
+      transition.remove();
       wrap.remove();
     },
   };

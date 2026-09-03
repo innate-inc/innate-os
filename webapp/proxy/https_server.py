@@ -16,6 +16,11 @@ secure-origin features (WebSerial leader-arm) need HTTPS; the arm panel offers a
 one-click switch rather than an automatic bounce. A self-signed certificate is
 generated on first run (10 years) under ~/.innate-webapp-tls/ via openssl.
 
+In simulator mode, environment switching crosses a narrow file control plane:
+the proxy may create one bounded request in a writable mailbox and may only
+read the controller's catalog snapshot from a separate read-only mount.
+It never receives a Docker socket or shells out on behalf of those routes.
+
 Static files are served with aiohttp's FileResponse: a single stat() yields the
 mtime+size ETag, a matching If-None-Match returns a bodyless 304 before the file
 is read, and Range is honoured. Everything is no-cache — the browser revalidates
@@ -36,6 +41,7 @@ import asyncio
 import gzip
 import json
 import logging
+import math
 import mimetypes
 import os
 import posixpath
@@ -45,10 +51,13 @@ import ssl
 import subprocess
 import sys
 import threading
-from pathlib import Path
+import time
+import uuid
+from pathlib import Path, PurePosixPath
 
 import aiohttp
 from aiohttp import web
+from aiohttp.web_protocol import RequestPayloadError
 from media_routes import (
     episode_response,
     joints_response,
@@ -183,6 +192,7 @@ CONTENT_TYPES = {
 # /robot is the exception: a robot does have the tracked ROS package, so it
 # answers there too, with that robot's own description.
 SIM_VIEWER_ROOT = ROOT.parent / "sim" / "viewer"
+ACTIVE_ENVIRONMENT_PATH = ROOT.parent / "sim" / "assets" / ".active-environment.json"
 SIM_VIEWER_ROUTES = {
     "/sim-viewer/": SIM_VIEWER_ROOT / "dist-lib",
     "/models/": SIM_VIEWER_ROOT / "public" / "models",
@@ -192,6 +202,22 @@ SIM_VIEWER_ROUTES = {
     # Collision hulls for the SimSession's "collisions" debug overlay.
     "/physics/": SIM_VIEWER_ROOT / "public" / "physics",
 }
+
+ENVIRONMENT_NO_STORE = {"Cache-Control": "no-store, max-age=0"}
+
+# The host launcher owns the simulator lifecycle. The webapp gets a deliberately
+# tiny filesystem control plane instead of access to Docker or a host shell:
+# requests is the one writable bind mount, status is a separate read-only one.
+SIM_ENVIRONMENT_REQUESTS_DIR = Path("/run/innate-sim-control/requests")
+SIM_ENVIRONMENT_STATUS_DIR = Path("/run/innate-sim-control/status")
+SIM_ENVIRONMENT_TIME = time.time
+SIM_ENVIRONMENT_ALLOWED_HOSTS = {"localhost", "127.0.0.1"}
+SIM_ENVIRONMENT_MUTATION_ENABLED = WEBAPP_SIM_CONTROLS and os.environ.get("INNATE_SIM_WEBAPP_BIND", "") == "127.0.0.1"
+
+ENVIRONMENT_ID_RE = re.compile(r"^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?$")
+CONTROL_REQUEST_MAX_BYTES = 4096
+CONTROL_STATUS_MAX_BYTES = 64 * 1024
+CONTROL_HEARTBEAT_MAX_AGE_S = 5.0
 
 
 def _content_type(path: Path) -> str:
@@ -354,6 +380,347 @@ async def sim_viewer_handler(request: web.Request) -> web.StreamResponse:
     raise web.HTTPNotFound(text="not found")
 
 
+def _environment_asset_path(value: object, *, expect_directory: bool) -> "Path | None":
+    """Resolve one descriptor path inside sim/viewer/public, fail closed."""
+    if not isinstance(value, str) or not value.strip() or "\\" in value:
+        return None
+    relative = PurePosixPath(value)
+    if relative.is_absolute() or any(part in ("", ".", "..") for part in relative.parts):
+        return None
+    public = _safe_resolve(SIM_VIEWER_ROOT / "public")
+    target = _safe_resolve(SIM_VIEWER_ROOT / "public" / Path(*relative.parts))
+    if public is None or target is None or not target.is_relative_to(public):
+        return None
+    exists = target.is_dir() if expect_directory else target.is_file()
+    return target if exists else None
+
+
+def _load_active_environment() -> "tuple[dict[str, object], dict[str, Path]] | None":
+    """Validated public descriptor plus its resolved viewer assets."""
+    try:
+        descriptor = json.loads(ACTIVE_ENVIRONMENT_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(descriptor, dict) or descriptor.get("schema_version") != 1:
+        return None
+    if not isinstance(descriptor.get("id"), str) or not isinstance(descriptor.get("fingerprint"), str):
+        return None
+    viewer = descriptor.get("viewer")
+    if not isinstance(viewer, dict):
+        return None
+    collision_dir = _environment_asset_path(viewer.get("collision_dir"), expect_directory=True)
+    if collision_dir is None:
+        return None
+
+    resolved = {"collision_dir": collision_dir}
+    viewer_type = viewer.get("type")
+    if viewer_type == "glb":
+        model = _environment_asset_path(viewer.get("model"), expect_directory=False)
+        if model is None:
+            return None
+        resolved["model"] = model
+    elif viewer_type == "split-glb":
+        manifest = _environment_asset_path(viewer.get("manifest"), expect_directory=False)
+        base_dir = _environment_asset_path(viewer.get("base_dir"), expect_directory=True)
+        if manifest is None or base_dir is None:
+            return None
+        resolved["manifest"] = manifest
+        resolved["base_dir"] = base_dir
+    else:
+        return None
+    return descriptor, resolved
+
+
+def _raise_environment_unavailable() -> None:
+    """Keep an old proxy's missing route distinct from a broken active pack.
+
+    A new simulator proxy knows that the generic route exists. If its selected
+    descriptor or referenced assets are unavailable, report a retryable service
+    failure so a new viewer cannot mistake that condition for the legacy proxy
+    contract and silently load the apartment instead.
+    """
+    if WEBAPP_SIM_CONTROLS:
+        raise web.HTTPServiceUnavailable(
+            text="active simulator environment unavailable",
+            headers=ENVIRONMENT_NO_STORE,
+        )
+    raise web.HTTPNotFound(text="not found", headers=ENVIRONMENT_NO_STORE)
+
+
+def _bind_environment_fingerprint(request: web.Request, fingerprint: str) -> None:
+    """Bind an unversioned URL once; reject a URL bound to an old pack.
+
+    Redirecting a stale URL to the latest descriptor would let a page that
+    already loaded pack A's room layout attach pack B's meshes mid-stream.
+    """
+    requested = request.query.get("fingerprint")
+    if requested == fingerprint:
+        return
+    if requested is not None:
+        raise web.HTTPPreconditionFailed(text="simulator environment changed", headers=ENVIRONMENT_NO_STORE)
+    query = dict(request.query)
+    query["fingerprint"] = fingerprint
+    raise web.HTTPTemporaryRedirect(
+        location=str(request.rel_url.with_query(query)),
+        headers=ENVIRONMENT_NO_STORE,
+    )
+
+
+async def sim_environment_manifest(request: web.Request) -> web.Response:
+    loaded = _load_active_environment()
+    if loaded is None:
+        _raise_environment_unavailable()
+    descriptor, _resolved = loaded
+    return web.json_response(descriptor, headers=ENVIRONMENT_NO_STORE)
+
+
+async def sim_environment_asset(request: web.Request) -> web.StreamResponse:
+    loaded = _load_active_environment()
+    if loaded is None:
+        _raise_environment_unavailable()
+    descriptor, resolved = loaded
+    fingerprint = descriptor.get("fingerprint")
+    if not isinstance(fingerprint, str) or not fingerprint:
+        raise web.HTTPNotFound(text="not found")
+
+    clean = request.path
+    target: Path | None = None
+    if clean == "/sim-environment/scene.glb":
+        target = resolved.get("model")
+    elif clean == "/sim-environment/layout.json":
+        target = resolved.get("manifest")
+    else:
+        for prefix, root_key in (
+            ("/sim-environment/rooms/", "base_dir"),
+            ("/sim-environment/collisions/", "collision_dir"),
+        ):
+            if not clean.startswith(prefix):
+                continue
+            base = resolved.get(root_key)
+            if base is None:
+                break
+            target = _safe_resolve(base / clean[len(prefix) :])
+            if target is None or not target.is_file() or not target.is_relative_to(base):
+                target = None
+            break
+    if target is None or not target.is_file():
+        raise web.HTTPNotFound(text="not found")
+    _bind_environment_fingerprint(request, fingerprint)
+    return await _serve_static(target, request)
+
+
+class _ControlUnavailable(ValueError):
+    pass
+
+
+def _control_error(status: int, message: str) -> web.Response:
+    return web.json_response({"error": message}, status=status, headers=ENVIRONMENT_NO_STORE)
+
+
+def _read_control_json(path: Path, max_bytes: int = CONTROL_STATUS_MAX_BYTES) -> dict[str, object]:
+    """Read one controller-owned snapshot from its fixed bind-mount path."""
+    try:
+        raw = path.read_bytes()
+        if not raw or len(raw) > max_bytes:
+            raise ValueError
+        value = json.loads(raw)
+    except (OSError, RecursionError, UnicodeError, ValueError) as exc:
+        raise _ControlUnavailable from exc
+    if not isinstance(value, dict):
+        raise _ControlUnavailable
+    return value
+
+
+def _load_environment_catalog() -> dict[str, object]:
+    value = _read_control_json(SIM_ENVIRONMENT_STATUS_DIR / "catalog.json")
+    environments = value.get("environments")
+    active = value.get("active")
+    switch = value.get("switch")
+    if (
+        value.get("schema_version") != 1
+        or not isinstance(environments, list)
+        or any(not _valid_environment_summary(item) for item in environments)
+        or (active is not None and not _valid_environment_summary(active, active=True))
+        or (switch is not None and not _valid_switch(switch))
+    ):
+        raise _ControlUnavailable
+    return {"schema_version": 1, "active": active, "environments": environments, "switch": switch}
+
+
+def _canonical_request_id(value: object) -> "str | None":
+    if not isinstance(value, str):
+        return None
+    try:
+        canonical = str(uuid.UUID(value))
+    except ValueError:
+        return None
+    return canonical if value == canonical else None
+
+
+def _valid_environment_id(value: object) -> bool:
+    return isinstance(value, str) and len(value) <= 64 and ENVIRONMENT_ID_RE.fullmatch(value) is not None
+
+
+def _valid_environment_summary(value: object, *, active: bool = False) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and isinstance(value.get("id"), str)
+        and isinstance(value.get("display_name"), str)
+        and (not active or isinstance(value.get("fingerprint"), str))
+    )
+
+
+def _valid_switch(value: object) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and isinstance(value.get("request_id"), str)
+        and _valid_environment_summary(value.get("target"))
+        and value.get("state") in {"queued", "running", "ready", "failed"}
+        and isinstance(value.get("message"), str)
+    )
+
+
+def _load_pending_switch_request() -> "dict[str, str] | None":
+    """Return only a complete mailbox request; a partial write is not state."""
+    try:
+        value = _read_control_json(SIM_ENVIRONMENT_REQUESTS_DIR / "current.json", CONTROL_REQUEST_MAX_BYTES)
+    except _ControlUnavailable:
+        return None
+    if set(value) != {"request_id", "id"}:
+        return None
+    request_id = _canonical_request_id(value.get("request_id"))
+    environment_id = value.get("id")
+    if request_id is None or not _valid_environment_id(environment_id):
+        return None
+    assert isinstance(environment_id, str)
+    return {"request_id": request_id, "id": environment_id}
+
+
+def _environment_summary(catalog: dict[str, object], environment_id: str) -> dict[str, str]:
+    environments = catalog.get("environments")
+    if isinstance(environments, list):
+        for candidate in environments:
+            if not isinstance(candidate, dict) or candidate.get("id") != environment_id:
+                continue
+            return {"id": environment_id, "display_name": str(candidate["display_name"])}
+    return {"id": environment_id, "display_name": environment_id}
+
+
+def _local_simulator_request(request: web.Request) -> bool:
+    return SIM_ENVIRONMENT_MUTATION_ENABLED and request.host.split(":", 1)[0].lower() in SIM_ENVIRONMENT_ALLOWED_HOSTS
+
+
+def _controller_accepting_requests() -> bool:
+    if (SIM_ENVIRONMENT_STATUS_DIR / "stopping").exists():
+        return False
+    try:
+        heartbeat = _read_control_json(SIM_ENVIRONMENT_STATUS_DIR / "heartbeat.json", 4096)
+        updated_at = float(heartbeat["updated_at"])
+    except (KeyError, OverflowError, TypeError, ValueError, _ControlUnavailable):
+        return False
+    if heartbeat.get("schema_version") != 1 or not math.isfinite(updated_at):
+        return False
+    age = SIM_ENVIRONMENT_TIME() - updated_at
+    return -1.0 <= age <= CONTROL_HEARTBEAT_MAX_AGE_S
+
+
+def _write_switch_request(value: dict[str, str]) -> None:
+    path = SIM_ENVIRONMENT_REQUESTS_DIR / "current.json"
+    payload = (json.dumps(value, separators=(",", ":"), sort_keys=True) + "\n").encode()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o644)
+    try:
+        os.fchmod(fd, 0o644)
+        with os.fdopen(fd, "wb", closefd=False) as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+    finally:
+        os.close(fd)
+
+
+async def sim_environments_catalog(request: web.Request) -> web.Response:
+    if not WEBAPP_SIM_CONTROLS:
+        return _control_error(404, "not found")
+    try:
+        catalog = _load_environment_catalog()
+    except _ControlUnavailable:
+        return _control_error(503, "simulator environment controller unavailable")
+    pending = _load_pending_switch_request()
+    switch = catalog.get("switch")
+    if pending is not None:
+        if not isinstance(switch, dict) or switch.get("request_id") != pending["request_id"]:
+            catalog["switch"] = {
+                "request_id": pending["request_id"],
+                "target": _environment_summary(catalog, pending["id"]),
+                "state": "queued",
+                "message": "Waiting for the simulator environment controller...",
+            }
+            switch = catalog["switch"]
+    status = (
+        503
+        if isinstance(switch, dict)
+        and switch.get("state") in {"queued", "running"}
+        and not _controller_accepting_requests()
+        else 200
+    )
+    return web.json_response(catalog, status=status, headers=ENVIRONMENT_NO_STORE)
+
+
+async def sim_environment_switch(request: web.Request) -> web.Response:
+    if not WEBAPP_SIM_CONTROLS:
+        return _control_error(404, "not found")
+    if not SIM_ENVIRONMENT_MUTATION_ENABLED:
+        return _control_error(403, "environment switching is disabled for LAN-accessible simulators")
+    if not _local_simulator_request(request):
+        return _control_error(403, "environment switching requires a local simulator host")
+    if request.headers.get("X-Requested-By") != "innate-webapp":
+        return _control_error(403, "missing X-Requested-By header")
+    if request.headers.get("Origin") != f"{request.scheme}://{request.host}":
+        return _control_error(403, "request origin does not match this simulator")
+    if request.content_type != "application/json" and not request.content_type.endswith("+json"):
+        return _control_error(400, "invalid JSON body")
+    try:
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in request.content.iter_chunked(CONTROL_REQUEST_MAX_BYTES + 1):
+            size += len(chunk)
+            if size > CONTROL_REQUEST_MAX_BYTES:
+                return _control_error(413, "request body too large")
+            chunks.append(chunk)
+        body = json.loads(b"".join(chunks).decode(request.charset or "utf-8"))
+    except (LookupError, RecursionError, ValueError, RequestPayloadError):
+        return _control_error(400, "invalid JSON body")
+    environment_id = body.get("id") if isinstance(body, dict) and set(body) == {"id"} else None
+    if not _valid_environment_id(environment_id):
+        return _control_error(400, "body must contain one valid environment id")
+    assert isinstance(environment_id, str)
+
+    try:
+        catalog = _load_environment_catalog()
+    except _ControlUnavailable:
+        return _control_error(503, "simulator environment controller unavailable")
+
+    if not _controller_accepting_requests():
+        return _control_error(503, "simulator environment controller unavailable")
+    existing = catalog.get("switch")
+    if isinstance(existing, dict) and existing.get("state") in {"queued", "running"}:
+        return _control_error(409, "an environment switch is already in progress")
+    target = next((item for item in catalog["environments"] if item.get("id") == environment_id), None)
+    if target is None:
+        return _control_error(404, "environment is not installed")
+
+    request_id = str(uuid.uuid4())
+    try:
+        _write_switch_request({"request_id": request_id, "id": environment_id})
+    except FileExistsError:
+        return _control_error(409, "an environment switch is already in progress")
+    except OSError:
+        return _control_error(503, "simulator environment controller unavailable")
+    summary = {"id": target["id"], "display_name": target.get("display_name", target["id"])}
+    return web.json_response({"request_id": request_id, "target": summary}, status=202, headers=ENVIRONMENT_NO_STORE)
+
+
 async def config_handler(request: web.Request) -> web.Response:
     """Serve config.json with env-driven feature flags overlaid, so a deployment
     can flip flags without editing the committed file (the sim sets
@@ -364,6 +731,7 @@ async def config_handler(request: web.Request) -> web.Response:
         cfg = {}
     if WEBAPP_SIM_CONTROLS:
         cfg["simControls"] = True
+        cfg["simEnvironmentControls"] = _local_simulator_request(request)
         # The 3D view prefers a direct loopback socket over this relay.
         cfg["worldStatePort"] = WORLD_STATE_PORT
     return web.json_response(cfg, headers={"Cache-Control": "no-cache"})
@@ -514,6 +882,13 @@ def build_app() -> web.Application:
     app.router.add_get("/restart", restart_handler)
     # Before the catch-all; the bare /armsdk page route stays on the SPA shell.
     app.router.add_get("/armsdk/model/{tail:.*}", armsdk_model)
+    app.router.add_get("/sim-environments.json", sim_environments_catalog)
+    app.router.add_post("/sim-environment/switch", sim_environment_switch)
+    app.router.add_get("/sim-environment/manifest.json", sim_environment_manifest)
+    app.router.add_get("/sim-environment/scene.glb", sim_environment_asset)
+    app.router.add_get("/sim-environment/layout.json", sim_environment_asset)
+    app.router.add_get("/sim-environment/rooms/{tail:.*}", sim_environment_asset)
+    app.router.add_get("/sim-environment/collisions/{tail:.*}", sim_environment_asset)
     # Prefix routes must precede the catch-all so /models/foo.glb doesn't fall to
     # the SPA shell — first matching resource wins in add order.
     for prefix in SIM_VIEWER_ROUTES:
