@@ -30,11 +30,19 @@ export function createBenchmark(parent, ros) {
   root.innerHTML = `
     <div class="policy-panel-head">Benchmark</div>
     <div class="bench-note">loading scenarios…</div>
+    <div class="bench-now" hidden></div>
     <div class="bench-list"></div>`;
   parent.appendChild(root);
 
   const note = /** @type {HTMLElement} */ (root.querySelector(".bench-note"));
+  const now = /** @type {HTMLElement} */ (root.querySelector(".bench-now"));
   const list = /** @type {HTMLElement} */ (root.querySelector(".bench-list"));
+  /** @type {Map<string, HTMLElement>} scenario id -> its row */
+  const rows = new Map();
+  /** The row this page started, if any. Runs started elsewhere (the headless
+   *  runner) are matched by instruction instead, which is looser: the paired
+   *  suite reuses wordings, so several rows can light up for one run. */
+  let startedId = null;
 
   /** @type {any[]} */ let scenarios = [];
   let radius = 0.75;
@@ -54,6 +62,7 @@ export function createBenchmark(parent, ros) {
   /** @param {any} sc @param {HTMLElement} row @param {HTMLElement} out */
   async function run(sc, row, out) {
     if (active) return;
+    startedId = sc.id;
     row.classList.add("running");
     out.textContent = "placing…";
     // Sim only: put the robot where the scenario starts. Driving there first
@@ -90,6 +99,7 @@ export function createBenchmark(parent, ros) {
     }
     clearInterval(tick);
     active = null;
+    startedId = null;
     const final = dist(sc.goals);
     const ok = final <= radius;
     row.classList.remove("running");
@@ -97,6 +107,30 @@ export function createBenchmark(parent, ros) {
     row.classList.toggle("fail", !ok);
     out.textContent = `${ok ? "reached" : "missed"} — stopped ${final.toFixed(2)} m away`
       + (best <= radius && !ok ? `, was within ${best.toFixed(2)} m` : "");
+  }
+
+  /** @param {any} status the parsed /nav_policy/status payload */
+  function setStatus(status) {
+    const live = Boolean(status?.running) && typeof status?.instruction === "string";
+    // The page knows which row it started; a run driven from anywhere else is
+    // matched on its wording, which is what the status carries.
+    const hits = !live ? [] : startedId
+      ? [startedId]
+      : scenarios.filter((sc) => sc.instruction === status.instruction).map((sc) => sc.id);
+
+    for (const [id, row] of rows) row.classList.toggle("running", hits.includes(id));
+    if (!hits.length) {
+      now.hidden = true;
+      return;
+    }
+    const first = scenarios.find((sc) => sc.id === hits[0]);
+    now.hidden = false;
+    now.textContent = hits.length > 1
+      ? `running: ${status.instruction} (${hits.length} scenarios share this wording)`
+      : `running ${first.id}: ${first.instruction}`;
+    // Keep it in view — the list is a hundred rows long and the running one is
+    // usually scrolled off it.
+    rows.get(hits[0])?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
   fetch("public/nav_benchmark.json")
@@ -121,12 +155,14 @@ export function createBenchmark(parent, ros) {
         meta.textContent = `${sc.id} · ${detail} · ${sc.path_m} m`
           + (sc.goals.length > 1 ? ` · ${sc.goals.length} valid spots` : "");
         row.querySelector(".bench-run")?.addEventListener("click", () => run(sc, row, meta));
+        rows.set(sc.id, row);
         list.appendChild(row);
       }
     })
     .catch((err) => { note.textContent = `could not load scenarios: ${err?.message || err}`; });
 
   return {
+    setStatus,
     destroy() {
       active?.cancel();
       unadvertise();

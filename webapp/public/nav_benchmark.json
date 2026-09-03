@@ -1006,7 +1006,7 @@
    ],
    "radius": 0.75,
    "path_m": 7.0,
-   "instruction": "Go forward, turn right, then stop.",
+   "instruction": "Go forward, turn right, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1063,7 +1063,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.9,
-   "instruction": "Go forward, turn left, turn right, then stop.",
+   "instruction": "Go forward, turn left, turn right, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1082,7 +1082,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.9,
-   "instruction": "Go forward, turn left, turn right, then stop.",
+   "instruction": "Go forward, turn left, turn right, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1120,7 +1120,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.9,
-   "instruction": "Go forward, turn left, turn right, then stop.",
+   "instruction": "Go forward, turn left, turn right, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1139,7 +1139,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.9,
-   "instruction": "Go forward, turn right, turn left, then stop.",
+   "instruction": "Go forward, turn right, turn left, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1196,7 +1196,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.85,
-   "instruction": "Go forward, turn right, turn right, then stop.",
+   "instruction": "Go forward, turn right, turn right, then go about 7 metres and stop.",
    "suite": "families"
   },
   {
@@ -1215,7 +1215,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.75,
-   "instruction": "Go forward, turn right, turn right, then stop.",
+   "instruction": "Go forward, turn right, turn right, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1329,7 +1329,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.7,
-   "instruction": "Go forward, turn right, turn left, then stop.",
+   "instruction": "Go forward, turn right, turn left, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1362,7 +1362,7 @@
    "path_m": 2.0,
    "turn": "left",
    "turn_deg": 104.5,
-   "instruction": "Turn left and drive to the end.",
+   "instruction": "Turn left and stop at the end of the passage.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1383,7 +1383,7 @@
    "path_m": 5.95,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Drive straight forward and stop when you get there.",
+   "instruction": "Go straight ahead and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1404,7 +1404,7 @@
    "path_m": 2.9,
    "turn": "right",
    "turn_deg": -108.4,
-   "instruction": "Go right and keep going until you have to stop.",
+   "instruction": "Turn right and stop at the end of the passage.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1425,7 +1425,7 @@
    "path_m": 6.0,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Go straight ahead and stop at the end of the way.",
+   "instruction": "Go straight ahead and stop by the sofa.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1446,7 +1446,7 @@
    "path_m": 5.85,
    "turn": "left",
    "turn_deg": 62.0,
-   "instruction": "Turn left and follow the passage.",
+   "instruction": "Turn left and stop at the end of the passage.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1467,7 +1467,7 @@
    "path_m": 5.9,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Continue straight ahead.",
+   "instruction": "Go straight ahead and stop by the sofa.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1488,7 +1488,7 @@
    "path_m": 4.8,
    "turn": "left",
    "turn_deg": 126.3,
-   "instruction": "Turn left and drive to the end.",
+   "instruction": "Turn left and stop at the end of the passage.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1509,7 +1509,7 @@
    "path_m": 2.1,
    "turn": "right",
    "turn_deg": -59.5,
-   "instruction": "Turn right and follow the passage.",
+   "instruction": "Turn right and stop at the end of the passage.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1530,7 +1530,7 @@
    "path_m": 5.9,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Continue straight ahead.",
+   "instruction": "Go straight ahead and stop by the sofa.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1551,7 +1551,7 @@
    "path_m": 3.8,
    "turn": "back",
    "turn_deg": 175.0,
-   "instruction": "Turn around and drive back the way you came.",
+   "instruction": "Turn around and stop at the end of the passage.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1572,7 +1572,7 @@
    "path_m": 3.1,
    "turn": "right",
    "turn_deg": -32.4,
-   "instruction": "Turn right and follow the passage.",
+   "instruction": "Turn right and stop at the end of the passage.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1593,7 +1593,7 @@
    "path_m": 5.9,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Continue straight ahead.",
+   "instruction": "Go straight ahead and stop by the sofa.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1614,7 +1614,7 @@
    "path_m": 1.75,
    "turn": "left",
    "turn_deg": 90.0,
-   "instruction": "Turn left and drive to the end.",
+   "instruction": "Turn left and stop at the end of the passage.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1635,7 +1635,7 @@
    "path_m": 4.95,
    "turn": "right",
    "turn_deg": -128.7,
-   "instruction": "Turn right and follow the passage.",
+   "instruction": "Turn right and stop by the sofa.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1656,7 +1656,7 @@
    "path_m": 5.15,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Continue straight ahead.",
+   "instruction": "Go straight ahead and stop at the end of the passage.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1677,7 +1677,7 @@
    "path_m": 2.75,
    "turn": "back",
    "turn_deg": 154.2,
-   "instruction": "Turn around and drive back the way you came.",
+   "instruction": "Turn around and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1698,7 +1698,7 @@
    "path_m": 2.15,
    "turn": "left",
    "turn_deg": 27.5,
-   "instruction": "Turn left and follow the passage.",
+   "instruction": "Turn left and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1719,7 +1719,7 @@
    "path_m": 5.4,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Continue straight ahead.",
+   "instruction": "Go straight ahead and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1740,7 +1740,7 @@
    "path_m": 1.95,
    "turn": "left",
    "turn_deg": 126.7,
-   "instruction": "Turn left and drive to the end.",
+   "instruction": "Turn left and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1761,7 +1761,7 @@
    "path_m": 5.95,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Drive straight forward and stop when you get there.",
+   "instruction": "Go straight ahead and stop by the sofa.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1782,7 +1782,7 @@
    "path_m": 1.95,
    "turn": "left",
    "turn_deg": 59.5,
-   "instruction": "Go left and keep going until you have to stop.",
+   "instruction": "Turn left and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1803,7 +1803,7 @@
    "path_m": 5.9,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Go straight ahead and stop at the end of the way.",
+   "instruction": "Go straight ahead and stop at the end of the passage.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1824,7 +1824,7 @@
    "path_m": 2.05,
    "turn": "back",
    "turn_deg": -173.4,
-   "instruction": "Turn around and go to the far end behind you.",
+   "instruction": "Turn around and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1845,7 +1845,7 @@
    "path_m": 4.15,
    "turn": "left",
    "turn_deg": 111.2,
-   "instruction": "Go left and keep going until you have to stop.",
+   "instruction": "Turn left and stop by the sofa.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1866,7 +1866,7 @@
    "path_m": 4.2,
    "turn": "right",
    "turn_deg": -127.9,
-   "instruction": "Turn right and drive to the end.",
+   "instruction": "Turn right and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1887,7 +1887,7 @@
    "path_m": 5.95,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Drive straight forward and stop when you get there.",
+   "instruction": "Go straight ahead and stop at the end of the passage.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1908,7 +1908,7 @@
    "path_m": 3.55,
    "turn": "right",
    "turn_deg": -75.0,
-   "instruction": "Go right and keep going until you have to stop.",
+   "instruction": "Turn right and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1929,7 +1929,7 @@
    "path_m": 4.9,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Go straight ahead and stop at the end of the way.",
+   "instruction": "Go straight ahead and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1950,7 +1950,7 @@
    "path_m": 5.05,
    "turn": "back",
    "turn_deg": -167.2,
-   "instruction": "Turn around and go to the far end behind you.",
+   "instruction": "Turn around and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1971,7 +1971,7 @@
    "path_m": 5.1,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Continue straight ahead.",
+   "instruction": "Go straight ahead and stop by the dining table.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -1992,7 +1992,7 @@
    "path_m": 5.3,
    "turn": "back",
    "turn_deg": -165.7,
-   "instruction": "Turn around and drive back the way you came.",
+   "instruction": "Turn around and stop by the dining table.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -2013,7 +2013,7 @@
    "path_m": 5.85,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Drive straight forward and stop when you get there.",
+   "instruction": "Go straight ahead and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -2034,7 +2034,7 @@
    "path_m": 5.2,
    "turn": "back",
    "turn_deg": 156.7,
-   "instruction": "Turn around and keep going.",
+   "instruction": "Turn around and stop by the dining table.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -2055,7 +2055,7 @@
    "path_m": 6.0,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Go straight ahead and stop at the end of the way.",
+   "instruction": "Go straight ahead and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -2076,7 +2076,7 @@
    "path_m": 2.05,
    "turn": "left",
    "turn_deg": 121.9,
-   "instruction": "Turn left and follow the passage.",
+   "instruction": "Turn left and stop by the dining table.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -2097,7 +2097,7 @@
    "path_m": 5.1,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Continue straight ahead.",
+   "instruction": "Go straight ahead and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -2118,7 +2118,7 @@
    "path_m": 1.9,
    "turn": "left",
    "turn_deg": 72.5,
-   "instruction": "Turn left and drive to the end.",
+   "instruction": "Turn left and stop by the dining table.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -2139,7 +2139,7 @@
    "path_m": 5.2,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Drive straight forward and stop when you get there.",
+   "instruction": "Go straight ahead and stop by the sofa.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -2160,7 +2160,7 @@
    "path_m": 4.9,
    "turn": "right",
    "turn_deg": -92.3,
-   "instruction": "Go right and keep going until you have to stop.",
+   "instruction": "Turn right and stop by the dining table.",
    "suite": "paired",
    "family": "r2r",
    "goals": [
@@ -2181,7 +2181,7 @@
    "path_m": 5.95,
    "turn": "straight",
    "turn_deg": 0.0,
-   "instruction": "Go straight ahead and stop at the end of the way.",
+   "instruction": "Go straight ahead and stop by the bed.",
    "suite": "paired",
    "family": "r2r",
    "goals": [

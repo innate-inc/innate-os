@@ -167,6 +167,7 @@ export function mount(stage) {
         const status = JSON.parse(msg.data);
         panel.setStatus(status);
         obsBar.setStatus(status);
+        bench.setStatus(status);
       } catch {
         // a truncated payload is not worth tearing the page down over
       }

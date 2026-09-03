@@ -44,6 +44,7 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from innate_cloud_msgs.action import NavigateInstruction
 from innate_cloud_msgs.srv import CheckPolicyServer
+from mars_msgs.srv import GotoJS
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
@@ -53,7 +54,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, CompressedImage
-from std_msgs.msg import String
+from std_msgs.msg import Float64MultiArray, String
 
 from .costmap import Costmap
 from .introspect import ObservationStrip
@@ -92,6 +93,12 @@ STATUS_HZ = 5.0
 # megabyte an update -- so it goes out slower than plans arrive. The window
 # barely changes between consecutive plans anyway.
 STRIP_HZ = 1.0
+# The arm is tucked for the whole run. The policy was trained on the r12
+# embodiment (tucked arm, 0.12 m radius) and plans for a body that shape; an
+# arm left anywhere else sticks outside the footprint the plans assume and
+# clips doorframes the path itself was clear of. Radians, joint1..joint6.
+NAV_ARM_POSE = (1.48, -0.25, 1.46, -1.23, -0.06, 0.0)
+NAV_ARM_MOVE_S = 3.0
 # A connection test answers quickly or it is not a test -- someone is watching
 # a button, and "no route to host" should not take the run-start timeout.
 PROBE_TIMEOUT_S = 4.0
@@ -230,6 +237,7 @@ class InnateNavNode(Node):
         self._status_pub = self.create_publisher(String, "/nav_policy/status", 1)
         self._obs_pub = self.create_publisher(
             CompressedImage, "/nav_policy/observations/compressed", 1)
+        self._arm = None
         self._obs = ObservationStrip()
         self._obs_at = 0.0
         self._plan_times: deque[float] = deque(maxlen=16)
@@ -380,6 +388,21 @@ class InnateNavNode(Node):
         if fields:
             self._cfg = replace(self._cfg, **fields)
         return SetParametersResult(successful=True)
+
+    def _tuck_arm(self) -> None:
+        """Put the arm in the navigation pose before driving. Best effort: a
+        robot with no arm, or one that will not answer, still navigates -- it
+        just collides more, which is the situation this exists to improve."""
+        if self._arm is None:
+            self._arm = self.create_client(GotoJS, "/mars/arm/goto_js")
+        if not self._arm.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning("no /mars/arm/goto_js; driving with the arm as-is")
+            return
+        request = GotoJS.Request()
+        request.data = Float64MultiArray(data=list(NAV_ARM_POSE))
+        request.time = NAV_ARM_MOVE_S
+        self._arm.call_async(request)
+        time.sleep(NAV_ARM_MOVE_S)      # committed: drive only once it is tucked
 
     def _drive(self, v: float, w: float) -> None:
         """Every moving command goes out through here, ramped.
@@ -630,6 +653,7 @@ class InnateNavNode(Node):
         result = NavigateInstruction.Result()
         feedback = NavigateInstruction.Feedback()
 
+        self._tuck_arm()
         self._cancel_requested.clear()
         self._arrived.clear()
         self._blocked.reset()
