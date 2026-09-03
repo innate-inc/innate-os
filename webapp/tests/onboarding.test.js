@@ -13,6 +13,7 @@ import {
   TELEOP_ONBOARDING_STEPS,
   isCylinderPickupCompletion,
   isWaveCompletion,
+  paddedSpotlightRect,
   positionAboveTarget,
   resolveAvailableStep,
 } from "../js/teleop/teleopOnboarding.js";
@@ -48,6 +49,20 @@ assert.deepEqual(
     { width: 390, height: 720 },
   ),
   { left: 28, top: 12 },
+);
+assert.deepEqual(
+  paddedSpotlightRect(
+    { left: 762, right: 992, top: 658, bottom: 702 },
+    { width: 1280, height: 720 },
+  ),
+  { left: 748, top: 644, width: 258, height: 72 },
+);
+assert.deepEqual(
+  paddedSpotlightRect(
+    { left: 4, right: 386, top: 4, bottom: 716 },
+    { width: 390, height: 720 },
+  ),
+  { left: 0, top: 0, width: 390, height: 720 },
 );
 assert.equal(INTRO_NUDGE.title, "Meet MARS");
 assert.match(INTRO_NUDGE.body, /control room/);
