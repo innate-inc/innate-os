@@ -15,6 +15,8 @@ import type {
   EnvironmentRoster,
 } from "./physics/worldStateController";
 import type { PropInfo } from "./props";
+import { interpolateTraffic } from "./trafficState";
+import type { TrafficManifest, TrafficState } from "./trafficState";
 
 /** One roster row as a renderer wants it: what the challenge is, plus how it
  * has gone so far. Merged here from the two halves the server sends. */
@@ -90,11 +92,13 @@ export class SimSession {
   // Ground-truth snapshots on the sim clock.
   #samples: {
     t: number;
+    worldEpoch: number;
     x: number;
     y: number;
     yaw: number;
     joints: Record<string, number>;
     objects: Record<string, number[]>;
+    traffic: TrafficState | null;
   }[] = [];
   #gaps: number[] = []; // recent inter-arrival gaps: sizes the playback delay
   #lastArrival = 0;
@@ -123,6 +127,18 @@ export class SimSession {
 
   #environment: EnvironmentRoster | null = null;
   #environmentListeners = new Set<(roster: EnvironmentRoster) => void>();
+
+  // Traffic is a separate environment-owned system, not a manipulation prop:
+  // Clear/objectsPresent/challenges must never remove or count these cars.
+  #trafficManifest: TrafficManifest | null = null;
+  // `null` is a meaningful, explicit roster for non-traffic environments. Keep
+  // reception separate from the value so a hot-swap cannot mistake "not here
+  // yet" for an apartment that deliberately has no traffic.
+  #trafficManifestDirty = false;
+  // A ready scene can reject a structurally valid roster when its authored
+  // signal materials do not match. Try once per roster/scene, then preserve the
+  // last accepted traffic frame until a new roster or scene makes retry useful.
+  #trafficManifestRetryBlocked = false;
 
   #stateUrls: string[];
   #rosUrl: string;
@@ -197,6 +213,11 @@ export class SimSession {
       this.#propsDirty = true; // handed to the scene on the next tick
       for (const cb of this.#propListeners) cb(props);
     };
+    this.#controller.onTrafficManifest = (manifest) => {
+      this.#trafficManifest = manifest;
+      this.#trafficManifestDirty = true;
+      this.#trafficManifestRetryBlocked = false;
+    };
     this.#controller.onChallenges = (challenges) => {
       // Arrives ahead of the stream, so the merge below has titles and briefs
       // before the first block; on a reconnect it just replaces them.
@@ -228,12 +249,28 @@ export class SimSession {
       this.#lastArrival = now;
 
       const last = this.#samples[this.#samples.length - 1];
-      if (last === undefined || s.t > last.t) {
-        this.#samples.push({ t: s.t, x: s.x, y: s.y, yaw: s.yaw, joints: s.joints, objects: s.objects });
+      const sample = {
+        t: s.t,
+        worldEpoch: s.worldEpoch,
+        x: s.x,
+        y: s.y,
+        yaw: s.yaw,
+        joints: s.joints,
+        objects: s.objects,
+        traffic: s.traffic,
+      };
+      if (last !== undefined && s.worldEpoch !== last.worldEpoch) {
+        // Any reset is a hard generation boundary even if it happened before
+        // the old sim clock advanced by the legacy 0.5-second heuristic.
+        this.#samples = [sample];
+        this.#playT = null;
+        this.#spawned = false;
+      } else if (last === undefined || s.t > last.t) {
+        this.#samples.push(sample);
         if (this.#samples.length > 60) this.#samples.shift();
       } else if (s.t < last.t - 0.5) {
         // Sim clock jumped backwards (world-server restart): restart playback.
-        this.#samples = [{ t: s.t, x: s.x, y: s.y, yaw: s.yaw, joints: s.joints, objects: s.objects }];
+        this.#samples = [sample];
         this.#playT = null;
       }
       this.#live = true;
@@ -432,6 +469,26 @@ export class SimSession {
   /** Per-frame: clamped interpolation on the sim clock, #delayS behind the
    * newest sample; a delivery gap holds the last pose, never extrapolates. */
   tick(scene: SimScene, dt: number): void {
+    if (this.#propsDirty) {
+      this.#propsDirty = false;
+      scene.setPropManifest(this.#props);
+    }
+    if (this.#trafficManifestDirty && !this.#trafficManifestRetryBlocked) {
+      try {
+        scene.setTrafficManifest(this.#trafficManifest);
+        this.#trafficManifestDirty = false;
+      } catch (error) {
+        // Keep the last complete cars/lights and report once per authoritative
+        // roster; a new roster or scene clears the retry latch.
+        this.#trafficManifestRetryBlocked = true;
+        console.error("[sim-session] traffic roster rejected; preserving the last complete traffic frame:", error);
+      }
+    }
+    if (this.#overlaysDirty) {
+      this.#overlaysDirty = false;
+      scene.setLidarVisible(this.#lidarOn);
+      scene.setCollisionHullsVisible(this.#hullsOn);
+    }
     if (!this.#live || this.#samples.length === 0) return;
     const first = this.#samples[0];
     if (!this.#spawned) {
@@ -479,17 +536,11 @@ export class SimSession {
         ...q.map((v) => v / norm),
       ];
     }
-    if (this.#propsDirty) {
-      this.#propsDirty = false;
-      scene.setPropManifest(this.#props);
-    }
     scene.setObjectPoses(objects);
-
-    if (this.#overlaysDirty) {
-      this.#overlaysDirty = false;
-      scene.setLidarVisible(this.#lidarOn);
-      scene.setCollisionHullsVisible(this.#hullsOn);
-    }
+    // States belong to the pending roster. Feeding them into the last accepted
+    // roster after a rejection could move shared car IDs or change its lamps,
+    // destroying the complete frame we deliberately preserved above.
+    if (!this.#trafficManifestDirty) scene.setTrafficState(interpolateTraffic(a.traffic, b.traffic, u));
     if (this.#lidarOn && this.#scanDirty && this.#scan) {
       this.#scanDirty = false;
       scene.setLidarPoints(this.#scan);

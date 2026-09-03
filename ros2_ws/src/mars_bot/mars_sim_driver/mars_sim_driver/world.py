@@ -219,10 +219,13 @@ def build_world_xml(
     texture_max: int | None = None,
     props: "PropRegistry | None" = None,
     spawn_pose: tuple[float, float, float] = (SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG),
+    traffic_bodies: str = "",
 ) -> str:
     """The apartment environment MJCF (floor plane + decomposed room hulls,
     optionally the textured visual rooms in their own geom group, plus every
-    droppable prop parked off-map -- see props.py).
+    droppable prop parked off-map -- see props.py). Environment-owned dynamic
+    bodies such as town traffic are inserted directly under worldbody via
+    traffic_bodies, already expressed in simulator Z-up coordinates.
     texture_max caps the visual textures' resolution (see capped_texture_path)."""
     prop_assets = props.assets_xml(VISUAL_GROUP) if props else ""
     prop_bodies = props.bodies_xml(VISUAL_GROUP, COLLISION_GROUP) if props else ""
@@ -300,6 +303,7 @@ def build_world_xml(
 {chr(10).join(geom_lines)}
 {chr(10).join(visual_geom_lines)}
     </body>{prop_bodies}{robot_body}
+{traffic_bodies}
   </worldbody>
 </mujoco>
 """
