@@ -404,6 +404,33 @@ async def test_missing_sim_environment_descriptor_keeps_canonical_static_routes(
 
 
 @sync
+async def test_sim_proxy_reports_missing_or_invalid_active_pack_as_unavailable(tmp_path):
+    root = make_app_root(tmp_path)
+    viewer, descriptor_path, descriptor, routes = make_sim_viewer(tmp_path)
+    overrides = {
+        "ROOT": root,
+        "WEBAPP_SIM_CONTROLS": True,
+        "SIM_VIEWER_ROOT": viewer,
+        "ACTIVE_ENVIRONMENT_PATH": descriptor_path,
+        "SIM_VIEWER_ROUTES": routes,
+    }
+
+    async with serve(**overrides) as (session, base):
+        for path in ("/sim-environment/manifest.json", "/sim-environment/scene.glb"):
+            response = await session.get(base + path)
+            assert response.status == 503
+            assert response.headers["Cache-Control"] == "no-store, max-age=0"
+
+    descriptor["viewer"]["model"] = "environments/gallery/missing.glb"
+    descriptor_path.write_text(json.dumps(descriptor))
+    async with serve(**overrides) as (session, base):
+        for path in ("/sim-environment/manifest.json", "/sim-environment/scene.glb"):
+            response = await session.get(base + path)
+            assert response.status == 503
+            assert response.headers["Cache-Control"] == "no-store, max-age=0"
+
+
+@sync
 async def test_sim_environment_descriptor_and_collision_paths_fail_closed(tmp_path):
     root = make_app_root(tmp_path)
     viewer, descriptor_path, descriptor, routes = make_sim_viewer(tmp_path)

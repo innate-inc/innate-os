@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   environmentAssetUrl,
   isValidManifestRoom,
+  requiresCompleteEnvironment,
   resolveEnvironmentSource,
 } from "../src/environmentSource.ts";
 
@@ -57,6 +58,20 @@ test("only a persistent 404 selects legacy routes; a later probe can recover", a
   );
   assert.equal(active.fingerprint, "gallery");
   assert.equal(environmentAssetUrl(active.sceneUrl!, active.fingerprint), "/sim-environment/scene.glb?fingerprint=gallery");
+});
+
+test("a new proxy's unavailable active pack never falls back to legacy geometry", async () => {
+  const unavailable = (async () => response(503)) as typeof fetch;
+  await assert.rejects(
+    resolveEnvironmentSource(unavailable, async () => {}),
+    /descriptor returned HTTP 503/,
+  );
+});
+
+test("initial descriptor geometry is strict while legacy apartment remains best effort", () => {
+  assert.equal(requiresCompleteEnvironment("pack-fingerprint"), true);
+  assert.equal(requiresCompleteEnvironment(undefined), false);
+  assert.equal(requiresCompleteEnvironment(undefined, true), true, "hot swaps remain strict for every source");
 });
 
 test("progressive room validation requires the name used by priority sorting", () => {

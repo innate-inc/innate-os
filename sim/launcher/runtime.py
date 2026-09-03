@@ -969,10 +969,7 @@ def ensure_os_container(
                 "The running simulator container uses outdated host ports. "
                 "Run `./innate-sim up` once before switching environments in the browser."
             )
-        log(
-            "The running OS container is bound to an older port block; "
-            f"recreating it to serve {config['webapp_url']}."
-        )
+        log(f"The running OS container is bound to an older port block; recreating it to serve {config['webapp_url']}.")
         reuse_running_container = False
     if reuse_running_container and not os_container_environment_control_mounts_current():
         if preserve_container:
@@ -2749,7 +2746,7 @@ def _world_model_sources_digest(config: dict[str, object]) -> str:
     driver = mars_bot / "mars_sim_driver" / "mars_sim_driver"
     candidates = sorted((mars_bot / "mars_sim" / "urdf").glob("*"))
     candidates += sorted((mars_bot / "mars_sim" / "meshes").glob("*"))
-    candidates += [driver / name for name in ("world.py", "core.py", "constants.py")]
+    candidates += [driver / name for name in ("world.py", "core.py", "constants.py", "traffic.py")]
     candidates += [sim_repo / "assets" / ".assets-tag"]
     environment = config.get("environment")
     if isinstance(environment, EnvironmentPack):

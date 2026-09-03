@@ -5,7 +5,7 @@ sim/README.md "world_server.py"):
   Framing: 4-byte big-endian length | JSON; responses are one JSON frame,
   then one binary frame iff the JSON says "blob": <nbytes>.
 - observer state stream (--state-port): a WebSocket broadcasting ground
-  truth ({t, wall, pose, joints, objects}) after every physics slice, and
+  truth ({t, wall, world_epoch, pose, joints, objects, traffic}) after every physics slice, and
   accepting stage commands ({"op": "drop_prop_at", ...}) back. Ground truth and
   scenery only -- robot software must never consume or drive it.
 
@@ -145,11 +145,13 @@ class WorldServer:
             x, y, yaw = self.sim.pose()
             joints = self.sim.joint_positions()
             objects = self.sim.object_poses()
+            traffic = self.sim.traffic_state()
             # Prop CENTRES for the judge (props.py center_offset): a distance
             # to the human has to mean its body, not the feet its origin sits
             # at. Gathered here because the judge runs without the sim.
             centers = self.sim.object_centers()
             sim_time = float(self.sim.data.time)
+            world_epoch = self.sim.world_epoch
             # Under the same lock hold as the snapshot: names WHICH world these
             # numbers came from, so a challenge start landing between here and
             # tick() cannot get them judged against its fresh run.
@@ -173,9 +175,11 @@ class WorldServer:
             {
                 "t": sim_time,
                 "wall": time.time(),
+                "world_epoch": world_epoch,
                 "pose": [x, y, yaw],
                 "joints": joints,
                 "objects": objects,
+                "traffic": traffic,
                 "challenge": challenge,
             }
         )
@@ -249,6 +253,7 @@ class WorldServer:
                 json.dumps(
                     {
                         "props": self.sim.prop_manifest(),
+                        "traffic_manifest": self.sim.traffic_manifest(),
                         "challenges": self.challenges.roster(),
                         "environment": {
                             "id": self.environment_id,
@@ -452,6 +457,7 @@ def main() -> None:
             depth_render_wh=DEPTH_WH,
             visual_dir=args.visual_dir,
             spawn_pose=(args.spawn_x, args.spawn_y, args.spawn_yaw_degrees),
+            environment_id=args.environment_id,
         ),
         environment_id=args.environment_id,
         environment_fingerprint=args.environment_fingerprint,

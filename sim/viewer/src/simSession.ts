@@ -15,6 +15,8 @@ import type {
   WorldEnvironment,
 } from "./physics/worldStateController";
 import type { PropInfo } from "./props";
+import { interpolateTraffic } from "./trafficState";
+import type { TrafficManifest, TrafficState } from "./trafficState";
 
 /** One roster row as a renderer wants it: what the challenge is, plus how it
  * has gone so far. Merged here from the two halves the server sends. */
@@ -94,11 +96,13 @@ export class SimSession {
   // Ground-truth snapshots on the sim clock.
   #samples: {
     t: number;
+    worldEpoch: number;
     x: number;
     y: number;
     yaw: number;
     joints: Record<string, number>;
     objects: Record<string, number[]>;
+    traffic: TrafficState | null;
   }[] = [];
   #gaps: number[] = []; // recent inter-arrival gaps: sizes the playback delay
   #lastArrival = 0;
@@ -107,6 +111,7 @@ export class SimSession {
   #live = false;
   #spawned = false;
   #renderScene: SimScene | null = null;
+  #renderSceneRosterBlocked = false;
   #environment: WorldEnvironment | null = null;
   #environmentConnected = false;
   #environmentListeners = new Set<(environment: SimEnvironmentState) => void>();
@@ -128,6 +133,15 @@ export class SimSession {
   #props: PropInfo[] = [];
   #propListeners = new Set<(props: PropInfo[]) => void>();
   #propsDirty = false;
+
+  // Traffic is a separate environment-owned system, not a manipulation prop:
+  // Clear/objectsPresent/challenges must never remove or count these cars.
+  #trafficManifest: TrafficManifest | null = null;
+  #trafficManifestDirty = false;
+  // A ready scene can reject a structurally valid roster when its authored
+  // signal materials do not match. Try once per roster/scene, then preserve the
+  // last accepted traffic frame until a new roster or scene makes retry useful.
+  #trafficManifestRetryBlocked = false;
 
   #stateUrls: string[];
   #rosUrl: string;
@@ -200,6 +214,7 @@ export class SimSession {
     this.#controller = controller;
     controller.onConnectionChange = (connected) => {
       if (this.#controller !== controller) return;
+      if (!connected && this.#environmentConnected) this.#clearWorldGeneration();
       this.#environmentConnected = connected;
       this.#publishEnvironment();
     };
@@ -209,22 +224,7 @@ export class SimSession {
         this.#environment?.id !== environment.id ||
         this.#environment?.fingerprint !== environment.fingerprint
       ) {
-        this.#samples = [];
-        this.#gaps = [];
-        this.#lastArrival = 0;
-        this.#playT = null;
-        this.#live = false;
-        this.#gotPose = false;
-        this.#spawned = false;
-        this.#props = [];
-        this.#propsDirty = true;
-        for (const cb of this.#propListeners) cb([]);
-        this.#challengeInfo = [];
-        this.#challenge = { list: [], active: null };
-        this.#challengeJson = "";
-        for (const cb of this.#challengeListeners) cb(this.#challenge);
-        this.#scan = null;
-        this.#scanDirty = false;
+        this.#clearWorldGeneration();
       }
       this.#environment = environment;
       this.#publishEnvironment();
@@ -233,6 +233,11 @@ export class SimSession {
       this.#props = props;
       this.#propsDirty = true; // handed to the scene on the next tick
       for (const cb of this.#propListeners) cb(props);
+    };
+    controller.onTrafficManifest = (manifest) => {
+      this.#trafficManifest = manifest;
+      this.#trafficManifestDirty = true;
+      this.#trafficManifestRetryBlocked = false;
     };
     controller.onChallenges = (challenges) => {
       // Arrives ahead of the stream, so the merge below has titles and briefs
@@ -254,18 +259,36 @@ export class SimSession {
       this.#lastArrival = now;
 
       const last = this.#samples[this.#samples.length - 1];
-      if (last === undefined || s.t > last.t) {
-        this.#samples.push({ t: s.t, x: s.x, y: s.y, yaw: s.yaw, joints: s.joints, objects: s.objects });
+      const sample = {
+        t: s.t,
+        worldEpoch: s.worldEpoch,
+        x: s.x,
+        y: s.y,
+        yaw: s.yaw,
+        joints: s.joints,
+        objects: s.objects,
+        traffic: s.traffic,
+      };
+      if (last !== undefined && s.worldEpoch !== last.worldEpoch) {
+        // Any reset is a hard generation boundary even if it happened before
+        // the old sim clock advanced by the legacy 0.5-second heuristic.
+        this.#samples = [sample];
+        this.#playT = null;
+        this.#spawned = false;
+      } else if (last === undefined || s.t > last.t) {
+        this.#samples.push(sample);
         if (this.#samples.length > 60) this.#samples.shift();
       } else if (s.t < last.t - 0.5) {
         // Sim clock jumped backwards (world-server restart): restart playback.
-        this.#samples = [{ t: s.t, x: s.x, y: s.y, yaw: s.yaw, joints: s.joints, objects: s.objects }];
+        this.#samples = [sample];
         this.#playT = null;
+        this.#spawned = false;
       }
       this.#live = true;
       if (s.challenge) this.#publishChallenge(s.challenge);
       if (!this.#gotPose) {
         this.#gotPose = true;
+        this.#publishEnvironment();
         this.#maybeStreaming();
       }
     };
@@ -282,22 +305,55 @@ export class SimSession {
     });
   }
 
+  /** Invalidate every dynamic value owned by one world-server process. This
+   * runs on transport loss as well as environment identity changes because a
+   * restarted process begins world_epoch at zero again. */
+  #clearWorldGeneration(): void {
+    this.#renderScene?.clearWorldState();
+    this.#samples = [];
+    this.#gaps = [];
+    this.#lastArrival = 0;
+    this.#playT = null;
+    this.#live = false;
+    this.#gotPose = false;
+    this.#spawned = false;
+    this.#props = [];
+    this.#propsDirty = true;
+    for (const cb of this.#propListeners) cb([]);
+    this.#challengeInfo = [];
+    this.#challenge = { list: [], active: null };
+    this.#challengeJson = "";
+    for (const cb of this.#challengeListeners) cb(this.#challenge);
+    this.#scan = null;
+    this.#scanDirty = false;
+    this.#trafficManifest = null;
+    this.#trafficManifestDirty = true;
+    this.#trafficManifestRetryBlocked = false;
+    this.#lagRecent = [];
+    this.#lagMinS = Infinity;
+    if (this.#started) this.#patch({ status: "connecting", ...this.#videoArrays() });
+  }
+
   stop(): void {
     this.#controller?.dispose();
     this.#controller = null;
     this.#scanFeed?.dispose();
     this.#scanFeed = null;
     this.#started = false;
-    this.#gotPose = false;
+    this.#clearWorldGeneration();
     this.#environmentConnected = false;
     this.#publishEnvironment();
-    this.#patch({ status: "idle", videoStream: null });
+    this.#patch({ status: "idle", videoStream: null, ...this.#videoArrays() });
   }
 
   destroy(): void {
     this.stop();
     this.#listeners.clear();
     this.#environmentListeners.clear();
+    this.#propListeners.clear();
+    this.#challengeListeners.clear();
+    this.#thumbCanvases = [];
+    this.#thumbContexts = [];
   }
 
   /** Toggle the /scan hit-point overlay (stage "lidar" chip). The rosbridge
@@ -362,13 +418,13 @@ export class SimSession {
   /** Subscribe to the physics world's environment identity and connection. */
   onEnvironment(cb: (environment: SimEnvironmentState) => void): () => void {
     this.#environmentListeners.add(cb);
-    if (this.#environment) cb({ ...this.#environment, connected: this.#environmentConnected });
+    if (this.#environment) cb({ ...this.#environment, connected: this.#environmentConnected && this.#gotPose });
     return () => this.#environmentListeners.delete(cb);
   }
 
   #publishEnvironment(): void {
     if (!this.#environment) return;
-    const state = { ...this.#environment, connected: this.#environmentConnected };
+    const state = { ...this.#environment, connected: this.#environmentConnected && this.#gotPose };
     for (const cb of this.#environmentListeners) cb(state);
   }
 
@@ -461,12 +517,84 @@ export class SimSession {
 
   /** Per-frame: clamped interpolation on the sim clock, #delayS behind the
    * newest sample; a delivery gap holds the last pose, never extrapolates. */
-  tick(scene: SimScene, dt: number): void {
-    if (scene !== this.#renderScene) {
+  tick(
+    scene: SimScene,
+    dt: number,
+    { strictTrafficManifest = false }: { strictTrafficManifest?: boolean } = {},
+  ): void {
+    const previousScene = this.#renderScene;
+    const sceneChanged = scene !== previousScene;
+    const previousSceneState = sceneChanged
+      ? {
+          spawned: this.#spawned,
+          rosterBlocked: this.#renderSceneRosterBlocked,
+          propsDirty: this.#propsDirty,
+          trafficManifestDirty: this.#trafficManifestDirty,
+          trafficManifestRetryBlocked: this.#trafficManifestRetryBlocked,
+          overlaysDirty: this.#overlaysDirty,
+        }
+      : null;
+    if (sceneChanged) {
       this.#renderScene = scene;
       this.#spawned = false;
+      this.#renderSceneRosterBlocked = false;
       this.#propsDirty = true;
+      this.#trafficManifestDirty = true;
+      this.#trafficManifestRetryBlocked = false;
       this.#overlaysDirty = true;
+    }
+    const sceneMatchesEnvironment =
+      !this.#environment ||
+      !scene.environmentFingerprint ||
+      scene.environmentFingerprint === this.#environment.fingerprint;
+    if (!sceneMatchesEnvironment) {
+      if (!this.#renderSceneRosterBlocked) {
+        this.#renderSceneRosterBlocked = true;
+        scene.setPropManifest([]);
+        scene.setTrafficManifest(null);
+      }
+    } else {
+      this.#renderSceneRosterBlocked = false;
+      if (this.#propsDirty) {
+        this.#propsDirty = false;
+        scene.setPropManifest(this.#props);
+      }
+      if (this.#trafficManifestDirty && !this.#trafficManifestRetryBlocked) {
+        try {
+          scene.setTrafficManifest(this.#trafficManifest);
+          this.#trafficManifestDirty = false;
+        } catch (error) {
+          // TrafficLibrary validates transactionally, so the previous cars and
+          // lamps are still a complete frame. A hidden hot-swap candidate stays
+          // strict: restore the active scene's delivery state and propagate so
+          // it cannot be activated with an incomplete traffic contract.
+          if (strictTrafficManifest) {
+            this.#renderScene = previousScene;
+            if (previousSceneState !== null) {
+              this.#spawned = previousSceneState.spawned;
+              this.#renderSceneRosterBlocked = previousSceneState.rosterBlocked;
+              this.#propsDirty = previousSceneState.propsDirty;
+              this.#trafficManifestDirty = previousSceneState.trafficManifestDirty;
+              this.#trafficManifestRetryBlocked = previousSceneState.trafficManifestRetryBlocked;
+              this.#overlaysDirty = previousSceneState.overlaysDirty;
+            }
+            throw error;
+          }
+          // An already-active scene instead reports once and keeps rendering;
+          // a new authoritative roster or scene clears this retry latch.
+          this.#trafficManifestRetryBlocked = true;
+          console.error("[sim-session] traffic roster rejected; preserving the last complete traffic frame:", error);
+        }
+      }
+    }
+    if (this.#overlaysDirty) {
+      this.#overlaysDirty = false;
+      scene.setLidarVisible(this.#lidarOn);
+      scene.setCollisionHullsVisible(this.#hullsOn);
+    }
+    if (!sceneMatchesEnvironment) {
+      this.#spawned = false;
+      return;
     }
     if (!this.#live || this.#samples.length === 0) return;
     const first = this.#samples[0];
@@ -515,17 +643,12 @@ export class SimSession {
         ...q.map((v) => v / norm),
       ];
     }
-    if (this.#propsDirty) {
-      this.#propsDirty = false;
-      scene.setPropManifest(this.#props);
-    }
     scene.setObjectPoses(objects);
+    // States belong to the pending roster. Feeding them into the last accepted
+    // roster after a rejection could move shared car IDs or change its lamps,
+    // destroying the complete frame we deliberately preserved above.
+    if (!this.#trafficManifestDirty) scene.setTrafficState(interpolateTraffic(a.traffic, b.traffic, u));
 
-    if (this.#overlaysDirty) {
-      this.#overlaysDirty = false;
-      scene.setLidarVisible(this.#lidarOn);
-      scene.setCollisionHullsVisible(this.#hullsOn);
-    }
     if (this.#lidarOn && this.#scanDirty && this.#scan) {
       this.#scanDirty = false;
       scene.setLidarPoints(this.#scan);

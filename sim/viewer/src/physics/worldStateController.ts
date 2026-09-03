@@ -4,6 +4,8 @@
 // world_server.py "two interfaces".
 
 import type { PropInfo } from "../props";
+import { parseTrafficManifest, parseTrafficState } from "../trafficState.ts";
+import type { TrafficManifest, TrafficState } from "../trafficState";
 
 /** What a challenge IS: sent once per connection, like the prop roster,
  * because none of it changes while the server runs (challenges.py roster). */
@@ -43,6 +45,8 @@ export interface WorldState {
   t: number;
   /** Server wall clock (s): Date.now()/1000 - wall = true delivery lag. */
   wall: number;
+  /** Increments on every simulator reset, including challenge and NaN resets. */
+  worldEpoch: number;
   x: number;
   y: number;
   yaw: number;
@@ -50,6 +54,8 @@ export interface WorldState {
   /** Ground truth of every manipulation prop (world.py GRASP_OBJECTS), keyed
    * by name: [x, y, z, qw, qx, qy, qz]. Empty on servers that predate them. */
   objects: Record<string, number[]>;
+  /** Environment traffic, separate from manipulation props. */
+  traffic: TrafficState | null;
   /** Challenge judge state; null on servers that predate it. */
   challenge: ChallengeBlock | null;
 }
@@ -59,10 +65,20 @@ export interface WorldEnvironment {
   fingerprint: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function finiteTuple3(value: unknown): value is [number, number, number] {
+  return Array.isArray(value) && value.length === 3 && value.every((item) => typeof item === "number" && Number.isFinite(item));
+}
+
 export class WorldStateController {
   onState?: (state: WorldState) => void;
   /** The prop roster, sent once per connection (props.py sidecars). */
   onProps?: (props: PropInfo[]) => void;
+  /** Static procedural traffic model, explicit null for environments without it. */
+  onTrafficManifest?: (manifest: TrafficManifest | null) => void;
   /** The challenge roster, sent in the same opening frame (challenges.py). */
   onChallenges?: (challenges: ChallengeInfo[]) => void;
   /** Pack identity from the opening roster frame. */
@@ -100,7 +116,6 @@ export class WorldStateController {
       // prevents a reconnect from momentarily reusing the previous roster.
       this.onConnectionChange?.(false);
       this.#everOpened = true;
-      this.#retryMs = 500;
       this.#resolveOpen();
     };
     ws.onerror = () => {
@@ -138,49 +153,102 @@ export class WorldStateController {
   }
 
   #onMessage(raw: string): void {
-    const parsed = JSON.parse(raw) as {
-      props?: PropInfo[];
-      challenges?: ChallengeInfo[];
-      environment?: WorldEnvironment;
-    };
-    if (parsed.props || parsed.challenges || parsed.environment) {
-      // Roster frame, not a state frame: it has no clock and arrives once,
-      // ahead of the stream (see world_server.serve_state).
-      if (
-        typeof parsed.environment?.id === "string" &&
-        typeof parsed.environment?.fingerprint === "string" &&
-        parsed.environment.id &&
-        parsed.environment.fingerprint
-      ) {
-        this.onEnvironment?.(parsed.environment);
-        // A TCP/WebSocket open is not enough after a restart: only advertise
-        // connected once this socket has proved which physics world it serves.
-        this.onConnectionChange?.(true);
-      }
-      if (parsed.props) this.onProps?.(parsed.props);
-      if (parsed.challenges) this.onChallenges?.(parsed.challenges);
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(raw) as unknown;
+    } catch {
+      console.warn("[sim-viewer] ignoring malformed world-state JSON");
       return;
     }
-    const msg = parsed as unknown as {
-      t: number;
-      wall: number;
-      pose: [number, number, number];
-      joints: Record<string, number>;
-      objects?: Record<string, number[]> | null;
-      challenge?: ChallengeBlock | null;
-    };
-    const joints = msg.joints;
+    if (!isRecord(decoded)) {
+      console.warn("[sim-viewer] ignoring non-object world-state JSON");
+      return;
+    }
+    const parsed = decoded;
+    if ("props" in parsed || "challenges" in parsed || "environment" in parsed || "traffic_manifest" in parsed) {
+      // Roster frame, not a state frame: it has no clock and arrives once,
+      // ahead of the stream (see world_server.serve_state).
+      const rawEnvironment = parsed.environment;
+      const environment =
+        isRecord(rawEnvironment) &&
+        typeof rawEnvironment.id === "string" &&
+        rawEnvironment.id &&
+        typeof rawEnvironment.fingerprint === "string" &&
+        rawEnvironment.fingerprint
+          ? { id: rawEnvironment.id, fingerprint: rawEnvironment.fingerprint }
+          : null;
+      let validRoster = environment !== null;
+      let props: PropInfo[] | undefined;
+      let challenges: ChallengeInfo[] | undefined;
+      let trafficManifest: TrafficManifest | null | undefined;
+      if ("props" in parsed) {
+        if (Array.isArray(parsed.props)) props = parsed.props as PropInfo[];
+        else validRoster = false;
+      }
+      if ("challenges" in parsed) {
+        if (Array.isArray(parsed.challenges)) challenges = parsed.challenges as ChallengeInfo[];
+        else validRoster = false;
+      }
+      if ("traffic_manifest" in parsed) {
+        const manifest = parseTrafficManifest(parsed.traffic_manifest);
+        if (parsed.traffic_manifest !== null && manifest === null) {
+          console.error("[sim-viewer] rejecting malformed traffic manifest");
+          validRoster = false;
+        } else {
+          trafficManifest = manifest;
+        }
+      }
+      if (!validRoster || environment === null) {
+        // Nothing in an opening frame is observable until the whole frame has
+        // validated. Otherwise an invalid traffic roster could still replace
+        // the environment/props/challenges before this one-shot socket closes.
+        this.#ws.close(1002, "invalid world-state roster");
+        return;
+      }
+
+      this.onEnvironment?.(environment);
+      if (props !== undefined) this.onProps?.(props);
+      if (challenges !== undefined) this.onChallenges?.(challenges);
+      if (trafficManifest !== undefined) this.onTrafficManifest?.(trafficManifest);
+      // A TCP/WebSocket open is not enough after a restart. Publish connected
+      // only after identity and every roster have been installed, so the hot-
+      // switch barrier cannot reveal a scene with stale traffic for one frame.
+      this.#retryMs = 500;
+      this.onConnectionChange?.(true);
+      return;
+    }
+    if (
+      typeof parsed.t !== "number" ||
+      !Number.isFinite(parsed.t) ||
+      typeof parsed.wall !== "number" ||
+      !Number.isFinite(parsed.wall) ||
+      !finiteTuple3(parsed.pose) ||
+      !isRecord(parsed.joints) ||
+      Object.values(parsed.joints).some((value) => typeof value !== "number" || !Number.isFinite(value)) ||
+      (parsed.objects !== undefined && parsed.objects !== null && !isRecord(parsed.objects))
+    ) {
+      console.warn("[sim-viewer] ignoring malformed world-state frame");
+      return;
+    }
+    const joints = { ...(parsed.joints as Record<string, number>) };
     // joint6M: the gripper's mirrored finger (URDF mimic of joint6, x-1).
     joints["joint6M"] = -(joints["joint6"] ?? 0);
+    const traffic = parseTrafficState(parsed.traffic);
+    if (parsed.traffic !== undefined && parsed.traffic !== null && traffic === null) {
+      console.warn("[sim-viewer] ignoring world-state frame with malformed traffic");
+      return;
+    }
     this.onState?.({
-      t: msg.t,
-      wall: msg.wall,
-      x: msg.pose[0],
-      y: msg.pose[1],
-      yaw: msg.pose[2],
+      t: parsed.t,
+      wall: parsed.wall,
+      worldEpoch: Number.isInteger(parsed.world_epoch) && (parsed.world_epoch as number) >= 0 ? (parsed.world_epoch as number) : 0,
+      x: parsed.pose[0],
+      y: parsed.pose[1],
+      yaw: parsed.pose[2],
       joints,
-      objects: msg.objects ?? {},
-      challenge: msg.challenge ?? null,
+      objects: (parsed.objects as Record<string, number[]> | null | undefined) ?? {},
+      traffic,
+      challenge: (parsed.challenge as ChallengeBlock | null | undefined) ?? null,
     });
   }
 }

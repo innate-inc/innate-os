@@ -14,8 +14,17 @@ import { SimScene, type CameraMode, type CameraView } from "./scene";
 import type { PropInfo } from "./props";
 import { LoadQueue } from "./loadQueue";
 import { THUMB_H, THUMB_W, type SimSession } from "./simSession";
-import { resolveEnvironmentSource, type EnvironmentSource } from "./environmentSource";
-import { claimEnvironmentSwapKey, EnvironmentSwapCoordinator } from "./environmentSwap";
+import {
+  requiresCompleteEnvironment,
+  resolveEnvironmentSource,
+  type EnvironmentSource,
+} from "./environmentSource";
+import {
+  claimEnvironmentSwapKey,
+  deferEnvironmentSwapRetry,
+  EnvironmentSwapCoordinator,
+  prepareEnvironmentSwapScene,
+} from "./environmentSwap";
 
 // One PiP tile refresh per N rendered frames, round-robin: ~30fps per tile
 // at most half an extra scene render per frame.
@@ -331,6 +340,10 @@ export function createSimStage(
     return button;
   });
   let cameraMode = 0;
+  // Page chrome belongs to the shared stage, not to a particular SimScene.
+  // Keep it here so a hot-swapped scene gets the same usable viewport before
+  // its first frame is revealed.
+  let safeInsetRight = 0;
   const refreshCameraSwitch = () => {
     cameraButtons.forEach((button, index) => setChipOn(button, index === cameraMode));
   };
@@ -694,8 +707,11 @@ export function createSimStage(
     const layout = await targetScene.loadApartmentLayout();
     targetScene.frameLayout(layout);
     const { done: robotDone } = await targetScene.loadRobot(targetQueue);
-    const environmentDone = targetScene.streamApartment(targetQueue, layout, { strict: strictEnvironment });
+    const environmentDone = targetScene.streamApartment(targetQueue, layout, {
+      strict: requiresCompleteEnvironment(layout.fingerprint, strictEnvironment),
+    });
     await Promise.all([robotDone, environmentDone]);
+    targetScene.markEnvironmentReady();
     targetScene.prefetchPropModels();
     return layout.fingerprint ?? null;
   };
@@ -705,7 +721,7 @@ export function createSimStage(
   let queue = new LoadQueue(2, ({ loaded, total }) => setProgress(loaded, total));
   queue.setEstimatedTotal(42e6);
   const swaps = new EnvironmentSwapCoordinator<SceneCandidate>();
-  let desiredSwapKey = "";
+  const desiredSwap = { key: "" };
   let latestTransition: EnvironmentTransition = { active: false, generation: 0, fingerprint: null };
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -756,12 +772,12 @@ export function createSimStage(
 
   const requestSceneSwap = (fingerprint: string, transitionGeneration: number) => {
     const key = `${transitionGeneration}:${fingerprint}`;
-    const claimedKey = claimEnvironmentSwapKey(desiredSwapKey, key);
+    const claimedKey = claimEnvironmentSwapKey(desiredSwap.key, key);
     if (disposed || claimedKey === null) return;
     // Claim before announcing viewer state. dispatchEvent is synchronous: the
     // watcher immediately echoes a switch-state event, which must see this key
     // as already handled instead of recursively announcing readiness forever.
-    desiredSwapKey = claimedKey;
+    desiredSwap.key = claimedKey;
     if (currentSceneFingerprint === fingerprint) {
       swaps.invalidate();
       announceViewer(fingerprint, true);
@@ -772,7 +788,7 @@ export function createSimStage(
       .replace(
         (swapGeneration) => buildScene(fingerprint, swapGeneration),
         (candidate) => {
-          if (disposed || desiredSwapKey !== key) {
+          if (disposed || desiredSwap.key !== key) {
             candidate.queue.cancel();
             candidate.scene.dispose();
             return;
@@ -781,16 +797,25 @@ export function createSimStage(
           const oldScene = scene;
           const oldQueue = queue;
           bindCameraMode(candidate.scene);
-          candidate.scene.setCameraMode(CAMERA_MODES[cameraMode]);
           candidate.canvas.style.visibility = "";
           const width = wrap.clientWidth || 1280;
           const height = wrap.clientHeight || 720;
-          candidate.scene.setRenderSize(width, height, Math.min(devicePixelRatio, 2));
           // Upload textures and draw one complete candidate frame off-DOM. No
           // visible state changes until every fallible preparation step passes.
-          session.tick(candidate.scene, 0);
-          candidate.scene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
-          candidate.scene.render();
+          prepareEnvironmentSwapScene(
+            candidate.scene,
+            (target) => session.tick(target, 0, { strictTrafficManifest: true }),
+            {
+              width,
+              height,
+              pixelRatio: Math.min(devicePixelRatio, 2),
+              safeInsetRight,
+              // The first tick may call spawnAt(), which deliberately cancels an
+              // in-flight overview tween. The helper restores this afterwards.
+              cameraMode: CAMERA_MODES[cameraMode],
+              view: VIEW_FOR[session.primaryCamera] ?? "orbit",
+            },
+          );
 
           clearPlacementSelection();
           unbindCanvasPlacement(oldCanvas);
@@ -813,19 +838,26 @@ export function createSimStage(
         },
       )
       .catch((error) => {
-        if (disposed || desiredSwapKey !== key) return;
-        desiredSwapKey = "";
-        announceViewer(fingerprint, false, error instanceof Error ? error.message : "scene load failed");
-        retryTimer = setTimeout(() => {
-          retryTimer = null;
-          if (
+        if (disposed || desiredSwap.key !== key) return;
+        if (retryTimer !== null) clearTimeout(retryTimer);
+        retryTimer = deferEnvironmentSwapRetry(
+          desiredSwap,
+          key,
+          () => announceViewer(fingerprint, false, error instanceof Error ? error.message : "scene load failed"),
+          (callback, delayMs) =>
+            setTimeout(() => {
+              retryTimer = null;
+              callback();
+            }, delayMs),
+          () =>
             latestTransition.active &&
             latestTransition.generation === transitionGeneration &&
-            latestTransition.fingerprint === fingerprint
-          ) {
+            latestTransition.fingerprint === fingerprint,
+          () => {
+            retryTimer = null;
             requestSceneSwap(fingerprint, transitionGeneration);
-          }
-        }, 1000);
+          },
+        );
       });
   };
 
@@ -836,7 +868,11 @@ export function createSimStage(
     const state = (event as CustomEvent<EnvironmentTransition>).detail;
     if (!state || typeof state.active !== "boolean") return;
     if (state.generation !== latestTransition.generation) {
-      desiredSwapKey = "";
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      desiredSwap.key = "";
       swaps.invalidate();
     }
     latestTransition = state;
@@ -886,7 +922,10 @@ export function createSimStage(
 
   return {
     audioEl: null, // sim has no robot mic; the pages skip the mic toggle in sim mode
-    setSafeInsets: (insets) => scene.setSafeInsets(insets),
+    setSafeInsets: (insets) => {
+      safeInsetRight = Math.max(0, insets.right ?? 0);
+      scene.setSafeInsets({ right: safeInsetRight });
+    },
     attach(next: HTMLElement) {
       attached = true;
       next.appendChild(wrap);
@@ -903,6 +942,7 @@ export function createSimStage(
       // The agent page lifts this into its own layout; take it back before
       // that page clears its DOM.
       wrap.appendChild(debugStack);
+      safeInsetRight = 0;
       scene.setSafeInsets({ right: 0 }); // the agent dock's inset must not follow the stage
       clearPlacementSelection(); // an armed prop must not follow the pointer either
       wrap.remove();

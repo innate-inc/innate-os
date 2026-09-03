@@ -22,6 +22,8 @@ import {
 } from "./environmentSource";
 import { LoadQueue, queuedGLB } from "./loadQueue";
 import { PropLibrary, type PropInfo } from "./props";
+import { TrafficLibrary } from "./traffic";
+import type { TrafficManifest, TrafficState } from "./trafficState";
 
 const APARTMENT_ROOM_BASE_URL = "/models/apartment/";
 // /robot is the mars_sim ROS package itself (served straight from ros2_ws, see
@@ -191,6 +193,7 @@ export class SimScene {
   private hullsGroup?: THREE.Group;
   private hullsPromise?: Promise<void>;
   private environmentSourcePromise?: Promise<EnvironmentSource>;
+  private loadedEnvironmentFingerprint?: string;
   private hullsVisible = false;
   // Shared fat-line material for placeholder boxes (LineBasicMaterial's
   // linewidth is ignored by WebGL). resolution is refreshed each render().
@@ -207,6 +210,7 @@ export class SimScene {
   private hullMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff88, wireframe: true });
   // Every prop in the world, built from the server's roster (props.ts).
   private props: PropLibrary;
+  private traffic: TrafficLibrary;
   // While true a placement drag owns the pointer and orbit stays off.
   private placementMode = false;
   private cameraMode: CameraMode = "free";
@@ -237,7 +241,10 @@ export class SimScene {
     opts: { fixedSize?: { width: number; height: number }; environmentSource?: EnvironmentSource } = {},
   ) {
     this.fixedSize = opts.fixedSize ?? null;
-    if (opts.environmentSource) this.environmentSourcePromise = Promise.resolve(opts.environmentSource);
+    if (opts.environmentSource) {
+      this.environmentSourcePromise = Promise.resolve(opts.environmentSource);
+      this.loadedEnvironmentFingerprint = opts.environmentSource.fingerprint;
+    }
     const w = this.fixedSize?.width ?? window.innerWidth;
     const h = this.fixedSize?.height ?? window.innerHeight;
     // Pre-pose orbit framing would flash before spawnAt replaces it.
@@ -262,6 +269,7 @@ export class SimScene {
       () => this.updateShadowVolume(),
       (model) => this.warmTextures(model),
     );
+    this.traffic = new TrafficLibrary(this.scene, this.hullMaterial, () => this.updateShadowVolume());
 
     this.camera = new THREE.PerspectiveCamera(55, w / h, 0.05, 200);
     this.camera.up.set(0, 0, 1);
@@ -438,6 +446,7 @@ export class SimScene {
   setCollisionHullsVisible(visible: boolean): void {
     this.hullsVisible = visible;
     this.props.setHullsVisible(visible);
+    this.traffic.setHullsVisible(visible);
     if (visible && !this.hullsPromise) {
       // ~1300 OBJ fetches; takes seconds on first show. A failure resets the
       // promise so toggling again retries instead of staying dead forever.
@@ -507,6 +516,12 @@ export class SimScene {
     return this.environmentSourcePromise;
   }
 
+  /** Identity of the geometry this scene loaded, used to keep a hidden hot-
+   * swap candidate from receiving the previous world's rosters. */
+  get environmentFingerprint(): string | undefined {
+    return this.loadedEnvironmentFingerprint;
+  }
+
   /**
    * Phase one of the apartment load: fetch the manifest (a few KB) and draw
    * every room's placeholder box. Called before any mesh download starts, so
@@ -521,6 +536,7 @@ export class SimScene {
     this.scene.add(group);
 
     const source = await this.environmentSource();
+    this.loadedEnvironmentFingerprint = source.fingerprint;
     let manifest: ApartmentManifest | null = null;
     if (source.mode === "split-glb" && source.manifestUrl) {
       try {
@@ -588,9 +604,11 @@ export class SimScene {
       }
       try {
         const root = await queuedGLB(queue, loader, environmentAssetUrl(layout.sceneUrl, layout.fingerprint));
+        if (queue.cancelled) throw new Error("load queue cancelled");
         this.dressRoom(root);
         group.add(root);
       } catch (err) {
+        if (queue.cancelled) throw err;
         console.error("[sim-viewer] apartment unavailable (no manifest, no monolith):", err);
         if (strict) throw err;
       }
@@ -605,14 +623,20 @@ export class SimScene {
     const loadRoom = ({ room, box }: ApartmentLayout["rooms"][number]) =>
       queuedGLB(queue, loader, environmentAssetUrl(`${roomBaseUrl}${room.file}`, layout.fingerprint))
         .then((root) => {
+          if (queue.cancelled) throw new Error("load queue cancelled");
           this.dressRoom(root);
           group.add(root);
         })
         .catch((err) => {
+          if (queue.cancelled) throw err;
           console.error(`[sim-viewer] apartment room '${room.file}' failed to load:`, err);
           if (strict) throw err;
         })
         .finally(() => {
+          // cancel() rejects active queue promises before their browser fetches
+          // necessarily finish. The owning scene may already be disposed when
+          // this continuation runs, so leave its graph and geometry untouched.
+          if (queue.cancelled) return;
           group.remove(box);
           box.geometry.dispose(); // material is shared -- disposed in dispose()
         });
@@ -677,6 +701,7 @@ export class SimScene {
         else setFrontSide(obj.material);
       }
     });
+    this.traffic.registerEnvironment(root);
   }
 
   /** A thick wireframe outline of a box, used as a loading placeholder (room or
@@ -743,12 +768,14 @@ export class SimScene {
     loader.parseCollision = true; // the collisions overlay draws these
 
     const robot = await loader.loadAsync(ROBOT_URDF_URL); // loadMeshCb enqueued every STL during parse
-    return { done: this.finishRobot(robot, meshLoads) };
+    if (queue.cancelled) throw new Error("load queue cancelled");
+    return { done: this.finishRobot(robot, meshLoads, queue) };
   }
 
   /** Attach + restyle the robot once its queued STL meshes have all loaded. */
-  private async finishRobot(robot: URDFRobot, meshLoads: Promise<void>[]): Promise<URDFRobot> {
+  private async finishRobot(robot: URDFRobot, meshLoads: Promise<void>[], queue: LoadQueue): Promise<URDFRobot> {
     await Promise.all(meshLoads);
+    if (queue.cancelled) throw new Error("load queue cancelled");
 
     for (const name of HIDDEN_FRAME_LINKS) {
       const link = robot.links[name];
@@ -846,6 +873,18 @@ export class SimScene {
       const dx = root.position.x - this.robotXY[0];
       const dy = root.position.y - this.robotXY[1];
       if (Math.hypot(dx, dy) <= reach) points.push([root.position.x, root.position.y]);
+    }
+    for (const bounds of this.traffic.visibleBounds) {
+      const dx = Math.max(bounds.minX - this.robotXY[0], 0, this.robotXY[0] - bounds.maxX);
+      const dy = Math.max(bounds.minY - this.robotXY[1], 0, this.robotXY[1] - bounds.maxY);
+      if (Math.hypot(dx, dy) <= reach) {
+        points.push(
+          [bounds.minX, bounds.minY],
+          [bounds.minX, bounds.maxY],
+          [bounds.maxX, bounds.minY],
+          [bounds.maxX, bounds.maxY],
+        );
+      }
     }
     const xs = points.map((pt) => pt[0]);
     const ys = points.map((pt) => pt[1]);
@@ -1055,6 +1094,34 @@ export class SimScene {
     this.updateShadowVolume(); // the props moved; the box may need to grow or shrink
   }
 
+  /** Adopt the world server's procedural traffic roster. Cars intentionally
+   * stay separate from manipulation props and their Clear/challenge flows. */
+  setTrafficManifest(manifest: TrafficManifest | null): void {
+    this.traffic.setManifest(manifest);
+  }
+
+  /** Complete the environment/traffic asset contract before revealing a
+   * hot-swap candidate. */
+  markEnvironmentReady(): void {
+    this.traffic.markEnvironmentReady();
+  }
+
+  /** Mirror authoritative signal aspects and car poses from MuJoCo. */
+  setTrafficState(state: TrafficState | null): void {
+    this.traffic.setState(state);
+  }
+
+  /** Immediately hide dynamic state while an environment identity changes;
+   * the replacement scene is revealed only after its own roster/state land. */
+  clearWorldState(): void {
+    this.robotRoot.visible = false;
+    this.spawned = false;
+    this.props.setManifest([]);
+    this.traffic.clear();
+    this.traffic.setManifest(null);
+    this.setLidarVisible(false);
+  }
+
   // Orange accent for the arm links (see ORANGE_LINKS). Cached so every mesh
   // on those links shares one material.
   private orangeMaterial(): THREE.MeshStandardMaterial {
@@ -1236,6 +1303,7 @@ export class SimScene {
    * the oldest (~16), breaking the live view. */
   dispose(): void {
     this.props.clearPlacementPreview();
+    this.traffic.dispose();
     this.placeholderMat?.dispose();
     this.cameraEnv?.dispose(); // a PMREM render target, not a loaded image
     this.controls.dispose();
@@ -1323,16 +1391,6 @@ function layoutFocus(bounds: THREE.Box3): THREE.Vector3 {
   const focus = bounds.getCenter(new THREE.Vector3());
   focus.z = bounds.min.z;
   return focus;
-}
-
-/** Runtime guard against a malformed manifest (untrusted JSON): file is a
- * string and bbox is two arrays of >=3 finite numbers -- else we'd build a Box3
- * from Vector3(undefined) and get NaN geometry. */
-function isValidRoom(room: unknown): boolean {
-  const r = room as { file?: unknown; bbox?: { min?: unknown; max?: unknown } } | null;
-  const finite3 = (a: unknown): boolean =>
-    Array.isArray(a) && a.length >= 3 && a.slice(0, 3).every((n) => typeof n === "number" && Number.isFinite(n));
-  return typeof r?.file === "string" && finite3(r?.bbox?.min) && finite3(r?.bbox?.max);
 }
 
 /** Closes the hole under the barrel, so the glass does not see into the head. */

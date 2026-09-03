@@ -56,6 +56,7 @@ import threading
 import time
 import uuid
 from pathlib import Path, PurePosixPath
+from typing import NoReturn
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -449,6 +450,22 @@ def _load_active_environment() -> "tuple[dict[str, object], dict[str, Path]] | N
     return descriptor, resolved
 
 
+def _raise_environment_unavailable() -> NoReturn:
+    """Keep an old proxy's missing route distinct from a broken active pack.
+
+    A new simulator proxy knows that the generic route exists. If its selected
+    descriptor or referenced assets are unavailable, report a retryable service
+    failure so a new viewer cannot mistake that condition for the legacy proxy
+    contract and silently load the apartment instead.
+    """
+    if WEBAPP_SIM_CONTROLS:
+        raise web.HTTPServiceUnavailable(
+            text="active simulator environment unavailable",
+            headers=ENVIRONMENT_NO_STORE,
+        )
+    raise web.HTTPNotFound(text="not found", headers=ENVIRONMENT_NO_STORE)
+
+
 def _bind_environment_fingerprint(request: web.Request, fingerprint: str) -> None:
     """Bind an unversioned URL once; reject a URL bound to an old pack.
 
@@ -471,7 +488,7 @@ def _bind_environment_fingerprint(request: web.Request, fingerprint: str) -> Non
 async def sim_environment_manifest(request: web.Request) -> web.Response:
     loaded = _load_active_environment()
     if loaded is None:
-        raise web.HTTPNotFound(text="not found")
+        _raise_environment_unavailable()
     descriptor, _resolved = loaded
     return web.json_response(descriptor, headers=ENVIRONMENT_NO_STORE)
 
@@ -479,7 +496,7 @@ async def sim_environment_manifest(request: web.Request) -> web.Response:
 async def sim_environment_asset(request: web.Request) -> web.StreamResponse:
     loaded = _load_active_environment()
     if loaded is None:
-        raise web.HTTPNotFound(text="not found")
+        _raise_environment_unavailable()
     descriptor, resolved = loaded
     fingerprint = descriptor.get("fingerprint")
     if not isinstance(fingerprint, str) or not fingerprint:

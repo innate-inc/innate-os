@@ -28,6 +28,7 @@ from pathlib import Path
 
 import numpy as np
 import trimesh
+from low_poly_town_signals import SIGNAL_ASPECTS, isolate_signal_materials
 from PIL import Image
 
 SIM = Path(__file__).resolve().parents[1]
@@ -179,15 +180,16 @@ def _load_authored_scene(source_obj: Path, source_mtl: Path) -> trimesh.Scene:
         staged = Path(temporary)
         staged_obj = staged / "town.obj"
         staged_mtl = staged / "town.mtl"
-        shutil.copy2(source_mtl, staged_mtl)
         text = source_obj.read_text(encoding="utf-8")
         text, replacements = re.subn(r"(?m)^mtllib\s+.*$", "mtllib town.mtl", text, count=1)
         if replacements != 1:
             text = f"mtllib town.mtl\n{text}"
+        text, material_text = isolate_signal_materials(text, source_mtl.read_text(encoding="utf-8"))
         text, polygon_count = _triangulate_obj(text)
         if polygon_count < 1_000:
             raise RuntimeError(f"expected the authored town to contain many n-gons, found {polygon_count}")
         staged_obj.write_text(text, encoding="utf-8")
+        staged_mtl.write_text(material_text, encoding="utf-8")
         loaded = trimesh.load(staged_obj, force="scene", process=False, maintain_order=True)
 
     if not isinstance(loaded, trimesh.Scene) or len(loaded.geometry) < 20:
@@ -197,6 +199,15 @@ def _load_authored_scene(source_obj: Path, source_mtl: Path) -> trimesh.Scene:
 
     for mesh in loaded.geometry.values():
         mesh.apply_translation((0.0, -ROAD_SURFACE_Y, 0.0))
+    expected_signal_faces = 864
+    signal_faces: dict[str, int] = {}
+    for mesh in loaded.geometry.values():
+        name = str(getattr(getattr(mesh.visual, "material", None), "name", ""))
+        if name.startswith("Signal_"):
+            signal_faces[name] = len(mesh.faces)
+    expected_names = {f"Signal_{phase}_{aspect}" for phase in ("NS", "EW") for aspect in SIGNAL_ASPECTS}
+    if set(signal_faces) != expected_names or any(count != expected_signal_faces for count in signal_faces.values()):
+        raise RuntimeError(f"unexpected generated traffic signal meshes: {signal_faces}")
     return loaded
 
 

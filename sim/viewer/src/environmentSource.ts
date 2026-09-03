@@ -35,6 +35,13 @@ export interface EnvironmentSource {
   fingerprint?: string;
 }
 
+/** Descriptor-backed routes promise one exact pack, so missing geometry must
+ * fail the load. Only the fingerprint-less old-proxy apartment keeps the
+ * historical best-effort visual behavior. */
+export function requiresCompleteEnvironment(fingerprint?: string, strict = false): boolean {
+  return strict || Boolean(fingerprint);
+}
+
 /** Append the pack identity only to descriptor-backed generic asset routes. */
 export function environmentAssetUrl(url: string, fingerprint?: string): string {
   if (!fingerprint) return url;
