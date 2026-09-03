@@ -79,8 +79,10 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   camsToggle.hidden = true;
   camsToggle.innerHTML =
     '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<path d="M3 8.8A2.3 2.3 0 0 1 5.3 6.5h1.4a1.5 1.5 0 0 0 1.25-.67l.6-.9a1.5 1.5 0 0 1 1.25-.68h4.4a1.5 1.5 0 0 1 1.25.68l.6.9a1.5 1.5 0 0 0 1.25.67h1.4A2.3 2.3 0 0 1 21 8.8v7.9a2.3 2.3 0 0 1-2.3 2.3H5.3A2.3 2.3 0 0 1 3 16.7z"/>' +
-    '<circle cx="12" cy="12.5" r="3.3"/></svg>';
+    // An eye, not a camera body: this shows and hides the view tiles, and a
+    // camera glyph reads as "take a photo".
+    '<path d="M2.4 12S6.2 5.6 12 5.6 21.6 12 21.6 12 17.8 18.4 12 18.4 2.4 12 2.4 12Z"/>' +
+    '<circle cx="12" cy="12" r="3.1"/></svg>';
   (opts.stripParent ?? parent).append(camsToggle, strip);
 
   // Collapsible only where the room is tight; wide stages keep the tiles up.
