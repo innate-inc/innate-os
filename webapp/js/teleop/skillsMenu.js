@@ -46,6 +46,7 @@ function shortcutKbd(label) {
  * @param {{
  *   onSkillStarted?: (run: {skillId: string, inputs: Record<string, any>}) => void,
  *   onSkillCompleted?: (run: {skillId: string, inputs: Record<string, any>}) => void,
+ *   onSkillEnded?: (run: {skillId: string, ok: boolean}) => void,
  *   onOpenChange?: (open: boolean) => void
  * }} [opts]
  * @returns {{ destroy: () => void }}
@@ -305,11 +306,13 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
           done: true,
         };
         if (ok) opts.onSkillCompleted?.({ skillId: skill.id, inputs: built.inputs });
+        opts.onSkillEnded?.({ skillId: skill.id, ok });
         render();
       },
       (err) => {
         if (run?.skillId !== skill.id) return;
         run = { skillId: skill.id, cancel: () => {}, text: err?.message || "Run failed", error: true, canceling: false, done: true };
+        opts.onSkillEnded?.({ skillId: skill.id, ok: false });
         render();
       },
     );

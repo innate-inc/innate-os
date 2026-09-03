@@ -139,7 +139,9 @@ function buildCockpit(root) {
     }),
     // Collapsible skill launcher pinned next to the speak bar.
     createSkillsMenu(ttsOverlay, ros, {
+      onSkillStarted: onboarding.onSkillStarted,
       onSkillCompleted: onboarding.onSkillCompleted,
+      onSkillEnded: onboarding.onSkillEnded,
       onOpenChange: onboarding.onSkillsMenuOpenChange,
     }),
     createArmPanel(armOverlay, ros, { hideServices: !!config.simControls }),

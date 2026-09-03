@@ -29,8 +29,8 @@ export const TELEOP_ONBOARDING_STEPS = {
   },
   pick: {
     eyebrow: "3 of 3 · Manipulation",
-    title: "Pick up the cylinder",
-    body: "Open Skills, choose Pick Any Object, and enter “The Cylinder” for prompt.",
+    title: "Pick something up",
+    body: "Open Skills, choose Pick Any Object, and describe what to grab — try “the blue cylinder”.",
   },
   agent: {
     eyebrow: "Direct control complete",
@@ -39,9 +39,28 @@ export const TELEOP_ONBOARDING_STEPS = {
   },
 };
 
+// Worn by a step's card while its skill is in flight — never a step of its own,
+// so it never reaches stored progress. The eyebrow is the step's own, so the
+// counter does not move while the robot works.
+const RUNNING_BODY = /** @type {const} */ ({
+  wave: "Wave is a recorded episode playing back — someone moved the arm once, and MARS repeats it.",
+  pick: "MARS is looking for the object, lining the gripper up, and closing on it.",
+});
+
+/** @param {keyof typeof RUNNING_BODY} step */
+export const runningCopy = (step) => ({
+  eyebrow: TELEOP_ONBOARDING_STEPS[step].eyebrow,
+  title: "Watch it happen",
+  body: RUNNING_BODY[step],
+});
+
 const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 const shortcut = isMac ? "⌘K" : "Ctrl+K";
 const NEXT_STEP = /** @type {const} */ ({ intro: "wave", wave: "talk", talk: "pick", pick: "agent" });
+// The speech step advances on send, but MARS is still mid-sentence then; hold
+// the card long enough to hear it before the step changes underneath.
+export const SPEAK_ADVANCE_MS = 2000;
+const PREV_STEP = /** @type {const} */ ({ wave: "intro", talk: "wave", pick: "talk", agent: "pick" });
 
 /** @param {string} id */
 const skillName = (id) => String(id).split("/").at(-1)?.replace(/[-_]+/g, " ").toLowerCase() ?? "";
@@ -49,14 +68,19 @@ const skillName = (id) => String(id).split("/").at(-1)?.replace(/[-_]+/g, " ").t
 /** @param {{skillId: string}} run */
 export const isWaveCompletion = (run) => skillName(run.skillId) === "wave";
 
-/** @param {{skillId: string, inputs: Record<string, any>}} run */
-export const isCylinderPickupCompletion = (run) =>
-  skillName(run.skillId) === "pick any object" &&
-  String(run.inputs.prompt ?? "").trim().toLowerCase() === "the cylinder";
+/** @param {{skillId: string}} run */
+export const isPickupCompletion = (run) => skillName(run.skillId) === "pick any object";
 
 /** @param {keyof typeof TELEOP_ONBOARDING_STEPS} step @param {boolean | null} speechAvailable */
 export const resolveAvailableStep = (step, speechAvailable) =>
   step === "talk" && speechAvailable === false ? "pick" : step;
+
+/** Stepping back into a step forward navigation skips would bounce straight forward again.
+ * @param {keyof typeof PREV_STEP} step @param {boolean | null} speechAvailable */
+export const resolvePreviousStep = (step, speechAvailable) => {
+  const previous = PREV_STEP[step];
+  return previous === "talk" && speechAvailable === false ? PREV_STEP[previous] : previous;
+};
 
 /**
  * Keep coaching for the bottom controls visually attached to the highlighted
@@ -100,9 +124,11 @@ let maskId = 0;
  * Guided first-run mission for direct control. Steps advance only when the
  * corresponding command is actually sent and, for skills, succeeds.
  * @param {HTMLElement} root
- * @param {{ prepareCylinder?: () => void }} [options]
+ * @param {{ prepareCylinder?: () => void }} [options] Sets the manipulation
+ * target down as the pick step opens; a no-op on hardware, where the user puts
+ * a real object in front of the robot instead.
  */
-export function createTeleopOnboarding(root, options = {}) {
+export function createTeleopOnboarding(root, { prepareCylinder } = {}) {
   /** @type {HTMLElement | null} */
   let card = null;
   /** @type {HTMLElement | null} */
@@ -114,6 +140,9 @@ export function createTeleopOnboarding(root, options = {}) {
   /** @type {keyof typeof TELEOP_ONBOARDING_STEPS | null} */
   let step = null;
   let skillsMenuOpen = false;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let speakAdvance = null;
+  let running = false;
   /** @type {boolean | null} */
   let speechAvailable = null;
 
@@ -124,27 +153,42 @@ export function createTeleopOnboarding(root, options = {}) {
     show(isStep(saved) ? saved : "intro");
   }
 
-  /** @param {keyof typeof TELEOP_ONBOARDING_STEPS} next */
+  /** Enter a step: commit the progress, set the world up, paint the card.
+   * @param {keyof typeof TELEOP_ONBOARDING_STEPS} next */
   function show(next) {
     next = resolveAvailableStep(next, speechAvailable);
-    close(false);
     step = next;
+    running = false;
     storageSet(TELEOP_ONBOARDING_PROGRESS_KEY, next);
-    const copy = TELEOP_ONBOARDING_STEPS[next];
+    if (next === "pick") prepareCylinder?.();
+    render(TELEOP_ONBOARDING_STEPS[next]);
+  }
+
+  /** Repaint the current step with different copy — no progress write, and no
+   * second can, so a running skill is never interrupted by its own card.
+   * @param {{eyebrow: string, title: string, body: string}} copy */
+  function render(copy) {
+    const next = step;
+    if (!next) return;
+    close(false);
     const centered = next === "intro";
-    target = centered ? null : targetFor(next);
+    target = centered || running ? null : targetFor(next);
     target?.classList.add("agent-onboarding-target");
-    if (next === "pick") options.prepareCylinder?.();
 
     if (centered) {
       root.classList.add("agent-onboarding-focused");
       document.body.classList.add("agent-onboarding-active");
     }
-    mask = createSpotlightMask(centered ? 0 : 3);
-    root.appendChild(mask);
+    // A running skill gets no shade at all: the card has stepped aside to let
+    // the robot be watched, and spotlighting a control it no longer points at
+    // would darken the scene instead.
+    if (!running) {
+      mask = createSpotlightMask(centered ? 0 : 3);
+      root.appendChild(mask);
+    }
 
     card = document.createElement("aside");
-    card.className = `agent-onboarding-card teleop-onboarding-card is-${next}`;
+    card.className = `agent-onboarding-card teleop-onboarding-card is-${next}${running ? " is-running" : ""}`;
     card.setAttribute("role", "status");
     card.innerHTML =
       `<span class="microlabel agent-onboarding-eyebrow">${copy.eyebrow}</span>` +
@@ -153,35 +197,12 @@ export function createTeleopOnboarding(root, options = {}) {
 
     const actions = document.createElement("div");
     actions.className = "agent-onboarding-actions";
-    const skip = document.createElement("button");
-    skip.type = "button";
-    skip.className = "agent-onboarding-dismiss";
-    skip.textContent = "Skip";
-    skip.addEventListener("click", () => {
-      const nextStep = next === "agent" ? null : NEXT_STEP[next];
-      if (nextStep) show(nextStep);
-      else close(true);
-    });
-    actions.appendChild(skip);
+    actions.appendChild(
+      actionButton("Skip tour", "agent-onboarding-dismiss agent-onboarding-quit", () => close(true)),
+    );
 
-    if (next === "intro") {
-      const begin = document.createElement("button");
-      begin.type = "button";
-      begin.className = "agent-onboarding-primary";
-      begin.textContent = "Show me";
-      begin.addEventListener("click", () => show("wave"));
-      actions.appendChild(begin);
-    } else if (next === "agent") {
-      const agent = document.createElement("a");
-      agent.href = "/";
-      agent.className = "agent-onboarding-primary";
-      agent.textContent = "Open Agent";
-      agent.addEventListener("click", () => {
-        storageRemove(TELEOP_ONBOARDING_PROGRESS_KEY);
-        requestAgentOnboarding();
-      });
-      actions.appendChild(agent);
-    }
+    // Mid-run the card offers only the way out; the skill's own Stop is in the menu.
+    if (!running) appendNavigation(actions, next);
     card.appendChild(actions);
     root.appendChild(card);
     requestAnimationFrame(position);
@@ -193,6 +214,30 @@ export function createTeleopOnboarding(root, options = {}) {
     if (name === "talk") return document.querySelector(".tts-bar");
     if (name === "agent") return document.querySelector('.rail-link[data-section="agent"]');
     return null;
+  }
+
+  /** @param {HTMLElement} actions @param {keyof typeof TELEOP_ONBOARDING_STEPS} next */
+  function appendNavigation(actions, next) {
+    if (next === "intro") {
+      actions.appendChild(actionButton("Show me", "agent-onboarding-primary", () => show("wave")));
+      return;
+    }
+    const previous = resolvePreviousStep(next, speechAvailable);
+    actions.appendChild(actionButton("Back", "agent-onboarding-dismiss", () => show(previous)));
+    if (next !== "agent") {
+      const nextStep = NEXT_STEP[next];
+      actions.appendChild(actionButton("Skip step", "agent-onboarding-dismiss", () => show(nextStep)));
+      return;
+    }
+    const agent = document.createElement("a");
+    agent.href = "/";
+    agent.className = "agent-onboarding-primary";
+    agent.textContent = "Open Agent";
+    agent.addEventListener("click", () => {
+      storageRemove(TELEOP_ONBOARDING_PROGRESS_KEY);
+      requestAgentOnboarding();
+    });
+    actions.appendChild(agent);
   }
 
   function position() {
@@ -303,6 +348,8 @@ export function createTeleopOnboarding(root, options = {}) {
 
   /** @param {boolean} remember */
   function close(remember) {
+    if (speakAdvance) clearTimeout(speakAdvance);
+    speakAdvance = null;
     card?.remove();
     card = null;
     mask?.remove();
@@ -319,14 +366,38 @@ export function createTeleopOnboarding(root, options = {}) {
     }
   }
 
-  /** @param {{skillId: string, inputs: Record<string, any>}} run */
+  /** @param {{skillId: string}} run */
+  function onSkillStarted(run) {
+    if (step === "wave" && isWaveCompletion(run)) startRunning("wave");
+    if (step === "pick" && isPickupCompletion(run)) startRunning("pick");
+  }
+
+  /** @param {keyof typeof RUNNING_BODY} which */
+  function startRunning(which) {
+    running = true;
+    render(runningCopy(which));
+  }
+
+  /** @param {{skillId: string}} run */
   function onSkillCompleted(run) {
     if (step === "wave" && isWaveCompletion(run)) show("talk");
-    if (step === "pick" && isCylinderPickupCompletion(run)) show("agent");
+    if (step === "pick" && isPickupCompletion(run)) show("agent");
+  }
+
+  /** A failed or cancelled run leaves the card claiming MARS is still working.
+   * @param {{skillId: string, ok: boolean}} run */
+  function onSkillEnded(run) {
+    if (run.ok || !running || !step) return;
+    running = false;
+    render(TELEOP_ONBOARDING_STEPS[step]);
   }
 
   function onSpeak() {
-    if (step === "talk") show("pick");
+    if (step !== "talk" || speakAdvance) return;
+    speakAdvance = setTimeout(() => {
+      speakAdvance = null;
+      show("pick");
+    }, SPEAK_ADVANCE_MS);
   }
 
   /** @param {boolean} available */
@@ -344,7 +415,9 @@ export function createTeleopOnboarding(root, options = {}) {
   window.addEventListener("resize", position);
 
   return {
+    onSkillStarted,
     onSkillCompleted,
+    onSkillEnded,
     onSpeak,
     onSpeechAvailabilityChange,
     onSkillsMenuOpenChange,
@@ -354,6 +427,16 @@ export function createTeleopOnboarding(root, options = {}) {
       window.removeEventListener("resize", position);
     },
   };
+}
+
+/** @param {string} label @param {string} className @param {() => void} onClick */
+function actionButton(label, className, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
 }
 
 /** @param {string | null} value @returns {value is keyof typeof TELEOP_ONBOARDING_STEPS} */

@@ -508,6 +508,54 @@ select.skill-input {
   outline-offset: 5px;
   border-radius: 10px;
   box-shadow: 0 0 0 8px rgb(232 163 61 / 10%);
+  animation: agent-onboarding-ping 2s cubic-bezier(0.455, 0.03, 0.515, 0.955) infinite;
+}
+
+/* The ring's geometry never moves — only its colour and the halo breathe, so
+   the target stays as easy to aim at as any other control.
+   Both ends are pinned: targets are ordinary controls that carry their own
+   box-shadow (the speech bar's inset sheen), and an implicit start taken from
+   that computed value interpolates inset-to-outset, which CSS resolves
+   discretely — the pulse would jump instead of breathe, or not show at all. */
+@keyframes agent-onboarding-ping {
+  0%,
+  100% {
+    outline-color: var(--ctl-accent);
+    box-shadow: 0 0 0 3px rgb(232 163 61 / 26%);
+  }
+
+  50% {
+    outline-color: rgb(247 194 116 / 40%);
+    box-shadow: 0 0 0 13px rgb(232 163 61 / 0%);
+  }
+}
+
+/* Inside the chat scroller the ring has only the list's 14px gutter before
+   overflow clips it, so the halo tightens to fit rather than losing its left arc. */
+.chat-msg.agent-onboarding-target {
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px rgb(232 163 61 / 10%);
+  animation-name: agent-onboarding-ping-tight;
+}
+
+@keyframes agent-onboarding-ping-tight {
+  0%,
+  100% {
+    outline-color: var(--ctl-accent);
+    box-shadow: 0 0 0 2px rgb(232 163 61 / 26%);
+  }
+
+  50% {
+    outline-color: rgb(247 194 116 / 40%);
+    box-shadow: 0 0 0 9px rgb(232 163 61 / 0%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-onboarding-target,
+  .chat-msg.agent-onboarding-target {
+    animation: none;
+  }
 }
 
 .agent-onboarding-mask {
@@ -548,6 +596,18 @@ select.skill-input {
   background: rgb(18 20 23 / 94%);
   backdrop-filter: blur(20px);
   box-shadow: 0 18px 50px rgb(0 0 0 / 48%);
+}
+
+/* A card that says "watch it happen" must not be standing in front of the
+   robot: while a skill runs it parks top-left, clear of the rail, instead of
+   anchoring beside the Skills menu. !important beats the narrow-screen rule
+   below, the same way .is-intro does. */
+.teleop-onboarding-card.is-running {
+  top: 16px !important;
+  right: auto;
+  bottom: auto !important;
+  left: 76px !important;
+  width: min(280px, calc(100vw - 88px));
 }
 
 .agent-onboarding-card.is-intro {
@@ -596,6 +656,7 @@ select.skill-input {
 
 .agent-onboarding-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 18px;
@@ -619,6 +680,17 @@ select.skill-input {
 .agent-onboarding-actions .agent-onboarding-primary {
   border-color: var(--accent-dim);
   color: var(--accent);
+}
+
+.agent-onboarding-actions .agent-onboarding-quit {
+  margin-right: auto;
+  border-color: transparent;
+  background: none;
+  color: var(--muted);
+}
+
+.agent-onboarding-actions .agent-onboarding-quit:hover {
+  color: var(--text);
 }
 
 @media (max-width: 520px) {
