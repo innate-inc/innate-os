@@ -438,7 +438,7 @@ def configure_brain_backend(config: dict[str, object]) -> None:
         f"{DIM}The robot's agent runs on the robot, but thinks with a cloud LLM.\n"
         f"Choose how it reaches one:\n"
         f"  - Your own Gemini key: the agent calls Google directly. Everything\n"
-        f"    works except voice.\n"
+        f"    works except voice, unless you also set CARTESIA_API_KEY in .env.\n"
         f"  - Innate service key (ships with a MARS robot): the agent calls Gemini\n"
         f"    through Innate's proxy. Full experience, including the robot's voice.\n"
         f"  - None: drive, navigate, and trigger skills manually, with no agent.{NC}"
