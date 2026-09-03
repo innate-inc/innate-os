@@ -10993,6 +10993,8 @@ select.skill-input {
   .training-tools .episodes-search {
     flex-basis: 100%;
   }
+}
+
 /* ── Policy page ─────────────────────────────────────────────────────────
    Scene left, inference readout right. The readout is the point of the page,
    so it holds a fixed column rather than collapsing under the scene. */
