@@ -60,7 +60,7 @@ export async function robotSessionFactory() {
 
 /**
  * @param {any} mod
- * @param {any} config
+ * @param {{ worldStatePort?: number }} config
  */
 function acquireSimSession(mod, config) {
   if (simLinger !== null) {
