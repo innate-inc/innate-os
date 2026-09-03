@@ -92,6 +92,11 @@ export const MAP_COLORS = {
   route: "#00b7ff",
   policy: "#ffd700",
   policyPoint: "#00ff88",
+  // Benchmark preview: cyan so it reads as "the question", distinct from the
+  // gold/green the policy answers with.
+  scenarioStart: "#42d4f4",
+  scenarioGoal: "#42d4f4",
+  scenarioGoalFill: "rgba(66, 212, 244, 0.14)",
   scan: "#d96a5a",
   memory: MEMORY_COLOR,
   costLethal: "rgb(217 106 90 / 82%)",
@@ -397,6 +402,10 @@ export function createMap(root, opts = {}) {
    *  composition as the robot, so they land where the robot will. */
   let policyPath = null;
   let policyAtS = 0;
+  /** @type {{spawn:number[], goals:number[][], radius:number}|null} the
+   *  benchmark scenario being previewed: where it starts and what counts as
+   *  arriving. Sim world coordinates, same frame as the policy path. */
+  let scenario = null;
   /** @type {any} latest sensor_msgs/LaserScan */
   let scanMsg = null;
   // base_link -> base_laser from /tf_static (URDF); zero until it arrives.
@@ -1458,6 +1467,39 @@ export function createMap(root, opts = {}) {
       ctx.stroke(path);
     }
 
+    // The scenario being previewed: where it starts, and every spot that counts
+    // as arriving (objectnav accepts any instance, so there can be several).
+    if (scenario && pose) {
+      const [sx, sy, syaw] = scenario.spawn;
+      for (const [gx, gy] of scenario.goals) {
+        const g = odomPointToMap(gx, gy);
+        const c = worldToCanvas(g.x, g.y);
+        const rpx = (scenario.radius / grid.resolution) * view.scale;
+        ctx.beginPath();
+        ctx.arc(c.px, c.py, rpx, 0, Math.PI * 2);
+        ctx.fillStyle = MAP_COLORS.scenarioGoalFill;
+        ctx.fill();
+        ctx.strokeStyle = MAP_COLORS.scenarioGoal;
+        ctx.lineWidth = 1.5 * dpr();
+        ctx.stroke();
+      }
+      const s0 = odomPointToMap(sx, sy);
+      const a = worldToCanvas(s0.x, s0.y);
+      const head = odomPointToMap(sx + 0.45 * Math.cos((syaw * Math.PI) / 180),
+                                  sy + 0.45 * Math.sin((syaw * Math.PI) / 180));
+      const b = worldToCanvas(head.x, head.y);
+      ctx.strokeStyle = MAP_COLORS.scenarioStart;
+      ctx.lineWidth = 2.5 * dpr();
+      ctx.beginPath();
+      ctx.moveTo(a.px, a.py);
+      ctx.lineTo(b.px, b.py);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(a.px, a.py, 4 * dpr(), 0, Math.PI * 2);
+      ctx.fillStyle = MAP_COLORS.scenarioStart;
+      ctx.fill();
+    }
+
     // The policy's waypoints: gold line, green points, the same pairing the sim
     // viewer draws on the floor so the two surfaces read as one thing. Stale
     // paths fade rather than vanish -- a run that stopped replanning is worth
@@ -2284,7 +2326,14 @@ export function createMap(root, opts = {}) {
   // must keep working from the sidebar reel while the layer chip is off.
   const unsubMemories = ros.subscribe(MEMORY_POSITIONS_TOPIC, onMemories, 0, "std_msgs/msg/String");
 
+  /** @param {{spawn:number[], goals:number[][], radius:number}|null} sc */
+  function setScenario(sc) {
+    scenario = sc;
+    draw();
+  }
+
   return {
+    setScenario,
     /** Re-measure and redraw. The host reparents between the thumbnail and the
      *  full stage, and setZoom below is a no-op when the saved zoom happens to
      *  match, which leaves the redraw entirely up to the ResizeObserver firing

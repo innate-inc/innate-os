@@ -987,7 +987,7 @@
    ],
    "radius": 0.75,
    "path_m": 7.0,
-   "instruction": "Go forward, turn left, turn left, then stop by the sofa.",
+   "instruction": "Go past the bed, go through the doorway, go through the doorway, pass the bathroom, then stop by the sofa.",
    "suite": "families"
   },
   {
@@ -1006,7 +1006,7 @@
    ],
    "radius": 0.75,
    "path_m": 7.0,
-   "instruction": "Go forward, turn right, then stop by the bed.",
+   "instruction": "Go past the armchair, pass the sofa, go through the doorway, pass the bathroom, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1025,7 +1025,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.95,
-   "instruction": "Go forward, turn right, turn left, then stop by the sofa.",
+   "instruction": "Go past the bed, go through the doorway, turn right, go through the doorway, then stop by the sofa.",
    "suite": "families"
   },
   {
@@ -1044,7 +1044,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.95,
-   "instruction": "Go forward, turn right, then stop by the bed.",
+   "instruction": "Go past the armchair, pass the sofa, pass the bathroom, go through the doorway, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1063,7 +1063,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.9,
-   "instruction": "Go forward, turn left, turn right, then stop at the end of the passage.",
+   "instruction": "Go past the bed, go through the doorway, turn left, go through the doorway, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1082,7 +1082,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.9,
-   "instruction": "Go forward, turn left, turn right, then stop by the bed.",
+   "instruction": "Leave the room, turn left, turn right, go through the doorway, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1101,7 +1101,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.9,
-   "instruction": "Go forward, turn left, then stop by the sofa.",
+   "instruction": "Go past the bed, go through the doorway, turn left, go through the doorway, then stop by the sofa.",
    "suite": "families"
   },
   {
@@ -1120,7 +1120,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.9,
-   "instruction": "Go forward, turn left, turn right, then stop at the end of the passage.",
+   "instruction": "Leave the room, pass the bed, go through the doorway, turn left, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1139,7 +1139,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.9,
-   "instruction": "Go forward, turn right, turn left, then stop at the end of the passage.",
+   "instruction": "Go past the bathroom, go through the doorway, turn right, pass the bed, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1158,7 +1158,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.9,
-   "instruction": "Go forward, turn right, then stop by the bed.",
+   "instruction": "Go past the armchair, pass the sofa, go through the doorway, pass the bathroom, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1177,7 +1177,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.85,
-   "instruction": "Go forward, turn left, then stop by the dining table.",
+   "instruction": "Leave the room, pass the bathroom, pass the armchair, pass the sofa, then stop by the dining table.",
    "suite": "families"
   },
   {
@@ -1196,7 +1196,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.85,
-   "instruction": "Go forward, turn right, turn right, then go about 7 metres and stop.",
+   "instruction": "Go past the armchair, pass the dining table, pass the kitchen counter, pass the oven, then go about 7 metres and stop.",
    "suite": "families"
   },
   {
@@ -1215,7 +1215,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.75,
-   "instruction": "Go forward, turn right, turn right, then stop at the end of the passage.",
+   "instruction": "Go past the bed, go through the doorway, turn right, go through the doorway, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1234,7 +1234,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.75,
-   "instruction": "Go forward, turn left, turn left, then stop by the dining table.",
+   "instruction": "Go past the bed, go through the doorway, turn left, pass the bathroom, then stop by the dining table.",
    "suite": "families"
   },
   {
@@ -1253,7 +1253,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.75,
-   "instruction": "Go forward, turn left, turn left, then stop by the sofa.",
+   "instruction": "Go past the bed, go through the doorway, turn left, go through the doorway, then stop by the sofa.",
    "suite": "families"
   },
   {
@@ -1272,7 +1272,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.75,
-   "instruction": "Go forward, turn right, turn right, then stop by the bed.",
+   "instruction": "Go past the armchair, pass the sofa, pass the bathroom, go through the doorway, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1291,7 +1291,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.75,
-   "instruction": "Go forward, turn right, turn right, then stop by the bed.",
+   "instruction": "Go past the armchair, pass the dining table, pass the kitchen counter, pass the oven, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1310,7 +1310,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.7,
-   "instruction": "Go forward, turn right, then stop by the sofa.",
+   "instruction": "Leave the room, turn right, go through the doorway, pass the bathroom, then stop by the sofa.",
    "suite": "families"
   },
   {
@@ -1329,7 +1329,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.7,
-   "instruction": "Go forward, turn right, turn left, then stop at the end of the passage.",
+   "instruction": "Go past the armchair, pass the dining table, pass the oven, pass the refrigerator, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1348,7 +1348,7 @@
    ],
    "radius": 0.75,
    "path_m": 6.65,
-   "instruction": "Go forward, turn left, turn left, then stop by the sofa.",
+   "instruction": "Go past the bed, go through the doorway, turn left, pass the bathroom, then stop by the sofa.",
    "suite": "families"
   },
   {

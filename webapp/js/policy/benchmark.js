@@ -23,13 +23,16 @@ const SETTLE_MS = 1500;
 const TURN_LABEL = { straight: "straight", left: "left", right: "right", back: "turn around" };
 const FAMILY_LABEL = { pointnav: "pointnav", objectnav: "objectnav", r2r: "vln" };
 
-/** @param {any} ros @param {HTMLElement} parent */
-export function createBenchmark(parent, ros) {
+/** @param {HTMLElement} parent @param {any} ros
+ *  @param {(sc:any|null)=>void} onSelect shows the scenario on the map */
+export function createBenchmark(parent, ros, onSelect = () => {}) {
   const root = document.createElement("div");
   root.className = "policy-bench";
   root.innerHTML = `
     <div class="policy-panel-head">Benchmark</div>
     <div class="bench-note">loading scenarios…</div>
+    <div class="bench-suites"></div>
+    <div class="bench-selected" hidden></div>
     <div class="bench-now" hidden></div>
     <div class="bench-list"></div>`;
   parent.appendChild(root);
@@ -37,12 +40,19 @@ export function createBenchmark(parent, ros) {
   const note = /** @type {HTMLElement} */ (root.querySelector(".bench-note"));
   const now = /** @type {HTMLElement} */ (root.querySelector(".bench-now"));
   const list = /** @type {HTMLElement} */ (root.querySelector(".bench-list"));
+  const suites = /** @type {HTMLElement} */ (root.querySelector(".bench-suites"));
+  const selBox = /** @type {HTMLElement} */ (root.querySelector(".bench-selected"));
   /** @type {Map<string, HTMLElement>} scenario id -> its row */
   const rows = new Map();
   /** The row this page started, if any. Runs started elsewhere (the headless
    *  runner) are matched by instruction instead, which is looser: the paired
    *  suite reuses wordings, so several rows can light up for one run. */
   let startedId = null;
+  /** @type {any} the scenario shown on the map and armed for the Run button */
+  let selected = null;
+  /** @type {any[]} queued scenarios for a batch; empty when idle */
+  let queue = [];
+  let stopBatch = false;
 
   /** @type {any[]} */ let scenarios = [];
   let radius = 0.75;
@@ -109,6 +119,67 @@ export function createBenchmark(parent, ros) {
       + (best <= radius && !ok ? `, was within ${best.toFixed(2)} m` : "");
   }
 
+  function select(sc) {
+    selected = sc;
+    for (const [id, row] of rows) row.classList.toggle("selected", id === sc?.id);
+    onSelect(sc);
+    selBox.hidden = !sc;
+    if (!sc) return;
+    selBox.replaceChildren();
+    const text = document.createElement("div");
+    text.className = "bench-selected-text";
+    text.textContent = `${sc.id} · ${sc.instruction}`;
+    const go = document.createElement("button");
+    go.type = "button";
+    go.className = "bench-go";
+    go.textContent = "Run this";
+    go.addEventListener("click", () => runOne(sc));
+    selBox.append(text, go);
+  }
+
+  async function runOne(sc) {
+    const row = rows.get(sc.id);
+    if (!row) return;
+    await run(sc, row, /** @type {HTMLElement} */ (row.querySelector(".bench-meta")));
+  }
+
+  /** Run a set back to back. Stoppable, because 60 scenarios is an hour. */
+  async function runBatch(list_) {
+    if (queue.length) { stopBatch = true; return; }
+    queue = [...list_];
+    stopBatch = false;
+    renderSuites();
+    for (const sc of queue) {
+      if (stopBatch) break;
+      select(sc);
+      await runOne(sc);
+    }
+    queue = [];
+    renderSuites();
+  }
+
+  function renderSuites() {
+    const running = queue.length > 0;
+    const groups = [
+      ["everything", scenarios],
+      ["pointnav", scenarios.filter((s) => s.family === "pointnav")],
+      ["objectnav", scenarios.filter((s) => s.family === "objectnav")],
+      ["vln", scenarios.filter((s) => s.suite === "families" && s.family === "r2r")],
+      ["paired", scenarios.filter((s) => s.suite === "paired")],
+    ];
+    suites.replaceChildren();
+    for (const [label, group] of groups) {
+      if (!group.length) continue;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "bench-suite";
+      b.textContent = running ? "Stop" : `${label} (${group.length})`;
+      b.disabled = running && label !== "everything";
+      b.addEventListener("click", () => runBatch(group));
+      suites.appendChild(b);
+    }
+  }
+
   /** @param {any} status the parsed /nav_policy/status payload */
   function setStatus(status) {
     const live = Boolean(status?.running) && typeof status?.instruction === "string";
@@ -139,6 +210,7 @@ export function createBenchmark(parent, ros) {
       scenarios = doc.scenarios || [];
       radius = doc.goal_radius_m ?? radius;
       note.textContent = `${scenarios.length} scenarios · goal radius ${radius} m · sim only`;
+      renderSuites();
       for (const sc of scenarios) {
         const row = document.createElement("div");
         row.className = "bench-row";
@@ -154,7 +226,11 @@ export function createBenchmark(parent, ros) {
         const detail = sc.suite === "paired" ? (TURN_LABEL[sc.turn] ?? sc.turn) : kind;
         meta.textContent = `${sc.id} · ${detail} · ${sc.path_m} m`
           + (sc.goals.length > 1 ? ` · ${sc.goals.length} valid spots` : "");
-        row.querySelector(".bench-run")?.addEventListener("click", () => run(sc, row, meta));
+        row.querySelector(".bench-run")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          run(sc, row, meta);
+        });
+        row.addEventListener("click", () => select(sc));
         rows.set(sc.id, row);
         list.appendChild(row);
       }
@@ -164,6 +240,7 @@ export function createBenchmark(parent, ros) {
   return {
     setStatus,
     destroy() {
+      stopBatch = true;
       active?.cancel();
       unadvertise();
       unsubOdom();

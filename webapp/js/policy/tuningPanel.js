@@ -41,8 +41,10 @@ export function createTuningPanel(parent) {
   const root = document.createElement("div");
   root.className = "policy-panel policy-tuning";
   root.innerHTML = `
-    <div class="policy-panel-head">Tuning</div>
-    <div class="policy-knobs">
+    <button class="policy-panel-head policy-fold" type="button" aria-expanded="false">
+      <span class="policy-fold-mark">\u203a</span>Tuning
+    </button>
+    <div class="policy-knobs" hidden>
       ${KNOBS.map((k) => `
         <div class="policy-knob" data-k="${k.name}">
           <label for="knob-${k.name}">${k.label}</label>
@@ -50,11 +52,25 @@ export function createTuningPanel(parent) {
           <span>${k.unit}</span>
         </div>`).join("")}
     </div>
-    <div class="policy-tuning-foot">
+    <div class="policy-tuning-foot" hidden>
       <button class="policy-tuning-save" type="button" disabled>Save</button>
       <span class="policy-tuning-status">reading…</span>
     </div>`;
   parent.appendChild(root);
+
+  // Collapsed by default: nine knobs is a lot of column for something touched
+  // occasionally, and the benchmark below it is what the page is usually for.
+  const fold = /** @type {HTMLButtonElement} */ (root.querySelector(".policy-fold"));
+  const folded = [root.querySelector(".policy-knobs"), root.querySelector(".policy-tuning-foot")];
+  const setOpen = (open) => {
+    fold.setAttribute("aria-expanded", String(open));
+    /** @type {HTMLElement} */ (fold.querySelector(".policy-fold-mark")).textContent =
+      open ? "\u02c5" : "\u203a";
+    for (const el of folded) if (el) /** @type {HTMLElement} */ (el).hidden = !open;
+    localStorage.setItem("policy-tuning-open", String(open));
+  };
+  fold.addEventListener("click", () => setOpen(fold.getAttribute("aria-expanded") !== "true"));
+  setOpen(localStorage.getItem("policy-tuning-open") === "true");
 
   const save = /** @type {HTMLButtonElement} */ (root.querySelector(".policy-tuning-save"));
   const status = /** @type {HTMLElement} */ (root.querySelector(".policy-tuning-status"));

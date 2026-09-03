@@ -92,7 +92,8 @@ export function mount(stage) {
     const side = /** @type {HTMLElement} */ (root.querySelector(".policy-side"));
     const panel = createStatusPanel(side);
     const tuning = createTuningPanel(side);
-    const bench = createBenchmark(side, ros);
+    const bench = createBenchmark(side, ros, (sc) =>
+      map.setScenario(sc && { spawn: sc.spawn, goals: sc.goals, radius: sc.radius }));
     // The stage only draws what the session streams it; without this the scene
     // mounts empty and the orbit camera has nothing to orbit.
     session.start();
