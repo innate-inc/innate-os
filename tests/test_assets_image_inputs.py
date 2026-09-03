@@ -98,6 +98,21 @@ def test_household_resident_source_outputs_are_complete():
         assert f"sim/viewer/public/models/resident_{resident}.glb" in relative
 
 
+@pytest.mark.skipif(not SEEDER.is_file(), reason="asset tooling not present")
+def test_soft_sock_runtime_outputs_are_complete():
+    spec = importlib.util.spec_from_file_location("seed_asset_context", SEEDER)
+    seed = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(seed)
+
+    relative = {path.relative_to(REPO_ROOT).as_posix() for path in seed.RAW_FILES}
+    assert {
+        "sim/assets/softbodies/soft_sock/cloth_data.npz",
+        "sim/assets/softbodies/soft_sock/texture_base_color.png",
+        "sim/viewer/public/models/soft_sock.glb",
+        "sim/viewer/public/models/soft_sock_skin.bin",
+    } <= relative
+
+
 @pytest.mark.skipif(not WORKFLOW.is_file(), reason="publish workflow not present")
 def test_every_hashed_input_also_triggers_a_publish():
     """A hashed-but-unlisted file renames the image without building it: silent

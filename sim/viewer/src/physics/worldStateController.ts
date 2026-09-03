@@ -4,6 +4,7 @@
 // world_server.py "two interfaces".
 
 import type { PropInfo } from "../props";
+import { decodeDeformableFrame, type DeformableFrame } from "./deformableFrame";
 
 /** What a challenge IS: sent once per connection, like the prop roster,
  * because none of it changes while the server runs (challenges.py roster). */
@@ -60,6 +61,8 @@ export class WorldStateController {
   onProps?: (props: PropInfo[]) => void;
   /** The challenge roster, sent in the same opening frame (challenges.py). */
   onChallenges?: (challenges: ChallengeInfo[]) => void;
+  /** Latest world-space control vertices for one deformable prop. */
+  onDeformableFrame?: (frame: DeformableFrame) => void;
 
   #url: string;
   #ws!: WebSocket;
@@ -83,11 +86,16 @@ export class WorldStateController {
    * retry with backoff until dispose(). */
   #connect(): void {
     const ws = new WebSocket(this.#url);
+    ws.binaryType = "arraybuffer";
     this.#ws = ws;
     ws.onopen = () => {
       this.#everOpened = true;
       this.#retryMs = 500;
       this.#resolveOpen();
+      // Capability negotiation is deliberately one-way: old servers ignore
+      // this unknown command and continue their JSON-only stream, while new
+      // servers only spend bandwidth on IDF1 frames for clients that ask.
+      ws.send(JSON.stringify({ op: "subscribe_deformables", encoding: "idf1" }));
     };
     ws.onerror = () => {
       // Settle init()'s await on a failed FIRST attempt; reconnection continues.
@@ -98,7 +106,7 @@ export class WorldStateController {
       setTimeout(() => this.#connect(), this.#retryMs);
       this.#retryMs = Math.min(this.#retryMs * 2, 5000);
     };
-    ws.onmessage = (ev) => this.#onMessage(ev.data as string);
+    ws.onmessage = (ev) => this.#onMessage(ev.data);
   }
 
   async init(): Promise<void> {
@@ -117,7 +125,15 @@ export class WorldStateController {
     this.#ws.close();
   }
 
-  #onMessage(raw: string): void {
+  #onMessage(raw: string | ArrayBuffer): void {
+    if (raw instanceof ArrayBuffer) {
+      try {
+        this.onDeformableFrame?.(decodeDeformableFrame(raw));
+      } catch (err) {
+        console.warn("[sim-viewer] ignoring malformed deformable frame", err);
+      }
+      return;
+    }
     const parsed = JSON.parse(raw) as { props?: PropInfo[]; challenges?: ChallengeInfo[] };
     if (parsed.props || parsed.challenges) {
       // Roster frame, not a state frame: it has no clock and arrives once,

@@ -14,6 +14,7 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
 import { LoadQueue, queuedGLB } from "./loadQueue";
+import type { DeformableFrame } from "./physics/deformableFrame";
 import { PropLibrary, type PropInfo } from "./props";
 
 const APARTMENT_URL = "/models/appartement.glb";
@@ -992,6 +993,11 @@ export class SimScene {
   setObjectPoses(poses: Record<string, number[]>): void {
     this.props.setPoses(poses);
     this.updateShadowVolume(); // the props moved; the box may need to grow or shrink
+  }
+
+  /** Upload the latest world-space control surface to its deformable prop. */
+  setDeformableFrame(frame: DeformableFrame): void {
+    this.props.setDeformableFrame(frame);
   }
 
   // Orange accent for the arm links (see ORANGE_LINKS). Cached so every mesh

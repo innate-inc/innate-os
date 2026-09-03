@@ -341,7 +341,7 @@ class VirtualMars:
             self.data.qpos[qadr] = home
         mq, _md, source, mult = self._mimic
         self.data.qpos[mq] = mult * ARM_HOME[source]
-        self.props.mark_all_parked()  # mj_resetData already re-parked every prop
+        self.props.mark_all_parked(self.data)  # also disables parked flex contacts/constraints
         self._cmd_vx = self._cmd_wz = 0.0
         self._cmd_sim_time = -math.inf
         self._hold = None
@@ -372,22 +372,40 @@ class VirtualMars:
         """Advance the sim by `duration` seconds, applying servos each step."""
         end = self.data.time + duration
         while self.data.time < end:
-            self._apply_control()
-            mujoco.mj_step(self.model, self.data)
+            if self.props.has_deformables:
+                # A deformable's rest-dihedral force depends on positions and
+                # velocities computed by step1. Clamp state before that phase;
+                # changing qvel afterwards would stale its velocity-dependent
+                # quantities. Servos and bending then belong before step2 so
+                # it integrates every applied force once.
+                self.props.prepare_step(self.data)
+                self._clamp_base_velocity()
+                mujoco.mj_step1(self.model, self.data)
+                self._apply_control(clamp_velocity=False)
+                self.props.apply_deformable_forces(self.data)
+                mujoco.mj_step2(self.model, self.data)
+            else:
+                self._apply_control()
+                mujoco.mj_step(self.model, self.data)
             if not np.all(np.isfinite(self.data.qpos)):
                 self.reset()
                 return
 
-    def _apply_control(self) -> None:
+    def _clamp_base_velocity(self) -> None:
         d = self.data
         dof_x, dof_y, dof_yaw = (self._base[k][1] for k in ("x", "y", "yaw"))
-
         lin = math.hypot(d.qvel[dof_x], d.qvel[dof_y])
         if lin > world.MAX_BASE_LINEAR_SPEED:
             d.qvel[dof_x] *= world.MAX_BASE_LINEAR_SPEED / lin
             d.qvel[dof_y] *= world.MAX_BASE_LINEAR_SPEED / lin
         if abs(d.qvel[dof_yaw]) > world.MAX_BASE_ANGULAR_SPEED:
             d.qvel[dof_yaw] = math.copysign(world.MAX_BASE_ANGULAR_SPEED, d.qvel[dof_yaw])
+
+    def _apply_control(self, *, clamp_velocity: bool = True) -> None:
+        d = self.data
+        dof_x, dof_y, dof_yaw = (self._base[k][1] for k in ("x", "y", "yaw"))
+        if clamp_velocity:
+            self._clamp_base_velocity()
 
         expired = d.time - self._cmd_sim_time > CMD_VEL_TIMEOUT_S
         vx = 0.0 if expired else self._cmd_vx
@@ -774,6 +792,10 @@ class VirtualMars:
         """[x, y, z, qw, qx, qy, qz] per prop in world frame. Props parked off-map
         are omitted."""
         return self.props.poses(self.data)
+
+    def deformable_frames(self) -> list[tuple[int, np.ndarray]]:
+        """Active low-resolution flex vertices for observer rendering."""
+        return self.props.deformable_frames(self.data)
 
     def object_centers(self) -> dict[str, tuple[float, float]]:
         """xy of each out prop's visual CENTRE (props.py center_offset), which

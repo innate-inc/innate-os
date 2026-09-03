@@ -118,6 +118,25 @@ RAW_FILES = {
         f"{_RAW_RELEASE}/soccer_ball_basecolor.png",
         "ea698ee6e7e3cc318a72cfd4ebe51393abf1cb6a8cf9b2cac1559abf8c6c8099",
     ),
+    # Authored by Axel Peytavin for Innate. These are runtime-ready outputs:
+    # the original high-resolution authoring source is not needed to build or
+    # run the simulator, and pinning each byte keeps the asset image reproducible.
+    SIM / "assets" / "softbodies" / "soft_sock" / "cloth_data.npz": (
+        f"{_RAW_RELEASE}/soft_sock_cloth_data.npz",
+        "80819f024ff6f4c27cbb01ffc96816335f472b236355918daba1c7e4dafb3d08",
+    ),
+    SIM / "assets" / "softbodies" / "soft_sock" / "texture_base_color.png": (
+        f"{_RAW_RELEASE}/soft_sock_texture_base_color.png",
+        "8c827f79cf94665ad2ffd790eeb30026b0111986c59ba9257053bb2d1e02ec14",
+    ),
+    SIM / "viewer" / "public" / "models" / "soft_sock.glb": (
+        f"{_RAW_RELEASE}/soft_sock.glb",
+        "82d715ce7897bc4f3615bbb0d795929393bb9f8f08f1bbce8e1e4b2d937dbeaf",
+    ),
+    SIM / "viewer" / "public" / "models" / "soft_sock_skin.bin": (
+        f"{_RAW_RELEASE}/soft_sock_skin.bin",
+        "fa0b010711c695afc62aa7d0c4e038ab4fe80fd69a1e45295f4585c7f4c46abe",
+    ),
 }
 
 
