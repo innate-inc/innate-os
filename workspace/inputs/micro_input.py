@@ -128,6 +128,13 @@ def _scribe_previous_text(keyterms: "list[str]") -> str:
     return f"Likely words: {', '.join(fitted)}" if fitted else ""
 
 
+_LEADING_PUNCTUATION = re.compile(r"^[\s.,!?;:…\-–—]+")
+
+
+def strip_leading_punctuation(text: str) -> str:
+    return _LEADING_PUNCTUATION.sub("", text).strip()
+
+
 class SlowAgc:
     """Software gain for the quiet far-field mic: instant attack (a loud onset
     can never be pushed past the target), slow release (~16 s back to full
@@ -860,12 +867,14 @@ class MicroInput(InputDevice):
 
     def _on_transcript(self, text: str) -> None:
         """Called when transcript is ready."""
-        if text:
-            self.logger.info(f"🎤 Transcript: {text}")
+        text = strip_leading_punctuation(text)
+        if not text:
+            return
+        self.logger.info(f"🎤 Transcript: {text}")
 
-            self.send_data(text, data_type="chat_in")
-            self._last_transcript = text
-            self._send_vad_status()
+        self.send_data(text, data_type="chat_in")
+        self._last_transcript = text
+        self._send_vad_status()
 
 
 # ========== Audio Streaming Helpers ==========
