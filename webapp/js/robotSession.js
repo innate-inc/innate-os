@@ -20,6 +20,8 @@
 import { WebRtcSession } from "./webrtcSession.js";
 import { acquireVideoSession, releaseVideoSession } from "./sharedVideoSession.js";
 import { getConfig } from "./config.js";
+import { ros } from "./rosClient.js";
+import { SIM_RESPAWN_TOPIC } from "./constants.js";
 
 /** @typedef {{ audioEl: null, attach: (parent: HTMLElement) => void, detach: () => void, destroy: () => void, setSafeInsets: (insets: { right?: number }) => void }} SimStage */
 
@@ -46,6 +48,8 @@ export async function robotSessionFactory() {
       // URL, not a module path tsc can resolve.
       // @ts-ignore
       const mod = await import("/sim-viewer/sim-session.js");
+      // rws resolves a bare publish against the graph; nothing else publishes here.
+      ros.advertise(SIM_RESPAWN_TOPIC, "std_msgs/msg/Bool");
       return {
         createSession: () => acquireSimSession(mod, config),
         releaseSession: () => releaseSimSession(),
@@ -93,7 +97,10 @@ function releaseSimSession() {
  */
 function acquireSimStage(mod, root, session) {
   if (simStage) simStage.attach(root);
-  else simStage = /** @type {SimStage} */ (mod.createSimStage(root, session));
+  else {
+    const respawn = () => ros.publish(SIM_RESPAWN_TOPIC, { data: true });
+    simStage = /** @type {SimStage} */ (mod.createSimStage(root, session, respawn));
+  }
   const stage = simStage;
   return { ...stage, destroy: () => stage.detach() };
 }

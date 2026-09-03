@@ -66,6 +66,8 @@ const TOUCH_PLACEMENT_HINT: Partial<Record<PlacementState["kind"], string>> = {
 export function createSimStage(
   parent: HTMLElement,
   session: SimSession,
+  // Via the ROS node, not the world server: it fails the in-flight arm trajectory.
+  onRespawn: () => void,
 ): {
   audioEl: null;
   setSafeInsets: (insets: { right?: number }) => void;
@@ -107,6 +109,7 @@ export function createSimStage(
     '<span class="sim-scene-toggle-icon sim-scene-toggle-shapes" aria-hidden="true"></span>' +
     '<svg class="sim-scene-toggle-icon sim-scene-toggle-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>';
 
+  const coarsePointer = window.matchMedia("(hover: none)");
   let setupOpen = localStorage.getItem("sim-scene-panel-open") === "true";
   const setSetupOpen = (open: boolean) => {
     setupOpen = open;
@@ -124,6 +127,13 @@ export function createSimStage(
     clearPlacementSelection();
   };
   document.addEventListener(PANEL_OPEN_EVENT, onPanelOpen);
+  // Touch only: on a mouse, clicking the scene is how an armed prop gets placed.
+  const onOutsidePointer = (event: PointerEvent) => {
+    if (!setupOpen || !coarsePointer.matches) return;
+    if (event.target instanceof Node && setup.contains(event.target)) return;
+    setSetupOpen(false);
+  };
+  document.addEventListener("pointerdown", onOutsidePointer, true);
   setupToggle.onclick = () => setSetupOpen(!setupOpen);
   setup.append(setupBody, setupToggle);
   debugStack.appendChild(setup);
@@ -199,7 +209,6 @@ export function createSimStage(
   placementToast.className = "sim-placement-toast";
   placementToast.hidden = true;
   wrap.appendChild(placementToast);
-  const coarsePointer = window.matchMedia("(hover: none)");
   let placement: PlacementState = { kind: "choose-prop" };
   const selectedProp = (): string | null =>
     placement.kind === "following" || placement.kind === "rotating" ? placement.prop : null;
@@ -254,7 +263,17 @@ export function createSimStage(
   viewAids.appendChild(viewAidsLabel);
   addToggle(viewAids, "Lidar", (on) => session.setLidarVisible(on));
   addToggle(viewAids, "Collisions", (on) => session.setCollisionHullsVisible(on));
-  utilitySection.append(cameraModes, viewAids);
+  const robotRow = document.createElement("div");
+  robotRow.className = "sim-view-aids";
+  const robotRowLabel = document.createElement("span");
+  robotRowLabel.textContent = "Robot";
+  const respawnChip = makeChip("Respawn", "Back to the spawn pose, arm home, every prop parked");
+  respawnChip.onclick = () => {
+    clearPlacementSelection();
+    onRespawn();
+  };
+  robotRow.append(robotRowLabel, respawnChip);
+  utilitySection.append(cameraModes, viewAids, robotRow);
   setupBody.appendChild(utilitySection);
 
   const propChips = new Map<string, HTMLButtonElement>();
@@ -630,6 +649,7 @@ export function createSimStage(
       window.removeEventListener("pointerup", finishDrop);
       window.removeEventListener("pointercancel", cancelDrop);
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
+      document.removeEventListener("pointerdown", onOutsidePointer, true);
       scene.dispose();
       wrap.remove();
     },

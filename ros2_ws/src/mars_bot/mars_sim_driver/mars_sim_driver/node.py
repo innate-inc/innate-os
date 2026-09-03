@@ -50,7 +50,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, JointState, LaserScan, PointCloud2, PointField
-from std_msgs.msg import Empty, Float64MultiArray, Int32, Int64, String
+from std_msgs.msg import Bool, Float64MultiArray, Int32, Int64, String
 from std_srvs.srv import Trigger
 from tf2_ros import TransformBroadcaster
 
@@ -167,9 +167,9 @@ class VirtualMarsNode(Node):
             Float64MultiArray, "/mars/arm/commands", self._on_arm_commands, qos_profile_sensor_data
         )
         self.create_subscription(Int32, "/mars/head/set_position", self._on_head_position, 10)
-        # Sim-only convenience (no real-robot equivalent): respawn at the
-        # spawn pose, used by sim/viewer's Reset button in connected mode.
-        self.create_subscription(Empty, "/virtual_mars/reset", self._on_reset, 10)
+        # Sim-only. Bool, not Empty: rws cannot deserialize a zero-field message
+        # from a browser and takes this subscriber down with it.
+        self.create_subscription(Bool, "/virtual_mars/reset", self._on_reset, 10)
 
         services = ReentrantCallbackGroup()  # goto services block; don't starve timers
         if GotoJS is not None:
@@ -260,7 +260,7 @@ class VirtualMarsNode(Node):
                 self._segments.pop(0)
                 self._segment_started = None
 
-    def _on_reset(self, _msg: Empty) -> None:
+    def _on_reset(self, _msg: Bool) -> None:
         with self._lock:
             self._fail_active_traj()
             self.sim.reset()
