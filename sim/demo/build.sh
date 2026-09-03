@@ -13,6 +13,10 @@ cd "$REPO_ROOT"
 IMAGE="${IMAGE:-ghcr.io/innate-inc/innate-os-sim-demo}"
 TAG="${TAG:-$(git rev-parse --short HEAD)}"
 ROS_IMAGE="${ROS_IMAGE:-ghcr.io/innate-inc/innate-os-sim-ros:main}"
+# Set empty to build without moving the floating tag -- CI does that for
+# anything that is not main, so a one-off build cannot become what every
+# visitor gets.
+LATEST_TAG="${LATEST_TAG-latest}"
 
 resolve() {
     python3 - "$1" <<'PY'
@@ -44,7 +48,7 @@ exec docker buildx build \
     --build-arg "VIEWER_IMAGE=$VIEWER_IMAGE" \
     --cache-from "type=registry,ref=$IMAGE:buildcache" \
     --tag "$IMAGE:$TAG" \
-    --tag "$IMAGE:latest" \
+    ${LATEST_TAG:+--tag "$IMAGE:$LATEST_TAG"} \
     -f sim/demo/Dockerfile \
     "$@" \
     .

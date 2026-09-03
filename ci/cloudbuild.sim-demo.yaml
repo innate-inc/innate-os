@@ -1,0 +1,47 @@
+# Builds the public sim demo image -- the one the broker hands to visitors.
+#
+# On Cloud Build rather than a GitHub runner because the image is ~9GB and
+# pulls three more (ros, assets, viewer) to assemble it. The build itself is
+# sim/demo/build.sh unchanged: it resolves the content-addressed asset and
+# viewer tags from sim/launcher/config.py, which is what keeps the demo showing
+# the same apartment a dev checkout does.
+timeout: 7200s
+
+substitutions:
+  _IMAGE: us-central1-docker.pkg.dev/innate-managed-infra/sim/innate-os-sim-demo
+  _IMAGE_TAG: manual
+  _GHCR_USERNAME_SECRET: innate-os-sim-ghcr-username
+  _GHCR_TOKEN_SECRET: innate-os-sim-ghcr-token
+  # Only main moves it. A one-off build must not become what every visitor gets.
+  _LATEST_TAG: ""
+
+steps:
+  - id: build-and-push-sim-demo
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    secretEnv: [GHCR_TOKEN, GHCR_USERNAME]
+    env:
+      - IMAGE=${_IMAGE}
+      - TAG=${_IMAGE_TAG}
+      - LATEST_TAG=${_LATEST_TAG}
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        # The three base images live on GHCR and are private.
+        echo "$$GHCR_TOKEN" | docker login ghcr.io -u "$$GHCR_USERNAME" --password-stdin
+        # buildx with a container driver: --push and registry cache need it.
+        docker buildx create --use --driver docker-container --name demo >/dev/null
+        sim/demo/build.sh --push
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/${_GHCR_TOKEN_SECRET}/versions/latest
+      env: GHCR_TOKEN
+    - versionName: projects/$PROJECT_ID/secrets/${_GHCR_USERNAME_SECRET}/versions/latest
+      env: GHCR_USERNAME
+
+options:
+  machineType: E2_HIGHCPU_32
+  diskSizeGb: 200
+  logging: CLOUD_LOGGING_ONLY

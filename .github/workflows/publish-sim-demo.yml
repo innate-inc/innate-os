@@ -1,0 +1,68 @@
+name: Publish Sim Demo Image
+
+# The image the sim-broker hands to visitors. Nothing built it before, so its
+# tag was moved by hand and went stale silently -- a demo four hours behind main
+# looks fine, it is just not what you shipped.
+#
+# SECURITY: mirrors publish-sim-images.yml. Triggers stay push +
+# workflow_dispatch ONLY -- never pull_request or pull_request_target, which
+# would let a fork's code mint GCP credentials. Jobs are additionally guarded on
+# repository and event name.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/publish-sim-demo.yml
+      - ci/cloudbuild.sim-demo.yaml
+      - sim/demo/**
+      - sim/launcher/config.py
+      - ros2_ws/src/**
+      - webapp/**
+      - workspace/**
+  workflow_dispatch:
+
+concurrency:
+  group: publish-sim-demo
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: github.repository == 'innate-inc/innate-os' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Submit Cloud Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="$(git rev-parse --short HEAD)"
+          # Only main moves `latest`; a workflow_dispatch on a branch publishes
+          # its sha and nothing else.
+          latest_tag=""
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            latest_tag="latest"
+          fi
+
+          gcloud builds submit \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ vars.GCP_REGION }}" \
+            --gcs-source-staging-dir="${{ vars.GCP_CLOUD_BUILD_SOURCE_STAGING_DIR }}" \
+            --service-account="projects/${{ vars.GCP_PROJECT_ID }}/serviceAccounts/${{ vars.GCP_CLOUD_BUILD_SERVICE_ACCOUNT }}" \
+            --config=ci/cloudbuild.sim-demo.yaml \
+            --substitutions="_IMAGE_TAG=sha-${short_sha},_LATEST_TAG=${latest_tag},_GHCR_USERNAME_SECRET=${{ vars.GHCR_USERNAME_SECRET }},_GHCR_TOKEN_SECRET=${{ vars.GHCR_TOKEN_SECRET }}"
+
+          echo "Published sha-${short_sha}${latest_tag:+ and }${latest_tag}" >> "$GITHUB_STEP_SUMMARY"
