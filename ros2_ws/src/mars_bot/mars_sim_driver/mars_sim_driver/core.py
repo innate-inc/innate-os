@@ -32,6 +32,7 @@ from .constants import (
 from .drive_limits import clamp_cmd_vel
 from .environments import DEFAULT_ENVIRONMENT_ID, Environment
 from .props import PropRegistry
+from .traffic import TrafficController
 from .world import ARM_HOME
 
 # Stop the base if the last Twist is stale, like a real base watchdog.
@@ -217,6 +218,7 @@ class VirtualMars:
         # Droppable props: sidecars from the tracked source dir plus any the
         # asset bundle shipped, each parked off-map until something places it.
         self.props = PropRegistry.load([world.repo_root() / "sim" / "props", ASSETS_DIR / "props"])
+        self.traffic = TrafficController(self.environment.id)
         xml = world.build_world_xml(
             rooms,
             include_placeholder_robot=False,
@@ -224,6 +226,7 @@ class VirtualMars:
             texture_max=_texture_cap(self._render_w),
             props=self.props,
             spawn_pose=self._spawn,
+            traffic_bodies=self.traffic.bodies_xml(),
         )
         # Lidar rays hit only the textured visual meshes (true surfaces, like
         # a real lidar) when available -- without them, fall back to all
@@ -243,6 +246,7 @@ class VirtualMars:
             Path(world.__file__),
             Path(__file__),
             Path(__file__).with_name("constants.py"),
+            Path(__file__).with_name("traffic.py"),
             *(f for pieces in rooms.values() for f in pieces),
             *(p for obj in visual_rooms.values() for p in (obj, obj.with_suffix(".png"))),
             *(f for f in urdf_path.parent.rglob("*") if f.suffix in (".stl", ".dae", ".obj", ".png", ".urdf")),
@@ -259,6 +263,7 @@ class VirtualMars:
             robot_spec = world.load_robot_spec(urdf_path)
             world.add_planar_base(robot_spec)
             world.tune_contacts(robot_spec)
+            self.traffic.configure_robot_spec(robot_spec)
             world_spec.attach(robot_spec, frame=world_spec.worldbody.add_frame(), prefix="robot_")
 
             for cam_name, (body_name, forward, up) in CAMERAS.items():
@@ -285,6 +290,7 @@ class VirtualMars:
                         stale.unlink(missing_ok=True)
                 mujoco.mj_saveModel(self.model, str(cache_path), None)
         world.style_robot_geoms(self.model)
+        self.traffic.bind(self.model)
         # The planar base pins z at the plane, so the ground's 7mm contact
         # margin reads as permanent penetration -- huge normal force whose
         # friction cone glues the base. The worker's ground has no margin.
@@ -348,6 +354,7 @@ class VirtualMars:
         mq, _md, source, mult = self._mimic
         self.data.qpos[mq] = mult * ARM_HOME[source]
         self.props.mark_all_parked()  # mj_resetData already re-parked every prop
+        self.traffic.reset(self.data)
         self._cmd_vx = self._cmd_wz = 0.0
         self._cmd_sim_time = -math.inf
         self._hold = None
@@ -387,6 +394,7 @@ class VirtualMars:
         end = self.data.time + duration
         while self.data.time < end:
             self._apply_control()
+            self.traffic.step(self.data, float(self.model.opt.timestep), self.pose()[:2])
             mujoco.mj_step(self.model, self.data)
             if not np.all(np.isfinite(self.data.qpos)):
                 self.reset()
@@ -801,6 +809,14 @@ class VirtualMars:
     def prop_manifest(self) -> list[dict]:
         """What every prop is and how to draw it (props.py), for the viewer."""
         return self.props.manifest()
+
+    def traffic_manifest(self) -> dict | None:
+        """Static procedural car/signal description for observer viewers."""
+        return self.traffic.manifest()
+
+    def traffic_state(self) -> dict | None:
+        """Authoritative traffic state on the same sim clock as robot pose."""
+        return self.traffic.state(float(self.data.time), self.world_epoch)
 
     def drop_prop_at(self, name: str, x: float, y: float, yaw: float = 0.0) -> bool:
         """Release one prop above (x, y) and let physics settle it onto

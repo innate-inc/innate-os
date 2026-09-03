@@ -1,9 +1,11 @@
 // Ground-truth state feed for the sim viewer: the world server broadcasts
-// {t, wall, pose, joints, objects} per physics slice on its observer WebSocket
+// {t, wall, world_epoch, pose, joints, objects, traffic} per physics slice on its observer WebSocket
 // (proxied at /worldstate) -- the 3D view's only state source. See
 // world_server.py "two interfaces".
 
 import type { PropInfo } from "../props";
+import { parseTrafficManifest, parseTrafficState } from "../trafficState.ts";
+import type { TrafficManifest, TrafficState } from "../trafficState";
 
 /** What a challenge IS: sent once per connection, like the prop roster,
  * because none of it changes while the server runs (challenges.py roster). */
@@ -65,6 +67,8 @@ export interface WorldState {
   t: number;
   /** Server wall clock (s): Date.now()/1000 - wall = true delivery lag. */
   wall: number;
+  /** Reset generation; changes across resets and environment switches. */
+  worldEpoch: number;
   x: number;
   y: number;
   yaw: number;
@@ -72,6 +76,8 @@ export interface WorldState {
   /** Ground truth of every manipulation prop (world.py GRASP_OBJECTS), keyed
    * by name: [x, y, z, qw, qx, qy, qz]. Empty on servers that predate them. */
   objects: Record<string, number[]>;
+  /** Environment traffic, separate from manipulation props. */
+  traffic: TrafficState | null;
   /** Challenge judge state; null on servers that predate it. */
   challenge: ChallengeBlock | null;
 }
@@ -80,6 +86,8 @@ export class WorldStateController {
   onState?: (state: WorldState) => void;
   /** The prop roster, sent once per connection (props.py sidecars). */
   onProps?: (props: PropInfo[]) => void;
+  /** Static procedural traffic model, explicit null for environments without it. */
+  onTrafficManifest?: (manifest: TrafficManifest | null) => void;
   /** The challenge roster, sent in the same opening frame (challenges.py). */
   onChallenges?: (challenges: ChallengeInfo[]) => void;
   /** The environment roster: in the opening frame, and again on every switch. */
@@ -148,38 +156,65 @@ export class WorldStateController {
       environment?: EnvironmentInfo | null;
       environments?: EnvironmentSummary[];
       switch?: EnvironmentRoster["switch"];
+      traffic_manifest?: unknown;
     };
-    if (parsed.props || parsed.challenges) {
+    if (
+      "props" in parsed ||
+      "challenges" in parsed ||
+      "environment" in parsed ||
+      "environments" in parsed ||
+      "switch" in parsed ||
+      "traffic_manifest" in parsed
+    ) {
       // Roster frame, not a state frame: it has no clock, opens the stream and
       // returns whenever the world changes (see world_server.serve_state).
-      if (parsed.props) this.onProps?.(parsed.props);
-      if (parsed.challenges) this.onChallenges?.(parsed.challenges);
+      let trafficManifest: TrafficManifest | null | undefined;
+      if ("traffic_manifest" in parsed) {
+        trafficManifest = parseTrafficManifest(parsed.traffic_manifest);
+        if (parsed.traffic_manifest !== null && trafficManifest === null) {
+          console.error("[sim-viewer] rejecting malformed traffic manifest");
+          this.#ws.close(1002, "invalid traffic manifest");
+          return;
+        }
+      }
       this.onEnvironment?.({
         environment: parsed.environment ?? null,
         environments: parsed.environments ?? [],
         switch: parsed.switch ?? null,
       });
+      if (parsed.props) this.onProps?.(parsed.props);
+      if (parsed.challenges) this.onChallenges?.(parsed.challenges);
+      if (trafficManifest !== undefined) this.onTrafficManifest?.(trafficManifest);
       return;
     }
     const msg = parsed as unknown as {
       t: number;
       wall: number;
+      world_epoch?: number;
       pose: [number, number, number];
       joints: Record<string, number>;
       objects?: Record<string, number[]> | null;
+      traffic?: unknown;
       challenge?: ChallengeBlock | null;
     };
     const joints = msg.joints;
     // joint6M: the gripper's mirrored finger (URDF mimic of joint6, x-1).
     joints["joint6M"] = -(joints["joint6"] ?? 0);
+    const traffic = parseTrafficState(msg.traffic);
+    if (msg.traffic !== undefined && msg.traffic !== null && traffic === null) {
+      console.warn("[sim-viewer] ignoring world-state frame with malformed traffic");
+      return;
+    }
     this.onState?.({
       t: msg.t,
       wall: msg.wall,
+      worldEpoch: msg.world_epoch ?? 0,
       x: msg.pose[0],
       y: msg.pose[1],
       yaw: msg.pose[2],
       joints,
       objects: msg.objects ?? {},
+      traffic,
       challenge: msg.challenge ?? null,
     });
   }

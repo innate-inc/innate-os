@@ -5,9 +5,10 @@ sim/README.md "world_server.py"):
   Framing: 4-byte big-endian length | JSON; responses are one JSON frame,
   then one binary frame iff the JSON says "blob": <nbytes>.
 - observer state stream (--state-port): a WebSocket broadcasting ground
-  truth ({t, wall, world_epoch, pose, joints, objects}) after every physics
+  truth ({t, wall, world_epoch, pose, joints, objects, traffic}) after every physics
   slice, and accepting stage commands ({"op": "drop_prop_at", ...}) back. A
-  roster frame ({props, challenges, environment, environments, switch}) opens
+  roster frame ({props, traffic_manifest, challenges, environment,
+  environments, switch}) opens
   every connection and is resent whenever the environment changes. Ground
   truth and scenery only -- robot software must never consume or drive it.
 
@@ -150,6 +151,7 @@ class WorldServer:
             x, y, yaw = self.sim.pose()
             joints = self.sim.joint_positions()
             objects = self.sim.object_poses()
+            traffic = self.sim.traffic_state()
             # Prop CENTRES for the judge (props.py center_offset): a distance
             # to the human has to mean its body, not the feet its origin sits
             # at. Gathered here because the judge runs without the sim.
@@ -183,6 +185,7 @@ class WorldServer:
                 "pose": [x, y, yaw],
                 "joints": joints,
                 "objects": objects,
+                "traffic": traffic,
                 "challenge": challenge,
             }
         )
@@ -272,6 +275,7 @@ class WorldServer:
         return json.dumps(
             {
                 "props": self.sim.prop_manifest(),
+                "traffic_manifest": self.sim.traffic_manifest(),
                 "challenges": self.challenges.roster(),
                 "environment": environment.public() if environment else None,
                 "environments": [candidate.summary() for candidate in self.environments],

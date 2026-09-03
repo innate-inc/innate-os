@@ -23,5 +23,17 @@ jobs:
 
       - name: Run the host-side test suite
         run: |
-          pip install pytest pyyaml
-          python -m pytest tests/ -q
+          pip install pytest pyyaml numpy trimesh pillow mujoco
+          python -m pytest tests/ sim/launcher/test/ -q
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test simulator scene swapping
+        working-directory: sim/viewer
+        run: |
+          npm ci
+          npm run test:environment
+          npm run typecheck
