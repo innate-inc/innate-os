@@ -3,6 +3,11 @@
 // so the webapp's CSS behaves identically. Owns all rendering: primary view
 // full-res every frame, PiP thumbnails scissor-rendered from the same GL
 // context and blitted out.
+//
+// One stage serves every page: detach() parks it out of the DOM, attach()
+// drops it into the next one. Rebuilding it per page refetched ~80 MB of
+// models and never gave the memory back (~450 MB of renderer RSS a switch),
+// which walked a phone into the OS memory killer.
 
 import * as THREE from "three";
 import { SimScene, type CameraMode, type CameraView } from "./scene";
@@ -61,7 +66,13 @@ const TOUCH_PLACEMENT_HINT: Partial<Record<PlacementState["kind"], string>> = {
 export function createSimStage(
   parent: HTMLElement,
   session: SimSession,
-): { audioEl: null; setSafeInsets: (insets: { right?: number }) => void; destroy: () => void } {
+): {
+  audioEl: null;
+  setSafeInsets: (insets: { right?: number }) => void;
+  attach: (parent: HTMLElement) => void;
+  detach: () => void;
+  destroy: () => void;
+} {
   const wrap = document.createElement("div");
   // The class's position:absolute+inset:0 must survive: overriding it once had
   // the wrap size itself off the canvas buffer, ignoring window resizes.
@@ -486,6 +497,19 @@ export function createSimStage(
   let thumbCursor = 0;
   let lastTime = performance.now();
   let disposed = false;
+  let attached = true;
+
+  // rAF is throttled for a hidden tab but not for a detached canvas, so a
+  // parked stage would render full-rate into nothing.
+  const startLoop = () => {
+    if (raf !== 0 || !attached || disposed) return;
+    lastTime = performance.now(); // a paused stage must not integrate the gap as one dt
+    raf = requestAnimationFrame(loop);
+  };
+  const stopLoop = () => {
+    cancelAnimationFrame(raf);
+    raf = 0;
+  };
 
   const loop = (now: number) => {
     raf = requestAnimationFrame(loop);
@@ -543,7 +567,7 @@ export function createSimStage(
       // replaces it. Bail at each await if the stage was destroyed mid-load
       // (SPA remount) -- else we'd mutate a disposed scene.
       session.stageReady();
-      raf = requestAnimationFrame(loop);
+      startLoop();
       // The apartment manifest first (a few KB, unqueued): it draws every
       // room's placeholder box and frames the camera on them, so the first
       // frames show the apartment's wireframe layout rather than an empty
@@ -575,12 +599,32 @@ export function createSimStage(
   return {
     audioEl: null, // sim has no robot mic; the pages skip the mic toggle in sim mode
     setSafeInsets: (insets) => scene.setSafeInsets(insets),
+    attach(next: HTMLElement) {
+      attached = true;
+      next.appendChild(wrap);
+      startLoop();
+      resize();
+      // A page used to get a new scene, so entering one always framed the
+      // robot in free orbit; that is page state, not session state.
+      scene.setCameraMode("free");
+      scene.frameRobot();
+    },
+    detach() {
+      attached = false;
+      stopLoop();
+      // The agent page lifts this into its own layout; take it back before
+      // that page clears its DOM.
+      wrap.appendChild(debugStack);
+      scene.setSafeInsets({ right: 0 }); // the agent dock's inset must not follow the stage
+      clearPlacementSelection(); // an armed prop must not follow the pointer either
+      wrap.remove();
+    },
     destroy() {
       disposed = true;
       queue.cancel(); // stop pulling new downloads for a stage that's gone
       unsubscribe();
       unsubscribeProps();
-      cancelAnimationFrame(raf);
+      stopLoop();
       observer.disconnect();
       longTaskObserver?.disconnect();
       window.removeEventListener("pointerup", finishDrop);
