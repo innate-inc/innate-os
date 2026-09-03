@@ -5981,7 +5981,7 @@ select.episodes-tool {
 
 .skills-pop-search {
   position: relative;
-  margin: 8px 8px 0;
+  margin: 8px;
 }
 
 /* The popover opens upward from the pill, so the search goes to its near end
@@ -5993,7 +5993,6 @@ select.episodes-tool {
 
   .skills-pop-search {
     order: 1; /* after the list, which keeps the default 0 */
-    margin: 8px; /* clear of the list above and the popover's edge below */
   }
 }
 
