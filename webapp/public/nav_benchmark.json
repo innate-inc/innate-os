@@ -1,7 +1,7 @@
 {
  "name": "sim apartment nav benchmark",
- "note": "Two suites. FAMILIES covers the three task families the policy serves, 20 each, with ground truth the sim can verify: pointnav's goal IS its instruction (ego-frame coordinates), objectnav is scored against every viewpoint the named object is visible and close from (any instance counts), and VLN is a turn-by-turn route ending at a landmark. PAIRED is 40 scenarios in sets that share a spawn and differ only in the instruction, so comparing siblings isolates whether the words mattered. Spawns and goals are generated from the map, so all have clearance and every pair is connected.",
- "goal_radius_m": 0.75,
+ "note": "Two suites. FAMILIES covers the three task families the policy serves, 20 each, with ground truth the sim can verify: pointnav's goal IS its instruction (ego-frame coordinates), objectnav is scored against every viewpoint the named object is visible and close from (any instance counts), and VLN is a turn-by-turn route ending at a landmark. PAIRED is 40 scenarios in sets that share a spawn and differ only in the instruction, so comparing siblings isolates whether the words mattered. Each scenario's success radius matches the precision of its own instruction -- a coordinate is held to 0.75 m, a named object to 1.5 m, since the words do not say which side of a bed to stand on. Spawns and goals are generated from the map, so all have clearance and every pair is connected.",
+ "goal_radius_m": null,
  "scenarios": [
   {
    "id": "pn00",
@@ -398,7 +398,7 @@
      1.04
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.9,
    "instruction": "Find the toilet.",
    "suite": "families"
@@ -438,7 +438,7 @@
      1.19
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.85,
    "instruction": "Find the bed.",
    "suite": "families"
@@ -466,7 +466,7 @@
      -2.56
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.85,
    "instruction": "Find the kitchen counter.",
    "suite": "families"
@@ -502,7 +502,7 @@
      -2.56
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.8,
    "instruction": "Find the dining table.",
    "suite": "families"
@@ -538,7 +538,7 @@
      -2.56
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.8,
    "instruction": "Find the dining table.",
    "suite": "families"
@@ -574,7 +574,7 @@
      -2.56
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.8,
    "instruction": "Find the dining table.",
    "suite": "families"
@@ -598,7 +598,7 @@
      -1.66
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.8,
    "instruction": "Find the refrigerator.",
    "suite": "families"
@@ -622,7 +622,7 @@
      -1.66
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.8,
    "instruction": "Find the refrigerator.",
    "suite": "families"
@@ -646,7 +646,7 @@
      -1.66
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.8,
    "instruction": "Find the refrigerator.",
    "suite": "families"
@@ -670,7 +670,7 @@
      -2.46
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.8,
    "instruction": "Find the oven.",
    "suite": "families"
@@ -694,7 +694,7 @@
      -2.46
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.8,
    "instruction": "Find the oven.",
    "suite": "families"
@@ -718,7 +718,7 @@
      -2.46
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.8,
    "instruction": "Find the oven.",
    "suite": "families"
@@ -758,7 +758,7 @@
      1.19
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.75,
    "instruction": "Find the bed.",
    "suite": "families"
@@ -786,7 +786,7 @@
      -2.56
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.75,
    "instruction": "Find the kitchen counter.",
    "suite": "families"
@@ -814,7 +814,7 @@
      -2.56
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.05,
    "instruction": "Find the kitchen counter.",
    "suite": "families"
@@ -842,7 +842,7 @@
      0.14
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.95,
    "instruction": "Find the sofa.",
    "suite": "families"
@@ -870,7 +870,7 @@
      -1.06
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.95,
    "instruction": "Find the armchair.",
    "suite": "families"
@@ -910,7 +910,7 @@
      1.19
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.75,
    "instruction": "Find the bed.",
    "suite": "families"
@@ -938,7 +938,7 @@
      0.14
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.75,
    "instruction": "Find the sofa.",
    "suite": "families"
@@ -966,7 +966,7 @@
      -1.06
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.75,
    "instruction": "Find the armchair.",
    "suite": "families"
@@ -985,9 +985,9 @@
      -0.76
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.0,
-   "instruction": "Go past the bed, go through the doorway, go through the doorway, pass the bathroom, then stop by the sofa.",
+   "instruction": "Go through the doorway, pass the bed, go through the doorway, pass the bathroom, then stop by the sofa.",
    "suite": "families"
   },
   {
@@ -1004,9 +1004,9 @@
      3.34
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 7.0,
-   "instruction": "Go past the armchair, pass the sofa, go through the doorway, pass the bathroom, then stop by the bed.",
+   "instruction": "Go through the doorway, pass the armchair, go through the doorway, go through the doorway, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1023,9 +1023,9 @@
      0.14
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.95,
-   "instruction": "Go past the bed, go through the doorway, turn right, go through the doorway, then stop by the sofa.",
+   "instruction": "Go through the doorway, turn right, pass the bed, go through the doorway, then stop by the sofa.",
    "suite": "families"
   },
   {
@@ -1042,9 +1042,9 @@
      5.94
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.95,
-   "instruction": "Go past the armchair, pass the sofa, pass the bathroom, go through the doorway, then stop by the bed.",
+   "instruction": "Go through the doorway, pass the bathroom, turn right, go through the doorway, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1061,9 +1061,9 @@
      4.74
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 6.9,
-   "instruction": "Go past the bed, go through the doorway, turn left, go through the doorway, then stop at the end of the passage.",
+   "instruction": "Go through the doorway, pass the bed, turn left, go through the doorway, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1080,9 +1080,9 @@
      2.04
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.9,
-   "instruction": "Leave the room, turn left, turn right, go through the doorway, then stop by the bed.",
+   "instruction": "Go through the doorway, turn left, turn right, go through the doorway, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1099,9 +1099,9 @@
      -0.76
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.9,
-   "instruction": "Go past the bed, go through the doorway, turn left, go through the doorway, then stop by the sofa.",
+   "instruction": "Go through the doorway, pass the bed, turn left, go through the doorway, then stop by the sofa.",
    "suite": "families"
   },
   {
@@ -1118,9 +1118,9 @@
      5.94
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 6.9,
-   "instruction": "Leave the room, pass the bed, go through the doorway, turn left, then stop at the end of the passage.",
+   "instruction": "Go through the doorway, pass the bed, go through the doorway, turn left, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1137,9 +1137,9 @@
      5.94
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 6.9,
-   "instruction": "Go past the bathroom, go through the doorway, turn right, pass the bed, then stop at the end of the passage.",
+   "instruction": "Go through the doorway, turn right, pass the bed, go through the doorway, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1156,9 +1156,9 @@
      4.89
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.9,
-   "instruction": "Go past the armchair, pass the sofa, go through the doorway, pass the bathroom, then stop by the bed.",
+   "instruction": "Go through the doorway, pass the armchair, go through the doorway, turn right, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1175,9 +1175,9 @@
      -0.66
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.85,
-   "instruction": "Leave the room, pass the bathroom, pass the armchair, pass the sofa, then stop by the dining table.",
+   "instruction": "Go through the doorway, pass the bathroom, pass the armchair, go through the doorway, then stop by the dining table.",
    "suite": "families"
   },
   {
@@ -1194,9 +1194,9 @@
      3.79
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 6.85,
-   "instruction": "Go past the armchair, pass the dining table, pass the kitchen counter, pass the oven, then go about 7 metres and stop.",
+   "instruction": "Go through the doorway, pass the armchair, go through the doorway, pass the bathroom, then go about 7 metres and stop.",
    "suite": "families"
   },
   {
@@ -1213,9 +1213,9 @@
      5.94
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 6.75,
-   "instruction": "Go past the bed, go through the doorway, turn right, go through the doorway, then stop at the end of the passage.",
+   "instruction": "Go through the doorway, pass the bed, turn right, go through the doorway, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1232,9 +1232,9 @@
      -0.66
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.75,
-   "instruction": "Go past the bed, go through the doorway, turn left, pass the bathroom, then stop by the dining table.",
+   "instruction": "Go through the doorway, turn left, pass the bathroom, pass the armchair, then stop by the dining table.",
    "suite": "families"
   },
   {
@@ -1251,9 +1251,9 @@
      0.14
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.75,
-   "instruction": "Go past the bed, go through the doorway, turn left, go through the doorway, then stop by the sofa.",
+   "instruction": "Go through the doorway, pass the bed, turn left, go through the doorway, then stop by the sofa.",
    "suite": "families"
   },
   {
@@ -1270,9 +1270,9 @@
      1.39
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.75,
-   "instruction": "Go past the armchair, pass the sofa, pass the bathroom, go through the doorway, then stop by the bed.",
+   "instruction": "Go through the doorway, pass the bathroom, turn right, go through the doorway, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1289,9 +1289,9 @@
      2.24
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.75,
-   "instruction": "Go past the armchair, pass the dining table, pass the kitchen counter, pass the oven, then stop by the bed.",
+   "instruction": "Go through the doorway, pass the armchair, go through the doorway, pass the bathroom, then stop by the bed.",
    "suite": "families"
   },
   {
@@ -1308,9 +1308,9 @@
      -1.06
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.7,
-   "instruction": "Leave the room, turn right, go through the doorway, pass the bathroom, then stop by the sofa.",
+   "instruction": "Go through the doorway, turn right, go through the doorway, pass the bathroom, then stop by the sofa.",
    "suite": "families"
   },
   {
@@ -1327,9 +1327,9 @@
      4.74
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 6.7,
-   "instruction": "Go past the armchair, pass the dining table, pass the oven, pass the refrigerator, then stop at the end of the passage.",
+   "instruction": "Go past the armchair, go through the doorway, pass the bathroom, go through the doorway, then stop at the end of the passage.",
    "suite": "families"
   },
   {
@@ -1346,7 +1346,7 @@
      -0.76
     ]
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.65,
    "instruction": "Go past the bed, go through the doorway, turn left, pass the bathroom, then stop by the sofa.",
    "suite": "families"
@@ -1358,7 +1358,7 @@
     5.94,
     -98.5
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 2.0,
    "turn": "left",
    "turn_deg": 104.5,
@@ -1379,7 +1379,7 @@
     5.94,
     -98.5
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.95,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -1400,7 +1400,7 @@
     4.89,
     -170.5
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 2.9,
    "turn": "right",
    "turn_deg": -108.4,
@@ -1421,7 +1421,7 @@
     4.89,
     -170.5
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.0,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -1442,7 +1442,7 @@
     4.74,
     -56.3
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 5.85,
    "turn": "left",
    "turn_deg": 62.0,
@@ -1463,7 +1463,7 @@
     4.74,
     -56.3
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.9,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -1484,7 +1484,7 @@
     4.74,
     -126.3
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 4.8,
    "turn": "left",
    "turn_deg": 126.3,
@@ -1505,7 +1505,7 @@
     4.74,
     -126.3
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 2.1,
    "turn": "right",
    "turn_deg": -59.5,
@@ -1526,7 +1526,7 @@
     4.74,
     -126.3
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.9,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -1547,7 +1547,7 @@
     4.64,
     -159.4
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 3.8,
    "turn": "back",
    "turn_deg": 175.0,
@@ -1568,7 +1568,7 @@
     4.64,
     -159.4
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 3.1,
    "turn": "right",
    "turn_deg": -32.4,
@@ -1589,7 +1589,7 @@
     4.64,
     -159.4
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.9,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -1610,7 +1610,7 @@
     3.79,
     45.0
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 1.75,
    "turn": "left",
    "turn_deg": 90.0,
@@ -1631,7 +1631,7 @@
     3.79,
     45.0
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 4.95,
    "turn": "right",
    "turn_deg": -128.7,
@@ -1652,7 +1652,7 @@
     3.79,
     45.0
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 5.15,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -1673,7 +1673,7 @@
     3.34,
     -160.6
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 2.75,
    "turn": "back",
    "turn_deg": 154.2,
@@ -1694,7 +1694,7 @@
     3.34,
     -160.6
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 2.15,
    "turn": "left",
    "turn_deg": 27.5,
@@ -1715,7 +1715,7 @@
     3.34,
     -160.6
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.4,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -1736,7 +1736,7 @@
     3.34,
     177.0
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 1.95,
    "turn": "left",
    "turn_deg": 126.7,
@@ -1757,7 +1757,7 @@
     3.34,
     177.0
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.95,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -1778,7 +1778,7 @@
     3.34,
     174.3
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 1.95,
    "turn": "left",
    "turn_deg": 59.5,
@@ -1799,7 +1799,7 @@
     3.34,
     174.3
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 5.9,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -1820,7 +1820,7 @@
     2.99,
     130.9
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 2.05,
    "turn": "back",
    "turn_deg": -173.4,
@@ -1841,7 +1841,7 @@
     2.99,
     130.9
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 4.15,
    "turn": "left",
    "turn_deg": 111.2,
@@ -1862,7 +1862,7 @@
     2.99,
     130.9
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 4.2,
    "turn": "right",
    "turn_deg": -127.9,
@@ -1883,7 +1883,7 @@
     2.99,
     130.9
    ],
-   "radius": 0.75,
+   "radius": 1.0,
    "path_m": 5.95,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -1904,7 +1904,7 @@
     2.24,
     122.0
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 3.55,
    "turn": "right",
    "turn_deg": -75.0,
@@ -1925,7 +1925,7 @@
     2.24,
     122.0
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 4.9,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -1946,7 +1946,7 @@
     2.04,
     -99.5
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.05,
    "turn": "back",
    "turn_deg": -167.2,
@@ -1967,7 +1967,7 @@
     2.04,
     -99.5
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.1,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -1988,7 +1988,7 @@
     1.04,
     87.0
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.3,
    "turn": "back",
    "turn_deg": -165.7,
@@ -2009,7 +2009,7 @@
     1.04,
     87.0
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.85,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -2030,7 +2030,7 @@
     0.14,
     109.4
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.2,
    "turn": "back",
    "turn_deg": 156.7,
@@ -2051,7 +2051,7 @@
     0.14,
     109.4
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 6.0,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -2072,7 +2072,7 @@
     -0.66,
     -160.6
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 2.05,
    "turn": "left",
    "turn_deg": 121.9,
@@ -2093,7 +2093,7 @@
     -0.66,
     -160.6
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.1,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -2114,7 +2114,7 @@
     -0.66,
     177.0
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 1.9,
    "turn": "left",
    "turn_deg": 72.5,
@@ -2135,7 +2135,7 @@
     -0.66,
     177.0
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.2,
    "turn": "straight",
    "turn_deg": 0.0,
@@ -2156,7 +2156,7 @@
     -0.76,
     81.0
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 4.9,
    "turn": "right",
    "turn_deg": -92.3,
@@ -2177,7 +2177,7 @@
     -0.76,
     81.0
    ],
-   "radius": 0.75,
+   "radius": 1.5,
    "path_m": 5.95,
    "turn": "straight",
    "turn_deg": 0.0,

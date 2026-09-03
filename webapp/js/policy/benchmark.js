@@ -55,7 +55,9 @@ export function createBenchmark(parent, ros, onSelect = () => {}) {
   let stopBatch = false;
 
   /** @type {any[]} */ let scenarios = [];
-  let radius = 0.75;
+  // Each scenario carries its own tolerance: a coordinate is held to the
+  // point, "by the bed" to something bed-sized.
+  const radiusOf = (sc) => sc?.radius ?? 1.0;
   /** @type {{x:number,y:number}|null} */ let pose = null;
   /** @type {{cancel:()=>void}|null} */ let active = null;
 
@@ -111,12 +113,12 @@ export function createBenchmark(parent, ros, onSelect = () => {}) {
     active = null;
     startedId = null;
     const final = dist(sc.goals);
-    const ok = final <= radius;
+    const ok = final <= radiusOf(sc);
     row.classList.remove("running");
     row.classList.toggle("pass", ok);
     row.classList.toggle("fail", !ok);
     out.textContent = `${ok ? "reached" : "missed"} — stopped ${final.toFixed(2)} m away`
-      + (best <= radius && !ok ? `, was within ${best.toFixed(2)} m` : "");
+      + (best <= radiusOf(sc) && !ok ? `, was within ${best.toFixed(2)} m` : "");
   }
 
   function select(sc) {
@@ -208,8 +210,9 @@ export function createBenchmark(parent, ros, onSelect = () => {}) {
     .then((r) => r.json())
     .then((doc) => {
       scenarios = doc.scenarios || [];
-      radius = doc.goal_radius_m ?? radius;
-      note.textContent = `${scenarios.length} scenarios · goal radius ${radius} m · sim only`;
+      const radii = [...new Set(scenarios.map(radiusOf))].sort((a, b) => a - b);
+      note.textContent = `${scenarios.length} scenarios · goal radius `
+        + `${radii.join("/")} m by instruction · sim only`;
       renderSuites();
       for (const sc of scenarios) {
         const row = document.createElement("div");

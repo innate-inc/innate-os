@@ -15,6 +15,9 @@ import cv2, numpy as np
 RES, OX, OY = 0.05, -11.0884, -7.4106
 SIMPLIFY_M, TURN_DEG = 0.5, 50.0
 PASS_M = 1.9          # how close the route comes to call it "passing" something
+START_SKIP_M = 1.2    # what is beside you at the start is not something you pass
+GOAL_SKIP_M = 1.2     # nor is the thing you are stopping at
+SAME_PLACE_M = 1.0    # two objects seen from one spot are one landmark, not two
 DOOR_CLEARANCE_M = 0.55   # a pinch this tight is a doorway, not a corridor
 MAX_CLAUSES = 5
 
@@ -105,18 +108,37 @@ def doorways(pts):
             if not out or i - out[-1] > 8: out.append(i)
     return out
 
-def events(pts, goal_name):
-    """What happens along the route, in the order it happens."""
+def events(pts, goal_name, step_m):
+    """What happens along the route, in the order it happens.
+
+    Not everything nearby is passed. What sits beside the spawn is where the
+    robot starts -- vl03 began 6 cm from the sofa and the instruction said
+    "pass the sofa" -- and what sits at the goal is the terminus, already named.
+    Objects sharing a viewpoint (the sofa and the armchair are seen from the
+    same three spots) are one landmark seen once, so the closest wins.
+    """
     doors = set(doorways(pts))
+    total = (len(pts) - 1) * step_m
     seen, out = set(), []
     for i, p in enumerate(pts):
-        if i in doors: out.append((i, "door", None))
+        travelled = i * step_m
+        if i in doors: out.append((travelled, "door", None, 0.0))
+        if travelled < START_SKIP_M or total - travelled < GOAL_SKIP_M: continue
         for name, spots in OBJECTS.items():
             if name == goal_name or name in seen: continue
-            near = [s for s in spots if math.dist(p, s) <= PASS_M and visible(p, s)]
+            near = [math.dist(p, s) for s in spots if math.dist(p, s) <= PASS_M and visible(p, s)]
             if near:
-                seen.add(name); out.append((i, "pass", name))
-    return sorted(out)
+                seen.add(name); out.append((travelled, "pass", name, min(near)))
+    out.sort()
+    # one place, one landmark: drop the further of two passes at the same spot
+    kept = []
+    for ev in out:
+        if ev[1] == "pass" and kept and kept[-1][1] == "pass" \
+                and ev[0] - kept[-1][0] < SAME_PLACE_M:
+            if ev[3] < kept[-1][3]: kept[-1] = ev
+            continue
+        kept.append(ev)
+    return kept
 
 def turns_at(pts, spawn_yaw):
     legs = simplify(pts, SIMPLIFY_M)
@@ -134,21 +156,23 @@ def turns_at(pts, spawn_yaw):
 def describe(spawn, goal, terminus, goal_name):
     pts = route((spawn[0], spawn[1]), goal)
     step_m = 0.25
-    evs = events(pts, goal_name)
+    evs = events(pts, goal_name, step_m)
     turns = turns_at(pts, spawn[2])
     # merge both streams by distance travelled so the order is the route's
-    items = [(i * step_m, "ev", kind, name) for i, kind, name in evs]
+    items = [(d, "ev", kind, name) for d, kind, name, _ in evs]
     items += [(d, "turn", side, None) for d, side in turns]
     items.sort(key=lambda t: t[0])
 
-    clauses, first_door = [], True
+    clauses = []
     for _, kind, a, b in items:
         if len(clauses) >= MAX_CLAUSES - 1: break
         if kind == "turn":
             clauses.append(f"turn {a}")
         elif a == "door":
-            clauses.append("leave the room" if first_door and not clauses else "go through the doorway")
-            first_door = False
+            # Not "leave the room": at the clearance this flat has, whether a
+            # spawn is in a room or a wide spot in a corridor is not something
+            # the map can tell me, and every route would have claimed it.
+            clauses.append("go through the doorway")
         else:
             # The label is the viewpoint's, and a viewpoint for the toilet is
             # the hall spot it is glimpsed from -- you pass a bathroom, and
