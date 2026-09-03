@@ -54,7 +54,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, CompressedImage
-from std_msgs.msg import Float64MultiArray, String
+from std_msgs.msg import Float64MultiArray, Int32, String
 
 from .costmap import Costmap
 from .introspect import ObservationStrip
@@ -99,6 +99,10 @@ STRIP_HZ = 1.0
 # clips doorframes the path itself was clear of. Radians, joint1..joint6.
 NAV_ARM_POSE = (1.48, -0.25, 1.46, -1.23, -0.06, 0.0)
 NAV_ARM_MOVE_S = 3.0
+# Head level. The checkpoint's camera spec is pitch 0 -- a tilted head moves
+# the horizon the same way a wrong focal length does, and the policy reads
+# floor distance off where the floor meets the frame.
+NAV_HEAD_DEG = 0
 # A connection test answers quickly or it is not a test -- someone is watching
 # a button, and "no route to host" should not take the run-start timeout.
 PROBE_TIMEOUT_S = 4.0
@@ -238,6 +242,7 @@ class InnateNavNode(Node):
         self._obs_pub = self.create_publisher(
             CompressedImage, "/nav_policy/observations/compressed", 1)
         self._arm = None
+        self._head = self.create_publisher(Int32, "/mars/head/set_position", 1)
         self._obs = ObservationStrip()
         self._obs_at = 0.0
         self._plan_times: deque[float] = deque(maxlen=16)
@@ -389,10 +394,12 @@ class InnateNavNode(Node):
             self._cfg = replace(self._cfg, **fields)
         return SetParametersResult(successful=True)
 
-    def _tuck_arm(self) -> None:
-        """Put the arm in the navigation pose before driving. Best effort: a
-        robot with no arm, or one that will not answer, still navigates -- it
-        just collides more, which is the situation this exists to improve."""
+    def _pose_for_nav(self) -> None:
+        """Put the body in the shape the policy was trained on: arm tucked,
+        head level. Best effort -- a robot that will not answer still
+        navigates, it just collides more and misjudges distance, which is the
+        situation this exists to improve."""
+        self._head.publish(Int32(data=NAV_HEAD_DEG))
         if self._arm is None:
             self._arm = self.create_client(GotoJS, "/mars/arm/goto_js")
         if not self._arm.wait_for_service(timeout_sec=2.0):
@@ -653,7 +660,7 @@ class InnateNavNode(Node):
         result = NavigateInstruction.Result()
         feedback = NavigateInstruction.Feedback()
 
-        self._tuck_arm()
+        self._pose_for_nav()
         self._cancel_requested.clear()
         self._arrived.clear()
         self._blocked.reset()
