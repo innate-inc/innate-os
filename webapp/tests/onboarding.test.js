@@ -13,6 +13,7 @@ import {
   TELEOP_ONBOARDING_STEPS,
   isCylinderPickupCompletion,
   isWaveCompletion,
+  positionAboveTarget,
   resolveAvailableStep,
 } from "../js/teleop/teleopOnboarding.js";
 
@@ -32,6 +33,22 @@ assert.ok(!isCylinderPickupCompletion({ skillId: "innate-os/pick_any_object", in
 assert.equal(resolveAvailableStep("talk", false), "pick");
 assert.equal(resolveAvailableStep("talk", true), "talk");
 assert.equal(resolveAvailableStep("talk", null), "talk");
+assert.deepEqual(
+  positionAboveTarget(
+    { left: 762, right: 992, top: 658 },
+    { width: 350, height: 184 },
+    { width: 1280, height: 720 },
+  ),
+  { left: 702, top: 458 },
+);
+assert.deepEqual(
+  positionAboveTarget(
+    { left: 80, right: 310, top: 120 },
+    { width: 350, height: 184 },
+    { width: 390, height: 720 },
+  ),
+  { left: 28, top: 12 },
+);
 assert.equal(INTRO_NUDGE.title, "Meet MARS");
 assert.match(INTRO_NUDGE.body, /control room/);
 assert.match(FIRST_NUDGE.body, /Agent menu/);

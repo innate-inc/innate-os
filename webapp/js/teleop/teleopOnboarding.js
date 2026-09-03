@@ -59,11 +59,34 @@ export const resolveAvailableStep = (step, speechAvailable) =>
   step === "talk" && speechAvailable === false ? "pick" : step;
 
 /**
+ * Keep coaching for the bottom controls visually attached to the highlighted
+ * control without covering it. The 76px minimum clears the persistent rail.
+ * @param {{left: number, right: number, top: number}} targetRect
+ * @param {{width: number, height: number}} cardSize
+ * @param {{width: number, height: number}} viewport
+ */
+export function positionAboveTarget(targetRect, cardSize, viewport) {
+  const edge = 12;
+  const railEdge = 76;
+  const gap = 16;
+  const maxLeft = Math.max(edge, viewport.width - cardSize.width - edge);
+  const minLeft = Math.min(railEdge, maxLeft);
+  return {
+    left: Math.max(
+      minLeft,
+      Math.min(maxLeft, targetRect.left + (targetRect.right - targetRect.left - cardSize.width) / 2),
+    ),
+    top: Math.max(edge, Math.min(viewport.height - cardSize.height - edge, targetRect.top - cardSize.height - gap)),
+  };
+}
+
+/**
  * Guided first-run mission for direct control. Steps advance only when the
  * corresponding command is actually sent and, for skills, succeeds.
  * @param {HTMLElement} root
+ * @param {{ prepareCylinder?: () => void }} [options]
  */
-export function createTeleopOnboarding(root) {
+export function createTeleopOnboarding(root, options = {}) {
   /** @type {HTMLElement | null} */
   let card = null;
   /** @type {HTMLElement | null} */
@@ -93,6 +116,7 @@ export function createTeleopOnboarding(root) {
     const centered = next === "intro";
     target = centered ? null : targetFor(next);
     target?.classList.add("agent-onboarding-target");
+    if (next === "pick") options.prepareCylinder?.();
 
     if (centered) {
       root.classList.add("agent-onboarding-focused");
@@ -183,6 +207,16 @@ export function createTeleopOnboarding(root) {
     const rect = target.getBoundingClientRect();
     const width = card.offsetWidth || 350;
     const height = card.offsetHeight || 190;
+    if (step === "wave" || step === "talk" || step === "pick") {
+      const point = positionAboveTarget(
+        rect,
+        { width, height },
+        { width: window.innerWidth, height: window.innerHeight },
+      );
+      card.style.left = `${point.left}px`;
+      card.style.top = `${point.top}px`;
+      return;
+    }
     let left = rect.left - width - 16;
     if (left < 76) left = Math.min(window.innerWidth - width - 12, rect.right + 16);
     const top = Math.max(12, Math.min(window.innerHeight - height - 12, rect.top + rect.height / 2 - height / 2));
