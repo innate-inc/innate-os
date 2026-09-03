@@ -81,6 +81,22 @@ export function positionAboveTarget(targetRect, cardSize, viewport) {
 }
 
 /**
+ * Expand and clamp a spotlight hole so the shade never touches its subject.
+ * @param {{left: number, right: number, top: number, bottom: number}} rect
+ * @param {{width: number, height: number}} viewport
+ * @param {number} [padding]
+ */
+export function paddedSpotlightRect(rect, viewport, padding = 14) {
+  const left = Math.max(0, rect.left - padding);
+  const top = Math.max(0, rect.top - padding);
+  const right = Math.min(viewport.width, rect.right + padding);
+  const bottom = Math.min(viewport.height, rect.bottom + padding);
+  return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+}
+
+let maskId = 0;
+
+/**
  * Guided first-run mission for direct control. Steps advance only when the
  * corresponding command is actually sent and, for skills, succeeds.
  * @param {HTMLElement} root
@@ -91,8 +107,10 @@ export function createTeleopOnboarding(root, options = {}) {
   let card = null;
   /** @type {HTMLElement | null} */
   let target = null;
-  /** @type {HTMLElement | null} */
+  /** @type {SVGSVGElement | null} */
   let mask = null;
+  /** @type {SVGRectElement[]} */
+  let spotlightHoles = [];
   /** @type {keyof typeof TELEOP_ONBOARDING_STEPS | null} */
   let step = null;
   let skillsMenuOpen = false;
@@ -121,14 +139,9 @@ export function createTeleopOnboarding(root, options = {}) {
     if (centered) {
       root.classList.add("agent-onboarding-focused");
       document.body.classList.add("agent-onboarding-active");
-      mask = document.createElement("div");
-      mask.className = "agent-onboarding-mask";
-      mask.setAttribute("aria-hidden", "true");
-      const segment = document.createElement("div");
-      segment.className = "agent-onboarding-mask-segment";
-      mask.appendChild(segment);
-      root.appendChild(mask);
     }
+    mask = createSpotlightMask(centered ? 0 : 3);
+    root.appendChild(mask);
 
     card = document.createElement("aside");
     card.className = `agent-onboarding-card teleop-onboarding-card is-${next}`;
@@ -185,8 +198,7 @@ export function createTeleopOnboarding(root, options = {}) {
   function position() {
     if (!card) return;
     if (step === "intro") {
-      const segment = /** @type {HTMLElement | null} */ (mask?.firstElementChild);
-      if (segment) setRect(segment, 0, 0, window.innerWidth, window.innerHeight);
+      sizeSpotlightMask();
       return;
     }
     if (!target) return;
@@ -201,6 +213,7 @@ export function createTeleopOnboarding(root, options = {}) {
       const height = card.offsetHeight || 190;
       card.style.left = `${Math.max(76, popRect.left - width - 16)}px`;
       card.style.top = `${Math.max(12, Math.min(window.innerHeight - height - 12, popRect.top))}px`;
+      updateSpotlight([target, skillsPop, card]);
       return;
     }
     card.style.width = "";
@@ -215,6 +228,7 @@ export function createTeleopOnboarding(root, options = {}) {
       );
       card.style.left = `${point.left}px`;
       card.style.top = `${point.top}px`;
+      updateSpotlight([target, card]);
       return;
     }
     let left = rect.left - width - 16;
@@ -222,14 +236,69 @@ export function createTeleopOnboarding(root, options = {}) {
     const top = Math.max(12, Math.min(window.innerHeight - height - 12, rect.top + rect.height / 2 - height / 2));
     card.style.left = `${Math.max(76, left)}px`;
     card.style.top = `${top}px`;
+    updateSpotlight([target, card]);
   }
 
-  /** @param {HTMLElement} element @param {number} left @param {number} top @param {number} width @param {number} height */
-  function setRect(element, left, top, width, height) {
-    element.style.left = `${left}px`;
-    element.style.top = `${top}px`;
-    element.style.width = `${width}px`;
-    element.style.height = `${height}px`;
+  /** @param {number} holeCount */
+  function createSpotlightMask(holeCount) {
+    const svgNs = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNs, "svg");
+    svg.classList.add("agent-onboarding-mask");
+    svg.setAttribute("aria-hidden", "true");
+    const defs = document.createElementNS(svgNs, "defs");
+    const definition = document.createElementNS(svgNs, "mask");
+    const id = `teleop-onboarding-mask-${maskId += 1}`;
+    definition.id = id;
+    definition.setAttribute("maskUnits", "userSpaceOnUse");
+    const field = document.createElementNS(svgNs, "rect");
+    field.classList.add("agent-onboarding-mask-field");
+    definition.appendChild(field);
+    spotlightHoles = [];
+    for (let index = 0; index < holeCount; index += 1) {
+      const hole = document.createElementNS(svgNs, "rect");
+      hole.classList.add("agent-onboarding-mask-hole");
+      hole.setAttribute("rx", "18");
+      definition.appendChild(hole);
+      spotlightHoles.push(hole);
+    }
+    defs.appendChild(definition);
+    const shade = document.createElementNS(svgNs, "rect");
+    shade.classList.add("agent-onboarding-mask-shade");
+    shade.setAttribute("mask", `url(#${id})`);
+    svg.append(defs, shade);
+    return svg;
+  }
+
+  function sizeSpotlightMask() {
+    if (!mask) return;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    mask.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    for (const rect of mask.querySelectorAll(".agent-onboarding-mask-field, .agent-onboarding-mask-shade")) {
+      rect.setAttribute("x", "0");
+      rect.setAttribute("y", "0");
+      rect.setAttribute("width", String(width));
+      rect.setAttribute("height", String(height));
+    }
+  }
+
+  /** @param {HTMLElement[]} subjects */
+  function updateSpotlight(subjects) {
+    sizeSpotlightMask();
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    spotlightHoles.forEach((hole, index) => {
+      const subject = subjects[index];
+      if (!subject) {
+        hole.setAttribute("width", "0");
+        hole.setAttribute("height", "0");
+        return;
+      }
+      const rect = paddedSpotlightRect(subject.getBoundingClientRect(), viewport);
+      hole.setAttribute("x", String(rect.left));
+      hole.setAttribute("y", String(rect.top));
+      hole.setAttribute("width", String(rect.width));
+      hole.setAttribute("height", String(rect.height));
+    });
   }
 
   /** @param {boolean} remember */
@@ -238,6 +307,7 @@ export function createTeleopOnboarding(root, options = {}) {
     card = null;
     mask?.remove();
     mask = null;
+    spotlightHoles = [];
     target?.classList.remove("agent-onboarding-target");
     target = null;
     root.classList.remove("agent-onboarding-focused");
