@@ -344,6 +344,12 @@ class Manipulation:
         """Clamp (x, y) into the graspable reach box."""
         return (max(cls.REACH_X[0], min(cls.REACH_X[1], x)), max(cls.REACH_Y[0], min(cls.REACH_Y[1], y)))
 
+    def reachable(
+        self, x: float, y: float, z: float, *, roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0
+    ) -> bool:
+        """Whether IK finds a solution for the pose; the arm does not move."""
+        return self._solve_ik(x, y, z, roll, pitch, yaw) is not None
+
     # --- motion ---
 
     def move_to(
