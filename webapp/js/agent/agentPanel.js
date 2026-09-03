@@ -42,7 +42,8 @@ const CHAT_EXAMPLES = [
  *   enableMic?: boolean,
  *   onMicState?: (state: {on: boolean, busy: boolean, level: number, waveform: number[], error: string | null}) => void,
  *   onUserMessage?: () => void,
- *   onRobotMessage?: (message: HTMLElement | null) => void
+ *   onRobotMessage?: (message: HTMLElement | null) => void,
+ *   onAgentName?: (name: string) => void
  * }} opts
  *   enableMic connects the browser microphone in sim, where the robot has no
  *   physical microphone (see micStream.js).
@@ -113,6 +114,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       headAgentName.textContent = name;
       sheet?.setName(name);
       updateHeadLabel();
+      opts.onAgentName?.(name);
     },
     onBrainActive(active, justStarted) {
       panel.classList.toggle("active", active);

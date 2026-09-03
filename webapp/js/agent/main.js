@@ -171,6 +171,7 @@ function buildAgentView(root) {
     },
     onUserMessage: onboarding.onUserMessage,
     onRobotMessage: onboarding.onRobotMessage,
+    onAgentName: onboarding.onAgentChange,
   });
   const simSession = /** @type {any} */ (session);
   const challengePanel =

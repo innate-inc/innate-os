@@ -5,15 +5,15 @@
 import { ONBOARDING_REQUEST_EVENT, markOnboardingSeen } from "../onboarding.js";
 
 export const INTRO_NUDGE = {
-  eyebrow: "Welcome to Innate OS",
-  title: "Meet MARS",
-  body: "This is your robot's control room. Talk to MARS, watch it work, and guide it through the world.",
+  eyebrow: "Autonomous control",
+  title: "This is Agent",
+  body: "MARS acts on its own here: it looks through the camera, decides what to do, and runs a skill — one turn at a time. You give the goal and watch it think.",
 };
 
 export const FIRST_NUDGE = {
   eyebrow: "Demo Agent is ready",
   title: "Talk to MARS",
-  body: "Hold the mic or type the message below. You can switch agents from the Agent menu after this introduction.",
+  body: "Demo Agent can navigate, wave, pick things up, and look around. Hold the mic or type the message below.",
   examples: ["What can you do?"],
 };
 
@@ -23,12 +23,24 @@ export const REPLY_NUDGE = {
   body: "Keep talking naturally: ask it to navigate somewhere, wave, or pick up an object.",
 };
 
+export const SWITCH_NUDGE = {
+  eyebrow: "Agents are code",
+  title: "Now meet J3SO",
+  body: "Every agent is a Python class you write: the skills it can run, and a prompt that gives it a personality. Pick J3SO from the agent menu.",
+};
+
+export const J3SO_NUDGE = {
+  eyebrow: "J3SO is running",
+  title: "Ask it the same thing",
+  body: "Same robot, a different file: J3SO gets navigation and head emotions, and a prompt that makes it a blunt, sarcastic droid. Yours go in workspace/custom_agents/.",
+};
+
 /**
  * A non-modal, conversation-aware first-run coach. The first beat clears away
  * secondary controls and points at chat; the second appears only after the
  * robot has actually replied.
  * @param {HTMLElement} root
- * @returns {{ onUserMessage: () => void, onRobotMessage: (message?: HTMLElement | null) => void, destroy: () => void }}
+ * @returns {{ onUserMessage: () => void, onRobotMessage: (message?: HTMLElement | null) => void, onAgentChange: (name: string) => void, destroy: () => void }}
  */
 export function createAgentOnboarding(root) {
   /** @type {HTMLElement | null} */
@@ -58,7 +70,7 @@ export function createAgentOnboarding(root) {
     if (remember) markOnboardingSeen();
   }
 
-  /** @param {typeof INTRO_NUDGE | typeof FIRST_NUDGE | typeof REPLY_NUDGE} copy @param {Element | null} anchor @param {"intro" | "first" | "reply"} phase */
+  /** @param {typeof INTRO_NUDGE | typeof FIRST_NUDGE | typeof REPLY_NUDGE} copy @param {Element | null} anchor @param {"intro" | "first" | "reply" | "switch" | "meet"} phase */
   function show(copy, anchor, phase) {
     close(false);
     if (phase === "intro" || phase === "first") {
@@ -109,20 +121,31 @@ export function createAgentOnboarding(root) {
     actions.className = "agent-onboarding-actions";
     const dismiss = document.createElement("button");
     dismiss.type = "button";
-    dismiss.className = "agent-onboarding-dismiss";
-    dismiss.textContent = phase === "reply" ? "Keep talking" : "Skip";
+    const keepTalking = phase === "reply" || phase === "meet";
+    dismiss.className = `agent-onboarding-dismiss${keepTalking ? "" : " agent-onboarding-quit"}`;
+    dismiss.textContent = keepTalking ? "Keep talking" : "Skip tour";
     dismiss.addEventListener("click", () => close(true));
     actions.appendChild(dismiss);
     if (phase === "intro") {
       const next = document.createElement("button");
       next.type = "button";
       next.className = "agent-onboarding-primary";
-      next.textContent = "Meet MARS";
+      next.textContent = "Show me";
       next.addEventListener("click", () => {
         show(FIRST_NUDGE, root.querySelector(".agent-compose"), "first");
       });
       actions.appendChild(next);
     } else if (phase === "reply") {
+      const swap = document.createElement("button");
+      swap.type = "button";
+      swap.className = "agent-onboarding-primary";
+      swap.textContent = "Meet J3SO";
+      swap.addEventListener("click", () => {
+        expandControls();
+        show(SWITCH_NUDGE, root.querySelector(".agent-directive-picker"), "switch");
+      });
+      actions.appendChild(swap);
+    } else if (phase === "meet") {
       const nav = document.createElement("a");
       nav.href = "/nav";
       nav.className = "agent-onboarding-primary";
@@ -133,6 +156,15 @@ export function createAgentOnboarding(root) {
     card.appendChild(actions);
     root.appendChild(card);
     requestAnimationFrame(position);
+  }
+
+  /** A collapsed control panel display:nones the picker, so the step would
+   * point at a zero-sized box. */
+  function expandControls() {
+    const panel = root.querySelector(".agent-control-panel");
+    if (!panel?.classList.contains("collapsed")) return;
+    const head = panel.querySelector(".agent-head");
+    if (head instanceof HTMLElement) head.click();
   }
 
   function position() {
@@ -148,7 +180,7 @@ export function createAgentOnboarding(root) {
     const rect = target.getBoundingClientRect();
     if (mask) {
       const [topMask, rightMask, bottomMask, leftMask] = /** @type {HTMLElement[]} */ ([...mask.children]);
-      const pad = 8;
+      const pad = 14;  // clears the halo's full pulse, or the mask clips it mid-breath
       const holeTop = Math.max(0, rect.top - pad);
       const holeRight = Math.min(window.innerWidth, rect.right + pad);
       const holeBottom = Math.min(window.innerHeight, rect.bottom + pad);
@@ -189,6 +221,13 @@ export function createAgentOnboarding(root) {
     markOnboardingSeen();
   }
 
+  /** The switch only counts when the roster actually reports J3SO selected.
+   * @param {string} name */
+  function onAgentChange(name) {
+    if (!card?.classList.contains("is-switch") || !/j3so/i.test(name)) return;
+    show(J3SO_NUDGE, root.querySelector(".agent-compose"), "meet");
+  }
+
   function onRequest() {
     start();
   }
@@ -199,6 +238,7 @@ export function createAgentOnboarding(root) {
   return {
     onUserMessage,
     onRobotMessage,
+    onAgentChange,
     destroy() {
       close(false);
       window.removeEventListener(ONBOARDING_REQUEST_EVENT, onRequest);
