@@ -32,6 +32,7 @@ assert.match(TELEOP_ONBOARDING_STEPS.intro.body, /microphone to hear what it hea
 assert.match(TELEOP_ONBOARDING_STEPS.wave.body, /\{shortcut\}/);
 assert.match(TELEOP_ONBOARDING_STEPS.talk.body, /speech bar/);
 assert.match(TELEOP_ONBOARDING_STEPS.pick.body, /Pick Any Object/);
+assert.match(TELEOP_ONBOARDING_STEPS.pick.body, /red LEGO brick/);
 assert.match(TELEOP_ONBOARDING_STEPS.agent.body, /combine skills/);
 assert.ok(isWaveCompletion({ skillId: "innate-os/wave" }));
 assert.ok(isPickupCompletion({ skillId: "innate-os/pick_any_object" }));

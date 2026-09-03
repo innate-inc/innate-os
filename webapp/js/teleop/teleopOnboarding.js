@@ -30,7 +30,7 @@ export const TELEOP_ONBOARDING_STEPS = {
   pick: {
     eyebrow: "3 of 3 · Manipulation",
     title: "Pick something up",
-    body: "Open Skills, choose Pick Any Object, and describe what to grab — try “the blue cylinder”.",
+    body: "Open Skills, choose Pick Any Object, and describe what to grab — try “the red LEGO brick”.",
   },
   agent: {
     eyebrow: "Direct control complete",
@@ -144,11 +144,11 @@ let maskId = 0;
  * Guided first-run mission for direct control. Steps advance only when the
  * corresponding command is actually sent and, for skills, succeeds.
  * @param {HTMLElement} root
- * @param {{ prepareCylinder?: () => void }} [options] Sets the manipulation
+ * @param {{ prepareLego?: () => void }} [options] Sets the manipulation
  * target down as the pick step opens; a no-op on hardware, where the user puts
  * a real object in front of the robot instead.
  */
-export function createTeleopOnboarding(root, { prepareCylinder } = {}) {
+export function createTeleopOnboarding(root, { prepareLego } = {}) {
   /** @type {HTMLElement | null} */
   let card = null;
   /** @type {HTMLElement | null} */
@@ -180,12 +180,12 @@ export function createTeleopOnboarding(root, { prepareCylinder } = {}) {
     step = next;
     running = false;
     storageSet(TELEOP_ONBOARDING_PROGRESS_KEY, next);
-    if (next === "pick") prepareCylinder?.();
+    if (next === "pick") prepareLego?.();
     render(copyForStep(next, speechAvailable));
   }
 
   /** Repaint the current step with different copy — no progress write, and no
-   * second can, so a running skill is never interrupted by its own card.
+   * second brick, so a running skill is never interrupted by its own card.
    * @param {{eyebrow: string, title: string, body: string}} copy */
   function render(copy) {
     const next = step;
