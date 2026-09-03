@@ -3,6 +3,11 @@
 // so the webapp's CSS behaves identically. Owns all rendering: primary view
 // full-res every frame, PiP thumbnails scissor-rendered from the same GL
 // context and blitted out.
+//
+// One stage serves every page: detach() parks it out of the DOM, attach()
+// drops it into the next one. Rebuilding it per page refetched ~80 MB of
+// models and never gave the memory back (~450 MB of renderer RSS a switch),
+// which walked a phone into the OS memory killer.
 
 import * as THREE from "three";
 import { SimScene, type CameraMode, type CameraView } from "./scene";
@@ -61,7 +66,15 @@ const TOUCH_PLACEMENT_HINT: Partial<Record<PlacementState["kind"], string>> = {
 export function createSimStage(
   parent: HTMLElement,
   session: SimSession,
-): { audioEl: null; setSafeInsets: (insets: { right?: number }) => void; destroy: () => void } {
+  // Via the ROS node, not the world server: it fails the in-flight arm trajectory.
+  onRespawn: () => void,
+): {
+  audioEl: null;
+  setSafeInsets: (insets: { right?: number }) => void;
+  attach: (parent: HTMLElement) => void;
+  detach: () => void;
+  destroy: () => void;
+} {
   const wrap = document.createElement("div");
   // The class's position:absolute+inset:0 must survive: overriding it once had
   // the wrap size itself off the canvas buffer, ignoring window resizes.
@@ -96,6 +109,7 @@ export function createSimStage(
     '<span class="sim-scene-toggle-icon sim-scene-toggle-shapes" aria-hidden="true"></span>' +
     '<svg class="sim-scene-toggle-icon sim-scene-toggle-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>';
 
+  const coarsePointer = window.matchMedia("(hover: none)");
   let setupOpen = localStorage.getItem("sim-scene-panel-open") === "true";
   const setSetupOpen = (open: boolean) => {
     setupOpen = open;
@@ -113,6 +127,13 @@ export function createSimStage(
     clearPlacementSelection();
   };
   document.addEventListener(PANEL_OPEN_EVENT, onPanelOpen);
+  // Touch only: on a mouse, clicking the scene is how an armed prop gets placed.
+  const onOutsidePointer = (event: PointerEvent) => {
+    if (!setupOpen || !coarsePointer.matches) return;
+    if (event.target instanceof Node && setup.contains(event.target)) return;
+    setSetupOpen(false);
+  };
+  document.addEventListener("pointerdown", onOutsidePointer, true);
   setupToggle.onclick = () => setSetupOpen(!setupOpen);
   setup.append(setupBody, setupToggle);
   debugStack.appendChild(setup);
@@ -188,7 +209,6 @@ export function createSimStage(
   placementToast.className = "sim-placement-toast";
   placementToast.hidden = true;
   wrap.appendChild(placementToast);
-  const coarsePointer = window.matchMedia("(hover: none)");
   let placement: PlacementState = { kind: "choose-prop" };
   const selectedProp = (): string | null =>
     placement.kind === "following" || placement.kind === "rotating" ? placement.prop : null;
@@ -243,7 +263,17 @@ export function createSimStage(
   viewAids.appendChild(viewAidsLabel);
   addToggle(viewAids, "Lidar", (on) => session.setLidarVisible(on));
   addToggle(viewAids, "Collisions", (on) => session.setCollisionHullsVisible(on));
-  utilitySection.append(cameraModes, viewAids);
+  const robotRow = document.createElement("div");
+  robotRow.className = "sim-view-aids";
+  const robotRowLabel = document.createElement("span");
+  robotRowLabel.textContent = "Robot";
+  const respawnChip = makeChip("Respawn", "Back to the spawn pose, arm home, every prop parked");
+  respawnChip.onclick = () => {
+    clearPlacementSelection();
+    onRespawn();
+  };
+  robotRow.append(robotRowLabel, respawnChip);
+  utilitySection.append(cameraModes, viewAids, robotRow);
   setupBody.appendChild(utilitySection);
 
   const propChips = new Map<string, HTMLButtonElement>();
@@ -486,6 +516,19 @@ export function createSimStage(
   let thumbCursor = 0;
   let lastTime = performance.now();
   let disposed = false;
+  let attached = true;
+
+  // rAF is throttled for a hidden tab but not for a detached canvas, so a
+  // parked stage would render full-rate into nothing.
+  const startLoop = () => {
+    if (raf !== 0 || !attached || disposed) return;
+    lastTime = performance.now(); // a paused stage must not integrate the gap as one dt
+    raf = requestAnimationFrame(loop);
+  };
+  const stopLoop = () => {
+    cancelAnimationFrame(raf);
+    raf = 0;
+  };
 
   const loop = (now: number) => {
     raf = requestAnimationFrame(loop);
@@ -543,7 +586,7 @@ export function createSimStage(
       // replaces it. Bail at each await if the stage was destroyed mid-load
       // (SPA remount) -- else we'd mutate a disposed scene.
       session.stageReady();
-      raf = requestAnimationFrame(loop);
+      startLoop();
       // The apartment manifest first (a few KB, unqueued): it draws every
       // room's placeholder box and frames the camera on them, so the first
       // frames show the apartment's wireframe layout rather than an empty
@@ -575,17 +618,38 @@ export function createSimStage(
   return {
     audioEl: null, // sim has no robot mic; the pages skip the mic toggle in sim mode
     setSafeInsets: (insets) => scene.setSafeInsets(insets),
+    attach(next: HTMLElement) {
+      attached = true;
+      next.appendChild(wrap);
+      startLoop();
+      resize();
+      // A page used to get a new scene, so entering one always framed the
+      // robot in free orbit; that is page state, not session state.
+      scene.setCameraMode("free");
+      scene.frameRobot();
+    },
+    detach() {
+      attached = false;
+      stopLoop();
+      // The agent page lifts this into its own layout; take it back before
+      // that page clears its DOM.
+      wrap.appendChild(debugStack);
+      scene.setSafeInsets({ right: 0 }); // the agent dock's inset must not follow the stage
+      clearPlacementSelection(); // an armed prop must not follow the pointer either
+      wrap.remove();
+    },
     destroy() {
       disposed = true;
       queue.cancel(); // stop pulling new downloads for a stage that's gone
       unsubscribe();
       unsubscribeProps();
-      cancelAnimationFrame(raf);
+      stopLoop();
       observer.disconnect();
       longTaskObserver?.disconnect();
       window.removeEventListener("pointerup", finishDrop);
       window.removeEventListener("pointercancel", cancelDrop);
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
+      document.removeEventListener("pointerdown", onOutsidePointer, true);
       scene.dispose();
       wrap.remove();
     },

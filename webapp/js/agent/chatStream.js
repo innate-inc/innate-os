@@ -79,6 +79,15 @@ export function createChatStream() {
     if (wasAtBottom) stream.scrollTop = stream.scrollHeight;
   }
 
+  // A shorter sheet keeps scrollTop, pinning the top of the view and pushing
+  // the newest turn out of sight.
+  let pinnedToBottom = true;
+  stream.addEventListener("scroll", () => {
+    pinnedToBottom = atBottom();
+  });
+  const streamResize = new ResizeObserver(() => settleStreamAfterMutation(pinnedToBottom));
+  streamResize.observe(stream);
+
   /** @param {HTMLElement} el */
   function appendStreamItem(el) {
     stream.append(el);
@@ -478,6 +487,7 @@ export function createChatStream() {
     replay,
     setMode: setStreamMode,
     destroy() {
+      streamResize.disconnect();
       for (const timer of compactEnterTimers) clearTimeout(timer);
     },
   };

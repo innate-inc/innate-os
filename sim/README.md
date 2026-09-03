@@ -529,7 +529,7 @@ highlights:
   still plays back at the commanded rate
 - latched `/robot_info` `{"simulated": true}` — how the webapp knows to
   render the Three.js view instead of opening WebRTC
-- `/virtual_mars/reset` (sim-only)
+- `/virtual_mars/reset` (sim-only, `std_msgs/Bool` — see node.py)
 
 Camera topics render lazily — no subscribers, no render requests, no GL
 work — which is what makes headless runs cheap.

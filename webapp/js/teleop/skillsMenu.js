@@ -240,6 +240,8 @@ export function createSkillsMenu(parent, rosClient) {
     return { inputs: out };
   }
 
+  const coarsePointer = window.matchMedia("(hover: none)");
+
   // ---- run lifecycle ------------------------------------------------------
 
   /** @param {any} skill @param {boolean} [closeOnStart] */
@@ -269,7 +271,9 @@ export function createSkillsMenu(parent, rosClient) {
     );
     run = { skillId: skill.id, cancel, text: "Running…", error: false, canceling: false, done: false };
     render();
-    if (closeOnStart) {
+    // Touch has no keyboard to hand back to, and focusing the search box there
+    // just raises the on-screen one over the stage you came to watch.
+    if (closeOnStart || coarsePointer.matches) {
       setOpen(false);
       // Return keyboard control to the page. Keeping focus on the closed Skills
       // button makes the next Enter reopen this menu instead of focusing chat.

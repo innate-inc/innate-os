@@ -390,6 +390,12 @@ select.skill-input {
     grid-row: 2;
   }
 
+  /* The cockpit's scene is the page, so it runs the full height and the
+     wordmark sits on it. Every other page keeps the band. */
+  .stage:has(.cockpit) {
+    grid-row: 1 / -1;
+  }
+
   /* Touch has no hover, so the desktop hover-expand never fires. */
   .rail:hover {
     width: 216px;
@@ -5975,7 +5981,7 @@ select.episodes-tool {
 
 .skills-pop-search {
   position: relative;
-  margin: 8px 8px 0;
+  margin: 8px;
 }
 
 /* The popover opens upward from the pill, so the search goes to its near end
@@ -5987,7 +5993,6 @@ select.episodes-tool {
 
   .skills-pop-search {
     order: 1; /* after the list, which keeps the default 0 */
-    margin: 8px; /* clear of the list above and the popover's edge below */
   }
 }
 
@@ -7229,11 +7234,16 @@ select.skill-input {
   position: absolute;
   bottom: 66px;
   left: 0;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: min(360px, calc(100vw - 92px));
+  /* It grows upward from a fixed bottom, so a short screen clipped its top off.
+     66px of its own offset + the stack's 132px + room for the phone rail. */
+  max-height: calc(100dvh - 264px);
   padding: 0 13px 13px;
   gap: 14px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: rgb(8 8 10 / 42%);
   backdrop-filter: blur(30px) saturate(1.1) brightness(0.82);
   -webkit-backdrop-filter: blur(30px) saturate(1.1) brightness(0.82);
@@ -7387,6 +7397,15 @@ select.skill-input {
   gap: 12px;
 }
 
+.sim-scene-section:has(.sim-prop-grid) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  /* Header + gap + one row. Stops here rather than shrinking on, so the roster
+     scrolls while there is room for a row and the panel scrolls once there is not. */
+  min-height: 106px;
+}
+
 .sim-scene-section-header {
   display: flex;
   min-height: 30px;
@@ -7417,7 +7436,21 @@ select.skill-input {
 .sim-prop-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
+  min-height: 64px; /* one whole row of objects, plus a sliver of the next */
   gap: 7px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@media (max-height: 720px) {
+  .sim-scene-panel {
+    gap: 10px;
+  }
+
+  .sim-scene-section,
+  .sim-scene-utilities {
+    gap: 8px;
+  }
 }
 
 .sim-scene-button,

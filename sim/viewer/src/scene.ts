@@ -1104,6 +1104,19 @@ export class SimScene {
     this.robotRoot.visible = true;
     this.robotRoot.position.set(x, y, 0);
     this.robotRoot.rotation.set(0, 0, yaw);
+    this.frameFacing(x, y, yaw);
+    this.renderer.domElement.style.visibility = "";
+    this.followPrevXY = [x, y];
+  }
+
+  /** Re-frame on the robot where it stands (see simStage's attach). */
+  frameRobot(): void {
+    if (!this.spawned) return; // no real pose yet -- spawnAt still owes the first framing
+    this.frameFacing(this.robotRoot.position.x, this.robotRoot.position.y, this.robotRoot.rotation.z);
+  }
+
+  private frameFacing(x: number, y: number, yaw: number): void {
+    this.cameraTween = undefined; // an overview fly-out in flight would drag it straight back off
 
     const forwardX = Math.cos(yaw);
     const forwardY = Math.sin(yaw);
@@ -1125,9 +1138,6 @@ export class SimScene {
     this.camera.position.copy(target).addScaledVector(perch.sub(target), pullback);
     this.controls.target.copy(target);
     this.controls.update();
-    this.renderer.domElement.style.visibility = "";
-
-    this.followPrevXY = [x, y];
   }
 
   /** Move the robot root to a 2D pose (meters, yaw radians about +Z). */
