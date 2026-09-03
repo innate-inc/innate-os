@@ -6,6 +6,7 @@
 
 import { ros } from "./rosClient.js";
 import { initTtsAudio } from "./ttsAudio.js";
+import { initMotorSoundAudio } from "./motorSoundAudio.js";
 import { getConfig } from "./config.js";
 import { sharedAgentState } from "./teleop/agentState.js";
 import { createAgentIndicator } from "./agentIndicator.js";
@@ -169,6 +170,7 @@ export function initShell(navigate) {
 
   // Play robot speech (/tts/audio) regardless of which page is open; idempotent.
   initTtsAudio();
+  initMotorSoundAudio();
 
   // A running agent shows a top-center "running" pill, linking back to the Agent
   // page to take control. It's persistent (built once); setActive hides it while

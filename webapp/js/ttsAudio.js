@@ -25,6 +25,11 @@ navigator.locks?.request("innate-tts-speaker", () => {
   return new Promise(() => {}); // hold until this tab closes
 });
 
+/** Shared by continuous simulator audio so one tab owns every robot sound. */
+export function isRobotAudioSpeaker() {
+  return speaker;
+}
+
 export function initTtsAudio() {
   if (started) return;
   started = true;
