@@ -11,7 +11,9 @@ import { FIRST_NUDGE, INTRO_NUDGE, J3SO_NUDGE, REPLY_NUDGE, SWITCH_NUDGE } from 
 import {
   TELEOP_ONBOARDING_PROGRESS_KEY,
   TELEOP_ONBOARDING_STEPS,
+  SPEECH_UNAVAILABLE_STEP,
   boundingSpotlightRect,
+  copyForStep,
   isPickupCompletion,
   isWaveCompletion,
   paddedSpotlightRect,
@@ -34,9 +36,13 @@ assert.match(TELEOP_ONBOARDING_STEPS.agent.body, /combine skills/);
 assert.ok(isWaveCompletion({ skillId: "innate-os/wave" }));
 assert.ok(isPickupCompletion({ skillId: "innate-os/pick_any_object" }));
 assert.ok(!isPickupCompletion({ skillId: "innate-os/wave" }));
-assert.equal(resolveAvailableStep("talk", false), "pick");
+assert.equal(resolveAvailableStep("talk", false), "talk");
 assert.equal(resolveAvailableStep("talk", true), "talk");
 assert.equal(resolveAvailableStep("talk", null), "talk");
+assert.equal(copyForStep("talk", false), SPEECH_UNAVAILABLE_STEP);
+assert.equal(copyForStep("talk", true), TELEOP_ONBOARDING_STEPS.talk);
+assert.match(SPEECH_UNAVAILABLE_STEP.body, /INNATE_SERVICE_KEY/);
+assert.match(SPEECH_UNAVAILABLE_STEP.body, /Cartesia/);
 assert.deepEqual(
   positionAboveTarget(
     { left: 762, right: 992, top: 658 },
@@ -76,7 +82,7 @@ assert.deepEqual(
 );
 assert.equal(resolvePreviousStep("wave", null), "intro");
 assert.equal(resolvePreviousStep("pick", true), "talk");
-assert.equal(resolvePreviousStep("pick", false), "wave");
+assert.equal(resolvePreviousStep("pick", false), "talk");
 assert.ok(SPEAK_ADVANCE_MS >= 2000);
 // A running card is a repaint of its own step, not a step of its own.
 for (const step of ["wave", "pick"]) {
