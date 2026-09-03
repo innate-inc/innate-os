@@ -33,6 +33,7 @@ import json
 import queue
 import re
 import shutil
+import string
 import subprocess
 import threading
 import time
@@ -128,10 +129,13 @@ def _scribe_previous_text(keyterms: "list[str]") -> str:
     return f"Likely words: {', '.join(fitted)}" if fitted else ""
 
 
-_LEADING_PUNCTUATION = re.compile(r"^[\s.,!?;:…\-–—]+")
+_PUNCTUATION = ".,!?;:…-–—"
+_LEADING_PUNCTUATION = re.compile(rf"^[{re.escape(_PUNCTUATION)}]+\s+")
 
 
 def strip_leading_punctuation(text: str) -> str:
+    if not text.strip(_PUNCTUATION + string.whitespace):
+        return ""
     return _LEADING_PUNCTUATION.sub("", text).strip()
 
 
