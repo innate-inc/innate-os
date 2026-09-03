@@ -117,7 +117,11 @@ class WorldServer:
                 behind = target - self.sim.data.time
                 if behind > 0.5:
                     # Catching up a long stall would monopolize the lock; drop it.
-                    print(f"[world-server] dropping {behind:.1f}s of physics backlog after a stall", flush=True)
+                    print(
+                        f"[world-server] {time.strftime('%H:%M:%S')} "
+                        f"dropping {behind:.1f}s of physics backlog after a stall",
+                        flush=True,
+                    )
                     start_wall = time.perf_counter()
                     start_sim = self.sim.data.time
                 elif behind > 0:
@@ -440,6 +444,12 @@ def main() -> None:
         f"[world-server] GL self-test ({backend}): {steady_ms:.0f} ms/frame (first frame {first_ms:.0f} ms)",
         flush=True,
     )
+    # Warm the depth renderer too: its one-time GL context creation took ~1.4s
+    # INSIDE the physics lock when the first client requested depth mid-run
+    # (measured as a physics stall on a Pi). Here physics hasn't started and
+    # nobody is connected, so the cost is invisible -- and a broken depth
+    # path fails the boot instead of the first depth consumer.
+    server.sim.render_depth("main")
     release_freed_heap()  # model-compile + GL-context scratch, ~1GB on glibc
 
     binds = [b.strip() for b in args.bind.split(",") if b.strip()]
@@ -468,7 +478,10 @@ def main() -> None:
 
     for listener in listeners:
         threading.Thread(target=accept_loop, args=(listener,), daemon=True).start()
-    server.render_loop()  # main thread owns the GL context
+    try:
+        server.render_loop()  # main thread owns the GL context
+    except KeyboardInterrupt:
+        print("[world-server] interrupted -- shutting down", flush=True)
 
 
 if __name__ == "__main__":

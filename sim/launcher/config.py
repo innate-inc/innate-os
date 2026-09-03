@@ -223,6 +223,7 @@ LOG_TARGETS = {
     "viewer-build": VIEWER_BUILD_LOG_PATH,
     "world-server": WORLD_SERVER_LOG_PATH,
     "os-session": OS_SESSION_LOG_PATH,
+    "sim-driver": OS_SESSION_LOG_PATH,  # alias: the driver logs inside the ROS session
     "down": DOWN_LOG_PATH,
 }
 
