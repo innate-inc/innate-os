@@ -87,7 +87,37 @@ function buildCockpit(root) {
 
   const keyboard = createKeyboardDrive(drive);
   const telemetry = telemetryOverlay ? createTelemetry(telemetryOverlay, ros) : null;
-  const onboarding = createTeleopOnboarding(root);
+  const simProps = /** @type {{
+   *   onProps?: (cb: (props: {name: string}[]) => void) => () => void,
+   *   placePropAtRobot?: (name: string) => void,
+   * }} */ (/** @type {unknown} */ (session));
+  /** @type {(() => void) | null} */
+  let stopCylinderPrep = null;
+  const prepareCylinder = () => {
+    stopCylinderPrep?.();
+    stopCylinderPrep = null;
+    if (!config.simControls || !simProps.onProps || !simProps.placePropAtRobot) return;
+    let placed = false;
+    let subscribed = false;
+    let unsubscribe = () => {};
+    unsubscribe = simProps.onProps((props) => {
+      if (placed || !props.some((prop) => prop.name === "can")) return;
+      placed = true;
+      simProps.placePropAtRobot?.("can");
+      if (subscribed) {
+        unsubscribe();
+        stopCylinderPrep = null;
+      }
+    });
+    // onProps fires synchronously when the roster has already arrived.
+    subscribed = true;
+    if (placed) {
+      unsubscribe();
+      stopCylinderPrep = null;
+    }
+    else stopCylinderPrep = unsubscribe;
+  };
+  const onboarding = createTeleopOnboarding(root, { prepareCylinder });
   const parts = [videoStage, ...(telemetry ? [telemetry] : [])];
   // Keep the listen control in the same place on sim and hardware. The sim
   // starts listening by default; hardware remains opt-in for privacy.
@@ -114,7 +144,9 @@ function buildCockpit(root) {
     }),
     createArmPanel(armOverlay, ros, { hideServices: !!config.simControls }),
     ...(config.simControls ? [] : [createProfilingPanel(root, session)]),
-    createCameraSwitch(root, session, ros),
+    // Teleop is the head-camera control room. Do not let a saved Arm, Top View,
+    // or Map choice make onboarding begin from the wrong perspective.
+    createCameraSwitch(root, session, ros, { primaryOnMount: "main" }),
     keyboard,
     onboarding,
   );
@@ -135,6 +167,7 @@ function buildCockpit(root) {
       // Confirm dialogs (speed picker) live on document.body — sweep them so
       // navigating away doesn't leave one floating over the next page.
       dismissAllConfirms();
+      stopCylinderPrep?.();
       for (const part of parts) part.destroy();
       if (config.simControls) setTtsAudioEnabled(true);
       releaseSession(session);
