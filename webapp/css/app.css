@@ -390,6 +390,12 @@ select.skill-input {
     grid-row: 2;
   }
 
+  /* The cockpit's scene is the page, so it runs the full height and the
+     wordmark sits on it. Every other page keeps the band. */
+  .stage:has(.cockpit) {
+    grid-row: 1 / -1;
+  }
+
   /* Touch has no hover, so the desktop hover-expand never fires. */
   .rail:hover {
     width: 216px;
@@ -7396,7 +7402,9 @@ select.skill-input {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  min-height: 0;
+  /* Header + gap + one row. Stops here rather than shrinking on, so the roster
+     scrolls while there is room for a row and the panel scrolls once there is not. */
+  min-height: 106px;
 }
 
 .sim-scene-section-header {
@@ -7429,10 +7437,21 @@ select.skill-input {
 .sim-prop-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  min-height: 64px; /* a row of objects survives even the shortest screen */
+  min-height: 64px; /* one whole row of objects, plus a sliver of the next */
   gap: 7px;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+@media (max-height: 720px) {
+  .sim-scene-panel {
+    gap: 10px;
+  }
+
+  .sim-scene-section,
+  .sim-scene-utilities {
+    gap: 8px;
+  }
 }
 
 .sim-scene-button,
