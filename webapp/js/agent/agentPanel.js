@@ -130,25 +130,33 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   input.className = "agent-compose-input";
   input.rows = 1;
   input.setAttribute("aria-label", "Message MARS");
+  input.setAttribute("aria-keyshortcuts", "Enter");
   const placeholder = document.createElement("span");
   placeholder.className = "agent-compose-placeholder";
   placeholder.textContent = CHAT_EXAMPLES[0];
   const micMount = document.createElement("div");
   micMount.className = "agent-compose-mic";
+  const focusHint = document.createElement("button");
+  focusHint.type = "button";
+  focusHint.className = "tts-key tts-focus-key agent-compose-focus-key";
+  focusHint.textContent = "↵";
+  focusHint.setAttribute("aria-label", "Focus agent message input");
+  focusHint.title = "Focus message input (Enter)";
   const send = document.createElement("button");
   send.type = "submit";
   send.className = "agent-compose-send";
   send.innerHTML = '<span class="agent-compose-send-icon" aria-hidden="true"></span>';
   send.setAttribute("aria-label", "Send message");
   send.title = "Send message";
-  form.append(input, placeholder);
+  form.append(input, placeholder, focusHint);
   if (opts.enableMic) form.append(micMount);
   form.append(send);
   function syncComposerAction() {
     const empty = input.value.trim().length === 0;
     send.disabled = empty;
-    send.hidden = Boolean(opts.enableMic && empty);
+    send.hidden = empty;
     micMount.hidden = !opts.enableMic || !empty;
+    focusHint.hidden = !empty;
     placeholder.classList.toggle("hidden", !empty);
   }
   syncComposerAction();
@@ -186,6 +194,27 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       if (stream instanceof HTMLElement) stream.scrollTop = stream.scrollHeight;
     },
   });
+
+  function focusComposer() {
+    sheet?.open();
+    input.focus();
+  }
+  focusHint.addEventListener("click", focusComposer);
+  /** @param {KeyboardEvent} e */
+  function focusComposerOnEnter(e) {
+    if (
+      e.defaultPrevented ||
+      e.key !== "Enter" ||
+      e.repeat ||
+      e.altKey ||
+      e.ctrlKey ||
+      e.metaKey ||
+      e.target !== document.body
+    ) return;
+    e.preventDefault();
+    focusComposer();
+  }
+  window.addEventListener("keydown", focusComposerOnEnter);
 
   // ---- composer -----------------------------------------------------------
   async function startMic() {
@@ -328,6 +357,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       chat.destroy();
       document.removeEventListener("visibilitychange", onVisible);
       clearInterval(historyPoll);
+      window.removeEventListener("keydown", focusComposerOnEnter);
       unsubConn();
       unsubIn();
       unsubOut();
@@ -336,4 +366,3 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     },
   };
 }
-

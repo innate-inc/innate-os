@@ -9193,8 +9193,18 @@ select.skill-input {
   transition-duration: 100ms;
 }
 
+.agent-compose-focus-key {
+  position: relative;
+  z-index: 2;
+  align-self: center;
+}
+
 .agent-compose-input:focus {
   outline: none;
+}
+
+.agent-compose-input:focus ~ .agent-compose-focus-key {
+  display: none;
 }
 
 .agent-compose-mic {
