@@ -39,6 +39,12 @@ export const TELEOP_ONBOARDING_STEPS = {
   },
 };
 
+export const SPEECH_UNAVAILABLE_STEP = {
+  eyebrow: "2 of 3 · Speech",
+  title: "Speech is not configured",
+  body: "Add an INNATE_SERVICE_KEY and restart Innate OS to enable Cartesia speech. You can skip this step for now.",
+};
+
 // Worn by a step's card while its skill is in flight — never a step of its own,
 // so it never reaches stored progress. The eyebrow is the step's own, so the
 // counter does not move while the robot works.
@@ -71,16 +77,16 @@ export const isWaveCompletion = (run) => skillName(run.skillId) === "wave";
 /** @param {{skillId: string}} run */
 export const isPickupCompletion = (run) => skillName(run.skillId) === "pick any object";
 
-/** @param {keyof typeof TELEOP_ONBOARDING_STEPS} step @param {boolean | null} speechAvailable */
-export const resolveAvailableStep = (step, speechAvailable) =>
-  step === "talk" && speechAvailable === false ? "pick" : step;
+/** Unavailable capabilities remain visible and explain how to enable them.
+ * @param {keyof typeof TELEOP_ONBOARDING_STEPS} step @param {boolean | null} _speechAvailable */
+export const resolveAvailableStep = (step, _speechAvailable) => step;
 
-/** Stepping back into a step forward navigation skips would bounce straight forward again.
- * @param {keyof typeof PREV_STEP} step @param {boolean | null} speechAvailable */
-export const resolvePreviousStep = (step, speechAvailable) => {
-  const previous = PREV_STEP[step];
-  return previous === "talk" && speechAvailable === false ? PREV_STEP[previous] : previous;
-};
+/** @param {keyof typeof PREV_STEP} step @param {boolean | null} _speechAvailable */
+export const resolvePreviousStep = (step, _speechAvailable) => PREV_STEP[step];
+
+/** @param {keyof typeof TELEOP_ONBOARDING_STEPS} step @param {boolean | null} speechAvailable */
+export const copyForStep = (step, speechAvailable) =>
+  step === "talk" && speechAvailable === false ? SPEECH_UNAVAILABLE_STEP : TELEOP_ONBOARDING_STEPS[step];
 
 /**
  * Keep coaching for the bottom controls visually attached to the highlighted
@@ -175,7 +181,7 @@ export function createTeleopOnboarding(root, { prepareCylinder } = {}) {
     running = false;
     storageSet(TELEOP_ONBOARDING_PROGRESS_KEY, next);
     if (next === "pick") prepareCylinder?.();
-    render(TELEOP_ONBOARDING_STEPS[next]);
+    render(copyForStep(next, speechAvailable));
   }
 
   /** Repaint the current step with different copy — no progress write, and no
@@ -424,8 +430,9 @@ export function createTeleopOnboarding(root, { prepareCylinder } = {}) {
 
   /** @param {boolean} available */
   function onSpeechAvailabilityChange(available) {
+    const changed = speechAvailable !== available;
     speechAvailable = available;
-    if (!available && step === "talk") show("pick");
+    if (changed && step === "talk") render(copyForStep("talk", speechAvailable));
   }
 
   function onSkillsMenuOpenChange(open) {
