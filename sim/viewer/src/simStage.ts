@@ -383,6 +383,13 @@ export function createSimStage(
     barFill.style.width = `${total > 0 ? Math.min(100, (loaded / total) * 100) : 0}%`;
     readout.textContent = `${mb(loaded)} / ${mb(total)} MB`;
   };
+  // A phase with nothing to download: the world server is rebuilding its
+  // world, so the last load's bar and byte count must not linger under it.
+  const setWaiting = (text: string) => {
+    setLoading(text);
+    barFill.style.width = "0%";
+    readout.textContent = "";
+  };
   const failLoading = (text: string) => {
     barFill.style.background = "#ff9f9f";
     loadingLabel.style.color = "#ff9f9f";
@@ -653,7 +660,7 @@ export function createSimStage(
     environmentSelect.value = environment?.id ?? "";
     environmentSelect.disabled = pending?.state === "loading";
     if (pending?.state === "loading") {
-      setLoading(`switching to ${pending.display_name.toLowerCase()}...`);
+      setWaiting(`switching to ${pending.display_name.toLowerCase()}: the simulator is rebuilding its world...`);
     } else if (pending?.state === "failed") {
       console.error("[sim-viewer] environment switch failed:", pending.message);
       failLoading(`switch to ${pending.display_name.toLowerCase()} failed`);
