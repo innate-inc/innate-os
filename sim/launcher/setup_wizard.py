@@ -432,7 +432,7 @@ def configure_brain_backend(config: dict[str, object]) -> None:
     choice = _prompt_choice(
         "How would you like to access the cloud LLM?",
         {
-            "1": "Your own API keys (Gemini, plus Cartesia for the robot's voice)",
+            "1": "Your own API keys (Gemini, plus optional Cartesia for the voice)",
             "2": "Innate service key (ships with a MARS robot)",
             "3": "None (run the sim without an agent)",
         },

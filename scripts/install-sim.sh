@@ -883,7 +883,7 @@ VOICE_KEY=""
 
 draw_llm_options() {
     llm_row=0
-    for llm_label in "Your own API keys     a Gemini key, plus Cartesia for the robot's voice" \
+    for llm_label in "Your own API keys     a Gemini key, plus optional Cartesia for the voice" \
         "Innate service key    ships with a MARS robot, or ask on https://discord.gg/innate" \
         "None                  run the simulator without an agent"; do
         llm_row=$((llm_row + 1))
