@@ -84,6 +84,10 @@ PARAMS = {
     "descend_z3": 0.045,
     # ee_link target, not fingertip height. 0.01 dug into carpet and aborted.
     "floor_z": 0.03,
+    # One bounded retry after the encoder proves the claw closed on air. The
+    # normal attempt remains carpet-safe; only a confirmed miss goes 1 cm
+    # lower, before the robot has backed away from the target.
+    "retry_floor_z": 0.02,
     "descend_s": 1.2,
     "descend_abort_z": 0.12,
     "arm_pitch": 1.30,
@@ -508,13 +512,24 @@ class PickAnyObject(Skill):
             return 0.0, p["arm_pitch"], 0.0
         return roll, ROLLED_PITCH, yaw
 
-    def _push_to_floor(self, x: float, y: float, z_from: float, roll: float, pitch: float, yaw: float) -> None:
+    def _push_to_floor(
+        self,
+        x: float,
+        y: float,
+        z_from: float,
+        roll: float,
+        pitch: float,
+        yaw: float,
+        *,
+        floor_z: float | None = None,
+    ) -> None:
         """Blind descent to floor as ONE multi-waypoint trajectory — the
         rung-by-rung version decelerated at every rung and looked choppy.
         Contact just stalls the final segments; abort if still high."""
         p = self._p
+        target_z = p["floor_z"] if floor_z is None else floor_z
         self.check_cancelled()
-        rungs = [z for z in (p["descend_z1"], p["descend_z2"], p["descend_z3"], p["floor_z"]) if z < z_from - 1e-6]
+        rungs = [z for z in (p["descend_z1"], p["descend_z2"], p["descend_z3"], target_z) if z < z_from - 1e-6]
         if rungs:
             # grip=GRIPPER_OPEN re-asserts an open claw even if it drifted
             # shut during the wrist descent (never re-seed from measured).
@@ -533,6 +548,8 @@ class PickAnyObject(Skill):
             ee_z = self.manipulation.pose.z
         except ArmFailed:
             ee_z = None
+        if ee_z is not None:
+            self.logger.info(f"[PickAnyObject] descent target={target_z:.3f}, settled z={ee_z:.3f}")
         if ee_z is not None and ee_z > p["descend_abort_z"]:
             self.manipulation.recover()
             raise ArmUnhealthy("arm would not descend")
@@ -545,41 +562,65 @@ class PickAnyObject(Skill):
             raise LookupError("joint states missing or short")
         return list(js.position[:6])
 
-    def _close_twist_lift(self, x: float, y: float, roll: float, pitch: float, yaw: float) -> None:
-        """Close, joint-space twist+lift (IK would unwind j5). Uses time.sleep
-        on purpose: the fingers have committed, and a cancel must not unwind
-        mid-grip — the run finishes this and the teardown carries the object.
-        Closing on air reaches ~GRIPPER_EMPTY_J6, which _grasp_verified's j6
-        check catches."""
+    def _gripper_closed_on_air(self) -> bool:
+        """Whether fresh encoder state proves the last close caught nothing.
+
+        Missing state is deliberately inconclusive: never reopen a possibly
+        held object merely because telemetry dropped out.
+        """
+        js = self.joint_states
+        return js is not None and len(js.position) > 5 and js.position[5] <= GRIPPER_EMPTY_J6 + 0.02
+
+    def _pre_close_lift(self, x: float, y: float, roll: float, pitch: float, yaw: float) -> None:
         p = self._p
-        if p["close_lift_m"] > 0:
-            try:
-                ee_z = self.manipulation.pose.z
-                self.manipulation.move_to(
-                    x,
-                    y,
-                    ee_z + p["close_lift_m"],
-                    roll=roll,
-                    pitch=pitch,
-                    yaw=yaw,
-                    duration=0.5,
-                    tolerance_xy=None,
-                    tolerance_z=None,
-                )
-            except ArmFailed:
-                pass  # best-effort pre-close lift; the grasp decides below
+        if p["close_lift_m"] <= 0:
+            return
+        try:
+            ee_z = self.manipulation.pose.z
+            self.manipulation.move_to(
+                x,
+                y,
+                ee_z + p["close_lift_m"],
+                roll=roll,
+                pitch=pitch,
+                yaw=yaw,
+                duration=0.5,
+                tolerance_xy=None,
+                tolerance_z=None,
+            )
+        except ArmFailed:
+            pass  # best-effort pre-close lift; the grasp decides below
+
+    def _close_once(self) -> None:
+        p = self._p
         try:
             self.manipulation.gripper_close(p["close_strength"], duration=p["close_s"])
         except ArmFailed as e:
             raise ArmUnhealthy(f"gripper would not close: {e}") from e
-        # Fingers have committed: from here teardown must fold with the grip
-        # kept, not open over the floor mid-carry — only a verified miss
-        # clears the flag. Set here, not after _grasp_at returns: an exception
-        # in the twist/lift below (e.g. ArmUnhealthy from the LookupError
-        # fallback) must not release a just-grasped object on the way home.
-        self._holding = True
         time.sleep(p["close_settle_s"])
 
+    def _retry_lower_if_empty(self, x: float, y: float, roll: float, pitch: float, yaw: float) -> bool:
+        """Retry one centimetre lower, once, after a confirmed air close."""
+        if not self._gripper_closed_on_air():
+            return False
+        p = self._p
+        retry_z = p["retry_floor_z"]
+        self.logger.warning(f"[PickAnyObject] claw closed on air; retrying grasp at z={retry_z:.3f}")
+        self._holding = False
+        self.manipulation.gripper_open(duration=1.0)
+        try:
+            z_from = self.manipulation.pose.z
+        except ArmFailed:
+            z_from = p["floor_z"] + p["close_lift_m"]
+        self._push_to_floor(x, y, z_from, roll, pitch, yaw, floor_z=retry_z)
+        self._pre_close_lift(x, y, roll, pitch, yaw)
+        self._close_once()
+        self._holding = True
+        return True
+
+    def _lift_grasp(self, x: float, y: float, roll: float, yaw: float) -> None:
+        """Lift a closed grasp; joint space keeps a rolled wrist wound."""
+        p = self._p
         grip = -p["close_strength"]
         # The twist winds FABRIC onto the fingers; on a rigid shell it helps
         # eject the object. Gemini's grip_strength doubles as the hardness signal.
@@ -618,6 +659,26 @@ class PickAnyObject(Skill):
             self.manipulation.move_to(
                 x, y, 0.22, roll=roll, pitch=p["arm_pitch"], yaw=yaw, duration=2.0, tolerance_xy=0.10
             )
+
+    def _close_twist_lift(self, x: float, y: float, roll: float, pitch: float, yaw: float) -> None:
+        """Close, retry a proven miss lower once, then lift.
+
+        The encoder is checked both after closing and after the first lift. A
+        floor or edge contact can initially hold the claw open even though no
+        object comes up; that miss must also retry before the base backs away.
+        """
+        self._pre_close_lift(x, y, roll, pitch, yaw)
+        self._close_once()
+        retried = self._retry_lower_if_empty(x, y, roll, pitch, yaw)
+        # Fingers have committed: from here teardown must fold with the grip
+        # kept, not open over the floor mid-carry — only a verified miss
+        # clears the flag. Set here, not after _grasp_at returns: an exception
+        # in the lift below must not release a just-grasped object on the way
+        # home.
+        self._holding = True
+        self._lift_grasp(x, y, roll, yaw)
+        if not retried and self._retry_lower_if_empty(x, y, roll, pitch, yaw):
+            self._lift_grasp(x, y, roll, yaw)
 
     def _grasp_at(self, prompt, xy):
         """Full grasp at floor xy (base_link)."""
