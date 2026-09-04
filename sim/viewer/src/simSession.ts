@@ -15,6 +15,7 @@ import type {
   EnvironmentRoster,
 } from "./physics/worldStateController";
 import type { PropInfo } from "./props";
+import { interpolateTraffic, type TrafficManifest, type TrafficState } from "./trafficState";
 
 /** One roster row as a renderer wants it: what the challenge is, plus how it
  * has gone so far. Merged here from the two halves the server sends. */
@@ -95,6 +96,7 @@ export class SimSession {
     yaw: number;
     joints: Record<string, number>;
     objects: Record<string, number[]>;
+    traffic: TrafficState | null;
   }[] = [];
   #gaps: number[] = []; // recent inter-arrival gaps: sizes the playback delay
   #lastArrival = 0;
@@ -123,6 +125,13 @@ export class SimSession {
 
   #environment: EnvironmentRoster | null = null;
   #environmentListeners = new Set<(roster: EnvironmentRoster) => void>();
+
+  // The pack's traffic roster, applied to the scene on the next tick. A scene
+  // rejects a roster whose lamp materials it lacks (a pack still streaming
+  // in); the latch stops that retrying every frame until refreshTraffic().
+  #trafficManifest: TrafficManifest | null = null;
+  #trafficManifestDirty = false;
+  #trafficManifestRetryBlocked = false;
 
   #stateUrls: string[];
   #rosUrl: string;
@@ -206,6 +215,9 @@ export class SimSession {
     this.#controller.onEnvironment = (roster) => {
       const previous = this.#environment?.environment?.id;
       this.#environment = roster;
+      this.#trafficManifest = roster.traffic;
+      this.#trafficManifestDirty = true;
+      this.#trafficManifestRetryBlocked = false;
       // Another world: its first pose must spawn (and frame) the robot afresh.
       if (roster.environment && roster.environment.id !== previous) {
         this.#samples = [];
@@ -229,11 +241,11 @@ export class SimSession {
 
       const last = this.#samples[this.#samples.length - 1];
       if (last === undefined || s.t > last.t) {
-        this.#samples.push({ t: s.t, x: s.x, y: s.y, yaw: s.yaw, joints: s.joints, objects: s.objects });
+        this.#samples.push({ t: s.t, x: s.x, y: s.y, yaw: s.yaw, joints: s.joints, objects: s.objects, traffic: s.traffic });
         if (this.#samples.length > 60) this.#samples.shift();
       } else if (s.t < last.t - 0.5) {
         // Sim clock jumped backwards (world-server restart): restart playback.
-        this.#samples = [{ t: s.t, x: s.x, y: s.y, yaw: s.yaw, joints: s.joints, objects: s.objects }];
+        this.#samples = [{ t: s.t, x: s.x, y: s.y, yaw: s.yaw, joints: s.joints, objects: s.objects, traffic: s.traffic }];
         this.#playT = null;
       }
       this.#live = true;
@@ -330,7 +342,16 @@ export class SimSession {
     return () => this.#propListeners.delete(cb);
   }
 
-  /** Subscribe and replay the latest environment roster, if available. */
+  /** The stage finished loading a pack's scene: apply the roster's traffic to
+   * it now that its lamp materials exist. */
+  refreshTraffic(): void {
+    this.#trafficManifestDirty = true;
+    this.#trafficManifestRetryBlocked = false;
+  }
+
+  /** Subscribe to the environment roster (environments.py); fires immediately
+   * once it has arrived. The stage loads the pack's scene and builds its
+   * picker from this. */
   onEnvironment(cb: (roster: EnvironmentRoster) => void): () => void {
     this.#environmentListeners.add(cb);
     if (this.#environment) cb(this.#environment);
@@ -483,7 +504,19 @@ export class SimSession {
       this.#propsDirty = false;
       scene.setPropManifest(this.#props);
     }
+    if (this.#trafficManifestDirty && !this.#trafficManifestRetryBlocked) {
+      try {
+        scene.setTrafficManifest(this.#trafficManifest);
+        this.#trafficManifestDirty = false;
+      } catch (error) {
+        this.#trafficManifestRetryBlocked = true;
+        console.error("[sim-session] traffic roster rejected; keeping the last complete traffic frame:", error);
+      }
+    }
     scene.setObjectPoses(objects);
+    // A rejected roster keeps its last complete frame: states belong to the
+    // pending roster and could move shared car ids or relight its lamps.
+    if (!this.#trafficManifestDirty) scene.setTrafficState(interpolateTraffic(a.traffic, b.traffic, u));
 
     if (this.#overlaysDirty) {
       this.#overlaysDirty = false;

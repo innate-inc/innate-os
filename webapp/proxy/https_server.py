@@ -194,6 +194,9 @@ SIM_VIEWER_ROUTES = {
     "/robot/": ROOT.parent / "ros2_ws" / "src" / "mars_bot" / "mars_sim",
     # Collision hulls for the SimSession's "collisions" debug overlay.
     "/physics/": SIM_VIEWER_ROOT / "public" / "physics",
+    # Locally built environment packs (sim/environments.local): outside public,
+    # which the launcher replaces wholesale on every asset-image refresh.
+    "/local-environments/": SIM_VIEWER_ROOT / "local-environments",
 }
 
 

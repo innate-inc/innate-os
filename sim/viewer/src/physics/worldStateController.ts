@@ -4,6 +4,7 @@
 // world_server.py "two interfaces".
 
 import type { PropInfo } from "../props";
+import { parseTrafficManifest, parseTrafficState, type TrafficManifest, type TrafficState } from "../trafficState";
 
 /** What a challenge IS: sent once per connection, like the prop roster,
  * because none of it changes while the server runs (challenges.py roster). */
@@ -58,6 +59,8 @@ export interface EnvironmentRoster {
   environment: EnvironmentInfo | null;
   environments: EnvironmentSummary[];
   switch: (EnvironmentSummary & { state: "loading" | "failed"; message?: string }) | null;
+  /** The pack's procedural cars and signals (traffic.py); null where it has none. */
+  traffic: TrafficManifest | null;
 }
 
 export interface WorldState {
@@ -72,6 +75,8 @@ export interface WorldState {
   /** Ground truth of every manipulation prop (world.py GRASP_OBJECTS), keyed
    * by name: [x, y, z, qw, qx, qy, qz]. Empty on servers that predate them. */
   objects: Record<string, number[]>;
+  /** The pack's traffic (traffic.py); null where the pack has none. */
+  traffic: TrafficState | null;
   /** Challenge judge state; null on servers that predate it. */
   challenge: ChallengeBlock | null;
 }
@@ -148,16 +153,22 @@ export class WorldStateController {
       environment?: EnvironmentInfo | null;
       environments?: EnvironmentSummary[];
       switch?: EnvironmentRoster["switch"];
+      traffic_manifest?: unknown;
     };
-    if (parsed.props || parsed.challenges) {
+    if (parsed.props || parsed.challenges || "environment" in parsed || "traffic_manifest" in parsed) {
       // Roster frame, not a state frame: it has no clock, opens the stream and
       // returns whenever the world changes (see world_server.serve_state).
       if (parsed.props) this.onProps?.(parsed.props);
       if (parsed.challenges) this.onChallenges?.(parsed.challenges);
+      const traffic = parseTrafficManifest(parsed.traffic_manifest);
+      if (parsed.traffic_manifest != null && traffic === null) {
+        console.error("[sim-viewer] ignoring a malformed traffic manifest");
+      }
       this.onEnvironment?.({
         environment: parsed.environment ?? null,
         environments: parsed.environments ?? [],
         switch: parsed.switch ?? null,
+        traffic,
       });
       return;
     }
@@ -167,8 +178,14 @@ export class WorldStateController {
       pose: [number, number, number];
       joints: Record<string, number>;
       objects?: Record<string, number[]> | null;
+      traffic?: unknown;
       challenge?: ChallengeBlock | null;
     };
+    const traffic = parseTrafficState(msg.traffic);
+    if (msg.traffic != null && traffic === null) {
+      console.warn("[sim-viewer] ignoring a world-state frame with malformed traffic");
+      return;
+    }
     const joints = msg.joints;
     // joint6M: the gripper's mirrored finger (URDF mimic of joint6, x-1).
     joints["joint6M"] = -(joints["joint6"] ?? 0);
@@ -180,6 +197,7 @@ export class WorldStateController {
       yaw: msg.pose[2],
       joints,
       objects: msg.objects ?? {},
+      traffic,
       challenge: msg.challenge ?? null,
     });
   }

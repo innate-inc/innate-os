@@ -625,6 +625,8 @@ export function createSimStage(
       if (disposed || version !== loadVersion) return;
       await Promise.all([robotDone, scene.streamApartment(queue, layout)]);
       if (disposed || version !== loadVersion) return;
+      scene.markEnvironmentReady();
+      session.refreshTraffic();
       hideLoading();
       // Prefetch props after the scene, outside its progress bar.
       if (firstLoad) scene.prefetchPropModels();

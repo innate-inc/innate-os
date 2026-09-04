@@ -15,6 +15,8 @@ import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
 import { LoadQueue, queuedGLB } from "./loadQueue";
 import { PropLibrary, type PropInfo } from "./props";
+import { TrafficLibrary } from "./traffic";
+import type { TrafficManifest, TrafficState } from "./trafficState";
 
 /** An environment pack's browser assets as its manifest names them: paths
  * under sim/viewer/public, which the webapp serves at /models and /physics
@@ -222,6 +224,8 @@ export class SimScene {
   private hullMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff88, wireframe: true });
   // Every prop in the world, built from the server's roster (props.ts).
   private props: PropLibrary;
+  // The pack's cars and signal lamps, driven by the world server (traffic.ts).
+  private traffic: TrafficLibrary;
   // While true a placement drag owns the pointer and orbit stays off.
   private placementMode = false;
   private cameraMode: CameraMode = "free";
@@ -273,6 +277,7 @@ export class SimScene {
       () => this.updateShadowVolume(),
       (model) => this.warmTextures(model),
     );
+    this.traffic = new TrafficLibrary(this.scene, this.hullMaterial, () => this.updateShadowVolume());
 
     this.camera = new THREE.PerspectiveCamera(55, w / h, 0.05, 200);
     this.camera.up.set(0, 0, 1);
@@ -449,6 +454,7 @@ export class SimScene {
   setCollisionHullsVisible(visible: boolean): void {
     this.hullsVisible = visible;
     this.props.setHullsVisible(visible);
+    this.traffic.setHullsVisible(visible);
     if (visible && !this.hullsPromise) {
       // ~1300 OBJ fetches; takes seconds on first show. A failure resets the
       // promise so toggling again retries instead of staying dead forever.
@@ -552,8 +558,28 @@ export class SimScene {
     return { group, rooms, monolith: false, baseUrl };
   }
 
-  /** Dispose environment assets; retain the robot and props for the next pose. */
+  /** Adopt the world server's traffic roster: cars to draw and the lamp
+   * materials to light. Throws when the loaded environment lacks a lamp the
+   * roster names (see TrafficLibrary); the session retries after a load. */
+  setTrafficManifest(manifest: TrafficManifest | null): void {
+    this.traffic.setManifest(manifest);
+  }
+
+  /** Every environment glb is in: the roster's lamp materials must exist now. */
+  markEnvironmentReady(): void {
+    this.traffic.markEnvironmentReady();
+  }
+
+  /** Mirror the authoritative signal aspects and car poses from MuJoCo. */
+  setTrafficState(state: TrafficState | null): void {
+    this.traffic.setState(state);
+  }
+
+  /** Drop the loaded environment -- rooms, placeholders, collision hulls,
+   * traffic -- ahead of another pack's load. The robot and props stay; the
+   * next pose spawns the robot into the new world and frames it there. */
   unloadEnvironment(): void {
+    this.traffic.resetEnvironment();
     for (const group of [this.layoutGroup, this.hullsGroup]) {
       if (!group) continue;
       this.scene.remove(group);
@@ -674,6 +700,7 @@ export class SimScene {
         else setFrontSide(obj.material);
       }
     });
+    this.traffic.registerEnvironment(root);
   }
 
   /** A thick wireframe outline of a box, used as a loading placeholder (room or
@@ -843,6 +870,12 @@ export class SimScene {
       const dx = root.position.x - this.robotXY[0];
       const dy = root.position.y - this.robotXY[1];
       if (Math.hypot(dx, dy) <= reach) points.push([root.position.x, root.position.y]);
+    }
+    for (const bounds of this.traffic.visibleBounds) {
+      const dx = Math.max(bounds.minX - this.robotXY[0], 0, this.robotXY[0] - bounds.maxX);
+      const dy = Math.max(bounds.minY - this.robotXY[1], 0, this.robotXY[1] - bounds.maxY);
+      if (Math.hypot(dx, dy) > reach) continue;
+      points.push([bounds.minX, bounds.minY], [bounds.minX, bounds.maxY], [bounds.maxX, bounds.minY], [bounds.maxX, bounds.maxY]);
     }
     const xs = points.map((pt) => pt[0]);
     const ys = points.map((pt) => pt[1]);
@@ -1233,6 +1266,7 @@ export class SimScene {
    * the oldest (~16), breaking the live view. */
   dispose(): void {
     this.props.clearPlacementPreview();
+    this.traffic.dispose();
     this.placeholderMat?.dispose();
     this.cameraEnv?.dispose(); // a PMREM render target, not a loaded image
     this.controls.dispose();

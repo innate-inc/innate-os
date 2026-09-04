@@ -95,6 +95,7 @@ echo "Started UDP leader receiver (:9999/udp)..."
 # can switch it between packs (/nav/change_navigation_map).
 mkdir -p ~/innate-os/data/maps
 cp ~/innate-os/sim/assets/map/*.yaml ~/innate-os/sim/assets/map/*.pgm ~/innate-os/data/maps/ 2>/dev/null || true
+cp ~/innate-os/sim/assets/local-environments/*/map/*.yaml ~/innate-os/sim/assets/local-environments/*/map/*.pgm ~/innate-os/data/maps/ 2>/dev/null || true
 tmux new-window -t "$SESSION_NAME" -n nav-brain
 tmux send-keys -t "${TMUX_TARGET_PREFIX}:nav-brain" "ros2 launch mars_nav mode_manager.launch.py" C-m
 echo "Started navigation system..."
