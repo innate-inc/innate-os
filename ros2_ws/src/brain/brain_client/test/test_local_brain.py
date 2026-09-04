@@ -16,6 +16,9 @@ import pytest
 from brain_client.brain.context import GeminiContext, _decision_from
 from brain_client.brain.prompt import build_system_prompt
 from brain_client.brain.tools import (
+    END_CONTINUOUS_NAVIGATION,
+    GO_TO_POINT_IN_VIEW,
+    NAV_INSIGHT_CONTINUOUS,
     STOP_SKILL,
     WAIT,
     assign_tool_names,
@@ -128,6 +131,30 @@ def test_build_tools_while_running_with_user_speech_offers_stop_alone():
 def test_build_tools_with_no_skills_still_offers_wait():
     declarations = build_tools([], None)[0]["functionDeclarations"]
     assert [d["name"] for d in declarations] == ["wait"]
+
+
+def test_continuous_navigation_tools_follow_visual_navigation_availability():
+    unavailable = build_tools([], None)[0]["functionDeclarations"]
+    assert NAV_INSIGHT_CONTINUOUS not in [d["name"] for d in unavailable]
+
+    idle = build_tools([], None, can_go_to_point_in_view=True)[0]["functionDeclarations"]
+    assert [d["name"] for d in idle] == [GO_TO_POINT_IN_VIEW, NAV_INSIGHT_CONTINUOUS, WAIT]
+
+    active = build_tools([], None, can_go_to_point_in_view=True, continuous_navigation_active=True)[0][
+        "functionDeclarations"
+    ]
+    assert [d["name"] for d in active] == [GO_TO_POINT_IN_VIEW, END_CONTINUOUS_NAVIGATION, WAIT]
+
+    actuator_removed = build_tools([], None, continuous_navigation_active=True)[0]["functionDeclarations"]
+    assert [d["name"] for d in actuator_removed] == [END_CONTINUOUS_NAVIGATION, WAIT]
+
+    moving = build_tools([], "navigate_to_position", continuous_navigation_active=True)[0]["functionDeclarations"]
+    assert [d["name"] for d in moving] == [
+        STOP_SKILL,
+        GO_TO_POINT_IN_VIEW,
+        END_CONTINUOUS_NAVIGATION,
+        WAIT,
+    ]
 
 
 def test_unknown_param_type_falls_back_to_annotated_string():
@@ -677,6 +704,114 @@ def test_go_to_point_rejects_out_of_range_coordinates(agent_factory):
     assert started == []
     outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
     assert outcome == "rejected — y and x must be within 0-1000 image coordinates"
+
+
+def test_local_agent_runs_a_continuous_navigation_step_and_finishes(agent_factory):
+    """The real turn/dispatch path carries the objective across bounded Nav2 steps."""
+    from brain_client.skills.registry import SkillRegistry
+
+    agent, state = agent_factory()
+    state.registry = SkillRegistry.from_metadata([NAV_SKILL])
+    agent._roster.active_skill_ids = lambda: [NAV_SKILL["id"]]
+    agent._camera.fresh_image_jpeg = lambda max_age: FRAME
+    agent._camera.fresh_frame = lambda max_age: (FRAME, -10.0)
+    agent._config.vertical_fov = CAM["vertical_fov_deg"]
+    agent._config.height_cam = CAM["cam_height"]
+    agent._config.x_cam = CAM["cam_forward"]
+    started = []
+    agent._runner.start_task = lambda *a, **k: started.append(a)
+
+    responses = iter(
+        [
+            model_response(call_part(NAV_INSIGHT_CONTINUOUS, {"target_description": "the end of the hall"})),
+            model_response(call_part(GO_TO_POINT_IN_VIEW, {"y": 900, "x": 500})),
+            model_response(
+                call_part(
+                    END_CONTINUOUS_NAVIGATION,
+                    {"status": "reached", "reason": "the end wall is directly in front of me"},
+                )
+            ),
+        ]
+    )
+    request_bodies = []
+
+    def transport(model, body):
+        request_bodies.append(body)
+        return [next(responses)]
+
+    agent._context._transport = transport
+    run_turn(agent)
+    assert agent._continuous_navigation_target == "the end of the hall"
+
+    run_turn(agent)
+    assert len(started) == 1, agent._context._history[-1]
+    assert started[0][0] == NAV_SKILL["id"]
+    assert started[0][2]["local_frame"] is True
+    system = request_bodies[1]["systemInstruction"]["parts"][0]["text"]
+    assert "one bounded step" in system
+    observation = request_bodies[1]["contents"][-1]["parts"][0]["text"]
+    assert 'Continuous navigation objective: "the end of the hall"' in observation
+
+    run_turn(agent)
+    assert agent._continuous_navigation_target is None
+
+
+def test_continuous_navigation_replaces_a_running_waypoint_from_a_fresh_frame(agent_factory):
+    agent, state = agent_factory()
+    agent._roster.active_skill_ids = lambda: [NAV_SKILL["id"]]
+    agent._continuous_navigation_target = "the end of the hall"
+    agent._frame_at_capture = FRAME
+    agent._pitch_at_capture = -10.0
+    agent._config.vertical_fov = CAM["vertical_fov_deg"]
+    agent._config.height_cam = CAM["cam_height"]
+    agent._config.x_cam = CAM["cam_forward"]
+    state.primitive_running = RunningSkill(
+        primitive_name="navigate_to_position",
+        skill_id=NAV_SKILL["id"],
+        primitive_id="first-step",
+    )
+    cancelled = []
+    started = []
+    agent._runner.has_active_goal = True
+    agent._runner.cancel_active_goal = lambda: cancelled.append(True)
+    agent._runner.start_task = lambda *args: started.append(args)
+
+    outcome = agent._go_to_point_in_view({"y": 900, "x": 500})
+
+    assert "replacing" in outcome
+    assert cancelled == [True]
+    assert agent._continuous_navigation_pending_goal is not None
+    assert started == []
+
+    # A newer frame can revise the queued goal without issuing duplicate
+    # cancellation requests. Only the latest visual decision is executed.
+    first_pending = agent._continuous_navigation_pending_goal
+    outcome = agent._go_to_point_in_view({"y": 900, "x": 550})
+    assert "newest camera frame" in outcome
+    assert cancelled == [True]
+    assert agent._continuous_navigation_pending_goal != first_pending
+
+    # The cancellation result has released the runner slot before it reports
+    # the terminal event. The latest visual goal becomes the next Nav2 step.
+    state.primitive_running = None
+    agent.on_skill_event("interrupted", "navigate_to_position", "replanning")
+    asyncio.run_coroutine_threadsafe(asyncio.sleep(0), agent._runtime.loop).result(timeout=2)
+
+    assert len(started) == 1
+    assert started[0][0] == NAV_SKILL["id"]
+    assert agent._continuous_navigation_target == "the end of the hall"
+    assert agent._continuous_navigation_pending_goal is None
+
+
+def test_external_navigation_interruption_clears_continuous_mode(agent_factory):
+    agent, _ = agent_factory()
+    agent._continuous_navigation_target = "the end of the hall"
+
+    agent.on_skill_event("interrupted", "navigate_to_position", "Stopped from the app")
+    # Barrier behind the callback posted by on_skill_event.
+    asyncio.run_coroutine_threadsafe(asyncio.sleep(0), agent._runtime.loop).result(timeout=2)
+
+    assert agent._continuous_navigation_target is None
 
 
 def test_chat_failure_after_commit_still_answers_the_models_calls(agent_factory, monkeypatch):

@@ -3,6 +3,7 @@
 from innate_skills.change_volume import ChangeVolume
 from innate_skills.check_battery import CheckBattery
 from innate_skills.close_gripper import CloseGripper
+from innate_skills.continuous_navigation import ContinuousNavigation
 from innate_skills.drop_in_box import DropInBox
 from innate_skills.head_emotion import HeadEmotion
 from innate_skills.navigate_to_position import NavigateToPosition
@@ -33,6 +34,7 @@ class DemoAgent(Agent):
         ref generated inside the recording folder (see skills/physical_refs.py)."""
         return [
             NavigateToPosition,
+            ContinuousNavigation,
             Wave,
             PickAnyObject,
             OpenGripper,

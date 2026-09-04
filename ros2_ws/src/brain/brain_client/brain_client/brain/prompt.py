@@ -100,14 +100,33 @@ A skill is running right now. Guidance while it runs:
 {guidance}
 """
 
+_CONTINUOUS_NAVIGATION_GUIDANCE = """
+Continuous visual navigation mode is active.
+
+Reassess the route from every fresh camera update, including while navigate_to_position is still moving. If the
+current waypoint no longer looks best, call go_to_point_in_view with the best safe floor point in the CURRENT frame;
+this replaces the in-flight waypoint. If the waypoint still looks correct, wait rather than replacing it needlessly.
+A completed navigate_to_position run is only one bounded step, not completion of the objective. If the objective is
+visibly reached, call end_continuous_navigation with status=reached. A failed or externally interrupted step ends
+this mode automatically. If the route is unsafe or ambiguous, or no progress can be made, call
+end_continuous_navigation with status=cannot_proceed. Do not invent a route through unseen obstacles, and do not
+claim arrival merely because one movement completed. If the user asks to stop or switch tasks, call
+end_continuous_navigation with status=cancelled before doing anything else.
+"""
+
 
 def build_system_prompt(
-    directive_prompt: str | None, identity: RobotIdentity | None = None, running_guidance: str = ""
+    directive_prompt: str | None,
+    identity: RobotIdentity | None = None,
+    running_guidance: str = "",
+    continuous_navigation_active: bool = False,
 ) -> str:
     directive = (directive_prompt or "").strip() or "Be a helpful home robot."
     prompt = _SYSTEM_PROMPT.format(directive=directive, identity=_identity_block(identity))
     if running_guidance:
         prompt += _RUNNING_GUIDANCE.format(guidance=running_guidance)
+    if continuous_navigation_active:
+        prompt += _CONTINUOUS_NAVIGATION_GUIDANCE
     return prompt
 
 
