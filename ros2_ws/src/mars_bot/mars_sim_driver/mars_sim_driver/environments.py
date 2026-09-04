@@ -123,7 +123,7 @@ class NavMapBridge:
             if frame.get("topic") == self.TOPIC:
                 self.current = str(frame["msg"]["data"])
             elif frame.get("op") == "service_response":
-                print(f"[nav-map] {self.SERVICE}: {frame.get('values')}", flush=True)
+                print(f"[nav-map] {self.SERVICE} -> {frame.get('values', frame)}", flush=True)
             if self.current in (None, self.wanted) or time.monotonic() - requested_at < self.RETRY_S:
                 continue
             requested_at = time.monotonic()
