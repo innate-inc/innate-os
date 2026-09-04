@@ -335,7 +335,7 @@ select.skill-input {
   opacity: 0.85;
 }
 
-/* Bottom-pinned utility links (Settings), at the rail's very bottom. */
+/* Bottom-pinned utility links (Help and Settings), at the rail's very bottom. */
 .rail-foot {
   margin-top: auto;
   padding-top: 12px;
@@ -457,6 +457,425 @@ select.skill-input {
     inset: 0;
     z-index: 69;
     background: rgb(0 0 0 / 45%);
+  }
+}
+
+.rail-help {
+  width: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail-help-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* ---- app onboarding ---------------------------------------------------- */
+
+/* Agent onboarding starts as the product itself: MARS plus the ordinary chat,
+   with no card, spotlight, or substitute interaction. Intro Agent reveals the
+   surrounding simulator surfaces through /onboarding/ui as it explains them. */
+.agent-conversation-onboarding > :is(
+    .overlay-stack-top-left,
+    .agent-stage-view-toggle,
+    .sim-debug-stack,
+    .agent-challenge-dock
+  ),
+.agent-conversation-onboarding .agent-control-panel {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-6px);
+}
+
+/* Unlike the floating overlays, the controls share the chat's flex column.
+   Remove them from layout until their reveal so an invisible card cannot
+   shorten the conversation panel. */
+.agent-conversation-onboarding:not(.agent-onboarding-show-controls)
+  .agent-control-panel {
+  display: none;
+}
+
+.agent-conversation-onboarding > :is(
+    .overlay-stack-top-left,
+    .agent-stage-view-toggle,
+    .sim-debug-stack,
+    .agent-challenge-dock
+  ),
+.agent-conversation-onboarding .agent-control-panel,
+.agent-cockpit > :is(
+    .overlay-stack-top-left,
+    .agent-stage-view-toggle,
+    .sim-debug-stack,
+    .agent-challenge-dock
+  ),
+.agent-cockpit .agent-control-panel {
+  transition:
+    opacity 260ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    transform 280ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    visibility 0s;
+}
+
+.agent-conversation-onboarding.agent-onboarding-show-cameras
+  > .overlay-stack-top-left,
+.agent-conversation-onboarding.agent-onboarding-show-controls
+  > :is(.agent-stage-view-toggle, .sim-debug-stack, .agent-challenge-dock),
+.agent-conversation-onboarding.agent-onboarding-show-controls
+  .agent-control-panel {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+body.agent-conversation-onboarding-active {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+body.agent-conversation-onboarding-active
+  :is(.rail, .rail-ribbon, .rail-scrim) {
+  display: none;
+}
+
+/* Keep the opening exchange human without hiding the actions MARS performs.
+   Lifecycle chatter and thought traces stay quiet; real skill cards remain in
+   the transcript. */
+.agent-conversation-onboarding .agent-stream-mode,
+.agent-conversation-onboarding .agent-stream > :is(
+    .chat-msg.system,
+    .chat-thoughts
+  ) {
+  display: none;
+}
+
+/* Compact layouts need the sheet header as a grab surface, but its agent name
+   and Stop control belong to the later controls reveal, not the first frame. */
+.agent-conversation-onboarding:not(.agent-onboarding-show-controls)
+  .agent-sheet-header
+  :is(.agent-sheet-glyph, .agent-sheet-name, .agent-sheet-action) {
+  visibility: hidden;
+  opacity: 0;
+}
+
+/* The keyboard affordance lives in the interface, never in MARS's dialogue.
+   A touch-first device has no Space key, so it only gets the mic button. */
+.agent-conversation-onboarding
+  .agent-mic-control.has-space-shortcut:not(.listening):not(.waiting):not(.unavailable)
+  .agent-mic-label {
+  opacity: 1;
+}
+
+.agent-guided-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 2px 0 8px 2px;
+}
+
+.agent-guided-prompt-label {
+  color: rgb(255 255 255 / 48%);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.agent-guided-prompt-button {
+  position: relative;
+  max-width: min(100%, 430px);
+  padding: 10px 38px 10px 13px;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: left;
+  background: #34343a;
+  border: 1px solid #34343a;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 140ms ease;
+}
+
+.agent-guided-prompt-button::after {
+  position: absolute;
+  top: 50%;
+  right: 13px;
+  content: "→";
+  color: rgb(255 255 255 / 62%);
+  transform: translateY(-50%);
+}
+
+.agent-guided-prompt-button:active {
+  transform: scale(0.985);
+}
+
+.agent-guided-prompt-button:focus-visible {
+  outline: 2px solid var(--agent-purple);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .agent-guided-prompt-button:hover {
+    border-color: rgb(255 255 255 / 32%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-cockpit > :is(
+      .overlay-stack-top-left,
+      .agent-stage-view-toggle,
+      .sim-debug-stack,
+      .agent-challenge-dock
+    ),
+  .agent-cockpit .agent-control-panel {
+    transition: none;
+  }
+}
+
+/* Conversation-aware Agent coach. */
+.agent-onboarding-active .rail-nav:not(.rail-foot),
+.agent-onboarding-focused .overlay-stack-top-left,
+.agent-onboarding-focused .agent-stage-view-toggle,
+.agent-onboarding-focused .sim-debug-stack,
+.agent-onboarding-focused .agent-challenge-dock {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.rail-nav,
+.overlay-stack-top-left,
+.agent-stage-view-toggle,
+.sim-debug-stack,
+.agent-challenge-dock {
+  transition: opacity 180ms ease;
+}
+
+.agent-onboarding-target {
+  position: relative;
+  outline: 2px solid var(--ctl-accent);
+  outline-offset: 5px;
+  border-radius: 10px;
+  box-shadow: 0 0 0 8px rgb(232 163 61 / 10%);
+  animation: agent-onboarding-ping 2s cubic-bezier(0.455, 0.03, 0.515, 0.955) infinite;
+}
+
+/* The ring's geometry never moves — only its colour and the halo breathe, so
+   the target stays as easy to aim at as any other control.
+   Both ends are pinned: targets are ordinary controls that carry their own
+   box-shadow (the speech bar's inset sheen), and an implicit start taken from
+   that computed value interpolates inset-to-outset, which CSS resolves
+   discretely — the pulse would jump instead of breathe, or not show at all. */
+@keyframes agent-onboarding-ping {
+  0%,
+  100% {
+    outline-color: var(--ctl-accent);
+    box-shadow: 0 0 0 3px rgb(232 163 61 / 26%);
+  }
+
+  50% {
+    outline-color: rgb(247 194 116 / 40%);
+    box-shadow: 0 0 0 13px rgb(232 163 61 / 0%);
+  }
+}
+
+/* Inside the chat scroller the ring has only the list's 14px gutter before
+   overflow clips it, so the halo tightens to fit rather than losing its left arc. */
+.chat-msg.agent-onboarding-target {
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px rgb(232 163 61 / 10%);
+  animation-name: agent-onboarding-ping-tight;
+}
+
+@keyframes agent-onboarding-ping-tight {
+  0%,
+  100% {
+    outline-color: var(--ctl-accent);
+    box-shadow: 0 0 0 2px rgb(232 163 61 / 26%);
+  }
+
+  50% {
+    outline-color: rgb(247 194 116 / 40%);
+    box-shadow: 0 0 0 9px rgb(232 163 61 / 0%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-onboarding-target,
+  .chat-msg.agent-onboarding-target {
+    animation: none;
+  }
+}
+
+.agent-onboarding-mask {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1100;
+  pointer-events: none;
+}
+
+.agent-onboarding-mask-field {
+  fill: #fff;
+}
+
+.agent-onboarding-mask-hole {
+  fill: #000;
+}
+
+.agent-onboarding-mask-shade {
+  fill: rgb(0 0 0 / 64%);
+}
+
+.agent-onboarding-mask-segment {
+  position: fixed;
+  background: rgb(0 0 0 / 78%);
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+}
+
+.agent-onboarding-card {
+  position: fixed;
+  z-index: 1102;
+  width: min(350px, calc(100vw - 88px));
+  padding: 20px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 12px;
+  background: rgb(18 20 23 / 94%);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 48%);
+}
+
+/* A card that says "watch it happen" must not be standing in front of the
+   robot: while a skill runs it parks top-left, clear of the rail, instead of
+   anchoring beside the Skills menu. !important beats the narrow-screen rule
+   below, the same way .is-intro does. */
+.teleop-onboarding-card.is-running {
+  top: 16px !important;
+  right: auto;
+  bottom: auto !important;
+  left: 76px !important;
+  width: min(280px, calc(100vw - 88px));
+}
+
+.agent-onboarding-card.is-intro {
+  top: 50%;
+  left: calc(50% + 32px);
+  width: min(390px, calc(100vw - 88px));
+  transform: translate(-50%, -50%);
+}
+
+.agent-onboarding-card h2 {
+  margin: 12px 0 8px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.agent-onboarding-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.agent-onboarding-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 15px;
+}
+
+.agent-onboarding-examples button {
+  padding: 7px 10px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 4%);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.agent-onboarding-examples button:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.agent-onboarding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.agent-onboarding-actions button,
+.agent-onboarding-actions a {
+  padding: 9px 13px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 4%);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.agent-onboarding-actions .agent-onboarding-primary {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.agent-onboarding-actions .agent-onboarding-quit {
+  margin-right: auto;
+  border-color: transparent;
+  background: none;
+  color: var(--muted);
+}
+
+.agent-onboarding-actions .agent-onboarding-quit:hover {
+  color: var(--text);
+}
+
+@media (max-width: 520px) {
+  .agent-onboarding-card {
+    right: 12px;
+    bottom: 100px;
+    left: 76px !important;
+    top: auto !important;
+    width: auto;
+    padding: 18px;
+  }
+
+  .agent-onboarding-card.is-intro {
+    right: auto;
+    bottom: auto;
+    left: calc(50% + 32px) !important;
+    top: 50% !important;
+    width: min(300px, calc(100vw - 88px));
+    transform: translate(-50%, -50%);
+  }
+
+  .agent-onboarding-card h2 {
+    font-size: 18px;
   }
 }
 

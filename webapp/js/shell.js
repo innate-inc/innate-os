@@ -13,6 +13,11 @@ import { createAgentIndicator } from "./agentIndicator.js";
 import { createArmAlert } from "./armAlert.js";
 import { maybeShowAppPromo } from "./appPromo.js";
 import { installPressActivate } from "./pressActivate.js";
+import {
+  consumeAgentOnboardingRequest,
+  createOnboarding,
+  ONBOARDING_START_SECTION,
+} from "./onboarding.js";
 import { FOOTER_SECTIONS, GROUPS, SECTIONS, SIM_SECTIONS, railRows } from "./railLayout.js";
 
 /** @typedef {import("./railLayout.js").Section} Section */
@@ -40,7 +45,7 @@ const RIBBON_PULL_PX = 18;
  * the router uses to reflect the active section on each navigation. Called once
  * by the router, not per page (navigation is client-side now).
  * @param {(path: string) => void} navigate Router navigation, for key shortcuts.
- * @returns {{ setActive: (key: string) => void }}
+ * @returns {{ setActive: (key: string) => void, firstPageReady: () => void }}
  */
 // iOS ignores user-scalable=no; Safari fires proprietary gesture events for
 // pinch -- cancel them so the app UI never zooms (the 3D canvas keeps its own
@@ -75,7 +80,11 @@ export function initShell(navigate) {
   const footNav = document.createElement("nav");
   footNav.className = "rail-nav rail-foot";
   footNav.setAttribute("aria-label", "Utility");
+  const onboarding = createOnboarding();
   let activeKey = "";
+  let checkedFirstPage = false;
+  let onboardingPending = false;
+  let onboardingRestart = false;
 
   /**
    * (Re)build the rail from railRows — links in group order, a divider at each
@@ -89,6 +98,7 @@ export function initShell(navigate) {
       nav.appendChild(row.kind === "divider" ? buildDivider(row.label) : buildLink(row.section));
     }
     footNav.innerHTML = "";
+    footNav.appendChild(buildHelpButton());
     for (const section of FOOTER_SECTIONS) {
       if (!visible || visible.has(section.key)) footNav.appendChild(buildLink(section));
     }
@@ -113,6 +123,33 @@ export function initShell(navigate) {
       `<span class="rail-label">${section.label}</span>` +
       (shortcut ? `<span class="rail-key" aria-hidden="true">${shortcut}</span>` : "");
     return a;
+  }
+
+  function buildHelpButton() {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "rail-link rail-help";
+    button.title = "Help & onboarding";
+    button.setAttribute("aria-label", "Help & onboarding");
+    button.innerHTML =
+      '<span class="rail-ico"><span class="rail-help-mark" aria-hidden="true">?</span></span>' +
+      '<span class="rail-label">Help</span>';
+    button.addEventListener("click", requestOnboarding);
+    return button;
+  }
+
+  function requestOnboarding() {
+    onboardingPending = true;
+    onboardingRestart = true;
+    // Replay the contextual coach in either onboarding surface. From utility
+    // pages, return to the canonical Agent introduction.
+    if (activeKey === ONBOARDING_START_SECTION || activeKey === "teleop") {
+      onboardingPending = false;
+      onboarding.start(true);
+      onboardingRestart = false;
+    } else {
+      navigate(pathForKey(ONBOARDING_START_SECTION));
+    }
   }
 
   /** @param {string | null} label */
@@ -203,7 +240,24 @@ export function initShell(navigate) {
     document.title = section ? `Innate · ${section.label}` : "Innate";
   }
 
-  return { setActive };
+  function firstPageReady() {
+    if (!checkedFirstPage) {
+      checkedFirstPage = true;
+      onboardingPending = onboarding.shouldAutoStart();
+      if (onboardingPending && activeKey !== ONBOARDING_START_SECTION) {
+        navigate(pathForKey(ONBOARDING_START_SECTION));
+      }
+    }
+    if (onboardingPending && activeKey === ONBOARDING_START_SECTION) {
+      onboardingPending = false;
+      onboarding.start(onboardingRestart);
+      onboardingRestart = false;
+      return;
+    }
+    if (activeKey === "agent" && consumeAgentOnboardingRequest()) onboarding.start();
+  }
+
+  return { setActive, firstPageReady };
 }
 
 /**

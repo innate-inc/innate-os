@@ -13,9 +13,13 @@ const TTS_UNAVAILABLE_PLACEHOLDER = "Speech needs an Innate service key";
 /**
  * @param {HTMLElement} parent
  * @param {import("../rosClient.js").RosClient} rosClient
+ * @param {{
+ *   onSpeak?: (text: string) => void,
+ *   onAvailabilityChange?: (available: boolean) => void
+ * }} [opts]
  * @returns {{ destroy: () => void }}
  */
-export function createTtsBar(parent, rosClient) {
+export function createTtsBar(parent, rosClient, opts = {}) {
   const wrap = document.createElement("div");
   wrap.className = "tts-bar";
 
@@ -70,6 +74,7 @@ export function createTtsBar(parent, rosClient) {
     const text = input.value.trim();
     if (!text) return false;
     rosClient.publish(TTS_TOPIC, { data: text });
+    opts.onSpeak?.(text);
     input.value = "";
     syncActions();
     wrap.classList.add("sent");
@@ -142,6 +147,7 @@ export function createTtsBar(parent, rosClient) {
     syncActions();
     input.placeholder = available ? "Make the robot speak…" : TTS_UNAVAILABLE_PLACEHOLDER;
     input.title = available ? TTS_TOPIC : "The speak bar needs the hosted Innate brain (INNATE_SERVICE_KEY).";
+    opts.onAvailabilityChange?.(available);
   }, undefined, "std_msgs/msg/String");
 
   return {

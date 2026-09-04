@@ -421,8 +421,12 @@ export class SimSession {
     this.#controller?.send({ op: "abort_challenge" });
   }
 
-  // WebRTC-specific surface: harmless no-ops in sim.
-  setAudio(_on: boolean): void {}
+  // The sim has no WebRTC microphone track; browser TTS playback is controlled
+  // separately. Mirror the listen state for Teleop's shared button.
+  setAudio(on: boolean): void {
+    if (this.#state.audioRequested === on) return;
+    this.#patch({ audioRequested: on });
+  }
   async getStats(): Promise<null> {
     return null;
   }
