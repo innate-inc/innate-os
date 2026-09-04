@@ -1,4 +1,4 @@
-"""Deterministic intersection traffic for the locally licensed town pack.
+"""Deterministic intersection traffic for Crossroads and the local town pack.
 
 MuJoCo owns the clock, signal aspects, and car poses.  The browser receives a
 primitive model manifest plus snapshots of that authoritative state; it never
@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import copy
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html import escape
 from typing import Any
 
 TOWN_ENVIRONMENT_ID = "low-poly-town"
+TRAFFIC_ENVIRONMENT_IDS = {TOWN_ENVIRONMENT_ID, "intersection"}
 
 NS = "north_south"
 EW = "east_west"
@@ -196,8 +197,15 @@ class TrafficController:
     """Environment-scoped traffic clock, cars, and MuJoCo bindings."""
 
     def __init__(self, environment_id: str):
-        self.enabled = environment_id == TOWN_ENVIRONMENT_ID
-        self.cars = [Car(lane, lane.initial_position) for lane in LANES] if self.enabled else []
+        self.enabled = environment_id in TRAFFIC_ENVIRONMENT_IDS
+        # Crossroads is 40 m across; recycle only after the whole car clears
+        # that footprint. Keep the optional, smaller local town unchanged.
+        lanes = (
+            [replace(lane, start=-23.0 * lane.direction, end=23.0 * lane.direction) for lane in LANES]
+            if environment_id == "intersection"
+            else LANES
+        )
+        self.cars = [Car(lane, lane.initial_position) for lane in lanes] if self.enabled else []
         self._mocap_ids: dict[str, int] = {}
         self._signal_material_ids: dict[str, dict[str, int]] = {}
         self._model: Any | None = None

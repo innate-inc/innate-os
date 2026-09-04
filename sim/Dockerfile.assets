@@ -133,6 +133,8 @@ RUN set -eux; \
 RUN uv run tools/build_viewer_physics.py /out/physics /out/models
 # Each pack's textured MuJoCo meshes, lidar nav map, and browser glb + hull soup.
 RUN uv run tools/build_environment_pack.py finish backrooms viewer/assets/backrooms/backrooms_vr.glb /out
+# Original procedural scenery: no downloaded source or local licensed pack.
+RUN uv run tools/build_intersection.py --viewer-out /out
 # The compiled ~168 MB MJB and downscaled texture caches are host-local
 # derivations; shipping them would nearly double the image.
 COPY sim/ATTRIBUTION.md ./assets/ATTRIBUTION.md

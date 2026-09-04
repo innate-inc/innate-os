@@ -1,0 +1,20 @@
+{
+  "display_name": "Crossroads",
+  "physics": {
+    "collision_dir": "intersection_split_v2",
+    "visual_dir": "intersection_visual"
+  },
+  "navigation": { "map_yaml": "map/intersection.yaml" },
+  "viewer": {
+    "type": "glb",
+    "model": "models/intersection/intersection.glb",
+    "collision_dir": "physics/intersection_collisions"
+  },
+  "spawn": { "x": 3.0, "y": -9.5, "yaw_degrees": 90.0 },
+  "attribution": {
+    "name": "Crossroads",
+    "author": "Innate Inc",
+    "license": "Apache-2.0",
+    "source": "sim/tools/build_intersection.py"
+  }
+}
