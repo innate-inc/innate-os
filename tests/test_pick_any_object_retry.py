@@ -39,6 +39,14 @@ class _Manipulation:
             self.skill.joint_states.position[5] = -0.085
 
 
+class _Approach:
+    def __init__(self):
+        self.moves = []
+
+    def drive(self, distance):
+        self.moves.append(distance)
+
+
 def _skill(*, closes_empty, empties_on_lift=False):
     skill = PickAnyObject.__new__(PickAnyObject)
     skill._p = dict(PARAMS)
@@ -48,30 +56,33 @@ def _skill(*, closes_empty, empties_on_lift=False):
     skill._grip_strength = 0.0
     skill._holding = False
     skill.manipulation = _Manipulation(skill, closes_empty=closes_empty, empties_on_lift=empties_on_lift)
+    skill._goto_search_pose = lambda _bearing: skill.manipulation.events.append(("search",))
+    skill._wrist_descend = lambda _prompt, x, y: (x - 0.01, y + 0.01, 0.05, 0.0)
+    skill._grasp_orientation = lambda _x, _y, roll: (roll, 1.3, 0.0)
     return skill
 
 
-def test_air_close_retries_once_lower_but_held_object_does_not(monkeypatch):
+def test_empty_grasp_recenters_twice_but_held_object_does_not_retry(monkeypatch):
     monkeypatch.setattr("innate_skills.pick_any_object.time.sleep", lambda _seconds: None)
 
     missed = _skill(closes_empty=True)
-    missed._close_once()
-    assert missed._retry_lower_if_empty(0.25, 0.0, 0.0, 1.3, 0.0)
-    assert missed.manipulation.events == [
-        ("close", 0.6, 1.5),
-        ("open", 1.0),
-        ("follow", [0.02], 0.8),
-        ("move_to", 0.03),
-        ("close", 0.6, 1.5),
-    ]
+    missed._close_twist_lift("brick", 0.25, 0.0, 0.0, 1.3, 0.0)
+    assert [event[0] for event in missed.manipulation.events].count("open") == 2
+    assert [event[0] for event in missed.manipulation.events].count("search") == 2
+    assert [event[0] for event in missed.manipulation.events].count("close") == 3
 
     held = _skill(closes_empty=False)
-    held._close_once()
-    assert not held._retry_lower_if_empty(0.25, 0.0, 0.0, 1.3, 0.0)
-    assert held.manipulation.events == [("close", 0.6, 1.5)]
+    held._close_twist_lift("brick", 0.25, 0.0, 0.0, 1.3, 0.0)
+    assert [event[0] for event in held.manipulation.events].count("open") == 0
+    assert [event[0] for event in held.manipulation.events].count("close") == 1
 
     dropped = _skill(closes_empty=False, empties_on_lift=True)
-    dropped._close_twist_lift(0.25, 0.0, 0.0, 1.3, 0.0)
-    assert [event[0] for event in dropped.manipulation.events].count("open") == 1
-    assert [event[0] for event in dropped.manipulation.events].count("close") == 2
-    assert [event[0] for event in dropped.manipulation.events].count("lift") == 2
+    dropped._close_twist_lift("brick", 0.25, 0.0, 0.0, 1.3, 0.0)
+    assert [event[0] for event in dropped.manipulation.events].count("open") == 2
+    assert [event[0] for event in dropped.manipulation.events].count("close") == 3
+    assert [event[0] for event in dropped.manipulation.events].count("lift") == 3
+
+    approach = _Approach()
+    held.sleep = lambda _seconds: None
+    assert held._grasp_verified("brick", approach)
+    assert approach.moves == []
