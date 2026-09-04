@@ -42,10 +42,11 @@ class TtsStream(Protocol):
 @dataclass(frozen=True)
 class TtsTransport:
     """A way out to Cartesia, plus the pre-warm that saves the first utterance
-    the TLS handshake (~1-2s)."""
+    the TLS handshake (~1-2s) and the teardown for whatever it opened."""
 
     stream: TtsStream
     warmup: Callable[[], None]
+    close: Callable[[], None]
 
 
 class TtsBackend(StrEnum):
@@ -74,7 +75,9 @@ def proxy_tts(proxy: ProxyClient) -> TtsTransport:
         # Any request to the proxy host warms httpx's connection pool.
         proxy.get_sync_client().head(proxy.proxy_url)
 
-    return TtsTransport(stream=tts.bytes_stream, warmup=warmup)
+    # close is a no-op: the node owns the ProxyClient and shares it with the
+    # brain and STT, so closing it here would cut those off mid-run.
+    return TtsTransport(stream=tts.bytes_stream, warmup=warmup, close=lambda: None)
 
 
 def direct_tts(api_key: str) -> TtsTransport:
@@ -110,4 +113,4 @@ def direct_tts(api_key: str) -> TtsTransport:
     def warmup() -> None:
         client.head(DIRECT_URL)
 
-    return TtsTransport(stream=stream, warmup=warmup)
+    return TtsTransport(stream=stream, warmup=warmup, close=client.close)

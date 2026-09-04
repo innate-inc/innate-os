@@ -538,9 +538,9 @@ class TTSHandler:
         for callback in dropped:
             callback(False)  # a dangling environment-speech ack would wait out its 30s watchdog
         if self._tts is not None:
-            self.logger.info("🔇 TTS handler closed")
-            # Neither transport needs explicit cleanup in sync mode
+            self._tts.close()
             self._tts = None
+            self.logger.info("🔇 TTS handler closed")
 
 
 def _finalize_wav(data: bytes) -> bytes:

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from config import (
+    CARTESIA_API_KEY,
     CLI_SIM,
     ENV_PATH,
     GEMINI_API_KEY,
@@ -34,10 +35,6 @@ def is_interactive_terminal() -> bool:
         return sys.stdin.isatty() and sys.stdout.isatty()
     except Exception:
         return False
-
-
-def is_configured_secret(value: str | None) -> bool:
-    return is_configured_secret_value(INNATE_SERVICE_KEY, value)
 
 
 def _is_active_env_assignment(line: str, key: str) -> bool:
@@ -227,17 +224,17 @@ def uncomment_env_key(path: Path, key: str) -> str | None:
     return value
 
 
-def _save_service_key(config: dict[str, object], service_key: str) -> None:
-    write_env_value(ENV_PATH, INNATE_SERVICE_KEY, service_key)
-    _use_service_key_for_run(config, service_key)
-    success(f"Saved {INNATE_SERVICE_KEY} to {ENV_PATH}.")
-
-
-def _use_service_key_for_run(config: dict[str, object], service_key: str) -> None:
+def _use_key_for_run(config: dict[str, object], key: str, value: str) -> None:
     raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
     user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
-    raw_env[INNATE_SERVICE_KEY] = service_key
-    user_env[INNATE_SERVICE_KEY] = service_key
+    raw_env[key] = value
+    user_env[key] = value
+
+
+def _save_key(config: dict[str, object], key: str, value: str) -> None:
+    write_env_value(ENV_PATH, key, value)
+    _use_key_for_run(config, key, value)
+    success(f"Saved {key} to {ENV_PATH}.")
 
 
 def _prompt_choice(question: str, options: dict[str, str], *, default: str) -> str:
@@ -271,70 +268,47 @@ def _prompt_choice(question: str, options: dict[str, str], *, default: str) -> s
         print(f"{YELLOW}Please choose one of: {', '.join(options)}.{NC}")
 
 
-def _save_gemini_key(config: dict[str, object], gemini_key: str) -> None:
-    write_env_value(ENV_PATH, GEMINI_API_KEY, gemini_key)
-    raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
+def _configure_key(config: dict[str, object], key: str, prompt: str, *, optional: bool = False) -> bool:
+    """Get one secret into .env -- keep what is already there, restore a
+    commented-out line, adopt one from the shell, or ask for it. Returns
+    whether the key ends up set; an optional one is declined with an empty
+    line, a required one asks again.
+    """
     user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
-    raw_env[GEMINI_API_KEY] = gemini_key
-    user_env[GEMINI_API_KEY] = gemini_key
-    success(f"Saved {GEMINI_API_KEY} to {ENV_PATH}.")
-
-
-def _configure_gemini_key(config: dict[str, object]) -> None:
-    user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
-    if is_configured_secret_value(GEMINI_API_KEY, user_env.get(GEMINI_API_KEY)):
-        if not _prompt_yes_no(f"{GEMINI_API_KEY} is already set. Replace it?", default=False):
-            return
+    if is_configured_secret_value(key, user_env.get(key)):
+        if not _prompt_yes_no(f"{key} is already set. Replace it?", default=False):
+            return True
     else:
-        restored = uncomment_env_key(ENV_PATH, GEMINI_API_KEY)
+        restored = uncomment_env_key(ENV_PATH, key)
         if restored is not None:
-            raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
-            raw_env[GEMINI_API_KEY] = restored
-            user_env[GEMINI_API_KEY] = restored
-            success(f"Re-enabled {GEMINI_API_KEY} in {ENV_PATH.name}.")
-            return
+            _use_key_for_run(config, key, restored)
+            success(f"Re-enabled {key} in {ENV_PATH.name}.")
+            return True
 
-        shell_value = os.environ.get(GEMINI_API_KEY, "").strip()
-        if is_configured_secret_value(GEMINI_API_KEY, shell_value) and _prompt_yes_no(
-            f"Found {GEMINI_API_KEY} in your shell. Save it to {ENV_PATH.name}?", default=True
+        shell_value = os.environ.get(key, "").strip()
+        if is_configured_secret_value(key, shell_value) and _prompt_yes_no(
+            f"Found {key} in your shell. Save it to {ENV_PATH.name}?", default=True
         ):
-            _save_gemini_key(config, shell_value)
-            return
+            _save_key(config, key, shell_value)
+            return True
 
     while True:
-        gemini_key = _prompt_secret(f"Paste {GEMINI_API_KEY}")
-        if is_configured_secret_value(GEMINI_API_KEY, gemini_key):
-            _save_gemini_key(config, gemini_key)
-            return
-        warn("Gemini key cannot be empty. Press Ctrl+C to cancel.")
+        value = _prompt_secret(prompt)
+        if is_configured_secret_value(key, value):
+            _save_key(config, key, value)
+            return True
+        if optional:
+            return False
+        warn(f"{key} cannot be empty. Press Ctrl+C to cancel.")
 
 
-def _configure_service_key(config: dict[str, object]) -> None:
-    user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
-    if is_configured_secret(user_env.get(INNATE_SERVICE_KEY)):
-        if not _prompt_yes_no(f"{INNATE_SERVICE_KEY} is already set. Replace it?", default=False):
-            return
-    else:
-        restored = uncomment_env_key(ENV_PATH, INNATE_SERVICE_KEY)
-        if restored is not None:
-            _use_service_key_for_run(config, restored)
-            success(f"Re-enabled {INNATE_SERVICE_KEY} in {ENV_PATH.name}.")
-            return
-
-        shell_value = os.environ.get(INNATE_SERVICE_KEY, "").strip()
-        if is_configured_secret(shell_value) and _prompt_yes_no(
-            f"Found {INNATE_SERVICE_KEY} in your shell. Save it to {ENV_PATH.name}?", default=True
-        ):
-            _save_service_key(config, shell_value)
-            return
-
-    while True:
-        service_key = _prompt_secret(f"Paste {INNATE_SERVICE_KEY}")
-        if is_configured_secret(service_key):
-            _save_service_key(config, service_key)
-            print(f"{GREEN}Innate proxy credentials are ready.{NC}")
-            return
-        warn("Service key cannot be empty. Press Ctrl+C to cancel.")
+def _configure_own_keys(config: dict[str, object]) -> None:
+    """Your own keys: Gemini for the brain, then Cartesia for the voice that a
+    service key would otherwise include."""
+    _configure_key(config, GEMINI_API_KEY, f"Paste {GEMINI_API_KEY}")
+    print(f"{DIM}A Cartesia key gives the robot a voice. Everything else works without it.{NC}")
+    if not _configure_key(config, CARTESIA_API_KEY, f"Paste {CARTESIA_API_KEY} (Enter to skip)", optional=True):
+        warn("No Cartesia key — the robot will run without speech.")
 
 
 def ensure_uv_prerequisite() -> None:
@@ -386,22 +360,29 @@ def report_configured_keys(config: dict[str, object]) -> None:
 BRAIN_BACKENDS = ("gemini", "innate", "none")
 
 
-def apply_brain_backend(config: dict[str, object], backend: str, key: str) -> None:
+def apply_brain_backend(config: dict[str, object], backend: str, keys: str) -> None:
     """Write a choice someone already made, without asking again.
 
     The installer collects this before it installs anything, so the question
     lands in the first ten seconds rather than after apt, uv and a clone. It
     collects the answer only -- which key goes in .env, and which get commented
     out, stays here, so there is one implementation of that.
+
+    ``keys`` is what the installer sent down the pipe: the brain key, then the
+    optional Cartesia key on a second line.
     """
+    brain_key, _, voice_key = keys.partition("\n")
+    voice_key = voice_key.strip()
     if backend == "gemini":
-        _save_gemini_key(config, key)
+        _save_key(config, GEMINI_API_KEY, brain_key)
+        if voice_key:
+            _save_key(config, CARTESIA_API_KEY, voice_key)
         _disable_keys(config, [INNATE_SERVICE_KEY])
     elif backend == "innate":
-        _save_service_key(config, key)
-        _disable_keys(config, [GEMINI_API_KEY])
+        _save_key(config, INNATE_SERVICE_KEY, brain_key)
+        _disable_keys(config, [GEMINI_API_KEY, CARTESIA_API_KEY])
     else:
-        _disable_keys(config, [GEMINI_API_KEY, INNATE_SERVICE_KEY])
+        _disable_keys(config, [GEMINI_API_KEY, CARTESIA_API_KEY, INNATE_SERVICE_KEY])
         warn("No brain backend selected. The sim will run without an agent.")
     report_configured_keys(config)
 
@@ -417,13 +398,15 @@ def configure_brain_backend(config: dict[str, object]) -> None:
     """
     user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
     has_gemini = is_configured_secret_value(GEMINI_API_KEY, user_env.get(GEMINI_API_KEY))
-    has_service_key = is_configured_secret(user_env.get(INNATE_SERVICE_KEY))
+    has_service_key = is_configured_secret_value(INNATE_SERVICE_KEY, user_env.get(INNATE_SERVICE_KEY))
 
     if not is_interactive_terminal():
         if has_service_key:
             success("Innate proxy selected (INNATE_SERVICE_KEY detected).")
         elif has_gemini:
             success("Direct Gemini access selected (GEMINI_API_KEY detected).")
+            if not is_configured_secret_value(CARTESIA_API_KEY, user_env.get(CARTESIA_API_KEY)):
+                warn(f"No CARTESIA_API_KEY — the robot will run without speech. Add one to {ENV_PATH} for a voice.")
         else:
             warn(
                 f"No brain key configured. Add GEMINI_API_KEY (your own Gemini key) or "
@@ -437,10 +420,11 @@ def configure_brain_backend(config: dict[str, object]) -> None:
     print(
         f"{DIM}The robot's agent runs on the robot, but thinks with a cloud LLM.\n"
         f"Choose how it reaches one:\n"
-        f"  - Your own Gemini key: the agent calls Google directly. Everything\n"
-        f"    works except voice, unless you also set CARTESIA_API_KEY in .env.\n"
-        f"  - Innate service key (ships with a MARS robot): the agent calls Gemini\n"
-        f"    through Innate's proxy. Full experience, including the robot's voice.\n"
+        f"  - Your own API keys: a Gemini key (https://aistudio.google.com/api-keys)\n"
+        f"    for the agent, then an optional Cartesia key\n"
+        f"    (https://play.cartesia.ai/keys) to give the robot a voice.\n"
+        f"  - Innate service key (ships with a MARS robot): one key reaches both\n"
+        f"    Gemini and Cartesia through Innate's proxy. Voice included.\n"
         f"  - None: drive, navigate, and trigger skills manually, with no agent.{NC}"
     )
     print()
@@ -448,20 +432,21 @@ def configure_brain_backend(config: dict[str, object]) -> None:
     choice = _prompt_choice(
         "How would you like to access the cloud LLM?",
         {
-            "1": "Your own Gemini key (get one at https://aistudio.google.com/api-keys)",
-            "2": "Innate service key (from your robot)",
+            "1": "Your own API keys (Gemini, plus Cartesia for the robot's voice)",
+            "2": "Innate service key (ships with a MARS robot)",
             "3": "None (run the sim without an agent)",
         },
         default=default_choice,
     )
     if choice == "1":
-        _configure_gemini_key(config)
+        _configure_own_keys(config)
         _disable_keys(config, [INNATE_SERVICE_KEY])
     elif choice == "2":
-        _configure_service_key(config)
-        _disable_keys(config, [GEMINI_API_KEY])
+        _configure_key(config, INNATE_SERVICE_KEY, f"Paste {INNATE_SERVICE_KEY}")
+        print(f"{GREEN}Innate proxy credentials are ready.{NC}")
+        _disable_keys(config, [GEMINI_API_KEY, CARTESIA_API_KEY])
     else:
-        _disable_keys(config, [GEMINI_API_KEY, INNATE_SERVICE_KEY])
+        _disable_keys(config, [GEMINI_API_KEY, CARTESIA_API_KEY, INNATE_SERVICE_KEY])
         warn("No brain backend selected. The sim will run without an agent.")
 
     report_configured_keys(config)
