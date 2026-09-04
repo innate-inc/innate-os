@@ -5,8 +5,8 @@ benches, flush curb cuts, zebra crossings, and deterministic right-hand traffic.
 Select **Crossroads** in the simulator environment menu.
 
 All scenery is authored as primitives in `sim/tools/build_intersection.py`.
-There are no downloaded inputs, textures, or dependencies on the optional
-licensed `low-poly-town` environment. Source and generated scenery are
+There are no downloaded inputs, external textures, or purchased asset dependencies.
+Source and generated scenery are
 Apache-2.0; attribution ships in both OCI layers.
 
 The normal asset-image build generates the browser GLB, exact convex collision

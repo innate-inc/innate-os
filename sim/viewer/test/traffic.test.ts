@@ -163,10 +163,10 @@ test("traffic runs from validated wire snapshots through safe scene swaps and Th
     socket.open();
     socket.message({
       environment: {
-        id: "low-poly-town",
-        display_name: "Town Intersection",
-        viewer: { type: "glb", model: "local-environments/low-poly-town/scene.glb" },
-        spawn: [1.6, -9, 90],
+        id: "intersection",
+        display_name: "Crossroads",
+        viewer: { type: "glb", model: "models/intersection/intersection.glb" },
+        spawn: [3, -9.5, 90],
       },
       environments: [],
       switch: null,

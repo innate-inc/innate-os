@@ -1,4 +1,4 @@
-"""Deterministic intersection traffic for Crossroads and the local town pack.
+"""Deterministic intersection traffic for Crossroads.
 
 MuJoCo owns the clock, signal aspects, and car poses.  The browser receives a
 primitive model manifest plus snapshots of that authoritative state; it never
@@ -12,12 +12,11 @@ from __future__ import annotations
 
 import copy
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from html import escape
 from typing import Any
 
-TOWN_ENVIRONMENT_ID = "low-poly-town"
-TRAFFIC_ENVIRONMENT_IDS = {TOWN_ENVIRONMENT_ID, "intersection"}
+TRAFFIC_ENVIRONMENT_IDS = {"intersection"}
 
 NS = "north_south"
 EW = "east_west"
@@ -122,15 +121,15 @@ class Lane:
 
 
 LANES = (
-    # Route endpoints put the whole 3.6m car beyond the authored town bounds,
+    # Route endpoints put the whole 3.6m car beyond the 40 m Crossroads bounds,
     # so a recycle never visibly pops in the middle of a road-edge facade.
-    Lane("eastbound", EW, "x", 1, -1.51, -17.0, 17.0, -8.22, 0.0, "#e05b47", -11.7),
-    Lane("westbound", EW, "x", -1, 1.81, 17.0, -17.0, 8.48, math.pi, "#4d83d1", 11.7),
-    # MARS spawns in the northbound lane at y=-9.  Start this car beyond the
+    Lane("eastbound", EW, "x", 1, -1.51, -23.0, 23.0, -8.22, 0.0, "#e05b47", -11.7),
+    Lane("westbound", EW, "x", -1, 1.81, 23.0, -23.0, 8.48, math.pi, "#4d83d1", 11.7),
+    # MARS spawns beside the northbound lane. Start this car beyond the
     # junction; after it recycles at the south edge, robot following prevents
     # it from spawning through or driving through the stationary robot.
-    Lane("northbound", NS, "y", 1, 1.79, -17.0, 17.0, -8.20, math.pi / 2, "#e2b643", 7.0),
-    Lane("southbound", NS, "y", -1, -1.53, 17.0, -17.0, 8.50, -math.pi / 2, "#55a96f", 11.7),
+    Lane("northbound", NS, "y", 1, 1.79, -23.0, 23.0, -8.20, math.pi / 2, "#e2b643", 7.0),
+    Lane("southbound", NS, "y", -1, -1.53, 23.0, -23.0, 8.50, -math.pi / 2, "#55a96f", 11.7),
 )
 
 
@@ -198,14 +197,7 @@ class TrafficController:
 
     def __init__(self, environment_id: str):
         self.enabled = environment_id in TRAFFIC_ENVIRONMENT_IDS
-        # Crossroads is 40 m across; recycle only after the whole car clears
-        # that footprint. Keep the optional, smaller local town unchanged.
-        lanes = (
-            [replace(lane, start=-23.0 * lane.direction, end=23.0 * lane.direction) for lane in LANES]
-            if environment_id == "intersection"
-            else LANES
-        )
-        self.cars = [Car(lane, lane.initial_position) for lane in lanes] if self.enabled else []
+        self.cars = [Car(lane, lane.initial_position) for lane in LANES] if self.enabled else []
         self._mocap_ids: dict[str, int] = {}
         self._signal_material_ids: dict[str, dict[str, int]] = {}
         self._model: Any | None = None
@@ -264,9 +256,9 @@ class TrafficController:
             self._signal_material_ids[group] = ids
         if missing:
             raise RuntimeError(
-                "town traffic-signal materials are missing ("
+                "Crossroads traffic-signal materials are missing ("
                 + ", ".join(missing)
-                + "). Rebuild the licensed town with sim/tools/build_low_poly_town.py."
+                + "). Rebuild Crossroads with sim/tools/build_intersection.py."
             )
 
         # configure_robot_spec() must run before compile: body-level collision

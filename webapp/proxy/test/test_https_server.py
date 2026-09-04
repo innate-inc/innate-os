@@ -146,18 +146,18 @@ async def test_path_guards(tmp_path):
 async def test_local_environment_assets_are_served(tmp_path):
     root = make_app_root(tmp_path)
     local_environments = tmp_path / "viewer-public" / "local-environments"
-    scene = local_environments / "low-poly-town" / "scene.glb"
+    scene = local_environments / "custom-pack" / "scene.glb"
     scene.parent.mkdir(parents=True)
-    scene.write_bytes(b"town glb")
+    scene.write_bytes(b"custom glb")
     routes = dict(H.SIM_VIEWER_ROUTES)
     assert routes["/local-environments/"] == H.SIM_VIEWER_ROOT / "public" / "local-environments"
     routes["/local-environments/"] = local_environments
 
     async with serve(ROOT=root, SIM_VIEWER_ROUTES=routes) as (s, base):
-        response = await s.get(base + "/local-environments/low-poly-town/scene.glb")
+        response = await s.get(base + "/local-environments/custom-pack/scene.glb")
         assert response.status == 200
         assert response.headers["Content-Type"] == "model/gltf-binary"
-        assert await response.read() == b"town glb"
+        assert await response.read() == b"custom glb"
 
 
 @sync
