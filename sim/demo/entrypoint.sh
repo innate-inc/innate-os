@@ -1,16 +1,7 @@
 #!/bin/bash
-# PID 1 of a demo session container: bring up the world, then the ROS fleet,
-# then hold the session open for its lease and exit.
-#
-# Unlike the dev sim there is no launcher and no host process -- the world
-# server runs in this container (sim_driver.launch.py documents the
-# VIRTUAL_MARS_REMOTE escape hatch). The dev sim keeps the world on the host
-# because native GL renders ~7x faster than software GL; a headless cloud
-# instance has no native GL either way, so that reason does not apply here.
+# PID 1 of a session: world server, then the ROS fleet, then hold for the lease.
 set -euo pipefail
 
-# Only what the world server needs -- it links no rclpy, so the Zenoh/RMW env
-# (config/dds/setup_dds.zsh) belongs to the tmux shells, which get it from .zshrc.
 # ROS's setup.bash reads AMENT_TRACE_SETUP_FILES while unset, which -u makes fatal.
 set +u
 source /opt/ros/humble/setup.bash
@@ -24,9 +15,8 @@ export MUJOCO_GL INNATE_SIM_RENDER_SCALE
 
 WORLD_LOG=/root/world-server.log
 
-# The render scale is baked into the compiled model (it sets the texture cap),
-# so overriding it here would miss the cache and put a multi-minute compile on
-# the session-start path. Refuse rather than boot mysteriously slowly.
+# The scale is baked into the compiled model; a different one misses the cache
+# and puts a multi-minute compile on the session-start path. Refuse instead.
 BAKED_SCALE_FILE="$VIRTUAL_MARS_ASSETS/.model_cache/render_scale"
 if [ -f "$BAKED_SCALE_FILE" ]; then
     BAKED_SCALE=$(cat "$BAKED_SCALE_FILE")
@@ -49,8 +39,7 @@ ros2 run mars_sim_driver world_server \
     --render-scale "$INNATE_SIM_RENDER_SCALE" >"$WORLD_LOG" 2>&1 &
 WORLD_PID=$!
 
-# The world must answer before the driver node connects, or sim_driver dies on
-# its first RPC and the fleet comes up against a world that isn't there.
+# sim_driver dies on its first RPC if the world is not up yet.
 for _ in $(seq 1 120); do
     if grep -q "GL self-test" "$WORLD_LOG" 2>/dev/null; then break; fi
     if ! kill -0 "$WORLD_PID" 2>/dev/null; then
@@ -65,8 +54,7 @@ grep "GL self-test" "$WORLD_LOG" || { echo "[demo] world server never reported G
 echo "[demo] starting ROS fleet"
 /root/innate-os/sim/demo/launch_demo.zsh
 
-# The lease is enforced by the broker too; this is the backstop for a session
-# the broker loses track of. Exiting PID 1 is what stops the billing.
+# Backstop for a session the broker loses track of: exiting PID 1 stops the bill.
 if [ "$INNATE_DEMO_LEASE_SECONDS" -gt 0 ]; then
     echo "[demo] session lease: ${INNATE_DEMO_LEASE_SECONDS}s"
     sleep "$INNATE_DEMO_LEASE_SECONDS"

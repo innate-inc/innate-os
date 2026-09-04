@@ -28,7 +28,7 @@ Everything else follows from being public:
 | world server | host process (`uv`) | in-container |
 | `.env`, `~/.ssh`, `~/.gitconfig` | mounted | **absent** |
 | `POST /settings.json`, `/restart` | on | **off** (`INNATE_WEBAPP_READONLY=1`) |
-| foxglove, leader receiver, console | on | off |
+| foxglove, leader receiver | on | off |
 | lifetime | until `down` | `INNATE_DEMO_LEASE_SECONDS` (600) |
 | render scale | 1 | 2 |
 
@@ -65,15 +65,7 @@ Budget ~30–60s for the ROS fleet. Anything much longer means the model cache
 missed — check the build log for `model cache:` and confirm no `COPY` was added
 after the prewarm step (the cache key hashes every asset's mtime+size).
 
-## Before this is public
+## Deploying it
 
-The image is hardened, the deployment is not. Still required:
-
-- **A demo-only `INNATE_SERVICE_KEY`**, injected at run time, never baked. Not
-  the fleet key — if it leaks you want to rotate something no robot uses.
-- **Egress blocked** except the LLM proxy.
-- **CPU/memory caps** per container.
-- **Turnstile** in front of whatever hands out sessions.
-- The lease here is a backstop, not the enforcement point: a broker that loses
-  track of a container must not leave it running, but the broker still owns the
-  clock.
+The image is hardened; handing out sessions, keys, limits and the challenge are
+the broker's job: `apps/sim-broker` in innate-cloud.

@@ -1,20 +1,8 @@
 #!/usr/bin/env python3
-"""Compile the MuJoCo world once at image build time so the .mjb cache ships
-baked in. Compiling 1300+ hulls costs minutes; loading the binary costs ~50ms
-(mars_sim_driver.core._model_cache_path) -- the difference between a demo
-session starting in seconds and starting in minutes.
-
-Three ways to bake a cache the runtime then misses, all silent:
-
-- Importing mars_sim_driver from ros2_ws/src instead of the sourced install
-  overlay. The cache key hashes each asset's PATH as well as its mtime+size,
-  and world.py/core.py are themselves assets, so the two trees key differently.
-  Hence no sys.path games here: source install/setup.bash and import.
-- Building the world at a different render scale than the world server will.
-  The scale sets the visual-room texture cap (core._texture_cap), which is
-  baked into the compiled model -- so scale 1 and scale 2 are different worlds.
-- COPYing anything into the image after this runs, which moves an mtime.
-"""
+"""Compile the MuJoCo world at build time so a session loads a .mjb in ~50ms
+instead of compiling 1300 hulls for minutes. The cache key hashes asset paths,
+mtimes and the render scale, so this must import from the sourced install tree,
+build at the scale the world server will use, and run after every COPY."""
 
 import os
 import sys
@@ -68,11 +56,8 @@ def main() -> int:
         return 1
     print(f"model cache: {cached[0]} ({cached[0].stat().st_size / 1e6:.0f} MB)")
 
-    # Building a second time is the only honest proof: a .mjb sitting at some
-    # other key would satisfy the glob above while the runtime still compiles
-    # from scratch. VirtualMars writes the binary only on the compile path, so
-    # an untouched file is the hit -- elapsed time is not, because a cold
-    # compile is ~1s on a big build host and no ceiling separates the two.
+    # A second build is the only proof: the binary is rewritten only on the
+    # compile path, so an untouched file is a hit. Elapsed time cannot tell.
     baked = cached[0].stat().st_mtime_ns
     reload_s = build()
     print(f"cache reload: {reload_s:.2f}s")
@@ -84,7 +69,7 @@ def main() -> int:
         )
         return 1
 
-    # entrypoint.sh reads this to refuse a render scale the cache was not baked for.
+    # entrypoint.sh refuses a scale the cache was not baked for.
     (cache_dir / SCALE_MARKER).write_text(f"{scale}\n", encoding="utf-8")
     return 0
 

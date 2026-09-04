@@ -120,11 +120,8 @@ if TYPE_CHECKING:
 
 
 def repo_root() -> Path:
-    """The innate-os tree this module belongs to, found by walking up for the
-    two directories that mark it. A fixed parents[N] cannot do this: colcon
-    installs this file deeper than a dev checkout, where the same index lands on
-    ros2_ws/install and every path built from it -- props, challenges -- resolves
-    to a directory that does not exist, silently and with no error."""
+    """Walk up to the tree that holds sim/ and ros2_ws/. A fixed parents[N] lands
+    on ros2_ws/install once colcon has installed this file, silently."""
     here = Path(__file__).resolve()
     for candidate in here.parents:
         if (candidate / "sim").is_dir() and (candidate / "ros2_ws").is_dir():

@@ -77,9 +77,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # Position + FPS/queue) surface without editing the committed (robot-default)
 # config.json. Overlaid onto /config.json at request time.
 WEBAPP_SIM_CONTROLS = os.environ.get("WEBAPP_SIM_CONTROLS", "").strip().lower() in ("1", "true", "yes")
-# Drops the two routes that mutate the running stack (settings write, restart).
-# Set by the public sim demo, where every visitor is unauthenticated: nothing
-# else in the app writes, so this leaves the surface read-only.
+# The public demo sets this: its visitors are unauthenticated, and these two
+# routes are the only ones that write.
 WEBAPP_READONLY = os.environ.get("INNATE_WEBAPP_READONLY", "").strip().lower() in ("1", "true", "yes")
 CERT_DIR = Path.home() / ".innate-webapp-tls"
 ROSBRIDGE_URL = "ws://127.0.0.1:9090"

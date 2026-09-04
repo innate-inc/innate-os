@@ -1,10 +1,5 @@
-# Builds the public sim demo image -- the one the broker hands to visitors.
-#
-# On Cloud Build rather than a GitHub runner because the image is ~9GB and
-# pulls three more (ros, assets, viewer) to assemble it. The build itself is
-# sim/demo/build.sh unchanged: it resolves the content-addressed asset and
-# viewer tags from sim/launcher/config.py, which is what keeps the demo showing
-# the same apartment a dev checkout does.
+# The public sim demo image, via sim/demo/build.sh. Cloud Build rather than a
+# runner: ~9GB, assembled from three more.
 timeout: 7200s
 
 substitutions:
@@ -12,7 +7,7 @@ substitutions:
   _IMAGE_TAG: manual
   _GHCR_USERNAME_SECRET: innate-os-sim-ghcr-username
   _GHCR_TOKEN_SECRET: innate-os-sim-ghcr-token
-  # Only main moves it. A one-off build must not become what every visitor gets.
+  # Only main moves it.
   _LATEST_TAG: ""
 
 steps:
@@ -28,9 +23,7 @@ steps:
       - -c
       - |
         set -euo pipefail
-        # The three base images live on GHCR and are private.
         echo "$$GHCR_TOKEN" | docker login ghcr.io -u "$$GHCR_USERNAME" --password-stdin
-        # buildx with a container driver: --push and registry cache need it.
         docker buildx create --use --driver docker-container --name demo >/dev/null
         sim/demo/build.sh --push
 

@@ -1,17 +1,7 @@
 #!/bin/zsh -l
-#
-# The demo stack: scripts/launch_sim_in_tmux.zsh minus everything a browser
-# visitor cannot reach. Kept as its own file rather than flags on the dev
-# launcher so a change to the dev sim can never silently widen the demo.
-#
-# Dropped vs the dev sim:
-#   foxglove_bridge        -- ws:8765 is never published to a demo visitor
-#   udp_leader_receiver    -- leader-arm teleop needs hardware on the operator side
-# Kept: rosbridge, app, sim driver, nav, brain, behavior, input manager, arm IK,
-# uninavid (the VLN demo), webapp, innate_console.
-#
-# innate_console pipes every pane's stdout to the visitor's Logging page. No node
-# may print a secret: the demo's INNATE_SERVICE_KEY would land in the browser.
+# scripts/launch_sim_in_tmux.zsh minus foxglove and the leader receiver, which a
+# visitor cannot reach. A separate file, so a dev-sim change cannot widen the demo.
+# innate_console pipes every pane to the visitor's Logging page: never print a secret.
 
 set -e
 
@@ -51,13 +41,12 @@ if [[ "${INNATE_DEMO_UNINAVID:-1}" == "1" ]]; then
   tmux send-keys -t "${SESSION_NAME}:vision-nav" "ros2 launch innate_uninavid uninavid.launch.py cmd_vel_topic:=/cmd_vel" C-m
 fi
 
-# Only :80 is ever routed to a visitor -- the demo sits behind a TLS-terminating
-# proxy, so the self-signed cert on :443 (and the warning it costs) never shows.
+# Only :80 is routed to a visitor; TLS terminates upstream.
 tmux new-window -t "$SESSION_NAME" -n webapp
 tmux send-keys -t "${SESSION_NAME}:webapp" \
   "cd ~/innate-os/webapp && while true; do WEBAPP_SIM_CONTROLS=1 INNATE_WEBAPP_READONLY=1 python3 proxy/https_server.py; sleep 2; done" C-m
 
-# Last: it taps every pane with tmux pipe-pane, so they have to exist first.
+# Last: it pipe-panes every window, so they must exist first.
 tmux new-window -t "$SESSION_NAME" -n console
 tmux send-keys -t "${SESSION_NAME}:console" "ros2 launch innate_console console.launch.py" C-m
 
