@@ -159,7 +159,8 @@ function buildAgentView(root) {
 
   /** @type {ReturnType<typeof createAgentMicControl> | null} */
   let micControl = null;
-  const onboarding = createAgentOnboarding(root);
+  /** @type {ReturnType<typeof createAgentOnboarding> | null} */
+  let onboarding = null;
   const panel = createAgentPanel(root, ros, agentState, {
     enableMic: Boolean(config.simControls),
     onMicState: (state) => {
@@ -169,9 +170,16 @@ function buildAgentView(root) {
         waveform: state.waveform,
       });
     },
-    onUserMessage: onboarding.onUserMessage,
-    onRobotMessage: onboarding.onRobotMessage,
-    onAgentName: onboarding.onAgentChange,
+    ensureRunning: async (fallback) => {
+      if (!onboarding?.isActive()) return fallback();
+      await onboarding.ensureRunning();
+    },
+  });
+  onboarding = createAgentOnboarding(root, ros, agentState, {
+    // Opening a page must never activate autonomous control on physical MARS.
+    enabled: Boolean(config.simControls),
+    onNotice: panel.addNotice,
+    onStart: panel.beginOnboarding,
   });
   const simSession = /** @type {any} */ (session);
   const challengePanel =
@@ -280,4 +288,3 @@ function buildAgentView(root) {
     },
   };
 }
-

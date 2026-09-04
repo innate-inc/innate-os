@@ -26,6 +26,12 @@ import {
 // Runs of the same skill collapse into one group at this many in a row.
 const SKILL_GROUP_MIN = 3;
 
+/** The bridge between the agent and this UI is implementation detail, not an
+ * action the user asked the robot to perform. @param {string} name */
+export function isInternalOnboardingSkill(name) {
+  return name.replace(/[^a-z0-9]/gi, "").toLowerCase() === "revealonboarding";
+}
+
 /**
  * @returns {{
  *   head: HTMLElement,
@@ -35,6 +41,7 @@ const SKILL_GROUP_MIN = 3;
  *   addSkillRun: (key: string, name: string, status: string, ts: number, reason: string, args: any) => void,
  *   routeChatOut: (sender: string, text: string, ts: number) => void,
  *   replay: (entries: any[]) => void,
+ *   clear: () => void,
  *   setMode: (mode: "compact" | "detailed") => void,
  *   destroy: () => void,
  * }}
@@ -441,7 +448,7 @@ export function createChatStream() {
     if (sender === "task_activated") {
       const name = String(e?.text ?? e?.skill_name ?? e?.skillId ?? "");
       const status = String(e?.taskStatus ?? "");
-      if (!name || !status) return;
+      if (!name || !status || isInternalOnboardingSkill(name)) return;
       const key = String(e?.primitiveId ?? e?.skillId ?? name);
       addSkillRun(key, name, status, ts, typeof e?.failureReason === "string" ? e.failureReason : "", e?.args);
       return;
@@ -477,6 +484,10 @@ export function createChatStream() {
     stream.scrollTop = wasAtBottom ? stream.scrollHeight : priorTop;
   }
 
+  function clear() {
+    replay([]);
+  }
+
   return {
     head: streamHead,
     wrap: streamWrap,
@@ -485,6 +496,7 @@ export function createChatStream() {
     addSkillRun,
     routeChatOut,
     replay,
+    clear,
     setMode: setStreamMode,
     destroy() {
       streamResize.disconnect();

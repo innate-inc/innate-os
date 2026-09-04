@@ -484,6 +484,106 @@ select.skill-input {
 
 /* ---- app onboarding ---------------------------------------------------- */
 
+/* Agent onboarding starts as the product itself: MARS plus the ordinary chat,
+   with no card, spotlight, or substitute interaction. Intro Agent reveals the
+   surrounding simulator surfaces through /onboarding/ui as it explains them. */
+.agent-conversation-onboarding > :is(
+    .overlay-stack-top-left,
+    .agent-stage-view-toggle,
+    .sim-debug-stack,
+    .agent-challenge-dock
+  ),
+.agent-conversation-onboarding .agent-control-panel {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-6px);
+}
+
+.agent-conversation-onboarding > :is(
+    .overlay-stack-top-left,
+    .agent-stage-view-toggle,
+    .sim-debug-stack,
+    .agent-challenge-dock
+  ),
+.agent-conversation-onboarding .agent-control-panel,
+.agent-cockpit > :is(
+    .overlay-stack-top-left,
+    .agent-stage-view-toggle,
+    .sim-debug-stack,
+    .agent-challenge-dock
+  ),
+.agent-cockpit .agent-control-panel {
+  transition:
+    opacity 260ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    transform 280ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    visibility 0s;
+}
+
+.agent-conversation-onboarding.agent-onboarding-show-cameras
+  > .overlay-stack-top-left,
+.agent-conversation-onboarding.agent-onboarding-show-controls
+  > :is(.agent-stage-view-toggle, .sim-debug-stack, .agent-challenge-dock),
+.agent-conversation-onboarding.agent-onboarding-show-controls
+  .agent-control-panel {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+body.agent-conversation-onboarding-active {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+body.agent-conversation-onboarding-active
+  :is(.rail, .rail-ribbon, .rail-scrim) {
+  display: none;
+}
+
+/* Keep the opening exchange human: agent lifecycle messages, thought traces,
+   and tool telemetry remain available after the surrounding controls arrive,
+   but do not speak over MARS's introduction. */
+.agent-conversation-onboarding .agent-stream-mode,
+.agent-conversation-onboarding .agent-stream > :is(
+    .chat-msg.system,
+    .chat-thoughts,
+    .chat-skill,
+    .chat-skill-group
+  ) {
+  display: none;
+}
+
+/* Compact layouts need the sheet header as a grab surface, but its agent name
+   and Stop control belong to the later controls reveal, not the first frame. */
+.agent-conversation-onboarding:not(.agent-onboarding-show-controls)
+  .agent-sheet-header
+  :is(.agent-sheet-glyph, .agent-sheet-name, .agent-sheet-action) {
+  visibility: hidden;
+  opacity: 0;
+}
+
+/* The keyboard affordance lives in the interface, never in MARS's dialogue.
+   A touch-first device has no Space key, so it only gets the mic button. */
+.agent-conversation-onboarding
+  .agent-mic-control.has-space-shortcut:not(.listening):not(.waiting):not(.unavailable)
+  .agent-mic-label {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-cockpit > :is(
+      .overlay-stack-top-left,
+      .agent-stage-view-toggle,
+      .sim-debug-stack,
+      .agent-challenge-dock
+    ),
+  .agent-cockpit .agent-control-panel {
+    transition: none;
+  }
+}
+
 /* Conversation-aware Agent coach. */
 .agent-onboarding-active .rail-nav:not(.rail-foot),
 .agent-onboarding-focused .overlay-stack-top-left,
