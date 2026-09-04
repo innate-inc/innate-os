@@ -46,5 +46,7 @@ sim/.venv/
 !sim/props/**
 !sim/challenges/
 !sim/challenges/**
+!sim/environments/
+!sim/environments/**
 __pycache__/
 *.pyc
