@@ -24,6 +24,8 @@ class KDLIKNode(Node):
     # Cartesian error (m + 0.1 * rad) under which a seed's solution is taken
     # as-is instead of being outvoted by another seed's marginally better fit.
     CONTINUITY_SCORE = 0.005
+    # Radians past a URDF limit still accepted: solver noise, not a real overrun.
+    LIMIT_SLACK = 0.01
 
     def __init__(self):
         super().__init__("kdl_ik_from_file")
@@ -80,6 +82,14 @@ class KDLIKNode(Node):
             )
 
         self.get_logger().info(f"IK using joints: {self.joint_names}")
+
+        # LMA knows nothing about joint limits: from a folded posture it returns
+        # solutions past the range, which the driver then clamps silently, so the
+        # arm lands somewhere nobody asked for. Reject those here instead.
+        self.joint_limits = [
+            (robot_model.joint_map[name].limit.lower, robot_model.joint_map[name].limit.upper)
+            for name in self.joint_names
+        ]
 
         # Calculate and store initial FK pose (corresponding to q=0)
         self.initial_frame = kdl.Frame()
@@ -184,6 +194,12 @@ class KDLIKNode(Node):
             return True, q_out, score
         return False, None, float("inf")
 
+    def _within_limits(self, q: kdl.JntArray) -> bool:
+        return all(
+            lower - self.LIMIT_SLACK <= self._normalize_angle(q[i]) <= upper + self.LIMIT_SLACK
+            for i, (lower, upper) in enumerate(self.joint_limits)
+        )
+
     def _normalize_angle(self, angle):
         """Normalize angle to [-pi, pi]."""
         while angle > math.pi:
@@ -229,6 +245,9 @@ class KDLIKNode(Node):
 
         for seed_name, seed in seeds:
             success, q_out, score = self._try_ik_with_seed(seed, target_frame)
+            if success and not self._within_limits(q_out):
+                self.get_logger().debug(f"IK ({seed_name} seed) solution violates joint limits — rejected")
+                success = False
             if success and score < best_score:
                 best_solution = q_out
                 best_score = score
@@ -239,7 +258,10 @@ class KDLIKNode(Node):
         solve_time_ms = (time.perf_counter() - start_time) * 1000
 
         if best_solution is None:
-            self.get_logger().error(f"KDL IK failed from all seeds (took {solve_time_ms:.2f} ms)")
+            self.get_logger().warning(
+                f"KDL IK found no solution within joint limits (took {solve_time_ms:.2f} ms)",
+                throttle_duration_sec=1.0,
+            )
             return
 
         self.get_logger().debug(
