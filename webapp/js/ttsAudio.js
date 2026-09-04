@@ -25,6 +25,11 @@ navigator.locks?.request("innate-tts-speaker", () => {
   return new Promise(() => {}); // hold until this tab closes
 });
 
+/** Shared by continuous simulator audio so one tab owns every robot sound. */
+export function isRobotAudioSpeaker() {
+  return speaker;
+}
+
 export function initTtsAudio() {
   if (started) return;
   started = true;
@@ -104,7 +109,7 @@ function play(b64) {
 }
 
 /** @param {string} b64 @returns {Uint8Array} */
-function base64ToBytes(b64) {
+export function base64ToBytes(b64) {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
