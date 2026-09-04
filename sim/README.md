@@ -179,8 +179,11 @@ The apartment is the default world. Another pack is a directory under
 `sim/environments/` with a `manifest.json` naming its MuJoCo collision and
 visual meshes and Nav2 map (under `sim/assets/`), the browser glb or per-room
 manifest and collision hulls (under `sim/viewer/public/`), and the spawn pose --
-`sim/environments/apartment/manifest.json` is the template. Licensed packs the
-repository must not ship go in `sim/environments.local/` (gitignored).
+`sim/environments/apartment/manifest.json` is the template. Meshes are in
+meters, glTF Y-up, with the floor at y = 0: physics stands the robot on the
+MJCF ground plane there, and the 3D view's floor grid sits just below it.
+Licensed packs the repository must not ship go in `sim/environments.local/`
+(gitignored).
 
 Pick one at launch, or set `[simulation] environment` in `sim/config.toml`:
 
