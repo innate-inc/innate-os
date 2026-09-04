@@ -83,7 +83,9 @@ CAR_MODEL = {
                 "material": "rubber",
             }
             for x in (-1.125, 1.125)
-            for y in (-0.685, 0.685)
+            # Keep the outer wheel caps slightly proud of the 1.55 m body.
+            # Flush caps are coplanar with its sides and z-fight in Three.
+            for y in (-0.710, 0.710)
         ),
         {"shape": "box", "size": [0.05, 0.32, 0.18], "position": [1.775, 0.46, 0.52], "material": "headlight"},
         {"shape": "box", "size": [0.05, 0.32, 0.18], "position": [1.775, -0.46, 0.52], "material": "headlight"},

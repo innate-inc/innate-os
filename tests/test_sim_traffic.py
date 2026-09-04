@@ -245,8 +245,11 @@ def test_town_traffic_runs_safely_from_controller_through_mujoco():
     assert traffic.bodies_xml().count('mocap="true"') == 4
     body = traffic_model.CAR_MODEL["parts"][0]
     body_face = abs(body["position"][0]) + body["size"][0] / 2
+    body_side = abs(body["position"][1]) + body["size"][1] / 2
     lamps = [part for part in traffic_model.CAR_MODEL["parts"] if part["material"] in {"headlight", "taillight"}]
+    wheels = [part for part in traffic_model.CAR_MODEL["parts"] if part["material"] == "rubber"]
     assert all(abs(part["position"][0]) + part["size"][0] / 2 > body_face + 0.01 for part in lamps)
+    assert all(abs(part["position"][1]) + part["length"] / 2 > body_side + 0.01 for part in wheels)
     apartment = traffic_model.TrafficController("apartment")
     assert (apartment.bodies_xml(), apartment.manifest(), apartment.state(0.0, 0)) == ("", None, None)
 
