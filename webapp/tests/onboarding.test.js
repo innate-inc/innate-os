@@ -12,15 +12,15 @@ import {
 import {
   AGENT_ONBOARDING_PROGRESS_KEY,
   backendReadinessFromMessage,
+  CAPABILITY_RESPONSE,
   GUIDED_PROMPTS,
   hasIntroAgent,
   matchesSkill,
   ONBOARDING_GREETING,
+  ownedSkillEvent,
   parseRevealSections,
   parsePromptStage,
   REVEAL_SECTIONS,
-  revealSectionFromMessage,
-  skillPromptOutcome,
 } from "../js/agent/agentOnboarding.js";
 import { isInternalOnboardingSkill } from "../js/agent/chatStream.js";
 import {
@@ -111,6 +111,7 @@ assert.deepEqual(REVEAL_SECTIONS, ["cameras", "controls", "complete"]);
 assert.match(ONBOARDING_GREETING, /^Hi, I’m MARS/);
 assert.doesNotMatch(ONBOARDING_GREETING, /hold Space|type in the chat/i);
 assert.equal(GUIDED_PROMPTS.capabilities, "What can you do?");
+assert.match(CAPABILITY_RESPONSE, /^I am your physical agent/);
 assert.equal(GUIDED_PROMPTS.pickup, "Pick up the Lego in front of you.");
 assert.equal(GUIDED_PROMPTS.deliver, "Go and give it to the person in the corner.");
 assert.equal(hasIntroAgent({ agents: [{ id: "intro_agent" }] }), true);
@@ -125,9 +126,6 @@ assert.deepEqual(
   ["cameras", "controls"],
 );
 assert.deepEqual(parseRevealSections({ revealed: "cameras" }), []);
-assert.equal(revealSectionFromMessage({ data: '{"section":"cameras"}' }), "cameras");
-assert.equal(revealSectionFromMessage({ data: '{"section":"bogus"}' }), null);
-assert.equal(revealSectionFromMessage({ data: "not-json" }), null);
 assert.equal(backendReadinessFromMessage({ data: '{"state":"ready","connected":true}' }), true);
 assert.equal(backendReadinessFromMessage({ data: '{"state":"invalid_config","connected":false}' }), false);
 assert.equal(backendReadinessFromMessage({ data: '{"state":"starting","connected":false}' }), null);
@@ -137,11 +135,17 @@ assert.ok(!isInternalOnboardingSkill("wave"));
 assert.ok(matchesSkill("innate-os/pick_any_object", "pick_any_object"));
 assert.ok(matchesSkill("Open Gripper", "open_gripper"));
 assert.ok(!matchesSkill("close_gripper", "open_gripper"));
-assert.equal(skillPromptOutcome("pickup", "innate-os/pick_any_object", "running"), null);
-assert.equal(skillPromptOutcome("pickup", "innate-os/pick_any_object", "completed"), "deliver");
-assert.equal(skillPromptOutcome("pickup", "innate-os/pick_any_object", "failed"), "retry");
-assert.equal(skillPromptOutcome("deliver", "innate-os/navigate_to_position", "failed"), "retry");
-assert.equal(skillPromptOutcome("deliver", "innate-os/open_gripper", "completed"), "done");
+const pickRunning = { skill: "innate-os/pick_any_object", runId: "pick-1", status: "running", timestamp: 20 };
+assert.deepEqual(ownedSkillEvent("pick_any_object", "", pickRunning, 10), { kind: "claim", runId: "pick-1" });
+assert.equal(
+  ownedSkillEvent("pick_any_object", "pick-1", { ...pickRunning, runId: "foreign", status: "completed" }, 10),
+  null,
+);
+assert.deepEqual(
+  ownedSkillEvent("pick_any_object", "pick-1", { ...pickRunning, status: "completed" }, 10),
+  { kind: "completed", runId: "pick-1" },
+);
+assert.equal(ownedSkillEvent("pick_any_object", "", { ...pickRunning, timestamp: 5 }, 10), null);
 
 const appCss = readFileSync(new URL("../css/app.css", import.meta.url), "utf8");
 assert.match(
@@ -155,6 +159,7 @@ assert.match(
   /const greeting = greetWhenBrainIsPresent\(startedAt\);/,
   "resuming an unfinished onboarding session must replay MARS's greeting",
 );
+assert.doesNotMatch(agentOnboardingSource, /ONBOARDING_UI_TOPIC|revealSectionFromMessage/);
 assert.doesNotMatch(
   agentOnboardingSource,
   /fresh\s*\?\s*greetWhenBrainIsPresent/,
@@ -164,6 +169,27 @@ assert.match(
   agentOnboardingSource,
   /if \(fresh\) await options\.prepareEnvironment\?\.\(\);[\s\S]*?const greeting = greetWhenBrainIsPresent/,
   "a fresh onboarding must finish preparing its environment before MARS greets",
+);
+
+const agentPanelSource = readFileSync(new URL("../js/agent/agentPanel.js", import.meta.url), "utf8");
+const submitTextSource = agentPanelSource.match(
+  /async function submitText\(text\) \{[\s\S]*?\n  \}/,
+)?.[0] ?? "";
+assert.ok(
+  submitTextSource.indexOf("await (opts.ensureRunning") < submitTextSource.indexOf("rosClient.publish(CHAT_IN_TOPIC"),
+  "a local onboarding turn must start the agent before publishing",
+);
+assert.ok(
+  submitTextSource.indexOf("if (!sent) throw") < submitTextSource.indexOf("opts.onUserMessage?.(text, timestamp)"),
+  "the browser must not own an onboarding turn until ROS accepts its publish",
+);
+const remoteChatHandlerSource = agentPanelSource.match(
+  /const unsubIn = rosClient\.subscribe\([\s\S]*?const unsubOut/,
+)?.[0] ?? "";
+assert.doesNotMatch(
+  remoteChatHandlerSource,
+  /onUserMessage/,
+  "another browser's chat echo must not advance this browser's onboarding",
 );
 
 const agentMainSource = readFileSync(new URL("../js/agent/main.js", import.meta.url), "utf8");

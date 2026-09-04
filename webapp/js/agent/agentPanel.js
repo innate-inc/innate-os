@@ -42,9 +42,9 @@ const CHAT_EXAMPLES = [
  *   enableMic?: boolean,
  *   onMicState?: (state: {on: boolean, busy: boolean, level: number, waveform: number[], error: string | null}) => void,
  *   ensureRunning?: (fallback: () => Promise<void>) => Promise<void>,
- *   onUserMessage?: (text: string) => void,
- *   onRobotMessage?: (text: string) => void,
- *   onSkillStatus?: (skill: string, status: string) => void,
+ *   onUserMessage?: (text: string, timestamp: number) => void,
+ *   onRobotMessage?: (text: string, timestamp: number) => void,
+ *   onSkillStatus?: (event: {skill: string, runId: string, status: string, timestamp: number}) => void,
  * }} opts
  *   enableMic connects the browser microphone in sim, where the robot has no
  *   physical microphone (see micStream.js).
@@ -233,24 +233,38 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     mic?.stop();
   }
 
+  let sending = false;
   /** @param {string} text */
   async function submitText(text) {
-    if (!text) return;
-    chat.addMessage("user", text, Date.now() / 1000);
-    opts.onUserMessage?.(text);
-    await (opts.ensureRunning?.(directives.ensureRunning) ?? directives.ensureRunning());
-    rosClient.publish(CHAT_IN_TOPIC, {
-      data: JSON.stringify({ text, sender: "user", timestamp: Date.now() / 1000, origin: selfOrigin }),
-    });
+    if (!text || sending) return false;
+    sending = true;
+    try {
+      await (opts.ensureRunning?.(directives.ensureRunning) ?? directives.ensureRunning());
+      const timestamp = Date.now() / 1000;
+      const sent = rosClient.publish(CHAT_IN_TOPIC, {
+        data: JSON.stringify({ text, sender: "user", timestamp, origin: selfOrigin }),
+      });
+      if (!sent) throw new Error("The robot connection was lost before the message could be sent.");
+      chat.addMessage("user", text, timestamp);
+      opts.onUserMessage?.(text, timestamp);
+      return true;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "The message could not be sent.";
+      chat.addMessage("system", detail, Date.now() / 1000);
+      return false;
+    } finally {
+      sending = false;
+    }
   }
 
   async function submit() {
     const text = input.value.trim();
     if (!text) return;
-    input.value = "";
-    input.style.height = "auto";
-    syncComposerAction();
-    await submitText(text);
+    if (await submitText(text)) {
+      if (input.value.trim() === text) input.value = "";
+      input.style.height = "auto";
+      syncComposerAction();
+    }
   }
 
   form.addEventListener("submit", (e) => {
@@ -320,7 +334,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const text = String(payload?.text ?? "");
     if (!text) return;
     chat.addMessage("user", text, Number(payload?.timestamp) || Date.now() / 1000);
-    opts.onUserMessage?.(text);
   }, undefined, "std_msgs/msg/String");
 
   const unsubOut = rosClient.subscribe(CHAT_OUT_TOPIC, (m) => {
@@ -336,7 +349,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     if (!sender || !text) return;
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
     chat.routeChatOut(sender, text, ts);
-    if (sender === "robot") opts.onRobotMessage?.(text);
+    if (sender === "robot") opts.onRobotMessage?.(text, ts);
   }, undefined, "std_msgs/msg/String");
 
   const unsubSkill = rosClient.subscribe(SKILL_STATUS_UPDATE_TOPIC, (m) => {
@@ -350,10 +363,10 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const name = String(payload?.primitive_name ?? payload?.skill_name ?? payload?.skill_id ?? "");
     const status = String(payload?.status ?? "");
     if (!name || !status || isInternalOnboardingSkill(name)) return;
-    opts.onSkillStatus?.(String(payload?.skill_id ?? name), status);
     const key = String(payload?.primitive_id ?? payload?.skill_id ?? name);
     const reason = typeof payload?.reason === "string" ? payload.reason : "";
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
+    opts.onSkillStatus?.({ skill: String(payload?.skill_id ?? name), runId: key, status, timestamp: ts });
     chat.addSkillRun(key, name, status, ts, reason, payload?.args);
   }, undefined, "std_msgs/msg/String");
 
