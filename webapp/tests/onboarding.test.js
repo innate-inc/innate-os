@@ -8,7 +8,15 @@ import {
   ONBOARDING_START_SECTION,
   ONBOARDING_VERSION,
 } from "../js/onboarding.js";
-import { FIRST_NUDGE, INTRO_NUDGE, J3SO_NUDGE, REPLY_NUDGE, SWITCH_NUDGE } from "../js/agent/agentOnboarding.js";
+import {
+  AGENT_ONBOARDING_PROGRESS_KEY,
+  backendReadinessFromMessage,
+  ONBOARDING_GREETING,
+  parseRevealSections,
+  REVEAL_SECTIONS,
+  revealSectionFromMessage,
+} from "../js/agent/agentOnboarding.js";
+import { isInternalOnboardingSkill } from "../js/agent/chatStream.js";
 import {
   TELEOP_ONBOARDING_PROGRESS_KEY,
   TELEOP_ONBOARDING_STEPS,
@@ -26,7 +34,7 @@ import {
 } from "../js/teleop/teleopOnboarding.js";
 
 assert.equal(ONBOARDING_SEEN_KEY, `innate.onboardingSeen.v${ONBOARDING_VERSION}`);
-assert.equal(ONBOARDING_VERSION, 3);
+assert.equal(ONBOARDING_VERSION, 4);
 assert.equal(ONBOARDING_REQUEST_EVENT, "innate:onboarding-request");
 assert.equal(ONBOARDING_START_SECTION, "agent");
 assert.equal(TELEOP_ONBOARDING_PROGRESS_KEY, `innate.teleopOnboardingProgress.v${ONBOARDING_VERSION}`);
@@ -92,20 +100,23 @@ for (const step of ["wave", "pick"]) {
   assert.equal(runningCopy(step).eyebrow, TELEOP_ONBOARDING_STEPS[step].eyebrow);
   assert.equal(runningCopy(step).title, "Watch it happen");
 }
-assert.equal(INTRO_NUDGE.title, "This is Agent");
-assert.match(INTRO_NUDGE.body, /one turn at a time/);
-assert.match(FIRST_NUDGE.body, /type the message/);
-assert.match(SWITCH_NUDGE.body, /agent menu/i);
-assert.match(SWITCH_NUDGE.body, /J3SO/);
-assert.deepEqual(FIRST_NUDGE.examples, ["What can you do?"]);
-assert.match(REPLY_NUDGE.body, /navigate/);
-assert.match(REPLY_NUDGE.body, /wave/);
-assert.match(REPLY_NUDGE.body, /pick up/);
-
-for (const nudge of [INTRO_NUDGE, FIRST_NUDGE, REPLY_NUDGE, SWITCH_NUDGE, J3SO_NUDGE]) {
-  assert.ok(nudge.eyebrow.trim());
-  assert.ok(nudge.title.trim());
-  assert.ok(nudge.body.trim());
-}
+assert.equal(AGENT_ONBOARDING_PROGRESS_KEY, `innate.agentOnboarding.v${ONBOARDING_VERSION}`);
+assert.deepEqual(REVEAL_SECTIONS, ["cameras", "controls", "complete"]);
+assert.match(ONBOARDING_GREETING, /^Hi, I’m MARS/);
+assert.doesNotMatch(ONBOARDING_GREETING, /hold Space|type in the chat/i);
+assert.deepEqual(
+  parseRevealSections({ revealed: ["controls", "bogus", "cameras", "controls"] }),
+  ["cameras", "controls"],
+);
+assert.deepEqual(parseRevealSections({ revealed: "cameras" }), []);
+assert.equal(revealSectionFromMessage({ data: '{"section":"cameras"}' }), "cameras");
+assert.equal(revealSectionFromMessage({ data: '{"section":"bogus"}' }), null);
+assert.equal(revealSectionFromMessage({ data: "not-json" }), null);
+assert.equal(backendReadinessFromMessage({ data: '{"state":"ready","connected":true}' }), true);
+assert.equal(backendReadinessFromMessage({ data: '{"state":"invalid_config","connected":false}' }), false);
+assert.equal(backendReadinessFromMessage({ data: '{"state":"starting","connected":false}' }), null);
+assert.ok(isInternalOnboardingSkill("RevealOnboarding"));
+assert.ok(isInternalOnboardingSkill("reveal_onboarding"));
+assert.ok(!isInternalOnboardingSkill("wave"));
 
 console.log("ok - conversation onboarding contract");

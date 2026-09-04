@@ -20,7 +20,7 @@ import {
   GET_CHAT_HISTORY_SERVICE,
   SKILL_STATUS_UPDATE_TOPIC,
 } from "../constants.js";
-import { createChatStream } from "./chatStream.js";
+import { createChatStream, isInternalOnboardingSkill } from "./chatStream.js";
 import { createDirectiveControls } from "./directiveControls.js";
 import { createAgentSheet } from "./agentSheet.js";
 
@@ -41,9 +41,7 @@ const CHAT_EXAMPLES = [
  * @param {{
  *   enableMic?: boolean,
  *   onMicState?: (state: {on: boolean, busy: boolean, level: number, waveform: number[], error: string | null}) => void,
- *   onUserMessage?: () => void,
- *   onRobotMessage?: (message: HTMLElement | null) => void,
- *   onAgentName?: (name: string) => void
+ *   ensureRunning?: (fallback: () => Promise<void>) => Promise<void>,
  * }} opts
  *   enableMic connects the browser microphone in sim, where the robot has no
  *   physical microphone (see micStream.js).
@@ -52,7 +50,9 @@ const CHAT_EXAMPLES = [
  *   startMic: () => Promise<void>,
  *   stopMic: () => void,
  *   micMount: HTMLElement,
- *   setCompact: (on: boolean) => void
+ *   setCompact: (on: boolean) => void,
+ *   addNotice: (text: string) => void,
+ *   beginOnboarding: (fresh: boolean, startedAt: number) => void
  * }}
  *   setCompact swaps the right-edge dock for the bottom sheet (agentSheet.js).
  */
@@ -114,7 +114,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       headAgentName.textContent = name;
       sheet?.setName(name);
       updateHeadLabel();
-      opts.onAgentName?.(name);
     },
     onBrainActive(active, justStarted) {
       panel.classList.toggle("active", active);
@@ -222,7 +221,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
 
   // ---- composer -----------------------------------------------------------
   async function startMic() {
-    await directives.ensureRunning();
+    await (opts.ensureRunning?.(directives.ensureRunning) ?? directives.ensureRunning());
     await mic?.start();
   }
 
@@ -237,8 +236,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     input.value = "";
     input.style.height = "auto";
     syncComposerAction();
-    opts.onUserMessage?.();
-    await directives.ensureRunning();
+    await (opts.ensureRunning?.(directives.ensureRunning) ?? directives.ensureRunning());
     rosClient.publish(CHAT_IN_TOPIC, {
       data: JSON.stringify({ text, sender: "user", timestamp: Date.now() / 1000, origin: selfOrigin }),
     });
@@ -265,8 +263,11 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   // is permanent — the brain's record is the only thing that can close it.
   let loadingHistory = false;
   let lastSnapshot = "";
+  let historyFloor = 0;
 
-  async function loadHistory() {
+  /** @param {boolean} [duringOnboarding] */
+  async function loadHistory(duringOnboarding = false) {
+    if (!duringOnboarding && root.classList.contains("agent-conversation-onboarding")) return;
     if (loadingHistory) return;
     loadingHistory = true;
     try {
@@ -276,7 +277,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       const entries = JSON.parse(raw || "[]");
       if (!Array.isArray(entries) || !entries.length) return;
       lastSnapshot = raw;
-      chat.replay(entries);
+      chat.replay(entries.filter((entry) => (Number(entry?.timestamp) || 0) >= historyFloor));
     } catch (err) {
       console.warn("[chat] reconcile failed:", err);
     } finally {
@@ -308,7 +309,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const text = String(payload?.text ?? "");
     if (!text) return;
     chat.addMessage("user", text, Number(payload?.timestamp) || Date.now() / 1000);
-    opts.onUserMessage?.();
   }, undefined, "std_msgs/msg/String");
 
   const unsubOut = rosClient.subscribe(CHAT_OUT_TOPIC, (m) => {
@@ -324,10 +324,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     if (!sender || !text) return;
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
     chat.routeChatOut(sender, text, ts);
-    if (sender === "robot") {
-      const messages = chat.wrap.querySelectorAll(".chat-msg.robot");
-      opts.onRobotMessage?.(/** @type {HTMLElement | null} */ (messages[messages.length - 1] ?? null));
-    }
   }, undefined, "std_msgs/msg/String");
 
   const unsubSkill = rosClient.subscribe(SKILL_STATUS_UPDATE_TOPIC, (m) => {
@@ -340,7 +336,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     }
     const name = String(payload?.primitive_name ?? payload?.skill_name ?? payload?.skill_id ?? "");
     const status = String(payload?.status ?? "");
-    if (!name || !status) return;
+    if (!name || !status || isInternalOnboardingSkill(name)) return;
     const key = String(payload?.primitive_id ?? payload?.skill_id ?? name);
     const reason = typeof payload?.reason === "string" ? payload.reason : "";
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
@@ -358,6 +354,17 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       // Its switch is hidden here, so a wider visit's choice must not stick.
       if (on) chat.setMode("compact");
       sheet.setEnabled(on);
+    },
+    /** @param {string} text */
+    addNotice(text) {
+      chat.addMessage("system", text, Date.now() / 1000);
+    },
+    beginOnboarding(fresh, startedAt) {
+      historyFloor = startedAt / 1000;
+      lastSnapshot = "";
+      chat.clear();
+      sheet.open();
+      if (!fresh) void loadHistory(true);
     },
     destroy() {
       sheet.destroy();

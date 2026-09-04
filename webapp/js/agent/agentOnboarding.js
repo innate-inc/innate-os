@@ -2,247 +2,288 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
 
-import { ONBOARDING_REQUEST_EVENT, markOnboardingSeen } from "../onboarding.js";
+// First-run Agent onboarding is a real conversation with Intro Agent. The
+// browser owns only presentation state; the agent decides when to reveal each
+// part of the simulator by calling RevealOnboarding.
 
-export const INTRO_NUDGE = {
-  eyebrow: "Autonomous control",
-  title: "This is Agent",
-  body: "MARS acts on its own here: it looks through the camera, decides what to do, and runs a skill — one turn at a time. You give the goal and watch it think.",
-};
+import {
+  ONBOARDING_UI_TOPIC,
+  TTS_TOPIC,
+  WEBSOCKET_STATUS_TOPIC,
+} from "../constants.js";
+import {
+  markOnboardingSeen,
+  ONBOARDING_REQUEST_EVENT,
+  ONBOARDING_VERSION,
+} from "../onboarding.js";
 
-export const FIRST_NUDGE = {
-  eyebrow: "Demo Agent is ready",
-  title: "Talk to MARS",
-  body: "Demo Agent can navigate, wave, pick things up, and look around. Hold the mic or type the message below.",
-  examples: ["What can you do?"],
-};
+export const AGENT_ONBOARDING_PROGRESS_KEY = `innate.agentOnboarding.v${ONBOARDING_VERSION}`;
+export const INTRO_AGENT_ID = "intro_agent";
+export const REVEAL_SECTIONS = ["cameras", "controls", "complete"];
+export const ONBOARDING_GREETING =
+  "Hi, I’m MARS — your friendly, AI-native personal robot.";
+const ONBOARDING_SESSION_MS = 30 * 60 * 1000;
 
-export const REPLY_NUDGE = {
-  eyebrow: "MARS answered",
-  title: "Now make it move",
-  body: "Keep talking naturally: ask it to navigate somewhere, wave, or pick up an object.",
-};
+/** @param {unknown} value @returns {string[]} */
+export function parseRevealSections(value) {
+  if (!value || typeof value !== "object") return [];
+  const raw = /** @type {{revealed?: unknown}} */ (value).revealed;
+  if (!Array.isArray(raw)) return [];
+  return REVEAL_SECTIONS.filter((section) => raw.includes(section));
+}
 
-export const SWITCH_NUDGE = {
-  eyebrow: "Agents are code",
-  title: "Now meet J3SO",
-  body: "Every agent is a Python class you write: the skills it can run, and a prompt that gives it a personality. Pick J3SO from the agent menu.",
-};
+/** @param {unknown} message @returns {string | null} */
+export function revealSectionFromMessage(message) {
+  if (typeof /** @type {any} */ (message)?.data !== "string") return null;
+  try {
+    const section = String(JSON.parse(/** @type {any} */ (message).data)?.section ?? "");
+    return REVEAL_SECTIONS.includes(section) ? section : null;
+  } catch {
+    return null;
+  }
+}
 
-export const J3SO_NUDGE = {
-  eyebrow: "J3SO is running",
-  title: "Ask it the same thing",
-  body: "Same robot, a different file: J3SO gets navigation and head emotions, and a prompt that makes it a blunt, sarcastic droid. Yours go in workspace/custom_agents/.",
-};
+/** Ready, definitively unavailable, or still starting/unknown.
+ * @param {unknown} message @returns {boolean | null} */
+export function backendReadinessFromMessage(message) {
+  if (typeof /** @type {any} */ (message)?.data !== "string") return null;
+  try {
+    const status = JSON.parse(/** @type {any} */ (message).data);
+    if (status?.connected === true) return true;
+    if (["invalid_config", "connection_error", "backend_error", "error", "stopped"].includes(status?.state)) {
+      return false;
+    }
+  } catch {
+    // Unknown status is allowed time to settle below.
+  }
+  return null;
+}
 
 /**
- * A non-modal, conversation-aware first-run coach. The first beat clears away
- * secondary controls and points at chat; the second appears only after the
- * robot has actually replied.
  * @param {HTMLElement} root
- * @returns {{ onUserMessage: () => void, onRobotMessage: (message?: HTMLElement | null) => void, onAgentChange: (name: string) => void, destroy: () => void }}
+ * @param {import("../rosClient.js").RosClient} rosClient
+ * @param {ReturnType<typeof import("../teleop/agentState.js").sharedAgentState>} agentState
+ * @param {{enabled: boolean, onNotice?: (text: string) => void, onStart?: (fresh: boolean, startedAt: number) => void}} options
  */
-export function createAgentOnboarding(root) {
-  /** @type {HTMLElement | null} */
-  let card = null;
-  /** @type {HTMLElement | null} */
-  let target = null;
-  /** @type {HTMLElement | null} */
-  let mask = null;
-  let awaitingReply = false;
+export function createAgentOnboarding(root, rosClient, agentState, options) {
+  let active = false;
+  let startedAt = loadStartedAt();
+  /** @type {Promise<void> | null} */
+  let starting = null;
+  let destroyed = false;
+  /** @type {Set<string>} */
+  const revealed = new Set(loadProgress());
+  /** @type {boolean | null} */
+  let backendReady = null;
+  /** @type {Set<(ready: boolean) => void>} */
+  const backendListeners = new Set();
+  const unadvertiseGreeting = rosClient.advertise(TTS_TOPIC, "std_msgs/msg/String");
 
-  function start() {
-    close(false);
-    awaitingReply = false;
-    show(INTRO_NUDGE, null, "intro");
-  }
-
-  /** @param {boolean} remember */
-  function close(remember) {
-    card?.remove();
-    card = null;
-    mask?.remove();
-    mask = null;
-    target?.classList.remove("agent-onboarding-target");
-    target = null;
-    root.classList.remove("agent-onboarding-focused");
-    document.body.classList.remove("agent-onboarding-active");
-    if (remember) markOnboardingSeen();
-  }
-
-  /** @param {typeof INTRO_NUDGE | typeof FIRST_NUDGE | typeof REPLY_NUDGE} copy @param {Element | null} anchor @param {"intro" | "first" | "reply" | "switch" | "meet"} phase */
-  function show(copy, anchor, phase) {
-    close(false);
-    if (phase === "intro" || phase === "first") {
-      root.classList.add("agent-onboarding-focused");
-      document.body.classList.add("agent-onboarding-active");
-      mask = document.createElement("div");
-      mask.className = "agent-onboarding-mask";
-      mask.setAttribute("aria-hidden", "true");
-      const segmentCount = phase === "intro" ? 1 : 4;
-      for (let index = 0; index < segmentCount; index += 1) {
-        const segment = document.createElement("div");
-        segment.className = "agent-onboarding-mask-segment";
-        mask.appendChild(segment);
-      }
-      root.appendChild(mask);
+  function loadProgress() {
+    try {
+      return parseRevealSections(JSON.parse(localStorage.getItem(AGENT_ONBOARDING_PROGRESS_KEY) || "{}"));
+    } catch {
+      return [];
     }
-    target = anchor instanceof HTMLElement ? anchor : phase === "intro" ? null : root;
-    target?.classList.add("agent-onboarding-target");
-
-    card = document.createElement("aside");
-    card.className = `agent-onboarding-card is-${phase}`;
-    card.setAttribute("role", "status");
-    card.innerHTML =
-      `<span class="microlabel agent-onboarding-eyebrow">${copy.eyebrow}</span>` +
-      `<h2>${copy.title}</h2>` +
-      `<p>${copy.body}</p>`;
-
-    if (phase === "first" && "examples" in copy) {
-      const examples = document.createElement("div");
-      examples.className = "agent-onboarding-examples";
-      for (const example of copy.examples) {
-        const chip = document.createElement("button");
-        chip.type = "button";
-        chip.textContent = example;
-        chip.addEventListener("click", () => {
-          const input = root.querySelector(".agent-compose-input");
-          if (!(input instanceof HTMLInputElement) && !(input instanceof HTMLTextAreaElement)) return;
-          input.value = example;
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-          input.focus();
-        });
-        examples.appendChild(chip);
-      }
-      card.appendChild(examples);
-    }
-
-    const actions = document.createElement("div");
-    actions.className = "agent-onboarding-actions";
-    const dismiss = document.createElement("button");
-    dismiss.type = "button";
-    const keepTalking = phase === "reply" || phase === "meet";
-    dismiss.className = `agent-onboarding-dismiss${keepTalking ? "" : " agent-onboarding-quit"}`;
-    dismiss.textContent = keepTalking ? "Keep talking" : "Skip tour";
-    dismiss.addEventListener("click", () => close(true));
-    actions.appendChild(dismiss);
-    if (phase === "intro") {
-      const next = document.createElement("button");
-      next.type = "button";
-      next.className = "agent-onboarding-primary";
-      next.textContent = "Show me";
-      next.addEventListener("click", () => {
-        show(FIRST_NUDGE, root.querySelector(".agent-compose"), "first");
-      });
-      actions.appendChild(next);
-    } else if (phase === "reply") {
-      const swap = document.createElement("button");
-      swap.type = "button";
-      swap.className = "agent-onboarding-primary";
-      swap.textContent = "Meet J3SO";
-      swap.addEventListener("click", () => {
-        expandControls();
-        show(SWITCH_NUDGE, root.querySelector(".agent-directive-picker"), "switch");
-      });
-      actions.appendChild(swap);
-    } else if (phase === "meet") {
-      const nav = document.createElement("a");
-      nav.href = "/nav";
-      nav.className = "agent-onboarding-primary";
-      nav.textContent = "Open Navigation";
-      nav.addEventListener("click", () => markOnboardingSeen());
-      actions.appendChild(nav);
-    }
-    card.appendChild(actions);
-    root.appendChild(card);
-    requestAnimationFrame(position);
   }
 
-  /** A collapsed control panel display:nones the picker, so the step would
-   * point at a zero-sized box. */
-  function expandControls() {
-    const panel = root.querySelector(".agent-control-panel");
-    if (!panel?.classList.contains("collapsed")) return;
-    const head = panel.querySelector(".agent-head");
-    if (head instanceof HTMLElement) head.click();
+  function loadStartedAt() {
+    try {
+      const value = Number(JSON.parse(localStorage.getItem(AGENT_ONBOARDING_PROGRESS_KEY) || "{}")?.startedAt);
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    } catch {
+      return 0;
+    }
   }
 
-  function position() {
-    if (!card) return;
-    if (card.classList.contains("is-intro")) {
-      const segment = /** @type {HTMLElement | null} */ (mask?.firstElementChild);
-      if (segment) setMaskRect(segment, 0, 0, window.innerWidth, window.innerHeight);
-      card.style.removeProperty("left");
-      card.style.removeProperty("top");
+  function persist() {
+    try {
+      localStorage.setItem(
+        AGENT_ONBOARDING_PROGRESS_KEY,
+        JSON.stringify({ version: ONBOARDING_VERSION, startedAt, revealed: [...revealed] }),
+      );
+    } catch {
+      // Storage can be unavailable in locked-down browsers; the live tour works.
+    }
+  }
+
+  function render() {
+    root.classList.toggle("agent-conversation-onboarding", active);
+    document.body.classList.toggle("agent-conversation-onboarding-active", active);
+    for (const section of REVEAL_SECTIONS) {
+      root.classList.toggle(`agent-onboarding-show-${section}`, !active || revealed.has(section));
+    }
+  }
+
+  /** @param {string} section */
+  function reveal(section) {
+    if (!active || !REVEAL_SECTIONS.includes(section)) return;
+    if (section === "complete") {
+      for (const name of REVEAL_SECTIONS) revealed.add(name);
+      active = false;
+      persist();
+      markOnboardingSeen();
+      render();
       return;
     }
-    if (!target) return;
-    const rect = target.getBoundingClientRect();
-    if (mask) {
-      const [topMask, rightMask, bottomMask, leftMask] = /** @type {HTMLElement[]} */ ([...mask.children]);
-      const pad = 14;  // clears the halo's full pulse, or the mask clips it mid-breath
-      const holeTop = Math.max(0, rect.top - pad);
-      const holeRight = Math.min(window.innerWidth, rect.right + pad);
-      const holeBottom = Math.min(window.innerHeight, rect.bottom + pad);
-      const holeLeft = Math.max(0, rect.left - pad);
-      setMaskRect(topMask, 0, 0, window.innerWidth, holeTop);
-      setMaskRect(rightMask, holeRight, holeTop, window.innerWidth - holeRight, holeBottom - holeTop);
-      setMaskRect(bottomMask, 0, holeBottom, window.innerWidth, window.innerHeight - holeBottom);
-      setMaskRect(leftMask, 0, holeTop, holeLeft, holeBottom - holeTop);
+    revealed.add(section);
+    persist();
+    render();
+  }
+
+  const unsubUi = rosClient.subscribe(
+    ONBOARDING_UI_TOPIC,
+    (message) => {
+      const section = revealSectionFromMessage(message);
+      if (section) reveal(section);
+    },
+    undefined,
+    "std_msgs/msg/String",
+  );
+  const unsubBackend = rosClient.subscribe(
+    WEBSOCKET_STATUS_TOPIC,
+    (message) => {
+      const readiness = backendReadinessFromMessage(message);
+      if (readiness === null) return;
+      backendReady = readiness;
+      for (const listener of backendListeners) listener(readiness);
+    },
+    undefined,
+    "std_msgs/msg/String",
+  );
+
+  function waitForBackend() {
+    if (backendReady !== null) return Promise.resolve(backendReady);
+    return new Promise((resolve) => {
+      let done = false;
+      /** @param {boolean} ready */
+      const finish = (ready) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        backendListeners.delete(finish);
+        resolve(ready);
+      };
+      const timer = setTimeout(() => finish(false), 10_000);
+      backendListeners.add(finish);
+    });
+  }
+
+  /**
+   * @param {(snapshot: ReturnType<typeof agentState.get>) => boolean} predicate
+   * @param {number} timeoutMs
+   * @returns {Promise<ReturnType<typeof agentState.get> | null>}
+   */
+  function waitForState(predicate, timeoutMs) {
+    return new Promise((resolve) => {
+      const initial = agentState.get();
+      if (predicate(initial)) {
+        resolve(initial);
+        return;
+      }
+      let done = false;
+      /** @type {() => void} */
+      let unsubscribe = () => {};
+      /** @type {ReturnType<typeof setTimeout>} */
+      let timer;
+      /** @param {ReturnType<typeof agentState.get> | null} value */
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        unsubscribe();
+        resolve(value);
+      };
+      unsubscribe = agentState.subscribe((snapshot) => {
+        if (predicate(snapshot)) finish(snapshot);
+      });
+      timer = setTimeout(() => finish(null), timeoutMs);
+    });
+  }
+
+  async function activateIntroAgent() {
+    if (!(await waitForBackend())) {
+      throw new Error("Agent onboarding is unavailable because the AI service is offline. Check INNATE_SERVICE_KEY.");
     }
-    const width = card.offsetWidth || 340;
-    const height = card.offsetHeight || 190;
-    let left = rect.left - width - 16;
-    if (left < 76) left = Math.min(window.innerWidth - width - 12, rect.right + 16);
-    const top = Math.max(12, Math.min(window.innerHeight - height - 12, rect.top + rect.height / 2 - height / 2));
-    card.style.left = `${Math.max(76, left)}px`;
-    card.style.top = `${top}px`;
+    const roster = await waitForState(
+      (snapshot) => snapshot.agents.some((agent) => agent.id === INTRO_AGENT_ID),
+      10_000,
+    );
+    if (!roster || destroyed) throw new Error("Intro Agent is unavailable.");
+    const state = agentState.get();
+    if (!state.brainActive || state.currentDirective !== INTRO_AGENT_ID) {
+      await agentState.setDirective(INTRO_AGENT_ID);
+    }
+    const running = await waitForState(
+      (snapshot) => snapshot.brainActive && snapshot.currentDirective === INTRO_AGENT_ID,
+      8_000,
+    );
+    if (!running || destroyed) throw new Error("Intro Agent did not start.");
   }
 
-  /** @param {HTMLElement} element @param {number} left @param {number} top @param {number} width @param {number} height */
-  function setMaskRect(element, left, top, width, height) {
-    element.style.left = `${left}px`;
-    element.style.top = `${top}px`;
-    element.style.width = `${Math.max(0, width)}px`;
-    element.style.height = `${Math.max(0, height)}px`;
+  async function ensureRunning() {
+    if (!active) return false;
+    if (!starting) {
+      starting = activateIntroAgent().finally(() => {
+        starting = null;
+      });
+    }
+    await starting;
+    return true;
   }
 
-  function onUserMessage() {
-    if (!card?.classList.contains("is-first")) return;
-    awaitingReply = true;
-    close(false);
+  async function start(restart = false) {
+    if (!options.enabled) return;
+    const now = Date.now();
+    const fresh = restart || startedAt === 0 || now - startedAt > ONBOARDING_SESSION_MS;
+    if (fresh) {
+      revealed.clear();
+      startedAt = now;
+      try {
+        localStorage.removeItem(AGENT_ONBOARDING_PROGRESS_KEY);
+      } catch {
+        // See persist().
+      }
+    }
+    active = true;
+    persist();
+    render();
+    options.onStart?.(fresh, startedAt);
+    try {
+      await ensureRunning();
+      if (destroyed || !active) return;
+      if (fresh) {
+        // The opening copy is product copy, not a model turn: keep it exact and
+        // let the live Intro Agent own every response and reveal after this.
+        rosClient.publish(TTS_TOPIC, { data: ONBOARDING_GREETING });
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "The Intro Agent could not start.";
+      options.onNotice?.(`${detail} The full simulator interface has been restored.`);
+      for (const section of REVEAL_SECTIONS) revealed.add(section);
+      active = false;
+      render();
+    }
   }
 
-  /** @param {HTMLElement | null} [message] */
-  function onRobotMessage(message = null) {
-    if (!awaitingReply) return;
-    awaitingReply = false;
-    show(REPLY_NUDGE, message || root.querySelector(".agent-compose"), "reply");
-    markOnboardingSeen();
+  /** @param {CustomEvent<{restart?: boolean}>} event */
+  function onRequest(event) {
+    void start(Boolean(event.detail?.restart));
   }
-
-  /** The switch only counts when the roster actually reports J3SO selected.
-   * @param {string} name */
-  function onAgentChange(name) {
-    if (!card?.classList.contains("is-switch") || !/j3so/i.test(name)) return;
-    show(J3SO_NUDGE, root.querySelector(".agent-compose"), "meet");
-  }
-
-  function onRequest() {
-    start();
-  }
-
-  window.addEventListener(ONBOARDING_REQUEST_EVENT, onRequest);
-  window.addEventListener("resize", position);
+  window.addEventListener(ONBOARDING_REQUEST_EVENT, /** @type {EventListener} */ (onRequest));
+  render();
 
   return {
-    onUserMessage,
-    onRobotMessage,
-    onAgentChange,
+    isActive: () => active,
+    ensureRunning,
     destroy() {
-      close(false);
-      window.removeEventListener(ONBOARDING_REQUEST_EVENT, onRequest);
-      window.removeEventListener("resize", position);
+      destroyed = true;
+      active = false;
+      render();
+      unadvertiseGreeting();
+      unsubUi();
+      unsubBackend();
+      window.removeEventListener(ONBOARDING_REQUEST_EVENT, /** @type {EventListener} */ (onRequest));
     },
   };
 }
