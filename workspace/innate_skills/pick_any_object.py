@@ -8,6 +8,7 @@ No depth camera — URDF + pinhole model.
 """
 
 import math
+import os
 import re
 import time
 
@@ -68,9 +69,15 @@ PARAMS = {
     "wrist_pitch": 0.82,
     "wrist_box_u": 320.0,
     # Below image center: the wrist cam sits above the fingertips, so
-    # mid-frame aims short of them. 350 is the hardware-tuned parallax bias.
-    "wrist_box_v": 350.0,
+    # mid-frame aims short of them. Keep the hardware-tuned 350 target on a
+    # robot; the simulator camera model needs 310 or the fingertip centre ends
+    # up about 3 cm beyond a floor target. The simulator launcher exports its
+    # world-state port into every service container.
+    "wrist_box_v": 310.0 if os.environ.get("INNATE_WORLD_STATE_PORT") else 350.0,
     "wrist_half_px": 60.0,
+    # The broad box gets the arm down quickly; near the floor, require the
+    # object to be genuinely central before committing to a grasp.
+    "wrist_final_half_px": 20.0,
     "wrist_kx": -0.04,
     "wrist_ky": -0.04,
     "wrist_step_max": 0.04,
@@ -88,6 +95,7 @@ PARAMS = {
     # normal attempt remains carpet-safe; only a confirmed miss goes 1 cm
     # lower, before the robot has backed away from the target.
     "retry_floor_z": 0.02,
+    "grasp_retries": 2.0,
     "descend_s": 1.2,
     "descend_abort_z": 0.12,
     "arm_pitch": 1.30,
@@ -344,7 +352,10 @@ class PickAnyObject(Skill):
         self, x: float, y: float, z: float, reason: str, axis: vision.Axis | None = None
     ) -> tuple[float, float, float, float]:
         roll = self._grasp_roll(axis)
-        self.logger.info(f"[PickAnyObject] wrist stage: {reason} (z={z:.3f}, roll={math.degrees(roll):+.0f} deg)")
+        self.logger.info(
+            f"[PickAnyObject] wrist stage: {reason} "
+            f"(x={x:.3f}, y={y:.3f}, z={z:.3f}, roll={math.degrees(roll):+.0f} deg)"
+        )
         return x, y, z, roll
 
     @staticmethod
@@ -440,7 +451,8 @@ class PickAnyObject(Skill):
 
             err_u = px[0] - p["wrist_box_u"]
             err_v = px[1] - p["wrist_box_v"]
-            inside = inside_box(px, p["wrist_box_u"], p["wrist_box_v"], p["wrist_half_px"])
+            half_px = p["wrist_final_half_px"] if z <= AXIS_MIN_Z else p["wrist_half_px"]
+            inside = inside_box(px, p["wrist_box_u"], p["wrist_box_v"], half_px)
             centered = centered + 1 if inside else 0
             if streak < 2:
                 continue  # watch one more frame before trusting it
@@ -569,7 +581,10 @@ class PickAnyObject(Skill):
         held object merely because telemetry dropped out.
         """
         js = self.joint_states
-        return js is not None and len(js.position) > 5 and js.position[5] <= GRIPPER_EMPTY_J6 + 0.02
+        j6 = js.position[5] if js is not None and len(js.position) > 5 else None
+        empty = j6 is not None and j6 <= GRIPPER_EMPTY_J6 + 0.02
+        self.logger.info(f"[PickAnyObject] grip check: j6={j6} -> {'EMPTY' if empty else 'HELD/UNKNOWN'}")
+        return empty
 
     def _pre_close_lift(self, x: float, y: float, roll: float, pitch: float, yaw: float) -> None:
         p = self._p
@@ -599,24 +614,20 @@ class PickAnyObject(Skill):
             raise ArmUnhealthy(f"gripper would not close: {e}") from e
         time.sleep(p["close_settle_s"])
 
-    def _retry_lower_if_empty(self, x: float, y: float, roll: float, pitch: float, yaw: float) -> bool:
-        """Retry one centimetre lower, once, after a confirmed air close."""
-        if not self._gripper_closed_on_air():
-            return False
+    def _prepare_grasp_retry(
+        self, prompt: str, x: float, y: float
+    ) -> tuple[float, float, float, float, float]:
+        """Reopen, reacquire the object with the wrist, and descend lower."""
         p = self._p
         retry_z = p["retry_floor_z"]
-        self.logger.warning(f"[PickAnyObject] claw closed on air; retrying grasp at z={retry_z:.3f}")
         self._holding = False
         self.manipulation.gripper_open(duration=1.0)
-        try:
-            z_from = self.manipulation.pose.z
-        except ArmFailed:
-            z_from = p["floor_z"] + p["close_lift_m"]
-        self._push_to_floor(x, y, z_from, roll, pitch, yaw, floor_z=retry_z)
+        self._goto_search_pose(math.atan2(y, x))
+        x, y, z, roll = self._wrist_descend(prompt, x, y)
+        roll, pitch, yaw = self._grasp_orientation(x, y, roll)
+        self._push_to_floor(x, y, z, roll, pitch, yaw, floor_z=retry_z)
         self._pre_close_lift(x, y, roll, pitch, yaw)
-        self._close_once()
-        self._holding = True
-        return True
+        return x, y, roll, pitch, yaw
 
     def _lift_grasp(self, x: float, y: float, roll: float, yaw: float) -> None:
         """Lift a closed grasp; joint space keeps a rolled wrist wound."""
@@ -660,25 +671,42 @@ class PickAnyObject(Skill):
                 x, y, 0.22, roll=roll, pitch=p["arm_pitch"], yaw=yaw, duration=2.0, tolerance_xy=0.10
             )
 
-    def _close_twist_lift(self, x: float, y: float, roll: float, pitch: float, yaw: float) -> None:
-        """Close, retry a proven miss lower once, then lift.
+    def _close_twist_lift(
+        self, prompt: str, x: float, y: float, roll: float, pitch: float, yaw: float
+    ) -> None:
+        """Close and lift, reacquiring and retrying a proven miss.
 
         The encoder is checked both after closing and after the first lift. A
         floor or edge contact can initially hold the claw open even though no
         object comes up; that miss must also retry before the base backs away.
         """
         self._pre_close_lift(x, y, roll, pitch, yaw)
-        self._close_once()
-        retried = self._retry_lower_if_empty(x, y, roll, pitch, yaw)
-        # Fingers have committed: from here teardown must fold with the grip
-        # kept, not open over the floor mid-carry — only a verified miss
-        # clears the flag. Set here, not after _grasp_at returns: an exception
-        # in the lift below must not release a just-grasped object on the way
-        # home.
-        self._holding = True
-        self._lift_grasp(x, y, roll, yaw)
-        if not retried and self._retry_lower_if_empty(x, y, roll, pitch, yaw):
-            self._lift_grasp(x, y, roll, yaw)
+        retries = int(self._p["grasp_retries"])
+        for attempt in range(retries + 1):
+            self._close_once()
+            empty = self._gripper_closed_on_air()
+            lifted = False
+            # Fingers may initially be held apart by a floor/edge contact. A
+            # lift distinguishes that from a grasp before the base moves.
+            if not empty:
+                self._holding = True
+                self._lift_grasp(x, y, roll, yaw)
+                lifted = True
+                empty = self._gripper_closed_on_air()
+                if not empty:
+                    return
+            if attempt >= retries:
+                # Keep the old safe teardown posture even when the final
+                # attempt is empty; verification will report the miss.
+                self._holding = True
+                if not lifted:
+                    self._lift_grasp(x, y, roll, yaw)
+                return
+            self.logger.warning(
+                f"[PickAnyObject] grasp attempt {attempt + 1} closed on air; "
+                f"re-centering for retry {attempt + 2}/{retries + 1}"
+            )
+            x, y, roll, pitch, yaw = self._prepare_grasp_retry(prompt, x, y)
 
     def _grasp_at(self, prompt, xy):
         """Full grasp at floor xy (base_link)."""
@@ -699,12 +727,31 @@ class PickAnyObject(Skill):
         roll, pitch, yaw = self._grasp_orientation(x, y, roll)
         self._push_to_floor(x, y, z, roll, pitch, yaw)
         self.check_cancelled()  # last exit before the fingers commit
-        self._close_twist_lift(x, y, roll, pitch, yaw)
+        self._close_twist_lift(prompt, x, y, roll, pitch, yaw)
 
     def _grasp_verified(self, prompt, approach: FloorApproach):
-        """Back up, then check floor clear + gripper not open. Gemini gets both
-        cameras: the wrist view can show the object in the fingers, so a held
-        object isn't mistaken for a dropped one."""
+        """Verify a lifted grasp, backing up only when mechanics are unclear.
+
+        A non-empty claw after the lift, with the end effector measurably clear
+        of the floor, is already strong evidence of a grasp.  Do not drive the
+        base away in that state: a rigid object can be secure vertically but
+        get knocked loose by the horizontal verification move.  The existing
+        camera check remains the fallback for missing or ambiguous telemetry.
+        """
+        js = self.joint_states
+        j6 = js.position[5] if js is not None and len(js.position) > 5 else None
+        j6_ok = j6 is not None and j6 > GRIPPER_EMPTY_J6 + 0.02
+        try:
+            ee_z = self.manipulation.pose.z
+        except ArmFailed:
+            ee_z = None
+        lifted_clear = ee_z is not None and ee_z >= self._p["floor_z"] + 0.07
+        if j6_ok and lifted_clear:
+            self.logger.info(
+                f"[PickAnyObject] verify: lifted grasp j6={j6} z={ee_z:.3f} -> HELD"
+            )
+            return True
+
         approach.drive(-VERIFY_BACKUP_M)
         self.sleep(self._p["settle_s"])
         js = self.joint_states
