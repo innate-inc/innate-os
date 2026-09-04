@@ -120,9 +120,13 @@ if TYPE_CHECKING:
 
 
 def repo_root() -> Path:
-    """Best-effort repo root for dev checkouts (this file lives at
-    ros2_ws/src/mars_bot/mars_sim_driver/mars_sim_driver/world.py)."""
-    return Path(__file__).resolve().parents[5]
+    """Walk up to the tree that holds sim/ and ros2_ws/. A fixed parents[N] lands
+    on ros2_ws/install once colcon has installed this file, silently."""
+    here = Path(__file__).resolve()
+    for candidate in here.parents:
+        if (candidate / "sim").is_dir() and (candidate / "ros2_ws").is_dir():
+            return candidate
+    return here.parents[5]
 
 
 def default_assets_dir() -> Path:

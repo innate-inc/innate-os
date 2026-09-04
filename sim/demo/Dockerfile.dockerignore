@@ -1,0 +1,27 @@
+# For sim/demo/Dockerfile: exclude everything, admit the tracked trees it COPYs.
+# Generated geometry and the viewer bundle come from the published images instead.
+**
+
+!ros2_ws/**
+!scripts/**
+!config/**
+!workspace/**
+!webapp/**
+!sim/props/**
+!sim/challenges/**
+!sim/demo/**
+
+# Secrets and local state never enter a public image.
+.env
+**/.env
+**/.git
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+ros2_ws/build/**
+ros2_ws/install/**
+ros2_ws/log/**
+config/settings.yaml
+config/ssh/**
+config/security/**
