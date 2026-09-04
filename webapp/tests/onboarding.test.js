@@ -11,8 +11,10 @@ import {
 import {
   AGENT_ONBOARDING_PROGRESS_KEY,
   backendReadinessFromMessage,
+  GUIDED_PROMPTS,
   ONBOARDING_GREETING,
   parseRevealSections,
+  parsePromptStage,
   REVEAL_SECTIONS,
   revealSectionFromMessage,
 } from "../js/agent/agentOnboarding.js";
@@ -104,6 +106,11 @@ assert.equal(AGENT_ONBOARDING_PROGRESS_KEY, `innate.agentOnboarding.v${ONBOARDIN
 assert.deepEqual(REVEAL_SECTIONS, ["cameras", "controls", "complete"]);
 assert.match(ONBOARDING_GREETING, /^Hi, I’m MARS/);
 assert.doesNotMatch(ONBOARDING_GREETING, /hold Space|type in the chat/i);
+assert.equal(GUIDED_PROMPTS.capabilities, "What can you do?");
+assert.equal(GUIDED_PROMPTS.pickup, "Pick up this Lego piece in front of you.");
+assert.equal(parsePromptStage({ promptStage: "pickup" }), "pickup");
+assert.equal(parsePromptStage({ promptStage: "done" }), "done");
+assert.equal(parsePromptStage({ promptStage: "unknown" }), "capabilities");
 assert.deepEqual(
   parseRevealSections({ revealed: ["controls", "bogus", "cameras", "controls"] }),
   ["cameras", "controls"],

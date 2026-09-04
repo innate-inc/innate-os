@@ -42,6 +42,8 @@ const CHAT_EXAMPLES = [
  *   enableMic?: boolean,
  *   onMicState?: (state: {on: boolean, busy: boolean, level: number, waveform: number[], error: string | null}) => void,
  *   ensureRunning?: (fallback: () => Promise<void>) => Promise<void>,
+ *   onUserMessage?: (text: string) => void,
+ *   onRobotMessage?: (text: string) => void,
  * }} opts
  *   enableMic connects the browser microphone in sim, where the robot has no
  *   physical microphone (see micStream.js).
@@ -52,7 +54,8 @@ const CHAT_EXAMPLES = [
  *   micMount: HTMLElement,
  *   setCompact: (on: boolean) => void,
  *   addNotice: (text: string) => void,
- *   beginOnboarding: (fresh: boolean, startedAt: number) => void
+ *   beginOnboarding: (fresh: boolean, startedAt: number) => void,
+ *   setSuggestedPrompt: (text: string | null) => void
  * }}
  *   setCompact swaps the right-edge dock for the bottom sheet (agentSheet.js).
  */
@@ -229,17 +232,24 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     mic?.stop();
   }
 
-  async function submit() {
-    const text = input.value.trim();
+  /** @param {string} text */
+  async function submitText(text) {
     if (!text) return;
     chat.addMessage("user", text, Date.now() / 1000);
-    input.value = "";
-    input.style.height = "auto";
-    syncComposerAction();
+    opts.onUserMessage?.(text);
     await (opts.ensureRunning?.(directives.ensureRunning) ?? directives.ensureRunning());
     rosClient.publish(CHAT_IN_TOPIC, {
       data: JSON.stringify({ text, sender: "user", timestamp: Date.now() / 1000, origin: selfOrigin }),
     });
+  }
+
+  async function submit() {
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    input.style.height = "auto";
+    syncComposerAction();
+    await submitText(text);
   }
 
   form.addEventListener("submit", (e) => {
@@ -309,6 +319,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const text = String(payload?.text ?? "");
     if (!text) return;
     chat.addMessage("user", text, Number(payload?.timestamp) || Date.now() / 1000);
+    opts.onUserMessage?.(text);
   }, undefined, "std_msgs/msg/String");
 
   const unsubOut = rosClient.subscribe(CHAT_OUT_TOPIC, (m) => {
@@ -324,6 +335,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     if (!sender || !text) return;
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
     chat.routeChatOut(sender, text, ts);
+    if (sender === "robot") opts.onRobotMessage?.(text);
   }, undefined, "std_msgs/msg/String");
 
   const unsubSkill = rosClient.subscribe(SKILL_STATUS_UPDATE_TOPIC, (m) => {
@@ -365,6 +377,9 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       chat.clear();
       sheet.open();
       if (!fresh) void loadHistory(true);
+    },
+    setSuggestedPrompt(text) {
+      chat.setSuggestion(text, (selected) => void submitText(selected));
     },
     destroy() {
       sheet.destroy();

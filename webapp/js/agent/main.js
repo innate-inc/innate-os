@@ -161,6 +161,32 @@ function buildAgentView(root) {
   let micControl = null;
   /** @type {ReturnType<typeof createAgentOnboarding> | null} */
   let onboarding = null;
+  const simProps = /** @type {{
+   *   onProps?: (callback: (props: {name: string}[]) => void) => () => void,
+   *   placePropAtRobot?: (name: string) => void,
+   * }} */ (/** @type {unknown} */ (session));
+  /** @type {(() => void) | null} */
+  let stopLegoPrep = null;
+  function prepareLego() {
+    stopLegoPrep?.();
+    stopLegoPrep = null;
+    if (!config.simControls || !simProps.onProps || !simProps.placePropAtRobot) return;
+    let placed = false;
+    let subscribed = false;
+    let unsubscribe = () => {};
+    unsubscribe = simProps.onProps((props) => {
+      if (placed || !props.some((prop) => prop.name === "lego")) return;
+      placed = true;
+      simProps.placePropAtRobot?.("lego");
+      if (subscribed) {
+        unsubscribe();
+        stopLegoPrep = null;
+      }
+    });
+    subscribed = true;
+    if (placed) unsubscribe();
+    else stopLegoPrep = unsubscribe;
+  }
   const panel = createAgentPanel(root, ros, agentState, {
     enableMic: Boolean(config.simControls),
     onMicState: (state) => {
@@ -174,12 +200,16 @@ function buildAgentView(root) {
       if (!onboarding?.isActive()) return fallback();
       await onboarding.ensureRunning();
     },
+    onUserMessage: (text) => onboarding?.onUserMessage(text),
+    onRobotMessage: (text) => onboarding?.onRobotMessage(text),
   });
   onboarding = createAgentOnboarding(root, ros, agentState, {
     // Opening a page must never activate autonomous control on physical MARS.
     enabled: Boolean(config.simControls),
     onNotice: panel.addNotice,
     onStart: panel.beginOnboarding,
+    onSuggestedPrompt: panel.setSuggestedPrompt,
+    prepareLego,
   });
   const simSession = /** @type {any} */ (session);
   const challengePanel =
@@ -254,6 +284,7 @@ function buildAgentView(root) {
     {
       destroy: () => {
         root.removeEventListener("pointerdown", onScenePointerDown);
+        stopLegoPrep?.();
       },
     },
     { destroy: () => stageViewToggle.remove() },
