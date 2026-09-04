@@ -572,6 +572,64 @@ body.agent-conversation-onboarding-active
   opacity: 1;
 }
 
+.agent-guided-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 2px 0 8px 2px;
+}
+
+.agent-guided-prompt-label {
+  color: rgb(255 255 255 / 48%);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.agent-guided-prompt-button {
+  position: relative;
+  max-width: min(100%, 430px);
+  padding: 10px 38px 10px 13px;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: left;
+  background: rgb(64 31 251 / 18%);
+  border: 1px solid rgb(151 135 255 / 50%);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%);
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.agent-guided-prompt-button::after {
+  position: absolute;
+  top: 50%;
+  right: 13px;
+  content: "→";
+  color: rgb(255 255 255 / 62%);
+  transform: translateY(-50%);
+}
+
+.agent-guided-prompt-button:active {
+  transform: scale(0.985);
+}
+
+.agent-guided-prompt-button:focus-visible {
+  outline: 2px solid var(--agent-purple);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .agent-guided-prompt-button:hover {
+    background: rgb(64 31 251 / 28%);
+    border-color: rgb(151 135 255 / 78%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .agent-cockpit > :is(
       .overlay-stack-top-left,

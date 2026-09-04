@@ -42,6 +42,7 @@ export function isInternalOnboardingSkill(name) {
  *   routeChatOut: (sender: string, text: string, ts: number) => void,
  *   replay: (entries: any[]) => void,
  *   clear: () => void,
+ *   setSuggestion: (text: string | null, onSelect?: (text: string) => void) => void,
  *   setMode: (mode: "compact" | "detailed") => void,
  *   destroy: () => void,
  * }}
@@ -95,9 +96,40 @@ export function createChatStream() {
   const streamResize = new ResizeObserver(() => settleStreamAfterMutation(pinnedToBottom));
   streamResize.observe(stream);
 
+  /** @type {HTMLElement | null} */
+  let suggestion = null;
+
   /** @param {HTMLElement} el */
   function appendStreamItem(el) {
-    stream.append(el);
+    if (suggestion?.isConnected) suggestion.before(el);
+    else stream.append(el);
+  }
+
+  /** Keep one concrete next move directly under the latest message.
+   * @param {string | null} text @param {(text: string) => void} [onSelect] */
+  function setSuggestion(text, onSelect) {
+    const wasAtBottom = atBottom();
+    suggestion?.remove();
+    suggestion = null;
+    if (!text || !onSelect) {
+      settleStreamAfterMutation(wasAtBottom);
+      return;
+    }
+    const wrap = document.createElement("div");
+    wrap.className = "agent-guided-prompt";
+    const label = document.createElement("span");
+    label.className = "agent-guided-prompt-label mono";
+    label.textContent = "Try asking";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "agent-guided-prompt-button";
+    button.textContent = text;
+    button.addEventListener("click", () => onSelect(text));
+    wrap.append(label, button);
+    suggestion = wrap;
+    stream.append(wrap);
+    animateCompactEnter(wrap);
+    settleStreamAfterMutation(wasAtBottom);
   }
 
   /** @type {{ wrap: HTMLElement, status: HTMLElement, list: HTMLElement, lastByKind: Record<string, string>, startTs: number, latestTs: number } | null} */
@@ -480,6 +512,7 @@ export function createChatStream() {
       replayingHistory = false;
       stream.classList.remove("replaying");
     }
+    if (suggestion) stream.append(suggestion);
     // A reconcile can land while the reader is up in the scrollback.
     stream.scrollTop = wasAtBottom ? stream.scrollHeight : priorTop;
   }
@@ -497,6 +530,7 @@ export function createChatStream() {
     routeChatOut,
     replay,
     clear,
+    setSuggestion,
     setMode: setStreamMode,
     destroy() {
       streamResize.disconnect();

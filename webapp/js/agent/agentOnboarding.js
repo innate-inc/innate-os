@@ -22,7 +22,21 @@ export const INTRO_AGENT_ID = "intro_agent";
 export const REVEAL_SECTIONS = ["cameras", "controls", "complete"];
 export const ONBOARDING_GREETING =
   "Hi, I’m MARS — your friendly, AI-native personal robot.";
+export const GUIDED_PROMPTS = {
+  capabilities: "What can you do?",
+  pickup: "Pick up this Lego piece in front of you.",
+};
 const ONBOARDING_SESSION_MS = 30 * 60 * 1000;
+
+/** @param {unknown} value @returns {"capabilities" | "pickup" | "done"} */
+export function parsePromptStage(value) {
+  if (!value || typeof value !== "object") return "capabilities";
+  const stage = /** @type {{promptStage?: unknown}} */ (value).promptStage;
+  return stage === "pickup" || stage === "done" ? stage : "capabilities";
+}
+
+/** @param {string} text */
+const normalizedPrompt = (text) => text.trim().toLowerCase().replace(/[.!?]+$/, "");
 
 /** @param {unknown} value @returns {string[]} */
 export function parseRevealSections(value) {
@@ -63,7 +77,13 @@ export function backendReadinessFromMessage(message) {
  * @param {HTMLElement} root
  * @param {import("../rosClient.js").RosClient} rosClient
  * @param {ReturnType<typeof import("../teleop/agentState.js").sharedAgentState>} agentState
- * @param {{enabled: boolean, onNotice?: (text: string) => void, onStart?: (fresh: boolean, startedAt: number) => void}} options
+ * @param {{
+ *   enabled: boolean,
+ *   onNotice?: (text: string) => void,
+ *   onStart?: (fresh: boolean, startedAt: number) => void,
+ *   onSuggestedPrompt?: (text: string | null) => void,
+ *   prepareLego?: () => void,
+ * }} options
  */
 export function createAgentOnboarding(root, rosClient, agentState, options) {
   let active = false;
@@ -71,6 +91,10 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
   /** @type {Promise<void> | null} */
   let starting = null;
   let destroyed = false;
+  /** @type {"capabilities" | "pickup" | "done"} */
+  let promptStage = loadPromptStage();
+  /** @type {"capabilities" | "pickup" | null} */
+  let awaitingReply = null;
   /** @type {Set<string>} */
   const revealed = new Set(loadProgress());
   /** @type {boolean | null} */
@@ -96,11 +120,19 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
     }
   }
 
+  function loadPromptStage() {
+    try {
+      return parsePromptStage(JSON.parse(localStorage.getItem(AGENT_ONBOARDING_PROGRESS_KEY) || "{}"));
+    } catch {
+      return "capabilities";
+    }
+  }
+
   function persist() {
     try {
       localStorage.setItem(
         AGENT_ONBOARDING_PROGRESS_KEY,
-        JSON.stringify({ version: ONBOARDING_VERSION, startedAt, revealed: [...revealed] }),
+        JSON.stringify({ version: ONBOARDING_VERSION, startedAt, revealed: [...revealed], promptStage }),
       );
     } catch {
       // Storage can be unavailable in locked-down browsers; the live tour works.
@@ -115,6 +147,14 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
     }
   }
 
+  function syncSuggestedPrompt() {
+    const text = active && awaitingReply === null && promptStage !== "done"
+      ? GUIDED_PROMPTS[promptStage]
+      : null;
+    options.onSuggestedPrompt?.(text);
+    if (text === GUIDED_PROMPTS.pickup) options.prepareLego?.();
+  }
+
   /** @param {string} section */
   function reveal(section) {
     if (!active || !REVEAL_SECTIONS.includes(section)) return;
@@ -124,6 +164,7 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
       persist();
       markOnboardingSeen();
       render();
+      syncSuggestedPrompt();
       return;
     }
     revealed.add(section);
@@ -238,6 +279,8 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
     const fresh = restart || startedAt === 0 || now - startedAt > ONBOARDING_SESSION_MS;
     if (fresh) {
       revealed.clear();
+      promptStage = "capabilities";
+      awaitingReply = null;
       startedAt = now;
       try {
         localStorage.removeItem(AGENT_ONBOARDING_PROGRESS_KEY);
@@ -249,6 +292,7 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
     persist();
     render();
     options.onStart?.(fresh, startedAt);
+    syncSuggestedPrompt();
     try {
       await ensureRunning();
       if (destroyed || !active) return;
@@ -263,7 +307,25 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
       for (const section of REVEAL_SECTIONS) revealed.add(section);
       active = false;
       render();
+      syncSuggestedPrompt();
     }
+  }
+
+  /** @param {string} text */
+  function onUserMessage(text) {
+    if (!active || awaitingReply !== null || promptStage === "done") return;
+    if (normalizedPrompt(text) !== normalizedPrompt(GUIDED_PROMPTS[promptStage])) return;
+    awaitingReply = promptStage;
+    syncSuggestedPrompt();
+  }
+
+  /** @param {string} text */
+  function onRobotMessage(text) {
+    if (!active || awaitingReply === null || text.trim() === ONBOARDING_GREETING) return;
+    promptStage = awaitingReply === "capabilities" ? "pickup" : "done";
+    awaitingReply = null;
+    persist();
+    syncSuggestedPrompt();
   }
 
   /** @param {CustomEvent<{restart?: boolean}>} event */
@@ -276,10 +338,13 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
   return {
     isActive: () => active,
     ensureRunning,
+    onUserMessage,
+    onRobotMessage,
     destroy() {
       destroyed = true;
       active = false;
       render();
+      syncSuggestedPrompt();
       unadvertiseGreeting();
       unsubUi();
       unsubBackend();
