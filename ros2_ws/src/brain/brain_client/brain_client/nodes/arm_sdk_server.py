@@ -45,6 +45,7 @@ from brain_client.robot.manipulation import Manipulation
 from brain_client.state.arm import Arm
 
 IDLE_PARK_S = 60.0  # park the state feeds this long after the last command
+STATE_WAKE_S = 1.5  # how long a waking command waits for the first /mars/arm/state
 
 rclpy.init(args=sys.argv)  # honor the launch file's --ros-args
 node = rclpy.create_node("arm_sdk_server")
@@ -62,12 +63,20 @@ last_request = time.monotonic()
 
 
 def touch():
-    """Mark activity and make sure the state feeds are live (idempotent)."""
+    """Mark activity and make sure the state feeds are live (idempotent).
+
+    Waking from parked, wait for the first joint-state sample: the gripper and
+    joint-space commands read the measured arm and would refuse the very
+    command that woke the feeds."""
     global last_request
     last_request = time.monotonic()
-    if manip._executor is None:  # log the resume, not every stream step
-        node.get_logger().info("command while parked — starting arm-state feeds")
+    if manip._executor is not None:
+        return
+    node.get_logger().info("command while parked — starting arm-state feeds")
     manip.start()
+    deadline = time.monotonic() + STATE_WAKE_S
+    while manip._arm_state is None and time.monotonic() < deadline:
+        time.sleep(0.02)
 
 
 def parker():
