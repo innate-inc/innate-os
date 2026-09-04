@@ -30,6 +30,8 @@
 !sim/assets/backrooms_split/**
 !sim/assets/backrooms_split_v2/**
 !sim/assets/backrooms_visual/**
+!sim/assets/intersection_split_v2/**
+!sim/assets/intersection_visual/**
 !sim/assets/map/**
 !sim/assets/humans/**
 !sim/assets/objects/**

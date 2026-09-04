@@ -200,6 +200,8 @@ SIM_ASSET_UNITS_DERIVED = (
     "backrooms_split",
     "backrooms_split_v2",
     "backrooms_visual",
+    "intersection_split_v2",
+    "intersection_visual",
     "map",
 )
 SIM_ASSET_UNITS_AUTHORED = (
