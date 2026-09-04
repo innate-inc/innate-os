@@ -87,6 +87,7 @@ export function backendReadinessFromMessage(message) {
  *   onNotice?: (text: string) => void,
  *   onStart?: (fresh: boolean, startedAt: number) => void,
  *   onSuggestedPrompt?: (text: string | null) => void,
+ *   prepareEnvironment?: () => Promise<void>,
  *   prepareLego?: () => void,
  * }} options
  */
@@ -305,16 +306,22 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
     active = true;
     persist();
     render();
-    options.onStart?.(fresh, startedAt);
-    syncSuggestedPrompt();
-    // A resumed session means the page was reloaded before onboarding finished.
-    // The robot process may also have restarted, so replay the opening line to
-    // make that restored session visibly and audibly begin again.
-    const greeting = greetWhenBrainIsPresent(startedAt);
     try {
+      // A fresh tour owns its opening scene. Wait for the environment reset so
+      // the greeting and first suggested action cannot race the robot spawn.
+      // A reload of an unfinished tour resumes the existing world untouched.
+      if (fresh) await options.prepareEnvironment?.();
+      if (destroyed || !active) return;
+      options.onStart?.(fresh, startedAt);
+      syncSuggestedPrompt();
+      // A resumed session means the page was reloaded before onboarding finished.
+      // The robot process may also have restarted, so replay the opening line to
+      // make that restored session visibly and audibly begin again.
+      const greeting = greetWhenBrainIsPresent(startedAt);
       await Promise.all([ensureRunning(), greeting]);
       if (destroyed || !active) return;
     } catch (error) {
+      if (destroyed) return;
       const detail = error instanceof Error ? error.message : "The Intro Agent could not start.";
       options.onNotice?.(`${detail} The full simulator interface has been restored.`);
       for (const section of REVEAL_SECTIONS) revealed.add(section);

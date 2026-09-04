@@ -148,5 +148,14 @@ assert.doesNotMatch(
   /fresh\s*\?\s*greetWhenBrainIsPresent/,
   "the greeting must not be limited to a brand-new browser session",
 );
+assert.match(
+  agentOnboardingSource,
+  /if \(fresh\) await options\.prepareEnvironment\?\.\(\);[\s\S]*?const greeting = greetWhenBrainIsPresent/,
+  "a fresh onboarding must finish preparing its environment before MARS greets",
+);
+
+const agentMainSource = readFileSync(new URL("../js/agent/main.js", import.meta.url), "utf8");
+assert.match(agentMainSource, /switchEnvironment\("backrooms"\)/);
+assert.match(agentMainSource, /prepareEnvironment: prepareBackrooms/);
 
 console.log("ok - conversation onboarding contract");
