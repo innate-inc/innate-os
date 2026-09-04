@@ -512,6 +512,13 @@ export class SimScene {
    */
   async loadApartmentLayout(viewer: EnvironmentViewer = APARTMENT_VIEWER): Promise<ApartmentLayout> {
     this.environmentViewer = viewer;
+    // Exterior packs need a longer, daylight view. Always restore defaults
+    // on the next pack so an outdoor visit cannot change indoor rendering.
+    const daylight = viewer.atmosphere === "daylight";
+    const background = daylight ? 0xcddbe2 : 0x14161a;
+    this.scene.background = new THREE.Color(background);
+    this.scene.fog = new THREE.FogExp2(background, daylight ? 0.004 : 0.035);
+    this.controls.maxDistance = daylight ? 65 : 30;
     // One parent group holds every room and carries the Y-up -> Z-up rotation,
     // so it's applied once; placeholder boxes and rooms attach underneath.
     const group = new THREE.Group();

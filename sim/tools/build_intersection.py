@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Innate Inc
 """Generate Crossroads, an original, redistributable low-poly town square.
 
-No downloaded models, textures, or local environment packs are read. All
+No downloaded scenery, textures, or local environment packs are inputs. All
 dimensions below are metres in simulator Z-up coordinates. The same authored
 convex primitives supply the viewer and MuJoCo; no approximate CoACD bake is
 needed. The navigation map is then scanned from the compiled static world.

@@ -7,6 +7,7 @@
   "navigation": { "map_yaml": "map/intersection.yaml" },
   "viewer": {
     "type": "glb",
+    "atmosphere": "daylight",
     "model": "models/intersection/intersection.glb",
     "collision_dir": "physics/intersection_collisions"
   },
