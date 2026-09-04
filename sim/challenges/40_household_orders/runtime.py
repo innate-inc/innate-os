@@ -179,19 +179,23 @@ class HouseholdOrdersRuntime(ChallengeRuntime):
                         resident.name,
                         f"I'm {resident.name} and I want {resident.order} Please repeat the complete order back to me.",
                         resident.voice_id,
+                        resident.prop,
                     )
                 )
                 continue
             if self._matches(resident, event["text"]):
                 self._confirmed.add(resident.id)
                 result.events.append({"type": "resident_order_confirmed", "resident": resident.id})
-                result.replies.append(EnvironmentReply(resident.name, "That's correct. Thank you.", resident.voice_id))
+                result.replies.append(
+                    EnvironmentReply(resident.name, "That's correct. Thank you.", resident.voice_id, resident.prop)
+                )
             else:
                 result.replies.append(
                     EnvironmentReply(
                         resident.name,
                         f"Not quite. I want {resident.order} Please repeat the complete order back to me.",
                         resident.voice_id,
+                        resident.prop,
                     )
                 )
         return result

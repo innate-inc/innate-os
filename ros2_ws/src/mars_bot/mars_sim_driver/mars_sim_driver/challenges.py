@@ -304,6 +304,7 @@ class EnvironmentReply:
     speaker: str
     text: str
     voice_id: str
+    source: str | None = None
 
 
 @dataclass
@@ -697,6 +698,8 @@ class ChallengeEngine:
                                     "text": reply.text,
                                     "voice_id": reply.voice_id,
                                 }
+                                if reply.source:
+                                    payload["source"] = reply.source
                             elif isinstance(reply, str):
                                 payload = {"sender": "user", "text": reply, "timestamp": time.time()}
                             else:

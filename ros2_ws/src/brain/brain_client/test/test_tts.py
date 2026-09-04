@@ -46,7 +46,7 @@ def test_failed_reply_no_longer_holds_the_floor(monkeypatch):
     handler._speech_cv = threading.Condition()
     handler._playing_reply_id = None
     handler.logger = SimpleNamespace(info=lambda _message: None, error=lambda _message: None)
-    handler.speak_text = lambda _text, _voice, _on_start=None: False
+    handler.speak_text = lambda _text, _voice, _on_start=None, _audio_source="robot": False
     monkeypatch.setattr("brain_client.transport.tts.time.sleep", lambda _seconds: None)
 
     handler._speech_loop()
@@ -83,7 +83,7 @@ def test_a_reply_nobody_has_heard_loses_its_siblings_to_a_newer_one(monkeypatch,
         assert handler.speak_text_async("new reply", replace_pending=True, reply_id="new-reply")
         handler._speech_queue.append(None)
 
-    def speak(text, _voice, on_start=None):
+    def speak(text, _voice, on_start=None, _audio_source="robot"):
         spoken.append(text)
         if text == "failed first":
             attempt = spoken.count(text)

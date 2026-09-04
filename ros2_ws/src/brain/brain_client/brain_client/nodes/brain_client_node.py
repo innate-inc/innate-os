@@ -426,7 +426,6 @@ class BrainClientNode(Node):
         except (KeyError, ValueError) as exc:
             self.get_logger().warning(f"Ignoring invalid environment speech request: {exc}")
             return
-
         shown = threading.Event()
 
         def show() -> None:
@@ -449,6 +448,7 @@ class BrainClientNode(Node):
             on_start=show,
             on_done=deliver,
             protected=True,  # another character's line: agent flushes must not cancel it
+            audio_source=payload.get("source"),
         )
         if not queued:
             deliver(False)

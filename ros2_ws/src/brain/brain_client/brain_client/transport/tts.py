@@ -8,6 +8,7 @@ Generates speech audio and plays it through the robot's audio system.
 
 import base64
 import io
+import json
 import queue
 import struct
 import subprocess
@@ -34,6 +35,7 @@ class _Utterance:
     on_done: Callable[[bool], None] | None
     reply_id: str | None  # sentences of one streamed reply share an id
     protected: bool  # never flushed (environment speech: not our backlog)
+    audio_source: str | None = "robot"  # which simulated body speaks; None means nowhere in particular
 
 
 def _survives_flush(item: _Utterance, playing_reply_id: str | None) -> bool:
@@ -160,6 +162,7 @@ class TTSHandler:
         text: str,
         voice_config: dict[str, Any] | None = None,
         on_start: Callable[[], None] | None = None,
+        audio_source: str | None = "robot",
     ) -> bool:
         """
         Convert text to speech and play it.
@@ -168,6 +171,7 @@ class TTSHandler:
             text: Text to speak
             voice_config: Optional voice configuration override
             on_start: Called once the first audio reaches the speaker
+            audio_source: Simulated body the sound comes from (sim only; the webapp fades it by camera distance)
 
         Returns:
             True if speech was successfully generated and played, False otherwise
@@ -201,7 +205,7 @@ class TTSHandler:
             }
 
             if self._simulator_mode and self.tts_audio_pub is not None:
-                success = self._synthesize_to_topic(text, voice, t_start, on_start)
+                success = self._synthesize_to_topic(text, voice, t_start, on_start, audio_source)
             else:
                 success = self._synthesize_to_aplay(text, voice, t_start, on_start)
         except Exception as e:
@@ -348,8 +352,9 @@ class TTSHandler:
         voice: dict[str, Any],
         t_start: float,
         on_start: Callable[[], None] | None = None,
+        audio_source: str | None = "robot",
     ) -> bool:
-        """Synthesize the full clip and publish it (base64 WAV) on /tts/audio.
+        """Synthesize the full clip and publish it (JSON: base64 WAV + source) on /tts/audio.
 
         The sim container has no audio device, so the webapp is the speaker. We
         collect the whole clip (utterances are short) and publish it once.
@@ -370,7 +375,7 @@ class TTSHandler:
             return False
 
         wav = _finalize_wav(bytes(buf))
-        self._publish_audio(wav)
+        self._publish_audio(wav, audio_source)
         if on_start is not None:
             on_start()
         # Publishing the full clip is the beginning of playback, not the end.
@@ -386,14 +391,13 @@ class TTSHandler:
         )
         return True
 
-    def _publish_audio(self, wav: bytes) -> None:
-        """Publish one already-finalized clip on /tts/audio as base64 WAV."""
+    def _publish_audio(self, wav: bytes, audio_source: str | None) -> None:
         if self.tts_audio_pub is None or not wav:
             return
         from std_msgs.msg import String
 
-        payload = base64.b64encode(wav).decode("ascii")
-        self.tts_audio_pub.publish(String(data=payload))
+        payload = {"audio": base64.b64encode(wav).decode("ascii"), "source": audio_source}
+        self.tts_audio_pub.publish(String(data=json.dumps(payload, separators=(",", ":"))))
 
     def speak_text_async(
         self,
@@ -404,6 +408,7 @@ class TTSHandler:
         on_done: Callable[[bool], None] | None = None,
         reply_id: str | None = None,
         protected: bool = False,
+        audio_source: str | None = "robot",
     ) -> bool:
         """
         Queue text to be spoken. Utterances play in order, one at a time;
@@ -440,7 +445,9 @@ class TTSHandler:
                 self._speech_queue.extend(kept)
             queued = len(self._speech_queue) < self._speech_queue_maxlen
             if queued:
-                self._speech_queue.append(_Utterance(text, voice_config, on_start, on_done, reply_id, protected))
+                self._speech_queue.append(
+                    _Utterance(text, voice_config, on_start, on_done, reply_id, protected, audio_source)
+                )
                 self._speech_cv.notify()
         if not queued:
             self.logger.warning(f"🔇 Speech queue full, dropping: '{text[:60]}'")
@@ -516,12 +523,12 @@ class TTSHandler:
             # reply's flush spares siblings of speech nobody has heard, and they
             # play ahead of the newer answer.
             take_floor = self._floor_taken_on_start(item.reply_id, self._once(item.on_start))
-            success = self.speak_text(item.text, item.voice_config, take_floor)
+            success = self.speak_text(item.text, item.voice_config, take_floor, item.audio_source)
             if not success:
                 self._set_playing_reply(None)
                 self.logger.info("🔄 Retrying TTS after 1 second...")
                 time.sleep(1)
-                success = self.speak_text(item.text, item.voice_config, take_floor)
+                success = self.speak_text(item.text, item.voice_config, take_floor, item.audio_source)
             if not success:
                 self._set_playing_reply(None)
                 self._drop_queued_reply(item.reply_id)

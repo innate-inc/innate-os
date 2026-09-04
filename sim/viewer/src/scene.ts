@@ -154,6 +154,11 @@ const TOP_FALLBACK_HEIGHT_M = 12;
 // Robot-mounted camera views: frames, axis conventions, FOV and near plane
 // match the driver's cameras (mars_sim_driver.core's CAMERAS).
 export type CameraView = "orbit" | "main" | "arm";
+export interface SimAudioPerspective {
+  view: CameraView;
+  listener: [number, number, number];
+  sources: Record<string, [number, number, number]>;
+}
 // Track mars_sim_driver/constants.py: per-camera FOVs matching what the
 // driver renders (the head and wrist are different physical lenses), so the
 // operator's preview frames what the robot consumes. main is the head's real
@@ -887,6 +892,21 @@ export class SimScene {
   setView(view: CameraView): void {
     this.activeView = view === "orbit" || this.robotCameras.has(view) ? view : "orbit";
     this.applyControlsEnabled();
+  }
+
+  /** Snapshot from the exact scene state used by the primary render. */
+  audioPerspective(): SimAudioPerspective {
+    const activeCamera =
+      (this.activeView !== "orbit" ? this.robotCameras.get(this.activeView) : undefined) ?? this.camera;
+    const listener = activeCamera.getWorldPosition(new THREE.Vector3());
+    return {
+      view: this.activeView,
+      listener: [listener.x, listener.y, listener.z],
+      sources: {
+        robot: [this.robotRoot.position.x, this.robotRoot.position.y, this.robotRoot.position.z],
+        ...this.props.audioSourcePositions,
+      },
+    };
   }
 
   /** While a placement drag owns the pointer the orbit controls stay off,

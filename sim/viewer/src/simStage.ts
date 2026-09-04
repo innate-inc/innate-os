@@ -31,6 +31,7 @@ const MIN_FRAME_MS = 1000 / 62;
 // are a contract with webapp/js/agent/challengePanel.js.
 const PANEL_OPEN_EVENT = "innate:panel-open";
 const PANEL_ID = "sim-scene-setup";
+const AUDIO_PERSPECTIVE_EVENT = "innate:sim-audio-perspective";
 
 const VIEW_FOR: Record<string, CameraView> = { main: "main", arm: "arm", orbit: "orbit" };
 const ROTATION_DRAG_PX = 6;
@@ -555,6 +556,9 @@ export function createSimStage(
     cancelAnimationFrame(raf);
     raf = 0;
   };
+  const clearAudioPerspective = () => {
+    document.dispatchEvent(new CustomEvent(AUDIO_PERSPECTIVE_EVENT, { detail: null }));
+  };
 
   const loop = (now: number) => {
     raf = requestAnimationFrame(loop);
@@ -581,6 +585,7 @@ export function createSimStage(
     // ...then the primary view full-frame on top.
     scene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
     scene.render();
+    document.dispatchEvent(new CustomEvent(AUDIO_PERSPECTIVE_EVENT, { detail: scene.audioPerspective() }));
     frame++;
 
     if (perfEl) {
@@ -685,6 +690,7 @@ export function createSimStage(
     detach() {
       attached = false;
       stopLoop();
+      clearAudioPerspective();
       // The agent page lifts this into its own layout; take it back before
       // that page clears its DOM.
       wrap.appendChild(debugStack);
@@ -699,6 +705,7 @@ export function createSimStage(
       unsubscribeProps();
       unsubscribeEnvironment();
       stopLoop();
+      clearAudioPerspective();
       observer.disconnect();
       longTaskObserver?.disconnect();
       window.removeEventListener("pointerup", finishDrop);

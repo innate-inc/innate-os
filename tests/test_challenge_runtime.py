@@ -51,7 +51,9 @@ class ReplyRuntime(ChallengeRuntime):
                 continue
             resident = event["text"]
             result.events.append({"type": "confirmed", "resident": resident})
-            result.replies.append(EnvironmentReply(resident.title(), "Confirmed", f"voice-{resident}"))
+            result.replies.append(
+                EnvironmentReply(resident.title(), "Confirmed", f"voice-{resident}", f"resident-{resident}")
+            )
         return result
 
 
@@ -126,6 +128,7 @@ def test_environment_reply_is_a_speech_request_the_brain_voices(tmp_path):
     assert payload["speaker"] == "A"
     assert payload["sender"] == "environment_speech"
     assert payload["voice_id"] == "voice-a"
+    assert payload["source"] == "resident-a"
 
 
 def test_restart_invalidates_queued_and_dequeued_replies(tmp_path):

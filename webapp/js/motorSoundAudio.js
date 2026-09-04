@@ -6,6 +6,7 @@
 
 import { ros } from "./rosClient.js";
 import { base64ToBytes, isRobotAudioSpeaker } from "./ttsAudio.js";
+import { followSimAudioSource } from "./simSpatialAudio.js";
 
 const TOPIC = "/motor_sound/audio";
 const LEAD_S = 0.12;
@@ -14,6 +15,8 @@ const MAX_QUEUED_S = 0.5;
 let started = false;
 /** @type {AudioContext | null} */
 let context = null;
+/** @type {GainNode | null} */
+let output = null;
 let nextAt = 0;
 
 export function initMotorSoundAudio() {
@@ -25,7 +28,12 @@ export function initMotorSoundAudio() {
   const unlock = () => {
     if (!context) {
       const Context = window.AudioContext || /** @type {any} */ (window).webkitAudioContext;
-      if (Context) context = new Context();
+      if (Context) {
+        context = new Context();
+        output = context.createGain();
+        output.connect(context.destination);
+        followSimAudioSource("robot", (gain) => output?.gain.setTargetAtTime(gain, context?.currentTime ?? 0, 0.05));
+      }
     }
     void context?.resume();
   };
@@ -40,27 +48,30 @@ export function initMotorSoundAudio() {
   });
 
   ros.subscribe(TOPIC, (msg) => {
-    if (!context || document.visibilityState === "hidden" || !isRobotAudioSpeaker() || typeof msg?.data !== "string") {
+    if (!output || document.visibilityState === "hidden" || !isRobotAudioSpeaker() || typeof msg?.data !== "string") {
       return;
     }
+    const out = output;
+    const ctx = /** @type {AudioContext} */ (out.context);
     let payload;
     try {
       payload = JSON.parse(msg.data);
     } catch {
       return; // a malformed audio packet must not disrupt the shell
     }
-    if (context.state === "running") {
-      schedule(context, payload);
+    if (ctx.state === "running") {
+      schedule(out, payload);
       return;
     }
-    void context.resume().then(() => {
-      if (context && document.visibilityState !== "hidden") schedule(context, payload);
+    void ctx.resume().then(() => {
+      if (document.visibilityState !== "hidden") schedule(out, payload);
     }).catch(() => {});
   }, undefined, "std_msgs/msg/String");
 }
 
-/** @param {AudioContext} ctx @param {{ sample_rate?: unknown, pcm?: unknown }} payload */
-function schedule(ctx, payload) {
+/** @param {GainNode} out @param {{ sample_rate?: unknown, pcm?: unknown }} payload */
+function schedule(out, payload) {
+  const ctx = /** @type {AudioContext} */ (out.context);
   const rate = Number(payload?.sample_rate);
   if (!Number.isFinite(rate) || rate < 8_000 || rate > 192_000 || typeof payload?.pcm !== "string") return;
   let bytes;
@@ -81,7 +92,7 @@ function schedule(ctx, payload) {
   for (let i = 0; i < samples.length; i++) channel[i] = samples[i] / 32768;
   const source = ctx.createBufferSource();
   source.buffer = buffer;
-  source.connect(ctx.destination);
+  source.connect(out);
   source.start(nextAt);
   nextAt += buffer.duration;
 }

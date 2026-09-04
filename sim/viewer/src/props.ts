@@ -276,6 +276,15 @@ export class PropLibrary {
     return [...this.roots.values()].filter((r) => r.visible);
   }
 
+  /** Live world positions keyed by the authoritative prop names. */
+  get audioSourcePositions(): Record<string, [number, number, number]> {
+    const positions: Record<string, [number, number, number]> = {};
+    for (const [name, root] of this.roots) {
+      if (root.visible) positions[name] = [root.position.x, root.position.y, root.position.z];
+    }
+    return positions;
+  }
+
   private buildPlacementPreview(name: string): PlacementPreview | undefined {
     const info = this.info.get(name);
     if (!info) return undefined;

@@ -1,8 +1,8 @@
 // @ts-check
 // Robot speech playback. In SIM mode the brain publishes synthesized speech
-// (base64 WAV) on /tts/audio whenever it speaks — "make the robot speak", agent
-// replies, skill narration — because the sim has no audio device, so the
-// browser is the speaker. The real robot plays speech out its own physical
+// on /tts/audio whenever it speaks — "make the robot speak", agent replies,
+// skill narration — because the sim has no audio device, so the browser is the
+// speaker. Each clip is JSON: base64 WAV plus the simulated body it comes from. The real robot plays speech out its own physical
 // speaker and publishes nothing here (a browser playing it too would double
 // the voice), so against a robot this module simply never fires.
 // Mounted from the shell (which loads on every page), so speech plays no matter
@@ -10,6 +10,7 @@
 
 import { ros } from "./rosClient.js";
 import { isMicAudioActive, setTtsPlaying } from "./micAudioState.js";
+import { followSimAudioSource } from "./simSpatialAudio.js";
 
 const TTS_AUDIO_TOPIC = "/tts/audio";
 
@@ -36,12 +37,17 @@ export function initTtsAudio() {
 
   ros.subscribe(TTS_AUDIO_TOPIC, (msg) => {
     if (!speaker) return; // another tab is the elected speaker
-    const b64 = msg?.data;
-    if (typeof b64 !== "string" || !b64) return;
+    if (typeof msg?.data !== "string") return;
     // Defensive: if a clip does arrive while the operator has the robot mic
     // open, skip it — the speaker would be heard through the mic as well.
     if (isMicAudioActive()) return;
-    enqueue(b64);
+    let clip;
+    try {
+      clip = JSON.parse(msg.data);
+    } catch {
+      return;
+    }
+    if (typeof clip?.audio === "string" && clip.audio) enqueue(clip);
   }, undefined, "std_msgs/msg/String");
 }
 
@@ -49,7 +55,8 @@ export function initTtsAudio() {
 // aplay finishes. In sim a clip is "done" once published, so the robot half can
 // only serialize synthesis — played on arrival, a two-sentence reply talks over
 // itself. This queue is what puts that behavior back.
-/** @type {string[]} */
+/** @typedef {{ audio: string, source: string | null }} Clip */
+/** @type {Clip[]} */
 const pending = [];
 let playing = false;
 
@@ -57,9 +64,9 @@ let playing = false;
 // reason speak_text_async drops superseded speech).
 const MAX_PENDING = 4;
 
-/** @param {string} b64 */
-function enqueue(b64) {
-  pending.push(b64);
+/** @param {Clip} clip */
+function enqueue(clip) {
+  pending.push(clip);
   while (pending.length > MAX_PENDING) {
     pending.shift();
     console.warn("[tts] playback backlog full — dropping the oldest clip");
@@ -68,25 +75,30 @@ function enqueue(b64) {
 }
 
 function playNext() {
-  const b64 = pending.shift();
-  if (b64 === undefined) {
+  const clip = pending.shift();
+  if (clip === undefined) {
     playing = false;
     return;
   }
   playing = true;
   try {
-    play(b64);
+    play(clip);
   } catch (err) {
     console.warn("[tts] failed to play audio:", err);
     playNext(); // one bad clip must not strand the rest of the reply
   }
 }
 
-/** @param {string} b64 base64-encoded WAV */
-function play(b64) {
-  const blob = new Blob([/** @type {BlobPart} */ (base64ToBytes(b64))], { type: "audio/wav" });
+/** @param {Clip} clip */
+function play(clip) {
+  const blob = new Blob([/** @type {BlobPart} */ (base64ToBytes(clip.audio))], { type: "audio/wav" });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
+  // Bound at playback, not arrival: a clip that waited in the queue must use
+  // the camera position it actually plays under.
+  const stopFollowing = followSimAudioSource(clip.source, (gain) => {
+    audio.volume = gain;
+  });
   // The mic stream stops publishing while this is set, so every path must
   // release it — one that never finishes mutes the microphone for the session.
   setTtsPlaying(true);
@@ -94,6 +106,7 @@ function play(b64) {
   const done = () => {
     if (released) return;
     released = true;
+    stopFollowing();
     setTtsPlaying(false);
     URL.revokeObjectURL(url);
     playNext();
