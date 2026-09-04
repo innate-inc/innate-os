@@ -109,7 +109,7 @@ function play(b64) {
 }
 
 /** @param {string} b64 @returns {Uint8Array} */
-function base64ToBytes(b64) {
+export function base64ToBytes(b64) {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
