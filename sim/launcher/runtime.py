@@ -774,6 +774,8 @@ WORKSPACE_USER_DIRS = ("custom_agents", "custom_skills")
 def ensure_workspace_dirs(config: dict[str, object]) -> None:
     """Pre-create container-written workspace dirs as the invoking user."""
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    # Also a bind-mount source Docker would otherwise create root-owned.
+    (os_repo / "sim" / "viewer" / "local-environments").mkdir(parents=True, exist_ok=True)
     for name in WORKSPACE_USER_DIRS:
         path = os_repo / "workspace" / name
         try:

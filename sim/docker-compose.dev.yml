@@ -108,6 +108,9 @@ services:
       # (runtime.install_layer_subtree).
       - ../sim/viewer/public:/root/innate-os/sim/viewer/public:ro
       - ../sim/viewer/dist-lib:/root/innate-os/sim/viewer/dist-lib:ro
+      # Locally built environment packs' browser files (served at
+      # /local-environments/); the launcher pre-creates the directory.
+      - ../sim/viewer/local-environments:/root/innate-os/sim/viewer/local-environments:ro
       - ${INNATE_OS_ENV_FILE:-../.env}:/root/innate-os/.env:ro
 
       # 2) Keep build/install/log folders as Docker named volumes, so they won't pollute your host
