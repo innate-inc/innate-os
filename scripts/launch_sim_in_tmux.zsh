@@ -90,10 +90,11 @@ echo "Started UDP leader receiver (:9999/udp)..."
 # === Window 3: Nav + Brain ===
 # The REAL navigation stack (mode manager, router, namespaced planners, AMCL,
 # velocity smoother) -- the sim substitutes only the CUDA grid_localizer (see
-# mars_sim_driver) and seeds the maps dir with the generated apartment map so
-# the mode manager boots straight into navigation mode.
+# mars_sim_driver) and seeds the maps dir with every environment pack's map so
+# the mode manager boots straight into navigation mode and the world server
+# can switch it between packs (/nav/change_map).
 mkdir -p ~/innate-os/data/maps
-cp ~/innate-os/sim/assets/map/sim_apartment.* ~/innate-os/data/maps/ 2>/dev/null || true
+cp ~/innate-os/sim/assets/map/*.yaml ~/innate-os/sim/assets/map/*.pgm ~/innate-os/data/maps/ 2>/dev/null || true
 tmux new-window -t "$SESSION_NAME" -n nav-brain
 tmux send-keys -t "${TMUX_TARGET_PREFIX}:nav-brain" "ros2 launch mars_nav mode_manager.launch.py" C-m
 echo "Started navigation system..."

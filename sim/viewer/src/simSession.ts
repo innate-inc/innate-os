@@ -7,7 +7,13 @@
 import type { SimScene } from "./scene";
 import { RosbridgePhysicsController } from "./physics/rosbridgeController";
 import { WorldStateController } from "./physics/worldStateController";
-import type { ChallengeActive, ChallengeBlock, ChallengeInfo, ChallengeProgress } from "./physics/worldStateController";
+import type {
+  ChallengeActive,
+  ChallengeBlock,
+  ChallengeInfo,
+  ChallengeProgress,
+  EnvironmentRoster,
+} from "./physics/worldStateController";
 import type { PropInfo } from "./props";
 
 /** One roster row as a renderer wants it: what the challenge is, plus how it
@@ -115,6 +121,11 @@ export class SimSession {
   #propListeners = new Set<(props: PropInfo[]) => void>();
   #propsDirty = false;
 
+  // The environment roster (environments.py), relayed like the props: which
+  // pack the world runs, which it offers, and a switch in flight.
+  #environment: EnvironmentRoster | null = null;
+  #environmentListeners = new Set<(roster: EnvironmentRoster) => void>();
+
   #stateUrls: string[];
   #rosUrl: string;
 
@@ -194,6 +205,17 @@ export class SimSession {
       this.#challengeInfo = challenges;
       this.#challengeJson = "";
     };
+    this.#controller.onEnvironment = (roster) => {
+      const previous = this.#environment?.environment?.id;
+      this.#environment = roster;
+      // Another world: its first pose must spawn (and frame) the robot afresh.
+      if (roster.environment && roster.environment.id !== previous) {
+        this.#samples = [];
+        this.#playT = null;
+        this.#spawned = false;
+      }
+      for (const cb of this.#environmentListeners) cb(roster);
+    };
     this.#controller.onState = (s) => {
       const lag = Date.now() / 1000 - s.wall;
       if (lag < this.#lagMinS) this.#lagMinS = lag;
@@ -248,6 +270,7 @@ export class SimSession {
   destroy(): void {
     this.stop();
     this.#listeners.clear();
+    this.#environmentListeners.clear();
   }
 
   /** Toggle the /scan hit-point overlay (stage "lidar" chip). The rosbridge
@@ -307,6 +330,21 @@ export class SimSession {
     this.#propListeners.add(cb);
     if (this.#props.length) cb(this.#props);
     return () => this.#propListeners.delete(cb);
+  }
+
+  /** Subscribe to the environment roster (environments.py); fires immediately
+   * once it has arrived. The stage loads the pack's scene and builds its
+   * picker from this. */
+  onEnvironment(cb: (roster: EnvironmentRoster) => void): () => void {
+    this.#environmentListeners.add(cb);
+    if (this.#environment) cb(this.#environment);
+    return () => this.#environmentListeners.delete(cb);
+  }
+
+  /** Ask the world server to rebuild its world for another pack. Progress and
+   * the outcome come back through onEnvironment. */
+  switchEnvironment(id: string): void {
+    this.#controller?.send({ op: "switch_environment", id });
   }
 
   /** Whether any manipulation prop is currently in the world. Read from

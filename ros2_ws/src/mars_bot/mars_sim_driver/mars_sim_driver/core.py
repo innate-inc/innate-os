@@ -15,6 +15,7 @@ import math
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import mujoco
 import numpy as np
@@ -32,6 +33,9 @@ from .constants import (
 from .drive_limits import clamp_cmd_vel
 from .props import PropRegistry
 from .world import ARM_HOME, SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG
+
+if TYPE_CHECKING:
+    from .environments import Environment
 
 # Stop the base if the last Twist is stale, like a real base watchdog.
 CMD_VEL_TIMEOUT_S = 0.5
@@ -193,6 +197,7 @@ class VirtualMars:
         split_dir: Path | None = None,
         render_wh: tuple[int, int] | None = None,
         depth_render_wh: tuple[int, int] | None = None,
+        environment: "Environment | None" = None,
     ):
         # render_wh / depth_render_wh override the offscreen render
         # resolutions (default: the camera-native CAMERA_WIDTH x
@@ -201,13 +206,15 @@ class VirtualMars:
         # rate -- and upscales at the wire; direct/notebook users keep full res.
         self._render_w, self._render_h = render_wh or (CAMERA_WIDTH, CAMERA_HEIGHT)
         self._depth_w, self._depth_h = depth_render_wh or (self._render_w, self._render_h)
-        rooms = world.find_decomposed_rooms(split_dir or ASSETS_DIR / "apartment_split_v2")
+        self.environment = environment
+        collision_dir = split_dir or (environment.collision_dir if environment else ASSETS_DIR / "apartment_split_v2")
+        rooms = world.find_decomposed_rooms(collision_dir)
         if not rooms:
             raise RuntimeError(
-                f"no decomposed rooms under {split_dir or ASSETS_DIR} -- "
-                "run decompose_rooms.py or set VIRTUAL_MARS_ASSETS"
+                f"no decomposed rooms under {collision_dir} -- run decompose_rooms.py or set VIRTUAL_MARS_ASSETS"
             )
-        visual_dir = ASSETS_DIR / "apartment_visual"
+        visual_dir = environment.visual_dir if environment else ASSETS_DIR / "apartment_visual"
+        self._spawn = environment.spawn if environment else (SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG)
         visual_rooms = world.find_visual_rooms(visual_dir) if visual_dir.is_dir() else {}
 
         # Droppable props: sidecars from the tracked source dir plus any the
@@ -219,6 +226,7 @@ class VirtualMars:
             visual_rooms=visual_rooms,
             texture_max=_texture_cap(self._render_w),
             props=self.props,
+            spawn_pose=self._spawn,
         )
         # Lidar rays hit only the textured visual meshes (true surfaces, like
         # a real lidar) when available -- without them, fall back to all
@@ -334,9 +342,10 @@ class VirtualMars:
     def reset(self) -> None:
         self.world_epoch += 1
         mujoco.mj_resetData(self.model, self.data)
-        self.data.qpos[self._base["x"][0]] = SPAWN_X
-        self.data.qpos[self._base["y"][0]] = SPAWN_Y
-        self.data.qpos[self._base["yaw"][0]] = math.radians(SPAWN_YAW_DEG)
+        spawn_x, spawn_y, spawn_yaw_deg = self._spawn
+        self.data.qpos[self._base["x"][0]] = spawn_x
+        self.data.qpos[self._base["y"][0]] = spawn_y
+        self.data.qpos[self._base["yaw"][0]] = math.radians(spawn_yaw_deg)
         for qadr, _dadr, home in self._joints.values():
             self.data.qpos[qadr] = home
         mq, _md, source, mult = self._mimic
@@ -347,6 +356,14 @@ class VirtualMars:
         self._hold = None
         self._still_since = None
         mujoco.mj_forward(self.model, self.data)
+
+    def close(self) -> None:
+        """Release the offscreen GL renderers; must run on the thread that
+        rendered with them (macOS GL is main-thread-sensitive)."""
+        for renderer in (self._renderer, self._depth_renderer):
+            if renderer is not None:
+                renderer.close()
+        self._renderer = self._depth_renderer = None
 
     def set_cmd_vel(self, vx: float, wz: float) -> None:
         self._cmd_vx, self._cmd_wz = clamp_cmd_vel(vx, wz)

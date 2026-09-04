@@ -173,6 +173,27 @@ If something stops you anyway, we want to hear about it —
 ./innate-sim clean       # remove containers/volumes (keeps .env + config)
 ```
 
+### Environment packs
+
+The apartment is the default world. Another pack is a directory under
+`sim/environments/` with a `manifest.json` naming its MuJoCo collision and
+visual meshes and Nav2 map (under `sim/assets/`), the browser glb or per-room
+manifest and collision hulls (under `sim/viewer/public/`), and the spawn pose --
+`sim/environments/apartment/manifest.json` is the template. Licensed packs the
+repository must not ship go in `sim/environments.local/` (gitignored).
+
+Pick one at launch, or set `[simulation] environment` in `sim/config.toml`:
+
+```bash
+./innate-sim up --environment apartment
+```
+
+A running simulator switches in place: **Scene setup → Environment** in the
+3D view, or `up --environment` again. The world server rebuilds its MuJoCo
+world for the pack and swaps it under the physics lock -- the robot respawns
+there, the viewer streams the pack's rooms, and Nav2 changes to its map over
+`/nav/change_map` -- with nothing restarted and the page still open.
+
 ## Build skills and agents
 
 The simulator shares the repository's [`workspace/`](../workspace/) with the

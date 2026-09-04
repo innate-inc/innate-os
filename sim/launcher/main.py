@@ -350,6 +350,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run without network: skip skill asset downloads, and reuse already-built Docker images instead of pulling/building",
     )
+    up_parser.add_argument(
+        "--environment",
+        metavar="NAME",
+        help="Environment pack to load (sim/environments/NAME); overrides [simulation].environment in sim/config.toml",
+    )
     sim_subparsers.add_parser(
         "down",
         prog=f"{CLI_SIM} down",
@@ -425,6 +430,8 @@ def main() -> int:
                 backend=args.backend,
             )
         elif args.sim_command == "up":
+            if args.environment:
+                config["environment_id"] = args.environment
             cmd_up(
                 config,
                 watch=not args.once,

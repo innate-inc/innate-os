@@ -38,6 +38,28 @@ export interface ChallengeBlock {
   active: ChallengeActive | null;
 }
 
+/** One environment pack as the world server lists it (environments.py). */
+export interface EnvironmentSummary {
+  id: string;
+  display_name: string;
+}
+
+/** The loaded pack: its browser assets as the manifest names them (paths
+ * under sim/viewer/public, served at /models and /physics) and spawn pose. */
+export interface EnvironmentInfo extends EnvironmentSummary {
+  viewer: Record<string, string>;
+  spawn: [number, number, number];
+}
+
+/** The roster frame's environment half: what is loaded, what could be, and a
+ * switch in flight or the last one that failed. A server that predates packs
+ * sends none of it -- `environment` is null and it is running the apartment. */
+export interface EnvironmentRoster {
+  environment: EnvironmentInfo | null;
+  environments: EnvironmentSummary[];
+  switch: (EnvironmentSummary & { state: "loading" | "failed"; message?: string }) | null;
+}
+
 export interface WorldState {
   /** Sim clock (s) -- the playback timeline. */
   t: number;
@@ -60,6 +82,8 @@ export class WorldStateController {
   onProps?: (props: PropInfo[]) => void;
   /** The challenge roster, sent in the same opening frame (challenges.py). */
   onChallenges?: (challenges: ChallengeInfo[]) => void;
+  /** The environment roster: in the opening frame, and again on every switch. */
+  onEnvironment?: (roster: EnvironmentRoster) => void;
 
   #url: string;
   #ws!: WebSocket;
@@ -118,12 +142,23 @@ export class WorldStateController {
   }
 
   #onMessage(raw: string): void {
-    const parsed = JSON.parse(raw) as { props?: PropInfo[]; challenges?: ChallengeInfo[] };
+    const parsed = JSON.parse(raw) as {
+      props?: PropInfo[];
+      challenges?: ChallengeInfo[];
+      environment?: EnvironmentInfo | null;
+      environments?: EnvironmentSummary[];
+      switch?: EnvironmentRoster["switch"];
+    };
     if (parsed.props || parsed.challenges) {
-      // Roster frame, not a state frame: it has no clock and arrives once,
-      // ahead of the stream (see world_server.serve_state).
+      // Roster frame, not a state frame: it has no clock, opens the stream and
+      // returns whenever the world changes (see world_server.serve_state).
       if (parsed.props) this.onProps?.(parsed.props);
       if (parsed.challenges) this.onChallenges?.(parsed.challenges);
+      this.onEnvironment?.({
+        environment: parsed.environment ?? null,
+        environments: parsed.environments ?? [],
+        switch: parsed.switch ?? null,
+      });
       return;
     }
     const msg = parsed as unknown as {
