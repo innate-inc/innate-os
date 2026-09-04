@@ -483,7 +483,7 @@ export class SimSession {
       this.#propsDirty = false;
       scene.setPropManifest(this.#props);
     }
-    scene.setObjectPoses(objects);
+    scene.setObjectPoses(objects, a.t + (b.t - a.t) * u);
 
     if (this.#overlaysDirty) {
       this.#overlaysDirty = false;

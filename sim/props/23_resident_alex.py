@@ -2,9 +2,8 @@
 
 from mars_sim_driver.props import Prop
 
-# The resident mesh is pre-normalized to metres, Z-up, and feet-at-origin. A
-# mocap body keeps Alex stationary while challenges remain free to place and
-# face her.
+# Authored residents share Z-up, feet-at-origin geometry in both renderers.
+# Their browser Idle clip is cosmetic; the mocap collision body stays fixed.
 PROP = Prop(
     name="resident_alex",
     label="A",
@@ -17,7 +16,7 @@ PROP = Prop(
     friction=(0.9, 0.01, 0.001),
     solref=(0.02, 1.0),
     margin=0.007,
-    rgba=(0.75, 0.2, 0.2, 1.0),
+    rgba=(0.22, 0.55, 0.79, 1.0),
     rest_z=0.0,
     drop_z=0.0,
     kinematic=True,
@@ -27,5 +26,6 @@ PROP = Prop(
         "glb": "/models/resident_alex.glb",
         "preNormalized": True,
         "nameLabel": True,
+        "idleAnimation": "Idle",
     },
 )

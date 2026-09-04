@@ -11,7 +11,7 @@ from mars_sim_driver.challenges import Challenge, Drop, EventSeen, Goal, SkillDo
 from .runtime import HouseholdOrdersRuntime, Resident
 
 # Stable American-English Cartesia voices recommended for conversational
-# agents. Blake's scan is masculine; Alex's and Casey's are feminine.
+# agents. Keep resident voices stable when their visual models change.
 MASCULINE_VOICE_ID = "a5136bf9-224c-4d76-b823-52bd5efcffcc"  # Jameson
 FEMININE_VOICE_ID = "f786b574-daa5-4673-aa0c-cbe3e8534c02"  # Katie
 
@@ -85,7 +85,7 @@ CHALLENGE = Challenge(
         "three orders are confirmed, submit them together with the place_doordash_order skill."
     ),
     # Each resident stands on clear, navigable floor in a different room,
-    # with enough clearance for the robot to approach. The scans face +y at
+    # with enough clearance for the robot to approach. The models face +y at
     # identity, so these yaws turn each resident toward their room's open
     # floor rather than the nearest wall.
     setup=[

@@ -66,7 +66,8 @@ The npm scripts are for working on the viewer directly, not for running the sim:
 ```bash
 npm install
 npm run build:lib   # dist-lib/sim-session.js -- NOT what the container serves
-npm run typecheck   # NOT run by CI, and the vite lib build does not typecheck
+npm run typecheck
+npm test           # generated resident assets + prop animation lifecycle
 ```
 
 `dist-lib/` on the host is a scratch output of those scripts. Nothing mounts it.
@@ -92,3 +93,24 @@ public/             (fetched bundle) robot URDF+STLs, apartment glb
 Scene convention is Z-up, X-forward (matches ROS/REP-103), so the robot's
 URDF loads with no axis remap; the apartment glb (authored Y-up, the glTF
 convention) is rotated on load.
+
+## Household residents
+
+`tools/residents/model.mjs` authors Alex, Blake, and Casey, including their
+distinct faces and a 24-second seamless idle cycle. `tools/build-residents.mjs`
+generates both renderer formats from that source during the asset-image build:
+animated GLBs and standing-pose MuJoCo OBJ/palette textures. They are normalized
+to the existing resident heights, Z-up with feet at the origin and facing +Y,
+so the household challenge's placement/yaw and dialogue remain unchanged.
+
+For local asset inspection, run `node tools/build-residents.mjs /path/to/output`;
+it writes `models/` and `humans/`. Generated files stay outside git. Static face
+and hair details are merged by material to limit draw calls.
+
+The sidecar's `viewer.idleAnimation` opts into the GLB's `Idle` clip. PropLibrary
+samples it at interpolated simulation time, so pause, reset, and stream stalls
+hold the same pose as the rest of the scene. Placement previews stay still.
+Idle motion is cosmetic in Three.js; MuJoCo RGB/depth use the same characters
+in their standing pose, with fixed collision hulls. This does not add roaming
+or walking to the household challenge. Old bundles without the clip still
+display their static models.

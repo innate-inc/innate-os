@@ -1047,8 +1047,8 @@ export class SimScene {
    * ({name: [x, y, z, qw, qx, qy, qz]} -- world_server's "objects" block).
    * A prop the block stops naming has left the world and is hidden rather
    * than left behind at its last pose. */
-  setObjectPoses(poses: Record<string, number[]>): void {
-    this.props.setPoses(poses);
+  setObjectPoses(poses: Record<string, number[]>, simTime = 0): void {
+    this.props.setPoses(poses, simTime);
     this.updateShadowVolume(); // the props moved; the box may need to grow or shrink
   }
 
@@ -1232,7 +1232,7 @@ export class SimScene {
    * stage per visit, and undisposed contexts pile up until the browser kills
    * the oldest (~16), breaking the live view. */
   dispose(): void {
-    this.props.clearPlacementPreview();
+    this.props.dispose();
     this.placeholderMat?.dispose();
     this.cameraEnv?.dispose(); // a PMREM render target, not a loaded image
     this.controls.dispose();

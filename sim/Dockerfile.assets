@@ -163,6 +163,13 @@ COPY sim/viewer/tools ./tools
 COPY sim/viewer/public/models/appartement.glb ./appartement.glb
 RUN node tools/split-apartment.mjs ./appartement.glb /out/models/apartment
 
+# Authored residents are generated from tracked source, not downloaded scans.
+# Keep their cheap build below CoACD and emit both renderer formats together.
+RUN node tools/build-residents.mjs /residents
+
+FROM derived AS work
+COPY --from=split /residents/humans /sim/assets/humans
+
 # ----------------------------------------------------------------- assembly
 # Gather the complete viewer subtree in ONE place, so the final stage needs a
 # single COPY -- which is what keeps the layer count equal to the subtree count.
@@ -174,9 +181,7 @@ COPY --from=split   /out/models/apartment         /viewer/models/apartment
 COPY sim/viewer/public/models/human.glb           /viewer/models/human.glb
 COPY sim/viewer/public/models/labrador.glb        /viewer/models/labrador.glb
 COPY sim/viewer/public/models/soccer_ball.glb     /viewer/models/soccer_ball.glb
-COPY sim/viewer/public/models/resident_alex.glb    /viewer/models/resident_alex.glb
-COPY sim/viewer/public/models/resident_blake.glb   /viewer/models/resident_blake.glb
-COPY sim/viewer/public/models/resident_casey.glb   /viewer/models/resident_casey.glb
+COPY --from=split /residents/models              /viewer/models
 COPY --from=derived /out/models                   /viewer/models
 # No /viewer/robot: the webapp serves the robot description straight out of
 # ros2_ws (webapp/proxy/https_server.py).
@@ -188,5 +193,5 @@ COPY sim/ATTRIBUTION.md                           /viewer/ATTRIBUTION.md
 # directory, so a reordered or extra COPY fails the publish rather than
 # silently repointing `work` at the wrong blob.
 FROM scratch
-COPY --from=derived  /sim/assets  /work
+COPY --from=work     /sim/assets  /work
 COPY --from=assemble /viewer      /viewer
