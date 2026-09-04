@@ -542,15 +542,13 @@ body.agent-conversation-onboarding-active
   display: none;
 }
 
-/* Keep the opening exchange human: agent lifecycle messages, thought traces,
-   and tool telemetry remain available after the surrounding controls arrive,
-   but do not speak over MARS's introduction. */
+/* Keep the opening exchange human without hiding the actions MARS performs.
+   Lifecycle chatter and thought traces stay quiet; real skill cards remain in
+   the transcript, while RevealOnboarding is filtered at the data boundary. */
 .agent-conversation-onboarding .agent-stream-mode,
 .agent-conversation-onboarding .agent-stream > :is(
     .chat-msg.system,
-    .chat-thoughts,
-    .chat-skill,
-    .chat-skill-group
+    .chat-thoughts
   ) {
   display: none;
 }
