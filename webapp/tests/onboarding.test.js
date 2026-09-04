@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Innate Inc
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   ONBOARDING_REQUEST_EVENT,
   ONBOARDING_SEEN_KEY,
@@ -12,6 +13,7 @@ import {
   AGENT_ONBOARDING_PROGRESS_KEY,
   backendReadinessFromMessage,
   GUIDED_PROMPTS,
+  hasIntroAgent,
   ONBOARDING_GREETING,
   parseRevealSections,
   parsePromptStage,
@@ -108,6 +110,9 @@ assert.match(ONBOARDING_GREETING, /^Hi, I’m MARS/);
 assert.doesNotMatch(ONBOARDING_GREETING, /hold Space|type in the chat/i);
 assert.equal(GUIDED_PROMPTS.capabilities, "What can you do?");
 assert.equal(GUIDED_PROMPTS.pickup, "Pick up this Lego piece in front of you.");
+assert.equal(hasIntroAgent({ agents: [{ id: "intro_agent" }] }), true);
+assert.equal(hasIntroAgent({ agents: [{ id: "default_agent" }] }), false);
+assert.equal(hasIntroAgent({ agents: [] }), false);
 assert.equal(parsePromptStage({ promptStage: "pickup" }), "pickup");
 assert.equal(parsePromptStage({ promptStage: "done" }), "done");
 assert.equal(parsePromptStage({ promptStage: "unknown" }), "capabilities");
@@ -125,5 +130,23 @@ assert.equal(backendReadinessFromMessage({ data: '{"state":"starting","connected
 assert.ok(isInternalOnboardingSkill("RevealOnboarding"));
 assert.ok(isInternalOnboardingSkill("reveal_onboarding"));
 assert.ok(!isInternalOnboardingSkill("wave"));
+
+const appCss = readFileSync(new URL("../css/app.css", import.meta.url), "utf8");
+assert.match(
+  appCss,
+  /\.agent-conversation-onboarding:not\(\.agent-onboarding-show-controls\)[\s\S]*?\.agent-control-panel\s*\{\s*display:\s*none;/,
+);
+
+const agentOnboardingSource = readFileSync(new URL("../js/agent/agentOnboarding.js", import.meta.url), "utf8");
+assert.match(
+  agentOnboardingSource,
+  /const greeting = greetWhenBrainIsPresent\(startedAt\);/,
+  "resuming an unfinished onboarding session must replay MARS's greeting",
+);
+assert.doesNotMatch(
+  agentOnboardingSource,
+  /fresh\s*\?\s*greetWhenBrainIsPresent/,
+  "the greeting must not be limited to a brand-new browser session",
+);
 
 console.log("ok - conversation onboarding contract");

@@ -500,6 +500,14 @@ select.skill-input {
   transform: translateY(-6px);
 }
 
+/* Unlike the floating overlays, the controls share the chat's flex column.
+   Remove them from layout until their reveal so an invisible card cannot
+   shorten the conversation panel. */
+.agent-conversation-onboarding:not(.agent-onboarding-show-controls)
+  .agent-control-panel {
+  display: none;
+}
+
 .agent-conversation-onboarding > :is(
     .overlay-stack-top-left,
     .agent-stage-view-toggle,
@@ -595,12 +603,11 @@ body.agent-conversation-onboarding-active
   font-size: 14px;
   line-height: 1.35;
   text-align: left;
-  background: rgb(64 31 251 / 18%);
-  border: 1px solid rgb(151 135 255 / 50%);
+  background: #34343a;
+  border: 1px solid #34343a;
   border-radius: 12px;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%);
   cursor: pointer;
-  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+  transition: border-color 140ms ease, transform 140ms ease;
 }
 
 .agent-guided-prompt-button::after {
@@ -623,8 +630,7 @@ body.agent-conversation-onboarding-active
 
 @media (hover: hover) and (pointer: fine) {
   .agent-guided-prompt-button:hover {
-    background: rgb(64 31 251 / 28%);
-    border-color: rgb(151 135 255 / 78%);
+    border-color: rgb(255 255 255 / 32%);
   }
 }
 
