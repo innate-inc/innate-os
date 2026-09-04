@@ -96,7 +96,23 @@ class NavMapBridge:
         self.url = url
         self.wanted = map_name
         self.current: str | None = None
+        self._requested_at = -math.inf
         threading.Thread(target=self._run, daemon=True).start()
+
+    def switch_to(self, map_name: str, timeout_s: float) -> bool:
+        """Ask for a map and wait for Nav2 to report it. True at once when no
+        Nav2 has been seen yet (a world server running alone), so a switch
+        never waits on a stack that is not there."""
+        self.wanted = map_name
+        self._requested_at = -math.inf
+        if self.current is None:
+            return True
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self.current == map_name:
+                return True
+            time.sleep(0.25)
+        return False
 
     def _run(self) -> None:
         try:
@@ -114,7 +130,6 @@ class NavMapBridge:
             time.sleep(5)
 
     def _reconcile(self, ws) -> None:
-        requested_at = -math.inf
         while True:
             try:
                 frame = json.loads(ws.recv(timeout=1.0))
@@ -124,14 +139,14 @@ class NavMapBridge:
                 self.current = str(frame["msg"]["data"])
             elif frame.get("op") == "service_response":
                 print(f"[nav-map] {self.SERVICE} -> {frame.get('values', frame)}", flush=True)
-            if self.current in (None, self.wanted) or time.monotonic() - requested_at < self.RETRY_S:
+            if self.current in (None, self.wanted) or time.monotonic() - self._requested_at < self.RETRY_S:
                 continue
-            requested_at = time.monotonic()
+            self._requested_at = time.monotonic()
             ws.send(
                 json.dumps(
                     {
                         "op": "call_service",
-                        "id": f"nav-map-{int(requested_at)}",
+                        "id": f"nav-map-{int(self._requested_at)}",
                         "service": self.SERVICE,
                         "args": {"map_name": self.wanted},
                     }

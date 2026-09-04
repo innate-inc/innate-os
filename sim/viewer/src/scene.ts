@@ -201,6 +201,9 @@ export class SimScene {
   private robotXY: [number, number] = [0, 0];
   private layoutGroup?: THREE.Group;
   private environmentViewer: EnvironmentViewer = APARTMENT_VIEWER;
+  // Bumped by unloadEnvironment: a load still in flight for the previous
+  // pack must drop its result rather than attach it to the next one.
+  private environmentGeneration = 0;
   private hullsGroup?: THREE.Group;
   private hullsPromise?: Promise<void>;
   private hullsVisible = false;
@@ -459,6 +462,7 @@ export class SimScene {
   }
 
   private async loadCollisionHulls(): Promise<void> {
+    const generation = this.environmentGeneration;
     const group = new THREE.Group();
     group.rotation.x = Math.PI / 2;
     const baseUrl = `${publicUrl(this.environmentViewer.collision_dir ?? APARTMENT_VIEWER.collision_dir)}/`;
@@ -485,6 +489,10 @@ export class SimScene {
           group.add(obj);
         }),
       );
+    }
+    if (generation !== this.environmentGeneration) {
+      disposeObject(group);
+      return;
     }
     group.visible = this.hullsVisible; // honor toggles made while loading
     this.hullsGroup = group;
@@ -558,6 +566,7 @@ export class SimScene {
       });
     }
     this.layoutGroup = this.hullsGroup = this.hullsPromise = this.layoutBounds = undefined;
+    this.environmentGeneration += 1;
     this.robotRoot.visible = false;
     this.spawned = false;
   }
@@ -579,6 +588,10 @@ export class SimScene {
       try {
         if (!layout.modelUrl) throw new Error("the pack names no model");
         const root = await queuedGLB(queue, loader, layout.modelUrl);
+        if (group !== this.layoutGroup) {
+          disposeObject(root); // the pack was unloaded while this streamed
+          return;
+        }
         this.dressRoom(root);
         group.add(root);
       } catch (err) {
@@ -590,6 +603,10 @@ export class SimScene {
     const loadRoom = ({ room, box }: ApartmentLayout["rooms"][number]) =>
       queuedGLB(queue, loader, `${layout.baseUrl}${room.file}`)
         .then((root) => {
+          if (group !== this.layoutGroup) {
+            disposeObject(root); // the pack was unloaded while this streamed
+            return;
+          }
           this.dressRoom(root);
           group.add(root);
         })
@@ -1305,6 +1322,15 @@ function layoutFocus(bounds: THREE.Box3): THREE.Vector3 {
   const focus = bounds.getCenter(new THREE.Vector3());
   focus.z = bounds.min.z;
   return focus;
+}
+
+/** Free a loaded subtree's GPU-bound resources (geometries, materials, textures). */
+function disposeObject(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    obj.geometry.dispose();
+    disposeMaterials(obj.material);
+  });
 }
 
 function disposeMaterials(material: THREE.Material | THREE.Material[]): void {

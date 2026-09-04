@@ -18,6 +18,7 @@ import argparse
 import json
 import struct
 import sys
+from collections import Counter
 from pathlib import Path
 
 import decompose_rooms
@@ -37,10 +38,13 @@ Parts = dict[str, trimesh.Trimesh]
 def load_parts(glb: Path) -> tuple[Parts, float]:
     """Every mesh part in the scene's Y-up world frame, plus the floor height."""
     scene = trimesh.load(glb, force="scene")
-    parts = {name: geom.copy() for name, geom in scene.geometry.items()}
-    for node in scene.graph.nodes_geometry:
-        transform, name = scene.graph[node]
-        parts[name].apply_transform(transform)
+    placements = [(node, *scene.graph[node]) for node in scene.graph.nodes_geometry]
+    uses = Counter(geometry for _node, _transform, geometry in placements)
+    parts: Parts = {}
+    for node, transform, geometry in placements:  # one part per placement: instanced geometry is several
+        part = scene.geometry[geometry].copy()
+        part.apply_transform(transform)
+        parts[geometry if uses[geometry] == 1 else f"{geometry}__{node}"] = part
     whole = trimesh.util.concatenate(list(parts.values()))
     up = whole.face_normals[:, 1] > 0.95
     heights, index = np.unique(np.round(whole.triangles_center[up][:, 1], 3), return_inverse=True)

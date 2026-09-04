@@ -306,6 +306,13 @@ class WorldServer:
                 self.switch = {**summary, "state": "loading"}
                 self._publish_roster()
                 fresh = self._build_sim(target)
+                # Nav2 changes map before the world changes: the epoch bump
+                # below reseeds AMCL from the new world's pose, which must
+                # land on the new map, and a map Nav2 cannot load fails the
+                # switch with the old world still running.
+                if self.nav_map is not None and not self.nav_map.switch_to(target.map_name, timeout_s=45.0):
+                    self._retired.put(fresh)
+                    raise RuntimeError(f"Nav2 did not load {target.map_name}")
             except Exception as exc:
                 self.switch = {**summary, "state": "failed", "message": repr(exc)}
                 self._publish_roster()
@@ -316,12 +323,12 @@ class WorldServer:
                 fresh.world_epoch = retired.world_epoch + 1  # a new world is a reset to every consumer
                 self.challenges.sim = fresh
                 fresh.step(0.5)  # settle from the spawn drop before anyone looks
+            with self.frame_ready:
+                self.latest.clear()  # the old world's last frames must not answer the next request
             self._retired.put(retired)
             self.switch = None
             self._publish_roster()
             self.publish_state()
-            if self.nav_map is not None:
-                self.nav_map.wanted = target.map_name
             print(f"[world-server] environment switched to {target.id}", flush=True)
 
     def _close_retired(self) -> None:
@@ -347,7 +354,8 @@ class WorldServer:
             depth = sim.read_depth().astype(np.float32)
             frame = ({"ok": True, "shape": list(depth.shape), "dtype": "float32"}, depth.tobytes())
         with self.frame_ready:
-            self.latest[product] = frame
+            if sim is self.sim:  # a render that outlived a switch must not resurface the old world
+                self.latest[product] = frame
             self.frame_ready.notify_all()
 
     def render_loop(self) -> None:
