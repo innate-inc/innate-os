@@ -28,10 +28,6 @@ from decompose_rooms import decompose_room
 from PIL import Image
 
 SIM = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(SIM / "sandbox"))
-import _driver_pkg  # noqa: E402,F401
-import export_nav_map as nav  # noqa: E402
-
 ASSETS = SIM / "assets"
 DEFAULT_VIEWER_OUT = SIM / "viewer" / "public"
 FLAT_SHEET_M = 0.02  # a part this thin in y is a floor plane; the MJCF ground plane stands in for it
@@ -99,6 +95,12 @@ def write_visuals(pack_id: str, parts: Parts) -> None:
 
 
 def write_nav_map(pack_id: str) -> None:
+    # Imported here, not at the top: the decompose stage of the asset image
+    # carries no driver package, by design (its CoACD bake must not re-run on
+    # a driver edit), and only this step compiles a world.
+    sys.path.insert(0, str(SIM / "sandbox"))
+    import _driver_pkg  # noqa: F401
+    import export_nav_map as nav
     from mars_sim_driver.core import VirtualMars
     from mars_sim_driver.environments import Environment
 
