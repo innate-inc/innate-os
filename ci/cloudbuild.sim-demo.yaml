@@ -5,6 +5,8 @@ timeout: 7200s
 substitutions:
   _IMAGE: us-central1-docker.pkg.dev/innate-managed-infra/sim/innate-os-sim-demo
   _IMAGE_TAG: manual
+  _ASSETS_IMAGE: manual
+  _VIEWER_IMAGE: manual
   _GHCR_USERNAME_SECRET: innate-os-sim-ghcr-username
   _GHCR_TOKEN_SECRET: innate-os-sim-ghcr-token
   # Only main moves it.
@@ -18,6 +20,8 @@ steps:
     env:
       - IMAGE=${_IMAGE}
       - TAG=${_IMAGE_TAG}
+      - ASSETS_IMAGE=${_ASSETS_IMAGE}
+      - VIEWER_IMAGE=${_VIEWER_IMAGE}
       - LATEST_TAG=${_LATEST_TAG}
     args:
       - -c
