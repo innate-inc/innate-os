@@ -140,6 +140,7 @@ class Manipulation:
     STREAM_RATE_HZ = 30.0
     STREAM_MAX_SPEED = 1.8  # rad/s
     STREAM_IDLE_S = 0.4
+    STREAM_IK_TIMEOUT_S = 0.1
 
     # A motion completes on ARRIVAL, and motions serialize in the driver, so a
     # queued one waits out whatever is already moving before its own duration
@@ -563,6 +564,30 @@ class Manipulation:
                 self._stream_thread = threading.Thread(target=self._stream_run, daemon=True)
                 self._stream_thread.start()
 
+    def stream_pose(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        roll: float,
+        pitch: float,
+        yaw: float,
+        grip: float | None = None,
+    ) -> bool:
+        """One step of cartesian streaming: solve IK for the pose and hand
+        the arm joints to :meth:`stream_joints`. ``grip`` is a j6 target in
+        radians streamed alongside (it becomes the standing grip when the
+        stream ends); None keeps the standing grip. Returns False, moving
+        nothing, when the pose has no solution — a follower loop skips the
+        step and waits for the next target. Fast by design: the IK timeout is
+        one stream tick, not a motion's patience.
+        """
+        joints = self._solve_ik(x, y, z, roll, pitch, yaw, timeout=self.STREAM_IK_TIMEOUT_S)
+        if joints is None:
+            return False
+        self.stream_joints(joints if grip is None else [*joints, grip])
+        return True
+
     def stream_stop(self) -> None:
         """Stop streaming; the arm holds its current position. Idempotent.
 
@@ -780,7 +805,7 @@ class Manipulation:
                         return None
                     return joint_positions
 
-        self.logger.error(f"[Manipulation] IK solution timeout after {timeout}s")
+        self.logger.debug(f"[Manipulation] IK solution timeout after {timeout}s")  # callers raise or skip
         return None
 
     def _goto(self, joint_positions: list[float], duration: float, wait: bool) -> bool:

@@ -21,6 +21,12 @@ from mars_arm.urdf import treeFromUrdfModel  # local parser in urdf.py
 
 
 class KDLIKNode(Node):
+    # Cartesian error (m + 0.1 * rad) under which a seed's solution is taken
+    # as-is instead of being outvoted by another seed's marginally better fit.
+    CONTINUITY_SCORE = 0.005
+    # Radians past a URDF limit still accepted: solver noise, not a real overrun.
+    LIMIT_SLACK = 0.01
+
     def __init__(self):
         super().__init__("kdl_ik_from_file")
 
@@ -76,6 +82,14 @@ class KDLIKNode(Node):
             )
 
         self.get_logger().info(f"IK using joints: {self.joint_names}")
+
+        # LMA knows nothing about joint limits: from a folded posture it returns
+        # solutions past the range, which the driver then clamps silently, so the
+        # arm lands somewhere nobody asked for. Reject those here instead.
+        self.joint_limits = [
+            (robot_model.joint_map[name].limit.lower, robot_model.joint_map[name].limit.upper)
+            for name in self.joint_names
+        ]
 
         # Calculate and store initial FK pose (corresponding to q=0)
         self.initial_frame = kdl.Frame()
@@ -180,6 +194,12 @@ class KDLIKNode(Node):
             return True, q_out, score
         return False, None, float("inf")
 
+    def _within_limits(self, q: kdl.JntArray) -> bool:
+        return all(
+            lower - self.LIMIT_SLACK <= self._normalize_angle(q[i]) <= upper + self.LIMIT_SLACK
+            for i, (lower, upper) in enumerate(self.joint_limits)
+        )
+
     def _normalize_angle(self, angle):
         """Normalize angle to [-pi, pi]."""
         while angle > math.pi:
@@ -204,14 +224,16 @@ class KDLIKNode(Node):
         # Log the target frame before IK
         target_pos = target_frame.p
         target_rot = target_frame.M.GetRPY()
-        self.get_logger().info(
+        self.get_logger().debug(
             f"IK Target (absolute w.r.t. base) - Pos (x,y,z): ({target_pos.x():.4f}, {target_pos.y():.4f}, {target_pos.z():.4f}), "
             f"RPY: ({target_rot[0]:.4f}, {target_rot[1]:.4f}, {target_rot[2]:.4f})"
         )
 
-        # Multi-start IK: try from current position and from zeros, pick best
         start_time = time.perf_counter()
 
+        # Multi-start IK: the current posture first, and only if that lands
+        # short, a zero-seeded solve as well. A streamed target hops between
+        # elbow branches if both seeds get a vote on every step.
         seeds = [
             ("current", self.current_q),
             ("zeros", kdl.JntArray(self.chain.getNrOfJoints())),  # initialized to zeros
@@ -223,18 +245,26 @@ class KDLIKNode(Node):
 
         for seed_name, seed in seeds:
             success, q_out, score = self._try_ik_with_seed(seed, target_frame)
+            if success and not self._within_limits(q_out):
+                self.get_logger().debug(f"IK ({seed_name} seed) solution violates joint limits — rejected")
+                success = False
             if success and score < best_score:
                 best_solution = q_out
                 best_score = score
                 best_seed_name = seed_name
+            if best_score < self.CONTINUITY_SCORE:
+                break
 
         solve_time_ms = (time.perf_counter() - start_time) * 1000
 
         if best_solution is None:
-            self.get_logger().error(f"KDL IK failed from all seeds (took {solve_time_ms:.2f} ms)")
+            self.get_logger().warning(
+                f"KDL IK found no solution within joint limits (took {solve_time_ms:.2f} ms)",
+                throttle_duration_sec=1.0,
+            )
             return
 
-        self.get_logger().info(
+        self.get_logger().debug(
             f"KDL IK solved (seed={best_seed_name}, score={best_score:.4f}, took {solve_time_ms:.2f} ms)"
         )
 
@@ -270,8 +300,10 @@ class KDLIKNode(Node):
         # cmd_msg.data = ik_positions
         # self.command_pub.publish(cmd_msg)
 
-        # seed next solve with the result
-        self.current_q = q_out
+        # Seed the next solve with the solution that was published. Not q_out:
+        # that is the last seed tried, which is None when its solve failed —
+        # seeding with None crashed the node on the next joint-state message.
+        self.current_q = best_solution
 
 
 def main(args=None):
