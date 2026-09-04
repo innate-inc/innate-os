@@ -764,10 +764,7 @@ class ChallengeEngine:
         return environment.id if environment is not None else None
 
     def roster(self) -> list[dict]:
-        """What each challenge the running environment can host IS. It only
-        changes with the world, so it goes out once per observer connection
-        and again per environment switch (world_server.serve_state) rather
-        than ~75 times a second -- the briefs are paragraphs."""
+        """Challenge briefs for this environment; sent on connection and world changes."""
         environment_id = self._environment_id()
         return [
             {"id": c.id, "title": c.title, "brief": c.brief}

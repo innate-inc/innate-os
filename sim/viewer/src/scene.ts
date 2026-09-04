@@ -552,9 +552,7 @@ export class SimScene {
     return { group, rooms, monolith: false, baseUrl };
   }
 
-  /** Drop the loaded environment -- rooms, placeholders, collision hulls --
-   * ahead of another pack's load. The robot and props stay; the next pose
-   * spawns the robot into the new world and frames it there. */
+  /** Dispose environment assets; retain the robot and props for the next pose. */
   unloadEnvironment(): void {
     for (const group of [this.layoutGroup, this.hullsGroup]) {
       if (!group) continue;

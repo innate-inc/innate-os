@@ -166,8 +166,6 @@ export function createSimStage(
     };
   };
 
-  // Environment packs (environments.py): shown once the world server offers a
-  // choice; the select mirrors what is loaded and asks for the rest.
   const environmentSection = document.createElement("section");
   environmentSection.className = "sim-scene-section sim-environment-section";
   environmentSection.hidden = true;
@@ -392,10 +390,8 @@ export function createSimStage(
   };
   const hideLoading = () => {
     loading.style.opacity = "0";
-    // Not transitionend: it never fires under prefers-reduced-motion (the
-    // webapp disables all transitions) or when the fade starts pre-paint, and
-    // the invisible overlay would stay and eat every click. Kept in the DOM
-    // for the next environment switch.
+    // transitionend may not fire with reduced motion or before paint.
+    // Keep the overlay for subsequent switches.
     hideLoadingTimer = setTimeout(() => (loading.style.display = "none"), 700);
   };
   // The scrim fades when the download finishes (see the load sequence below);
@@ -596,9 +592,7 @@ export function createSimStage(
     }
   };
 
-  // One shared bounded queue drives real byte progress for the whole load;
-  // seed an estimate so the bar has a width before Content-Lengths arrive
-  // (apartment ~35 MB + robot ~7 MB), refined as real sizes land.
+  // Estimate apartment + robot bytes until download sizes arrive.
   let queue = new LoadQueue(2, ({ loaded, total }) => setProgress(loaded, total));
   queue.setEstimatedTotal(42e6);
   // The robot loads once; environments come and go around it.
@@ -606,8 +600,7 @@ export function createSimStage(
   let loadedEnvironmentId: string | null = null;
   let loadVersion = 0;
   const loadEnvironment = async (environment: EnvironmentInfo | null) => {
-    // A newer roster supersedes this load at every await, and the queue it
-    // pulled from stops taking downloads.
+    // Discard superseded loads after each await.
     const version = ++loadVersion;
     if (loadedEnvironmentId !== null) {
       queue.cancel();
@@ -620,28 +613,20 @@ export function createSimStage(
     loadedEnvironmentId = environment?.id ?? "";
     const name = environment?.display_name.toLowerCase() ?? "apartment";
     try {
-      // The room manifest first (a few KB, unqueued): it draws every room's
-      // placeholder box and frames the camera on them, so the first frames
-      // show the wireframe layout rather than an empty void while the meshes
-      // are still being fetched.
+      // Show layout placeholders while meshes download.
       setLoading(`loading ${name} layout...`);
       const layout = await scene.loadApartmentLayout(environment?.viewer ?? APARTMENT_VIEWER);
       if (disposed || version !== loadVersion) return;
       scene.frameLayout(layout);
       setLoading(`loading robot and ${name}...`);
-      // Await once: the robot's STLs are now in the shared queue. Enqueue the
-      // rooms after, so they land behind the robot (deterministic robot-first,
-      // no timing guess).
+      // Enqueue robot meshes before rooms to prioritize the robot.
       const firstLoad = robotDone === null;
       robotDone ??= (await scene.loadRobot(queue)).done;
       if (disposed || version !== loadVersion) return;
-      // Await twice: the rest of both loads.
       await Promise.all([robotDone, scene.streamApartment(queue, layout)]);
       if (disposed || version !== loadVersion) return;
       hideLoading();
-      // Only now parse the prop models, so they queue behind the robot and
-      // rooms and stay out of the progress bar -- but land well before anyone
-      // clicks a prop chip. See PropLibrary.prefetchModels.
+      // Prefetch props after the scene, outside its progress bar.
       if (firstLoad) scene.prefetchPropModels();
     } catch (err) {
       if (disposed || version !== loadVersion) return;
@@ -654,10 +639,7 @@ export function createSimStage(
     }
   };
 
-  // Start rendering + accept poses right away: the worldstate socket is
-  // already connecting (session.start), so the robot's placeholder box snaps
-  // to its real spawn pose while the STLs stream, then the mesh replaces it.
-  // The scene itself waits for the roster to say which pack the world runs.
+  // Accept poses now; load the environment when its roster arrives.
   session.stageReady();
   startLoop();
   let environmentOptionsKey = "";

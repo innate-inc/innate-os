@@ -249,11 +249,7 @@ class WorldServer:
         client skips states instead of queueing lag), and accept the stage
         commands above on the way back."""
         threading.Thread(target=self._serve_scenario_commands, args=(ws,), daemon=True).start()
-        # The roster (props.py sidecars, challenges.py, environments.py) only
-        # changes with the world, so it goes out once per connection and again
-        # per environment switch instead of riding every state broadcast. The
-        # viewer builds its models and buttons from the props; the challenge
-        # panel gets titles and briefs here and progress from the stream.
+        # Send roster metadata on connection and changes, not every physics tick.
         last_seq = last_roster = -1
         try:
             while True:
@@ -289,10 +285,10 @@ class WorldServer:
             self.state_cond.notify_all()
 
     def switch_environment(self, environment_id: str) -> None:
-        """Rebuild the world for another pack in place. The old world keeps
-        stepping while the new model compiles, then the two swap under the
-        physics lock, and every consumer sees a reset into the new world:
-        world_epoch advances, the roster is resent, Nav2 changes map."""
+        """Compile alongside the running world, then swap under the physics lock.
+
+        Advance world_epoch so consumers treat the switch as a reset.
+        """
         if self._build_sim is None:
             raise RuntimeError("this world server was built for one fixed world")
         with self._switch_lock:

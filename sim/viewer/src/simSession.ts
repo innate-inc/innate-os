@@ -121,8 +121,6 @@ export class SimSession {
   #propListeners = new Set<(props: PropInfo[]) => void>();
   #propsDirty = false;
 
-  // The environment roster (environments.py), relayed like the props: which
-  // pack the world runs, which it offers, and a switch in flight.
   #environment: EnvironmentRoster | null = null;
   #environmentListeners = new Set<(roster: EnvironmentRoster) => void>();
 
@@ -332,17 +330,14 @@ export class SimSession {
     return () => this.#propListeners.delete(cb);
   }
 
-  /** Subscribe to the environment roster (environments.py); fires immediately
-   * once it has arrived. The stage loads the pack's scene and builds its
-   * picker from this. */
+  /** Subscribe and replay the latest environment roster, if available. */
   onEnvironment(cb: (roster: EnvironmentRoster) => void): () => void {
     this.#environmentListeners.add(cb);
     if (this.#environment) cb(this.#environment);
     return () => this.#environmentListeners.delete(cb);
   }
 
-  /** Ask the world server to rebuild its world for another pack. Progress and
-   * the outcome come back through onEnvironment. */
+  /** Request a switch; progress and outcome arrive through onEnvironment. */
   switchEnvironment(id: string): void {
     this.#controller?.send({ op: "switch_environment", id });
   }
