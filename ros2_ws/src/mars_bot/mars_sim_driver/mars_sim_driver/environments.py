@@ -91,12 +91,18 @@ class NavMapBridge:
     TOPIC = "/nav/current_map"
     SERVICE = "/nav/change_navigation_map"
     RETRY_S = 20.0  # a map switch relocalizes; give it time before asking again
+    SWITCH_RETRY_S = 3.0  # while a switch waits, "already in progress" replies are retried this often
+    # The mode manager reports a map well before its stack is up, and a map
+    # change landing mid-boot leaves Nav2 half-activated. The launcher seeds
+    # the boot map, so this only guards a mismatch it could not prevent.
+    BOOT_GRACE_S = 30.0
 
     def __init__(self, url: str, map_name: str):
         self.url = url
         self.wanted = map_name
         self.current: str | None = None
         self._requested_at = -math.inf
+        self._first_report_at: float | None = None
         threading.Thread(target=self._run, daemon=True).start()
 
     def switch_to(self, map_name: str, timeout_s: float) -> bool:
@@ -111,6 +117,8 @@ class NavMapBridge:
         while time.monotonic() < deadline:
             if self.current == map_name:
                 return True
+            if time.monotonic() - self._requested_at >= self.SWITCH_RETRY_S:
+                self._requested_at = -math.inf
             time.sleep(0.25)
         self.wanted = previous  # the world stays as it was; so must the map it is reconciled to
         self._requested_at = -math.inf
@@ -126,6 +134,7 @@ class NavMapBridge:
             try:
                 with connect(self.url, open_timeout=5) as ws:
                     ws.send(json.dumps({"op": "subscribe", "topic": self.TOPIC, "type": "std_msgs/String"}))
+                    self._first_report_at = None
                     self._reconcile(ws)
             except Exception:  # noqa: BLE001,S110 -- rosbridge down/restarting; retry
                 pass
@@ -139,9 +148,13 @@ class NavMapBridge:
                 frame = {}
             if frame.get("topic") == self.TOPIC:
                 self.current = str(frame["msg"]["data"])
+                if self._first_report_at is None:
+                    self._first_report_at = time.monotonic()
             elif frame.get("op") == "service_response":
                 print(f"[nav-map] {self.SERVICE} -> {frame.get('values', frame)}", flush=True)
             if self.current in (None, self.wanted) or time.monotonic() - self._requested_at < self.RETRY_S:
+                continue
+            if self._first_report_at is None or time.monotonic() - self._first_report_at < self.BOOT_GRACE_S:
                 continue
             self._requested_at = time.monotonic()
             ws.send(

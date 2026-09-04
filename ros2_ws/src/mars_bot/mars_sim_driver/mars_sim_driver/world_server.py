@@ -306,7 +306,7 @@ class WorldServer:
                 # below reseeds AMCL from the new world's pose, which must
                 # land on the new map, and a map Nav2 cannot load fails the
                 # switch with the old world still running.
-                if self.nav_map is not None and not self.nav_map.switch_to(target.map_name, timeout_s=45.0):
+                if self.nav_map is not None and not self.nav_map.switch_to(target.map_name, timeout_s=60.0):
                     self._retired.put(fresh)
                     raise RuntimeError(f"Nav2 did not load {target.map_name}")
             except Exception as exc:

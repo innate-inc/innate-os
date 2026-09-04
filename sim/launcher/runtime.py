@@ -905,6 +905,28 @@ def retitle_step(message: str) -> None:
         step.retitle(message)
 
 
+def _seed_nav_map(config: dict[str, object]) -> None:
+    """Point Nav2's saved-map file at the selected pack before the ROS session
+    starts, so the mode manager boots on it. With several maps installed it
+    would otherwise boot on the alphabetically first one and the world
+    server's map bridge would have to change maps under a stack still coming
+    up, which the mode manager does not survive well."""
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    environment_id = str(config["environment_id"])
+    manifests = [sim_repo / root / environment_id / "manifest.json" for root in ("environments", "environments.local")]
+    manifest = next((path for path in manifests if path.is_file()), None)
+    if manifest is None:
+        return
+    try:
+        map_yaml = json.loads(manifest.read_text(encoding="utf-8"))["navigation"]["map_yaml"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    state = os_repo / "data"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / ".last_map").write_text(f"{Path(str(map_yaml)).name}\n", encoding="utf-8")
+
+
 def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline: bool = False) -> None:
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     os_image = str(config["os_image"]).strip()
@@ -1044,6 +1066,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
         ensure_state_dir()
         ROS_INSTALL_STATE_PATH.write_text(f"{ros_inputs_hash}\n", encoding="utf-8")
 
+    _seed_nav_map(config)
     log("Launching ROS simulation nodes inside the OS container...")
     retitle_step("Launching the ROS nodes")
     launch_script = (
