@@ -28,6 +28,11 @@ export const GUIDED_PROMPTS = {
 };
 const ONBOARDING_SESSION_MS = 30 * 60 * 1000;
 
+/** @param {{agents: Array<{id: string}>}} snapshot */
+export function hasIntroAgent(snapshot) {
+  return snapshot.agents.some((agent) => agent.id === INTRO_AGENT_ID);
+}
+
 /** @param {unknown} value @returns {"capabilities" | "pickup" | "done"} */
 export function parsePromptStage(value) {
   if (!value || typeof value !== "object") return "capabilities";
@@ -247,7 +252,7 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
       throw new Error("Agent onboarding is unavailable because the AI service is offline. Check INNATE_SERVICE_KEY.");
     }
     const roster = await waitForState(
-      (snapshot) => snapshot.agents.some((agent) => agent.id === INTRO_AGENT_ID),
+      hasIntroAgent,
       10_000,
     );
     if (!roster || destroyed) throw new Error("Intro Agent is unavailable.");
@@ -273,6 +278,15 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
     return true;
   }
 
+  /** Start synthesizing the opening line as soon as the brain exists. Full
+   * agent activation can finish in parallel; speech does not depend on it.
+   * @param {number} sessionStartedAt */
+  async function greetWhenBrainIsPresent(sessionStartedAt) {
+    const roster = await waitForState(hasIntroAgent, 10_000);
+    if (!roster || destroyed || !active || startedAt !== sessionStartedAt) return;
+    rosClient.publish(TTS_TOPIC, { data: ONBOARDING_GREETING });
+  }
+
   async function start(restart = false) {
     if (!options.enabled) return;
     const now = Date.now();
@@ -293,14 +307,13 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
     render();
     options.onStart?.(fresh, startedAt);
     syncSuggestedPrompt();
+    // A resumed session means the page was reloaded before onboarding finished.
+    // The robot process may also have restarted, so replay the opening line to
+    // make that restored session visibly and audibly begin again.
+    const greeting = greetWhenBrainIsPresent(startedAt);
     try {
-      await ensureRunning();
+      await Promise.all([ensureRunning(), greeting]);
       if (destroyed || !active) return;
-      if (fresh) {
-        // The opening copy is product copy, not a model turn: keep it exact and
-        // let the live Intro Agent own every response and reveal after this.
-        rosClient.publish(TTS_TOPIC, { data: ONBOARDING_GREETING });
-      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : "The Intro Agent could not start.";
       options.onNotice?.(`${detail} The full simulator interface has been restored.`);
