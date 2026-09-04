@@ -11,6 +11,8 @@ from brain_client.skills.registry import SkillMeta
 STOP_SKILL = "stop_current_skill"
 WAIT = "wait"
 GO_TO_POINT_IN_VIEW = "go_to_point_in_view"
+NAV_INSIGHT_CONTINUOUS = "nav_insight_continuous"
+END_CONTINUOUS_NAVIGATION = "end_continuous_navigation"
 
 # An explicit no-op keeps idle turns clean: without it, models tend to emit
 # placeholder text ("[]", "Empty response") rather than returning nothing.
@@ -29,7 +31,8 @@ _GO_TO_POINT_IN_VIEW_DECLARATION = {
         "coordinates (0-1000) of a point ON THE FLOOR: y from the top, x from the left. For an "
         "object, point at the floor at its base. The robot drives to about 0.35 m short of that "
         "spot and turns to face it. Prefer this over navigate_to_position for anything you can "
-        "see. Far targets are approached in capped steps — call it again after arriving."
+        "see. Far targets are approached in capped steps. During continuous navigation, call it "
+        "from a fresh camera frame whenever the current waypoint should be replaced; otherwise wait."
     ),
     "parameters": {
         "type": "OBJECT",
@@ -38,6 +41,47 @@ _GO_TO_POINT_IN_VIEW_DECLARATION = {
             "x": {"type": "INTEGER", "description": "0-1000 from image left"},
         },
         "required": ["y", "x"],
+    },
+}
+
+# Provisional compatibility with innate-cloud-agent's old continuous visual
+# navigation primitive. The local brain already owns the camera/model loop, so
+# these tools only manage the objective; each actual movement still goes
+# through the bounded, grounded go_to_point_in_view -> navigate_to_position path.
+_NAV_INSIGHT_CONTINUOUS_DECLARATION = {
+    "name": NAV_INSIGHT_CONTINUOUS,
+    "description": (
+        "Start autonomous continuous visual navigation toward a distant target. Use when the target "
+        "is far away, not yet visible, or requires several visual navigation steps. The mode keeps "
+        "using fresh camera frames and bounded navigation steps until the target is reached or cannot "
+        "be reached. Do not use for a nearby visible target; use go_to_point_in_view directly."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "target_description": {
+                "type": "STRING",
+                "description": "What to navigate toward, such as 'the exit door at the end of the hallway'",
+            }
+        },
+        "required": ["target_description"],
+    },
+}
+
+_END_CONTINUOUS_NAVIGATION_DECLARATION = {
+    "name": END_CONTINUOUS_NAVIGATION,
+    "description": (
+        "End the active continuous navigation mode. Use status=reached only when the current camera "
+        "frame shows the objective has actually been reached; use cannot_proceed when blocked and "
+        "cancelled when the user asks to stop or switch tasks."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "status": {"type": "STRING", "enum": ["reached", "cannot_proceed", "cancelled"]},
+            "reason": {"type": "STRING", "description": "Brief visual or navigation reason"},
+        },
+        "required": ["status", "reason"],
     },
 }
 
@@ -66,7 +110,13 @@ def assign_tool_names(skills: list[SkillMeta]) -> list[tuple[str, SkillMeta]]:
     shadow a built-in tool); colliding names get a numeric suffix so a call
     never silently dispatches to the wrong skill.
     """
-    taken = {STOP_SKILL, WAIT, GO_TO_POINT_IN_VIEW}
+    taken = {
+        STOP_SKILL,
+        WAIT,
+        GO_TO_POINT_IN_VIEW,
+        NAV_INSIGHT_CONTINUOUS,
+        END_CONTINUOUS_NAVIGATION,
+    }
     named: list[tuple[str, SkillMeta]] = []
     for meta in skills:
         base = name = tool_name(meta["name"])
@@ -85,6 +135,7 @@ def build_tools(
     running_skill_name: str | None,
     *,
     can_go_to_point_in_view: bool = False,
+    continuous_navigation_active: bool = False,
     user_spoke: bool = False,
 ) -> list[dict]:
     """One function declaration per available skill, in a native tools block.
@@ -111,10 +162,32 @@ def build_tools(
                 else "Use when it is clearly failing, no longer makes sense, or the user asks for something else."
             ),
         }
-        return [{"functionDeclarations": [stop] if user_spoke else [stop, _WAIT_DECLARATION]}]
+        if user_spoke:
+            return [{"functionDeclarations": [stop]}]
+        if continuous_navigation_active and running_skill_name == "navigate_to_position":
+            # A continuous visual-navigation turn must be able to revise the
+            # in-flight waypoint from its fresh frame instead of waiting for a
+            # long Nav2 goal to finish. Dispatch serializes cancel -> replace.
+            return [
+                {
+                    "functionDeclarations": [
+                        stop,
+                        _GO_TO_POINT_IN_VIEW_DECLARATION,
+                        _END_CONTINUOUS_NAVIGATION_DECLARATION,
+                        _WAIT_DECLARATION,
+                    ]
+                }
+            ]
+        return [{"functionDeclarations": [stop, _WAIT_DECLARATION]}]
     declarations = [_declaration(name, meta) for name, meta in named_skills]
     if can_go_to_point_in_view:
         declarations.append(_GO_TO_POINT_IN_VIEW_DECLARATION)
+    if continuous_navigation_active:
+        # Keep the escape hatch even if navigate_to_position disappears from
+        # the live roster while a run is active.
+        declarations.append(_END_CONTINUOUS_NAVIGATION_DECLARATION)
+    elif can_go_to_point_in_view:
+        declarations.append(_NAV_INSIGHT_CONTINUOUS_DECLARATION)
     declarations.append(_WAIT_DECLARATION)
     return [{"functionDeclarations": declarations}]
 

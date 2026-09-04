@@ -33,7 +33,15 @@ from brain_client.brain import grounding
 from brain_client.brain.context import Decision, GeminiContext, ToolCall
 from brain_client.brain.loop import LoopThread
 from brain_client.brain.prompt import build_system_prompt, self_reference_turns
-from brain_client.brain.tools import GO_TO_POINT_IN_VIEW, STOP_SKILL, WAIT, assign_tool_names, build_tools
+from brain_client.brain.tools import (
+    END_CONTINUOUS_NAVIGATION,
+    GO_TO_POINT_IN_VIEW,
+    NAV_INSIGHT_CONTINUOUS,
+    STOP_SKILL,
+    WAIT,
+    assign_tool_names,
+    build_tools,
+)
 from brain_client.brain.transport import pick_transport
 from brain_client.brain.utils import (
     Event,
@@ -136,6 +144,11 @@ class BrainAgent:
         self._frame_at_capture: bytes | None = None
         self._pitch_at_capture = 0.0
         self._tool_map: dict[str, str] = {}  # gemini function name -> skill id
+        self._continuous_navigation_target: str | None = None
+        # A fresh visual decision can replace a still-running Nav2 step. Keep
+        # only the newest requested goal and start it after cancellation has
+        # released the one-skill slot.
+        self._continuous_navigation_pending_goal: dict | None = None
         self._error_streak = 0
         self._activated_at = 0.0
         self._turn_count = 0
@@ -200,6 +213,9 @@ class BrainAgent:
         if not unwound:
             self._logger.error("[Brain] Agent loop did not unwind within 5s")
         self._events.clear()
+        if unwound:
+            self._continuous_navigation_target = None
+            self._continuous_navigation_pending_goal = None
         return unwound
 
     def reset(self) -> None:
@@ -291,6 +307,10 @@ class BrainAgent:
 
     async def _think(self, context: GeminiContext, events: list[Event], speaker: SpeechStreamer) -> None:
         text, frames = self._look(events)
+        if self._continuous_navigation_target is not None:
+            # The target originates in user speech, so keep it in user-role
+            # observation text rather than promoting it into system guidance.
+            text += f"\n- Continuous navigation objective: {json.dumps(self._continuous_navigation_target)}"
         if self._frame_at_capture is None:
             return  # the feed died between the loop's freshness check and the look
         wrist_frames = [i for i, (label, _) in enumerate(frames) if label == FrameLabel.WRIST]
@@ -301,6 +321,7 @@ class BrainAgent:
             directive.get_prompt() if directive else None,
             identity=self._identity.current if self._identity is not None else None,
             running_guidance=self._running_guidance(self._state.primitive_running),
+            continuous_navigation_active=self._continuous_navigation_target is not None,
         )
         if self._state.log_everything:
             self._logger.info(f"[Brain] Turn input:\n{text}")
@@ -467,8 +488,18 @@ class BrainAgent:
         named = assign_tool_names(skills)
         self._tool_map = {name: meta["id"] for name, meta in named}
         if running is not None:
-            return build_tools([], running.primitive_name, user_spoke=user_spoke)
-        return build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids)
+            return build_tools(
+                [],
+                running.primitive_name,
+                continuous_navigation_active=self._continuous_navigation_target is not None,
+                user_spoke=user_spoke,
+            )
+        return build_tools(
+            named,
+            None,
+            can_go_to_point_in_view=_NAV_TO_POSITION in active_ids,
+            continuous_navigation_active=self._continuous_navigation_target is not None,
+        )
 
     # ================= act =================
     def _act(self, decision: Decision, speaker: SpeechStreamer, context: GeminiContext) -> list[tuple[ToolCall, str]]:
@@ -525,6 +556,17 @@ class BrainAgent:
             # (a goal that slips through anyway is cancelled by the runner's
             # generation bump, but this keeps the robot from twitching first).
             return "rejected — the brain is deactivating"
+        if call.name == NAV_INSIGHT_CONTINUOUS:
+            return self._start_continuous_navigation(call.args)
+        if call.name == END_CONTINUOUS_NAVIGATION:
+            return self._end_continuous_navigation(call.args)
+        if call.name == GO_TO_POINT_IN_VIEW:
+            running = self._state.primitive_running
+            if running is not None and (
+                self._continuous_navigation_target is None or running.primitive_name != "navigate_to_position"
+            ):
+                return "rejected — another skill is already running; stop it first"
+            return self._go_to_point_in_view(call.args)
         # Only names declared this turn resolve: falling back to the full
         # registry would let a hallucinated call bypass the active-skill allowlist.
         # The map is a turn old by now and the roster can change under it, so
@@ -532,8 +574,8 @@ class BrainAgent:
         skill_id = self._tool_map.get(call.name)
         if self._state.primitive_running is not None:
             return "rejected — another skill is already running; stop it first"
-        if call.name == GO_TO_POINT_IN_VIEW:
-            return self._go_to_point_in_view(call.args)
+        if self._continuous_navigation_target is not None:
+            return "rejected — end continuous navigation before starting a different skill"
         if skill_id is None:
             return f"unknown skill '{call.name}'"
         if skill_id not in self._roster.active_skill_ids():
@@ -542,16 +584,53 @@ class BrainAgent:
         return "started — you will get an event when it finishes"
 
     def _stop_skill(self) -> str:
-        if self._runner.has_active_goal:
+        was_continuous = self._continuous_navigation_target is not None
+        self._continuous_navigation_target = None
+        self._continuous_navigation_pending_goal = None
+        if getattr(self._runner, "has_active_goal", False):
             self._runner.cancel_active_goal()
-            return "stopping — you will get an event when it has stopped"
+            prefix = "continuous navigation canceled; " if was_continuous else ""
+            return prefix + "stopping — you will get an event when it has stopped"
         if self._state.primitive_running is None:
-            return "no skill is running"
+            return "continuous navigation canceled" if was_continuous else "no skill is running"
         # A run this client didn't start (webapp/CLI manual run): the skills
         # server's owner-agnostic cancel is the only handle.
         if self._runner.cancel_external():
-            return "stopping — you will get an event when it has stopped"
+            prefix = "continuous navigation canceled; " if was_continuous else ""
+            return prefix + "stopping — you will get an event when it has stopped"
         return "could not stop it — the skills server is unreachable"
+
+    def _start_continuous_navigation(self, args: dict) -> str:
+        if _NAV_TO_POSITION not in self._roster.active_skill_ids():
+            return "rejected — navigate_to_position is not available"
+        if self._state.primitive_running is not None:
+            return "rejected — another skill is already running; stop it first"
+        target = str(args.get("target_description") or "").strip()
+        if not target:
+            return "rejected — give a target_description"
+        if self._continuous_navigation_target is not None:
+            return f"rejected — already navigating continuously toward {self._continuous_navigation_target}"
+        self._continuous_navigation_target = target[:500]
+        self._continuous_navigation_pending_goal = None
+        return f"continuous navigation started toward {self._continuous_navigation_target}"
+
+    def _end_continuous_navigation(self, args: dict) -> str:
+        target = self._continuous_navigation_target
+        if target is None:
+            return "continuous navigation is not active"
+        status = args.get("status")
+        reason = str(args.get("reason") or "").strip()
+        if status not in ("reached", "cannot_proceed", "cancelled") or not reason:
+            return "rejected — give status reached, cannot_proceed, or cancelled and a reason"
+        self._continuous_navigation_target = None
+        self._continuous_navigation_pending_goal = None
+        if getattr(self._runner, "has_active_goal", False):
+            self._runner.cancel_active_goal()
+        if status == "reached":
+            return f"continuous navigation completed: reached {target} — {reason}"
+        if status == "cancelled":
+            return f"continuous navigation canceled — {reason}"
+        return f"continuous navigation ended before reaching {target} — {reason}"
 
     def _go_to_point_in_view(self, args: dict) -> str:
         """Project the pointed-at floor pixel into a local navigate_to_position goal."""
@@ -584,6 +663,19 @@ class BrainAgent:
             f"goal ({inputs['x']:.2f}, {inputs['y']:.2f}, {inputs['theta_degrees']:.0f}°) "
             f"pitch={self._pitch_at_capture:.0f}°"
         )
+        if self._state.primitive_running is not None:
+            # The model made this decision from a newer frame while the prior
+            # bounded step was moving. Cancellation is asynchronous; queue the
+            # replacement and let the terminal event start it after the runner
+            # releases its slot. Newer frames overwrite this pending goal.
+            cancel_already_requested = self._continuous_navigation_pending_goal is not None
+            self._continuous_navigation_pending_goal = inputs
+            if cancel_already_requested:
+                return "updated the queued replan from the newest camera frame"
+            if self._runner.has_active_goal:
+                self._runner.cancel_active_goal()
+                return "replanning from the current camera frame — replacing the in-flight waypoint"
+            return "replanning queued — waiting for the in-flight waypoint handle"
         self._start_skill(_NAV_TO_POSITION, inputs)
         return (
             f"driving to the floor point {math.hypot(*floor):.1f}m away (stopping ~{grounding.STANDOFF_M}m short) "
@@ -632,10 +724,34 @@ class BrainAgent:
     def on_skill_event(
         self, status: str, skill_name: str, detail: str | None = None, image: bytes | None = None
     ) -> None:
+        if skill_name == "navigate_to_position" and status in (
+            "completed",
+            "failed",
+            "interrupted",
+            "canceled",
+            "cancelled",
+        ):
+            # This callback runs on the ROS executor. Keep mode mutation and a
+            # planned replacement on the agent loop, queued before the wake.
+            self._runtime.post(self._handle_continuous_navigation_terminal, status)
         line = f"Skill {skill_name} {status}"
         if detail:
             line += f": {detail}"
         self.add_event(line, image=image)
+
+    def _clear_continuous_navigation(self) -> None:
+        self._continuous_navigation_target = None
+        self._continuous_navigation_pending_goal = None
+
+    def _handle_continuous_navigation_terminal(self, status: str) -> None:
+        pending = self._continuous_navigation_pending_goal
+        if status == "completed" and pending is None:
+            return  # normal bounded-step completion; the event wakes a fresh visual decision
+        if status != "failed" and self._continuous_navigation_target and pending:
+            self._continuous_navigation_pending_goal = None
+            self._start_skill(_NAV_TO_POSITION, pending)
+            return
+        self._clear_continuous_navigation()
 
     def on_skill_feedback(self, skill_name: str, feedback: str, image: bytes | None = None) -> None:
         self.add_event(f"Update from running skill {skill_name}: {feedback}", image=image)
@@ -695,6 +811,7 @@ class BrainAgent:
             next_in=max(0.0, round(self._pause_until - time.monotonic(), 1)) if self._pause_until else 0.0,
             streak=self._error_streak,
             running=running.primitive_name if running else None,
+            continuous_navigation=self._continuous_navigation_target,
             history=self._context.history_len if self._context else 0,
             tokens=self._context.last_usage if self._context else {},
             uptime=round(time.monotonic() - self._activated_at, 0) if self._state.is_brain_active else 0,

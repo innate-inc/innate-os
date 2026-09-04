@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Innate Inc
 import math
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 from geometry_msgs.msg import PoseStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
@@ -238,10 +238,39 @@ class Nav2Controller:
             )
         return detail
 
-    def go_to_position(self, x: float, y: float, theta: float, local_frame: bool) -> None:
+    def cancel_navigation(self) -> None:
+        """Best-effort stop for a skill cancel or an internal visual replan."""
+        try:
+            self.navigator.cancelTask()
+        except Exception as e:
+            self.logger.warning(f"Could not cancel Nav2 task: {e}")
+
+    def _cancel_for_replan(self) -> None:
+        """Cancel the current goal and wait until Nav2 releases it."""
+        self.navigator.cancelTask()
+        deadline = time.monotonic() + 3.0
+        while not self.navigator.isTaskComplete():
+            if time.monotonic() >= deadline:
+                raise SkillFailed("Nav2 did not stop the previous goal in time to replan safely")
+            self.skill.sleep(0.05)
+
+    def go_to_position(
+        self,
+        x: float,
+        y: float,
+        theta: float,
+        local_frame: bool,
+        reassess: Callable[[], object | None] | None = None,
+    ) -> object | None:
         """Navigate to the goal, blocking until Nav2 finishes. Raises
         SkillFailed with a human-readable reason; a skill cancel unwinds as
-        SkillCancelled with the Nav2 task cancelled."""
+        SkillCancelled with the Nav2 task cancelled.
+
+        ``reassess`` runs while the action is in flight. Returning a value
+        cancels this goal and hands that value back to the caller, which lets a
+        long-running visual-navigation skill replace or end a waypoint without
+        waiting for it to complete. Returning None leaves the goal untouched.
+        """
         goal_x, goal_y, goal_yaw, goal_frame = self._resolve_goal(x, y, theta, local_frame)
 
         goal_pose = self._pose_stamped(goal_x, goal_y, goal_yaw, goal_frame)
@@ -260,11 +289,18 @@ class Nav2Controller:
         said_close_to_goal = False
         last_pose = None
         while not self.navigator.isTaskComplete():
+            directive = None
             try:
                 self.skill.sleep(0.1)
+                directive = reassess() if reassess is not None else None
             except SkillCancelled:
-                self.navigator.cancelTask()
+                self.cancel_navigation()
                 raise
+
+            if directive is not None:
+                if not self.navigator.isTaskComplete():
+                    self._cancel_for_replan()
+                return directive
 
             feedback = self.navigator.getFeedback()
             if not feedback:
@@ -298,7 +334,7 @@ class Nav2Controller:
 
         result = self.navigator.getResult()
         if result == TaskResult.SUCCEEDED:
-            return
+            return None
         detail = f"Nav2 reported {getattr(result, 'name', result)}"
         if last_distance >= 0.0:
             detail += f" with {last_distance:.2f}m still to go"

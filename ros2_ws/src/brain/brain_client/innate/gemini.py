@@ -21,7 +21,7 @@ def make_client():
     return client if client.is_available() else None
 
 
-def ask_image(client, images_b64, question, logger=None, retries=3):
+def ask_image(client, images_b64, question, logger=None, retries=3, *, model=MODEL, reasoning_effort=None):
     """JPEG(s) + question -> reply text. None if no client / all retries fail.
     images_b64: one base64 string or a list of them — sent in order, so the
     question can refer to them as image 1, image 2, ... Frames go inline as
@@ -34,10 +34,12 @@ def ask_image(client, images_b64, question, logger=None, retries=3):
     content = [{"type": "text", "text": question}]
     content += [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}"}} for b in images_b64]
     body = {
-        "model": MODEL,
+        "model": model,
         "temperature": 0.0,
         "messages": [{"role": "user", "content": content}],
     }
+    if reasoning_effort is not None:
+        body["reasoning_effort"] = reasoning_effort
     for attempt in range(retries):
         cancellable_sleep(0)
         try:

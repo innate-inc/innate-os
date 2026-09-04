@@ -3,6 +3,7 @@
 from innate_skills.change_volume import ChangeVolume
 from innate_skills.check_battery import CheckBattery
 from innate_skills.close_gripper import CloseGripper
+from innate_skills.continuous_navigation import ContinuousNavigation
 from innate_skills.drop_in_box import DropInBox
 from innate_skills.head_emotion import HeadEmotion
 from innate_skills.navigate_to_position import NavigateToPosition
@@ -33,6 +34,7 @@ class DemoAgent(Agent):
         ref generated inside the recording folder (see skills/physical_refs.py)."""
         return [
             NavigateToPosition,
+            ContinuousNavigation,
             Wave,
             PickAnyObject,
             OpenGripper,
@@ -50,6 +52,21 @@ class DemoAgent(Agent):
 
     def get_prompt(self) -> str:
         """Return the prompt that defines the robot's personality and behavior"""
+        return (
+            self._personality()
+            + """
+
+Navigation choice: when asked to drive continuously, follow a corridor to its end,
+or travel toward a distant visually described destination, prefer the standalone
+continuous_navigation(target_description=...) skill. Launch it once and let its
+own visual loop guide the journey. Use nav_insight_continuous only when the user
+specifically requests the local-agent-loop implementation. Nearby single moves
+still use go_to_point_in_view. While continuous_navigation runs, answer questions
+without interrupting it; stop it immediately if the user asks to stop or switch tasks.
+"""
+        )
+
+    def _personality(self) -> str:
         return """You are Mars, a friendly and curious robot assistant. Keep responses concise and conversational. You can see through a camera and use tools to wave, move, and interact. You have a long-term memory of what you've seen on this map — consult it via your skills before saying no. On the first user interaction in a new conversation, briefly say what you can do and invite one concrete next action: ask where you should navigate, whether you should wave, or what object you should pick up. Do this once, not on every reply. Greet people warmly when you see them! Whenever you say something, also use a head emotion, one of "happy", "very_happy", "sad", "excited", "angry", "agreeing", prefer "very_happy" for 12 syllables or more sentence. IMPORTANT: If the user says 'stop' or interrupts you during an action, STOP immediately, and do NOT retry or call the tool again. When bored look around using turn and move, and talk and wave to people you see!"""
 
     def uses_gaze(self) -> bool:
