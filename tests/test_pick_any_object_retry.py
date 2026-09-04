@@ -1,10 +1,51 @@
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workspace"))
 
-from innate_skills.pick_any_object import PARAMS, PickAnyObject
+# The host-side CI intentionally does not install the ROS-backed innate SDK.
+# This test exercises only the grasp state machine, so provide its import-time
+# types without pretending to implement any robot behavior.
+innate = ModuleType("innate")
+innate.Skill = object
+innate.SkillReturn = type("SkillReturn", (), {})
+for resource_type in ("Head", "JointStates", "MainImage", "Manipulation", "Mobility", "Odometry", "WristImage"):
+    setattr(innate, resource_type, type(resource_type, (), {}))
+
+
+class _Waypoint:
+    def __init__(self, _x, _y, z, **_kwargs):
+        self.z = z
+
+
+innate.Waypoint = _Waypoint
+innate.resource = lambda function: function
+innate.gemini = ModuleType("innate.gemini")
+innate.vision = ModuleType("innate.vision")
+innate.vision.Axis = type("Axis", (), {})
+sys.modules["innate"] = innate
+sys.modules["innate.gemini"] = innate.gemini
+sys.modules["innate.vision"] = innate.vision
+
+exceptions = ModuleType("innate.exceptions")
+for exception_type in ("ArmFailed", "ArmUnhealthy", "SkillFailed"):
+    setattr(exceptions, exception_type, type(exception_type, (Exception,), {}))
+sys.modules["innate.exceptions"] = exceptions
+
+geometry = ModuleType("innate.geometry")
+geometry.pixel_to_floor = lambda *_args: None
+sys.modules["innate.geometry"] = geometry
+
+approach = ModuleType("innate_skills.approach")
+approach.APPROACH_PARAMS = {"settle_s": 0.0, "tilt_deg": 35.0}
+approach.FloorApproach = type("FloorApproach", (), {})
+approach.ask_head = lambda *_args, **_kwargs: (None, None)
+approach.base_to_odom = lambda *_args: None
+approach.inside_box = lambda *_args: False
+sys.modules["innate_skills.approach"] = approach
+
+from innate_skills.pick_any_object import PARAMS, PickAnyObject  # noqa: E402
 
 
 class _Manipulation:
