@@ -48,10 +48,6 @@ export const MIC_AUDIO_TOPIC = "/mic/audio";
 // the agent's reply. Same topics the sim console + mobile app use.
 export const CHAT_IN_TOPIC = "/brain/chat_in";
 export const CHAT_OUT_TOPIC = "/brain/chat_out";
-// Agent-driven onboarding UI commands. The Intro Agent publishes a JSON
-// {section} payload here through RevealOnboarding; the browser progressively
-// reveals the matching simulator surface.
-export const ONBOARDING_UI_TOPIC = "/onboarding/ui";
 // Full chat history snapshot (brain_messages/srv/GetChatHistory → {history}, a
 // JSON string of {sender, text, timestamp, ...} entries). Fetched on connect so
 // the panel shows the conversation from before this page load, not just live.

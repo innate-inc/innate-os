@@ -3,11 +3,10 @@
 // Copyright (c) 2026 Innate Inc
 
 // First-run Agent onboarding is a real conversation with Intro Agent. The
-// browser owns only presentation state; the agent decides when to reveal each
-// part of the simulator by calling RevealOnboarding.
+// browser owns the session and reveals the interface from the local turn and
+// the exact skill runs that follow it; robot-wide events are never sufficient.
 
 import {
-  ONBOARDING_UI_TOPIC,
   TTS_TOPIC,
   WEBSOCKET_STATUS_TOPIC,
 } from "../constants.js";
@@ -22,6 +21,8 @@ export const INTRO_AGENT_ID = "intro_agent";
 export const REVEAL_SECTIONS = ["cameras", "controls", "complete"];
 export const ONBOARDING_GREETING =
   "Hi, I’m MARS — your friendly, AI-native personal robot.";
+export const CAPABILITY_RESPONSE =
+  "I am your physical agent, can evolve in the world, do whatever you want, and ask me anything.";
 export const GUIDED_PROMPTS = {
   capabilities: "What can you do?",
   pickup: "Pick up the Lego in front of you.",
@@ -52,21 +53,26 @@ export function matchesSkill(value, expected) {
   return name === expected || name.endsWith(`_${expected}`);
 }
 
-/** @param {"capabilities" | "pickup" | "deliver" | null} awaiting
- * @param {string} skill @param {string} status
- * @returns {"deliver" | "done" | "retry" | null} */
-export function skillPromptOutcome(awaiting, skill, status) {
-  const terminalFailure = status === "failed" || status === "interrupted";
-  if (awaiting === "pickup" && matchesSkill(skill, "pick_any_object")) {
-    if (status === "completed") return "deliver";
-    return terminalFailure ? "retry" : null;
+/** Reduce the robot-wide skill bus to one run this browser can own.
+ * @param {string} expectedSkill @param {string} ownedRunId
+ * @param {{skill: string, runId: string, status: string, timestamp: number}} event
+ * @param {number} afterTimestamp
+ * @returns {{kind: "claim" | "completed" | "failed" | "interrupted", runId: string} | null} */
+export function ownedSkillEvent(expectedSkill, ownedRunId, event, afterTimestamp) {
+  if (
+    !event.runId ||
+    event.timestamp < afterTimestamp ||
+    !matchesSkill(event.skill, expectedSkill)
+  ) return null;
+  if (event.status === "running") {
+    return ownedRunId ? null : { kind: "claim", runId: event.runId };
   }
-  if (awaiting === "deliver" && matchesSkill(skill, "open_gripper")) {
-    if (status === "completed") return "done";
-    return terminalFailure ? "retry" : null;
-  }
-  if (awaiting === "deliver" && matchesSkill(skill, "navigate_to_position") && terminalFailure) {
-    return "retry";
+  if (!ownedRunId || event.runId !== ownedRunId) return null;
+  if (["completed", "failed", "interrupted"].includes(event.status)) {
+    return /** @type {{kind: "completed" | "failed" | "interrupted", runId: string}} */ ({
+      kind: event.status,
+      runId: event.runId,
+    });
   }
   return null;
 }
@@ -77,17 +83,6 @@ export function parseRevealSections(value) {
   const raw = /** @type {{revealed?: unknown}} */ (value).revealed;
   if (!Array.isArray(raw)) return [];
   return REVEAL_SECTIONS.filter((section) => raw.includes(section));
-}
-
-/** @param {unknown} message @returns {string | null} */
-export function revealSectionFromMessage(message) {
-  if (typeof /** @type {any} */ (message)?.data !== "string") return null;
-  try {
-    const section = String(JSON.parse(/** @type {any} */ (message).data)?.section ?? "");
-    return REVEAL_SECTIONS.includes(section) ? section : null;
-  } catch {
-    return null;
-  }
 }
 
 /** Ready, definitively unavailable, or still starting/unknown.
@@ -129,6 +124,9 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
   let promptStage = loadPromptStage();
   /** @type {"capabilities" | "pickup" | "deliver" | null} */
   let awaitingReply = null;
+  let awaitingSince = 0;
+  let ownedSkillRunId = "";
+  let deliverySkill = "navigate_to_position";
   /** @type {Set<string>} */
   const revealed = new Set(loadProgress());
   /** @type {boolean | null} */
@@ -206,15 +204,6 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
     render();
   }
 
-  const unsubUi = rosClient.subscribe(
-    ONBOARDING_UI_TOPIC,
-    (message) => {
-      const section = revealSectionFromMessage(message);
-      if (section) reveal(section);
-    },
-    undefined,
-    "std_msgs/msg/String",
-  );
   const unsubBackend = rosClient.subscribe(
     WEBSOCKET_STATUS_TOPIC,
     (message) => {
@@ -324,6 +313,9 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
       revealed.clear();
       promptStage = "capabilities";
       awaitingReply = null;
+      awaitingSince = 0;
+      ownedSkillRunId = "";
+      deliverySkill = "navigate_to_position";
       startedAt = now;
       try {
         localStorage.removeItem(AGENT_ONBOARDING_PROGRESS_KEY);
@@ -359,36 +351,73 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
     }
   }
 
-  /** @param {string} text */
-  function onUserMessage(text) {
+  /** The panel invokes this only after this browser successfully publishes its
+   * own turn. Remote chat echoes are transcript-only.
+   * @param {string} text @param {number} timestamp */
+  function onUserMessage(text, timestamp) {
     if (!active || awaitingReply !== null || promptStage === "done") return;
     if (normalizedPrompt(text) !== normalizedPrompt(GUIDED_PROMPTS[promptStage])) return;
     awaitingReply = promptStage;
+    awaitingSince = timestamp;
+    ownedSkillRunId = "";
+    deliverySkill = "navigate_to_position";
     syncSuggestedPrompt();
   }
 
-  /** @param {string} text */
-  function onRobotMessage(text) {
-    if (!active || awaitingReply === null || text.trim() === ONBOARDING_GREETING) return;
-    // The conversational answer advances the first prompt. Physical prompts
-    // advance only when their relevant skill actually finishes below, so an
-    // acknowledgement cannot get ahead of the robot.
-    if (awaitingReply !== "capabilities") return;
+  /** @param {string} text @param {number} timestamp */
+  function onRobotMessage(text, timestamp) {
+    if (
+      !active ||
+      awaitingReply !== "capabilities" ||
+      timestamp < awaitingSince ||
+      normalizedPrompt(text) !== normalizedPrompt(CAPABILITY_RESPONSE)
+    ) return;
+    reveal("cameras");
     promptStage = "pickup";
     awaitingReply = null;
+    awaitingSince = 0;
     persist();
     syncSuggestedPrompt();
   }
 
-  /** @param {string} skill @param {string} status */
-  function onSkillStatus(skill, status) {
-    if (!active || awaitingReply === null) return;
-    const outcome = skillPromptOutcome(awaitingReply, skill, status);
-    if (outcome === null) return;
-    if (outcome !== "retry") promptStage = outcome;
-    awaitingReply = null;
-    persist();
-    syncSuggestedPrompt();
+  /** @param {{skill: string, runId: string, status: string, timestamp: number}} event */
+  function onSkillStatus(event) {
+    if (!active || !awaitingReply || awaitingReply === "capabilities") return;
+    const expectedSkill = awaitingReply === "pickup" ? "pick_any_object" : deliverySkill;
+    const ownedEvent = ownedSkillEvent(expectedSkill, ownedSkillRunId, event, awaitingSince);
+    if (ownedEvent?.kind === "claim") {
+      // The first expected run begun after this browser's accepted prompt owns
+      // the step. A terminal event with any other run id is robot-wide noise.
+      ownedSkillRunId = ownedEvent.runId;
+      return;
+    }
+    if (!ownedEvent) return;
+    if (ownedEvent.kind === "failed" || ownedEvent.kind === "interrupted") {
+      awaitingReply = null;
+      awaitingSince = 0;
+      ownedSkillRunId = "";
+      deliverySkill = "navigate_to_position";
+      syncSuggestedPrompt();
+      return;
+    }
+    if (awaitingReply === "pickup") {
+      reveal("controls");
+      promptStage = "deliver";
+      awaitingReply = null;
+      awaitingSince = 0;
+      ownedSkillRunId = "";
+      persist();
+      syncSuggestedPrompt();
+      return;
+    }
+    if (deliverySkill === "navigate_to_position") {
+      // Delivery is one browser-owned chain: keep the prompt closed while the
+      // agent moves from the owned navigation run to its OpenGripper run.
+      deliverySkill = "open_gripper";
+      ownedSkillRunId = "";
+      return;
+    }
+    reveal("complete");
   }
 
   /** @param {CustomEvent<{restart?: boolean}>} event */
@@ -410,7 +439,6 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
       render();
       syncSuggestedPrompt();
       unadvertiseGreeting();
-      unsubUi();
       unsubBackend();
       window.removeEventListener(ONBOARDING_REQUEST_EVENT, /** @type {EventListener} */ (onRequest));
     },

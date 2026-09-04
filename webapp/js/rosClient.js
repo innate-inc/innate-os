@@ -179,13 +179,15 @@ export class RosClient {
   }
 
   /**
-   * Fire-and-forget publish. Dropped (not queued) when the socket is down —
-   * callers that care observe onStateChange.
+   * Fire-and-forget publish. Returns false when the socket is down instead of
+   * pretending a frame was accepted; callers that own transactional UI state
+   * can keep that state pending and offer a retry.
    * @param {string} topic
    * @param {object} msg
+   * @returns {boolean}
    */
   publish(topic, msg) {
-    this.#send({ op: "publish", topic, msg });
+    return this.#send({ op: "publish", topic, msg });
   }
 
   /**
@@ -567,11 +569,13 @@ export class RosClient {
     });
   }
 
-  /** @param {object} payload */
+  /** @param {object} payload @returns {boolean} */
   #send(payload) {
     if (this.#ws?.readyState === WebSocket.OPEN) {
       this.#ws.send(JSON.stringify(payload));
+      return true;
     }
+    return false;
   }
 
   /** @param {Error} err */

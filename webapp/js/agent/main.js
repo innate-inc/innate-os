@@ -249,9 +249,9 @@ function buildAgentView(root) {
       if (!onboarding?.isActive()) return fallback();
       await onboarding.ensureRunning();
     },
-    onUserMessage: (text) => onboarding?.onUserMessage(text),
-    onRobotMessage: (text) => onboarding?.onRobotMessage(text),
-    onSkillStatus: (skill, status) => onboarding?.onSkillStatus(skill, status),
+    onUserMessage: (text, timestamp) => onboarding?.onUserMessage(text, timestamp),
+    onRobotMessage: (text, timestamp) => onboarding?.onRobotMessage(text, timestamp),
+    onSkillStatus: (event) => onboarding?.onSkillStatus(event),
   });
   onboarding = createAgentOnboarding(root, ros, agentState, {
     // Opening a page must never activate autonomous control on physical MARS.

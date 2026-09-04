@@ -552,7 +552,7 @@ body.agent-conversation-onboarding-active
 
 /* Keep the opening exchange human without hiding the actions MARS performs.
    Lifecycle chatter and thought traces stay quiet; real skill cards remain in
-   the transcript, while RevealOnboarding is filtered at the data boundary. */
+   the transcript. */
 .agent-conversation-onboarding .agent-stream-mode,
 .agent-conversation-onboarding .agent-stream > :is(
     .chat-msg.system,
