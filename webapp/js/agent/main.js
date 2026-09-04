@@ -164,7 +164,52 @@ function buildAgentView(root) {
   const simProps = /** @type {{
    *   onProps?: (callback: (props: {name: string}[]) => void) => () => void,
    *   placePropAtRobot?: (name: string) => void,
+   *   onEnvironment?: (callback: (roster: {environment: {id: string} | null, environments: {id: string}[], switch: {id: string, state: string, message?: string} | null}) => void) => () => void,
+   *   switchEnvironment?: (id: string) => void,
    * }} */ (/** @type {unknown} */ (session));
+  function prepareBackrooms() {
+    if (!config.simControls || !simProps.onEnvironment || !simProps.switchEnvironment) return Promise.resolve();
+    const onEnvironment = simProps.onEnvironment;
+    const switchEnvironment = simProps.switchEnvironment;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let requested = false;
+      let subscribed = false;
+      let unsubscribe = () => {};
+      const finish = (/** @type {Error | null} */ error = null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (subscribed) unsubscribe();
+        if (error) reject(error);
+        else resolve(undefined);
+      };
+      const timer = setTimeout(
+        () => finish(new Error("Backrooms took too long to load.")),
+        15_000,
+      );
+      unsubscribe = onEnvironment((roster) => {
+        if (roster.environment?.id === "backrooms" && roster.switch?.state !== "loading") {
+          finish();
+          return;
+        }
+        if (roster.switch?.id === "backrooms" && roster.switch.state === "failed") {
+          finish(new Error(roster.switch.message || "Backrooms failed to load."));
+          return;
+        }
+        if (!roster.environments.some(({ id }) => id === "backrooms")) {
+          finish(new Error("The backrooms environment is unavailable."));
+          return;
+        }
+        if (!requested) {
+          requested = true;
+          switchEnvironment("backrooms");
+        }
+      });
+      subscribed = true;
+      if (settled) unsubscribe();
+    });
+  }
   /** @type {(() => void) | null} */
   let stopLegoPrep = null;
   function prepareLego() {
@@ -209,6 +254,7 @@ function buildAgentView(root) {
     onNotice: panel.addNotice,
     onStart: panel.beginOnboarding,
     onSuggestedPrompt: panel.setSuggestedPrompt,
+    prepareEnvironment: prepareBackrooms,
     prepareLego,
   });
   const simSession = /** @type {any} */ (session);
