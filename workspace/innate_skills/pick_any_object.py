@@ -614,9 +614,7 @@ class PickAnyObject(Skill):
             raise ArmUnhealthy(f"gripper would not close: {e}") from e
         time.sleep(p["close_settle_s"])
 
-    def _prepare_grasp_retry(
-        self, prompt: str, x: float, y: float
-    ) -> tuple[float, float, float, float, float]:
+    def _prepare_grasp_retry(self, prompt: str, x: float, y: float) -> tuple[float, float, float, float, float]:
         """Reopen, reacquire the object with the wrist, and descend lower."""
         p = self._p
         retry_z = p["retry_floor_z"]
@@ -671,9 +669,7 @@ class PickAnyObject(Skill):
                 x, y, 0.22, roll=roll, pitch=p["arm_pitch"], yaw=yaw, duration=2.0, tolerance_xy=0.10
             )
 
-    def _close_twist_lift(
-        self, prompt: str, x: float, y: float, roll: float, pitch: float, yaw: float
-    ) -> None:
+    def _close_twist_lift(self, prompt: str, x: float, y: float, roll: float, pitch: float, yaw: float) -> None:
         """Close and lift, reacquiring and retrying a proven miss.
 
         The encoder is checked both after closing and after the first lift. A
@@ -747,9 +743,7 @@ class PickAnyObject(Skill):
             ee_z = None
         lifted_clear = ee_z is not None and ee_z >= self._p["floor_z"] + 0.07
         if j6_ok and lifted_clear:
-            self.logger.info(
-                f"[PickAnyObject] verify: lifted grasp j6={j6} z={ee_z:.3f} -> HELD"
-            )
+            self.logger.info(f"[PickAnyObject] verify: lifted grasp j6={j6} z={ee_z:.3f} -> HELD")
             return True
 
         approach.drive(-VERIFY_BACKUP_M)
