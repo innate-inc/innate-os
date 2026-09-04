@@ -94,7 +94,8 @@ class NavMapBridge:
     SWITCH_RETRY_S = 3.0  # while a switch waits, "already in progress" replies are retried this often
     # The mode manager reports a map well before its stack is up, and a map
     # change landing mid-boot leaves Nav2 half-activated. The launcher seeds
-    # the boot map, so this only guards a mismatch it could not prevent.
+    # the boot map, so this only guards an unsolicited correction of a mismatch
+    # it could not prevent; a switch the user asked for is never held back.
     BOOT_GRACE_S = 30.0
 
     def __init__(self, url: str, map_name: str):
@@ -103,6 +104,7 @@ class NavMapBridge:
         self.current: str | None = None
         self._requested_at = -math.inf
         self._first_report_at: float | None = None
+        self._switching = False
         threading.Thread(target=self._run, daemon=True).start()
 
     def switch_to(self, map_name: str, timeout_s: float) -> bool:
@@ -113,16 +115,27 @@ class NavMapBridge:
         self._requested_at = -math.inf
         if self.current is None:
             return True
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            if self.current == map_name:
-                return True
-            if time.monotonic() - self._requested_at >= self.SWITCH_RETRY_S:
-                self._requested_at = -math.inf
-            time.sleep(0.25)
+        self._switching = True
+        try:
+            deadline = time.monotonic() + timeout_s
+            while time.monotonic() < deadline:
+                if self.current == map_name:
+                    return True
+                if time.monotonic() - self._requested_at >= self.SWITCH_RETRY_S:
+                    self._requested_at = -math.inf
+                time.sleep(0.25)
+        finally:
+            self._switching = False
         self.wanted = previous  # the world stays as it was; so must the map it is reconciled to
         self._requested_at = -math.inf
         return False
+
+    def _may_request(self) -> bool:
+        if self.current in (None, self.wanted) or time.monotonic() - self._requested_at < self.RETRY_S:
+            return False
+        if self._switching:
+            return True
+        return self._first_report_at is not None and time.monotonic() - self._first_report_at >= self.BOOT_GRACE_S
 
     def _run(self) -> None:
         try:
@@ -152,9 +165,7 @@ class NavMapBridge:
                     self._first_report_at = time.monotonic()
             elif frame.get("op") == "service_response":
                 print(f"[nav-map] {self.SERVICE} -> {frame.get('values', frame)}", flush=True)
-            if self.current in (None, self.wanted) or time.monotonic() - self._requested_at < self.RETRY_S:
-                continue
-            if self._first_report_at is None or time.monotonic() - self._first_report_at < self.BOOT_GRACE_S:
+            if not self._may_request():
                 continue
             self._requested_at = time.monotonic()
             ws.send(

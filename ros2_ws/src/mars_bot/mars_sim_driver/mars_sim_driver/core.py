@@ -155,11 +155,11 @@ def _texture_cap(render_w: int) -> int | None:
     return 2048 if render_w > CAMERA_WIDTH // 2 else 1024
 
 
-def _model_cache_path(xml: str, asset_files: list[Path]) -> Path:
-    """Cache location for the compiled model, keyed by everything that shapes
-    it: the generated MJCF (which embeds resolved mesh/texture paths, so the
-    texture cap and asset locations are covered), the referenced files'
-    mtime+size, and the MuJoCo version. Compiling 1300+ convex hulls costs
+def _model_cache_path(environment_id: str, xml: str, asset_files: list[Path]) -> Path:
+    """Cache location for the compiled model: one slot per environment pack,
+    keyed by everything that shapes it -- the generated MJCF (which embeds
+    resolved mesh/texture paths, so the texture cap and asset locations are
+    covered), the referenced files' mtime+size, and the MuJoCo version. Compiling 1300+ convex hulls costs
     minutes on weak machines and leaves ~0.4GB of heap debris; loading the
     saved binary takes ~50ms and only the model's real ~120MB."""
     digest = hashlib.sha256()
@@ -171,7 +171,7 @@ def _model_cache_path(xml: str, asset_files: list[Path]) -> Path:
         except OSError:
             continue
         digest.update(f"{path}:{st.st_mtime_ns}:{st.st_size}\n".encode())
-    return ASSETS_DIR / ".model_cache" / f"world-{digest.hexdigest()[:16]}.mjb"
+    return ASSETS_DIR / ".model_cache" / f"world-{environment_id}-{digest.hexdigest()[:16]}.mjb"
 
 
 def release_freed_heap() -> None:
@@ -249,7 +249,7 @@ class VirtualMars:
             # A prop mesh appearing (or being republished) changes the world.
             *self.props.asset_files(),
         ]
-        cache_path = _model_cache_path(xml, asset_files)
+        cache_path = _model_cache_path(self.environment.id, xml, asset_files)
         self.model = None
         if cache_path.exists():
             with contextlib.suppress(Exception):  # noqa: BLE001 -- corrupt cache falls back to compiling
@@ -280,7 +280,9 @@ class VirtualMars:
             del world_spec, robot_spec  # spec copies of every mesh/texture
             with contextlib.suppress(OSError):
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
-                for stale in cache_path.parent.glob("world-*.mjb"):
+                # Only this pack's stale models: switching packs must find the
+                # other pack's compiled world still there.
+                for stale in cache_path.parent.glob(f"world-{self.environment.id}-*.mjb"):
                     if stale != cache_path:
                         stale.unlink(missing_ok=True)
                 mujoco.mj_saveModel(self.model, str(cache_path), None)
