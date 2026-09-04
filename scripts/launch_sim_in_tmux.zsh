@@ -95,11 +95,6 @@ echo "Started UDP leader receiver (:9999/udp)..."
 # can switch it between packs (/nav/change_navigation_map).
 mkdir -p ~/innate-os/data/maps
 cp ~/innate-os/sim/assets/map/*.yaml ~/innate-os/sim/assets/map/*.pgm ~/innate-os/data/maps/ 2>/dev/null || true
-# Licensed packs live under assets/local-environments so they survive refreshes
-# of the published asset directories. Nav2 still consumes one flat maps folder,
-# so seed those pack maps alongside the published ones before mode_manager starts.
-find ~/innate-os/sim/assets/local-environments -mindepth 3 -maxdepth 3 -type f \( -name '*.yaml' -o -name '*.pgm' \) \
-  -exec cp {} ~/innate-os/data/maps/ \; 2>/dev/null || true
 tmux new-window -t "$SESSION_NAME" -n nav-brain
 tmux send-keys -t "${TMUX_TARGET_PREFIX}:nav-brain" "ros2 launch mars_nav mode_manager.launch.py" C-m
 echo "Started navigation system..."

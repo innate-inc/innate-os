@@ -14,6 +14,7 @@ needed. The navigation map is then scanned from the compiled static world.
 from __future__ import annotations
 
 import argparse
+import shutil
 from collections import defaultdict
 from pathlib import Path
 
@@ -215,6 +216,11 @@ def build(viewer_out: Path = SIM / "viewer/public", assets_dir: Path = SIM / "as
     models = viewer_out / "models" / PACK_ID
     models.mkdir(parents=True, exist_ok=True)
     trimesh.Scene(parts).export(models / f"{PACK_ID}.glb")
+    # Only this generated pack tree is ours; renamed parts must not survive
+    # into world.find_visual_rooms() or the static lidar scan below.
+    visual_root = assets_dir / f"{PACK_ID}_visual"
+    if visual_root.exists():
+        shutil.rmtree(visual_root)
     write_visuals(PACK_ID, parts, assets_dir)
     collision_root = assets_dir / f"{PACK_ID}_split_v2" / PACK_ID
     collision_root.mkdir(parents=True, exist_ok=True)

@@ -22,11 +22,21 @@ from mars_sim_driver.traffic import LANES, SIGNAL_MATERIALS  # noqa: E402
 
 def test_clean_crossroads_build_loads_visuals_physics_and_static_map(tmp_path):
     assets, viewer = tmp_path / "assets", tmp_path / "viewer"
+    stale = assets / "intersection_visual/retired-part/retired-part.obj"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("obsolete mesh from an earlier build")
+    sibling = assets / "other_visual/keep.obj"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_text("another environment's mesh")
     build(viewer, assets)
+    assert not stale.parent.exists()
+    assert sibling.read_text() == "another environment's mesh"
     manifest = json.loads((ROOT / "sim/environments/intersection/manifest.json").read_text())
     scene = trimesh.load(viewer / manifest["viewer"]["model"], force="scene")
     signals = {name for aspects in SIGNAL_MATERIALS.values() for name in aspects.values()}
     assert signals <= {mesh.visual.material.name for mesh in scene.geometry.values()}
+    expected_parts = {mesh.visual.material.name.lower().replace("_", "-") for mesh in scene.geometry.values()}
+    assert {path.name for path in (assets / "intersection_visual").iterdir()} == expected_parts
     assert all(np.isfinite(mesh.vertices).all() for mesh in scene.geometry.values())
     hulls = sorted((assets / manifest["physics"]["collision_dir"]).glob("*/*_collision_*.obj"))
     meshes = [trimesh.load(path, force="mesh") for path in hulls]
