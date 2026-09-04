@@ -296,12 +296,19 @@ class WorldServer:
             if current is not None and current.id == environment_id:
                 return
             summary = {"id": environment_id, "display_name": environment_id}
+            started = time.monotonic()
+            phases: list[str] = []
+
+            def phase(label: str) -> None:
+                phases.append(f"{label} {time.monotonic() - started:.1f}s")
+
             try:
                 target = Environment.load(environment_id)
                 summary = target.summary()
                 self.switch = {**summary, "state": "loading"}
                 self._publish_roster()
                 fresh = self._build_sim(target)
+                phase("compiled")
                 # Nav2 changes map before the world changes: the epoch bump
                 # below reseeds AMCL from the new world's pose, which must
                 # land on the new map, and a map Nav2 cannot load fails the
@@ -309,6 +316,7 @@ class WorldServer:
                 if self.nav_map is not None and not self.nav_map.switch_to(target.map_name, timeout_s=60.0):
                     self._retired.put(fresh)
                     raise RuntimeError(f"Nav2 did not load {target.map_name}")
+                phase("nav map")
             except Exception as exc:
                 self.switch = {**summary, "state": "failed", "message": repr(exc)}
                 self._publish_roster()
@@ -325,7 +333,8 @@ class WorldServer:
             self.switch = None
             self._publish_roster()
             self.publish_state()
-            print(f"[world-server] environment switched to {target.id}", flush=True)
+            phase("swapped")
+            print(f"[world-server] environment switched to {target.id}: {', '.join(phases)}", flush=True)
 
     def _close_retired(self) -> None:
         with contextlib.suppress(queue.Empty):
