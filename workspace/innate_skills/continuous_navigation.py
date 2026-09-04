@@ -5,8 +5,8 @@
 Unlike the local brain's built-in continuous-navigation mode, this is a real
 long-running skill. It owns its camera/model loop and keeps reassessing while
 its Nav2 action is still moving. A new visual waypoint replaces the in-flight
-goal; KEEP_CURRENT leaves Nav2 alone so the base does not brake and accelerate
-again on every model turn.
+goal even when the route is unchanged. Only duplicate destinations or a
+transient invalid observation leave the current waypoint untouched.
 """
 
 from __future__ import annotations
@@ -137,8 +137,8 @@ class ContinuousNavigation(Skill):
     """Continuously navigate toward a distant visually described target.
 
     This is the separately launchable skill implementation. It uses fresh
-    head-camera frames while Nav2 is moving, keeps the current waypoint when
-    it remains appropriate, replaces it when the visual route changes, and
+    head-camera frames while Nav2 is moving, advances the waypoint along the
+    visible route without waiting to arrive at the previous waypoint, and
     stops only when the target is visibly reached or progress is unsafe.
     Requires target_description (for example, "the traffic lights at the
     intersection"). Use the local agent's nav_insight_continuous mode instead
@@ -210,8 +210,10 @@ class ContinuousNavigation(Skill):
             and self._active_goal is not None
             and _same_goal(directive.odom_goal, self._active_goal)
         ):
-            self.feedback("Visual route is unchanged; keeping the current Nav2 waypoint")
+            self.feedback("Selected destination duplicates the active waypoint; reassessing again while moving")
             return None
+        if directive.odom_goal is not None:
+            self.feedback("Advancing visual waypoint before the current navigation finishes")
         return directive
 
     def _decide(self, *, is_moving: bool) -> NavigationDirective:
@@ -241,7 +243,9 @@ class ContinuousNavigation(Skill):
             reasoning_effort="low",
         )
         self.check_cancelled()
-        decision = parse_visual_decision(reply, allow_keep=is_moving)
+        # KEEP_CURRENT is an internal fallback, not a model choice: a clear
+        # unchanged route still needs a fresh look-ahead point on every turn.
+        decision = parse_visual_decision(reply, allow_keep=False)
         self._previous_image = frame
 
         if decision is None:
@@ -259,7 +263,7 @@ class ContinuousNavigation(Skill):
 
         self._consecutive_model_failures = 0
         detail = decision.progress_description or decision.explanation
-        self.feedback(f"[{self._iteration}/{self._max_iterations}] {detail}")
+        self.feedback(f"[{self._iteration}/{self._max_iterations}] {decision.status.value}: {detail}")
         if decision.status != NavigationStatus.CONTINUE:
             return NavigationDirective(decision)
 
@@ -277,8 +281,11 @@ class ContinuousNavigation(Skill):
 
     def _prompt(self, *, is_moving: bool, has_previous: bool) -> str:
         moving = (
-            "The robot is CURRENTLY MOVING toward its previous safe waypoint. Return KEEP_CURRENT if that waypoint "
-            "still follows the best visible route; use CONTINUE only if it should be replaced."
+            "The robot is CURRENTLY MOVING. Select a NEW look-ahead floor point from the fresh current image "
+            "on EVERY assessment, even when the route is unchanged. Advance the destination along the clear "
+            "visible route as the robot moves; do not wait for arrival at the previous waypoint. "
+            "Choose far enough ahead to sustain progress, within visibly safe floor. "
+            "The previous waypoint is provisional, not a destination you must finish."
             if is_moving
             else "The robot is stopped and needs a new waypoint; do not return KEEP_CURRENT."
         )
@@ -292,12 +299,11 @@ Image 1 is the fresh current head-camera view. {previous}
 
 Choose exactly one status:
 - CONTINUE: provide x and y from 0 to 1000 for a visibly clear point ON THE FLOOR in Image 1 that advances the objective.
-- KEEP_CURRENT: only while already moving and the existing waypoint remains appropriate.
 - OBJECTIVE_REACHED: only with current visual evidence that the robot has reached a useful stopping position.
 - CANNOT_PROCEED: the route is visibly blocked, unsafe, or the objective cannot be located after reasonable exploration.
 
 Do not point through objects, walls, vehicles, curbs, or people. For a visible target, point at clear floor leading toward
 it, not on the object itself. Return JSON only:
-{{"status":"CONTINUE|KEEP_CURRENT|OBJECTIVE_REACHED|CANNOT_PROCEED","x":0,"y":0,
+{{"status":"CONTINUE|OBJECTIVE_REACHED|CANNOT_PROCEED","x":0,"y":0,
 "explanation":"brief reason","progress_description":"change since the previous view"}}
 """

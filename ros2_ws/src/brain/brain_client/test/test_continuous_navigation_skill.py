@@ -7,7 +7,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(_REPO_ROOT / "workspace"))
 
 from innate_agents.demo_agent import DemoAgent  # noqa: E402
+from innate_skills import continuous_navigation as continuous  # noqa: E402
 from innate_skills.continuous_navigation import (  # noqa: E402
+    ContinuousNavigation,
     NavigationStatus,
     VisualDecision,
     decision_odom_goal,
@@ -45,7 +47,7 @@ def test_visual_decision_contract_and_motion_compensated_goal():
     assert math.isclose(current[2] + theta, odom_goal[2], abs_tol=1e-9)
 
 
-def test_nav2_controller_cancels_an_inflight_goal_before_returning_replan():
+def test_visual_loop_advances_an_unfinished_goal_on_an_unchanged_route(monkeypatch):
     class FakeNavigator:
         cancelled = False
 
@@ -75,8 +77,38 @@ def test_nav2_controller_cancels_an_inflight_goal_before_returning_replan():
     controller._resolve_goal = lambda x, y, theta, _local: (x, y, theta, "odom")
     controller._pose_stamped = lambda x, y, theta, frame: (x, y, theta, frame)
 
-    replacement = object()
-    result = controller.go_to_position(1.0, 0.0, 0.0, True, reassess=lambda: replacement)
+    # The robot has moved since its previous assessment. The same clear
+    # floor pixel now represents a new absolute destination further ahead.
+    frame = MainImage("unused")
+    decision = VisualDecision(NavigationStatus.CONTINUE, "same clear corridor", x=500, y=800)
+    first_goal = decision_odom_goal(decision, frame, -20.0, (0.0, 0.0, 0.0))
+    skill = SimpleNamespace(
+        _target="end of the corridor", _iteration=1, _max_iterations=50,
+        _previous_image=frame, _consecutive_model_failures=0, _active_goal=first_goal,
+        main_image=frame, head_position=SimpleNamespace(pitch_degrees=-20.0),
+        odom=SimpleNamespace(x=1.0, y=0.0, theta=0.0), _proxy=object(),
+        logger=controller.logger, check_cancelled=lambda: None, feedback=lambda _message: None,
+    )
+    skill._prompt = lambda **kw: ContinuousNavigation._prompt(skill, **kw)
+    skill._decide = lambda **kw: ContinuousNavigation._decide(skill, **kw)
 
-    assert result is replacement
+    def model(_client, _images, prompt, **kwargs):
+        assert "on EVERY assessment, even when the route is unchanged" in prompt
+        assert "KEEP_CURRENT" not in prompt
+        assert kwargs["model"] == "gemini-3.8-flash"
+        assert kwargs["reasoning_effort"] == "low"
+        assert not navigator.isTaskComplete()
+        return '{"status":"CONTINUE","x":500,"y":800,"explanation":"same clear corridor"}'
+
+    monkeypatch.setattr(continuous.gemlib, "ask_image", model)
+    result = controller.go_to_position(
+        *first_goal, True, reassess=lambda: ContinuousNavigation._reassess_while_moving(skill)
+    )
+
+    assert result.odom_goal[0] == first_goal[0] + 1.0
     assert navigator.cancelled
+
+    # An identical absolute destination must not cause a cancel/restart loop.
+    skill._active_goal = result.odom_goal
+    skill._decide = lambda **_kw: result
+    assert ContinuousNavigation._reassess_while_moving(skill) is None
