@@ -84,12 +84,12 @@ class Environment:
 
 class NavMapBridge:
     """Keeps Nav2 on the active environment's map: watches /nav/current_map
-    over the stack's rosbridge and calls /nav/change_map whenever it disagrees
+    over the stack's rosbridge and calls /nav/change_navigation_map whenever it disagrees
     with what the world server wants. Reconnects forever and never blocks the
     sim, like the challenge bridges."""
 
     TOPIC = "/nav/current_map"
-    SERVICE = "/nav/change_map"
+    SERVICE = "/nav/change_navigation_map"
     RETRY_S = 20.0  # a map switch relocalizes; give it time before asking again
 
     def __init__(self, url: str, map_name: str):

@@ -195,7 +195,7 @@ A running simulator switches in place: **Scene setup → Environment** in the
 3D view, or `up --environment` again. The world server rebuilds its MuJoCo
 world for the pack and swaps it under the physics lock -- the robot respawns
 there, the viewer streams the pack's rooms, and Nav2 changes to its map over
-`/nav/change_map` -- with nothing restarted and the page still open.
+`/nav/change_navigation_map` -- with nothing restarted and the page still open.
 
 ## Build skills and agents
 
