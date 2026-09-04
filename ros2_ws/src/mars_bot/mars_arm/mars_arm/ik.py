@@ -300,8 +300,10 @@ class KDLIKNode(Node):
         # cmd_msg.data = ik_positions
         # self.command_pub.publish(cmd_msg)
 
-        # seed next solve with the result
-        self.current_q = q_out
+        # Seed the next solve with the solution that was published. Not q_out:
+        # that is the last seed tried, which is None when its solve failed —
+        # seeding with None crashed the node on the next joint-state message.
+        self.current_q = best_solution
 
 
 def main(args=None):
