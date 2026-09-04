@@ -236,7 +236,15 @@ class ContinuousNavigation(Skill):
         self._iteration += 1
         prompt = self._prompt(is_moving=is_moving, has_previous=previous is not None)
         images = [frame, previous] if previous is not None else frame
-        reply = gemlib.ask_image(self._proxy, images, prompt, logger=self.logger, retries=1 if is_moving else 2)
+        reply = gemlib.ask_image(
+            self._proxy,
+            images,
+            prompt,
+            logger=self.logger,
+            retries=1 if is_moving else 2,
+            model="gemini-3.8-flash",
+            reasoning_effort="low",
+        )
         self.check_cancelled()
         decision = parse_visual_decision(reply, allow_keep=is_moving)
         self._previous_image = frame
