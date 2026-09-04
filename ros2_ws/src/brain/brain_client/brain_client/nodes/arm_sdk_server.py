@@ -249,7 +249,9 @@ def execute_goal(goal_handle):
 class PoseSample(TypedDict):
     """One /armsdk/stream_pose message: an end-effector delta in base_link
     axes (metres, unit quaternion) relative to the pose the arm had when
-    ``session`` began. A new session re-anchors on the live pose."""
+    ``session`` began, plus an optional gripper opening (0 closed … 1 open)
+    that follows the operator's thumb. A new session re-anchors on the live
+    pose."""
 
     session: str
     x: float
@@ -259,6 +261,7 @@ class PoseSample(TypedDict):
     qy: float
     qz: float
     qw: float
+    grip: float | None
 
 
 class FollowState(StrEnum):
@@ -304,6 +307,7 @@ class PoseFollower:
                 qy=float(body["qy"]),
                 qz=float(body["qz"]),
                 qw=float(body["qw"]),
+                grip=None if body.get("grip") is None else min(1.0, max(0.0, float(body["grip"]))),
             )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             node.get_logger().warning(f"bad stream_pose message: {e}", throttle_duration_sec=2.0)
@@ -337,7 +341,8 @@ class PoseFollower:
                 (sample["x"], sample["y"], sample["z"]),
                 (sample["qx"], sample["qy"], sample["qz"], sample["qw"]),
             )
-            reached = manip.stream_pose(*target)
+            grip = None if sample["grip"] is None else sample["grip"] * Manipulation.GRIPPER_OPEN
+            reached = manip.stream_pose(*target, grip=grip)
             self._set(FollowState.FOLLOWING if reached else FollowState.UNREACHABLE)
         except (ArmFailed, ArmUnhealthy) as e:
             self._set(FollowState.REFUSED, str(e))
