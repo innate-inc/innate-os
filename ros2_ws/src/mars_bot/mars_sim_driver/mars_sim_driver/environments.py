@@ -103,7 +103,7 @@ class NavMapBridge:
         """Ask for a map and wait for Nav2 to report it. True at once when no
         Nav2 has been seen yet (a world server running alone), so a switch
         never waits on a stack that is not there."""
-        self.wanted = map_name
+        previous, self.wanted = self.wanted, map_name
         self._requested_at = -math.inf
         if self.current is None:
             return True
@@ -112,6 +112,8 @@ class NavMapBridge:
             if self.current == map_name:
                 return True
             time.sleep(0.25)
+        self.wanted = previous  # the world stays as it was; so must the map it is reconciled to
+        self._requested_at = -math.inf
         return False
 
     def _run(self) -> None:

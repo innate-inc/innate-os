@@ -491,7 +491,7 @@ export class SimScene {
       );
     }
     if (generation !== this.environmentGeneration) {
-      disposeObject(group);
+      group.traverse((obj) => obj instanceof THREE.Mesh && obj.geometry.dispose()); // hullMaterial is shared
       return;
     }
     group.visible = this.hullsVisible; // honor toggles made while loading
