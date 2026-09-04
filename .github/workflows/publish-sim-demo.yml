@@ -40,6 +40,24 @@ jobs:
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v3
 
+      # The asset and viewer tags are content-addressed via `git ls-files`, which
+      # Cloud Build's upload has no .git for. Resolve here, pass them in.
+      - name: Resolve base image tags
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolve() { python3 - "$1" <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path.cwd() / "sim" / "launcher"))
+          import config
+          print(getattr(config, f"resolve_{sys.argv[1]}_image")(Path.cwd()))
+          PY
+          }
+          echo "assets=$(resolve assets)" >> "$GITHUB_OUTPUT"
+          echo "viewer=$(resolve viewer)" >> "$GITHUB_OUTPUT"
+
       - name: Submit Cloud Build
         shell: bash
         run: |
@@ -57,6 +75,6 @@ jobs:
             --gcs-source-staging-dir="${{ vars.GCP_CLOUD_BUILD_SOURCE_STAGING_DIR }}" \
             --service-account="projects/${{ vars.GCP_PROJECT_ID }}/serviceAccounts/${{ vars.GCP_CLOUD_BUILD_SERVICE_ACCOUNT }}" \
             --config=ci/cloudbuild.sim-demo.yaml \
-            --substitutions="_IMAGE_TAG=sha-${short_sha},_LATEST_TAG=${latest_tag},_GHCR_USERNAME_SECRET=${{ vars.GHCR_USERNAME_SECRET }},_GHCR_TOKEN_SECRET=${{ vars.GHCR_TOKEN_SECRET }}"
+            --substitutions="_IMAGE_TAG=sha-${short_sha},_LATEST_TAG=${latest_tag},_ASSETS_IMAGE=${{ steps.tags.outputs.assets }},_VIEWER_IMAGE=${{ steps.tags.outputs.viewer }},_GHCR_USERNAME_SECRET=${{ vars.GHCR_USERNAME_SECRET }},_GHCR_TOKEN_SECRET=${{ vars.GHCR_TOKEN_SECRET }}"
 
           echo "Published sha-${short_sha}${latest_tag:+ and }${latest_tag}" >> "$GITHUB_STEP_SUMMARY"
