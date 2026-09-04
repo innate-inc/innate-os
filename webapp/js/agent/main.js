@@ -190,6 +190,10 @@ function buildAgentView(root) {
       );
       unsubscribe = onEnvironment((roster) => {
         if (roster.environment?.id === "backrooms" && roster.switch?.state !== "loading") {
+          // Blake is the largest standing resident model. Its authored reach
+          // places it 1.5m ahead of the backrooms spawn: clearly visible, but
+          // with enough room for MARS to approach and release the LEGO.
+          simProps.placePropAtRobot?.("resident_blake");
           finish();
           return;
         }
@@ -247,6 +251,7 @@ function buildAgentView(root) {
     },
     onUserMessage: (text) => onboarding?.onUserMessage(text),
     onRobotMessage: (text) => onboarding?.onRobotMessage(text),
+    onSkillStatus: (skill, status) => onboarding?.onSkillStatus(skill, status),
   });
   onboarding = createAgentOnboarding(root, ros, agentState, {
     // Opening a page must never activate autonomous control on physical MARS.

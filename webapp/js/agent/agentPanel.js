@@ -44,6 +44,7 @@ const CHAT_EXAMPLES = [
  *   ensureRunning?: (fallback: () => Promise<void>) => Promise<void>,
  *   onUserMessage?: (text: string) => void,
  *   onRobotMessage?: (text: string) => void,
+ *   onSkillStatus?: (skill: string, status: string) => void,
  * }} opts
  *   enableMic connects the browser microphone in sim, where the robot has no
  *   physical microphone (see micStream.js).
@@ -349,6 +350,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const name = String(payload?.primitive_name ?? payload?.skill_name ?? payload?.skill_id ?? "");
     const status = String(payload?.status ?? "");
     if (!name || !status || isInternalOnboardingSkill(name)) return;
+    opts.onSkillStatus?.(String(payload?.skill_id ?? name), status);
     const key = String(payload?.primitive_id ?? payload?.skill_id ?? name);
     const reason = typeof payload?.reason === "string" ? payload.reason : "";
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
