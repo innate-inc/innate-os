@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/publish-sim-demo.yml
+      - .gcloudignore
       - ci/cloudbuild.sim-demo.yaml
       - sim/demo/**
       - sim/launcher/config.py
