@@ -14,11 +14,13 @@ import {
   backendReadinessFromMessage,
   GUIDED_PROMPTS,
   hasIntroAgent,
+  matchesSkill,
   ONBOARDING_GREETING,
   parseRevealSections,
   parsePromptStage,
   REVEAL_SECTIONS,
   revealSectionFromMessage,
+  skillPromptOutcome,
 } from "../js/agent/agentOnboarding.js";
 import { isInternalOnboardingSkill } from "../js/agent/chatStream.js";
 import {
@@ -109,11 +111,13 @@ assert.deepEqual(REVEAL_SECTIONS, ["cameras", "controls", "complete"]);
 assert.match(ONBOARDING_GREETING, /^Hi, I’m MARS/);
 assert.doesNotMatch(ONBOARDING_GREETING, /hold Space|type in the chat/i);
 assert.equal(GUIDED_PROMPTS.capabilities, "What can you do?");
-assert.equal(GUIDED_PROMPTS.pickup, "Pick up this Lego piece in front of you.");
+assert.equal(GUIDED_PROMPTS.pickup, "Pick up the Lego in front of you.");
+assert.equal(GUIDED_PROMPTS.deliver, "Go and give it to the person in the corner.");
 assert.equal(hasIntroAgent({ agents: [{ id: "intro_agent" }] }), true);
 assert.equal(hasIntroAgent({ agents: [{ id: "default_agent" }] }), false);
 assert.equal(hasIntroAgent({ agents: [] }), false);
 assert.equal(parsePromptStage({ promptStage: "pickup" }), "pickup");
+assert.equal(parsePromptStage({ promptStage: "deliver" }), "deliver");
 assert.equal(parsePromptStage({ promptStage: "done" }), "done");
 assert.equal(parsePromptStage({ promptStage: "unknown" }), "capabilities");
 assert.deepEqual(
@@ -130,6 +134,14 @@ assert.equal(backendReadinessFromMessage({ data: '{"state":"starting","connected
 assert.ok(isInternalOnboardingSkill("RevealOnboarding"));
 assert.ok(isInternalOnboardingSkill("reveal_onboarding"));
 assert.ok(!isInternalOnboardingSkill("wave"));
+assert.ok(matchesSkill("innate-os/pick_any_object", "pick_any_object"));
+assert.ok(matchesSkill("Open Gripper", "open_gripper"));
+assert.ok(!matchesSkill("close_gripper", "open_gripper"));
+assert.equal(skillPromptOutcome("pickup", "innate-os/pick_any_object", "running"), null);
+assert.equal(skillPromptOutcome("pickup", "innate-os/pick_any_object", "completed"), "deliver");
+assert.equal(skillPromptOutcome("pickup", "innate-os/pick_any_object", "failed"), "retry");
+assert.equal(skillPromptOutcome("deliver", "innate-os/navigate_to_position", "failed"), "retry");
+assert.equal(skillPromptOutcome("deliver", "innate-os/open_gripper", "completed"), "done");
 
 const appCss = readFileSync(new URL("../css/app.css", import.meta.url), "utf8");
 assert.match(
@@ -157,5 +169,12 @@ assert.match(
 const agentMainSource = readFileSync(new URL("../js/agent/main.js", import.meta.url), "utf8");
 assert.match(agentMainSource, /switchEnvironment\("backrooms"\)/);
 assert.match(agentMainSource, /prepareEnvironment: prepareBackrooms/);
+assert.match(agentMainSource, /placePropAtRobot\?\.\("resident_blake"\)/);
+
+const introAgentSource = readFileSync(new URL("../../workspace/innate_agents/intro_agent.py", import.meta.url), "utf8");
+assert.match(introAgentSource, /I am your physical agent, can evolve in the world, do whatever you want, and ask me anything\./);
+assert.match(introAgentSource, /first answer exactly: "Yeah, sure\."/);
+assert.match(introAgentSource, /NavigateToPosition with x=0\.75, y=0, theta_degrees=0, local_frame=true/);
+assert.match(introAgentSource, /then use OpenGripper to drop the LEGO in front of them/);
 
 console.log("ok - conversation onboarding contract");

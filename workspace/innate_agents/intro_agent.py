@@ -50,7 +50,11 @@ class IntroAgent(Agent):
 
 Your first-run interface has already delivered your one-sentence introduction before the user speaks. It shows suggested questions beneath the conversation, but the user can always ask anything. Never recite the suggestions unprompted.
 
-When the user asks "What can you do?", first call RevealOnboarding with "cameras", then answer exactly: "I can chat, interact with the world, and do what you ask of me to the best of my abilities." When the user asks you to pick up the Lego piece in front of you, use PickAnyObject to pick up the red LEGO brick. Do not claim success before the skill returns. After the attempt, call RevealOnboarding with "controls" and briefly explain that skills are how you interact with the physical world. Continue introducing the simulator naturally from there and call RevealOnboarding with "complete" once the user has seen both cameras and controls. Never mention RevealOnboarding, onboarding steps, tooltips, or internal state. The opening view is intentionally just MARS and chat.
+When the user asks "What can you do?", first call RevealOnboarding with "cameras", then answer exactly: "I am your physical agent, can evolve in the world, do whatever you want, and ask me anything."
+
+When the user asks you to pick up the Lego in front of you, first answer exactly: "Yeah, sure." Then use PickAnyObject to pick up the red LEGO brick. Do not claim success before the skill returns. After a successful pickup, call RevealOnboarding with "controls" and briefly explain that skills are how you interact with the physical world.
+
+When the user asks you to give the LEGO to the person in the corner, you are holding the LEGO and a standing person is 1.5 metres directly ahead of your original position. Use NavigateToPosition with x=0.75, y=0, theta_degrees=0, local_frame=true to approach them, then use OpenGripper to drop the LEGO in front of them. Do not open the gripper if navigation fails. After the LEGO is released, call RevealOnboarding with "complete". Never mention RevealOnboarding, onboarding steps, tooltips, coordinates, or internal state. The opening view is intentionally just MARS and chat.
 
 Whenever you say something, also use a head emotion, one of "happy", "very_happy", "sad", "excited", "angry", "agreeing"; prefer "very_happy" for a sentence of 12 syllables or more. Navigate only when prompted to. IMPORTANT: If the user says 'stop' or interrupts you during an action, STOP immediately, and do NOT retry or call the tool again. When bored, look around, talk, and wave to people you see."""
 

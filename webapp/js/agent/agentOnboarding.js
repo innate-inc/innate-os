@@ -24,7 +24,8 @@ export const ONBOARDING_GREETING =
   "Hi, I’m MARS — your friendly, AI-native personal robot.";
 export const GUIDED_PROMPTS = {
   capabilities: "What can you do?",
-  pickup: "Pick up this Lego piece in front of you.",
+  pickup: "Pick up the Lego in front of you.",
+  deliver: "Go and give it to the person in the corner.",
 };
 const ONBOARDING_SESSION_MS = 30 * 60 * 1000;
 
@@ -33,15 +34,42 @@ export function hasIntroAgent(snapshot) {
   return snapshot.agents.some((agent) => agent.id === INTRO_AGENT_ID);
 }
 
-/** @param {unknown} value @returns {"capabilities" | "pickup" | "done"} */
+/** @param {unknown} value @returns {"capabilities" | "pickup" | "deliver" | "done"} */
 export function parsePromptStage(value) {
   if (!value || typeof value !== "object") return "capabilities";
   const stage = /** @type {{promptStage?: unknown}} */ (value).promptStage;
-  return stage === "pickup" || stage === "done" ? stage : "capabilities";
+  return stage === "pickup" || stage === "deliver" || stage === "done" ? stage : "capabilities";
 }
 
 /** @param {string} text */
 const normalizedPrompt = (text) => text.trim().toLowerCase().replace(/[.!?]+$/, "");
+
+/** Match either a display name ("Pick Any Object") or a namespaced skill id
+ * ("innate-os/pick_any_object") without coupling onboarding to catalog copy.
+ * @param {string} value @param {string} expected */
+export function matchesSkill(value, expected) {
+  const name = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return name === expected || name.endsWith(`_${expected}`);
+}
+
+/** @param {"capabilities" | "pickup" | "deliver" | null} awaiting
+ * @param {string} skill @param {string} status
+ * @returns {"deliver" | "done" | "retry" | null} */
+export function skillPromptOutcome(awaiting, skill, status) {
+  const terminalFailure = status === "failed" || status === "interrupted";
+  if (awaiting === "pickup" && matchesSkill(skill, "pick_any_object")) {
+    if (status === "completed") return "deliver";
+    return terminalFailure ? "retry" : null;
+  }
+  if (awaiting === "deliver" && matchesSkill(skill, "open_gripper")) {
+    if (status === "completed") return "done";
+    return terminalFailure ? "retry" : null;
+  }
+  if (awaiting === "deliver" && matchesSkill(skill, "navigate_to_position") && terminalFailure) {
+    return "retry";
+  }
+  return null;
+}
 
 /** @param {unknown} value @returns {string[]} */
 export function parseRevealSections(value) {
@@ -97,9 +125,9 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
   /** @type {Promise<void> | null} */
   let starting = null;
   let destroyed = false;
-  /** @type {"capabilities" | "pickup" | "done"} */
+  /** @type {"capabilities" | "pickup" | "deliver" | "done"} */
   let promptStage = loadPromptStage();
-  /** @type {"capabilities" | "pickup" | null} */
+  /** @type {"capabilities" | "pickup" | "deliver" | null} */
   let awaitingReply = null;
   /** @type {Set<string>} */
   const revealed = new Set(loadProgress());
@@ -342,7 +370,22 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
   /** @param {string} text */
   function onRobotMessage(text) {
     if (!active || awaitingReply === null || text.trim() === ONBOARDING_GREETING) return;
-    promptStage = awaitingReply === "capabilities" ? "pickup" : "done";
+    // The conversational answer advances the first prompt. Physical prompts
+    // advance only when their relevant skill actually finishes below, so an
+    // acknowledgement cannot get ahead of the robot.
+    if (awaitingReply !== "capabilities") return;
+    promptStage = "pickup";
+    awaitingReply = null;
+    persist();
+    syncSuggestedPrompt();
+  }
+
+  /** @param {string} skill @param {string} status */
+  function onSkillStatus(skill, status) {
+    if (!active || awaitingReply === null) return;
+    const outcome = skillPromptOutcome(awaitingReply, skill, status);
+    if (outcome === null) return;
+    if (outcome !== "retry") promptStage = outcome;
     awaitingReply = null;
     persist();
     syncSuggestedPrompt();
@@ -360,6 +403,7 @@ export function createAgentOnboarding(root, rosClient, agentState, options) {
     ensureRunning,
     onUserMessage,
     onRobotMessage,
+    onSkillStatus,
     destroy() {
       destroyed = true;
       active = false;
