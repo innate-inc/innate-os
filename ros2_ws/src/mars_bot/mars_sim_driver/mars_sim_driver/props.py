@@ -90,6 +90,10 @@ class Prop:
     # robot-frame metres. The manipulation props' values place them on an arc
     # the arm can reach top-down -- do NOT round them off.
     reach: tuple[float, float] = (0.6, 0.0)
+    # World-frame yaw used by place_at_robot. Zero preserves the historical
+    # orientation; individual manipulation targets can present a better grasp
+    # axis without changing arbitrary drag-and-drop placement.
+    placement_yaw: float = 0.0
     # Body-frame offset from the body origin to the visual CENTRE. Only
     # non-zero for a mesh whose origin is not its middle (the human scan stands
     # feet-at-origin), so distances to it mean what a reader expects.
@@ -396,7 +400,7 @@ class PropRegistry:
         cos, sin = math.cos(ryaw), math.sin(ryaw)
         x = rx + cos * forward - sin * lateral
         y = ry + sin * forward + cos * lateral
-        self._set_pose(data, name, x, y, prop.rest_z, 0.0)
+        self._set_pose(data, name, x, y, prop.rest_z, prop.placement_yaw)
         return True
 
     def groups(self) -> list[str]:
