@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from brain_client.common.logging import UniversalLogger
-from brain_client.transport.cartesia import TtsBackend, TtsTransport, pick_tts
+from brain_client.transport.cartesia import TtsBackend, TtsTransport, pick_tts, resolve_voice
 from innate_proxy import ProxyClient
 
 
@@ -107,6 +107,10 @@ class TTSHandler:
         self._tts, self.backend = pick_tts(self._proxy)
         if self._tts is None:
             return  # BrainClientNode._init_tts reports the missing key
+        speakable = resolve_voice(self.voice_id, self.backend)
+        if speakable != self.voice_id:
+            self.logger.warning(f"🗣️ Voice {self.voice_id} needs the Innate proxy — speaking as {speakable}")
+            self.voice_id = speakable
         self.logger.info(f"✅ Cartesia TTS initialized via {self.backend} (voice: {self.voice_id})")
         # Pre-warm the TCP+TLS connection so the first TTS request doesn't pay
         # the cold-start penalty (~1-2s).
@@ -134,6 +138,7 @@ class TTSHandler:
         A clip already streaming keeps the voice it started with — Cartesia picks
         the voice per request, so there is nothing to swap mid-stream.
         """
+        voice_id = resolve_voice(voice_id, self.backend)
         if voice_id == self.voice_id:
             return
         self.voice_id = voice_id

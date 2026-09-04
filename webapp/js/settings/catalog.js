@@ -79,9 +79,10 @@
 
 const P = "ros__parameters";
 
-// A few Cartesia stock voices for the TTS picker (ids from the Cartesia voice library).
-// "Alfred" is the env-backed launch default; the rest are stock Sonic voices. Any other id
-// set over SSH still works and shows as a "Custom" option in the dropdown.
+// Voices for the TTS picker. "Alfred" is the launch default and belongs to Innate's
+// Cartesia account, so it speaks only through the proxy -- a robot on its own
+// CARTESIA_API_KEY falls back to a public voice (transport/cartesia.py). The rest are
+// stock Sonic voices. Any other id set over SSH still works and shows as "Custom".
 const VOICE_OPTIONS = [
   { value: "9fdaae0b-f885-4813-b589-3c07cf9d5fea", label: "Alfred" },
   { value: "79a125e8-cd45-4c13-8a67-188112f4dd22", label: "British Lady" },
@@ -140,7 +141,7 @@ export const SETTINGS_PAGES = [
         knobs: [
           // `/**` in the file so a restart reaches every node that declares it, but the
           // live push goes to brain_client_node alone — it owns the only TTS that speaks.
-          { path: ["/**", P, "cartesia_voice_id"], label: "TTS voice", default: "9fdaae0b-f885-4813-b589-3c07cf9d5fea", type: "string", doc: "Cartesia voice for everything the robot speaks. Pick a stock voice, or paste any voice ID from Cartesia's library of hundreds.", docHref: "https://play.cartesia.ai/voices", docLinkText: "Browse Cartesia voices\u00A0↗", options: VOICE_OPTIONS, live: "/brain_client_node" },
+          { path: ["/**", P, "cartesia_voice_id"], label: "TTS voice", default: "9fdaae0b-f885-4813-b589-3c07cf9d5fea", type: "string", doc: "Cartesia voice for everything the robot speaks. Pick a stock voice, or paste any voice ID from Cartesia's library of hundreds. Alfred needs an Innate service key; on your own Cartesia key pick another.", docHref: "https://play.cartesia.ai/voices", docLinkText: "Browse Cartesia voices\u00A0↗", options: VOICE_OPTIONS, live: "/brain_client_node" },
         ],
       },
     ],

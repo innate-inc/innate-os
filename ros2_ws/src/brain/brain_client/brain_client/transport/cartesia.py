@@ -25,6 +25,12 @@ if TYPE_CHECKING:
 DIRECT_URL = "https://api.cartesia.ai/tts/bytes"
 DIRECT_API_VERSION = "2025-04-16"
 
+# Alfred, the robot's launch voice, belongs to Innate's Cartesia account -- a
+# request signed with anyone else's key 404s on it. Someone on their own key
+# gets a public library voice instead, or the robot boots mute.
+INNATE_VOICE_ID = "9fdaae0b-f885-4813-b589-3c07cf9d5fea"
+PUBLIC_VOICE_ID = "79f8b5fb-2cc8-479a-80df-29f7a7cf1a3e"  # "Nonfiction Man"
+
 
 class TtsStream(Protocol):
     """(model, transcript, voice, output format) -> audio chunks as they arrive."""
@@ -65,6 +71,13 @@ def pick_tts(proxy: ProxyClient | None) -> tuple[TtsTransport | None, TtsBackend
     if api_key:
         return direct_tts(api_key), TtsBackend.DIRECT
     return None, TtsBackend.UNCONFIGURED
+
+
+def resolve_voice(voice_id: str, backend: TtsBackend) -> str:
+    """The voice this backend can actually speak in (see INNATE_VOICE_ID)."""
+    if backend is TtsBackend.DIRECT and voice_id == INNATE_VOICE_ID:
+        return PUBLIC_VOICE_ID
+    return voice_id
 
 
 def proxy_tts(proxy: ProxyClient) -> TtsTransport:
