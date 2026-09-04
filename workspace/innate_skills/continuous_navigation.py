@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import math
-import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
@@ -25,7 +24,6 @@ from innate import HeadState, MainImage, Map, Odometry, Pose, Skill, SkillReturn
 from innate import gemini as gemlib
 from innate.geometry import IMG_H, IMG_W, pixel_to_floor
 
-REASSESS_INTERVAL_S = 3.0
 MAX_VISUAL_RANGE_M = 3.5
 STANDOFF_M = 0.35
 SAME_GOAL_DISTANCE_M = 0.45
@@ -174,7 +172,6 @@ class ContinuousNavigation(Skill):
         self._max_iterations = max(1, min(int(max_iterations), 100))
         self._iteration = 0
         self._previous_image: MainImage | None = None
-        self._next_assessment_at = 0.0
         self._consecutive_model_failures = 0
         self._active_goal: tuple[float, float, float] | None = None
         self.on_cancel(self.controller.cancel_navigation)
@@ -192,7 +189,6 @@ class ContinuousNavigation(Skill):
             self._active_goal = directive.odom_goal
             current = self.odom
             x, y, theta = local_goal(self._active_goal, (current.x, current.y, current.theta))
-            self._next_assessment_at = time.monotonic() + REASSESS_INTERVAL_S
             replanned = self.controller.go_to_position(x, y, theta, True, reassess=self._reassess_while_moving)
             if isinstance(replanned, NavigationDirective):
                 directive = replanned
@@ -204,9 +200,8 @@ class ContinuousNavigation(Skill):
             directive = self._decide(is_moving=False)
 
     def _reassess_while_moving(self) -> NavigationDirective | None:
-        if time.monotonic() < self._next_assessment_at:
-            return None
-        self._next_assessment_at = time.monotonic() + REASSESS_INTERVAL_S
+        # Model calls are serial: start the next look on the next controller
+        # poll, with no extra timer after a decision or waypoint replacement.
         directive = self._decide(is_moving=True)
         if directive.decision.status == NavigationStatus.KEEP_CURRENT:
             return None
