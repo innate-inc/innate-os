@@ -61,3 +61,5 @@ sim/assets/**/*.log
 **/__pycache__/**
 **/.venv/**
 **/.DS_Store
+
+!sim/viewer/config/cabinet.json

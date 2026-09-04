@@ -211,6 +211,9 @@ class WorldServer:
             yaw = float(cmd.get("yaw", 0.0))
             with self.lock:
                 ok = self.sim.drop_prop_at(name, x, y, yaw)
+        elif op == "set_cabinet_open":
+            with self.lock:
+                ok = self.sim.set_cabinet_open(cmd["opened"])
         elif op == "place_prop_at_robot":  # at rest, at the prop's own reach offset
             name = str(cmd["name"])
             with self.lock:

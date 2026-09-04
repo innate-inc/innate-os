@@ -286,7 +286,20 @@ export function createSimStage(
     onRespawn();
   };
   robotRow.append(robotRowLabel, respawnChip);
-  utilitySection.append(cameraModes, viewAids, robotRow);
+  const cabinetRow = document.createElement("div");
+  cabinetRow.className = "sim-view-aids";
+  cabinetRow.hidden = true;
+  const cabinetLabel = document.createElement("span");
+  cabinetLabel.textContent = "Kitchen cabinet";
+  const cabinetView = makeChip("View cabinet");
+  cabinetView.onclick = () => { session.showOrbitCamera(); scene.focusKitchenCabinet(); setSetupOpen(false); };
+  const cabinetOpen = makeChip("Open door");
+  cabinetOpen.onclick = () => { session.showOrbitCamera(); scene.focusKitchenCabinet(); session.setCabinetOpen(true); setSetupOpen(false); };
+  const cabinetClose = makeChip("Close door");
+  cabinetClose.onclick = () => { session.showOrbitCamera(); scene.focusKitchenCabinet(); session.setCabinetOpen(false); setSetupOpen(false); };
+  cabinetRow.append(cabinetLabel, cabinetView, cabinetOpen, cabinetClose);
+  utilitySection.append(cameraModes, viewAids, robotRow, cabinetRow);
+
   setupBody.appendChild(utilitySection);
 
   const propChips = new Map<string, HTMLButtonElement>();
@@ -562,6 +575,7 @@ export function createSimStage(
     const dt = Math.min((now - lastTime) / 1000, 0.1);
     lastTime = now;
     session.tick(scene, dt);
+    cabinetRow.hidden = !session.hasKitchenCabinet;
 
     // Thumbnails first (scissor corner renders, blitted out), one tile per
     // slot -- see THUMB_FRAME_DIV.

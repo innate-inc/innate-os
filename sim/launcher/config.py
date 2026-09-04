@@ -153,6 +153,7 @@ ASSETS_IMAGE_INPUT_FILES = (
 # in below CoACD: a driver edit re-runs the nav map (minutes), not the bake.
 ASSETS_IMAGE_PATHSPECS = (
     "sim/environments",
+    "sim/viewer/config/cabinet.json",
     "sim/tools",
     "sim/viewer/tools",
     "ros2_ws/src/mars_bot/mars_sim_driver",
