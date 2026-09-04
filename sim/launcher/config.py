@@ -191,6 +191,9 @@ SIM_ASSET_UNITS_DERIVED = (
     "apartment_split",
     "apartment_split_v2",
     "apartment_visual",
+    "backrooms_split",
+    "backrooms_split_v2",
+    "backrooms_visual",
     "map",
 )
 SIM_ASSET_UNITS_AUTHORED = (

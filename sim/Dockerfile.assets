@@ -35,6 +35,7 @@
 FROM scratch AS raw
 COPY sim/viewer/assets/apartment_obj/apartment.obj /raw/apartment.obj
 COPY sim/viewer/public/models/appartement.glb      /raw/appartement.glb
+COPY sim/viewer/assets/backrooms/backrooms_vr.glb  /raw/backrooms_vr.glb
 # Each subtree is distributed on its own, so each carries its own attribution.
 COPY sim/ATTRIBUTION.md                            /raw/ATTRIBUTION.md
 
@@ -101,6 +102,11 @@ RUN set -eux; \
     uv run tools/split_apartment_obj.py; \
     ./tools/bake_all_rooms.sh; \
     uv run tools/decompose_objects.py
+# Further packs bake in their own layers below the apartment's, so a new pack
+# never invalidates the 17-minute bake above. The backrooms are boxy; 10 cm
+# hulls follow their walls as closely as 5 cm ones and bake in half the time.
+COPY --from=raw /raw/backrooms_vr.glb ./viewer/assets/backrooms/backrooms_vr.glb
+RUN uv run tools/build_environment_pack.py decompose backrooms viewer/assets/backrooms/backrooms_vr.glb --threshold 0.1
 
 # -------------------------------------------------------------- room splitting
 # Light next to CoACD: GLB -> per-room OBJ+PNG and the nav map.
@@ -125,6 +131,8 @@ RUN set -eux; \
 # overlay cannot drift. The props' hull soups land beside their glTF models
 # rather than under physics/.
 RUN uv run tools/build_viewer_physics.py /out/physics /out/models
+# Each pack's textured MuJoCo meshes, lidar nav map, and browser glb + hull soup.
+RUN uv run tools/build_environment_pack.py finish backrooms viewer/assets/backrooms/backrooms_vr.glb /out
 # The compiled ~168 MB MJB and downscaled texture caches are host-local
 # derivations; shipping them would nearly double the image.
 COPY sim/ATTRIBUTION.md ./assets/ATTRIBUTION.md
