@@ -8,6 +8,7 @@ export const ONBOARDING_VERSION = 3;
 export const ONBOARDING_SEEN_KEY = `innate.onboardingSeen.v${ONBOARDING_VERSION}`;
 export const ONBOARDING_REQUEST_EVENT = "innate:onboarding-request";
 export const AGENT_ONBOARDING_PENDING_KEY = `innate.agentOnboardingPending.v${ONBOARDING_VERSION}`;
+export const ONBOARDING_START_SECTION = "agent";
 
 export function markOnboardingSeen() {
   try {

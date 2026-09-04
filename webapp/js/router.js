@@ -20,7 +20,6 @@ import { initShell } from "./shell.js";
 import { getConfig } from "./config.js";
 import { SIM_SECTIONS } from "./railLayout.js";
 import { trackKeyboardInset } from "./keyboardInset.js";
-import { shouldAutoStartOnboarding } from "./onboarding.js";
 
 trackKeyboardInset();
 
@@ -54,12 +53,6 @@ const ROUTES = [
 ];
 
 const stage = /** @type {HTMLElement} */ (document.getElementById("stage"));
-
-// The first visit begins in direct control, where the guided mission teaches
-// skills and speech before handing off to Agent. Keep explicit deep links.
-if (normalize(location.pathname) === "/" && shouldAutoStartOnboarding()) {
-  history.replaceState({}, "", "/teleop" + location.search + location.hash);
-}
 
 /** @type {PageView | null} */
 let currentView = null;
