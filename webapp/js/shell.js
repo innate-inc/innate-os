@@ -13,7 +13,11 @@ import { createAgentIndicator } from "./agentIndicator.js";
 import { createArmAlert } from "./armAlert.js";
 import { maybeShowAppPromo } from "./appPromo.js";
 import { installPressActivate } from "./pressActivate.js";
-import { consumeAgentOnboardingRequest, createOnboarding } from "./onboarding.js";
+import {
+  consumeAgentOnboardingRequest,
+  createOnboarding,
+  ONBOARDING_START_SECTION,
+} from "./onboarding.js";
 import { FOOTER_SECTIONS, GROUPS, SECTIONS, SIM_SECTIONS, railRows } from "./railLayout.js";
 
 /** @typedef {import("./railLayout.js").Section} Section */
@@ -137,12 +141,14 @@ export function initShell(navigate) {
   function requestOnboarding() {
     onboardingPending = true;
     onboardingRestart = true;
-    if (activeKey === "teleop") {
+    // Replay the contextual coach in either onboarding surface. From utility
+    // pages, return to the canonical Agent introduction.
+    if (activeKey === ONBOARDING_START_SECTION || activeKey === "teleop") {
       onboardingPending = false;
       onboarding.start(true);
       onboardingRestart = false;
     } else {
-      navigate("/teleop");
+      navigate(pathForKey(ONBOARDING_START_SECTION));
     }
   }
 
@@ -238,9 +244,11 @@ export function initShell(navigate) {
     if (!checkedFirstPage) {
       checkedFirstPage = true;
       onboardingPending = onboarding.shouldAutoStart();
-      if (onboardingPending && activeKey !== "teleop") navigate("/teleop");
+      if (onboardingPending && activeKey !== ONBOARDING_START_SECTION) {
+        navigate(pathForKey(ONBOARDING_START_SECTION));
+      }
     }
-    if (onboardingPending && activeKey === "teleop") {
+    if (onboardingPending && activeKey === ONBOARDING_START_SECTION) {
       onboardingPending = false;
       onboarding.start(onboardingRestart);
       onboardingRestart = false;
