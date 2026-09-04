@@ -10,7 +10,8 @@
 // which walked a phone into the OS memory killer.
 
 import * as THREE from "three";
-import { SimScene, type CameraMode, type CameraView } from "./scene";
+import { APARTMENT_VIEWER, SimScene, type CameraMode, type CameraView } from "./scene";
+import type { EnvironmentInfo } from "./physics/worldStateController";
 import type { PropInfo } from "./props";
 import { LoadQueue } from "./loadQueue";
 import { THUMB_H, THUMB_W, type SimSession } from "./simSession";
@@ -164,6 +165,18 @@ export function createSimStage(
       onToggle(on);
     };
   };
+
+  const environmentSection = document.createElement("section");
+  environmentSection.className = "sim-scene-section sim-environment-section";
+  environmentSection.hidden = true;
+  const environmentLabel = document.createElement("h3");
+  environmentLabel.textContent = "Environment";
+  const environmentSelect = document.createElement("select");
+  environmentSelect.className = "skill-input";
+  environmentSelect.setAttribute("aria-label", "Environment");
+  environmentSelect.onchange = () => session.switchEnvironment(environmentSelect.value);
+  environmentSection.append(environmentLabel, environmentSelect);
+  setupBody.appendChild(environmentSection);
 
   const objectsSection = document.createElement("section");
   objectsSection.className = "sim-scene-section";
@@ -355,11 +368,27 @@ export function createSimStage(
   loading.append(bar, loadingLabel, readout);
   wrap.appendChild(loading);
 
-  const setLoading = (text: string) => (loadingLabel.textContent = text);
+  let hideLoadingTimer: ReturnType<typeof setTimeout> | null = null;
+  const setLoading = (text: string) => {
+    if (hideLoadingTimer !== null) clearTimeout(hideLoadingTimer);
+    hideLoadingTimer = null;
+    loading.style.display = "flex";
+    loading.style.opacity = "1";
+    barFill.style.background = "#7dffc4";
+    loadingLabel.style.color = "rgba(255,255,255,.6)";
+    loadingLabel.textContent = text;
+  };
   const mb = (bytes: number) => (bytes / 1e6).toFixed(1);
   const setProgress = (loaded: number, total: number) => {
     barFill.style.width = `${total > 0 ? Math.min(100, (loaded / total) * 100) : 0}%`;
     readout.textContent = `${mb(loaded)} / ${mb(total)} MB`;
+  };
+  // A phase with nothing to download: the world server is rebuilding its
+  // world, so the last load's bar and byte count must not linger under it.
+  const setWaiting = (text: string) => {
+    setLoading(text);
+    barFill.style.width = "0%";
+    readout.textContent = "";
   };
   const failLoading = (text: string) => {
     barFill.style.background = "#ff9f9f";
@@ -368,12 +397,9 @@ export function createSimStage(
   };
   const hideLoading = () => {
     loading.style.opacity = "0";
-    loading.style.pointerEvents = "none"; // never shield the stage while fading
-    loading.addEventListener("transitionend", () => loading.remove(), { once: true });
-    // transitionend never fires under prefers-reduced-motion (the webapp
-    // disables all transitions) or when the fade starts pre-paint -- without
-    // this fallback the invisible overlay stayed and ate every click.
-    setTimeout(() => loading.remove(), 700);
+    // transitionend may not fire with reduced motion or before paint.
+    // Keep the overlay for subsequent switches.
+    hideLoadingTimer = setTimeout(() => (loading.style.display = "none"), 700);
   };
   // The scrim fades when the download finishes (see the load sequence below);
   // here we only surface load failures.
@@ -573,47 +599,75 @@ export function createSimStage(
     }
   };
 
-  // One shared bounded queue drives real byte progress for the whole load;
-  // seed an estimate so the bar has a width before Content-Lengths arrive
-  // (apartment ~35 MB + robot ~7 MB), refined as real sizes land.
-  const queue = new LoadQueue(2, ({ loaded, total }) => setProgress(loaded, total));
+  // Estimate apartment + robot bytes until download sizes arrive.
+  let queue = new LoadQueue(2, ({ loaded, total }) => setProgress(loaded, total));
   queue.setEstimatedTotal(42e6);
-  (async () => {
-    try {
-      // Start rendering + accept poses right away: the worldstate socket is
-      // already connecting (session.start), so the robot's placeholder box
-      // snaps to its real spawn pose while the STLs stream, then the mesh
-      // replaces it. Bail at each await if the stage was destroyed mid-load
-      // (SPA remount) -- else we'd mutate a disposed scene.
-      session.stageReady();
-      startLoop();
-      // The apartment manifest first (a few KB, unqueued): it draws every
-      // room's placeholder box and frames the camera on them, so the first
-      // frames show the apartment's wireframe layout rather than an empty
-      // void while the meshes are still being fetched.
-      setLoading("loading layout...");
-      const layout = await scene.loadApartmentLayout();
-      if (disposed) return;
-      scene.frameLayout(layout);
-      setLoading("loading robot and apartment...");
-      // Await once: the robot's STLs are now in the shared queue. Enqueue the
-      // apartment rooms after, so they land behind the robot (deterministic
-      // robot-first, no timing guess).
-      const { done: robotDone } = await scene.loadRobot(queue);
-      if (disposed) return;
-      const apartment = scene.streamApartment(queue, layout);
-      // Await twice: the rest of both loads.
-      await Promise.all([robotDone, apartment]);
-      if (disposed) return;
-      hideLoading();
-      // Only now parse the prop models, so they queue behind the robot and
-      // apartment and stay out of the progress bar -- but land well before
-      // anyone clicks a prop chip. See PropLibrary.prefetchModels.
-      scene.prefetchPropModels();
-    } catch (err) {
-      if (!disposed) session.stageError(err);
+  // The robot loads once; environments come and go around it.
+  let robotDone: Promise<unknown> | null = null;
+  let loadedEnvironmentId: string | null = null;
+  let loadVersion = 0;
+  const loadEnvironment = async (environment: EnvironmentInfo | null) => {
+    // Discard superseded loads after each await.
+    const version = ++loadVersion;
+    if (loadedEnvironmentId !== null) {
+      queue.cancel();
+      queue = new LoadQueue(2, ({ loaded, total }) => {
+        if (version === loadVersion) setProgress(loaded, total);
+      });
+      queue.setEstimatedTotal(35e6);
+      scene.unloadEnvironment();
     }
-  })();
+    loadedEnvironmentId = environment?.id ?? "";
+    const name = environment?.display_name.toLowerCase() ?? "apartment";
+    try {
+      // Show layout placeholders while meshes download.
+      setLoading(`loading ${name} layout...`);
+      const layout = await scene.loadApartmentLayout(environment?.viewer ?? APARTMENT_VIEWER);
+      if (disposed || version !== loadVersion) return;
+      scene.frameLayout(layout);
+      setLoading(`loading robot and ${name}...`);
+      // Enqueue robot meshes before rooms to prioritize the robot.
+      const firstLoad = robotDone === null;
+      robotDone ??= (await scene.loadRobot(queue)).done;
+      if (disposed || version !== loadVersion) return;
+      await Promise.all([robotDone, scene.streamApartment(queue, layout)]);
+      if (disposed || version !== loadVersion) return;
+      hideLoading();
+      // Prefetch props after the scene, outside its progress bar.
+      if (firstLoad) scene.prefetchPropModels();
+    } catch (err) {
+      if (disposed || version !== loadVersion) return;
+      if (robotDone === null) {
+        session.stageError(err);
+        return;
+      }
+      console.error(`[sim-viewer] environment '${name}' failed to load:`, err);
+      failLoading(`${name} failed to load -- see the browser console`);
+    }
+  };
+
+  // Accept poses now; load the environment when its roster arrives.
+  session.stageReady();
+  startLoop();
+  let environmentOptionsKey = "";
+  const unsubscribeEnvironment = session.onEnvironment(({ environment, environments, switch: pending }) => {
+    environmentSection.hidden = environments.length < 2;
+    const optionsKey = environments.map(({ id, display_name }) => `${id}\0${display_name}`).join("\n");
+    if (optionsKey !== environmentOptionsKey) {
+      environmentOptionsKey = optionsKey;
+      environmentSelect.replaceChildren(...environments.map(({ id, display_name }) => new Option(display_name, id)));
+    }
+    environmentSelect.value = environment?.id ?? "";
+    environmentSelect.disabled = pending?.state === "loading";
+    if (pending?.state === "loading") {
+      setWaiting(`loading robot and ${pending.display_name.toLowerCase()}...`);
+    } else if (pending?.state === "failed") {
+      console.error("[sim-viewer] environment switch failed:", pending.message);
+      failLoading(`switch to ${pending.display_name.toLowerCase()} failed`);
+      hideLoadingTimer = setTimeout(hideLoading, 4000);
+    }
+    if ((environment?.id ?? "") !== loadedEnvironmentId) void loadEnvironment(environment);
+  });
 
   return {
     audioEl: null, // sim has no robot mic; the pages skip the mic toggle in sim mode
@@ -643,6 +697,7 @@ export function createSimStage(
       queue.cancel(); // stop pulling new downloads for a stage that's gone
       unsubscribe();
       unsubscribeProps();
+      unsubscribeEnvironment();
       stopLoop();
       observer.disconnect();
       longTaskObserver?.disconnect();

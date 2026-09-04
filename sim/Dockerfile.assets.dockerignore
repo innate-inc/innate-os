@@ -10,6 +10,7 @@
 # Raw geometry (seeded).
 !sim/viewer/assets/apartment_obj/apartment.obj
 !sim/viewer/public/models/appartement.glb
+!sim/viewer/assets/backrooms/backrooms_vr.glb
 # The authored prop models the viewer loads (seeded). Their hull soups are NOT
 # here: build_viewer_physics.py derives those in-image.
 !sim/viewer/public/models/human.glb
@@ -26,6 +27,9 @@
 !sim/assets/apartment_split/**
 !sim/assets/apartment_split_v2/**
 !sim/assets/apartment_visual/**
+!sim/assets/backrooms_split/**
+!sim/assets/backrooms_split_v2/**
+!sim/assets/backrooms_visual/**
 !sim/assets/map/**
 !sim/assets/humans/**
 !sim/assets/objects/**

@@ -77,6 +77,7 @@ RESIDENTS = [
 
 CHALLENGE = Challenge(
     id="household_orders",
+    environments=("apartment",),
     title="Household Orders",
     brief=(
         "Three residents are waiting in different rooms. Find each resident, ask for their DoorDash order, "

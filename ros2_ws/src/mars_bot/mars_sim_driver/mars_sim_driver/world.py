@@ -218,6 +218,7 @@ def build_world_xml(
     visual_rooms: dict[str, Path] | None = None,
     texture_max: int | None = None,
     props: "PropRegistry | None" = None,
+    spawn_pose: tuple[float, float, float] = (SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG),
 ) -> str:
     """The apartment environment MJCF (floor plane + decomposed room hulls,
     optionally the textured visual rooms in their own geom group, plus every
@@ -248,7 +249,8 @@ def build_world_xml(
         png_path = obj_path.with_suffix(".png")
         if texture_max:
             png_path = capped_texture_path(png_path, texture_max)
-        visual_mesh_lines.append(f'    <mesh name="vis_{room}" file="{obj_path.resolve()}"/>')
+        # shell: a flat part (a floor plane) has no volume, and visuals carry no mass anyway
+        visual_mesh_lines.append(f'    <mesh name="vis_{room}" file="{obj_path.resolve()}" inertia="shell"/>')
         visual_mesh_lines.append(f'    <texture name="tex_{room}" type="2d" file="{png_path.resolve()}"/>')
         visual_mesh_lines.append(f'    <material name="mat_{room}" texture="tex_{room}" specular="0" shininess="0"/>')
         visual_geom_lines.append(
@@ -268,7 +270,7 @@ def build_world_xml(
         else ""
     )
 
-    lx, ly, lz, azimuth, elevation, extent = spawn_camera_view(SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG)
+    lx, ly, lz, azimuth, elevation, extent = spawn_camera_view(*spawn_pose)
 
     return f"""
 <mujoco model="apartment">

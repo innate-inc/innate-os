@@ -7,7 +7,13 @@
 import type { SimScene } from "./scene";
 import { RosbridgePhysicsController } from "./physics/rosbridgeController";
 import { WorldStateController } from "./physics/worldStateController";
-import type { ChallengeActive, ChallengeBlock, ChallengeInfo, ChallengeProgress } from "./physics/worldStateController";
+import type {
+  ChallengeActive,
+  ChallengeBlock,
+  ChallengeInfo,
+  ChallengeProgress,
+  EnvironmentRoster,
+} from "./physics/worldStateController";
 import type { PropInfo } from "./props";
 
 /** One roster row as a renderer wants it: what the challenge is, plus how it
@@ -115,6 +121,9 @@ export class SimSession {
   #propListeners = new Set<(props: PropInfo[]) => void>();
   #propsDirty = false;
 
+  #environment: EnvironmentRoster | null = null;
+  #environmentListeners = new Set<(roster: EnvironmentRoster) => void>();
+
   #stateUrls: string[];
   #rosUrl: string;
 
@@ -194,6 +203,17 @@ export class SimSession {
       this.#challengeInfo = challenges;
       this.#challengeJson = "";
     };
+    this.#controller.onEnvironment = (roster) => {
+      const previous = this.#environment?.environment?.id;
+      this.#environment = roster;
+      // Another world: its first pose must spawn (and frame) the robot afresh.
+      if (roster.environment && roster.environment.id !== previous) {
+        this.#samples = [];
+        this.#playT = null;
+        this.#spawned = false;
+      }
+      for (const cb of this.#environmentListeners) cb(roster);
+    };
     this.#controller.onState = (s) => {
       const lag = Date.now() / 1000 - s.wall;
       if (lag < this.#lagMinS) this.#lagMinS = lag;
@@ -248,6 +268,7 @@ export class SimSession {
   destroy(): void {
     this.stop();
     this.#listeners.clear();
+    this.#environmentListeners.clear();
   }
 
   /** Toggle the /scan hit-point overlay (stage "lidar" chip). The rosbridge
@@ -307,6 +328,18 @@ export class SimSession {
     this.#propListeners.add(cb);
     if (this.#props.length) cb(this.#props);
     return () => this.#propListeners.delete(cb);
+  }
+
+  /** Subscribe and replay the latest environment roster, if available. */
+  onEnvironment(cb: (roster: EnvironmentRoster) => void): () => void {
+    this.#environmentListeners.add(cb);
+    if (this.#environment) cb(this.#environment);
+    return () => this.#environmentListeners.delete(cb);
+  }
+
+  /** Request a switch; progress and outcome arrive through onEnvironment. */
+  switchEnvironment(id: string): void {
+    this.#controller?.send({ op: "switch_environment", id });
   }
 
   /** Whether any manipulation prop is currently in the world. Read from

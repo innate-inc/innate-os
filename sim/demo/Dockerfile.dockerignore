@@ -9,6 +9,7 @@
 !webapp/**
 !sim/props/**
 !sim/challenges/**
+!sim/environments/**
 !sim/demo/**
 
 # Secrets and local state never enter a public image.

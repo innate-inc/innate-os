@@ -5,9 +5,11 @@ sim/README.md "world_server.py"):
   Framing: 4-byte big-endian length | JSON; responses are one JSON frame,
   then one binary frame iff the JSON says "blob": <nbytes>.
 - observer state stream (--state-port): a WebSocket broadcasting ground
-  truth ({t, wall, pose, joints, objects}) after every physics slice, and
-  accepting stage commands ({"op": "drop_prop_at", ...}) back. Ground truth and
-  scenery only -- robot software must never consume or drive it.
+  truth ({t, wall, world_epoch, pose, joints, objects}) after every physics
+  slice, and accepting stage commands ({"op": "drop_prop_at", ...}) back. A
+  roster frame ({props, challenges, environment, environments, switch}) opens
+  every connection and is resent whenever the environment changes. Ground
+  truth and scenery only -- robot software must never consume or drive it.
 
 Always runs on the host (the launcher starts it via uv): in-container
 software GL was slow enough to starve the whole ROS stack. No ROS; beyond
@@ -21,11 +23,13 @@ import argparse
 import contextlib
 import json
 import os
+import queue
 import socket
 import struct
 import sys
 import threading
 import time
+from collections.abc import Callable
 
 import numpy as np
 from PIL import Image as PILImage
@@ -37,6 +41,7 @@ except ImportError:  # view-only feature; the sim must not die without it
 
 from .challenges import ChallengeChatBridge, ChallengeEngine, SkillEventBridge
 from .core import CAMERA_HEIGHT, CAMERA_WIDTH, VirtualMars, encode_jpeg, release_freed_heap
+from .environments import DEFAULT_ENVIRONMENT_ID, Environment, NavMapBridge
 
 # Depth renders at the pointcloud grid: identical published cloud, 16x less fill.
 DEPTH_WH = (CAMERA_WIDTH // 4, CAMERA_HEIGHT // 4)
@@ -69,9 +74,18 @@ PRODUCTS = ("jpeg:main", "jpeg:wrist", "depth:main")
 
 
 class WorldServer:
-    def __init__(self, sim: VirtualMars):
+    def __init__(self, sim: VirtualMars, build_sim: Callable[[Environment], VirtualMars] | None = None):
         self.sim = sim
         self.lock = threading.Lock()
+        # Compiles the world for another pack (switch_environment). None is a
+        # fixed world, as sandbox/notebook users construct it.
+        self._build_sim = build_sim
+        self.environments = Environment.load_all() if build_sim else []
+        self.switch: dict | None = None  # in flight or last failed, for the roster frame
+        self._switch_lock = threading.Lock()
+        # Worlds a switch replaced; closed on the render thread, which owns GL.
+        self._retired: queue.SimpleQueue[VirtualMars] = queue.SimpleQueue()
+        self.nav_map: NavMapBridge | None = None
         # Advertised in ping replies so the launcher can tell a current
         # server from a stale pre-stream one (which it must restart).
         self.state_port: int | None = None
@@ -95,6 +109,7 @@ class WorldServer:
         # broadcast to every connected WebSocket (see serve_state).
         self.state_payload = "{}"
         self.state_seq = 0
+        self.roster_seq = 0
         self.state_cond = threading.Condition()
         # Challenge judge: evaluated on each published state, driven by
         # observer commands, fed skill events by SkillEventBridge (main()).
@@ -140,6 +155,7 @@ class WorldServer:
             # at. Gathered here because the judge runs without the sim.
             centers = self.sim.object_centers()
             sim_time = float(self.sim.data.time)
+            world_epoch = self.sim.world_epoch
             # Under the same lock hold as the snapshot: names WHICH world these
             # numbers came from, so a challenge start landing between here and
             # tick() cannot get them judged against its fresh run.
@@ -163,6 +179,7 @@ class WorldServer:
             {
                 "t": sim_time,
                 "wall": time.time(),
+                "world_epoch": world_epoch,
                 "pose": [x, y, yaw],
                 "joints": joints,
                 "objects": objects,
@@ -218,6 +235,9 @@ class WorldServer:
             self.challenges.abort()
             self.publish_state()
             return
+        elif op == "switch_environment":  # rebuilds the world; progress rides the roster frame
+            self.switch_environment(str(cmd.get("id", "")))
+            return
         else:
             return
         if not ok:
@@ -229,47 +249,125 @@ class WorldServer:
         client skips states instead of queueing lag), and accept the stage
         commands above on the way back."""
         threading.Thread(target=self._serve_scenario_commands, args=(ws,), daemon=True).start()
-        # The prop roster (props.py sidecars) and the challenge roster
-        # (challenges.py) never change while the server runs, so they go out
-        # once per connection instead of riding every state broadcast. The
-        # viewer builds its models and buttons from the props; the challenge
-        # panel gets titles and briefs here and progress from the stream.
-        with contextlib.suppress(Exception):  # noqa: BLE001 -- client gone before the first frame
-            ws.send(json.dumps({"props": self.sim.prop_manifest(), "challenges": self.challenges.roster()}))
-        last_seq = -1
+        # Send roster metadata on connection and changes, not every physics tick.
+        last_seq = last_roster = -1
         try:
             while True:
                 with self.state_cond:
-                    self.state_cond.wait_for(lambda seen=last_seq: self.state_seq != seen)
+                    self.state_cond.wait_for(
+                        lambda seen=(last_seq, last_roster): (self.state_seq, self.roster_seq) != seen
+                    )
                     payload, last_seq = self.state_payload, self.state_seq
+                    roster_changed, last_roster = self.roster_seq != last_roster, self.roster_seq
+                if roster_changed:
+                    ws.send(self.roster_frame())
                 ws.send(payload)
         except Exception:  # noqa: BLE001,S110 -- client gone; the stream just ends
             pass
+
+    # --- environment packs (environments.py) ---
+
+    def roster_frame(self) -> str:
+        environment = self.sim.environment
+        return json.dumps(
+            {
+                "props": self.sim.prop_manifest(),
+                "challenges": self.challenges.roster(),
+                "environment": environment.public() if environment else None,
+                "environments": [candidate.summary() for candidate in self.environments],
+                "switch": self.switch,
+            }
+        )
+
+    def _publish_roster(self) -> None:
+        with self.state_cond:
+            self.roster_seq += 1
+            self.state_cond.notify_all()
+
+    def switch_environment(self, environment_id: str) -> None:
+        """Compile alongside the running world, then swap under the physics lock.
+
+        Advance world_epoch so consumers treat the switch as a reset.
+        """
+        if self._build_sim is None:
+            raise RuntimeError("this world server was built for one fixed world")
+        with self._switch_lock:
+            current = self.sim.environment
+            if current is not None and current.id == environment_id:
+                return
+            summary = {"id": environment_id, "display_name": environment_id}
+            started = time.monotonic()
+            phases: list[str] = []
+
+            def phase(label: str) -> None:
+                phases.append(f"{label} {time.monotonic() - started:.1f}s")
+
+            try:
+                target = Environment.load(environment_id)
+                summary = target.summary()
+                self.switch = {**summary, "state": "loading"}
+                self._publish_roster()
+                fresh = self._build_sim(target)
+                phase("compiled")
+                # Nav2 changes map before the world changes: the epoch bump
+                # below reseeds AMCL from the new world's pose, which must
+                # land on the new map, and a map Nav2 cannot load fails the
+                # switch with the old world still running.
+                if self.nav_map is not None and not self.nav_map.switch_to(target.map_name, timeout_s=60.0):
+                    self._retired.put(fresh)
+                    raise RuntimeError(f"Nav2 did not load {target.map_name}")
+                phase("nav map")
+            except Exception as exc:
+                self.switch = {**summary, "state": "failed", "message": repr(exc)}
+                self._publish_roster()
+                raise
+            self.challenges.abort()  # its scene belongs to the world going away
+            with self.lock:
+                retired, self.sim = self.sim, fresh
+                fresh.world_epoch = retired.world_epoch + 1  # a new world is a reset to every consumer
+                self.challenges.sim = fresh
+                fresh.step(0.5)  # settle from the spawn drop before anyone looks
+            with self.frame_ready:
+                self.latest.clear()  # the old world's last frames must not answer the next request
+            self._retired.put(retired)
+            self.switch = None
+            self._publish_roster()
+            self.publish_state()
+            phase("swapped")
+            print(f"[world-server] environment switched to {target.id}: {', '.join(phases)}", flush=True)
+
+    def _close_retired(self) -> None:
+        with contextlib.suppress(queue.Empty):
+            while True:
+                self._retired.get_nowait().close()
 
     # --- renders (main thread only: macOS GL is main-thread-sensitive) ---
 
     def _render_product(self, product: str) -> None:
         kind, camera = product.split(":")
+        sim = self.sim  # one world per frame, across a switch
         if kind == "jpeg":
             with self.lock:
-                self.sim.update_camera(camera)
-            rgb = self.sim.read_rgb()
+                sim.update_camera(camera)
+            rgb = sim.read_rgb()
             if rgb.shape[0] != CAMERA_HEIGHT:  # scaled render -> wire res
                 rgb = np.asarray(PILImage.fromarray(rgb).resize((CAMERA_WIDTH, CAMERA_HEIGHT), PILImage.BILINEAR))
             frame = ({"ok": True}, encode_jpeg(rgb))
         else:  # depth
             with self.lock:
-                self.sim.update_depth(camera)
-            depth = self.sim.read_depth().astype(np.float32)
+                sim.update_depth(camera)
+            depth = sim.read_depth().astype(np.float32)
             frame = ({"ok": True, "shape": list(depth.shape), "dtype": "float32"}, depth.tobytes())
         with self.frame_ready:
-            self.latest[product] = frame
+            if sim is self.sim:  # a render that outlived a switch must not resurface the old world
+                self.latest[product] = frame
             self.frame_ready.notify_all()
 
     def render_loop(self) -> None:
         """Demand-paced frame pump: one render per client request, plus a
         keep-warm heartbeat when no client watches."""
         while True:
+            self._close_retired()
             now = time.monotonic()
             active = [p for p in PRODUCTS if now - self.requested_at.get(p, -1e9) < PRODUCT_TTL_S]
             if not active:
@@ -317,7 +415,16 @@ class WorldServer:
     def handle(self, req: dict) -> tuple[dict, bytes | None]:
         op = req.get("op")
         if op == "ping":
-            return {"ok": True, "state_port": self.state_port, "binds": self.binds}, None
+            environment = self.sim.environment
+            return {
+                "ok": True,
+                "state_port": self.state_port,
+                "binds": self.binds,
+                "environment": environment.id if environment else None,
+            }, None
+        if op == "switch_environment":  # the launcher's `up --environment` on a running server
+            self.switch_environment(str(req["id"]))
+            return {"ok": True}, None
         if op == "state":
             with self.lock:
                 x, y, yaw = self.sim.pose()
@@ -407,11 +514,26 @@ def main() -> None:
         "host.docker.internal, but a native Linux/WSL Docker engine resolves it to the bridge "
         "gateway -- there the launcher passes '127.0.0.1,<gateway>' (host-owned, not LAN-routable).",
     )
+    parser.add_argument(
+        "--environment",
+        default=DEFAULT_ENVIRONMENT_ID,
+        help="Environment pack to load: sim/environments/NAME/manifest.json",
+    )
+    parser.add_argument(
+        "--rosbridge-url",
+        default="ws://127.0.0.1:9090",
+        help="The stack's rosbridge, for the best-effort challenge and Nav2-map bridges",
+    )
     args = parser.parse_args()
 
-    print(f"[world-server] loading VirtualMars (render scale {args.render_scale})...", flush=True)
     render_wh = (CAMERA_WIDTH // args.render_scale, CAMERA_HEIGHT // args.render_scale)
-    server = WorldServer(VirtualMars(render_wh=render_wh, depth_render_wh=DEPTH_WH))
+
+    def build_sim(environment: Environment) -> VirtualMars:
+        return VirtualMars(render_wh=render_wh, depth_render_wh=DEPTH_WH, environment=environment)
+
+    environment = Environment.load(args.environment)
+    print(f"[world-server] loading VirtualMars ({environment.id}, render scale {args.render_scale})...", flush=True)
+    server = WorldServer(build_sim(environment), build_sim=build_sim)
     server.sim.step(0.5)  # settle from the spawn drop before clients look
 
     # Boot self-test: prove GL works before accepting clients, and report
@@ -458,8 +580,9 @@ def main() -> None:
         print(f"[world-server] observer state stream on port {args.state_port} ({', '.join(binds)})", flush=True)
 
     threading.Thread(target=server.physics_loop, daemon=True).start()
-    SkillEventBridge(server.challenges)  # robot skill events for challenge goals (best-effort)
-    ChallengeChatBridge(server.challenges)  # robot speech <-> environment replies (best-effort)
+    SkillEventBridge(server.challenges, args.rosbridge_url)  # robot skill events for challenge goals (best-effort)
+    ChallengeChatBridge(server.challenges, args.rosbridge_url)  # robot speech <-> environment replies (best-effort)
+    server.nav_map = NavMapBridge(args.rosbridge_url, environment.map_name)  # Nav2 follows the pack (best-effort)
 
     def accept_loop(listener: socket.socket) -> None:
         while True:

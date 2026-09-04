@@ -173,6 +173,32 @@ If something stops you anyway, we want to hear about it —
 ./innate-sim clean       # remove containers/volumes (keeps .env + config)
 ```
 
+### Environment packs
+
+The apartment is the default world and the backrooms ship beside it. A pack is
+a directory under `sim/environments/` with a `manifest.json` naming its MuJoCo
+collision and visual meshes and Nav2 map (under `sim/assets/`), the browser glb
+or per-room manifest and collision hulls (under `sim/viewer/public/`), and the
+spawn pose -- `sim/environments/backrooms/manifest.json` is the template, and
+`sim/tools/build_environment_pack.py` derives every one of those files from a
+single glTF scene (the asset image runs it; see `sim/Dockerfile.assets`). Meshes are in
+meters, glTF Y-up, with the floor at y = 0: physics stands the robot on the
+MJCF ground plane there, and the 3D view's floor grid sits just below it.
+Licensed packs the repository must not ship go in `sim/environments.local/`
+(gitignored).
+
+Pick one at launch, or set `[simulation] environment` in `sim/config.toml`:
+
+```bash
+./innate-sim up --environment backrooms
+```
+
+A running simulator switches in place: **Scene setup → Environment** in the
+3D view, or `up --environment` again. The world server rebuilds its MuJoCo
+world for the pack and swaps it under the physics lock -- the robot respawns
+there, the viewer streams the pack's rooms, and Nav2 changes to its map over
+`/nav/change_navigation_map` -- with nothing restarted and the page still open.
+
 ## Build skills and agents
 
 The simulator shares the repository's [`workspace/`](../workspace/) with the
@@ -220,8 +246,13 @@ CHALLENGE = Challenge(
         Goal("Push it to the dog", Near("soccer_ball", "labrador", 1.2)),
     ],
     time_limit_s=600,
+    environments=("apartment",),
 )
 ```
+
+`environments` names the packs whose coordinates the drops and goals are
+written in; a challenge that places nothing (Victory Lap) leaves it out and
+is offered in every environment.
 
 `setup` drops props by name (the sidecars in [`sim/props/`](props/)). Goals
 are judged strictly in order and latch once true. The predicates are `Near`,

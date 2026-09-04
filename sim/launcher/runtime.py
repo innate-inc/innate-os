@@ -905,6 +905,28 @@ def retitle_step(message: str) -> None:
         step.retitle(message)
 
 
+def _seed_nav_map(config: dict[str, object]) -> None:
+    """Point Nav2's saved-map file at the selected pack before the ROS session
+    starts, so the mode manager boots on it. With several maps installed it
+    would otherwise boot on the alphabetically first one and the world
+    server's map bridge would have to change maps under a stack still coming
+    up, which the mode manager does not survive well."""
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    environment_id = str(config["environment_id"])
+    manifests = [sim_repo / root / environment_id / "manifest.json" for root in ("environments", "environments.local")]
+    manifest = next((path for path in manifests if path.is_file()), None)
+    if manifest is None:
+        return
+    try:
+        map_yaml = json.loads(manifest.read_text(encoding="utf-8"))["navigation"]["map_yaml"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    state = os_repo / "data"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / ".last_map").write_text(f"{Path(str(map_yaml)).name}\n", encoding="utf-8")
+
+
 def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline: bool = False) -> None:
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     os_image = str(config["os_image"]).strip()
@@ -1044,6 +1066,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
         ensure_state_dir()
         ROS_INSTALL_STATE_PATH.write_text(f"{ros_inputs_hash}\n", encoding="utf-8")
 
+    _seed_nav_map(config)
     log("Launching ROS simulation nodes inside the OS container...")
     retitle_step("Launching the ROS nodes")
     launch_script = (
@@ -2201,11 +2224,11 @@ def _recv_exact(conn: socket.socket, n: int) -> bytes | None:
     return buf
 
 
-def _world_server_ping_reply(port: int, timeout: float = 2.0) -> dict | None:
-    """The server's ping reply (advertises state_port), or None."""
+def _world_server_request(port: int, request: dict, timeout: float = 2.0) -> dict | None:
+    """One driver-RPC round trip; the reply, or None when nothing answers or it says no."""
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=timeout) as conn:
-            payload = json.dumps({"op": "ping"}).encode()
+            payload = json.dumps(request).encode()
             conn.sendall(len(payload).to_bytes(4, "big") + payload)
             header = _recv_exact(conn, 4)
             if header is None:
@@ -2219,8 +2242,26 @@ def _world_server_ping_reply(port: int, timeout: float = 2.0) -> dict | None:
         return None
 
 
+def _world_server_ping_reply(port: int, timeout: float = 2.0) -> dict | None:
+    """The server's ping reply (advertises state_port, binds, environment), or None."""
+    return _world_server_request(port, {"op": "ping"}, timeout)
+
+
 def _world_server_ping(port: int, timeout: float = 2.0) -> bool:
     return _world_server_ping_reply(port, timeout) is not None
+
+
+def _ensure_world_environment(config: dict[str, object]) -> None:
+    """Hot-switch a running server onto the configured environment pack."""
+    wanted = str(config["environment_id"])
+    reply = _world_server_ping_reply(WORLD_SERVER_PORT)
+    if reply is None or reply.get("environment") == wanted:
+        return
+    log(f"Switching the host world server to environment {wanted!r}...")
+    if _world_server_request(WORLD_SERVER_PORT, {"op": "switch_environment", "id": wanted}, timeout=900.0) is None:
+        raise StackError(
+            f"The host world server could not switch to environment {wanted!r}; see `{CLI_SIM} logs world-server`."
+        )
 
 
 def _stop_stale_world_server() -> None:
@@ -2393,8 +2434,9 @@ def _world_model_sources_digest(config: dict[str, object]) -> str:
     driver = mars_bot / "mars_sim_driver" / "mars_sim_driver"
     candidates = sorted((mars_bot / "mars_sim" / "urdf").glob("*"))
     candidates += sorted((mars_bot / "mars_sim" / "meshes").glob("*"))
-    candidates += [driver / name for name in ("world.py", "core.py", "constants.py")]
+    candidates += [driver / name for name in ("world.py", "core.py", "constants.py", "environments.py")]
     candidates += [sim_repo / "assets" / ".assets-tag"]
+    candidates += sorted((sim_repo / "environments").rglob("manifest.json"))
     digest = hashlib.sha256()
     for f in candidates:
         with contextlib.suppress(OSError):
@@ -2447,6 +2489,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
             with contextlib.suppress(OSError):
                 running_digest = WORLD_SERVER_MODEL_DIGEST_PATH.read_text(encoding="utf-8").strip()
             if _world_model_sources_digest(config) == running_digest:
+                _ensure_world_environment(config)
                 log("Host world server already running.")
                 return endpoint
             log("Host world server compiled different robot/world sources -- restarting it...")
@@ -2484,7 +2527,9 @@ def ensure_world_server(config: dict[str, object]) -> str:
             warn("Falling back to software rendering (OSMesa) -- works on any machine, but renders are slow.")
         log(f"Starting host world server ({label} rendering)...")
         log_offset = WORLD_SERVER_LOG_PATH.stat().st_size if WORLD_SERVER_LOG_PATH.exists() else 0
-        if _start_world_server(uv, sim_repo, bind=bind, mujoco_gl=backend):
+        if _start_world_server(
+            uv, sim_repo, environment_id=str(config["environment_id"]), bind=bind, mujoco_gl=backend
+        ):
             # Record what this server compiled, for the reuse check above.
             WORLD_SERVER_MODEL_DIGEST_PATH.write_text(_world_model_sources_digest(config) + "\n", encoding="utf-8")
             log("Host world server ready.")
@@ -2569,7 +2614,7 @@ def _render_scale_args() -> list[str]:
     return ["--render-scale", str(scale)]
 
 
-def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | None) -> bool:
+def _start_world_server(uv: str, sim_repo: Path, *, environment_id: str, bind: str, mujoco_gl: str | None) -> bool:
     """One world-server start attempt; True once it answers pings."""
     bootstrap = (
         "import sys; sys.path.insert(0, 'ros2_ws/src/mars_bot/mars_sim_driver'); "
@@ -2595,6 +2640,10 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
                 str(WORLD_SERVER_PORT),
                 "--state-port",
                 str(WORLD_STATE_PORT),
+                "--environment",
+                environment_id,
+                "--rosbridge-url",
+                f"ws://127.0.0.1:{SIM_ROSBRIDGE_PORT}",
             ]
             + _render_scale_args(),
             cwd=sim_repo.parent,

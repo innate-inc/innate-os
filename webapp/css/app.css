@@ -7406,6 +7406,16 @@ select.skill-input {
   min-height: 106px;
 }
 
+.sim-environment-section {
+  display: grid;
+  gap: 6px;
+}
+
+.sim-environment-section select {
+  width: 100%;
+  min-width: 0;
+}
+
 .sim-scene-section-header {
   display: flex;
   min-height: 30px;

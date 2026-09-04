@@ -1,5 +1,5 @@
-// SimScene — Three.js scene: the apartment.glb environment (visual only)
-// plus the real MARS robot from its ROS URDF. Convention: Z-up, X-forward
+// SimScene — Three.js scene: the environment pack's glb (visual only) plus
+// the real MARS robot from its ROS URDF. Convention: Z-up, X-forward
 // (REP-103); the URDF loads unrotated, the Y-up glb is rotated on load.
 
 import * as THREE from "three";
@@ -16,8 +16,19 @@ import type { URDFRobot } from "urdf-loader";
 import { LoadQueue, queuedGLB } from "./loadQueue";
 import { PropLibrary, type PropInfo } from "./props";
 
-const APARTMENT_URL = "/models/appartement.glb";
-const APARTMENT_MANIFEST_URL = "/models/apartment/manifest.json";
+/** An environment pack's browser assets as its manifest names them: paths
+ * under sim/viewer/public, which the webapp serves at /models and /physics
+ * (environments.py). A world server that predates packs announces none, and
+ * the apartment is what it is running. */
+export type EnvironmentViewer = Record<string, string>;
+export const APARTMENT_VIEWER: EnvironmentViewer = {
+  type: "split-glb",
+  manifest: "models/apartment/manifest.json",
+  base_dir: "models/apartment",
+  model: "models/appartement.glb",
+  collision_dir: "physics/apartment_collisions_v2",
+};
+const publicUrl = (path: string): string => `/${path.replace(/^\/+/, "")}`;
 // /robot is the mars_sim ROS package itself (served straight from ros2_ws, see
 // webapp/proxy/https_server.py), so the URDF sits at its real path inside it.
 const ROBOT_URDF_URL = "/robot/urdf/mars.urdf";
@@ -43,6 +54,9 @@ export interface ApartmentLayout {
   rooms: { room: ManifestRoom; box: LineSegments2 }[];
   /** No manifest: streamApartment falls back to the monolith glb. */
   monolith: boolean;
+  /** Where the rooms' files live (trailing slash), or the monolith's URL. */
+  baseUrl: string;
+  modelUrl?: string;
 }
 // These URDF links carry no real body geometry — just small marker spheres
 // used to visualize the end-effector / camera optical frames (e.g. in
@@ -185,6 +199,11 @@ export class SimScene {
   private shadowCatcher?: THREE.Mesh;
   private shadowBoxM = SHADOW_BOX_MIN_M;
   private robotXY: [number, number] = [0, 0];
+  private layoutGroup?: THREE.Group;
+  private environmentViewer: EnvironmentViewer = APARTMENT_VIEWER;
+  // Bumped by unloadEnvironment: a load still in flight for the previous
+  // pack must drop its result rather than attach it to the next one.
+  private environmentGeneration = 0;
   private hullsGroup?: THREE.Group;
   private hullsPromise?: Promise<void>;
   private hullsVisible = false;
@@ -443,9 +462,10 @@ export class SimScene {
   }
 
   private async loadCollisionHulls(): Promise<void> {
+    const generation = this.environmentGeneration;
     const group = new THREE.Group();
     group.rotation.x = Math.PI / 2;
-    const baseUrl = "/physics/apartment_collisions_v2/";
+    const baseUrl = `${publicUrl(this.environmentViewer.collision_dir ?? APARTMENT_VIEWER.collision_dir)}/`;
     const material = this.hullMaterial;
 
     // Fast path: one binary triangle soup (float32 xyz), one fetch, no
@@ -470,6 +490,10 @@ export class SimScene {
         }),
       );
     }
+    if (generation !== this.environmentGeneration) {
+      group.traverse((obj) => obj instanceof THREE.Mesh && obj.geometry.dispose()); // hullMaterial is shared
+      return;
+    }
     group.visible = this.hullsVisible; // honor toggles made while loading
     this.hullsGroup = group;
     this.scene.add(group);
@@ -481,21 +505,30 @@ export class SimScene {
    * the first frame shows the apartment's wireframe layout instead of an empty
    * void, and the camera has something real to frame (see frameLayout).
    */
-  async loadApartmentLayout(): Promise<ApartmentLayout> {
+  async loadApartmentLayout(viewer: EnvironmentViewer = APARTMENT_VIEWER): Promise<ApartmentLayout> {
+    this.environmentViewer = viewer;
     // One parent group holds every room and carries the Y-up -> Z-up rotation,
     // so it's applied once; placeholder boxes and rooms attach underneath.
     const group = new THREE.Group();
     group.rotation.x = Math.PI / 2;
     this.scene.add(group);
+    this.layoutGroup = group;
 
+    const manifestUrl = viewer.type === "glb" || !viewer.manifest ? null : publicUrl(viewer.manifest);
     let manifest: ApartmentManifest | null = null;
-    try {
-      const res = await fetch(APARTMENT_MANIFEST_URL);
-      if (res.ok) manifest = (await res.json()) as ApartmentManifest;
-    } catch {
-      /* no manifest -- fall through to the monolith */
+    if (manifestUrl) {
+      try {
+        const res = await fetch(manifestUrl);
+        if (res.ok) manifest = (await res.json()) as ApartmentManifest;
+      } catch {
+        /* no manifest -- fall through to the monolith */
+      }
     }
-    if (!manifest || !Array.isArray(manifest.rooms)) return { group, rooms: [], monolith: true };
+    if (!manifestUrl || !manifest || !Array.isArray(manifest.rooms)) {
+      const modelUrl = viewer.model ? publicUrl(viewer.model) : undefined;
+      return { group, rooms: [], monolith: true, baseUrl: "", modelUrl };
+    }
+    const baseUrl = viewer.base_dir ? `${publicUrl(viewer.base_dir)}/` : manifestUrl.slice(0, manifestUrl.lastIndexOf("/") + 1);
 
     // Skip a malformed room rather than throwing -- a bad bbox would build a
     // Box3 from Vector3(undefined) and error the whole (visual-only) session.
@@ -516,7 +549,24 @@ export class SimScene {
         group.add(box);
         return { room, box };
       });
-    return { group, rooms, monolith: false };
+    return { group, rooms, monolith: false, baseUrl };
+  }
+
+  /** Dispose environment assets; retain the robot and props for the next pose. */
+  unloadEnvironment(): void {
+    for (const group of [this.layoutGroup, this.hullsGroup]) {
+      if (!group) continue;
+      this.scene.remove(group);
+      group.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        obj.geometry.dispose();
+        if (group === this.layoutGroup) disposeMaterials(obj.material); // hulls share hullMaterial
+      });
+    }
+    this.layoutGroup = this.hullsGroup = this.hullsPromise = this.layoutBounds = undefined;
+    this.environmentGeneration += 1;
+    this.robotRoot.visible = false;
+    this.spawned = false;
   }
 
   /**
@@ -530,23 +580,31 @@ export class SimScene {
     const { group } = layout;
 
     if (layout.monolith) {
-      // Dev-only fallback: a checkout that never ran the split. The published
-      // bundle always ships the manifest and never the monolith, so in prod
-      // this path only runs if the manifest fetch itself failed -- non-fatal,
-      // the sim just runs without the visual environment (robot still works).
+      // Single-glb packs, and the dev fallback for a checkout that never ran
+      // the apartment split (the published bundle always ships the manifest).
+      // Non-fatal: the sim just runs without the visual environment.
       try {
-        const root = await queuedGLB(queue, loader, APARTMENT_URL);
+        if (!layout.modelUrl) throw new Error("the pack names no model");
+        const root = await queuedGLB(queue, loader, layout.modelUrl);
+        if (group !== this.layoutGroup) {
+          disposeObject(root); // the pack was unloaded while this streamed
+          return;
+        }
         this.dressRoom(root);
         group.add(root);
       } catch (err) {
-        console.error("[sim-viewer] apartment unavailable (no manifest, no monolith):", err);
+        console.error("[sim-viewer] environment unavailable (no manifest, no monolith):", err);
       }
       return;
     }
 
     const loadRoom = ({ room, box }: ApartmentLayout["rooms"][number]) =>
-      queuedGLB(queue, loader, `/models/apartment/${room.file}`)
+      queuedGLB(queue, loader, `${layout.baseUrl}${room.file}`)
         .then((root) => {
+          if (group !== this.layoutGroup) {
+            disposeObject(root); // the pack was unloaded while this streamed
+            return;
+          }
           this.dressRoom(root);
           group.add(root);
         })
@@ -1262,6 +1320,22 @@ function layoutFocus(bounds: THREE.Box3): THREE.Vector3 {
   const focus = bounds.getCenter(new THREE.Vector3());
   focus.z = bounds.min.z;
   return focus;
+}
+
+/** Free a loaded subtree's GPU-bound resources (geometries, materials, textures). */
+function disposeObject(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    obj.geometry.dispose();
+    disposeMaterials(obj.material);
+  });
+}
+
+function disposeMaterials(material: THREE.Material | THREE.Material[]): void {
+  for (const mat of Array.isArray(material) ? material : [material]) {
+    for (const value of Object.values(mat)) if (value instanceof THREE.Texture) value.dispose();
+    mat.dispose();
+  }
 }
 
 /** Runtime guard against a malformed manifest (untrusted JSON): file is a

@@ -42,6 +42,12 @@ RAW_FILES = {
         f"{_RAW_RELEASE}/appartement.glb",
         "807ff2613f4b3aaf1fad39645fee19e10cd560296e1a2f59133daa46f8678c38",
     ),
+    # The backrooms pack's one source: build_environment_pack.py derives its
+    # hulls, textured MuJoCo meshes, nav map and viewer copy in-image.
+    SIM / "viewer" / "assets" / "backrooms" / "backrooms_vr.glb": (
+        f"{_RAW_RELEASE}/backrooms_vr.glb",
+        "f8f81dfa8a64a2afe51f0b2f31e6c596fcae196924beedc0f87258344a1ec7bf",
+    ),
     # The browser's prop models -- the glTF exports the viewer loads. Their
     # MuJoCo counterparts are the authored meshes under assets/objects and
     # assets/humans below. Decomposed object props get derived *_hulls.f32

@@ -191,6 +191,9 @@ SIM_ASSET_UNITS_DERIVED = (
     "apartment_split",
     "apartment_split_v2",
     "apartment_visual",
+    "backrooms_split",
+    "backrooms_split_v2",
+    "backrooms_visual",
     "map",
 )
 SIM_ASSET_UNITS_AUTHORED = (
@@ -719,6 +722,7 @@ def get_config() -> dict[str, object]:
         "os_image_auto": os_image_auto,
         "os_pull_image": os_pull_image if os_pull_image is not None else True,
         "os_always_build": os_always_build if os_always_build is not None else False,
+        "environment_id": get_nested_str(sim_config, "simulation", "environment") or "apartment",
     }
 
 

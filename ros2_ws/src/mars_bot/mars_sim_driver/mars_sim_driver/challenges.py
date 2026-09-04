@@ -348,6 +348,12 @@ class Challenge:
     runtime: ChallengeRuntime | None = field(default=None, kw_only=True, repr=False)
     time_limit_s: float | None = None
     reset_world: bool = True  # robot back to spawn + props re-parked on start
+    # Environment pack ids this scenario is authored for (its drops and goals
+    # are coordinates in that world); None means any pack can host it.
+    environments: tuple[str, ...] | None = field(default=None, kw_only=True)
+
+    def available_in(self, environment_id: str | None) -> bool:
+        return self.environments is None or environment_id in self.environments
 
 
 def load_challenges(roots: list[Path]) -> dict[str, Challenge]:
@@ -503,6 +509,9 @@ class ChallengeEngine:
         challenge = self.challenges.get(challenge_id)
         if challenge is None:
             print(f"[challenges] start ignored: unknown id {challenge_id!r}", flush=True)
+            return False
+        if not challenge.available_in(self._environment_id()):
+            print(f"[challenges] start ignored: {challenge_id!r} is not authored for this environment", flush=True)
             return False
         # Nothing is judged while the scene is being built. The world reset and
         # the drops take the sim lock, which the physics thread keeps grabbing
@@ -750,11 +759,18 @@ class ChallengeEngine:
                         self._record(challenge.id, "failed", None)
             return self._block(challenge)
 
+    def _environment_id(self) -> str | None:
+        environment = getattr(self.sim, "environment", None)
+        return environment.id if environment is not None else None
+
     def roster(self) -> list[dict]:
-        """What each challenge IS. Nothing here changes while the server runs,
-        so it goes out once per observer connection (world_server.serve_state)
-        rather than ~75 times a second -- the briefs are paragraphs."""
-        return [{"id": c.id, "title": c.title, "brief": c.brief} for c in self.challenges.values()]
+        """Challenge briefs for this environment; sent on connection and world changes."""
+        environment_id = self._environment_id()
+        return [
+            {"id": c.id, "title": c.title, "brief": c.brief}
+            for c in self.challenges.values()
+            if c.available_in(environment_id)
+        ]
 
     def _block(self, challenge: Challenge | None) -> dict:
         # Only what can change rides the state stream. Progress is a few
