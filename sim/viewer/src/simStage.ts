@@ -609,9 +609,6 @@ export function createSimStage(
   const loadEnvironment = async (environment: EnvironmentInfo | null) => {
     // Discard superseded loads after each await.
     const version = ++loadVersion;
-    const startedAt = performance.now();
-    const marks: string[] = [];
-    const mark = (label: string) => marks.push(`${label} ${((performance.now() - startedAt) / 1000).toFixed(1)}s`);
     if (loadedEnvironmentId !== null) {
       queue.cancel();
       queue = new LoadQueue(2, ({ loaded, total }) => {
@@ -619,7 +616,6 @@ export function createSimStage(
       });
       queue.setEstimatedTotal(35e6);
       scene.unloadEnvironment();
-      mark("unloaded");
     }
     loadedEnvironmentId = environment?.id ?? "";
     const name = environment?.display_name.toLowerCase() ?? "apartment";
@@ -628,7 +624,6 @@ export function createSimStage(
       setLoading(`loading ${name} layout...`);
       const layout = await scene.loadApartmentLayout(environment?.viewer ?? APARTMENT_VIEWER);
       if (disposed || version !== loadVersion) return;
-      mark("layout");
       scene.frameLayout(layout);
       setLoading(`loading robot and ${name}...`);
       // Enqueue robot meshes before rooms to prioritize the robot.
@@ -637,8 +632,6 @@ export function createSimStage(
       if (disposed || version !== loadVersion) return;
       await Promise.all([robotDone, scene.streamApartment(queue, layout)]);
       if (disposed || version !== loadVersion) return;
-      mark("meshes");
-      console.info(`[sim-viewer] ${name} loaded: ${marks.join(", ")}`);
       hideLoading();
       // Prefetch props after the scene, outside its progress bar.
       if (firstLoad) scene.prefetchPropModels();
@@ -667,7 +660,7 @@ export function createSimStage(
     environmentSelect.value = environment?.id ?? "";
     environmentSelect.disabled = pending?.state === "loading";
     if (pending?.state === "loading") {
-      setWaiting(`switching to ${pending.display_name.toLowerCase()}: the simulator is rebuilding its world...`);
+      setWaiting(`loading robot and ${pending.display_name.toLowerCase()}...`);
     } else if (pending?.state === "failed") {
       console.error("[sim-viewer] environment switch failed:", pending.message);
       failLoading(`switch to ${pending.display_name.toLowerCase()} failed`);
