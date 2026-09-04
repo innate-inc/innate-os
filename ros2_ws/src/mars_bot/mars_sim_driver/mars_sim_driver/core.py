@@ -15,7 +15,6 @@ import math
 import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import mujoco
 import numpy as np
@@ -31,11 +30,9 @@ from .constants import (
     WRIST_CAMERA_FOVY,
 )
 from .drive_limits import clamp_cmd_vel
+from .environments import DEFAULT_ENVIRONMENT_ID, Environment
 from .props import PropRegistry
-from .world import ARM_HOME, SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG
-
-if TYPE_CHECKING:
-    from .environments import Environment
+from .world import ARM_HOME
 
 # Stop the base if the last Twist is stale, like a real base watchdog.
 CMD_VEL_TIMEOUT_S = 0.5
@@ -197,7 +194,7 @@ class VirtualMars:
         split_dir: Path | None = None,
         render_wh: tuple[int, int] | None = None,
         depth_render_wh: tuple[int, int] | None = None,
-        environment: "Environment | None" = None,
+        environment: Environment | None = None,
     ):
         # render_wh / depth_render_wh override the offscreen render
         # resolutions (default: the camera-native CAMERA_WIDTH x
@@ -206,15 +203,15 @@ class VirtualMars:
         # rate -- and upscales at the wire; direct/notebook users keep full res.
         self._render_w, self._render_h = render_wh or (CAMERA_WIDTH, CAMERA_HEIGHT)
         self._depth_w, self._depth_h = depth_render_wh or (self._render_w, self._render_h)
-        self.environment = environment
-        collision_dir = split_dir or (environment.collision_dir if environment else ASSETS_DIR / "apartment_split_v2")
+        self.environment = environment or Environment.load(DEFAULT_ENVIRONMENT_ID, ASSETS_DIR)
+        collision_dir = split_dir or self.environment.collision_dir
         rooms = world.find_decomposed_rooms(collision_dir)
         if not rooms:
             raise RuntimeError(
                 f"no decomposed rooms under {collision_dir} -- run decompose_rooms.py or set VIRTUAL_MARS_ASSETS"
             )
-        visual_dir = environment.visual_dir if environment else ASSETS_DIR / "apartment_visual"
-        self._spawn = environment.spawn if environment else (SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG)
+        visual_dir = self.environment.visual_dir
+        self._spawn = self.environment.spawn
         visual_rooms = world.find_visual_rooms(visual_dir) if visual_dir.is_dir() else {}
 
         # Droppable props: sidecars from the tracked source dir plus any the

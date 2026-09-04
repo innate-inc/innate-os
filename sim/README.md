@@ -246,8 +246,13 @@ CHALLENGE = Challenge(
         Goal("Push it to the dog", Near("soccer_ball", "labrador", 1.2)),
     ],
     time_limit_s=600,
+    environments=("apartment",),
 )
 ```
+
+`environments` names the packs whose coordinates the drops and goals are
+written in; a challenge that places nothing (Victory Lap) leaves it out and
+is offered in every environment.
 
 `setup` drops props by name (the sidecars in [`sim/props/`](props/)). Goals
 are judged strictly in order and latch once true. The predicates are `Near`,
