@@ -32,16 +32,6 @@ Everything else follows from being public:
 | lifetime | until `down` | `INNATE_DEMO_LEASE_SECONDS` (600) |
 | render scale | 1 | 2 |
 
-## Files
-
-| | |
-|---|---|
-| `Dockerfile` | the image; three base images in, one session container out |
-| `build.sh` | resolves the content-addressed asset/viewer tags the way the launcher does |
-| `entrypoint.sh` | PID 1: world server → health gate → ROS fleet → lease → exit |
-| `launch_demo.zsh` | the trimmed fleet (`scripts/launch_sim_in_tmux.zsh` minus what a visitor can't reach) |
-| `prewarm_model.py` | compiles the world at build time so a session start loads a `.mjb`, not 1300 hulls |
-
 ## The two numbers that decide whether this works
 
 **Render speed.** Software GL is the demo's quality risk. The world server logs

@@ -36,10 +36,8 @@ tmux send-keys -t "${SESSION_NAME}:behavior.1" "ros2 launch brain_client input_m
 tmux new-window -t "$SESSION_NAME" -n arm-ik
 tmux send-keys -t "${SESSION_NAME}:arm-ik" "ros2 run mars_arm ik.py" C-m
 
-if [[ "${INNATE_DEMO_UNINAVID:-1}" == "1" ]]; then
-  tmux new-window -t "$SESSION_NAME" -n vision-nav
-  tmux send-keys -t "${SESSION_NAME}:vision-nav" "ros2 launch innate_uninavid uninavid.launch.py cmd_vel_topic:=/cmd_vel" C-m
-fi
+tmux new-window -t "$SESSION_NAME" -n vision-nav
+tmux send-keys -t "${SESSION_NAME}:vision-nav" "ros2 launch innate_uninavid uninavid.launch.py cmd_vel_topic:=/cmd_vel" C-m
 
 # Only :80 is routed to a visitor; TLS terminates upstream.
 tmux new-window -t "$SESSION_NAME" -n webapp
