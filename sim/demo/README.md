@@ -1,26 +1,23 @@
 # sim/demo — the public sim demo image
 
-One self-contained container that **is** a full sim session: start it, route
-port 80, throw it away. No bind mounts, no host process, no launcher — which is
-what makes it schedulable per session on Fly Machines, Cloudflare Containers, or
-a slot on your own box.
+One container that is a whole sim session, world server included: start it,
+route port 80, throw it away. The broker in innate-cloud (`apps/sim-broker`)
+hands one to each visitor of sim.innate.bot and destroys it after the lease.
 
 ```bash
-sim/demo/build.sh                 # -> ghcr.io/innate-inc/innate-os-sim-demo:<sha>
-docker run --rm -p 8080:80 ghcr.io/innate-inc/innate-os-sim-demo:latest
-# then open http://localhost:8080
+sim/demo/build.sh          # -> us-central1-docker.pkg.dev/innate-managed-infra/sim/innate-os-sim-demo:<sha>
+docker run --rm -p 8080:80 us-central1-docker.pkg.dev/innate-managed-infra/sim/innate-os-sim-demo:latest
 ```
+
+Every push to main publishes `sha-<commit>` and moves `latest`
+(`.github/workflows/publish-sim-demo.yml`); the broker's `/admin` page picks
+which tag sessions run.
 
 ## How it differs from the dev sim
 
-`./innate-sim up` runs the ROS fleet in a container and the MuJoCo world
-**natively on the host**, because native GL renders ~7x faster than software GL
-in Docker. A headless cloud instance has no native GL either way, so the demo
-hosts the world in the same container via the escape hatch
-`mars_sim_driver/launch/sim_driver.launch.py` documents:
-`VIRTUAL_MARS_REMOTE=127.0.0.1:8799`.
-
-Everything else follows from being public:
+`./innate-sim up` keeps the MuJoCo world on the host for native GL. A cloud
+instance has no native GL either way, so the demo runs the world in-container
+(`VIRTUAL_MARS_REMOTE=127.0.0.1:8799`) under software GL.
 
 | | dev sim | demo |
 |---|---|---|
@@ -32,30 +29,15 @@ Everything else follows from being public:
 | lifetime | until `down` | `INNATE_DEMO_LEASE_SECONDS` (600) |
 | render scale | 1 | 2 |
 
-## The two numbers that decide whether this works
+## The two numbers that decide whether it works
 
-**Render speed.** Software GL is the demo's quality risk. The world server logs
-its measurement on every boot:
+**Render speed.** The world server logs `GL self-test (osmesa): N ms/frame` on
+boot. Cameras render on demand at ~8Hz, so N much above ~120ms starves the
+camera panel and the agent's vision. Levers: a higher `INNATE_SIM_RENDER_SCALE`
+(cost falls with the square), more cores, or a GPU instance with `MUJOCO_GL=egl`.
+The scale is baked into the compiled model at build time; the entrypoint refuses
+a different one rather than booting slowly for reasons nobody can see.
 
-```bash
-docker logs <container> 2>&1 | grep "GL self-test"
-```
-
-`GL self-test (osmesa): N ms/frame`. Cameras render on demand at ~8Hz, so N much
-above ~120ms starves the camera panel and the agent's vision. Levers, in order:
-rebuild with a higher `INNATE_SIM_RENDER_SCALE` (cost falls with the square),
-give the instance more cores, or move to a GPU instance and set `MUJOCO_GL=egl`.
-
-The scale is a **build-time** choice: it sets the texture cap baked into the
-compiled model, so changing it at run time would miss the `.mjb` cache. The
-entrypoint refuses that rather than booting slowly for reasons nobody can see.
-
-**Boot time.** From `docker run` to a usable app, with the `.mjb` baked in.
-Budget ~30–60s for the ROS fleet. Anything much longer means the model cache
-missed — check the build log for `model cache:` and confirm no `COPY` was added
-after the prewarm step (the cache key hashes every asset's mtime+size).
-
-## Deploying it
-
-The image is hardened; handing out sessions, keys, limits and the challenge are
-the broker's job: `apps/sim-broker` in innate-cloud.
+**Boot time.** From container start to a usable app: ~30s, with the `.mjb`
+baked in. Much longer means the model cache missed -- check the build log for
+`model cache:` and that no `COPY` was added after the prewarm step.

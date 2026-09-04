@@ -6,7 +6,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-IMAGE="${IMAGE:-ghcr.io/innate-inc/innate-os-sim-demo}"
+IMAGE="${IMAGE:-us-central1-docker.pkg.dev/innate-managed-infra/sim/innate-os-sim-demo}"
 TAG="${TAG:-$(git rev-parse --short HEAD)}"
 ROS_IMAGE="${ROS_IMAGE:-ghcr.io/innate-inc/innate-os-sim-ros:main}"
 # Set empty (CI does, off main) so a one-off build cannot become what visitors get.
