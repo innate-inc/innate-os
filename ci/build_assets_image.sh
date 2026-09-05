@@ -13,7 +13,7 @@
 #   IMAGE_TAG           sha-<short12>
 #   IMAGE_INPUTS_HASH   config.compute_assets_image_inputs_hash of the checkout
 #   PUSH_MAIN_TAGS      "true" on main
-#   CACHE_SCOPE         the branch name; unset or "main" writes the shared cache
+#   CACHE_SCOPE         the ref name; a branch writes its own cache, main the shared one
 #
 # Deliberately NO image.revision label, and so no COMMIT_SHA input: it varies
 # per commit, which changes the config blob and therefore the index digest, so
@@ -60,10 +60,14 @@ fi
 # main's next publish the full 17 minutes. Branches read main's cache and their
 # own, and write only their own (cache-<branch>, aged out by
 # cleanup-sim-images.yml); main alone writes `buildcache`.
+# The hash suffix keeps refs that sanitise alike (feat/x, feat-x) or a tag
+# named main from sharing a cache; PUSH_MAIN_TAGS, not the name, says main.
 cache_from=(--cache-from "type=registry,ref=${assets_image}:buildcache")
 cache_ref="buildcache"
-if [ -n "${CACHE_SCOPE:-}" ] && [ "${CACHE_SCOPE}" != "main" ]; then
-  cache_ref="cache-$(printf '%s' "${CACHE_SCOPE}" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-100)"
+if [ "${PUSH_MAIN_TAGS:-false}" != "true" ] && [ -n "${CACHE_SCOPE:-}" ]; then
+  scope_slug="$(printf '%s' "${CACHE_SCOPE}" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-80)"
+  scope_hash="$(printf '%s' "${CACHE_SCOPE}" | git hash-object --stdin | cut -c1-8)"
+  cache_ref="cache-${scope_slug}-${scope_hash}"
   cache_from+=(--cache-from "type=registry,ref=${assets_image}:${cache_ref}")
 fi
 
