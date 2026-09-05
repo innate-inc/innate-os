@@ -1080,3 +1080,41 @@ def test_impossible_up_reposition_does_not_move(monkeypatch):
     with pytest.raises(SkillFailed, match="Cannot reach this level target"):
         skill._reposition_for_level_target((0.32, 0.0, 0.9), 0)
     assert not skill.manipulation.moves
+
+
+@pytest.mark.parametrize("leveling_succeeds", [True, False])
+def test_wrist_levels_before_fresh_image_and_vlm(monkeypatch, leveling_succeeds):
+    skill = OpenDoorWithVision(logging.getLogger("level-first"))
+    pose = SimpleNamespace(position=(0.32, 0.0, 0.28), rpy=(0.0, 0.4, 0.0))
+    skill.manipulation = SimpleNamespace(pose=pose)
+    skill.wrist_image = object()
+    order = []
+    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.0, 0.0, 0.0))
+
+    def level(target, _duration):
+        order.append("level")
+        assert target == pose.position
+        if leveling_succeeds:
+            pose.rpy = (0.0, 0.0, 0.0)
+        return pose
+
+    monkeypatch.setattr(skill, "_move_wrist", level)
+    fresh = object()
+    monkeypatch.setattr(skill, "_next_image", lambda *a: order.append("fresh image") or fresh)
+
+    def decide(image, **kwargs):
+        order.append("vision")
+        assert image is fresh
+        assert kwargs["previous_image"] is None
+        assert kwargs["previous_action"] is None
+        return "GRASP", None, "aligned"
+
+    monkeypatch.setattr(skill, "_request_wrist_decision", decide)
+    if leveling_succeeds:
+        skill._wrist_align(pose.position, restage=False)
+        assert order == ["level", "fresh image", "vision"]
+    else:
+        with pytest.raises(SkillFailed, match="not horizontal"):
+            skill._wrist_align(pose.position, restage=False)
+        assert order == ["level"]

@@ -599,6 +599,27 @@ class OpenDoorWithVision(Skill):
             f"measured gripper progress=({progress[0]:+.3f},{progress[1]:+.3f})m"
         )
 
+    def _ensure_wrist_level(self):
+        """Verify measured orientation before interpreting the wrist image."""
+        pose = self.manipulation.pose
+        roll, pitch, _yaw = pose.rpy
+        if not all(math.isfinite(value) for value in (roll, pitch)):
+            self.fail("Cannot verify gripper is horizontal: invalid orientation feedback")
+        corrected = max(abs(roll), abs(pitch)) > math.radians(5)
+        if corrected:
+            self.logger.info("[handle] leveling gripper before wrist vision")
+            self._move_wrist(tuple(pose.position), 0.8)
+            # Read actual feedback again; a requested level pose is not proof.
+            pose = self.manipulation.pose
+            roll, pitch, _yaw = pose.rpy
+        if not all(math.isfinite(value) for value in (roll, pitch)) or max(abs(roll), abs(pitch)) > math.radians(5):
+            self.fail("Gripper is not horizontal; wrist vision is paused")
+        self.logger.info(
+            f"[handle] horizontal verified: roll={math.degrees(roll):+.1f}deg pitch={math.degrees(pitch):+.1f}deg"
+        )
+        self.debug_event("wrist_horizontal_verified", roll=roll, pitch=pitch, corrected=corrected)
+        return corrected
+
     def _wrist_align(self, target, *, restage=True):
         if restage:
             self.manipulation.torque_on()
@@ -613,7 +634,14 @@ class OpenDoorWithVision(Skill):
         previous_action = None
         for step in count():
             self.sleep(0.4)
-            image = self.wrist_image if previous_image is None else self._next_image("wrist", previous_image)
+            before_level_check = self.wrist_image
+            if self._ensure_wrist_level():
+                # Leveling changes the camera orientation. Discard the old
+                # image/action pair instead of attributing that change to UP.
+                previous_image = None
+                previous_action = None
+                commanded_pose = tuple(self.manipulation.pose.position)
+            image = self._next_image("wrist", before_level_check)
             action, box, reason = self._request_wrist_decision(
                 image,
                 previous_image=previous_image,
