@@ -15,6 +15,8 @@ import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
 import { LoadQueue, queuedGLB } from "./loadQueue";
 import { PropLibrary, type PropInfo } from "./props";
+import { TrafficLibrary } from "./traffic";
+import type { TrafficManifest, TrafficState } from "./trafficState";
 
 /** An environment pack's browser assets as its manifest names them: paths
  * under sim/viewer/public, which the webapp serves at /models and /physics
@@ -222,6 +224,7 @@ export class SimScene {
   private hullMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff88, wireframe: true });
   // Every prop in the world, built from the server's roster (props.ts).
   private props: PropLibrary;
+  private traffic: TrafficLibrary;
   // While true a placement drag owns the pointer and orbit stays off.
   private placementMode = false;
   private cameraMode: CameraMode = "free";
@@ -273,6 +276,7 @@ export class SimScene {
       () => this.updateShadowVolume(),
       (model) => this.warmTextures(model),
     );
+    this.traffic = new TrafficLibrary(this.scene, this.hullMaterial, () => this.updateShadowVolume());
 
     this.camera = new THREE.PerspectiveCamera(55, w / h, 0.05, 200);
     this.camera.up.set(0, 0, 1);
@@ -449,6 +453,7 @@ export class SimScene {
   setCollisionHullsVisible(visible: boolean): void {
     this.hullsVisible = visible;
     this.props.setHullsVisible(visible);
+    this.traffic.setHullsVisible(visible);
     if (visible && !this.hullsPromise) {
       // ~1300 OBJ fetches; takes seconds on first show. A failure resets the
       // promise so toggling again retries instead of staying dead forever.
@@ -507,6 +512,13 @@ export class SimScene {
    */
   async loadApartmentLayout(viewer: EnvironmentViewer = APARTMENT_VIEWER): Promise<ApartmentLayout> {
     this.environmentViewer = viewer;
+    // Exterior packs need a longer, daylight view. Always restore defaults
+    // on the next pack so an outdoor visit cannot change indoor rendering.
+    const daylight = viewer.atmosphere === "daylight";
+    const background = daylight ? 0xcddbe2 : 0x14161a;
+    this.scene.background = new THREE.Color(background);
+    this.scene.fog = new THREE.FogExp2(background, daylight ? 0.004 : 0.035);
+    this.controls.maxDistance = daylight ? 65 : 30;
     // One parent group holds every room and carries the Y-up -> Z-up rotation,
     // so it's applied once; placeholder boxes and rooms attach underneath.
     const group = new THREE.Group();
@@ -554,6 +566,7 @@ export class SimScene {
 
   /** Dispose environment assets; retain the robot and props for the next pose. */
   unloadEnvironment(): void {
+    this.traffic.unloadEnvironment();
     for (const group of [this.layoutGroup, this.hullsGroup]) {
       if (!group) continue;
       this.scene.remove(group);
@@ -674,6 +687,7 @@ export class SimScene {
         else setFrontSide(obj.material);
       }
     });
+    this.traffic.registerEnvironment(root);
   }
 
   /** A thick wireframe outline of a box, used as a loading placeholder (room or
@@ -843,6 +857,18 @@ export class SimScene {
       const dx = root.position.x - this.robotXY[0];
       const dy = root.position.y - this.robotXY[1];
       if (Math.hypot(dx, dy) <= reach) points.push([root.position.x, root.position.y]);
+    }
+    for (const bounds of this.traffic.visibleBounds) {
+      const dx = Math.max(bounds.minX - this.robotXY[0], 0, this.robotXY[0] - bounds.maxX);
+      const dy = Math.max(bounds.minY - this.robotXY[1], 0, this.robotXY[1] - bounds.maxY);
+      if (Math.hypot(dx, dy) <= reach) {
+        points.push(
+          [bounds.minX, bounds.minY],
+          [bounds.minX, bounds.maxY],
+          [bounds.maxX, bounds.minY],
+          [bounds.maxX, bounds.maxY],
+        );
+      }
     }
     const xs = points.map((pt) => pt[0]);
     const ys = points.map((pt) => pt[1]);
@@ -1052,6 +1078,16 @@ export class SimScene {
     this.updateShadowVolume(); // the props moved; the box may need to grow or shrink
   }
 
+  /** Adopt the world server's traffic roster. Cars intentionally
+   * stay separate from manipulation props and their Clear/challenge flows. */
+  setTrafficManifest(manifest: TrafficManifest): void {
+    this.traffic.setManifest(manifest);
+  }
+
+  /** Mirror authoritative signal aspects and car poses from MuJoCo. */
+  setTrafficState(state: TrafficState | null): void {
+    this.traffic.setState(state);
+  }
   // Orange accent for the arm links (see ORANGE_LINKS). Cached so every mesh
   // on those links shares one material.
   private orangeMaterial(): THREE.MeshStandardMaterial {
@@ -1233,6 +1269,7 @@ export class SimScene {
    * the oldest (~16), breaking the live view. */
   dispose(): void {
     this.props.clearPlacementPreview();
+    this.traffic.unloadEnvironment();
     this.placeholderMat?.dispose();
     this.cameraEnv?.dispose(); // a PMREM render target, not a loaded image
     this.controls.dispose();

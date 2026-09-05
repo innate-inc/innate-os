@@ -189,6 +189,9 @@ SIM_VIEWER_ROOT = ROOT.parent / "sim" / "viewer"
 SIM_VIEWER_ROUTES = {
     "/sim-viewer/": SIM_VIEWER_ROOT / "dist-lib",
     "/models/": SIM_VIEWER_ROOT / "public" / "models",
+    # Licensed environment packs are generated locally and deliberately live
+    # outside /models so they cannot be mistaken for published image assets.
+    "/local-environments/": SIM_VIEWER_ROOT / "public" / "local-environments",
     # scene.ts declares `loader.packages = { mars_sim: "/robot" }`, so
     # `package://mars_sim/meshes/base.STL` resolves here by itself.
     "/robot/": ROOT.parent / "ros2_ws" / "src" / "mars_bot" / "mars_sim",

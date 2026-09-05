@@ -1961,6 +1961,7 @@ def ensure_viewer_public_assets(config: dict[str, object]) -> None:
         sim_repo / "viewer" / "public" / ".installed-tag",
         label="viewer assets",
         geometry_hash=compute_geometry_inputs_hash(config["os_repo"]),  # type: ignore[arg-type]
+        preserve_subtrees=("local-environments",),
     )
 
 
@@ -1973,6 +1974,7 @@ def install_layer_subtree(
     *,
     label: str,
     geometry_hash: str | None = None,
+    preserve_subtrees: tuple[str, ...] = (),
 ) -> None:
     """Put one subtree of one image layer on disk, idempotently.
 
@@ -1991,6 +1993,11 @@ def install_layer_subtree(
     that moved for an unrelated input does not re-fetch; the ref, so an
     override that renames the image does; and the narrow hash, so an
     unpublished tag can be told from a real change (see ensure_sim_assets).
+
+    `preserve_subtrees` names direct children owned by the local checkout rather
+    than the published layer. They are copied into the staged tree before the
+    atomic replacement so refreshing viewer assets cannot delete licensed,
+    gitignored environment packs.
     """
     parts = marker.read_text().split() if marker.exists() else []
     populated = destination.is_dir() and any(destination.iterdir())
@@ -2025,6 +2032,10 @@ def install_layer_subtree(
         source = staging / subtree
         if not source.is_dir():
             raise StackError(f"{shorten_docker_image_ref(image)} layer {digest[7:19]} has no {subtree}/ subtree.")
+        for preserved_name in preserve_subtrees:
+            preserved = destination / preserved_name
+            if preserved.is_dir():
+                shutil.copytree(preserved, source / preserved_name, dirs_exist_ok=True, symlinks=True)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.rmtree(destination, ignore_errors=True)
         shutil.move(str(source), str(destination))
@@ -2434,7 +2445,7 @@ def _world_model_sources_digest(config: dict[str, object]) -> str:
     driver = mars_bot / "mars_sim_driver" / "mars_sim_driver"
     candidates = sorted((mars_bot / "mars_sim" / "urdf").glob("*"))
     candidates += sorted((mars_bot / "mars_sim" / "meshes").glob("*"))
-    candidates += [driver / name for name in ("world.py", "core.py", "constants.py", "environments.py")]
+    candidates += [driver / name for name in ("world.py", "core.py", "constants.py", "environments.py", "traffic.py")]
     candidates += [sim_repo / "assets" / ".assets-tag"]
     candidates += sorted((sim_repo / "environments").rglob("manifest.json"))
     digest = hashlib.sha256()

@@ -187,6 +187,12 @@ MJCF ground plane there, and the 3D view's floor grid sits just below it.
 Licensed packs the repository must not ship go in `sim/environments.local/`
 (gitignored).
 
+Crossroads is generated from original geometry by `sim/tools/build_intersection.py`.
+Its manifest opts into the shared four-way traffic preset with `"traffic": true`
+(off when absent). Local packs can use the same preset without editing the driver;
+they must follow the layout in `mars_sim_driver/crossroads.py` and include the six
+`Signal_NS/EW_Red/Yellow/Green` materials. This flag is not an arbitrary route planner.
+
 Pick one at launch, or set `[simulation] environment` in `sim/config.toml`:
 
 ```bash

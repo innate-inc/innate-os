@@ -52,6 +52,17 @@ def test_dockerignore_admits_exactly_the_work_subtrees():
 SEEDER = REPO_ROOT / "ci" / "seed_asset_context.py"
 
 
+def test_traffic_geometry_sources_are_asset_and_geometry_inputs():
+    """Changing the car/layout cannot reuse a stale generated GLB or nav map."""
+    import config
+
+    inputs = config.iter_assets_image_input_files(REPO_ROOT)
+    for name in ("traffic", "crossroads"):
+        path = f"ros2_ws/src/mars_bot/mars_sim_driver/mars_sim_driver/{name}.py"
+        assert Path(path) in inputs
+        assert (path in config.GEOMETRY_DRIVER_FILES) == (name == "crossroads")
+
+
 def _dockerignore_allows(relative_path: str, rules: list[str]) -> bool:
     """Does any `!` rule re-admit `relative_path` after the leading `**`?"""
     for rule in rules:
