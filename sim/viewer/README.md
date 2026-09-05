@@ -96,8 +96,10 @@ convention) is rotated on load.
 
 ## Household residents
 
-`tools/residents/model.mjs` authors Alex, Blake, and Casey, including their
-distinct faces and a 24-second seamless idle cycle. `tools/build-residents.mjs`
+`tools/residents/model.mjs` authors Alex, Blake, and Casey with a 24-second
+seamless idle cycle. `tools/residents/head.mjs` shapes their individual heads,
+sculpted facial contours, eyes, lips, hair, and subtle skin shading.
+`tools/build-residents.mjs`
 generates both renderer formats from that source during the asset-image build:
 animated GLBs and standing-pose MuJoCo OBJ/palette textures. They are normalized
 to the existing resident heights, Z-up with feet at the origin and facing +Y,
@@ -105,7 +107,8 @@ so the household challenge's placement/yaw and dialogue remain unchanged.
 
 For local asset inspection, run `node tools/build-residents.mjs /path/to/output`;
 it writes `models/` and `humans/`. Generated files stay outside git. Static face
-and hair details are merged by material to limit draw calls.
+and hair details are merged by material to limit draw calls. Vertex colors are
+baked into palette swatches for matching skin and beard shading in MuJoCo.
 
 The sidecar's `viewer.idleAnimation` opts into the GLB's `Idle` clip. PropLibrary
 samples it at interpolated simulation time, so pause, reset, and stream stalls

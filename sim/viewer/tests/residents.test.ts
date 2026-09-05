@@ -80,6 +80,31 @@ test("generated residents share the MuJoCo frame and have seamless, planted-foot
     const box = new THREE.Box3().setFromObject(scene, true);
     assert.ok(Math.abs(box.min.z) < 1e-5, `${id} feet must start on the floor`);
     assert.ok(Math.abs(box.max.z - [1.68, 1.82, 1.7][i]) < 0.002);
+    let head: THREE.Object3D | undefined;
+    let hasSkinColor = false;
+    const flatColors = new Set<string>();
+    scene.traverse((node) => {
+      if (node.userData.part === "head") head = node;
+      if (node instanceof THREE.Mesh) {
+        const materials = Array.isArray(node.material)
+          ? node.material
+          : [node.material];
+        for (const material of materials)
+          if ("color" in material)
+            flatColors.add((material.color as THREE.Color).getHexString());
+      }
+      if (node instanceof THREE.Mesh && node.geometry.attributes.color)
+        hasSkinColor = true;
+    });
+    assert.ok(head, "head must remain independently articulated");
+    const headSize = new THREE.Box3()
+      .setFromObject(head, true)
+      .getSize(new THREE.Vector3());
+    assert.ok(
+      headSize.z > 0.22 && headSize.z < 0.29,
+      "adult head proportions must survive export",
+    );
+    assert.ok(hasSkinColor, "subtle skin shading must survive GLB export");
     assert.equal(animations[0].name, "Idle");
     assert.equal(animations[0].duration, 24);
     const baseline = matrices(scene);
@@ -129,6 +154,20 @@ test("generated residents share the MuJoCo frame and have seamless, planted-foot
         .subarray(1, 4)
         .toString(),
       "PNG",
+    );
+    const obj = readFileSync(`${output}/humans/resident_${id}.obj`, "utf8");
+    const uvs = obj.split("\n").filter((line) => line.startsWith("vt "));
+    assert.ok(
+      uvs.length > flatColors.size,
+      "MuJoCo needs the skin-shading colors as well as flat materials",
+    );
+    assert.ok(
+      uvs.every((line) =>
+        line
+          .split(" ")
+          .slice(1)
+          .every((v) => Number(v) > 0 && Number(v) < 1),
+      ),
     );
   }
 });

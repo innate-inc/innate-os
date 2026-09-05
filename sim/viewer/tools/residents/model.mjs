@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Innate Inc
 // Authored household residents. No scans, external textures, or random geometry.
 import * as THREE from "three";
+import { createHead } from "./head.mjs";
 
 export const RESIDENTS = ["alex", "blake", "casey"];
 export const IDLE_DURATION = 24;
@@ -15,10 +16,6 @@ const PALETTE = {
   denim: "#384657",
   shoe: "#393630",
   sole: "#ddd5c9",
-  "eye-white": "#ece7da",
-  pupil: "#211c18",
-  lip: "#a36960",
-  iris: "#516557",
   blue: "#398dc9",
   green: "#368764",
   purple: "#8856b2",
@@ -38,11 +35,7 @@ export function createResident(index) {
   }
   const trousers = mat("denim"),
     shoes = mat("shoe"),
-    sole = mat("sole"),
-    eyeWhite = mat("eye-white"),
-    pupil = mat("pupil"),
-    lip = mat("lip"),
-    iris = mat("iris");
+    sole = mat("sole");
   const shirtMats = [mat("blue"), mat("green"), mat("purple")];
   function mesh(geo, m, parent = scene) {
     const o = new THREE.Mesh(geo, m);
@@ -81,9 +74,9 @@ export function createResident(index) {
     chest.position.y = 0.3;
     chest.scale.z = 0.64;
     ball(0, 0.04, 0, width * 0.88, 0.12, 0.12, trousers, torso);
-    ball(0, 0.6, 0, 0.068, 0.095, 0.067, skin, torso);
+    ball(0, 0.585, 0, 0.049, 0.08, 0.046, skin, torso);
     const collar = mesh(
-      new THREE.TorusGeometry(0.077, 0.016, 8, 40),
+      new THREE.TorusGeometry(0.057, 0.012, 8, 40),
       shirt,
       torso,
     );
@@ -91,295 +84,7 @@ export function createResident(index) {
     collar.position.y = 0.535;
     for (let y of [0.36, 0.43, 0.5])
       ball(0.015, y, 0.134, 0.009, 0.009, 0.005, sole, torso);
-    const head = new THREE.Group();
-    head.position.y = 0.79;
-    torso.add(head);
-    const hw = [0.137, 0.153, 0.142][index],
-      hh = [0.186, 0.19, 0.205][index];
-    // A continuous sculpted face: tapered jaw, cheek volume and a shaped chin.
-    const faceGeo = new THREE.SphereGeometry(1, 64, 48),
-      pos = faceGeo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      let x = pos.getX(i),
-        y = pos.getY(i),
-        z = pos.getZ(i);
-      const jaw =
-        y < -0.2
-          ? 1 - (index === 0 ? 0.23 : 0.14) * Math.min(1, (-y - 0.2) / 0.8)
-          : 1;
-      let zz = z * 0.132;
-      if (z > 0) {
-        zz +=
-          0.014 *
-          Math.exp(-Math.pow((y + 0.19) / 0.27, 2)) *
-          Math.pow(Math.abs(x), 0.6);
-        zz += 0.01 * Math.exp(-Math.pow((y + 0.73) / 0.19, 2));
-      }
-      pos.setXYZ(i, x * hw * jaw, y * hh, zz);
-    }
-    faceGeo.computeVertexNormals();
-    mesh(faceGeo, skin, head);
-    // Ears, tragus and inset concha.
-    for (let side of [-1, 1]) {
-      ball(
-        side * (hw + 0.004),
-        -0.007,
-        -0.003,
-        0.027,
-        0.044,
-        0.023,
-        skin,
-        head,
-      );
-      ball(side * (hw + 0.013), -0.007, 0.016, 0.011, 0.024, 0.006, lip, head);
-      ball(side * (hw + 0.005), -0.015, 0.021, 0.01, 0.012, 0.007, skin, head);
-    }
-    function stroke(points, r, m, parent = head) {
-      return mesh(
-        new THREE.TubeGeometry(
-          new THREE.CatmullRomCurve3(points.map((p) => V(...p))),
-          24,
-          r,
-          8,
-          false,
-        ),
-        m,
-        parent,
-      );
-    }
-    const eyes = [];
-    for (let side of [-1, 1]) {
-      const eye = new THREE.Group();
-      eye.position.set(side * [0.057, 0.063, 0.058][index], 0.032, 0.12);
-      head.add(eye);
-      ball(0, 0, 0, 0.032, 0.016, 0.015, eyeWhite, eye);
-      const gaze = new THREE.Group();
-      eye.add(gaze);
-      ball(0, 0, 0.014, 0.012, 0.012, 0.004, iris, gaze);
-      ball(0, 0, 0.018, 0.0055, 0.0065, 0.002, pupil, gaze);
-      ball(-0.003, 0.004, 0.02, 0.0022, 0.0022, 0.001, eyeWhite, gaze);
-      stroke(
-        [
-          [-0.033, 0, 0],
-          [-0.019, 0.013, 0.008],
-          [0, 0.018, 0.01],
-          [0.021, 0.011, 0.007],
-          [0.033, 0, 0],
-        ],
-        0.004,
-        skin,
-        eye,
-      );
-      stroke(
-        [
-          [-0.032, 0, 0],
-          [-0.017, -0.011, 0.008],
-          [0.004, -0.013, 0.009],
-          [0.022, -0.008, 0.005],
-          [0.032, 0, 0],
-        ],
-        0.0035,
-        skin,
-        eye,
-      );
-      eyes.push({ eye, gaze });
-      const x = side * 0.059;
-      stroke(
-        [
-          [x - 0.034, 0.066, 0.118],
-          [x - 0.016, 0.074 + (index === 0 ? 0.007 : 0), 0.126],
-          [x + 0.01, 0.075, 0.125],
-          [x + 0.031, 0.067, 0.114],
-        ],
-        index === 1 ? 0.006 : 0.0045,
-        hair,
-      );
-      if (index === 2)
-        stroke(
-          [
-            [x - 0.026, 0.006, 0.126],
-            [x, 0.002, 0.131],
-            [x + 0.028, 0.008, 0.122],
-          ],
-          0.0018,
-          lip,
-        );
-    }
-    // Nose bridge, tip, nostril wings, philtrum, lips and lower-lip shadow.
-    ball(0, 0.007, 0.13, index === 1 ? 0.022 : 0.017, 0.044, 0.024, skin, head);
-    ball(
-      0,
-      -0.025,
-      0.156,
-      index === 1 ? 0.028 : 0.02,
-      0.018,
-      index === 2 ? 0.03 : 0.024,
-      skin,
-      head,
-    );
-    for (let side of [-1, 1]) {
-      ball(side * 0.02, -0.033, 0.144, 0.014, 0.011, 0.014, skin, head);
-      ball(side * 0.015, -0.039, 0.157, 0.007, 0.0035, 0.005, lip, head);
-    }
-    stroke(
-      [
-        [-0.041, -0.076, 0.117],
-        [-0.019, -0.071, 0.134],
-        [0, -0.074, 0.139],
-        [0.019, -0.071, 0.134],
-        [0.041, -0.076, 0.117],
-      ],
-      0.003,
-      lip,
-    );
-    stroke(
-      [
-        [-0.036, -0.078, 0.123],
-        [0, -0.087, 0.138],
-        [0.036, -0.078, 0.123],
-      ],
-      0.004,
-      lip,
-    );
-    if (index === 0) {
-      const cap = mesh(
-        new THREE.SphereGeometry(1, 40, 28, 0, Math.PI * 2, 0, 1.43),
-        hair,
-        head,
-      );
-      cap.scale.set(0.145, 0.197, 0.139);
-      cap.position.set(0, 0.004, -0.014);
-      for (let side of [-1, 1]) {
-        ball(side * 0.123, -0.009, -0.049, 0.045, 0.16, 0.078, hair, head);
-        stroke(
-          [
-            [side * 0.117, 0.114, 0.052],
-            [side * 0.138, 0.042, 0.024],
-            [side * 0.146, -0.063, -0.014],
-            [side * 0.119, -0.146, -0.039],
-          ],
-          0.013,
-          hair,
-        );
-      }
-      stroke(
-        [
-          [-0.127, 0.115, 0.061],
-          [-0.064, 0.16, 0.105],
-          [0.011, 0.175, 0.092],
-          [0.084, 0.143, 0.085],
-        ],
-        0.023,
-        hair,
-      );
-      for (let side of [-1, 1])
-        for (let j = 0; j < 8; j++) {
-          const x = side * (0.056 + (j % 4) * 0.012),
-            y = -0.007 - Math.floor(j / 4) * 0.014;
-          const z =
-            0.132 *
-              Math.sqrt(Math.max(0.1, 1 - (x / hw) ** 2 - (y / hh) ** 2)) +
-            0.007;
-          ball(x, y, z, 0.0017, 0.0015, 0.001, lip, head);
-        }
-    } else if (index === 1) {
-      for (let row = 0; row < 6; row++) {
-        const theta = 0.16 + row * 0.205;
-        for (let j = 0; j < 18; j++) {
-          const a = (j * Math.PI * 2) / 18 + row * 0.27;
-          ball(
-            0.151 * Math.sin(theta) * Math.cos(a),
-            0.192 * Math.cos(theta),
-            0.139 * Math.sin(theta) * Math.sin(a) - 0.012,
-            0.028,
-            0.026,
-            0.027,
-            hair,
-            head,
-          );
-        }
-      }
-      // Short, fitted beard follows the lower face, leaving the mouth visible.
-      for (let j = 0; j < 17; j++) {
-        const a = -1.3 + (j * 2.6) / 16;
-        ball(
-          0.106 * Math.sin(a),
-          -0.113 + 0.029 * Math.abs(Math.sin(a)),
-          0.1 * Math.cos(a),
-          0.023,
-          0.032,
-          0.02,
-          hair,
-          head,
-        );
-      }
-      for (let side of [-1, 1])
-        stroke(
-          [
-            [side * 0.016, -0.057, 0.141],
-            [side * 0.033, -0.06, 0.137],
-            [side * 0.049, -0.066, 0.122],
-          ],
-          0.006,
-          hair,
-        );
-    } else {
-      const cap = mesh(
-        new THREE.SphereGeometry(1, 40, 28, 0, Math.PI * 2, 0, 1.24),
-        hair,
-        head,
-      );
-      cap.scale.set(0.148, 0.21, 0.139);
-      cap.position.z = -0.02;
-      for (let j = 0; j < 9; j++)
-        stroke(
-          [
-            [-0.129 + j * 0.008, 0.1 + j * 0.006, 0.069],
-            [-0.08 + j * 0.013, 0.189, 0.085],
-            [0.035 + j * 0.01, 0.188 - j * 0.004, 0.074],
-            [0.123, 0.106 + j * 0.004, 0.025],
-          ],
-          0.009,
-          hair,
-        );
-      for (let side of [-1, 1]) {
-        const ring = mesh(
-          new THREE.TorusGeometry(0.038, 0.003, 10, 48),
-          shoes,
-          head,
-        );
-        ring.position.set(side * 0.061, 0.033, 0.148);
-        ring.scale.y = 0.82;
-        stroke(
-          [
-            [side * 0.101, 0.036, 0.147],
-            [side * 0.135, 0.038, 0.099],
-            [side * 0.146, 0.032, -0.011],
-          ],
-          0.003,
-          shoes,
-        );
-      }
-      stroke(
-        [
-          [-0.022, 0.034, 0.151],
-          [0, 0.043, 0.154],
-          [0.022, 0.034, 0.151],
-        ],
-        0.0028,
-        shoes,
-      );
-      for (let y of [0.099, 0.117])
-        stroke(
-          [
-            [-0.055, y, 0.111],
-            [0, y + 0.004, 0.126],
-            [0.055, y, 0.111],
-          ],
-          0.0012,
-          lip,
-        );
-    }
+    const { head, eyes } = createHead(index, skin, hair, torso);
     const arms = [-1, 1].map((side) => ({
       side,
       upper: capsule(0.06, shirt),
