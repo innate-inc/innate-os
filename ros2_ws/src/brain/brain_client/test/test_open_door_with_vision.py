@@ -815,3 +815,42 @@ def test_appearance_hint_is_optional_and_preserves_user_wording():
     skill._handle_color = "brushed Steel with black ends"
     assert "brushed Steel with black ends" in skill._appearance_hint()
     assert "vivid" not in skill._appearance_hint()
+
+
+@pytest.mark.parametrize("reachable", [True, False])
+def test_wrist_up_at_thirty_centimetres_uses_arm_reachability(monkeypatch, reachable):
+    from brain_client.robot.exceptions import ArmFailed
+    from brain_client.robot.manipulation import Manipulation
+
+    skill = OpenDoorWithVision(logging.getLogger("door-height-test"))
+    skill.manipulation = _ActionManipulation()
+    skill.manipulation.position[:] = [0.34, -0.018, 0.30]
+    skill.wrist_image = object()
+    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(skill, "_effort", lambda: (0.0,) * 5)
+    monkeypatch.setattr(skill, "_next_image", lambda *_args: object())
+    decisions = iter([("UP", None, "align shaft"), ("GRASP", None, "aligned")])
+    monkeypatch.setattr(skill, "_request_wrist_decision", lambda *_args, **_kwargs: next(decisions))
+    if not reachable:
+        # Exercise the real move_to rejection path: an IK failure must not
+        # issue a servo command or continue to the GRASP decision.
+        checked = []
+
+        def reject_ik(*args):
+            checked.append(args[:3])
+            return None
+
+        rejected = SimpleNamespace(_solve_ik=reject_ik)
+        monkeypatch.setattr(
+            skill.manipulation,
+            "move_to",
+            lambda *args, **kwargs: Manipulation.move_to(rejected, *args, **kwargs),
+        )
+        with pytest.raises(ArmFailed, match="IK found no solution"):
+            skill._wrist_align((0.34, -0.018, 0.30), restage=False)
+        assert checked == [(0.34, -0.018, 0.31)]
+        assert next(decisions)[0] == "GRASP"
+    else:
+        result = skill._wrist_align((0.34, -0.018, 0.30), restage=False)
+        assert result == pytest.approx((0.34, -0.018, 0.31))
+        assert skill.manipulation.moves == [(0.34, -0.018, 0.31)]

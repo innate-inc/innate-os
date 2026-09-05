@@ -106,7 +106,9 @@ def _wrist_action_pose(position, action):
     return (
         max(_WRIST_STAGING_X_M, min(_MAX_EE_X_M, x)),
         max(-0.10, min(0.10, y)),
-        max(_MIN_HANDLE_Z_M, min(_MAX_HANDLE_Z_M, z)),
+        # Handle-search height is not the arm workspace ceiling. move_to
+        # checks IK before sending every bounded wrist step to the servos.
+        max(_MIN_HANDLE_Z_M, z),
     )
 
 
