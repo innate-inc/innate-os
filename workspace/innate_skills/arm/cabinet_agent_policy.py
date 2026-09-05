@@ -35,9 +35,8 @@ base_step uses values [forward_metres,0,0], at most 3 cm. base_turn uses
 [yaw_radians,0,0], at most 0.12 rad, positive left. Do not turn while gripping.
 open_gripper/close_gripper/observe/done/give_up use [0,0,0]. close_gripper does
 not prove acquisition: inspect aperture, effort and new images before pulling.
-After verified acquisition, plan a substantial opening pull: the existing
-open_door_with_vision skill pulls about 0.40 m outward, then sweeps the held
-handle toward robot-left as reach allows. A 2-5 cm tug is only the START of
+After verified acquisition, plan a substantial opening pull: about 0.40 m
+outward, then sweep the held handle toward robot-left as reach allows. A 2-5 cm tug is only the START of
 opening, not a sufficient attempt. First retract the level arm within its
 reachable workspace, then continue straight backward with repeated base_step
 [-0.03,0,0] actions, observing between steps. An arm IK rejection means switch
@@ -50,7 +49,7 @@ is NOT by itself excessive ARM load or a reason to release. Assess arm joints
 little door gap. Continue toward about 40 cm unless the door is already open,
 the grasp slips, arm effort is excessive, measured motion fails, or images show
 an obstruction. If the hinge requires lateral motion, follow its observed arc
-with bounded level wrist moves; the existing fixture's opening sequence sweeps
+with bounded level wrist moves; this fixture's opening sequence sweeps
 left after retreat. Never force an unreachable side sweep or turn while gripping.
 A move completing does not prove the door opened. Only call done after an
 unambiguous new image shows the door open and the gripper released. Uncertain
@@ -103,13 +102,33 @@ class CabinetPolicy:
     def __init__(self, *, model=None, transport=None):
         self.model = model or os.environ.get("INNATE_CABINET_MODEL", MODEL)
         self.key = os.environ.get("OPENAI_API_KEY", "").strip()
-        if not self.key and transport is None:
-            raise ValueError("Set OPENAI_API_KEY in the skills-server environment before running")
+        self.proxy = None
+        if transport is None:
+            from innate_proxy import ProxyClient
+
+            client = ProxyClient()
+            if client.is_available():
+                self.proxy = client
+            elif not self.key:
+                raise ValueError("Configure INNATE_SERVICE_KEY, or OPENAI_API_KEY for local development")
+        self.backend = "innate-proxy" if self.proxy is not None else "direct"
         self.transport = transport or self._post
         self.history = []
         self.calls = 0
 
     def _post(self, payload):
+        if self.proxy is not None:
+            try:
+                with self.proxy.request_stream(
+                    "openai", "/v1/responses", method="POST", json=payload, timeout=45
+                ) as response:
+                    if response.status_code >= 400:
+                        raise RuntimeError(
+                            f"Innate OpenAI proxy HTTP {response.status_code}; check service access and quota"
+                        )
+                    return json.loads(response.read())
+            finally:
+                self.proxy.close()
         request = urllib.request.Request(
             "https://api.openai.com/v1/responses",
             data=json.dumps(payload, allow_nan=False).encode(),

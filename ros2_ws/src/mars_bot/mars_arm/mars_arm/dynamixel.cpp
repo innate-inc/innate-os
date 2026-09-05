@@ -87,14 +87,6 @@ void Dynamixel::disableTorque(int motor_id) {
     writeRegister(motor_id, ADDR_TORQUE_ENABLE, 0, 1, "disable torque");
 }
 
-bool Dynamixel::isTorqueEnabled(int motor_id) {
-    uint8_t enabled = 0;
-    uint8_t dxl_error = 0;
-    checkComm(packet_handler_->read1ByteTxRx(port_handler_, motor_id, ADDR_TORQUE_ENABLE, &enabled, &dxl_error),
-              motor_id, "read torque enable");
-    return enabled != 0;
-}
-
 void Dynamixel::setOperatingMode(int motor_id, OperatingMode mode) {
     writeRegister(motor_id, OPERATING_MODE_ADDR, static_cast<uint8_t>(mode), 1, "set operating mode");
 }

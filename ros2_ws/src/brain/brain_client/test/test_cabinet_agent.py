@@ -1,13 +1,20 @@
 """Responses contract and native Skill integration without API or robot motion."""
 
+import io
 import json
 import logging
+import os
+import sys
 import threading
 import time
+from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from innate_skills.arm.cabinet_agent_policy import CabinetPolicy, validate_action
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "workspace"))
+from innate_skills.arm.cabinet_agent_policy import CabinetPolicy, validate_action  # noqa: E402
 
 
 def reply(action="observe", values=None):
@@ -94,16 +101,14 @@ def test_incomplete_or_parallel_output(response):
         CabinetPolicy(transport=lambda _: response).decide({}, {}, time.sleep)
 
 
-@pytest.fixture(params=["gpt", "gemini"])
-def native(monkeypatch, request):
+@pytest.fixture
+def native(monkeypatch):
     pytest.importorskip("rclpy")
-    import importlib
+    from innate_skills.arm import open_cabinet_with_gpt as module
 
     from innate import MainImage, WristImage
 
-    module = importlib.import_module(f"innate_skills.arm.open_cabinet_with_{request.param}")
-    cls = module.OpenCabinetWithGpt if request.param == "gpt" else module.OpenCabinetWithGemini
-    skill = cls(logging.getLogger("cabinet-test"))
+    skill = module.OpenCabinetWithGpt(logging.getLogger("cabinet-test"))
     calls = []
     skill.manipulation = SimpleNamespace(
         pose=SimpleNamespace(position=(0.24, 0, 0.25), rpy=(0, 0, 0)),
@@ -125,7 +130,7 @@ def native(monkeypatch, request):
     monkeypatch.setattr(skill, "_move_wrist", lambda target, duration: calls.append("wrist"))
     monkeypatch.setattr(skill, "sleep", lambda _: None)
     monkeypatch.setattr(skill, "feedback", lambda *a: None)
-    monkeypatch.setattr(module.OpenCabinetWithGpt, "_level_ik", SimpleNamespace(solve=lambda *a: None))
+    monkeypatch.setattr(module.OpenCabinetWithGpt, "_level_ik", SimpleNamespace(solve=lambda *a: (0,) * 5))
     return module, skill, calls
 
 
@@ -133,7 +138,7 @@ def test_native_registration_and_loop(native, monkeypatch):
     module, skill, calls = native
     from innate import Skill
 
-    assert skill.name in ("open_cabinet_with_gpt", "open_cabinet_with_gemini")
+    assert skill.name == "open_cabinet_with_gpt"
     assert type(skill) in Skill._registry.values()
     sequence = iter([reply("close_gripper"), reply("base_turn", [0.1, 0, 0]), reply("open_gripper"), reply("done")])
     policy = CabinetPolicy(transport=lambda _: next(sequence))
@@ -144,7 +149,7 @@ def test_native_registration_and_loop(native, monkeypatch):
     assert any("Release gripper" in m.get("output", "") for m in policy.history)
 
 
-def test_missing_key_no_motion(native, monkeypatch):
+def test_missing_key_no_motion(native, monkeypatch, proxy_requests):
     _, skill, calls = native
     from innate.exceptions import SkillFailed
 
@@ -174,6 +179,9 @@ def test_native_stop_cleans_up_before_late_reply(native, monkeypatch):
     from innate.exceptions import SkillCancelled
 
     class CancelPolicy:
+        model = "test"
+        backend = "test"
+
         def decide(self, *args):
             raise SkillCancelled()
 
@@ -214,3 +222,100 @@ def test_real_ik_respects_sim_shoulder_guard():
     planner.fk.JntToCart(q, frame)
     assert tuple(frame.p[i] for i in range(3)) == pytest.approx(target, abs=0.005)
     assert max(abs(v) for v in frame.M.GetRPY()[:2]) < math.radians(3)
+
+
+@pytest.fixture
+def proxy_requests(monkeypatch):
+    from innate_skills.arm import cabinet_agent_policy as module
+
+    import innate_proxy
+
+    sent = []
+    state = SimpleNamespace(status=200, closed=0, direct=[])
+
+    class Proxy:
+        def is_available(self):
+            return bool(os.environ.get("INNATE_SERVICE_KEY"))
+
+        @contextmanager
+        def request_stream(self, service, endpoint, **kwargs):
+            sent.append((service, endpoint, kwargs))
+            yield SimpleNamespace(status_code=state.status, read=lambda: json.dumps(reply()).encode())
+
+        def close(self):
+            state.closed += 1
+
+    def direct(request, **kwargs):
+        state.direct.append(request)
+        return io.BytesIO(json.dumps(reply()).encode())
+
+    monkeypatch.setattr(innate_proxy, "ProxyClient", Proxy)
+    monkeypatch.setattr(module.urllib.request, "urlopen", direct)
+    monkeypatch.delenv("INNATE_SERVICE_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    return sent, state
+
+
+@pytest.mark.parametrize("service,direct", [(True, False), (True, True), (False, True)])
+def test_credential_routing(proxy_requests, monkeypatch, service, direct):
+    sent, state = proxy_requests
+    if service:
+        monkeypatch.setenv("INNATE_SERVICE_KEY", "test-service-credential")
+    if direct:
+        monkeypatch.setenv("OPENAI_API_KEY", "test-direct-credential")
+    policy = CabinetPolicy()
+    call, action = policy.decide({}, {}, time.sleep)
+    policy.result(call, "Observed")
+    policy.decide({}, {}, time.sleep)  # The proxy remains reusable after request cleanup.
+    assert action[0] == "observe"
+    assert policy.backend == ("innate-proxy" if service else "direct")
+    assert len(sent) == (2 if service else 0)
+    assert len(state.direct) == (0 if service else 2)
+    if service:
+        assert state.closed == 2
+        assert sent[0][:2] == ("openai", "/v1/responses")
+        payload = sent[0][2]["json"]
+    else:
+        assert state.direct[0].get_header("Authorization") == "Bearer test-direct-credential"
+        payload = json.loads(state.direct[0].data)
+    assert payload["service_tier"] == "priority"
+    assert "credential" not in json.dumps(payload)
+
+
+@pytest.mark.parametrize("status", [401, 429])
+def test_proxy_failure_does_not_fall_back_to_personal_key(proxy_requests, monkeypatch, status):
+    sent, state = proxy_requests
+    monkeypatch.setenv("INNATE_SERVICE_KEY", "test-service-credential")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-direct-credential")
+    state.status = status
+    with pytest.raises(RuntimeError, match=f"proxy HTTP {status}"):
+        CabinetPolicy().decide({}, {}, time.sleep)
+    assert len(sent) == state.closed == 1
+    assert not state.direct
+
+
+def test_effort_preflight_rejects_stale_and_excessive_arm_load(native):
+    module, skill, _ = native
+    from innate.exceptions import SkillFailed
+
+    skill.joint_states.received_at = time.monotonic()
+    skill.joint_states.effort = (0, 0, 0, 0, 0, -100)
+    assert module.OpenCabinetWithGpt._effort(skill) == (0,) * 5  # Closing effort is expected.
+    skill.joint_states.effort = (0, 91, 0, 0, 0, -100)
+    with pytest.raises(SkillFailed, match="exceeds"):
+        module.OpenCabinetWithGpt._effort(skill)
+    skill.joint_states.received_at -= 1
+    with pytest.raises(SkillFailed, match="stale"):
+        module.OpenCabinetWithGpt._effort(skill)
+
+
+@pytest.mark.parametrize("position,pitch", [((0.26, 0, 0.25), 0), ((float("nan"), 0, 0.25), 0), ((0.24, 0, 0.25), 0.2)])
+def test_executed_wrist_must_reach_finite_level_pose(native, position, pitch):
+    module, skill, calls = native
+    from innate.exceptions import SkillFailed
+
+    skill.manipulation.move_joints = lambda *a, **k: calls.append("move")
+    skill.manipulation.pose = SimpleNamespace(position=position, rpy=(0, pitch, 0))
+    with pytest.raises(SkillFailed, match="did not reach"):
+        module.OpenCabinetWithGpt._move_wrist(skill, (0.24, 0, 0.25), 1.0)
+    assert calls == ["move", "arm_stop"]

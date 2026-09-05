@@ -3,23 +3,45 @@
 """Experimental camera/telemetry tool agent for the house cabinet fixture."""
 
 import math
+import time
 
-from innate import SkillReturn, resource
+from innate import (
+    Head,
+    JointStates,
+    MainImage,
+    Manipulation,
+    Mobility,
+    Odometry,
+    Skill,
+    SkillReturn,
+    WristImage,
+    resource,
+)
 from innate.exceptions import ArmFailed, ArmUnhealthy
 
 from .cabinet_agent_policy import CabinetPolicy
-from .open_door_with_vision import OpenDoorWithVision
 
 
-class OpenCabinetWithGpt(OpenDoorWithVision):
+class OpenCabinetWithGpt(Skill):
     """Open the lower kitchen cabinet with GPT-6 Astra and camera feedback.
 
     Start facing the cabinet within about 60 cm, arm clear of obstacles and
     gripper empty. Experimental: developed for the house simulator fixture.
-    Requires OPENAI_API_KEY on the skills server. Uses head/wrist images and
-    measured poses, bounded level-arm/base actions, and visual verification.
+    Uses the Innate service key, or OPENAI_API_KEY for local development.
+    Uses head/wrist images and measured poses, bounded level-arm/base actions,
+    and visual verification.
     No scene-open command or privileged cabinet pose is exposed to the model.
     """
+
+    manipulation: Manipulation
+    mobility: Mobility
+    head: Head
+    main_image: MainImage
+    wrist_image: WristImage
+    joint_states: JointStates
+    odom: Odometry
+    debug_enabled = True
+    _frame_index = 0
 
     def _make_policy(self):
         return CabinetPolicy()
@@ -34,7 +56,12 @@ class OpenCabinetWithGpt(OpenDoorWithVision):
         return LevelHandleIK(shoulder_floor=-0.25)
 
     def _effort(self):
-        values = super()._effort()
+        age = time.monotonic() - self.joint_states.received_at
+        if self.joint_states.received_at <= 0.0 or age > 0.25:
+            self.fail("Arm effort feedback is stale during handle approach")
+        values = tuple(float(value) for value in self.joint_states.effort[:5])
+        if len(values) != 5 or not all(math.isfinite(value) for value in values):
+            self.fail("Arm effort feedback is unavailable during handle approach")
         if max(abs(value) for value in values) > 90.0:
             self.fail("Arm effort exceeds 90 percent; stopping cabinet manipulation")
         return values
@@ -109,6 +136,7 @@ class OpenCabinetWithGpt(OpenDoorWithVision):
             policy = self._make_policy()  # Fail for missing credentials BEFORE any motion.
         except ValueError as error:
             self.fail(str(error))
+        self.debug_event("policy_configured", model=policy.model, backend=policy.backend)
         self._frame_index = 0
         self._grip_commanded = False
         self._base_travel = 0.0
@@ -152,3 +180,105 @@ class OpenCabinetWithGpt(OpenDoorWithVision):
             # handle. No automatic opening or folding into the door.
             self.mobility.stop()
             self.manipulation.stream_stop()
+
+    def _odom_xyt(self):
+        pose = self.mobility.odom_xyt(self.odom)
+        if pose is None:
+            self.fail("Odometry is required for handle acquisition")
+        return pose
+
+    def _save_frame(self, image, camera: str, label: str):
+        frame_name = f"{self._frame_index:02d}_{camera}_{label}.jpg"
+        self._frame_index += 1
+        directory = self.debug_directory
+        if directory is not None:
+            try:
+                (directory / frame_name).write_bytes(image.jpeg)
+            except Exception as error:  # noqa: BLE001 - observability must not block safety
+                self.logger.warning(f"[OpenCabinetWithGpt] could not save {frame_name}: {error}")
+        return frame_name
+
+    def _next_image(self, camera, previous, timeout=1.5):
+        started = time.monotonic()
+        while time.monotonic() - started < timeout:
+            image = self.main_image if camera == "head" else self.wrist_image
+            if image is not previous:
+                return image
+            self.sleep(0.04)
+        self.fail(f"No fresh {camera} camera frames while measuring the handle")
+
+    def _rotate(self, radians):
+        before = self._odom_xyt()
+        if not self.mobility.rotate_by(self._odom_xyt, radians, logger=self.logger):
+            self.fail("Base rotation failed during handle acquisition")
+        self.debug_event("base_rotation", requested_rad=radians, before=list(before), after=list(self._odom_xyt()))
+
+    def _drive(self, metres):
+        before = self._odom_xyt()
+        if not self.mobility.drive(
+            self._odom_xyt, metres, kp=2.0, v_min=0.01, v_max=0.06, tolerance=0.003, logger=self.logger
+        ):
+            self.fail("Base motion failed during handle acquisition")
+        after = self._odom_xyt()
+        forward = (after[0] - before[0]) * math.cos(before[2]) + (after[1] - before[1]) * math.sin(before[2])
+        self.debug_event(
+            "base_translation", requested_m=metres, measured_forward_m=forward, before=list(before), after=list(after)
+        )
+        self.logger.info(f"[handle base] requested={metres:+.3f}m measured forward={forward:+.3f}m")
+        if abs(forward - metres) > 0.005:
+            self.fail(f"Base missed requested travel: requested {metres:+.3f}m, measured {forward:+.3f}m")
+
+    def _move_wrist(self, target, duration):
+        """Reject missed poses instead of accumulating fictitious progress."""
+        self._effort()  # Reject stale arm telemetry before planning.
+        try:
+            joints = self._level_ik.solve(target, tuple(self.joint_states.position[:5]))
+        except ValueError as error:
+            self.fail(str(error))
+        self.debug_event("level_wrist_plan", target=list(target), joints=list(joints))
+        self.check_cancelled()
+        self.manipulation.move_joints(joints, duration=duration)
+        self.sleep(0.15)  # Allow a fresh FK sample after joint motion completes.
+        settled = self.manipulation.pose
+        error = tuple(settled.position[i] - target[i] for i in range(3))
+        roll, pitch, _yaw = settled.rpy
+        self.debug_event(
+            "wrist_tracking",
+            target=list(target),
+            measured=list(settled.position),
+            error=list(error),
+            measured_rpy=list(settled.rpy),
+        )
+        self.logger.info(
+            f"[handle tracking] xyz error={tuple(round(v, 3) for v in error)}m "
+            f"roll={math.degrees(roll):+.1f}deg pitch={math.degrees(pitch):+.1f}deg"
+        )
+        if (
+            not all(math.isfinite(v) for v in (*error, roll, pitch))
+            or max(abs(v) for v in error) > 0.010
+            or max(abs(roll), abs(pitch)) > math.radians(5)
+        ):
+            self.manipulation.stream_stop()
+            self.fail("Arm did not reach the level wrist target; stopping instead of accumulating missed motion")
+        return settled
+
+    def _ensure_wrist_level(self):
+        """Verify measured orientation before interpreting the wrist image."""
+        pose = self.manipulation.pose
+        roll, pitch, _yaw = pose.rpy
+        if not all(math.isfinite(value) for value in (roll, pitch)):
+            self.fail("Cannot verify gripper is horizontal: invalid orientation feedback")
+        corrected = max(abs(roll), abs(pitch)) > math.radians(5)
+        if corrected:
+            self.logger.info("[handle] leveling gripper before wrist vision")
+            self._move_wrist(tuple(pose.position), 0.8)
+            # Read actual feedback again; a requested level pose is not proof.
+            pose = self.manipulation.pose
+            roll, pitch, _yaw = pose.rpy
+        if not all(math.isfinite(value) for value in (roll, pitch)) or max(abs(roll), abs(pitch)) > math.radians(5):
+            self.fail("Gripper is not horizontal; wrist vision is paused")
+        self.logger.info(
+            f"[handle] horizontal verified: roll={math.degrees(roll):+.1f}deg pitch={math.degrees(pitch):+.1f}deg"
+        )
+        self.debug_event("wrist_horizontal_verified", roll=roll, pitch=pitch, corrected=corrected)
+        return corrected

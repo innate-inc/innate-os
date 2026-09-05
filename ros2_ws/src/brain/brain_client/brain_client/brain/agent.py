@@ -96,7 +96,6 @@ class BrainAgent:
         battery: BatteryMonitor | None = None,
         identity: IdentityMonitor | None = None,
         trace: Callable[[str], None] | None = None,
-        record_trace: Callable[[str], None] | None = None,
     ):
         self._logger = node.get_logger()
         self._state = state
@@ -110,8 +109,6 @@ class BrainAgent:
         self._chat = chat
         self._gaze = gaze
         self._trace_sink = trace  # publishes one JSON string per event on /brain/trace
-        self._trace_recorder = record_trace
-        self._trace_record_failed = False
         self._lidar = ScanHealthReporter(
             scan_health, pose_tracker, chat, self._logger, enabled=not config.simulator_mode
         )
@@ -650,54 +647,30 @@ class BrainAgent:
         ``heavy`` marks events carrying request bodies or frames — hundreds of
         KB to serialize per turn, published only while something subscribes.
         """
-        payload = json.dumps({"ev": event, "t": time.time(), **fields})
-        if not heavy:
-            self._record_trace(payload)
-        if self._trace_sink is not None and (not heavy or self.trace_has_audience()):
-            self._trace_sink(payload)
-
-    def _record_trace(self, payload: str) -> None:
-        if self._trace_recorder is None:
+        if self._trace_sink is None or (heavy and not self.trace_has_audience()):
             return
-        try:
-            self._trace_recorder(payload)
-            self._trace_record_failed = False
-        except Exception as error:
-            if not self._trace_record_failed:
-                self._logger.error(f"[Brain] Could not persist agent trace: {error}")
-            self._trace_record_failed = True
+        self._trace_sink(json.dumps({"ev": event, "t": time.time(), **fields}))
 
     def _trace_request(self, body: dict) -> None:
-        # Retain the exact request (including conversation context) so a run
-        # can be reconstructed after the live monitor has disconnected.
-        payload = json.dumps({"ev": TraceEvent.TURN_REQUEST, "t": time.time(), "turn": self._turn_count, "body": body})
-        self._record_trace(payload)
-        if self._trace_sink is not None and self.trace_has_audience():
-            self._trace_sink(payload)
+        self._trace(TraceEvent.TURN_REQUEST, heavy=True, turn=self._turn_count, body=body)
 
     def _trace_turn_start(
         self, text: str, frames: list[Frame], tools: list[dict], system: str, context: GeminiContext
     ) -> None:
-        # This is the evidence for what the agent saw before choosing a skill.
-        # It is intentionally retained even when the live Brain page is closed;
-        # the recorder is bounded and rotates its JSONL files.
-        payload = json.dumps(
-            {
-                "ev": TraceEvent.TURN_START,
-                "t": time.time(),
-                "turn": self._turn_count,
-                "input": text,
-                "images": len(frames),
-                "tools": [d["name"] for d in tools[0]["functionDeclarations"]],
-                "history": context.history_len,
-                "history_images": context.image_turn_count,
-                "system": system,
-                "frames": [{"label": label, "jpeg": base64.b64encode(jpeg).decode()} for label, jpeg in frames],
-            }
+        if self._trace_sink is None or not self.trace_has_audience():
+            return  # skip the base64 work entirely, not just the publish
+        self._trace(
+            TraceEvent.TURN_START,
+            heavy=True,
+            turn=self._turn_count,
+            input=text,
+            images=len(frames),
+            tools=[d["name"] for d in tools[0]["functionDeclarations"]],
+            history=context.history_len,
+            history_images=context.image_turn_count,
+            system=system,
+            frames=[{"label": label, "jpeg": base64.b64encode(jpeg).decode()} for label, jpeg in frames],
         )
-        self._record_trace(payload)
-        if self._trace_sink is not None and self.trace_has_audience():
-            self._trace_sink(payload)
 
     async def _heartbeat(self) -> None:
         while True:

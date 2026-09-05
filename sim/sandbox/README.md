@@ -115,29 +115,3 @@ gitignored and never reaches a runner any other way.
 - `uv run sandbox/drive_mars.py` -- interactive viewer with the real URDF;
   drive from http://localhost:8766/control_panel.html (WASD/joystick over a
   local WebSocket -- macOS mjpython limitations rule out viewer-native keys).
-
-### Opening the kitchen cabinet
-
-The lower sink cabinet has a passive MuJoCo hinge and a vertical handle centered
-30 cm above the floor. Its dimensions live in `sim/viewer/config/cabinet.json`.
-The browser and robot-camera meshes retain the original door UVs and kitchen
-texture. Source apartment assets are unchanged; the world builder caches carved
-collision/visual variants and replaces the solid cabinet with a hollow carcass.
-
-From the repository root, run:
-
-```sh
-sim/.venv/bin/python sim/sandbox/cabinet_demo.py --record
-cd sim/viewer
-npm exec vite -- --host 127.0.0.1 --port 5187
-```
-
-Visit `http://127.0.0.1:5187/cabinet-demo.html`. Open, close, and replay use recorded
-poses from the full MuJoCo apartment, driven by bounded external hinge torque.
-This validates the articulation, not an autonomous MARS grasp-and-pull policy.
-The script also checks collision clearance throughout the opening arc, resting
-stability, the upper stop, reset, and URDF reach at the handle height. The normal
-viewer follows this same door from the world server's object-pose stream. In the
-full house, open **Scene setup → Kitchen cabinet** to view, open, or close it.
-These controls apply a bounded torque for at most eight seconds, then release
-the hinge; reset cancels any in-progress motion.

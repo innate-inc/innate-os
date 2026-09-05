@@ -728,8 +728,7 @@ def _index_feed_declarations(cls) -> None:
 class Skill(ABC):
     # Stamped by the loader to "shipped" or "user" based on origin directory.
     source: Source = "user"
-    # Opt-in persistent trace. Skills that call debug_event() are also traced
-    # lazily, but this guarantees construction/preflight failures are exportable.
+    # Opt-in persistent trace, including preflight failures.
     debug_enabled = False
 
     # Every subclass registers itself here at definition time, PyTorch-style:
@@ -880,7 +879,7 @@ class Skill(ABC):
     def debug_event(self, event: str, **fields) -> None:
         """Append structured state/decision data to this run's export bundle."""
         context = vars(self).get("_debug_context")
-        if context is None:
+        if not self.debug_enabled or context is None:
             return  # direct unit calls and legacy runners have no correlated run
         debug_run = vars(self).get("_debug_run")
         if debug_run is None:

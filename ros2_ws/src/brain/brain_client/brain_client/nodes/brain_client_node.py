@@ -30,7 +30,6 @@ from brain_client.agents.initializer import initialize_agents
 from brain_client.brain.agent import BrainAgent
 from brain_client.brain.memory_search import MemorySearch
 from brain_client.brain.search_server import MemorySearchServer
-from brain_client.brain.trace_recorder import AgentTraceRecorder
 from brain_client.brain.transport import pick_rest
 from brain_client.brain.utils import EventKind
 from brain_client.common.script_paths import get_innate_os_root
@@ -95,7 +94,6 @@ class BrainClientNode(Node):
 
         self._proxy = self._init_proxy()
         self._tts_handler = self._init_tts()
-        self.agent_trace_recorder = AgentTraceRecorder()
 
         # --- helper node for synchronous service calls (not spun by the executor) ---
         self._service_call_node = rclpy.create_node("brain_client_service_caller")
@@ -232,7 +230,6 @@ class BrainClientNode(Node):
             battery=self.battery,
             identity=self.identity,
             trace=lambda payload: self.brain_trace_pub.publish(String(data=payload)),
-            record_trace=self.agent_trace_recorder.record,
         )
         # Heavy traces (request bodies, frames — hundreds of KB per turn) are
         # only serialized while a monitor actually subscribes to /brain/trace.

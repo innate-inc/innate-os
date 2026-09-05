@@ -361,46 +361,6 @@ void MarsArmNode::armTorqueOffCallback(const std::shared_ptr<std_srvs::srv::Trig
     }
 }
 
-void MarsArmNode::armJointTorqueCallback(int servo_id, const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-                                         std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
-    RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/joint%d/torque (%s)", servo_id,
-                request->data ? "on" : "off");
-    try {
-        std::lock_guard<std::mutex> lock(dynamixel_mutex_);
-        if (request->data) {
-            // Capture the actual pose before re-enabling so the control loop cannot
-            // immediately command the joint back toward a stale target.
-            syncTargetToMotorPositions();
-            dynamixel_->enableTorque(servo_id);
-            reapplyGoalCurrentLocked(servo_id);
-        } else {
-            dynamixel_->disableTorque(servo_id);
-        }
-
-        std::array<bool, 6> torque_enabled{};
-        std::string torque_states = "[";
-        arm_torque_enabled_ = true;
-        for (int motor_id = 1; motor_id <= 6; ++motor_id) {
-            torque_enabled[motor_id - 1] = dynamixel_->isTorqueEnabled(motor_id);
-            arm_torque_enabled_ = arm_torque_enabled_ && torque_enabled[motor_id - 1];
-            torque_states += torque_enabled[motor_id - 1] ? "on" : "off";
-            torque_states += motor_id == 6 ? "]" : ",";
-        }
-
-        const bool requested_joint_enabled = torque_enabled[servo_id - 1];
-        response->success = requested_joint_enabled == request->data;
-        response->message = "Joint " + std::to_string(servo_id) + " torque is " +
-                            (requested_joint_enabled ? "enabled" : "disabled") + "; arm torque states " + torque_states;
-        if (!response->success) {
-            RCLCPP_ERROR(this->get_logger(), "Joint %d torque readback did not match request", servo_id);
-        }
-    } catch (const std::exception& e) {
-        response->success = false;
-        response->message = std::string("Failed: ") + e.what();
-        RCLCPP_ERROR(this->get_logger(), "Failed to set joint %d torque: %s", servo_id, e.what());
-    }
-}
-
 void MarsArmNode::armRebootServosCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
                                           std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/reboot");

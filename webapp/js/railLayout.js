@@ -16,7 +16,7 @@
 // runs the same IK node and answers the goto services, so the page exercises
 // the real Manipulation SDK against the simulated arm. The router gates its
 // routes on this set too (route keys are section keys).
-export const SIM_SECTIONS = new Set(["teleop", "agent", "nav", "logging", "armsdk", "approach", "settings"]);
+export const SIM_SECTIONS = new Set(["teleop", "agent", "nav", "logging", "armsdk", "settings"]);
 
 // The rail is grouped: standalone pages ride alone; multi-page workflows carry
 // an eyebrow label (visible while the rail is hover-expanded; collapsed, a
@@ -101,12 +101,6 @@ export const GROUPS = [
         label: "Arm SDK",
         // Articulated-arm motif: base, two links with a joint, and a claw.
         icon: '<circle cx="6" cy="19" r="2"/><path d="M7.5 17.5L10.5 10"/><circle cx="11" cy="8.8" r="1.4"/><path d="M12.3 8L17 5.5"/><path d="M17 5.5l2.5 1M17 5.5l.5 2.7"/>',
-      },
-      {
-        key: "approach",
-        label: "Approach",
-        // Crosshair over a target: what the skill is aiming the base at.
-        icon: '<rect x="4" y="4" width="16" height="16" rx="2"/><line x1="12" y1="7" x2="12" y2="17"/><line x1="7" y1="12" x2="17" y2="12"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/>',
       },
       {
         key: "calibration",

@@ -1,107 +1,82 @@
 # GPT-6 cabinet skill
 
-Skill: `innate-os/open_cabinet_with_gpt`, alongside
-`innate-os/open_door_with_vision` on `codex/pull-held-handle`
-(PR #737, includes the kitchen fixture).
+`innate-os/open_cabinet_with_gpt` opens the lower kitchen cabinet using
+GPT-6 Astra, head/wrist cameras and measured robot state. PR #737 contains this
+single cabinet-opening implementation and the hinged house-simulator fixture.
 
-## Source and adaptation
+## Credentials
 
-Jay Chooi's [tweet](https://x.com/chooi_jeq/status/2096064315115839904)
-reports GPT-6 Astra robot control results. The closest verified public
-implementation is Robocurve's
-[inspect-robots-agent](https://github.com/robocurve/inspect-robots/tree/main/plugins/inspect-robots-agent).
-Reference inspected at commit `7e4d1b7aee1c0d3cfc3a05a7492b9d12cda666f9`.
-This is an independent, smaller adaptation of its observation → single bounded
-motion → measured observation loop, two-image-observation history, and motion
-notes. It is not a reproduction of the tweet's evaluation or success rate.
-We reuse Innate's skill lifecycle, cameras, level IK and measured motion checks
-instead of introducing a second robotics runtime or executing generated code.
+Managed robots use their existing `INNATE_SERVICE_KEY`. `CabinetPolicy` routes
+OpenAI Responses requests through `innate_proxy.ProxyClient`; the provider key
+stays in Innate's service proxy. No personal OpenAI key is required on the robot.
 
-The policy gets both cameras, measured wrist pose, named joint state/efforts,
-and base odometry. It has absolute level-wrist targets, short base translations
-and rotations, gripper commands, observe, done and give_up. No door-state/set-angle
-or scene manipulation shortcut is exposed. Success is explicitly model-reported
-visual evidence, not an independent physics score.
+For standalone development without service credentials, set `OPENAI_API_KEY`
+in the skills-server environment (the private root `.env` for the simulator).
+It is used only when Innate service credentials are absent. A proxy access or
+quota error fails the run instead of silently charging a personal account.
+Missing both credentials fails before motion. Never commit credentials.
 
-## Key and model
+Default model: `gpt-6-astra`, `service_tier: "priority"`, low reasoning and
+4096 maximum output tokens. `INNATE_CABINET_MODEL` can override the exact model
+ID. Service credentials need access to OpenAI through the proxy.
 
-Set `OPENAI_API_KEY` in the **skills-server process environment**. For Docker,
-add it to that simulator's private environment configuration and recreate the
-container when ready; exporting it in an unrelated host terminal is insufficient.
-Do not put a real key in this document or git. The skill fails before movement
-if the key is missing. No Innate proxy or Gemini key is needed for this loop.
+## Running and inspecting
 
-Default model: `gpt-6-astra`, Responses API, `service_tier: "priority"`, low reasoning,
-4096 output-token cap.
-Optional environment override: `INNATE_CABINET_MODEL` (exact API model ID).
-See [official model documentation](https://developers.openai.com/api/docs/models/gpt-6-astra).
-Actual model access must be checked with the supplied account key.
+Start the house simulator, face the lower cabinet within about 60 cm, and
+ensure the arm path is clear and the gripper empty. Launch
+`open_cabinet_with_gpt` through the normal skill launcher. Its only input is
+`max_steps` (default 60, allowed 1–100).
 
-Start the house simulator on this branch, face the lower cabinet within about
-60 cm, and ensure the arm path is clear and the gripper empty. Invoke
-`open_cabinet_with_gpt` through the normal skill launcher (`max_steps=60`).
-It stages a horizontal wrist at base XYZ (0.30, 0, 0.30) m. Size priors match the
-fixture: a 12 cm vertical dark-metal handle centered 30 cm above the floor.
+The skill stages a horizontal wrist at base XYZ (0.30, 0, 0.30) m. Each decision
+gets labeled head/wrist images, measured wrist XYZ/orientation, joint
+positions/efforts, odometry and the commanded grip state. It preserves text,
+action results and reasoning state, plus the newest two image pairs.
+The model returns one validated action with values and an evidence note.
 
-Wrist actions are capped at 3 cm and level-IK checked, including a conservative
-−0.25 rad shoulder floor so the simulator clearance guard does not alter them; base steps at 3 cm,
-turns at 0.12 rad, cumulative travel at 1 m, cumulative turning at 1.2 rad.
-Fresh frames are required after each action. Three consecutive invalid motion
-plans stop the run. Stop interrupts the API waiter; late responses cannot move
-the robot. Cleanup halts arm/base and preserves the grip. No automatic release
-or folding on failure. Skill debug traces store observations, notes and frames.
+Actions are absolute level-wrist targets, base translations/rotations, gripper
+commands, observe, done and give_up. Wrist/base steps are capped at 3 cm, turns
+at 0.12 rad, cumulative base travel at 1 m and cumulative turning at 1.2 rad.
+Level IK includes a conservative −0.25 rad shoulder floor to respect the
+simulator's base-clearance guard. Measured arm/base tracking is checked after
+motion; fresh camera and arm-effort feedback is required. Turning while
+commanded to grip is rejected.
 
-## Validation boundary
+Opening guidance calls for roughly 40 cm of outward progress, using the arm
+then base in small steps before following the leftward hinge arc. This is
+model guidance, not a mechanically forced minimum. Gripper closing effort is
+separate from the arm load limit. Lost grasp, obstruction, excessive arm load
+or failed tracking remain reasons to stop.
 
-Contract tests exercise request history, bounded actions, malformed/incomplete
-model output and cancellation while HTTP is in flight. Native ROS skill tests
-exercise registration, camera/leveling flow, gripper/turn rejection, cleanup,
-missing-key preflight and unreachable targets with mocked actuators/model.
-These are scaffolding tests, not evidence of successful physical manipulation.
-A complete GPT-6 grasp/pull run and independent hinge-angle verification remain
-pending. Use the simulator for that full manipulation test.
+Stop interrupts the API waiter; a late response cannot move the robot. Cleanup
+halts arm/base while preserving the grip. Three consecutive rejected plans,
+API failure or decision-budget exhaustion fail the skill. Success is the
+model's visual assessment after release, not an independent physics score.
 
-Verified locally: 17 contract/native tests plus 46 existing door tests passed
-in the ROS container (63 total); Ruff and diff checks passed.
+Opt-in skill traces include camera frames, measured observations, decisions,
+credential backend (never the key), tracking checks and terminal status.
+Export the latest run with:
 
-Live simulator regression: staging reached (0.3014, 0.0005, 0.2975) m with
-0.64 degrees pitch, then a real GPT-6 camera request selected a 2.5 cm left
-move that tracked within 1.5 mm per axis. The run intentionally used
-`max_steps=1` and ended with decision-budget exhaustion. The earlier staging
-pose requested shoulder -0.83 rad, which the simulator limited to -0.25;
-IK now rejects that pose before sending it. Horizontal checks remain intact.
+```sh
+innate skill debug-export open_cabinet_with_gpt
+```
 
-The opening guidance now follows `open_door_with_vision`'s approximate 40 cm
-outward pull, arm first and then base, before following the leftward hinge arc.
-It keeps the existing 3 cm per-action limit and observations between moves.
-A short tug without a visible gap is not an exhausted opening attempt, and
-joint6's saturated closing effort is distinguished from excessive arm load.
-Lost grasp, failed tracking, excessive arm effort, and visible obstructions
-remain reasons to stop. No minimum pull is mechanically forced.
+## Source and validation
 
-A model-only replay of the recorded premature-release observation (step 11,
-run `b7018005768d4c7c9fc6bcb8c628b15b`), with historical telemetry/action attempts,
-selected another 3 cm backward base step instead of releasing. No motion was
-executed during that replay; full opening with this guidance is not yet verified.
+Inspired by Jay Chooi's [tweet](https://x.com/chooi_jeq/status/2096064315115839904)
+and Robocurve's public
+[inspect-robots-agent](https://github.com/robocurve/inspect-robots/tree/main/plugins/inspect-robots-agent),
+inspected at commit `7e4d1b7aee1c0d3cfc3a05a7492b9d12cda666f9`.
+This adaptation uses Innate's native skills, motion primitives and lifecycle;
+it does not execute generated Python or expose privileged cabinet state.
 
-## Equivalent Gemini skill
+Focused tests cover credential routing, proxy failure without direct fallback,
+Responses history, action bounds, in-flight cancellation, native skill cleanup,
+stale/excessive effort, invalid tracking, level IK and debug export.
+Two live GPT-6 vision/tool requests through the proxy passed with
+`OPENAI_API_KEY` unset, including multi-turn reasoning/tool-result history.
+Those API checks used recorded camera observations and executed no motion.
 
-`innate-os/open_cabinet_with_gemini` runs the exact same `execute`, observation,
-action, bounds, staging, cancellation and cleanup implementation as the GPT
-skill. It uses the same `CabinetPolicy` prompt, tool schema, validation, full
-text/state/action history and latest two pairs of camera images. Both expose
-`max_steps=60`. The older `open_door_with_vision` remains a separate algorithm.
-
-Only the policy factory changes: Gemini defaults to `gemini-3.8-flash` with
-low reasoning via the existing Innate proxy (`INNATE_SERVICE_KEY` with Gemini
-access), instead of GPT-6 via `OPENAI_API_KEY` and priority processing.
-`INNATE_CABINET_GEMINI_MODEL` overrides its model ID independently of GPT.
-The adapter translates the shared request into Gemini's OpenAI-compatible chat
-format and preserves its full assistant message, including tool-call thought
-signatures, across turns. OpenAI's service-tier setting is not sent to Gemini.
-
-Validation: 72 tests passed across the two agent skills, adapter and original
-door skill. The runtime loaded both skill IDs. Two real Gemini calls using
-recorded cabinet cameras/telemetry returned valid actions in 2.60 s and 1.42 s;
-the second included the first call's tool result. These were read-only API
-checks; no Gemini-controlled full grasp/opening is claimed.
+Earlier simulator validation reached staging within 2.6 mm per axis at
+0.64 degrees pitch, then executed a GPT-selected 2.5 cm move within 1.5 mm per
+axis. Cleanup does not constitute a fresh end-to-end grasp/opening test or
+physical-robot validation.

@@ -63,8 +63,6 @@ class MarsArmNode : public rclcpp::Node {
                              std::shared_ptr<std_srvs::srv::Trigger::Response> response);
     void armTorqueOffCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                               std::shared_ptr<std_srvs::srv::Trigger::Response> response);
-    void armJointTorqueCallback(int servo_id, const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-                                std::shared_ptr<std_srvs::srv::SetBool::Response> response);
     void armRebootServosCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                                  std::shared_ptr<std_srvs::srv::Trigger::Response> response);
     void armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
@@ -111,7 +109,6 @@ class MarsArmNode : public rclcpp::Node {
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr arm_command_sub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_on_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_off_service_;
-    std::array<rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr, 6> arm_joint_torque_services_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_reboot_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_fix_error_service_;
     rclcpp::Service<mars_msgs::srv::GotoJS>::SharedPtr arm_goto_js_service_;

@@ -5,10 +5,8 @@ from innate import Manipulation, Skill, SkillReturn
 
 class ArmZeroPosition(Skill):
     """Use this to move the arm to its zero/home position where all joints are
-    at 0 radians. This is the preparation step before approaching and grasping
-    a fixed handle for ``pull_held_handle``. Do not use it to reposition an arm
-    that is already attached to a door or fixture. For a freely held object,
-    the gripper keeps its current closure unless keep_gripper=False."""
+    at 0 radians. Safe while holding an object: the gripper keeps its current
+    closure unless keep_gripper=False."""
 
     manipulation: Manipulation
 

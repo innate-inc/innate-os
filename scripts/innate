@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Innate OS developer CLI.  Run ``innate --help`` for usage."""
 
-import base64
 import json
 import os
 import pwd
@@ -1845,11 +1844,6 @@ def _find_debug_run(reference: str | None) -> tuple[Path, dict] | None:
     return None
 
 
-def _agent_trace_paths() -> list[Path]:
-    base = INNATE_OS_ROOT / "workspace" / "debug_runs" / "agent_trace.jsonl"
-    return [path for path in [base.with_name(f"{base.name}.{i}") for i in range(3, 0, -1)] + [base] if path.is_file()]
-
-
 def _export_skill_debug(reference: str | None, output: Path | None) -> Path:
     found = _find_debug_run(reference)
     if found is None:
@@ -1868,28 +1862,6 @@ def _export_skill_debug(reference: str | None, output: Path | None) -> Path:
     destination = output or Path.cwd() / f"{skill_name}-{run_id[:12]}-debug.zip"
     destination = destination.expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
-
-    agent_events = []
-    malformed_agent_lines = 0
-    # The model turn begins before the skill's run status exists. Keep enough
-    # lead-in for slow inference so its frames and reasoning are not clipped.
-    correlation_start = started - 120.0
-    correlation_end = finished + 5.0
-    for trace_path in _agent_trace_paths():
-        try:
-            lines = trace_path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                malformed_agent_lines += 1
-                continue
-            timestamp = float(event.get("t", 0))
-            if correlation_start <= timestamp <= correlation_end:
-                agent_events.append(event)
-    agent_events.sort(key=lambda event: float(event.get("t", 0)))
 
     try:
         revision = subprocess.run(
@@ -1910,9 +1882,9 @@ def _export_skill_debug(reference: str | None, output: Path | None) -> Path:
                 "-u",
                 "ros-app.service",
                 "--since",
-                f"@{max(0, correlation_start):.3f}",
+                f"@{max(0, started):.3f}",
                 "--until",
-                f"@{correlation_end:.3f}",
+                f"@{finished:.3f}",
                 "--no-pager",
             ],
             capture_output=True,
@@ -1929,29 +1901,6 @@ def _export_skill_debug(reference: str | None, output: Path | None) -> Path:
             if path.is_file() and path.resolve() != destination:
                 archive.write(path, f"skill/{path.name}")
 
-        cleaned_events = []
-        for event in agent_events:
-            cleaned = dict(event)
-            frames = []
-            for index, frame in enumerate(event.get("frames", [])):
-                frame_copy = dict(frame)
-                encoded = frame_copy.pop("jpeg", None)
-                if encoded:
-                    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(frame.get("label", "frame")))
-                    name = f"agent_frames/turn-{event.get('turn', 'unknown')}-{index}-{label}.jpg"
-                    try:
-                        archive.writestr(name, base64.b64decode(encoded, validate=True))
-                        frame_copy["file"] = name
-                    except (ValueError, TypeError):
-                        frame_copy["decode_error"] = True
-                frames.append(frame_copy)
-            if "frames" in cleaned:
-                cleaned["frames"] = frames
-            cleaned_events.append(cleaned)
-        archive.writestr(
-            "agent_trace.jsonl",
-            "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in cleaned_events),
-        )
         archive.writestr("ros-app.log", journal)
         archive.writestr(
             "export_manifest.json",
@@ -1963,8 +1912,6 @@ def _export_skill_debug(reference: str | None, output: Path | None) -> Path:
                     "skill_name": skill_name,
                     "skill_id": manifest.get("skill_id"),
                     "git_revision": revision or None,
-                    "agent_events": len(cleaned_events),
-                    "malformed_agent_lines_skipped": malformed_agent_lines,
                     "journal_included": bool(journal),
                 },
                 indent=2,
@@ -1975,10 +1922,9 @@ def _export_skill_debug(reference: str | None, output: Path | None) -> Path:
         archive.writestr(
             "README.txt",
             "skill/events.jsonl contains every controller observation and decision.\n"
-            "agent_trace.jsonl contains exact model requests, thoughts, speech, tool arguments, and outcomes.\n"
-            "agent_frames/ contains the camera frames seen at the start of correlated agent turns.\n"
+            "skill/*.jpg contains the head and wrist camera observations.\n"
             "ros-app.log is the best-effort service journal for the same time window.\n"
-            "This skill starts with a handle already held; it does not perform handle recognition.\n",
+            "Success is the model's visual assessment; inspect images and motion feedback.\n",
         )
     return destination
 
@@ -3098,7 +3044,7 @@ def skill_run(args):
 @click.argument("reference", required=False, metavar="RUN_ID_OR_SKILL")
 @click.option("--output", type=click.Path(path_type=Path), help="Destination .zip path.")
 def skill_debug_export(reference, output):
-    """Export one run's controller trace, agent decisions, frames, and logs.
+    """Export one run's skill decisions, frames, and logs.
 
     With no reference, exports the newest recorded run. A reference can be a
     run ID, skill ID, or skill name; a skill reference selects its newest run.

@@ -131,17 +131,6 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
         std::bind(&MarsArmNode::armTorqueOffCallback, this, std::placeholders::_1, std::placeholders::_2),
         rmw_qos_profile_services_default, service_callback_group_);
 
-    for (int servo_id = 1; servo_id <= 6; ++servo_id) {
-        const auto service_name = "/mars/arm/joint" + std::to_string(servo_id) + "/torque";
-        arm_joint_torque_services_[servo_id - 1] = this->create_service<std_srvs::srv::SetBool>(
-            service_name,
-            [this, servo_id](const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-                             std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
-                armJointTorqueCallback(servo_id, request, response);
-            },
-            rmw_qos_profile_services_default, service_callback_group_);
-    }
-
     arm_reboot_service_ = this->create_service<std_srvs::srv::Trigger>(
         "/mars/arm/reboot",
         std::bind(&MarsArmNode::armRebootServosCallback, this, std::placeholders::_1, std::placeholders::_2),
