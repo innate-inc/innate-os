@@ -159,24 +159,36 @@ frame and would need a live `map->odom` transform to sit on the map canvas.
 
 **Mapping.** The Maps panel ports the mobile app's workflow: list/switch/
 delete maps (`/nav/available_maps`, `/nav/change_navigation_map`,
-`/nav/delete_map`), a map-free toggle, and **+ New map**, which flips the
-robot into mapping mode (`/nav/change_mode {mode: "mapping"}`). While
-mapping, a banner over the scene runs the record flow (Finish → name →
-Save, mirroring the mobile app's record/name screens); Save calls
+`/nav/delete_map`), a map-free toggle, and **+ New map**, which starts manual
+mapping (`/nav/change_mode {mode: "mapping"}`). When the optional **Explore
+Map** skill is present in the skill roster, the webapp pins it in the Skills
+launcher; running it uses `autonomous_mapping`. The two modes are one mapping
+session in the web UI. Both are robot-enforced Slow modes: `mars_app` reports
+the Slow preset, and the final command mux caps teleop, skills, Nav2, and
+recovery motion even if another client selects Fast or Mad. In either mode, a banner over the scene runs the record
+flow (Finish → name → Save, mirroring the manual record/name screens); Save calls
 `/nav/save_map` (name must be alphanumeric/`_`/`-`; `.yaml` appended
-server-side), then returns to navigation and activates the new map — the
-same sequence the mobile app runs. All nav state and every mode_manager
+server-side), then returns to navigation and activates the new map. In
+autonomous mode, Finish first settles Nav2 and leaves SLAM in manual mapping
+for naming. Before a
+save, map activation, or explicit mode change, the webapp best-effort calls
+`/brain/cancel_skill` so an explorer does not outlive the mapping session; old
+robot images without that service still proceed. All nav state and every mode_manager
 call live in `js/nav/navStore.js` (the webapp's port of the mobile app's
 MapDataContext); the panel, banner, and page are views of that store. The widget swaps its pose source to
-`/mapping_pose` (map-frame TF, published by mode_manager only while
-mapping) because raw `/odom` drifts against the growing SLAM map and any
+`/mapping_pose` (map-frame TF, published by mode_manager during either mapping
+mode) because raw `/odom` drifts against the growing SLAM map and any
 AMCL fix predates it. Mode follows the `/nav/current_mode` topic, so a
 mapping session started from the mobile app shows the same controls here.
-While mapping, the scene strips down to the growing map + live scan (the
+While either mapping mode is active, the scene strips down to the growing map + live scan (the
 costmap belongs to the previous map; layer chips lock), and the teleop
 drive kit mounts over it — main-camera PiP (WebRTC, or the sim viewer in
-sim), virtual joystick, WASD, and head tilt — because you drive the robot
-to build the map, exactly like the mobile app's record screen.
+sim), virtual joystick, WASD, and head tilt. In autonomous mapping, a nonzero
+joystick/WASD command follows the existing `/joystick` → `/cmd_vel_teleop`
+pipeline; Explore Map watches the latter and cancels itself so manual input
+takes over immediately. Releasing the controls still emits one zero and then
+goes silent. This is additive: robots whose available-skill roster does not
+include Explore Map keep the existing manual mapping workflow.
 
 **Measured velocity is derived, not read.** This robot never populates
 `Odometry.twist` — `mars_bringup`'s `_publish_odometry` copies pose out of the

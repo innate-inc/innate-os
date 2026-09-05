@@ -11,6 +11,8 @@ from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 
+from mars_control.teleop_publish_gate import TeleopPublishGate
+
 
 class JoystickAxis:
     def __init__(
@@ -88,8 +90,11 @@ class JoystickController(Node):
             slow_mode_factor=self.joystick_control["slow_mode_factor"],
         )
 
-        # Publisher for velocity commands
-        self.twist_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        # Route human commands through the priority mux. Publishing directly
+        # to /cmd_vel would compete with Nav2 and bypass autonomous-skill
+        # takeover monitoring.
+        self.twist_pub = self.create_publisher(Twist, "/cmd_vel_teleop", 10)
+        self._publish_gate = TeleopPublishGate()
 
         # Create timer for reading joystick input (use dt from parameters)
         self.create_timer(self.motion_control["dt"], self.timer_callback)
@@ -166,11 +171,17 @@ class JoystickController(Node):
             self.fig.canvas.draw()
             self.fig.canvas.flush_events()
 
-        # Create and publish Twist message only if publishing is enabled
-        if self.publishing_enabled:
+        # Teleop is the mux's top-priority input. Stream only while moving,
+        # followed by one exact zero, so a connected neutral joystick cannot
+        # starve Nav2 indefinitely.
+        command = self._publish_gate.next_command(
+            linear_speed,
+            angular_speed,
+            enabled=self.publishing_enabled,
+        )
+        if command is not None:
             msg = Twist()
-            msg.linear.x = linear_speed
-            msg.angular.z = angular_speed
+            msg.linear.x, msg.angular.z = command
             self.twist_pub.publish(msg)
 
     def _load_parameters(self):

@@ -75,7 +75,7 @@ class SkillsActionServer(Node):
 
         self._camera_node = CameraProvider()
 
-        self.declare_parameter("cmd_vel_topic", "/cmd_vel")
+        self.declare_parameter("cmd_vel_topic", "/cmd_vel_skills")
         self.cmd_vel_topic = str(self.get_parameter("cmd_vel_topic").value)
         self.declare_parameter("head_position_topic", "/mars/head/set_position")
         self.head_position_topic = str(self.get_parameter("head_position_topic").value)

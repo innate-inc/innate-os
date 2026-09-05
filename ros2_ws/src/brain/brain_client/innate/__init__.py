@@ -24,7 +24,7 @@ a bare type annotation — the type identifies the feed.
 and arm joints by name.
 
 One rule covers interfaces, cameras and robot state: annotate what you read.
-``battery: Battery``, ``odom: Odometry``, ``pose: Pose``, ``lidar: Lidar``,
+``battery: Battery``, ``odom: Odometry``, ``pose: Pose``, ``nav_mode: NavMode``, ``lidar: Lidar``,
 ``arm: Arm``, ``map: Map``, ``joint_states: JointStates``,
 ``head_position: HeadState``, ``image: MainImage`` / ``WristImage`` /
 ``DepthMap``, ``mobility: Mobility``, ``head: Head``,
@@ -82,6 +82,7 @@ from brain_client.state.image import DepthMap, Image, MainImage, WristImage
 from brain_client.state.joint_states import JointStates
 from brain_client.state.lidar import Lidar
 from brain_client.state.map import Map
+from brain_client.state.nav_mode import NavMode
 from brain_client.state.odometry import Odometry
 from brain_client.state.pose import Pose
 
@@ -107,6 +108,7 @@ __all__ = [
     "Manipulation",
     "Map",
     "Mobility",
+    "NavMode",
     "Odometry",
     "Pose",
     "RecallVerdict",

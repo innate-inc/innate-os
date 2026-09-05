@@ -9,7 +9,7 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from mars_bringup.config_loader import load_motion_limit_overrides, load_yaml_param_defaults
+from mars_bringup.config_loader import load_motion_limit_overrides, load_yaml_param_defaults, settings_params
 
 
 def expand_action_remappings(action_remappings):
@@ -114,6 +114,10 @@ def generate_launch_description():
         executable="cmd_vel_mux.py",
         name="cmd_vel_mux",
         output="screen",
+        # The mapping Slow envelope derives from the lower manual/Nav2 caps.
+        # settings.yaml is layered last so both motion_control and nav
+        # overrides remain authoritative.
+        parameters=[*settings_params()],
     )
 
     # Shared BT navigator node

@@ -134,7 +134,9 @@ class CameraCapture:
         self._head_sub = self._node.create_subscription(String, "/mars/head/current_position", self._on_head, 10)
         # The base being driven (joystick teleop, nav) is ego-motion the
         # primitive_running check can't see — a manual drive runs no skill.
-        self._cmd_vel_sub = self._node.create_subscription(Twist, self._config.cmd_vel_topic, self._on_cmd_vel, 10)
+        self._cmd_vel_sub = self._node.create_subscription(
+            Twist, self._config.motion_observation_topic, self._on_cmd_vel, 10
+        )
 
     def stop(self) -> None:
         # Destroying here is safe only because brain_client_node is spun

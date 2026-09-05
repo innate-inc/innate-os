@@ -9,11 +9,23 @@
 //   naming:     name field + inline validation    [Save]   [Back]
 //
 // Visibility follows the store's mode (topic-driven), so a session started
-// from the mobile app shows the same controls here; leaving mapping — by
-// whoever — resets the banner to the recording step for next time.
+// from the mobile app shows the same controls here; leaving either mapping
+// mode — by whoever — resets the banner to the recording step for next time.
 
+import { isMappingNavMode } from "../constants.js";
 import { confirmDialog } from "./confirm.js";
 import { MAP_NAME_RE } from "./navStore.js";
+
+/**
+ * Finish is a real motion boundary in autonomous mapping. Moving to manual
+ * mapping makes mode_manager close goal admission, cancel and settle Nav2,
+ * and leave slam_toolbox running for naming/saving.
+ * @param {ReturnType<typeof import("./navStore.js").createNavStore>} store
+ */
+export async function quiesceForMapNaming(store) {
+  if (store.state.mode !== "autonomous_mapping") return true;
+  return store.changeMode("mapping");
+}
 
 // The ⇧ glyph as an outline path rather than the unicode character: its
 // rendering varies wildly by platform font, and this matches the stroke
@@ -39,11 +51,14 @@ export function createMappingSession(scene, store) {
   banner.className = "mapping-banner";
   banner.hidden = true;
 
-  // Two prebuilt prose spans rather than one retitled on every render: the
+  // Prebuilt prose spans rather than retitling on every render: the manual
   // recording line carries a key cap, and render() runs on every store change.
   const recordingText = document.createElement("span");
   recordingText.className = "mapping-banner-text";
   recordingText.append("Recording map — cover the space, hold ", shiftKeyCap(), " to drive slowly");
+  const autonomousText = document.createElement("span");
+  autonomousText.className = "mapping-banner-text";
+  autonomousText.textContent = "Autonomous mapping — joystick or WASD takes over";
   const namingText = document.createElement("span");
   namingText.className = "mapping-banner-text";
   namingText.textContent = "Name this map";
@@ -61,11 +76,15 @@ export function createMappingSession(scene, store) {
   const secondaryBtn = document.createElement("button");
   secondaryBtn.type = "button";
   secondaryBtn.className = "mapping-btn danger";
-  banner.append(recordingText, namingText, nameInput, hint, primaryBtn, secondaryBtn);
+  banner.append(recordingText, autonomousText, namingText, nameInput, hint, primaryBtn, secondaryBtn);
   scene.appendChild(banner);
 
   /** @type {"recording" | "naming"} */
   let step = "recording";
+  // mode_manager publishes a transient `switching` mode before the service
+  // response and final `mapping` topic. Preserve Finish's naming intent across
+  // either delivery order; unrelated exits still reset the next session.
+  let namingTransitionPending = false;
 
   /** Inline validation while typing; returns the trimmed name if saveable. */
   function validName() {
@@ -84,16 +103,24 @@ export function createMappingSession(scene, store) {
 
   /** @param {import("./navStore.js").NavState} s */
   function render(s) {
-    const mapping = s.mode === "mapping";
+    const mapping = isMappingNavMode(s.mode);
     banner.hidden = !mapping;
     if (!mapping) {
-      step = "recording";
-      nameInput.value = "";
-      hint.textContent = "";
+      if (!namingTransitionPending) {
+        step = "recording";
+        nameInput.value = "";
+        hint.textContent = "";
+      }
       return;
     }
+    if (namingTransitionPending && s.mode === "mapping") {
+      step = "naming";
+      namingTransitionPending = false;
+    }
     const naming = step === "naming";
-    recordingText.hidden = naming;
+    const autonomous = s.mode === "autonomous_mapping";
+    recordingText.hidden = naming || autonomous;
+    autonomousText.hidden = naming || !autonomous;
     namingText.hidden = !naming;
     nameInput.hidden = !naming;
     hint.hidden = !naming;
@@ -109,7 +136,15 @@ export function createMappingSession(scene, store) {
 
   primaryBtn.addEventListener("click", async () => {
     if (step === "recording") {
+      const leavingAutonomous = store.state.mode === "autonomous_mapping";
+      namingTransitionPending = leavingAutonomous;
+      if (!(await quiesceForMapNaming(store))) {
+        namingTransitionPending = false;
+        render(store.state);
+        return;
+      }
       step = "naming";
+      if (store.state.mode === "mapping") namingTransitionPending = false;
       render(store.state);
       nameInput.focus();
       return;

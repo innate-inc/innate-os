@@ -48,7 +48,7 @@ def generate_launch_description():
     current_nav_mode_topic_arg = DeclareLaunchArgument(
         "current_nav_mode_topic",
         default_value="/nav/current_mode",
-        description="Topic for current navigation mode (mapfree, mapping, navigation)",
+        description="Topic for current navigation mode (mapfree, mapping, autonomous_mapping, navigation)",
     )
     log_everything_arg = DeclareLaunchArgument(
         "log_everything",

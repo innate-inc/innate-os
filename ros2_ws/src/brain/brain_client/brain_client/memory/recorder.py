@@ -79,6 +79,7 @@ _GRID_FRESH_SEC = 5.0
 # and an old one must not adopt a newer stage into its foreign frame.
 _SAVE_ANNOUNCEMENT_FRESH_SEC = 30.0
 _MIN_HEAD_PITCH_DEG = -25.0  # looking further down films the floor, not the room
+_MAPPING_MODES = frozenset({"mapping", "autonomous_mapping"})
 
 
 @dataclass(frozen=True)
@@ -167,7 +168,7 @@ class MemoryRecorder:
             self._candidate = _Candidate(time.monotonic(), *pose, sharpness, jpeg)
 
     def _recordable_moment(self) -> bool:
-        if self._nav_mode == "mapping":
+        if self._nav_mode in _MAPPING_MODES:
             return self._mapping_started is not None and self._slam_alive()
         return self._nav_mode == "navigation" and bool(self._map_name) and self._confident()
 
@@ -243,7 +244,7 @@ class MemoryRecorder:
     # --- the 1 Hz tick ---
     def tick(self) -> None:
         try:
-            if self._nav_mode == "mapping":
+            if self._nav_mode in _MAPPING_MODES:
                 # Entering the stage needs the session's identity: before the
                 # latched /nav/mapping_session replay arrives, touching it
                 # could wipe a half-tour this very session staged.

@@ -518,11 +518,18 @@ class AppControl : public rclcpp::Node {
 
         // The mode as the robot actually entered it, not as a client asked for it:
         // mode_manager redirects to mapping whenever there is no current map, and
-        // auto-starts there on a mapless boot, so no client can be trusted to know
-        // a mapping run began. Republished at 1 Hz; the policy ignores repeats.
+        // auto-starts there on a mapless boot, so no client can be trusted to know a
+        // mapping run began. Use the latched status so a late-starting app applies the
+        // policy immediately.
+        // Keep the mapping policy through `switching`, which is published before active
+        // navigation is cancelled; the final stable mode releases it after teardown.
         nav_mode_sub_ = this->create_subscription<std_msgs::msg::String>(
-            "/nav/current_mode", 10, [this](const std_msgs::msg::String::SharedPtr msg) {
-                mapping_ = (msg->data == "mapping");
+            "/nav/current_mode", rclcpp::QoS(1).reliable().transient_local(),
+            [this](const std_msgs::msg::String::SharedPtr msg) {
+                if (msg->data == "switching") {
+                    return;
+                }
+                mapping_ = (msg->data == "mapping" || msg->data == "autonomous_mapping");
                 apply_speed_policy();
             });
 
@@ -1013,6 +1020,18 @@ class AppControl : public rclcpp::Node {
                 if (value < 0.05 || value > drive::max_speed_scale()) {
                     result.successful = false;
                     result.reason = "motion_control.speed_scale must be within the published preset range";
+                    return result;
+                }
+                // Mapping is a hard Slow activity, not merely a one-shot preset.
+                // Reject another client's Fast/Mad write so /robot/info, the
+                // teleop smoother, and the Mad arm policy cannot disagree with
+                // the final cmd_vel mapping envelope.  apply_speed_policy()
+                // restores the pre-mapping selection after the stable exit mode
+                // arrives; holding through `switching` prevents an early release.
+                const double mapping_scale = drive::scale_for_mode(drive::MAPPING_SCALE_ID);
+                if (mapping_ && std::abs(value - mapping_scale) > 1e-9) {
+                    result.successful = false;
+                    result.reason = "Mapping locks motion_control.speed_scale to the Slow preset";
                     return result;
                 }
                 // The Mad-mode arm fold reacts to the APPLIED value (watch_mad_mode).

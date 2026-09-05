@@ -9,7 +9,6 @@ import subprocess
 import threading
 import time
 import traceback
-from enum import Enum
 
 import rclpy
 
@@ -30,8 +29,18 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import String
-from std_srvs.srv import Trigger
+from std_srvs.srv import SetBool, Trigger
 
+from mars_nav.navigation_policy import (
+    MAPPING_MODES,
+    MAPPING_SPEED_LIMIT_SERVICE,
+    VALID_NAVIGATION_MODES,
+    NavigationMode,
+    configure_only_nodes,
+    modes_nodes,
+    skip_cleanup_nodes,
+    starts_new_mapping_session,
+)
 from mars_nav.service_utils import call_service, get_node_state, transition_node
 
 # TODO: move this into launch file?
@@ -39,50 +48,13 @@ map_server_node = "navigation_map_server"
 bt_node = "bt_navigator"
 
 NAV_CANCEL_SERVICE = "/internal_navigate_to_pose/_action/cancel_goal"
-
-# Nodes that should only be configured (not activated) in specific modes
-configure_only_nodes = {
-    "mapfree": {"navigation/planner_server"},
-}
-
-# Nodes that should only be deactivated (not cleaned up/unconfigured) to avoid RMW bugs
-# These nodes stay in INACTIVE state rather than being fully unconfigured
-skip_cleanup_nodes = {
-    "controller_server",  # Zenoh RMW crashes during TF unsubscription in cleanup
-    "mapfree/planner_server",  # Segfaults during costmap cleanup (SIGSEGV exit code -11)
-    "navigation/planner_server",  # Same binary, same risk
-}
-
-modes_nodes = {
-    "mapping": ["slam_toolbox"],
-    "mapfree": [
+MAPPING_AUTHORITY_CONFLICTS = frozenset(
+    {
+        "navigation_map_server",
+        "navigation_amcl",
         "null_map_node",
-        "navigation/planner_server",  # unnecsessary but needed for BT, TODO, find a way to remove
-        "mapfree/planner_server",  # TBD DO WE WANT TO CLEAR COSTMAPS OR NAH # def has to be unconfigured to reload static map (unless we want to do update topics and stuff. which might be worth doing in iter 2) - do MAP_UPDATES
-        "controller_server",  # doesn't have to be deactivated, theoretically action should be cancelled by bt before it dies, and this won't receive a new path to follow - BUT IT HAS COSTMAP!!!
-        "bt_navigator",  # could stay on but underlying actions r gonna fail and be in a weird state;
-        "behavior_server",  # i guess this can just be deactivated - WHY??
-        "velocity_smoother",  # might be able to leave it running throughout any changes
-    ],
-    "navigation": [  # on map switch
-        "navigation_map_server",  # load_map topic
-        "navigation_grid_localizer",  # localize Trigger service - USE THE TRIGGER SERVICE AND RELOAD MAP SERVICE
-        "navigation_amcl",  # either restart or make sure its not first_map_only and send /map and /initialpose
-        "mapfree/planner_server",
-        "navigation/planner_server",  # TBD DO WE WANT TO CLEAR COSTMAPS OR NAH # def has to be unconfigured to reload static map (unless we want to do update topics and stuff. which might be worth doing in iter 2) - do MAP_UPDATES
-        "controller_server",  # doesn't have to be deactivated, theoretically action should be cancelled by bt before it dies, and this won't receive a new path to follow - BUT IT HAS COSTMAP!!!
-        "bt_navigator",  # could stay on but underlying actions r gonna fail and be in a weird state;
-        "behavior_server",  # i guess this can just be deactivated - WHY??
-        "velocity_smoother",  # might be able to leave it running throughout any changes
-        # TODO: kill any running BTs or behaviors on switch
-    ],
-}
-
-
-class NavigationMode(Enum):
-    NAV = "navigation"
-    MAPPING = "mapping"
-    MAPFREE = "mapfree"
+    }
+)
 
 
 class ModeManager(Node):
@@ -99,6 +71,12 @@ class ModeManager(Node):
 
         # Will be set in main() after adding this node to an executor.
         self._executor = None
+
+        # main() binds this to the in-process NavigateToPoseRouter.  DDS remains
+        # the public status transport, while this sink closes admission before
+        # a lifecycle teardown can race topic delivery.
+        self._navigation_mode_sink = None
+        self._navigation_pending_goals_getter = None
 
         # Lock to prevent concurrent mode changes
 
@@ -122,6 +100,11 @@ class ModeManager(Node):
         self._service_clients[NAV_CANCEL_SERVICE] = self.create_client(
             CancelGoal, NAV_CANCEL_SERVICE, callback_group=self._calls_going_outside_group
         )
+        self._service_clients[MAPPING_SPEED_LIMIT_SERVICE] = self.create_client(
+            SetBool,
+            MAPPING_SPEED_LIMIT_SERVICE,
+            callback_group=self._calls_going_outside_group,
+        )
         self._nav_status_sub = self.create_subscription(
             GoalStatusArray,
             "/internal_navigate_to_pose/_action/status",
@@ -135,6 +118,12 @@ class ModeManager(Node):
             Trigger,
             "/nav/cancel_navigation",
             self.cancel_navigation_callback,
+            callback_group=self._internal_callbacks_group,
+        )
+        self.reset_mapping_service = self.create_service(
+            Trigger,
+            "/nav/reset_mapping",
+            self.reset_mapping_callback,
             callback_group=self._internal_callbacks_group,
         )
 
@@ -159,8 +148,15 @@ class ModeManager(Node):
             DeleteMap, "/nav/delete_map", self.delete_map_callback, callback_group=self._internal_callbacks_group
         )
 
-        # Publisher to announce current mode
-        self.mode_publisher = self.create_publisher(String, "/nav/current_mode", 10)
+        # Publisher to announce current mode.  The router and late-starting
+        # skills need the current value immediately; a volatile publisher is
+        # incompatible with their transient-local subscriptions.
+        mode_qos = QoSProfile(
+            depth=1,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.mode_publisher = self.create_publisher(String, "/nav/current_mode", mode_qos)
 
         # Publisher to announce available maps
         self.maps_publisher = self.create_publisher(String, "/nav/available_maps", 10)
@@ -282,7 +278,10 @@ class ModeManager(Node):
         )
 
         self.get_logger().info("Mode Manager starting with map management capabilities.")
-        self.get_logger().info('- Call /nav/change_mode service to switch modes ("navigation" or "mapping")')
+        self.get_logger().info(
+            '- Call /nav/change_mode service to switch modes ("navigation", "mapping", '
+            '"autonomous_mapping", or "mapfree")'
+        )
         self.get_logger().info(
             "- Call /nav/change_navigation_map service to change map (restarts navigation if running)"
         )
@@ -311,15 +310,18 @@ class ModeManager(Node):
         )
 
     def odom_callback(self, msg):
-        # Only publish mapping_pose in mapping mode
-        if getattr(self, "current_mode", None) != "mapping":
+        # Both mapping modes use slam_toolbox as the map->odom authority.
+        if getattr(self, "current_mode", None) not in MAPPING_MODES:
             return
         try:
             tf_time = rclpy.time.Time()
             tf: TransformStamped = self.tf_buffer.lookup_transform("map", "base_link", tf_time)
             self._last_mapping_pose = (tf, time.monotonic())
             odom_msg = Odometry()
-            odom_msg.header.stamp = msg.header.stamp
+            # Stamp the pose with the TF sample it actually represents. Using
+            # the incoming odometry time would make a frozen SLAM transform
+            # look fresh as long as wheel odometry kept arriving.
+            odom_msg.header.stamp = tf.header.stamp
             odom_msg.header.frame_id = "map"
             odom_msg.child_frame_id = "base_link"
             odom_msg.pose.pose.position.x = tf.transform.translation.x
@@ -365,7 +367,7 @@ class ModeManager(Node):
             if os.path.exists(self.mode_file):
                 with open(self.mode_file) as f:
                     saved_mode = f.read().strip()
-                    if saved_mode in ["navigation", "mapping", "mapfree"]:
+                    if saved_mode in VALID_NAVIGATION_MODES:
                         self.get_logger().info(f"Loaded last mode: {saved_mode}")
                         return saved_mode
             # Default to navigation mode
@@ -447,15 +449,9 @@ class ModeManager(Node):
             self.get_logger().info("Create a map first, then switch to navigation mode")
             self.current_mode = "mapping"
 
-        if self.current_mode in ["navigation", "mapping"]:
+        if self.current_mode in VALID_NAVIGATION_MODES:
             self.get_logger().info(f"Auto-starting in {self.current_mode} mode...")
             # Simulate a service request
-            request = ChangeNavigationMode.Request()
-            request.mode = self.current_mode
-            response = ChangeNavigationMode.Response()
-            self.change_mode_callback(request, response, first_start=True)
-        elif self.current_mode == "mapfree":
-            self.get_logger().info("Auto-starting in mapfree mode (local Nav2)")
             request = ChangeNavigationMode.Request()
             request.mode = self.current_mode
             response = ChangeNavigationMode.Response()
@@ -466,7 +462,16 @@ class ModeManager(Node):
         # self.log_num += 1
         # if not (self.log_num % 10):
         # self.get_logger().info("Publishing status every second....", throttle_duration_sec = 10)
-        # Publish current mode
+        # Update the co-located router synchronously before the DDS publish.
+        # In particular, `switching` must close admission before cancellation
+        # checks and lifecycle teardown begin.
+        if self._navigation_mode_sink is not None:
+            try:
+                self._navigation_mode_sink(self.current_mode)
+            except Exception as e:
+                self.get_logger().error(f"Failed to synchronize navigation admission: {e}")
+
+        # Publish current mode for all other consumers and late subscribers.
         mode_msg = String()
         mode_msg.data = self.current_mode
         self.mode_publisher.publish(mode_msg)
@@ -480,6 +485,23 @@ class ModeManager(Node):
         current_map_msg = String()
         current_map_msg.data = self.current_map if self.current_map is not None else ""
         self.current_map_publisher.publish(current_map_msg)
+
+    def set_navigation_mode_sink(self, sink):
+        """Bind the co-located router's synchronous mode update hook."""
+        self._navigation_mode_sink = sink
+
+    def set_navigation_pending_goals_getter(self, getter):
+        """Bind the co-located router's accepted-goal reservation count."""
+        self._navigation_pending_goals_getter = getter
+
+    def _navigation_pending_goals(self):
+        if self._navigation_pending_goals_getter is None:
+            return 0
+        try:
+            return max(0, int(self._navigation_pending_goals_getter()))
+        except Exception as e:
+            self.get_logger().error(f"Failed to read router goal reservations: {e}")
+            return None
 
     def _init_service_clients(self):
         """Pre-create all service clients needed for lifecycle management."""
@@ -554,12 +576,88 @@ class ModeManager(Node):
             except Exception as e:
                 self.get_logger().debug(f"Error shutting down {node_name}: {e}")
 
+    def reset_mapping_callback(self, _request, response):
+        """Discard the unsaved SLAM graph and restart the current mapping stack."""
+
+        if not self._mode_change_lock.acquire(blocking=False):
+            response.success = False
+            response.message = "Navigation mode change already in progress"
+            return response
+
+        previous_mode = self.current_mode
+        try:
+            if previous_mode not in MAPPING_MODES:
+                response.success = False
+                response.message = "A map can only be reset while mapping is active"
+                return response
+
+            limit_ok, limit_message = self._set_mapping_speed_limit(True)
+            if not limit_ok:
+                response.success = False
+                response.message = f"Map reset aborted before transition: {limit_message}"
+                return response
+
+            self.current_mode = "switching"
+            self.publish_status()
+            cancelled_ok, cancel_message = self._cancel_active_navigation()
+            if not cancelled_ok:
+                self.current_mode = previous_mode
+                self.publish_status()
+                response.success = False
+                response.message = f"Map reset aborted: could not stop active navigation ({cancel_message})"
+                return response
+
+            # A same-mode startup deliberately preserves slam_toolbox.  Reset
+            # instead tears the complete mapping stack down, with SLAM last,
+            # so its next configure creates a genuinely empty pose graph.
+            for node_name in reversed(modes_nodes[previous_mode]):
+                target_state = (
+                    State.PRIMARY_STATE_INACTIVE
+                    if node_name in skip_cleanup_nodes
+                    else State.PRIMARY_STATE_UNCONFIGURED
+                )
+                if not transition_node(self._service_clients, self.get_logger(), node_name, target_state):
+                    rollback_ok, rollback_message = self.request_mode_startup(NavigationMode(previous_mode))
+                    self.current_mode = previous_mode if rollback_ok else "none"
+                    self.publish_status()
+                    response.success = False
+                    response.message = f"Map reset failed while stopping {node_name}"
+                    if not rollback_ok:
+                        response.message += f"; failed to restore mapping: {rollback_message}"
+                    return response
+
+            success, message = self.request_mode_startup(NavigationMode(previous_mode))
+            if not success:
+                self.current_mode = "none"
+                self.publish_status()
+                response.success = False
+                response.message = f"Map reset failed while restarting mapping: {message}"
+                return response
+
+            self._mapping_session_started = time.time()
+            self.mapping_session_publisher.publish(String(data=json.dumps({"started": self._mapping_session_started})))
+            self.current_mode = previous_mode
+            self.save_last_mode(previous_mode)
+            self.publish_status()
+            response.success = True
+            response.message = "Discarded the old map and started a fresh SLAM session"
+            return response
+        except Exception as exc:
+            self.current_mode = "none"
+            self.publish_status()
+            response.success = False
+            response.message = f"Error resetting map: {exc}"
+            self.get_logger().error(response.message)
+            return response
+        finally:
+            self._mode_change_lock.release()
+
     def request_mode_startup(self, mode: NavigationMode) -> tuple[bool, str]:
         """
         Request startup of navigation nodes for the given mode.
         First configures all nodes in forward order, then activates them one by one.
         Args:
-            mode: The mode type - must be NavigationMode.NAV, NavigationMode.MAPPING, or NavigationMode.MAPFREE
+            mode: One of the NavigationMode values.
         Returns: (success: bool, message: str)
         """
 
@@ -606,6 +704,7 @@ class ModeManager(Node):
                 return False, msg
 
             node_names = nodes
+            authority_failures = []
 
             for node_name in all_nodes_except_target:
                 # Check if this node should skip cleanup (only deactivate to INACTIVE)
@@ -624,6 +723,15 @@ class ModeManager(Node):
 
                 if not success:
                     self.get_logger().warning(f"Failed to shutdown non-target node {node_name} (continuing)")
+                    if mode.value in MAPPING_MODES and node_name in MAPPING_AUTHORITY_CONFLICTS:
+                        authority_failures.append(node_name)
+
+            if authority_failures:
+                message = (
+                    f"Refusing to start mapping while competing map/TF authorities remain active: {authority_failures}"
+                )
+                self.get_logger().error(message)
+                return False, message
 
             # Get nodes that should only be configured (not activated) for this mode
             configure_only = configure_only_nodes.get(mode.value, set())
@@ -883,6 +991,15 @@ class ModeManager(Node):
             if not self._mode_change_lock.acquire(blocking=False):
                 return
             try:
+                # The unlocked probes above can overlap an entire mode change.
+                # Never resurrect nodes from the captured stack after that
+                # transition has finished (e.g. slam_toolbox beside AMCL).
+                if self.current_mode != mode:
+                    self.get_logger().info(
+                        f"Navigation mode changed from {mode} to {self.current_mode} during watchdog probes; "
+                        "discarding stale repairs"
+                    )
+                    return
                 for node_name in needs_restore:
                     # Re-check under the lock: a mode operation may have just moved it.
                     wrong, target = restore_target(node_name)
@@ -1045,6 +1162,7 @@ class ModeManager(Node):
         Service callback to change the map for navigation mode
         request.map_name should contain the map filename (e.g., "home.yaml")
         """
+        release_warning = ""
         try:
             requested_map = request.map_name.strip()
 
@@ -1071,13 +1189,43 @@ class ModeManager(Node):
             self._switch_generation += 1
             my_generation = self._switch_generation
             previous_map = self.current_map
+            previous_mode = self.current_mode
+            admission_closed = False
+            speed_limit_armed = False
             try:
+                # A map replacement tears bt_navigator down just like a mode
+                # switch. Close the co-located router synchronously and wait
+                # for both handed-off and reserved goals to terminate before
+                # touching current_map or any lifecycle node. The web client's
+                # skill cancel is only a request acknowledgement and cannot be
+                # this server-side safety barrier.
+                if previous_mode == "navigation":
+                    limit_ok, limit_message = self._set_mapping_speed_limit(True)
+                    if not limit_ok:
+                        response.success = False
+                        response.message = f"Map switch aborted before transition: {limit_message}"
+                        self.get_logger().error(response.message)
+                        return response
+                    speed_limit_armed = True
+                    self.current_mode = "switching"
+                    admission_closed = True
+                    self.publish_status()
+                    cancelled_ok, cancel_message = self._cancel_active_navigation()
+                    if not cancelled_ok:
+                        response.success = False
+                        response.message = f"Map switch aborted: could not stop active navigation ({cancel_message})"
+                        self.current_mode = previous_mode
+                        self.publish_status()
+                        admission_closed = False
+                        self.get_logger().error(response.message)
+                        return response
+
                 # _efficient_map_switch loads self.current_map, so set it for
                 # the attempt but only persist (and keep) it on success.
                 self.current_map = requested_map
 
                 # If we're in navigation mode, use efficient map switch
-                if self.current_mode == "navigation":
+                if previous_mode == "navigation":
                     self.get_logger().info(f"Efficiently switching to new map: {requested_map}")
 
                     success, message = self._efficient_map_switch()
@@ -1105,7 +1253,22 @@ class ModeManager(Node):
                 self.current_map = previous_map
                 raise
             finally:
-                self._mode_change_lock.release()
+                try:
+                    if admission_closed:
+                        self.current_mode = previous_mode
+                        self.publish_status()
+                    if (
+                        speed_limit_armed
+                        and self.current_mode == previous_mode
+                        and previous_mode in {NavigationMode.NAV.value, NavigationMode.MAPFREE.value}
+                    ):
+                        limit_ok, limit_message = self._release_mapping_speed_limit_after_stable_mode()
+                        if not limit_ok:
+                            release_warning = f"; Slow drive envelope remains active ({limit_message})"
+                            if getattr(response, "message", ""):
+                                response.message += release_warning
+                finally:
+                    self._mode_change_lock.release()
 
             # Outside the lock: relocalization waits up to ~12 s on the grid
             # localizer and must not block concurrent mode/map service calls —
@@ -1114,8 +1277,12 @@ class ModeManager(Node):
                 self._trigger_relocalization(since=switch_started, generation=my_generation)
 
         except Exception as e:
-            response.success = False
-            response.message = f"Error changing map: {str(e)}"
+            if getattr(response, "success", None) is False and getattr(response, "message", ""):
+                response.message += f"; additional error while changing map: {str(e)}"
+            else:
+                response.success = False
+                response.message = f"Error changing map: {str(e)}"
+            response.message += release_warning
             self.get_logger().error(response.message)
 
         return response
@@ -1215,17 +1382,55 @@ class ModeManager(Node):
     def save_map_callback(self, request, response):
         """
         Service callback to save the current map with a new name
-        Only works when in mapping mode
+        Autonomous mapping is first quiesced into manual mapping so the saved
+        occupancy grid is not taken while exploration is still driving.
         request.map_name should contain the new map name (e.g., "my_new_map")
         request.overwrite: if true, allows overwriting existing maps
         """
+        # Reject malformed requests before stopping an autonomous run.
+        map_name = request.map_name.strip()
+        if not map_name or not map_name.replace("_", "").replace("-", "").isalnum():
+            response.success = False
+            response.message = (
+                f"Invalid map name '{map_name}'. Use alphanumeric characters, underscores, and hyphens only."
+            )
+            self.get_logger().error(response.message)
+            return response
+
+        # Do not hold _mode_change_lock while entering the existing mode-change
+        # path: it owns that lock itself and provides the full admission-close,
+        # goal-cancel, terminal-wait, and lifecycle transition barrier. A
+        # standalone save intentionally leaves the robot in manual mapping.
+        if self.current_mode == NavigationMode.AUTONOMOUS_MAPPING.value:
+            mode_request = ChangeNavigationMode.Request()
+            mode_request.mode = NavigationMode.MAPPING.value
+            mode_response = self.change_mode_callback(mode_request, ChangeNavigationMode.Response())
+            if not mode_response.success:
+                response.success = False
+                response.message = f"Cannot save map - failed to stop autonomous exploration: {mode_response.message}"
+                self.get_logger().error(response.message)
+                return response
+
+        # Saving reads current_mode/current_map and mutates the maps directory.
+        # Serialize it with mode switches and map changes so slam_toolbox cannot
+        # be torn down halfway through map_saver_cli or an overwrite cannot race
+        # another map operation. Keep the acquire non-blocking so executor
+        # threads never queue behind a long map save.
+        if not self._mode_change_lock.acquire(blocking=False):
+            response.success = False
+            response.message = "A mode or map operation is already in progress; try again"
+            self.get_logger().warning(response.message)
+            return response
         try:
             map_name = request.map_name.strip()
 
-            # Validate we're in mapping mode
-            if self.current_mode != "mapping":
+            # Revalidate under the lock. Autonomous mapping may have restarted
+            # after the optimistic quiesce returned but before this acquire;
+            # never delete or write map files unless manual mapping still owns
+            # the lifecycle stack.
+            if self.current_mode != NavigationMode.MAPPING.value:
                 response.success = False
-                response.message = f"Cannot save map - not in mapping mode. Current mode: {self.current_mode}"
+                response.message = f"Cannot save map - manual mapping is not active. Current mode: {self.current_mode}"
                 self.get_logger().error(response.message)
                 return response
 
@@ -1332,6 +1537,8 @@ class ModeManager(Node):
             response.success = False
             response.message = f"Error saving map: {str(e)}"
             self.get_logger().error(response.message)
+        finally:
+            self._mode_change_lock.release()
 
         return response
 
@@ -1356,7 +1563,7 @@ class ModeManager(Node):
     def _nav_status_callback(self, msg):
         self._nav_active_goals = sum(1 for s in msg.status_list if s.status in self._NAV_ACTIVE_STATUSES)
 
-    def _cancel_active_navigation(self, timeout_sec=5.0):
+    def _cancel_active_navigation(self, rpc_timeout_sec=5.0, terminal_timeout_sec=5.0):
         """Cancel all active NavigateToPose goals and wait for them to reach a
         terminal state. Returns (success, message).
 
@@ -1366,20 +1573,39 @@ class ModeManager(Node):
         or skill waiting forever. Never reports success while a goal is still
         live: skipping the cancel would strand it once Nav2 is torn down.
         """
-        if self._nav_active_goals == 0:
+        pending_goals = self._navigation_pending_goals()
+        if pending_goals is None:
+            return False, "Could not verify router goal reservations"
+        if self._nav_active_goals == 0 and pending_goals == 0:
             return True, "No active navigation goals"
 
-        deadline = time.time() + timeout_sec
         response = call_service(
-            self._service_clients, self.get_logger(), NAV_CANCEL_SERVICE, CancelGoal.Request(), timeout_sec
+            self._service_clients, self.get_logger(), NAV_CANCEL_SERVICE, CancelGoal.Request(), rpc_timeout_sec
         )
         if response is None:
             return False, "Navigation is active but its cancel service did not respond"
 
-        while self._nav_active_goals > 0 and time.time() < deadline:
+        # The cancel RPC has its own availability/response budget.  Start a
+        # fresh terminal-settle budget only after its acknowledgement arrives;
+        # otherwise a slow-but-successful RPC could consume the entire deadline
+        # and force lifecycle rollback before goals have a chance to terminate.
+        terminal_deadline = time.monotonic() + terminal_timeout_sec
+        while time.monotonic() < terminal_deadline:
+            pending_goals = self._navigation_pending_goals()
+            if pending_goals is None:
+                return False, "Could not verify router goal reservations"
+            if self._nav_active_goals == 0 and pending_goals == 0:
+                break
             time.sleep(0.05)
-        if self._nav_active_goals > 0:
-            return False, "Cancelled goals did not reach a terminal state in time"
+        pending_goals = self._navigation_pending_goals()
+        if pending_goals is None:
+            return False, "Could not verify router goal reservations"
+        if self._nav_active_goals > 0 or pending_goals > 0:
+            return (
+                False,
+                "Cancelled goals did not reach a terminal state in time "
+                f"(internal={self._nav_active_goals}, router={pending_goals})",
+            )
         return True, f"Cancelled {len(response.goals_canceling)} navigation goal(s)"
 
     def cancel_navigation_callback(self, request, response):
@@ -1387,6 +1613,47 @@ class ModeManager(Node):
         response.success, response.message = self._cancel_active_navigation()
         self.get_logger().info(f"/nav/cancel_navigation: {response.message}")
         return response
+
+    def _set_mapping_speed_limit(self, enabled: bool) -> tuple[bool, str]:
+        """Synchronously set the mux's authoritative final-drive envelope."""
+
+        state = "enable" if enabled else "disable"
+        try:
+            request = SetBool.Request()
+            request.data = enabled
+            result = call_service(
+                self._service_clients,
+                self.get_logger(),
+                MAPPING_SPEED_LIMIT_SERVICE,
+                request,
+                timeout_sec=2.0,
+            )
+        except Exception as e:
+            message = f"Could not {state} the mapping Slow envelope: {e}"
+            self.get_logger().error(message)
+            return False, message
+        if result is None:
+            message = f"Could not {state} the mapping Slow envelope: cmd_vel_mux did not acknowledge"
+            self.get_logger().error(message)
+            return False, message
+        if not result.success:
+            message = f"Could not {state} the mapping Slow envelope: {result.message}"
+            self.get_logger().error(message)
+            return False, message
+        return True, result.message
+
+    def _release_mapping_speed_limit_after_stable_mode(self) -> tuple[bool, str]:
+        """Release Slow only after navigation admission has a stable mode."""
+
+        stable_nonmapping_modes = {
+            NavigationMode.NAV.value,
+            NavigationMode.MAPFREE.value,
+        }
+        if self.current_mode not in stable_nonmapping_modes:
+            message = f"Refusing to release mapping Slow envelope while mode is '{self.current_mode}'"
+            self.get_logger().error(message)
+            return False, message
+        return self._set_mapping_speed_limit(False)
 
     def change_mode_callback(self, request, response, first_start=False):
         """
@@ -1407,15 +1674,17 @@ class ModeManager(Node):
 
         try:
             target_mode = request.mode.strip().lower()
-            if self.current_map is None:
-                target_mode = "mapping"
-
             # Validate mode
-            if target_mode not in ["navigation", "mapping", "mapfree"]:
+            if target_mode not in VALID_NAVIGATION_MODES:
                 response.success = False
-                response.message = f"Invalid mode '{target_mode}'. Use 'navigation', 'mapping', or 'mapfree'"
+                response.message = (
+                    f"Invalid mode '{target_mode}'. Use 'navigation', 'mapping', 'autonomous_mapping', or 'mapfree'"
+                )
                 self.get_logger().error(response.message)
                 return response
+
+            if self.current_map is None and target_mode not in MAPPING_MODES:
+                target_mode = "mapping"
 
             # Check if trying to switch to navigation but no maps are available
             if target_mode == "navigation" and not self.available_maps:
@@ -1428,8 +1697,18 @@ class ModeManager(Node):
 
             # Don't restart if already in the requested mode
             if self.current_mode == target_mode and not first_start:
-                response.success = True
-                response.message = f"Already in {target_mode} mode"
+                if target_mode in MAPPING_MODES:
+                    limit_ok, limit_message = self._set_mapping_speed_limit(True)
+                    response.success = limit_ok
+                    response.message = (
+                        f"Already in {target_mode} mode" if limit_ok else f"Mapping mode is not safe: {limit_message}"
+                    )
+                else:
+                    limit_ok, limit_message = self._release_mapping_speed_limit_after_stable_mode()
+                    response.success = True
+                    response.message = f"Already in {target_mode} mode"
+                    if not limit_ok:
+                        response.message += f"; Slow drive envelope remains active ({limit_message})"
                 self.get_logger().info(response.message)
                 return response
 
@@ -1443,21 +1722,42 @@ class ModeManager(Node):
                 self.current_map = fallback
                 self.save_last_map(fallback)
 
+            # Close router admission before checking/cancelling active goals. If
+            # cancellation ran first, a new goal could be admitted in the gap
+            # between its final status check and lifecycle teardown.
+            previous_mode = self.current_mode
+            limit_ok, limit_message = self._set_mapping_speed_limit(True)
+            if not limit_ok:
+                response.success = False
+                response.message = f"Mode switch aborted before transition: {limit_message}"
+                if first_start:
+                    # auto_start_mode already tore every lifecycle stack down.
+                    # Keep the persisted desired mode untouched, but publish
+                    # truthful runtime state so a later request does not take
+                    # the same-mode fast path without starting its stack.
+                    self.current_mode = "none"
+                    self.publish_status()
+                self.get_logger().error(response.message)
+                return response
+            self.current_mode = "switching"
+            self.publish_status()
+
             # Cancel active nav goals before tearing down their lifecycle nodes.
             # If cancellation can't be confirmed (service unreachable, or goals
-            # not terminal in time), abort rather than tear Nav2 down under a
-            # pending goal — that would strand the router/skill forever. Nav is
-            # left running; the caller can Stop explicitly and retry.
+            # not terminal in time), restore the still-running previous mode so
+            # callers can Stop explicitly and retry.
             cancelled_ok, cancel_message = self._cancel_active_navigation()
             if not cancelled_ok:
                 response.success = False
                 response.message = f"Mode switch aborted: could not stop active navigation ({cancel_message})"
+                self.current_mode = previous_mode
+                self.publish_status()
+                if previous_mode in {NavigationMode.NAV.value, NavigationMode.MAPFREE.value}:
+                    limit_ok, limit_message = self._release_mapping_speed_limit_after_stable_mode()
+                    if not limit_ok:
+                        response.message += f"; Slow drive envelope remains active ({limit_message})"
                 self.get_logger().error(response.message)
                 return response
-
-            # Set mode to switching
-            self.current_mode = "switching"
-            self.publish_status()  # Immediately publish the change
 
             # For mapfree, launch local-only Nav2 (planner, controller, costmaps) without map/AMCL
             if target_mode == "mapfree":
@@ -1474,6 +1774,11 @@ class ModeManager(Node):
                     response.message = f"Failed to start mapfree local navigation: {message}"
                     self.current_mode = "none"
 
+                self.publish_status()
+                if success:
+                    limit_ok, limit_message = self._release_mapping_speed_limit_after_stable_mode()
+                    if not limit_ok:
+                        response.message += f"; Slow drive envelope remains active ({limit_message})"
                 self.get_logger().info(response.message)
                 return response
 
@@ -1481,6 +1786,7 @@ class ModeManager(Node):
             mode_enum_map = {
                 "navigation": NavigationMode.NAV,
                 "mapping": NavigationMode.MAPPING,
+                "autonomous_mapping": NavigationMode.AUTONOMOUS_MAPPING,
             }
             target_mode_enum = mode_enum_map.get(target_mode)
 
@@ -1499,21 +1805,43 @@ class ModeManager(Node):
                         self.get_logger().info("BasicNavigator initialized for navigation mode")
                     except Exception as e:
                         self.get_logger().warning(f"Could not initialize BasicNavigator: {e}")
-                elif target_mode == "mapping":
-                    # Every slam_toolbox activation is a new coordinate frame;
-                    # stamp it before the mode flips so no subscriber pairs
-                    # mode "mapping" with a previous session's stamp.
+                elif starts_new_mapping_session(previous_mode, target_mode, first_start=first_start):
+                    # Every slam_toolbox activation is a new coordinate frame.
+                    # Manual <-> autonomous mapping keeps the same live SLAM
+                    # node, so that handoff must retain the session identity
+                    # and its staged spatial memories through save/finalize.
                     self._mapping_session_started = time.time()
                     self.mapping_session_publisher.publish(
                         String(data=json.dumps({"started": self._mapping_session_started}))
                     )
                 self.current_mode = target_mode
                 self.save_last_mode(target_mode)
+                self.publish_status()
+                if target_mode == NavigationMode.NAV.value:
+                    limit_ok, limit_message = self._release_mapping_speed_limit_after_stable_mode()
+                    if not limit_ok:
+                        response.message += f"; Slow drive envelope remains active ({limit_message})"
                 self.get_logger().info(response.message)
             else:
                 response.success = False
                 response.message = f"Failed to start {target_mode} mode: {message}"
-                self.current_mode = "none"
+                if not first_start and previous_mode in MAPPING_MODES and target_mode in MAPPING_MODES:
+                    # Both mapping stacks share slam_toolbox. A partial
+                    # expansion or contraction can fail after changing only
+                    # the autonomous Nav2 nodes while SLAM remains in the same
+                    # coordinate frame. Restore the previous stack and retain
+                    # that frame's session identity so a retry cannot wipe
+                    # staged memories.
+                    rollback_ok, rollback_message = self.request_mode_startup(NavigationMode(previous_mode))
+                    if rollback_ok:
+                        self.current_mode = previous_mode
+                        response.message += f"; restored {previous_mode} mode"
+                    else:
+                        self.current_mode = "none"
+                        response.message += f"; failed to restore {previous_mode} mode: {rollback_message}"
+                else:
+                    self.current_mode = "none"
+                self.publish_status()
                 self.get_logger().error(response.message)
 
         except Exception as e:
@@ -1521,6 +1849,7 @@ class ModeManager(Node):
             response.message = f"Error switching modes: {str(e)}"
             self.get_logger().error(response.message)
             self.current_mode = "none"
+            self.publish_status()
         finally:
             self._mode_change_lock.release()
 
@@ -1546,6 +1875,8 @@ def main(args=None):
     from mars_nav.navigate_to_pose_router import NavigateToPoseRouter
 
     navigate_to_pose_router = NavigateToPoseRouter()
+    mode_manager.set_navigation_mode_sink(navigate_to_pose_router.set_current_mode)
+    mode_manager.set_navigation_pending_goals_getter(navigate_to_pose_router.get_pending_goal_count)
 
     try:
         executor = MultiThreadedExecutor(num_threads=4)

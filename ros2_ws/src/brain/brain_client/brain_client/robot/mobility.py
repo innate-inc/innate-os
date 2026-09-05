@@ -5,7 +5,7 @@
 Mobility - Provides base movement (wheels) control capabilities to skills.
 
 This interface allows skills to:
-1. Send velocity commands on the common cmd_vel topic
+1. Send velocity commands through the skills-priority cmd_vel mux input
 2. Schedule automatic stop after a specified duration
 3. Precise blocking rotation via Nav2
 """
@@ -27,10 +27,10 @@ class Mobility:
 
     Injected as ``self.mobility`` when a skill declares ``mobility: Mobility``;
     the framework constructs it. Skills should use this instead of directly
-    publishing to cmd_vel.
+    publishing directly to the base command topic.
     """
 
-    def __init__(self, node: Node, logger, cmd_vel_topic: str = "/cmd_vel"):
+    def __init__(self, node: Node, logger, cmd_vel_topic: str = "/cmd_vel_skills"):
         self.node = node
         self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
         self.cmd_vel_topic = cmd_vel_topic

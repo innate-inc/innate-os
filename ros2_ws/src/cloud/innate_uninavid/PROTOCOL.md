@@ -16,13 +16,13 @@ goal completes, is cancelled, or an error occurs.
 ros2 launch innate_uninavid uninavid.launch.py
 # Override the config file:
 ros2 launch innate_uninavid uninavid.launch.py params_file:=/path/to/custom.yaml
-# In simulator mode, publish directly to /cmd_vel:
-ros2 launch innate_uninavid uninavid.launch.py cmd_vel_topic:=/cmd_vel
+# The simulator runs the same velocity smoother and final mux as hardware, so
+# the default command path is correct there too.
 ```
 
 By default, the launch file applies a `/cmd_vel` → `/cmd_vel_scaled`
-remapping.  The simulator overrides this to `/cmd_vel` because its bridge
-subscribes directly to that topic.
+remapping.  The velocity smoother then feeds `/cmd_vel_nav`, where the final
+mux arbitrates and applies mode-specific limits before publishing `/cmd_vel`.
 
 ### ROS parameters
 

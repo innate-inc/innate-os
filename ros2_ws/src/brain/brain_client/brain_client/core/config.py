@@ -21,6 +21,7 @@ class BrainConfig:
     # --- Topics ---
     image_topic: str
     cmd_vel_topic: str
+    motion_observation_topic: str
     arm_camera_image_topic: str
     odom_topic: str
     current_nav_mode_topic: str
@@ -83,7 +84,11 @@ class BrainConfig:
 _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     # --- Topics ---
     "image_topic": "/mars/main_camera/left/image_raw/compressed",
-    "cmd_vel_topic": "/cmd_vel",
+    # Brain/code-skill motion enters the skills-priority mux input.  Camera
+    # ego-motion suppression separately observes the final command sent to the
+    # base, which also includes teleop and Nav2.
+    "cmd_vel_topic": "/cmd_vel_skills",
+    "motion_observation_topic": "/cmd_vel",
     "arm_camera_image_topic": "/mars/arm/image_raw/compressed",
     "odom_topic": "/odom",
     "current_nav_mode_topic": "/nav/current_mode",

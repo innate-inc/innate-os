@@ -34,11 +34,19 @@ from brain_client.state.image import DepthMap, MainImage, WristImage
 from brain_client.state.joint_states import JointStates
 from brain_client.state.lidar import Lidar
 from brain_client.state.map import Map
+from brain_client.state.nav_mode import NavMode
 from brain_client.state.odometry import Odometry
 from brain_client.state.pose import Pose
 
 if TYPE_CHECKING:
     from brain_client.robot.spatial_memory import SpatialMemory
+
+
+NAV_MODE_QOS = QoSProfile(
+    depth=1,
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+)
 
 
 class RobotStateProvider:
@@ -69,12 +77,18 @@ class RobotStateProvider:
         self.last_joint_states = None
         self.last_battery = None
         self.last_amcl_pose = None
+        self.last_mapping_pose = None
+        self.last_nav_mode = None
         self.last_scan = None
         self._lidar_cache = None  # (msg, Lidar) of the last converted scan
         # ((map msg, keepout msg), Map) of the last converted map — a fresh Map per 50 Hz tick
         # would discard Map.grid's cached_property and re-decode the whole
         # grid on every skill read
         self._map_cache = None
+        # (msg, Pose) from the active map authority. Stable identity lets a
+        # safety-critical skill distinguish a new localization sample from
+        # the 50 Hz reinjection tick.
+        self._pose_cache = None
         # (jpeg, Image) of the last converted frame per camera — the b64
         # encode is far too expensive to redo at 50 Hz for a ~15 Hz camera
         self._main_image_cache = None
@@ -87,6 +101,8 @@ class RobotStateProvider:
         self._joint_states_sub = None
         self._battery_sub = None
         self._amcl_pose_sub = None
+        self._mapping_pose_sub = None
+        self._nav_mode_sub = None
         self._scan_sub = None
         # Gate feeds with this flag, never by destroying subscriptions:
         # destroying one the executor already selected as "ready" crashes the
@@ -116,6 +132,7 @@ class RobotStateProvider:
             RobotStateType.LAST_BATTERY: self.current_battery,
             RobotStateType.LAST_HEAD_POSITION: self.current_head_position,
             RobotStateType.LAST_POSE: self.current_pose,
+            RobotStateType.LAST_NAV_MODE: self.current_nav_mode,
             RobotStateType.LAST_LIDAR: self.current_lidar,
             RobotStateType.LAST_ARM: self.current_arm,
         }
@@ -168,6 +185,8 @@ class RobotStateProvider:
         self._amcl_pose_sub = feed_node.create_subscription(
             PoseWithCovarianceStamped, "/amcl_pose", self._on_amcl_pose, latched_qos
         )
+        self._mapping_pose_sub = feed_node.create_subscription(OdometryMsg, "/mapping_pose", self._on_mapping_pose, 10)
+        self._nav_mode_sub = feed_node.create_subscription(String, "/nav/current_mode", self._on_nav_mode, NAV_MODE_QOS)
         # the lidar driver publishes with sensor-data QoS (best effort); a
         # reliable subscription would never match it
         self._scan_sub = feed_node.create_subscription(LaserScan, "/scan", self._on_scan, qos_profile_sensor_data)
@@ -213,6 +232,19 @@ class RobotStateProvider:
 
     def _on_amcl_pose(self, msg: PoseWithCovarianceStamped) -> None:
         self.last_amcl_pose = msg
+
+    def _on_mapping_pose(self, msg: OdometryMsg) -> None:
+        self.last_mapping_pose = msg
+
+    def _on_nav_mode(self, msg: String) -> None:
+        mode = msg.data.strip().lower()
+        if mode != self.last_nav_mode:
+            # A pose from the previous authority must never leak through a
+            # lifecycle transition. New samples repopulate the matching feed.
+            self.last_mapping_pose = None
+            self.last_amcl_pose = None
+            self._pose_cache = None
+        self.last_nav_mode = mode
 
     def _on_scan(self, msg: LaserScan) -> None:
         if self._active:
@@ -428,17 +460,33 @@ class RobotStateProvider:
         )
 
     def current_pose(self) -> Pose | None:
-        msg = self.last_amcl_pose
+        if self.last_nav_mode in {"mapping", "autonomous_mapping"}:
+            msg = self.last_mapping_pose
+        elif self.last_nav_mode == "navigation":
+            msg = self.last_amcl_pose
+        else:
+            msg = None
         if msg is None:
             return None
+        if msg.header.frame_id != "map":
+            self._warn_missing("map-frame pose")
+            return None
+        cached = self._pose_cache
+        if cached is not None and cached[0] is msg:
+            return cached[1]
         pose = msg.pose.pose
-        return Pose(
+        converted = Pose(
             x=pose.position.x,
             y=pose.position.y,
             theta=quaternion_to_yaw(pose.orientation),
             stamp=msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
             frame_id=msg.header.frame_id,
         )
+        self._pose_cache = (msg, converted)
+        return converted
+
+    def current_nav_mode(self) -> NavMode | None:
+        return NavMode(self.last_nav_mode) if self.last_nav_mode else None
 
     def current_lidar(self) -> Lidar | None:
         msg = self.last_scan
@@ -488,6 +536,11 @@ class RobotStateProvider:
             value = getter()
             if value is not None:
                 to_inject[state_type.value] = value
+            elif state_type is RobotStateType.LAST_POSE:
+                # Pose authority changes must invalidate an already-injected
+                # value; omitting None leaves the old AMCL/SLAM pose in place.
+                to_inject[state_type.value] = None
+                self._warn_missing(state_type.name)
             else:
                 self._warn_missing(state_type.name)
         if to_inject:

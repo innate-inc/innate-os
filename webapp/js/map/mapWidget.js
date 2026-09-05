@@ -338,7 +338,10 @@ export function createMap(root, opts = {}) {
   let unsubMappingPose = null;
 
   function composedPose() {
-    if (mappingMode) return mappingPose ?? odomPose;
+    // Raw odometry is in the odom frame and must never be placed directly on
+    // a map-frame grid. If the SLAM pose is temporarily unavailable, hiding
+    // the marker is more truthful than drawing it several metres away.
+    if (mappingMode) return mappingPose;
     if (!amclPose) return odomPose;
     if (!odomAtAmcl || !odomPose) return amclPose;
     // Motion since the fix in the base frame, re-applied at the AMCL fix.
