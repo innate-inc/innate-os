@@ -22,6 +22,17 @@ module = importlib.import_module("workspace.innate_skills.arm.open_door_with_vis
 OpenDoorWithVision = module.OpenDoorWithVision
 
 
+@pytest.fixture(autouse=True)
+def stub_level_planner(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_level_ik", SimpleNamespace(solve=lambda target, _current: target))
+    monkeypatch.setattr(
+        OpenDoorWithVision,
+        "joint_states",
+        SimpleNamespace(position=(0.0,) * 6, effort=(0.0,) * 6, received_at=module.time.monotonic()),
+        raising=False,
+    )
+
+
 def _unit(vector):
     norm = math.sqrt(sum(value * value for value in vector))
     return tuple(value / norm for value in vector)
@@ -220,10 +231,7 @@ def test_wrist_decision_retries_malformed_content_and_logs_raw_responses(tmp_pat
     assert "Never choose UP or DOWN based on the direction you want the handle to move" in requests[0][1]
     assert "opposite sides of the handle SHAFT" in requests[0][1]
     assert "Do NOT choose GRASP when only the rounded free end or tip" in requests[0][1]
-    assert "move the gripper UP when needed to surround a higher shaft section" in requests[0][1]
-    assert "TOP END of the vertical handle is just visible" in requests[0][1]
-    assert "assume the gripper is too low and choose UP" in requests[0][1]
-    assert "Do not ABORT merely because the gripper temporarily occludes the handle" in requests[0][1]
+    assert "Occlusion alone does not tell you whether to move UP or DOWN" in requests[0][1]
     assert requests[0][2]["reasoning_effort"] == "low"
     assert requests[0][2]["model"] == "gemini-3.8-flash"
     assert (skill.debug_directory / "00_wrist_action_3.jpg").read_bytes() == b"current"
@@ -387,12 +395,19 @@ class _ActionManipulation:
             x=self.position[0],
             y=self.position[1],
             z=self.position[2],
+            rpy=(0.0, 0.0, 0.0),
         )
 
     def move_to(self, x, y, z, **_kwargs):
         self.moves.append((x, y, z))
         self.position[:] = [x, y, z - self.z_lag]
         return self.pose
+
+    def move_joints(self, joints, **kwargs):
+        return self.move_to(*joints, **kwargs)
+
+    def stream_stop(self):
+        pass
 
 
 def test_wrist_loop_executes_semantic_actions_until_grasp(monkeypatch):
@@ -458,7 +473,7 @@ def test_wrist_loop_accumulates_commands_without_adopting_measured_z_lag(monkeyp
     assert result == pytest.approx((0.35, -0.01, 0.238))
 
 
-def test_wrist_loop_logs_but_does_not_abort_on_large_tracking_error(monkeypatch):
+def test_wrist_loop_stops_on_large_tracking_error(monkeypatch):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-tracking-test"))
     skill.manipulation = _ActionManipulation(z_lag=0.020)
@@ -478,16 +493,11 @@ def test_wrist_loop_logs_but_does_not_abort_on_large_tracking_error(monkeypatch)
     events = []
     monkeypatch.setattr(skill, "debug_event", lambda event, **fields: events.append((event, fields)))
 
-    result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
-
-    expected_moves = [(0.35, 0.01, 0.220), (0.35, 0.01, 0.240)]
-    assert len(skill.manipulation.moves) == len(expected_moves)
-    for actual, expected in zip(skill.manipulation.moves, expected_moves, strict=True):
-        assert actual == pytest.approx(expected)
-    assert result == pytest.approx((0.35, 0.01, 0.220))
-    motion_events = [fields for event, fields in events if event == "wrist_action_motion"]
-    assert [event["max_tracking_error_m"] for event in motion_events] == pytest.approx([0.020, 0.020])
-    assert all("effort" in event for event in motion_events)
+    with pytest.raises(SkillFailed, match="did not reach the level wrist target"):
+        skill._wrist_align((0.35, 0.01, 0.20), restage=False)
+    assert len(skill.manipulation.moves) == 1
+    tracking = [fields for event, fields in events if event == "wrist_tracking"]
+    assert tracking[0]["error"][2] == pytest.approx(-0.020)
 
 
 def test_wrist_loop_continues_past_twelve_actions(monkeypatch):
@@ -549,7 +559,7 @@ def test_forward_near_full_extension_retracts_arm_and_creeps_base(monkeypatch, c
     creep = next(fields for event, fields in events if event == "wrist_base_creep")
     assert creep["arm_retraction_m"] == pytest.approx(0.04)
     assert creep["base_advance_m"] == pytest.approx(0.06)
-    assert creep["net_forward_m"] == pytest.approx(0.02)
+    assert creep["net_forward_m"] == pytest.approx(0.015)
 
     positions = [fields for event, fields in events if event == "wrist_position"]
     target = next(p for p in positions if p["phase"] == "target")
@@ -905,3 +915,106 @@ def test_grasp_attempts_stop_after_five_verified_misses(monkeypatch):
     assert attempts == [1, 2, 3, 4, 5]
     assert retries == [2, 3, 4, 5]
     assert skill.mobility.stops == 1
+
+
+def test_real_level_ik_rejects_recorded_tilted_target():
+    import PyKDL as kdl
+
+    from workspace.innate_skills.arm.level_handle_ik import LevelHandleIK
+
+    planner = LevelHandleIK()
+    target = (0.32, 0.011, 0.269)
+    joints = planner.solve(target, [0.0] * 5)
+    q = kdl.JntArray(5)
+    for i, v in enumerate(joints):
+        q[i] = v
+    pose = kdl.Frame()
+    planner.fk.JntToCart(q, pose)
+    assert tuple(pose.p[i] for i in range(3)) == pytest.approx(target, abs=0.005)
+    assert max(abs(v) for v in pose.M.GetRPY()[:2]) < math.radians(3)
+    with pytest.raises(ValueError, match="No level"):
+        planner.solve((0.36, -0.009, 0.409), joints)
+
+
+def test_invalid_level_target_never_sends_joint_command(monkeypatch):
+    skill = OpenDoorWithVision(logging.getLogger("reject-before-motion"))
+    sent = []
+    skill.manipulation = SimpleNamespace(move_joints=lambda *a, **k: sent.append(a))
+
+    def reject(*_args):
+        raise ValueError("No level solution")
+
+    monkeypatch.setattr(OpenDoorWithVision, "_level_ik", SimpleNamespace(solve=reject))
+    with pytest.raises(SkillFailed, match="No level solution"):
+        skill._move_wrist((0.36, 0.0, 0.409), 0.5)
+    assert not sent
+
+
+@pytest.mark.parametrize("direction", [1.0, -1.0])
+def test_small_base_drive_uses_precision_and_signed_progress(monkeypatch, direction):
+    skill = OpenDoorWithVision(logging.getLogger("precise-drive"))
+    base = [1.0, 2.0, math.pi / 2]
+    captured = {}
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: tuple(base))
+
+    def drive(_odom, metres, **kwargs):
+        captured.update(kwargs)
+        base[1] += direction * metres
+        return True
+
+    skill.mobility = SimpleNamespace(drive=drive)
+    if direction > 0:
+        skill._drive(0.06)
+    else:
+        with pytest.raises(SkillFailed, match="Base missed requested travel"):
+            skill._drive(0.06)
+    assert captured["tolerance"] == 0.003
+
+
+def test_base_compensation_uses_measured_retraction(monkeypatch):
+    skill = OpenDoorWithVision(logging.getLogger("measured-retraction"))
+    arm = _ActionManipulation()
+    arm.position[:] = [0.336, -0.015, 0.269]
+    skill.manipulation = arm
+    base = [1.0, 2.0, math.pi / 2]
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: tuple(base))
+
+    def retract(target, _duration):
+        assert target == pytest.approx((0.296, -0.015, 0.269))
+        arm.position[0] = 0.300  # Measured retraction is 36 mm, not 40.
+        return arm.pose
+
+    monkeypatch.setattr(skill, "_move_wrist", retract)
+    travel = []
+
+    def drive(distance):
+        travel.append(distance)
+        base[1] += distance
+
+    monkeypatch.setattr(skill, "_drive", drive)
+    skill._advance_with_base(1)
+    assert travel == pytest.approx([0.056])
+
+
+def test_forward_uses_base_when_level_reach_is_shorter_than_x_threshold(monkeypatch):
+    skill = OpenDoorWithVision(logging.getLogger("height-dependent-reach"))
+    skill.manipulation = _ActionManipulation()
+    skill.manipulation.position[:] = [0.34, 0.0, 0.329]
+    skill.wrist_image = object()
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.0, 0.0, 0.0))
+    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(skill, "_next_image", lambda *_args: object())
+    decisions = iter([("FORWARD", None, "approach"), ("GRASP", None, "aligned")])
+    monkeypatch.setattr(skill, "_request_wrist_decision", lambda *a, **k: next(decisions))
+
+    def unreachable(*_args):
+        raise ValueError("No level solution")
+
+    monkeypatch.setattr(OpenDoorWithVision, "_level_ik", SimpleNamespace(solve=unreachable))
+    base_steps = []
+    monkeypatch.setattr(
+        skill, "_advance_with_base", lambda step: base_steps.append(step) or tuple(skill.manipulation.position)
+    )
+    skill._wrist_align(tuple(skill.manipulation.position), restage=False)
+    assert base_steps == [0]
+    assert not skill.manipulation.moves

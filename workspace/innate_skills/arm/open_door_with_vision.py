@@ -40,7 +40,6 @@ _WRIST_STAGING_X_M = 0.32
 _MAX_EE_X_M = 0.40
 _WRIST_ACTION_STEP_M = 0.020
 _WRIST_COMFORT_X_M = 0.37
-_WRIST_BASE_CREEP_M = 0.06
 _WRIST_CREEP_RETRACT_M = 0.04
 _WRIST_CONTENT_ATTEMPTS = 2
 _WRIST_ACTIONS = frozenset({"FORWARD", "BACK", "LEFT", "RIGHT", "UP", "DOWN", "GRASP", "ABORT"})
@@ -258,9 +257,18 @@ class OpenDoorWithVision(Skill):
 
     def _drive(self, metres):
         before = self._odom_xyt()
-        if not self.mobility.drive(self._odom_xyt, metres, logger=self.logger):
+        if not self.mobility.drive(
+            self._odom_xyt, metres, kp=2.0, v_min=0.01, v_max=0.06, tolerance=0.003, logger=self.logger
+        ):
             self.fail("Base motion failed during handle acquisition")
-        self.debug_event("base_translation", requested_m=metres, before=list(before), after=list(self._odom_xyt()))
+        after = self._odom_xyt()
+        forward = (after[0] - before[0]) * math.cos(before[2]) + (after[1] - before[1]) * math.sin(before[2])
+        self.debug_event(
+            "base_translation", requested_m=metres, measured_forward_m=forward, before=list(before), after=list(after)
+        )
+        self.logger.info(f"[handle base] requested={metres:+.3f}m measured forward={forward:+.3f}m")
+        if abs(forward - metres) > 0.005:
+            self.fail(f"Base missed requested travel: requested {metres:+.3f}m, measured {forward:+.3f}m")
 
     def _localize_handle(self):
         self.sleep(0.8)
@@ -374,14 +382,11 @@ class OpenDoorWithVision(Skill):
             "the direction you want the handle to move in the image. Choose GRASP only when both fingers have "
             "passed on opposite sides of the handle SHAFT and a substantial shaft section is deep inside the "
             "finger pocket, behind the pointed fingertips. Closing must contact opposite sidewalls of the shaft. "
-            "Before GRASP, raise the gripper until the physical TOP END of the vertical handle is just visible "
-            "above or behind the gripper/finger pocket. The top should be peeking into view; it must not remain "
-            "fully hidden below or behind the gripper. If the expected handle or its top is hidden by the gripper, "
-            "assume the gripper is too low and choose UP to reveal it. Do not ABORT merely because the gripper "
-            "temporarily occludes the handle while doing this vertical alignment. "
-            "Do NOT choose GRASP when only the rounded free end or tip lies between the fingertips; that is a weak "
-            "tip pinch. For this vertical handle, move the gripper UP when needed to surround a higher shaft section "
-            "instead of pinching its bottom end. Choose ABORT if the handle is absent, "
+            "Occlusion alone does not tell you whether to move UP or DOWN. Do not keep raising the gripper "
+            "to reveal the handle top. Align with an accessible shaft section, not necessarily the top end. "
+            "If depth is unclear, use BACK to regain a view; do not infer enclosure from 2D overlap alone. "
+            "Do NOT choose GRASP when only the rounded free end or tip lies between the fingertips. "
+            "Choose ABORT if the handle is absent, "
             "ambiguous, occluded beyond safe guidance, or motion is unsafe. Do not use pixel thresholds or "
             "estimate coordinates for motion; judge the physical next action visually. Return ONLY a JSON list "
             'with one object: [{"box_2d":[ymin,xmin,ymax,xmax],"grasp_point":[y,x],'
@@ -427,6 +432,84 @@ class OpenDoorWithVision(Skill):
                 frame=frame_name,
             )
         self.fail("Wrist VLM did not return a valid bounded action")
+
+    @resource
+    def _level_ik(self):
+        from .level_handle_ik import LevelHandleIK
+
+        return LevelHandleIK()
+
+    def _move_wrist(self, target, duration):
+        """Reject missed poses instead of accumulating fictitious progress."""
+        self._effort()  # Reject stale arm telemetry before planning.
+        try:
+            joints = self._level_ik.solve(target, tuple(self.joint_states.position[:5]))
+        except ValueError as error:
+            self.fail(str(error))
+        self.debug_event("level_wrist_plan", target=list(target), joints=list(joints))
+        self.check_cancelled()
+        self.manipulation.move_joints(joints, duration=duration)
+        self.sleep(0.15)  # Allow a fresh FK sample after joint motion completes.
+        settled = self.manipulation.pose
+        error = tuple(settled.position[i] - target[i] for i in range(3))
+        roll, pitch, _yaw = settled.rpy
+        self.debug_event(
+            "wrist_tracking",
+            target=list(target),
+            measured=list(settled.position),
+            error=list(error),
+            measured_rpy=list(settled.rpy),
+        )
+        self.logger.info(
+            f"[handle tracking] xyz error={tuple(round(v, 3) for v in error)}m "
+            f"roll={math.degrees(roll):+.1f}deg pitch={math.degrees(pitch):+.1f}deg"
+        )
+        if max(abs(v) for v in error) > 0.010 or max(abs(roll), abs(pitch)) > math.radians(5):
+            self.manipulation.stream_stop()
+            self.fail("Arm did not reach the level wrist target; stopping instead of accumulating missed motion")
+        return settled
+
+    @staticmethod
+    def _gripper_odom_xy(position, base):
+        c, sn = math.cos(base[2]), math.sin(base[2])
+        return (base[0] + c * position[0] - sn * position[1], base[1] + sn * position[0] + c * position[1])
+
+    def _advance_with_base(self, step):
+        before = tuple(self.manipulation.pose.position)
+        base = self._odom_xyt()
+        start_xy = self._gripper_odom_xy(before, base)
+        forward = (math.cos(base[2]), math.sin(base[2]))
+        retreat = (before[0] - _WRIST_CREEP_RETRACT_M, before[1], before[2])
+        self._log_wrist_motion("target", step, "RETRACT", before, retreat)
+        settled = self._move_wrist(retreat, 0.8)
+        retracted_xy = self._gripper_odom_xy(settled.position, self._odom_xyt())
+        loss = sum((start_xy[i] - retracted_xy[i]) * forward[i] for i in range(2))
+        travel = loss + _WRIST_ACTION_STEP_M
+        if not 0.0 < travel <= 0.08:
+            self.fail(f"Unexpected measured retraction {loss:+.3f}m; base advance cancelled")
+        self.logger.info(
+            f"[handle step={step}] measured retraction={loss:.3f}m "
+            f"base forward target={travel:.3f}m net target={_WRIST_ACTION_STEP_M:.3f}m"
+        )
+        self._drive(travel)
+        final = tuple(self.manipulation.pose.position)
+        final_xy = self._gripper_odom_xy(final, self._odom_xyt())
+        net = sum((final_xy[i] - start_xy[i]) * forward[i] for i in range(2))
+        self._log_wrist_motion("measured", step, "BASE_FORWARD", before, retreat)
+        self.debug_event(
+            "wrist_base_creep",
+            step=step,
+            requested_arm_pose=list(retreat),
+            measured_arm_pose=list(final),
+            arm_retraction_m=loss,
+            base_advance_m=travel,
+            net_forward_m=net,
+            effort=list(self._effort()),
+        )
+        self.logger.info(f"[handle step={step}] measured net forward={net:+.3f}m")
+        if abs(net - _WRIST_ACTION_STEP_M) > 0.006:
+            self.fail(f"Gripper missed forward step: measured {net:+.3f}m, expected +0.020m")
+        return final
 
     def _log_wrist_motion(self, phase, step, action, previous, target):
         """Keep base-relative commands and odometry-frame progress distinct."""
@@ -477,7 +560,7 @@ class OpenDoorWithVision(Skill):
             self.manipulation.gripper_open(duration=1.0)
             commanded_pose = (_WRIST_STAGING_X_M, target[1], target[2])
             self._log_wrist_motion("target", -1, "STAGE", self.manipulation.pose.position, commanded_pose)
-            self.manipulation.move_to(*commanded_pose, duration=2.0)
+            self._move_wrist(commanded_pose, 2.0)
         else:
             commanded_pose = tuple(self.manipulation.pose.position)
         self._log_wrist_motion("measured", -1, "ALIGN", commanded_pose, commanded_pose)
@@ -514,38 +597,7 @@ class OpenDoorWithVision(Skill):
                 return tuple(measured.position)
             if action == "FORWARD" and commanded_pose[0] >= _WRIST_COMFORT_X_M:
                 self.check_cancelled()
-                retreat_pose = (
-                    max(_WRIST_STAGING_X_M, commanded_pose[0] - _WRIST_CREEP_RETRACT_M),
-                    commanded_pose[1],
-                    commanded_pose[2],
-                )
-                self._log_wrist_motion("target", step, "RETRACT", commanded_pose, retreat_pose)
-                settled = self.manipulation.move_to(
-                    *retreat_pose,
-                    duration=0.8,
-                    tolerance_xy=None,
-                    tolerance_z=None,
-                )
-                measured_pose = tuple(settled.position)
-                self.logger.info(
-                    f"[handle step={step}] base forward target={_WRIST_BASE_CREEP_M:.3f}m "
-                    f"planned net advance={_WRIST_BASE_CREEP_M - (commanded_pose[0] - retreat_pose[0]):.3f}m"
-                )
-                self._drive(_WRIST_BASE_CREEP_M)
-                self._log_wrist_motion("measured", step, "BASE_FORWARD", commanded_pose, retreat_pose)
-                self.debug_event(
-                    "wrist_base_creep",
-                    step=step,
-                    action=action,
-                    previous_commanded_pose=list(commanded_pose),
-                    requested_arm_pose=list(retreat_pose),
-                    measured_arm_pose=list(measured_pose),
-                    arm_retraction_m=commanded_pose[0] - retreat_pose[0],
-                    base_advance_m=_WRIST_BASE_CREEP_M,
-                    net_forward_m=_WRIST_BASE_CREEP_M - (commanded_pose[0] - retreat_pose[0]),
-                    effort=list(self._effort()),
-                )
-                commanded_pose = retreat_pose
+                commanded_pose = self._advance_with_base(step)
                 previous_image = image
                 previous_action = action
                 continue
@@ -553,8 +605,18 @@ class OpenDoorWithVision(Skill):
             if all(abs(next_pose[index] - commanded_pose[index]) < 1e-6 for index in range(3)):
                 self.fail(f"Wrist VLM requested {action}, but that motion is at a safety limit")
             self.check_cancelled()
+            if action == "FORWARD":
+                try:
+                    self._level_ik.solve(next_pose, tuple(self.joint_states.position[:5]))
+                except ValueError:
+                    # Level reach depends on height, not a fixed X threshold.
+                    # Advance the base from the last measured, level pose.
+                    commanded_pose = self._advance_with_base(step)
+                    previous_image = image
+                    previous_action = action
+                    continue
             self._log_wrist_motion("target", step, action, commanded_pose, next_pose)
-            settled = self.manipulation.move_to(*next_pose, duration=0.5, tolerance_xy=None, tolerance_z=None)
+            settled = self._move_wrist(next_pose, 0.5)
             self._log_wrist_motion("measured", step, action, commanded_pose, next_pose)
             measured_pose = tuple(settled.position)
             tracking_error = tuple(measured_pose[index] - next_pose[index] for index in range(3))
@@ -630,7 +692,7 @@ class OpenDoorWithVision(Skill):
         self.manipulation.gripper_open(duration=1.0)
         measured = self.manipulation.pose
         retreat_x = max(_WRIST_STAGING_X_M, measured.x - _WRIST_CREEP_RETRACT_M)
-        self.manipulation.move_to(retreat_x, measured.y, measured.z, duration=0.8)
+        self._move_wrist((retreat_x, measured.y, measured.z), 0.8)
         self.debug_event(
             "grasp_retry_started",
             attempt=attempt,
