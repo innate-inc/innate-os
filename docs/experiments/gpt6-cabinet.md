@@ -1,7 +1,8 @@
 # GPT-6 cabinet skill
 
-Skill: `innate-os/open_cabinet_with_gpt`, branch `codex/gpt6-cabinet-agent`,
-based on `codex/pull-held-handle` (PR #737, includes the kitchen fixture).
+Skill: `innate-os/open_cabinet_with_gpt`, alongside
+`innate-os/open_door_with_vision` on `codex/pull-held-handle`
+(PR #737, includes the kitchen fixture).
 
 ## Source and adaptation
 
