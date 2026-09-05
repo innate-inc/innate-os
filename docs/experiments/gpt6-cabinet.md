@@ -70,3 +70,16 @@ move that tracked within 1.5 mm per axis. The run intentionally used
 `max_steps=1` and ended with decision-budget exhaustion. The earlier staging
 pose requested shoulder -0.83 rad, which the simulator limited to -0.25;
 IK now rejects that pose before sending it. Horizontal checks remain intact.
+
+The opening guidance now follows `open_door_with_vision`'s approximate 40 cm
+outward pull, arm first and then base, before following the leftward hinge arc.
+It keeps the existing 3 cm per-action limit and observations between moves.
+A short tug without a visible gap is not an exhausted opening attempt, and
+joint6's saturated closing effort is distinguished from excessive arm load.
+Lost grasp, failed tracking, excessive arm effort, and visible obstructions
+remain reasons to stop. No minimum pull is mechanically forced.
+
+A model-only replay of the recorded premature-release observation (step 11,
+run `b7018005768d4c7c9fc6bcb8c628b15b`), with historical telemetry/action attempts,
+selected another 3 cm backward base step instead of releasing. No motion was
+executed during that replay; full opening with this guidance is not yet verified.
