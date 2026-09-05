@@ -360,8 +360,13 @@ class VirtualMars:
         """Release the offscreen GL renderers; must run on the thread that
         rendered with them (macOS GL is main-thread-sensitive)."""
         for renderer in (self._renderer, self._depth_renderer):
-            if renderer is not None:
-                renderer.close()
+            if renderer is None:
+                continue
+            # Renderer.close() destroys its GL context, then mjr_freeContext deletes
+            # textures/framebuffers by id on whatever context is *current* -- a newer
+            # world's, after a switch, whose every frame is then noise.
+            renderer._gl_context.make_current()
+            renderer.close()
         self._renderer = self._depth_renderer = None
 
     def set_cmd_vel(self, vx: float, wz: float) -> None:
