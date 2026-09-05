@@ -1131,6 +1131,8 @@ function buildTypeLegend() {
     item.className = "skills-pop-legend-item";
     item.title = hint;
     const icon = buildTypeIcon(cls, label);
+    // The adjacent text already names the category for screen readers.
+    icon.setAttribute("aria-hidden", "true");
     const text = document.createElement("span");
     text.textContent = label;
     item.append(icon, text);

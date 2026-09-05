@@ -43,6 +43,8 @@ document.querySelector('#test').onclick = (event) => {
     const icon = id => row(id).querySelector('.skills-pop-type-icon');
     const legends = [...document.querySelectorAll('.skills-pop-legend-item .skills-pop-type-icon')];
     ['pick_cup', 'wave', 'say_hello'].forEach((id, i) => {
+      assert(legends[i].getAttribute('aria-hidden') === 'true', 'legend icon is decorative');
+      assert(icon(id).getAttribute('aria-hidden') !== 'true', 'row category remains accessible');
       assert(icon(id).innerHTML === legends[i].innerHTML, `${id}: legend matches`);
       assert(icon(id).getAttribute('aria-label').endsWith('skill'), `${id}: accessible category`);
       assert(icon(id).getBoundingClientRect().width === 16, `${id}: compact size`);
