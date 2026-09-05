@@ -159,6 +159,7 @@ test("traffic runs from validated wire snapshots through safe scene swaps and Th
 
   try {
     session.start();
+    assert.equal(session.simulationClock, null);
     const socket = SessionWebSocket.instances[0];
     socket.open();
     socket.message({
@@ -175,6 +176,7 @@ test("traffic runs from validated wire snapshots through safe scene swaps and Th
       traffic_manifest: manifest,
     });
     socket.message(worldFrame(1, 0, state(-9)));
+    assert.deepEqual(session.simulationClock, { t: 1, worldEpoch: 2 });
     session.tick(scene, 0);
     assert.equal(manifestAttempts, 1);
     assert.equal(renderedCar()?.position.x, -9);
@@ -183,6 +185,7 @@ test("traffic runs from validated wire snapshots through safe scene swaps and Th
 
     socket.message({ traffic_manifest: replacement });
     socket.message(worldFrame(2, 1, state(-7, 0, "green")));
+    assert.deepEqual(session.simulationClock, { t: 2, worldEpoch: 2 });
     session.tick(scene, 0.016);
     assert.equal(manifestAttempts, 2);
     assert.equal(errors.length, 1);
