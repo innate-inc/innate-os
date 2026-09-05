@@ -119,7 +119,7 @@ def _left_push_offsets(distance_m):
 class OpenDoorWithVision(Skill):
     """Find and grasp a frontal protruding bar/lever handle, then pull it.
 
-    A tight detection of a known-height, vivid vertical handle provides metric
+    A tight detection of a known-height vertical handle provides metric
     monocular range. The head camera positions the base; a bounded wrist-camera
     action loop then visually guides the gripper. This experimental skill
     rejects clipped or unstable metric detections, unreachable geometry,
@@ -135,9 +135,12 @@ class OpenDoorWithVision(Skill):
     odom: Odometry
     debug_enabled = True
     _handle_description = "the protruding handle directly ahead"
-    _handle_color = "yellow"
+    _handle_color = ""
     _handle_height_m = 0.10
     _frame_index = 0
+
+    def _appearance_hint(self):
+        return f"Handle appearance hint: {self._handle_color!r}. " if self._handle_color else ""
 
     @resource
     def _proxy(self):
@@ -171,8 +174,8 @@ class OpenDoorWithVision(Skill):
             "edge, or an image/reflection of a handle. Return ONLY a JSON list with the "
             'best match first: [{"box_2d":[ymin,xmin,ymax,xmax],'
             '"grasp_point":[y,x]}], normalized 0-1000. Empty list if no graspable '
-            f"handle is visible. It is the {self._handle_color} component. "
-            "The box must be TIGHT around the complete vivid-colored "
+            f"handle is visible. {self._appearance_hint()}"
+            "The box must be TIGHT around the complete "
             "vertical handle, including its physical top and bottom.",
             logger=self.logger,
             reasoning_effort=_VISION_REASONING_EFFORT,
@@ -356,8 +359,8 @@ class OpenDoorWithVision(Skill):
             else f"Image 1 is the previous frame. Image 2 is the current frame after action {previous_action}."
         )
         prompt = (
-            f"Guide a robot gripper to grasp {self._handle_description!r}, the vivid "
-            f"{self._handle_color} vertical handle. {history} "
+            f"Guide a robot gripper to grasp {self._handle_description!r}, a vertical handle. "
+            f"{self._appearance_hint()}{history} "
             "Inspect the current frame and choose exactly ONE next action. "
             "FORWARD advances the open fingers toward the cabinet/handle. BACK retreats when too close or unsafe. "
             "LEFT or RIGHT means physically translate the GRIPPER in that direction, not move the handle in the "
@@ -540,7 +543,8 @@ class OpenDoorWithVision(Skill):
                 self._proxy,
                 image,
                 f"The robot just closed its two black gripper fingers on {self._handle_description!r}. "
-                f"Is a SHAFT section of the {self._handle_color} physical handle visibly enclosed with the two "
+                f"{self._appearance_hint()}"
+                "Is a SHAFT section of the requested physical handle visibly enclosed with the two "
                 "fingers contacting opposite sides, clearly away from its rounded free end? Answer NO if the "
                 "fingers merely pinch the terminal tip/end, contact the same side, or the shaft is not deep inside "
                 "the finger pocket. "
@@ -722,25 +726,25 @@ class OpenDoorWithVision(Skill):
     def execute(
         self,
         handle_description: str = "the protruding handle directly ahead",
-        handle_color: str = "yellow",
+        handle_color: str = "",
         handle_height_m: float = 0.10,
         pull_distance_m: float = 0.40,
     ) -> SkillReturn:
-        """Locate, grasp, and pull a frontal protruding handle."""
+        """Locate, grasp, and pull the described frontal protruding handle.
+
+        handle_color is an optional free-form appearance hint, including colors,
+        materials, or patterns. When omitted, handle_description identifies it.
+        """
         if self._proxy is None:
             self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
         if not 0.01 <= pull_distance_m <= 0.40:
             self.fail("pull_distance_m must be between 0.01 and 0.40")
         if not handle_description.strip():
             self.fail("handle_description must not be empty")
-        if not any(
-            color in handle_color.lower() for color in ("red", "orange", "yellow", "green", "blue", "purple", "pink")
-        ):
-            self.fail("handle_color must name a vivid red, orange, yellow, green, blue, purple, or pink color")
         if not 0.03 <= handle_height_m <= 0.25:
             self.fail("handle_height_m must be between 0.03 and 0.25")
         self._handle_description = handle_description.strip()
-        self._handle_color = handle_color.strip().lower()
+        self._handle_color = handle_color.strip()
         self._handle_height_m = handle_height_m
         self._frame_index = 0
         try:

@@ -614,7 +614,11 @@ class _Head:
         self.positions.append(value)
 
 
-def test_full_skill_acquires_before_pull_handoff(monkeypatch):
+@pytest.mark.parametrize(
+    "handle_options",
+    [{}, {"handle_color": "black"}, {"handle_color": "brushed stainless steel"}, {"handle_color": "black and white"}],
+)
+def test_full_skill_acquires_before_pull_handoff(monkeypatch, handle_options):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("open-door-test"))
     skill.mobility = _Mobility()
@@ -645,7 +649,9 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch):
         lambda retreat, left: order.append(("retreat_and_push_left", retreat, left)),
     )
 
-    result = skill.execute(pull_distance_m=0.40)
+    result = skill.execute(handle_description="the lower sink cabinet handle", pull_distance_m=0.40, **handle_options)
+    assert skill._handle_color == handle_options.get("handle_color", "")
+    assert skill._handle_description == "the lower sink cabinet handle"
 
     assert order == [
         "localize",
@@ -801,3 +807,11 @@ def test_post_grasp_left_pull_stops_at_ik_reach_boundary(monkeypatch):
 
 def test_door_defaults_to_thirty_centimetres_back_and_left(monkeypatch):
     assert OpenDoorWithVision.execute.__defaults__[-1] == pytest.approx(0.40)
+
+
+def test_appearance_hint_is_optional_and_preserves_user_wording():
+    skill = OpenDoorWithVision(logging.getLogger("door-appearance-test"))
+    assert skill._appearance_hint() == ""
+    skill._handle_color = "brushed Steel with black ends"
+    assert "brushed Steel with black ends" in skill._appearance_hint()
+    assert "vivid" not in skill._appearance_hint()
