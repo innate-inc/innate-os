@@ -21,6 +21,9 @@ class OpenCabinetWithGpt(OpenDoorWithVision):
     No scene-open command or privileged cabinet pose is exposed to the model.
     """
 
+    def _make_policy(self):
+        return CabinetPolicy()
+
     @resource
     def _level_ik(self):
         from .level_handle_ik import LevelHandleIK
@@ -103,7 +106,7 @@ class OpenCabinetWithGpt(OpenDoorWithVision):
         if isinstance(max_steps, bool) or not isinstance(max_steps, int) or not 1 <= max_steps <= 100:
             self.fail("max_steps must be an integer between 1 and 100")
         try:
-            policy = CabinetPolicy()  # Fail for missing key BEFORE any motion.
+            policy = self._make_policy()  # Fail for missing credentials BEFORE any motion.
         except ValueError as error:
             self.fail(str(error))
         self._frame_index = 0
@@ -125,7 +128,7 @@ class OpenCabinetWithGpt(OpenDoorWithVision):
                 observation, frames = self._observe(step)
                 call_id, (action, values, note) = policy.decide(observation, frames, self.sleep)
                 self.check_cancelled()
-                self.feedback(f"GPT cabinet {step + 1}: {action} — {note}")
+                self.feedback(f"{policy.model} cabinet {step + 1}: {action} — {note}")
                 self.debug_event("gpt_action", model=policy.model, action=action, values=list(values), note=note)
                 try:
                     self._act(action, values)
@@ -138,9 +141,9 @@ class OpenCabinetWithGpt(OpenDoorWithVision):
                 rejected = 0
                 policy.result(call_id, "Action completed; use the next measured observation to assess its effect")
                 if action == "give_up":
-                    self.fail(f"GPT stopped without verifying an open cabinet: {note}")
+                    self.fail(f"{policy.model} stopped without verifying an open cabinet: {note}")
                 if action == "done":
-                    return f"GPT visually reports the cabinet open after {policy.calls} decisions: {note}"
+                    return f"{policy.model} visually reports the cabinet open after {policy.calls} decisions: {note}"
             self.fail(f"Decision budget exhausted ({max_steps}); cabinet opening not verified")
         except (ArmFailed, ArmUnhealthy, ValueError, RuntimeError, OSError) as error:
             self.fail(str(error))

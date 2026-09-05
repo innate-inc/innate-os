@@ -83,3 +83,25 @@ A model-only replay of the recorded premature-release observation (step 11,
 run `b7018005768d4c7c9fc6bcb8c628b15b`), with historical telemetry/action attempts,
 selected another 3 cm backward base step instead of releasing. No motion was
 executed during that replay; full opening with this guidance is not yet verified.
+
+## Equivalent Gemini skill
+
+`innate-os/open_cabinet_with_gemini` runs the exact same `execute`, observation,
+action, bounds, staging, cancellation and cleanup implementation as the GPT
+skill. It uses the same `CabinetPolicy` prompt, tool schema, validation, full
+text/state/action history and latest two pairs of camera images. Both expose
+`max_steps=60`. The older `open_door_with_vision` remains a separate algorithm.
+
+Only the policy factory changes: Gemini defaults to `gemini-3.8-flash` with
+low reasoning via the existing Innate proxy (`INNATE_SERVICE_KEY` with Gemini
+access), instead of GPT-6 via `OPENAI_API_KEY` and priority processing.
+`INNATE_CABINET_GEMINI_MODEL` overrides its model ID independently of GPT.
+The adapter translates the shared request into Gemini's OpenAI-compatible chat
+format and preserves its full assistant message, including tool-call thought
+signatures, across turns. OpenAI's service-tier setting is not sent to Gemini.
+
+Validation: 72 tests passed across the two agent skills, adapter and original
+door skill. The runtime loaded both skill IDs. Two real Gemini calls using
+recorded cabinet cameras/telemetry returned valid actions in 2.60 s and 1.42 s;
+the second included the first call's tool result. These were read-only API
+checks; no Gemini-controlled full grasp/opening is claimed.

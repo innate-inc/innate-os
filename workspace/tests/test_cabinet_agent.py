@@ -94,14 +94,16 @@ def test_incomplete_or_parallel_output(response):
         CabinetPolicy(transport=lambda _: response).decide({}, {}, time.sleep)
 
 
-@pytest.fixture
-def native(monkeypatch):
+@pytest.fixture(params=["gpt", "gemini"])
+def native(monkeypatch, request):
     pytest.importorskip("rclpy")
-    from innate_skills.arm import open_cabinet_with_gpt as module
+    import importlib
 
     from innate import MainImage, WristImage
 
-    skill = module.OpenCabinetWithGpt(logging.getLogger("gpt-cabinet-test"))
+    module = importlib.import_module(f"innate_skills.arm.open_cabinet_with_{request.param}")
+    cls = module.OpenCabinetWithGpt if request.param == "gpt" else module.OpenCabinetWithGemini
+    skill = cls(logging.getLogger("cabinet-test"))
     calls = []
     skill.manipulation = SimpleNamespace(
         pose=SimpleNamespace(position=(0.24, 0, 0.25), rpy=(0, 0, 0)),
@@ -131,11 +133,11 @@ def test_native_registration_and_loop(native, monkeypatch):
     module, skill, calls = native
     from innate import Skill
 
-    assert skill.name == "open_cabinet_with_gpt"
-    assert module.OpenCabinetWithGpt in Skill._registry.values()
+    assert skill.name in ("open_cabinet_with_gpt", "open_cabinet_with_gemini")
+    assert type(skill) in Skill._registry.values()
     sequence = iter([reply("close_gripper"), reply("base_turn", [0.1, 0, 0]), reply("open_gripper"), reply("done")])
     policy = CabinetPolicy(transport=lambda _: next(sequence))
-    monkeypatch.setattr(module, "CabinetPolicy", lambda: policy)
+    monkeypatch.setattr(skill, "_make_policy", lambda: policy)
     assert "visually reports" in skill.execute(max_steps=4)
     assert calls.count("level") == 4
     assert calls[-2:] == ["base_stop", "arm_stop"]
@@ -147,7 +149,8 @@ def test_missing_key_no_motion(native, monkeypatch):
     from innate.exceptions import SkillFailed
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(SkillFailed, match="OPENAI_API_KEY"):
+    monkeypatch.delenv("INNATE_SERVICE_KEY", raising=False)
+    with pytest.raises(SkillFailed, match="OPENAI_API_KEY|INNATE_SERVICE_KEY"):
         skill.execute()
     assert calls == []
 
@@ -174,7 +177,7 @@ def test_native_stop_cleans_up_before_late_reply(native, monkeypatch):
         def decide(self, *args):
             raise SkillCancelled()
 
-    monkeypatch.setattr(module, "CabinetPolicy", CancelPolicy)
+    monkeypatch.setattr(skill, "_make_policy", CancelPolicy)
     with pytest.raises(SkillCancelled):
         skill.execute()
     assert calls[-2:] == ["base_stop", "arm_stop"]
@@ -186,7 +189,7 @@ def test_budget_exhaustion_is_failure(native, monkeypatch):
     from innate.exceptions import SkillFailed
 
     policy = CabinetPolicy(transport=lambda _: reply())
-    monkeypatch.setattr(module, "CabinetPolicy", lambda: policy)
+    monkeypatch.setattr(skill, "_make_policy", lambda: policy)
     with pytest.raises(SkillFailed, match="budget exhausted"):
         skill.execute(max_steps=1)
     assert calls[-2:] == ["base_stop", "arm_stop"]
