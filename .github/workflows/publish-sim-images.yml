@@ -256,6 +256,7 @@ jobs:
           IMAGE_TAG: ${{ needs.tags.outputs.image_tag }}
           IMAGE_INPUTS_HASH: ${{ needs.tags.outputs.assets_inputs_hash }}
           PUSH_MAIN_TAGS: ${{ needs.tags.outputs.push_main_tags }}
+          CACHE_SCOPE: ${{ github.ref_name }}
           # Deliberately no COMMIT_SHA: ci/build_assets_image.sh sets no
           # image.revision label -- see its header.
           #

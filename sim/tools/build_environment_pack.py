@@ -1,72 +1,28 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Derive an environment pack from one glTF scene: MuJoCo collision hulls and
-textured meshes under assets/, a lidar-consistent Nav2 map, and the browser's
-glb and hull soup. Two steps, in the asset image's stage order
-(sim/Dockerfile.assets) so the CoACD bake caches on its own:
+"""Derive an environment pack from one glTF scene, after decompose_pack.py has
+baked its hulls: textured MuJoCo meshes under assets/, a lidar-consistent Nav2
+map, and the browser's glb and hull soup.
 
-    uv run tools/build_environment_pack.py decompose <id> <scene.glb> [--threshold M]
-    uv run tools/build_environment_pack.py finish <id> <scene.glb> [viewer_out]
+    uv run tools/build_environment_pack.py <id> <scene.glb> [viewer_out]
 
-`finish` reads sim/environments/<id>/manifest.json: the nav map is rasterised
-from the compiled world like export_nav_map.py, and the manifest's spawn must
-land on known-free floor. The scene's floor -- the up-facing height carrying
-the most area -- is moved to y = 0 for physics and viewer alike.
+Reads sim/environments/<id>/manifest.json: the nav map is rasterised from the
+compiled world like export_nav_map.py, and the manifest's spawn must land on
+known-free floor. Physics and viewer share decompose_pack's floor at y = 0.
 """
 
 import argparse
 import json
 import struct
 import sys
-from collections import Counter
 from pathlib import Path
 
-import decompose_rooms
 import numpy as np
-import trimesh
 from build_viewer_physics import hull_soup
-from decompose_rooms import decompose_room
+from decompose_pack import ASSETS, SIM, Parts, load_parts
 from PIL import Image
 
-SIM = Path(__file__).resolve().parents[1]
-ASSETS = SIM / "assets"
 DEFAULT_VIEWER_OUT = SIM / "viewer" / "public"
-FLAT_SHEET_M = 0.02  # a part this thin in y is a floor plane; the MJCF ground plane stands in for it
-Parts = dict[str, trimesh.Trimesh]
-
-
-def load_parts(glb: Path) -> tuple[Parts, float]:
-    """Every mesh part in the scene's Y-up world frame, plus the floor height."""
-    scene = trimesh.load(glb, force="scene")
-    placements = [(node, *scene.graph[node]) for node in scene.graph.nodes_geometry]
-    uses = Counter(geometry for _node, _transform, geometry in placements)
-    parts: Parts = {}
-    for node, transform, geometry in placements:  # one part per placement: instanced geometry is several
-        part = scene.geometry[geometry].copy()
-        part.apply_transform(transform)
-        parts[geometry if uses[geometry] == 1 else f"{geometry}__{node}"] = part
-    whole = trimesh.util.concatenate(list(parts.values()))
-    up = whole.face_normals[:, 1] > 0.95
-    heights, index = np.unique(np.round(whole.triangles_center[up][:, 1], 3), return_inverse=True)
-    floor_y = float(heights[np.bincount(index, weights=whole.area_faces[up]).argmax()])
-    for geom in parts.values():
-        geom.apply_translation([0.0, -floor_y, 0.0])
-    return parts, floor_y
-
-
-def decompose(pack_id: str, glb: Path, threshold: float) -> None:
-    parts, floor_y = load_parts(glb)
-    print(f"{pack_id}: floor was at y={floor_y:+.3f}, now at 0")
-    decompose_rooms.THRESHOLD_M = threshold
-    split, hulls = ASSETS / f"{pack_id}_split", ASSETS / f"{pack_id}_split_v2"
-    split.mkdir(parents=True, exist_ok=True)
-    for name, geom in parts.items():
-        if geom.bounds[1][1] - geom.bounds[0][1] < FLAT_SHEET_M:
-            continue
-        obj = split / f"{name}.obj"
-        geom.export(obj)
-        print(f"{name}: {len(geom.faces)} faces")
-        print(f"    -> {decompose_room(obj, hulls / name)} hulls")
 
 
 def finish(pack_id: str, glb: Path, viewer_out: Path) -> None:
@@ -99,9 +55,6 @@ def write_visuals(pack_id: str, parts: Parts) -> None:
 
 
 def write_nav_map(pack_id: str) -> None:
-    # Imported here, not at the top: the decompose stage of the asset image
-    # carries no driver package, by design (its CoACD bake must not re-run on
-    # a driver edit), and only this step compiles a world.
     sys.path.insert(0, str(SIM / "sandbox"))
     import _driver_pkg  # noqa: F401
     import export_nav_map as nav
@@ -173,16 +126,11 @@ def write_shifted_glb(src: Path, dst: Path, dy: float) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("step", choices=("decompose", "finish"))
     parser.add_argument("pack_id")
     parser.add_argument("glb", type=Path)
     parser.add_argument("viewer_out", type=Path, nargs="?", default=DEFAULT_VIEWER_OUT)
-    parser.add_argument("--threshold", type=float, default=decompose_rooms.THRESHOLD_M, help="CoACD concavity, metres")
     args = parser.parse_args()
-    if args.step == "decompose":
-        decompose(args.pack_id, args.glb, args.threshold)
-    else:
-        finish(args.pack_id, args.glb, args.viewer_out)
+    finish(args.pack_id, args.glb, args.viewer_out)
 
 
 if __name__ == "__main__":
