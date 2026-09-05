@@ -1078,16 +1078,10 @@ export class SimScene {
     this.updateShadowVolume(); // the props moved; the box may need to grow or shrink
   }
 
-  /** Adopt the world server's procedural traffic roster. Cars intentionally
+  /** Adopt the world server's traffic roster. Cars intentionally
    * stay separate from manipulation props and their Clear/challenge flows. */
-  setTrafficManifest(manifest: TrafficManifest | null): void {
+  setTrafficManifest(manifest: TrafficManifest): void {
     this.traffic.setManifest(manifest);
-  }
-
-  /** Complete the environment/traffic asset contract before revealing a
-   * hot-swap candidate. */
-  markEnvironmentReady(): void {
-    this.traffic.markEnvironmentReady();
   }
 
   /** Mirror authoritative signal aspects and car poses from MuJoCo. */
@@ -1275,7 +1269,7 @@ export class SimScene {
    * the oldest (~16), breaking the live view. */
   dispose(): void {
     this.props.clearPlacementPreview();
-    this.traffic.dispose();
+    this.traffic.unloadEnvironment();
     this.placeholderMat?.dispose();
     this.cameraEnv?.dispose(); // a PMREM render target, not a loaded image
     this.controls.dispose();

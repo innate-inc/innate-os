@@ -130,15 +130,7 @@ export class SimSession {
 
   // Traffic is a separate environment-owned system, not a manipulation prop:
   // Clear/objectsPresent/challenges must never remove or count these cars.
-  #trafficManifest: TrafficManifest | null = null;
-  // `null` is a meaningful, explicit roster for non-traffic environments. Keep
-  // reception separate from the value so a hot-swap cannot mistake "not here
-  // yet" for an apartment that deliberately has no traffic.
-  #trafficManifestDirty = false;
-  // A ready scene can reject a structurally valid roster when its authored
-  // signal materials do not match. Try once per roster/scene, then preserve the
-  // last accepted traffic frame until a new roster or scene makes retry useful.
-  #trafficManifestRetryBlocked = false;
+  #trafficManifest: TrafficManifest = [];
 
   #stateUrls: string[];
   #rosUrl: string;
@@ -215,8 +207,7 @@ export class SimSession {
     };
     this.#controller.onTrafficManifest = (manifest) => {
       this.#trafficManifest = manifest;
-      this.#trafficManifestDirty = true;
-      this.#trafficManifestRetryBlocked = false;
+      this.#propsDirty = true;
     };
     this.#controller.onChallenges = (challenges) => {
       // Arrives ahead of the stream, so the merge below has titles and briefs
@@ -472,17 +463,7 @@ export class SimSession {
     if (this.#propsDirty) {
       this.#propsDirty = false;
       scene.setPropManifest(this.#props);
-    }
-    if (this.#trafficManifestDirty && !this.#trafficManifestRetryBlocked) {
-      try {
-        scene.setTrafficManifest(this.#trafficManifest);
-        this.#trafficManifestDirty = false;
-      } catch (error) {
-        // Keep the last complete cars/lights and report once per authoritative
-        // roster; a new roster or scene clears the retry latch.
-        this.#trafficManifestRetryBlocked = true;
-        console.error("[sim-session] traffic roster rejected; preserving the last complete traffic frame:", error);
-      }
+      scene.setTrafficManifest(this.#trafficManifest);
     }
     if (this.#overlaysDirty) {
       this.#overlaysDirty = false;
@@ -537,10 +518,7 @@ export class SimSession {
       ];
     }
     scene.setObjectPoses(objects);
-    // States belong to the pending roster. Feeding them into the last accepted
-    // roster after a rejection could move shared car IDs or change its lamps,
-    // destroying the complete frame we deliberately preserved above.
-    if (!this.#trafficManifestDirty) scene.setTrafficState(interpolateTraffic(a.traffic, b.traffic, u));
+    scene.setTrafficState(interpolateTraffic(a.traffic, b.traffic, u));
     if (this.#lidarOn && this.#scanDirty && this.#scan) {
       this.#scanDirty = false;
       scene.setLidarPoints(this.#scan);
@@ -578,12 +556,6 @@ export class SimSession {
   /** The live 2D canvas behind a PiP tile; the webapp mounts it directly. */
   thumbnailCanvas(index: number): HTMLCanvasElement | null {
     return this.#thumbCanvases[index] ?? null;
-  }
-
-  /** Latest authoritative simulation clock, independent of viewer interpolation. */
-  get simulationClock(): { t: number; worldEpoch: number } | null {
-    const sample = this.#samples[this.#samples.length - 1];
-    return sample ? { t: sample.t, worldEpoch: sample.worldEpoch } : null;
   }
 
   /** Server->browser state delivery lag: cur is the median of the last ~2s,

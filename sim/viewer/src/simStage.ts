@@ -14,8 +14,6 @@ import { APARTMENT_VIEWER, SimScene, type CameraMode, type CameraView } from "./
 import type { EnvironmentInfo } from "./physics/worldStateController";
 import type { PropInfo } from "./props";
 import { LoadQueue } from "./loadQueue";
-import { stagePixelRatio } from "./renderBudget";
-import { SlowdownDetector } from "./slowdown";
 import { THUMB_H, THUMB_W, type SimSession } from "./simSession";
 
 // One PiP tile refresh per N rendered frames, round-robin: ~30fps per tile
@@ -525,40 +523,11 @@ export function createSimStage(
   window.addEventListener("pointerup", finishDrop);
   window.addEventListener("pointercancel", cancelDrop);
 
-  // Full resolution by default. Reduction lasts until reload; only dismissal
-  // is remembered for the tab, so navigating/resizing doesn't nag again.
-  let reducedResolution = false;
-  const slowdown = new SlowdownDetector();
-  let environmentReady = false;
-  let stageVisible = true;
-  const resetSlowdown = () => slowdown.reset();
-  document.addEventListener("visibilitychange", resetSlowdown);
-  let resolutionDismissed = false;
-  try { resolutionDismissed = sessionStorage.getItem("sim-resolution-dismissed") === "true"; } catch { /* storage unavailable */ }
-  const resolutionNotice = document.createElement("div");
-  resolutionNotice.className = "sim-resolution-notice";
-  resolutionNotice.hidden = true;
-  const resolutionText = document.createElement("span");
-  const resolutionAction = makeChip("Reduce resolution");
-  const resolutionDismiss = makeChip("×", "Dismiss resolution notice");
-  resolutionDismiss.setAttribute("aria-label", "Dismiss resolution notice");
-  resolutionNotice.append(resolutionText, resolutionAction, resolutionDismiss);
-  debugStack.prepend(resolutionNotice);
-  resolutionAction.onclick = () => { reducedResolution = !reducedResolution; resize(); };
-  resolutionDismiss.onclick = () => {
-    resolutionDismissed = true;
-    resolutionNotice.hidden = true;
-    try { sessionStorage.setItem("sim-resolution-dismissed", "true"); } catch { /* storage unavailable */ }
-  };
   const resize = () => {
     const w = wrap.clientWidth;
     const h = wrap.clientHeight;
-    stageVisible = !!w && !!h;
-    slowdown.reset();
     if (!w || !h) return; // hidden (map primary): keep the last real size
-    resolutionText.textContent = reducedResolution ? "Render resolution reduced until reload." : "Slow rendering or simulation detected. Reducing resolution may help.";
-    resolutionAction.textContent = reducedResolution ? "Use full resolution" : "Reduce resolution";
-    scene.setRenderSize(w, h, stagePixelRatio(w, h, devicePixelRatio, reducedResolution));
+    scene.setRenderSize(w, h, Math.min(devicePixelRatio, 2));
     // setSize cleared the buffer (the spec clears a resized canvas) and the
     // browser paints before the next rAF, so the stage would flash black.
     scene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
@@ -585,7 +554,6 @@ export function createSimStage(
   const stopLoop = () => {
     cancelAnimationFrame(raf);
     raf = 0;
-    slowdown.reset();
   };
 
   const loop = (now: number) => {
@@ -614,10 +582,6 @@ export function createSimStage(
     scene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
     scene.render();
     frame++;
-    if (!resolutionDismissed && resolutionNotice.hidden &&
-        slowdown.sample(now, session.simulationClock, environmentReady && stageVisible && !document.hidden)) {
-      resolutionNotice.hidden = false;
-    }
 
     if (perfEl) {
       frameTimes.push(performance.now() - now);
@@ -628,7 +592,7 @@ export function createSimStage(
         const p95 = sorted[Math.floor(sorted.length * 0.95)] ?? 0;
         const lag = session.pipelineLag;
         const lagTxt = lag ? `  lag ${lag.curMs.toFixed(0)}ms (min ${lag.minMs.toFixed(0)})` : "";
-        perfEl.textContent = `js ${med.toFixed(1)}/${p95.toFixed(1)}ms  lt ${longTaskMs.toFixed(0)}ms  ${frameTimes.length}fps${lagTxt}  ${canvas.width}×${canvas.height}px`;
+        perfEl.textContent = `js ${med.toFixed(1)}/${p95.toFixed(1)}ms  lt ${longTaskMs.toFixed(0)}ms  ${frameTimes.length}fps${lagTxt}`;
         frameTimes = [];
         longTaskMs = 0;
       }
@@ -643,8 +607,6 @@ export function createSimStage(
   let loadedEnvironmentId: string | null = null;
   let loadVersion = 0;
   const loadEnvironment = async (environment: EnvironmentInfo | null) => {
-    environmentReady = false;
-    slowdown.reset();
     // Discard superseded loads after each await.
     const version = ++loadVersion;
     if (loadedEnvironmentId !== null) {
@@ -670,8 +632,6 @@ export function createSimStage(
       if (disposed || version !== loadVersion) return;
       await Promise.all([robotDone, scene.streamApartment(queue, layout)]);
       if (disposed || version !== loadVersion) return;
-      scene.markEnvironmentReady();
-      environmentReady = true;
       hideLoading();
       // Prefetch props after the scene, outside its progress bar.
       if (firstLoad) scene.prefetchPropModels();
@@ -745,7 +705,6 @@ export function createSimStage(
       window.removeEventListener("pointercancel", cancelDrop);
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
       document.removeEventListener("pointerdown", onOutsidePointer, true);
-      document.removeEventListener("visibilitychange", resetSlowdown);
       scene.dispose();
       wrap.remove();
     },

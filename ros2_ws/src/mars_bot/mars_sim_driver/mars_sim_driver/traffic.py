@@ -1,7 +1,7 @@
 """Deterministic intersection traffic for Crossroads.
 
 MuJoCo owns the clock, signal aspects, and car poses.  The browser receives a
-primitive model manifest plus snapshots of that authoritative state; it never
+car roster plus snapshots of that authoritative state; it never
 runs a second traffic simulation.  Cars are mocap bodies: their paths and
 signal compliance stay deterministic while their collision boxes remain real
 obstacles to MARS and their group-1 visual primitives remain visible to the
@@ -10,19 +10,27 @@ robot cameras and lidar.
 
 from __future__ import annotations
 
-import copy
 import math
 from dataclasses import dataclass
 from html import escape
 from typing import Any
 
-TRAFFIC_ENVIRONMENT_IDS = {"intersection"}
-
-NS = "north_south"
-EW = "east_west"
-RED = "red"
-YELLOW = "yellow"
-GREEN = "green"
+from .crossroads import (
+    CAR_LENGTH_M,
+    CAR_MODEL,
+    CAR_WIDTH_M,
+    EW,
+    GREEN,
+    JUNCTION_HALF_SIZE,
+    LANE_CENTER,
+    NS,
+    RED,
+    ROAD_HALF_WIDTH,
+    ROUTE_END,
+    SIGNAL_MATERIALS,
+    STOP_CENTER,
+    YELLOW,
+)
 
 GREEN_S = 12.0
 YELLOW_S = 3.0
@@ -37,147 +45,17 @@ COMMIT_MARGIN_M = 0.20
 ROBOT_RADIUS_M = 0.28
 ROBOT_FOLLOW_GAP_M = 0.55
 
-CAR_LENGTH_M = 3.60
-CAR_WIDTH_M = 1.55
 CAR_HALF_LENGTH_M = CAR_LENGTH_M / 2
 # Cars at the authored stop centres keep their front bumper just outside this
 # box. A vehicle already overlapping it owns the junction until its rear has
 # cleared, preventing cross traffic from driving through a MARS-blocked car.
-INTERSECTION_MIN_M = -6.35
-INTERSECTION_MAX_M = 6.35
+INTERSECTION_MIN_M = -JUNCTION_HALF_SIZE
+INTERSECTION_MAX_M = JUNCTION_HALF_SIZE
 
 # A private collision category: cars ignore the town's closed road-end walls
 # and scenery, while configure_robot_spec() adds this bit to the robot before
 # compilation so the car boxes still collide with MARS.
 CAR_COLLISION_BIT = 2
-
-SIGNAL_MATERIALS = {
-    NS: {RED: "Signal_NS_Red", YELLOW: "Signal_NS_Yellow", GREEN: "Signal_NS_Green"},
-    EW: {RED: "Signal_EW_Red", YELLOW: "Signal_EW_Yellow", GREEN: "Signal_EW_Green"},
-}
-
-SIGNAL_COLORS = {RED: "#ff4b55", YELLOW: "#ffd45a", GREEN: "#5ee27a"}
-
-# Three builds these primitives directly; _part_xml converts the same
-# descriptors to MJCF half-sizes and degrees.
-CAR_MODEL = {
-    "length": CAR_LENGTH_M,
-    "width": CAR_WIDTH_M,
-    "parts": [
-        # Leave the lamps slightly proud of the body.  Coplanar outer faces
-        # shimmer badly at distance in both MuJoCo and Three's depth buffers.
-        {
-            "shape": "prism",
-            "width": 1.55,
-            "position": [0, 0, 0],
-            "material": "body",
-            "profile": [
-                [-1.77, 0.32],
-                [-1.60, 0.20],
-                [1.62, 0.20],
-                [1.77, 0.32],
-                [1.70, 0.62],
-                [1.35, 0.77],
-                [-1.35, 0.77],
-                [-1.73, 0.61],
-            ],
-        },
-        {
-            "shape": "prism",
-            "width": 1.28,
-            "position": [0, 0, 0],
-            "material": "body",
-            "profile": [[-1.02, 0.76], [0.76, 0.76], [0.34, 1.27], [-0.62, 1.27]],
-        },
-        {"shape": "box", "size": [1.01, 1.30, 0.055], "position": [-0.14, 0, 1.285], "material": "body"},
-        {
-            "shape": "box",
-            "size": [0.035, 1.14, 0.48],
-            "position": [0.568, 0, 1.027],
-            "rotation": [0, -math.atan2(0.42, 0.51), 0],
-            "material": "glass",
-        },
-        {
-            "shape": "box",
-            "size": [0.035, 1.14, 0.47],
-            "position": [-0.835, 0, 1.027],
-            "rotation": [0, math.atan2(0.40, 0.51), 0],
-            "material": "glass",
-        },
-        *(
-            {
-                "shape": "prism",
-                "width": 0.035,
-                "position": [0, y, 0],
-                "material": "glass",
-                "profile": [[-0.89, 0.83], [0.60, 0.83], [0.28, 1.20], [-0.56, 1.20]],
-            }
-            for y in (-0.657, 0.657)
-        ),
-        *(
-            {
-                "shape": "cylinder",
-                "radius": 0.30,
-                "length": 0.18,
-                "position": [x, y, 0.30],
-                "rotation": [math.pi / 2, 0.0, 0.0],
-                "material": "rubber",
-                "rolling_radius": 0.30,
-            }
-            for x in (-1.125, 1.125)
-            # Keep the outer wheel caps slightly proud of the 1.55 m body.
-            # Flush caps are coplanar with its sides and z-fight in Three.
-            for y in (-0.710, 0.710)
-        ),
-        *(
-            {
-                "shape": "cylinder",
-                "radius": radius,
-                "length": 0.018,
-                "position": [x, sign * y, 0.30],
-                "rotation": [math.pi / 2, 0, 0],
-                "material": "alloy",
-                "rolling_radius": 0.30,
-            }
-            for x in (-1.125, 1.125)
-            for sign in (-1, 1)
-            for radius, y in ((0.215, 0.815), (0.055, 0.842))
-        ),
-        *(
-            {"shape": "box", "size": size, "position": [x, y, 0.30], "material": "rubber", "rolling_radius": 0.30}
-            for x in (-1.125, 1.125)
-            for y in (-0.83, 0.83)
-            for size in ([0.32, 0.012, 0.075], [0.075, 0.012, 0.32])
-        ),
-        *(
-            {"shape": "box", "size": [0.065, 0.025, 0.40], "position": [-0.18, y, 1.01], "material": "body"}
-            for y in (-0.682, 0.682)
-        ),
-        *(
-            {"shape": "box", "size": [0.20, 0.035, 0.045], "position": [0.25, y, 0.67], "material": "alloy"}
-            for y in (-0.79, 0.79)
-        ),
-        *(
-            {"shape": "box", "size": [0.06, 1.40, 0.12], "position": [x, 0, 0.32], "material": "alloy"}
-            for x in (-1.78, 1.78)
-        ),
-        {"shape": "box", "size": [0.05, 0.32, 0.18], "position": [1.775, 0.46, 0.52], "material": "headlight"},
-        {"shape": "box", "size": [0.05, 0.32, 0.18], "position": [1.775, -0.46, 0.52], "material": "headlight"},
-        {"shape": "box", "size": [0.05, 0.28, 0.17], "position": [-1.775, 0.48, 0.52], "material": "taillight"},
-        {"shape": "box", "size": [0.05, 0.28, 0.17], "position": [-1.775, -0.48, 0.52], "material": "taillight"},
-    ],
-    "colliders": [
-        {"shape": "box", "size": [3.60, 1.56, 0.73], "position": [0.0, 0.0, 0.365]},
-        {"shape": "box", "size": [1.70, 1.32, 0.60], "position": [-0.10, 0.0, 1.00]},
-    ],
-    "materials": {
-        "glass": "#263641",
-        "rubber": "#202328",
-        "headlight": "#fff0a8",
-        "taillight": "#d7353f",
-        "alloy": "#b6c1c8",
-    },
-}
 
 
 @dataclass(frozen=True)
@@ -198,13 +76,41 @@ class Lane:
 LANES = (
     # Route endpoints put the whole 3.6m car beyond the 40 m Crossroads bounds,
     # so a recycle never visibly pops in the middle of a road-edge facade.
-    Lane("eastbound", EW, "x", 1, -1.51, -23.0, 23.0, -8.22, 0.0, "#e05b47", -11.7),
-    Lane("westbound", EW, "x", -1, 1.81, 23.0, -23.0, 8.48, math.pi, "#4d83d1", 11.7),
+    Lane(
+        "eastbound", EW, "x", 1, -LANE_CENTER, -ROUTE_END, ROUTE_END, -STOP_CENTER, 0.0, "#e05b47", -STOP_CENTER - 3.2
+    ),
+    Lane(
+        "westbound", EW, "x", -1, LANE_CENTER, ROUTE_END, -ROUTE_END, STOP_CENTER, math.pi, "#4d83d1", STOP_CENTER + 3.2
+    ),
     # MARS spawns beside the northbound lane. Start this car beyond the
     # junction; after it recycles at the south edge, robot following prevents
     # it from spawning through or driving through the stationary robot.
-    Lane("northbound", NS, "y", 1, 1.79, -23.0, 23.0, -8.20, math.pi / 2, "#e2b643", 7.0),
-    Lane("southbound", NS, "y", -1, -1.53, 23.0, -23.0, 8.50, -math.pi / 2, "#55a96f", 11.7),
+    Lane(
+        "northbound",
+        NS,
+        "y",
+        1,
+        LANE_CENTER,
+        -ROUTE_END,
+        ROUTE_END,
+        -STOP_CENTER,
+        math.pi / 2,
+        "#e2b643",
+        2 * ROAD_HALF_WIDTH,
+    ),
+    Lane(
+        "southbound",
+        NS,
+        "y",
+        -1,
+        -LANE_CENTER,
+        ROUTE_END,
+        -ROUTE_END,
+        STOP_CENTER,
+        -math.pi / 2,
+        "#55a96f",
+        STOP_CENTER + 3.2,
+    ),
 )
 
 
@@ -218,20 +124,20 @@ class Car:
     committed: bool = False
 
 
-def phase_at(sim_time: float) -> tuple[str, dict[str, str]]:
-    """Return the scheduled phase and signal aspects at ``sim_time``."""
+def signals_at(sim_time: float) -> dict[str, str]:
+    """Scheduled aspects before the occupied-junction interlock."""
     t = sim_time % CYCLE_S
     if t < ALL_RED_S:
-        return "all_red_to_ns", {NS: RED, EW: RED}
+        return {NS: RED, EW: RED}
     if t < ALL_RED_S + GREEN_S:
-        return "ns_green", {NS: GREEN, EW: RED}
+        return {NS: GREEN, EW: RED}
     if t < ALL_RED_S + GREEN_S + YELLOW_S:
-        return "ns_yellow", {NS: YELLOW, EW: RED}
+        return {NS: YELLOW, EW: RED}
     if t < 2 * ALL_RED_S + GREEN_S + YELLOW_S:
-        return "all_red_to_ew", {NS: RED, EW: RED}
+        return {NS: RED, EW: RED}
     if t < 2 * ALL_RED_S + 2 * GREEN_S + YELLOW_S:
-        return "ew_green", {NS: RED, EW: GREEN}
-    return "ew_yellow", {NS: RED, EW: YELLOW}
+        return {NS: RED, EW: GREEN}
+    return {NS: RED, EW: YELLOW}
 
 
 def _rgba(hex_color: str) -> str:
@@ -270,16 +176,15 @@ def _collider_xml(collider: dict[str, Any]) -> str:
 class TrafficController:
     """Environment-scoped traffic clock, cars, and MuJoCo bindings."""
 
-    def __init__(self, environment_id: str):
-        self.enabled = environment_id in TRAFFIC_ENVIRONMENT_IDS
+    def __init__(self, enabled: bool = False):
+        self.enabled = enabled
         self.cars = [Car(lane, lane.initial_position) for lane in LANES] if self.enabled else []
         self._mocap_ids: dict[str, int] = {}
         self._rolling_geoms: dict[str, list[tuple[int, float, Any]]] = {}
         self._signal_material_ids: dict[str, dict[str, int]] = {}
         self._model: Any | None = None
         self._last_aspects: dict[str, str] | None = None
-        self._current_phase, initial_aspects = phase_at(0.0)
-        self._current_aspects = dict(initial_aspects)
+        self._current_aspects = signals_at(0.0)
 
     def bodies_xml(self) -> str:
         if not self.enabled:
@@ -299,7 +204,7 @@ class TrafficController:
         """Tiny convex side-profile extrusions; shared across all four cars.
 
         MuJoCo builds their visual hull directly from these inline vertices.
-        The browser extrudes the same profiles, with no GLB/OBJ dependency.
+        The car GLB is generated from the same profiles at asset-build time.
         """
         if not self.enabled:
             return ""
@@ -366,21 +271,6 @@ class TrafficController:
                 + "). Rebuild Crossroads with sim/tools/build_intersection.py."
             )
 
-        # configure_robot_spec() must run before compile: body-level collision
-        # masks are precomputed and cannot be repaired by changing only geoms.
-        for geom_id in range(model.ngeom):
-            body_id = int(model.geom_bodyid[geom_id])
-            body_name = model.body(body_id).name or ""
-            if (
-                body_name.startswith("robot_")
-                and int(model.geom_contype[geom_id]) != 0
-                and (
-                    not int(model.geom_conaffinity[geom_id]) & CAR_COLLISION_BIT
-                    or not int(model.body_conaffinity[body_id]) & CAR_COLLISION_BIT
-                )
-            ):
-                raise RuntimeError("robot collision bodies were not compiled into the traffic collision category")
-
     def reset(self, data: Any | None = None) -> None:
         if not self.enabled:
             return
@@ -392,14 +282,14 @@ class TrafficController:
             car.committed = False
         self._last_aspects = None
         if data is not None:
-            self._current_phase, self._current_aspects = self._effective_signals(float(data.time))
+            self._current_aspects = self._effective_signals(float(data.time))
             self._write_mocap(data)
             self._apply_signal_materials(self._current_aspects)
 
     def advance(self, dt: float, sim_time: float, robot_xy: tuple[float, float] | None = None) -> None:
         if not self.enabled:
             return
-        self._current_phase, aspects = self._effective_signals(sim_time)
+        aspects = self._effective_signals(sim_time)
         self._current_aspects = dict(aspects)
         occupied = self._occupied_groups()
         for car in self.cars:
@@ -418,7 +308,7 @@ class TrafficController:
                 occupied[car.lane.signal_group] = True
         return occupied
 
-    def _effective_signals(self, sim_time: float) -> tuple[str, dict[str, str]]:
+    def _effective_signals(self, sim_time: float) -> dict[str, str]:
         """Hold the next direction at red until the conflict box is empty.
 
         The scheduled all-red interval is normally ample.  This interlock also
@@ -426,16 +316,13 @@ class TrafficController:
         pinning a committed car in the junction), so the visible lamps never
         invite traffic into a box that the controller itself considers unsafe.
         """
-        phase, scheduled = phase_at(sim_time)
-        aspects = dict(scheduled)
+        aspects = signals_at(sim_time)
         occupied = self._occupied_groups()
         if aspects[NS] != RED and occupied[EW]:
             aspects[NS] = RED
         if aspects[EW] != RED and occupied[NS]:
             aspects[EW] = RED
-        if aspects != scheduled:
-            phase = f"{phase}_clearance_hold"
-        return phase, aspects
+        return aspects
 
     def step(self, data: Any, dt: float, robot_xy: tuple[float, float]) -> None:
         self.advance(dt, float(data.time) + dt, robot_xy)
@@ -576,18 +463,10 @@ class TrafficController:
                 self._model.mat_emission[material_id] = 0.45 if active else 0.0
         self._last_aspects = dict(aspects)
 
-    def manifest(self) -> dict[str, Any] | None:
-        if not self.enabled:
-            return None
-        return {
-            "schema_version": 1,
-            "car_model": copy.deepcopy(CAR_MODEL),
-            "cars": [{"id": car.lane.id, "color": car.lane.color} for car in self.cars],
-            "signal_materials": copy.deepcopy(SIGNAL_MATERIALS),
-            "signal_colors": dict(SIGNAL_COLORS),
-        }
+    def manifest(self) -> list[dict[str, str]]:
+        return [{"id": car.lane.id, "color": car.lane.color} for car in self.cars]
 
-    def state(self, _sim_time: float, world_epoch: int) -> dict[str, Any] | None:
+    def state(self, world_epoch: int) -> dict[str, Any] | None:
         if not self.enabled:
             return None
         # advance() chose the interlocked aspects used for both vehicle
@@ -600,12 +479,10 @@ class TrafficController:
             x, y = (car.position, car.lane.fixed) if car.lane.axis == "x" else (car.lane.fixed, car.position)
             cars[car.lane.id] = {
                 "pose": [x, y, car.lane.yaw],
-                "speed": car.speed,
                 "spawn_seq": car.spawn_seq,
             }
         return {
             "world_epoch": world_epoch,
-            "phase": self._current_phase,
             "signals": dict(self._current_aspects),
             "cars": cars,
         }

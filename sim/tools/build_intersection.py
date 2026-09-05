@@ -21,6 +21,9 @@ from pathlib import Path
 import numpy as np
 import trimesh
 from build_environment_pack import write_nav_map, write_visuals
+from build_traffic_car import SIGNAL_COLORS, SIGNAL_MATERIALS, build_car
+from build_viewer_physics import hull_soup
+from mars_sim_driver import crossroads as layout
 from PIL import Image
 
 SIM = Path(__file__).resolve().parents[1]
@@ -48,9 +51,9 @@ PALETTE = {
     "awning": "bd6050",
     "lamp": "ffe5ad",
     **{
-        f"Signal_{group}_{aspect}": color
-        for group in ("NS", "EW")
-        for aspect, color in (("Red", "ff4b55"), ("Yellow", "ffd45a"), ("Green", "5ee27a"))
+        name: SIGNAL_COLORS[aspect].lstrip("#")
+        for aspects in SIGNAL_MATERIALS.values()
+        for aspect, name in aspects.items()
     },
 }
 
@@ -109,29 +112,43 @@ def surface_uv(mesh: trimesh.Trimesh) -> np.ndarray:
 
 
 class Square:
-    def __init__(self):
+    def __init__(self) -> None:
         self.parts: dict[str, list[trimesh.Trimesh]] = defaultdict(list)
         self.hulls: list[trimesh.Trimesh] = []
 
-    def add(self, mesh, color, solid=True):
+    def add(self, mesh: trimesh.Trimesh, color: str | None, solid: bool = True) -> None:
         if solid:
             self.hulls.append(mesh.copy())
         if color is not None:  # None makes a collision-only boundary
             self.parts[color].append(mesh)
 
-    def box(self, center, size, color, solid=True):
+    def box(
+        self,
+        center: tuple[float, float, float],
+        size: tuple[float, float, float],
+        color: str | None,
+        solid: bool = True,
+    ) -> None:
         mesh = trimesh.creation.box(extents=size)
         mesh.apply_translation(center)
         self.add(mesh, color, solid)
 
-    def cylinder(self, center, radius, height, color, solid=True, rotation=0):
+    def cylinder(
+        self,
+        center: tuple[float, float, float],
+        radius: float,
+        height: float,
+        color: str,
+        solid: bool = True,
+        rotation: float = 0,
+    ) -> None:
         mesh = trimesh.creation.cylinder(radius=radius, height=height, sections=12)
         if rotation:
             mesh.apply_transform(trimesh.transformations.rotation_matrix(rotation, [1, 0, 0]))
         mesh.apply_translation(center)
         self.add(mesh, color, solid)
 
-    def tree(self, x, y, scale=1.0):
+    def tree(self, x: float, y: float, scale: float = 1.0) -> None:
         self.cylinder((x, y, 0.3), 0.8, 0.4, "curb")
         self.cylinder((x, y, 0.51), 0.68, 0.025, "soil", False)
         self.cylinder((x, y, 1.5), 0.16, 2.2, "wood")
@@ -148,7 +165,7 @@ class Square:
             mesh.apply_translation([x + dx * scale, y + dy * scale, z])
             self.add(mesh, "leaf-light" if dx > 0 else "leaf", False)
 
-    def building(self, x, y, w, d, height, color):
+    def building(self, x: float, y: float, w: float, d: float, height: float, color: str) -> None:
         self.box((x, y, height / 2 + 0.1), (w, d, height), color)
         self.box((x, y, 0.32), (w + 0.15, d + 0.15, 0.44), "curb")
         self.box((x, y, height + 0.18), (w + 0.4, d + 0.4, 0.22), "roof")
@@ -165,19 +182,24 @@ class Square:
         self.box((x, y + sy * (d / 2 + 0.45), 2.55), (w * 0.85, 1.0, 0.16), "awning", False)
         self.box((x, y + sy * (d / 2 + 0.045), 1.05), (0.85, 0.065, 1.85), "wood", False)
 
-    def sidewalks(self):
+    def sidewalks(self) -> None:
+        road, edge = layout.ROAD_HALF_WIDTH, layout.MAP_HALF_SIZE
+        middle, span = (road + edge) / 2, edge - road
         # MARS has an x/y/yaw-only base, so every drivable surface must be
         # at z=0. Raised border curbs stop short of the flush crossing cuts.
         for sx in (-1, 1):
             for sy in (-1, 1):
                 # The world's single ground plane supplies floor contact.
                 # A second hull here adds friction contacts that pin wheels.
-                self.box((sx * 11.75, sy * 11.75, -0.1), (16.5, 16.5, 0.2), "paving", False)
-                for a, b in ((3.5, 4.5), (6.1, 20)):
-                    self.box((sx * 3.55, sy * (a + b) / 2, 0.08), (0.1, b - a, 0.16), "curb")
-                    self.box((sx * (a + b) / 2, sy * 3.55, 0.08), (b - a, 0.1, 0.16), "curb")
+                self.box((sx * middle, sy * middle, -0.1), (span, span, 0.2), "paving", False)
+                for a, b in (
+                    (road, layout.CROSSING_CENTER - layout.CURB_CUT_HALF_WIDTH),
+                    (layout.CROSSING_CENTER + layout.CURB_CUT_HALF_WIDTH, edge),
+                ):
+                    self.box((sx * (road + 0.05), sy * (a + b) / 2, 0.08), (0.1, b - a, 0.16), "curb")
+                    self.box((sx * (a + b) / 2, sy * (road + 0.05), 0.08), (b - a, 0.1, 0.16), "curb")
 
-    def signal(self, x, y, direction, group):
+    def signal(self, x: float, y: float, direction: float, group: str) -> None:
         # Head faces the approaching lane; opposite approaches share aspects.
         self.cylinder((x, y, 1.9), 0.075, 3.6, "metal")
         self.box((x, y, 0.25), (0.3, 0.3, 0.3), "curb")
@@ -200,34 +222,50 @@ class Square:
 
 def design() -> Square:
     square = Square()
+    road, edge = layout.ROAD_HALF_WIDTH, layout.MAP_HALF_SIZE
+    middle, span = (road + edge) / 2, edge - road
     # Tile the cross without overlapping the sidewalks or each other. A full
     # asphalt slab 5 mm below paving z-fights through it in distant overviews.
-    square.box((0, 0, -0.1), (7, 40, 0.2), "asphalt", False)
+    square.box((0, 0, -0.1), (2 * road, 2 * edge, 0.2), "asphalt", False)
     for sign in (-1, 1):
-        square.box((sign * 11.75, 0, -0.1), (16.5, 7, 0.2), "asphalt", False)
+        square.box((sign * middle, 0, -0.1), (span, 2 * road, 0.2), "asphalt", False)
     square.sidewalks()
     for sign in (-1, 1):
-        for along in np.arange(8.5, 19.5, 2.8):
+        for along in np.arange(layout.STOP_LINE_CENTER + 2, edge - 0.5, 2.8):
             for across in (-0.12, 0.12):
                 square.box((across, sign * along, 0.004), (0.07, 1.6, 0.008), "yellow", False)
                 square.box((sign * along, across, 0.004), (1.6, 0.07, 0.008), "yellow", False)
-        for cross in np.arange(-3.1, 3.2, 0.7):
-            square.box((cross, sign * 5.3, 0.004), (0.38, 1.5, 0.008), "paint", False)
-            square.box((sign * 5.3, cross, 0.004), (1.5, 0.38, 0.008), "paint", False)
+        for cross in np.arange(-road + 0.4, road - 0.3, 0.7):
+            square.box(
+                (cross, sign * layout.CROSSING_CENTER, 0.004), (0.38, layout.CROSSING_WIDTH, 0.008), "paint", False
+            )
+            square.box(
+                (sign * layout.CROSSING_CENTER, cross, 0.004), (layout.CROSSING_WIDTH, 0.38, 0.008), "paint", False
+            )
         # Right-hand traffic: stop lines precede crossings and front bumpers.
-        square.box((sign * 1.8, -sign * 6.5, 0.004), (3.2, 0.22, 0.008), "paint", False)
-        square.box((-sign * 6.5, -sign * 1.8, 0.004), (0.22, 3.2, 0.008), "paint", False)
+        square.box(
+            (sign * layout.LANE_CENTER, -sign * layout.STOP_LINE_CENTER, 0.004),
+            (road - 0.3, layout.STOP_LINE_WIDTH, 0.008),
+            "paint",
+            False,
+        )
+        square.box(
+            (-sign * layout.STOP_LINE_CENTER, -sign * layout.LANE_CENTER, 0.004),
+            (layout.STOP_LINE_WIDTH, road - 0.3, 0.008),
+            "paint",
+            False,
+        )
         # Keep the continuous collision boundary, but leave all four road
         # mouths visually open. The visible fence stops at the sidewalks.
-        square.box((sign * 20.1, 0, 0.35), (0.2, 40.4, 0.7), None)
-        square.box((0, sign * 20.1, 0.35), (40, 0.2, 0.7), None)
+        square.box((sign * (edge + 0.1), 0, 0.35), (0.2, 2 * edge + 0.4, 0.7), None)
+        square.box((0, sign * (edge + 0.1), 0.35), (2 * edge, 0.2, 0.7), None)
         for side in (-1, 1):
-            square.box((sign * 20.1, side * 11.85, 0.35), (0.2, 16.7, 0.7), "curb", False)
-            square.box((side * 11.75, sign * 20.1, 0.35), (16.5, 0.2, 0.7), "curb", False)
-    square.signal(3.9, -6.8, 0, "NS")
-    square.signal(-3.9, 6.8, np.pi, "NS")
-    square.signal(-6.8, -3.9, -np.pi / 2, "EW")
-    square.signal(6.8, 3.9, np.pi / 2, "EW")
+            square.box((sign * (edge + 0.1), side * (middle + 0.1), 0.35), (0.2, span + 0.2, 0.7), "curb", False)
+            square.box((side * middle, sign * (edge + 0.1), 0.35), (span, 0.2, 0.7), "curb", False)
+    square.signal(layout.SIGNAL_ACROSS, -layout.SIGNAL_ALONG, 0, "NS")
+    square.signal(-layout.SIGNAL_ACROSS, layout.SIGNAL_ALONG, np.pi, "NS")
+    square.signal(-layout.SIGNAL_ALONG, -layout.SIGNAL_ACROSS, -np.pi / 2, "EW")
+    square.signal(layout.SIGNAL_ALONG, layout.SIGNAL_ACROSS, np.pi / 2, "EW")
     for spec in (
         (-13, -13, 9, 8, 7.6, "terracotta"),
         (13, -14, 9, 6, 5.5, "sage"),
@@ -286,6 +324,7 @@ def build(viewer_out: Path = SIM / "viewer/public", assets_dir: Path = SIM / "as
     models = viewer_out / "models" / PACK_ID
     models.mkdir(parents=True, exist_ok=True)
     trimesh.Scene(parts).export(models / f"{PACK_ID}.glb")
+    build_car(models / "car.glb")
     # Only this generated pack tree is ours; renamed parts must not survive
     # into world.find_visual_rooms() or the static lidar scan below.
     visual_root = assets_dir / f"{PACK_ID}_visual"
@@ -297,14 +336,15 @@ def build(viewer_out: Path = SIM / "viewer/public", assets_dir: Path = SIM / "as
     # This tool owns this generated directory. Remove stale hulls on rebuild.
     for path in collision_root.glob(f"{PACK_ID}_collision_*.obj"):
         path.unlink()
-    soup = []
+    names = []
     for index, mesh in enumerate(square.hulls):
         mesh.apply_transform(Z_TO_Y)
-        mesh.export(collision_root / f"{PACK_ID}_collision_{index:03d}.obj")
-        soup.append(mesh.triangles.reshape(-1, 3))
+        name = f"{PACK_ID}_collision_{index:03d}.obj"
+        mesh.export(collision_root / name)
+        names.append(name)
     collisions = viewer_out / "physics" / f"{PACK_ID}_collisions"
     collisions.mkdir(parents=True, exist_ok=True)
-    (collisions / "hulls.f32").write_bytes(np.concatenate(soup).astype("<f4").tobytes())
+    (collisions / "hulls.f32").write_bytes(hull_soup(collision_root, names).tobytes())
     (collisions / "manifest.json").write_text("[]\n")
     write_nav_map(PACK_ID, assets_dir, include_collision_hulls=True)
     print(f"Crossroads: {len(parts)} materials, {len(square.hulls)} convex hulls; no external source assets")

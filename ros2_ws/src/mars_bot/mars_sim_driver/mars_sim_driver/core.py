@@ -218,7 +218,7 @@ class VirtualMars:
         # Droppable props: sidecars from the tracked source dir plus any the
         # asset bundle shipped, each parked off-map until something places it.
         self.props = PropRegistry.load([world.repo_root() / "sim" / "props", ASSETS_DIR / "props"])
-        self.traffic = TrafficController(self.environment.id)
+        self.traffic = TrafficController(self.environment.traffic)
         xml = world.build_world_xml(
             rooms,
             include_placeholder_robot=False,
@@ -248,6 +248,7 @@ class VirtualMars:
             Path(__file__),
             Path(__file__).with_name("constants.py"),
             Path(__file__).with_name("traffic.py"),
+            Path(__file__).with_name("crossroads.py"),
             *(f for pieces in rooms.values() for f in pieces),
             *(p for obj in visual_rooms.values() for p in (obj, obj.with_suffix(".png"))),
             *(f for f in urdf_path.parent.rglob("*") if f.suffix in (".stl", ".dae", ".obj", ".png", ".urdf")),
@@ -400,9 +401,11 @@ class VirtualMars:
     def step(self, duration: float) -> None:
         """Advance the sim by `duration` seconds, applying servos each step."""
         end = self.data.time + duration
+        dt = float(self.model.opt.timestep)
         while self.data.time < end:
             self._apply_control()
-            self.traffic.step(self.data, float(self.model.opt.timestep), self.pose()[:2])
+            if self.traffic.enabled:
+                self.traffic.step(self.data, dt, self.pose()[:2])
             mujoco.mj_step(self.model, self.data)
             if not np.all(np.isfinite(self.data.qpos)):
                 self.reset()
@@ -818,13 +821,13 @@ class VirtualMars:
         """What every prop is and how to draw it (props.py), for the viewer."""
         return self.props.manifest()
 
-    def traffic_manifest(self) -> dict | None:
-        """Static procedural car/signal description for observer viewers."""
+    def traffic_manifest(self) -> list[dict[str, str]]:
+        """Car IDs and colours for observer viewers."""
         return self.traffic.manifest()
 
     def traffic_state(self) -> dict | None:
         """Authoritative traffic state on the same sim clock as robot pose."""
-        return self.traffic.state(float(self.data.time), self.world_epoch)
+        return self.traffic.state(self.world_epoch)
 
     def drop_prop_at(self, name: str, x: float, y: float, yaw: float = 0.0) -> bool:
         """Release one prop above (x, y) and let physics settle it onto

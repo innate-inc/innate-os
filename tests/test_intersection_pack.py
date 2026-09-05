@@ -15,9 +15,10 @@ sys.path.insert(0, str(ROOT / "sim/tools"))
 sys.path.insert(0, str(ROOT / "ros2_ws/src/mars_bot/mars_sim_driver"))
 
 from build_intersection import build  # noqa: E402
+from mars_sim_driver import environments  # noqa: E402
 from mars_sim_driver.core import VirtualMars  # noqa: E402
 from mars_sim_driver.environments import Environment  # noqa: E402
-from mars_sim_driver.traffic import LANES, SIGNAL_MATERIALS  # noqa: E402
+from mars_sim_driver.traffic import CAR_MODEL, LANES, SIGNAL_MATERIALS  # noqa: E402
 
 
 def test_clean_crossroads_build_loads_visuals_physics_and_static_map(tmp_path):
@@ -38,6 +39,14 @@ def test_clean_crossroads_build_loads_visuals_physics_and_static_map(tmp_path):
     expected_parts = {mesh.visual.material.name.lower().replace("_", "-") for mesh in scene.geometry.values()}
     assert {path.name for path in (assets / "intersection_visual").iterdir()} == expected_parts
     assert all(np.isfinite(mesh.vertices).all() for mesh in scene.geometry.values())
+    car = trimesh.load(viewer / "models/intersection/car.glb", force="scene")
+    assert {"body", "collision"} <= set(car.graph.nodes_geometry)
+    wheels = [
+        (parent, data) for parent, _, data in car.graph.to_edgelist() if "rolling_radius" in data.get("metadata", {})
+    ]
+    assert len(wheels) == 4 and all(parent == "car" for parent, _ in wheels)
+    assert car.bounds[0, 1] == pytest.approx(0, abs=1e-6)  # exported Y-up, wheels on the ground
+    assert all(mesh.is_winding_consistent and np.isfinite(mesh.vertices).all() for mesh in car.geometry.values())
     for name in ("asphalt", "paving", "terracotta", "blue", "sage", "cream", "wood"):
         mesh = scene.geometry[name]
         texture = np.asarray(mesh.visual.material.baseColorTexture)
@@ -80,6 +89,15 @@ def test_clean_crossroads_build_loads_visuals_physics_and_static_map(tmp_path):
         sim.set_cmd_vel(0.25, 0)
         sim.step(0.1)
     assert sim.pose()[0] < 3.2
+    sim.reset()
+    # Aligned spokes require mjSAMEFRAME_NONE or MuJoCo ignores their rotation.
+    index = next(i for i, part in enumerate(CAR_MODEL["parts"]) if part["shape"] == "box" and "rolling_radius" in part)
+    spoke = sim.model.geom(f"traffic_car_eastbound_part_{index}").id
+    before = sim.data.geom_xmat[spoke].copy()
+    sim.traffic.cars[0].position += np.pi * 0.3 / 2
+    sim.traffic._write_mocap(sim.data)
+    mujoco.mj_forward(sim.model, sim.data)
+    assert sim.data.geom_xmat[spoke] != pytest.approx(before)
     sim.reset()
     # Real material bindings, not just the controller's intended state.
     sim.traffic.advance(0.01, 5.0)
@@ -135,3 +153,20 @@ def test_clean_crossroads_build_loads_visuals_physics_and_static_map(tmp_path):
         for sign in (-1, 1):
             assert cell(*((sign * 20, 0) if axis == 0 else (0, sign * 20))) == 0
     assert not list(tmp_path.rglob("*low-poly-town*"))
+
+
+def test_local_pack_opts_into_traffic_without_a_driver_id(monkeypatch, tmp_path):
+    path = tmp_path / "manifest.json"
+    manifest = json.loads((ROOT / "sim/environments/intersection/manifest.json").read_text())
+    monkeypatch.setattr(environments, "manifest_path", lambda _: path)
+    for value in (True, False, "false"):
+        manifest["traffic"] = value
+        path.write_text(json.dumps(manifest))
+        if isinstance(value, bool):
+            assert Environment.load("local-crossroads", tmp_path).traffic is value
+        else:
+            with pytest.raises(ValueError, match="traffic must be a boolean"):
+                Environment.load("local-crossroads", tmp_path)
+    del manifest["traffic"]
+    path.write_text(json.dumps(manifest))
+    assert not Environment.load("local-crossroads", tmp_path).traffic

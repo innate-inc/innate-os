@@ -1,5 +1,6 @@
 {
   "display_name": "Crossroads",
+  "traffic": true,
   "physics": {
     "collision_dir": "intersection_split_v2",
     "visual_dir": "intersection_visual"
