@@ -4,7 +4,7 @@
 
 import math
 
-from innate import SkillReturn
+from innate import SkillReturn, resource
 from innate.exceptions import ArmFailed, ArmUnhealthy
 
 from .cabinet_agent_policy import CabinetPolicy
@@ -20,6 +20,15 @@ class OpenCabinetWithGpt(OpenDoorWithVision):
     measured poses, bounded level-arm/base actions, and visual verification.
     No scene-open command or privileged cabinet pose is exposed to the model.
     """
+
+    @resource
+    def _level_ik(self):
+        from .level_handle_ik import LevelHandleIK
+
+        # The frontal cabinet approach must clear the base. The sim applies
+        # a -0.25 rad shoulder floor beyond the URDF limits (hardware: -0.5).
+        # Keep this conservative floor for every pose, including side reaches.
+        return LevelHandleIK(shoulder_floor=-0.25)
 
     def _effort(self):
         values = super()._effort()
@@ -111,7 +120,7 @@ class OpenCabinetWithGpt(OpenDoorWithVision):
             self.manipulation.torque_on()
             # Empty gripper and a clear arm path are documented preconditions.
             self.manipulation.gripper_open(duration=1.0)
-            self._move_wrist((0.24, 0.0, 0.25), 3.0)
+            self._move_wrist((0.30, 0.0, 0.30), 3.0)
             for step in range(max_steps):
                 observation, frames = self._observe(step)
                 call_id, (action, values, note) = policy.decide(observation, frames, self.sleep)

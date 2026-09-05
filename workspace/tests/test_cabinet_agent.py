@@ -189,3 +189,24 @@ def test_budget_exhaustion_is_failure(native, monkeypatch):
     with pytest.raises(SkillFailed, match="budget exhausted"):
         skill.execute(max_steps=1)
     assert calls[-2:] == ["base_stop", "arm_stop"]
+
+
+def test_real_ik_respects_sim_shoulder_guard():
+    pytest.importorskip("rclpy")
+    import math
+
+    import PyKDL as kdl
+    from innate_skills.arm.level_handle_ik import LevelHandleIK
+
+    planner = LevelHandleIK(shoulder_floor=-0.25)
+    with pytest.raises(ValueError, match="No level"):
+        planner.solve((0.24, 0.0, 0.25), [0.0] * 5)
+    target = (0.30, 0.0, 0.30)
+    joints = planner.solve(target, [0.0] * 5)
+    assert joints[1] >= -0.25
+    q, frame = kdl.JntArray(5), kdl.Frame()
+    for i, value in enumerate(joints):
+        q[i] = value
+    planner.fk.JntToCart(q, frame)
+    assert tuple(frame.p[i] for i in range(3)) == pytest.approx(target, abs=0.005)
+    assert max(abs(v) for v in frame.M.GetRPY()[:2]) < math.radians(3)

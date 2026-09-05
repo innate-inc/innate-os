@@ -39,10 +39,11 @@ Actual model access must be checked with the supplied account key.
 Start the house simulator on this branch, face the lower cabinet within about
 60 cm, and ensure the arm path is clear and the gripper empty. Invoke
 `open_cabinet_with_gpt` through the normal skill launcher (`max_steps=60`).
-It stages a horizontal wrist at base XYZ (0.24, 0, 0.25) m. Size priors match the
+It stages a horizontal wrist at base XYZ (0.30, 0, 0.30) m. Size priors match the
 fixture: a 12 cm vertical dark-metal handle centered 30 cm above the floor.
 
-Wrist actions are capped at 3 cm and level-IK checked; base steps at 3 cm,
+Wrist actions are capped at 3 cm and level-IK checked, including a conservative
+−0.25 rad shoulder floor so the simulator clearance guard does not alter them; base steps at 3 cm,
 turns at 0.12 rad, cumulative travel at 1 m, cumulative turning at 1.2 rad.
 Fresh frames are required after each action. Three consecutive invalid motion
 plans stop the run. Stop interrupts the API waiter; late responses cannot move
@@ -56,8 +57,15 @@ model output and cancellation while HTTP is in flight. Native ROS skill tests
 exercise registration, camera/leveling flow, gripper/turn rejection, cleanup,
 missing-key preflight and unreachable targets with mocked actuators/model.
 These are scaffolding tests, not evidence of successful physical manipulation.
-A real GPT-6 camera/grasp/pull run and independent hinge-angle verification remain
-pending the key. Use the simulator for that first end-to-end run.
+A complete GPT-6 grasp/pull run and independent hinge-angle verification remain
+pending. Use the simulator for that full manipulation test.
 
-Verified locally: 16 new contract/native tests plus 46 existing door tests passed
-in the ROS container (62 total); Ruff and diff checks passed.
+Verified locally: 17 contract/native tests plus 46 existing door tests passed
+in the ROS container (63 total); Ruff and diff checks passed.
+
+Live simulator regression: staging reached (0.3014, 0.0005, 0.2975) m with
+0.64 degrees pitch, then a real GPT-6 camera request selected a 2.5 cm left
+move that tracked within 1.5 mm per axis. The run intentionally used
+`max_steps=1` and ended with decision-budget exhaustion. The earlier staging
+pose requested shoulder -0.83 rad, which the simulator limited to -0.25;
+IK now rejects that pose before sending it. Horizontal checks remain intact.

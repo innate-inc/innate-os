@@ -14,7 +14,8 @@ from mars_arm.urdf import treeFromUrdfModel
 
 
 class LevelHandleIK:
-    def __init__(self):
+    def __init__(self, *, shoulder_floor: float | None = None):
+        self.shoulder_floor = shoulder_floor
         model = URDF.from_xml_file(str(Path(get_package_share_directory("mars_sim")) / "urdf/mars.urdf"))
         ok, tree = treeFromUrdfModel(model)
         if not ok:
@@ -42,6 +43,8 @@ class LevelHandleIK:
             self.ik.CartToJnt(seed, frame, out)
             joints = [math.atan2(math.sin(out[i]), math.cos(out[i])) for i in range(len(current))]
             if not all(lo <= v <= hi for v, (lo, hi) in zip(joints, self.limits, strict=True)):
+                continue
+            if self.shoulder_floor is not None and joints[1] < self.shoulder_floor:
                 continue
             for i, v in enumerate(joints):
                 out[i] = v
