@@ -52,6 +52,14 @@ def test_dockerignore_admits_exactly_the_work_subtrees():
 SEEDER = REPO_ROOT / "ci" / "seed_asset_context.py"
 
 
+def test_traffic_module_is_an_asset_image_input():
+    """VirtualMars imports traffic while compiling the asset image's nav map."""
+    import config
+
+    traffic = Path("ros2_ws/src/mars_bot/mars_sim_driver/mars_sim_driver/traffic.py")
+    assert traffic in config.iter_assets_image_input_files(REPO_ROOT)
+
+
 def _dockerignore_allows(relative_path: str, rules: list[str]) -> bool:
     """Does any `!` rule re-admit `relative_path` after the leading `**`?"""
     for rule in rules:

@@ -163,7 +163,7 @@ ASSETS_IMAGE_PATHSPECS = (
 _DRIVER = "ros2_ws/src/mars_bot/mars_sim_driver/mars_sim_driver"
 ASSETS_IMAGE_DRIVER_FILES = tuple(
     f"{_DRIVER}/{name}.py"
-    for name in ("__init__", "constants", "core", "drive_limits", "environments", "props", "world")
+    for name in ("__init__", "constants", "core", "drive_limits", "environments", "props", "traffic", "world")
 )
 # Geometry is carved out by EXCLUSION, so a pathspec added above joins the
 # geometry hash by default: wrongly excluded costs a needless refusal, wrongly
