@@ -40,7 +40,12 @@ def subtree_of(repo: str, digest: str, token: str) -> str:
         oci.fetch_layer(repo, digest, buf, token, label=f"layer {digest[:19]}")
         buf.seek(0)
         with tarfile.open(fileobj=buf) as tar:
-            names = tar.getnames()
+            names = []
+            for member in tar:
+                oci.validate_layer_member(member)
+                if ".cabinet" in Path(member.name).parts:
+                    raise oci.OciError(f"host-local cabinet cache in asset layer: {member.name}")
+                names.append(member.name)
     whiteouts = [n for n in names if ".wh." in n]
     if whiteouts:
         sys.exit(f"layer {digest[:19]} has whiteouts ({whiteouts[:3]}): it is not standalone-extractable")

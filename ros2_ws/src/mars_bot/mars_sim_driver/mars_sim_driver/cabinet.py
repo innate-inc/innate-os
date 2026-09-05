@@ -6,6 +6,7 @@ cabinet volume before adding hollow walls and a single passive hinge.
 
 import hashlib
 import json
+import shutil
 from functools import lru_cache
 from pathlib import Path
 
@@ -167,7 +168,7 @@ def carve_assets(rooms, visuals):
             write_obj(cache / "cabinet_door.obj", panel, uv, normals)
             texture = target.with_suffix(".png")
             if not texture.exists():
-                texture.symlink_to(visuals[name].with_suffix(".png").resolve())
+                shutil.copyfile(visuals[name].with_suffix(".png"), texture)
             visual = str(target)
         manifest.write_text(json.dumps({"hulls": output, "visual": visual}))
     result = json.loads(manifest.read_text())

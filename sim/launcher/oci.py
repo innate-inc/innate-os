@@ -103,6 +103,14 @@ def split_ref(image: str) -> tuple[str, str]:
     return repo_path(name), reference
 
 
+def validate_layer_member(member: tarfile.TarInfo) -> None:
+    """Shared install/publication contract: safe paths, regular files and dirs."""
+    if member.name.startswith(("/", "..")) or ".." in Path(member.name).parts:
+        raise OciError(f"unsafe path in asset layer: {member.name}")
+    if not (member.isfile() or member.isdir()):
+        raise OciError(f"unsupported member type in asset layer: {member.name}")
+
+
 def safe_extract(blob: Path, dest: Path) -> None:
     """Extract a layer tarball, rejecting anything that could escape `dest`.
 
@@ -120,11 +128,7 @@ def safe_extract(blob: Path, dest: Path) -> None:
 
     def validated(tar: tarfile.TarFile):
         for member in tar:
-            if member.name.startswith(("/", "..")) or ".." in Path(member.name).parts:
-                raise OciError(f"unsafe path in asset layer: {member.name}")
-            # Only regular files and dirs: links could resolve outside dest.
-            if not (member.isfile() or member.isdir()):
-                raise OciError(f"unsupported member type in asset layer: {member.name}")
+            validate_layer_member(member)
             yield member
 
     with tarfile.open(blob) as tar:

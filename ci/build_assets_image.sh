@@ -32,7 +32,8 @@ inputs_tag="inputs-${IMAGE_INPUTS_HASH}"
 # is not bit-identical between runs even at a fixed seed, so rebuilding an
 # existing tag could replace its contents with different bytes.
 if python3 ci/verify_assets_image.py --exists "${assets_image}" "${inputs_tag}"; then
-  echo "${assets_image}:${inputs_tag} already published; nothing to build."
+  python3 ci/verify_assets_image.py "${assets_image}" "${inputs_tag}"
+  echo "${assets_image}:${inputs_tag} already published and verified; nothing to build."
   exit 0
 fi
 
