@@ -10,6 +10,22 @@ on:
     branches: [main, develop]
 
 jobs:
+  viewer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.21"
+          cache: npm
+          cache-dependency-path: sim/viewer/package-lock.json
+      - name: Check viewer and authored resident lifecycle
+        working-directory: sim/viewer
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build:lib
   pytest:
     runs-on: ubuntu-latest
     steps:

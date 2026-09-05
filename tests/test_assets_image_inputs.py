@@ -86,16 +86,18 @@ def test_dockerignore_admits_every_seeded_file():
 
 
 @pytest.mark.skipif(not SEEDER.is_file(), reason="asset tooling not present")
-def test_household_resident_source_outputs_are_complete():
+def test_household_residents_are_generated_for_both_renderers():
     spec = importlib.util.spec_from_file_location("seed_asset_context", SEEDER)
     seed = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(seed)
 
     relative = {path.relative_to(REPO_ROOT).as_posix() for path in seed.RAW_FILES}
-    for resident in ("alex", "blake", "casey"):
-        assert f"sim/assets/humans/resident_{resident}.obj" in relative
-        assert f"sim/assets/humans/resident_{resident}_basecolor.png" in relative
-        assert f"sim/viewer/public/models/resident_{resident}.glb" in relative
+    assert not any("resident_" in path for path in relative), "Old scans must not overwrite authored residents"
+    dockerfile = (REPO_ROOT / "sim" / "Dockerfile.assets").read_text()
+    assert "RUN node tools/build-residents.mjs /residents" in dockerfile
+    assert "COPY --from=split /residents/humans /sim/assets/humans" in dockerfile
+    assert "COPY --from=split /residents/models" in dockerfile
+    assert "COPY --from=work     /sim/assets  /work" in dockerfile
 
 
 @pytest.mark.skipif(not WORKFLOW.is_file(), reason="publish workflow not present")

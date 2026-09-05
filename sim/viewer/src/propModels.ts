@@ -91,6 +91,7 @@ export class PropModels {
     try {
       const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(info.viewer.glb!);
       normalizeModel(gltf.scene, info.viewer);
+      gltf.scene.animations = gltf.animations;
       gltf.scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
           obj.castShadow = true;

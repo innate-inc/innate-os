@@ -46,6 +46,8 @@ export interface PropViewerDef {
   nameLabel?: boolean;
   /** Body-frame height of the billboard's bottom edge. */
   nameLabelHeightM?: number;
+  /** Cosmetic in-place animation, sampled on the simulator clock. */
+  idleAnimation?: string;
 }
 
 function makeNameLabel(text: string, heightM: number): THREE.Sprite {
@@ -180,6 +182,9 @@ export class PropLibrary {
   private hulls: THREE.Mesh[] = [];
   private hullsVisible = false;
   private placementPreview?: PlacementPreview;
+  private mixers = new Map<string, THREE.AnimationMixer>();
+  private animationTime = 0;
+  private disposed = false;
 
   constructor(
     private scene: THREE.Scene,
@@ -200,6 +205,7 @@ export class PropLibrary {
     }
     for (const [name, root] of this.roots) {
       if (!this.info.has(name)) {
+        this.releaseAnimation(name);
         this.scene.remove(root);
         const label = nameLabelOf(root);
         if (label) {
@@ -233,7 +239,8 @@ export class PropLibrary {
   /** Mirror ground truth: {name: [x, y, z, qw, qx, qy, qz]}. A prop the block
    * stops naming has left the world (parked, or never dropped) and is hidden
    * rather than left behind at its last pose. */
-  setPoses(poses: Record<string, number[]>): void {
+  setPoses(poses: Record<string, number[]>, simTime = 0): void {
+    this.animationTime = simTime;
     for (const [name, root] of this.roots) {
       if (!poses[name]) root.visible = false;
     }
@@ -245,6 +252,7 @@ export class PropLibrary {
       root.visible = true;
       root.position.set(pose[0], pose[1], pose[2]);
       root.quaternion.set(pose[4], pose[5], pose[6], pose[3]);
+      this.mixers.get(name)?.setTime(simTime);
     }
   }
 
@@ -269,6 +277,31 @@ export class PropLibrary {
     for (const material of this.placementPreview.materials) material.dispose();
     for (const geometry of this.placementPreview.geometries) geometry.dispose();
     this.placementPreview = undefined;
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.clearPlacementPreview();
+    for (const name of this.mixers.keys()) this.releaseAnimation(name);
+  }
+
+  private releaseAnimation(name: string): void {
+    const mixer = this.mixers.get(name);
+    if (!mixer) return;
+    mixer.stopAllAction();
+    mixer.uncacheRoot(mixer.getRoot());
+    this.mixers.delete(name);
+  }
+
+  private startAnimation(info: PropInfo, model: THREE.Group): void {
+    if (!info.viewer.idleAnimation) return;
+    const clip = THREE.AnimationClip.findByName(model.animations, info.viewer.idleAnimation);
+    if (!clip) return; // Older asset bundles still render the static resident.
+    this.releaseAnimation(info.name);
+    const mixer = new THREE.AnimationMixer(model);
+    mixer.clipAction(clip).play();
+    mixer.setTime(this.animationTime);
+    this.mixers.set(info.name, mixer);
   }
 
   /** Every prop body currently in the world (shadow-box fitting). */
@@ -331,6 +364,7 @@ export class PropLibrary {
     const model = this.models.get(name);
     if (model) {
       root.add(model);
+      this.startAnimation(info, model);
     } else {
       // No glb, or one still parsing past its grace window: draw the primitive
       // physics is using, and swap the model in if it does still arrive.
@@ -374,10 +408,11 @@ export class PropLibrary {
    * parse outran MODEL_GRACE_MS. */
   private async swapWhenReady(info: PropInfo, root: THREE.Group, placeholder: THREE.Mesh): Promise<void> {
     const model = await this.models.load(info);
-    if (!model || placeholder.parent !== root) return; // failed, or the prop left the roster
+    if (!model || this.disposed || this.roots.get(info.name) !== root || placeholder.parent !== root) return;
     root.remove(placeholder);
     placeholder.geometry.dispose();
     root.add(model);
+    this.startAnimation(info, model);
     const label = info.viewer.nameLabelHeightM === undefined ? nameLabelOf(root) : undefined;
     if (label) label.position.z = labelAnchorZ(root); // the placeholder's height was a stand-in
     this.onChanged();

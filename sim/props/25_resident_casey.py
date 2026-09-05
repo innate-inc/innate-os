@@ -14,7 +14,7 @@ PROP = Prop(
     friction=(0.9, 0.01, 0.001),
     solref=(0.02, 1.0),
     margin=0.007,
-    rgba=(0.55, 0.8, 0.75, 1.0),
+    rgba=(0.53, 0.34, 0.70, 1.0),
     rest_z=0.0,
     drop_z=0.0,
     kinematic=True,
@@ -24,5 +24,6 @@ PROP = Prop(
         "glb": "/models/resident_casey.glb",
         "preNormalized": True,
         "nameLabel": True,
+        "idleAnimation": "Idle",
     },
 )
