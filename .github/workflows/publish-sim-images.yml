@@ -53,7 +53,9 @@ permissions:
 
 concurrency:
   group: publish-sim-images-${{ github.ref }}
-  cancel-in-progress: true
+  # Queue, never cancel: a cancelled run exports no build cache, so the next
+  # push after one re-bakes CoACD from cold.
+  cancel-in-progress: false
 
 jobs:
   tags:
