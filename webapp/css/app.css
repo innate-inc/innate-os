@@ -6139,7 +6139,7 @@ select.episodes-tool {
   cursor: not-allowed;
 }
 
-/* Launcher layout: dot then name flush left, digit hint and chevron in fixed
+/* Launcher layout: icon then name flush left, digit hint and chevron in fixed
    columns at the right edge, aligned across rows by the name's flex. */
 .skills-pop-name {
   flex: 1;
@@ -6151,31 +6151,23 @@ select.episodes-tool {
   text-align: left;
 }
 
-/* Skill-type indicator: learned (trained policy) / replay (recorded trajectory) /
-   digital (code skill). Color-only + a tooltip, no label text — keeps rows compact. */
-.skills-pop-type-dot {
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--hairline-strong);
+/* Category symbols share a neutral color; their shapes carry the meaning. */
+.skills-pop-type-icon {
+  display: inline-flex;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
 }
 
-.skills-pop-type-dot.learned {
-  background: var(--type-learned);
-}
-
-.skills-pop-type-dot.replay {
-  background: var(--type-replay);
-}
-
-.skills-pop-type-dot.digital {
-  background: var(--type-digital);
+.skills-pop-type-icon svg {
+  width: 100%;
+  height: 100%;
 }
 
 /* A skill file that failed to load — row is disabled, error shown inline. */
-.skills-pop-type-dot.broken {
-  background: var(--danger);
+.skills-pop-type-icon.broken {
+  color: var(--danger);
 }
 
 .skills-pop-tail {

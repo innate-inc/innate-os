@@ -697,13 +697,11 @@ export function createSkillsMenu(parent, rosClient) {
     head.className = "skills-pop-item";
     head.disabled = true;
     head.title = skill.load_error;
-    const dot = document.createElement("span");
-    dot.className = "skills-pop-type-dot broken";
-    dot.title = "Failed to load";
+    const icon = buildTypeIcon("broken", "Failed to load");
     const name = document.createElement("span");
     name.className = "skills-pop-name";
     name.textContent = formatName(skill);
-    head.append(dot, name);
+    head.append(icon, name);
     const status = document.createElement("div");
     status.className = "skills-pop-status error";
     const txt = document.createElement("span");
@@ -736,9 +734,7 @@ export function createSkillsMenu(parent, rosClient) {
     const num = document.createElement("span");
     num.className = "skills-pop-num mono";
     const typeMeta = skillTypeMeta(skill);
-    const dot = document.createElement("span");
-    dot.className = "skills-pop-type-dot" + (typeMeta ? ` ${typeMeta.cls}` : "");
-    if (typeMeta) dot.title = typeMeta.label;
+    const icon = buildTypeIcon(typeMeta?.cls ?? "unknown", typeMeta?.label ?? "Skill");
 
     const name = document.createElement("span");
     name.className = "skills-pop-name";
@@ -750,7 +746,7 @@ export function createSkillsMenu(parent, rosClient) {
     tail.className = "skills-pop-tail mono";
     if (running) tail.textContent = "…";
     else if (expandable) tail.textContent = isExpanded ? "▾" : "›";
-    head.append(dot, name, num, tail);
+    head.append(icon, name, num, tail);
 
     head.addEventListener("click", () => {
       if (expandable) {
@@ -1082,7 +1078,7 @@ function formatName(skill) {
 
 /**
  * Maps a skill's roster `type` ("code" | "learned" | "replay" | "poses") to the
- * dot color + tooltip shown before its name. Unknown/missing type renders no dot.
+ * icon + tooltip shown before its name. Unknown/missing types use a neutral icon.
  * @param {any} skill
  * @returns {{ cls: string, label: string } | null}
  */
@@ -1100,7 +1096,29 @@ function skillTypeMeta(skill) {
   }
 }
 
-/** Static key for the type dots, pinned above the (scrollable) skill list. */
+// Small, monochrome symbols shared by rows and their legend. Only static SVG
+// paths enter innerHTML; roster text is assigned through DOM attributes.
+/** @type {Record<string, string>} */
+const TYPE_ICON_PATHS = {
+  learned: '<path d="m7 7 3 3m4 4 3 3M7 17l3-3m4-4 3-3"/><circle cx="5" cy="5" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="12" cy="12" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/>',
+  replay: '<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/><path d="m10 8 6 4-6 4z"/>',
+  digital: '<path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18"/>',
+  unknown: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12h6m-3-3v6"/>',
+  broken: '<path d="m12 3 10 18H2L12 3zm0 6v5m0 3v.01"/>',
+};
+
+/** @param {string} type @param {string} label */
+function buildTypeIcon(type, label) {
+  const icon = document.createElement("span");
+  icon.className = "skills-pop-type-icon" + (type === "broken" ? " broken" : "");
+  icon.title = label;
+  icon.setAttribute("role", "img");
+  icon.setAttribute("aria-label", label);
+  icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TYPE_ICON_PATHS[type] ?? TYPE_ICON_PATHS.unknown}</svg>`;
+  return icon;
+}
+
+/** Static key for the type icons, pinned above the (scrollable) skill list. */
 function buildTypeLegend() {
   const legend = document.createElement("div");
   legend.className = "skills-pop-legend";
@@ -1112,11 +1130,10 @@ function buildTypeLegend() {
     const item = document.createElement("span");
     item.className = "skills-pop-legend-item";
     item.title = hint;
-    const dot = document.createElement("span");
-    dot.className = `skills-pop-type-dot ${cls}`;
+    const icon = buildTypeIcon(cls, label);
     const text = document.createElement("span");
     text.textContent = label;
-    item.append(dot, text);
+    item.append(icon, text);
     legend.appendChild(item);
   }
   return legend;
