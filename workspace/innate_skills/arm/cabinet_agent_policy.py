@@ -122,6 +122,7 @@ class CabinetPolicy:
             ]
         payload = {
             "model": self.model,
+            "service_tier": "priority",
             "instructions": SYSTEM,
             "input": copy.deepcopy(self.history),
             "tools": [TOOL],

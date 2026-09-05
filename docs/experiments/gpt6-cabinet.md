@@ -31,7 +31,8 @@ container when ready; exporting it in an unrelated host terminal is insufficient
 Do not put a real key in this document or git. The skill fails before movement
 if the key is missing. No Innate proxy or Gemini key is needed for this loop.
 
-Default model: `gpt-6-astra`, Responses API, low reasoning, 4096 output-token cap.
+Default model: `gpt-6-astra`, Responses API, `service_tier: "priority"`, low reasoning,
+4096 output-token cap.
 Optional environment override: `INNATE_CABINET_MODEL` (exact API model ID).
 See [official model documentation](https://developers.openai.com/api/docs/models/gpt-6-astra).
 Actual model access must be checked with the supplied account key.

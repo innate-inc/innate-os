@@ -33,6 +33,7 @@ def test_responses_history():
         assert action[0] == "observe"
         policy.result(call, "observed")
     assert sent[0]["model"] == "gpt-6-astra"
+    assert sent[0]["service_tier"] == "priority"
     assert not sent[0]["parallel_tool_calls"]
     assert sum(p["type"] == "input_image" for m in sent[2]["input"] for p in m.get("content", [])) == 4
     assert any(m.get("encrypted_content") == "opaque" for m in sent[2]["input"])
