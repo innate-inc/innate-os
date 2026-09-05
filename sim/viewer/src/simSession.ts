@@ -529,6 +529,12 @@ export class SimSession {
     return this.#thumbCanvases[index] ?? null;
   }
 
+  /** Latest authoritative simulation clock, independent of viewer interpolation. */
+  get simulationClock(): { t: number; receivedAt: number } | null {
+    const sample = this.#samples[this.#samples.length - 1];
+    return sample ? { t: sample.t, receivedAt: this.#lastArrival * 1000 } : null;
+  }
+
   /** Server->browser state delivery lag: cur is the median of the last ~2s,
    * min is the session floor (the pipeline's fixed cost). cur >> min means
    * a queue is filling upstream. Null until state has arrived. */
