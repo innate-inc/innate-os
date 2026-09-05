@@ -38,9 +38,9 @@ _APPROACH_RANGE_M = 0.35
 _BASE_HANDLE_X_BOUNDS_M = (0.33, 0.38)
 _WRIST_STAGING_X_M = 0.32
 _MAX_EE_X_M = 0.40
-_WRIST_ACTION_STEP_M = 0.010
+_WRIST_ACTION_STEP_M = 0.020
 _WRIST_COMFORT_X_M = 0.37
-_WRIST_BASE_CREEP_M = 0.05
+_WRIST_BASE_CREEP_M = 0.06
 _WRIST_CREEP_RETRACT_M = 0.04
 _WRIST_CONTENT_ATTEMPTS = 2
 _WRIST_ACTIONS = frozenset({"FORWARD", "BACK", "LEFT", "RIGHT", "UP", "DOWN", "GRASP", "ABORT"})
@@ -59,7 +59,7 @@ _MAIN_CAMERA_ORIGIN = (0.002519, 0.0295, 0.258545)
 _HEAD_METRIC_SAMPLES = 3
 _INITIAL_HANDLE_ATTEMPTS = 5
 _INITIAL_RETRY_FORWARD_M = 0.02
-_GRASP_ATTEMPTS = 2
+_GRASP_ATTEMPTS = 5
 _VISION_MODEL = "gemini-3.6-flash"
 _VISION_REASONING_EFFORT = "minimal"
 _LEFT_PUSH_SPEED_RAD_S = 0.25
@@ -89,7 +89,7 @@ def _parse_wrist_decision(text):
 
 
 def _wrist_action_pose(position, action):
-    """Map one semantic image-space action to a bounded 10 mm base-frame move."""
+    """Map one semantic image-space action to a bounded 20 mm base-frame move."""
     x, y, z = position
     if action == "FORWARD":
         x += _WRIST_ACTION_STEP_M
@@ -428,14 +428,59 @@ class OpenDoorWithVision(Skill):
             )
         self.fail("Wrist VLM did not return a valid bounded action")
 
+    def _log_wrist_motion(self, phase, step, action, previous, target):
+        """Keep base-relative commands and odometry-frame progress distinct."""
+        base = self._odom_xyt()
+        measured = tuple(self.manipulation.pose.position)
+        c, sn = math.cos(base[2]), math.sin(base[2])
+
+        def in_odom(pose):
+            return (base[0] + c * pose[0] - sn * pose[1], base[1] + sn * pose[0] + c * pose[1])
+
+        measured_xy, target_xy = in_odom(measured), in_odom(target)
+        if getattr(self, "_approach_origin", None) is None:
+            self._approach_origin = (base, measured_xy)
+        origin_base, origin_xy = self._approach_origin
+        delta = tuple(target[i] - previous[i] for i in range(3))
+        base_delta = tuple(base[i] - origin_base[i] for i in range(2))
+        progress = tuple(measured_xy[i] - origin_xy[i] for i in range(2))
+        fields = dict(
+            phase=phase,
+            step=step,
+            action=action,
+            target_base=list(target),
+            arm_delta=list(delta),
+            measured_base=list(measured),
+            base_odom=list(base),
+            target_odom_xy=list(target_xy),
+            measured_odom_xy=list(measured_xy),
+            base_delta_xy=list(base_delta),
+            gripper_progress_xy=list(progress),
+        )
+        self.debug_event("wrist_position", **fields)
+        self.logger.info(
+            f"[handle {phase} step={step} {action}] target base xyz="
+            f"({target[0]:.3f},{target[1]:.3f},{target[2]:.3f})m "
+            f"arm delta=({delta[0]:+.3f},{delta[1]:+.3f},{delta[2]:+.3f})m "
+            f"measured=({measured[0]:.3f},{measured[1]:.3f},{measured[2]:.3f})m"
+        )
+        self.logger.info(
+            f"[handle {phase} step={step}] odom target xy=({target_xy[0]:.3f},{target_xy[1]:.3f})m "
+            f"base xy=({base[0]:.3f},{base[1]:.3f})m yaw={math.degrees(base[2]):.1f}deg "
+            f"base delta=({base_delta[0]:+.3f},{base_delta[1]:+.3f})m "
+            f"measured gripper progress=({progress[0]:+.3f},{progress[1]:+.3f})m"
+        )
+
     def _wrist_align(self, target, *, restage=True):
         if restage:
             self.manipulation.torque_on()
             self.manipulation.gripper_open(duration=1.0)
             commanded_pose = (_WRIST_STAGING_X_M, target[1], target[2])
+            self._log_wrist_motion("target", -1, "STAGE", self.manipulation.pose.position, commanded_pose)
             self.manipulation.move_to(*commanded_pose, duration=2.0)
         else:
             commanded_pose = tuple(self.manipulation.pose.position)
+        self._log_wrist_motion("measured", -1, "ALIGN", commanded_pose, commanded_pose)
         previous_image = None
         previous_action = None
         for step in count():
@@ -474,6 +519,7 @@ class OpenDoorWithVision(Skill):
                     commanded_pose[1],
                     commanded_pose[2],
                 )
+                self._log_wrist_motion("target", step, "RETRACT", commanded_pose, retreat_pose)
                 settled = self.manipulation.move_to(
                     *retreat_pose,
                     duration=0.8,
@@ -481,7 +527,12 @@ class OpenDoorWithVision(Skill):
                     tolerance_z=None,
                 )
                 measured_pose = tuple(settled.position)
+                self.logger.info(
+                    f"[handle step={step}] base forward target={_WRIST_BASE_CREEP_M:.3f}m "
+                    f"planned net advance={_WRIST_BASE_CREEP_M - (commanded_pose[0] - retreat_pose[0]):.3f}m"
+                )
                 self._drive(_WRIST_BASE_CREEP_M)
+                self._log_wrist_motion("measured", step, "BASE_FORWARD", commanded_pose, retreat_pose)
                 self.debug_event(
                     "wrist_base_creep",
                     step=step,
@@ -502,7 +553,9 @@ class OpenDoorWithVision(Skill):
             if all(abs(next_pose[index] - commanded_pose[index]) < 1e-6 for index in range(3)):
                 self.fail(f"Wrist VLM requested {action}, but that motion is at a safety limit")
             self.check_cancelled()
+            self._log_wrist_motion("target", step, action, commanded_pose, next_pose)
             settled = self.manipulation.move_to(*next_pose, duration=0.5, tolerance_xy=None, tolerance_z=None)
+            self._log_wrist_motion("measured", step, action, commanded_pose, next_pose)
             measured_pose = tuple(settled.position)
             tracking_error = tuple(measured_pose[index] - next_pose[index] for index in range(3))
             max_tracking_error = max(abs(error) for error in tracking_error)
@@ -749,6 +802,7 @@ class OpenDoorWithVision(Skill):
         self._handle_color = handle_color.strip()
         self._handle_height_m = handle_height_m
         self._frame_index = 0
+        self._approach_origin = None
         try:
             self.debug_event(
                 "acquisition_started",
@@ -767,6 +821,7 @@ class OpenDoorWithVision(Skill):
             target = self._position_base(point)
             pregrasp = self._wrist_align(target)
             for attempt in range(1, _GRASP_ATTEMPTS + 1):
+                self.logger.info(f"[handle] grasp attempt {attempt}/{_GRASP_ATTEMPTS} at base xyz={pregrasp}")
                 if self._grasp(pregrasp, attempt):
                     break
                 if attempt == _GRASP_ATTEMPTS:

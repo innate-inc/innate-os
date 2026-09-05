@@ -364,13 +364,13 @@ def test_wrist_decision_parser_requires_allowed_action_and_box():
     )
 
 
-def test_wrist_actions_are_ten_millimetres_and_bounded():
+def test_wrist_actions_are_twenty_millimetres_and_bounded():
     start = (0.35, 0.01, 0.20)
 
-    assert module._wrist_action_pose(start, "FORWARD") == pytest.approx((0.36, 0.01, 0.20))
-    assert module._wrist_action_pose(start, "BACK") == pytest.approx((0.34, 0.01, 0.20))
-    assert module._wrist_action_pose(start, "LEFT") == pytest.approx((0.35, 0.02, 0.20))
-    assert module._wrist_action_pose(start, "RIGHT") == pytest.approx((0.35, 0.00, 0.20))
+    assert module._wrist_action_pose(start, "FORWARD") == pytest.approx((0.37, 0.01, 0.20))
+    assert module._wrist_action_pose(start, "BACK") == pytest.approx((0.33, 0.01, 0.20))
+    assert module._wrist_action_pose(start, "LEFT") == pytest.approx((0.35, 0.03, 0.20))
+    assert module._wrist_action_pose(start, "RIGHT") == pytest.approx((0.35, -0.01, 0.20))
     assert module._wrist_action_pose((0.40, 0.10, 0.30), "FORWARD") == pytest.approx((0.40, 0.10, 0.30))
 
 
@@ -399,6 +399,7 @@ def test_wrist_loop_executes_semantic_actions_until_grasp(monkeypatch):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-action-test"))
     skill.manipulation = _ActionManipulation()
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.0, 0.0, 0.0))
     skill.wrist_image = object()
     monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
     monkeypatch.setattr(skill, "_effort", lambda: (0.0, 0.0, 0.0, 0.0, 0.0))
@@ -420,8 +421,8 @@ def test_wrist_loop_executes_semantic_actions_until_grasp(monkeypatch):
 
     result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
 
-    assert result == pytest.approx((0.36, 0.00, 0.20))
-    assert skill.manipulation.moves == pytest.approx([(0.36, 0.01, 0.20), (0.36, 0.00, 0.20)])
+    assert result == pytest.approx((0.37, -0.01, 0.20))
+    assert skill.manipulation.moves == pytest.approx([(0.37, 0.01, 0.20), (0.37, -0.01, 0.20)])
     assert history == [(False, None, 0), (True, "FORWARD", 1), (True, "RIGHT", 2)]
 
 
@@ -429,6 +430,7 @@ def test_wrist_loop_accumulates_commands_without_adopting_measured_z_lag(monkeyp
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-commanded-pose-test"))
     skill.manipulation = _ActionManipulation(z_lag=0.002)
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.0, 0.0, 0.0))
     skill.wrist_image = object()
     monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
     monkeypatch.setattr(skill, "_effort", lambda: (0.0, 0.0, 0.0, 0.0, 0.0))
@@ -446,20 +448,21 @@ def test_wrist_loop_accumulates_commands_without_adopting_measured_z_lag(monkeyp
     result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
 
     expected_moves = [
-        (0.35, 0.01, 0.210),
         (0.35, 0.01, 0.220),
-        (0.35, 0.00, 0.220),
+        (0.35, 0.01, 0.240),
+        (0.35, -0.01, 0.240),
     ]
     assert len(skill.manipulation.moves) == len(expected_moves)
     for actual, expected in zip(skill.manipulation.moves, expected_moves, strict=True):
         assert actual == pytest.approx(expected)
-    assert result == pytest.approx((0.35, 0.00, 0.218))
+    assert result == pytest.approx((0.35, -0.01, 0.238))
 
 
 def test_wrist_loop_logs_but_does_not_abort_on_large_tracking_error(monkeypatch):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-tracking-test"))
     skill.manipulation = _ActionManipulation(z_lag=0.020)
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.0, 0.0, 0.0))
     skill.wrist_image = object()
     monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
     monkeypatch.setattr(skill, "_effort", lambda: (0.0, 0.0, 0.0, 0.0, 0.0))
@@ -477,11 +480,11 @@ def test_wrist_loop_logs_but_does_not_abort_on_large_tracking_error(monkeypatch)
 
     result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
 
-    expected_moves = [(0.35, 0.01, 0.210), (0.35, 0.01, 0.220)]
+    expected_moves = [(0.35, 0.01, 0.220), (0.35, 0.01, 0.240)]
     assert len(skill.manipulation.moves) == len(expected_moves)
     for actual, expected in zip(skill.manipulation.moves, expected_moves, strict=True):
         assert actual == pytest.approx(expected)
-    assert result == pytest.approx((0.35, 0.01, 0.200))
+    assert result == pytest.approx((0.35, 0.01, 0.220))
     motion_events = [fields for event, fields in events if event == "wrist_action_motion"]
     assert [event["max_tracking_error_m"] for event in motion_events] == pytest.approx([0.020, 0.020])
     assert all("effort" in event for event in motion_events)
@@ -491,6 +494,7 @@ def test_wrist_loop_continues_past_twelve_actions(monkeypatch):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-unbounded-actions-test"))
     skill.manipulation = _ActionManipulation()
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.0, 0.0, 0.0))
     skill.wrist_image = object()
     monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
     monkeypatch.setattr(skill, "_effort", lambda: (0.0, 0.0, 0.0, 0.0, 0.0))
@@ -505,13 +509,16 @@ def test_wrist_loop_continues_past_twelve_actions(monkeypatch):
     result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
 
     assert len(skill.manipulation.moves) == 13
-    assert result == pytest.approx((0.35, 0.01, 0.210))
+    assert result == pytest.approx((0.35, 0.01, 0.220))
 
 
-def test_forward_near_full_extension_retracts_arm_and_creeps_base(monkeypatch):
+def test_forward_near_full_extension_retracts_arm_and_creeps_base(monkeypatch, caplog):
     monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
     skill = OpenDoorWithVision(logging.getLogger("door-base-creep-test"))
     skill.manipulation = _ActionManipulation()
+    caplog.set_level(logging.INFO)
+    base = [1.0, 2.0, math.pi / 2]
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: tuple(base))
     skill.manipulation.position[:] = [0.37, 0.01, 0.20]
     skill.wrist_image = object()
     monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
@@ -525,19 +532,35 @@ def test_forward_near_full_extension_retracts_arm_and_creeps_base(monkeypatch):
     )
     monkeypatch.setattr(skill, "_request_wrist_decision", lambda *_args, **_kwargs: next(decisions))
     drives = []
-    monkeypatch.setattr(skill, "_drive", drives.append)
+
+    def drive(distance):
+        drives.append(distance)
+        base[1] += 0.055  # 5 mm less than commanded, with forward along odom Y.
+
+    monkeypatch.setattr(skill, "_drive", drive)
     events = []
     monkeypatch.setattr(skill, "debug_event", lambda event, **fields: events.append((event, fields)))
 
     result = skill._wrist_align((0.35, 0.01, 0.20), restage=False)
 
     assert skill.manipulation.moves == pytest.approx([(0.33, 0.01, 0.20)])
-    assert drives == pytest.approx([0.05])
+    assert drives == pytest.approx([0.06])
     assert result == pytest.approx((0.33, 0.01, 0.20))
     creep = next(fields for event, fields in events if event == "wrist_base_creep")
     assert creep["arm_retraction_m"] == pytest.approx(0.04)
-    assert creep["base_advance_m"] == pytest.approx(0.05)
-    assert creep["net_forward_m"] == pytest.approx(0.01)
+    assert creep["base_advance_m"] == pytest.approx(0.06)
+    assert creep["net_forward_m"] == pytest.approx(0.02)
+
+    positions = [fields for event, fields in events if event == "wrist_position"]
+    target = next(p for p in positions if p["phase"] == "target")
+    final = positions[-1]
+    assert target["target_base"] == pytest.approx([0.33, 0.01, 0.20])
+    assert final["arm_delta"] == pytest.approx([-0.04, 0.0, 0.0])
+    assert final["base_delta_xy"] == pytest.approx([0.0, 0.055])
+    assert final["gripper_progress_xy"] == pytest.approx([0.0, 0.015])
+    assert final["target_odom_xy"] == pytest.approx([0.99, 2.385])
+    assert "target base xyz=(0.330,0.010,0.200)m" in caplog.text
+    assert "measured gripper progress=(+0.000,+0.015)m" in caplog.text
 
 
 def test_grasp_uses_firm_strength_and_rejects_tip_pinch(monkeypatch):
@@ -640,7 +663,7 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch, handle_options):
     monkeypatch.setattr(
         skill,
         "_grasp",
-        lambda pregrasp, attempt: order.append(("grasp", attempt, pregrasp)) or attempt == 2,
+        lambda pregrasp, attempt: order.append(("grasp", attempt, pregrasp)) or attempt == 5,
     )
     monkeypatch.setattr(skill, "_prepare_grasp_retry", retry)
     monkeypatch.setattr(
@@ -660,6 +683,12 @@ def test_full_skill_acquires_before_pull_handoff(monkeypatch, handle_options):
         ("grasp", 1, (0.35, 0.0, 0.2)),
         ("retry", 2),
         ("grasp", 2, (0.36, 0.0, 0.2)),
+        ("retry", 3),
+        ("grasp", 3, (0.36, 0.0, 0.2)),
+        ("retry", 4),
+        ("grasp", 4, (0.36, 0.0, 0.2)),
+        ("retry", 5),
+        ("grasp", 5, (0.36, 0.0, 0.2)),
         ("retreat_and_push_left", 0.40, 0.40),
     ]
     assert "pulled back 0.40 m arm-first toward x=0.25 m with a straight backward base remainder" in result
@@ -824,6 +853,7 @@ def test_wrist_up_at_thirty_centimetres_uses_arm_reachability(monkeypatch, reach
 
     skill = OpenDoorWithVision(logging.getLogger("door-height-test"))
     skill.manipulation = _ActionManipulation()
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.0, 0.0, 0.0))
     skill.manipulation.position[:] = [0.34, -0.018, 0.30]
     skill.wrist_image = object()
     monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
@@ -848,9 +878,30 @@ def test_wrist_up_at_thirty_centimetres_uses_arm_reachability(monkeypatch, reach
         )
         with pytest.raises(ArmFailed, match="IK found no solution"):
             skill._wrist_align((0.34, -0.018, 0.30), restage=False)
-        assert checked == [(0.34, -0.018, 0.31)]
+        assert checked == [(0.34, -0.018, 0.32)]
         assert next(decisions)[0] == "GRASP"
     else:
         result = skill._wrist_align((0.34, -0.018, 0.30), restage=False)
-        assert result == pytest.approx((0.34, -0.018, 0.31))
-        assert skill.manipulation.moves == [(0.34, -0.018, 0.31)]
+        assert result == pytest.approx((0.34, -0.018, 0.32))
+        assert skill.manipulation.moves == [(0.34, -0.018, 0.32)]
+
+
+def test_grasp_attempts_stop_after_five_verified_misses(monkeypatch):
+    monkeypatch.setattr(OpenDoorWithVision, "_proxy", object())
+    skill = OpenDoorWithVision(logging.getLogger("grasp-retry-limit"))
+    skill.mobility = _Mobility()
+    skill.manipulation = _Manipulation()
+    skill.head = _Head()
+    target = (0.35, 0.0, 0.2)
+    monkeypatch.setattr(skill, "_localize_handle_with_retries", lambda: target)
+    monkeypatch.setattr(skill, "_position_base", lambda _point: target)
+    monkeypatch.setattr(skill, "_wrist_align", lambda _target: target)
+    attempts, retries = [], []
+    monkeypatch.setattr(skill, "_grasp", lambda _pose, attempt: attempts.append(attempt) or False)
+    monkeypatch.setattr(skill, "_prepare_grasp_retry", lambda _target, attempt: retries.append(attempt) or target)
+    monkeypatch.setattr(skill, "_retreat_and_push_left", lambda *_args: pytest.fail("must not pull an unheld handle"))
+    with pytest.raises(SkillFailed, match="after 5 verified attempts"):
+        skill.execute()
+    assert attempts == [1, 2, 3, 4, 5]
+    assert retries == [2, 3, 4, 5]
+    assert skill.mobility.stops == 1
