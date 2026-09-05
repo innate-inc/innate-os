@@ -1,13 +1,17 @@
 export type TrafficAspect = "red" | "yellow" | "green";
 
 export interface TrafficPart {
-  shape: "box" | "cylinder";
+  shape: "box" | "cylinder" | "prism";
   position: [number, number, number];
-  material: "body" | "glass" | "rubber" | "headlight" | "taillight";
+  material: "body" | "glass" | "rubber" | "headlight" | "taillight" | "alloy";
   size?: [number, number, number];
   radius?: number;
   length?: number;
+  width?: number;
+  profile?: [number, number][];
   rotation?: [number, number, number];
+  /** Visual rotation around local +Y, derived from forward distance. */
+  rolling_radius?: number;
 }
 
 export interface TrafficCarModel {
@@ -15,7 +19,7 @@ export interface TrafficCarModel {
   width: number;
   parts: TrafficPart[];
   colliders: { shape: "box"; position: [number, number, number]; size: [number, number, number] }[];
-  materials: Record<"glass" | "rubber" | "headlight" | "taillight", string>;
+  materials: Record<"glass" | "rubber" | "headlight" | "taillight", string> & { alloy?: string };
 }
 
 export interface TrafficManifest {
@@ -51,10 +55,22 @@ function tuple3(value: unknown, positive = false): value is [number, number, num
   );
 }
 
-const MATERIAL_ROLES = new Set<TrafficPart["material"]>(["body", "glass", "rubber", "headlight", "taillight"]);
+const MATERIAL_ROLES = new Set<TrafficPart["material"]>(["body", "glass", "rubber", "headlight", "taillight", "alloy"]);
 const ASPECTS = ["red", "yellow", "green"] as const;
 const nonEmptyString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
 const positiveNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0;
+
+/** MuJoCo takes the convex hull; reject concave profiles so both renderers agree. */
+function convexProfile(value: unknown): value is [number, number][] {
+  if (!Array.isArray(value) || value.length < 3 || value.some((p) => !Array.isArray(p) || p.length !== 2 || !p.every(Number.isFinite))) return false;
+  const points = value as [number, number][];
+  return points.every(([x, z], i) => {
+    const [nx, nz] = points[(i + 1) % points.length];
+    const side = ([px, pz]: [number, number]) => (nx - x) * (pz - z) - (nz - z) * (px - x);
+    const turn = side(points[(i + 2) % points.length]);
+    return Math.abs(turn) > 1e-10 && points.every((point) => side(point) * turn >= -1e-10);
+  });
+}
 
 export function parseTrafficManifest(value: unknown): TrafficManifest | null {
   if (!isRecord(value) || value.schema_version !== 1 || !isRecord(value.car_model)) return null;
@@ -76,8 +92,14 @@ export function parseTrafficManifest(value: unknown): TrafficManifest | null {
   for (const part of model.parts) {
     if (!isRecord(part) || !tuple3(part.position)) return null;
     if (typeof part.material !== "string" || !MATERIAL_ROLES.has(part.material as TrafficPart["material"])) return null;
+    if (part.material !== "body" && !nonEmptyString(model.materials[part.material])) return null;
     if (part.rotation !== undefined && !tuple3(part.rotation)) return null;
-    if (part.shape === "box" ? !tuple3(part.size, true) : part.shape !== "cylinder" || !positiveNumber(part.radius) || !positiveNumber(part.length) || !tuple3(part.rotation)) return null;
+    if (part.rolling_radius !== undefined && !positiveNumber(part.rolling_radius)) return null;
+    if (part.shape === "box") {
+      if (!tuple3(part.size, true)) return null;
+    } else if (part.shape === "prism") {
+      if (!positiveNumber(part.width) || !convexProfile(part.profile) || part.rolling_radius !== undefined) return null;
+    } else if (part.shape !== "cylinder" || !positiveNumber(part.radius) || !positiveNumber(part.length) || !tuple3(part.rotation)) return null;
   }
   for (const collider of model.colliders) {
     if (!isRecord(collider) || collider.shape !== "box" || !tuple3(collider.position) || !tuple3(collider.size, true)) return null;

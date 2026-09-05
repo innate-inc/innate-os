@@ -220,6 +220,7 @@ def build_world_xml(
     props: "PropRegistry | None" = None,
     spawn_pose: tuple[float, float, float] = (SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG),
     traffic_bodies: str = "",
+    traffic_assets: str = "",
 ) -> str:
     """The apartment environment MJCF (floor plane + decomposed room hulls,
     optionally the textured visual rooms in their own geom group, plus every
@@ -290,6 +291,7 @@ def build_world_xml(
   <asset>
 {chr(10).join(mesh_lines)}
 {chr(10).join(visual_mesh_lines)}{prop_assets}
+{traffic_assets}
   </asset>
   <worldbody>
     <!-- MuJoCo defaults an untyped light to a narrow spotlight.  The viewer's

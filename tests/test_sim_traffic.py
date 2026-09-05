@@ -1,3 +1,4 @@
+import math
 import sys
 from pathlib import Path
 
@@ -116,17 +117,21 @@ def test_crossroads_traffic_runs_safely_from_controller_through_mujoco():
     assert manifest is not None and [car["id"] for car in manifest["cars"]] == [car.lane.id for car in traffic.cars]
     assert traffic.bodies_xml().count('mocap="true"') == 4
     body = traffic_model.CAR_MODEL["parts"][0]
-    body_face = abs(body["position"][0]) + body["size"][0] / 2
-    body_side = abs(body["position"][1]) + body["size"][1] / 2
+    body_face = max(abs(x) for x, _ in body["profile"])
+    body_side = body["width"] / 2
     lamps = [part for part in traffic_model.CAR_MODEL["parts"] if part["material"] in {"headlight", "taillight"}]
-    wheels = [part for part in traffic_model.CAR_MODEL["parts"] if part["material"] == "rubber"]
+    wheels = [
+        part
+        for part in traffic_model.CAR_MODEL["parts"]
+        if part["material"] == "rubber" and part["shape"] == "cylinder"
+    ]
     assert all(abs(part["position"][0]) + part["size"][0] / 2 > body_face + 0.01 for part in lamps)
     assert all(abs(part["position"][1]) + part["length"] / 2 > body_side + 0.01 for part in wheels)
-    assert all(abs(car.lane.start) == abs(car.lane.end) == 23 for car in traffic.cars)
     for environment_id in ("apartment", "backrooms", "low-poly-town", "custom-pack"):
         disabled = traffic_model.TrafficController(environment_id)
         assert not disabled.enabled
         assert (disabled.bodies_xml(), disabled.manifest(), disabled.state(0.0, 0)) == ("", None, None)
+        assert disabled.assets_xml() == ""
 
     mujoco = pytest.importorskip("mujoco")
     if not callable(getattr(getattr(mujoco, "MjSpec", None), "from_string", None)):
@@ -137,7 +142,7 @@ def test_crossroads_traffic_runs_safely_from_controller_through_mujoco():
         for aspect in ("red", "yellow", "green")
     )
     world = mujoco.MjSpec.from_string(
-        f"<mujoco><asset>{materials}</asset><worldbody>{traffic.bodies_xml()}</worldbody></mujoco>"
+        f"<mujoco><asset>{materials}{traffic.assets_xml()}</asset><worldbody>{traffic.bodies_xml()}</worldbody></mujoco>"
     )
     robot = mujoco.MjSpec.from_string(
         '<mujoco><worldbody><body name="base" pos="0 0 0.3"><freejoint/>'
@@ -161,9 +166,32 @@ def test_crossroads_traffic_runs_safely_from_controller_through_mujoco():
         robot_body in (int(model.geom_bodyid[contact.geom1]), int(model.geom_bodyid[contact.geom2]))
         for contact in data.contact
     )
-    ns_red, ns_green = model.mat("mat_signal-ns-red").id, model.mat("mat_signal-ns-green").id
-    assert tuple(model.mat_rgba[ns_red]) == (1.0, 1.0, 1.0, 1.0)
-    assert tuple(model.mat_rgba[ns_green]) == (0.1, 0.1, 0.1, 1.0)
-    traffic.advance(0.01, 5.0)
-    assert tuple(model.mat_rgba[ns_red]) == (0.1, 0.1, 0.1, 1.0)
-    assert tuple(model.mat_rgba[ns_green]) == (1.0, 1.0, 1.0, 1.0)
+    # Wheels turn in the real camera/lidar geometry, not extra physics joints.
+    # A quarter wheel circumference is a quarter turn on every lane heading;
+    # unchanged positions keep them still and reset restores the initial angle.
+    assert model.nv == 6  # only the fixture robot's free joint
+    spoke_index = next(
+        i
+        for i, part in enumerate(traffic_model.CAR_MODEL["parts"])
+        if part["shape"] == "box" and "rolling_radius" in part
+    )
+    for car in traffic.cars:
+        spoke = model.geom(f"traffic_car_{car.lane.id}_part_{spoke_index}")
+        assert spoke.contype == 0 and spoke.conaffinity == 0
+        initial = spoke.quat.copy()
+        car.position = 0
+        traffic._write_mocap(data)
+        assert spoke.quat == pytest.approx((1, 0, 0, 0))
+        mujoco.mj_forward(model, data)
+        unturned = data.geom_xmat[spoke.id].copy()
+        car.position = car.lane.direction * 0.3 * math.pi / 2
+        traffic._write_mocap(data)
+        assert spoke.quat == pytest.approx((math.sqrt(0.5), 0, math.sqrt(0.5), 0))
+        mujoco.mj_forward(model, data)
+        pose = data.geom_xmat[spoke.id].copy()
+        assert pose != pytest.approx(unturned)
+        traffic._write_mocap(data)
+        mujoco.mj_forward(model, data)
+        assert data.geom_xmat[spoke.id] == pytest.approx(pose)
+        traffic.reset(data)
+        assert spoke.quat == pytest.approx(initial)

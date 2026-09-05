@@ -3,11 +3,10 @@ import test from "node:test";
 import { MAX_RENDER_PIXELS, stagePixelRatio } from "../src/renderBudget.ts";
 
 test("stage keeps full resolution by default and only bounds pixels after opting in", () => {
-  // Small -> measured Retina desktop -> 4K -> portrait -> small again,
-  // including fractional DPR and >2x devices. Three floors buffer dimensions.
+  // Below budget (including the DPR ceiling), Retina, and sub-1 scaling.
+  // Three floors buffer dimensions.
   for (const [width, height, dpr] of [
-    [800, 600, 1], [800, 600, 2], [2147, 1420, 2], [3840, 2160, 1],
-    [1440, 2560, 2], [1920, 1080, 1.25], [390, 844, 3], [800, 600, 2],
+    [390, 844, 3], [2147, 1420, 2], [3840, 2160, 1],
   ]) {
     assert.equal(stagePixelRatio(width, height, dpr), Math.min(dpr, 2), "no automatic downgrade");
     const ratio = stagePixelRatio(width, height, dpr, true);

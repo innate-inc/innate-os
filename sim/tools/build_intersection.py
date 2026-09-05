@@ -55,6 +55,59 @@ PALETTE = {
 }
 
 
+def surface_texture(color: str) -> Image.Image:
+    """Small, repeatable 2 m tiles, shared by the GLB and robot-camera OBJ.
+
+    These are authored here, not sampled from third-party images. Fine grain
+    gives way to the base palette in mipmaps instead of sparkling at distance.
+    """
+    rgb = np.array(tuple(bytes.fromhex(PALETTE[color])), dtype=float)
+    if color.startswith("Signal_") or color in {"glass", "glass-light", "lamp", "metal"}:
+        return Image.new("RGB", (4, 4), tuple(rgb.astype(int)))
+    rng = np.random.default_rng(14)
+    y, x = np.mgrid[:256, :256]
+    detail = rng.normal(0, 2, (256, 256))
+    if color == "asphalt":
+        detail *= 2.5
+    elif color == "paving":
+        # Half-metre stone slabs; subtly different stones, recessed joints.
+        detail += rng.uniform(-5, 5, (4, 4))[y // 64, x // 64]
+        detail[(x % 64 < 2) | (y % 64 < 2)] -= 28
+    elif color in {"terracotta", "blue", "sage", "cream"}:
+        # Painted brick still needs readable mortar. The cream corner uses
+        # larger limestone blocks; all façades have actual surface structure.
+        h, w = (64, 128) if color == "cream" else (32, 64)
+        row, column = y // h, (x + (y // h % 2) * (w // 2)) % 256 // w
+        detail += rng.uniform(-7, 7, (256 // h, 256 // w))[row, column]
+        joints = (y % h < 2) | ((x + (y // h % 2) * (w // 2)) % w < 2)
+        detail[joints] += 25 if color == "terracotta" else -30
+    elif color == "wood":
+        detail += 9 * np.sin(x * np.pi / 8 + 0.7 * np.sin(y * np.pi / 64))
+        detail[x % 64 < 2] -= 24
+    elif color in {"leaf", "leaf-light", "soil"}:
+        mottling = Image.fromarray(rng.integers(0, 255, (32, 32), dtype=np.uint8))
+        detail += (np.asarray(mottling.resize((256, 256), Image.Resampling.BILINEAR)).astype(float) - 128) * 0.15
+    elif color == "water":
+        detail = 5 * np.sin((x + y) * np.pi / 32) + 3 * np.sin((x - y) * np.pi / 16)
+    elif color == "roof":
+        detail[y % 32 < 2] -= 14
+    return Image.fromarray(np.clip(rgb + detail[:, :, None], 0, 255).astype(np.uint8))
+
+
+def surface_uv(mesh: trimesh.Trimesh) -> np.ndarray:
+    """Box-project in Z-up world metres, before the export-axis conversion.
+
+    Vertices are unmerged so a corner can have a different UV on each face;
+    walls keep vertical grain and horizontal faces share aligned paving.
+    """
+    axes = np.argmax(np.abs(mesh.face_normals), axis=1)
+    uv = np.empty((len(mesh.vertices), 2))
+    for normal_axis, plane in enumerate(((1, 2), (0, 2), (0, 1))):
+        indices = mesh.faces[axes == normal_axis].ravel()
+        uv[indices] = mesh.vertices[indices][:, plane] / 2
+    return uv
+
+
 class Square:
     def __init__(self):
         self.parts: dict[str, list[trimesh.Trimesh]] = defaultdict(list)
@@ -63,7 +116,8 @@ class Square:
     def add(self, mesh, color, solid=True):
         if solid:
             self.hulls.append(mesh.copy())
-        self.parts[color].append(mesh)
+        if color is not None:  # None makes a collision-only boundary
+            self.parts[color].append(mesh)
 
     def box(self, center, size, color, solid=True):
         mesh = trimesh.creation.box(extents=size)
@@ -86,6 +140,13 @@ class Square:
             mesh.apply_scale([scale, scale, scale * 1.15])
             mesh.apply_translation([x, y, z])
             self.add(mesh, color)
+        # Smaller asymmetrical lobes soften the two stacked canopy shapes.
+        # Visual-only: keep the original convex collision envelope and cost.
+        for dx, dy, z, r in ((-0.65, 0.2, 3.0, 0.65), (0.55, -0.4, 3.25, 0.75), (0.15, 0.5, 3.65, 0.65)):
+            mesh = trimesh.creation.icosphere(subdivisions=1, radius=r * scale)
+            mesh.apply_scale([1, 0.9, 1.15])
+            mesh.apply_translation([x + dx * scale, y + dy * scale, z])
+            self.add(mesh, "leaf-light" if dx > 0 else "leaf", False)
 
     def building(self, x, y, w, d, height, color):
         self.box((x, y, height / 2 + 0.1), (w, d, height), color)
@@ -139,8 +200,11 @@ class Square:
 
 def design() -> Square:
     square = Square()
-    # One road plane, not two intersecting boxes with z-fighting top faces.
-    square.box((0, 0, -0.105), (40, 40, 0.2), "asphalt", False)
+    # Tile the cross without overlapping the sidewalks or each other. A full
+    # asphalt slab 5 mm below paving z-fights through it in distant overviews.
+    square.box((0, 0, -0.1), (7, 40, 0.2), "asphalt", False)
+    for sign in (-1, 1):
+        square.box((sign * 11.75, 0, -0.1), (16.5, 7, 0.2), "asphalt", False)
     square.sidewalks()
     for sign in (-1, 1):
         for along in np.arange(8.5, 19.5, 2.8):
@@ -153,8 +217,13 @@ def design() -> Square:
         # Right-hand traffic: stop lines precede crossings and front bumpers.
         square.box((sign * 1.8, -sign * 6.5, 0.004), (3.2, 0.22, 0.008), "paint", False)
         square.box((-sign * 6.5, -sign * 1.8, 0.004), (0.22, 3.2, 0.008), "paint", False)
-        square.box((sign * 20.1, 0, 0.35), (0.2, 40.4, 0.7), "curb")
-        square.box((0, sign * 20.1, 0.35), (40, 0.2, 0.7), "curb")
+        # Keep the continuous collision boundary, but leave all four road
+        # mouths visually open. The visible fence stops at the sidewalks.
+        square.box((sign * 20.1, 0, 0.35), (0.2, 40.4, 0.7), None)
+        square.box((0, sign * 20.1, 0.35), (40, 0.2, 0.7), None)
+        for side in (-1, 1):
+            square.box((sign * 20.1, side * 11.85, 0.35), (0.2, 16.7, 0.7), "curb", False)
+            square.box((side * 11.75, sign * 20.1, 0.35), (16.5, 0.2, 0.7), "curb", False)
     square.signal(3.9, -6.8, 0, "NS")
     square.signal(-3.9, 6.8, np.pi, "NS")
     square.signal(-6.8, -3.9, -np.pi / 2, "EW")
@@ -198,12 +267,13 @@ def build(viewer_out: Path = SIM / "viewer/public", assets_dir: Path = SIM / "as
     parts = {}
     for color, meshes in square.parts.items():
         mesh = trimesh.util.concatenate(meshes)
-        mesh.apply_transform(Z_TO_Y)
         mesh.unmerge_vertices()  # intentional flat shading, even on foliage
+        uv = surface_uv(mesh)
+        mesh.apply_transform(Z_TO_Y)
         # Texture pixels are sRGB in glTF; bare baseColorFactor values are
-        # linear. Encoding the palette as tiny textures keeps it consistent
+        # linear. Encoding the palette as textures keeps it consistent
         # with the MuJoCo PNGs instead of washing out under the daylight rig.
-        texture = Image.new("RGB", (4, 4), tuple(bytes.fromhex(PALETTE[color])))
+        texture = surface_texture(color)
         material = trimesh.visual.material.PBRMaterial(
             name=color,
             baseColorFactor=[255, 255, 255, 255],
@@ -211,7 +281,7 @@ def build(viewer_out: Path = SIM / "viewer/public", assets_dir: Path = SIM / "as
             metallicFactor=0,
             roughnessFactor=1,
         )
-        mesh.visual = trimesh.visual.TextureVisuals(uv=np.zeros((len(mesh.vertices), 2)), material=material)
+        mesh.visual = trimesh.visual.TextureVisuals(uv=uv, material=material)
         parts[color.lower().replace("_", "-")] = mesh
     models = viewer_out / "models" / PACK_ID
     models.mkdir(parents=True, exist_ok=True)
@@ -236,7 +306,7 @@ def build(viewer_out: Path = SIM / "viewer/public", assets_dir: Path = SIM / "as
     collisions.mkdir(parents=True, exist_ok=True)
     (collisions / "hulls.f32").write_bytes(np.concatenate(soup).astype("<f4").tobytes())
     (collisions / "manifest.json").write_text("[]\n")
-    write_nav_map(PACK_ID, assets_dir)
+    write_nav_map(PACK_ID, assets_dir, include_collision_hulls=True)
     print(f"Crossroads: {len(parts)} materials, {len(square.hulls)} convex hulls; no external source assets")
 
 

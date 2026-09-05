@@ -3,7 +3,7 @@ import test from "node:test";
 import * as THREE from "three";
 import type { SimScene } from "../src/scene.ts";
 import { TrafficLibrary } from "../src/traffic.ts";
-import { interpolateTraffic, type TrafficManifest, type TrafficState } from "../src/trafficState.ts";
+import { interpolateTraffic, parseTrafficManifest, type TrafficManifest, type TrafficState } from "../src/trafficState.ts";
 
 const manifest: TrafficManifest = {
   schema_version: 1,
@@ -11,7 +11,7 @@ const manifest: TrafficManifest = {
     length: 3.6,
     width: 1.55,
     parts: [
-      { shape: "box", size: [3.6, 1.55, 0.56], position: [0, 0, 0.45], material: "body" },
+      { shape: "prism", width: 1.55, profile: [[-1.8, 0.2], [1.8, 0.2], [1.6, 0.73], [-1.6, 0.73]], position: [0, 0, 0], material: "body" },
       {
         shape: "cylinder",
         radius: 0.3,
@@ -19,6 +19,7 @@ const manifest: TrafficManifest = {
         position: [1.1, 0.77, 0.3],
         rotation: [Math.PI / 2, 0, 0],
         material: "rubber",
+        rolling_radius: 0.3,
       },
     ],
     colliders: [{ shape: "box", size: [3.6, 1.56, 0.56], position: [0, 0, 0.45] }],
@@ -99,6 +100,12 @@ test("traffic runs from validated wire snapshots through safe scene swaps and Th
   const respawned = state(10, 4, "green");
   assert.equal(interpolateTraffic(after, respawned, 0.9)?.cars.eastbound.pose[0], -8);
   assert.equal(interpolateTraffic(after, { ...respawned, world_epoch: 3 }, 1)?.world_epoch, 3);
+  const invalidWheel = structuredClone(manifest);
+  invalidWheel.car_model.parts[1].rolling_radius = 0;
+  assert.equal(parseTrafficManifest(invalidWheel), null);
+  const concaveBody = structuredClone(manifest);
+  concaveBody.car_model.parts[0].profile = [[-1, 0], [1, 0], [0, 0.2], [1, 1], [-1, 1]];
+  assert.equal(parseTrafficManifest(concaveBody), null);
 
   const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
@@ -180,6 +187,7 @@ test("traffic runs from validated wire snapshots through safe scene swaps and Th
     session.tick(scene, 0);
     assert.equal(manifestAttempts, 1);
     assert.equal(renderedCar()?.position.x, -9);
+    assert.equal(renderedCar()?.children[1].rotation.y, -9 / 0.3);
     assert.deepEqual(library.visibleBounds[0], { minX: -10.8, maxX: -7.2, minY: -2.285, maxY: -0.735 });
     const activeCar = renderedCar();
 
@@ -211,6 +219,21 @@ test("traffic runs from validated wire snapshots through safe scene swaps and Th
     session.tick(scene, 0.1);
     assert.equal(renderedTraffic?.signals.north_south, "green");
     assert.equal(signalMaterials.get("Signal_NS_Green")?.color.getHexString(), "5ee27a");
+
+    // Visual rotation uses the interpolated position, not elapsed browser time
+    // or speed. Stops freeze; respawns snap with the existing spawn boundary.
+    const halfway = interpolateTraffic(before, after, 0.5)!;
+    library.setState(halfway);
+    assert.equal(renderedCar()?.children[1].rotation.y, -9 / 0.3);
+    library.setState(halfway);
+    assert.equal(renderedCar()?.children[1].rotation.y, -9 / 0.3);
+    library.setState(interpolateTraffic(after, respawned, 0.9));
+    assert.equal(renderedCar()?.children[1].rotation.y, -8 / 0.3);
+    library.setState(interpolateTraffic(after, respawned, 1));
+    assert.equal(renderedCar()?.children[1].rotation.y, 10 / 0.3);
+    halfway.cars.eastbound.pose = [1.5, -9, -Math.PI / 2];
+    library.setState(halfway);
+    assert.ok(Math.abs(renderedCar()!.children[1].rotation.y - 9 / 0.3) < 1e-12);
 
     library.unloadEnvironment();
     socket.message({

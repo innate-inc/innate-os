@@ -99,7 +99,7 @@ def write_visuals(pack_id: str, parts: Parts, assets_dir: Path = ASSETS) -> None
     print(f"{pack_id}: {len(parts)} textured parts in {out}")
 
 
-def write_nav_map(pack_id: str, assets_dir: Path = ASSETS) -> None:
+def write_nav_map(pack_id: str, assets_dir: Path = ASSETS, *, include_collision_hulls: bool = False) -> None:
     # Imported here, not at the top: the decompose stage of the asset image
     # carries no driver package, by design (its CoACD bake must not re-run on
     # a driver edit), and only this step compiles a world.
@@ -108,9 +108,17 @@ def write_nav_map(pack_id: str, assets_dir: Path = ASSETS) -> None:
     import export_nav_map as nav
     from mars_sim_driver.core import VirtualMars
     from mars_sim_driver.environments import Environment
+    from mars_sim_driver.world import COLLISION_GROUP, VISUAL_GROUP
 
     environment = Environment.load(pack_id, assets_dir)
     sim = VirtualMars(environment=environment)
+    # Invisible play-area boundaries still constrain static navigation. This
+    # affects only the map bake, not the running robot's camera/lidar surfaces.
+    if include_collision_hulls:
+        static_hulls = (sim.model.geom_bodyid == sim.model.body("apartment").id) & (
+            sim.model.geom_group == COLLISION_GROUP
+        )
+        sim.model.geom_group[static_hulls] = VISUAL_GROUP
     # Dynamic actors must not become permanent obstacles in the static map.
     # The scan routines move the robot themselves but preserve mocap poses.
     sim.data.mocap_pos[:] = (1000.0, 1000.0, -1000.0)

@@ -14,6 +14,7 @@ const OFF_COLOR = new THREE.Color("#171b1d");
 
 interface CarRender {
   root: THREE.Group;
+  wheels: { mesh: THREE.Mesh; radius: number }[];
   colliders: THREE.Object3D[];
   halfLength: number;
   halfWidth: number;
@@ -158,7 +159,7 @@ export class TrafficLibrary {
         const material = new THREE.MeshStandardMaterial({
           color,
           roughness: role === "glass" ? 0.25 : 0.72,
-          metalness: role === "glass" ? 0.1 : 0.0,
+          metalness: role === "alloy" ? 0.45 : role === "glass" ? 0.1 : 0.0,
           flatShading: true,
         });
         if (role === "headlight") {
@@ -181,11 +182,12 @@ export class TrafficLibrary {
         flatShading: true,
       });
       this.#ownedMaterials.add(bodyMaterial);
+      const wheels: CarRender["wheels"] = [];
       model.parts.forEach((part, index) => {
         const material = part.material === "body" ? bodyMaterial : shared[part.material];
         const mesh = new THREE.Mesh(geometries[index], material);
         mesh.position.set(...part.position);
-        if (part.rotation) mesh.rotation.set(...part.rotation);
+        if (part.rolling_radius) wheels.push({ mesh, radius: part.rolling_radius });
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         root.add(mesh);
@@ -199,6 +201,7 @@ export class TrafficLibrary {
       });
       this.#cars.set(car.id, {
         root,
+        wheels,
         colliders,
         halfLength: model.length / 2,
         halfWidth: model.width / 2,
@@ -211,6 +214,12 @@ export class TrafficLibrary {
     let geometry: THREE.BufferGeometry;
     if (part.shape === "box" && part.size) {
       geometry = new THREE.BoxGeometry(...part.size);
+    } else if (part.shape === "prism" && part.profile && part.width !== undefined) {
+      geometry = new THREE.ExtrudeGeometry(new THREE.Shape(part.profile.map(([x, z]) => new THREE.Vector2(x, z))), {
+        depth: part.width, bevelEnabled: false, steps: 1,
+      });
+      geometry.rotateX(Math.PI / 2); // profile XY -> XZ, extrusion Z -> -Y
+      geometry.translate(0, part.width / 2, 0);
     } else if (part.shape === "cylinder" && part.radius !== undefined && part.length !== undefined) {
       geometry = new THREE.CylinderGeometry(part.radius, part.radius, part.length, 12, 1, false);
       // Three cylinders are +Y; the shared descriptor starts at +Z like MJCF.
@@ -218,6 +227,7 @@ export class TrafficLibrary {
     } else {
       throw new Error("invalid traffic primitive in a validated manifest");
     }
+    if (part.rotation) geometry.applyQuaternion(new THREE.Quaternion().setFromEuler(new THREE.Euler(...part.rotation)));
     this.#ownedGeometries.add(geometry);
     return geometry;
   }
@@ -229,6 +239,10 @@ export class TrafficLibrary {
       if (!state) continue;
       car.root.position.set(state.pose[0], state.pose[1], 0.0);
       car.root.rotation.set(0, 0, state.pose[2]);
+      // The server's lanes are straight. Use the interpolated pose, so wheels
+      // stop, resume and respawn on exactly the same timeline as the car.
+      const distance = state.pose[0] * Math.cos(state.pose[2]) + state.pose[1] * Math.sin(state.pose[2]);
+      for (const { mesh, radius } of car.wheels) mesh.rotation.y = distance / radius;
     }
     this.#applySignals();
     this.#onMoved();

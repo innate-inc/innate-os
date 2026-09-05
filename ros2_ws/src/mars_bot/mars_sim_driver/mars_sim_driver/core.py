@@ -227,6 +227,7 @@ class VirtualMars:
             props=self.props,
             spawn_pose=self._spawn,
             traffic_bodies=self.traffic.bodies_xml(),
+            traffic_assets=self.traffic.assets_xml(),
         )
         # Lidar rays hit only the textured visual meshes (true surfaces, like
         # a real lidar) when available -- without them, fall back to all

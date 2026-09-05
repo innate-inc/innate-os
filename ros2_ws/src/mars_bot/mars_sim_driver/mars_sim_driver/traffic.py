@@ -66,13 +66,54 @@ CAR_MODEL = {
     "parts": [
         # Leave the lamps slightly proud of the body.  Coplanar outer faces
         # shimmer badly at distance in both MuJoCo and Three's depth buffers.
-        {"shape": "box", "size": [3.54, 1.55, 0.56], "position": [0.0, 0.0, 0.45], "material": "body"},
-        {"shape": "box", "size": [1.70, 1.30, 0.60], "position": [-0.10, 0.0, 1.00], "material": "body"},
-        {"shape": "box", "size": [1.35, 1.33, 0.10], "position": [-0.10, 0.0, 1.30], "material": "body"},
-        {"shape": "box", "size": [0.04, 1.14, 0.36], "position": [0.77, 0.0, 1.01], "material": "glass"},
-        {"shape": "box", "size": [0.04, 1.14, 0.36], "position": [-0.97, 0.0, 1.01], "material": "glass"},
-        {"shape": "box", "size": [1.20, 0.035, 0.36], "position": [-0.10, 0.665, 1.01], "material": "glass"},
-        {"shape": "box", "size": [1.20, 0.035, 0.36], "position": [-0.10, -0.665, 1.01], "material": "glass"},
+        {
+            "shape": "prism",
+            "width": 1.55,
+            "position": [0, 0, 0],
+            "material": "body",
+            "profile": [
+                [-1.77, 0.32],
+                [-1.60, 0.20],
+                [1.62, 0.20],
+                [1.77, 0.32],
+                [1.70, 0.62],
+                [1.35, 0.77],
+                [-1.35, 0.77],
+                [-1.73, 0.61],
+            ],
+        },
+        {
+            "shape": "prism",
+            "width": 1.28,
+            "position": [0, 0, 0],
+            "material": "body",
+            "profile": [[-1.02, 0.76], [0.76, 0.76], [0.34, 1.27], [-0.62, 1.27]],
+        },
+        {"shape": "box", "size": [1.01, 1.30, 0.055], "position": [-0.14, 0, 1.285], "material": "body"},
+        {
+            "shape": "box",
+            "size": [0.035, 1.14, 0.48],
+            "position": [0.568, 0, 1.027],
+            "rotation": [0, -math.atan2(0.42, 0.51), 0],
+            "material": "glass",
+        },
+        {
+            "shape": "box",
+            "size": [0.035, 1.14, 0.47],
+            "position": [-0.835, 0, 1.027],
+            "rotation": [0, math.atan2(0.40, 0.51), 0],
+            "material": "glass",
+        },
+        *(
+            {
+                "shape": "prism",
+                "width": 0.035,
+                "position": [0, y, 0],
+                "material": "glass",
+                "profile": [[-0.89, 0.83], [0.60, 0.83], [0.28, 1.20], [-0.56, 1.20]],
+            }
+            for y in (-0.657, 0.657)
+        ),
         *(
             {
                 "shape": "cylinder",
@@ -81,11 +122,44 @@ CAR_MODEL = {
                 "position": [x, y, 0.30],
                 "rotation": [math.pi / 2, 0.0, 0.0],
                 "material": "rubber",
+                "rolling_radius": 0.30,
             }
             for x in (-1.125, 1.125)
             # Keep the outer wheel caps slightly proud of the 1.55 m body.
             # Flush caps are coplanar with its sides and z-fight in Three.
             for y in (-0.710, 0.710)
+        ),
+        *(
+            {
+                "shape": "cylinder",
+                "radius": radius,
+                "length": 0.018,
+                "position": [x, sign * y, 0.30],
+                "rotation": [math.pi / 2, 0, 0],
+                "material": "alloy",
+                "rolling_radius": 0.30,
+            }
+            for x in (-1.125, 1.125)
+            for sign in (-1, 1)
+            for radius, y in ((0.215, 0.815), (0.055, 0.842))
+        ),
+        *(
+            {"shape": "box", "size": size, "position": [x, y, 0.30], "material": "rubber", "rolling_radius": 0.30}
+            for x in (-1.125, 1.125)
+            for y in (-0.83, 0.83)
+            for size in ([0.32, 0.012, 0.075], [0.075, 0.012, 0.32])
+        ),
+        *(
+            {"shape": "box", "size": [0.065, 0.025, 0.40], "position": [-0.18, y, 1.01], "material": "body"}
+            for y in (-0.682, 0.682)
+        ),
+        *(
+            {"shape": "box", "size": [0.20, 0.035, 0.045], "position": [0.25, y, 0.67], "material": "alloy"}
+            for y in (-0.79, 0.79)
+        ),
+        *(
+            {"shape": "box", "size": [0.06, 1.40, 0.12], "position": [x, 0, 0.32], "material": "alloy"}
+            for x in (-1.78, 1.78)
         ),
         {"shape": "box", "size": [0.05, 0.32, 0.18], "position": [1.775, 0.46, 0.52], "material": "headlight"},
         {"shape": "box", "size": [0.05, 0.32, 0.18], "position": [1.775, -0.46, 0.52], "material": "headlight"},
@@ -101,6 +175,7 @@ CAR_MODEL = {
         "rubber": "#202328",
         "headlight": "#fff0a8",
         "taillight": "#d7353f",
+        "alloy": "#b6c1c8",
     },
 }
 
@@ -169,18 +244,18 @@ def _vec(values: list[float]) -> str:
     return " ".join(f"{value:.6g}" for value in values)
 
 
-def _part_xml(part: dict[str, Any], body_color: str) -> str:
+def _part_xml(part: dict[str, Any], body_color: str, name: str, index: int) -> str:
     material = part["material"]
     color = body_color if material == "body" else CAR_MODEL["materials"][material]
-    common = f'pos="{_vec(part["position"])}" rgba="{_rgba(color)}" contype="0" conaffinity="0" group="1"'
+    common = f'name="{name}" pos="{_vec(part["position"])}" rgba="{_rgba(color)}" contype="0" conaffinity="0" group="1"'
+    if "rotation" in part:
+        common += f' euler="{_vec([math.degrees(value) for value in part["rotation"]])}"'
+    if part["shape"] == "prism":
+        return f'      <geom type="mesh" mesh="traffic_profile_{index}" {common}/>'
     if part["shape"] == "box":
         half = [value / 2 for value in part["size"]]
         return f'      <geom type="box" size="{_vec(half)}" {common}/>'
-    rotation = [math.degrees(value) for value in part["rotation"]]
-    return (
-        f'      <geom type="cylinder" size="{part["radius"]:.6g} {part["length"] / 2:.6g}" '
-        f'euler="{_vec(rotation)}" {common}/>'
-    )
+    return f'      <geom type="cylinder" size="{part["radius"]:.6g} {part["length"] / 2:.6g}" {common}/>'
 
 
 def _collider_xml(collider: dict[str, Any]) -> str:
@@ -199,6 +274,7 @@ class TrafficController:
         self.enabled = environment_id in TRAFFIC_ENVIRONMENT_IDS
         self.cars = [Car(lane, lane.initial_position) for lane in LANES] if self.enabled else []
         self._mocap_ids: dict[str, int] = {}
+        self._rolling_geoms: dict[str, list[tuple[int, float, Any]]] = {}
         self._signal_material_ids: dict[str, dict[str, int]] = {}
         self._model: Any | None = None
         self._last_aspects: dict[str, str] | None = None
@@ -211,10 +287,29 @@ class TrafficController:
         bodies = []
         for car in self.cars:
             name = escape(f"traffic_car_{car.lane.id}", quote=True)
-            visuals = "\n".join(_part_xml(part, car.lane.color) for part in CAR_MODEL["parts"])
+            visuals = "\n".join(
+                _part_xml(part, car.lane.color, f"{name}_part_{index}", index)
+                for index, part in enumerate(CAR_MODEL["parts"])
+            )
             colliders = "\n".join(_collider_xml(collider) for collider in CAR_MODEL["colliders"])
             bodies.append(f'    <body name="{name}" mocap="true">\n{visuals}\n{colliders}\n    </body>')
         return "\n".join(bodies)
+
+    def assets_xml(self) -> str:
+        """Tiny convex side-profile extrusions; shared across all four cars.
+
+        MuJoCo builds their visual hull directly from these inline vertices.
+        The browser extrudes the same profiles, with no GLB/OBJ dependency.
+        """
+        if not self.enabled:
+            return ""
+        return "\n".join(
+            f'<mesh name="traffic_profile_{index}" vertex="'
+            + " ".join(_vec([x, sign * part["width"] / 2, z]) for sign in (-1, 1) for x, z in part["profile"])
+            + '"/>'
+            for index, part in enumerate(CAR_MODEL["parts"])
+            if part["shape"] == "prism"
+        )
 
     def configure_robot_spec(self, robot_spec: Any) -> None:
         """Opt robot collisions into the private car category pre-compile.
@@ -243,6 +338,16 @@ class TrafficController:
         }
         if any(mocap_id < 0 for mocap_id in self._mocap_ids.values()):
             raise RuntimeError("traffic car body was not compiled as a MuJoCo mocap body")
+        for car in self.cars:
+            geoms = []
+            for index, part in enumerate(CAR_MODEL["parts"]):
+                if "rolling_radius" in part:
+                    geom_id = model.geom(f"traffic_car_{car.lane.id}_part_{index}").id
+                    geoms.append((geom_id, part["rolling_radius"], model.geom_quat[geom_id].copy()))
+                    # mjSAMEFRAME_NONE: the compiler's body-aligned shortcut
+                    # would otherwise ignore our changing spoke quaternion.
+                    model.geom_sameframe[geom_id] = 0
+            self._rolling_geoms[car.lane.id] = geoms
 
         missing = []
         for group, aspects in SIGNAL_MATERIALS.items():
@@ -452,6 +557,14 @@ class TrafficController:
             data.mocap_pos[mocap_id] = (x, y, 0.0)
             half_yaw = car.lane.yaw / 2
             data.mocap_quat[mocap_id] = (math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw))
+            # Straight lanes: forward distance comes directly from position.
+            # No independent clock, accumulated drift, joints or wheel forces.
+            # Rotate only visual geoms; the two native collision boxes stay put.
+            for geom_id, radius, base in self._rolling_geoms[car.lane.id]:
+                half_roll = car.lane.direction * car.position / radius / 2
+                c, s = math.cos(half_roll), math.sin(half_roll)
+                w, x, y, z = base
+                self._model.geom_quat[geom_id] = (c * w - s * y, c * x + s * z, c * y + s * w, c * z - s * x)
 
     def _apply_signal_materials(self, aspects: dict[str, str]) -> None:
         if self._model is None or aspects == self._last_aspects:
