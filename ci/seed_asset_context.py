@@ -42,8 +42,9 @@ RAW_FILES = {
         f"{_RAW_RELEASE}/appartement.glb",
         "807ff2613f4b3aaf1fad39645fee19e10cd560296e1a2f59133daa46f8678c38",
     ),
-    # The backrooms pack's one source: build_environment_pack.py derives its
-    # hulls, textured MuJoCo meshes, nav map and viewer copy in-image.
+    # The backrooms pack's one source: decompose_pack.py bakes its hulls and
+    # build_environment_pack.py derives its textured MuJoCo meshes, nav map
+    # and viewer copy, both in-image.
     SIM / "viewer" / "assets" / "backrooms" / "backrooms_vr.glb": (
         f"{_RAW_RELEASE}/backrooms_vr.glb",
         "f8f81dfa8a64a2afe51f0b2f31e6c596fcae196924beedc0f87258344a1ec7bf",
