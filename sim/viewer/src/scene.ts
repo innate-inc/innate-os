@@ -2,6 +2,7 @@
 // the real MARS robot from its ROS URDF. Convention: Z-up, X-forward
 // (REP-103); the URDF loads unrotated, the Y-up glb is rotated on load.
 
+import { KitchenCabinet } from "./cabinet";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -565,6 +566,7 @@ export class SimScene {
     }
     this.layoutGroup = this.hullsGroup = this.hullsPromise = this.layoutBounds = undefined;
     this.environmentGeneration += 1;
+    this.kitchenCabinet = new KitchenCabinet();
     this.robotRoot.visible = false;
     this.spawned = false;
   }
@@ -654,10 +656,13 @@ export class SimScene {
     this.controls.update();
   }
 
+  private kitchenCabinet = new KitchenCabinet();
+
   /** Ready a loaded apartment room for the scene: receive shadows and force
    * FrontSide (the glb ships doubleSided) so walls draw only from inside the
    * room, giving overview cameras the dollhouse-cutaway look. */
   private dressRoom(root: THREE.Object3D): void {
+    this.kitchenCabinet.install(root);
     root.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
         // Does nothing, kept only so this doesn't look like an oversight: the
@@ -910,6 +915,15 @@ export class SimScene {
     this.onCameraModeChange?.(mode);
   }
 
+  focusKitchenCabinet(): void {
+    this.setView("orbit");
+    this.setCameraMode("free");
+    this.cameraTween = undefined;
+    this.camera.position.set(-.8, -2.05, 1.1);
+    this.controls.target.set(-1.5, -.52, .45);
+    this.controls.update();
+  }
+
   private applyControlsEnabled(): void {
     this.controls.enabled = this.activeView === "orbit" && !this.placementMode;
   }
@@ -1049,6 +1063,7 @@ export class SimScene {
    * than left behind at its last pose. */
   setObjectPoses(poses: Record<string, number[]>): void {
     this.props.setPoses(poses);
+    this.kitchenCabinet.setPose(poses);
     this.updateShadowVolume(); // the props moved; the box may need to grow or shrink
   }
 

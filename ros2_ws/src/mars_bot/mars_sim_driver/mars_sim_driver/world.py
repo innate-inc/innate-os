@@ -219,11 +219,17 @@ def build_world_xml(
     texture_max: int | None = None,
     props: "PropRegistry | None" = None,
     spawn_pose: tuple[float, float, float] = (SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG),
+    cabinet_enabled: bool = False,
 ) -> str:
     """The apartment environment MJCF (floor plane + decomposed room hulls,
     optionally the textured visual rooms in their own geom group, plus every
     droppable prop parked off-map -- see props.py).
     texture_max caps the visual textures' resolution (see capped_texture_path)."""
+    from . import cabinet
+
+    cabinet_room = (visual_rooms or {}).get(cabinet.config()["room"]) if cabinet_enabled else None
+    cabinet_mesh = cabinet_room.with_name("cabinet_door.obj") if cabinet_room else None
+    cabinet_bodies = cabinet.bodies_xml(VISUAL_GROUP, bool(cabinet_mesh)) if cabinet_enabled else ""
     prop_assets = props.assets_xml(VISUAL_GROUP) if props else ""
     prop_bodies = props.bodies_xml(VISUAL_GROUP, COLLISION_GROUP) if props else ""
     collision_group = COLLISION_GROUP if visual_rooms else 0
@@ -243,7 +249,7 @@ def build_world_xml(
             )
             i += 1
 
-    visual_mesh_lines = []
+    visual_mesh_lines = [f'    <mesh name="vis_cabinet_door" file="{cabinet_mesh.resolve()}"/>'] if cabinet_mesh else []
     visual_geom_lines = []
     for room, obj_path in (visual_rooms or {}).items():
         png_path = obj_path.with_suffix(".png")
@@ -299,7 +305,7 @@ def build_world_xml(
     <body name="apartment" quat="0.7071068 0.7071068 0 0">
 {chr(10).join(geom_lines)}
 {chr(10).join(visual_geom_lines)}
-    </body>{prop_bodies}{robot_body}
+    </body>{cabinet_bodies}{prop_bodies}{robot_body}
   </worldbody>
 </mujoco>
 """

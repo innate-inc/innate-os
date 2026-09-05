@@ -24,7 +24,9 @@ class JointStates(LegacyMapping):
     velocity: tuple
     """Joint velocities in rad/s."""
     effort: tuple
-    """Joint efforts/loads as published by the servos."""
+    """Signed actuator effort in percent of configured capacity."""
+    received_at: float = 0.0
+    """Local monotonic timestamp when this state was received."""
 
     def of(self, name: str) -> "tuple[float | None, float | None, float | None] | None":
         """(position, velocity, effort) for the named joint, or None if the

@@ -38,6 +38,7 @@ on:
       - sim/ATTRIBUTION.md
       - sim/sandbox/_driver_pkg.py
       - sim/environments/**
+      - sim/viewer/config/**
       - sim/tools/**
       - sim/viewer/tools/**
       - sim/viewer/package*.json

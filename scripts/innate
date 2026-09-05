@@ -12,6 +12,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import zipfile
 from contextlib import contextmanager
 from datetime import datetime
 from difflib import get_close_matches
@@ -1812,6 +1813,122 @@ def _skill_run(skill_ref: str, inputs_json: str, timeout: float | None, server_t
         _shutdown_skill_node(modules, node)
 
 
+def _debug_run_candidates() -> list[tuple[Path, dict]]:
+    root = INNATE_OS_ROOT / "workspace" / "debug_runs" / "skills"
+    candidates = []
+    if not root.is_dir():
+        return candidates
+    for manifest_path in root.glob("*/*/manifest.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        candidates.append((manifest_path.parent, manifest))
+    return sorted(candidates, key=lambda item: float(item[1].get("started_at", 0)), reverse=True)
+
+
+def _find_debug_run(reference: str | None) -> tuple[Path, dict] | None:
+    candidates = _debug_run_candidates()
+    if reference is None:
+        return candidates[0] if candidates else None
+    normalized = reference.replace("-", "_").lower()
+    for directory, manifest in candidates:
+        values = (
+            str(manifest.get("run_id", "")),
+            str(manifest.get("skill_id", "")),
+            str(manifest.get("skill_name", "")),
+            directory.parent.name,
+        )
+        if any(reference == value or normalized == value.replace("-", "_").lower() for value in values):
+            return directory, manifest
+    return None
+
+
+def _export_skill_debug(reference: str | None, output: Path | None) -> Path:
+    found = _find_debug_run(reference)
+    if found is None:
+        label = f" matching '{reference}'" if reference else ""
+        raise click.ClickException(f"No recorded skill debug run{label}")
+    run_dir, manifest = found
+    summary_path = run_dir / "summary.json"
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        summary = {}
+    started = float(manifest.get("started_at", 0))
+    finished = float(summary.get("finished_at", time.time()))
+    run_id = str(manifest.get("run_id", run_dir.name))
+    skill_name = str(manifest.get("skill_name", run_dir.parent.name))
+    destination = output or Path.cwd() / f"{skill_name}-{run_id[:12]}-debug.zip"
+    destination = destination.expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        revision = subprocess.run(
+            ["git", "-C", str(INNATE_OS_ROOT), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        ).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        revision = ""
+
+    journal = ""
+    try:
+        journal = subprocess.run(
+            [
+                "journalctl",
+                "-u",
+                "ros-app.service",
+                "--since",
+                f"@{max(0, started):.3f}",
+                "--until",
+                f"@{finished:.3f}",
+                "--no-pager",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    journal = journal[-4 * 1024 * 1024 :]
+
+    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(run_dir.iterdir()):
+            if path.is_file() and path.resolve() != destination:
+                archive.write(path, f"skill/{path.name}")
+
+        archive.writestr("ros-app.log", journal)
+        archive.writestr(
+            "export_manifest.json",
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "exported_at": time.time(),
+                    "run_id": run_id,
+                    "skill_name": skill_name,
+                    "skill_id": manifest.get("skill_id"),
+                    "git_revision": revision or None,
+                    "journal_included": bool(journal),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+        )
+        archive.writestr(
+            "README.txt",
+            "skill/events.jsonl contains every controller observation and decision.\n"
+            "skill/*.jpg contains the head and wrist camera observations.\n"
+            "ros-app.log is the best-effort service journal for the same time window.\n"
+            "Success is the model's visual assessment; inspect images and motion feedback.\n",
+        )
+    return destination
+
+
 # ---------------------------------------------------------------------------
 # Update business logic
 # ---------------------------------------------------------------------------
@@ -2921,6 +3038,19 @@ def skill_run(args):
 
     skill_ref, inputs_json, timeout, server_timeout = parsed
     sys.exit(_skill_run(skill_ref, inputs_json, timeout, server_timeout))
+
+
+@skill_cli.command("debug-export")
+@click.argument("reference", required=False, metavar="RUN_ID_OR_SKILL")
+@click.option("--output", type=click.Path(path_type=Path), help="Destination .zip path.")
+def skill_debug_export(reference, output):
+    """Export one run's skill decisions, frames, and logs.
+
+    With no reference, exports the newest recorded run. A reference can be a
+    run ID, skill ID, or skill name; a skill reference selects its newest run.
+    """
+    path = _export_skill_debug(reference, output)
+    ok(f"Debug bundle exported to {path}")
 
 
 # -- update -------------------------------------------------------------------

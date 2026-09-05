@@ -101,6 +101,9 @@ workspace/challenges.json
 # Per-skill persistent key-value stores (Skill.storage, skills/types.py).
 workspace/skill_storage/
 
+# Bounded on-robot skill traces (export with `innate skill debug-export`).
+workspace/debug_runs/
+
 # Generated on-robot by the skill catalog (typed physical-skill refs).
 workspace/physical_skills/
 

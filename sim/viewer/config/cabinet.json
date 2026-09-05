@@ -1,0 +1,28 @@
+{
+  "name": "kitchen_cabinet_door",
+  "room": "Sala_Cozinha",
+  "cutMin": [
+    -1.643,
+    0.098,
+    -0.24
+  ],
+  "cutMax": [
+    -1.0507,
+    0.87,
+    0.35
+  ],
+  "hinge": [
+    -1.639,
+    0.102,
+    0.3474
+  ],
+  "width": 0.584,
+  "height": 0.762,
+  "thickness": 0.018,
+  "maxAngle": 100,
+  "handleX": 0.524,
+  "handleHeight": 0.3,
+  "handleLength": 0.12,
+  "handleRadius": 0.008,
+  "handleClearance": 0.04
+}

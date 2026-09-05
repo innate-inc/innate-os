@@ -25,6 +25,7 @@ sim/.venv/
 !ros2_ws/apt-dependencies.hardware.txt
 !ros2_ws/pip-requirements.txt
 !scripts/
+!scripts/innate
 !scripts/update/
 !scripts/update/setup_repos.sh
 !ros2_ws/src/

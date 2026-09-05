@@ -211,6 +211,9 @@ class WorldServer:
             yaw = float(cmd.get("yaw", 0.0))
             with self.lock:
                 ok = self.sim.drop_prop_at(name, x, y, yaw)
+        elif op == "set_cabinet_open":
+            with self.lock:
+                ok = self.sim.set_cabinet_open(cmd["opened"])
         elif op == "place_prop_at_robot":  # at rest, at the prop's own reach offset
             name = str(cmd["name"])
             with self.lock:
@@ -434,6 +437,7 @@ class WorldServer:
                 # structural sag (see core.encoder_positions). The observer
                 # stream below keeps ground truth for viewers.
                 joints = self.sim.encoder_positions()
+                efforts = self.sim.joint_efforts()
                 targets = self.sim.joint_targets()
                 sim_time = float(self.sim.data.time)
                 world_epoch = self.sim.world_epoch
@@ -445,6 +449,7 @@ class WorldServer:
                 "vel": [vx, vy, wz],
                 "joints": joints,
                 "targets": targets,
+                "efforts": efforts,
             }, None
         if op == "cmd_vel":
             with self.lock:

@@ -70,6 +70,7 @@ NON_PACKAGE_DIR_NAMES = frozenset(
         "inputs",
         "skill_lib",
         "skill_storage",
+        "debug_runs",
         "agents",
         "skills",
         # generated TrainedSkill refs (see skills/physical_refs.py) — importable

@@ -1,3 +1,4 @@
+import cabinetSpec from "../config/cabinet.json";
 // SimSession — a drop-in for the webapp's WebRtcSession when the robot is
 // simulated: same state shape and methods, no video pipeline. State comes
 // from the world server's ground-truth observer stream (~75Hz pose+joints),
@@ -294,6 +295,19 @@ export class SimSession {
   }
 
   /** Send every prop back off-map (stage "clear" chip). */
+  get hasKitchenCabinet(): boolean {
+    const last = this.#samples[this.#samples.length - 1];
+    return last !== undefined && cabinetSpec.name in last.objects;
+  }
+
+  showOrbitCamera(): void {
+    this.setPrimaryCamera(this.#roster.indexOf("orbit"), "orbit");
+  }
+
+  setCabinetOpen(opened: boolean): void {
+    this.#controller?.send({op: "set_cabinet_open", opened});
+  }
+
   removeAllProps(): void {
     this.#controller?.send({ op: "remove_all_props" });
   }
@@ -348,7 +362,7 @@ export class SimSession {
    * drop. False until the first state arrives. */
   get objectsPresent(): boolean {
     const last = this.#samples[this.#samples.length - 1];
-    return last !== undefined && Object.keys(last.objects).length > 0;
+    return last !== undefined && this.#props.some(prop => prop.name in last.objects);
   }
 
   /** Subscribe to the challenge judge's state (roster + active run); fires

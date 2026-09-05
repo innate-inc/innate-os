@@ -120,6 +120,7 @@ COPY --from=raw /raw/appartement.glb ./viewer/public/models/appartement.glb
 # only sandbox file the pipeline imports.
 COPY sim/sandbox/_driver_pkg.py ./sandbox/_driver_pkg.py
 COPY sim/environments ./environments
+COPY sim/viewer/config/cabinet.json ./viewer/config/cabinet.json
 COPY ros2_ws/src/mars_bot/mars_sim_driver ../ros2_ws/src/mars_bot/mars_sim_driver
 COPY ros2_ws/src/mars_bot/mars_sim ../ros2_ws/src/mars_bot/mars_sim
 # Sampled here too: the nav-map export compiles the ~168 MB world model.
@@ -137,6 +138,7 @@ RUN uv run tools/build_environment_pack.py finish backrooms viewer/assets/backro
 # derivations; shipping them would nearly double the image.
 COPY sim/ATTRIBUTION.md ./assets/ATTRIBUTION.md
 RUN rm -rf assets/.model_cache \
+ && find assets -type d -name .cabinet -prune -exec rm -rf {} + \
  && find assets -name '*.cap*.png' -delete \
  && find assets -name '*.log' -delete
 

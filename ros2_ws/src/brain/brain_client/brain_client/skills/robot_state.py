@@ -67,6 +67,7 @@ class RobotStateProvider:
         self.last_keepout_map = None
         self.last_head_position = None
         self.last_joint_states = None
+        self.last_joint_states_received_at = 0.0
         self.last_battery = None
         self.last_amcl_pose = None
         self.last_scan = None
@@ -180,6 +181,7 @@ class RobotStateProvider:
         self.last_odom = None
         self.last_head_position = None
         self.last_joint_states = None
+        self.last_joint_states_received_at = 0.0
         self.last_battery = None
         self.last_scan = None
         self._lidar_cache = None
@@ -206,6 +208,7 @@ class RobotStateProvider:
     def _on_joint_states(self, msg: JointState) -> None:
         if self._active:
             self.last_joint_states = msg
+            self.last_joint_states_received_at = time.monotonic()
 
     def _on_battery(self, msg: BatteryState) -> None:
         if self._active:
@@ -399,6 +402,7 @@ class RobotStateProvider:
             position=tuple(msg.position),
             velocity=tuple(msg.velocity),
             effort=tuple(msg.effort),
+            received_at=self.last_joint_states_received_at,
         )
 
     def current_battery(self) -> Battery | None:

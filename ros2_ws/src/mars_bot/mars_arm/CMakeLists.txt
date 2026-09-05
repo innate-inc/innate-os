@@ -103,9 +103,13 @@ install(DIRECTORY
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  find_package(ament_cmake_gtest REQUIRED)
   set(ament_cmake_copyright_FOUND TRUE)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  ament_add_gtest(test_effort_conversion test/test_effort_conversion.cpp)
+  target_include_directories(test_effort_conversion PRIVATE include)
 endif()
 
 ament_package()

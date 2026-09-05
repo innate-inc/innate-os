@@ -601,24 +601,28 @@ class VirtualMarsNode(Node):
         try:
             with self._lock:
                 positions = self.sim.joint_positions()
+                efforts = self.sim.joint_efforts()
         except (OSError, RuntimeError):
             return  # world server gone; _publish_odom carries the warning
         msg = JointState()
         msg.header.stamp = self._stamp()
         msg.name = [*ARM_JOINTS, "joint_head"]  # same 7 as the real arm node
         msg.position = [positions[n] for n in msg.name]
+        msg.effort = [efforts[n] for n in msg.name] if all(n in efforts for n in msg.name) else []
         self._joint_states_pub.publish(msg)
 
     def _publish_arm_state(self) -> None:
         try:
             with self._lock:
                 positions = self.sim.joint_positions()
+                efforts = self.sim.joint_efforts()
         except (OSError, RuntimeError):
             return
         msg = JointState()
         msg.header.stamp = self._stamp()
         msg.name = list(ARM_JOINTS)
         msg.position = [positions[n] for n in ARM_JOINTS]
+        msg.effort = [efforts[n] for n in ARM_JOINTS] if all(n in efforts for n in ARM_JOINTS) else []
         self._arm_state_pub.publish(msg)
 
     def _publish_active_streams(self) -> None:

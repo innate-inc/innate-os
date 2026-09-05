@@ -20,7 +20,7 @@ import mujoco
 import numpy as np
 from PIL import Image
 
-from . import world
+from . import cabinet, world
 from .constants import (
     CAMERA_FX,
     CAMERA_FY,
@@ -214,6 +214,10 @@ class VirtualMars:
         self._spawn = self.environment.spawn
         visual_rooms = world.find_visual_rooms(visual_dir) if visual_dir.is_dir() else {}
 
+        self._has_cabinet = False
+        if self.environment.id == "apartment":
+            rooms, visual_rooms, self._has_cabinet = cabinet.carve_assets(rooms, visual_rooms)
+
         # Droppable props: sidecars from the tracked source dir plus any the
         # asset bundle shipped, each parked off-map until something places it.
         self.props = PropRegistry.load([world.repo_root() / "sim" / "props", ASSETS_DIR / "props"])
@@ -224,6 +228,7 @@ class VirtualMars:
             texture_max=_texture_cap(self._render_w),
             props=self.props,
             spawn_pose=self._spawn,
+            cabinet_enabled=self._has_cabinet,
         )
         # Lidar rays hit only the textured visual meshes (true surfaces, like
         # a real lidar) when available -- without them, fall back to all
@@ -339,6 +344,7 @@ class VirtualMars:
         release_freed_heap()
 
     def reset(self) -> None:
+        self._cabinet_target = None
         self.world_epoch += 1
         mujoco.mj_resetData(self.model, self.data)
         spawn_x, spawn_y, spawn_yaw_deg = self._spawn
@@ -394,8 +400,28 @@ class VirtualMars:
                 self.reset()
                 return
 
+    def set_cabinet_open(self, opened: bool) -> bool:
+        """Scene setup only: move the passive hinge briefly, then release it."""
+        if not isinstance(opened, bool):
+            raise ValueError("opened must be a boolean")
+        if not self._has_cabinet:
+            return False
+        self._cabinet_target = (math.pi / 2 if opened else 0.0, self.data.time + 8.0)
+        return True
+
     def _apply_control(self) -> None:
         d = self.data
+        if self._has_cabinet:
+            joint = self.model.joint("cabinet_hinge")
+            q, v = joint.qposadr[0], joint.dofadr[0]
+            d.qfrc_applied[v] = 0.0
+            if self._cabinet_target is not None:
+                target, deadline = self._cabinet_target
+                error = target - d.qpos[q]
+                if d.time >= deadline or (abs(error) < 0.02 and abs(d.qvel[v]) < 0.03):
+                    self._cabinet_target = None
+                else:
+                    d.qfrc_applied[v] = float(np.clip(8 * error - 1.3 * d.qvel[v], -0.8, 0.8))
         dof_x, dof_y, dof_yaw = (self._base[k][1] for k in ("x", "y", "yaw"))
 
         lin = math.hypot(d.qvel[dof_x], d.qvel[dof_y])
@@ -774,6 +800,17 @@ class VirtualMars:
     def joint_positions(self) -> dict[str, float]:
         return {name: float(self.data.qpos[qadr]) for name, (qadr, _d, _t) in self._joints.items()}
 
+    def joint_efforts(self) -> dict[str, float]:
+        """Signed servo load as percent of torque limit, matching /mars/arm/state.
+
+        Uses applied motor torque, including gravity/load, rather than external
+        contact force alone. This is simulated load, not calibrated motor current.
+        """
+        return {
+            name: float(100.0 * self.data.qfrc_applied[dadr] / self._servo[dadr][1])
+            for name, (_q, dadr, _t) in self._joints.items()
+        }
+
     def encoder_positions(self) -> dict[str, float]:
         """What the real servo encoders would read: link angle plus the
         structural deflection due to gravity. The driver publishes THIS on /joint_states --
@@ -787,9 +824,11 @@ class VirtualMars:
         return out
 
     def object_poses(self) -> dict[str, list[float]]:
-        """[x, y, z, qw, qx, qy, qz] per prop in world frame. Props parked off-map
-        are omitted."""
-        return self.props.poses(self.data)
+        """World poses for active props and fixed articulations.
+
+        Values are [x, y, z, qw, qx, qy, qz]; parked props are omitted.
+        """
+        return {**self.props.poses(self.data), **(cabinet.pose(self.model, self.data) if self._has_cabinet else {})}
 
     def object_centers(self) -> dict[str, tuple[float, float]]:
         """xy of each out prop's visual CENTRE (props.py center_offset), which

@@ -56,6 +56,18 @@ struct JointConfig {
     bool head_direction_reversed = false;
 };
 
+// Normalize addr-126 feedback to one skill-facing unit. x430 servos report
+// signed load in 0.1% units; x330 servos report signed current in mA. For an
+// x330, current_limit is populated during config loading even when omitted
+// from YAML, so its configured current capacity is the meaningful 100% mark.
+inline double effortPercent(int raw_feedback, const JointConfig& config) {
+    if (!isX330(config.motor_type)) {
+        return static_cast<double>(raw_feedback) / 10.0;
+    }
+    const int capacity = config.current_limit > 0 ? config.current_limit : kX330MaxCurrentLimit;
+    return 100.0 * static_cast<double>(raw_feedback) / static_cast<double>(capacity);
+}
+
 // Gain profile: 5 PID+FF values per joint
 struct GainProfile {
     int kp = 0, ki = 0, kd = 0, ff1 = 0, ff2 = 0;

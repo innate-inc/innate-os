@@ -153,6 +153,7 @@ ASSETS_IMAGE_INPUT_FILES = (
 # in below CoACD: a driver edit re-runs the nav map (minutes), not the bake.
 ASSETS_IMAGE_PATHSPECS = (
     "sim/environments",
+    "sim/viewer/config/cabinet.json",
     "sim/tools",
     "sim/viewer/tools",
     "ros2_ws/src/mars_bot/mars_sim_driver",
@@ -218,7 +219,7 @@ LEGACY_SHARED_CONTAINER = "innate-dev"
 LEGACY_SHARED_PROJECT = "innate-os"
 LEGACY_CLOUD_AGENT_CONTAINER = "innate-cloud-agent"
 OS_CONTAINER_TMUX_CMD = "./scripts/launch_sim_in_tmux.zsh --detach"
-SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY)
+SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY, "OPENAI_API_KEY")
 LOG_TARGETS = {
     "bootstrap": BOOTSTRAP_LOG_PATH,
     "compose": COMPOSE_LOG_PATH,
