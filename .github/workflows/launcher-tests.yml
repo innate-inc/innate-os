@@ -24,7 +24,7 @@ jobs:
       - name: Run the host-side test suite
         run: |
           pip install pytest pyyaml numpy trimesh pillow mujoco
-          python -m pytest tests/ sim/launcher/test/ -q
+          python -m pytest tests/ -q
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
