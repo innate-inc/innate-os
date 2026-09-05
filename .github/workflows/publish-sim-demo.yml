@@ -66,10 +66,12 @@ jobs:
           echo "viewer=$(resolve viewer)" >> "$GITHUB_OUTPUT"
 
       - name: Submit Cloud Build
+        id: build
         shell: bash
         run: |
           set -euo pipefail
           short_sha="$(git rev-parse --short HEAD)"
+          echo "tag=sha-${short_sha}" >> "$GITHUB_OUTPUT"
           # Only main moves `latest`.
           latest_tag=""
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
@@ -85,3 +87,31 @@ jobs:
             --substitutions="_IMAGE_TAG=sha-${short_sha},_LATEST_TAG=${latest_tag},_ASSETS_IMAGE=${{ steps.tags.outputs.assets }},_VIEWER_IMAGE=${{ steps.tags.outputs.viewer }},_GHCR_USERNAME_SECRET=${{ vars.GHCR_USERNAME_SECRET }},_GHCR_TOKEN_SECRET=${{ vars.GHCR_TOKEN_SECRET }}"
 
           echo "Published sha-${short_sha}${latest_tag:+ and }${latest_tag}" >> "$GITHUB_STEP_SUMMARY"
+
+      # Staging always hands out the newest image; production is promoted by
+      # pasting the same tag into its admin page. Ready sessions were built on
+      # the previous image, so they are retired and the pool rebuilds them.
+      # Where staging is and how to log in are both secrets: a clone of this
+      # repo has neither, and the step simply does nothing there.
+      - name: Point staging at this image
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          STAGING: ${{ secrets.SIM_STAGING_URL }}
+          ADMIN_TOKEN: ${{ secrets.SIM_STAGING_ADMIN_TOKEN }}
+          IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/sim/innate-os-sim-demo:${{ steps.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$STAGING" ] || [ -z "$ADMIN_TOKEN" ]; then
+            echo "::notice::SIM_STAGING_URL / SIM_STAGING_ADMIN_TOKEN not set; staging left as is"; exit 0
+          fi
+          jar="$(mktemp)"
+          curl -fsS -o /dev/null -c "$jar" --data-urlencode "token=${ADMIN_TOKEN}" "${STAGING}/admin/login"
+          curl -fsS -o /dev/null -b "$jar" -H 'content-type: application/json' \
+            -d "{\"simImage\":\"${IMAGE}\"}" "${STAGING}/admin/settings"
+          state="$(curl -fsS -b "$jar" "${STAGING}/admin/state")"
+          ids="$(jq -r '.sessions[] | select(.state == "ready") | .machineId' <<< "$state")"
+          for id in $ids; do
+            curl -fsS -o /dev/null -b "$jar" -X POST -H 'content-length: 0' "${STAGING}/admin/session/${id}/destroy"
+          done
+          echo "Staging now hands out ${{ steps.build.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
