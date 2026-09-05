@@ -157,8 +157,8 @@ def test_detection_exports_exact_camera_frame(tmp_path, monkeypatch):
     image = type("Frame", (), {"jpeg": b"exact-jpeg"})()
 
     assert skill._detect_box(image, "head") == pytest.approx((288, 96, 64, 288))
-    assert request["reasoning_effort"] == "minimal"
-    assert request["model"] == "gemini-3.6-flash"
+    assert request["reasoning_effort"] == "low"
+    assert request["model"] == "gemini-3.8-flash"
     assert (skill.debug_directory / "00_head_detection.jpg").read_bytes() == b"exact-jpeg"
 
 
@@ -224,8 +224,8 @@ def test_wrist_decision_retries_malformed_content_and_logs_raw_responses(tmp_pat
     assert "TOP END of the vertical handle is just visible" in requests[0][1]
     assert "assume the gripper is too low and choose UP" in requests[0][1]
     assert "Do not ABORT merely because the gripper temporarily occludes the handle" in requests[0][1]
-    assert requests[0][2]["reasoning_effort"] == "minimal"
-    assert requests[0][2]["model"] == "gemini-3.6-flash"
+    assert requests[0][2]["reasoning_effort"] == "low"
+    assert requests[0][2]["model"] == "gemini-3.8-flash"
     assert (skill.debug_directory / "00_wrist_action_3.jpg").read_bytes() == b"current"
     events = [json.loads(line) for line in (skill.debug_directory / "events.jsonl").read_text().splitlines()]
     raw = [event for event in events if event["event"] == "wrist_action_response"]
@@ -265,13 +265,13 @@ def test_gemini_image_request_forwards_reasoning_effort():
             "jpeg",
             "find it",
             retries=1,
-            reasoning_effort="minimal",
-            model="gemini-3.6-flash",
+            reasoning_effort="low",
+            model="gemini-3.8-flash",
         )
         == "[]"
     )
-    assert captured["reasoning_effort"] == "minimal"
-    assert captured["model"] == "gemini-3.6-flash"
+    assert captured["reasoning_effort"] == "low"
+    assert captured["model"] == "gemini-3.8-flash"
 
 
 def test_base_accepts_sub_motion_threshold_range_error(monkeypatch):
