@@ -800,6 +800,17 @@ class VirtualMars:
     def joint_positions(self) -> dict[str, float]:
         return {name: float(self.data.qpos[qadr]) for name, (qadr, _d, _t) in self._joints.items()}
 
+    def joint_efforts(self) -> dict[str, float]:
+        """Signed servo load as percent of torque limit, matching /mars/arm/state.
+
+        Uses applied motor torque, including gravity/load, rather than external
+        contact force alone. This is simulated load, not calibrated motor current.
+        """
+        return {
+            name: float(100.0 * self.data.qfrc_applied[dadr] / self._servo[dadr][1])
+            for name, (_q, dadr, _t) in self._joints.items()
+        }
+
     def encoder_positions(self) -> dict[str, float]:
         """What the real servo encoders would read: link angle plus the
         structural deflection due to gravity. The driver publishes THIS on /joint_states --

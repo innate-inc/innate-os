@@ -144,6 +144,10 @@ class RemoteWorld:
     def velocity(self) -> tuple[float, float, float]:
         return tuple(self._fresh_state()["vel"])
 
+    def joint_efforts(self) -> dict[str, float]:
+        # Older world servers must remain explicitly unavailable, never zero-load.
+        return dict(self._fresh_state().get("efforts", {}))
+
     def joint_positions(self) -> dict[str, float]:
         return dict(self._fresh_state()["joints"])
 
