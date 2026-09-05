@@ -90,9 +90,11 @@ FROM --platform=$BUILDPLATFORM toolchain AS decomp
 # Off by default so a local build stays readable; CI sets it, because an
 # OOM-killed bake leaves nothing behind to explain itself.
 ARG SIM_RESOURCE_LOG=0
-# The only copy of the pipeline scripts, so editing a tool re-bakes CoACD --
-# and the reason nothing else may land above this line.
-COPY sim/tools ./tools
+# Only the apartment's own scripts: everything copied here is in the cache key
+# of the 17-minute bake below, so the pack tool and the export scripts enter
+# in the layers that run them instead.
+COPY sim/tools/split_apartment_obj.py sim/tools/decompose_rooms.py sim/tools/bake_all_rooms.sh \
+     sim/tools/decompose_objects.py sim/tools/log_resources.sh ./tools/
 COPY --from=raw /raw/apartment.obj ./viewer/assets/apartment_obj/apartment.obj
 COPY sim/assets ./assets
 # The sampler is backgrounded and never reaped: the RUN's shell exiting takes
@@ -103,8 +105,10 @@ RUN set -eux; \
     ./tools/bake_all_rooms.sh; \
     uv run tools/decompose_objects.py
 # Further packs bake in their own layers below the apartment's, so a new pack
-# never invalidates the 17-minute bake above. The backrooms are boxy; 10 cm
-# hulls follow their walls as closely as 5 cm ones and bake in half the time.
+# or a pack-tool edit never invalidates the 17-minute bake above. The backrooms
+# are boxy; 10 cm hulls follow their walls as closely as 5 cm ones and bake in
+# half the time.
+COPY sim/tools/build_environment_pack.py sim/tools/build_viewer_physics.py ./tools/
 COPY --from=raw /raw/backrooms_vr.glb ./viewer/assets/backrooms/backrooms_vr.glb
 RUN uv run tools/build_environment_pack.py decompose backrooms viewer/assets/backrooms/backrooms_vr.glb --threshold 0.1
 
@@ -112,6 +116,7 @@ RUN uv run tools/build_environment_pack.py decompose backrooms viewer/assets/bac
 # Light next to CoACD: GLB -> per-room OBJ+PNG and the nav map.
 FROM decomp AS derived
 ARG SIM_RESOURCE_LOG=0
+COPY sim/tools ./tools
 COPY --from=raw /raw/appartement.glb ./viewer/public/models/appartement.glb
 # HERE, not in a parent: export_nav_map.py instantiates VirtualMars() and
 # rasterises its lidar, so the driver package and robot URDF are inputs to
