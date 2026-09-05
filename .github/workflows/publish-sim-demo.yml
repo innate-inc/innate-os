@@ -104,7 +104,9 @@ jobs:
           curl -fsS -o /dev/null -c "$jar" --data-urlencode "token=${ADMIN_TOKEN}" "${STAGING}/admin/login"
           curl -fsS -o /dev/null -b "$jar" -H 'content-type: application/json' \
             -d "{\"simImage\":\"${IMAGE}\"}" "${STAGING}/admin/settings"
-          for id in $(curl -fsS -b "$jar" "${STAGING}/admin/state" | jq -r '.sessions[] | select(.state == "ready") | .machineId'); do
+          state="$(curl -fsS -b "$jar" "${STAGING}/admin/state")"
+          ids="$(jq -r '.sessions[] | select(.state == "ready") | .machineId' <<< "$state")"
+          for id in $ids; do
             curl -fsS -o /dev/null -b "$jar" -X POST -H 'content-length: 0' "${STAGING}/admin/session/${id}/destroy"
           done
           echo "Staging now hands out ${{ steps.build.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
