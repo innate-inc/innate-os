@@ -1018,3 +1018,65 @@ def test_forward_uses_base_when_level_reach_is_shorter_than_x_threshold(monkeypa
     skill._wrist_align(tuple(skill.manipulation.position), restage=False)
     assert base_steps == [0]
     assert not skill.manipulation.moves
+
+
+def test_up_repositions_base_for_recorded_level_target(monkeypatch):
+    from workspace.innate_skills.arm.level_handle_ik import LevelHandleIK
+
+    planner = LevelHandleIK()
+    monkeypatch.setattr(OpenDoorWithVision, "_level_ik", planner)
+    skill = OpenDoorWithVision(logging.getLogger("up-reposition"))
+    skill.manipulation = _ActionManipulation()
+    skill.manipulation.position[:] = [0.320, -0.007, 0.308]
+    skill.joint_states = SimpleNamespace(position=planner.solve(skill.manipulation.position, [0.0] * 5))
+    base = [1.0, 2.0, math.radians(81.4)]
+    start_base = tuple(base)
+    target = (0.320, -0.007, 0.328)
+    expected_xy = skill._gripper_odom_xy(target, start_base)
+    moves, drives = [], []
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: tuple(base))
+
+    def move(target, _duration):
+        skill.joint_states.position = planner.solve(target, skill.joint_states.position)
+        moves.append(target)
+        skill.manipulation.position[:] = target
+        return skill.manipulation.pose
+
+    monkeypatch.setattr(skill, "_move_wrist", move)
+
+    def drive(distance):
+        drives.append(distance)
+        base[0] += (distance - 0.002) * math.cos(base[2])
+        base[1] += (distance - 0.002) * math.sin(base[2])
+        base[2] += 0.001  # Rebase using actual odometry, not the commanded shift.
+
+    monkeypatch.setattr(skill, "_drive", drive)
+    skill.wrist_image = object()
+    monkeypatch.setattr(skill, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(skill, "_next_image", lambda *_args: object())
+    decisions = iter([("UP", None, "align"), ("GRASP", None, "aligned")])
+    monkeypatch.setattr(skill, "_request_wrist_decision", lambda *a, **k: next(decisions))
+    result = skill._wrist_align(tuple(skill.manipulation.position), restage=False)
+    assert len(drives) == 1 and drives[0] == pytest.approx(0.04)
+    assert len(moves) == 2
+    assert moves[0] == pytest.approx((0.280, -0.007, 0.308))
+    assert result[2] == pytest.approx(0.328)
+    assert skill._gripper_odom_xy(result, base) == pytest.approx(expected_xy)
+    # The next UP cannot silently extend X back to the old staging distance.
+    assert module._wrist_action_pose(result, "UP")[0] == pytest.approx(result[0])
+    assert module._wrist_action_pose(result, "BACK")[0] < result[0]
+
+
+def test_impossible_up_reposition_does_not_move(monkeypatch):
+    skill = OpenDoorWithVision(logging.getLogger("impossible-reposition"))
+    skill.manipulation = _ActionManipulation()
+    monkeypatch.setattr(skill, "_odom_xyt", lambda: (0.0, 0.0, 0.0))
+
+    def reject(*_args):
+        raise ValueError("unreachable")
+
+    monkeypatch.setattr(OpenDoorWithVision, "_level_ik", SimpleNamespace(solve=reject))
+    monkeypatch.setattr(skill, "_drive", lambda *_args: pytest.fail("must not move base"))
+    with pytest.raises(SkillFailed, match="Cannot reach this level target"):
+        skill._reposition_for_level_target((0.32, 0.0, 0.9), 0)
+    assert not skill.manipulation.moves

@@ -102,13 +102,15 @@ def _wrist_action_pose(position, action):
         z += _WRIST_ACTION_STEP_M
     elif action == "DOWN":
         z -= _WRIST_ACTION_STEP_M
-    return (
-        max(_WRIST_STAGING_X_M, min(_MAX_EE_X_M, x)),
-        max(-0.10, min(0.10, y)),
-        # Handle-search height is not the arm workspace ceiling. move_to
-        # checks IK before sending every bounded wrist step to the servos.
-        max(_MIN_HANDLE_Z_M, z),
-    )
+    # Clamp only the axis being changed. Base repositioning can put X below
+    # the initial staging distance; an UP/BACK action must not push it out again.
+    if action == "FORWARD":
+        x = min(_MAX_EE_X_M, x)
+    if action in ("LEFT", "RIGHT"):
+        y = max(-0.10, min(0.10, y))
+    if action == "DOWN":
+        z = max(_MIN_HANDLE_Z_M, z)
+    return x, y, z
 
 
 def _left_push_offsets(distance_m):
@@ -474,6 +476,49 @@ class OpenDoorWithVision(Skill):
         c, sn = math.cos(base[2]), math.sin(base[2])
         return (base[0] + c * position[0] - sn * position[1], base[1] + sn * position[0] + c * position[1])
 
+    def _reposition_for_level_target(self, target, step):
+        """Bring the base closer while retaining the requested room-frame target."""
+        before = tuple(self.manipulation.pose.position)
+        base = self._odom_xyt()
+        start_xy = self._gripper_odom_xy(before, base)
+        target_world = (*self._gripper_odom_xy(target, base), target[2])
+        current = tuple(self.joint_states.position[:5])
+        retreat = None
+        for distance in (0.02, 0.04, 0.06, 0.08):
+            candidate = (before[0] - distance, before[1], before[2])
+            adjusted = (target[0] - distance, target[1], target[2])
+            try:
+                seed = self._level_ik.solve(candidate, current)
+                self._level_ik.solve(adjusted, seed)
+                # Leave room for the small allowed base undershoot.
+                self._level_ik.solve((adjusted[0] + 0.005, adjusted[1], adjusted[2]), seed)
+            except ValueError:
+                continue
+            retreat = candidate
+            break
+        if retreat is None:
+            self.fail("Cannot reach this level target with a base reposition of up to 8 cm")
+        self._log_wrist_motion("target", step, "REPOSITION_RETRACT", before, retreat)
+        settled = self._move_wrist(retreat, 0.8)
+        after_xy = self._gripper_odom_xy(settled.position, self._odom_xyt())
+        travel = (start_xy[0] - after_xy[0]) * math.cos(base[2]) + (start_xy[1] - after_xy[1]) * math.sin(base[2])
+        if not 0.0 < travel <= 0.09:
+            self.fail(f"Unexpected measured reposition retraction {travel:+.3f}m")
+        self.logger.info(f"[handle step={step}] bring base closer {travel:.3f}m; preserve room target {target_world}")
+        self._drive(travel)
+        adjusted = odom_point_to_base(target_world, self._odom_xyt())
+        self._log_wrist_motion("target", step, "REPOSITION_TARGET", self.manipulation.pose.position, adjusted)
+        self._move_wrist(adjusted, 0.5)
+        self._log_wrist_motion("measured", step, "REPOSITION_TARGET", retreat, adjusted)
+        self.debug_event(
+            "level_base_reposition",
+            step=step,
+            target_world=list(target_world),
+            adjusted_target=list(adjusted),
+            base_advance_m=travel,
+        )
+        return adjusted
+
     def _advance_with_base(self, step):
         before = tuple(self.manipulation.pose.position)
         base = self._odom_xyt()
@@ -605,16 +650,18 @@ class OpenDoorWithVision(Skill):
             if all(abs(next_pose[index] - commanded_pose[index]) < 1e-6 for index in range(3)):
                 self.fail(f"Wrist VLM requested {action}, but that motion is at a safety limit")
             self.check_cancelled()
-            if action == "FORWARD":
-                try:
-                    self._level_ik.solve(next_pose, tuple(self.joint_states.position[:5]))
-                except ValueError:
-                    # Level reach depends on height, not a fixed X threshold.
-                    # Advance the base from the last measured, level pose.
+            try:
+                self._level_ik.solve(next_pose, tuple(self.joint_states.position[:5]))
+            except ValueError:
+                if action == "FORWARD":
                     commanded_pose = self._advance_with_base(step)
-                    previous_image = image
-                    previous_action = action
-                    continue
+                elif action == "UP":
+                    commanded_pose = self._reposition_for_level_target(next_pose, step)
+                else:
+                    self.fail(f"No level solution for {action} target {next_pose}")
+                previous_image = image
+                previous_action = action
+                continue
             self._log_wrist_motion("target", step, action, commanded_pose, next_pose)
             settled = self._move_wrist(next_pose, 0.5)
             self._log_wrist_motion("measured", step, action, commanded_pose, next_pose)
