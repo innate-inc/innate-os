@@ -1096,7 +1096,7 @@ function skillTypeMeta(skill) {
   }
 }
 
-// Small, monochrome symbols shared by rows and their legend. Only static SVG
+// Small category symbols shared by rows and their legend. Only static SVG
 // paths enter innerHTML; roster text is assigned through DOM attributes.
 /** @type {Record<string, string>} */
 const TYPE_ICON_PATHS = {
@@ -1110,7 +1110,7 @@ const TYPE_ICON_PATHS = {
 /** @param {string} type @param {string} label */
 function buildTypeIcon(type, label) {
   const icon = document.createElement("span");
-  icon.className = "skills-pop-type-icon" + (type === "broken" ? " broken" : "");
+  icon.className = `skills-pop-type-icon ${type}`;
   icon.title = label;
   icon.setAttribute("role", "img");
   icon.setAttribute("aria-label", label);

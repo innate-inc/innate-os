@@ -23,9 +23,9 @@ body {
   --danger: #d96a5a;
   --blue: #401ffb;              /* Innate brand blue — logo backdrop */
   --rail-mark-h: 52px;          /* wordmark block; on phones every page starts below it */
-  --type-learned: #5fb8a3;      /* skill-type dot: trained ACT policy */
-  --type-replay: #6b93d6;       /* skill-type dot: recorded trajectory */
-  --type-digital: #a389d4;      /* skill-type dot: code/SDK skill */
+  --type-learned: #5fb8a3;      /* skill-type icon: trained ACT policy */
+  --type-replay: #6b93d6;       /* skill-type icon: recorded trajectory */
+  --type-digital: #a389d4;      /* skill-type icon: code/SDK skill */
   --eval: #b58ce6;              /* evaluation identity — policy rollouts, never training data */
   --eval-dim: rgb(181 140 230 / 40%);
   --eval-faint: rgb(181 140 230 / 12%);
@@ -6151,13 +6151,25 @@ select.episodes-tool {
   text-align: left;
 }
 
-/* Category symbols share a neutral color; their shapes carry the meaning. */
+/* Category symbols retain the familiar type colors alongside distinct shapes. */
 .skills-pop-type-icon {
   display: inline-flex;
   flex: 0 0 16px;
   width: 16px;
   height: 16px;
   color: var(--muted);
+}
+
+.skills-pop-type-icon.learned {
+  color: var(--type-learned);
+}
+
+.skills-pop-type-icon.replay {
+  color: var(--type-replay);
+}
+
+.skills-pop-type-icon.digital {
+  color: var(--type-digital);
 }
 
 .skills-pop-type-icon svg {

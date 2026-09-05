@@ -46,8 +46,9 @@ document.querySelector('#test').onclick = (event) => {
       assert(icon(id).innerHTML === legends[i].innerHTML, `${id}: legend matches`);
       assert(icon(id).getAttribute('aria-label').endsWith('skill'), `${id}: accessible category`);
       assert(icon(id).getBoundingClientRect().width === 16, `${id}: compact size`);
-      assert(getComputedStyle(icon(id)).color === getComputedStyle(icon('pick_cup')).color, 'monochrome categories');
+      assert(getComputedStyle(icon(id)).color === getComputedStyle(legends[i]).color, 'legend color matches category');
     });
+    assert(new Set(['pick_cup', 'wave', 'say_hello'].map(id => getComputedStyle(icon(id)).color)).size === 3, 'distinct category colors');
     assert(icon('home_pose').innerHTML === icon('pick_cup').innerHTML, 'poses use learned icon');
     assert(icon('custom_skill').querySelector('svg'), 'unknown type fallback');
     assert(document.querySelector('.skills-pop-type-icon.broken').closest('button').disabled, 'failed load cannot run');
