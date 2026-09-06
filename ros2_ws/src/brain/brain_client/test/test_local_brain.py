@@ -1581,6 +1581,107 @@ def test_conversation_capped_step_reports_unfinished_approach(agent_factory, cal
     assert 1.5 < started[1][2]["x"] < 1.7
 
 
+@pytest.mark.parametrize("existing_notes", [0, 2])
+@pytest.mark.parametrize("running", [False, True])
+def test_household_confirmation_uses_saved_notes_in_next_provider_turn(
+    agent_factory, tmp_path, monkeypatch, existing_notes, running
+):
+    # Script provider decisions, but exercise the real prompt, dispatch, durable
+    # notebook and completion event. The full simulator pilot checks model choice.
+    pytest.importorskip("rclpy")
+    from pathlib import Path
+
+    from brain_client.skills.registry import SkillRegistry
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[5] / "workspace"))
+    from innate_agents.household_orders_agent import HouseholdOrdersAgent
+    from innate_skills.mission_notes import MissionNotes
+    from innate_skills.mission_run import start_run
+
+    monkeypatch.setenv("INNATE_OS_ROOT", str(tmp_path))
+    start_run("household_orders_agent")
+    notes = MissionNotes(None)
+    exact = {
+        "resident-001": json.dumps({"name": "Alex", "confirmed_order": "Chipotle bowl; no cheese"}),
+        "resident-002": json.dumps({"name": "Casey", "confirmed_order": "Shake Shack fries"}),
+        "resident-003": json.dumps({"name": "Blake", "confirmed_order": "Sweetgreen bowl; dressing on side"}),
+    }
+    for key in list(exact)[:existing_notes]:
+        notes.execute("set", key, exact[key])
+    agent, state = agent_factory()
+    state.current_directive = HouseholdOrdersAgent()
+    names = ["mission_notes", "find_next_person", "place_doordash_order"]
+    state.registry = SkillRegistry.from_metadata(
+        [{"id": "innate-os/" + name, "name": name, "inputs": {}} for name in names]
+    )
+    agent._roster.active_skill_ids = lambda: list(state.registry.primitives)
+    state.primitive_running = RunningSkill("find_next_person", "innate-os/find_next_person") if running else None
+    agent._runner.has_active_goal = running
+    started, cancelled, saved, requests = [], [], [], []
+    agent._runner.cancel_active_goal = lambda: cancelled.append(True)
+
+    def start_task(skill_id, task_id, inputs):
+        started.append((skill_id, inputs))
+        if skill_id == "innate-os/mission_notes":
+            assert inputs["action"] == "set"  # no redundant list read
+            output = notes.execute(**inputs)
+            saved.append(output)
+            agent.on_skill_event("completed", "mission_notes", output.message)
+
+    agent._runner.start_task = start_task
+
+    def transport(model, body):
+        requests.append(body)
+        if state.primitive_running:
+            return [model_response(call_part(STOP_SKILL, {"continue_task": True}))]
+        if not saved:
+            return [
+                model_response(
+                    call_part(
+                        "mission_notes",
+                        {
+                            "action": "set",
+                            "key": "resident-003",
+                            "value": exact["resident-003"],
+                        },
+                    )
+                )
+            ]
+        assert any(
+            saved[-1].message in part.get("text", "") for entry in body["contents"] for part in entry.get("parts", [])
+        )
+        snapshot = saved[-1].data["notes"]
+        if len(snapshot) < 3:
+            return [model_response(call_part("find_next_person", {}))]
+        orders = {
+            json.loads(value)["name"].lower() + "_order": json.loads(value)["confirmed_order"]
+            for value in snapshot.values()
+        }
+        return [model_response(call_part("place_doordash_order", orders))]
+
+    agent._context._transport = transport
+    agent.on_user_message("That's correct. Thank you.", source="resident")
+    if running:
+        run_turn(agent)
+        assert cancelled == [True] and not started
+        state.primitive_running = None
+        agent._runner.has_active_goal = False
+        agent.on_skill_event("cancelled", "find_next_person", "Stopped")
+    run_turn(agent)
+    assert saved[-1].data["notes"] == {key: exact[key] for key in list(exact)[:existing_notes] + ["resident-003"]}
+    run_turn(agent)
+    assert [skill_id for skill_id, _ in started] == [
+        "innate-os/mission_notes",
+        "innate-os/" + ("place_doordash_order" if existing_notes == 2 else "find_next_person"),
+    ]
+    assert cancelled == ([True] if running else [])
+    assert len(requests) == (3 if running else 2)
+    if existing_notes == 2:
+        assert started[-1][1] == {
+            json.loads(v)["name"].lower() + "_order": json.loads(v)["confirmed_order"] for v in exact.values()
+        }
+
+
 if __name__ == "__main__":
     import sys
 

@@ -26,7 +26,8 @@ class MissionNotes(Skill):
     """A small exact-text notebook for the active mission run.
 
     ``set`` saves or replaces one key, ``get`` retrieves one key, ``list``
-    returns every note, and ``delete`` removes one key. The skill stores facts;
+    returns every note, and ``delete`` removes one key. A successful ``set``
+    also returns a copy of the saved notes for the next decision. The skill stores facts;
     it does not decide what the agent should do with them.
     """
 
@@ -88,7 +89,7 @@ class MissionNotes(Skill):
                 return _result("NOTE_NOT_CHANGED", {"reason": "non_empty_value_required", "key": note_key})
             notes[note_key] = note_value
             self._save_state(state)
-            return _result("NOTE_SAVED", {"key": note_key, "value": note_value})
+            return _result("NOTE_SAVED", {"key": note_key, "value": note_value, "notes": dict(notes)})
 
         if action == "delete":
             existed = notes.pop(note_key, None) is not None

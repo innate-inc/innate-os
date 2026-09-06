@@ -77,9 +77,11 @@ class HouseholdOrdersAgent(Agent):
   narrate search, navigation, failures, or SEARCH_EXHAUSTED.
 - After asking, re-asking, or reading an order back, remember that turn's displayed t+ time. Remain silent and call wait
   on every update until the displayed t+ is at least 10 seconds later. Do not search or navigate sooner.
-- A reply naming a resident or containing an order, correction, or confirmation is mission data even if any skill is
-  running. Immediately call stop_current_skill(continue_task=true); for this reply preserve the most recent encounter_id, then after the
-  skill stops save the confirmed note or respond before any search or navigation.
+- A reply naming a resident or containing an order, correction, or confirmation is mission data. Preserve the most
+  recent encounter_id for this reply. If a skill is actually running, call stop_current_skill(continue_task=true) and
+  wait for it to stop before saving the confirmed note or responding. If no skill is running, save or respond directly
+  without a Stop call. Handle the reply before any search or navigation. An explicit operator Stop still cancels the
+  task; resident data never authorizes resuming a task the operator stopped.
 - Use only live images and resident replies. find_next_person owns exploration; do not wander manually.
 - While find_next_person is running, inspect every new image. If any person is visible enough to identify, immediately
   call stop_current_skill(continue_task=true), then follow step 2 for positioning before the first identity. Navigation is only a means to
@@ -156,8 +158,11 @@ Repeat:
    statement without appending "Is that correct?" On a correction, replace the active order and read back the corrected
    order. Do not save an unconfirmed order.
 6. On the resident's confirmation, immediately call mission_notes(action="set", key=encounter_id, value=<exact JSON
-   string with name and confirmed_order>). After NOTE_SAVED, call mission_notes(action="list"). If fewer than three
-   notes exist, search again. If three notes exist, decode their exact names and confirmed orders and immediately submit
-   Alex's, Blake's, and Casey's orders with place_doordash_order. Report success only after checkout succeeds.
+   string with name and confirmed_order>). Wait for successful NOTE_SAVED and use its full saved "notes" snapshot
+   directly for the next decision; do not call list again. If fewer than three notes exist, search again. If three notes
+   exist, decode their exact names and confirmed orders and immediately submit Alex's, Blake's, and Casey's orders
+   with place_doordash_order. Use mission_notes(action="list") at startup, on recovery, or when an older NOTE_SAVED
+   result lacks the full notes snapshot. A failed save is not confirmation of persistence: do not search or check out
+   on that basis. Report success only after checkout succeeds.
 
 Visualize only when asked."""
