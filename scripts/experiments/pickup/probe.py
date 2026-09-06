@@ -1,4 +1,4 @@
-"""Temporary, data-only experiment instrumentation; excluded from final patch."""
+"""Data-only benchmark overlay, copied beside the skill only during trials."""
 
 import functools
 import json
@@ -31,6 +31,23 @@ class Response:
             record("usage_missing")
         return raw
 
+    def iter_lines(self):
+        for line in self.wrapped.iter_lines():
+            if line.startswith("data:"):
+                try:
+                    event = json.loads(line[5:].strip())
+                    if isinstance(event, dict) and event.get("type") == "response.completed":
+                        response = event["response"]
+                        record(
+                            "astra_usage",
+                            model=response.get("model"),
+                            usage=response.get("usage"),
+                            service_tier=response.get("service_tier"),
+                        )
+                except (ValueError, TypeError):
+                    pass  # the real transport validates the stream
+            yield line
+
 
 class Proxy:
     def __init__(self, wrapped):
@@ -51,6 +68,22 @@ class Proxy:
         )
         if calls >= limit:
             raise ValueError("Local pickup experiment call budget exhausted")
+        cost = 0.0
+        for event in (json.loads(line) for line in log.read_text().splitlines()) if log.exists() else []:
+            usage = event.get("usage") or {}
+            if event["kind"] == "astra_usage":
+                details = usage.get("input_tokens_details", {})
+                cached, writes = details.get("cached_tokens", 0), details.get("cache_write_tokens", 0)
+                cost += (
+                    (usage["input_tokens"] - cached - writes) * 10
+                    + cached
+                    + writes * 12.5
+                    + usage["output_tokens"] * 50
+                ) / 1e6
+            elif event["kind"] == "usage" and usage:
+                cost += (usage["prompt_tokens"] * 1.5 + (usage["total_tokens"] - usage["prompt_tokens"]) * 9) / 1e6
+        if cost >= 5:
+            raise ValueError("Pickup experiment reached its $5 cost review threshold")
         start = time.monotonic()
         record("provider_start", model=kwargs.get("json", {}).get("model"))
         try:

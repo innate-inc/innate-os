@@ -1,0 +1,5 @@
+[
+  {"id":"onboarding-lego","prop":"lego","x":-4.34,"y":-0.47,"yaw":0,"prompt":"the red LEGO brick"},
+  {"id":"rotated-lego","prop":"lego","x":-4.34,"y":-0.47,"yaw":1.5707963267948966,"prompt":"the red LEGO brick"},
+  {"id":"cube","prop":"cube","x":-4.34,"y":-0.47,"yaw":0,"prompt":"the red cube"}
+]

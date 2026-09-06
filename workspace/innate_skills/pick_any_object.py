@@ -306,7 +306,7 @@ class PickAnyObject(Skill):
                 if math.isfinite(z) and z >= self._p["floor_z"] + 0.07 and j6 > GRIPPER_EMPTY_J6 + 0.02:
                     self.logger.info("[PickAnyObject] keeping the raised rigid grasp for carry")
                     return
-            except (ArmFailed, LookupError):
+            except (ArmFailed, ArmUnhealthy, LookupError):
                 pass
         joints = CARRY_ARM + [-self._p["close_strength"]] if keep_grip else list(self.manipulation.REST)
         try:
@@ -904,7 +904,6 @@ class PickAnyObject(Skill):
         self._pickup_policy = None
         self._unpress_grasp = True
         if controller == "astra":
-            from innate_skills._pickup_probe import record
             from innate_skills.pickup_policy import PickupPolicy
 
             from brain_client.brain.openai_transport import pick_openai_transport
@@ -912,7 +911,9 @@ class PickAnyObject(Skill):
             transport, _backend = pick_openai_transport(self._proxy)
             if transport is None:
                 self.fail("Astra pickup requires OpenAI access")
-            self._pickup_policy = PickupPolicy(transport, record=lambda **values: record("astra_usage", **values))
+            self._pickup_policy = PickupPolicy(
+                transport, record=lambda **values: self.logger.info(f"[PickAnyObject] Astra usage: {values}")
+            )
 
         # Per-run reset: don't carry the last run's object or grip rating.
         self._grip_strength = None
@@ -955,9 +956,3 @@ class PickAnyObject(Skill):
             self.fail(f"'{prompt}' slipped while moving to the carry pose. Ask me to pick it up again.")
         self.say("Got it.")
         return f"Picked up '{prompt}' (grip verified after the lift and carry motion)"
-
-
-# Temporary local timing instrumentation.
-from innate_skills._pickup_probe import install as _install_probe  # noqa: E402
-
-_install_probe(PickAnyObject)
