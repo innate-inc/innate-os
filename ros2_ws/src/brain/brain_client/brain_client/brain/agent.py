@@ -35,7 +35,14 @@ from brain_client.brain.loop import LoopThread
 from brain_client.brain.openai_context import OpenAIContext
 from brain_client.brain.openai_transport import pick_openai_transport
 from brain_client.brain.prompt import build_system_prompt, self_reference_turns
-from brain_client.brain.tools import GO_TO_POINT_IN_VIEW, STOP_SKILL, WAIT, assign_tool_names, build_tools
+from brain_client.brain.tools import (
+    GO_TO_POINT_IN_VIEW,
+    START_REQUEST,
+    STOP_SKILL,
+    WAIT,
+    assign_tool_names,
+    build_tools,
+)
 from brain_client.brain.transport import pick_transport
 from brain_client.brain.utils import (
     Event,
@@ -327,7 +334,8 @@ class BrainAgent:
             system += (
                 "\nThe previous request, including its remaining steps, was cancelled. "
                 "Do not resume it on a world update or skill completion. Wait for a new user "
-                "instruction; if one is present, answer it and act only as it requests."
+                "instruction. Answer conversation in text. For an explicit new action, call "
+                "start_new_request before acting; never use it just to resume the cancelled plan."
             )
         if self._state.log_everything:
             self._logger.info(f"[Brain] Turn input:\n{text}")
@@ -508,8 +516,10 @@ class BrainAgent:
         # the name the model calls always resolves to the skill it was declared for.
         named = assign_tool_names(skills)
         self._tool_map = {name: meta["id"] for name, meta in named}
-        if self._request_stopped and not user_spoke:
-            return build_tools([], running.primitive_name if running else None)
+        if self._request_stopped:
+            return build_tools(
+                [], running.primitive_name if running else None, user_spoke=user_spoke, request_stopped=True
+            )
         if running is not None:
             return build_tools([], running.primitive_name, user_spoke=user_spoke)
         return build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids, user_spoke=user_spoke)
@@ -562,21 +572,24 @@ class BrainAgent:
     def _dispatch(self, call: ToolCall) -> str:
         if call.name == WAIT:
             return "ok"
+        if call.name == START_REQUEST:
+            if not self._acting_on_user_request or any(event.kind == EventKind.USER for event in self._events):
+                return "rejected — only a new user instruction can begin a new request"
+            self._request_stopped = False
+            return "new request accepted — carry out only the user's latest instruction"
         if call.name == STOP_SKILL:
             # Cancelling the actuator alone leaves the rest of a multi-step
             # request alive. Only deliberate replanning may retain that request.
             if call.args.get("continue_task") is not True:
                 self._request_stopped = True
                 self._acting_on_user_request = False  # also fences later calls in this response
-            elif self._acting_on_user_request:
-                self._request_stopped = False
             outcome = self._stop_skill()
             if self._request_stopped:
                 outcome += "; remaining steps cancelled — wait for a new user instruction"
             return outcome
         if any(event.kind == EventKind.USER for event in self._events):
             return "rejected — a newer user message is pending; respond to it before acting"
-        if self._request_stopped and not self._acting_on_user_request:
+        if self._request_stopped:
             return "rejected — the request was cancelled; wait for a new user instruction"
         if not self._state.is_brain_active:
             # Deactivation raced this turn's _act: don't start anything new
@@ -651,7 +664,6 @@ class BrainAgent:
     def _start_skill(self, skill_id: str, inputs: dict) -> None:
         self._gaze.pause()
         self._runner.start_task(skill_id, f"local-{uuid.uuid4().hex[:8]}", inputs)
-        self._request_stopped = False  # a new action, not conversation alone, releases the stop
 
     def _adjust_nav_goal(self, skill_id: str, inputs: dict) -> dict:
         if skill_id != _NAV_TO_POSITION:

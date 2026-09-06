@@ -16,6 +16,7 @@ import pytest
 from brain_client.brain.context import GeminiContext, _decision_from
 from brain_client.brain.prompt import build_system_prompt
 from brain_client.brain.tools import (
+    START_REQUEST,
     STOP_SKILL,
     WAIT,
     assign_tool_names,
@@ -773,6 +774,9 @@ def test_stop_cancels_remaining_sequence_until_new_user_request(agent_factory, r
     assert started == []  # conversation alone must not revive the cancelled request
 
     agent.on_user_message("Now wave")
+    response = model_response(call_part(START_REQUEST, {}))
+    run_turn(agent)
+    response = model_response(call_part("wave", {}))
     run_turn(agent)
     assert len(started) == 1
     assert started[0][0] == WAVE_SKILL["id"]
