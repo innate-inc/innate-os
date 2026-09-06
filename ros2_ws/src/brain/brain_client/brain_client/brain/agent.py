@@ -148,6 +148,8 @@ class BrainAgent:
         self._frame_at_capture: bytes | None = None
         self._pitch_at_capture = 0.0
         self._tool_map: dict[str, str] = {}  # gemini function name -> skill id
+        self._request_stopped = False  # survives skill completion and history compaction
+        self._acting_on_user_request = False
         self._error_streak = 0
         self._activated_at = 0.0
         self._turn_count = 0
@@ -226,6 +228,7 @@ class BrainAgent:
             return
         if self._context is not None:
             self._context.clear()
+        self._request_stopped = False
         if was_running and self._state.is_brain_active:
             self._runtime.spawn(self._loop())
 
@@ -320,6 +323,12 @@ class BrainAgent:
             identity=self._identity.current if self._identity is not None else None,
             running_guidance=self._running_guidance(self._state.primitive_running),
         )
+        if self._request_stopped:
+            system += (
+                "\nThe previous request, including its remaining steps, was cancelled. "
+                "Do not resume it on a world update or skill completion. Wait for a new user "
+                "instruction; if one is present, answer it and act only as it requests."
+            )
         if self._state.log_everything:
             self._logger.info(f"[Brain] Turn input:\n{text}")
         self._trace_turn_start(text, frames, tools, system, context)
@@ -333,9 +342,14 @@ class BrainAgent:
             return
 
         decision = context.absorb(message, response, latest_only_images=wrist_frames)
+        user_spoke = any(event.kind == EventKind.USER for event in events)
         del self._events[: len(events)]
         events.clear()  # committed: a failure below backs off against an empty peek
-        outcomes = self._act(decision, speaker, context)
+        self._acting_on_user_request = user_spoke
+        try:
+            outcomes = self._act(decision, speaker, context)
+        finally:
+            self._acting_on_user_request = False
         self._trace(
             TraceEvent.TURN_END,
             turn=self._turn_count,
@@ -494,9 +508,11 @@ class BrainAgent:
         # the name the model calls always resolves to the skill it was declared for.
         named = assign_tool_names(skills)
         self._tool_map = {name: meta["id"] for name, meta in named}
+        if self._request_stopped and not user_spoke:
+            return build_tools([], running.primitive_name if running else None)
         if running is not None:
             return build_tools([], running.primitive_name, user_spoke=user_spoke)
-        return build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids)
+        return build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids, user_spoke=user_spoke)
 
     # ================= act =================
     def _act(self, decision: Decision, speaker: SpeechStreamer, context: GeminiContext) -> list[tuple[ToolCall, str]]:
@@ -547,7 +563,21 @@ class BrainAgent:
         if call.name == WAIT:
             return "ok"
         if call.name == STOP_SKILL:
-            return self._stop_skill()
+            # Cancelling the actuator alone leaves the rest of a multi-step
+            # request alive. Only deliberate replanning may retain that request.
+            if call.args.get("continue_task") is not True:
+                self._request_stopped = True
+                self._acting_on_user_request = False  # also fences later calls in this response
+            elif self._acting_on_user_request:
+                self._request_stopped = False
+            outcome = self._stop_skill()
+            if self._request_stopped:
+                outcome += "; remaining steps cancelled — wait for a new user instruction"
+            return outcome
+        if any(event.kind == EventKind.USER for event in self._events):
+            return "rejected — a newer user message is pending; respond to it before acting"
+        if self._request_stopped and not self._acting_on_user_request:
+            return "rejected — the request was cancelled; wait for a new user instruction"
         if not self._state.is_brain_active:
             # Deactivation raced this turn's _act: don't start anything new
             # (a goal that slips through anyway is cancelled by the runner's
@@ -621,6 +651,7 @@ class BrainAgent:
     def _start_skill(self, skill_id: str, inputs: dict) -> None:
         self._gaze.pause()
         self._runner.start_task(skill_id, f"local-{uuid.uuid4().hex[:8]}", inputs)
+        self._request_stopped = False  # a new action, not conversation alone, releases the stop
 
     def _adjust_nav_goal(self, skill_id: str, inputs: dict) -> dict:
         if skill_id != _NAV_TO_POSITION:
