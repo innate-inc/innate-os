@@ -9,7 +9,9 @@ from innate_skills.grasp_tracker import GraspPointTracker
 
 def _edge_image(image):
     # Align color-image edge energy, not background intensity or a color blob.
-    image = cv2.GaussianBlur(image.astype(np.float32) / 255, (5, 5), 0.8)
+    # Match edges at a scale that tolerates sensor blur and subpixel resampling.
+    # Anchor visibility is checked separately on the unsmoothed color image.
+    image = cv2.GaussianBlur(image.astype(np.float32) / 255, (0, 0), 2.0)
     gx = cv2.Sobel(image, cv2.CV_32F, 1, 0)
     gy = cv2.Sobel(image, cv2.CV_32F, 0, 1)
     energy = gx * gx + gy * gy
