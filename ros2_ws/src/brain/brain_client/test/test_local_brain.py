@@ -450,6 +450,7 @@ import threading  # noqa: E402
 import time  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
+from brain_client.agents.types import TurnIntervals  # noqa: E402
 from brain_client.brain.agent import BrainAgent  # noqa: E402
 from brain_client.brain.utils import Event, EventKind  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
@@ -512,6 +513,21 @@ def agent_factory(monkeypatch):
     yield make
     for agent in created:
         agent.shutdown()
+
+
+def test_agent_turn_intervals_override_only_the_requested_mode(agent_factory):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(get_turn_intervals=lambda: TurnIntervals(supervision=1.0))
+
+    assert agent._interval() == 3.0
+    state.primitive_running = RunningSkill("search", "innate-os/find_next_person")
+    assert agent._interval() == 1.0
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, float("inf"), float("nan")])
+def test_agent_turn_intervals_reject_non_positive_or_non_finite_values(value):
+    with pytest.raises(ValueError, match="finite positive"):
+        TurnIntervals(supervision=value)
 
 
 def run_turn(agent: BrainAgent) -> None:
