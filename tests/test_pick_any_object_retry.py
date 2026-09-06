@@ -2,6 +2,8 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workspace"))
 
 # The host-side CI intentionally does not install the ROS-backed innate SDK.
@@ -127,3 +129,30 @@ def test_empty_grasp_recenters_twice_but_held_object_does_not_retry(monkeypatch)
     held.sleep = lambda _seconds: None
     assert held._grasp_verified("brick", approach)
     assert approach.moves == []
+
+
+def test_pickup_reports_a_drop_during_the_final_carry_motion(monkeypatch):
+    approach = SimpleNamespace(search=lambda _: (0.3, 0), position_above=lambda _, xy: xy)
+    monkeypatch.setattr("innate_skills.pick_any_object.FloorApproach", lambda *_: approach)
+    for dropped in (False, True):
+        skill = _skill(closes_empty=False)
+        events = []
+        skill._proxy = object()
+        skill.head = SimpleNamespace(set_position=lambda _: None)
+        skill.mobility = SimpleNamespace(stop=lambda: None)
+        skill.say = events.append
+        skill.fail = lambda message: (_ for _ in ()).throw(exceptions.SkillFailed(message))
+        skill._detect_px = lambda *_: None
+        skill._grasp_at = lambda *_: None
+        skill._grasp_verified = lambda *_: True
+        def carry(**_):
+            events.append("carry finished")
+            skill.joint_states.position[5] = -0.085 if dropped else 0.12
+        skill._rest_arm = carry
+        if dropped:
+            with pytest.raises(exceptions.SkillFailed, match="slipped"):
+                skill.execute("brick")
+            assert "Got it." not in events
+        else:
+            assert "carry motion" in skill.execute("brick")
+            assert events.index("Got it.") > events.index("carry finished")
