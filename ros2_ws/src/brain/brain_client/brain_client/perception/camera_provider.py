@@ -71,6 +71,7 @@ class CameraProvider(Node):
 
         self._main_camera_raw: bytes | None = None
         self._wrist_camera_raw: bytes | None = None
+        self._wrist_capture = None
         self._depth_msg: Image | None = None
         self._rgbd_lock = threading.Lock()
         self._rgbd_frames = {feed: deque(maxlen=8) for feed in ("main", "depth", "info")}
@@ -136,7 +137,7 @@ class CameraProvider(Node):
             self._info_sub = self.create_subscription(
                 CameraInfo, "/mars/main_camera/left/camera_info", self._info_cb, self._IMAGE_QOS
             )
-        if "depth" in feeds and self._epoch_sub is None:
+        if ({"depth", "wrist"} & set(feeds)) and self._epoch_sub is None:
             # Optional source-generation notifications invalidate retained frames.
             # Backend-specific reset topics are bound by launch remapping.
             self._epoch_sub = self.create_subscription(
@@ -181,6 +182,7 @@ class CameraProvider(Node):
         self._depth_sub = None
         self._main_camera_raw = None
         self._wrist_camera_raw = None
+        self._wrist_capture = None
         self._depth_msg = None
         self._feed_users = dict.fromkeys(self._feed_users, 0)
         self._info_sub = None
@@ -229,6 +231,7 @@ class CameraProvider(Node):
             self.destroy_subscription(self._wrist_sub)
             self._wrist_sub = None
             self._wrist_camera_raw = None
+            self._wrist_capture = None
         if "depth" in dead and self._depth_sub is not None:
             self.destroy_subscription(self._depth_sub)
             self._depth_sub = None
@@ -236,12 +239,14 @@ class CameraProvider(Node):
         if "depth" in dead and self._info_sub is not None:
             self.destroy_subscription(self._info_sub)
             self._info_sub = None
-        if "depth" in dead and self._epoch_sub is not None:
+        if not self._feed_users["depth"] and not self._feed_users["wrist"] and self._epoch_sub is not None:
             self.destroy_subscription(self._epoch_sub)
             self._epoch_sub = None
         with self._rgbd_lock:
-            if "main" in dead or "depth" in dead:
+            if set(dead) & {"main", "depth", "wrist"}:
                 self._rgbd_generation += 1
+                self._wrist_capture = None
+                self._wrist_camera_raw = None
                 self._rgbd_cached = None
             for feed in dead:
                 if feed in self._rgbd_frames:
@@ -266,7 +271,18 @@ class CameraProvider(Node):
         self._remember_frame("main", msg)
 
     def _wrist_camera_cb(self, msg: CompressedImage):
-        self._wrist_camera_raw = bytes(msg.data)
+        with self._rgbd_lock:
+            if stamp_ns(msg) < self._rgbd_capture_after_ns:
+                return
+            jpeg = bytes(msg.data)
+            self._wrist_capture = (
+                jpeg,
+                stamp_ns(msg),
+                time.monotonic(),
+                self.get_clock().now().nanoseconds,
+                self._rgbd_generation,
+            )
+            self._wrist_camera_raw = jpeg
 
     def _depth_cb(self, msg: Image):
         self._depth_msg = msg
@@ -283,6 +299,16 @@ class CameraProvider(Node):
     def last_wrist_camera_jpeg(self) -> bytes | None:
         """The latest wrist camera frame as raw JPEG bytes, or None."""
         return self._wrist_camera_raw
+
+    @property
+    def wrist_capture(self):
+        """Atomic JPEG/capture/receipt/generation snapshot for typed consumers."""
+        with self._rgbd_lock:
+            return self._wrist_capture
+
+    def wrist_generation_is_current(self, generation):
+        with self._rgbd_lock:
+            return generation == self._rgbd_generation and self._wrist_capture is not None
 
     @property
     def last_depth_image(self) -> "np.ndarray | None":
@@ -311,6 +337,8 @@ class CameraProvider(Node):
         # Called with the cache lock held. In-flight pre-reset messages are also
         # excluded by capture time, even if they arrive after this notification.
         self._rgbd_generation += 1
+        self._wrist_capture = None
+        self._wrist_camera_raw = None
         self._rgbd_cached = None
         self._rgbd_capture_after_ns = self.get_clock().now().nanoseconds
         if self._tf_buffer is not None:

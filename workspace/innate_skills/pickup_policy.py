@@ -25,6 +25,14 @@ def _tool(view):
         properties["grasp_point_2d"] = {"type": "array", "items": {"type": "number"}}
     if view == "wrist_verify":
         properties = {"box_2d": properties["box_2d"], "aligned": {"type": "boolean"}}
+    if view == "wrist_action":
+        properties = {
+            "box_2d": properties["box_2d"],
+            "action": {"type": "string", "enum": ["move", "close", "abort"]},
+            "delta_xyz": {"type": "array", "items": {"type": "number"}},
+            "delta_rpy": {"type": "array", "items": {"type": "number"}},
+            "aligned": {"type": "boolean"},
+        }
     return {
         "type": "function",
         "name": "pickup_observation",
@@ -109,7 +117,7 @@ def _numbers(value, size):
 
 
 def validate_observation(value, view):
-    if view not in {"head", "wrist", "head_metric", "wrist_verify"}:
+    if view not in {"head", "wrist", "head_metric", "wrist_verify", "wrist_action"}:
         raise ValueError("Unknown pickup view")
     if not isinstance(value, dict) or set(value) != {"detections"}:
         raise ValueError("Expected one pickup observation")
@@ -123,12 +131,20 @@ def validate_observation(value, view):
         fields = {"box_2d", "grip_strength", "search_clearance", "grasp_point_2d"}
     elif view == "wrist_verify":
         fields = {"box_2d", "aligned"}
+    if view == "wrist_action":
+        fields = {"box_2d", "action", "delta_xyz", "delta_rpy", "aligned"}
+        if len(detections) > 1:
+            raise ValueError("Expected at most one visual action")
     for detection in detections:
         if not isinstance(detection, dict) or set(detection) != fields:
             raise ValueError("Invalid pickup detection")
         box = detection["box_2d"]
         if not _numbers(box, 4) or not (0 <= box[0] < box[2] <= 1000 and 0 <= box[1] < box[3] <= 1000):
             raise ValueError("Pickup box is empty or outside the image")
+        if view == "wrist_action":
+            from innate_skills.pickup_visual_action import validate_action
+
+            validate_action(detection)
         if view in {"wrist", "head_metric"}:
             point = detection["grasp_point_2d"]
             if not _numbers(point, 2) or not (box[0] < point[0] < box[2] and box[1] < point[1] < box[3]):
@@ -158,21 +174,35 @@ class PickupPolicy:
         self.calls = 0
         self.max_calls = max_calls
 
-    def locate(self, target, image, sleep, check_cancelled, *, view, reference=None, timeout=95):
-        if view not in {"head", "wrist", "head_metric", "wrist_verify"}:
+    def locate(self, target, image, sleep, check_cancelled, *, view, reference=None, timeout=95, state=None):
+        if view not in {"head", "wrist", "head_metric", "wrist_verify", "wrist_action"}:
             raise ValueError("Unknown pickup view")
         if self.calls >= self.max_calls:
             raise ValueError("Pickup model-call budget exhausted")
         check_cancelled()
         self.calls += 1
         context = {"target": target, "view": view}
+        if state is not None:
+            context["robot_state"] = state
         images = [{"type": "input_image", "image_url": f"data:image/jpeg;base64,{image}"}]
-        if view in {"wrist", "wrist_verify"} and reference is not None:
+        if view in {"wrist", "wrist_verify", "wrist_action"} and reference is not None:
             context["head_reference_box_2d"] = reference["box_2d"]
             images.append({"type": "input_image", "image_url": f"data:image/jpeg;base64,{reference['image']}"})
+        action_instructions = ""
+        if view == "wrist_action":
+            from innate_skills.pickup_visual_action import INSTRUCTIONS
+
+            action_instructions = INSTRUCTIONS
+
         body = {
             "instructions": COMMON
-            + {"head": HEAD, "wrist": WRIST, "head_metric": HEAD_METRIC, "wrist_verify": WRIST_VERIFY}[view],
+            + {
+                "head": HEAD,
+                "wrist": WRIST,
+                "head_metric": HEAD_METRIC,
+                "wrist_verify": WRIST_VERIFY,
+                "wrist_action": action_instructions,
+            }[view],
             "input": [
                 {
                     "role": "user",

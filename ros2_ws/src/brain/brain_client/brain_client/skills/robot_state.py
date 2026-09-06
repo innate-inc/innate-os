@@ -337,6 +337,10 @@ class RobotStateProvider:
         if cached is not None and cached[0] is jpeg:
             return cached[1]
         image = WristImage.from_jpeg(jpeg)
+        capture = self._camera.wrist_capture
+        if capture is not None and capture[0] is jpeg:
+            image.capture_ns, image.received_monotonic, image.received_ros_ns, image.capture_generation = capture[1:]
+            image.capture_is_current = lambda: self._camera.wrist_generation_is_current(capture[4])
         self._wrist_image_cache = (jpeg, image)
         return image
 
