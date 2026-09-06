@@ -17,6 +17,7 @@ from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, bas
 
 from innate import (
     Head,
+    HeadState,
     JointStates,
     MainImage,
     Manipulation,
@@ -187,6 +188,7 @@ class PickAnyObject(Skill):
     manipulation: Manipulation
     mobility: Mobility
     head: Head
+    head_position: HeadState | None
     # `| None` — best effort: the approach falls back to stepwise re-detection
     # without head frames, the wrist stage to the blind grasp without wrist ones.
     main_image: MainImage | None
@@ -264,8 +266,7 @@ class PickAnyObject(Skill):
         """Head frame -> remembered target pixel and material handling style."""
         if self._pickup_policy is not None:
             self.mobility.stop()
-            self.sleep(self._p["settle_s"])
-            head_image = self.main_image
+            head_image = self._settled_head_image()
             observed = self._observe_pickup(prompt, head_image, "head")
             text = json.dumps(observed["detections"])
             # Perception overlaps the fold; finish it before any base search.
@@ -306,6 +307,47 @@ class PickAnyObject(Skill):
         if seen is not None:
             self._last_seen = seen
         return (u, v)
+
+    def _settled_head_image(self):
+        """Use measured head/base settling and a subsequent frame when available.
+
+        Missing, stale or moving telemetry keeps the original settling delay.
+        Two distinct head and odometry samples must confirm a stationary view;
+        merely receiving the commanded angle is not evidence of settling.
+        """
+        deadline = time.monotonic() + self._p["settle_s"]
+        last_head = last_odom = None
+        settled_since = None
+        settled_frame = None
+        while time.monotonic() < deadline:
+            self.check_cancelled()
+            head, odom = self.head_position, self.odom
+            if head is not None and odom is not None:
+                fresh = (
+                    head.raw_source is not None
+                    and head.raw_source is not last_head
+                    and odom.raw_source is not None
+                    and odom.raw_source is not last_odom
+                )
+                stationary = (
+                    abs(head.pitch_degrees - self._p["tilt_deg"]) <= 1.0
+                    and abs(odom.linear_velocity) <= 0.005
+                    and abs(odom.angular_velocity) <= 0.01
+                )
+                if not stationary:
+                    settled_since = settled_frame = None
+                elif fresh:
+                    last_head, last_odom = head.raw_source, odom.raw_source
+                    if settled_since is None:
+                        settled_since = time.monotonic()
+                    elif time.monotonic() - settled_since >= 0.15 and settled_frame is None:
+                        settled_frame = self.main_image
+                    elif settled_frame is not None:
+                        frame = self.main_image
+                        if frame and frame is not settled_frame:
+                            return frame
+            self.sleep(0.04)
+        return self.main_image
 
     def _finish_nav_fold(self):
         if getattr(self, "_nav_pending", False):

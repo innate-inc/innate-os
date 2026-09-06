@@ -12,7 +12,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workspace"))
 innate = ModuleType("innate")
 innate.Skill = object
 innate.SkillReturn = type("SkillReturn", (), {})
-for resource_type in ("Head", "JointStates", "MainImage", "Manipulation", "Mobility", "Odometry", "WristImage"):
+for resource_type in (
+    "Head",
+    "HeadState",
+    "JointStates",
+    "MainImage",
+    "Manipulation",
+    "Mobility",
+    "Odometry",
+    "WristImage",
+):
     setattr(innate, resource_type, type(resource_type, (), {}))
 
 
@@ -296,6 +305,7 @@ def test_head_perception_finishes_fold_before_returning_a_target(monkeypatch):
     skill._pickup_policy = object()
     skill._nav_pending = True
     skill.main_image = "image"
+    skill._settled_head_image = lambda: events.append("settle") or skill.main_image
     skill.mobility = SimpleNamespace(stop=lambda: events.append("stop"))
     skill.sleep = lambda _: events.append("settle")
     skill._observe_pickup = lambda *_: events.append("perception") or {"detections": []}
@@ -333,3 +343,38 @@ def test_pickup_reports_a_drop_during_the_final_carry_motion(monkeypatch):
         else:
             assert "carry motion" in skill.execute("brick", controller="classic")
             assert events.index("Got it.") > events.index("carry finished")
+
+
+@pytest.mark.parametrize("mode", ("healthy", "missing", "stale", "moving", "bad_angle", "frozen_camera"))
+def test_head_settling_requires_fresh_stationary_feedback_and_a_later_image(monkeypatch, mode):
+    skill = _skill(closes_empty=False)
+    skill._p.update(settle_s=1.2, tilt_deg=-20)
+    now = [0.0]
+    skill.main_image = object()
+
+    def update():
+        skill.head_position = (
+            SimpleNamespace(pitch_degrees=-15 if mode == "bad_angle" else -20, raw_source=object())
+            if mode != "missing"
+            else None
+        )
+        skill.odom = SimpleNamespace(
+            linear_velocity=0.03 if mode == "moving" else 0, angular_velocity=0, raw_source=object()
+        )
+
+    update()
+
+    def sleep(seconds):
+        now[0] += seconds
+        if mode != "stale":
+            update()
+        if mode != "frozen_camera":
+            skill.main_image = object()
+
+    skill.sleep = sleep
+    monkeypatch.setattr("innate_skills.pick_any_object.time.monotonic", lambda: now[0])
+    assert skill._settled_head_image() is skill.main_image
+    if mode == "healthy":
+        assert 0.15 < now[0] < 0.5
+    else:
+        assert now[0] >= 1.2
