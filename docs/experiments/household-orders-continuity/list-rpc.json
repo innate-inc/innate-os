@@ -1,0 +1,39 @@
+{
+  "type": "actual ROS skill results for controlled model replay",
+  "actions": [
+    {
+      "skill": "mission_run",
+      "args": {
+        "restart": true
+      },
+      "success": true,
+      "message": "RUN_STARTED {\"run_id\":\"20260906T033914Z-dde59702\"}"
+    },
+    {
+      "skill": "mission_notes",
+      "args": {
+        "action": "list"
+      },
+      "success": true,
+      "message": "MISSION_NOTES {\"notes\":{}}"
+    },
+    {
+      "skill": "mission_notes",
+      "args": {
+        "action": "set",
+        "key": "person-001",
+        "value": "{\"name\": \"Replay fixture\", \"confirmed_order\": \"no onions; sauce on the side\", \"trial\": 1}"
+      },
+      "success": true,
+      "message": "NOTE_SAVED {\"key\":\"person-001\",\"value\":\"{\\\"name\\\": \\\"Replay fixture\\\", \\\"confirmed_order\\\": \\\"no onions; sauce on the side\\\", \\\"trial\\\": 1}\"}"
+    },
+    {
+      "skill": "mission_notes",
+      "args": {
+        "action": "list"
+      },
+      "success": true,
+      "message": "MISSION_NOTES {\"notes\":{\"person-001\":\"{\\\"name\\\": \\\"Replay fixture\\\", \\\"confirmed_order\\\": \\\"no onions; sauce on the side\\\", \\\"trial\\\": 1}\"}}"
+    }
+  ]
+}
