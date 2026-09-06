@@ -415,7 +415,16 @@ class PickAnyObject(Skill):
             if not choices:
                 raise SkillFailed("Pickup target not confidently visible in wrist camera")
             box, plan = min(choices, key=lambda choice: self._wrist_aim_dist(choice[0]))
-            self._planned_roll = plan["roll"]
+            axis = plan["axis_2d"]
+            self._planned_roll = 0.0
+            if axis:
+                # Normalized coordinates have different horizontal/vertical
+                # scales. Convert to image pixels before computing the axis.
+                dy = (axis[2] - axis[0]) * vision.IMG_H
+                dx = (axis[3] - axis[1]) * vision.IMG_W
+                theta = math.atan2(dy, dx) % math.pi
+                roll = ROLL_SIGN * (theta - math.pi / 2)
+                self._planned_roll = max(-ROLL_MAX, min(ROLL_MAX, roll))
             return (box[0] + box[2] / 2.0, box[1] + box[3] / 2.0), box
         else:
             self.sleep(self._p["wrist_settle_s"])

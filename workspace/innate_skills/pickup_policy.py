@@ -19,7 +19,7 @@ def _tool(view):
             search_clearance={"type": "string", "enum": ["flat", "low", "high"]},
         )
     else:
-        properties["roll"] = {"type": "number"}
+        properties["axis_2d"] = {"type": "array", "items": {"type": "number"}}
     return {
         "type": "function",
         "name": "pickup_observation",
@@ -63,11 +63,11 @@ Use image 2 only for identity, never for output coordinates. Glare can wash a
 colored object almost white in the wrist view; compare its shape and reference
 instead of rejecting it only for changed color. Still reject missing or
 ambiguous targets. Material and clearance were already decided in the head view.
-Choose only the parallel gripper's minor-axis roll: fingers close along image u.
-An object long along image v uses roll 0; long along image u uses -1.5 or +1.5;
-intermediate angles use the corresponding roll within [-1.5,1.5]. Square or
-round objects use 0. Use the object's axis, not the fingers. The executor handles
-fresh-frame tracking, final centering and bounded motions.
+Return axis_2d as two points on the object's long centerline:
+[y1,x1,y2,x2], normalized 0-1000 in image 1. Use [] for square or round objects.
+Mark the visible axis, not the fingers. Do not calculate an angle: code converts
+these image points into the gripper's roll and applies the motion limits.
+The executor handles fresh-frame tracking and final centering.
 """
 
 
@@ -87,7 +87,7 @@ def validate_observation(value, view):
     detections = value["detections"]
     if not isinstance(detections, list) or len(detections) > 20:
         raise ValueError("Invalid pickup detections")
-    fields = {"box_2d", "grip_strength", "search_clearance"} if view == "head" else {"box_2d", "roll"}
+    fields = {"box_2d", "grip_strength", "search_clearance"} if view == "head" else {"box_2d", "axis_2d"}
     for detection in detections:
         if not isinstance(detection, dict) or set(detection) != fields:
             raise ValueError("Invalid pickup detection")
@@ -95,8 +95,13 @@ def validate_observation(value, view):
         if not _numbers(box, 4) or not (0 <= box[0] < box[2] <= 1000 and 0 <= box[1] < box[3] <= 1000):
             raise ValueError("Pickup box is empty or outside the image")
         if view == "wrist":
-            if not _numbers([detection["roll"]], 1) or abs(detection["roll"]) > 1.5:
-                raise ValueError("Pickup roll exceeds its limit")
+            axis = detection["axis_2d"]
+            if axis != [] and (
+                not _numbers(axis, 4)
+                or not all(0 <= n <= 1000 for n in axis)
+                or math.hypot(axis[2] - axis[0], axis[3] - axis[1]) < 1
+            ):
+                raise ValueError("Invalid pickup axis")
         else:
             if not _numbers([detection["grip_strength"]], 1) or detection["grip_strength"] not in (0.35, 0.60):
                 raise ValueError("Invalid pickup material strength")

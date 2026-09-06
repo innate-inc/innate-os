@@ -35,6 +35,7 @@ innate.resource = lambda function: function
 innate.gemini = ModuleType("innate.gemini")
 innate.vision = ModuleType("innate.vision")
 innate.vision.Axis = type("Axis", (), {})
+innate.vision.IMG_W, innate.vision.IMG_H = 640, 480
 sys.modules["innate"] = innate
 sys.modules["innate.gemini"] = innate.gemini
 sys.modules["innate.vision"] = innate.vision
@@ -292,7 +293,7 @@ def test_wrist_plan_uses_a_fresh_frame_and_refuses_a_frozen_camera(monkeypatch):
     fresh = object()
     seen = []
     skill._next_wrist_hsv = lambda old, **_: (True, fresh) if old is skill.wrist_image else (None, old)
-    plan = {"box_2d": [100, 200, 300, 400], "roll": 0}
+    plan = {"box_2d": [100, 200, 300, 400], "axis_2d": []}
     skill._observe_pickup = lambda _prompt, image, _view: seen.append(image) or {"detections": [plan]}
     monkeypatch.setattr(
         "innate_skills.pick_any_object.vision.parse_det_boxes", lambda _: [(300, 280, 40, 40)], raising=False
@@ -424,16 +425,26 @@ def test_flow_arrival_skips_head_only_for_confirmed_projectable_arrival(
     assert len(looks) == head_looks
 
 
-def test_wrist_plan_keeps_the_accepted_head_material(monkeypatch):
+@pytest.mark.parametrize(
+    "axis,roll",
+    [
+        ([], 0),
+        ([200, 200, 400, 350], -0.7853981633974483),
+        ([400, 350, 200, 200], -0.7853981633974483),
+        ([200, 200, 200, 400], -1.5),
+        ([200, 300, 400, 300], 0),
+    ],
+)
+def test_wrist_plan_keeps_head_material_and_converts_image_axis(monkeypatch, axis, roll):
     skill = _skill(closes_empty=False)
     skill._pickup_policy = object()
     skill._grip_strength = 0.6
     skill.wrist_image = "old"
     skill._next_wrist_hsv = lambda *_args, **_kwargs: (object(), "new")
-    skill._observe_pickup = lambda *_: {"detections": [{"box_2d": [100, 200, 300, 400], "roll": 0.4}]}
+    skill._observe_pickup = lambda *_: {"detections": [{"box_2d": [100, 100, 500, 500], "axis_2d": axis}]}
     monkeypatch.setattr(
         "innate_skills.pick_any_object.vision.parse_det_boxes", lambda _: [(300, 300, 40, 40)], raising=False
     )
     assert skill._wrist_seed("sock") == ((320, 320), (300, 300, 40, 40))
-    assert skill._planned_roll == 0.4
+    assert skill._planned_roll == pytest.approx(roll)
     assert skill._grip_strength == 0.6
