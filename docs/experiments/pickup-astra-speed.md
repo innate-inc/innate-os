@@ -35,6 +35,22 @@ Replay an exported diagnostic directory with
 `scripts/experiments/pickup/replay_grasp_tracker.py DIRECTORY` (NumPy and OpenCV
 required). USB camera stability remains an independent hardware/runtime concern.
 
+
+The following retry (`20260906T190725-d2f9a4f2`) accepted all 43 tracking updates,
+ending with 89 features, but USB disconnected at 19:07:56.442 UTC. The camera
+reopened at 19:07:58.021; the controller expired its fresh-frame wait at
+19:07:58.134 and stopped before grasp. The recovery update detects stream gaps
+both during and between arm steps, finishes the already-commanded bounded step,
+and holds position. It waits up to five additional seconds for a fresh frame,
+reacquires the grasp point from that exact frame, and requires two fresh tracked
+confirmations before moving or declaring final alignment. There are two camera
+recoveries per wrist descent, separate from ordinary tracking-loss reseeding;
+the existing alignment deadline and global model-call budget remain in force.
+Stop interrupts recovery waits. Offline cameras, missing targets, and exhausted
+retries fail without further descent or grasp. Physical recovery remains to be
+validated; automated tests exercise these controller paths and the motion
+worker's persistent gap flag.
+
 # Pickup speed experiment
 
 Status: the complete matched-v4 campaign at `dbe4de1ad` passes the fixed speed

@@ -3,6 +3,7 @@
 """Track a selected material point, never a changing feature/blob centroid."""
 
 import threading
+import time
 from contextlib import contextmanager
 
 import cv2
@@ -138,24 +139,29 @@ class GraspPointTracker:
         self.points = np.concatenate((self.points, new))
 
     @contextmanager
-    def during_motion(self, read, decode, raw):
+    def during_motion(self, read, decode, raw, gap_timeout=0.75):
         """Consume intermediate images while the caller performs a verified move.
 
         This worker only reads images and updates this tracker. The caller must
         not update the tracker until this context has joined the worker.
         """
         stop = threading.Event()
-        state = {"raw": raw, "error": None}
+        state = {"raw": raw, "error": None, "gap": False, "last_frame_at": time.monotonic()}
 
         def track():
             try:
+                last_frame = state["last_frame_at"]
                 while not stop.is_set():
+                    if time.monotonic() - last_frame >= gap_timeout:
+                        state["gap"] = True
                     image = read()
                     if image and image is not state["raw"]:
                         state["raw"] = image
                         frame = decode(image)
                         if frame is not None:
-                            self.update(frame)
+                            last_frame = state["last_frame_at"] = time.monotonic()
+                            if not state["gap"]:
+                                self.update(frame)
                     stop.wait(0.025)
             except Exception as error:
                 state["error"] = error

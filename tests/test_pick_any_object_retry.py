@@ -455,3 +455,93 @@ def test_wrist_plan_keeps_head_material_and_converts_image_axis(monkeypatch, axi
     assert skill._wrist_seed("sock") == ((192, 144), (300, 300, 40, 40))
     assert skill._planned_roll == pytest.approx(roll)
     assert skill._grip_strength == 0.6
+
+
+@pytest.mark.parametrize("recovery", ["returns", "offline", "cancel", "target_missing"])
+def test_camera_disconnect_holds_then_requires_new_grasp_confirmations(monkeypatch, recovery):
+    from contextlib import nullcontext
+
+    monkeypatch.setattr("innate_skills.pick_any_object.vision.b64_to_hsv", lambda x: x, raising=False)
+    monkeypatch.setattr("innate_skills.pick_any_object.inside_box", lambda *_: True)
+    skill = _skill(closes_empty=False)
+    skill._pickup_policy = object()
+    skill._planned_roll = 0
+    skill.manipulation.pose = SimpleNamespace(position=(0.3, 0, 0.06))
+    skill._wrist_seed = lambda _: ((320, 350), (280, 300, 80, 100))
+    events = []
+    old = SimpleNamespace(
+        ok=True,
+        axis=None,
+        update=lambda _: events.append("old_track") or (320, 350),
+        during_motion=lambda *_: nullcontext({"raw": "last", "gap": True}),
+    )
+    fresh = SimpleNamespace(ok=True, axis=None, update=lambda _: events.append("new_track") or (320, 350))
+    skill._new_wrist_tracker = lambda *_: (old, "seed")
+    skill.manipulation.move_to = lambda *_args, **_kw: events.append("move")
+    calls = 0
+
+    def frame(raw, timeout=1.5):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            events.append("outage")
+            return None, raw
+        if calls == 4:
+            assert timeout <= 5
+            assert events.count("move") == 1
+            events.append("reconnect_wait")
+            if recovery == "cancel":
+                raise InterruptedError("Stop")
+            if recovery == "offline":
+                return None, raw
+        return True, object()
+
+    skill._next_wrist_hsv = frame
+
+    def reseed(_prompt, raw, frame=None):
+        assert frame == (True, raw)
+        events.append("reseed")
+        if recovery == "target_missing":
+            return None, raw, "lost track"
+        return fresh, raw, ""
+
+    skill._wrist_reseed = reseed
+    if recovery == "returns":
+        assert PickAnyObject._wrist_descend(skill, "sock", 0.3, 0) == pytest.approx((0.3, 0, 0.05, 0))
+        assert events == [
+            "old_track",
+            "old_track",
+            "move",
+            "outage",
+            "reconnect_wait",
+            "reseed",
+            "new_track",
+            "new_track",
+        ]
+    else:
+        with pytest.raises(InterruptedError if recovery == "cancel" else exceptions.SkillFailed):
+            PickAnyObject._wrist_descend(skill, "sock", 0.3, 0)
+        assert events.count("move") == 1
+        assert "new_track" not in events
+
+
+def test_repeated_camera_interruptions_exhaust_budget_without_moving():
+    skill = _skill(closes_empty=False)
+    skill._pickup_policy = object()
+    skill._planned_roll = 0
+    skill.manipulation.pose = SimpleNamespace(position=(0.3, 0, 0.1))
+    skill._wrist_seed = lambda _: ((320, 350), (280, 300, 80, 100))
+    tracker = SimpleNamespace(ok=True)
+    skill._new_wrist_tracker = lambda *_: (tracker, "seed")
+    skill._next_wrist_hsv = lambda raw, timeout=1.5: (None, raw) if timeout == 1.5 else (True, object())
+    reacquisitions = []
+
+    def reseed(*_args, **_kwargs):
+        reacquisitions.append(True)
+        return tracker, object(), ""
+
+    skill._wrist_reseed = reseed
+    with pytest.raises(exceptions.SkillFailed, match="camera recovery budget exhausted"):
+        PickAnyObject._wrist_descend(skill, "sock", 0.3, 0)
+    assert len(reacquisitions) == 2
+    assert skill.manipulation.events == []
