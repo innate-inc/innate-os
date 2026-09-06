@@ -143,3 +143,13 @@ for (const mode of ["fresh", "completed", "playing", "locked"]) {
 }
 document.referrer="";
 console.log("ok - broker completion: pinned source/origin/request, new session, active attempt, and blocked storage");
+
+// Completing or skipping the mission must not trigger a second introduction
+// when the newly revealed Challenges panel is opened.
+const { maybeShowChallengeIntro } = await import("../js/agent/challengeIntro.js");
+for (const phase of ["done", "skipped"]) {
+  localStorage.removeItem("innate.challengeIntroSeen");
+  localStorage.setItem("innate.firstMission.v1", JSON.stringify({phase}));
+  assert.equal(maybeShowChallengeIntro(), null);
+}
+console.log("ok - first-run completion suppresses the redundant challenge introduction");

@@ -6,6 +6,8 @@
 // the docs page. After that, the panel keeps only a subtle "Tutorial" link in
 // its header that reopens this dialog on demand.
 
+import { readFirstRun } from "../onboarding.js";
+
 const TUTORIAL_URL = "https://docs.innate.bot/simulator/building-with-the-simulator";
 const PREVIEW_SRC = "/public/challenge-tutorial-preview.jpg";
 const SEEN_KEY = "innate.challengeIntroSeen";
@@ -16,7 +18,9 @@ const SEEN_KEY = "innate.challengeIntroSeen";
  * @returns {{ close: () => void } | null}
  */
 export function maybeShowChallengeIntro() {
-  if (storageGet(SEEN_KEY)) return null;
+  // A completed or skipped first mission already handled the introduction.
+  // Keep the explicit Tutorial link, without another automatic onboarding.
+  if (storageGet(SEEN_KEY) || ["done", "skipped"].includes(readFirstRun()?.phase)) return null;
   return showChallengeIntro();
 }
 
