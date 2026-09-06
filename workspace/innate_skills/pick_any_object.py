@@ -91,7 +91,7 @@ PARAMS = {
     "descend_z3": 0.045,
     # ee_link target, not fingertip height. 0.01 dug into carpet and aborted.
     "floor_z": 0.03,
-    # One bounded retry after the encoder proves the claw closed on air. The
+    # Two bounded retries after the encoder proves the claw closed on air. The
     # normal attempt remains carpet-safe; only a confirmed miss goes 1 cm
     # lower, before the robot has backed away from the target.
     "retry_floor_z": 0.02,

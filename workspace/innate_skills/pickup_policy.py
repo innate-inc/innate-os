@@ -43,12 +43,12 @@ Once centered within final_tolerance_px, choose descend with
 delta=[0,0,stop_z-current_z]. This is one bounded descent decision: the executor
 retains the original 1cm motion steps, speed, fresh-frame checks and cancellation
 points, without asking you the same descent question at every step. The descent
-is at most0.20m and stops at stop_z. Use move for lateral alignment first.
+is at most 0.20m and stops at stop_z. Use move for lateral alignment first.
 
 At stop_z, first align precisely within final_tolerance_px. Choose grasp only
 then; code checks these conditions. Grasp descends to the existing floor limit
 and closes there. For fabric or a target requiring the fingers to unpress from
-the floor, choose unpress_grasp: it adds the original1cm lift before closing.
+the floor, choose unpress_grasp: it adds the original 1cm lift before closing.
 For a thin rigid object prefer grasp so that lift does not leave only its top
 edge between the fingers. A successful motion is NOT proof of grip.
 The deterministic close/lift/encoder checks follow your grasp command, with
@@ -56,8 +56,8 @@ bounded retries on proven empty grasps. Do not choose grasp for a missing or
 uncertain target. Observe for one ambiguous frame; give_up if target is lost.
 
 roll is the desired gripper roll in radians, within +-1.5. Fingers close across
-image u: a long object along image v needs roll0; along image u needs roll-1.5
-(or +1.5). Choose the minor-axis grasp of the OBJECT, not the fingers. Keep roll0
+image u: a long object along image v needs roll 0; along image u needs roll -1.5
+(or +1.5). Choose the minor-axis grasp of the OBJECT, not the fingers. Keep roll 0
 for nearly square or round objects. Roll is applied only at the final grasp.
 For grasp/unpress_grasp/observe/give_up delta=[0,0,0]. Center=[-1,-1] if not visible. Brief note
 states visible evidence. Never invent simulator coordinates or hidden state.
@@ -83,7 +83,7 @@ def validate_action(value):
         raise ValueError("Pickup roll exceeds its limit")
     if value["action"] == "descend":
         if value["delta"][:2] != [0, 0] or not -0.20 <= value["delta"][2] < 0:
-            raise ValueError("Descent must be vertical and at most20cm")
+            raise ValueError("Descent must be vertical and at most 20cm")
     elif any(abs(d) > 0.04 for d in value["delta"]):
         raise ValueError("Pickup step exceeds 4cm")
     center = value["center"]
