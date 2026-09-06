@@ -1234,7 +1234,12 @@ class PickAnyObject(Skill):
             )
             self.say(f"Looking for {prompt}.")
             xy = approach.search(prompt)
-            xy = approach.position_above(prompt, xy)
+            if not self._metric_pickup:
+                xy = approach.position_above(prompt, xy)
+            # The metric prototype accepts only targets already inside its
+            # local measured envelope. Floor projection has a height bias and
+            # its positioning motion would invalidate the fixed-view proposal.
+            # An out-of-envelope target aborts in _grasp_rgbd instead.
             self.say("Picking it up.")
             self._grasp_at(prompt, xy)
             # _close_twist_lift latched self._holding the moment the fingers

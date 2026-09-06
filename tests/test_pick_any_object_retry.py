@@ -681,3 +681,28 @@ def test_metric_path_only_closes_after_fresh_head_and_final_wrist_checks(monkeyp
         assert events[-2:] == [("wrist",), ("close",)]
         assert [e[1] for e in events if e[0] == "move"] == pytest.approx([0.1, 0.09, 0.08, 0.07, 0.06, 0.05])
         assert [e[2] for e in events if e[0] == "move"] == [2.0, 0.5, 0.5, 0.5, 0.5, 0.5]
+
+
+@pytest.mark.parametrize("controller", ["classic", "astra", "rgbd"])
+def test_metric_entry_preserves_fixed_view_while_existing_controllers_keep_positioning(monkeypatch, controller):
+    transport = ModuleType("brain_client.brain.openai_transport")
+    transport.pick_openai_transport = lambda _: (lambda *a: iter(()), "test")
+    monkeypatch.setitem(sys.modules, transport.__name__, transport)
+    skill = _skill(closes_empty=False)
+    events = []
+    skill._proxy = object()
+    skill.head = SimpleNamespace(set_position=lambda _: None)
+    skill.mobility = SimpleNamespace(stop=lambda: None)
+    skill.manipulation.move_joints = lambda *a, **k: None
+    skill.manipulation.wait = lambda: None
+    skill.say = lambda _: None
+    skill.sleep = lambda _: None
+    skill._grasp_at = lambda *a: events.append("grasp")
+    skill._grasp_verified = lambda *a: True
+    skill._rest_arm = lambda **k: None
+    approach = SimpleNamespace(
+        search=lambda _: (0.32, 0), position_above=lambda *a: events.append("position") or (0.28, 0)
+    )
+    monkeypatch.setattr("innate_skills.pick_any_object.FloorApproach", lambda *a, **k: approach)
+    skill.execute("cube", controller=controller)
+    assert events == (["grasp"] if controller == "rgbd" else ["position", "grasp"])
