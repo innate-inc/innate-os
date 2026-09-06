@@ -17,6 +17,7 @@ import pytest
 from brain_client.brain.context import GeminiContext, _decision_from
 from brain_client.brain.prompt import build_system_prompt
 from brain_client.brain.tools import (
+    START_REQUEST,
     STOP_SKILL,
     WAIT,
     assign_tool_names,
@@ -845,6 +846,101 @@ def test_tool_failure_becomes_an_outcome_instead_of_failing_the_committed_turn(a
     assert agent._error_streak == 0
     outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
     assert outcome.startswith("failed —")
+
+
+@pytest.mark.parametrize("running", [True, False])
+def test_stop_cancels_remaining_sequence_until_new_user_request(agent_factory, running):
+    from brain_client.skills.registry import SkillRegistry
+
+    agent, state = agent_factory()
+    state.registry = SkillRegistry.from_metadata([WAVE_SKILL])
+    agent._roster.active_skill_ids = lambda: [WAVE_SKILL["id"]]
+    state.primitive_running = RunningSkill(primitive_name="navigate", skill_id="local/nav") if running else None
+    started, cancelled, requests = [], [], []
+    agent._runner.has_active_goal = running
+    agent._runner.cancel_active_goal = lambda: cancelled.append(True)
+    agent._runner.start_task = lambda *args: started.append(args)
+    response = model_response(call_part(STOP_SKILL, {}), call_part("wave", {}))
+
+    def transport(model, body):
+        requests.append(body)
+        return [response]
+
+    agent._context._transport = transport
+    agent.on_user_message("Stop moving and keep holding the brick")
+    run_turn(agent)
+    assert STOP_SKILL in [d["name"] for d in requests[-1]["tools"][0]["functionDeclarations"]]
+    assert cancelled == ([True] if running else [])
+    assert started == []  # even another call in the same response cannot continue
+
+    state.primitive_running = None
+    agent._runner.has_active_goal = False
+    agent.add_event("Navigation cancelled; navigation is ready again")
+    # Neither completion/recovery nor compacting old conversation lifts the stop.
+    agent._context.clear()
+    response = model_response(call_part("wave", {}))
+    run_turn(agent)
+    assert [d["name"] for d in requests[-1]["tools"][0]["functionDeclarations"]] == [WAIT]
+    assert "remaining steps" in json.dumps(requests[-1]["systemInstruction"])
+    assert started == []  # a stale/hallucinated action is rejected at dispatch too
+
+    agent.on_user_message("Thanks. What can you see?")
+    response = model_response({"text": "I can see the room."})
+    run_turn(agent)
+    response = model_response(call_part("wave", {}))
+    run_turn(agent)
+    assert started == []  # conversation alone must not revive the cancelled request
+
+    agent.on_user_message("Now wave")
+    response = model_response(call_part(START_REQUEST, {}), call_part("wave", {}))
+    run_turn(agent)
+    assert started == []  # the next turn supplies the new task's action schemas
+    response = model_response(call_part("wave", {}))
+    run_turn(agent)
+    assert len(started) == 1
+    assert started[0][0] == WAVE_SKILL["id"]
+
+
+def test_explicit_replanning_can_continue_after_skill_cancellation(agent_factory):
+    from brain_client.skills.registry import SkillRegistry
+
+    agent, state = agent_factory()
+    state.registry = SkillRegistry.from_metadata([WAVE_SKILL])
+    agent._roster.active_skill_ids = lambda: [WAVE_SKILL["id"]]
+    state.primitive_running = RunningSkill(primitive_name="navigate", skill_id="local/nav")
+    started = []
+    agent._runner.has_active_goal = True
+    agent._runner.cancel_active_goal = lambda: None
+    agent._runner.start_task = lambda *args: started.append(args)
+    agent._context._transport = lambda model, body: [model_response(call_part(STOP_SKILL, {"continue_task": True}))]
+    run_turn(agent)
+    state.primitive_running = None
+    agent.add_event("Skill cancelled")
+    agent._context._transport = lambda model, body: [model_response(call_part("wave", {}))]
+    run_turn(agent)
+    assert len(started) == 1
+
+
+def test_late_action_is_answered_but_not_executed_when_new_user_message_is_pending(agent_factory):
+    from brain_client.skills.registry import SkillRegistry
+
+    agent, state = agent_factory()
+    state.registry = SkillRegistry.from_metadata([WAVE_SKILL])
+    agent._roster.active_skill_ids = lambda: [WAVE_SKILL["id"]]
+    started = []
+    agent._runner.start_task = lambda *args: started.append(args)
+
+    def transport(model, body):
+        agent.on_user_message("Stop and wait")
+        return [model_response(call_part("wave", {}, call_id="late-call"))]
+
+    agent._context._transport = transport
+    run_turn(agent)
+    assert started == []
+    result = agent._context._history[-1]["parts"][0]["functionResponse"]
+    assert result["name"] == "wave"
+    assert "newer user message" in result["response"]["outcome"]
+    assert len(agent._events) == 1  # the next turn still receives the stop
 
 
 def test_turn_finishing_after_deactivation_is_dropped_entirely(agent_factory):

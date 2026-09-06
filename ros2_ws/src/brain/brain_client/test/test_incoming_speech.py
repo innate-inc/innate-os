@@ -94,10 +94,10 @@ def test_overlap_duplicates_and_reset_do_not_reopen_or_resurrect_input(agent_fac
     assert [d["name"] for d in agent._build_tools([])[0]["functionDeclarations"]] == [WAIT]
     assert "rejected" in agent._execute(ToolCall("person_identity", {}))
     assert started == []
-    assert [e.text for e in agent._events if e.kind == EventKind.USER] == ['The user says: "First"']
+    assert [e.text for e in agent._events if e.kind == EventKind.USER] == ['The resident says: "First"']
     agent.reset()
     agent.finish_incoming_speech(second, "Old reply after reset")
-    assert agent._incoming_speech == set() and agent._events == []
+    assert not agent._incoming_speech and agent._events == []
 
 
 def test_input_keeps_manual_skills_and_own_speech_ungated(agent_factory):
@@ -133,10 +133,10 @@ def test_fresh_turn_cannot_snapshot_between_transcript_queue_and_gate_retirement
     enqueue_started, release_enqueue, model_started = threading.Event(), threading.Event(), threading.Event()
     original = agent.on_user_message
 
-    def enqueue(text):
+    def enqueue(text, **kwargs):
         enqueue_started.set()
         assert release_enqueue.wait(3)
-        original(text)
+        original(text, **kwargs)
 
     agent.on_user_message = enqueue
     requests = []
@@ -323,3 +323,212 @@ def test_speech_failure_paths_deliver_once_and_release_gate(speech_node, monkeyp
         item.on_done(False)  # duplicate completion cannot repeat the transcript
     assert not node.brain._incoming_speech
     assert len([e for e in node.brain._events if e.kind == EventKind.USER]) == 1
+
+
+@pytest.mark.parametrize("provider", ["gemini", "openai"])
+def test_household_replan_listening_and_operator_stop_provenance(agent_factory, provider):
+    agent, state = agent_factory()
+    started = enable_skills(agent, state)
+    cancelled = []
+    agent._runner.has_active_goal = True
+    agent._runner.cancel_active_goal = lambda: cancelled.append("stop")
+    agent._runner.interrupt_for_input = lambda ids: cancelled.append("listen")
+    requests = []
+    calls = []
+
+    def transport(model, body):
+        requests.append(body)
+        if provider == "openai":
+            yield completed(
+                *(
+                    call_item(f"call-{len(requests)}-{i}", name, json.dumps(args))
+                    for i, (name, args) in enumerate(calls)
+                )
+            )
+        else:
+            yield model_response(
+                *(call_part(name, args, f"call-{len(requests)}-{i}") for i, (name, args) in enumerate(calls))
+            )
+
+    if provider == "openai":
+        agent._context = context(transport)
+    else:
+        agent._context._transport = transport
+
+    def turn(*actions):
+        calls[:] = actions
+        run_turn(agent)
+        history = agent._context._history[-1]["parts"]
+        return [p["functionResponse"]["response"]["outcome"] for p in history if "functionResponse" in p]
+
+    # Intentional visible-person replan preserves request; next schema allows identity.
+    state.primitive_running = RunningSkill("navigate_to_position", NAV_SKILL["id"])
+    turn((STOP_SKILL, {"continue_task": True}))
+    assert not agent._request_stopped and cancelled == ["stop"]
+    state.primitive_running = None
+    turn(("person_identity", {}))
+    assert len(started) == 1
+    # Temporary input cancellation likewise leaves the request intact.
+    state.primitive_running = RunningSkill("navigate_to_position", NAV_SKILL["id"])
+    token = agent.begin_incoming_speech()
+    assert cancelled[-1] == "listen"
+    agent.finish_incoming_speech(token, "My order is ready to confirm")
+    state.primitive_running = None
+    turn(("person_identity", {}))
+    assert len(started) == 2 and not agent._request_stopped
+
+    # Receipt-time provenance survives queued playback across operator Stop.
+    queued = agent.begin_incoming_speech()
+    queued_generation = agent._request_generation
+    agent.on_user_message("Stop and wait")
+    turn((STOP_SKILL, {}))
+    assert agent._request_stopped and agent._request_generation > queued_generation
+    agent.finish_incoming_speech(queued, "Please continue my order")
+    late = next(e for e in agent._events if e.kind == EventKind.USER)
+    assert late.source == "environment" and late.request_generation == queued_generation
+    assert "start_new_request" not in {d["name"] for d in agent._build_tools(list(agent._events))[0]["functionDeclarations"]}
+    agent.on_skill_event(
+        "cancelled", "navigate_to_position", "Paused for incoming speech; the navigation goal was cancelled."
+    )
+    results = turn(("start_new_request", {}), ("person_identity", {}))
+    assert all(result.startswith("rejected") for result in results)
+    assert len(started) == 2 and agent._request_stopped
+    turn(("start_new_request", {}), ("navigate_to_position", {"x": 1, "y": 0}))
+    assert len(started) == 2 and agent._request_stopped
+    # Even a newly received NPC utterance after Stop cannot become an operator request.
+    token = agent.begin_incoming_speech()
+    agent.finish_incoming_speech(token, "Start a new request")
+    turn(("start_new_request", {}))
+    assert agent._request_stopped
+
+    agent.on_user_message("Please identify the person now")
+    results = turn(("start_new_request", {}), ("person_identity", {}))
+    assert results[0].startswith("new request accepted")
+    assert "next update" in results[1] and len(started) == 2
+    turn(("person_identity", {}))
+    assert len(started) == 3 and not agent._request_stopped
+    # Every native call receives its output even when fenced.
+    if provider == "openai":
+        outputs = [item for item in requests[-1]["input"] if item.get("type") == "function_call_output"]
+        assert {item["call_id"] for item in outputs} >= {"call-8-0", "call-8-1"}
+
+
+@pytest.mark.parametrize("provider", ["gemini", "openai"])
+@pytest.mark.parametrize("supersede", [False, True])
+def test_operator_request_survives_gated_wait_turns(agent_factory, provider, supersede):
+    agent, state = agent_factory()
+    started = enable_skills(agent, state)
+    agent._runner.has_active_goal = False
+    calls = []
+
+    def transport(model, body):
+        if provider == "openai":
+            yield completed(*(call_item(str(i), name, json.dumps(args)) for i, (name, args) in enumerate(calls)))
+        else:
+            yield model_response(*(call_part(name, args, str(i)) for i, (name, args) in enumerate(calls)))
+
+    if provider == "openai":
+        agent._context = context(transport)
+    else:
+        agent._context._transport = transport
+
+    def turn(*actions):
+        calls[:] = actions
+        run_turn(agent)
+
+    agent.on_user_message("Stop")
+    turn((STOP_SKILL, {}))
+    token = agent.begin_incoming_speech()
+    agent.on_user_message("Now identify the person")
+    pending = agent._latest_operator_event
+    turn((WAIT, {}))
+    turn((WAIT, {}))
+    assert any(event is pending for event in agent._events)
+    assert agent._request_stopped and not started
+    if supersede:
+        agent.on_user_message("Actually stop and wait")
+        turn((STOP_SKILL, {}))
+        assert agent._latest_operator_event is None
+    agent.finish_incoming_speech(token, "Please resume my order")
+    names = {d["name"] for d in agent._build_tools(list(agent._events))[0]["functionDeclarations"]}
+    assert ("start_new_request" in names) is not supersede
+    turn(("start_new_request", {}), ("person_identity", {}))
+    assert not started  # rejected or must wait for fresh action schemas
+    assert agent._request_stopped is supersede
+    turn(("person_identity", {}))
+    assert len(started) == (0 if supersede else 1)
+
+
+@pytest.mark.parametrize("provider", ["gemini", "openai"])
+def test_operator_receipt_survives_input_arriving_between_commit_and_act(agent_factory, provider):
+    agent, state = agent_factory()
+    enable_skills(agent, state)
+    agent._request_stopped = True
+    agent.on_user_message("Now identify the person")
+    pending = agent._latest_operator_event
+    calls = [("start_new_request", {})]
+
+    def transport(model, body):
+        if provider == "openai":
+            yield completed(*(call_item(str(i), name, json.dumps(args)) for i, (name, args) in enumerate(calls)))
+        else:
+            yield model_response(*(call_part(name, args) for name, args in calls))
+
+    if provider == "openai":
+        agent._context = context(transport)
+    else:
+        agent._context._transport = transport
+    original_act = agent._act
+    tokens = []
+
+    def act(*args, **kwargs):
+        tokens.append(agent.begin_incoming_speech())
+        return original_act(*args, **kwargs)
+
+    agent._act = act
+    run_turn(agent)
+    assert agent._request_stopped and any(event is pending for event in agent._events)
+    agent._act = original_act
+    agent.finish_incoming_speech(tokens[0], "My order please")
+    run_turn(agent)
+    assert not agent._request_stopped and agent._latest_operator_event is None
+    assert not any(event is pending for event in agent._events)
+
+
+@pytest.mark.parametrize("provider", ["gemini", "openai"])
+def test_old_stop_preserves_later_unseen_operator_receipt(agent_factory, provider):
+    agent, state = agent_factory()
+    started = enable_skills(agent, state)
+    agent._runner.has_active_goal = False
+    agent.on_user_message("Stop and wait")
+    turns = 0
+
+    def transport(model, body):
+        nonlocal turns
+        turns += 1
+        if turns == 1:
+            agent.on_user_message("Actually now identify the person")
+            calls = [(STOP_SKILL, {}), ("person_identity", {})]
+        elif turns == 2:
+            calls = [("start_new_request", {}), ("person_identity", {})]
+        else:
+            calls = [("person_identity", {})]
+        if provider == "openai":
+            yield completed(*(call_item(str(i), name, json.dumps(args)) for i, (name, args) in enumerate(calls)))
+        else:
+            yield model_response(*(call_part(name, args) for name, args in calls))
+
+    if provider == "openai":
+        agent._context = context(transport)
+    else:
+        agent._context._transport = transport
+    run_turn(agent)
+    assert agent._request_stopped and not started
+    pending = agent._latest_operator_event
+    assert pending is not None and "Actually now identify" in pending.text
+    assert pending.request_generation == agent._request_generation
+    assert any(event is pending for event in agent._events)
+    run_turn(agent)
+    assert not agent._request_stopped and not started
+    run_turn(agent)
+    assert len(started) == 1

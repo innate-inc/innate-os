@@ -37,7 +37,14 @@ from brain_client.brain.loop import LoopThread
 from brain_client.brain.openai_context import OpenAIContext
 from brain_client.brain.openai_transport import pick_openai_transport
 from brain_client.brain.prompt import build_system_prompt, self_reference_turns
-from brain_client.brain.tools import GO_TO_POINT_IN_VIEW, STOP_SKILL, WAIT, assign_tool_names, build_tools
+from brain_client.brain.tools import (
+    GO_TO_POINT_IN_VIEW,
+    START_REQUEST,
+    STOP_SKILL,
+    WAIT,
+    assign_tool_names,
+    build_tools,
+)
 from brain_client.brain.transport import pick_transport
 from brain_client.brain.utils import (
     Event,
@@ -151,6 +158,12 @@ class BrainAgent:
         self._frame_at_capture: bytes | None = None
         self._pitch_at_capture = 0.0
         self._tool_map: dict[str, str] = {}  # gemini function name -> skill id
+        self._request_stopped = False
+        self._request_generation = 0
+        self._latest_operator_event: Event | None = None
+        self._turn_operator_receipt: Event | None = None
+        self._acting_on_user_request = False
+        self._request_started_this_turn = False
         self._error_streak = 0
         self._activated_at = 0.0
         self._turn_count = 0
@@ -164,7 +177,7 @@ class BrainAgent:
         # Input callbacks and dispatch share this lock: speech cannot begin
         # between the final gate check and claiming a new skill.
         self._input_lock = threading.RLock()
-        self._incoming_speech: set[object] = set()
+        self._incoming_speech: dict[object, int] = {}
         self._input_generation = 0
         self._accept_incoming = state.is_brain_active
 
@@ -246,6 +259,10 @@ class BrainAgent:
             return
         if self._context is not None:
             self._context.clear()
+        with self._input_lock:
+            self._request_stopped = False
+            self._request_generation += 1
+            self._latest_operator_event = None
         if was_running and self._state.is_brain_active:
             with self._input_lock:
                 self._accept_incoming = True
@@ -346,6 +363,12 @@ class BrainAgent:
             identity=self._identity.current if self._identity is not None else None,
             running_guidance=self._running_guidance(self._state.primitive_running),
         )
+        if self._request_stopped:
+            system += (
+                "\nThe previous request and remaining steps were cancelled. Do not resume on world updates, "
+                "resident speech, or skill completion. Answer conversation in text. Only a fresh operator "
+                "instruction may use start_new_request; then wait for next update's action schemas."
+            )
         if self._state.log_everything:
             self._logger.info(f"[Brain] Turn input:\n{text}")
         self._trace_turn_start(text, frames, tools, system, context)
@@ -359,9 +382,27 @@ class BrainAgent:
             return
 
         decision = context.absorb(message, response, latest_only_images=wrist_frames)
-        del self._events[: len(events)]
+        committed_events = tuple(events)
+        with self._input_lock:
+            del self._events[: len(events)]
         events.clear()  # committed: a failure below backs off against an empty peek
-        outcomes = self._act(decision, speaker, context, input_generation=input_generation)
+        self._request_started_this_turn = False
+        try:
+            outcomes = self._act(decision, speaker, context, input_generation=input_generation)
+        finally:
+            with self._input_lock:
+                pending_operator = self._latest_operator_event
+                if (
+                    self._input_blocks(input_generation)
+                    and pending_operator is not None
+                    and any(event is pending_operator for event in committed_events)
+                    and pending_operator.request_generation == self._request_generation
+                ):
+                    # Decide after dispatch: input can begin between commit and
+                    # _act. Accepted start/Stop clear this receipt, so neither is
+                    # replayed; fenced turns keep the instruction visible.
+                    self._events.insert(0, pending_operator)
+                self._acting_on_user_request = False
         self._trace(
             TraceEvent.TURN_END,
             turn=self._turn_count,
@@ -525,10 +566,18 @@ class BrainAgent:
         running = self._state.primitive_running
         user_spoke = any(event.kind == EventKind.USER for event in events)
         self._turn_user_spoke = user_spoke
+        self._turn_operator_receipt = next((event for event in reversed(events) if event.source == "operator"), None)
+        self._acting_on_user_request = any(
+            event.kind == EventKind.USER
+            and event.source == "operator"
+            and event.request_generation == self._request_generation
+            and event is self._latest_operator_event
+            for event in events
+        )
         with self._input_lock:
             if self._incoming_speech:
                 self._tool_map = {}
-                return build_tools([], running.primitive_name if running else None)
+                return build_tools([], running.primitive_name if running else None, user_spoke=user_spoke)
         active_ids = set(self._roster.active_skill_ids())
         skills = [meta for meta in self._state.registry.metadata if meta["id"] in active_ids]
         blocked_ids = self._interaction_blocked_skill_ids()
@@ -538,6 +587,14 @@ class BrainAgent:
         # the name the model calls always resolves to the skill it was declared for.
         named = assign_tool_names(skills)
         self._tool_map = {name: meta["id"] for name, meta in named}
+        if self._request_stopped:
+            return build_tools(
+                [],
+                running.primitive_name if running else None,
+                user_spoke=self._acting_on_user_request,
+                request_stopped=True,
+                can_stop_running=self._departure_guard_reason() is None,
+            )
         if running is not None:
             return build_tools(
                 [],
@@ -545,7 +602,7 @@ class BrainAgent:
                 user_spoke=user_spoke,
                 can_stop_running=self._departure_guard_reason() is None,
             )
-        return build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids)
+        return build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids, user_spoke=user_spoke)
 
     # ================= act =================
     def _act(
@@ -626,8 +683,38 @@ class BrainAgent:
                 running = self._state.primitive_running
                 if self._incoming_speech and running is not None and running.manual and not self._turn_user_spoke:
                     return "rejected — incoming speech does not interrupt a manual skill"
-                return self._stop_skill()
+                if self._departure_guard_reason() is not None and not self._turn_user_spoke:
+                    return self._stop_skill()
+                if call.args.get("continue_task") is not True:
+                    self._request_stopped = True
+                    self._request_generation += 1
+                    newer = self._latest_operator_event
+                    if (
+                        newer is not None
+                        and newer is not self._turn_operator_receipt
+                        and any(event is newer for event in self._events)
+                    ):
+                        # Stop remains authoritative for the old request, but a
+                        # later unseen operator receipt belongs to the new epoch.
+                        # Preserve its wording/identity ordering for a fresh turn.
+                        preserved = Event(newer.text, newer.image, newer.kind, newer.source, self._request_generation)
+                        self._events[:] = [
+                            preserved if event is newer else event
+                            for event in self._events
+                            if event.source != "operator" or event is newer
+                        ]
+                        self._latest_operator_event = preserved
+                    else:
+                        self._latest_operator_event = None
+                        self._events[:] = [event for event in self._events if event.source != "operator"]
+                    self._acting_on_user_request = False
+                outcome = self._stop_skill()
+                if self._request_stopped:
+                    outcome += "; remaining steps cancelled — wait for a new operator instruction"
+                return outcome
             if self._input_blocks(input_generation):
+                if any(event.kind == EventKind.USER and event.source == "operator" for event in self._events):
+                    return "rejected — a newer user message is pending; respond to it before acting"
                 return "rejected — incoming speech changed; wait for and consume its transcript before acting"
             return self._dispatch_available(call)
 
@@ -635,6 +722,23 @@ class BrainAgent:
         return bool(self._incoming_speech) or (generation is not None and generation != self._input_generation)
 
     def _dispatch_available(self, call: ToolCall) -> str:
+        if call.name == START_REQUEST:
+            if (
+                not self._request_stopped
+                or not self._acting_on_user_request
+                or any(event.kind == EventKind.USER for event in self._events)
+            ):
+                return "rejected — only a new user instruction can begin a new request"
+            self._request_stopped = False
+            self._latest_operator_event = None
+            self._request_started_this_turn = True
+            return "new request accepted — carry out only the user's latest instruction"
+        if any(event.kind == EventKind.USER for event in self._events):
+            return "rejected — a newer user message is pending; respond to it before acting"
+        if self._request_started_this_turn:
+            return "rejected — wait for the next update and its action schemas before starting the new request"
+        if self._request_stopped:
+            return "rejected — the request was cancelled; wait for a new user instruction"
         if not self._state.is_brain_active:
             # Deactivation raced this turn's _act: don't start anything new
             # (a goal that slips through anyway is cancelled by the runner's
@@ -648,12 +752,17 @@ class BrainAgent:
         if self._state.primitive_running is not None:
             return "rejected — another skill is already running; stop it first"
         if call.name == GO_TO_POINT_IN_VIEW:
-            return self._go_to_point_in_view(call.args)
+            outcome = self._go_to_point_in_view(call.args)
+            if self._acting_on_user_request and not outcome.startswith("rejected"):
+                self._latest_operator_event = None
+            return outcome
         if skill_id is None:
             return f"unknown skill '{call.name}'"
         if skill_id not in self._roster.active_skill_ids():
             return f"rejected — {call.name} is no longer available"
         self._start_skill(skill_id, self._adjust_nav_goal(skill_id, dict(call.args)))
+        if self._acting_on_user_request:
+            self._latest_operator_event = None
         return "started — you will get an event when it finishes"
 
     def _stop_skill(self) -> str:
@@ -814,7 +923,7 @@ class BrainAgent:
             if not self._accept_incoming or not self._state.is_brain_active:
                 return None
             token = object()
-            self._incoming_speech.add(token)
+            self._incoming_speech[token] = self._request_generation
             self._input_generation += 1
             try:
                 running = self._state.primitive_running
@@ -822,7 +931,7 @@ class BrainAgent:
                     self._runner.interrupt_for_input(_INPUT_INTERRUPT_SKILLS)
                 self.add_event("Incoming speech started. Wait for the completed transcript before continuing.")
             except Exception:
-                self._incoming_speech.remove(token)
+                self._incoming_speech.pop(token)
                 self._input_generation += 1
                 raise
             return token
@@ -834,18 +943,28 @@ class BrainAgent:
                 return
             try:
                 if self._accept_incoming and self._state.is_brain_active:
-                    self.on_user_message(text)
+                    self.on_user_message(text, source="environment", request_generation=self._incoming_speech[token])
             finally:
-                self._incoming_speech.remove(token)
+                self._incoming_speech.pop(token)
                 self._input_generation += 1
 
-    def add_event(self, text: str, image: bytes | None = None, kind: EventKind = EventKind.INFO) -> None:
+    def add_event(
+        self,
+        text: str,
+        image: bytes | None = None,
+        kind: EventKind = EventKind.INFO,
+        *,
+        source: str = "system",
+        request_generation: int | None = None,
+    ) -> Event | None:
         """Queue something that happened; the loop wakes for an immediate turn."""
         if not self.available:
             return  # no transport, no loop: these would accumulate forever
-        self._events.append(Event(text, image, kind))
+        event = Event(text, image, kind, source, request_generation)
+        self._events.append(event)
         self._runtime.post(self._wake, kind)
         self._trace(TraceEvent.EVENT, kind=kind, text=text, image=image is not None)
+        return event
 
     def _wake(self, kind: EventKind) -> None:
         """Loop thread: end any pause; user speech also abandons a housekeeping turn."""
@@ -853,8 +972,17 @@ class BrainAgent:
         if kind == EventKind.USER:
             self._user_spoke.set()
 
-    def on_user_message(self, text: str) -> None:
-        self.add_event(f'The user says: "{text}"', kind=EventKind.USER)
+    def on_user_message(self, text: str, *, source: str = "operator", request_generation: int | None = None) -> None:
+        with self._input_lock:
+            if source == "operator":
+                self._input_generation += 1  # fence in-flight speech/actions at receipt, before interpretation
+            generation = self._request_generation if request_generation is None else request_generation
+            label = "The user says" if source == "operator" else "The resident says"
+            event = self.add_event(
+                f'{label}: "{text}"', kind=EventKind.USER, source=source, request_generation=generation
+            )
+            if source == "operator":
+                self._latest_operator_event = event
 
     def on_custom_input(self, data: dict) -> None:
         device = data.get("input_device", "unknown")

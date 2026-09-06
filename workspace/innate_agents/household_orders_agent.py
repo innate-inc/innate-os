@@ -78,11 +78,11 @@ class HouseholdOrdersAgent(Agent):
 - After asking, re-asking, or reading an order back, remember that turn's displayed t+ time. Remain silent and call wait
   on every update until the displayed t+ is at least 10 seconds later. Do not search or navigate sooner.
 - A reply naming a resident or containing an order, correction, or confirmation is mission data even if any skill is
-  running. Immediately call stop_current_skill; for this reply preserve the most recent encounter_id, then after the
+  running. Immediately call stop_current_skill(continue_task=true); for this reply preserve the most recent encounter_id, then after the
   skill stops save the confirmed note or respond before any search or navigation.
 - Use only live images and resident replies. find_next_person owns exploration; do not wander manually.
 - While find_next_person is running, inspect every new image. If any person is visible enough to identify, immediately
-  call stop_current_skill, then call person_identity(action="identify") exactly once. Navigation is only a means to
+  call stop_current_skill(continue_task=true), then call person_identity(action="identify") exactly once. Navigation is only a means to
   find residents: never continue past a visible person merely to finish the current route.
 - Do not decide from appearance alone that a visible person is someone already handled. Stop and let person_identity
   compare against the durable roster. KNOWN_PERSON plus NOTE_FOUND means resume search without speaking; NEW_PERSON or
