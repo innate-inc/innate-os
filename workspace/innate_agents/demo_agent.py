@@ -9,6 +9,7 @@ from innate_skills.navigate_to_position import NavigateToPosition
 from innate_skills.open_gripper import OpenGripper
 from innate_skills.pick_any_object import PickAnyObject
 from innate_skills.search_memory import SearchMemory
+from innate_skills.throw_object import ThrowObject
 from innate_skills.wave import Wave
 from inputs.micro_input import MicroInput
 
@@ -42,6 +43,7 @@ class DemoAgent(Agent):
             ChangeVolume,
             CheckBattery,
             DropInBox,
+            ThrowObject,
         ]
 
     def get_inputs(self) -> list[InputRef]:

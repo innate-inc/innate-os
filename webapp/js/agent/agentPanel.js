@@ -211,6 +211,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   function focusComposerOnEnter(e) {
     if (
       e.defaultPrevented ||
+      root.classList.contains("first-mission-choosing") ||
       e.key !== "Enter" ||
       e.repeat ||
       e.altKey ||

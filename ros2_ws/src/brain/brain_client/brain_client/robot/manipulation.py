@@ -63,6 +63,9 @@ class Waypoint:
     pitch: float = 0.0
     yaw: float = 0.0
     duration: float = 1.0
+    # Optional release within a continuous trajectory. None carries the grip
+    # from the preceding waypoint (or follow's standing grip at the start).
+    grip: float | None = None
 
 
 class Safety:
@@ -465,6 +468,10 @@ class Manipulation:
             joints = self._solve_ik(wp.x, wp.y, wp.z, wp.roll, wp.pitch, wp.yaw)
             if joints is None:
                 raise ArmFailed(f"IK found no solution for waypoint {i} ({wp.x:.2f}, {wp.y:.2f}, {wp.z:.2f})")
+            if wp.grip is not None:
+                if not math.isfinite(wp.grip) or not -self.GRIPPER_MAX_STRENGTH <= wp.grip <= self.GRIPPER_OPEN:
+                    raise ArmFailed(f"invalid grip at waypoint {i}")
+                j6 = wp.grip
             waypoint_joints.append(joints + [j6])
 
         if len(waypoint_joints) == 1:

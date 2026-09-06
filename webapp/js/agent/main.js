@@ -30,6 +30,8 @@ import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
 import { createAgentMicControl } from "./agentMicControl.js";
 import { createAgentOnboarding } from "./agentOnboarding.js";
+import { createInterfaceTour } from "../uiTour.js";
+import { initializeFirstRunCompletion } from "../onboarding.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
 // marks a sim deployment — used here to drop the (absent) battery readout. Fetched
@@ -37,6 +39,7 @@ import { createAgentOnboarding } from "./agentOnboarding.js";
 // it synchronously.
 /** @type {any} */
 const config = await getConfig();
+if (config.simControls) await initializeFirstRunCompletion();
 
 // Resolved once at import time (the router's dynamic import awaits it):
 // WebRTC for real robots, the Three.js SimSession in simulation (see
@@ -161,81 +164,6 @@ function buildAgentView(root) {
   let micControl = null;
   /** @type {ReturnType<typeof createAgentOnboarding> | null} */
   let onboarding = null;
-  const simProps = /** @type {{
-   *   onProps?: (callback: (props: {name: string}[]) => void) => () => void,
-   *   placePropAtRobot?: (name: string) => void,
-   *   onEnvironment?: (callback: (roster: {environment: {id: string} | null, environments: {id: string}[], switch: {id: string, state: string, message?: string} | null}) => void) => () => void,
-   *   switchEnvironment?: (id: string) => void,
-   * }} */ (/** @type {unknown} */ (session));
-  function prepareBackrooms() {
-    if (!config.simControls || !simProps.onEnvironment || !simProps.switchEnvironment) return Promise.resolve();
-    const onEnvironment = simProps.onEnvironment;
-    const switchEnvironment = simProps.switchEnvironment;
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      let requested = false;
-      let subscribed = false;
-      let unsubscribe = () => {};
-      const finish = (/** @type {Error | null} */ error = null) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (subscribed) unsubscribe();
-        if (error) reject(error);
-        else resolve(undefined);
-      };
-      const timer = setTimeout(
-        () => finish(new Error("Backrooms took too long to load.")),
-        15_000,
-      );
-      unsubscribe = onEnvironment((roster) => {
-        if (roster.environment?.id === "backrooms" && roster.switch?.state !== "loading") {
-          // Blake is the largest standing resident model. Its authored reach
-          // places it 1.5m ahead of the backrooms spawn: clearly visible, but
-          // with enough room for MARS to approach and release the LEGO.
-          simProps.placePropAtRobot?.("resident_blake");
-          finish();
-          return;
-        }
-        if (roster.switch?.id === "backrooms" && roster.switch.state === "failed") {
-          finish(new Error(roster.switch.message || "Backrooms failed to load."));
-          return;
-        }
-        if (!roster.environments.some(({ id }) => id === "backrooms")) {
-          finish(new Error("The backrooms environment is unavailable."));
-          return;
-        }
-        if (!requested) {
-          requested = true;
-          switchEnvironment("backrooms");
-        }
-      });
-      subscribed = true;
-      if (settled) unsubscribe();
-    });
-  }
-  /** @type {(() => void) | null} */
-  let stopLegoPrep = null;
-  function prepareLego() {
-    stopLegoPrep?.();
-    stopLegoPrep = null;
-    if (!config.simControls || !simProps.onProps || !simProps.placePropAtRobot) return;
-    let placed = false;
-    let subscribed = false;
-    let unsubscribe = () => {};
-    unsubscribe = simProps.onProps((props) => {
-      if (placed || !props.some((prop) => prop.name === "lego")) return;
-      placed = true;
-      simProps.placePropAtRobot?.("lego");
-      if (subscribed) {
-        unsubscribe();
-        stopLegoPrep = null;
-      }
-    });
-    subscribed = true;
-    if (placed) unsubscribe();
-    else stopLegoPrep = unsubscribe;
-  }
   const panel = createAgentPanel(root, ros, agentState, {
     enableMic: Boolean(config.simControls),
     onMicState: (state) => {
@@ -249,9 +177,7 @@ function buildAgentView(root) {
       if (!onboarding?.isActive()) return fallback();
       await onboarding.ensureRunning();
     },
-    onUserMessage: (text, timestamp) => onboarding?.onUserMessage(text, timestamp),
-    onRobotMessage: (text, timestamp) => onboarding?.onRobotMessage(text, timestamp),
-    onSkillStatus: (event) => onboarding?.onSkillStatus(event),
+    onUserMessage: () => onboarding?.onUserMessage(),
   });
   onboarding = createAgentOnboarding(root, ros, agentState, {
     // Opening a page must never activate autonomous control on physical MARS.
@@ -259,8 +185,7 @@ function buildAgentView(root) {
     onNotice: panel.addNotice,
     onStart: panel.beginOnboarding,
     onSuggestedPrompt: panel.setSuggestedPrompt,
-    prepareEnvironment: prepareBackrooms,
-    prepareLego,
+    session,
   });
   const simSession = /** @type {any} */ (session);
   const challengePanel =
@@ -331,11 +256,11 @@ function buildAgentView(root) {
     cameraSwitch,
     ...(micControl ? [micControl] : []),
     onboarding,
+    createInterfaceTour(root, "agent"),
     panel,
     {
       destroy: () => {
         root.removeEventListener("pointerdown", onScenePointerDown);
-        stopLegoPrep?.();
       },
     },
     { destroy: () => stageViewToggle.remove() },
