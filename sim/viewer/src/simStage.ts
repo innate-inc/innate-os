@@ -14,6 +14,7 @@ import { APARTMENT_VIEWER, SimScene, type CameraMode, type CameraView } from "./
 import type { EnvironmentInfo } from "./physics/worldStateController";
 import type { PropInfo } from "./props";
 import { LoadQueue } from "./loadQueue";
+import { createEnvironmentBridge } from "./environmentBridge";
 import { THUMB_H, THUMB_W, type SimSession } from "./simSession";
 
 // One PiP tile refresh per N rendered frames, round-robin: ~30fps per tile
@@ -605,7 +606,9 @@ export function createSimStage(
   // The robot loads once; environments come and go around it.
   let robotDone: Promise<unknown> | null = null;
   let loadedEnvironmentId: string | null = null;
+  let currentEnvironment: EnvironmentInfo | null = null;
   let loadVersion = 0;
+  const environmentBridge = createEnvironmentBridge(session, () => void loadEnvironment(currentEnvironment));
   const loadEnvironment = async (environment: EnvironmentInfo | null) => {
     // Discard superseded loads after each await.
     const version = ++loadVersion;
@@ -615,9 +618,12 @@ export function createSimStage(
         if (version === loadVersion) setProgress(loaded, total);
       });
       queue.setEstimatedTotal(35e6);
-      scene.unloadEnvironment();
+      // Retrying geometry does not produce a new server epoch/pose. Keep
+      // the existing robot and traffic instead of waiting for a respawn.
+      scene.unloadEnvironment({ preserveWorldState: loadedEnvironmentId === environment?.id });
     }
     loadedEnvironmentId = environment?.id ?? "";
+    environmentBridge.updateView(loadedEnvironmentId, "loading");
     const name = environment?.display_name.toLowerCase() ?? "apartment";
     try {
       // Show layout placeholders while meshes download.
@@ -633,10 +639,12 @@ export function createSimStage(
       await Promise.all([robotDone, scene.streamApartment(queue, layout)]);
       if (disposed || version !== loadVersion) return;
       hideLoading();
+      environmentBridge.updateView(loadedEnvironmentId, "ready");
       // Prefetch props after the scene, outside its progress bar.
       if (firstLoad) scene.prefetchPropModels();
     } catch (err) {
       if (disposed || version !== loadVersion) return;
+      environmentBridge.updateView(environment?.id ?? "", "failed");
       if (robotDone === null) {
         session.stageError(err);
         return;
@@ -651,6 +659,7 @@ export function createSimStage(
   startLoop();
   let environmentOptionsKey = "";
   const unsubscribeEnvironment = session.onEnvironment(({ environment, environments, switch: pending }) => {
+    currentEnvironment = environment;
     environmentSection.hidden = environments.length < 2;
     const optionsKey = environments.map(({ id, display_name }) => `${id}\0${display_name}`).join("\n");
     if (optionsKey !== environmentOptionsKey) {
@@ -698,6 +707,7 @@ export function createSimStage(
       unsubscribe();
       unsubscribeProps();
       unsubscribeEnvironment();
+      environmentBridge.destroy();
       stopLoop();
       observer.disconnect();
       longTaskObserver?.disconnect();

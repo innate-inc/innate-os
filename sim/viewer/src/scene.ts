@@ -565,8 +565,8 @@ export class SimScene {
   }
 
   /** Dispose environment assets; retain the robot and props for the next pose. */
-  unloadEnvironment(): void {
-    this.traffic.unloadEnvironment();
+  unloadEnvironment({ preserveWorldState = false }: { preserveWorldState?: boolean } = {}): void {
+    if (!preserveWorldState) this.traffic.unloadEnvironment();
     for (const group of [this.layoutGroup, this.hullsGroup]) {
       if (!group) continue;
       this.scene.remove(group);
@@ -578,15 +578,16 @@ export class SimScene {
     }
     this.layoutGroup = this.hullsGroup = this.hullsPromise = this.layoutBounds = undefined;
     this.environmentGeneration += 1;
-    this.robotRoot.visible = false;
-    this.spawned = false;
+    if (!preserveWorldState) {
+      this.robotRoot.visible = false;
+      this.spawned = false;
+    }
   }
 
   /**
    * Phase two: stream each room's glb through the queue and swap its
-   * placeholder box out on arrival. A room that fails is non-fatal (visual
-   * only): log it, drop its box, and let the rest of the apartment and the
-   * session carry on.
+   * placeholder box out on arrival. Finish the remaining rooms on failure,
+   * then let the stage offer a retry instead of claiming the world loaded.
    */
   async streamApartment(queue: LoadQueue, layout: ApartmentLayout): Promise<void> {
     const loader = new GLTFLoader();
@@ -595,22 +596,18 @@ export class SimScene {
     if (layout.monolith) {
       // Single-glb packs, and the dev fallback for a checkout that never ran
       // the apartment split (the published bundle always ships the manifest).
-      // Non-fatal: the sim just runs without the visual environment.
-      try {
-        if (!layout.modelUrl) throw new Error("the pack names no model");
-        const root = await queuedGLB(queue, loader, layout.modelUrl);
-        if (group !== this.layoutGroup) {
-          disposeObject(root); // the pack was unloaded while this streamed
-          return;
-        }
-        this.dressRoom(root);
-        group.add(root);
-      } catch (err) {
-        console.error("[sim-viewer] environment unavailable (no manifest, no monolith):", err);
+      if (!layout.modelUrl) throw new Error("the pack names no model");
+      const root = await queuedGLB(queue, loader, layout.modelUrl);
+      if (group !== this.layoutGroup) {
+        disposeObject(root); // the pack was unloaded while this streamed
+        return;
       }
+      this.dressRoom(root);
+      group.add(root);
       return;
     }
 
+    let failed = false;
     const loadRoom = ({ room, box }: ApartmentLayout["rooms"][number]) =>
       queuedGLB(queue, loader, `${layout.baseUrl}${room.file}`)
         .then((root) => {
@@ -621,7 +618,10 @@ export class SimScene {
           this.dressRoom(root);
           group.add(root);
         })
-        .catch((err) => console.error(`[sim-viewer] apartment room '${room.file}' failed to load:`, err))
+        .catch((err) => {
+          failed = true;
+          console.error(`[sim-viewer] apartment room '${room.file}' failed to load:`, err);
+        })
         .finally(() => {
           group.remove(box);
           box.geometry.dispose(); // material is shared -- disposed in dispose()
@@ -637,6 +637,7 @@ export class SimScene {
     const rest = ordered.slice(priority.length);
     for (const room of priority) await loadRoom(room);
     await Promise.all(rest.map(loadRoom));
+    if (failed) throw new Error("Some environment models failed to load");
   }
 
   /**
