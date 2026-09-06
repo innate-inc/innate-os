@@ -370,6 +370,11 @@ export class SimSession {
     this.#controller?.send({ op: "switch_environment", id });
   }
 
+  /** A roster alone may be stale after the observer connection drops. */
+  get environmentConnected(): boolean {
+    return this.#started && this.#lastArrival > 0 && performance.now() / 1000 - this.#lastArrival < 5;
+  }
+
   /** Whether any manipulation prop is currently in the world. Read from
    * ground truth rather than from what this client last asked for, so the
    * stage's button still reads right after a sim reset or another viewer's
