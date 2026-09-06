@@ -696,6 +696,57 @@ def test_error_backoff_ignores_chatter_but_wakes_for_user_speech(agent_factory):
     future.result(timeout=2)
 
 
+@pytest.mark.parametrize("wake", ["completed", "failed", "interrupted", "speech", "feedback", "image"])
+def test_bare_running_feedback_keeps_supervision_pause_but_meaningful_events_wake(agent_factory, wake):
+    agent, state = agent_factory()
+    state.primitive_running = RunningSkill("find_next_person", "innate-os/find_next_person")
+    state.current_directive = SimpleNamespace(
+        get_turn_intervals=lambda: TurnIntervals(supervision=1.0),
+        get_departure_guard=lambda: None,
+        get_prompt=lambda: "Search for people",
+    )
+    requests = []
+
+    def transport(model, body):
+        requests.append(body)
+        return [model_response(call_part(WAIT, {}))]
+
+    agent._context._transport = transport
+    paused = threading.Event()
+
+    async def next_update():
+        paused.set()
+        await agent._pause(agent._interval())
+        await agent._turn(agent._context)
+
+    future = asyncio.run_coroutine_threadsafe(next_update(), agent._runtime.loop)
+    assert paused.wait(1)
+    for feedback in ("running", " running ", "RUNNING", "", "  ", "running"):
+        agent.on_skill_feedback("find_next_person", feedback)
+    time.sleep(0.05)  # allow a mistakenly queued wake to reach the model
+    assert agent._interval() == 1.0  # search visual-supervision cadence is unchanged
+    assert not future.done() and not requests and not agent._events
+    if wake == "speech":
+        agent.on_user_message("Stop now")
+    elif wake == "feedback":
+        agent.on_skill_feedback("find_next_person", "running recovery after planner failure")
+    elif wake == "image":
+        agent.on_skill_feedback("find_next_person", "running", image=JPEG)
+    else:
+        agent.on_skill_event(wake, "find_next_person", "terminal detail")
+    future.result(timeout=0.5)  # terminal/input delivery does not wait out the timer
+    assert len(requests) == 1
+    assert not agent._events  # the next real model update consumed the event
+    if wake == "image":
+        assert images_in(requests[0]["contents"][-1]) == 2  # main view plus feedback image
+    elif wake == "speech":
+        assert "Stop now" in json.dumps(requests[0])
+    elif wake == "feedback":
+        assert "running recovery after planner failure" in json.dumps(requests[0])
+    else:
+        assert f"Skill find_next_person {wake}: terminal detail" in json.dumps(requests[0])
+
+
 def test_turn_start_drops_the_oldest_backlog_beyond_the_cap(agent_factory):
     # An outage plus a chatty scene must not grow the turn input without
     # bound: the oldest stimuli are dropped at the cap (they are stale).

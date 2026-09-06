@@ -1019,6 +1019,12 @@ class BrainAgent:
         self.add_event(line, image=image)
 
     def on_skill_feedback(self, skill_name: str, feedback: str, image: bytes | None = None) -> None:
+        # The running skill is already present in every observation. A bare
+        # status adds no information, but queuing it bypasses the supervision
+        # pause and spends a model turn on short skills before they finish.
+        # Keep visual supervision on its normal timer and all actual feedback.
+        if not image and feedback.strip().casefold() in {"", "running"}:
+            return
         self.add_event(f"Update from running skill {skill_name}: {feedback}", image=image)
 
     # ================= telemetry =================
