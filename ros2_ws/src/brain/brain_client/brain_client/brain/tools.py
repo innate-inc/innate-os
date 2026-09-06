@@ -99,20 +99,41 @@ def build_tools(
     carrying a user message gets stop_current_skill ALONE — plain text becomes
     the reply channel, and the description steers stop away from questions.
     """
-    if running_skill_name is not None:
+    if running_skill_name is not None or user_spoke:
         stop = {
             "name": STOP_SKILL,
-            "description": f"Abort the currently running skill ({running_skill_name}). "
+            "description": (
+                f"Abort the currently running skill ({running_skill_name}). "
+                if running_skill_name
+                else "Cancel the current request and its remaining steps. "
+            )
             + (
                 "Only when the user asks you to stop or switch task, or the skill is clearly "
                 "failing. Questions and conversation are NOT reasons to stop — answer those "
                 "in text and let the skill continue."
                 if user_spoke
                 else "Use when it is clearly failing, no longer makes sense, or the user asks for something else."
-            ),
+            )
+            + " By default, cancel the whole request and wait for a new user instruction.",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "continue_task": {
+                        "type": "BOOLEAN",
+                        "description": (
+                            "Default false. Set true only to replan a failing skill or switch to "
+                            "a replacement task the user explicitly requested. Never true when "
+                            "the user asks to stop, wait, or keep holding an object."
+                        ),
+                    },
+                },
+            },
         }
+    if running_skill_name is not None:
         return [{"functionDeclarations": [stop] if user_spoke else [stop, _WAIT_DECLARATION]}]
     declarations = [_declaration(name, meta) for name, meta in named_skills]
+    if user_spoke:
+        declarations.append(stop)
     if can_go_to_point_in_view:
         declarations.append(_GO_TO_POINT_IN_VIEW_DECLARATION)
     declarations.append(_WAIT_DECLARATION)
