@@ -142,11 +142,11 @@ ROLLED_PITCH = math.pi / 2
 MEM_COAST_LIMIT = 2
 WRIST_SEARCH_ARM = [0.1473, -0.0706, -0.4449, 1.3376, -0.0491]
 # Same camera pitch and reach, without raising to 20cm only to descend again.
-# URDF FK: EE near (0.30,-0.053,0.10). Used only when every joint travels no
+# URDF FK: EE near (0.315,-0.053,0.10). Used only when every joint travels no
 # farther than in the original search move, at the same duration.
-LOW_WRIST_SEARCH_ARM = [0.1473, -0.19894886, 0.43537349, 0.58357537, -0.0491]
+LOW_WRIST_SEARCH_ARM = [0.1473, -0.08003764, 0.30662779, 0.59340985, -0.0491]
 # Only for model-confirmed thin, flat rigid targets with clearance at 7cm.
-FLAT_WRIST_SEARCH_ARM = [0.1473, -0.12154981, 0.58245634, 0.35909347, -0.0491]
+FLAT_WRIST_SEARCH_ARM = [0.1473, -0.07563421, 0.53055148, 0.36508273, -0.0491]
 
 
 class _BlobTracker:
@@ -630,14 +630,17 @@ class PickAnyObject(Skill):
         pose = [bearing, a[1], a[2], self._p["wrist_pitch"] - a[1] - a[2], a[4], self.manipulation.GRIPPER_OPEN]
         if self._pickup_policy is not None:
             search = a
+            reach = 0.30
             if self._grip_strength is not None and self._grip_strength < SOFT_GRIP_MIN:
                 if self._search_clearance == "flat":
                     search = FLAT_WRIST_SEARCH_ARM
+                    reach = 0.306
                 elif self._search_clearance == "low":
                     search = LOW_WRIST_SEARCH_ARM
+                    reach = 0.315
             # Aim from joint1's URDF origin, not base_link. The fixed search
-            # pose reaches about 30cm; camera servoing handles the remainder.
-            arm_bearing = math.atan2(0.30 * math.sin(bearing) + 0.05285, 0.30 * math.cos(bearing) - 0.086)
+            # reach follows the selected pose; camera servoing handles the rest.
+            arm_bearing = math.atan2(reach * math.sin(bearing) + 0.05285, reach * math.cos(bearing) - 0.086)
             candidate = [
                 arm_bearing,
                 search[1],
@@ -1022,7 +1025,14 @@ class PickAnyObject(Skill):
                 self.manipulation.move_joints(NAV_ARM, duration=3.0, block=False)
                 self._nav_pending = True
 
-            approach = FloorApproach(self, self._p, self._detect_px)
+            approach = FloorApproach(
+                self,
+                self._p,
+                self._detect_px,
+                # Astra's wrist stage must recognize the target again before
+                # any grasp. Blind or classic callers keep head confirmation.
+                confirm_arrival=self._pickup_policy is None or self._p["wrist_steps"] < 1,
+            )
             self.say(f"Looking for {prompt}.")
             xy = approach.search(prompt)
             xy = approach.position_above(prompt, xy)
