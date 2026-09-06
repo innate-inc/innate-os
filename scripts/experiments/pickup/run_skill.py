@@ -17,6 +17,7 @@ p.add_argument("--controller", choices=("astra", "classic"))
 p.add_argument("--timeout", type=float, default=180)
 p.add_argument("--disable-only", action="store_true")
 p.add_argument("--cancel-during-astra", action="store_true")
+p.add_argument("--cancel-during-wrist", action="store_true")
 a = p.parse_args()
 rclpy.init()
 node = rclpy.create_node("pickup_measurement")
@@ -54,15 +55,22 @@ try:
         raise RuntimeError("Pickup rejected")
     result_future = handle.get_result_async()
     try:
-        if a.cancel_during_astra:
+        if a.cancel_during_astra or a.cancel_during_wrist:
             probe = Path("/root/innate-os/workspace/skill_storage/pickup_probe/events.jsonl")
             while not result_future.done() and time.monotonic() - started < a.timeout:
                 rclpy.spin_once(node, timeout_sec=0.05)
                 events = [json.loads(line) for line in probe.read_text().splitlines()] if probe.exists() else []
                 if any(
-                    e["kind"] == "provider_start"
-                    and e.get("model") == "gpt-6-astra"
-                    and e["wall"] >= row["request_wall"]
+                    e["wall"] >= row["request_wall"]
+                    and (
+                        (a.cancel_during_astra and e["kind"] == "provider_start" and e.get("model") == "gpt-6-astra")
+                        or (
+                            a.cancel_during_wrist
+                            and e["kind"] == "phase_end"
+                            and e.get("phase") == "_wrist_seed"
+                            and time.time() - e["wall"] >= 0.5
+                        )
+                    )
                     for e in events
                 ):
                     row["cancel_wall"] = time.time()

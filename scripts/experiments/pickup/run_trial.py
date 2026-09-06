@@ -35,6 +35,7 @@ parser.add_argument("--x", type=float, default=-4.34)
 parser.add_argument("--y", type=float, default=-0.47)
 parser.add_argument("--prompt", default="the red LEGO brick")
 parser.add_argument("--cancel-during-astra", action="store_true")
+parser.add_argument("--cancel-during-wrist", action="store_true")
 a = parser.parse_args()
 if not a.live:
     parser.error("This runs robot motion in the simulator and billed inference; pass --live")
@@ -195,6 +196,8 @@ def run():
     remote = "/tmp/pickup-result.json"
     try:
         options = ["--cancel-during-astra"] if a.cancel_during_astra else []
+        if a.cancel_during_wrist:
+            options.append("--cancel-during-wrist")
         if a.controller == "classic":
             options += ["--controller", "classic"]
         with (out / "action.log").open("w") as log:
