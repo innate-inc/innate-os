@@ -37,6 +37,9 @@ class HouseholdOrdersAgent(Agent):
     def get_inputs(self) -> list[InputRef]:
         return [MicroInput]
 
+    def listen_before_acting(self) -> bool:
+        return True
+
     def get_turn_intervals(self) -> TurnIntervals:
         # Search is a long-running navigation skill. Look again one second
         # after each completed model turn so a resident cannot pass through

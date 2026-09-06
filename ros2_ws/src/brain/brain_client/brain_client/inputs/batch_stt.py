@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import numpy as np
 
 from brain_client.brain.transport import GENERATE_PATH
+from brain_client.inputs.speech_lifecycle import SpeechLifecycle
 from brain_client.inputs.vad import MIC_SAMPLE_RATE, pcm16_to_f32, resample_24k_to_16k
 
 if TYPE_CHECKING:
@@ -390,13 +391,17 @@ class BatchSttSession:
         silence_secs: float,
         on_transcript: Callable[[str], None],
         logger: UniversalLogger,
+        on_speech: Callable[[dict], None] | None = None,
     ):
+        self._speech = SpeechLifecycle(on_speech or (lambda event: None))
+        self._utterance_id = None
+        self._feed_lock = threading.RLock()
         self._transcriber = transcriber
         self._sample_rate = sample_rate
         self._on_transcript = on_transcript
         self._logger = logger
         self._endpointer = Endpointer(sample_rate=sample_rate, is_voiced=is_voiced, silence_secs=silence_secs)
-        self._utterances: queue.Queue[bytes | None] = queue.Queue(maxsize=MAX_PENDING_UTTERANCES)
+        self._utterances: queue.Queue[tuple[str | None, bytes] | None] = queue.Queue(maxsize=MAX_PENDING_UTTERANCES)
         self._worker: threading.Thread | None = None
         self._stopped = False
         self.utterance_count = 0
@@ -410,20 +415,39 @@ class BatchSttSession:
         return True
 
     def feed(self, chunk: bytes) -> None:
-        utterance = self._endpointer.feed(chunk)
-        if utterance is not None:
-            self._logger.info(f"🎤 Utterance closed ({len(utterance) / (self._sample_rate * 2):.1f}s), transcribing...")
-            self.utterance_count += 1
-            self._enqueue(utterance)
+        with self._feed_lock:
+            was_open = self._endpointer.in_speech
+            utterance = self._endpointer.feed(chunk)
+            if not was_open and self._endpointer.in_speech:
+                self._utterance_id = self._speech.start()
+            if was_open and not self._endpointer.in_speech:
+                self._closed_utterance(utterance)
 
-    def _enqueue(self, item: bytes | None) -> None:
+    def flush(self) -> None:
+        """Close pre-duck audio; never endpoint on synthetic silence."""
+        with self._feed_lock:
+            if self._endpointer.in_speech:
+                self._closed_utterance(self._endpointer.flush())
+
+    def _closed_utterance(self, utterance: bytes | None) -> None:
+        token, self._utterance_id = self._utterance_id, None
+        if utterance is None:
+            self._speech.finish(token, reason='discarded')
+            return
+        self._speech.ended(token)
+        self.utterance_count += 1
+        self._enqueue((token, utterance))
+
+    def _enqueue(self, item: tuple[str | None, bytes] | None) -> None:
         while True:
             try:
                 self._utterances.put_nowait(item)
                 return
             except queue.Full:
                 try:
-                    self._utterances.get_nowait()
+                    dropped = self._utterances.get_nowait()
+                    if dropped is not None:
+                        self._speech.finish(dropped[0], reason="backlog_dropped")
                     self._logger.error("❌ Transcription backlog full — dropping oldest utterance")
                 except queue.Empty:
                     pass
@@ -438,6 +462,7 @@ class BatchSttSession:
 
     def stop(self) -> None:
         self._stopped = True
+        self._speech.close()
         self._enqueue(None)
         if self._worker:
             self._worker.join(timeout=2.0)
@@ -448,12 +473,16 @@ class BatchSttSession:
             utterance = self._utterances.get()
             if utterance is None:
                 return
+            token, pcm = utterance
             try:
-                text = self._transcriber(pcm_to_wav(utterance, self._sample_rate))
+                text = self._transcriber(pcm_to_wav(pcm, self._sample_rate))
                 # A call that outlives stop() must not publish: by the time it
                 # returns, the mic may be active again under a newer session.
-                if text and not self._stopped:
-                    self._on_transcript(text)
+                if not self._stopped:
+                    self._speech.finish(token, text)
+                    if text:
+                        self._on_transcript(text)
             except Exception as e:  # noqa: BLE001 — one failed call must not kill the mic
+                self._speech.finish(token, reason="transcription_failed")
                 self.failure_count += 1
                 self._logger.error(f"❌ Batch transcription failed: {e}")

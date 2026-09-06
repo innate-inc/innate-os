@@ -379,6 +379,11 @@ class BrainClientNode(Node):
                 "[BrainClient] Ignoring /brain/chat_in: payload must be a JSON object with a 'text' field."
             )
             return
+        if data.get('sender') == 'microphone_lifecycle':
+            self.brain.on_microphone_speech(data)
+            return
+        if data.get('speech_lifecycle'):
+            return  # opted-in input is delivered once by the lifecycle terminal event
         if data.get("sender") == "environment_speech":
             self._on_environment_speech(data)
             return
@@ -427,17 +432,19 @@ class BrainClientNode(Node):
             self.get_logger().warning(f"Ignoring invalid environment speech request: {exc}")
             return
 
-        token = self.brain.begin_incoming_speech()
+        context = self.brain.speech_context()
+        token = None
         callback_lock = threading.Lock()
         shown = False
         delivered = False
 
         def show() -> None:
-            nonlocal shown
+            nonlocal shown, token
             with callback_lock:
-                if shown:
+                if shown or delivered or not self.state.is_brain_active or context != self.brain.speech_context():
                     return
                 shown = True
+                token = self.brain.begin_incoming_speech(context)
             self.chat.emit(Sender.USER, text, speak=False)
 
         def deliver(_success: bool) -> None:
@@ -446,10 +453,7 @@ class BrainClientNode(Node):
                 if delivered:
                     return
                 delivered = True
-            try:
-                show()  # a clip that never played still leaves its line on screen
-            finally:
-                self.brain.finish_incoming_speech(token, text)
+            self.brain.complete_speech(context, token, text if _success and shown else "", source="environment")
 
         if self._tts_handler is None:
             self.get_logger().warning("Environment speech requested while TTS is unavailable")

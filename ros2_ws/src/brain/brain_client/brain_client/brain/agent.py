@@ -178,6 +178,9 @@ class BrainAgent:
         # between the final gate check and claiming a new skill.
         self._input_lock = threading.RLock()
         self._incoming_speech: dict[object, int] = {}
+        self._incoming_timers = {}
+        self._speech_epoch = 0
+        self._microphone_tokens = {}
         self._input_generation = 0
         self._accept_incoming = state.is_brain_active
 
@@ -243,7 +246,12 @@ class BrainAgent:
         """Synchronous: when this returns True, no turn is thinking and none will act."""
         with self._input_lock:
             self._accept_incoming = False
+            for timer in self._incoming_timers.values():
+                timer.cancel()
+            self._incoming_timers.clear()
             self._incoming_speech.clear()
+            self._microphone_tokens.clear()
+            self._speech_epoch += 1
             self._input_generation += 1
         unwound = self._runtime.cancel()
         if not unwound:
@@ -896,7 +904,8 @@ class BrainAgent:
             f"approaching floor point {math.hypot(*floor):.1f}m away with {standoff}m requested standoff"
             + (
                 " (capped step; target remains farther away; conversation distance NOT reached — do not greet yet)"
-                if capped else ""
+                if capped
+                else ""
             )
             + " — you will get an event when it finishes; inspect a fresh main camera image before any next approach"
         )
@@ -920,13 +929,62 @@ class BrainAgent:
         return adjusted
 
     # ================= events (executor thread) =================
-    def begin_incoming_speech(self) -> object | None:
-        """Gate before input enters a synthesis/playback queue; no transcript yet."""
+    def listening_enabled(self) -> bool:
+        directive = self._state.current_directive
+        return bool(directive and getattr(directive, "listen_before_acting", lambda: False)())
+
+    def speech_context(self) -> tuple[int, int] | None:
         with self._input_lock:
             if not self._accept_incoming or not self._state.is_brain_active:
                 return None
+            return self._speech_epoch, self._request_generation
+
+    def complete_speech(self, context, token, text: str, *, source: str) -> None:
+        with self._input_lock:
+            if context is None or context != self.speech_context() or not self._accept_incoming:
+                if token in self._incoming_speech:
+                    self.finish_incoming_speech(token, "")
+                return
+            if token is not None:
+                self.finish_incoming_speech(token, text, source=source)
+            elif text and self._state.is_brain_active:
+                self.on_user_message(text, source=source, request_generation=context[1])
+
+    def on_microphone_speech(self, data: dict) -> None:
+        token_id = data.get("utterance_id")
+        if not isinstance(token_id, str) or not token_id:
+            return
+        with self._input_lock:
+            if data.get("stage") == "started":
+                if not self.listening_enabled() or token_id in self._microphone_tokens:
+                    return
+                context = self.speech_context()
+                token = self.begin_incoming_speech(context)
+                if token is not None:
+                    self._microphone_tokens[token_id] = context, token
+            elif data.get("stage") == "finished":
+                entry = self._microphone_tokens.pop(token_id, None)
+                if entry is not None:
+                    text = data.get("text", "")
+                    self.complete_speech(*entry, text if isinstance(text, str) else "", source="operator")
+
+    def begin_incoming_speech(self, context=None) -> object | None:
+        """Gate on acoustic/playback onset; no transcript yet."""
+        with self._input_lock:
+            if (
+                not self._accept_incoming
+                or not self._state.is_brain_active
+                or not self.listening_enabled()
+                or (context is not None and context != self.speech_context())
+            ):
+                return None
             token = object()
             self._incoming_speech[token] = self._request_generation
+            # Also bound orphaned holds if the input process disappears entirely.
+            timer = threading.Timer(90.0, self.finish_incoming_speech, args=(token, ""))
+            timer.daemon = True
+            self._incoming_timers[token] = timer
+            timer.start()
             self._input_generation += 1
             try:
                 running = self._state.primitive_running
@@ -935,20 +993,29 @@ class BrainAgent:
                 self.add_event("Incoming speech started. Wait for the completed transcript before continuing.")
             except Exception:
                 self._incoming_speech.pop(token)
+                timer = self._incoming_timers.pop(token, None)
+                if timer is not None:
+                    timer.cancel()
                 self._input_generation += 1
                 raise
             return token
 
-    def finish_incoming_speech(self, token: object | None, text: str) -> None:
+    def finish_incoming_speech(self, token: object | None, text: str, *, source: str = "environment") -> None:
         """Queue the transcript before reopening dispatch; stale/duplicate callbacks do nothing."""
         with self._input_lock:
             if token not in self._incoming_speech:
                 return
+            for key, (_, active_token) in list(self._microphone_tokens.items()):
+                if active_token is token:
+                    self._microphone_tokens.pop(key)
             try:
-                if self._accept_incoming and self._state.is_brain_active:
-                    self.on_user_message(text, source="environment", request_generation=self._incoming_speech[token])
+                if text and self._accept_incoming and self._state.is_brain_active:
+                    self.on_user_message(text, source=source, request_generation=self._incoming_speech[token])
             finally:
                 self._incoming_speech.pop(token)
+                timer = self._incoming_timers.pop(token, None)
+                if timer is not None:
+                    timer.cancel()
                 self._input_generation += 1
 
     def add_event(
