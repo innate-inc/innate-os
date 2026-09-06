@@ -124,6 +124,9 @@ def test_real_grasp_path_move_then_close_or_open_abort(monkeypatch, failure):
         with pytest.raises((SkillFailed, InterruptedError)):
             s._grasp_at("cube", (0.3, 0))
         assert "close" not in calls and s._metric_open_pregrasp
+        if failure == "abort":
+            assert s._visual_abort["reason"] == "model uncertain"
+            assert s._visual_abort["model_result"][0]["action"] == "abort"
     else:
         s._grasp_at("cube", (0.3, 0))
         assert calls == ["move"] * 7 + ["close"]
