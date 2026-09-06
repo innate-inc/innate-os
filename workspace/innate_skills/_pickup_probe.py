@@ -44,7 +44,11 @@ class Proxy:
         config = ROOT / "budget.json"
         limit = json.loads(config.read_text())["max_calls"] if config.exists() else 40
         log = ROOT / "events.jsonl"
-        calls = sum(json.loads(line)["kind"] == "provider_start" for line in log.read_text().splitlines()) if log.exists() else 0
+        calls = (
+            sum(json.loads(line)["kind"] == "provider_start" for line in log.read_text().splitlines())
+            if log.exists()
+            else 0
+        )
         if calls >= limit:
             raise ValueError("Local pickup experiment call budget exhausted")
         start = time.monotonic()
@@ -61,9 +65,21 @@ def install(cls):
         return
     factory = cls._proxy._factory
     cls._proxy._factory = lambda self: Proxy(factory(self))
-    for name in ("execute", "_detect_px", "_wrist_seed", "_wrist_descend", "_wrist_done", "_goto_search_pose",
-                 "_push_to_floor", "_pre_close_lift", "_close_once", "_prepare_grasp_retry",
-                 "_lift_grasp", "_grasp_verified", "_rest_arm"):
+    for name in (
+        "execute",
+        "_detect_px",
+        "_wrist_seed",
+        "_wrist_descend",
+        "_wrist_done",
+        "_goto_search_pose",
+        "_push_to_floor",
+        "_pre_close_lift",
+        "_close_once",
+        "_prepare_grasp_retry",
+        "_lift_grasp",
+        "_grasp_verified",
+        "_rest_arm",
+    ):
         method = getattr(cls, name)
 
         def wrap(method, name):
@@ -78,6 +94,7 @@ def install(cls):
                     return result
                 finally:
                     record("phase_end", phase=name, elapsed_s=time.monotonic() - start)
+
             return measured
 
         setattr(cls, name, wrap(method, name))
