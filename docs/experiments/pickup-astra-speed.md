@@ -11,6 +11,13 @@ success. Simulator object state is an evaluator input only; the skill/model sees
 robot cameras, odometry and joint telemetry. Report action latency and stable-hold
 latency separately, along with every failed or timed-out trial.
 
+Before the final matched campaign, a sibling pickup-to-throw integration exposed
+a slow slip several seconds after initial success. Add the same 20-second
+post-action retention gate to both controllers: a late drop fails the trial.
+Keep the fixed request-to-completion-plus-two-second latency measurement separate
+from this durability validation; report both. Three-second pilot recordings do
+not establish the longer retention gate.
+
 The candidate must have median end-to-end latency at most 50% of baseline, with
 no observed meaningful reliability regression on matched repeated trials. Use
 three repeats per representative scenario at minimum: onboarding LEGO, rotated
@@ -104,7 +111,10 @@ its ten-call development guard during reacquisition. These are failures, not
 fast pickups. The next prototype allows a model-selected close without the
 blanket 1cm pre-close lift, retains the original floor/force limits, preserves
 the raised rigid grip, and budgets enough bounded decisions for the existing
-retries. None of these changes has yet established the requested speedup.
+retries. The sixth pilot completed one close and held the brick at 14.5cm above
+the floor: 47.199 seconds action latency, 49.199 including the initial stability
+check, with a physics/wall ratio of 1.0002. Both camera views were inspected.
+This is one successful development run, not the requested repeated proof.
 
 Gemini pilot costs use all returned output tokens including the difference
 between `total_tokens` and `prompt_tokens`, because proxy `completion_tokens`
@@ -112,8 +122,16 @@ omits thinking. The first ten calls cost an estimated $0.04336 at
 [$1.50/M input and $9/M output](https://ai.google.dev/gemini-api/docs/pricing?authuser=1).
 These are provider list-price estimates, not invoices.
 
-Across all five development pickups, all 30 provider calls have returned usage.
-The estimated total is $0.31366, using Astra's $10/M input and $50/M output
-rates (no cached tokens in these pilots). The external cost ledger preserves
-raw usage and each trial's subtotal. Ten calls remain in the initial pilot
-envelope before reassessment.
+Across all six development pickups, all 36 provider calls have returned usage.
+The corrected estimated total is $0.43432, including Astra's cache-write input
+surcharge ($12.50/M versus $10/M uncached input, $1/M cached input, and $50/M
+output). The earlier estimate omitted that surcharge. The external cost ledger
+preserves raw usage and each trial's subtotal.
+
+Reassessment: one successful half-time pilot and complete low-cost accounting
+warrant the frozen matched set and focused negative checks. Bound that next
+stage at 200 cumulative provider calls, with a $5 estimated-cost review threshold
+that stops subsequent requests. Stop for missing usage or provider failure.
+The budget and phase wrappers now live exclusively in an explicit benchmark
+overlay under `scripts/experiments/pickup`; production pickup has no global
+experiment counter or cap.
