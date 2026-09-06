@@ -10,6 +10,23 @@ import cv2
 import numpy as np
 
 
+def make_grasp_tracker(hsv, box, point, *, rigid=False):
+    tracker = GraspPointTracker(hsv, box, point)
+    if rigid:
+        # GFTT ranks corners relative to the strongest response, so a smooth
+        # patch can yield many weak noise features. Require absolute contrast
+        # and the same spatial support before choosing material optical flow.
+        strength = cv2.cornerMinEigenVal(tracker.gray, blockSize=5)
+        points = tracker.points.reshape(-1, 2) if tracker.points is not None else np.empty((0, 2))
+        pixels = points.astype(int)
+        strong = points[strength[pixels[:, 1], pixels[:, 0]] >= 1e-4]
+        if not tracker._supported(strong, tracker.anchor):
+            from innate_skills.rigid_grasp_tracker import RigidGraspTracker
+
+            return RigidGraspTracker(hsv, box, point)
+    return tracker
+
+
 class GraspPointTracker:
     def __init__(self, hsv, box, point):
         self.gray = self._gray(hsv)
