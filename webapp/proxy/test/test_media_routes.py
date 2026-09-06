@@ -90,6 +90,35 @@ async def test_run_log_serves_and_fences(tmp_path, monkeypatch):
 
 
 @sync
+async def test_media_symlinks_do_not_reveal_files_outside_their_roots(tmp_path, monkeypatch):
+    skill = _skill(tmp_path, monkeypatch)
+    root = make_app_root(tmp_path)
+    canary = "synthetic-private-media-canary"
+    outside = tmp_path / "private.txt"
+    outside.write_text("RuntimeError: " + canary)
+    memories = tmp_path / "memories"
+    (memories / "Home").mkdir(parents=True)
+    (memories / "Home" / "1.jpg").symlink_to(outside)
+    monkeypatch.setattr(media_routes, "MEMORY_DIR", memories)
+    (skill / "thumbs").mkdir()
+    (skill / "thumbs" / "episode_1_camera_1.jpg").symlink_to(outside)
+    (skill / "data" / "episode_1_camera_1.mp4").write_bytes(b"synthetic-video")
+    run = skill / "run"
+    run.mkdir()
+    (run / "output.log").symlink_to(outside)
+    async with serve(ROOT=root) as (s, base):
+        for route, params in (
+            ("/memory/image", {"map": "Home", "id": "1"}),
+            ("/episode/thumb", {"dir": str(skill), "id": "1", "camera": "camera_1"}),
+        ):
+            response = await s.get(base + route, params=params)
+            assert response.status == 404
+            assert canary not in await response.text()
+        info = await (await s.get(base + "/run/info", params={"dir": str(skill), "id": "run"})).json()
+        assert info["error_excerpt"] == ""
+
+
+@sync
 async def test_run_log_bounded_read(tmp_path, monkeypatch):
     skill = _skill(tmp_path, monkeypatch)
     run = skill / "run"

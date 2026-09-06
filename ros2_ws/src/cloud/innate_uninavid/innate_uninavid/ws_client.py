@@ -192,12 +192,10 @@ class UninavidWsClient:
     async def _session(self) -> None:
         """Single connection attempt with one 401 retry (via auth.ws_connect)."""
         try:
-            async with await self._auth.ws_connect(
-                self._url,
-                max_size=4 * 1024 * 1024,
-                ping_interval=20,
-                ping_timeout=20,
-            ) as ws:
+            # Public simulator sessions reach a private credential relay; owner
+            # runs keep AuthProvider's token injection and renewal behavior.
+            connect = self._auth.ws_connect if self._auth is not None else websockets.connect
+            async with await connect(self._url, max_size=4 * 1024 * 1024, ping_interval=20, ping_timeout=20) as ws:
                 with self._lock:
                     self._state = ClientState.CONNECTED
                 self._log.info("WS connected")

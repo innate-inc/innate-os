@@ -29,7 +29,10 @@ from auth_client import AuthProvider
 from auth_client.httpx_auth import InnateBearerAuth
 from dotenv import load_dotenv
 
-load_dotenv()
+from innate_proxy.public_demo import demo_proxy_url, public_demo_enabled
+
+if not public_demo_enabled():
+    load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +52,18 @@ class ProxyClient:
         auth_issuer_url: str | None = None,
         config: dict[str, Any] | None = None,
     ) -> None:
-        raw_url = (proxy_url or os.getenv("INNATE_PROXY_URL", "https://proxy-v1.svc.innate.bot")).rstrip("/")
+        self._public_demo = public_demo_enabled()
+        if self._public_demo:
+            if innate_service_key or auth_issuer_url or proxy_url:
+                raise RuntimeError("Public simulator proxy configuration must come from its credential-free relay")
+            raw_url = demo_proxy_url()
+        else:
+            raw_url = (proxy_url or os.getenv("INNATE_PROXY_URL", "https://proxy-v1.svc.innate.bot")).rstrip("/")
         if raw_url and not raw_url.startswith(("http://", "https://")):
             raw_url = f"https://{raw_url}"
         self.proxy_url: str = raw_url
 
-        self._service_key: str = innate_service_key or os.getenv("INNATE_SERVICE_KEY", "")
+        self._service_key: str = "" if self._public_demo else innate_service_key or os.getenv("INNATE_SERVICE_KEY", "")
         self.config: dict[str, Any] = config or {}
 
         issuer_url = auth_issuer_url or os.getenv("INNATE_AUTH_URL", "https://auth-v1.svc.innate.bot")
@@ -77,7 +86,7 @@ class ProxyClient:
 
     def is_available(self) -> bool:
         """Return True if proxy credentials are configured."""
-        return bool(self.proxy_url and self._service_key)
+        return bool(self.proxy_url and (self._public_demo or self._service_key))
 
     # -- Token helpers --------------------------------------------------------
 

@@ -141,3 +141,49 @@ def test_public_ws_cannot_retrieve_service_key(ros_node):
         frontdoor.ROSBRIDGE_URL = saved_url
         bridge.terminate()
         bridge.wait(timeout=10)
+
+
+def test_public_demo_navigation_uses_credential_free_relay(monkeypatch):
+    from types import SimpleNamespace
+
+    import innate_uninavid.node as navigation
+
+    from innate_proxy.public_demo import _CREDENTIAL_NAME
+
+    for name in os.environ:
+        if _CREDENTIAL_NAME.search(name.upper()):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("INNATE_PUBLIC_DEMO", "1")
+    monkeypatch.setenv("INNATE_DEMO_PROXY_URL", "http://127.0.0.1:8081")
+    rclpy.init()
+    node = UninavidNode()
+    try:
+        assert node._auth is None and node._service_key == ""
+        assert node._ws_url == "ws://127.0.0.1:8081/uninavid/ws"
+        seen = []
+
+        class CompletedClient:
+            state = navigation.ClientState.COMPLETED
+
+            def __init__(self, **kwargs):
+                assert kwargs["auth_provider"] is None
+                assert kwargs["url"] == node._ws_url
+
+            def connect(self, instruction):
+                seen.append(instruction)
+
+            def disconnect(self):
+                pass
+
+        monkeypatch.setattr(navigation, "UninavidWsClient", CompletedClient)
+        goal = SimpleNamespace(
+            request=SimpleNamespace(instruction="look at the chair"),
+            is_active=True,
+            is_cancel_requested=False,
+            succeed=lambda: seen.append("completed"),
+        )
+        assert node._execute(goal).success
+        assert seen == ["look at the chair", "completed"]
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()

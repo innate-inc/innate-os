@@ -329,32 +329,86 @@ async def _serve_static(path: Path, request: web.Request) -> web.StreamResponse:
 
 async def static_handler(request: web.Request) -> web.StreamResponse:
     clean = request.path
+    # Source/configuration files beside the zero-build app are not web assets.
+    # Deny hidden components before the SPA fallback (including encoded ones,
+    # which aiohttp has already decoded).
+    parts = Path(clean).parts[1:]
+    if any(part.startswith(".") for part in parts):
+        raise web.HTTPNotFound(text="not found")
     target = _safe_resolve(ROOT / clean.lstrip("/"))
     if target is None:
         raise web.HTTPNotFound(text="not found")
     if target.is_dir():
-        target = target / "index.html"
-    body_path = target if target.is_file() else None
+        target = _safe_resolve(target / "index.html")
+    body_path = target if target is not None and target.is_file() else None
     # SPA fallback: an extensionless route that maps to no file (e.g. /profiling,
     # /settings, or a deep link/refresh on any client-side route) is served the
     # app shell so the router can render it. Asset requests carry a suffix
     # (.js/.css/...), so a genuinely missing asset still 404s below. The
     # in-root guard keeps a traversal like /../secrets a 404, not the shell.
-    if body_path is None and target.is_relative_to(ROOT) and "." not in clean.rsplit("/", 1)[-1]:
-        body_path = ROOT / "index.html"
+    if body_path is None and target is not None and target.is_relative_to(ROOT) and "." not in clean.rsplit("/", 1)[-1]:
+        body_path = _safe_resolve(ROOT / "index.html")
     # Refuse anything that escapes the app root (or the TLS keys, defensively).
     if body_path is None or not body_path.is_relative_to(ROOT) or body_path.suffix == ".pem":
+        raise web.HTTPNotFound(text="not found")
+    relative = body_path.relative_to(ROOT)
+    if relative != Path("index.html") and (
+        relative.parts[0] not in {"js", "css", "public", "debug", "assets"}
+        or body_path.suffix.lower()
+        not in {
+            ".html",
+            ".js",
+            ".css",
+            ".json",
+            ".svg",
+            ".avif",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".webp",
+            ".ico",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".mp4",
+        }
+    ):
         raise web.HTTPNotFound(text="not found")
     return await _serve_static(body_path, request)
 
 
 async def sim_viewer_handler(request: web.Request) -> web.StreamResponse:
     clean = request.path
+    if any(part.startswith(".") for part in Path(clean).parts[1:]):
+        raise web.HTTPNotFound(text="not found")
     for prefix, base in SIM_VIEWER_ROUTES.items():
         if not clean.startswith(prefix):
             continue
         target = _safe_resolve(base / clean[len(prefix) :])
-        if target is None or not target.is_file() or not target.is_relative_to(base.resolve()):
+        if (
+            target is None
+            or not target.is_file()
+            or not target.is_relative_to(base.resolve())
+            or target.suffix.lower()
+            not in {
+                ".js",
+                ".json",
+                ".glb",
+                ".gltf",
+                ".bin",
+                ".obj",
+                ".mtl",
+                ".urdf",
+                ".stl",
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".webp",
+                ".avif",
+                ".wasm",
+            }
+        ):
             raise web.HTTPNotFound(text="not found")
         return await _serve_static(target, request)
     raise web.HTTPNotFound(text="not found")
@@ -409,26 +463,26 @@ async def restart_handler(request: web.Request) -> web.Response:
 # IK node solves against (the installed mars_sim share), read-only under
 # /armsdk/model/.
 MARS_MODEL_ROOT = ROOT.parent / "ros2_ws" / "install" / "mars_sim" / "share" / "mars_sim"
+MARS_MODEL_SOURCE_ROOT = ROOT.parent / "ros2_ws" / "src" / "mars_bot" / "mars_sim"
 
 
 def _model_target(tail: str) -> "Path | None":
-    """MARS_MODEL_ROOT / tail, with traversal blocked on the *requested* path.
+    """Serve models from the install or the explicit colcon source package.
 
-    Deliberately does not resolve() the result. The sim builds the workspace
-    with colcon --symlink-install (scripts/validate_sim_ros_install.zsh), which
-    installs every model file as a symlink into ros2_ws/src — so resolving and
-    then demanding containment 404s the whole model there. The robot installs
-    real files (plain colcon build) and never hit it.
-
-    Prefixing "/" before normpath collapses any leading "..", so the join
-    cannot escape the base and the symlinks we do follow are the build's own.
+    Symlink installs are expected; arbitrary symlink targets are not. Fence the
+    resolved path to both legitimate roots instead of trusting every symlink.
     """
     rel = posixpath.normpath("/" + tail).lstrip("/")
     if not rel:
         return None
     try:
-        target = MARS_MODEL_ROOT / rel
-        return target if target.is_file() else None
+        target = (MARS_MODEL_ROOT / rel).resolve()
+        allowed = any(target.is_relative_to(base.resolve()) for base in (MARS_MODEL_ROOT, MARS_MODEL_SOURCE_ROOT))
+        return (
+            target
+            if allowed and target.is_file() and target.suffix.lower() in {".urdf", ".stl", ".srdf", ".xml"}
+            else None
+        )
     except (OSError, ValueError):  # illegal path bytes (e.g. a decoded NUL)
         return None
 

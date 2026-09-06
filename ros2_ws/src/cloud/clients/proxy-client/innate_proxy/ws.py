@@ -46,7 +46,7 @@ class SyncRealtimeConnection:
 
     def __init__(
         self,
-        auth: AuthProvider,
+        auth: AuthProvider | None,
         ws_url: str,
         on_message: Callable | None = None,
         on_open: Callable | None = None,
@@ -122,7 +122,12 @@ class SyncRealtimeConnection:
 
     async def _run_ws(self) -> None:
         try:
-            self._ws = await self._auth.ws_connect(self._ws_url)
+            if self._auth is not None:
+                self._ws = await self._auth.ws_connect(self._ws_url)
+            else:
+                from websockets import connect
+
+                self._ws = await connect(self._ws_url)
             self._connected.set()
             if self._on_open:
                 self._on_open()
