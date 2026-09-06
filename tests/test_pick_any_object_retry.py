@@ -545,3 +545,46 @@ def test_repeated_camera_interruptions_exhaust_budget_without_moving():
         PickAnyObject._wrist_descend(skill, "sock", 0.3, 0)
     assert len(reacquisitions) == 2
     assert skill.manipulation.events == []
+
+
+@pytest.mark.parametrize("camera_online", [True, False])
+def test_stationary_reseed_latency_is_not_camera_silence(monkeypatch, camera_online):
+    clock = [0.0]
+    monkeypatch.setattr("innate_skills.pick_any_object.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("innate_skills.pick_any_object.inside_box", lambda *_: True)
+    skill = _skill(closes_empty=False)
+    skill._pickup_policy = object()
+    skill._planned_roll = 0
+    skill.manipulation.pose = SimpleNamespace(position=(0.3, 0, 0.05))
+    skill._wrist_seed = lambda _: ((320, 350), (280, 300, 80, 100))
+    events = []
+    lost = SimpleNamespace(ok=True, misses=3, axis=None, update=lambda _: None)
+    fresh = SimpleNamespace(ok=True, axis=None, update=lambda _: events.append("track") or (320, 350))
+    skill._new_wrist_tracker = lambda *_: (lost, "initial")
+
+    def frame(raw, timeout=1.5):
+        clock[0] += 0.1
+        if raw == "reseed" and not camera_online:
+            clock[0] += timeout
+            return None, raw
+        return True, object()
+
+    def reseed(_prompt, _raw, frame=None):
+        # The arm is stationary while inference runs. Its original seed frame
+        # remains the reference; confirmations must come from later frames.
+        assert frame is None, "Healthy camera must not trigger a second recovery"
+        assert not events
+        events.append("reseed")
+        clock[0] += 3.0
+        return fresh, "reseed", ""
+
+    skill._next_wrist_hsv = frame
+    skill._wrist_reseed = reseed
+    if camera_online:
+        assert PickAnyObject._wrist_descend(skill, "sock", 0.3, 0) == pytest.approx((0.3, 0, 0.05, 0))
+        assert events == ["reseed", "track", "track"]
+    else:
+        with pytest.raises(exceptions.SkillFailed, match="wrist camera did not recover"):
+            PickAnyObject._wrist_descend(skill, "sock", 0.3, 0)
+        assert events == ["reseed"]
+    assert skill.manipulation.events == []
