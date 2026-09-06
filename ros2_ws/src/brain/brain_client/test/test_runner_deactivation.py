@@ -242,7 +242,7 @@ def test_input_cancels_pending_navigation_once_and_keeps_normal_cleanup():
     )
     assert state.primitive_running is None and runner._goal_handle is None
     assert cleanup == ["stop", "finished"]
-    assert events[0][0] == "interrupted" and "Continue the request" in events[0][1]
+    assert events[0] == ("interrupted", "Paused for incoming speech; the navigation goal was cancelled.")
 
 
 def test_input_never_cancels_manual_or_unrelated_skills_and_stop_disowns_pending_navigation():

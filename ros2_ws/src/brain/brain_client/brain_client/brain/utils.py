@@ -30,6 +30,8 @@ class Event:
     text: str
     image: bytes | None = None
     kind: EventKind = EventKind.INFO
+    source: str = "system"
+    request_generation: int | None = None
 
 
 class FrameLabel(StrEnum):

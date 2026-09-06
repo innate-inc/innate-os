@@ -388,7 +388,7 @@ class PrimitiveRunner:
         # client's job.
         status, detail = self._classify_result(result, is_code)
         if input_interrupted and status == "interrupted":
-            detail = "Paused for incoming speech. Continue the request after consuming its transcript."
+            detail = "Paused for incoming speech; the navigation goal was cancelled."
         if status is not None:
             image = base64.b64decode(result.image_b64) if result.image_b64 else None
             self.on_event(status, primitive_name, detail, image=image)
