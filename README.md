@@ -290,6 +290,9 @@ The terminal opens a live dashboard, and the robot webapp at [https://localhost]
 
 See [`sim/README.md`](sim/README.md) for everything else: the day-to-day workflow, the ROS-free VirtualMars Python API (with a walkthrough notebook), and the architecture.
 
+For owner-local OpenAI and Cartesia key entry, rotation, removal, and runtime
+requirements, see [provider keys](docs/provider-keys.md).
+
 ---
 
 ## Foxglove
