@@ -1,3 +1,5 @@
+> Latest-source comparison (2026-09-06): classic 7/9 durable pickups; Astra 0/9, all tracking failures. No candidate success-time median; benchmark criteria fail. See `pickup-astra-speed/final-cleanup-report.json`. Earlier speed and integration results below apply only to their historical frozen source.
+
 > September 6 hardware follow-up: the Astra wrist controller now requests a
 > `grasp_point_2d` on visible material and tracks that persistent point with local
 > Lucas–Kanade features, forward/backward checks and a robust similarity fit.
