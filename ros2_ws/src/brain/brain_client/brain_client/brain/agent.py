@@ -13,8 +13,9 @@ The whole agent is one sequential coroutine on a dedicated loop thread
   that has not begun to speak, and the rerun sees everything it saw plus the
   new message.
 
-Threading contract: ROS callbacks (executor thread) only queue events and wake
-the loop; observing, history, and acting all happen in the coroutine.
+Threading contract: callbacks queue events and wake the loop. Incoming speech
+also synchronizes its gate with dispatch and requests owned navigation cancellation;
+observing, history, and model-directed acting happen in the coroutine.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import base64
 import contextlib
 import json
 import math
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -79,6 +81,7 @@ if TYPE_CHECKING:
     from innate_proxy import ProxyClient
 
 _NAV_TO_POSITION = "innate-os/navigate_to_position"
+_INPUT_INTERRUPT_SKILLS = frozenset({_NAV_TO_POSITION, "innate-os/find_next_person"})
 _FRESH_FRAME_SEC = 3.0  # an older camera frame means the feed is broken; don't think blind
 _MAX_EVENTS_QUEUED = 30  # the oldest beyond this are dropped as stale stimuli
 _MAX_EVENT_IMAGES = 4  # newest event images sent per turn; older ones arrive as text only
@@ -155,7 +158,10 @@ class BrainAgent:
         self._frame_at_capture: bytes | None = None
         self._pitch_at_capture = 0.0
         self._tool_map: dict[str, str] = {}  # gemini function name -> skill id
-        self._request_stopped = False  # survives skill completion and history compaction
+        self._request_stopped = False
+        self._request_generation = 0
+        self._latest_operator_event: Event | None = None
+        self._turn_operator_receipt: Event | None = None
         self._acting_on_user_request = False
         self._request_started_this_turn = False
         self._error_streak = 0
@@ -165,6 +171,18 @@ class BrainAgent:
         self._turn_in_flight = False
         self._speaker: SpeechStreamer | None = None  # the in-flight turn's streamer (the racing loop reads it)
         self._pause_until = 0.0  # monotonic deadline of the current between-turns pause
+        self._departure_anchor: tuple[float, float, float] | None = None
+        self._interaction_guard_started_at: float | None = None
+        self._turn_user_spoke = False
+        # Input callbacks and dispatch share this lock: speech cannot begin
+        # between the final gate check and claiming a new skill.
+        self._input_lock = threading.RLock()
+        self._incoming_speech: dict[object, int] = {}
+        self._incoming_timers = {}
+        self._speech_epoch = 0
+        self._microphone_tokens = {}
+        self._input_generation = 0
+        self._accept_incoming = state.is_brain_active
 
         self._runtime = LoopThread("brain-agent")
         self._new_event = asyncio.Event()  # something was queued (loop thread; set via runtime.post)
@@ -217,11 +235,24 @@ class BrainAgent:
             return False
         self._activated_at = time.monotonic()
         self._error_streak = 0
+        self._departure_anchor = None
+        self._interaction_guard_started_at = None
+        with self._input_lock:
+            self._accept_incoming = True
         self._runtime.spawn(self._loop())
         return True
 
     def stop(self) -> bool:
         """Synchronous: when this returns True, no turn is thinking and none will act."""
+        with self._input_lock:
+            self._accept_incoming = False
+            for timer in self._incoming_timers.values():
+                timer.cancel()
+            self._incoming_timers.clear()
+            self._incoming_speech.clear()
+            self._microphone_tokens.clear()
+            self._speech_epoch += 1
+            self._input_generation += 1
         unwound = self._runtime.cancel()
         if not unwound:
             self._logger.error("[Brain] Agent loop did not unwind within 5s")
@@ -236,8 +267,13 @@ class BrainAgent:
             return
         if self._context is not None:
             self._context.clear()
-        self._request_stopped = False
+        with self._input_lock:
+            self._request_stopped = False
+            self._request_generation += 1
+            self._latest_operator_event = None
         if was_running and self._state.is_brain_active:
+            with self._input_lock:
+                self._accept_incoming = True
             self._runtime.spawn(self._loop())
 
     def shutdown(self) -> None:
@@ -306,19 +342,23 @@ class BrainAgent:
         commits, so a failed or abandoned turn re-sends the same events.
         """
         del self._events[:-_MAX_EVENTS_QUEUED]  # bound the backlog after an outage
-        events = list(self._events)
+        with self._input_lock:
+            events = list(self._events)
+            input_generation = self._input_generation
         self._turn_count += 1
         self._turn_started_at = time.monotonic()
         speaker = self._speaker = self._chat.stream_speech()  # published before the first await, for the racing loop
         try:
-            await self._think(context, events, speaker)
+            await self._think(context, events, speaker, input_generation)
         except asyncio.CancelledError:
             self._trace(TraceEvent.TURN_DROPPED, turn=self._turn_count, latency=self._elapsed())
             raise
         except Exception as error:
             await self._back_off(error, seen=len(events))
 
-    async def _think(self, context: GeminiContext, events: list[Event], speaker: SpeechStreamer) -> None:
+    async def _think(
+        self, context: GeminiContext, events: list[Event], speaker: SpeechStreamer, input_generation: int
+    ) -> None:
         text, frames = self._look(events)
         if self._frame_at_capture is None:
             return  # the feed died between the loop's freshness check and the look
@@ -333,16 +373,15 @@ class BrainAgent:
         )
         if self._request_stopped:
             system += (
-                "\nThe previous request, including its remaining steps, was cancelled. "
-                "Do not resume it on a world update or skill completion. Wait for a new user "
-                "instruction. Answer conversation in text. For an explicit new action, call "
-                "start_new_request before acting; never use it just to resume the cancelled plan."
+                "\nThe previous request and remaining steps were cancelled. Do not resume on world updates, "
+                "resident speech, or skill completion. Answer conversation in text. Only a fresh operator "
+                "instruction may use start_new_request; then wait for next update's action schemas."
             )
         if self._state.log_everything:
             self._logger.info(f"[Brain] Turn input:\n{text}")
         self._trace_turn_start(text, frames, tools, system, context)
 
-        response = await self._generate(context, message, tools, system, speaker, wrist_frames)
+        response = await self._generate(context, message, tools, system, speaker, wrist_frames, input_generation)
         latency = self._elapsed()
         self._report_recovered()
         if not self._state.is_brain_active:
@@ -351,15 +390,27 @@ class BrainAgent:
             return
 
         decision = context.absorb(message, response, latest_only_images=wrist_frames)
-        user_spoke = any(event.kind == EventKind.USER for event in events)
-        del self._events[: len(events)]
+        committed_events = tuple(events)
+        with self._input_lock:
+            del self._events[: len(events)]
         events.clear()  # committed: a failure below backs off against an empty peek
-        self._acting_on_user_request = user_spoke
         self._request_started_this_turn = False
         try:
-            outcomes = self._act(decision, speaker, context)
+            outcomes = self._act(decision, speaker, context, input_generation=input_generation)
         finally:
-            self._acting_on_user_request = False
+            with self._input_lock:
+                pending_operator = self._latest_operator_event
+                if (
+                    self._input_blocks(input_generation)
+                    and pending_operator is not None
+                    and any(event is pending_operator for event in committed_events)
+                    and pending_operator.request_generation == self._request_generation
+                ):
+                    # Decide after dispatch: input can begin between commit and
+                    # _act. Accepted start/Stop clear this receipt, so neither is
+                    # replayed; fenced turns keep the instruction visible.
+                    self._events.insert(0, pending_operator)
+                self._acting_on_user_request = False
         self._trace(
             TraceEvent.TURN_END,
             turn=self._turn_count,
@@ -383,13 +434,20 @@ class BrainAgent:
         system: str,
         speaker: SpeechStreamer,
         wrist_frames: list[int],
+        input_generation: int,
     ) -> dict:
         """The only blocking call, on a worker thread. Cancellation unwinds HERE —
         the orphaned HTTP call finishes and its result is dropped."""
         self._turn_in_flight = True
+
+        def feed(text: str) -> None:
+            with self._input_lock:
+                if not self._input_blocks(input_generation):
+                    speaker.feed(text)
+
         try:
             return await asyncio.to_thread(
-                context.generate, message, tools, system, speaker.feed, latest_only_images=wrist_frames
+                context.generate, message, tools, system, feed, latest_only_images=wrist_frames
             )
         finally:
             self._turn_in_flight = False
@@ -497,6 +555,9 @@ class BrainAgent:
             events=events,
             has_wrist_frame=arm_jpeg is not None,
         )
+        with self._input_lock:
+            if self._incoming_speech:
+                text += "\nIncoming speech is being delivered. Wait for its transcript before acting or replying."
         return text, frames
 
     def _now(self) -> datetime:
@@ -512,37 +573,82 @@ class BrainAgent:
     def _build_tools(self, events: list[Event]) -> list[dict]:
         running = self._state.primitive_running
         user_spoke = any(event.kind == EventKind.USER for event in events)
+        self._turn_user_spoke = user_spoke
+        self._turn_operator_receipt = next((event for event in reversed(events) if event.source == "operator"), None)
+        self._acting_on_user_request = any(
+            event.kind == EventKind.USER
+            and event.source == "operator"
+            and event.request_generation == self._request_generation
+            and event is self._latest_operator_event
+            for event in events
+        )
+        with self._input_lock:
+            if self._incoming_speech:
+                self._tool_map = {}
+                return build_tools([], running.primitive_name if running else None, user_spoke=user_spoke)
         active_ids = set(self._roster.active_skill_ids())
         skills = [meta for meta in self._state.registry.metadata if meta["id"] in active_ids]
+        blocked_ids = self._interaction_blocked_skill_ids()
+        if blocked_ids:
+            skills = [meta for meta in skills if meta["id"] not in blocked_ids]
         # One naming pass feeds both the declarations and the dispatch map, so
         # the name the model calls always resolves to the skill it was declared for.
         named = assign_tool_names(skills)
         self._tool_map = {name: meta["id"] for name, meta in named}
         if self._request_stopped:
             return build_tools(
-                [], running.primitive_name if running else None, user_spoke=user_spoke, request_stopped=True
+                [],
+                running.primitive_name if running else None,
+                user_spoke=self._acting_on_user_request,
+                request_stopped=True,
+                can_stop_running=self._departure_guard_reason() is None,
             )
         if running is not None:
-            return build_tools([], running.primitive_name, user_spoke=user_spoke)
+            return build_tools(
+                [],
+                running.primitive_name,
+                user_spoke=user_spoke,
+                can_stop_running=self._departure_guard_reason() is None,
+            )
         return build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids, user_spoke=user_spoke)
 
     # ================= act =================
-    def _act(self, decision: Decision, speaker: SpeechStreamer, context: GeminiContext) -> list[tuple[ToolCall, str]]:
+    def _act(
+        self,
+        decision: Decision,
+        speaker: SpeechStreamer,
+        context: GeminiContext,
+        *,
+        input_generation: int | None = None,
+    ) -> list[tuple[ToolCall, str]]:
         # Execute and answer the calls before any chat I/O: a functionCall
         # left unanswered in history poisons every later request.
-        outcomes = [(call, self._execute(call)) for call in decision.calls]
+        outcomes = [(call, self._execute(call, input_generation=input_generation)) for call in decision.calls]
         context.add_tool_outcomes(outcomes)
         if decision.thoughts:
             self._chat.emit_thoughts(decision.thoughts)
-        speech = decision.speech
-        user_waiting = any(event.kind == EventKind.USER for event in self._events)
-        if speech and not speaker.spoke and user_waiting:
-            self._suppress_reply(speaker, speech)
-        speaker.flush()  # the reply's last sentence has no trailing boundary
-        if speaker.spoke and speech:
-            self._chat.emit(
-                Sender.ROBOT, speech, speak=False
-            )  # audio went out per sentence; the panel gets one message
+        # Serialize the final eligibility check, buffered audio, and dialogue
+        # publication with input arrival. Provider work finished before this lock.
+        with self._input_lock:
+            if self._input_blocks(input_generation):
+                speaker.mute()
+                if decision.speech:
+                    self.add_event(
+                        "(Your previous reply was interrupted by incoming speech. "
+                        "Respond after consuming its completed transcript.)"
+                    )
+                # The simulator also consumes robot chat as spoken dialogue:
+                # never publish the full stale reply after muting its audio.
+                return outcomes
+            speech = decision.speech
+            user_waiting = any(event.kind == EventKind.USER for event in self._events)
+            if speech and not speaker.spoke and user_waiting:
+                self._suppress_reply(speaker, speech)
+            speaker.flush()  # the reply's last sentence has no trailing boundary
+            if speaker.spoke and speech:
+                self._chat.emit(
+                    Sender.ROBOT, speech, speak=False
+                )  # audio went out per sentence; the panel gets one message
         return outcomes
 
     def _suppress_reply(self, speaker: SpeechStreamer, speech: str) -> None:
@@ -558,7 +664,7 @@ class BrainAgent:
             "something newer. Answer their latest message.)"
         )
 
-    def _execute(self, call: ToolCall) -> str:
+    def _execute(self, call: ToolCall, *, input_generation: int | None = None) -> str:
         """Run one tool call; the returned string is the model-facing outcome.
 
         Never raises: the turn has already committed, so an escaping error
@@ -566,30 +672,75 @@ class BrainAgent:
         """
         self._logger.info(f"[Brain] Tool call: {call.name}({call.args})")
         try:
-            return self._dispatch(call)
+            return self._dispatch(call, input_generation=input_generation)
         except Exception as error:
             self._logger.error(f"[Brain] Tool call {call.name} failed: {error!r}")
             return f"failed — {error}"
 
-    def _dispatch(self, call: ToolCall) -> str:
+    def _dispatch(self, call: ToolCall, *, input_generation: int | None = None) -> str:
         if call.name == WAIT:
             return "ok"
+        with self._input_lock:
+            if call.name == STOP_SKILL:
+                if (
+                    input_generation is not None
+                    and input_generation != self._input_generation
+                    and not self._turn_user_spoke
+                ):
+                    return "rejected — incoming speech changed; reassess stopping after consuming its transcript"
+                running = self._state.primitive_running
+                if self._incoming_speech and running is not None and running.manual and not self._turn_user_spoke:
+                    return "rejected — incoming speech does not interrupt a manual skill"
+                if self._departure_guard_reason() is not None and not self._turn_user_spoke:
+                    return self._stop_skill()
+                if call.args.get("continue_task") is not True:
+                    self._request_stopped = True
+                    self._request_generation += 1
+                    newer = self._latest_operator_event
+                    if (
+                        newer is not None
+                        and newer is not self._turn_operator_receipt
+                        and any(event is newer for event in self._events)
+                    ):
+                        # Stop remains authoritative for the old request, but a
+                        # later unseen operator receipt belongs to the new epoch.
+                        # Preserve its wording/identity ordering for a fresh turn.
+                        preserved = Event(newer.text, newer.image, newer.kind, newer.source, self._request_generation)
+                        self._events[:] = [
+                            preserved if event is newer else event
+                            for event in self._events
+                            if event.source != "operator" or event is newer
+                        ]
+                        self._latest_operator_event = preserved
+                    else:
+                        self._latest_operator_event = None
+                        self._events[:] = [event for event in self._events if event.source != "operator"]
+                    self._acting_on_user_request = False
+                outcome = self._stop_skill()
+                if self._request_stopped:
+                    outcome += "; remaining steps cancelled — wait for a new operator instruction"
+                return outcome
+            if self._input_blocks(input_generation):
+                if any(event.kind == EventKind.USER and event.source == "operator" for event in self._events):
+                    return "rejected — a newer user message is pending; respond to it before acting"
+                return "rejected — incoming speech changed; wait for and consume its transcript before acting"
+            return self._dispatch_available(call)
+
+    def _input_blocks(self, generation: int | None) -> bool:
+        return bool(self._incoming_speech) or (generation is not None and generation != self._input_generation)
+
+    def _dispatch_available(self, call: ToolCall) -> str:
         if call.name == START_REQUEST:
-            if not self._acting_on_user_request or any(event.kind == EventKind.USER for event in self._events):
+            if (
+                not self._request_stopped
+                or not self._acting_on_user_request
+                or any(event.kind == EventKind.USER for event in self._events)
+            ):
                 return "rejected — only a new user instruction can begin a new request"
             self._request_stopped = False
+            self._latest_operator_event = None
             self._request_started_this_turn = True
             return "new request accepted — carry out only the user's latest instruction"
-        if call.name == STOP_SKILL:
-            # Cancelling the actuator alone leaves the rest of a multi-step
-            # request alive. Only deliberate replanning may retain that request.
-            if call.args.get("continue_task") is not True:
-                self._request_stopped = True
-                self._acting_on_user_request = False  # also fences later calls in this response
-            outcome = self._stop_skill()
-            if self._request_stopped:
-                outcome += "; remaining steps cancelled — wait for a new user instruction"
-            return outcome
         if any(event.kind == EventKind.USER for event in self._events):
             return "rejected — a newer user message is pending; respond to it before acting"
         if self._request_started_this_turn:
@@ -609,15 +760,23 @@ class BrainAgent:
         if self._state.primitive_running is not None:
             return "rejected — another skill is already running; stop it first"
         if call.name == GO_TO_POINT_IN_VIEW:
-            return self._go_to_point_in_view(call.args)
+            outcome = self._go_to_point_in_view(call.args)
+            if self._acting_on_user_request and not outcome.startswith("rejected"):
+                self._latest_operator_event = None
+            return outcome
         if skill_id is None:
             return f"unknown skill '{call.name}'"
         if skill_id not in self._roster.active_skill_ids():
             return f"rejected — {call.name} is no longer available"
         self._start_skill(skill_id, self._adjust_nav_goal(skill_id, dict(call.args)))
+        if self._acting_on_user_request:
+            self._latest_operator_event = None
         return "started — you will get an event when it finishes"
 
     def _stop_skill(self) -> str:
+        guard_reason = self._departure_guard_reason()
+        if guard_reason is not None and not self._turn_user_spoke:
+            return f"rejected — {guard_reason}"
         if self._runner.has_active_goal:
             self._runner.cancel_active_goal()
             return "stopping — you will get an event when it has stopped"
@@ -628,6 +787,44 @@ class BrainAgent:
         if self._runner.cancel_external():
             return "stopping — you will get an event when it has stopped"
         return "could not stop it — the skills server is unreachable"
+
+    def _departure_guard_reason(self) -> str | None:
+        """Why the current skill must continue away from a recent identity anchor."""
+        directive = self._state.current_directive
+        policy = directive.get_departure_guard() if directive is not None else None
+        running = self._state.primitive_running
+        anchor = self._departure_anchor
+        if policy is None or running is None or anchor is None or running.skill_id not in policy.protected_skill_ids:
+            return None
+        anchor_x, anchor_y, anchored_at = anchor
+        elapsed = time.monotonic() - anchored_at
+        if elapsed >= policy.maximum_hold_s:
+            self._departure_anchor = None
+            return None
+        pose = self._pose.current_pose_xyt()
+        if pose is not None and math.hypot(pose[0] - anchor_x, pose[1] - anchor_y) >= policy.minimum_departure_m:
+            self._departure_anchor = None
+            return None
+        return (
+            f"continue {running.primitive_name} until the robot has departed at least "
+            f"{policy.minimum_departure_m:g} m from the already-known person "
+            f"(or {policy.maximum_hold_s:g} s elapse)"
+        )
+
+    def _interaction_guard_policy(self):
+        directive = self._state.current_directive
+        getter = getattr(directive, "get_interaction_guard", None) if directive is not None else None
+        return getter() if getter is not None else None
+
+    def _interaction_blocked_skill_ids(self) -> frozenset[str]:
+        policy = self._interaction_guard_policy()
+        started_at = self._interaction_guard_started_at
+        if policy is None or started_at is None:
+            return frozenset()
+        if time.monotonic() - started_at >= policy.maximum_hold_s:
+            self._interaction_guard_started_at = None
+            return frozenset()
+        return frozenset(policy.blocked_skill_ids)
 
     def _go_to_point_in_view(self, args: dict) -> str:
         """Project the pointed-at floor pixel into a local navigate_to_position goal."""
@@ -643,27 +840,74 @@ class BrainAgent:
         if not in_image(*point):
             return "rejected — y and x must be within 0-1000 image coordinates"
         v_norm, u_norm = point
-        floor = grounding.pixel_to_floor(
-            u_norm,
-            v_norm,
-            frame_jpeg=self._frame_at_capture,
-            vertical_fov_deg=self._config.vertical_fov,
-            pitch_deg=self._pitch_at_capture,
-            cam_height=self._config.height_cam,
-            cam_forward=self._config.x_cam,
-        )
+        standoff = grounding.parse_standoff(args.get("standoff_m", grounding.STANDOFF_M))
+        if standoff is None:
+            return "rejected — standoff_m must be a finite number from 0.35 to 1.5 meters"
+        if standoff != grounding.STANDOFF_M:
+            floor = grounding.conversation_floor(
+                u_norm, v_norm, frame_jpeg=self._frame_at_capture, pitch_deg=self._pitch_at_capture
+            )
+        else:
+            floor = grounding.pixel_to_floor(
+                u_norm,
+                v_norm,
+                frame_jpeg=self._frame_at_capture,
+                vertical_fov_deg=self._config.vertical_fov,
+                pitch_deg=self._pitch_at_capture,
+                cam_height=self._config.height_cam,
+                cam_forward=self._config.x_cam,
+            )
         if floor is None:
-            return "rejected — that point is at or above the horizon; point at the floor"
-        inputs = self._adjust_nav_goal(_NAV_TO_POSITION, grounding.approach_goal(*floor))
+            if standoff == grounding.STANDOFF_M:
+                return "rejected — that point is at or above the horizon; point at the floor"
+            return "rejected — that point cannot be projected; use visible floor in the current main camera frame"
+        if standoff == grounding.STANDOFF_M:
+            inputs = self._adjust_nav_goal(_NAV_TO_POSITION, grounding.approach_goal(*floor))
+        else:
+            current_pose = self._pose.current_pose_xyt()
+            if self._pose_at_capture is None or current_pose is None:
+                return "rejected — conversation approach needs capture and current robot poses"
+            # Rebase the target, not a previously shortened goal: a robot that
+            # moved into conversation range must not drive back to its old pose.
+            target = adjust_nav_goal(
+                {"x": floor[0], "y": floor[1], "theta_degrees": 0.0, "local_frame": True},
+                capture_pose=self._pose_at_capture,
+                current_pose=current_pose,
+                is_mapfree=self._pose.is_mapfree,
+            )
+            floor = (target["x"], target["y"])
+            goal = grounding.approach_goal(*floor, standoff_m=standoff)
+            if goal["x"] == goal["y"] == 0.0 and abs(goal["theta_degrees"]) <= 5.0:
+                return "already positioned — no movement needed; continue this encounter without another approach"
+            # This goal is already relative to current_pose. Only convert to the
+            # static map if needed; applying the capture delta again would drift.
+            inputs = adjust_nav_goal(
+                goal,
+                capture_pose=current_pose,
+                current_pose=current_pose,
+                is_mapfree=self._pose.is_mapfree,
+                use_static_map=getattr(self._pose, "cur_nav_mode", None) == "navigation",
+            )
         self._logger.info(
             f"[Brain] go_to_point_in_view ({v_norm:.0f},{u_norm:.0f}) -> floor ({floor[0]:.2f}, {floor[1]:.2f})m, "
             f"goal ({inputs['x']:.2f}, {inputs['y']:.2f}, {inputs['theta_degrees']:.0f}°) "
             f"pitch={self._pitch_at_capture:.0f}°"
         )
         self._start_skill(_NAV_TO_POSITION, inputs)
+        if standoff == grounding.STANDOFF_M:
+            return (
+                f"driving to the floor point {math.hypot(*floor):.1f}m away (stopping ~{grounding.STANDOFF_M}m short) "
+                "— you will get an event when it finishes"
+            )
+        capped = math.hypot(*floor) > grounding.MAX_RANGE_M
         return (
-            f"driving to the floor point {math.hypot(*floor):.1f}m away (stopping ~{grounding.STANDOFF_M}m short) "
-            "— you will get an event when it finishes"
+            f"approaching floor point {math.hypot(*floor):.1f}m away with {standoff}m requested standoff"
+            + (
+                " (capped step; target remains farther away; conversation distance NOT reached — do not greet yet)"
+                if capped
+                else ""
+            )
+            + " — you will get an event when it finishes; inspect a fresh main camera image before any next approach"
         )
 
     def _start_skill(self, skill_id: str, inputs: dict) -> None:
@@ -678,19 +922,119 @@ class BrainAgent:
             capture_pose=self._pose_at_capture,
             current_pose=self._pose.current_pose_xyt(),
             is_mapfree=self._pose.is_mapfree,
+            use_static_map=getattr(self._pose, "cur_nav_mode", None) == "navigation",
         )
         if adjusted is not inputs:
             self._logger.info(f"[Brain] nav goal re-based to the current pose: {adjusted}")
         return adjusted
 
     # ================= events (executor thread) =================
-    def add_event(self, text: str, image: bytes | None = None, kind: EventKind = EventKind.INFO) -> None:
+    def listening_enabled(self) -> bool:
+        directive = self._state.current_directive
+        return bool(directive and getattr(directive, "listen_before_acting", lambda: False)())
+
+    def speech_context(self) -> tuple[int, int] | None:
+        with self._input_lock:
+            if not self._accept_incoming or not self._state.is_brain_active:
+                return None
+            return self._speech_epoch, self._request_generation
+
+    def complete_speech(self, context, token, text: str, *, source: str) -> None:
+        with self._input_lock:
+            if context is None or context != self.speech_context() or not self._accept_incoming:
+                if token in self._incoming_speech:
+                    self.finish_incoming_speech(token, "")
+                return
+            if token is not None:
+                self.finish_incoming_speech(token, text, source=source)
+            elif text and self._state.is_brain_active:
+                self.on_user_message(text, source=source, request_generation=context[1])
+
+    def on_microphone_speech(self, data: dict) -> None:
+        token_id = data.get("utterance_id")
+        if not isinstance(token_id, str) or not token_id:
+            return
+        with self._input_lock:
+            if data.get("stage") == "started":
+                if not self.listening_enabled() or token_id in self._microphone_tokens:
+                    return
+                context = self.speech_context()
+                token = self.begin_incoming_speech(context)
+                if token is not None:
+                    self._microphone_tokens[token_id] = context, token
+            elif data.get("stage") == "finished":
+                entry = self._microphone_tokens.pop(token_id, None)
+                if entry is not None:
+                    text = data.get("text", "")
+                    self.complete_speech(*entry, text if isinstance(text, str) else "", source="operator")
+
+    def begin_incoming_speech(self, context=None) -> object | None:
+        """Gate on acoustic/playback onset; no transcript yet."""
+        with self._input_lock:
+            if (
+                not self._accept_incoming
+                or not self._state.is_brain_active
+                or not self.listening_enabled()
+                or (context is not None and context != self.speech_context())
+            ):
+                return None
+            token = object()
+            self._incoming_speech[token] = self._request_generation
+            # Also bound orphaned holds if the input process disappears entirely.
+            timer = threading.Timer(90.0, self.finish_incoming_speech, args=(token, ""))
+            timer.daemon = True
+            self._incoming_timers[token] = timer
+            timer.start()
+            self._input_generation += 1
+            try:
+                running = self._state.primitive_running
+                if running is not None and not running.manual and running.skill_id in _INPUT_INTERRUPT_SKILLS:
+                    self._runner.interrupt_for_input(_INPUT_INTERRUPT_SKILLS)
+                self.add_event("Incoming speech started. Wait for the completed transcript before continuing.")
+            except Exception:
+                self._incoming_speech.pop(token)
+                timer = self._incoming_timers.pop(token, None)
+                if timer is not None:
+                    timer.cancel()
+                self._input_generation += 1
+                raise
+            return token
+
+    def finish_incoming_speech(self, token: object | None, text: str, *, source: str = "environment") -> None:
+        """Queue the transcript before reopening dispatch; stale/duplicate callbacks do nothing."""
+        with self._input_lock:
+            if token not in self._incoming_speech:
+                return
+            for key, (_, active_token) in list(self._microphone_tokens.items()):
+                if active_token is token:
+                    self._microphone_tokens.pop(key)
+            try:
+                if text and self._accept_incoming and self._state.is_brain_active:
+                    self.on_user_message(text, source=source, request_generation=self._incoming_speech[token])
+            finally:
+                self._incoming_speech.pop(token)
+                timer = self._incoming_timers.pop(token, None)
+                if timer is not None:
+                    timer.cancel()
+                self._input_generation += 1
+
+    def add_event(
+        self,
+        text: str,
+        image: bytes | None = None,
+        kind: EventKind = EventKind.INFO,
+        *,
+        source: str = "system",
+        request_generation: int | None = None,
+    ) -> Event | None:
         """Queue something that happened; the loop wakes for an immediate turn."""
         if not self.available:
             return  # no transport, no loop: these would accumulate forever
-        self._events.append(Event(text, image, kind))
+        event = Event(text, image, kind, source, request_generation)
+        self._events.append(event)
         self._runtime.post(self._wake, kind)
         self._trace(TraceEvent.EVENT, kind=kind, text=text, image=image is not None)
+        return event
 
     def _wake(self, kind: EventKind) -> None:
         """Loop thread: end any pause; user speech also abandons a housekeeping turn."""
@@ -698,8 +1042,17 @@ class BrainAgent:
         if kind == EventKind.USER:
             self._user_spoke.set()
 
-    def on_user_message(self, text: str) -> None:
-        self.add_event(f'The user says: "{text}"', kind=EventKind.USER)
+    def on_user_message(self, text: str, *, source: str = "operator", request_generation: int | None = None) -> None:
+        with self._input_lock:
+            if source == "operator":
+                self._input_generation += 1  # fence in-flight speech/actions at receipt, before interpretation
+            generation = self._request_generation if request_generation is None else request_generation
+            label = "The user says" if source == "operator" else "The resident says"
+            event = self.add_event(
+                f'{label}: "{text}"', kind=EventKind.USER, source=source, request_generation=generation
+            )
+            if source == "operator":
+                self._latest_operator_event = event
 
     def on_custom_input(self, data: dict) -> None:
         device = data.get("input_device", "unknown")
@@ -708,12 +1061,40 @@ class BrainAgent:
     def on_skill_event(
         self, status: str, skill_name: str, detail: str | None = None, image: bytes | None = None
     ) -> None:
+        directive = self._state.current_directive
+        policy = directive.get_departure_guard() if directive is not None else None
+        if (
+            policy is not None
+            and status == "completed"
+            and skill_name in policy.trigger_skill_names
+            and detail is not None
+            and any(detail.startswith(prefix) for prefix in policy.trigger_result_prefixes)
+        ):
+            pose = self._pose.current_pose_xyt()
+            if pose is not None:
+                self._departure_anchor = (pose[0], pose[1], time.monotonic())
+        interaction_policy = self._interaction_guard_policy()
+        if interaction_policy is not None and status == "completed" and detail is not None:
+            if skill_name in interaction_policy.release_skill_names and any(
+                detail.startswith(prefix) for prefix in interaction_policy.release_result_prefixes
+            ):
+                self._interaction_guard_started_at = None
+            elif skill_name in interaction_policy.trigger_skill_names and any(
+                detail.startswith(prefix) for prefix in interaction_policy.trigger_result_prefixes
+            ):
+                self._interaction_guard_started_at = time.monotonic()
         line = f"Skill {skill_name} {status}"
         if detail:
             line += f": {detail}"
         self.add_event(line, image=image)
 
     def on_skill_feedback(self, skill_name: str, feedback: str, image: bytes | None = None) -> None:
+        # The running skill is already present in every observation. A bare
+        # status adds no information, but queuing it bypasses the supervision
+        # pause and spends a model turn on short skills before they finish.
+        # Keep visual supervision on its normal timer and all actual feedback.
+        if not image and feedback.strip().casefold() in {"", "running"}:
+            return
         self.add_event(f"Update from running skill {skill_name}: {feedback}", image=image)
 
     # ================= telemetry =================

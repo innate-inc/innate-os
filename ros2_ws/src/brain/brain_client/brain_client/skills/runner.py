@@ -51,6 +51,7 @@ class PrimitiveRunner:
         # the agent loop (start_task) and the ROS executor (manual-event
         # mirror, deactivation/reset, action callbacks).
         self._slot_lock = threading.Lock()
+        self._input_interrupted: RunningSkill | None = None
 
     # --- public API ---
     def start_task(self, skill_id: str, primitive_id: str | None, inputs: dict) -> None:
@@ -76,6 +77,7 @@ class PrimitiveRunner:
                 # Claimed before the goal is sent: the response and result
                 # callbacks fire on the ROS thread and must find the state they clear.
                 self._state.primitive_running = claim
+                self._input_interrupted = None
                 generation = self._generation
         if occupant is not None:
             self.report_start_failure(
@@ -129,6 +131,8 @@ class PrimitiveRunner:
         with self._slot_lock:
             if self._state.primitive_running is claim:
                 self._state.primitive_running = None
+                if self._input_interrupted is claim:
+                    self._input_interrupted = None
 
     def report_start_failure(self, *, primitive_name, primitive_id, reason, skill_id=None) -> None:
         """Tell the brain and the app that a task never started (no goal exists)."""
@@ -168,6 +172,26 @@ class PrimitiveRunner:
         self._cancel_skill_client.call_async(Trigger.Request())
         return True
 
+    def interrupt_for_input(self, skill_ids: frozenset[str]) -> None:
+        """Cancel only an owned navigation claim, retaining normal result cleanup.
+
+        Remember a pending claim too: its handle may not have arrived yet.
+        Speech is a pause in the request, not a user Stop or a task reset.
+        """
+        with self._slot_lock:
+            running = self._state.primitive_running
+            if (
+                running is None
+                or running.manual
+                or running.skill_id not in skill_ids
+                or self._input_interrupted is running
+            ):
+                return
+            self._input_interrupted = running
+            handle = self._goal_handle
+        if handle is not None:
+            handle.cancel_goal_async().add_done_callback(self._on_cancel_response)
+
     def abort_running(self) -> None:
         """Stop the brain's primitive without announcing an interruption (used on reset)."""
         with self._slot_lock:
@@ -197,6 +221,7 @@ class PrimitiveRunner:
             if running is not None and running.manual:
                 return
             self._generation += 1
+            self._input_interrupted = None
             handle, self._goal_handle = self._goal_handle, None
             self._state.primitive_running = None
         if handle:
@@ -272,14 +297,19 @@ class PrimitiveRunner:
             goal_handle = None
         accepted = goal_handle is not None and goal_handle.accepted
         running = None
+        input_interrupted = False
         with self._slot_lock:
             stale = generation != self._generation
             if not stale:
                 if accepted:
                     self._goal_handle = goal_handle
+                    input_interrupted = (
+                        self._input_interrupted is not None and self._input_interrupted is self._state.primitive_running
+                    )
                 else:
                     running, self._state.primitive_running = self._state.primitive_running, None
                     self._goal_handle = None
+                    self._input_interrupted = None
         if stale:
             # The brain disowned this goal while its response was in flight:
             # cancel it now that a handle finally exists, touch nothing else.
@@ -302,6 +332,8 @@ class PrimitiveRunner:
             return
         self._logger.info("Primitive execution goal accepted.")
         goal_handle.get_result_async().add_done_callback(lambda f: self._on_result(f, generation))
+        if input_interrupted:
+            goal_handle.cancel_goal_async().add_done_callback(self._on_cancel_response)
 
     def _on_cancel_response(self, future) -> None:
         cancel_response = future.result()
@@ -325,11 +357,14 @@ class PrimitiveRunner:
                 f"{status_color}Primitive execution result: {result.success}, Type: {result.success_type}\033[0m"
             )
         running = None
+        input_interrupted = False
         with self._slot_lock:
             stale = generation != self._generation
             if not stale:
                 running, self._state.primitive_running = self._state.primitive_running, None
                 self._goal_handle = None
+                input_interrupted = running is not None and self._input_interrupted is running
+                self._input_interrupted = None
         if stale:
             # A disowned goal ending: a newer run (or a fresh context) may own
             # the state and the event queue now — this result concerns neither.
@@ -352,6 +387,8 @@ class PrimitiveRunner:
         # (for every goal, not just the agent's) — only the brain event is this
         # client's job.
         status, detail = self._classify_result(result, is_code)
+        if input_interrupted and status == "interrupted":
+            detail = "Paused for incoming speech; the navigation goal was cancelled."
         if status is not None:
             image = base64.b64decode(result.image_b64) if result.image_b64 else None
             self.on_event(status, primitive_name, detail, image=image)

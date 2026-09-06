@@ -1,0 +1,442 @@
+{
+  "kind": "controlled prompt replay; no autonomous mission, skill dispatch, or navigation measurement",
+  "model": "gpt-6-astra",
+  "effort": "low",
+  "seed": null,
+  "max_calls": 12,
+  "estimated_usd_cap": 6.0,
+  "image_sha256": "7ece810ab9954c7751d6cf20156b337412088a12bba4287fdfbe118ce9fec411",
+  "prompt_sha256": {
+    "baseline": "63cb62f2b75b1536bd09ff3faf1375acdf0e473880f6b9ed27214b923de1c699",
+    "candidate": "362b24a9e1a24e3502b0d7fde6b51615d635d3a7612075e8bdcef15af671fdf8"
+  },
+  "calls": 11,
+  "estimated_usd": 0.2460085,
+  "rows": [
+    {
+      "arm": "baseline",
+      "case": "startup",
+      "turn": 1,
+      "events": [
+        "Begin a new Household Orders task now."
+      ],
+      "request_sha256": "f389ae3bf3c221e40a9554c4e1ddec2f042cfb1a15023aae5fd0074cb1c90c86",
+      "reservation_usd": 0.597575,
+      "usage": {
+        "input_tokens": 3282,
+        "input_tokens_details": {
+          "cache_write_tokens": 3279,
+          "cached_tokens": 0
+        },
+        "output_tokens": 15,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 3297
+      },
+      "estimated_usd": 0.0417675,
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "status": "ok",
+      "speech": null,
+      "calls": [
+        {
+          "name": "mission_run",
+          "args": {}
+        }
+      ],
+      "pass_probe": true,
+      "receipt": "RUN_STARTED {\"run_id\":\"20260906T033326Z-7c3b1f8b\"}",
+      "seconds": 2.8293
+    },
+    {
+      "arm": "baseline",
+      "case": "startup",
+      "turn": 2,
+      "events": [
+        "mission_run completed: RUN_STARTED {\"run_id\":\"20260906T033326Z-7c3b1f8b\"}"
+      ],
+      "request_sha256": "41326f60ec2b9ea4d0ae956fc499e046cd7fbc4bb53acc4e45adbf765def08c7",
+      "reservation_usd": 0.70755,
+      "usage": {
+        "input_tokens": 3753,
+        "input_tokens_details": {
+          "cache_write_tokens": 1061,
+          "cached_tokens": 2689
+        },
+        "output_tokens": 18,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 3771
+      },
+      "estimated_usd": 0.0168815,
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "status": "ok",
+      "speech": null,
+      "calls": [
+        {
+          "name": "person_identity",
+          "args": {
+            "action": "begin"
+          }
+        }
+      ],
+      "pass_probe": true,
+      "receipt": "ROSTER_INITIALIZED {\"expected_residents\":3}",
+      "seconds": 1.9556
+    },
+    {
+      "arm": "baseline",
+      "case": "startup",
+      "turn": 3,
+      "events": [
+        "person_identity completed: ROSTER_INITIALIZED {\"expected_residents\":3}"
+      ],
+      "request_sha256": "76a8be4cbef02424a0da91b0e1bdb660a88fa2e419402ef6f0bf1e86302177ff",
+      "reservation_usd": 0.8178124999999999,
+      "usage": {
+        "input_tokens": 4215,
+        "input_tokens_details": {
+          "cache_write_tokens": 1523,
+          "cached_tokens": 2689
+        },
+        "output_tokens": 19,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 4234
+      },
+      "estimated_usd": 0.0227065,
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "status": "ok",
+      "speech": null,
+      "calls": [
+        {
+          "name": "find_next_person",
+          "args": {
+            "reset": true
+          }
+        }
+      ],
+      "pass_probe": true,
+      "receipt": "SEARCH_RESET {}",
+      "seconds": 1.9513
+    },
+    {
+      "arm": "baseline",
+      "case": "recovery",
+      "turn": 1,
+      "events": [
+        "Continue the existing Household Orders task after a gap in updates. The mission, identity roster, and search were already initialized. A resident confirmed an order, and mission_notes saved it under person-001. You have lost track of the current progress after navigation. Recover the saved facts before continuing."
+      ],
+      "request_sha256": "cd0336ce1e094c688e3294142e5f5c3e6d125e0ae0f4e48e362515e15f410272",
+      "reservation_usd": 0.60105,
+      "usage": {
+        "input_tokens": 3332,
+        "input_tokens_details": {
+          "cache_write_tokens": 640,
+          "cached_tokens": 2689
+        },
+        "output_tokens": 19,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 3351
+      },
+      "estimated_usd": 0.011669,
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "status": "ok",
+      "speech": null,
+      "calls": [
+        {
+          "name": "mission_notes",
+          "args": {
+            "action": "list"
+          }
+        }
+      ],
+      "pass_probe": true,
+      "notes_preserved": true,
+      "receipt": "MISSION_NOTES {\"notes\":{\"person-001\":\"{\\\"name\\\": \\\"Replay fixture\\\", \\\"confirmed_order\\\": \\\"no onions; sauce on the side\\\", \\\"trial\\\": 1}\"}}",
+      "seconds": 1.6371
+    },
+    {
+      "arm": "baseline",
+      "case": "recovery",
+      "turn": 2,
+      "events": [
+        "mission_notes completed: MISSION_NOTES {\"notes\":{\"person-001\":\"{\\\"name\\\": \\\"Replay fixture\\\", \\\"confirmed_order\\\": \\\"no onions; sauce on the side\\\", \\\"trial\\\": 1}\"}}"
+      ],
+      "request_sha256": "ae9d8c00da60e5e6d44a1dfa839b50b66ce67c2c4854dbb42a9f7f21fc2e0d5b",
+      "reservation_usd": 0.71275,
+      "usage": {
+        "input_tokens": 3822,
+        "input_tokens_details": {
+          "cache_write_tokens": 1130,
+          "cached_tokens": 2689
+        },
+        "output_tokens": 15,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 3837
+      },
+      "estimated_usd": 0.017594,
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "status": "ok",
+      "speech": null,
+      "calls": [
+        {
+          "name": "find_next_person",
+          "args": {}
+        }
+      ],
+      "pass_probe": true,
+      "notes_preserved": true,
+      "receipt": null,
+      "seconds": 2.4531
+    },
+    {
+      "arm": "candidate",
+      "case": "startup",
+      "turn": 1,
+      "events": [
+        "Begin a new Household Orders task now."
+      ],
+      "request_sha256": "82be936f924212aba013429be9045f869127c80cc734d4bf44f44877ae467750",
+      "reservation_usd": 0.6022375,
+      "usage": {
+        "input_tokens": 3355,
+        "input_tokens_details": {
+          "cache_write_tokens": 3352,
+          "cached_tokens": 0
+        },
+        "output_tokens": 19,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 3374
+      },
+      "estimated_usd": 0.04288,
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "status": "ok",
+      "speech": null,
+      "calls": [
+        {
+          "name": "mission_run",
+          "args": {
+            "restart": true
+          }
+        }
+      ],
+      "pass_probe": true,
+      "receipt": "RUN_STARTED {\"run_id\":\"20260906T033348Z-08b4c34d\"}",
+      "seconds": 1.9027
+    },
+    {
+      "arm": "candidate",
+      "case": "startup",
+      "turn": 2,
+      "events": [
+        "mission_run completed: RUN_STARTED {\"run_id\":\"20260906T033348Z-08b4c34d\"}"
+      ],
+      "request_sha256": "40d5f7ffb1c2f4348eedb9d577e8062306da5b4861e2d72c6b3e0700d2b85899",
+      "reservation_usd": 0.7124125,
+      "usage": {
+        "input_tokens": 3828,
+        "input_tokens_details": {
+          "cache_write_tokens": 1063,
+          "cached_tokens": 2762
+        },
+        "output_tokens": 18,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 3846
+      },
+      "estimated_usd": 0.0169795,
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "status": "ok",
+      "speech": null,
+      "calls": [
+        {
+          "name": "person_identity",
+          "args": {
+            "action": "begin"
+          }
+        }
+      ],
+      "pass_probe": true,
+      "receipt": "ROSTER_INITIALIZED {\"expected_residents\":3}",
+      "seconds": 1.6737
+    },
+    {
+      "arm": "candidate",
+      "case": "startup",
+      "turn": 3,
+      "events": [
+        "person_identity completed: ROSTER_INITIALIZED {\"expected_residents\":3}"
+      ],
+      "request_sha256": "487ce9c5e6ca570ac23551de0c10ba247e3a367243d8a2ce94ab71e4d7cd2c88",
+      "reservation_usd": 0.8226749999999999,
+      "usage": {
+        "input_tokens": 4290,
+        "input_tokens_details": {
+          "cache_write_tokens": 1525,
+          "cached_tokens": 2762
+        },
+        "output_tokens": 19,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 4309
+      },
+      "estimated_usd": 0.0228045,
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "status": "ok",
+      "speech": null,
+      "calls": [
+        {
+          "name": "find_next_person",
+          "args": {
+            "reset": true
+          }
+        }
+      ],
+      "pass_probe": true,
+      "receipt": "SEARCH_RESET {}",
+      "seconds": 1.7839
+    },
+    {
+      "arm": "candidate",
+      "case": "recovery",
+      "turn": 1,
+      "events": [
+        "Continue the existing Household Orders task after a gap in updates. The mission, identity roster, and search were already initialized. A resident confirmed an order, and mission_notes saved it under person-001. You have lost track of the current progress after navigation. Recover the saved facts before continuing."
+      ],
+      "request_sha256": "15b960c74f0d3354b365b012e6a3eae3c11d2860ca63e445de3f649665d3d11b",
+      "reservation_usd": 0.6057125,
+      "usage": {
+        "input_tokens": 3405,
+        "input_tokens_details": {
+          "cache_write_tokens": 640,
+          "cached_tokens": 2762
+        },
+        "output_tokens": 15,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 3420
+      },
+      "estimated_usd": 0.011542,
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "status": "ok",
+      "speech": null,
+      "calls": [
+        {
+          "name": "mission_run",
+          "args": {}
+        }
+      ],
+      "pass_probe": true,
+      "notes_preserved": true,
+      "receipt": "RUN_RESUMED {\"run_id\":\"20260906T033348Z-08b4c34d\"}",
+      "seconds": 1.7735
+    },
+    {
+      "arm": "candidate",
+      "case": "recovery",
+      "turn": 2,
+      "events": [
+        "mission_run completed: RUN_RESUMED {\"run_id\":\"20260906T033348Z-08b4c34d\"}"
+      ],
+      "request_sha256": "b3e374f40afd8f94b0ef9dde1e2c99ef92ce0990c0115398cb9ac57518faed36",
+      "reservation_usd": 0.7157,
+      "usage": {
+        "input_tokens": 3876,
+        "input_tokens_details": {
+          "cache_write_tokens": 1111,
+          "cached_tokens": 2762
+        },
+        "output_tokens": 19,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 3895
+      },
+      "estimated_usd": 0.0176295,
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "status": "ok",
+      "speech": null,
+      "calls": [
+        {
+          "name": "mission_notes",
+          "args": {
+            "action": "list"
+          }
+        }
+      ],
+      "pass_probe": true,
+      "notes_preserved": true,
+      "receipt": "MISSION_NOTES {\"notes\":{\"person-001\":\"{\\\"name\\\": \\\"Replay fixture\\\", \\\"confirmed_order\\\": \\\"no onions; sauce on the side\\\", \\\"trial\\\": 1}\"}}",
+      "seconds": 2.048
+    },
+    {
+      "arm": "candidate",
+      "case": "recovery",
+      "turn": 3,
+      "events": [
+        "mission_notes completed: MISSION_NOTES {\"notes\":{\"person-001\":\"{\\\"name\\\": \\\"Replay fixture\\\", \\\"confirmed_order\\\": \\\"no onions; sauce on the side\\\", \\\"trial\\\": 1}\"}}"
+      ],
+      "request_sha256": "bc40a2b51982fcaa23219bef4eeac1a334708665e4a94ac5beba6f8ca168c1cc",
+      "reservation_usd": 0.8274,
+      "usage": {
+        "input_tokens": 4366,
+        "input_tokens_details": {
+          "cache_write_tokens": 1601,
+          "cached_tokens": 2762
+        },
+        "output_tokens": 15,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 4381
+      },
+      "estimated_usd": 0.0235545,
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "status": "ok",
+      "speech": null,
+      "calls": [
+        {
+          "name": "find_next_person",
+          "args": {}
+        }
+      ],
+      "pass_probe": true,
+      "notes_preserved": true,
+      "receipt": null,
+      "seconds": 1.6308
+    }
+  ],
+  "criteria": {
+    "startup": "mission_run (candidate restart=true), identity begin, search reset=true, one call and no speech per turn",
+    "recovery": "Inspect saved notes without starting a new mission or searching before inspection; no invented confirmation or checkout"
+  },
+  "prices_usd_per_million": {
+    "input": 10,
+    "cached": 1,
+    "cache_write": 12.5,
+    "output": 50
+  }
+}

@@ -264,7 +264,9 @@ def test_cancelled_sequence_preserves_native_call_outputs_and_requires_new_reque
 def test_cadence_waits_after_completion_and_never_overlaps_requests(agent_factory, monkeypatch):
     agent, state = agent_factory()
     state.current_directive = SimpleNamespace(
-        get_prompt=lambda: "Wait quietly", get_turn_intervals=lambda: TurnIntervals(idle=0.06, supervision=0.09)
+        get_prompt=lambda: "Wait quietly",
+        get_turn_intervals=lambda: TurnIntervals(idle=0.06, supervision=0.09),
+        get_departure_guard=lambda: None,
     )
     first, third, release = threading.Event(), threading.Event(), threading.Event()
     starts, ends, pauses = [], [], []

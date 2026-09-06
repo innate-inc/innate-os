@@ -1,0 +1,11 @@
+Runtime: 64d90a5be2fc5e8803f41489ae7c7377ee4a700e
+Environment: ROS Humble + local ARM64 simulator dependencies; pytest plugin autoload disabled.
+Suites: test_mission_run.py test_household_resident_roster.py test_mission_notes.py test_navigation_keepout.py test_resident_roster_continuity.py test_robot_state_qos.py test_local_brain.py test_agent_loading.py test_openai_context.py test_openai_transport.py test_pose_math.py
+
+........................................................................ [ 27%]
+........................................................................ [ 54%]
+........................................................................ [ 81%]
+.................................................                        [100%]
+265 passed in 13.67s
+
+Ruff check of all changed Python files: passed.

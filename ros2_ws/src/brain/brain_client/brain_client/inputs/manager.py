@@ -73,11 +73,21 @@ class InputDeviceManager:
         """Publish data an input device emits: to the agent (chat_in, custom) or past it (telemetry)."""
         try:
             text = data if isinstance(data, str) else data.get("text", "")
+            if data_type == "speech":
+                payload = dict(
+                    data,
+                    sender="microphone_lifecycle",
+                    text=text if isinstance(text, str) and _HAS_CONTENT.search(text) else "",
+                )
+                self._chat_in_pub.publish(String(data=json.dumps(payload)))
+                return
             if data_type == "chat_in":
                 if not _HAS_CONTENT.search(text):
                     self._logger.debug(f"🔇 Dropped contentless transcript from '{device_name}': {text!r}")
                     return
                 data_dict = {"text": text, "sender": "user", "timestamp": time.time()}
+                if isinstance(data, dict) and data.get("speech_lifecycle"):
+                    data_dict["speech_lifecycle"] = True
             else:
                 data_dict = {"text": data} if isinstance(data, str) else data.copy()
                 data_dict["input_device"] = device_name
@@ -135,13 +145,17 @@ class InputDeviceManager:
         """
         self._logger.debug(f"📥 Received active_inputs message: {raw}")
         try:
-            required_inputs = json.loads(raw).get("inputs", [])
+            payload = json.loads(raw)
+            required_inputs = payload.get("inputs", [])
         except (json.JSONDecodeError, AttributeError, TypeError):
             self._logger.error(f"Ignoring active_inputs: invalid payload {raw[:100]!r}")
             return
         self._logger.debug(f"🎯 Processing inputs: {required_inputs}")
         self._requested_inputs = set(required_inputs)
         for name, device in self.input_devices.items():
+            configure = getattr(device, "set_listening_enabled", None)
+            if configure and configure(payload.get("listen_before_acting") is True):
+                self._apply(name, device, False)  # a fresh STT session fences old callbacks
             self._apply(name, device, name in self._requested_inputs and self._is_allowed(name))
 
     def set_all_active(self, active: bool) -> tuple[bool, str]:

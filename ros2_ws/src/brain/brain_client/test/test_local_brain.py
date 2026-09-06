@@ -10,6 +10,7 @@ with a None or capturing transport.
 """
 
 import json
+import math
 
 import pytest
 
@@ -451,7 +452,7 @@ import threading  # noqa: E402
 import time  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
-from brain_client.agents.types import TurnIntervals  # noqa: E402
+from brain_client.agents.types import DepartureGuard, InteractionGuard, TurnIntervals  # noqa: E402
 from brain_client.brain.agent import BrainAgent  # noqa: E402
 from brain_client.brain.utils import Event, EventKind  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
@@ -533,6 +534,123 @@ def test_agent_turn_intervals_reject_non_positive_or_non_finite_values(value):
         TurnIntervals(supervision=value)
 
 
+def departure_guard() -> DepartureGuard:
+    return DepartureGuard(
+        trigger_skill_names=("person_identity",),
+        trigger_result_prefixes=("KNOWN_PERSON",),
+        protected_skill_ids=("innate-os/find_next_person",),
+        minimum_departure_m=1.25,
+        maximum_hold_s=12.0,
+    )
+
+
+def test_known_person_departure_guard_hides_stop_until_robot_moves(agent_factory):
+    agent, state = agent_factory()
+    pose = [(2.0, 3.0, 0.0)]
+    agent._pose = SimpleNamespace(current_pose_xyt=lambda: pose[0], is_mapfree=False)
+    state.current_directive = SimpleNamespace(
+        get_turn_intervals=lambda: TurnIntervals(), get_departure_guard=departure_guard
+    )
+
+    agent.on_skill_event("completed", "person_identity", "KNOWN_PERSON encounter_id=resident-1")
+    state.primitive_running = RunningSkill("find_next_person", "innate-os/find_next_person")
+
+    declarations = agent._build_tools([])[0]["functionDeclarations"]
+    assert [declaration["name"] for declaration in declarations] == [WAIT]
+
+    pose[0] = (3.3, 3.0, 0.0)
+    declarations = agent._build_tools([])[0]["functionDeclarations"]
+    assert [declaration["name"] for declaration in declarations] == [STOP_SKILL, WAIT]
+
+
+def test_departure_guard_never_blocks_user_requested_stop(agent_factory):
+    agent, state = agent_factory()
+    agent._pose = SimpleNamespace(current_pose_xyt=lambda: (2.0, 3.0, 0.0), is_mapfree=False)
+    state.current_directive = SimpleNamespace(
+        get_turn_intervals=lambda: TurnIntervals(), get_departure_guard=departure_guard
+    )
+    agent.on_skill_event("completed", "person_identity", "KNOWN_PERSON encounter_id=resident-1")
+    state.primitive_running = RunningSkill("find_next_person", "innate-os/find_next_person")
+
+    declarations = agent._build_tools([Event("The user says: stop", kind=EventKind.USER)])[0][
+        "functionDeclarations"
+    ]
+    assert [declaration["name"] for declaration in declarations] == [STOP_SKILL]
+
+
+@pytest.mark.parametrize("field,value", [("minimum_departure_m", 0.0), ("maximum_hold_s", float("inf"))])
+def test_departure_guard_rejects_invalid_bounds(field, value):
+    kwargs = dict(
+        trigger_skill_names=("person_identity",),
+        trigger_result_prefixes=("KNOWN_PERSON",),
+        protected_skill_ids=("innate-os/find_next_person",),
+        minimum_departure_m=1.25,
+        maximum_hold_s=12.0,
+    )
+    kwargs[field] = value
+    with pytest.raises(ValueError, match="finite positive"):
+        DepartureGuard(**kwargs)
+
+
+def interaction_guard() -> InteractionGuard:
+    return InteractionGuard(
+        trigger_skill_names=("mission_notes",),
+        trigger_result_prefixes=("NOTE_MISSING",),
+        blocked_skill_ids=("innate-os/find_next_person",),
+        release_skill_names=("mission_notes",),
+        release_result_prefixes=("NOTE_SAVED",),
+        maximum_hold_s=35.0,
+    )
+
+
+def test_interaction_guard_hides_search_until_note_is_saved(agent_factory):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(
+        get_turn_intervals=lambda: TurnIntervals(),
+        get_departure_guard=lambda: None,
+        get_interaction_guard=interaction_guard,
+    )
+    state.registry.metadata = [
+        {"id": "innate-os/find_next_person", "name": "find_next_person", "inputs": {}},
+        {"id": "innate-os/navigate_to_position", "name": "navigate_to_position", "inputs": {}},
+    ]
+    agent._roster = SimpleNamespace(
+        active_skill_ids=lambda: ["innate-os/find_next_person", "innate-os/navigate_to_position"]
+    )
+
+    agent.on_skill_event("completed", "mission_notes", 'NOTE_MISSING {"key":"resident-002"}')
+    declarations = agent._build_tools([])[0]["functionDeclarations"]
+    names = [declaration["name"] for declaration in declarations]
+    assert "find_next_person" not in names
+    assert "navigate_to_position" in names
+
+    agent.on_skill_event("completed", "mission_notes", 'NOTE_SAVED {"key":"resident-002"}')
+    declarations = agent._build_tools([])[0]["functionDeclarations"]
+    assert "find_next_person" in [declaration["name"] for declaration in declarations]
+
+
+def test_interaction_guard_expires_fail_open(agent_factory):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(get_interaction_guard=interaction_guard)
+    agent._interaction_guard_started_at = time.monotonic() - 36.0
+
+    assert agent._interaction_blocked_skill_ids() == frozenset()
+    assert agent._interaction_guard_started_at is None
+
+
+@pytest.mark.parametrize("value", [0.0, float("inf"), float("nan")])
+def test_interaction_guard_rejects_invalid_timeout(value):
+    with pytest.raises(ValueError, match="finite positive"):
+        InteractionGuard(
+            trigger_skill_names=("mission_notes",),
+            trigger_result_prefixes=("NOTE_MISSING",),
+            blocked_skill_ids=("innate-os/find_next_person",),
+            release_skill_names=("mission_notes",),
+            release_result_prefixes=("NOTE_SAVED",),
+            maximum_hold_s=value,
+        )
+
+
 def run_turn(agent: BrainAgent) -> None:
     """Run one turn to completion on the agent's own loop thread."""
     assert agent._context is not None  # the loop hands _turn the context it guarded on
@@ -576,6 +694,57 @@ def test_error_backoff_ignores_chatter_but_wakes_for_user_speech(agent_factory):
     assert not future.done()
     agent.on_user_message("are you there?")
     future.result(timeout=2)
+
+
+@pytest.mark.parametrize("wake", ["completed", "failed", "interrupted", "speech", "feedback", "image"])
+def test_bare_running_feedback_keeps_supervision_pause_but_meaningful_events_wake(agent_factory, wake):
+    agent, state = agent_factory()
+    state.primitive_running = RunningSkill("find_next_person", "innate-os/find_next_person")
+    state.current_directive = SimpleNamespace(
+        get_turn_intervals=lambda: TurnIntervals(supervision=1.0),
+        get_departure_guard=lambda: None,
+        get_prompt=lambda: "Search for people",
+    )
+    requests = []
+
+    def transport(model, body):
+        requests.append(body)
+        return [model_response(call_part(WAIT, {}))]
+
+    agent._context._transport = transport
+    paused = threading.Event()
+
+    async def next_update():
+        paused.set()
+        await agent._pause(agent._interval())
+        await agent._turn(agent._context)
+
+    future = asyncio.run_coroutine_threadsafe(next_update(), agent._runtime.loop)
+    assert paused.wait(1)
+    for feedback in ("running", " running ", "RUNNING", "", "  ", "running"):
+        agent.on_skill_feedback("find_next_person", feedback)
+    time.sleep(0.05)  # allow a mistakenly queued wake to reach the model
+    assert agent._interval() == 1.0  # search visual-supervision cadence is unchanged
+    assert not future.done() and not requests and not agent._events
+    if wake == "speech":
+        agent.on_user_message("Stop now")
+    elif wake == "feedback":
+        agent.on_skill_feedback("find_next_person", "running recovery after planner failure")
+    elif wake == "image":
+        agent.on_skill_feedback("find_next_person", "running", image=JPEG)
+    else:
+        agent.on_skill_event(wake, "find_next_person", "terminal detail")
+    future.result(timeout=0.5)  # terminal/input delivery does not wait out the timer
+    assert len(requests) == 1
+    assert not agent._events  # the next real model update consumed the event
+    if wake == "image":
+        assert images_in(requests[0]["contents"][-1]) == 2  # main view plus feedback image
+    elif wake == "speech":
+        assert "Stop now" in json.dumps(requests[0])
+    elif wake == "feedback":
+        assert "running recovery after planner failure" in json.dumps(requests[0])
+    else:
+        assert f"Skill find_next_person {wake}: terminal detail" in json.dumps(requests[0])
 
 
 def test_turn_start_drops_the_oldest_backlog_beyond_the_cap(agent_factory):
@@ -1224,6 +1393,293 @@ def test_system_prompt_embeds_directive_and_defaults_when_empty():
     assert "Patrol the house" in build_system_prompt("Patrol the house")
     assert "helpful home robot" in build_system_prompt(None)
     assert "helpful home robot" in build_system_prompt("   ")
+
+
+@pytest.fixture
+def calibrated_geometry(monkeypatch):
+    # Load the production pure geometry module without innate's ROS authoring imports.
+    import importlib.util
+    import sys
+    from pathlib import Path
+    from types import ModuleType
+
+    spec = importlib.util.spec_from_file_location("innate.geometry", Path(__file__).parents[1] / "innate/geometry.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    package = ModuleType("innate")
+    package.geometry = module
+    monkeypatch.setitem(sys.modules, "innate", package)
+    return module
+
+
+@pytest.mark.parametrize("value", [True, False, None, "1.2", float("nan"), float("inf"), -1, 0, 0.34, 1.51])
+def test_conversation_standoff_rejects_invalid_values(value):
+    assert grounding.parse_standoff(value) is None
+
+
+def test_conversation_geometry_and_bounded_goals(calibrated_geometry):
+    geometry = calibrated_geometry
+
+    for pitch in (19.47, -15.54):
+        for x, y in ((1.0, 0.0), (2.5, 0.3), (8.0, -0.2)):
+            u, v = geometry.floor_to_pixel(x, y, pitch)
+            actual = grounding.conversation_floor(u * 1000 / 640, v * 1000 / 480, frame_jpeg=FRAME, pitch_deg=pitch)
+            assert actual == pytest.approx((x, y))
+            goal = grounding.approach_goal(*actual, standoff_m=1.2)
+            assert math.hypot(goal["x"], goal["y"]) <= 2.3 + 1e-9
+            assert goal["theta_degrees"] == pytest.approx(math.degrees(math.atan2(y, x)))
+    assert grounding.approach_goal(1, 0, 1.2)["x"] == 0
+    assert grounding.approach_goal(2, 1) == grounding.approach_goal(2, 1, 0.35)
+    assert grounding.conversation_floor(500, 0, frame_jpeg=FRAME, pitch_deg=0) is None
+    assert grounding.conversation_floor(500, 900, frame_jpeg=JPEG, pitch_deg=0) is None
+
+
+@pytest.mark.parametrize("standoff", [None, 0.35, 1.2, True, float("nan")])
+def test_view_approach_through_provider_turn(agent_factory, standoff, calibrated_geometry):
+    from brain_client.skills.registry import SkillRegistry
+
+    geometry = calibrated_geometry
+
+    agent, state = agent_factory(vertical_fov=70, height_cam=0.2, x_cam=0.05)
+    state.registry = SkillRegistry.from_metadata([NAV_SKILL])
+    agent._roster.active_skill_ids = lambda: [NAV_SKILL["id"]]
+    agent._camera.fresh_frame = lambda _: (FRAME, 19.47)
+    agent._pose.current_pose_xyt = lambda: (0.0, 0.0, 0.0)
+    started = []
+    agent._runner.start_task = lambda *a, **k: started.append(a)
+    u, v = geometry.floor_to_pixel(2.5, 0.3, 19.47)
+    args = {"y": round(v * 1000 / 480), "x": round(u * 1000 / 640)}
+    if standoff is not None:
+        args["standoff_m"] = standoff
+    agent._context._transport = lambda model, body: [model_response(call_part("go_to_point_in_view", args))]
+    run_turn(agent)
+    outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+    if standoff is True or (standoff is not None and math.isnan(standoff)):
+        assert not started
+        assert outcome.startswith("rejected")
+    else:
+        assert len(started) == 1
+        if standoff == 1.2:
+            floor = grounding.conversation_floor(args["x"], args["y"], frame_jpeg=FRAME, pitch_deg=19.47)
+        else:
+            floor = grounding.pixel_to_floor(
+                args["x"],
+                args["y"],
+                frame_jpeg=FRAME,
+                pitch_deg=19.47,
+                vertical_fov_deg=70,
+                cam_height=0.2,
+                cam_forward=0.05,
+            )
+        assert started[0][2] == grounding.approach_goal(*floor, standoff_m=standoff or 0.35)
+        assert "event when it finishes" in outcome
+
+
+@pytest.mark.parametrize("target_y", [0.0, 0.4])
+def test_conversation_near_target_does_not_translate(agent_factory, calibrated_geometry, target_y):
+    from brain_client.skills.registry import SkillRegistry
+
+    agent, state = agent_factory()
+    state.registry = SkillRegistry.from_metadata([NAV_SKILL])
+    agent._roster.active_skill_ids = lambda: [NAV_SKILL["id"]]
+    agent._camera.fresh_frame = lambda _: (FRAME, 19.47)
+    agent._pose.current_pose_xyt = lambda: (0.0, 0.0, 0.0)
+    started = []
+    agent._runner.start_task = lambda *a, **k: started.append(a)
+    u, v = calibrated_geometry.floor_to_pixel(1.0, target_y, 19.47)
+    args = {"y": round(v * 1000 / 480), "x": round(u * 1000 / 640), "standoff_m": 1.2}
+    agent._context._transport = lambda model, body: [model_response(call_part("go_to_point_in_view", args))]
+    run_turn(agent)
+    outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+    if target_y == 0:
+        assert not started
+        assert outcome.startswith("already positioned")
+    else:
+        assert len(started) == 1
+        assert started[0][2]["x"] == started[0][2]["y"] == 0.0
+        assert started[0][2]["theta_degrees"] > 5.0
+
+
+@pytest.mark.parametrize("mode", ["navigation", "mapfree"])
+@pytest.mark.parametrize("current", [(0.6, 0.0, 0.0), (-1.0, 0.0, 0.0), (0.3, 0.0, 0.5), None])
+def test_conversation_rebases_target_before_standoff(agent_factory, calibrated_geometry, mode, current):
+    from brain_client.skills.registry import SkillRegistry
+
+    agent, state = agent_factory()
+    state.registry = SkillRegistry.from_metadata([NAV_SKILL])
+    agent._roster.active_skill_ids = lambda: [NAV_SKILL["id"]]
+    agent._camera.fresh_frame = lambda _: (FRAME, 19.47)
+    agent._pose.current_pose_xyt = lambda: (0.0, 0.0, 0.0)
+    agent._pose.cur_nav_mode = mode
+    agent._pose.is_mapfree = mode == "mapfree"
+    started = []
+    agent._runner.start_task = lambda *a, **k: started.append(a)
+    u, v = calibrated_geometry.floor_to_pixel(1.0, 0.0, 19.47)
+    args = {"y": round(v * 1000 / 480), "x": round(u * 1000 / 640), "standoff_m": 1.2}
+
+    def transport(model, body):
+        agent._pose.current_pose_xyt = lambda: current
+        return [model_response(call_part("go_to_point_in_view", args))]
+
+    agent._context._transport = transport
+    run_turn(agent)
+    outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+    if current is None:
+        assert not started
+        assert "needs capture and current" in outcome
+        return
+    # Expected geometry derived independently in the current robot frame.
+    floor = grounding.conversation_floor(args["x"], args["y"], frame_jpeg=FRAME, pitch_deg=19.47)
+    dx, dy = floor[0] - current[0], floor[1] - current[1]
+    c, sn = math.cos(current[2]), math.sin(current[2])
+    x, y = c * dx + sn * dy, -sn * dx + c * dy
+    distance = math.hypot(x, y)
+    heading = math.atan2(y, x)
+    if distance <= 1.2 and abs(math.degrees(heading)) <= 5:
+        assert not started
+        assert outcome.startswith("already positioned")
+        return
+    assert len(started) == 1
+    goal = started[0][2]
+    travel = max(distance - 1.2, 0)
+    gx, gy = travel * math.cos(heading), travel * math.sin(heading)
+    if mode == "navigation":
+        assert goal["x"] == pytest.approx(current[0] + c * gx - sn * gy)
+        assert goal["y"] == pytest.approx(current[1] + sn * gx + c * gy)
+        assert not goal["local_frame"]
+    else:
+        assert goal["x"] == pytest.approx(gx)
+        assert goal["y"] == pytest.approx(gy)
+        assert goal["theta_degrees"] == pytest.approx(math.degrees(heading))
+
+
+def test_conversation_capped_step_reports_unfinished_approach(agent_factory, calibrated_geometry):
+    from brain_client.skills.registry import SkillRegistry
+
+    agent, state = agent_factory()
+    state.registry = SkillRegistry.from_metadata([NAV_SKILL])
+    agent._roster.active_skill_ids = lambda: [NAV_SKILL["id"]]
+    agent._camera.fresh_frame = lambda _: (FRAME, 19.47)
+    agent._pose.current_pose_xyt = lambda: (0.0, 0.0, 0.0)
+    started = []
+    agent._runner.start_task = lambda *args, **kwargs: started.append(args)
+    # The next observation measures the remaining range after a bounded move.
+    # Tool results distinguish unfinished approach from a final standoff goal.
+    for distance, capped in ((5.1, True), (2.8, False)):
+        u, v = calibrated_geometry.floor_to_pixel(distance, 0.0, 19.47)
+        args = {"y": round(v * 1000 / 480), "x": round(u * 1000 / 640), "standoff_m": 1.2}
+        agent._context._transport = lambda model, body, args=args: [
+            model_response(call_part("go_to_point_in_view", args))
+        ]
+        run_turn(agent)
+        outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+        assert ("conversation distance NOT reached" in outcome) is capped
+        assert ("do not greet yet" in outcome) is capped
+        assert "inspect a fresh main camera image" in outcome
+    assert len(started) == 2
+    assert started[0][2]["x"] == pytest.approx(2.3, abs=0.01)
+    assert 1.5 < started[1][2]["x"] < 1.7
+
+
+@pytest.mark.parametrize("existing_notes", [0, 2])
+@pytest.mark.parametrize("running", [False, True])
+def test_household_confirmation_uses_saved_notes_in_next_provider_turn(
+    agent_factory, tmp_path, monkeypatch, existing_notes, running
+):
+    # Script provider decisions, but exercise the real prompt, dispatch, durable
+    # notebook and completion event. The full simulator pilot checks model choice.
+    pytest.importorskip("rclpy")
+    from pathlib import Path
+
+    from brain_client.skills.registry import SkillRegistry
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[5] / "workspace"))
+    from innate_agents.household_orders_agent import HouseholdOrdersAgent
+    from innate_skills.mission_notes import MissionNotes
+    from innate_skills.mission_run import start_run
+
+    monkeypatch.setenv("INNATE_OS_ROOT", str(tmp_path))
+    start_run("household_orders_agent")
+    notes = MissionNotes(None)
+    exact = {
+        "resident-001": json.dumps({"name": "Alex", "confirmed_order": "Chipotle bowl; no cheese"}),
+        "resident-002": json.dumps({"name": "Casey", "confirmed_order": "Shake Shack fries"}),
+        "resident-003": json.dumps({"name": "Blake", "confirmed_order": "Sweetgreen bowl; dressing on side"}),
+    }
+    for key in list(exact)[:existing_notes]:
+        notes.execute("set", key, exact[key])
+    agent, state = agent_factory()
+    state.current_directive = HouseholdOrdersAgent()
+    names = ["mission_notes", "find_next_person", "place_doordash_order"]
+    state.registry = SkillRegistry.from_metadata(
+        [{"id": "innate-os/" + name, "name": name, "inputs": {}} for name in names]
+    )
+    agent._roster.active_skill_ids = lambda: list(state.registry.primitives)
+    state.primitive_running = RunningSkill("find_next_person", "innate-os/find_next_person") if running else None
+    agent._runner.has_active_goal = running
+    started, cancelled, saved, requests = [], [], [], []
+    agent._runner.cancel_active_goal = lambda: cancelled.append(True)
+
+    def start_task(skill_id, task_id, inputs):
+        started.append((skill_id, inputs))
+        if skill_id == "innate-os/mission_notes":
+            assert inputs["action"] == "set"  # no redundant list read
+            output = notes.execute(**inputs)
+            saved.append(output)
+            agent.on_skill_event("completed", "mission_notes", output.message)
+
+    agent._runner.start_task = start_task
+
+    def transport(model, body):
+        requests.append(body)
+        if state.primitive_running:
+            return [model_response(call_part(STOP_SKILL, {"continue_task": True}))]
+        if not saved:
+            return [
+                model_response(
+                    call_part(
+                        "mission_notes",
+                        {
+                            "action": "set",
+                            "key": "resident-003",
+                            "value": exact["resident-003"],
+                        },
+                    )
+                )
+            ]
+        assert any(
+            saved[-1].message in part.get("text", "") for entry in body["contents"] for part in entry.get("parts", [])
+        )
+        snapshot = saved[-1].data["notes"]
+        if len(snapshot) < 3:
+            return [model_response(call_part("find_next_person", {}))]
+        orders = {
+            json.loads(value)["name"].lower() + "_order": json.loads(value)["confirmed_order"]
+            for value in snapshot.values()
+        }
+        return [model_response(call_part("place_doordash_order", orders))]
+
+    agent._context._transport = transport
+    agent.on_user_message("That's correct. Thank you.", source="resident")
+    if running:
+        run_turn(agent)
+        assert cancelled == [True] and not started
+        state.primitive_running = None
+        agent._runner.has_active_goal = False
+        agent.on_skill_event("cancelled", "find_next_person", "Stopped")
+    run_turn(agent)
+    assert saved[-1].data["notes"] == {key: exact[key] for key in list(exact)[:existing_notes] + ["resident-003"]}
+    run_turn(agent)
+    assert [skill_id for skill_id, _ in started] == [
+        "innate-os/mission_notes",
+        "innate-os/" + ("place_doordash_order" if existing_notes == 2 else "find_next_person"),
+    ]
+    assert cancelled == ([True] if running else [])
+    assert len(requests) == (3 if running else 2)
+    if existing_notes == 2:
+        assert started[-1][1] == {
+            json.loads(v)["name"].lower() + "_order": json.loads(v)["confirmed_order"] for v in exact.values()
+        }
 
 
 if __name__ == "__main__":

@@ -379,6 +379,11 @@ class BrainClientNode(Node):
                 "[BrainClient] Ignoring /brain/chat_in: payload must be a JSON object with a 'text' field."
             )
             return
+        if data.get('sender') == 'microphone_lifecycle':
+            self.brain.on_microphone_speech(data)
+            return
+        if data.get('speech_lifecycle'):
+            return  # opted-in input is delivered once by the lifecycle terminal event
         if data.get("sender") == "environment_speech":
             self._on_environment_speech(data)
             return
@@ -427,29 +432,45 @@ class BrainClientNode(Node):
             self.get_logger().warning(f"Ignoring invalid environment speech request: {exc}")
             return
 
-        shown = threading.Event()
+        context = self.brain.speech_context()
+        token = None
+        callback_lock = threading.Lock()
+        shown = False
+        delivered = False
 
         def show() -> None:
-            if not shown.is_set():
-                shown.set()
-                self.chat.emit(Sender.USER, text, speak=False)
+            nonlocal shown, token
+            with callback_lock:
+                if shown or delivered or not self.state.is_brain_active or context != self.brain.speech_context():
+                    return
+                shown = True
+                token = self.brain.begin_incoming_speech(context)
+            self.chat.emit(Sender.USER, text, speak=False)
 
         def deliver(_success: bool) -> None:
-            show()  # a clip that never played still leaves its line on screen
-            if self.state.is_brain_active:
-                self.brain.on_user_message(text)
+            nonlocal delivered
+            with callback_lock:
+                if delivered:
+                    return
+                delivered = True
+            self.brain.complete_speech(context, token, text if _success and shown else "", source="environment")
 
         if self._tts_handler is None:
             self.get_logger().warning("Environment speech requested while TTS is unavailable")
             deliver(False)
             return
-        queued = self._tts_handler.speak_text_async(
-            text,
-            voice_config={"mode": "id", "id": voice_id},
-            on_start=show,
-            on_done=deliver,
-            protected=True,  # another character's line: agent flushes must not cancel it
-        )
+        try:
+            queued = self._tts_handler.speak_text_async(
+                text,
+                voice_config={"mode": "id", "id": voice_id},
+                on_start=show,
+                on_done=deliver,
+                protected=True,  # another character's line: agent flushes must not cancel it
+            )
+        except Exception as exc:
+            self.get_logger().error(f"Could not queue environment speech: {exc}")
+            deliver(False)
+            return
         if not queued:
             deliver(False)
 

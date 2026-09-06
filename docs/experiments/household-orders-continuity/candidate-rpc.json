@@ -1,0 +1,233 @@
+{
+  "type": "scripted ROS skill action replay; no autonomous challenge or paid model calls",
+  "candidate": true,
+  "summaries": [
+    {
+      "trial": 1,
+      "initial_run": "20260906T033348Z-08b4c34d",
+      "retry_run": "20260906T033348Z-08b4c34d",
+      "run_preserved": true,
+      "identity_result": "ROSTER_ALREADY_INITIALIZED",
+      "search_result": "SEARCH_ALREADY_INITIALIZED",
+      "note_result": "NOTE_FOUND",
+      "exact_note_preserved": true
+    },
+    {
+      "trial": 2,
+      "initial_run": "20260906T033351Z-04147385",
+      "retry_run": "20260906T033351Z-04147385",
+      "run_preserved": true,
+      "identity_result": "ROSTER_ALREADY_INITIALIZED",
+      "search_result": "SEARCH_ALREADY_INITIALIZED",
+      "note_result": "NOTE_FOUND",
+      "exact_note_preserved": true
+    },
+    {
+      "trial": 3,
+      "initial_run": "20260906T033355Z-d39ef255",
+      "retry_run": "20260906T033355Z-d39ef255",
+      "run_preserved": true,
+      "identity_result": "ROSTER_ALREADY_INITIALIZED",
+      "search_result": "SEARCH_ALREADY_INITIALIZED",
+      "note_result": "NOTE_FOUND",
+      "exact_note_preserved": true
+    }
+  ],
+  "actions": [
+    {
+      "skill": "mission_run",
+      "args": {
+        "restart": true
+      },
+      "success": true,
+      "message": "RUN_STARTED {\"run_id\":\"20260906T033348Z-08b4c34d\"}"
+    },
+    {
+      "skill": "person_identity",
+      "args": {
+        "action": "begin"
+      },
+      "success": true,
+      "message": "ROSTER_INITIALIZED {\"expected_residents\":3}"
+    },
+    {
+      "skill": "find_next_person",
+      "args": {
+        "reset": true
+      },
+      "success": true,
+      "message": "SEARCH_RESET {}"
+    },
+    {
+      "skill": "mission_notes",
+      "args": {
+        "action": "set",
+        "key": "person-001",
+        "value": "{\"name\": \"Replay fixture\", \"confirmed_order\": \"no onions; sauce on the side\", \"trial\": 1}"
+      },
+      "success": true,
+      "message": "NOTE_SAVED {\"key\":\"person-001\",\"value\":\"{\\\"name\\\": \\\"Replay fixture\\\", \\\"confirmed_order\\\": \\\"no onions; sauce on the side\\\", \\\"trial\\\": 1}\"}"
+    },
+    {
+      "skill": "mission_run",
+      "args": {},
+      "success": true,
+      "message": "RUN_RESUMED {\"run_id\":\"20260906T033348Z-08b4c34d\"}"
+    },
+    {
+      "skill": "person_identity",
+      "args": {
+        "action": "begin"
+      },
+      "success": true,
+      "message": "ROSTER_ALREADY_INITIALIZED {\"expected_residents\":3}"
+    },
+    {
+      "skill": "find_next_person",
+      "args": {
+        "reset": true
+      },
+      "success": true,
+      "message": "SEARCH_ALREADY_INITIALIZED {\"observations\":0,\"unreachable\":0}"
+    },
+    {
+      "skill": "mission_notes",
+      "args": {
+        "action": "get",
+        "key": "person-001"
+      },
+      "success": true,
+      "message": "NOTE_FOUND {\"key\":\"person-001\",\"value\":\"{\\\"name\\\": \\\"Replay fixture\\\", \\\"confirmed_order\\\": \\\"no onions; sauce on the side\\\", \\\"trial\\\": 1}\"}"
+    },
+    {
+      "skill": "mission_run",
+      "args": {
+        "restart": true
+      },
+      "success": true,
+      "message": "RUN_STARTED {\"run_id\":\"20260906T033351Z-04147385\"}"
+    },
+    {
+      "skill": "person_identity",
+      "args": {
+        "action": "begin"
+      },
+      "success": true,
+      "message": "ROSTER_INITIALIZED {\"expected_residents\":3}"
+    },
+    {
+      "skill": "find_next_person",
+      "args": {
+        "reset": true
+      },
+      "success": true,
+      "message": "SEARCH_RESET {}"
+    },
+    {
+      "skill": "mission_notes",
+      "args": {
+        "action": "set",
+        "key": "person-001",
+        "value": "{\"name\": \"Replay fixture\", \"confirmed_order\": \"no onions; sauce on the side\", \"trial\": 2}"
+      },
+      "success": true,
+      "message": "NOTE_SAVED {\"key\":\"person-001\",\"value\":\"{\\\"name\\\": \\\"Replay fixture\\\", \\\"confirmed_order\\\": \\\"no onions; sauce on the side\\\", \\\"trial\\\": 2}\"}"
+    },
+    {
+      "skill": "mission_run",
+      "args": {},
+      "success": true,
+      "message": "RUN_RESUMED {\"run_id\":\"20260906T033351Z-04147385\"}"
+    },
+    {
+      "skill": "person_identity",
+      "args": {
+        "action": "begin"
+      },
+      "success": true,
+      "message": "ROSTER_ALREADY_INITIALIZED {\"expected_residents\":3}"
+    },
+    {
+      "skill": "find_next_person",
+      "args": {
+        "reset": true
+      },
+      "success": true,
+      "message": "SEARCH_ALREADY_INITIALIZED {\"observations\":0,\"unreachable\":0}"
+    },
+    {
+      "skill": "mission_notes",
+      "args": {
+        "action": "get",
+        "key": "person-001"
+      },
+      "success": true,
+      "message": "NOTE_FOUND {\"key\":\"person-001\",\"value\":\"{\\\"name\\\": \\\"Replay fixture\\\", \\\"confirmed_order\\\": \\\"no onions; sauce on the side\\\", \\\"trial\\\": 2}\"}"
+    },
+    {
+      "skill": "mission_run",
+      "args": {
+        "restart": true
+      },
+      "success": true,
+      "message": "RUN_STARTED {\"run_id\":\"20260906T033355Z-d39ef255\"}"
+    },
+    {
+      "skill": "person_identity",
+      "args": {
+        "action": "begin"
+      },
+      "success": true,
+      "message": "ROSTER_INITIALIZED {\"expected_residents\":3}"
+    },
+    {
+      "skill": "find_next_person",
+      "args": {
+        "reset": true
+      },
+      "success": true,
+      "message": "SEARCH_RESET {}"
+    },
+    {
+      "skill": "mission_notes",
+      "args": {
+        "action": "set",
+        "key": "person-001",
+        "value": "{\"name\": \"Replay fixture\", \"confirmed_order\": \"no onions; sauce on the side\", \"trial\": 3}"
+      },
+      "success": true,
+      "message": "NOTE_SAVED {\"key\":\"person-001\",\"value\":\"{\\\"name\\\": \\\"Replay fixture\\\", \\\"confirmed_order\\\": \\\"no onions; sauce on the side\\\", \\\"trial\\\": 3}\"}"
+    },
+    {
+      "skill": "mission_run",
+      "args": {},
+      "success": true,
+      "message": "RUN_RESUMED {\"run_id\":\"20260906T033355Z-d39ef255\"}"
+    },
+    {
+      "skill": "person_identity",
+      "args": {
+        "action": "begin"
+      },
+      "success": true,
+      "message": "ROSTER_ALREADY_INITIALIZED {\"expected_residents\":3}"
+    },
+    {
+      "skill": "find_next_person",
+      "args": {
+        "reset": true
+      },
+      "success": true,
+      "message": "SEARCH_ALREADY_INITIALIZED {\"observations\":0,\"unreachable\":0}"
+    },
+    {
+      "skill": "mission_notes",
+      "args": {
+        "action": "get",
+        "key": "person-001"
+      },
+      "success": true,
+      "message": "NOTE_FOUND {\"key\":\"person-001\",\"value\":\"{\\\"name\\\": \\\"Replay fixture\\\", \\\"confirmed_order\\\": \\\"no onions; sauce on the side\\\", \\\"trial\\\": 3}\"}"
+    }
+  ]
+}
