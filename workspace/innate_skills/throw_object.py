@@ -10,8 +10,9 @@ from innate.exceptions import ArmFailed, ArmUnhealthy
 
 class ThrowObject(Skill):
     """Toss a small object ALREADY HELD in the gripper a short distance straight
-    ahead. Pick it up first and face the intended landing area; this skill
-    neither aims nor navigates. Use only when the user asks to throw and the
+    ahead, about as far as the arm can reach. Pick it up first, bring the
+    landing area within arm reach and face it; this skill neither aims nor
+    navigates. Use only when the user asks to throw and the
     landing area is clear of people. A toss can miss: inspect where it landed
     before claiming a cleanup task is complete. For a careful placement use
     DropInBox instead.

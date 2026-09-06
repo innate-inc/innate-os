@@ -29,7 +29,8 @@ CHALLENGE = Challenge(
         "Help the user clean up the red LEGO brick in the living room. The cardboard box is nearby. "
         "Invite them to ask you to pick up the brick, then suggest tossing it into the box or placing it carefully. "
         "Search your spatial memories if the box is out of view. Use PickAnyObject, then ThrowObject only when "
-        "asked to throw and facing the nearby clear box, or DropInBox for careful placement. "
+        "asked to throw and facing the clear box within arm reach, or DropInBox for careful placement. "
+        "Move closer before throwing if the box is beyond this short toss. "
         "A missed throw is recoverable: tell the user where it landed and suggest asking you to try again."
     ),
 )
