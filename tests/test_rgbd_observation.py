@@ -274,3 +274,44 @@ def test_sdk_optional_rgbd_annotation_declares_the_shared_feed():
     assert probe.rgbd is observation
     provider._inject(probe, [(feed, lambda: None)])
     assert probe.rgbd is None
+
+
+def test_wrist_capture_retained_generation_and_delayed_reset_frame():
+    rclpy = pytest.importorskip("rclpy")
+    from sensor_msgs.msg import CompressedImage
+    from std_msgs.msg import Int64
+
+    from brain_client.perception.camera_provider import CameraProvider
+
+    if not rclpy.ok():
+        rclpy.init()
+    provider = CameraProvider()
+    try:
+        msg = CompressedImage()
+        msg.header.stamp = provider.get_clock().now().to_msg()
+        msg.data = b"jpeg"
+        provider._wrist_camera_cb(msg)
+        capture = provider.wrist_capture
+        assert capture[0] is provider.last_wrist_camera_jpeg
+        assert provider.wrist_generation_is_current(capture[4])
+        provider._epoch_cb(Int64(data=99))
+        assert provider.wrist_capture is None
+        assert not provider.wrist_generation_is_current(capture[4])
+        provider._wrist_camera_cb(msg)
+        assert provider.wrist_capture is None
+        msg.header.stamp = provider.get_clock().now().to_msg()
+        provider._wrist_camera_cb(msg)
+        assert provider.wrist_capture[4] != capture[4]
+        retained_generation = provider.wrist_capture[4]
+        provider._wrist_sub = object()
+        provider._feed_users = {"main": 1, "wrist": 0, "depth": 0}
+        provider._stop_spin = lambda: None
+        provider._start_spin = lambda: None
+        provider.destroy_subscription = lambda _: None
+        provider._drop_unused_feeds()
+        assert not provider.wrist_generation_is_current(retained_generation)
+        msg.header.stamp = provider.get_clock().now().to_msg()
+        provider._wrist_camera_cb(msg)
+        assert not provider.wrist_generation_is_current(retained_generation)
+    finally:
+        provider.destroy_node()

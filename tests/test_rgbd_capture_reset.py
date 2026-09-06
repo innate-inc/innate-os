@@ -13,11 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ros2_ws/src/mars_b
 from mars_sim_driver.world_server import WorldServer
 
 
-def test_reset_invalidates_cached_and_inflight_pair():
+@pytest.mark.parametrize("kind,camera", [("rgbd", "main"), ("jpeg", "wrist")])
+def test_reset_invalidates_cached_and_inflight_pair(kind, camera):
+    product = f"{kind}:{camera}"
     server = object.__new__(WorldServer)
     server.lock = threading.Lock()
     server.frame_ready = threading.Condition()
-    server.latest = {"rgbd:main": ({"old": True}, b"old")}
+    server.latest = {product: ({"old": True}, b"old")}
     server.wanted = set()
     server.requested_at = {}
     server.render_demand = threading.Event()
@@ -36,7 +38,7 @@ def test_reset_invalidates_cached_and_inflight_pair():
             assert not server.lock.locked()
             if self.interrupt:
                 server.handle({"op": "reset"})
-                assert "rgbd:main" not in server.latest
+                assert product not in server.latest
             return np.zeros((480, 640, 3), np.uint8)
 
         def read_depth(self):
@@ -47,24 +49,25 @@ def test_reset_invalidates_cached_and_inflight_pair():
             self.world_epoch += 1
 
     server.sim = Scene()
-    server._render_product("rgbd:main")
-    assert "rgbd:main" not in server.latest
-    assert "rgbd:main" in server.wanted
+    server._render_product(product)
+    assert product not in server.latest
+    assert product in server.wanted
     server.sim.interrupt = False
-    server._render_product("rgbd:main")
-    meta, blob = server.latest["rgbd:main"]
+    server._render_product(product)
+    meta, blob = server.latest[product]
     assert meta["world_epoch"] == 1 and meta["captured_ns"] > 0
-    assert len(blob) == meta["jpeg_size"] + 120 * 160 * 4
+    if kind == "rgbd":
+        assert len(blob) == meta["jpeg_size"] + 120 * 160 * 4
     # Automatic physics resets bypass the RPC invalidation path.
     server.sim.reset()
     result = []
-    reader = threading.Thread(target=lambda: result.append(server.render("main", "rgbd")))
+    reader = threading.Thread(target=lambda: result.append(server.render(camera, kind)))
     reader.start()
     deadline = time.monotonic() + 1
-    while "rgbd:main" in server.latest and time.monotonic() < deadline:
+    while product in server.latest and time.monotonic() < deadline:
         time.sleep(0.001)
-    assert "rgbd:main" not in server.latest
-    server._render_product("rgbd:main")
+    assert product not in server.latest
+    server._render_product(product)
     reader.join(1)
     assert not reader.is_alive()
     assert result[0][0]["world_epoch"] == 2

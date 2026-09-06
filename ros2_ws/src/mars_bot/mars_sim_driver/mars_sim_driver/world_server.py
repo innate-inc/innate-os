@@ -377,18 +377,20 @@ class WorldServer:
             )
         elif kind == "jpeg":
             with self.lock:
+                captured_ns = time.time_ns()
+                capture_epoch = sim.world_epoch
                 sim.update_camera(camera)
             rgb = sim.read_rgb()
             if rgb.shape[0] != CAMERA_HEIGHT:  # scaled render -> wire res
                 rgb = np.asarray(PILImage.fromarray(rgb).resize((CAMERA_WIDTH, CAMERA_HEIGHT), PILImage.BILINEAR))
-            frame = ({"ok": True}, encode_jpeg(rgb))
+            frame = ({"ok": True, "captured_ns": captured_ns, "world_epoch": capture_epoch}, encode_jpeg(rgb))
         else:  # depth
             with self.lock:
                 sim.update_depth(camera, include_robot=kind == "surface_depth")
             depth = sim.read_depth().astype(np.float32)
             frame = ({"ok": True, "shape": list(depth.shape), "dtype": "float32"}, depth.tobytes())
         with self.lock, self.frame_ready:
-            if sim is self.sim and (kind != "rgbd" or sim.world_epoch == capture_epoch):
+            if sim is self.sim and (kind not in {"rgbd", "jpeg"} or sim.world_epoch == capture_epoch):
                 self.latest[product] = frame
             else:
                 # A reset can replace state without replacing the sim object.
@@ -451,7 +453,7 @@ class WorldServer:
                 if frame is None:
                     continue
                 meta, blob = frame
-                if kind == "rgbd" and meta.get("ok") and meta.get("world_epoch") != self.sim.world_epoch:
+                if kind in {"rgbd", "jpeg"} and meta.get("ok") and meta.get("world_epoch") != self.sim.world_epoch:
                     self.latest.pop(product, None)
                     self.wanted.add(product)
                     self.render_demand.set()
@@ -507,6 +509,8 @@ class WorldServer:
             with self.lock, self.frame_ready:
                 self.sim.reset()
                 self.latest.pop("rgbd:main", None)
+                self.latest.pop("jpeg:main", None)
+                self.latest.pop("jpeg:wrist", None)
             return {"ok": True}, None
         if op == "lidar":
             with self.lock:

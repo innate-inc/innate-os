@@ -519,12 +519,18 @@ class VirtualMarsNode(Node):
                 rendered = True
                 t0 = time.perf_counter()
                 try:
-                    jpeg = self.sim.render_jpeg(camera)
+                    jpeg, captured_ns = self.sim.render_jpeg_capture(camera)
                 except (OSError, RuntimeError) as exc:
                     self.get_logger().warning(f"{camera} render unavailable ({exc}); skipping frame")
                     continue
                 cost[camera] = 0.8 * cost[camera] + 0.2 * (time.perf_counter() - t0)
-                self._publish_camera_frames(pub, raw_pub, camera, jpeg)
+                self._publish_camera_frames(
+                    pub,
+                    raw_pub,
+                    camera,
+                    jpeg,
+                    Time(sec=captured_ns // 1_000_000_000, nanosec=captured_ns % 1_000_000_000),
+                )
             if not rendered:
                 time.sleep(0.02)
 
