@@ -71,7 +71,6 @@ def generate_launch_description():
     brain_client_node = Node(
         package="brain_client",
         executable="brain_client_node.py",
-        name="brain_client_node",
         parameters=[
             {
                 "image_topic": LaunchConfiguration("image_topic"),
@@ -88,9 +87,14 @@ def generate_launch_description():
             *settings_params(),
         ],
         output="screen",
-        # Mute the benign "Publisher already registered" rosout-plumbing warning
-        # from in-process helper nodes that can share a name.
-        arguments=["--ros-args", "--log-level", "rcl.logging_rosout:=ERROR"],
+        # Scope the name remap so helper nodes keep distinct parameter services.
+        arguments=[
+            "--ros-args",
+            "-r",
+            "brain_client_node:__node:=brain_client_node",
+            "--log-level",
+            "rcl.logging_rosout:=ERROR",
+        ],
     )
 
     return LaunchDescription(
