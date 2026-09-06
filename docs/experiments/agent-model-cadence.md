@@ -37,6 +37,26 @@ environment. Keys are never ROS parameters. Direct calls are disabled in public
 demo mode; provider failures never silently switch accounts or models. Local key
 setup is supplied by the separate provider-key PR.
 
+**An OpenAI key alone does not enable every robot capability.** This switch only
+changes the primary agent's thinking turns:
+
+- `SearchMemory` still uses Gemini via `pick_rest` and `gemini_model`. With neither
+  a configured Innate proxy nor `GEMINI_API_KEY`, the node does not start the
+  `/brain/search_memory` action server. Memory recording remains available, but
+  a directive offering `SearchMemory` cannot recall through that action.
+- Microphone STT retains its separate configuration. ElevenLabs requires the
+  Innate proxy; without it the microphone selects Gemini as its fallback. That
+  fallback also needs `GEMINI_API_KEY`, so an OpenAI-only setup has no functioning
+  microphone transcription through this path. This PR adds no OpenAI STT backend.
+- Gemini-backed vision skills retain their existing credentials and models.
+
+These dependencies were verified from
+[`BrainClientNode._build_collaborators`](../../ros2_ws/src/brain/brain_client/brain_client/nodes/brain_client_node.py)
+and [`MicroInput`](../../workspace/inputs/micro_input.py). The live comparison used
+the managed proxy; it did **not** establish full standalone operation with only
+an OpenAI key. Keep Gemini access when using those capabilities, or migrate them
+in a separate change.
+
 ## Cadence and cancellation
 
 A directive can override just the needed mode:
