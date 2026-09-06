@@ -463,10 +463,11 @@ def agent_factory(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")  # gives the agent a swappable transport
     created = []
 
-    def make(trace=None) -> tuple[BrainAgent, BrainState]:
+    def make(trace=None, **config_overrides) -> tuple[BrainAgent, BrainState]:
         logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
         node = SimpleNamespace(get_logger=lambda: logger)
         config = SimpleNamespace(
+            brain_provider="gemini",
             gemini_model="m",
             gemini_thinking_level="",
             history_max_entries=60,
@@ -476,6 +477,7 @@ def agent_factory(monkeypatch):
             simulator_mode=False,
             timezone="",
         )
+        vars(config).update(config_overrides)
         state = BrainState()
         state.is_brain_active = True
         camera = SimpleNamespace(

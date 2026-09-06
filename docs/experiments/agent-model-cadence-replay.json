@@ -1,0 +1,44 @@
+[
+  {
+    "case": "idle",
+    "seconds": 4.693915583000489,
+    "speech": null,
+    "calls": [
+      "wait"
+    ],
+    "usage": {
+      "prompt": 1546,
+      "cached": 1543,
+      "output": 13
+    },
+    "history_len": 3
+  },
+  {
+    "case": "describe",
+    "seconds": 1.7903088330003811,
+    "speech": "I appear to be at the entrance to a living room.",
+    "calls": [
+      "wait"
+    ],
+    "usage": {
+      "prompt": 1991,
+      "cached": 0,
+      "output": 32
+    },
+    "history_len": 6
+  },
+  {
+    "case": "stop",
+    "seconds": 1.5395736659993418,
+    "speech": "Stopping now.",
+    "calls": [
+      "stop_current_skill"
+    ],
+    "usage": {
+      "prompt": 2493,
+      "cached": 0,
+      "output": 25
+    },
+    "history_len": 9
+  }
+]

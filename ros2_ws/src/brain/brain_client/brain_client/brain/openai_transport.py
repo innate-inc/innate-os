@@ -30,7 +30,7 @@ def pick_openai_transport(proxy: ProxyClient | None) -> tuple[Transport | None, 
     if proxy is not None and proxy.is_available():
         return proxy_transport(proxy), "innate-proxy"
     key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if key and os.environ.get("INNATE_PUBLIC_DEMO") != "1":
+    if key and os.environ.get("INNATE_PUBLIC_DEMO", "").strip().lower() not in {"1", "true", "yes"}:
         return direct_transport(key), "openai-direct"
     return None, "unconfigured"
 
@@ -50,6 +50,10 @@ def _events(response: httpx.Response) -> Iterator[dict]:
         if not line.startswith("data:"):
             continue
         data = line[5:].strip()
+        # The managed proxy wraps upstream SSE event-name lines in data fields.
+        # JSON data lines are still separate; these labels carry no response body.
+        if data.startswith("event:"):
+            continue
         if data == "[DONE]":
             break
         try:
@@ -81,7 +85,7 @@ def proxy_transport(proxy: ProxyClient) -> Transport:
 
 def direct_transport(api_key: str) -> Transport:
     def stream(model: str, body: dict) -> Iterator[dict]:
-        if os.environ.get("INNATE_PUBLIC_DEMO") == "1":
+        if os.environ.get("INNATE_PUBLIC_DEMO", "").strip().lower() in {"1", "true", "yes"}:
             raise OpenAITransportError("Direct OpenAI access is disabled in the public simulator")
         try:
             # Per-call ownership also closes sockets when a consumer closes the

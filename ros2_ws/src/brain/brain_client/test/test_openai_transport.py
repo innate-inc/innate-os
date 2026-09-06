@@ -131,3 +131,17 @@ def test_missing_keys_demo_guard_and_connection_errors(provider, monkeypatch):
         list(stream("gpt-6-astra", {}))
     assert KEY not in str(failure.value)
     assert provider["requests"] == []
+
+
+def test_proxy_wrapped_sse_event_names_are_not_json(provider):
+    provider["body"] = "".join(f"data: event: {event['type']}\n\ndata: {json.dumps(event)}\n\n" for event in EVENTS)
+    stream, _ = transport.pick_openai_transport(None)
+    assert list(stream("gpt-6-astra", {})) == EVENTS
+
+
+@pytest.mark.parametrize("value", ["true", " yes ", "TRUE"])
+def test_public_demo_boolean_variants_block_direct_keys(provider, monkeypatch, value):
+    monkeypatch.setenv("INNATE_PUBLIC_DEMO", value)
+    assert transport.pick_openai_transport(None) == (None, "unconfigured")
+    with pytest.raises(transport.OpenAITransportError, match="disabled"):
+        list(transport.direct_transport(KEY)("gpt-6-astra", {}))
