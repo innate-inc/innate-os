@@ -890,6 +890,7 @@ class PickAnyObject(Skill):
 
     def _grasp_at(self, prompt, xy):
         """Full grasp at floor xy (base_link)."""
+        self.check_cancelled()  # the flow-to-wrist handoff must honor a pending Stop
         p = self._p
         x, y = self.manipulation.clamp_reach(xy[0] - p["grasp_x_off"], xy[1])
 
