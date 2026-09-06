@@ -182,6 +182,11 @@ class PickupPolicy:
         check_cancelled()
         self.calls += 1
         context = {"target": target, "view": view}
+        if view == "wrist_action" and reference is not None:
+            from innate_skills.pickup_visual_action import identity_reference
+
+            reference = identity_reference(reference)
+            context["head_reference_is_padded_crop"] = reference.get("reference_is_padded_crop", False)
         if state is not None:
             context["robot_state"] = state
         images = [{"type": "input_image", "image_url": f"data:image/jpeg;base64,{image}"}]
@@ -195,7 +200,7 @@ class PickupPolicy:
             action_instructions = INSTRUCTIONS
 
         body = {
-            "instructions": COMMON
+            "instructions": ("" if view == "wrist_action" else COMMON)
             + {
                 "head": HEAD,
                 "wrist": WRIST,
