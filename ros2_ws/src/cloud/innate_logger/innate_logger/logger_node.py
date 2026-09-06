@@ -67,10 +67,6 @@ class LoggerNode(Node):
             os.getenv("TELEMETRY_URL", DEFAULT_TELEMETRY_URL),
         )
         self.declare_parameter(
-            "service_key",
-            os.getenv("INNATE_SERVICE_KEY", ""),
-        )
-        self.declare_parameter(
             "auth_issuer_url",
             os.getenv("INNATE_AUTH_URL", DEFAULT_AUTH_ISSUER_URL),
         )
@@ -80,7 +76,8 @@ class LoggerNode(Node):
         self.declare_parameter("disk_boot_delay", self.DISK_BOOT_DELAY)
 
         telemetry_url: str = str(self.get_parameter("telemetry_url").get_parameter_value().string_value)
-        service_key: str = str(self.get_parameter("service_key").value)
+        # Never declare credentials as ROS params: rosbridge can read them.
+        service_key: str = os.getenv("INNATE_SERVICE_KEY", "")
         auth_issuer: str = str(self.get_parameter("auth_issuer_url").value)
 
         if not service_key:

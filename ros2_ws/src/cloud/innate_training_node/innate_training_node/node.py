@@ -164,10 +164,6 @@ class TrainingNode(Node):
             os.getenv("TRAINING_SERVER_URL", DEFAULT_SERVER_URL),
         )
         self.declare_parameter(
-            "service_key",
-            os.getenv("INNATE_SERVICE_KEY", ""),
-        )
-        self.declare_parameter(
             "auth_issuer_url",
             os.getenv("INNATE_AUTH_URL", DEFAULT_AUTH_ISSUER_URL),
         )
@@ -175,7 +171,8 @@ class TrainingNode(Node):
         self.declare_parameter("status_publish_interval_sec", 1.0)
 
         server_url = str(self.get_parameter("server_url").value)
-        service_key = str(self.get_parameter("service_key").value)
+        # Never declare credentials as ROS params: rosbridge can read them.
+        service_key = os.getenv("INNATE_SERVICE_KEY", "")
         auth_issuer = str(self.get_parameter("auth_issuer_url").value)
         poll_sec = float(self.get_parameter("poll_interval_sec").value)
         pub_sec = float(self.get_parameter("status_publish_interval_sec").value)
