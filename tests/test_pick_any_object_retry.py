@@ -149,6 +149,22 @@ def test_model_grasp_preserves_raised_rigid_hold_without_reseeding_grip(monkeypa
     assert len(skill.manipulation.events) == len(before) + 2
 
 
+def test_rigid_floor_close_is_shared_while_soft_and_unknown_keep_unpress():
+    for controller in (None, object()):
+        for strength in (0.35, 0.6, None):
+            skill = _skill(closes_empty=False)
+            skill._pickup_policy = controller
+            skill._grip_strength = strength
+            skill._unpress_grasp = True
+            skill.manipulation.pose.z = 0.03
+            skill._pre_close_lift(0.3, 0, 0, 1.3, 0)
+            if strength == 0.35:
+                assert skill.manipulation.events == []
+                assert skill.manipulation.pose.z == 0.03
+            else:
+                assert skill.manipulation.events == [("move_to", 0.04)]
+
+
 def test_planned_descent_keeps_small_steps_final_confirmation_and_cancel_points(monkeypatch):
     monkeypatch.setattr("innate_skills.pick_any_object.inside_box", lambda *_: True)
 
