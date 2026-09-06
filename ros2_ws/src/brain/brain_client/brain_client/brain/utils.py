@@ -127,19 +127,33 @@ def in_image(y: float, x: float) -> bool:
     return 0.0 <= y <= 1000.0 and 0.0 <= x <= 1000.0
 
 
-def adjust_nav_goal(inputs: dict, *, capture_pose: Pose | None, current_pose: Pose | None, is_mapfree: bool) -> dict:
+def adjust_nav_goal(
+    inputs: dict,
+    *,
+    capture_pose: Pose | None,
+    current_pose: Pose | None,
+    is_mapfree: bool,
+    use_static_map: bool = False,
+) -> dict:
     """Ground a navigate_to_position goal in the robot's current pose.
 
-    Local goals are relative to the frame the model saw, so they shift by
-    however far the robot moved since capture. Absolute goals only exist on a
-    map; in mapfree mode they are re-based onto the robot instead — the map
-    planner would only reject them.
+    Local goals are relative to the frame the model saw, so they first shift
+    by however far the robot moved since capture. In static navigation mode
+    they then become absolute endpoints so the static planner and
+    occupancy-map guard own the whole route. In mapfree, mapping, and unknown
+    modes they stay robot-relative. Absolute goals in mapfree mode are
+    re-based onto the robot instead — the map planner would only reject them.
     """
     if inputs.get("local_frame", False):
-        if capture_pose is None or current_pose is None:
-            return inputs
-        delta = pose_math.compute_pose_delta(capture_pose, current_pose)
-        return pose_math.adjust_local_nav_command(inputs, delta)
+        if use_static_map and current_pose is None:
+            raise ValueError("cannot ground a local navigation goal because the current map pose is unavailable")
+        adjusted = inputs
+        if capture_pose is not None and current_pose is not None:
+            delta = pose_math.compute_pose_delta(capture_pose, current_pose)
+            adjusted = pose_math.adjust_local_nav_command(inputs, delta)
+        if use_static_map:
+            return pose_math.local_to_absolute_nav_command(adjusted, current_pose)
+        return adjusted
     if not is_mapfree or current_pose is None:
         return inputs
     return pose_math.absolute_to_local_nav_command(inputs, current_pose)
