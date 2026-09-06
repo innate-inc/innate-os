@@ -102,11 +102,17 @@ def compact_upper_surface(observation, box, point):
     samples = samples[samples[:, 2] >= 0.008]
     if len(samples) < 10:
         return None
+    if np.max(np.ptp(samples[:, :2], axis=0)) > 0.061:
+        return None
     yaw = np.arctan2(center[1] + 0.05285, center[0] - 0.086)
     jaw_axis = np.array([-np.sin(yaw), np.cos(yaw)])
-    if np.ptp(samples[:, :2] @ jaw_axis) + 0.01 > 0.071:
-        return None
-    if np.max(np.ptp(samples[:, :2], axis=0)) + 0.01 > 0.071:
+    approach_axis = np.array([np.cos(yaw), np.sin(yaw)])
+    relative = samples[:, :2] - center[:2]
+    # Both signed extents must fit around THIS tool center. Width alone lets
+    # an off-center proposal put one edge outside a jaw. Preserve 10mm on
+    # each side of the 81mm opening, and the same compact footprint along the
+    # other horizontal tool axis. This does not certify unseen geometry.
+    if max(np.max(np.abs(relative @ jaw_axis)), np.max(np.abs(relative @ approach_axis))) > 0.0305:
         return None
     # A front-face patch is lower than the observed top; it is not a center for
     # a vertical pinch. Leave only the sensor's few-mm uncertainty allowance.

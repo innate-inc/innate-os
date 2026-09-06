@@ -131,3 +131,26 @@ def test_wrist_stationary_verdict_rejects_target_motion_or_new_occlusion():
     image[100:200, 150:250] = 0
     assert not same_wrist_patch(old, encode(image), BOX)
     assert not same_wrist_patch(old, b"broken", BOX)
+
+
+def test_aperture_is_center_relative_not_only_total_width():
+    from types import SimpleNamespace as NS
+
+    yaw = np.arctan2(0.05285, 0.3 - 0.086)
+    jaw = np.array([-np.sin(yaw), np.cos(yaw)])
+    other = np.array([np.cos(yaw), np.sin(yaw)])
+    center = np.array([0.3, 0.0])
+
+    def observation(offset):
+        def surface(u, v):
+            xy = center + ((u - 200) / 120 * 0.06) * jaw + ((v - 150) / 120 * 0.01) * other
+            if (u, v) == (200, 150):
+                xy = center + offset * jaw
+            return (*xy, 0.04)
+
+        return NS(image_size=(400, 300), surface_point_in_base=surface)
+
+    # Same 60mm geometry; only the proposed grasp center changes.
+    assert compact_upper_surface(observation(0), BOX, POINT) is not None
+    assert compact_upper_surface(observation(0.02), BOX, POINT) is None
+    assert compact_upper_surface(observation(-0.02), BOX, POINT) is None
