@@ -52,6 +52,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      # ubuntu-latest ships libGL but not OSMesa, and with MUJOCO_GL=osmesa
+      # PyOpenGL binds to OSMesa at import -- without the library every test
+      # that imports the driver fails at collection, before a world is built.
+      - name: Install OSMesa
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libosmesa6 libosmesa6-dev
+
       - name: Run the benchmark test suite
         env:
           MUJOCO_GL: osmesa
