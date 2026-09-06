@@ -7,6 +7,7 @@ grasp (optional wrist visual-servo), verify by backing up.
 No depth camera — URDF + pinhole model.
 """
 
+import json
 import math
 import os
 import re
@@ -139,6 +140,10 @@ ROLLED_PITCH = math.pi / 2
 # "could not centre".
 MEM_COAST_LIMIT = 2
 WRIST_SEARCH_ARM = [0.1473, -0.0706, -0.4449, 1.3376, -0.0491]
+# Same camera pitch and reach, without raising to 20cm only to descend again.
+# URDF FK: EE near (0.30,-0.053,0.10). Used only when every joint travels no
+# farther than in the original search move, at the same duration.
+LOW_WRIST_SEARCH_ARM = [0.1473, -0.19894886, 0.43537349, 0.58357537, -0.0491]
 
 
 class _BlobTracker:
@@ -254,26 +259,34 @@ class PickAnyObject(Skill):
         return best
 
     def _detect_px(self, prompt):
-        """Head frame -> grasp pixel of the remembered target, or None. Also
-        records Gemini's per-object grip_strength for the close."""
-        text, img = ask_head(
-            self,
-            self._proxy,
-            f"Find '{prompt}' lying on the floor in this image. Match precisely — "
-            "not paper/packaging when asked for clothing, and NOT anything held "
-            "by the robot arm. Return ONLY a JSON list of ALL matches (every "
-            "one, if several look alike), each "
-            '{"box_2d":[ymin,xmin,ymax,xmax], "grasp_point":[y,x], '
-            '"grip_strength":s} normalized 0-1000, best first. grasp_point is '
-            "the CENTER of the object (geometric middle of the visible blob), "
-            "not an edge or tip. grip_strength is how hard a parallel gripper "
-            "should squeeze this object, 0.30-0.60: soft/deformable objects "
-            "(socks, fabric, plush) need 0.60 or they slip out; rigid/hard "
-            "objects (metal, hard plastic, wood, ceramic) need 0.30-0.40 — "
-            "squeezing them harder stalls the gripper servo. "
-            "Empty list if not present.",
-            self._p["settle_s"],
-        )
+        """Head frame -> remembered target pixel and material handling style."""
+        if self._pickup_policy is not None:
+            self.mobility.stop()
+            self.sleep(self._p["settle_s"])
+            observed = self._observe_pickup(prompt, self.main_image, "head")
+            text = json.dumps(observed["detections"])
+            # Perception overlaps the fold; finish it before any base search.
+            # On cancellation/failure, execute's finally joins it before teardown.
+            self._finish_nav_fold()
+        else:
+            text, img = ask_head(
+                self,
+                self._proxy,
+                f"Find '{prompt}' lying on the floor in this image. Match precisely — "
+                "not paper/packaging when asked for clothing, and NOT anything held "
+                "by the robot arm. Return ONLY a JSON list of ALL matches (every "
+                "one, if several look alike), each "
+                '{"box_2d":[ymin,xmin,ymax,xmax], "grasp_point":[y,x], '
+                '"grip_strength":s} normalized 0-1000, best first. grasp_point is '
+                "the CENTER of the object (geometric middle of the visible blob), "
+                "not an edge or tip. grip_strength is how hard a parallel gripper "
+                "should squeeze this object, 0.30-0.60: soft/deformable objects "
+                "(socks, fabric, plush) need 0.60 or they slip out; rigid/hard "
+                "objects (metal, hard plastic, wood, ceramic) need 0.30-0.40 — "
+                "squeezing them harder stalls the gripper servo. "
+                "Empty list if not present.",
+                self._p["settle_s"],
+            )
         cands = vision.parse_det_cands(text)
         cand = self._choose_cand(cands) if cands else None
         if cand is None:
@@ -286,6 +299,21 @@ class PickAnyObject(Skill):
         if seen is not None:
             self._last_seen = seen
         return (u, v)
+
+    def _finish_nav_fold(self):
+        if getattr(self, "_nav_pending", False):
+            try:
+                self.manipulation.wait()
+            finally:
+                self._nav_pending = False
+
+    def _observe_pickup(self, prompt, image, view):
+        if not image:
+            raise SkillFailed(f"No {view} image for pickup")
+        try:
+            return self._pickup_policy.locate(prompt, image, self.sleep, self.check_cancelled, view=view)
+        except ValueError as error:
+            raise SkillFailed(str(error)) from None
 
     def _rest_arm(self, keep_grip):
         """Best-effort teardown: carry if holding, else fold to rest. Never
@@ -319,23 +347,34 @@ class PickAnyObject(Skill):
             self.logger.warning(f"[PickAnyObject] rest-arm failed: {e}")
 
     def _wrist_seed(self, prompt):
-        """Wrist Gemini box -> (center_px, box) or (None, None)."""
+        """Wrist detection -> tracking box and, for Astra, a grasp plan."""
         self.sleep(self._p["wrist_settle_s"])
         img = self.wrist_image
-        text = (
-            gemlib.ask_image(
-                self._proxy,
-                img,
-                f"Wrist camera on a robot gripper, looking down at the floor. "
-                f"Find '{prompt}' on the floor. Ignore the gripper fingers "
-                "themselves. Return ONLY a JSON list of ALL matches, each "
-                '{"box_2d":[ymin,xmin,ymax,xmax]} normalized 0-1000, best first, '
-                "each box TIGHT around its object. Empty list if not visible.",
-                logger=self.logger,
+        if self._pickup_policy is not None:
+            detections = self._observe_pickup(prompt, img, "wrist")["detections"]
+            choices = [(box, plan) for plan in detections for box in vision.parse_det_boxes(json.dumps([plan]))]
+            if not choices:
+                raise SkillFailed("Pickup target not confidently visible in wrist camera")
+            box, plan = min(choices, key=lambda choice: self._wrist_aim_dist(choice[0]))
+            self._planned_roll = plan["roll"]
+            self._unpress_grasp = plan["grasp_style"] == "unpress"
+            self._grip_strength = plan["grip_strength"]
+            return (box[0] + box[2] / 2.0, box[1] + box[3] / 2.0), box
+        else:
+            text = (
+                gemlib.ask_image(
+                    self._proxy,
+                    img,
+                    f"Wrist camera on a robot gripper, looking down at the floor. "
+                    f"Find '{prompt}' on the floor. Ignore the gripper fingers "
+                    "themselves. Return ONLY a JSON list of ALL matches, each "
+                    '{"box_2d":[ymin,xmin,ymax,xmax]} normalized 0-1000, best first, '
+                    "each box TIGHT around its object. Empty list if not visible.",
+                    logger=self.logger,
+                )
+                if img
+                else None
             )
-            if img
-            else None
-        )
         boxes = vision.parse_det_boxes(text)
         # The base already centred the tracked instance under the arm, so among
         # identical twins the box nearest the servo aim point is ours.
@@ -368,7 +407,12 @@ class PickAnyObject(Skill):
     def _wrist_done(
         self, x: float, y: float, z: float, reason: str, axis: vision.Axis | None = None
     ) -> tuple[float, float, float, float]:
-        roll = self._grasp_roll(axis)
+        if self._pickup_policy is not None:
+            if reason != "reached stop z" or self._planned_roll is None:
+                raise SkillFailed(f"Wrist pickup alignment failed: {reason}")
+            roll = self._planned_roll
+        else:
+            roll = self._grasp_roll(axis)
         self.logger.info(
             f"[PickAnyObject] wrist stage: {reason} "
             f"(x={x:.3f}, y={y:.3f}, z={z:.3f}, roll={math.degrees(roll):+.0f} deg)"
@@ -409,8 +453,6 @@ class PickAnyObject(Skill):
         wrist_steps - 1). Color model, not LK: the object grows/deforms
         during the descent and optical flow slides off.
         Returns (x, y, z, roll); falls back to (tx, ty, roll 0) if never seen."""
-        if getattr(self, "_pickup_policy", None) is not None:
-            return self._wrist_descend_model(prompt)
         p = self._p
         try:
             ee = self.manipulation.pose.position
@@ -437,7 +479,7 @@ class PickAnyObject(Skill):
         centered = 0  # consecutive matches INSIDE the box
         stalled = 0  # consecutive steps eaten by the reach clamp
         reason = "reached stop z"
-        while z > p["wrist_stop_z"] + 1e-6:
+        while z > p["wrist_stop_z"] + 1e-6 or self._pickup_policy is not None:
             # Explicit cancel point: with a fresh frame already buffered (the
             # common case after each blocking move) _next_wrist_hsv returns
             # without ever sleeping, so a Stop would ride the whole descent.
@@ -478,6 +520,8 @@ class PickAnyObject(Skill):
             if inside and centered < 2:
                 continue  # just entered the box — confirm it stays
 
+            if z <= p["wrist_stop_z"] + 1e-6 and centered >= 2:
+                break  # fresh confirmation at the final height before closing
             stepped_down = centered >= 2
             if stepped_down:
                 z = max(p["wrist_stop_z"], z - p["wrist_z_step"])
@@ -515,84 +559,26 @@ class PickAnyObject(Skill):
 
         return self._wrist_done(x, y, z, reason, axis)
 
-    def _wrist_descend_model(self, prompt):
-        """Fresh-camera decisions; the SDK still owns every bounded motion."""
-        from innate_skills.pickup_policy import motion_target
-
-        p = {**self._p, "wrist_ceiling_z": self.manipulation.pose.z}
-        self.sleep(p["wrist_settle_s"])
-        raw = None
-        last_action = None
-        deadline = time.monotonic() + WRIST_ALIGN_TIMEOUT_S
-        while time.monotonic() < deadline:
-            self.check_cancelled()
-            _hsv, raw = self._next_wrist_hsv(raw)
-            if _hsv is None:
-                raise SkillFailed("No fresh wrist image for pickup")
-            position = tuple(self.manipulation.pose.position)
-            gain = p["wrist_kx"] / 100 * ((position[2] + WRIST_CAM_ABOVE_EE) / (0.15 + WRIST_CAM_ABOVE_EE))
-            observation = {
-                "target": prompt,
-                "position": position,
-                "aim": [p["wrist_box_u"], p["wrist_box_v"]],
-                "gain": gain,
-                "stop_z": p["wrist_stop_z"],
-                "tolerance_px": p["wrist_final_half_px"] if position[2] <= AXIS_MIN_Z else p["wrist_half_px"],
-                "final_tolerance_px": p["wrist_final_half_px"],
-                "previous_action": last_action,
-            }
-            try:
-                action = self._pickup_policy.decide(
-                    observation, raw, self.sleep, self.check_cancelled, timeout=deadline - time.monotonic()
-                )
-                self.check_cancelled()
-                if time.monotonic() >= deadline:
-                    raise SkillFailed("Wrist pickup alignment timed out")
-                self.logger.info(f"[PickAnyObject] Astra observation: {observation}; action: {action}")
-                current = tuple(self.manipulation.pose.position)
-                if math.dist(current, position) > 0.015:
-                    raise SkillFailed("Arm moved during pickup observation; stopping")
-                target = motion_target(action, position if action["action"] == "descend" else current, p)
-            except ValueError as error:
-                raise SkillFailed(str(error)) from None
-            self.logger.info(f"[PickAnyObject] Astra action: {action}")
-            last_action = action
-            if action["action"] == "give_up":
-                raise SkillFailed("Pickup target not confidently visible in wrist camera")
-            if action["action"] in {"grasp", "unpress_grasp"}:
-                self._unpress_grasp = action["action"] == "unpress_grasp"
-                return (*current, action["roll"])
-            if action["action"] == "observe":
-                continue
-            x, y, z, duration = target
-            nx, ny = self.manipulation.clamp_reach(x, y)
-            if math.hypot(nx - x, ny - y) > 0.001:
-                raise SkillFailed("Model pickup step is outside arm reach")
-            if action["action"] == "descend":
-                # One model decision, the same small motion/cancel points.
-                step_z = current[2]
-                while step_z > z + 1e-6:
-                    self.check_cancelled()
-                    step_z = max(z, step_z - p["wrist_z_step"])
-                    self.manipulation.move_to(x, y, step_z, pitch=p["wrist_pitch"], duration=p["wrist_move_s"])
-                    frame = self.wrist_image
-                    hsv, raw = self._next_wrist_hsv(frame)
-                    if hsv is None:
-                        raise SkillFailed("Wrist camera stopped during descent")
-            else:
-                self.manipulation.move_to(x, y, z, pitch=p["wrist_pitch"], duration=duration)
-            # Discard the frame buffered during motion; wait for a new arrival.
-            raw = self.wrist_image
-        raise SkillFailed("Wrist pickup alignment timed out")
-
     def _goto_search_pose(self, bearing):
-        """WRIST_SEARCH_ARM aimed at bearing; pins IK to elbow-up branch.
+        """Joint-space camera pose aimed at bearing; fixes the IK starting branch.
 
         j6 commands GRIPPER_OPEN instead of echoing a live j6 read: right
         after the gripper open the joint_states snapshot is one tick
         stale, and re-commanding it would close the just-opened gripper."""
         a = WRIST_SEARCH_ARM
         pose = [bearing, a[1], a[2], self._p["wrist_pitch"] - a[1] - a[2], a[4], self.manipulation.GRIPPER_OPEN]
+        if self._pickup_policy is not None:
+            low = LOW_WRIST_SEARCH_ARM
+            candidate = [bearing, low[1], low[2], self._p["wrist_pitch"] - low[1] - low[2], low[4], pose[5]]
+            try:
+                current = self._arm_joints()
+                if all(
+                    abs(new - start) <= abs(old - start) + 1e-6
+                    for new, old, start in zip(candidate, pose, current, strict=True)
+                ):
+                    pose = candidate
+            except LookupError:
+                pass  # original search is the conservative fallback
         self.manipulation.move_joints(pose, duration=self._p["hover_s"])
         self.sleep(0.3)
 
@@ -903,6 +889,8 @@ class PickAnyObject(Skill):
             self.fail("Pickup controller must be astra or classic")
         self._pickup_policy = None
         self._unpress_grasp = True
+        self._planned_roll = None
+        self._nav_pending = False
         if controller == "astra":
             from innate_skills.pickup_policy import PickupPolicy
 
@@ -924,7 +912,11 @@ class PickAnyObject(Skill):
             self.head.set_position(int(round(self._p["tilt_deg"])))
             # Fold clear of the head camera before searching
             # (5-joint move: the claw keeps whatever it currently holds).
-            self.manipulation.move_joints(NAV_ARM, duration=3.0)
+            if self._pickup_policy is None:
+                self.manipulation.move_joints(NAV_ARM, duration=3.0)
+            else:
+                self.manipulation.move_joints(NAV_ARM, duration=3.0, block=False)
+                self._nav_pending = True
 
             approach = FloorApproach(self, self._p, self._detect_px)
             self.say(f"Looking for {prompt}.")
@@ -947,6 +939,10 @@ class PickAnyObject(Skill):
             self.fail(f"Arm servo failure: {e}")
         finally:
             self.mobility.stop()
+            try:
+                self._finish_nav_fold()
+            except (ArmFailed, ArmUnhealthy):
+                self.logger.warning("[PickAnyObject] navigation fold did not complete")
             self._rest_arm(keep_grip=self._holding)
             self.head.set_position(0)
         # A rigid object can slip during the final fold even after a verified

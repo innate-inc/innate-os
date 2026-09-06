@@ -141,3 +141,26 @@ that stops subsequent requests. Stop for missing usage or provider failure.
 The budget and phase wrappers now live exclusively in an explicit benchmark
 overlay under `scripts/experiments/pickup`; production pickup has no global
 experiment counter or cap.
+
+## First matched round and revised candidate
+
+The first six normalized trials at `be8435589` did not meet the speed target.
+Astra retained all three objects for20seconds, at51.651/49.649/64.117seconds
+(onboarding LEGO/rotated LEGO/cube). Classic completed the first and third at
+69.059/48.171seconds; its rotated LEGO slipped during carry. Successful-trial
+medians were51.651versus58.615seconds, only12% faster; the fixed-penalty medians
+showed25%. This incomplete campaign is retained, not presented as final proof.
+
+The revised prototype replaces repeated model wrist moves with one bounded
+Astra observation/grasp plan and the existing cancellable camera servo. It also
+uses Astra for head localization, overlaps that first look with the unchanged
+navigation fold, and joins the fold before base search or teardown. A final
+fresh-camera centering check and failure on lost tracking precede closing.
+
+A lower search pose avoids raising the gripper only to lower it again. Offline
+URDF FK agrees with KDL: NAV EE z0.065m, original search z0.198m, proposed search
+z0.100m. From NAV, every joint travels no farther in the same two seconds; the
+quintic trajectory's computed peak EE speed falls from0.3043to0.2675m/s, with
+the same minimum EE z0.065m. Runtime falls back to the original search whenever
+any joint would travel farther. This is a kinematic check, not collision or
+pickup proof; real simulator validation remains required before comparison.

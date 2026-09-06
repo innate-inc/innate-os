@@ -98,6 +98,7 @@ def _skill(*, closes_empty, empties_on_lift=False):
     skill.check_cancelled = lambda: None
     skill._grip_strength = 0.0
     skill._holding = False
+    skill._pickup_policy = None
     skill.manipulation = _Manipulation(skill, closes_empty=closes_empty, empties_on_lift=empties_on_lift)
     skill._goto_search_pose = lambda _bearing: skill.manipulation.events.append(("search",))
     skill._wrist_descend = lambda _prompt, x, y: (x - 0.01, y + 0.01, 0.05, 0.0)
@@ -148,13 +149,19 @@ def test_model_grasp_preserves_raised_rigid_hold_without_reseeding_grip(monkeypa
     assert len(skill.manipulation.events) == len(before) + 2
 
 
-def test_model_descent_keeps_small_steps_fresh_frames_and_cancel_points():
-    import pytest
+def test_planned_descent_keeps_small_steps_final_confirmation_and_cancel_points(monkeypatch):
+    monkeypatch.setattr("innate_skills.pick_any_object.inside_box", lambda *_: True)
 
     def make(cancel_after=None):
         skill = _skill(closes_empty=False)
+        skill._pickup_policy = object()
+        skill._planned_roll = -1.5
         skill.manipulation.pose = SimpleNamespace(z=0.15, position=(0.3, 0, 0.15))
         moves, frames = [], []
+        center = (320, skill._p["wrist_box_v"])
+        skill._wrist_seed = lambda _: (center, (300, 300, 40, 40))
+        tracker = SimpleNamespace(ok=True, axis=None, update=lambda _: center)
+        monkeypatch.setattr("innate_skills.pick_any_object._BlobTracker", lambda *_: tracker)
 
         def move(x, y, z, **kwargs):
             moves.append((z, kwargs["duration"]))
@@ -162,44 +169,70 @@ def test_model_descent_keeps_small_steps_fresh_frames_and_cancel_points():
 
         skill.manipulation.move_to = move
         skill.manipulation.clamp_reach = lambda x, y: (x, y)
-        skill.wrist_image = object()
 
-        def frame(_previous):
+        def frame(_):
             frames.append(True)
             return True, object()
 
         skill._next_wrist_hsv = frame
-        skill.sleep = lambda _seconds: None
 
         def check():
             if cancel_after and len(moves) >= cancel_after:
                 raise InterruptedError("Stop")
 
         skill.check_cancelled = check
-        decisions = iter(
-            [
-                dict(
-                    action="descend",
-                    center=[320, skill._p["wrist_box_v"]],
-                    delta=[0, 0, -0.10],
-                    roll=0,
-                    note="centered",
-                ),
-                dict(action="grasp", center=[320, skill._p["wrist_box_v"]], delta=[0, 0, 0], roll=0, note="aligned"),
-            ]
-        )
-        skill._pickup_policy = SimpleNamespace(decide=lambda *_args, **_kwargs: next(decisions))
         return skill, moves, frames
 
     skill, moves, frames = make()
-    assert skill._wrist_descend_model("brick") == pytest.approx((0.3, 0, 0.05, 0))
-    assert len(moves) == 10 and all(duration == 0.5 for _z, duration in moves)
+    assert PickAnyObject._wrist_descend(skill, "brick", 0.3, 0) == pytest.approx((0.3, 0, 0.05, -1.5))
+    assert len(moves) == 10 and all(duration == 0.5 for _, duration in moves)
     assert len(frames) >= len(moves) + 2
-    assert not skill._unpress_grasp
-    cancelled, moves, frames = make(cancel_after=3)
+    cancelled, moves, _ = make(cancel_after=3)
     with pytest.raises(InterruptedError):
-        cancelled._wrist_descend_model("brick")
+        PickAnyObject._wrist_descend(cancelled, "brick", 0.3, 0)
     assert len(moves) == 3
+
+
+def test_lower_search_never_increases_any_joint_travel_at_the_same_duration():
+    from innate_skills.pick_any_object import NAV_ARM, WRIST_SEARCH_ARM
+
+    for start in (NAV_ARM, [0, 0.2, 0.1, 1.0, -0.0491]):
+        skill = _skill(closes_empty=False)
+        skill._pickup_policy = object()
+        skill.joint_states.position = [*start, skill.manipulation.GRIPPER_OPEN]
+        skill.sleep = lambda _: None
+        commands = []
+        skill.manipulation.move_joints = lambda joints, duration, commands=commands: commands.append((joints, duration))
+        PickAnyObject._goto_search_pose(skill, 0)
+        target, duration = commands[0]
+        old = [
+            0,
+            WRIST_SEARCH_ARM[1],
+            WRIST_SEARCH_ARM[2],
+            skill._p["wrist_pitch"] - sum(WRIST_SEARCH_ARM[1:3]),
+            WRIST_SEARCH_ARM[4],
+        ]
+        assert duration == skill._p["hover_s"]
+        assert all(abs(n - s) <= abs(o - s) + 1e-6 for n, o, s in zip(target[:5], old, start, strict=True))
+        if start is NAV_ARM:
+            assert target[2] > 0  # selected the lower search instead of original
+    assert target[:5] == pytest.approx(old)  # unfavorable start falls back to original
+
+
+def test_head_perception_finishes_fold_before_returning_a_target(monkeypatch):
+    skill = _skill(closes_empty=False)
+    events = []
+    skill._pickup_policy = object()
+    skill._nav_pending = True
+    skill.main_image = "image"
+    skill.mobility = SimpleNamespace(stop=lambda: events.append("stop"))
+    skill.sleep = lambda _: events.append("settle")
+    skill._observe_pickup = lambda *_: events.append("perception") or {"detections": []}
+    skill.manipulation.wait = lambda: events.append("join")
+    monkeypatch.setattr("innate_skills.pick_any_object.vision.parse_det_cands", lambda _: [], raising=False)
+    assert skill._detect_px("brick") is None
+    assert events == ["stop", "settle", "perception", "join"]
+    assert not skill._nav_pending
 
 
 def test_pickup_reports_a_drop_during_the_final_carry_motion(monkeypatch):
