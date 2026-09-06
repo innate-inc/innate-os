@@ -28,9 +28,9 @@ TOOL = {
                         "roll": {"type": "number"},
                         "grip_strength": {"type": "number"},
                         "grasp_style": {"type": "string", "enum": ["floor", "unpress"]},
-                        "low_search": {"type": "boolean"},
+                        "search_clearance": {"type": "string", "enum": ["flat", "low", "high"]},
                     },
-                    "required": ["box_2d", "roll", "grip_strength", "grasp_style", "low_search"],
+                    "required": ["box_2d", "roll", "grip_strength", "grasp_style", "search_clearance"],
                 },
             }
         },
@@ -55,10 +55,12 @@ plastic, wood, ceramic or metal need 0.30-0.40. This selects the existing handli
 style; software owns the force limits. For thin rigid objects choose grasp_style
 floor: close at the existing floor limit. For fabric or a target whose fingers
 need unpressing choose unpress, the original 1cm lift before closing.
-For the head view, low_search may be true only for a clearly small, low rigid
-object with clear space at a 10cm wrist height (roughly under6cm tall). Use false
-for tall, bulky, soft or uncertain objects; they keep the original high search.
-For wrist views use false; the head observation already chose search clearance.
+For the head view, search_clearance is flat only for a clearly thin, flat rigid
+object under roughly 3cm tall, with clear space at a 7cm wrist height. Use low
+for other clearly small rigid objects under roughly 6cm tall, with clear space
+at a 10cm wrist height. Use high for tall, bulky, soft or uncertain objects;
+they keep the original high search. For wrist views use high; the head
+observation already chose search clearance.
 
 The executor tracks your selected object through fresh camera frames, aligns it,
 and performs bounded motions at unchanged limits. You choose WHAT to grasp, its
@@ -86,7 +88,7 @@ def validate_observation(value):
             "roll",
             "grip_strength",
             "grasp_style",
-            "low_search",
+            "search_clearance",
         }:
             raise ValueError("Invalid pickup detection")
         box = detection["box_2d"]
@@ -98,7 +100,7 @@ def validate_observation(value):
             raise ValueError("Invalid pickup material strength")
         if detection["grasp_style"] not in {"floor", "unpress"}:
             raise ValueError("Unknown pickup closing style")
-        if type(detection["low_search"]) is not bool:
+        if detection["search_clearance"] not in ("flat", "low", "high"):
             raise ValueError("Invalid pickup search clearance")
     return value
 

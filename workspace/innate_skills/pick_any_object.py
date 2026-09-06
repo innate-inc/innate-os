@@ -144,6 +144,8 @@ WRIST_SEARCH_ARM = [0.1473, -0.0706, -0.4449, 1.3376, -0.0491]
 # URDF FK: EE near (0.30,-0.053,0.10). Used only when every joint travels no
 # farther than in the original search move, at the same duration.
 LOW_WRIST_SEARCH_ARM = [0.1473, -0.19894886, 0.43537349, 0.58357537, -0.0491]
+# Only for model-confirmed thin, flat rigid targets with clearance at 7cm.
+FLAT_WRIST_SEARCH_ARM = [0.1473, -0.12154981, 0.58245634, 0.35909347, -0.0491]
 
 
 class _BlobTracker:
@@ -292,7 +294,7 @@ class PickAnyObject(Skill):
         if cand is None:
             return None
         if self._pickup_policy is not None:
-            self._low_search_allowed = observed["detections"][cands.index(cand)]["low_search"]
+            self._search_clearance = observed["detections"][cands.index(cand)]["search_clearance"]
         u, v, grip = cand
         if grip is not None:
             lo, hi = GRIP_STRENGTH_RANGE
@@ -350,9 +352,12 @@ class PickAnyObject(Skill):
 
     def _wrist_seed(self, prompt):
         """Wrist detection -> tracking box and, for Astra, a grasp plan."""
-        self.sleep(self._p["wrist_settle_s"])
-        img = self.wrist_image
         if self._pickup_policy is not None:
+            # The search already finished and settled. Wait for an actual new
+            # frame instead of another fixed pause, and refuse a frozen camera.
+            hsv, img = self._next_wrist_hsv(self.wrist_image, timeout=self._p["wrist_settle_s"])
+            if hsv is None:
+                raise SkillFailed("No fresh wrist image for pickup")
             detections = self._observe_pickup(prompt, img, "wrist")["detections"]
             choices = [(box, plan) for plan in detections for box in vision.parse_det_boxes(json.dumps([plan]))]
             if not choices:
@@ -363,6 +368,8 @@ class PickAnyObject(Skill):
             self._grip_strength = plan["grip_strength"]
             return (box[0] + box[2] / 2.0, box[1] + box[3] / 2.0), box
         else:
+            self.sleep(self._p["wrist_settle_s"])
+            img = self.wrist_image
             text = (
                 gemlib.ask_image(
                     self._proxy,
@@ -569,9 +576,24 @@ class PickAnyObject(Skill):
         stale, and re-commanding it would close the just-opened gripper."""
         a = WRIST_SEARCH_ARM
         pose = [bearing, a[1], a[2], self._p["wrist_pitch"] - a[1] - a[2], a[4], self.manipulation.GRIPPER_OPEN]
-        if self._pickup_policy is not None and self._low_search_allowed and self._grip_strength < SOFT_GRIP_MIN:
-            low = LOW_WRIST_SEARCH_ARM
-            candidate = [bearing, low[1], low[2], self._p["wrist_pitch"] - low[1] - low[2], low[4], pose[5]]
+        if self._pickup_policy is not None:
+            search = a
+            if self._grip_strength is not None and self._grip_strength < SOFT_GRIP_MIN:
+                if self._search_clearance == "flat":
+                    search = FLAT_WRIST_SEARCH_ARM
+                elif self._search_clearance == "low":
+                    search = LOW_WRIST_SEARCH_ARM
+            # Aim from joint1's URDF origin, not base_link. The fixed search
+            # pose reaches about 30cm; camera servoing handles the remainder.
+            arm_bearing = math.atan2(0.30 * math.sin(bearing) + 0.05285, 0.30 * math.cos(bearing) - 0.086)
+            candidate = [
+                arm_bearing,
+                search[1],
+                search[2],
+                self._p["wrist_pitch"] - search[1] - search[2],
+                search[4],
+                pose[5],
+            ]
             try:
                 current = self._arm_joints()
                 if all(
@@ -583,6 +605,30 @@ class PickAnyObject(Skill):
                 pass  # original search is the conservative fallback
         self.manipulation.move_joints(pose, duration=self._p["hover_s"])
         self.sleep(0.3)
+
+    def _prepare_wrist_search(self, bearing):
+        if self._pickup_policy is None:
+            self.manipulation.gripper_open(duration=1.0)
+            self._goto_search_pose(bearing)
+            return
+        # The search move already commands an open claw over two seconds,
+        # slower than the separate one-second open. Keep its verification:
+        # any missing, non-finite or not-fully-open reading falls back to the
+        # SDK's verified open, including its reboot/retry for a tripped servo.
+        try:
+            self._goto_search_pose(bearing)
+        except ArmFailed:
+            # A tripped claw can reject the combined move before its aperture
+            # is readable. Preserve the original verified-open recovery first.
+            self.manipulation.gripper_open(duration=1.0)
+            self._goto_search_pose(bearing)
+        try:
+            j6 = self._arm_joints()[5]
+            opened = math.isfinite(j6) and j6 >= self.manipulation.GRIPPER_OPEN - 0.05
+        except LookupError:
+            opened = False
+        if not opened:
+            self.manipulation.gripper_open(duration=1.0)
 
     def _grasp_orientation(self, x: float, y: float, roll: float) -> tuple[float, float, float]:
         """(roll, pitch, yaw) for the descent and close. Unrolled is the
@@ -703,8 +749,7 @@ class PickAnyObject(Skill):
         p = self._p
         retry_z = p["retry_floor_z"]
         self._holding = False
-        self.manipulation.gripper_open(duration=1.0)
-        self._goto_search_pose(math.atan2(y, x))
+        self._prepare_wrist_search(math.atan2(y, x))
         x, y, z, roll = self._wrist_descend(prompt, x, y)
         roll, pitch, yaw = self._grasp_orientation(x, y, roll)
         self._push_to_floor(x, y, z, roll, pitch, yaw, floor_z=retry_z)
@@ -794,13 +839,11 @@ class PickAnyObject(Skill):
         x, y = self.manipulation.clamp_reach(xy[0] - p["grasp_x_off"], xy[1])
 
         self.manipulation.torque_on()
-        # gripper_open reboots + retries a tripped servo, raising ArmUnhealthy
-        # if the claw stays shut.
-        self.manipulation.gripper_open(duration=1.0)
         if p["wrist_steps"] >= 1:
-            self._goto_search_pose(math.atan2(y, x))
+            self._prepare_wrist_search(math.atan2(y, x))
             x, y, z, roll = self._wrist_descend(prompt, x, y)
         else:
+            self.manipulation.gripper_open(duration=1.0)
             z, roll = p["hover_z"], 0.0
             self.manipulation.move_to(x, y, z, pitch=p["arm_pitch"], duration=p["hover_s"])
 
@@ -897,7 +940,7 @@ class PickAnyObject(Skill):
         self._pickup_policy = None
         self._unpress_grasp = True
         self._planned_roll = None
-        self._low_search_allowed = False
+        self._search_clearance = "high"
         self._nav_pending = False
         if controller == "astra":
             from innate_skills.pickup_policy import PickupPolicy
