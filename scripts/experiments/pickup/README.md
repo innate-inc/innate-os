@@ -10,7 +10,7 @@ Run from a clean candidate checkout using the simulator Python environment:
 ```sh
 sim/.venv/bin/python scripts/experiments/pickup/run_trial.py matched-lego-r1-classic \
   --live --container innate-dev-EXACT-ID --port-base 30600 \
-  --output-root /absolute/evidence/directory --max-provider-calls 240 \
+  --output-root /absolute/evidence/directory --max-provider-calls 290 \
   --campaign matched-v1 --scenario-id onboarding-lego --repeat 1 --controller classic
 ```
 

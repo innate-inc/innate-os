@@ -1,0 +1,298 @@
+{
+  "campaign": "matched-v4",
+  "frozen_source_hashes": {
+    "scripts/experiments/pickup/run_trial.py": "786ffb9f944cf5c5ec860b34417ae67b5d62bba329ebfb114a6f04a57eb1d0e4",
+    "scripts/experiments/pickup/run_skill.py": "a09ccee72fe44775a2fb53bfcccc644b5dd45bb391fbafd088b25d863c918d6c",
+    "scripts/experiments/pickup/judge.py": "ddbce3d16ef758ece623d3be2d5307190288478e9b991659cf2d098f980bd6ca",
+    "scripts/experiments/pickup/report.py": "5fe854f16718c22893ce99276c0acf01168a281e21168af481fc668ec896d708",
+    "workspace/innate_skills/pick_any_object.py": "f74b287386cc2612fb606fce1de3e450f324bfc2a0b4302f534e9cb8b09159fd",
+    "workspace/innate_skills/pickup_policy.py": "ef7311eda0976983dfd5affa38de892e28830974fb5364151bca0e28c44a8d1c",
+    "workspace/innate_skills/_pickup_probe.py": "8b034e9d6f7c7b765e5b87389f71dbfd0b981efbf6974ecfeddfbab970462c15",
+    "workspace/innate_skills/approach.py": "cb35d8f4bd4ec4e94d7827893c3b5795b0843ba2d488ff70a6e3ed74d1b3a3a4",
+    "sim/props/12_lego.py": "048c01a61014eb01e592ffd55dda2383074997253caf5610e25986c33add33aa",
+    "sim/props/10_cube.py": "05e375a8bcc6504e4c25e182bc6b46c9903c37ed5f2bef78685db669515adbfe",
+    "ros2_ws/src/mars_bot/mars_sim_driver/mars_sim_driver/props.py": "80c50ccfb7b960dc4891ee17bfb8f7732b5da505e7fb27e1d3373105c5938470"
+  },
+  "source_audit_error": null,
+  "complete": true,
+  "working_baseline": true,
+  "observed_reliability_preserved": true,
+  "medians": {
+    "classic": {
+      "success_median_s": 48.7952345220001,
+      "all_attempt_median_s": 48.7952345220001
+    },
+    "astra": {
+      "success_median_s": 22.78106009200019,
+      "all_attempt_median_s": 22.78106009200019
+    }
+  },
+  "candidate_to_baseline_ratio": {
+    "success_median_s": 0.46687059331027475,
+    "all_attempt_median_s": 0.46687059331027475
+  },
+  "by_scenario": {
+    "onboarding-lego": {
+      "classic": {
+        "attempts": 3,
+        "successes": 3,
+        "success_median_s": 69.39006303099995,
+        "all_attempt_median_s": 69.39006303099995
+      },
+      "astra": {
+        "attempts": 3,
+        "successes": 3,
+        "success_median_s": 23.324882343000354,
+        "all_attempt_median_s": 23.324882343000354
+      }
+    },
+    "rotated-lego": {
+      "classic": {
+        "attempts": 3,
+        "successes": 3,
+        "success_median_s": 45.293239687000096,
+        "all_attempt_median_s": 45.293239687000096
+      },
+      "astra": {
+        "attempts": 3,
+        "successes": 3,
+        "success_median_s": 21.975480175000484,
+        "all_attempt_median_s": 21.975480175000484
+      }
+    },
+    "cube": {
+      "classic": {
+        "attempts": 3,
+        "successes": 3,
+        "success_median_s": 47.631863271999464,
+        "all_attempt_median_s": 47.631863271999464
+      },
+      "astra": {
+        "attempts": 3,
+        "successes": 3,
+        "success_median_s": 24.55654313500054,
+        "all_attempt_median_s": 24.55654313500054
+      }
+    }
+  },
+  "trials": [
+    {
+      "trial": "matched-v4-rotated-lego-r3-astra",
+      "controller": "astra",
+      "scenario": "rotated-lego",
+      "repeat": 3,
+      "success": true,
+      "latency_s": 21.557280510000055,
+      "penalized_s": 21.557280510000055,
+      "action_s": 19.557280510000055,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-cube-r1-classic",
+      "controller": "classic",
+      "scenario": "cube",
+      "repeat": 1,
+      "success": true,
+      "latency_s": 48.7952345220001,
+      "penalized_s": 48.7952345220001,
+      "action_s": 46.7952345220001,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-rotated-lego-r1-astra",
+      "controller": "astra",
+      "scenario": "rotated-lego",
+      "repeat": 1,
+      "success": true,
+      "latency_s": 21.975480175000484,
+      "penalized_s": 21.975480175000484,
+      "action_s": 19.975480175000484,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-cube-r3-classic",
+      "controller": "classic",
+      "scenario": "cube",
+      "repeat": 3,
+      "success": true,
+      "latency_s": 47.631863271999464,
+      "penalized_s": 47.631863271999464,
+      "action_s": 45.631863271999464,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-cube-r2-classic",
+      "controller": "classic",
+      "scenario": "cube",
+      "repeat": 2,
+      "success": true,
+      "latency_s": 46.536187978999806,
+      "penalized_s": 46.536187978999806,
+      "action_s": 44.536187978999806,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-rotated-lego-r2-astra",
+      "controller": "astra",
+      "scenario": "rotated-lego",
+      "repeat": 2,
+      "success": true,
+      "latency_s": 22.78106009200019,
+      "penalized_s": 22.78106009200019,
+      "action_s": 20.78106009200019,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-onboarding-lego-r1-classic",
+      "controller": "classic",
+      "scenario": "onboarding-lego",
+      "repeat": 1,
+      "success": true,
+      "latency_s": 67.21846282099978,
+      "penalized_s": 67.21846282099978,
+      "action_s": 65.21846282099978,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-rotated-lego-r3-classic",
+      "controller": "classic",
+      "scenario": "rotated-lego",
+      "repeat": 3,
+      "success": true,
+      "latency_s": 45.293239687000096,
+      "penalized_s": 45.293239687000096,
+      "action_s": 43.293239687000096,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-cube-r2-astra",
+      "controller": "astra",
+      "scenario": "cube",
+      "repeat": 2,
+      "success": true,
+      "latency_s": 24.55654313500054,
+      "penalized_s": 24.55654313500054,
+      "action_s": 22.55654313500054,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-onboarding-lego-r1-astra",
+      "controller": "astra",
+      "scenario": "onboarding-lego",
+      "repeat": 1,
+      "success": true,
+      "latency_s": 25.152045426000768,
+      "penalized_s": 25.152045426000768,
+      "action_s": 23.152045426000768,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-onboarding-lego-r3-astra",
+      "controller": "astra",
+      "scenario": "onboarding-lego",
+      "repeat": 3,
+      "success": true,
+      "latency_s": 22.614455343000373,
+      "penalized_s": 22.614455343000373,
+      "action_s": 20.614455343000373,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-rotated-lego-r2-classic",
+      "controller": "classic",
+      "scenario": "rotated-lego",
+      "repeat": 2,
+      "success": true,
+      "latency_s": 45.18175806199906,
+      "penalized_s": 45.18175806199906,
+      "action_s": 43.18175806199906,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-onboarding-lego-r2-classic",
+      "controller": "classic",
+      "scenario": "onboarding-lego",
+      "repeat": 2,
+      "success": true,
+      "latency_s": 69.55439153100087,
+      "penalized_s": 69.55439153100087,
+      "action_s": 67.55439153100087,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-rotated-lego-r1-classic",
+      "controller": "classic",
+      "scenario": "rotated-lego",
+      "repeat": 1,
+      "success": true,
+      "latency_s": 130.67793159999928,
+      "penalized_s": 130.67793159999928,
+      "action_s": 128.67793159999928,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-onboarding-lego-r2-astra",
+      "controller": "astra",
+      "scenario": "onboarding-lego",
+      "repeat": 2,
+      "success": true,
+      "latency_s": 23.324882343000354,
+      "penalized_s": 23.324882343000354,
+      "action_s": 21.324882343000354,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-onboarding-lego-r3-classic",
+      "controller": "classic",
+      "scenario": "onboarding-lego",
+      "repeat": 3,
+      "success": true,
+      "latency_s": 69.39006303099995,
+      "penalized_s": 69.39006303099995,
+      "action_s": 67.39006303099995,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-cube-r1-astra",
+      "controller": "astra",
+      "scenario": "cube",
+      "repeat": 1,
+      "success": true,
+      "latency_s": 24.918091344999993,
+      "penalized_s": 24.918091344999993,
+      "action_s": 22.918091344999993,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    },
+    {
+      "trial": "matched-v4-cube-r3-astra",
+      "controller": "astra",
+      "scenario": "cube",
+      "repeat": 3,
+      "success": true,
+      "latency_s": 22.610347760000877,
+      "penalized_s": 22.610347760000877,
+      "action_s": 20.610347760000877,
+      "revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+      "valid_comparison": true
+    }
+  ],
+  "meets_benchmark_criteria": true,
+  "uncertainty": "Three repeats per scenario detect obvious regressions; they cannot establish population reliability or hardware performance."
+}

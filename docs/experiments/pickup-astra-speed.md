@@ -1,8 +1,60 @@
 # Pickup speed experiment
 
-Status: matched-v3 has a working baseline and 9/9 durable pickups with each
-controller, but its 44.785% median reduction misses the 50% gate. The requested
-goal remains unproven.
+Status: the complete matched-v4 campaign at `dbe4de1ad` passes the fixed speed
+and reliability gates: **53.313% lower median latency, 48.795 s to 22.781 s**,
+with 9/9 durable pickups for each controller. This is a simulator result across
+three repeats of three scenes, not a hardware or population-reliability claim.
+Final pickup-to-throw compatibility and video handoff are being completed.
+
+## Final matched result
+
+| Scenario | Classic median | Astra median | Durable successes, each |
+|---|---:|---:|---:|
+| Onboarding LEGO | 69.390 s | 23.325 s | 3/3 |
+| Rotated LEGO | 45.293 s | 21.975 s | 3/3 |
+| Cube | 47.632 s | 24.557 s | 3/3 |
+| All nine attempts per controller | 48.795 s | 22.781 s | 9/9 |
+
+Both successful-only and fixed-penalty all-attempt medians meet the predeclared
+50% gate. The gate is aggregate; cube's scenario median improves by 48.44% and
+does not individually halve. Every attempt passed the separate 20-second
+post-action retention check. A long first-provider response in the first classic
+rotated trial is retained in its 130.678 s result; later classic repeats took
+45.182 and 45.293 s. No trial was discarded or replaced.
+
+The [complete report](pickup-astra-speed/matched-v4-report.json) contains all
+18 attempts, source hashes, medians and fixed gates. The
+[reset audit](pickup-astra-speed/matched-v4-reset-source-audit.json) verifies
+identical recorded sources, reset-state spread below 1e-5 and the
+[predeclared plan](pickup-astra-speed/matched-v4-plan.json) fixes all scenarios,
+controller order and repeat 2 for the three original-speed comparison videos.
+Source hashes are reconstructed from frozen Git blobs, including the timing
+instrumentation, and every trial's physics rate passed the 0.98–1.02 range.
+
+The final candidate uses Astra/low for head localization, material and clearance,
+then a referenced wrist image with a box and image-space object axis. Code
+converts that axis to the bounded grasp angle. It overlaps head perception with
+the navigation fold, uses fresh feedback to shorten settling, and avoids a
+redundant head confirmation after three fresh optical-flow arrival frames while
+still requiring wrist recognition. Lower search moves preserve every joint's
+original travel bound at the same duration; a verified raised rigid grip avoids
+the final carry fold. Closing force, descent increments, final centering and
+committed closing/lifting durations remain unchanged. The shared rigid
+floor-close correction and truthful carry result apply to classic too.
+
+Validation on this production revision: 113 root tests, lint and diff checks;
+actual absent-target failure without a grasp; actual Stop during moving wrist
+alignment with loop exit 0.514 s after cancellation and no grasp started. Earlier
+inference cancellation verifies that a late worker response cannot dispatch
+motion. Independent read-only review found no actionable defects in the final
+delta. No physical robot was used.
+
+The final comparison used the coordinator-approved 290-call cumulative ceiling
+and unchanged $5 review/stop bound. All provider usage is retained; estimated
+cumulative list-price cost through this comparison is $2.9138445 across 275
+calls. The final campaign itself used 27 classic calls ($0.123048) and 18 Astra
+calls ($0.249300). Development
+pilots and earlier failed campaigns below remain separate from this result.
 
 ## Acceptance fixed before implementation
 
