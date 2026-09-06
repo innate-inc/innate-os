@@ -2,9 +2,11 @@
 # Copyright (c) 2026 Innate Inc
 """Create a generic agent-owned run and preserve its skill artifacts."""
 
+import fcntl
 import json
 import os
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -48,7 +50,25 @@ def active_run_id() -> str | None:
     return run["run_id"] if run is not None else None
 
 
+@contextmanager
+def _run_lock():
+    root = artifact_root()
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / ".run.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def start_run(agent_id: str) -> dict[str, Any]:
+    """Explicitly start a fresh run, including for external trial controllers."""
+    with _run_lock():
+        return _start_run_unlocked(agent_id)
+
+
+def _start_run_unlocked(agent_id: str) -> dict[str, Any]:
     started_at = datetime.now(timezone.utc)
     run_id = f"{started_at.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
     run = {
@@ -81,11 +101,25 @@ def write_artifact_set(kind: str, artifacts: dict[str, bytes], *, snapshot: bool
 
 
 class MissionRun(Skill):
-    """Start a fresh generic run shared by this agent's stateful skills."""
+    """Start or resume a run shared by this agent's stateful skills."""
 
-    def execute(self) -> SkillReturn:
-        run = start_run("household_orders_agent")
+    def execute(self, restart: bool = False) -> SkillReturn:
+        """Resume on retries; use restart=True only to explicitly begin a new task."""
+        if type(restart) is not bool:
+            self.fail("restart must be a boolean")
+        self.check_cancelled()
+        with _run_lock():
+            # A Stop may have landed while another process held the lock.
+            self.check_cancelled()
+            run = active_run()
+            if run is not None and not restart:
+                if run.get("agent_id") != "household_orders_agent":
+                    self.fail("Active mission belongs to a different agent; use restart=True for a new task")
+                code = "RUN_RESUMED"
+            else:
+                run = _start_run_unlocked("household_orders_agent")
+                code = "RUN_STARTED"
         return SkillOutput(
-            f"RUN_STARTED {json.dumps({'run_id': run['run_id']}, separators=(',', ':'))}",
+            f"{code} {json.dumps({'run_id': run['run_id']}, separators=(',', ':'))}",
             data={"run_id": run["run_id"]},
         )
