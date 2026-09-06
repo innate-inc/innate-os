@@ -265,7 +265,8 @@ class PickAnyObject(Skill):
         if self._pickup_policy is not None:
             self.mobility.stop()
             self.sleep(self._p["settle_s"])
-            observed = self._observe_pickup(prompt, self.main_image, "head")
+            head_image = self.main_image
+            observed = self._observe_pickup(prompt, head_image, "head")
             text = json.dumps(observed["detections"])
             # Perception overlaps the fold; finish it before any base search.
             # On cancellation/failure, execute's finally joins it before teardown.
@@ -294,7 +295,9 @@ class PickAnyObject(Skill):
         if cand is None:
             return None
         if self._pickup_policy is not None:
-            self._search_clearance = observed["detections"][cands.index(cand)]["search_clearance"]
+            plan = observed["detections"][cands.index(cand)]
+            self._search_clearance = plan["search_clearance"]
+            self._head_reference = {"image": head_image, "box_2d": plan["box_2d"]}
         u, v, grip = cand
         if grip is not None:
             lo, hi = GRIP_STRENGTH_RANGE
@@ -315,7 +318,14 @@ class PickAnyObject(Skill):
         if not image:
             raise SkillFailed(f"No {view} image for pickup")
         try:
-            return self._pickup_policy.locate(prompt, image, self.sleep, self.check_cancelled, view=view)
+            return self._pickup_policy.locate(
+                prompt,
+                image,
+                self.sleep,
+                self.check_cancelled,
+                view=view,
+                reference=getattr(self, "_head_reference", None) if view == "wrist" else None,
+            )
         except ValueError as error:
             raise SkillFailed(str(error)) from None
 
@@ -941,6 +951,7 @@ class PickAnyObject(Skill):
         self._unpress_grasp = True
         self._planned_roll = None
         self._search_clearance = "high"
+        self._head_reference = None
         self._nav_pending = False
         if controller == "astra":
             from innate_skills.pickup_policy import PickupPolicy
