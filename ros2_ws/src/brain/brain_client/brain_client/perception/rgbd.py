@@ -45,6 +45,8 @@ class RgbdObservation:
     generation: int = 0
     base_from_optical: tuple[float, ...] | None = None
     """Capture-time base_link transform: tx,ty,tz,qx,qy,qz,qw, or unavailable."""
+    odom_from_optical: tuple[float, ...] | None = None
+    """Capture-time camera pose in odom, for checking whether the view moved."""
 
     @classmethod
     def from_messages(cls, rgb, depth, info, received, *, now_ns, now_monotonic, max_age=0.5, generation=0):
