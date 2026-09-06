@@ -396,15 +396,15 @@ class CameraProvider(Node):
                     self._rgbd_cached = (marker, (rgb, depth[0], info[0]), observation)
             tf_buffer = self._tf_buffer
             if observation is not None and tf_buffer is not None:
-                try:
-                    transform = tf_buffer.lookup_transform(
-                        "base_link", observation.frame_id, Time(nanoseconds=stamp)
-                    ).transform
-                except TransformException:
-                    pass  # missing/bracketing TF is unavailable, never a latest pose
-                else:
+                for frame, field in (("base_link", "base_from_optical"), ("odom", "odom_from_optical")):
+                    try:
+                        transform = tf_buffer.lookup_transform(
+                            frame, observation.frame_id, Time(nanoseconds=stamp)
+                        ).transform
+                    except TransformException:
+                        continue  # missing/bracketing TF is unavailable, never a latest pose
                     t, q = transform.translation, transform.rotation
-                    observation = replace(observation, base_from_optical=(t.x, t.y, t.z, q.x, q.y, q.z, q.w))
+                    observation = replace(observation, **{field: (t.x, t.y, t.z, q.x, q.y, q.z, q.w)})
             if require_pose and (observation is None or observation.base_from_optical is None):
                 return None
             return (

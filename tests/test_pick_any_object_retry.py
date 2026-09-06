@@ -606,3 +606,78 @@ def test_wrist_tracker_uses_model_seed_and_known_material(monkeypatch, strength,
 
     monkeypatch.setattr("innate_skills.grasp_tracker.make_grasp_tracker", make)
     assert skill._new_wrist_tracker((10, 20, 30, 40), (25, 40), None) == (tracker, raw)
+
+
+@pytest.mark.parametrize(
+    "failure", [None, "head", "search_changed", "wrist_missing", "wrist_veto", "wrist_changed", "cancel"]
+)
+def test_metric_path_only_closes_after_fresh_head_and_final_wrist_checks(monkeypatch, failure):
+    import base64
+
+    from innate_skills import pickup_rgbd
+
+    skill = _skill(closes_empty=False)
+    point = (0.3, 0.0, 0.04)
+    checks = iter([point, None if failure == "search_changed" else point])
+    monkeypatch.setattr(
+        pickup_rgbd, "revalidate_material_point", lambda *a, **k: None if failure == "head" else next(checks)
+    )
+    monkeypatch.setattr(pickup_rgbd, "compact_upper_surface", lambda *a: point)
+    monkeypatch.setattr(pickup_rgbd, "same_wrist_patch", lambda *a: failure != "wrist_changed")
+    skill.rgbd = object()
+    skill._metric_reference = (
+        object(),
+        dict(grip_strength=0.35, search_clearance="low", box_2d=[100, 100, 300, 300], grasp_point_2d=[150, 200]),
+    )
+    events = []
+
+    def pose(z):
+        return SimpleNamespace(x=0.3, y=0.0, z=z, position=(0.3, 0.0, z), rpy=(0.0, 1.5708, 0.24))
+
+    arm = skill.manipulation
+    arm.pose = pose(0.1)
+    arm.torque_on = lambda: None
+    arm.reachable = lambda *a, **k: True
+
+    def move(x, y, z, **kw):
+        events.append(("move", z, kw["duration"]))
+        arm.pose = pose(z)
+
+    arm.move_to = move
+    skill._prepare_wrist_search = lambda *a: events.append(("search",))
+
+    def floor(*a):
+        arm.pose = pose(0.03)
+        events.append(("floor",))
+
+    skill._push_to_floor = floor
+    skill.wrist_image = "initial"
+    frames = iter([base64.b64encode(b"reference").decode(), base64.b64encode(b"fresh").decode()])
+    skill._next_wrist_hsv = lambda *a, **k: (None, None) if failure == "wrist_missing" else (object(), next(frames))
+
+    def verdict(*a):
+        events.append(("wrist",))
+        return {"detections": [{"box_2d": [100, 100, 300, 300], "aligned": failure != "wrist_veto"}]}
+
+    skill._observe_pickup = verdict
+    skill._arm_joints = lambda: [0.0] * 5 + [arm.GRIPPER_OPEN]
+
+    def cancel():
+        if failure == "cancel" and ("wrist",) in events:
+            raise InterruptedError("stop")
+
+    skill.check_cancelled = cancel
+    skill._close_twist_lift = lambda *a: events.append(("close",))
+    if failure:
+        with pytest.raises((exceptions.SkillFailed, InterruptedError)):
+            skill._grasp_rgbd("cube")
+        assert ("close",) not in events
+        if failure == "head":
+            assert not events
+        if failure == "search_changed":
+            assert events == [("search",)]
+    else:
+        skill._grasp_rgbd("cube")
+        assert events[-2:] == [("wrist",), ("close",)]
+        assert [e[1] for e in events if e[0] == "move"] == pytest.approx([0.1, 0.09, 0.08, 0.07, 0.06, 0.05])
+        assert [e[2] for e in events if e[0] == "move"] == [2.0, 0.5, 0.5, 0.5, 0.5, 0.5]

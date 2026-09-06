@@ -7,6 +7,7 @@ grasp (optional wrist visual-servo), verify by backing up.
 No depth camera — URDF + pinhole model.
 """
 
+import base64
 import json
 import math
 import os
@@ -270,7 +271,13 @@ class PickAnyObject(Skill):
         if self._pickup_policy is not None:
             self.mobility.stop()
             head_image = self._settled_head_image()
-            observed = self._observe_pickup(prompt, head_image, "head")
+            reference = None
+            if getattr(self, "_metric_pickup", False):
+                reference = self.wait_for(lambda: getattr(self, "rgbd", None), timeout=2)
+                if reference is None:
+                    raise SkillFailed("No fresh calibrated head depth for metric pickup")
+                head_image = base64.b64encode(reference.jpeg).decode("ascii")
+            observed = self._observe_pickup(prompt, head_image, "head_metric" if reference else "head")
             text = json.dumps(observed["detections"])
             # Perception overlaps the fold; finish it before any base search.
             # On cancellation/failure, execute's finally joins it before teardown.
@@ -302,6 +309,8 @@ class PickAnyObject(Skill):
             plan = observed["detections"][cands.index(cand)]
             self._search_clearance = plan["search_clearance"]
             self._head_reference = {"image": head_image, "box_2d": plan["box_2d"]}
+            if reference is not None:
+                self._metric_reference = (reference, plan)
         u, v, grip = cand
         if grip is not None:
             lo, hi = GRIP_STRENGTH_RANGE
@@ -369,7 +378,7 @@ class PickAnyObject(Skill):
                 self.sleep,
                 self.check_cancelled,
                 view=view,
-                reference=getattr(self, "_head_reference", None) if view == "wrist" else None,
+                reference=getattr(self, "_head_reference", None) if view in {"wrist", "wrist_verify"} else None,
             )
         except ValueError as error:
             raise SkillFailed(str(error)) from None
@@ -957,6 +966,8 @@ class PickAnyObject(Skill):
     def _grasp_at(self, prompt, xy):
         """Full grasp at floor xy (base_link)."""
         self.check_cancelled()  # the flow-to-wrist handoff must honor a pending Stop
+        if getattr(self, "_metric_pickup", False):
+            return self._grasp_rgbd(prompt)
         p = self._p
         x, y = self.manipulation.clamp_reach(xy[0] - p["grasp_x_off"], xy[1])
 
@@ -973,6 +984,126 @@ class PickAnyObject(Skill):
         self._push_to_floor(x, y, z, roll, pitch, yaw)
         self.check_cancelled()  # last exit before the fingers commit
         self._close_twist_lift(prompt, x, y, roll, pitch, yaw)
+
+    def _grasp_rgbd(self, prompt):
+        """Opt-in bounded compact rigid grasp, with a fresh final wrist veto.
+
+        Unsupported observations abort this prototype. They must never silently
+        enter the affine tracker or the blind grasp path.
+        """
+        from innate_skills.pickup_rgbd import compact_upper_surface, revalidate_material_point, same_wrist_patch
+
+        reference, plan = self._metric_reference
+        if plan["grip_strength"] != 0.35 or plan["search_clearance"] not in {"flat", "low"}:
+            raise SkillFailed("Metric pickup requires a compact rigid low/flat target")
+        current = self.rgbd
+        center = revalidate_material_point(
+            reference, current, plan["box_2d"], plan["grasp_point_2d"], now_ns=time.time_ns()
+        )
+        if center is None or compact_upper_surface(current, plan["box_2d"], plan["grasp_point_2d"]) is None:
+            raise SkillFailed("Head proposal changed or is outside the compact metric envelope")
+        x, y, top = center
+        self.logger.info(f"[PickAnyObject] fresh metric upper center: {center}")
+        self.manipulation.torque_on()
+        self._prepare_wrist_search(math.atan2(y, x))
+        # Search motion can occlude or disturb the target. Recheck the original
+        # upper material against new sensors before the metric arm motion.
+        current = self.rgbd
+        confirmed = revalidate_material_point(
+            reference, current, plan["box_2d"], plan["grasp_point_2d"], now_ns=time.time_ns()
+        )
+        if confirmed is None or math.dist(center, confirmed) > 0.008:
+            raise SkillFailed("Metric target changed during the search move")
+        x, y, top = confirmed
+        start = self.manipulation.pose
+        stop_z = self._p["wrist_stop_z"]
+        if (
+            not all(math.isfinite(v) for v in start.position)
+            or math.hypot(start.x - x, start.y - y) > 0.04
+            or not (stop_z <= start.z <= stop_z + 0.05 + 1e-3)
+            or start.z - top < 0.025
+        ):
+            raise SkillFailed("Metric target is outside the existing low search envelope")
+        # ee_link lies on the tool centerline (URDF ee_joint x=.091838).
+        # Vertical tool orientation removes a pitch-dependent XY offset.
+        roll, pitch, yaw = 0.0, math.pi / 2, math.atan2(y + 0.05285, x - 0.086)
+        floor = self._p["floor_z"]
+        if not all(
+            self.manipulation.reachable(x, y, z, roll=roll, pitch=pitch, yaw=yaw) for z in (start.z, stop_z, floor)
+        ):
+            raise SkillFailed("Vertical metric grasp is unreachable")
+        # Use the original hover duration for XY/orientation, then the existing
+        # centimetre-per-half-second descent. Never shorten physical settling.
+        self.manipulation.move_to(
+            x,
+            y,
+            start.z,
+            roll=roll,
+            pitch=pitch,
+            yaw=yaw,
+            duration=self._p["hover_s"],
+            grip=self.manipulation.GRIPPER_OPEN,
+            tolerance_xy=0.008,
+            tolerance_z=0.008,
+        )
+        z = start.z
+        while z > stop_z + 1e-6:
+            self.check_cancelled()
+            z = max(stop_z, z - self._p["wrist_z_step"])
+            self.manipulation.move_to(
+                x,
+                y,
+                z,
+                roll=roll,
+                pitch=pitch,
+                yaw=yaw,
+                duration=self._p["wrist_move_s"],
+                grip=self.manipulation.GRIPPER_OPEN,
+                tolerance_xy=0.008,
+                tolerance_z=0.008,
+            )
+        self._push_to_floor(x, y, z, roll, pitch, yaw)
+        pose = self.manipulation.pose
+        if (
+            not all(math.isfinite(v) for v in (*pose.position, *pose.rpy))
+            or math.hypot(pose.x - x, pose.y - y) > 0.008
+            or abs(pose.z - floor) > 0.008
+        ):
+            raise SkillFailed("Metric pre-close pose did not settle")
+        before = self.wrist_image
+        decoded, frame = self._next_wrist_hsv(before, timeout=0.5)
+        if decoded is None or frame is before or frame is None:
+            raise SkillFailed("No new wrist frame at metric endpoint")
+        verdict = self._observe_pickup(prompt, frame, "wrist_verify")["detections"]
+        if len(verdict) != 1 or not verdict[0]["aligned"]:
+            raise SkillFailed("Fresh wrist view did not confirm target between open pads")
+        # Inference is historical by completion. Require another newly delivered
+        # frame with unchanged target/pads and unchanged arm before committing.
+        before = self.wrist_image
+        decoded, fresh = self._next_wrist_hsv(before, timeout=0.5)
+        after = self.manipulation.pose
+        if (
+            decoded is None
+            or fresh is None
+            or fresh is before
+            or not all(math.isfinite(v) for v in (*after.position, *after.rpy))
+            or math.dist(pose.position, after.position) > 0.002
+            or max(abs(a - b) for a, b in zip(pose.rpy, after.rpy, strict=True)) > 0.01
+            or not same_wrist_patch(base64.b64decode(frame), base64.b64decode(fresh), verdict[0]["box_2d"])
+        ):
+            raise SkillFailed("Wrist endpoint changed during the final decision")
+        j6 = self._arm_joints()[5]
+        if not math.isfinite(j6) or j6 < self.manipulation.GRIPPER_OPEN - 0.05:
+            raise SkillFailed("Metric endpoint claw is not fully open")
+        self.check_cancelled()
+        # Retain the ordinary close/lift/encoder checks. A confirmed empty close
+        # cannot retry through the unrelated image tracker in this prototype.
+        original_params = self._p
+        self._p = {**original_params, "grasp_retries": 0.0}
+        try:
+            self._close_twist_lift(prompt, x, y, roll, pitch, yaw)
+        finally:
+            self._p = original_params
 
     def _grasp_verified(self, prompt, approach: FloorApproach):
         """Verify a lifted grasp, backing up only when mechanics are unclear.
@@ -1057,14 +1188,16 @@ class PickAnyObject(Skill):
         """Pick up `prompt` from the floor."""
         if self._proxy is None:
             self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
-        if controller not in {"astra", "classic"}:
-            self.fail("Pickup controller must be astra or classic")
+        if controller not in {"astra", "classic", "rgbd"}:
+            self.fail("Pickup controller must be astra, classic or rgbd")
+        self._metric_pickup = controller == "rgbd"
+        self._metric_reference = None
         self._pickup_policy = None
         self._planned_roll = None
         self._search_clearance = "high"
         self._head_reference = None
         self._nav_pending = False
-        if controller == "astra":
+        if controller in {"astra", "rgbd"}:
             from innate_skills.pickup_policy import PickupPolicy
 
             from brain_client.brain.openai_transport import pick_openai_transport

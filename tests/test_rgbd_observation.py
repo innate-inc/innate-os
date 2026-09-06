@@ -171,6 +171,11 @@ def test_provider_association_and_calibration_invalidation_with_ros_messages():
         static.transform.rotation.w = 1.0
         static.transform.translation.x = 0.03
         provider._tf_buffer.set_transform_static(static, "test")
+        odom = TransformStamped()
+        odom.header.frame_id, odom.child_frame_id = "odom", "base_link"
+        odom.transform.rotation.w = 1.0
+        odom.transform.translation.x = 4.0
+        provider._tf_buffer.set_transform_static(odom, "test")
         for dt, x in ((-100_000_000, 0.0), (100_000_000, 2.0)):
             transform = TransformStamped()
             transform.header.frame_id, transform.child_frame_id = "base_link", "head"
@@ -179,6 +184,7 @@ def test_provider_association_and_calibration_invalidation_with_ros_messages():
             transform.transform.translation.x = x
             provider._tf_buffer.set_transform(transform, "test")
         posed = provider.rgbd_observation(require_pose=True)
+        assert posed.odom_from_optical[0] == pytest.approx(5.03)
         assert posed.base_from_optical[0] == pytest.approx(1.03)  # capture-time interpolation, not latest2.03
         from std_msgs.msg import Int64
 
