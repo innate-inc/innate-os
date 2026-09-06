@@ -79,6 +79,7 @@ class CameraProvider(Node):
         self._epoch_sub = None
         self._stream_epoch = None
         self._rgbd_generation = 0
+        self._wrist_generation = 0
         self._rgbd_cached = None
         self._rgbd_capture_after_ns = 0
         self._tf_buffer = None
@@ -243,11 +244,13 @@ class CameraProvider(Node):
             self.destroy_subscription(self._epoch_sub)
             self._epoch_sub = None
         with self._rgbd_lock:
-            if set(dead) & {"main", "depth", "wrist"}:
+            if "main" in dead or "depth" in dead:
                 self._rgbd_generation += 1
+                self._rgbd_cached = None
+            if "wrist" in dead:
+                self._wrist_generation += 1
                 self._wrist_capture = None
                 self._wrist_camera_raw = None
-                self._rgbd_cached = None
             for feed in dead:
                 if feed in self._rgbd_frames:
                     self._rgbd_frames[feed].clear()
@@ -280,7 +283,7 @@ class CameraProvider(Node):
                 stamp_ns(msg),
                 time.monotonic(),
                 self.get_clock().now().nanoseconds,
-                self._rgbd_generation,
+                self._wrist_generation,
             )
             self._wrist_camera_raw = jpeg
 
@@ -308,7 +311,7 @@ class CameraProvider(Node):
 
     def wrist_generation_is_current(self, generation):
         with self._rgbd_lock:
-            return generation == self._rgbd_generation and self._wrist_capture is not None
+            return generation == self._wrist_generation and self._wrist_capture is not None
 
     @property
     def last_depth_image(self) -> "np.ndarray | None":
@@ -337,6 +340,7 @@ class CameraProvider(Node):
         # Called with the cache lock held. In-flight pre-reset messages are also
         # excluded by capture time, even if they arrive after this notification.
         self._rgbd_generation += 1
+        self._wrist_generation += 1
         self._wrist_capture = None
         self._wrist_camera_raw = None
         self._rgbd_cached = None
