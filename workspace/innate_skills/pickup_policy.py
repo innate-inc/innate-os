@@ -28,8 +28,9 @@ TOOL = {
                         "roll": {"type": "number"},
                         "grip_strength": {"type": "number"},
                         "grasp_style": {"type": "string", "enum": ["floor", "unpress"]},
+                        "low_search": {"type": "boolean"},
                     },
-                    "required": ["box_2d", "roll", "grip_strength", "grasp_style"],
+                    "required": ["box_2d", "roll", "grip_strength", "grasp_style", "low_search"],
                 },
             }
         },
@@ -54,6 +55,10 @@ plastic, wood, ceramic or metal need 0.30-0.40. This selects the existing handli
 style; software owns the force limits. For thin rigid objects choose grasp_style
 floor: close at the existing floor limit. For fabric or a target whose fingers
 need unpressing choose unpress, the original 1cm lift before closing.
+For the head view, low_search may be true only for a clearly small, low rigid
+object with clear space at a 10cm wrist height (roughly under6cm tall). Use false
+for tall, bulky, soft or uncertain objects; they keep the original high search.
+For wrist views use false; the head observation already chose search clearance.
 
 The executor tracks your selected object through fresh camera frames, aligns it,
 and performs bounded motions at unchanged limits. You choose WHAT to grasp, its
@@ -76,7 +81,13 @@ def validate_observation(value):
     if not isinstance(detections, list) or len(detections) > 20:
         raise ValueError("Invalid pickup detections")
     for detection in detections:
-        if not isinstance(detection, dict) or set(detection) != {"box_2d", "roll", "grip_strength", "grasp_style"}:
+        if not isinstance(detection, dict) or set(detection) != {
+            "box_2d",
+            "roll",
+            "grip_strength",
+            "grasp_style",
+            "low_search",
+        }:
             raise ValueError("Invalid pickup detection")
         box = detection["box_2d"]
         if not _numbers(box, 4) or not (0 <= box[0] < box[2] <= 1000 and 0 <= box[1] < box[3] <= 1000):
@@ -87,6 +98,8 @@ def validate_observation(value):
             raise ValueError("Invalid pickup material strength")
         if detection["grasp_style"] not in {"floor", "unpress"}:
             raise ValueError("Unknown pickup closing style")
+        if type(detection["low_search"]) is not bool:
+            raise ValueError("Invalid pickup search clearance")
     return value
 
 

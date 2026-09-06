@@ -200,6 +200,7 @@ def test_lower_search_never_increases_any_joint_travel_at_the_same_duration():
         skill = _skill(closes_empty=False)
         skill._pickup_policy = object()
         skill.joint_states.position = [*start, skill.manipulation.GRIPPER_OPEN]
+        skill._low_search_allowed = True
         skill.sleep = lambda _: None
         commands = []
         skill.manipulation.move_joints = lambda joints, duration, commands=commands: commands.append((joints, duration))

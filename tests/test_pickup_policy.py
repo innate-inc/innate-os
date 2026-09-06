@@ -13,7 +13,7 @@ spec.loader.exec_module(policy)
 
 
 def test_observation_rejects_invalid_boxes_and_unsafe_grasp_choices():
-    plan = dict(box_2d=[100, 200, 300, 400], roll=-1.5, grip_strength=0.35, grasp_style="floor")
+    plan = dict(box_2d=[100, 200, 300, 400], roll=-1.5, grip_strength=0.35, grasp_style="floor", low_search=True)
     assert policy.validate_observation({"detections": [plan]})["detections"] == [plan]
     assert policy.validate_observation({"detections": []}) == {"detections": []}
     for update in (
@@ -23,6 +23,7 @@ def test_observation_rejects_invalid_boxes_and_unsafe_grasp_choices():
         {"roll": 1.6},
         {"grip_strength": 0.7},
         {"grasp_style": "drop"},
+        {"low_search": "yes"},
     ):
         with pytest.raises(ValueError):
             policy.validate_observation({"detections": [{**plan, **update}]})
