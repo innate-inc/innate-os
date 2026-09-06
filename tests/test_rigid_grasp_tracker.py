@@ -112,3 +112,22 @@ def test_nonfinite_reverse_registration_is_rejected(monkeypatch):
     assert tracker.update(hsv(SEED)) is None
     assert tracker.guess == ANCHOR
     assert np.array_equal(tracker.template, before)
+
+
+def test_low_contrast_registration_tolerates_blur_without_anchor_drift():
+    background = np.uint8(205 + 4 * np.sin(X / 13) * np.cos(Y / 17))
+    material = np.uint8(235 + 0.02 * X + 0.01 * Y)
+    mask = np.zeros_like(MASK)
+    cv2.rectangle(mask, (250, 195), (389, 334), 255, -1)
+    anchor = np.array([310.0, 264.0, 1.0])
+    tracker = RigidGraspTracker(hsv(np.where(mask, material, background)), (248, 193, 144, 144), anchor[:2])
+    for step in range(1, 9):
+        transform = cv2.getRotationMatrix2D((320, 264), step * 0.6, 1 + step * 0.012)
+        transform[:, 2] += [step * 0.7, -step * 0.4]
+        coverage = cv2.warpAffine(mask.astype(np.float32) / 255, transform, (640, 480))
+        surface = cv2.warpAffine(material, transform, (640, 480))
+        image = np.uint8(coverage * surface + (1 - coverage) * np.roll(background, step * 2, axis=1))
+        image = cv2.GaussianBlur(image, (0, 0), 2.0 if step % 4 == 0 else 0.3)
+        point = tracker.update(hsv(image))
+        assert point is not None, (step, tracker.reason)
+        assert np.linalg.norm(np.asarray(point) - transform @ anchor) < 1
