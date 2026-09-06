@@ -1000,8 +1000,10 @@ class PickAnyObject(Skill):
         center = revalidate_material_point(
             reference, current, plan["box_2d"], plan["grasp_point_2d"], now_ns=time.time_ns()
         )
-        if center is None or compact_upper_surface(current, plan["box_2d"], plan["grasp_point_2d"]) is None:
-            raise SkillFailed("Head proposal changed or is outside the compact metric envelope")
+        if center is None:
+            raise SkillFailed("Head RGB-D proposal failed fresh-view revalidation")
+        if compact_upper_surface(current, plan["box_2d"], plan["grasp_point_2d"]) is None:
+            raise SkillFailed("Head RGB-D surface is outside the compact metric envelope")
         x, y, top = center
         self.logger.info(f"[PickAnyObject] fresh metric upper center: {center}")
         self.manipulation.torque_on()
