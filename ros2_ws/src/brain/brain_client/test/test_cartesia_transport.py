@@ -168,7 +168,7 @@ def test_proxy_precedes_direct_even_in_public_demo_and_retains_shared_client(mon
 
 
 @pytest.mark.parametrize("route", ["direct", "proxy"])
-@pytest.mark.parametrize("failure", ["unauthorized", "warmup_http", "partial_stream", "warmup_exception"])
+@pytest.mark.parametrize("failure", ["unauthorized", "partial_stream", "warmup_exception"])
 def test_failures_expose_only_status_or_generic_error_without_failover(monkeypatch, route, failure):
     requests = []
     streams = []
@@ -197,7 +197,7 @@ def test_failures_expose_only_status_or_generic_error_without_failover(monkeypat
     transport, _backend = cartesia.pick_tts(proxy)
     assert transport is not None
     handler, messages, _audio = handler_for(transport)
-    expected = f"cartesia {route}: " + ("HTTP 401" if failure in {"unauthorized", "warmup_http"} else "request failed")
+    expected = f"cartesia {route}: " + ("HTTP 401" if failure == "unauthorized" else "request failed")
     try:
         with pytest.raises(RuntimeError) as error:
             if failure.startswith("warmup"):
@@ -220,6 +220,34 @@ def test_failures_expose_only_status_or_generic_error_without_failover(monkeypat
             proxy.close()
         else:
             assert clients[0].is_closed
+
+
+@pytest.mark.parametrize("route", ["direct", "proxy"])
+def test_warmup_ignores_http_status_without_logging_provider_details(monkeypatch, route):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(405, text=CANARY, headers={"X-Provider-Details": CANARY})
+
+    proxy = None
+    if route == "direct":
+        direct_factory(monkeypatch, respond)
+        transport = cartesia.direct_tts(CANARY)
+    else:
+        proxy = proxy_client(respond)
+        transport = cartesia.proxy_tts(proxy)
+    handler, messages, _audio = handler_for(transport)
+    try:
+        transport.warmup()
+        handler._warmup_connection()
+        assert [request.method for request in requests] == ["HEAD", "HEAD"]
+        assert any("pre-warmed" in message for message in messages)
+        assert all(CANARY not in message and "failed" not in message for message in messages)
+    finally:
+        transport.close()
+        if proxy is not None:
+            proxy.close()
 
 
 @pytest.mark.parametrize("flag", ["1", " true ", "YES"])

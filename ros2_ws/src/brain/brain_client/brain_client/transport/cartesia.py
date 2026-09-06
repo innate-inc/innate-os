@@ -107,7 +107,7 @@ def proxy_tts(proxy: ProxyClient) -> TtsTransport:
     def warmup() -> None:
         # Any request to the proxy host warms httpx's connection pool.
         with _safe_errors("proxy"):
-            proxy.get_sync_client().head(proxy.proxy_url).raise_for_status()
+            proxy.get_sync_client().head(proxy.proxy_url)
 
     # close is a no-op: the node owns the ProxyClient and shares it with the
     # brain and STT, so closing it here would cut those off mid-run.
@@ -149,7 +149,8 @@ def direct_tts(api_key: str) -> TtsTransport:
     def warmup() -> None:
         _require_private_session()
         with _safe_errors("direct"):
-            client.head(DIRECT_URL).raise_for_status()
+            # The bytes endpoint can reject HEAD (405) after warming TLS.
+            client.head(DIRECT_URL)
 
     def close() -> None:
         with _safe_errors("direct"):
