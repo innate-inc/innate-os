@@ -183,7 +183,7 @@ class PickAnyObject(Skill):
     (e.g. prompt='the white sock', 'a red cup'). The robot localizes the
     object metrically with the head camera, drives above it, grasps, and
     verifies the grasp by backing up and checking the floor. The arm is
-    returned to rest either way."""
+    returned to a carry posture when holding, or rest after a miss."""
 
     manipulation: Manipulation
     mobility: Mobility

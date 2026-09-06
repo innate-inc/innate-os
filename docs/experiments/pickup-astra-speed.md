@@ -228,3 +228,35 @@ changes rather than blindly relaxing color matching. The bounded continuation
 allows 240 cumulative provider calls, retaining the $5 cost review/stop bound
 and mandatory complete usage accounting; the coordinator authorized this modest
 extension before the next campaign.
+
+## Shared baseline correction and final candidate pilots
+
+The original matched-v2 baseline failed its per-scenario reliability gate. The
+shared correction at `a53d39dbc` skips the 1 cm pre-close lift for known rigid
+objects in both controllers, retaining the original floor and force limits.
+Classic pilots then held the onboarding LEGO, rotated LEGO and cube for 20 seconds
+at 68.109, 44.611 and 47.034 seconds end to end respectively. These are pilots,
+not a substitute for a complete matched baseline.
+
+Candidate changes through `3607fed2e` preserve the SDK's verified gripper-open
+recovery while combining open with search, choose bounded lower search poses
+from the model's clearance classification, and use the last accepted head image
+as an identity reference in the wrist request. Wrist boxes always refer to the
+current wrist image. This recovered a cube whose color was washed out by glare.
+Fresh head encoder and stationary odometry samples spanning at least 150 ms,
+followed by a new camera frame, can finish the head settling wait early. Missing,
+stale, moving or invalid feedback retains the original 1.2 second wait. Closing
+and lifting durations, preload and settling waits remain unchanged.
+
+The three v5 development pilots all passed the 20 second hold gate: LEGO 24.742 s,
+rotated LEGO 23.304 s and cube 26.500 s. The first LEGO pilot used the shorter prompt
+`the red LEGO`; a further pilot uses the frozen scenario's exact
+`the red LEGO brick` prompt before the matched-v3 campaign. All matched trials
+use `scenarios.json` exactly and the same frozen source hashes for both paths.
+
+`negative-v5-wrist-stop` confirms real joint motion between wrist localization
+and Stop, then exits the wrist stage 0.431 seconds after the acknowledged cancel
+request. No grasp starts; only the existing safe arm teardown follows. The
+server returns ROS status 4 with `success=true` and `success_type=cancelled`;
+the latter is authoritative, and the benchmark rejects this as a pickup success.
+The earlier absent-target and inference-cancel recordings remain retained.
