@@ -290,3 +290,12 @@ blind grasps keep head confirmation. Neither the wrist recognition requirement
 nor the final centering, force, descent, cancellation or hold gates is relaxed.
 These are candidate changes awaiting real pilots and a new complete comparison,
 not adjustments to the frozen matched-v3 result.
+
+
+The v6 pilots retained all three objects for20seconds, but provider latency
+left insufficient timing margin. The next candidate splits the same forced
+Astra tool by view: head output contains box, material handling and clearance;
+wrist output contains only box and roll, using the accepted head material.
+The executor already owns rigid floor closing and soft unpressing, so the
+redundant model closing-style choice is removed. The model, reasoning effort,
+reference images, force/motion limits, fresh-frame checks and scorer stay fixed.
