@@ -100,6 +100,18 @@ storage.clear();const hardware=simulator();ui=hardware.mount(false);await flush(
 storage.set(FIRST_RUN_KEY,'{"id":"put_it_away","phase":"playing","attemptId":"broken"}');assert.equal(readFirstRun(),null);
 console.log("ok - first missions: all choices, exact attempt, natural chat, reload, skip, and hardware guard");
 
+// A denied write still preserves this tab's attempt across route remounts.
+storage.clear();
+const setItemBeforeDenial=localStorage.setItem;
+localStorage.setItem=()=>{throw Error("Storage denied");};
+const denied=simulator();
+ui=denied.mount();ui.choose("put_it_away");await flush();
+ui.flow.destroy();ui=denied.mount();await flush();
+assert.equal(denied.calls.starts.length,1);
+ui.skip();await flush();ui.flow.destroy();ui=denied.mount();
+assert.equal(ui.flow.isActive(),false);ui.flow.destroy();
+localStorage.setItem=setItemBeforeDenial;
+
 // Terminal completion travels through the pinned parent, across container origins.
 for (const mode of ["fresh", "completed", "playing", "locked"]) {
   storage.clear();

@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Innate Inc
 // The browser owns first-run participation; the world owns mission success.
 import { WEBSOCKET_STATUS_TOPIC } from "../constants.js";
-import { FIRST_RUN_KEY, FIRST_RUN_REQUEST_EVENT, markOnboardingSeen, publishFirstRunCompletion, readFirstRun, shouldAutoStartOnboarding } from "../onboarding.js";
+import { FIRST_RUN_REQUEST_EVENT, markOnboardingSeen, publishFirstRunCompletion, readFirstRun, saveFirstRun, shouldAutoStartOnboarding } from "../onboarding.js";
 
 export const INTRO_AGENT_ID = "intro_agent";
 export const FIRST_MISSIONS = [
@@ -47,7 +47,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   root.append(overlay);
 
   function persist() {
-    try { localStorage.setItem(FIRST_RUN_KEY, JSON.stringify(saved)); } catch { /* in-memory flow still works */ }
+    saveFirstRun(saved);
   }
   const mission = () => FIRST_MISSIONS.find(({id}) => id === saved?.id);
   function paintVisibility() {

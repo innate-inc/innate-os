@@ -21,8 +21,20 @@ export const FIRST_RUN_REQUEST_EVENT = "innate:first-run-request";
 const COMPLETION_CHANNEL = "innate:first-mission:v1";
 /** @type {{phase:string}|null} */
 let inheritedCompletion = null;
+/** @type {any} */
+let unstoredFirstRun = null;
 /** @type {Promise<void>|undefined} */
 let completionReady;
+
+export function saveFirstRun(/** @type {any} */ saved) {
+  try {
+    localStorage.setItem(FIRST_RUN_KEY, JSON.stringify(saved));
+    unstoredFirstRun = null;
+  } catch {
+    // Storage denial cannot make a route remount replay this tab's mission.
+    unstoredFirstRun = saved;
+  }
+}
 
 function embeddingOrigin() {
   if (window.parent === window || !document.referrer) return null;
@@ -74,6 +86,7 @@ export function initializeFirstRunCompletion() {
 }
 
 export function readFirstRun() {
+  if (unstoredFirstRun) return unstoredFirstRun;
   try {
     const saved = JSON.parse(localStorage.getItem(FIRST_RUN_KEY) || "null");
     if (!saved || typeof saved !== "object") return inheritedCompletion;
