@@ -11,12 +11,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workspace"))
 from innate_skills.pickup_visual_action import fresh, trajectory, unchanged, validate_action
 
 
-def action(kind="move", **kw):
+def action(kind="floor", **kw):
     return dict(
         box_2d=[200, 200, 600, 600],
         action=kind,
-        delta_xyz=[0, 0, -0.07] if kind == "move" else [0, 0, 0],
-        delta_rpy=[0, 0.48, -0.24] if kind == "move" else [0, 0, 0],
+        delta_xy_m=[0, 0],
         aligned=kind == "close",
         **kw,
     )
@@ -24,26 +23,26 @@ def action(kind="move", **kw):
 
 def test_bounded_actions_and_interpolated_pace():
     a = action()
-    path = trajectory((0.30, 0, 0.10), (0, 0.82, 0.24), a)
+    path = trajectory((0.30, 0, 0.10), (0, 0.82, 0.24), a, {"floor_z": 0.03, "arm_pitch": 1.3})
     assert len(path) == 7
     assert path[-1][2] == pytest.approx(0.03)
     assert all(abs(p[2] - q[2]) <= 0.010001 for p, q in zip([(0, 0, 0.10)] + path, path, strict=False))
     for update in [
-        dict(delta_xyz=[True, 0, 0]),
-        dict(delta_xyz=[float("nan"), 0, 0]),
-        dict(delta_xyz=[0.05, 0, 0]),
-        dict(delta_rpy=[0, 0, 0.6]),
+        dict(delta_xy_m=[True, 0]),
+        dict(delta_xy_m=[float("nan"), 0]),
+        dict(delta_xy_m=[0.05, 0]),
+        dict(delta_xy_m=[0, 0, 0]),
         dict(aligned=True),
         dict(action="dance"),
     ]:
         with pytest.raises(ValueError):
             validate_action({**a, **update})
     with pytest.raises(ValueError):
-        trajectory((0.30, 0, 0.05), (0, 0.82, 0.24), a)
+        trajectory((0.30, 0, 0.15), (0, 0.82, 0.24), a, {"floor_z": 0.03, "arm_pitch": 1.3})
     with pytest.raises(ValueError):
         validate_action({**action("close"), "aligned": False})
     with pytest.raises(ValueError):
-        validate_action({**action("close"), "delta_xyz": [0, 0, 0.001]})
+        validate_action({**action("close"), "delta_xy_m": [0, 0.001]})
 
 
 def frame(image=None):
@@ -354,8 +353,22 @@ def test_visual_request_crops_only_identity_reference_and_remaps_box():
     jpeg = base64.b64decode(content[2]["image_url"].split(",")[1])
     assert cv2.imdecode(np.frombuffer(jpeg, np.uint8), 1).shape == (240, 160, 3)
     assert "Ignore the robot, fingers" not in body["instructions"]
-    assert "floor_grasp_precondition" in body["instructions"]
+    assert "floor_grasp_ready" in body["instructions"]
     from innate_skills.pickup_visual_action import identity_reference
 
     invalid = {**reference, "box_2d": [0, 0, 0, 1]}
     assert identity_reference(invalid) is invalid
+
+
+def test_floor_preset_owns_posture_and_shift_preserves_it():
+    params = {"floor_z": 0.03, "arm_pitch": 1.3}
+    floor_action = {**action(), "delta_xy_m": [0.01, 0.005]}
+    path = trajectory((0.3, 0, 0.0985115153826579), (-0.05, 0.827, 0.206), floor_action, params)
+    assert path[-1] == pytest.approx((0.31, 0.005, 0.03, 0, 1.3, 0))
+    shift = {**action("shift"), "delta_xy_m": [0.005, 0]}
+    path = trajectory((0.3, 0, 0.031), (0.234, 1.308, 0.242), shift, params)
+    assert path[-1] == pytest.approx((0.305, 0, 0.031, 0.234, 1.308, 0.242))
+    with pytest.raises(ValueError):
+        trajectory((0.3, 0, 0.10), (0, 0.82, 0.6), action(), params)
+    with pytest.raises(ValueError):
+        validate_action(action("shift"))

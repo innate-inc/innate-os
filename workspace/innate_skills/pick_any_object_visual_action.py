@@ -9,7 +9,6 @@ from innate_skills.pick_any_object import PickAnyObject
 from innate_skills.pickup_visual_action import (
     POSITION_TOLERANCE_M,
     at_floor_grasp,
-    floor_grasp_precondition,
     fresh,
     inside_envelope,
     trajectory,
@@ -84,8 +83,6 @@ class PickAnyObjectVisualAction(PickAnyObject):
             if not math.isfinite(joints[5]) or joints[5] < self.manipulation.GRIPPER_OPEN - 0.05:
                 raise SkillFailed("Visual action requires a verified open claw")
             frame = self._fresh_stationary_frame()
-            # Check two freshly captured views before asking, as well as after.
-            frame = self._stable_after_decision(frame, pose)
             try:
                 result = self._pickup_policy.locate(
                     prompt,
@@ -95,10 +92,11 @@ class PickAnyObjectVisualAction(PickAnyObject):
                     view="wrist_action",
                     reference=self._head_reference,
                     state={
-                        "position_xyz_m": list(pose.position),
+                        "position_xyz_m": [round(v, 3) for v in pose.position],
                         "rpy_rad": [round(v, 3) for v in pose.rpy],
                         "claw_angle_rad": round(joints[5], 3),
-                        "floor_grasp_precondition": floor_grasp_precondition(self._p),
+                        "floor_grasp_ready": at_floor_grasp(pose.position, pose.rpy, self._p),
+                        "floor_drop_m": round(max(0.0, pose.position[2] - self._p["floor_z"]), 3),
                         "moves_remaining": MAX_MOVES - moves,
                         "wrist_decisions_remaining": MAX_WRIST_DECISIONS - decision,
                     },
@@ -107,11 +105,10 @@ class PickAnyObjectVisualAction(PickAnyObject):
                 if len(result) != 1 or result[0]["action"] == "abort":
                     raise SkillFailed("Visual action is uncertain; preserving open posture")
                 action = result[0]
-                self._stable_after_decision(frame, pose)
-                if action["action"] == "move":
+                if action["action"] in {"floor", "shift"}:
                     if moves >= MAX_MOVES:
                         raise SkillFailed("Visual movement budget exhausted")
-                    path = trajectory(pose.position, pose.rpy, action)
+                    path = trajectory(pose.position, pose.rpy, action, self._p)
                     for p in path:
                         self.check_cancelled()
                         if not self.manipulation.reachable(*p[:3], roll=p[3], pitch=p[4], yaw=p[5]):
@@ -133,6 +130,7 @@ class PickAnyObjectVisualAction(PickAnyObject):
                         self.sleep(0)
                     moves += 1
                     continue
+                self._stable_after_decision(frame, pose)
                 # A close decision follows no further alignment/floor movement.
                 # Once committed, existing close/lift is deliberately non-cancellable.
                 j6 = self._arm_joints()[5]

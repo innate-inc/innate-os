@@ -28,9 +28,8 @@ def _tool(view):
     if view == "wrist_action":
         properties = {
             "box_2d": properties["box_2d"],
-            "action": {"type": "string", "enum": ["move", "close", "abort"]},
-            "delta_xyz": {"type": "array", "items": {"type": "number"}},
-            "delta_rpy": {"type": "array", "items": {"type": "number"}},
+            "action": {"type": "string", "enum": ["floor", "shift", "close", "abort"]},
+            "delta_xy_m": {"type": "array", "items": {"type": "number"}},
             "aligned": {"type": "boolean"},
         }
     return {
@@ -132,7 +131,7 @@ def validate_observation(value, view):
     elif view == "wrist_verify":
         fields = {"box_2d", "aligned"}
     if view == "wrist_action":
-        fields = {"box_2d", "action", "delta_xyz", "delta_rpy", "aligned"}
+        fields = {"box_2d", "action", "delta_xy_m", "aligned"}
         if len(detections) > 1:
             raise ValueError("Expected at most one visual action")
     for detection in detections:
