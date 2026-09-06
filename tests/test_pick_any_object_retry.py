@@ -212,11 +212,20 @@ def test_planned_descent_keeps_small_steps_final_confirmation_and_cancel_points(
 def test_lower_search_never_increases_any_joint_travel_at_the_same_duration():
     from innate_skills.pick_any_object import NAV_ARM, WRIST_SEARCH_ARM
 
-    for start in (NAV_ARM, [0, 0.2, 0.1, 1.0, -0.0491]):
+    cases = (
+        (NAV_ARM, "flat", 0.35, True),
+        (NAV_ARM, "low", 0.35, True),
+        (NAV_ARM, "high", 0.35, False),
+        (NAV_ARM, "flat", 0.6, False),
+        (NAV_ARM, "flat", None, False),
+        ([0, 0.2, 0.1, 1.0, -0.0491], "flat", 0.35, False),
+    )
+    for start, clearance, strength, lowered in cases:
         skill = _skill(closes_empty=False)
         skill._pickup_policy = object()
         skill.joint_states.position = [*start, skill.manipulation.GRIPPER_OPEN]
-        skill._low_search_allowed = True
+        skill._search_clearance = clearance
+        skill._grip_strength = strength
         skill.sleep = lambda _: None
         commands = []
         skill.manipulation.move_joints = lambda joints, duration, commands=commands: commands.append((joints, duration))
@@ -231,9 +240,54 @@ def test_lower_search_never_increases_any_joint_travel_at_the_same_duration():
         ]
         assert duration == skill._p["hover_s"]
         assert all(abs(n - s) <= abs(o - s) + 1e-6 for n, o, s in zip(target[:5], old, start, strict=True))
-        if start is NAV_ARM:
+        if lowered:
             assert target[2] > 0  # selected the lower search instead of original
+        else:
+            assert target[1:5] == pytest.approx(old[1:5])
     assert target[:5] == pytest.approx(old)  # unfavorable start falls back to original
+
+
+def test_search_open_keeps_verified_sdk_recovery_for_shut_or_missing_telemetry():
+    for aperture in (0.8, -0.085, float("nan"), None):
+        skill = _skill(closes_empty=False)
+        skill._pickup_policy = object()
+        skill.joint_states = None if aperture is None else SimpleNamespace(position=[0] * 5 + [aperture])
+        skill._prepare_wrist_search(0)
+        events = skill.manipulation.events
+        assert events[0] == ("search",)
+        assert [event for event in events if event[0] == "open"] == ([] if aperture == 0.8 else [("open", 1.0)])
+    skill = _skill(closes_empty=False)
+    skill._pickup_policy = object()
+    skill.joint_states.position[5] = 0.8
+
+    def search(_bearing):
+        skill.manipulation.events.append(("search",))
+        if len(skill.manipulation.events) == 1:
+            raise exceptions.ArmFailed("tripped claw rejected combined move")
+
+    skill._goto_search_pose = search
+    skill._prepare_wrist_search(0)
+    assert skill.manipulation.events == [("search",), ("open", 1.0), ("search",)]
+
+
+def test_wrist_plan_uses_a_fresh_frame_and_refuses_a_frozen_camera(monkeypatch):
+    skill = _skill(closes_empty=False)
+    skill._pickup_policy = object()
+    skill.wrist_image = object()
+    fresh = object()
+    seen = []
+    skill._next_wrist_hsv = lambda old, **_: (True, fresh) if old is skill.wrist_image else (None, old)
+    plan = {"roll": 0, "grip_strength": 0.35, "grasp_style": "floor"}
+    skill._observe_pickup = lambda _prompt, image, _view: seen.append(image) or {"detections": [plan]}
+    monkeypatch.setattr(
+        "innate_skills.pick_any_object.vision.parse_det_boxes", lambda _: [(300, 280, 40, 40)], raising=False
+    )
+    skill._wrist_seed("brick")
+    assert seen == [fresh]
+    skill._next_wrist_hsv = lambda old, **_: (None, old)
+    with pytest.raises(exceptions.SkillFailed, match="fresh wrist image"):
+        skill._wrist_seed("brick")
+    assert seen == [fresh]  # never infer from the stale frame
 
 
 def test_head_perception_finishes_fold_before_returning_a_target(monkeypatch):

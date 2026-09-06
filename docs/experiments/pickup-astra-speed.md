@@ -199,3 +199,22 @@ aperture, lift, existing carry motion, and 20-second retention. Only a verified
 correction warrants another frozen matched set with the same acceptance gates.
 The estimated next stage is approximately 60 calls / $0.80, within the existing
 200-call / $5 cumulative review bounds.
+
+The shared correction at `a53d39dbc` passed all three classic pilots, including
+20-second retention: 68.109 / 44.611 / 47.034 seconds. The onboarding first miss
+remains, but the successful retry kept a wider aperture through lift and carry;
+the rotated LEGO succeeded on its first close. This supports the narrow shared
+correction, not a claim of population reliability.
+
+The next Astra candidate combines claw opening with the existing two-second
+search move, preserving verified-open recovery for a rejected move, shut claw,
+or missing telemetry. It aims the search from the URDF shoulder origin. The
+head plan distinguishes flat thin rigid targets (7cm search clearance), other
+low rigid targets (10cm), and tall/soft/uncertain targets (original high search).
+Every joint must still travel no farther than the original move from measured
+state, at the same duration. From NAV, independent URDF FK gives a minimum EE
+height of 6.500cm and peak quintic EE speed of 0.2302m/s for the flat pose,
+versus 0.3043m/s originally. After the search has settled, the wrist observation
+waits for a new camera frame instead of another fixed pause; frozen video fails
+without inference or grasp. These are candidate optimizations, separate from
+the shared floor-close correction, and require real simulator pilots.
