@@ -17,6 +17,24 @@
 > successful pickup replay. Blue's OpenCV 4.11 passed a staged synthetic motion
 > and blank-frame check without commanding the robot.
 
+
+The next Blue run (`20260906T185627-952c1e1b`) stopped before grasp at z=0.0927 m.
+Kernel and camera logs confirm USB disconnects at 18:56:43 and 18:56:55 UTC;
+the first consumed the bounded reacquisition. The restarted tracker then lost
+support as it discarded corners (65 down to 8) without adding replacements.
+The follow-up refreshes corners only inside the geometrically verified material
+patch and maps them back into the existing reference coordinates, preserving the
+grasp point. On Blue itself, replay now accepts all 41 post-reacquisition frames
+and ends with 99 features. A separate SIFT correspondence/homography audit from
+the original seed image agrees with the final replay point within 1.9 pixels.
+A 40-frame synthetic descent to 2.4x scale verifies anchor error below 1.5 pixels;
+35 focused tests pass. This remains replay evidence, not a successful physical
+pickup. Intermediate recorded frames were JPEG re-encoded, so replay is approximate.
+
+Replay an exported diagnostic directory with
+`scripts/experiments/pickup/replay_grasp_tracker.py DIRECTORY` (NumPy and OpenCV
+required). USB camera stability remains an independent hardware/runtime concern.
+
 # Pickup speed experiment
 
 Status: the complete matched-v4 campaign at `dbe4de1ad` passes the fixed speed

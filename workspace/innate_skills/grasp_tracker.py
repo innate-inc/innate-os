@@ -26,12 +26,13 @@ class GraspPointTracker:
             mask[top:bottom, left:right] = 255
         local = np.zeros_like(mask)
         cv2.circle(local, tuple(np.round(self.anchor).astype(int)), 70, 255, -1)
+        self.region = cv2.bitwise_and(mask, local)
         self.points = cv2.goodFeaturesToTrack(
             self.gray,
             maxCorners=100,
             qualityLevel=0.02,
             minDistance=5,
-            mask=cv2.bitwise_and(mask, local),
+            mask=self.region,
             blockSize=5,
         )
         self.ok = self.points is not None and self._supported(self.points.reshape(-1, 2), self.anchor)
@@ -105,12 +106,36 @@ class GraspPointTracker:
         # the anchor. Failed frames never contaminate the last accepted state.
         self.original = src[keep].reshape(-1, 1, 2).copy()
         self.points = dst[keep].reshape(-1, 1, 2).copy()
+        self._refresh(gray, transform, point)
         self.gray = gray
         self.scale = scale
         self.guess = tuple(map(float, point))
         self.misses = 0
         self.reason = "tracked"
         return self.guess
+
+    def _refresh(self, gray, transform, point):
+        """Add texture inside the verified material patch, preserving its anchor.
+
+        New corners acquire coordinates in the original reference frame through
+        the inverse transform. Their centroid never becomes the grasp point.
+        Refresh happens only after a geometrically accepted observation.
+        """
+        if len(self.points) >= 80:
+            return
+        height, width = gray.shape
+        mask = cv2.warpAffine(self.region, transform, (width, height), flags=cv2.INTER_NEAREST)
+        local = np.zeros_like(mask)
+        cv2.circle(local, tuple(np.round(point).astype(int)), 70, 255, -1)
+        mask = cv2.bitwise_and(mask, local)
+        for p in self.points.reshape(-1, 2):
+            cv2.circle(mask, tuple(np.round(p).astype(int)), 6, 0, -1)
+        new = cv2.goodFeaturesToTrack(gray, 100 - len(self.points), 0.02, 6, mask=mask, blockSize=5)
+        if new is None:
+            return
+        reference = cv2.transform(new, cv2.invertAffineTransform(transform))
+        self.original = np.concatenate((self.original, reference))
+        self.points = np.concatenate((self.points, new))
 
     @contextmanager
     def during_motion(self, read, decode, raw):
