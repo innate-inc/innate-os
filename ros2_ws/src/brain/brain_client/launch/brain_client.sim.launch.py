@@ -55,7 +55,8 @@ def generate_launch_description():
     brain_client_node = Node(
         package="brain_client",
         executable="brain_client_node.py",
-        name="brain_client_node",
+        # A process-wide name remap also renames helper nodes and their services.
+        arguments=["--ros-args", "-r", "brain_client_node:__node:=brain_client_node"],
         parameters=[
             {
                 "image_topic": LaunchConfiguration("image_topic"),
