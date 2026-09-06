@@ -71,7 +71,7 @@ def _send_frame(conn: socket.socket, payload: bytes) -> None:
 
 # A product stays active this long after its last request (unwatched = free).
 PRODUCT_TTL_S = 3.0
-PRODUCTS = ("jpeg:main", "jpeg:wrist", "depth:main")
+PRODUCTS = ("jpeg:main", "jpeg:wrist", "depth:main", "surface_depth:main", "rgbd:main")
 
 
 class WorldServer:
@@ -350,7 +350,32 @@ class WorldServer:
     def _render_product(self, product: str) -> None:
         kind, camera = product.split(":")
         sim = self.sim  # one world per frame, across a switch
-        if kind == "jpeg":
+        if kind == "rgbd":
+            # Snapshot both renderer scenes from one physics state. The expensive
+            # GL reads remain outside the physics lock; cache the capture stamp,
+            # never the time a later client happens to request these bytes.
+            with self.lock:
+                captured_ns = time.time_ns()
+                capture_epoch = sim.world_epoch
+                sim.update_camera(camera)
+                sim.update_depth(camera, include_robot=True)
+            rgb = sim.read_rgb()
+            if rgb.shape[0] != CAMERA_HEIGHT:
+                rgb = np.asarray(PILImage.fromarray(rgb).resize((CAMERA_WIDTH, CAMERA_HEIGHT), PILImage.BILINEAR))
+            jpeg = encode_jpeg(rgb)
+            depth = sim.read_depth().astype("<f4")
+            frame = (
+                {
+                    "ok": True,
+                    "captured_ns": captured_ns,
+                    "world_epoch": capture_epoch,
+                    "jpeg_size": len(jpeg),
+                    "shape": list(depth.shape),
+                    "dtype": "<f4",
+                },
+                jpeg + depth.tobytes(),
+            )
+        elif kind == "jpeg":
             with self.lock:
                 sim.update_camera(camera)
             rgb = sim.read_rgb()
@@ -359,12 +384,17 @@ class WorldServer:
             frame = ({"ok": True}, encode_jpeg(rgb))
         else:  # depth
             with self.lock:
-                sim.update_depth(camera)
+                sim.update_depth(camera, include_robot=kind == "surface_depth")
             depth = sim.read_depth().astype(np.float32)
             frame = ({"ok": True, "shape": list(depth.shape), "dtype": "float32"}, depth.tobytes())
-        with self.frame_ready:
-            if sim is self.sim:  # a render that outlived a switch must not resurface the old world
+        with self.lock, self.frame_ready:
+            if sim is self.sim and (kind != "rgbd" or sim.world_epoch == capture_epoch):
                 self.latest[product] = frame
+            else:
+                # A reset can replace state without replacing the sim object.
+                # Retry pending demand instead of resurrecting a pre-reset pair.
+                self.wanted.add(product)
+                self.render_demand.set()
             self.frame_ready.notify_all()
 
     def render_loop(self) -> None:
@@ -406,13 +436,27 @@ class WorldServer:
         self.requested_at[product] = time.monotonic()
         self.wanted.add(product)
         self.render_demand.set()
-        with self.frame_ready:
-            if product not in self.latest:
-                self.frame_ready.wait_for(lambda: product in self.latest, timeout=10.0)
-            if product not in self.latest:
-                return {"ok": False, "error": "render timeout (no frame produced)"}, None
-            meta, blob = self.latest[product]
-        return meta, blob
+        deadline = time.monotonic() + 10.0
+        while True:
+            with self.frame_ready:
+                if not self.frame_ready.wait_for(
+                    lambda: product in self.latest, timeout=max(0.0, deadline - time.monotonic())
+                ):
+                    return {"ok": False, "error": "render timeout (no frame produced)"}, None
+            # Physics can reset in place on nonfinite state without an RPC.
+            # Always validate cached generation under the physics lock too.
+            # Never hold that lock while waiting for a renderer to make a frame.
+            with self.lock, self.frame_ready:
+                frame = self.latest.get(product)
+                if frame is None:
+                    continue
+                meta, blob = frame
+                if kind == "rgbd" and meta.get("ok") and meta.get("world_epoch") != self.sim.world_epoch:
+                    self.latest.pop(product, None)
+                    self.wanted.add(product)
+                    self.render_demand.set()
+                    continue
+                return meta, blob
 
     # --- request handling (one thread per connection) ---
 
@@ -460,8 +504,9 @@ class WorldServer:
                     self.sim.set_joint_target(name, float(value))
             return {"ok": True}, None
         if op == "reset":
-            with self.lock:
+            with self.lock, self.frame_ready:
                 self.sim.reset()
+                self.latest.pop("rgbd:main", None)
             return {"ok": True}, None
         if op == "lidar":
             with self.lock:
@@ -471,7 +516,9 @@ class WorldServer:
         if op == "render_jpeg":
             return self.render(str(req["camera"]), "jpeg")
         if op == "render_depth":
-            return self.render(str(req["camera"]), "depth")
+            return self.render(str(req["camera"]), "surface_depth" if req.get("include_robot") else "depth")
+        if op == "render_rgbd":
+            return self.render(str(req["camera"]), "rgbd")
         if op == "shutdown":  # used by the launcher for a clean stop
             return {"ok": True}, None
         return {"ok": False, "error": f"unknown op {op!r}"}, None
