@@ -11,6 +11,7 @@ without needing Bluetooth or a live NetworkManager.
 import json
 import os
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 # Ensure the package is importable
@@ -55,6 +56,16 @@ def _send_command(server, payload: dict) -> dict:
     return json.loads(bytes(result_bytes).decode("utf-8"))
 
 
+def _wait_until(predicate, timeout=2.0):
+    """Poll until *predicate* is true (background connect threads are async)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # scan_wifi
 # ---------------------------------------------------------------------------
@@ -77,7 +88,9 @@ class TestScanWifi:
         # Deduplicated
         assert len([s for s in resp["visible_ssids"] if s == "OfficeNet"]) == 1
 
-        # Verify the actual nmcli invocation uses --rescan yes and sudo
+        # Verify the actual nmcli invocation uses sudo and forces a sweep:
+        # user-initiated scans must surface a hotspot enabled seconds ago,
+        # which --rescan auto's cache reuse would miss (internal scans stay auto)
         scan_call = [c for c in mock_run.call_args_list if any("wifi" in str(a) and "rescan" in str(a) for a in c.args)]
         assert len(scan_call) >= 1
         args = scan_call[-1]
@@ -255,6 +268,10 @@ class TestNmcliConnectRetry:
         scan_indices = [i for i, c in enumerate(calls) if "wifi list" in c]
         assert len(up_indices) == 2
         assert any(up_indices[0] < s < up_indices[1] for s in scan_indices)
+        # The retry rescan must force a fresh sweep — a stale cache is the
+        # suspected failure cause, so --rescan auto (cache reuse) is useless here
+        retry_scans = [calls[s] for s in scan_indices if up_indices[0] < s < up_indices[1]]
+        assert all("--rescan yes" in c for c in retry_scans)
 
     @patch.object(nmcli_utils, "_run_nmcli")
     def test_no_retry_on_terminal_errors(self, mock_run):
@@ -361,13 +378,16 @@ class TestUpdateNetwork:
             {"command": "update_network", "data": {"ssid": "OfficeNet", "password": "secret123", "priority": 20}},
         )
 
-        assert resp["status"] == "success"
+        # Immediate response is in_progress; scan+connect runs in a background
+        # thread which activates the saved profile with 'connection up'.
+        assert resp["status"] == "in_progress"
+        assert _wait_until(lambda: any("connection up" in c and "OfficeNet" in c for c, kw in captured_cmds))
 
-        # Should have called 'nmcli device wifi connect OfficeNet ...'
-        connect_cmds = [c for c, kw in captured_cmds if "device wifi connect" in c and "OfficeNet" in c]
-        assert len(connect_cmds) >= 1
-        assert "password" in connect_cmds[0]
-        assert "secret123" in connect_cmds[0]
+        # The profile was saved with the password before the thread dispatched
+        add_cmds = [c for c, kw in captured_cmds if "connection add" in c and "OfficeNet" in c]
+        assert len(add_cmds) >= 1
+        assert "wifi-sec.psk" in add_cmds[0]
+        assert "secret123" in add_cmds[0]
 
     @patch.object(simple_bt_service, "time")
     @patch.object(nmcli_utils, "_run_nmcli")
@@ -395,7 +415,10 @@ class TestUpdateNetwork:
 
         resp = _send_command(server, {"command": "update_network", "data": {"ssid": "FBI_VAN_6", "priority": 50}})
 
-        assert resp["status"] == "success"
+        # Immediate response is in_progress; activation happens in a background
+        # thread via 'connection up'.
+        assert resp["status"] == "in_progress"
+        assert _wait_until(lambda: any("connection up" in c for c, _ in captured_cmds))
 
         # Should NOT have called 'device wifi connect' — just modify + up
         connect_cmds = [c for c, _ in captured_cmds if "device wifi connect" in c]
@@ -480,12 +503,90 @@ class TestConnectNetwork:
 
         resp = _send_command(server, {"command": "connect_network", "data": {"ssid": "FBI_VAN_6"}})
 
-        assert resp["status"] == "success"
+        # Immediate response is in_progress; activation happens in a background
+        # thread via 'connection up' with sudo.
+        assert resp["status"] == "in_progress"
+        assert _wait_until(lambda: any("connection up" in c for c, kw in captured_cmds))
 
-        # Should have called connection up with sudo
         up_calls = [kw for c, kw in captured_cmds if "connection up" in c]
         assert len(up_calls) >= 1
         assert up_calls[0].get("use_sudo") is True
+
+
+# ---------------------------------------------------------------------------
+# Notification chunking
+# ---------------------------------------------------------------------------
+
+
+class TestNotificationChunking:
+    """Responses larger than one ATT MTU are split across notifications.
+
+    BlueZ truncates each notification to ATT_MTU-3 bytes, so a get_status
+    with a handful of saved profiles (>182 bytes on iOS) used to arrive as
+    unparseable truncated JSON. The server now emits <=NOTIFY_CHUNK_SIZE
+    fragments terminated by a newline: the app buffers until the newline,
+    parses the line, and drops it on parse failure — resyncing at the next
+    newline instead of a corrupt buffer poisoning every later response.
+    """
+
+    def _sent_bytes(self, server):
+        """Concatenate every set_value payload the mock characteristic got."""
+        chunks = server._ble_characteristic.set_value.call_args_list
+        return b"".join(bytes(c.args[0]) for c in chunks)
+
+    @patch.object(nmcli_utils, "_run_nmcli")
+    def test_large_response_is_chunked_and_reassembles(self, mock_run):
+        """11 saved profiles (like a demo robot) must survive the notify path."""
+        profiles = [f"ExpoNetwork_{i}" for i in range(11)]
+
+        def side_effect(cmd_list, **kwargs):
+            cmd = " ".join(cmd_list)
+            if "connection" in cmd and "NAME,TYPE,UUID" in cmd:
+                return (True, "".join(f"{p}:802-11-wireless:uuid-{i}\n" for i, p in enumerate(profiles)), None)
+            if "autoconnect-priority" in cmd:
+                return (True, "connection.autoconnect-priority:10\n", None)
+            if "ACTIVE,SSID" in cmd:
+                return (True, f"yes:{profiles[0]}\n", None)
+            if "DEVICE,TYPE,STATE" in cmd:
+                return (True, "wlP1p1s0:wifi:connected\n", None)
+            if "IP4.ADDRESS" in cmd:
+                return (True, "IP4.ADDRESS:192.168.1.42/24\n", None)
+            return (True, "", None)
+
+        mock_run.side_effect = side_effect
+        server = _make_server()
+
+        resp = _send_command(server, {"command": "get_status"})
+        assert len(resp["networks"]) == 11  # sanity: payload really is large
+
+        sent = self._sent_bytes(server)
+        # Every individual notification fits the chunk budget
+        for c in server._ble_characteristic.set_value.call_args_list:
+            assert len(c.args[0]) <= simple_bt_service.NOTIFY_CHUNK_SIZE
+        # It took more than one notification, the message carries its newline
+        # terminator (the app's framing boundary), and the concatenation is
+        # the complete response — exactly what the app reassembles
+        assert len(server._ble_characteristic.set_value.call_args_list) > 1
+        assert sent.endswith(b"\n")
+        assert json.loads(sent.decode("utf-8")) == resp
+
+    @patch.object(nmcli_utils, "_run_nmcli")
+    def test_small_response_stays_single_notification(self, mock_run):
+        """Responses that fit one MTU still arrive whole (old-app compatible).
+
+        The trailing newline is the framing terminator; JSON.parse tolerates
+        it, so clients that parse a single notification as-is keep working.
+        """
+        mock_run.return_value = (False, None, "Wi-Fi is disabled")
+        server = _make_server()
+
+        resp = _send_command(server, {"command": "scan_wifi"})
+
+        calls = server._ble_characteristic.set_value.call_args_list
+        assert len(calls) == 1
+        sent = bytes(calls[0].args[0])
+        assert sent.endswith(b"\n")
+        assert json.loads(sent.decode("utf-8")) == resp
 
 
 # ---------------------------------------------------------------------------
@@ -555,7 +656,7 @@ class TestNmcliCommandShape:
         assert "wifi" in call_args
         assert "list" in call_args
         assert "--rescan" in call_args
-        assert "yes" in call_args
+        assert "auto" in call_args
         # Terse SSID-only output
         assert "-t" in call_args
         ssid_idx = call_args.index("-f")
