@@ -758,7 +758,10 @@ def build_os_env(config: dict[str, object]) -> Path:
     raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
     os_env: dict[str, str] = dict(raw_env)
 
-    if os.environ.get("INNATE_PUBLIC_DEMO") == "1" or os_env.get("INNATE_PUBLIC_DEMO") == "1":
+    if any(
+        value.strip().lower() in {"1", "true", "yes"}
+        for value in (os.environ.get("INNATE_PUBLIC_DEMO", ""), os_env.get("INNATE_PUBLIC_DEMO", ""))
+    ):
         if any(os_env.get(key, "").strip() for key in SECRET_ENV_KEYS):
             raise StackError("Public simulator runtimes cannot contain API keys; use the external demo relay.")
 

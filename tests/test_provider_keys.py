@@ -67,14 +67,15 @@ def test_key_rotation_runtime_pickup_and_removal(tmp_path, monkeypatch):
     assert "openai: not configured" in cli(root, "status").stdout
 
 
-def test_rejected_input_and_public_demo_never_save_or_echo(tmp_path):
+@pytest.mark.parametrize("public_flag", ["1", " true ", "YES"])
+def test_rejected_input_and_public_demo_never_save_or_echo(tmp_path, public_flag):
     for value in ["", "\n", f"{CANARY}\nOTHER=value", CANARY + "\x00", CANARY + "\x1b[31m"]:
         result = cli(tmp_path, "set", "openai", "--stdin", value=value)
         assert result.returncode != 0
         assert CANARY not in result.stdout + result.stderr
         assert not (tmp_path / ".env").exists()
     for args in [("set", "openai", "--stdin"), ("remove", "cartesia"), ("status",)]:
-        result = cli(tmp_path, *args, value=CANARY, extra_env={"INNATE_PUBLIC_DEMO": "1"})
+        result = cli(tmp_path, *args, value=CANARY, extra_env={"INNATE_PUBLIC_DEMO": public_flag})
         assert result.returncode != 0
         assert "public simulator" in result.stderr
         assert CANARY not in result.stdout + result.stderr
@@ -108,10 +109,11 @@ def test_simulator_key_injection_and_explicit_local_precedence(tmp_path, monkeyp
     generated = launcher.build_os_env(launcher.get_config())
     assert launcher.parse_env_file(generated)["OPENAI_API_KEY"] == ""
     assert launcher.parse_env_file(generated)["CARTESIA_API_KEY"] == "replacement"
-    monkeypatch.setenv("INNATE_PUBLIC_DEMO", "1")
-    with pytest.raises(launcher.StackError, match="cannot contain API keys") as failure:
-        launcher.build_os_env(config)
-    assert CANARY not in str(failure.value)
+    for flag in ["1", " true ", "YES"]:
+        monkeypatch.setenv("INNATE_PUBLIC_DEMO", flag)
+        with pytest.raises(launcher.StackError, match="cannot contain API keys") as failure:
+            launcher.build_os_env(config)
+        assert CANARY not in str(failure.value)
 
 
 @pytest.mark.parametrize("cancel", [False, True])

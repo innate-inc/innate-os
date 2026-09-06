@@ -20,7 +20,7 @@ PROVIDERS = {
 
 
 def _require_owner_runtime() -> None:
-    if os.environ.get("INNATE_PUBLIC_DEMO") == "1":
+    if os.environ.get("INNATE_PUBLIC_DEMO", "").strip().lower() in {"1", "true", "yes"}:
         raise click.ClickException("API key configuration is disabled in the public simulator.")
 
 

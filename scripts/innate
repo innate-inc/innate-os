@@ -2682,6 +2682,7 @@ def keys_cli(ctx):
 
 
 def _key_commands():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sim" / "launcher"))
     import provider_keys
 
