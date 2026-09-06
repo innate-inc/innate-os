@@ -108,6 +108,7 @@ class PickAnyObjectVisualAction(PickAnyObject):
         self._decision_pose_monotonic = None
         anchor = arm_anchor = None
         frame = pose = None
+        last_capture_ns = None
         while time.monotonic() < deadline:
             try:
                 frame = self._fresh_wrist_frame(timeout=min(1.0, max(0.0, deadline - time.monotonic())))
@@ -124,7 +125,11 @@ class PickAnyObjectVisualAction(PickAnyObject):
             if reason == "camera generation changed":
                 self._remember_visual_abort(reason, anchor, frame, arm_anchor, pose)
                 raise SkillFailed(reason)
-            if anchor is None or reason:
+            gap = last_capture_ns is not None and (frame.capture_ns - last_capture_ns) * 1e-9 > 0.5
+            last_capture_ns = frame.capture_ns
+            if anchor is None or reason or gap:
+                # A gap beyond the existing freshness horizon is not observed
+                # stationarity: establish a new window from this fresh capture.
                 anchor, arm_anchor = frame, pose
                 self._decision_pose_monotonic = sampled
             elif (frame.capture_ns - anchor.capture_ns) * 1e-9 >= window:

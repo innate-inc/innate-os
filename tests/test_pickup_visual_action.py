@@ -374,7 +374,7 @@ def test_floor_preset_owns_posture_and_shift_preserves_it():
         validate_action(action("shift"))
 
 
-@pytest.mark.parametrize("case", ["settles", "drifts", "reset", "cancel"])
+@pytest.mark.parametrize("case", ["settles", "drifts", "reset", "cancel", "gap"])
 def test_observed_settling_uses_fixed_anchor_and_latest_pose(monkeypatch, case):
     importlib.import_module("test_pick_any_object_retry")
     from innate_skills import pick_any_object_visual_action as module
@@ -394,9 +394,9 @@ def test_observed_settling_uses_fixed_anchor_and_latest_pose(monkeypatch, case):
         if case == "cancel":
             raise InterruptedError("stop")
         index[0] += 1
-        now[0] += 0.2
+        now[0] += 0.9 if case == "gap" and index[0] == 2 else 0.2
         f = frame()
-        f.capture_ns = 10_000_000_000 + index[0] * 200_000_000
+        f.capture_ns = round((now[0] - 10) * 1e9)
         f.capture_generation = 2 if case == "reset" and index[0] > 1 else 1
         x = 0.3 + (0.001 * index[0] if case == "drifts" else 0.001 * min(index[0], 3))
         s.manipulation.pose = NS(position=(x, 0, 0.1), rpy=(0, 0.82, 0.24))
@@ -405,11 +405,11 @@ def test_observed_settling_uses_fixed_anchor_and_latest_pose(monkeypatch, case):
         return f
 
     s._fresh_wrist_frame = sample
-    if case == "settles":
+    if case in {"settles", "gap"}:
         f, pose = s._settled_wrist_observation()
         assert f is frames[-1] and pose is s.manipulation.pose
         assert pose.position[0] == pytest.approx(0.303)
-        assert now[0] >= 21.0
+        assert now[0] + 1e-9 >= (21.9 if case == "gap" else 21.0)
     elif case == "cancel":
         with pytest.raises(InterruptedError):
             s._settled_wrist_observation()
