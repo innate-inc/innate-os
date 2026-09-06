@@ -16,16 +16,32 @@ consumes zero CPU when no skill needs camera data.
 import threading
 import time
 from collections import deque
+from dataclasses import replace
 
 import numpy as np
 import rclpy
 import rclpy.executors
+from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
+from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 from std_msgs.msg import Int64
+from tf2_ros import Buffer, TransformException, TransformListener
 
 from .rgbd import RgbdObservation, decode_depth, stamp_ns
+
+
+class _CaptureTransforms(Buffer):
+    """Discard queued dynamic transforms from before stream invalidation."""
+
+    def __init__(self, minimum_stamp):
+        super().__init__(cache_time=Duration(seconds=3))
+        self._minimum_stamp = minimum_stamp
+
+    def set_transform(self, transform, authority):
+        if stamp_ns(transform) >= self._minimum_stamp():
+            super().set_transform(transform, authority)
 
 
 class CameraProvider(Node):
@@ -62,7 +78,10 @@ class CameraProvider(Node):
         self._epoch_sub = None
         self._stream_epoch = None
         self._rgbd_generation = 0
+        self._rgbd_cached = None
         self._rgbd_capture_after_ns = 0
+        self._tf_buffer = None
+        self._tf_listener = None
 
         self._main_sub = None
         self._wrist_sub = None
@@ -126,6 +145,9 @@ class CameraProvider(Node):
                 self._epoch_cb,
                 QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL),
             )
+        if self._main_sub is not None and self._depth_sub is not None and self._tf_listener is None:
+            self._tf_buffer = _CaptureTransforms(lambda: self._rgbd_capture_after_ns)
+            self._tf_listener = TransformListener(self._tf_buffer, self)
         if self._running:
             return
         self._start_spin()
@@ -150,6 +172,7 @@ class CameraProvider(Node):
             self._drop_unused_feeds()
             return
         self._stop_spin()
+        self._stop_capture_transforms()
         for sub in (self._main_sub, self._wrist_sub, self._depth_sub, self._info_sub, self._epoch_sub):
             if sub is not None:
                 self.destroy_subscription(sub)
@@ -196,6 +219,8 @@ class CameraProvider(Node):
         if not dead:
             return
         self._stop_spin()
+        if "main" in dead or "depth" in dead:
+            self._stop_capture_transforms()
         if "main" in dead and self._main_sub is not None:
             self.destroy_subscription(self._main_sub)
             self._main_sub = None
@@ -217,6 +242,7 @@ class CameraProvider(Node):
         with self._rgbd_lock:
             if "main" in dead or "depth" in dead:
                 self._rgbd_generation += 1
+                self._rgbd_cached = None
             for feed in dead:
                 if feed in self._rgbd_frames:
                     self._rgbd_frames[feed].clear()
@@ -285,7 +311,10 @@ class CameraProvider(Node):
         # Called with the cache lock held. In-flight pre-reset messages are also
         # excluded by capture time, even if they arrive after this notification.
         self._rgbd_generation += 1
+        self._rgbd_cached = None
         self._rgbd_capture_after_ns = self.get_clock().now().nanoseconds
+        if self._tf_buffer is not None:
+            self._tf_buffer.clear()  # dynamic history only; static extrinsics survive
         for frames in self._rgbd_frames.values():
             frames.clear()
 
@@ -318,11 +347,18 @@ class CameraProvider(Node):
                 and all(0 <= time.monotonic() - t <= max_age for t in observation.received_monotonic)
             )
 
-    def rgbd_observation(self, max_age=0.5) -> RgbdObservation | None:
+    def _stop_capture_transforms(self):
+        # Subscription destruction is only called while the executor is parked.
+        if self._tf_listener is not None:
+            self._tf_listener.unregister()
+        self._tf_listener = self._tf_buffer = None
+
+    def rgbd_observation(self, max_age=0.5, *, require_pose=False) -> RgbdObservation | None:
         """Newest exact-stamp calibrated triplet; subscribe to main and depth.
 
         Independent render/publication stamps are deliberately not matched by
-        proximity. No transform or stationarity inference is made here.
+        proximity. TF binds base_link to the actual capture time; no latest-pose
+        fallback or stationarity inference is made. The SDK requires that pose.
         """
         with self._rgbd_lock:
             frames = {key: tuple(value) for key, value in self._rgbd_frames.items()}
@@ -339,16 +375,38 @@ class CameraProvider(Node):
                 continue
             if not self._same_calibration(info[0], latest_info):
                 continue
-            observation = RgbdObservation.from_messages(
-                rgb,
-                depth[0],
-                info[0],
-                (rgb_time, depth[1], info[1]),
-                now_ns=self.get_clock().now().nanoseconds,
-                now_monotonic=time.monotonic(),
-                max_age=max_age,
-                generation=generation,
-            )
+            marker = (generation, stamp, id(rgb), id(depth[0]), id(info[0]))
+            cached = self._rgbd_cached
+            if cached is not None and cached[0] == marker:
+                observation = cached[2]
+            else:
+                observation = RgbdObservation.from_messages(
+                    rgb,
+                    depth[0],
+                    info[0],
+                    (rgb_time, depth[1], info[1]),
+                    now_ns=self.get_clock().now().nanoseconds,
+                    now_monotonic=time.monotonic(),
+                    max_age=max_age,
+                    generation=generation,
+                )
+                if observation is not None:
+                    # Retain messages with the marker so object ids cannot be
+                    # recycled. Recheck age/generation on every cached read.
+                    self._rgbd_cached = (marker, (rgb, depth[0], info[0]), observation)
+            tf_buffer = self._tf_buffer
+            if observation is not None and tf_buffer is not None:
+                try:
+                    transform = tf_buffer.lookup_transform(
+                        "base_link", observation.frame_id, Time(nanoseconds=stamp)
+                    ).transform
+                except TransformException:
+                    pass  # missing/bracketing TF is unavailable, never a latest pose
+                else:
+                    t, q = transform.translation, transform.rotation
+                    observation = replace(observation, base_from_optical=(t.x, t.y, t.z, q.x, q.y, q.z, q.w))
+            if require_pose and (observation is None or observation.base_from_optical is None):
+                return None
             return (
                 observation if observation is not None and self.observation_is_current(observation, max_age) else None
             )

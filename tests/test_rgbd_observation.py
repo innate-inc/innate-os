@@ -1,5 +1,6 @@
 import importlib.util
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -159,10 +160,34 @@ def test_provider_association_and_calibration_invalidation_with_ros_messages():
         observation = provider.rgbd_observation()
         assert observation is not None
         assert provider.observation_is_current(observation)
+        from geometry_msgs.msg import TransformStamped
+        from rclpy.time import Time
+
+        from brain_client.perception.camera_provider import _CaptureTransforms
+
+        provider._tf_buffer = _CaptureTransforms(lambda: provider._rgbd_capture_after_ns)
+        static = TransformStamped()
+        static.header.frame_id, static.child_frame_id = "head", "camera_optical_frame"
+        static.transform.rotation.w = 1.0
+        static.transform.translation.x = 0.03
+        provider._tf_buffer.set_transform_static(static, "test")
+        for dt, x in ((-100_000_000, 0.0), (100_000_000, 2.0)):
+            transform = TransformStamped()
+            transform.header.frame_id, transform.child_frame_id = "base_link", "head"
+            transform.header.stamp = Time(nanoseconds=observation.stamp_ns + dt).to_msg()
+            transform.transform.rotation.w = 1.0
+            transform.transform.translation.x = x
+            provider._tf_buffer.set_transform(transform, "test")
+        posed = provider.rgbd_observation(require_pose=True)
+        assert posed.base_from_optical[0] == pytest.approx(1.03)  # capture-time interpolation, not latest2.03
         from std_msgs.msg import Int64
 
         provider._epoch_cb(Int64(data=1))
         assert not provider.observation_is_current(observation)
+        transform.header.stamp = Time(nanoseconds=observation.stamp_ns - 100_000_000).to_msg()
+        provider._tf_buffer.set_transform(transform, "delayed pre-reset")
+        assert not provider._tf_buffer.can_transform("base_link", "camera_optical_frame", Time())
+        assert provider._tf_buffer.can_transform("head", "camera_optical_frame", Time())
         provider._main_camera_cb(rgb)
         provider._depth_cb(depth)
         provider._info_cb(info)
@@ -175,6 +200,7 @@ def test_provider_association_and_calibration_invalidation_with_ros_messages():
         provider._info_cb(info)
         observation = provider.rgbd_observation()
         assert observation is not None
+        assert provider.rgbd_observation(require_pose=True) is None  # no post-reset dynamic TF
         # A newly received uncalibrated CameraInfo invalidates the older triplet.
         newer = CameraInfo()
         newer.header.stamp = provider.get_clock().now().to_msg()
@@ -205,3 +231,40 @@ def test_paired_render_protocol_preserves_capture_stamp_and_rejects_truncation()
     blob = blob[:-1]
     with pytest.raises(RuntimeError, match="malformed"):
         world.render_rgbd("main")
+
+
+def test_optical_surface_to_base_uses_capture_transform_and_rejects_invalid_pose():
+    observation = build(messages())
+    raw = np.array(observation.surface_point(200, 150))
+    q = np.sqrt(0.5)
+    posed = replace(observation, base_from_optical=(0.1, 0.2, 0.3, 0.0, 0.0, q, q))
+    expected = np.array([-raw[1], raw[0], raw[2]]) + [0.1, 0.2, 0.3]
+    np.testing.assert_allclose(posed.surface_point_in_base(200, 150), expected, atol=1e-6)
+    assert observation.surface_point_in_base(200, 150) is None
+    assert replace(posed, base_from_optical=(0.0,) * 7).surface_point_in_base(200, 150) is None
+
+
+def test_sdk_optional_rgbd_annotation_declares_the_shared_feed():
+    pytest.importorskip("rclpy")
+    from brain_client.skills.types import RobotStateType
+    from innate import RgbdObservation, Skill
+
+    class Probe(Skill):
+        rgbd: RgbdObservation | None
+
+        def execute(self):
+            pass
+
+    probe = Probe(logger=None)
+    assert RobotStateType.LAST_RGBD_OBSERVATION in probe.declared_robot_state_types()
+    assert not Probe.rgbd.required
+    from brain_client.skills.robot_state import RobotStateProvider
+
+    provider = object.__new__(RobotStateProvider)
+    provider._warn_missing = lambda *_: None
+    feed = RobotStateType.LAST_RGBD_OBSERVATION
+    observation = build(messages())
+    provider._inject(probe, [(feed, lambda: observation)])
+    assert probe.rgbd is observation
+    provider._inject(probe, [(feed, lambda: None)])
+    assert probe.rgbd is None

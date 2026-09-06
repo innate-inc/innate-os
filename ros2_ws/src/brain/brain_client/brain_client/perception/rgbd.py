@@ -43,6 +43,8 @@ class RgbdObservation:
     r: tuple[float, ...]
     p: tuple[float, ...]
     generation: int = 0
+    base_from_optical: tuple[float, ...] | None = None
+    """Capture-time base_link transform: tx,ty,tz,qx,qy,qz,qw, or unavailable."""
 
     @classmethod
     def from_messages(cls, rgb, depth, info, received, *, now_ns, now_monotonic, max_age=0.5, generation=0):
@@ -145,3 +147,22 @@ class RgbdObservation:
         ray = np.linalg.solve(p[:, :3], [*rect, 1.0])
         point = r.T @ (ray * (float(np.median(patch)) / ray[2]))
         return tuple(float(value) for value in point)
+
+    def surface_point_in_base(self, u, v):
+        """Visible surface in capture-time base_link, never a motion target.
+
+        This uses the measured TF at capture time. It does not rebase a retained
+        point after the robot or object moves; obtain and validate a new snapshot.
+        """
+        pose = self.base_from_optical
+        if pose is None or len(pose) != 7 or not np.isfinite(pose).all():
+            return None
+        q = np.asarray(pose[3:])
+        if not np.isclose(q @ q, 1.0, atol=1e-5):
+            return None
+        point = self.surface_point(u, v)
+        if point is None:
+            return None
+        point = np.asarray(point)
+        rotated = point + 2 * np.cross(q[:3], np.cross(q[:3], point) + q[3] * point)
+        return tuple(float(v) for v in rotated + pose[:3])
