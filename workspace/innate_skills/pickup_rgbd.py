@@ -8,10 +8,12 @@ import cv2
 import numpy as np
 
 
-def revalidate_material_point(reference, current, box, point, *, now_ns):
+def revalidate_material_point(reference, current, box, point, *, now_ns, now_monotonic=None):
     if reference is None or current is None:
         return None
-    if any(not 0 <= time.monotonic() - t <= 0.5 for t in current.received_monotonic):
+    if now_monotonic is None:
+        now_monotonic = time.monotonic()
+    if any(not 0 <= now_monotonic - t <= 0.5 for t in current.received_monotonic):
         return None
     # The model may take seconds. Only the reference is allowed to be historical.
     if not 0 <= (now_ns - current.stamp_ns) * 1e-9 <= 0.5 or current.stamp_ns <= reference.stamp_ns:
