@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
+from innate_skills.abandon_interaction import AbandonInteraction
 from innate_skills.find_next_person import FindNextPerson
 from innate_skills.mission_notes import MissionNotes
 from innate_skills.mission_run import MissionRun
@@ -26,6 +27,7 @@ class HouseholdOrdersAgent(Agent):
     def get_skills(self) -> list[SkillRef]:
         return [
             MissionRun,
+            AbandonInteraction,
             FindNextPerson,
             PersonIdentity,
             MissionNotes,
@@ -67,8 +69,8 @@ class HouseholdOrdersAgent(Agent):
             trigger_skill_names=("mission_notes",),
             trigger_result_prefixes=("NOTE_MISSING",),
             blocked_skill_ids=("innate-os/find_next_person",),
-            release_skill_names=("mission_notes",),
-            release_result_prefixes=("NOTE_SAVED",),
+            release_skill_names=("mission_notes", "abandon_interaction"),
+            release_result_prefixes=("NOTE_SAVED", "INTERACTION_ABANDONED "),
             maximum_hold_s=35.0,
         )
 
@@ -81,7 +83,9 @@ class HouseholdOrdersAgent(Agent):
 - After asking, re-asking, or reading an order back, remember that turn's displayed t+ time. Remain silent and call wait
   on every update until the displayed t+ is at least 10 seconds later. Do not search or navigate sooner.
 - A reply naming a resident or containing an order, correction, or confirmation is mission data. Preserve the most
-  recent encounter_id for this reply. If a skill is actually running, call stop_current_skill(continue_task=true) and
+  recent encounter_id for this reply only while that conversation is active. An abandoned encounter is not an active
+  conversation: never attach a later bare confirmation to it or to a newly identified person; establish who is speaking
+  and obtain their complete order and confirmation again. If a skill is actually running, call stop_current_skill(continue_task=true) and
   wait for it to stop before saving the confirmed note or responding. If no skill is running, save or respond directly
   without a Stop call. Handle the reply before any search or navigation. An explicit operator Stop still cancels the
   task; resident data never authorizes resuming a task the operator stopped.
@@ -140,7 +144,15 @@ Repeat:
    torso pixel, guessed floor point, or remembered coordinates. When already close and facing them, do not translate.
    A "capped step" result means conversation distance has NOT been reached: do not greet after that step. When it
    finishes, inspect a fresh main camera image and use visible floor at the same resident's feet for the next bounded
-   step. If feet/floor are cropped, occluded, or ambiguous, or the third step is still capped, search again.
+   step. If an approach is needed but feet/floor are cropped, occluded, or ambiguous BEFORE any greeting, call
+   abandon_interaction(reason="visual_target_unavailable") instead of waiting for search to become available.
+   Do not use this after a question/readback, while a reply is arriving, or with an unsaved confirmed order.
+   Handle any already-arrived reply before deciding to abandon. Wait for successful INTERACTION_ABANDONED;
+   failed/cancelled abandonment does not release the guard. On success, discard only this active conversation
+   association, preserve all durable notes/roster, and search on the next update. Obtain a fresh identity before
+   another greeting or note; never transfer a name, order, or confirmation across encounters. A later reply with
+   ambiguous speaker identity requires fresh identification and a complete order/confirmation, never a guessed save.
+   If the third approach step is still capped, search again.
    After a successful uncapped approach, re-identify with the current encounter_id. If its continuity context is
    rejected, use the one fresh-match recovery in step 2 and its new notes lookup; otherwise continue only if the ID is preserved.
    Then ask immediately: NOTE_MISSING after re-identification must not restart this initial approach. An
