@@ -509,11 +509,12 @@ class PickAnyObject(Skill):
 
     def _new_wrist_tracker(self, box, px, raw):
         if self._pickup_policy is not None:
-            from innate_skills.grasp_tracker import GraspPointTracker
+            from innate_skills.grasp_tracker import make_grasp_tracker
 
             # Seed on precisely the frame that supplied the model coordinates.
             hsv, raw = self._wrist_seed_frame
-            return GraspPointTracker(hsv, box, px), raw
+            rigid = GRIP_STRENGTH_RANGE[0] <= self._grip_strength < SOFT_GRIP_MIN
+            return make_grasp_tracker(hsv, box, px, rigid=rigid), raw
         hsv, raw = self._next_wrist_hsv(raw)
         return (_BlobTracker(hsv, box, px) if hsv is not None else None), raw
 

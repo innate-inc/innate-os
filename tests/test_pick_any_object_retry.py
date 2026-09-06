@@ -588,3 +588,21 @@ def test_stationary_reseed_latency_is_not_camera_silence(monkeypatch, camera_onl
             PickAnyObject._wrist_descend(skill, "sock", 0.3, 0)
         assert events == ["reseed"]
     assert skill.manipulation.events == []
+
+
+@pytest.mark.parametrize("strength,rigid", [(0.35, True), (0.5, False), (0.0, False)])
+def test_wrist_tracker_uses_model_seed_and_known_material(monkeypatch, strength, rigid):
+    skill = _skill(closes_empty=False)
+    skill._pickup_policy = object()
+    skill._grip_strength = strength
+    frame, raw, tracker = object(), object(), object()
+    skill._wrist_seed_frame = (frame, raw)
+
+    def make(image, box, point, **options):
+        assert image is frame
+        assert (box, point) == ((10, 20, 30, 40), (25, 40))
+        assert options == {"rigid": rigid}
+        return tracker
+
+    monkeypatch.setattr("innate_skills.grasp_tracker.make_grasp_tracker", make)
+    assert skill._new_wrist_tracker((10, 20, 30, 40), (25, 40), None) == (tracker, raw)
