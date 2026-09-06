@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING
 from brain_client.brain import grounding
 from brain_client.brain.context import Decision, GeminiContext, ToolCall
 from brain_client.brain.loop import LoopThread
+from brain_client.brain.openai_context import OpenAIContext
+from brain_client.brain.openai_transport import pick_openai_transport
 from brain_client.brain.prompt import build_system_prompt, self_reference_turns
 from brain_client.brain.tools import GO_TO_POINT_IN_VIEW, STOP_SKILL, WAIT, assign_tool_names, build_tools
 from brain_client.brain.transport import pick_transport
@@ -117,12 +119,22 @@ class BrainAgent:
         if config.timezone.strip() and self._timezone is None:
             self._logger.warn(f"[Brain] Unknown timezone '{config.timezone}' — using the host's local zone")
 
-        transport, self.backend = pick_transport(proxy)
+        self.provider = config.brain_provider
+        if self.provider == "openai":
+            transport, self.backend = pick_openai_transport(proxy)
+            context_class = OpenAIContext
+            self.model = config.openai_model
+            self.reasoning_effort = config.openai_reasoning_effort
+        else:
+            transport, self.backend = pick_transport(proxy)
+            context_class = GeminiContext
+            self.model = config.gemini_model
+            self.reasoning_effort = config.gemini_thinking_level
         self._context = (
-            GeminiContext(
+            context_class(
                 transport,
-                model=config.gemini_model,
-                thinking_level=config.gemini_thinking_level,
+                model=self.model,
+                thinking_level=self.reasoning_effort,
                 max_history=config.history_max_entries,
                 max_image_turns=config.history_max_image_turns,
                 reference=self_reference_turns(),
@@ -154,7 +166,10 @@ class BrainAgent:
         self.trace_has_audience: Callable[[], bool] = lambda: True
 
         if self._context is not None:
-            self._context.on_request = self._trace_request  # the monitor renders the exact request body
+            if isinstance(self._context, OpenAIContext):
+                self._context.on_native_request = self._trace_request
+            else:
+                self._context.on_request = self._trace_request  # exact request body
 
     def set_timezone(self, name: str) -> bool:
         """Point the status-line clock at an IANA zone ("" = the host's own); False if unknown."""
@@ -166,7 +181,7 @@ class BrainAgent:
 
     @property
     def available(self) -> bool:
-        """Whether the brain can reach Gemini — true exactly when a context exists."""
+        """Whether the brain can reach the selected provider — true exactly when a context exists."""
         return self._context is not None
 
     @property
@@ -179,8 +194,9 @@ class BrainAgent:
         """Spawn the agent loop; False when it refused (caller must not report active)."""
         if not self.available:
             self._chat.emit_system(
-                "⚠️ The brain has no way to reach Gemini — configure the Innate proxy "
-                "(INNATE_SERVICE_KEY) or set GEMINI_API_KEY in innate-os/.env and restart."
+                f"⚠️ The brain has no way to reach {self.provider} — configure the Innate proxy "
+                f"(INNATE_SERVICE_KEY) or set {'OPENAI_API_KEY' if self.provider == 'openai' else 'GEMINI_API_KEY'} "
+                "in innate-os/.env and restart."
             )
         if self._runtime.running:
             return True
@@ -251,12 +267,14 @@ class BrainAgent:
             self._logger.error(f"[Brain] Agent loop crashed: {error!r}")
             self._chat.emit_system(f"⚠️ Brain loop crashed: {error!r} — stop and start the brain to recover.")
         finally:
-            heartbeat.cancel()
             if self._speaker is not None:
                 self._speaker.mute()
-            for task in (turn, spoke):
-                if task is not None:
-                    task.cancel()  # stop() can land mid-race; the turn dies with the loop
+            children = [task for task in (turn, spoke, heartbeat) if task is not None]
+            for task in children:
+                task.cancel()
+            # stop() must wait for the turn's finally blocks too. Otherwise an
+            # old turn can clear the in-flight flag after a restarted turn sets it.
+            await asyncio.gather(*children, return_exceptions=True)
 
     def _abandon(self, turn: asyncio.Task[None]) -> bool:
         """Cancel a thinking turn the user just talked over — unless it already
@@ -271,7 +289,7 @@ class BrainAgent:
         return True
 
     async def _turn(self, context: GeminiContext) -> None:
-        """One turn: look at the world, think with Gemini, commit, act.
+        """One turn: look at the world, think, commit, act.
 
         ``events`` is a peek at the queue — consumed only when the turn
         commits, so a failed or abandoned turn re-sends the same events.
@@ -322,6 +340,10 @@ class BrainAgent:
             TraceEvent.TURN_END,
             turn=self._turn_count,
             latency=latency,
+            provider=self.provider,
+            model=self.model,
+            reasoning_effort=self.reasoning_effort,
+            tokens=context.last_usage,
             thoughts=decision.thoughts,
             speech=decision.speech,
             calls=[{"name": call.name, "args": call.args, "outcome": outcome} for call, outcome in outcomes],
@@ -407,8 +429,14 @@ class BrainAgent:
             self._pause_until = 0.0
 
     def _interval(self) -> float:
+        directive = self._state.current_directive
+        overrides = directive.get_turn_intervals() if directive is not None else None
         if self._state.primitive_running:
+            if overrides is not None and overrides.supervision is not None:
+                return overrides.supervision
             return self._config.supervision_turn_interval
+        if overrides is not None and overrides.idle is not None:
+            return overrides.idle
         return self._config.idle_turn_interval
 
     def _elapsed(self) -> float:
@@ -687,7 +715,10 @@ class BrainAgent:
             TraceEvent.SNAPSHOT,
             active=self._state.is_brain_active,
             backend=self.backend,
-            model=self._config.gemini_model,
+            provider=self.provider,
+            model=self.model,
+            reasoning_effort=self.reasoning_effort,
+            interval=self._interval(),
             turn=self._turn_count,
             in_flight=self._turn_in_flight,
             thinking_for=self._elapsed() if self._turn_in_flight else 0,
