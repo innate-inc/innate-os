@@ -131,3 +131,24 @@ def test_low_contrast_registration_tolerates_blur_without_anchor_drift():
         point = tracker.update(hsv(image))
         assert point is not None, (step, tracker.reason)
         assert np.linalg.norm(np.asarray(point) - transform @ anchor) < 1
+
+
+@pytest.mark.parametrize("failure", ["missing", "partial_anchor"])
+def test_textured_background_cannot_authorize_missing_or_occluded_target(failure):
+    background = np.uint8(205 + 30 * np.sin(X / 13) * np.cos(Y / 17))
+    mask = np.zeros_like(MASK)
+    cv2.rectangle(mask, (250, 195), (389, 334), 255, -1)
+    transform = cv2.getRotationMatrix2D((320, 264), 15, 1)
+    coverage = cv2.warpAffine(mask.astype(np.float32) / 255, transform, (640, 480))
+    seed = np.uint8(coverage * 244 + (1 - coverage) * background)
+    anchor = (320.0, 264.0)
+    tracker = RigidGraspTracker(hsv(seed), (233, 177, 173, 174), anchor)
+    assert tracker.ok
+    image = background.copy() if failure == "missing" else seed.copy()
+    if failure == "partial_anchor":
+        cv2.rectangle(image, (316, 260), (324, 268), 20, -1)
+    reference, pose = tracker.template.copy(), tracker.transform.copy()
+    assert tracker.update(hsv(image)) is None
+    assert tracker.guess == anchor
+    assert np.array_equal(tracker.template, reference)
+    assert np.array_equal(tracker.transform, pose)
