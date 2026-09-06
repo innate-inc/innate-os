@@ -190,6 +190,12 @@ class PickAnyObjectVisualAction(PickAnyObject):
                     timeout=30,
                 )["detections"]
                 if len(result) != 1 or result[0]["action"] == "abort":
+                    after = self.manipulation.pose
+                    self._current_pose_monotonic = time.monotonic()
+                    self._remember_visual_abort(
+                        "model uncertain", frame, getattr(self, "wrist_image", None), pose, after
+                    )
+                    self._visual_abort["model_result"] = result
                     raise SkillFailed("Visual action is uncertain; preserving open posture")
                 action = result[0]
                 if action["action"] in {"floor", "shift"}:
