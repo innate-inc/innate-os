@@ -94,3 +94,23 @@ def test_refresh_keeps_material_anchor_through_long_descent():
     previous = tracker.guess
     assert tracker.update(hsv(np.zeros_like(gray))) is None
     assert tracker.guess == previous
+
+
+def test_motion_camera_gap_latches_and_does_not_bridge_missing_motion():
+    import time
+
+    rng = np.random.default_rng(3)
+    gray = rng.integers(0, 256, (480, 640), dtype=np.uint8)
+    tracker = module.GraspPointTracker(hsv(gray), (220, 160, 160, 160), (300, 240))
+    current = [object()]
+    original = tracker.guess
+    with tracker.during_motion(lambda: current[0], lambda _: hsv(gray), current[0], gap_timeout=0.05) as state:
+        deadline = time.monotonic() + 1
+        while not state["gap"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert state["gap"]
+        current[0] = object()  # camera returns; the gap must stay latched
+        time.sleep(0.08)
+    assert state["gap"]
+    assert tracker.guess == original
+    assert tracker.misses == 0  # no speculative update across the interruption

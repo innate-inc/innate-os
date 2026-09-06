@@ -115,6 +115,9 @@ PARAMS = {
 
 FOLLOW_TIMEOUT_S = 20.0
 WRIST_ALIGN_TIMEOUT_S = 60.0
+WRIST_CAMERA_RECOVERY_S = 5.0
+WRIST_CAMERA_GAP_S = 0.75
+WRIST_CAMERA_RECOVERIES = 2
 WRIST_MAX_JUMP_PX = 80.0
 WRIST_SEG_MIN_SCORE = 25.0
 WRIST_CAM_ABOVE_EE = 0.07
@@ -402,12 +405,14 @@ class PickAnyObject(Skill):
         except Exception as e:  # noqa: BLE001 — teardown must not mask the run result
             self.logger.warning(f"[PickAnyObject] rest-arm failed: {e}")
 
-    def _wrist_seed(self, prompt):
+    def _wrist_seed(self, prompt, frame=None):
         """Wrist detection -> tracking box and, for Astra, a grasp plan."""
         if self._pickup_policy is not None:
             # The search already finished and settled. Wait for an actual new
             # frame instead of another fixed pause, and refuse a frozen camera.
-            hsv, img = self._next_wrist_hsv(self.wrist_image, timeout=self._p["wrist_settle_s"])
+            hsv, img = (
+                frame if frame is not None else self._next_wrist_hsv(self.wrist_image, timeout=WRIST_CAMERA_RECOVERY_S)
+            )
             if hsv is None:
                 raise SkillFailed("No fresh wrist image for pickup")
             detections = self._observe_pickup(prompt, img, "wrist")["detections"]
@@ -512,9 +517,9 @@ class PickAnyObject(Skill):
         hsv, raw = self._next_wrist_hsv(raw)
         return (_BlobTracker(hsv, box, px) if hsv is not None else None), raw
 
-    def _wrist_reseed(self, prompt, raw):
+    def _wrist_reseed(self, prompt, raw, frame=None):
         """Reacquire within the existing bounded model budget, while stationary."""
-        px, box = self._wrist_seed(prompt)
+        px, box = self._wrist_seed(prompt) if frame is None else self._wrist_seed(prompt, frame=frame)
         if px is None:
             return None, raw, "lost track"
         tracker, raw = self._new_wrist_tracker(box, px, raw)
@@ -535,6 +540,8 @@ class PickAnyObject(Skill):
             ee = None
         z = ee[2] if ee else p["hover_z"]
         looks = int(p["wrist_steps"]) - 1
+        recoveries = WRIST_CAMERA_RECOVERIES
+        camera_lost = False
 
         px, box = self._wrist_seed(prompt)
         if px is None:
@@ -545,7 +552,8 @@ class PickAnyObject(Skill):
         if tracker is None or not tracker.ok:
             return self._wrist_done(tx, ty, z, "insufficient tracking support")
 
-        deadline = time.monotonic() + WRIST_ALIGN_TIMEOUT_S
+        last_frame_at = time.monotonic()
+        deadline = last_frame_at + WRIST_ALIGN_TIMEOUT_S
         axis = None  # last blob axis read high enough to trust
         streak = 0  # verified matches since the arm last moved
         centered = 0  # consecutive matches INSIDE the box
@@ -560,6 +568,38 @@ class PickAnyObject(Skill):
                 reason = "timeout"
                 break
             hsv, raw = self._next_wrist_hsv(raw)
+            now = time.monotonic()
+            camera_lost = camera_lost or hsv is None or now - last_frame_at >= WRIST_CAMERA_GAP_S
+            last_frame_at = now
+            if camera_lost and self._pickup_policy is not None:
+                # A camera restart can hide the entire last arm movement. Never
+                # extend optical flow across that gap or preserve centered votes.
+                streak = centered = 0
+                if recoveries <= 0:
+                    reason = "camera recovery budget exhausted"
+                    break
+                recoveries -= 1
+                self.logger.info("[PickAnyObject] wrist camera interrupted; holding position and reacquiring")
+                if hsv is None:
+                    remaining = min(WRIST_CAMERA_RECOVERY_S, deadline - time.monotonic())
+                    if remaining <= 0:
+                        reason = "timeout"
+                        break
+                    hsv, raw = self._next_wrist_hsv(raw, timeout=remaining)
+                if hsv is None:
+                    reason = "wrist camera did not recover"
+                    break
+                self.check_cancelled()
+                if time.monotonic() >= deadline:
+                    reason = "timeout"
+                    break
+                tracker, raw, fail = self._wrist_reseed(prompt, raw, frame=(hsv, raw))
+                if tracker is None:
+                    reason = fail
+                    break
+                camera_lost = False
+                last_frame_at = time.monotonic()
+                continue  # two new tracked frames must authorize the next move
             if hsv is None:
                 reason = "no wrist frames"
                 break
@@ -627,6 +667,8 @@ class PickAnyObject(Skill):
                 with tracker.during_motion(lambda: self.wrist_image, vision.b64_to_hsv, raw) as motion:
                     self.manipulation.move_to(x, y, z, pitch=p["wrist_pitch"], duration=p["wrist_move_s"])
                 raw = motion["raw"]
+                camera_lost = motion.get("gap", False)
+                last_frame_at = motion.get("last_frame_at", time.monotonic())
                 if not tracker.ok:
                     reason = "tracking worker failed"
                     break
