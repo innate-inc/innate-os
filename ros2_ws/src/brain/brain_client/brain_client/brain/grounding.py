@@ -116,10 +116,39 @@ def pixel_to_floor(
     return (x, y)
 
 
-def approach_goal(floor_x: float, floor_y: float) -> dict:
-    """navigate_to_position inputs that stop :data:`STANDOFF_M` short, facing the spot."""
+def parse_standoff(value: object = STANDOFF_M) -> float | None:
+    """Only bounded numeric distances; bool is not a distance."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not STANDOFF_M <= value <= 1.5 or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def conversation_floor(
+    u_norm: float, v_norm: float, *, frame_jpeg: bytes, pitch_deg: float
+) -> tuple[float, float] | None:
+    """Calibrated main-camera ray, retaining true range until goal construction.
+
+    The pitch-only URDF head has no yaw; base yaw is handled by pose rebasing.
+    Intrinsics describe the full image resized to 640x480, not a cropped image.
+    Geometry cannot determine whether a selected pixel actually shows feet.
+    """
+    from innate import geometry
+
+    dims = jpeg_dimensions(frame_jpeg)
+    if not dims or min(dims) <= 0 or not math.isfinite(pitch_deg):
+        return None
+    floor = geometry.pixel_to_floor(u_norm * geometry.IMG_W / 1000, v_norm * geometry.IMG_H / 1000, pitch_deg)
+    return floor if floor is not None and all(math.isfinite(v) for v in floor) else None
+
+
+def approach_goal(floor_x: float, floor_y: float, standoff_m: float = STANDOFF_M) -> dict:
+    """Stop short, facing the spot; explicit conversation goals have bounded travel."""
     distance = math.hypot(floor_x, floor_y)
-    travel = max(distance - STANDOFF_M, 0.0)
+    travel = max(distance - standoff_m, 0.0)
+    if standoff_m != STANDOFF_M:
+        travel = min(travel, MAX_RANGE_M - standoff_m)
     ratio = travel / distance if distance > 1e-6 else 0.0
     heading = math.atan2(floor_y, floor_x)
     return {

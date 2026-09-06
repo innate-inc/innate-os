@@ -29,13 +29,19 @@ _GO_TO_POINT_IN_VIEW_DECLARATION = {
         "coordinates (0-1000) of a point ON THE FLOOR: y from the top, x from the left. For an "
         "object, point at the floor at its base. The robot drives to about 0.35 m short of that "
         "spot and turns to face it. Prefer this over navigate_to_position for anything you can "
-        "see. Far targets are approached in capped steps — call it again after arriving."
+        "see. For conversation use standoff_m=1.2 and visible floor at the resident feet in the current main "
+        "camera image, never an older identity or wrist image. If feet/floor are cropped or ambiguous, "
+        "do not invent a point. Far targets are capped steps; inspect a fresh image after arriving."
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "y": {"type": "INTEGER", "description": "0-1000 from image top"},
             "x": {"type": "INTEGER", "description": "0-1000 from image left"},
+            "standoff_m": {
+                "type": "NUMBER",
+                "description": "Optional distance short of target, 0.35 to 1.5 meters; default 0.35, conversation 1.2",
+            },
         },
         "required": ["y", "x"],
     },
