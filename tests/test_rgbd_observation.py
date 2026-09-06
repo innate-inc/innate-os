@@ -308,7 +308,12 @@ def test_wrist_capture_retained_generation_and_delayed_reset_frame():
         provider._stop_spin = lambda: None
         provider._start_spin = lambda: None
         provider.destroy_subscription = lambda _: None
+        head_generation = provider._rgbd_generation
+        head_cached = object()
+        provider._rgbd_cached = head_cached
         provider._drop_unused_feeds()
+        assert provider._rgbd_generation == head_generation
+        assert provider._rgbd_cached is head_cached
         assert not provider.wrist_generation_is_current(retained_generation)
         msg.header.stamp = provider.get_clock().now().to_msg()
         provider._wrist_camera_cb(msg)
