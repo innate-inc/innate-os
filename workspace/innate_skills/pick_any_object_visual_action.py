@@ -6,14 +6,24 @@ import math
 import time
 
 from innate_skills.pick_any_object import PickAnyObject
-from innate_skills.pickup_visual_action import fresh, inside_envelope, trajectory, unchanged
+from innate_skills.pickup_visual_action import (
+    POSITION_TOLERANCE_M,
+    at_floor_grasp,
+    floor_grasp_precondition,
+    fresh,
+    inside_envelope,
+    trajectory,
+    unchanged,
+)
 
 from innate import SkillReturn
 from innate.exceptions import SkillFailed
 
+# Astra-only budget: ordinary inherited held-object verification can use Gemini.
+# Experiments must separately cap ALL provider requests, including verifier retries.
 # One head decision and up to four wrist decisions; the head search may consume
 # more than one, in which case the same total cap reduces the wrist budget.
-MAX_PROVIDER_CALLS = 5
+MAX_ASTRA_CALLS = 5
 MAX_WRIST_DECISIONS = 4
 MAX_MOVES = 2
 
@@ -25,7 +35,7 @@ class PickAnyObjectVisualAction(PickAnyObject):
         return super().execute(prompt=prompt, controller="astra")
 
     def _observe_pickup(self, prompt, image, view):
-        self._pickup_policy.max_calls = MAX_PROVIDER_CALLS
+        self._pickup_policy.max_calls = MAX_ASTRA_CALLS
         return super()._observe_pickup(prompt, image, view)
 
     def _fresh_stationary_frame(self):
@@ -65,10 +75,10 @@ class PickAnyObjectVisualAction(PickAnyObject):
         self.manipulation.torque_on()
         self._prepare_wrist_search(math.atan2(xy[1], xy[0]))
         moves = 0
-        self._pickup_policy.max_calls = MAX_PROVIDER_CALLS
+        self._pickup_policy.max_calls = MAX_ASTRA_CALLS
         for decision in range(MAX_WRIST_DECISIONS):
             pose = self.manipulation.pose
-            if not inside_envelope(pose.position, pose.rpy):
+            if not inside_envelope(pose.position, pose.rpy, minimum_z=self._p["floor_z"] - POSITION_TOLERANCE_M):
                 raise SkillFailed("Arm pose outside visual action envelope")
             joints = self._arm_joints()
             if not math.isfinite(joints[5]) or joints[5] < self.manipulation.GRIPPER_OPEN - 0.05:
@@ -86,8 +96,9 @@ class PickAnyObjectVisualAction(PickAnyObject):
                     reference=self._head_reference,
                     state={
                         "position_xyz_m": list(pose.position),
-                        "rpy_rad": list(pose.rpy),
-                        "claw_angle_rad": joints[5],
+                        "rpy_rad": [round(v, 3) for v in pose.rpy],
+                        "claw_angle_rad": round(joints[5], 3),
+                        "floor_grasp_precondition": floor_grasp_precondition(self._p),
                         "moves_remaining": MAX_MOVES - moves,
                         "wrist_decisions_remaining": MAX_WRIST_DECISIONS - decision,
                     },
@@ -127,12 +138,17 @@ class PickAnyObjectVisualAction(PickAnyObject):
                 j6 = self._arm_joints()[5]
                 if not math.isfinite(j6) or j6 < self.manipulation.GRIPPER_OPEN - 0.05:
                     raise SkillFailed("Claw changed before visual close")
+                final_pose = self.manipulation.pose
+                if not at_floor_grasp(pose.position, pose.rpy, self._p) or not at_floor_grasp(
+                    final_pose.position, final_pose.rpy, self._p
+                ):
+                    raise SkillFailed("Visual close requires the existing floor-grasp posture")
                 self.check_cancelled()
                 original = self._p
                 self._p = {**original, "grasp_retries": 0.0}
                 try:
                     self._metric_open_pregrasp = False
-                    self._close_twist_lift(prompt, *pose.position[:2], *pose.rpy)
+                    self._close_twist_lift(prompt, *final_pose.position[:2], *final_pose.rpy)
                 finally:
                     self._p = original
                 return
