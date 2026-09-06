@@ -387,6 +387,13 @@ class PickAnyObject(Skill):
         """Best-effort teardown: carry if holding, else fold to rest. Never
         raises. REST, not ZERO: after a failed descent the arm can be near the
         floor, and the zero posture would sweep the gripper through it."""
+        if getattr(self, "_metric_open_pregrasp", False) and not keep_grip:
+            # An open metric approach has not committed a grasp. Folding REST
+            # here would also close the fingers beside the rejected target.
+            # Leave the current arm command intact; this is not a motion brake
+            # and does not change how an already-issued move handles Stop.
+            self.logger.info("[PickAnyObject] preserving open pre-grasp posture after metric abort")
+            return
         if (
             keep_grip
             and getattr(self, "_pickup_policy", None) is not None
@@ -1006,6 +1013,7 @@ class PickAnyObject(Skill):
             raise SkillFailed("Head RGB-D surface is outside the compact metric envelope")
         x, y, top = center
         self.logger.info(f"[PickAnyObject] fresh metric upper center: {center}")
+        self._metric_open_pregrasp = True
         self.manipulation.torque_on()
         self._prepare_wrist_search(math.atan2(y, x))
         # Search motion can occlude or disturb the target. Recheck the original
@@ -1103,6 +1111,10 @@ class PickAnyObject(Skill):
         original_params = self._p
         self._p = {**original_params, "grasp_retries": 0.0}
         try:
+            # Last cancellation checkpoint is above. The rigid path's pre-close
+            # lift is a no-op; closure is now committed, with ordinary handling
+            # retained for an uncertain close or a held object.
+            self._metric_open_pregrasp = False
             self._close_twist_lift(prompt, x, y, roll, pitch, yaw)
         finally:
             self._p = original_params
@@ -1194,6 +1206,7 @@ class PickAnyObject(Skill):
             self.fail("Pickup controller must be astra, classic or rgbd")
         self._metric_pickup = controller == "rgbd"
         self._metric_reference = None
+        self._metric_open_pregrasp = False
         self._pickup_policy = None
         self._planned_roll = None
         self._search_clearance = "high"
