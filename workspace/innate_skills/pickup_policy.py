@@ -65,8 +65,11 @@ states visible evidence. Never invent simulator coordinates or hidden state.
 
 
 def _numbers(value, size):
-    return (isinstance(value, list) and len(value) == size and
-            all(type(x) in (float, int) and math.isfinite(x) for x in value))
+    return (
+        isinstance(value, list)
+        and len(value) == size
+        and all(type(x) in (float, int) and math.isfinite(x) for x in value)
+    )
 
 
 def validate_action(value):
@@ -79,7 +82,7 @@ def validate_action(value):
     if not _numbers([value["roll"]], 1) or abs(value["roll"]) > 1.5:
         raise ValueError("Pickup roll exceeds its limit")
     if value["action"] == "descend":
-        if value["delta"][:2] != [0,0] or not -.20 <= value["delta"][2] < 0:
+        if value["delta"][:2] != [0, 0] or not -0.20 <= value["delta"][2] < 0:
             raise ValueError("Descent must be vertical and at most20cm")
     elif any(abs(d) > 0.04 for d in value["delta"]):
         raise ValueError("Pickup step exceeds 4cm")
@@ -98,27 +101,29 @@ def motion_target(action, position, params):
     action = validate_action(action)
     u, v = action["center"]
     x, y, z = position
-    tolerance = params["wrist_final_half_px"] if z <= .07 or action["action"] == "descend" else params["wrist_half_px"]
-    centered = abs(u-params["wrist_box_u"]) <= tolerance and abs(v-params["wrist_box_v"]) <= tolerance
+    tolerance = params["wrist_final_half_px"] if z <= 0.07 or action["action"] == "descend" else params["wrist_half_px"]
+    centered = abs(u - params["wrist_box_u"]) <= tolerance and abs(v - params["wrist_box_v"]) <= tolerance
     if action["action"] in {"grasp", "unpress_grasp"}:
-        if z > params["wrist_stop_z"] + .005 or not centered:
+        if z > params["wrist_stop_z"] + 0.005 or not centered:
             raise ValueError("Grasp requires a centered object at the stop height")
         return None
     if action["action"] not in {"move", "descend"}:
         return None
     dx, dy, dz = action["delta"]
-    if dz < 0 and (not centered or abs(dx)+abs(dy) > 1e-6):
+    if dz < 0 and (not centered or abs(dx) + abs(dy) > 1e-6):
         raise ValueError("Align before descending")
-    target = x+dx, y+dy, z+dz
+    target = x + dx, y + dy, z + dz
     # Measured settling can be slightly below the commanded stop. A lateral
     # correction there must not fail or command another downward step.
-    minimum_z = min(z, params["wrist_stop_z"]) if dz >= 0 else params["wrist_stop_z"]-.001
-    if not minimum_z <= target[2] <= params.get("wrist_ceiling_z", params["hover_z"])+.005:
+    minimum_z = min(z, params["wrist_stop_z"]) if dz >= 0 else params["wrist_stop_z"] - 0.001
+    if not minimum_z <= target[2] <= params.get("wrist_ceiling_z", params["hover_z"]) + 0.005:
         raise ValueError("Wrist height outside pickup bounds")
     # Same translation rates as the original 4cm lateral / 1cm descent steps.
-    duration = max(params["wrist_move_s"],
-                   math.hypot(dx,dy) / (params["wrist_step_max"] / params["wrist_move_s"]),
-                   abs(dz) / (params["wrist_z_step"] / params["wrist_move_s"]))
+    duration = max(
+        params["wrist_move_s"],
+        math.hypot(dx, dy) / (params["wrist_step_max"] / params["wrist_move_s"]),
+        abs(dz) / (params["wrist_z_step"] / params["wrist_move_s"]),
+    )
     return (*target, duration)
 
 
@@ -136,10 +141,15 @@ class PickupPolicy:
         self.calls += 1
         body = {
             "instructions": SYSTEM,
-            "input": [{"role": "user", "content": [
-                {"type": "input_text", "text": json.dumps(observation, allow_nan=False)},
-                {"type": "input_image", "image_url": f"data:image/jpeg;base64,{image}"},
-            ]}],
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": json.dumps(observation, allow_nan=False)},
+                        {"type": "input_image", "image_url": f"data:image/jpeg;base64,{image}"},
+                    ],
+                }
+            ],
             "tools": [TOOL],
             "tool_choice": {"type": "function", "name": "pickup_action"},
             "parallel_tool_calls": False,
@@ -160,8 +170,12 @@ class PickupPolicy:
                 if not completed or completed.get("status") != "completed":
                     raise ValueError("Pickup model response incomplete")
                 usage = completed.get("usage")
-                record(model=completed.get("model"), usage=usage,
-                       service_tier=completed.get("service_tier"), elapsed_s=time.monotonic()-start)
+                record(
+                    model=completed.get("model"),
+                    usage=usage,
+                    service_tier=completed.get("service_tier"),
+                    elapsed_s=time.monotonic() - start,
+                )
                 if not usage:
                     raise ValueError("Pickup provider usage missing")
                 calls = [x for x in completed.get("output", []) if x.get("type") == "function_call"]

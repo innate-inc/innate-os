@@ -1,6 +1,6 @@
 # Pickup speed experiment
 
-Status: baseline preparation; no speed or reliability claim yet.
+Status: development pilots; no speed or reliability improvement claim yet.
 
 ## Acceptance fixed before implementation
 
@@ -20,10 +20,20 @@ Freeze the scenario set before the comparison and retain slower cases. Apply a
 180-second action timeout identically. Report sample size and uncertainty rather
 than extrapolating a small simulator set to hardware.
 
+Freeze scoring before the final matched set: a failed, rejected or timed-out
+pickup contributes the same 180-second failure penalty. Report both this
+all-attempt median and successful-trial latency, plus per-scenario outcomes.
+Require the half-time condition on both medians, so failed baselines cannot
+manufacture an apparent improvement. A working baseline needs stable holds in
+at least two of three repeats of every scenario. Keep development pilots
+separate from final frozen-code trials, retaining their failures and costs.
+
 Baseline source: the three pickup commits from draft #757 at `0cad4eb5`, reused
 above draft #772 at `cc039cc4` (Astra transport). Local combined baseline is
-`ee2d71a10`. Any reliability correction needed to establish a working baseline
-will be identified and applied equally before timing candidate optimizations.
+`ee2d71a10`. The recorded pilots additionally include the truthful post-carry
+result check at `870b5107f`, applied to both controllers. Any other reliability
+correction needed to establish a working baseline will be identified and
+applied equally before timing candidate optimizations.
 
 ## Workflow and risks
 
@@ -69,3 +79,41 @@ expanding to the matched set.
 Official API references checked September 5, 2026:
 [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra) and
 [structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
+
+## Pilot observations
+
+Two original-controller onboarding LEGO trials completed in 97.16 and 97.99
+seconds. Both needed three closes and retained the object after the carry fold.
+Wrist alignment consumed 49–51 seconds across the attempts; five Gemini 3.5
+Flash calls consumed 12.55–16.07 seconds per trial. Native physics ran at 1.000
+times wall-clock speed in every recorded pilot. This differs from two sibling
+onboarding observations in which the carry fold lost the object; preserve the
+post-carry check and judge real held state rather than assuming success.
+
+The first judge incorrectly required the object center to rise by the arm's
+7cm clearance criterion. Camera review showed a stable held brick at 7cm above
+the floor, versus its 1cm starting center. The judge was calibrated before any
+candidate comparison to require at least 3cm center rise, nonempty claw, and
+two seconds of position stability within 2cm in this isolated floor-object
+fixture. The original erroneous judgement is preserved beside the correction.
+
+Three initial Astra pilots failed: a search-height guard assumed the wrong
+starting height; a lateral correction rejected normal 2mm settling below the
+commanded stop; and a correctly centered grasp slipped on lift, then exhausted
+its ten-call development guard during reacquisition. These are failures, not
+fast pickups. The next prototype allows a model-selected close without the
+blanket 1cm pre-close lift, retains the original floor/force limits, preserves
+the raised rigid grip, and budgets enough bounded decisions for the existing
+retries. None of these changes has yet established the requested speedup.
+
+Gemini pilot costs use all returned output tokens including the difference
+between `total_tokens` and `prompt_tokens`, because proxy `completion_tokens`
+omits thinking. The first ten calls cost an estimated $0.04336 at
+[$1.50/M input and $9/M output](https://ai.google.dev/gemini-api/docs/pricing?authuser=1).
+These are provider list-price estimates, not invoices.
+
+Across all five development pickups, all 30 provider calls have returned usage.
+The estimated total is $0.31366, using Astra's $10/M input and $50/M output
+rates (no cached tokens in these pilots). The external cost ledger preserves
+raw usage and each trial's subtotal. Ten calls remain in the initial pilot
+envelope before reassessment.

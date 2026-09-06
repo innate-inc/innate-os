@@ -291,14 +291,19 @@ class PickAnyObject(Skill):
         """Best-effort teardown: carry if holding, else fold to rest. Never
         raises. REST, not ZERO: after a failed descent the arm can be near the
         floor, and the zero posture would sweep the gripper through it."""
-        if keep_grip and getattr(self, "_pickup_policy", None) is not None and self._grip_strength is not None and self._grip_strength < SOFT_GRIP_MIN:
+        if (
+            keep_grip
+            and getattr(self, "_pickup_policy", None) is not None
+            and self._grip_strength is not None
+            and self._grip_strength < SOFT_GRIP_MIN
+        ):
             # A verified raised rigid grasp is already a carry position. Folding
             # it to a fixed wrist roll can eject the object. Leave the standing
             # joint/grip targets intact; never reseed grip from measured aperture.
             try:
                 j6 = self._arm_joints()[5]
                 z = self.manipulation.pose.z
-                if math.isfinite(z) and z >= self._p["floor_z"] + .07 and j6 > GRIPPER_EMPTY_J6 + .02:
+                if math.isfinite(z) and z >= self._p["floor_z"] + 0.07 and j6 > GRIPPER_EMPTY_J6 + 0.02:
                     self.logger.info("[PickAnyObject] keeping the raised rigid grasp for carry")
                     return
             except (ArmFailed, LookupError):
@@ -525,24 +530,27 @@ class PickAnyObject(Skill):
             if _hsv is None:
                 raise SkillFailed("No fresh wrist image for pickup")
             position = tuple(self.manipulation.pose.position)
-            gain = p["wrist_kx"] / 100 * ((position[2]+WRIST_CAM_ABOVE_EE)/(.15+WRIST_CAM_ABOVE_EE))
+            gain = p["wrist_kx"] / 100 * ((position[2] + WRIST_CAM_ABOVE_EE) / (0.15 + WRIST_CAM_ABOVE_EE))
             observation = {
-                "target": prompt, "position": position,
+                "target": prompt,
+                "position": position,
                 "aim": [p["wrist_box_u"], p["wrist_box_v"]],
-                "gain": gain, "stop_z": p["wrist_stop_z"],
+                "gain": gain,
+                "stop_z": p["wrist_stop_z"],
                 "tolerance_px": p["wrist_final_half_px"] if position[2] <= AXIS_MIN_Z else p["wrist_half_px"],
                 "final_tolerance_px": p["wrist_final_half_px"],
                 "previous_action": last_action,
             }
             try:
-                action = self._pickup_policy.decide(observation, raw, self.sleep, self.check_cancelled,
-                                                    timeout=deadline-time.monotonic())
+                action = self._pickup_policy.decide(
+                    observation, raw, self.sleep, self.check_cancelled, timeout=deadline - time.monotonic()
+                )
                 self.check_cancelled()
                 if time.monotonic() >= deadline:
                     raise SkillFailed("Wrist pickup alignment timed out")
                 self.logger.info(f"[PickAnyObject] Astra observation: {observation}; action: {action}")
                 current = tuple(self.manipulation.pose.position)
-                if math.dist(current, position) > .015:
+                if math.dist(current, position) > 0.015:
                     raise SkillFailed("Arm moved during pickup observation; stopping")
                 target = motion_target(action, position if action["action"] == "descend" else current, p)
             except ValueError as error:
@@ -558,14 +566,14 @@ class PickAnyObject(Skill):
                 continue
             x, y, z, duration = target
             nx, ny = self.manipulation.clamp_reach(x, y)
-            if math.hypot(nx-x, ny-y) > .001:
+            if math.hypot(nx - x, ny - y) > 0.001:
                 raise SkillFailed("Model pickup step is outside arm reach")
             if action["action"] == "descend":
                 # One model decision, the same small motion/cancel points.
                 step_z = current[2]
                 while step_z > z + 1e-6:
                     self.check_cancelled()
-                    step_z = max(z, step_z-p["wrist_z_step"])
+                    step_z = max(z, step_z - p["wrist_z_step"])
                     self.manipulation.move_to(x, y, step_z, pitch=p["wrist_pitch"], duration=p["wrist_move_s"])
                     frame = self.wrist_image
                     hsv, raw = self._next_wrist_hsv(frame)
@@ -896,9 +904,10 @@ class PickAnyObject(Skill):
         self._pickup_policy = None
         self._unpress_grasp = True
         if controller == "astra":
-            from brain_client.brain.openai_transport import pick_openai_transport
-            from innate_skills.pickup_policy import PickupPolicy
             from innate_skills._pickup_probe import record
+            from innate_skills.pickup_policy import PickupPolicy
+
+            from brain_client.brain.openai_transport import pick_openai_transport
 
             transport, _backend = pick_openai_transport(self._proxy)
             if transport is None:
@@ -947,6 +956,8 @@ class PickAnyObject(Skill):
         self.say("Got it.")
         return f"Picked up '{prompt}' (grip verified after the lift and carry motion)"
 
+
 # Temporary local timing instrumentation.
-from innate_skills._pickup_probe import install as _install_probe
+from innate_skills._pickup_probe import install as _install_probe  # noqa: E402
+
 _install_probe(PickAnyObject)
