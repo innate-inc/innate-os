@@ -287,3 +287,65 @@ def test_continuity_hint_must_match_the_immediately_active_encounter(roster, mon
     assert output.image is None
     assert saved["active_encounter_id"] is None
     assert [entry["name"] for entry in saved["encounters"]] == ["Alex", "Blake"]
+
+
+@pytest.mark.parametrize("fresh_match", ["resident-002", "resident-001", None])
+def test_rejected_hint_then_one_fresh_full_roster_match(roster, monkeypatch, fresh_match):
+    """Exercise actual matcher state transitions; agent fallback choice remains prompt policy."""
+    reference = _frame((130, 40, 40))
+    other = _frame((40, 40, 130))
+    current = _frame((40, 130, 40))
+    state = _state_with_blake(reference, identified_pose=Pose(1.0, 2.0, 0.0))
+    state["encounters"].append(
+        {
+            "encounter_id": "resident-001",
+            "name": "Alex",
+            "status": "confirmed",
+            "order": "Another complete order",
+            "reference_images_b64": [str(other)],
+        }
+    )
+    roster.storage["state"] = state
+    roster.pose = Pose(2.15, 2.0, 0.0)  # guard stays at 1 m; a real 1.15 m approach exceeds it
+    cameras, model_calls = [], []
+
+    def capture():
+        cameras.append(True)
+        return current, None
+
+    def ask(*args, **kwargs):
+        model_calls.append(True)
+        if fresh_match is None:
+            return "not valid identity JSON"
+        return json.dumps(
+            {
+                "decision": "match",
+                "encounter_id": fresh_match,
+                "confidence": 0.95,
+                "view_quality": "good",
+                "plausible_encounter_ids": [fresh_match],
+                "reason": "clear saved match",
+            }
+        )
+
+    roster._fresh_upward_frame = capture
+    monkeypatch.setattr(roster_module.gemlib, "ask_image", ask)
+    rejected = roster._identify("resident-002")
+    _assert_contract(rejected, "IDENTITY_UNAVAILABLE", reason="continuity_context_unavailable")
+    assert cameras == model_calls == []
+    assert roster._load_state()["active_encounter_id"] is None
+
+    fresh = roster._identify()  # explicit separate call, no hint and no automatic matcher retry
+    saved = roster._load_state()
+    assert cameras == model_calls == [True]
+    if fresh_match is None:
+        _assert_contract(fresh, "IDENTITY_UNAVAILABLE", reason="malformed_identity_response")
+        assert saved["active_encounter_id"] is None
+    else:
+        _assert_contract(fresh, "KNOWN_PERSON", encounter_id=fresh_match)
+        assert saved["active_encounter_id"] == fresh_match
+    assert {entry["encounter_id"]: entry["order"] for entry in saved["encounters"]} == {
+        "resident-002": "A complete order",
+        "resident-001": "Another complete order",
+    }
+    assert len(saved["encounters"]) == 2 and saved["pending"] == []
