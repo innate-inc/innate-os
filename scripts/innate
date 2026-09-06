@@ -2673,6 +2673,45 @@ def cli(ctx):
 # -- service group ------------------------------------------------------------
 
 
+@cli.group("keys", invoke_without_command=True)
+@click.pass_context
+def keys_cli(ctx):
+    """Configure owner-local API keys (never exposed through robot settings)."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+def _key_commands():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sim" / "launcher"))
+    import provider_keys
+
+    return provider_keys
+
+
+@keys_cli.command("set", context_settings={"ignore_unknown_options": True, "allow_extra_args": True})
+@click.argument("provider", type=click.Choice(["openai", "cartesia", "gemini", "innate"]))
+@click.option("--stdin", "from_stdin", is_flag=True, help="Read one key from a pipe instead of the hidden prompt.")
+@click.pass_context
+def keys_set(ctx, provider, from_stdin):
+    """Save or replace a key. Key values are never command-line arguments."""
+    if ctx.args:
+        raise click.ClickException("Key values are not accepted as arguments. Use the hidden prompt or --stdin.")
+    _key_commands().set_key(INNATE_OS_ROOT, provider, from_stdin=from_stdin)
+
+
+@keys_cli.command("status")
+def keys_status():
+    """Show which keys are configured without revealing their values."""
+    _key_commands().status(INNATE_OS_ROOT)
+
+
+@keys_cli.command("remove")
+@click.argument("provider", type=click.Choice(["openai", "cartesia", "gemini", "innate"]))
+def keys_remove(provider):
+    """Clear a key, including saved copies from prior setup choices."""
+    _key_commands().remove_key(INNATE_OS_ROOT, provider)
+
+
 @cli.group(invoke_without_command=True)
 @click.pass_context
 def service(ctx):

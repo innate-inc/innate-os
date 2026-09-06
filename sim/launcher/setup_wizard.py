@@ -6,7 +6,6 @@ import getpass
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 from config import (
     CLI_SIM,
@@ -19,6 +18,17 @@ from config import (
     warn,
 )
 from dashboard import BOLD, CYAN, DIM, GREEN, NC, YELLOW, confirm, menus_supported, select_one
+
+# Re-export the existing wizard helpers for callers importing them here.
+from env_store import (  # noqa: F401
+    _is_active_env_assignment,
+    _is_commented_env_assignment,
+    _quote_env_value,
+    _unquote_env_value,
+    comment_out_env_key,
+    uncomment_env_key,
+    write_env_value,
+)
 from runtime import UV_INSTALL_COMMAND, find_uv
 
 
@@ -38,14 +48,6 @@ def is_interactive_terminal() -> bool:
 
 def is_configured_secret(value: str | None) -> bool:
     return is_configured_secret_value(INNATE_SERVICE_KEY, value)
-
-
-def _is_active_env_assignment(line: str, key: str) -> bool:
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#") or "=" not in stripped:
-        return False
-    assignment_key, _ = stripped.split("=", 1)
-    return assignment_key.strip() == key
 
 
 def _prompt_yes_no(question: str, *, default: bool = False) -> bool:
@@ -129,102 +131,6 @@ def _read_masked_secret(prompt: str) -> str | None:
         sys.stdout.write("\n")
         sys.stdout.flush()
     return "".join(chars).strip()
-
-
-def _quote_env_value(value: str) -> str:
-    if "'" in value:
-        raise ValueError("secret values saved to .env cannot contain single quotes")
-    return f"'{value}'"
-
-
-def _unquote_env_value(value: str) -> str:
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        return value[1:-1]
-    return value
-
-
-def _is_commented_env_assignment(line: str, key: str) -> bool:
-    """True only for a commented-out assignment of ``key`` (``# KEY=value``).
-
-    A descriptive comment like ``# Filled by ./innate setup ...`` is not an
-    assignment, so it is never matched (and never toggled)."""
-    stripped = line.strip()
-    if not stripped.startswith("#"):
-        return False
-    return _is_active_env_assignment(stripped.lstrip("#").strip(), key)
-
-
-def write_env_value(path: Path, key: str, value: str) -> None:
-    if "\n" in value or "\r" in value:
-        raise ValueError(f"{key} cannot contain newlines")
-
-    replacement = f"{key}={_quote_env_value(value)}"
-    lines = path.read_text().splitlines() if path.exists() else []
-    updated = False
-    output: list[str] = []
-
-    for line in lines:
-        if _is_active_env_assignment(line, key):
-            if not updated:
-                output.append(replacement)
-                updated = True
-        else:
-            output.append(line)
-
-    if not updated:
-        if output and output[-1].strip():
-            output.append("")
-        output.append(replacement)
-
-    path.write_text("\n".join(output) + "\n")
-
-
-def comment_out_env_key(path: Path, key: str) -> bool:
-    """Comment out an active ``KEY=...`` assignment in the env file, if present.
-
-    Returns True when a line was actually commented out. Leaves unset keys and
-    already-commented lines untouched.
-    """
-    if not path.exists():
-        return False
-    lines = path.read_text().splitlines()
-    changed = False
-    output: list[str] = []
-    for line in lines:
-        if _is_active_env_assignment(line, key):
-            output.append(f"# {line}")
-            changed = True
-        else:
-            output.append(line)
-    if changed:
-        path.write_text("\n".join(output) + "\n")
-    return changed
-
-
-def uncomment_env_key(path: Path, key: str) -> str | None:
-    """Re-enable a previously commented-out ``# KEY=value`` assignment so the user
-    can switch a backend back on without re-pasting the key. Value-less
-    placeholders (the ``# KEY=`` lines shipped in .env.template) are left
-    commented — there is no key to restore, so the caller must prompt for one.
-    Returns the restored value, or None if there is nothing to restore."""
-    if not path.exists():
-        return None
-    lines = path.read_text().splitlines()
-    value: str | None = None
-    output: list[str] = []
-    for line in lines:
-        if value is None and _is_commented_env_assignment(line, key):
-            body = line.strip().lstrip("#").strip()
-            _, raw_value = body.split("=", 1)
-            candidate = _unquote_env_value(raw_value.strip())
-            if candidate:
-                output.append(body)
-                value = candidate
-                continue
-        output.append(line)
-    if value is not None:
-        path.write_text("\n".join(output) + "\n")
-    return value
 
 
 def _save_service_key(config: dict[str, object], service_key: str) -> None:

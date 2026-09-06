@@ -238,7 +238,7 @@ LEGACY_SHARED_CONTAINER = "innate-dev"
 LEGACY_SHARED_PROJECT = "innate-os"
 LEGACY_CLOUD_AGENT_CONTAINER = "innate-cloud-agent"
 OS_CONTAINER_TMUX_CMD = "./scripts/launch_sim_in_tmux.zsh --detach"
-SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY)
+SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY, "OPENAI_API_KEY", "CARTESIA_API_KEY")
 LOG_TARGETS = {
     "bootstrap": BOOTSTRAP_LOG_PATH,
     "compose": COMPOSE_LOG_PATH,
@@ -702,7 +702,9 @@ def get_config() -> dict[str, object]:
     raw_env = dict(user_env)
     for key in SECRET_ENV_KEYS:
         value = os.environ.get(key, "").strip()
-        if is_configured_secret_value(key, value):
+        # An explicit local value (including a blank removal) wins over an old
+        # shell export, matching config_loader on the robot after restart.
+        if key not in user_env and is_configured_secret_value(key, value):
             raw_env[key] = value
     sim_config = parse_toml_file(SIM_CONFIG_PATH)
     if "cloud_agent" in sim_config:
@@ -747,13 +749,18 @@ def get_config() -> dict[str, object]:
 
 
 def write_env_file(path: Path, values: dict[str, str]) -> None:
-    lines = [f"{key}={value}" for key, value in sorted(values.items()) if value != ""]
-    path.write_text("\n".join(lines) + "\n")
+    from env_store import write_env_values
+
+    write_env_values(path, values)
 
 
 def build_os_env(config: dict[str, object]) -> Path:
     raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
     os_env: dict[str, str] = dict(raw_env)
+
+    if os.environ.get("INNATE_PUBLIC_DEMO") == "1" or os_env.get("INNATE_PUBLIC_DEMO") == "1":
+        if any(os_env.get(key, "").strip() for key in SECRET_ENV_KEYS):
+            raise StackError("Public simulator runtimes cannot contain API keys; use the external demo relay.")
 
     ensure_state_dir()
     write_env_file(GENERATED_OS_ENV_PATH, os_env)
