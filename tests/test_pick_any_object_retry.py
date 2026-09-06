@@ -145,9 +145,11 @@ def test_pickup_reports_a_drop_during_the_final_carry_motion(monkeypatch):
         skill._detect_px = lambda *_: None
         skill._grasp_at = lambda *_: None
         skill._grasp_verified = lambda *_: True
-        def carry(**_):
+
+        def carry(*, events=events, skill=skill, dropped=dropped, **_):
             events.append("carry finished")
             skill.joint_states.position[5] = -0.085 if dropped else 0.12
+
         skill._rest_arm = carry
         if dropped:
             with pytest.raises(exceptions.SkillFailed, match="slipped"):
@@ -156,3 +158,19 @@ def test_pickup_reports_a_drop_during_the_final_carry_motion(monkeypatch):
         else:
             assert "carry motion" in skill.execute("brick")
             assert events.index("Got it.") > events.index("carry finished")
+
+
+def test_rigid_carry_preserves_only_a_raised_nonempty_grasp(monkeypatch):
+    monkeypatch.setattr("innate_skills.pick_any_object.time.sleep", lambda _: None)
+    for strength, z, aperture, preserved in [
+        (0.35, 0.20, 0.12, True),
+        (0.60, 0.20, 0.12, False),
+        (0.35, 0.04, 0.12, False),
+        (0.35, 0.20, -0.085, False),
+    ]:
+        skill = _skill(closes_empty=False)
+        skill._grip_strength = strength
+        skill.manipulation.pose.z = z
+        skill.joint_states.position[5] = aperture
+        skill._rest_arm(keep_grip=True)
+        assert len(skill.manipulation.events) == (0 if preserved else 2)

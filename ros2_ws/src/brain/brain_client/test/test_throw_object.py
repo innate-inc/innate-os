@@ -23,6 +23,7 @@ class ThrowTests(unittest.TestCase):
         skill.manipulation = SimpleNamespace(
             GRIPPER_OPEN=Manipulation.GRIPPER_OPEN,
             GRIPPER_MAX_STRENGTH=Manipulation.GRIPPER_MAX_STRENGTH,
+            pose=SimpleNamespace(roll=-1.5),
             torque_on=Mock(),
             gripper_close=Mock(),
             move_to=Mock(),
@@ -58,6 +59,8 @@ class ThrowTests(unittest.TestCase):
         skill.manipulation.follow.side_effect = lambda _: skill._cancel_latch().set()
         self.assertIn("Check where it landed", skill.execute())
         skill.manipulation.follow.assert_called_once()
+        self.assertEqual(skill.manipulation.move_to.call_args.kwargs["roll"], -1.5)
+        self.assertTrue(all(waypoint.roll == -1.5 for waypoint in skill.manipulation.follow.call_args.args[0]))
         skill = self.skill()
         skill.manipulation.follow.side_effect = ArmFailed("trajectory rejected")
         with self.assertRaisesRegex(SkillFailed, "trajectory rejected"):
