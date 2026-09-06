@@ -101,7 +101,7 @@ def test_real_grasp_path_move_then_close_or_open_abort(monkeypatch, failure):
         s.manipulation.pose = NS(position=xyz, rpy=(kw["roll"], kw["pitch"], kw["yaw"]))
 
     s.manipulation.move_to = move
-    s._fresh_stationary_frame = lambda: frame()
+    s._settled_wrist_observation = lambda: (frame(), s.manipulation.pose)
 
     def stable(*_):
         if failure == "changed":
@@ -143,7 +143,7 @@ def test_real_post_inference_gate_rejects_changed_pose_reset_and_pixels(monkeypa
     a = frame()
     b = frame()
     a.capture_generation = b.capture_generation = 1
-    s._fresh_stationary_frame = lambda: b
+    s._fresh_wrist_frame = lambda: b
     s._stable_after_decision(a, pose)
     b.capture_generation = 2
     with pytest.raises(SkillFailed):
@@ -177,14 +177,14 @@ def test_capture_wait_rejects_republished_old_image_and_honors_stop(monkeypatch)
 
     s.sleep = republish
     with pytest.raises(SkillFailed, match="fresh captured"):
-        s._fresh_stationary_frame()
+        s._fresh_wrist_frame()
 
     def stop(_seconds):
         raise InterruptedError("stop")
 
     s.sleep = stop
     with pytest.raises(InterruptedError):
-        s._fresh_stationary_frame()
+        s._fresh_wrist_frame()
 
 
 def test_scene_change_during_ik_preflight_cannot_issue_motion(monkeypatch):
@@ -201,7 +201,7 @@ def test_scene_change_during_ik_preflight_cannot_issue_motion(monkeypatch):
     s.check_cancelled = lambda: None
     s._arm_joints = lambda: [0] * 5 + [0.85]
     s._prepare_wrist_search = lambda *_: None
-    s._fresh_stationary_frame = frame
+    s._settled_wrist_observation = lambda: (frame(), s.manipulation.pose)
     s.sleep = lambda _: None
     changed = [False]
     moves = []
@@ -261,7 +261,7 @@ def test_explicit_visual_close_cannot_bypass_mechanical_precondition(z, pitch):
     s.check_cancelled = lambda: None
     s._prepare_wrist_search = lambda *_: None
     s._arm_joints = lambda: [0] * 5 + [0.85]
-    s._fresh_stationary_frame = frame
+    s._settled_wrist_observation = lambda: (frame(), s.manipulation.pose)
     s._stable_after_decision = lambda f, p: f
     s.manipulation = NS(pose=NS(position=(0.3, 0, z), rpy=(0, pitch, 0)), GRIPPER_OPEN=0.85, torque_on=lambda: None)
     s._pickup_policy = NS(locate=lambda *a, **k: {"detections": [action("close")]})
@@ -286,7 +286,7 @@ def test_latest_pose_cannot_drift_out_of_close_band_after_visual_check():
     s.sleep = lambda _: None
     s.check_cancelled = lambda: None
     s._prepare_wrist_search = lambda *_: None
-    s._fresh_stationary_frame = frame
+    s._settled_wrist_observation = lambda: (frame(), s.manipulation.pose)
     s._stable_after_decision = lambda f, p: f
     s.manipulation = NS(pose=NS(position=(0.3, 0, 0.037), rpy=(0, 1.3, 0)), GRIPPER_OPEN=0.85, torque_on=lambda: None)
     reads = [0]
@@ -372,3 +372,102 @@ def test_floor_preset_owns_posture_and_shift_preserves_it():
         trajectory((0.3, 0, 0.10), (0, 0.82, 0.6), action(), params)
     with pytest.raises(ValueError):
         validate_action(action("shift"))
+
+
+@pytest.mark.parametrize("case", ["settles", "drifts", "reset", "cancel"])
+def test_observed_settling_uses_fixed_anchor_and_latest_pose(monkeypatch, case):
+    importlib.import_module("test_pick_any_object_retry")
+    from innate_skills import pick_any_object_visual_action as module
+
+    from innate.exceptions import SkillFailed
+
+    s = object.__new__(module.PickAnyObjectVisualAction)
+    s._p = {"wrist_settle_s": 0.8}
+    now = [20.0]
+    index = [0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    s.check_cancelled = lambda: None
+    s.manipulation = NS(pose=None)
+    frames = []
+
+    def sample(timeout=1.0):
+        if case == "cancel":
+            raise InterruptedError("stop")
+        index[0] += 1
+        now[0] += 0.2
+        f = frame()
+        f.capture_ns = 10_000_000_000 + index[0] * 200_000_000
+        f.capture_generation = 2 if case == "reset" and index[0] > 1 else 1
+        x = 0.3 + (0.001 * index[0] if case == "drifts" else 0.001 * min(index[0], 3))
+        s.manipulation.pose = NS(position=(x, 0, 0.1), rpy=(0, 0.82, 0.24))
+        s.wrist_image = f
+        frames.append(f)
+        return f
+
+    s._fresh_wrist_frame = sample
+    if case == "settles":
+        f, pose = s._settled_wrist_observation()
+        assert f is frames[-1] and pose is s.manipulation.pose
+        assert pose.position[0] == pytest.approx(0.303)
+        assert now[0] >= 21.0
+    elif case == "cancel":
+        with pytest.raises(InterruptedError):
+            s._settled_wrist_observation()
+    else:
+        if case == "drifts":
+            s._grip_strength = 0.35
+            s._search_clearance = "low"
+            s.manipulation.torque_on = lambda: None
+            s._prepare_wrist_search = lambda *_: None
+            s._pickup_policy = NS(locate=lambda *a, **k: pytest.fail("unsettled view reached model"))
+            with pytest.raises(SkillFailed):
+                s._grasp_at("cube", (0.3, 0))
+        else:
+            with pytest.raises(SkillFailed):
+                s._settled_wrist_observation()
+        assert s._visual_abort["reason"] == ("camera generation changed" if case == "reset" else "wrist did not settle")
+        assert s._visual_abort["current"]["camera"]["capture_ns"] == frames[-1].capture_ns
+
+
+def test_abort_retains_exact_images_and_predicate_after_control(monkeypatch):
+    import base64
+
+    importlib.import_module("test_pick_any_object_retry")
+    from innate_skills.pick_any_object import PickAnyObject
+    from innate_skills.pick_any_object_visual_action import PickAnyObjectVisualAction
+
+    from innate.exceptions import SkillFailed
+
+    class Captured(str):
+        @property
+        def jpeg(self):
+            return base64.b64decode(self)
+
+    a = Captured(base64.b64encode(frame().jpeg).decode())
+    im = np.full((480, 640), 60, np.uint8)
+    im[200:220, 300:320] = 220
+    b = Captured(base64.b64encode(frame(im).jpeg).decode())
+    for i, f in enumerate((a, b)):
+        f.capture_ns = 100 + i
+        f.capture_generation = 1
+        f.capture_is_current = lambda: True
+        f.received_monotonic = 20.0 + i
+        f.received_ros_ns = 100 + i
+    s = object.__new__(PickAnyObjectVisualAction)
+    s.storage = {}
+    s.logger = NS(warning=lambda _: None)
+    pose = NS(position=(0.3, 0, 0.03), rpy=(0, 1.3, 0))
+    s.manipulation = NS(pose=pose)
+    s._fresh_wrist_frame = lambda: b
+    s.check_cancelled = lambda: None
+
+    def parent(self, **kwargs):
+        self._stable_after_decision(a, pose)
+
+    monkeypatch.setattr(PickAnyObject, "execute", parent)
+    with pytest.raises(SkillFailed, match="wrist image changed"):
+        s.execute("cube")
+    saved = s.storage["last_visual_abort"]
+    assert saved["reason"] == "wrist image changed"
+    assert saved["original"]["jpeg_b64"] == a and saved["current"]["jpeg_b64"] == b
+    assert saved["current"]["camera"]["capture_ns"] == 101
