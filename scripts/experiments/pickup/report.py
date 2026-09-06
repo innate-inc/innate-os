@@ -17,6 +17,14 @@ for path in a.root.glob("*/manifest.json"):
     if scenario.get("campaign") != a.campaign:
         continue
     judgement = json.loads(path.with_name("judgement.json").read_text())
+    expected = next((s for s in scenarios if s["id"] == scenario["scenario_id"]), {})
+    valid = (
+        bool(expected)
+        and all(scenario.get(k) == v for k, v in expected.items() if k != "id")
+        and manifest.get("source_unchanged_during_trial") is True
+        and not manifest.get("recording_errors")
+        and 0.98 <= judgement.get("physics_to_wall_ratio", 0) <= 1.02
+    )
     rows.append(
         {
             "trial": path.parent.name,
@@ -28,11 +36,12 @@ for path in a.root.glob("*/manifest.json"):
             "penalized_s": judgement["end_to_end_s"] if judgement["success"] else 180,
             "action_s": judgement["action_elapsed_s"],
             "revision": manifest["source_revision"],
+            "valid_comparison": valid,
         }
     )
 
 by_scenario = {}
-complete = True
+complete = all(r["valid_comparison"] for r in rows) and len({r["revision"] for r in rows}) == 1
 for scenario in scenarios:
     entries = [r for r in rows if r["scenario"] == scenario["id"]]
     by_scenario[scenario["id"]] = {}
@@ -74,7 +83,7 @@ result = {
     "candidate_to_baseline_ratio": ratios,
     "by_scenario": by_scenario,
     "trials": rows,
-    "goal_passed": working_baseline
+    "meets_benchmark_criteria": working_baseline
     and reliability_preserved
     and all(v is not None and v <= 0.5 for v in ratios.values()),
     "uncertainty": "Three repeats per scenario detect obvious regressions; they cannot establish population reliability or hardware performance.",
