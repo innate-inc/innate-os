@@ -318,7 +318,12 @@ def test_head_perception_finishes_fold_before_returning_a_target(monkeypatch):
 
 def test_pickup_reports_a_drop_during_the_final_carry_motion(monkeypatch):
     approach = SimpleNamespace(search=lambda _: (0.3, 0), position_above=lambda _, xy: xy)
-    monkeypatch.setattr("innate_skills.pick_any_object.FloorApproach", lambda *_: approach)
+
+    def make_approach(*_, **kwargs):
+        assert kwargs["confirm_arrival"] is True
+        return approach
+
+    monkeypatch.setattr("innate_skills.pick_any_object.FloorApproach", make_approach)
     for dropped in (False, True):
         skill = _skill(closes_empty=False)
         events = []
@@ -378,3 +383,36 @@ def test_head_settling_requires_fresh_stationary_feedback_and_a_later_image(monk
         assert 0.15 < now[0] < 0.5
     else:
         assert now[0] >= 1.2
+
+
+@pytest.mark.parametrize(
+    ("confirm", "flow_result", "projectable", "head_looks"),
+    ((True, "in_box", True, 1), (False, "in_box", True, 0), (False, "in_box", False, 1), (False, "timeout", True, 1)),
+)
+def test_flow_arrival_skips_head_only_for_confirmed_projectable_arrival(
+    monkeypatch, confirm, flow_result, projectable, head_looks
+):
+    import importlib.util
+
+    repo = Path(__file__).resolve().parents[1]
+
+    def load(name, path):
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    real_geometry = load("pickup_test_geometry", repo / "ros2_ws/src/brain/brain_client/innate/geometry.py")
+    monkeypatch.setitem(sys.modules, "innate.geometry", real_geometry)
+    module = load("pickup_test_approach", repo / "workspace/innate_skills/approach.py")
+    monkeypatch.setattr(module, "floor_to_pixel", lambda *_: (320, 200))
+    monkeypatch.setattr(module, "pixel_to_floor", lambda *_: (0.28, 0) if projectable else None)
+    host = SimpleNamespace(main_image="frame", mobility=SimpleNamespace(stop=lambda: None))
+    approach = module.FloorApproach(host, dict(module.APPROACH_PARAMS), None, confirm_arrival=confirm)
+    approach.odom_xyt = lambda: (0, 0, 0)
+    approach._sweet_box = lambda: ((320, 300), (40, 40), (20, 20))
+    approach._follow_into_box = lambda *_args, **_kwargs: (flow_result, (320, 300))
+    looks = []
+    approach._localize_retry = lambda _: looks.append("head") or ((0.28, 0), (320, 300))
+    assert approach.position_above("the brick", (0.4, 0)) == (0.28, 0)
+    assert len(looks) == head_looks

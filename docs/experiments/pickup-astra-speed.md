@@ -1,7 +1,8 @@
 # Pickup speed experiment
 
-Status: the complete second campaign passes the speed ratios but fails the
-predeclared working-baseline gate. The requested goal remains unproven.
+Status: matched-v3 has a working baseline and 9/9 durable pickups with each
+controller, but its 44.785% median reduction misses the 50% gate. The requested
+goal remains unproven.
 
 ## Acceptance fixed before implementation
 
@@ -260,3 +261,32 @@ request. No grasp starts; only the existing safe arm teardown follows. The
 server returns ROS status 4 with `success=true` and `success_type=cancelled`;
 the latter is authoritative, and the benchmark rejects this as a pickup success.
 The earlier absent-target and inference-cancel recordings remain retained.
+
+
+## Matched-v3 result and next bounded pilot
+
+All 18 attempts at `25ab908b005c5e58b237aec429fd9d56c3e7c703` passed the initial
+hold and additional 20-second durability gate. Both successful-only and
+all-attempt medians were 46.766963 seconds for classic and 25.822354 seconds for
+Astra: **44.785% lower**, below the required 50%. Per-scenario success counts
+were 3/3 for both controllers on onboarding LEGO, rotated LEGO and cube. Exact
+source hashes agree with the frozen revision; reset-state differences were
+below 1e-5 and all physics-rate checks passed. Every attempt remains retained.
+Cumulative usage through this campaign: 211 calls, complete usage records,
+estimated $2.259 at the recorded list prices.
+
+The next pilot adjusts nominal low-search reach from 0.30m to 0.315m, and flat
+search reach to 0.306m, addressing repeated forward camera-servo corrections.
+A proposed full 2cm shift exceeded the original joint-travel envelope and was
+rejected. The chosen poses keep every joint's travel at or below the original,
+with the same 2-second motion; independent URDF checks give peak EE speeds
+0.249m/s and 0.238m/s versus 0.304m/s originally. The runtime travel guard still
+falls back to the original pose for unfavorable starting states.
+
+Astra also permits three fresh optical-flow arrival frames to hand off directly
+to mandatory wrist-model target recognition. This only applies to a successful,
+projectable `in_box` result; timeouts, invalid projections, classic callers and
+blind grasps keep head confirmation. Neither the wrist recognition requirement
+nor the final centering, force, descent, cancellation or hold gates is relaxed.
+These are candidate changes awaiting real pilots and a new complete comparison,
+not adjustments to the frozen matched-v3 result.
