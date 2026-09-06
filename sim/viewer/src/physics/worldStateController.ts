@@ -25,6 +25,7 @@ export interface ChallengeProgress {
 /** The currently running (or just finished) challenge. */
 export interface ChallengeActive {
   id: string;
+  attempt_id?: string;
   state: "running" | "passed" | "failed";
   reason: string;
   elapsed_s: number;

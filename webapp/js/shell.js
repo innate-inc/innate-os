@@ -14,9 +14,11 @@ import { createArmAlert } from "./armAlert.js";
 import { maybeShowAppPromo } from "./appPromo.js";
 import { installPressActivate } from "./pressActivate.js";
 import {
-  consumeAgentOnboardingRequest,
-  createOnboarding,
+  ONBOARDING_REQUEST_EVENT,
+  initializeFirstRunCompletion,
+  shouldAutoStartOnboarding,
   ONBOARDING_START_SECTION,
+  startFirstRun,
 } from "./onboarding.js";
 import { FOOTER_SECTIONS, GROUPS, SECTIONS, SIM_SECTIONS, railRows } from "./railLayout.js";
 
@@ -80,7 +82,6 @@ export function initShell(navigate) {
   const footNav = document.createElement("nav");
   footNav.className = "rail-nav rail-foot";
   footNav.setAttribute("aria-label", "Utility");
-  const onboarding = createOnboarding();
   let activeKey = "";
   let checkedFirstPage = false;
   let onboardingPending = false;
@@ -129,8 +130,8 @@ export function initShell(navigate) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "rail-link rail-help";
-    button.title = "Help & onboarding";
-    button.setAttribute("aria-label", "Help & onboarding");
+    button.title = "Interface help";
+    button.setAttribute("aria-label", "Interface help");
     button.innerHTML =
       '<span class="rail-ico"><span class="rail-help-mark" aria-hidden="true">?</span></span>' +
       '<span class="rail-label">Help</span>';
@@ -141,11 +142,10 @@ export function initShell(navigate) {
   function requestOnboarding() {
     onboardingPending = true;
     onboardingRestart = true;
-    // Replay the contextual coach in either onboarding surface. From utility
-    // pages, return to the canonical Agent introduction.
+    // Help shows passive tips. It never restarts the first mission.
     if (activeKey === ONBOARDING_START_SECTION || activeKey === "teleop") {
       onboardingPending = false;
-      onboarding.start(true);
+      window.dispatchEvent(new CustomEvent(ONBOARDING_REQUEST_EVENT));
       onboardingRestart = false;
     } else {
       navigate(pathForKey(ONBOARDING_START_SECTION));
@@ -185,7 +185,8 @@ export function initShell(navigate) {
   // browser/OS combo like Cmd+1 (tab switch). A removed link (sim-mode filter)
   // simply has no match, so its number is inert.
   window.addEventListener("keydown", (e) => {
-    if (e.altKey || e.ctrlKey || e.metaKey || e.repeat || isTypingContext()) return;
+    if (e.defaultPrevented || document.body.classList.contains("agent-conversation-onboarding-active")
+      || e.altKey || e.ctrlKey || e.metaKey || e.repeat || isTypingContext()) return;
     const section = SECTIONS[Number(e.key) - 1];
     if (!section) return;
     const link = rail.querySelector(`.rail-link[data-section="${section.key}"]`);
@@ -240,21 +241,23 @@ export function initShell(navigate) {
     document.title = section ? `Innate · ${section.label}` : "Innate";
   }
 
-  function firstPageReady() {
+  async function firstPageReady() {
     if (!checkedFirstPage) {
       checkedFirstPage = true;
-      onboardingPending = onboarding.shouldAutoStart();
+      const config = await getConfig();
+      if (config?.simControls) await initializeFirstRunCompletion();
+      onboardingPending = !!config?.simControls && shouldAutoStartOnboarding();
       if (onboardingPending && activeKey !== ONBOARDING_START_SECTION) {
         navigate(pathForKey(ONBOARDING_START_SECTION));
       }
     }
     if (onboardingPending && activeKey === ONBOARDING_START_SECTION) {
       onboardingPending = false;
-      onboarding.start(onboardingRestart);
+      if (onboardingRestart) window.dispatchEvent(new CustomEvent(ONBOARDING_REQUEST_EVENT));
+      else startFirstRun();
       onboardingRestart = false;
       return;
     }
-    if (activeKey === "agent" && consumeAgentOnboardingRequest()) onboarding.start();
   }
 
   return { setActive, firstPageReady };

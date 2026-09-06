@@ -55,6 +55,21 @@ def test_clean_crossroads_build_loads_visuals_physics_and_static_map(tmp_path):
         sim.step(0.1)
     assert sim.pose()[0] < 3.2
     sim.reset()
+    # The judge samples more slowly than physics. A real car contact survives
+    # moving out of contact before the observer consumes that frame.
+    car = sim.traffic.cars[0]
+    lane = car.lane
+    car_x, car_y = (car.position, lane.fixed) if lane.axis == "x" else (lane.fixed, car.position)
+    sim.data.qpos[sim.model.joint("robot_base_x").qposadr[0]] = car_x
+    sim.data.qpos[sim.model.joint("robot_base_y").qposadr[0]] = car_y
+    mujoco.mj_forward(sim.model, sim.data)
+    sim.step(0.02)
+    sim.data.qpos[sim.model.joint("robot_base_x").qposadr[0]] = 10
+    sim.data.qpos[sim.model.joint("robot_base_y").qposadr[0]] = -9
+    mujoco.mj_forward(sim.model, sim.data)
+    assert sim.traffic_contact()
+    assert not sim.traffic_contact()
+    sim.reset()
     # Real material bindings, not just the controller's intended state.
     sim.traffic.advance(0.01, 5.0)
     assert sim.model.mat("mat_signal-ns-green").rgba[0] == 1

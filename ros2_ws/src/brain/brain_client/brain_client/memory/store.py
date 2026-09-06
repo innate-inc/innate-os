@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import time
@@ -57,6 +58,7 @@ class Memory:
     y: float
     theta: float
     stamp: float  # epoch seconds at capture
+    label: str = ""  # optional authored description; recorded frames need none
 
 
 @dataclass(frozen=True)
@@ -87,9 +89,10 @@ class MemorySnapshot:
 
 
 class MemoryStore:
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path, *, seed_dir: Path | None = None):
         self._maps_dir = data_dir / "maps"
         self._root = data_dir / "spatial_memory"
+        self._seed_dir = seed_dir
         self._lock = Lock()
         self._map_name: str | None = None
         self._dir: Path | None = None
@@ -358,6 +361,47 @@ class MemoryStore:
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass  # a wrong-shaped index is as stale as a wrong fingerprint
         self._wipe_locked()
+        self._seed_locked()
+
+    def _seed_locked(self) -> None:
+        """Bootstrap a new map from an authored, fingerprint-matched image pack.
+
+        Existing indexes, including deliberately cleared memories, never enter
+        this path. A remapped environment cannot inherit old coordinates.
+        """
+        if self._seed_dir is None or self._map_name is None or self._dir is None:
+            return
+        source = self._seed_dir / Path(self._map_name).stem
+        try:
+            index = json.loads((source / "index.json").read_text())
+            if (
+                not isinstance(index, dict)
+                or index.get("version") != _INDEX_VERSION
+                or index.get("fingerprint") != self._fingerprint
+            ):
+                return
+            memories = [Memory(**entry) for entry in index["memories"]]
+            if len(memories) > 100 or any(
+                type(memory.id) is not int
+                or memory.id < 1
+                or not all(math.isfinite(value) for value in (memory.x, memory.y, memory.theta, memory.stamp))
+                or not isinstance(memory.label, str)
+                or len(memory.label) > 200
+                for memory in memories
+            ):
+                return
+            if len({memory.id for memory in memories}) != len(memories):
+                return
+            images = [(source / f"{memory.id}.jpg").read_bytes() for memory in memories]
+            if any(not image.startswith(b"\xff\xd8") for image in images):
+                return
+            for memory, jpeg in zip(memories, images, strict=True):
+                self._write_image_locked(memory.id, jpeg)
+            self._memories = memories
+            self._next_id = max((memory.id for memory in memories), default=0) + 1
+            self._commit_locked()
+        except (OSError, ValueError, TypeError, KeyError):
+            return  # a missing/broken optional pack must not prevent recording
 
     def _adopt_stage_locked(self, session_started: float) -> bool:
         """Re-attach to a stage this same SLAM session built (a brain restart

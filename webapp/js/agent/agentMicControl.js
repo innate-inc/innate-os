@@ -248,14 +248,21 @@ export function createAgentMicControl(root, callbacks) {
 
   function spacebarCanControlMic() {
     if (!(composerInput instanceof HTMLTextAreaElement)) return false;
+    if (root.closest(".first-mission-choosing")) return false;
     // Only a focused composer holding a draft blocks the spacebar; an unsent
     // draft must not disable push-to-talk for the whole page.
     if (document.activeElement === composerInput) return composerInput.value.length === 0;
+    // Space activates a focused button (mission choice, Skip, tour Next, ...).
+    // Only the microphone's own button may turn that activation into a hold.
+    const focused = document.activeElement;
+    if (focused instanceof Element && focused !== button
+      && focused.closest("button, a, input, select, [role=button], .ui-tour-card")) return false;
     return !isTypingContext();
   }
 
   /** @param {KeyboardEvent} event */
   function onWindowKeyDown(event) {
+    if (event.defaultPrevented) return;
     if (event.code !== SPACEBAR_KEY_CODE) {
       cancelPendingSpacebarHold();
       return;

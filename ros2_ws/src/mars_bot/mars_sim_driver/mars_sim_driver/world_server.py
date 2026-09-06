@@ -152,6 +152,7 @@ class WorldServer:
             joints = self.sim.joint_positions()
             objects = self.sim.object_poses()
             traffic = self.sim.traffic_state()
+            traffic_contact = self.sim.traffic_contact()
             # Prop CENTRES for the judge (props.py center_offset): a distance
             # to the human has to mean its body, not the feet its origin sits
             # at. Gathered here because the judge runs without the sim.
@@ -170,7 +171,9 @@ class WorldServer:
         # for a frame instead -- which is the module's own contract, that a
         # broken challenge degrades that challenge and never the sim.
         try:
-            challenge = self.challenges.tick(sim_time, (x, y, yaw), centers, epoch)
+            challenge = self.challenges.tick(
+                sim_time, (x, y, yaw), centers, epoch, objects=objects, traffic_contact=traffic_contact
+            )
         except Exception as exc:  # noqa: BLE001 -- degrade the challenge, never the sim
             challenge = None
             if time.time() - self._challenge_error_at > 5.0:  # 75Hz: do not flood the log
@@ -231,11 +234,11 @@ class WorldServer:
                 self.sim.remove_all_props()
             ok = True
         elif op == "start_challenge":  # sets its own scene up; see challenges.py
-            self.challenges.start(str(cmd.get("id", "")))
+            self.challenges.start(str(cmd.get("id", "")), request_id=cmd.get("request_id"))
             self.publish_state()
             return
         elif op == "abort_challenge":
-            self.challenges.abort()
+            self.challenges.abort(request_id=cmd.get("request_id"))
             self.publish_state()
             return
         elif op == "switch_environment":  # rebuilds the world; progress rides the roster frame

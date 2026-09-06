@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "fingerprint": "f317943d6d37c2efc951a63c1b4185ae9b27fd08ab17a47b3f4c05d6ae925c7a",
+  "memories": [
+    {
+      "id": 1,
+      "x": 5.200000002355203,
+      "y": -5.2999998515225775,
+      "theta": 3.141592504999842,
+      "stamp": 1788665603.8034701,
+      "label": "South crosswalk: starting curb on the east sidewalk, looking west across the street"
+    },
+    {
+      "id": 2,
+      "x": -5.1999999999058835,
+      "y": -5.299999994049329,
+      "theta": 3.1415926476403286,
+      "stamp": 1788665603.8726232,
+      "label": "South crosswalk: destination curb on the west sidewalk, after crossing from east to west"
+    }
+  ]
+}

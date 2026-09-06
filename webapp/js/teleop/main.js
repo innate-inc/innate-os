@@ -27,7 +27,7 @@ import { createTelemetry } from "./telemetry.js";
 import { createArmPanel } from "./armPanel.js";
 import { createProfilingPanel } from "./profilingPanel.js";
 import { createSkillsMenu } from "./skillsMenu.js";
-import { createTeleopOnboarding } from "./teleopOnboarding.js";
+import { createInterfaceTour } from "../uiTour.js";
 import { createCameraSwitch } from "./cameraSwitch.js";
 import { dismissAllConfirms } from "../nav/confirm.js";
 import { setTtsAudioEnabled } from "../ttsAudio.js";
@@ -87,37 +87,7 @@ function buildCockpit(root) {
 
   const keyboard = createKeyboardDrive(drive);
   const telemetry = telemetryOverlay ? createTelemetry(telemetryOverlay, ros) : null;
-  const simProps = /** @type {{
-   *   onProps?: (cb: (props: {name: string}[]) => void) => () => void,
-   *   placePropAtRobot?: (name: string) => void,
-   * }} */ (/** @type {unknown} */ (session));
-  /** @type {(() => void) | null} */
-  let stopLegoPrep = null;
-  const prepareLego = () => {
-    stopLegoPrep?.();
-    stopLegoPrep = null;
-    if (!config.simControls || !simProps.onProps || !simProps.placePropAtRobot) return;
-    let placed = false;
-    let subscribed = false;
-    let unsubscribe = () => {};
-    unsubscribe = simProps.onProps((props) => {
-      if (placed || !props.some((prop) => prop.name === "lego")) return;
-      placed = true;
-      simProps.placePropAtRobot?.("lego");
-      if (subscribed) {
-        unsubscribe();
-        stopLegoPrep = null;
-      }
-    });
-    // onProps fires synchronously when the roster has already arrived.
-    subscribed = true;
-    if (placed) {
-      unsubscribe();
-      stopLegoPrep = null;
-    }
-    else stopLegoPrep = unsubscribe;
-  };
-  const onboarding = createTeleopOnboarding(root, { prepareLego });
+  const onboarding = createInterfaceTour(root, "teleop");
   const parts = [videoStage, ...(telemetry ? [telemetry] : [])];
   // Keep the listen control in the same place on sim and hardware. The sim
   // starts listening by default; hardware remains opt-in for privacy.
@@ -133,17 +103,9 @@ function buildCockpit(root) {
     createHeadTilt(rightRail, ros),
     createWasdChips(chipsOverlay, keyboard),
     createJoystick(stickOverlay, drive),
-    createTtsBar(ttsOverlay, ros, {
-      onSpeak: onboarding.onSpeak,
-      onAvailabilityChange: onboarding.onSpeechAvailabilityChange,
-    }),
+    createTtsBar(ttsOverlay, ros),
     // Collapsible skill launcher pinned next to the speak bar.
-    createSkillsMenu(ttsOverlay, ros, {
-      onSkillStarted: onboarding.onSkillStarted,
-      onSkillCompleted: onboarding.onSkillCompleted,
-      onSkillEnded: onboarding.onSkillEnded,
-      onOpenChange: onboarding.onSkillsMenuOpenChange,
-    }),
+    createSkillsMenu(ttsOverlay, ros),
     createArmPanel(armOverlay, ros, { hideServices: !!config.simControls }),
     ...(config.simControls ? [] : [createProfilingPanel(root, session)]),
     // Teleop is the head-camera control room. Do not let a saved Arm, Top View,
@@ -169,7 +131,6 @@ function buildCockpit(root) {
       // Confirm dialogs (speed picker) live on document.body — sweep them so
       // navigating away doesn't leave one floating over the next page.
       dismissAllConfirms();
-      stopLegoPrep?.();
       for (const part of parts) part.destroy();
       if (config.simControls) setTtsAudioEnabled(true);
       releaseSession(session);

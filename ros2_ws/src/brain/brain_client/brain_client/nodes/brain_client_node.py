@@ -12,6 +12,7 @@ service surface, and spins. The agent loop itself lives in
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections import deque
@@ -179,7 +180,12 @@ class BrainClientNode(Node):
         # Spatial memory: the recorder builds it whenever the robot drives well-
         # localized (brain active or not); skills recall over it through the
         # /brain/search_memory action — the agent itself knows nothing of it.
-        self.memory_store = MemoryStore(get_innate_os_root() / "data")
+        self.memory_store = MemoryStore(
+            get_innate_os_root() / "data",
+            seed_dir=(get_innate_os_root() / "workspace/innate_agents/intro_memories")
+            if os.environ.get("VIRTUAL_MARS_REMOTE")
+            else None,
+        )
         rest = pick_rest(self._proxy)
         self.memory_search = (
             MemorySearch(self.memory_store, rest, model=cfg.gemini_model, logger=self.get_logger())
