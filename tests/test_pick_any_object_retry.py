@@ -131,6 +131,62 @@ def test_empty_grasp_recenters_twice_but_held_object_does_not_retry(monkeypatch)
     assert approach.moves == []
 
 
+def test_model_grasp_preserves_raised_rigid_hold_without_reseeding_grip(monkeypatch):
+    monkeypatch.setattr("innate_skills.pick_any_object.time.sleep", lambda _seconds: None)
+    skill = _skill(closes_empty=False)
+    skill._pickup_policy = object()
+    skill._unpress_grasp = False
+    skill._close_twist_lift("brick", .25, 0, 0, 1.3, 0)
+    assert skill._holding
+    assert not any(e[0] == "move_to" for e in skill.manipulation.events)
+    before = list(skill.manipulation.events)
+    skill._rest_arm(keep_grip=True)
+    assert skill.manipulation.events == before
+    # A low arm still needs safe teardown; retaining it would drag the object.
+    skill.manipulation.pose.z = .04
+    skill._rest_arm(keep_grip=True)
+    assert len(skill.manipulation.events) == len(before) + 2
+
+
+def test_model_descent_keeps_small_steps_fresh_frames_and_cancel_points():
+    import pytest
+
+    def make(cancel_after=None):
+        skill = _skill(closes_empty=False)
+        skill.manipulation.pose = SimpleNamespace(z=.15, position=(.3,0,.15))
+        moves, frames = [], []
+        def move(x,y,z,**kwargs):
+            moves.append((z,kwargs["duration"]))
+            skill.manipulation.pose = SimpleNamespace(z=z,position=(x,y,z))
+        skill.manipulation.move_to = move
+        skill.manipulation.clamp_reach = lambda x,y:(x,y)
+        skill.wrist_image = object()
+        def frame(_previous):
+            frames.append(True)
+            return True,object()
+        skill._next_wrist_hsv = frame
+        skill.sleep = lambda _seconds:None
+        def check():
+            if cancel_after and len(moves)>=cancel_after:
+                raise InterruptedError("Stop")
+        skill.check_cancelled = check
+        decisions=iter([
+            dict(action="descend",center=[320,skill._p["wrist_box_v"]],delta=[0,0,-.10],roll=0,note="centered"),
+            dict(action="grasp",center=[320,skill._p["wrist_box_v"]],delta=[0,0,0],roll=0,note="aligned"),
+        ])
+        skill._pickup_policy = SimpleNamespace(decide=lambda *_args,**_kwargs:next(decisions))
+        return skill,moves,frames
+
+    skill,moves,frames=make()
+    assert skill._wrist_descend_model("brick") == pytest.approx((.3,0,.05,0))
+    assert len(moves)==10 and all(duration==.5 for _z,duration in moves)
+    assert len(frames)>=len(moves)+2
+    assert not skill._unpress_grasp
+    cancelled,moves,frames=make(cancel_after=3)
+    with pytest.raises(InterruptedError):cancelled._wrist_descend_model("brick")
+    assert len(moves)==3
+
+
 def test_pickup_reports_a_drop_during_the_final_carry_motion(monkeypatch):
     approach = SimpleNamespace(search=lambda _: (0.3, 0), position_above=lambda _, xy: xy)
     monkeypatch.setattr("innate_skills.pick_any_object.FloorApproach", lambda *_: approach)
@@ -151,8 +207,8 @@ def test_pickup_reports_a_drop_during_the_final_carry_motion(monkeypatch):
         skill._rest_arm = carry
         if dropped:
             with pytest.raises(exceptions.SkillFailed, match="slipped"):
-                skill.execute("brick")
+                skill.execute("brick", controller="classic")
             assert "Got it." not in events
         else:
-            assert "carry motion" in skill.execute("brick")
+            assert "carry motion" in skill.execute("brick", controller="classic")
             assert events.index("Got it.") > events.index("carry finished")
