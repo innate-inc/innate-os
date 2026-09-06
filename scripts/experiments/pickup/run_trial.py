@@ -134,6 +134,7 @@ def run():
         "scripts/experiments/pickup/report.py",
         "workspace/innate_skills/pick_any_object.py",
         "workspace/innate_skills/pickup_policy.py",
+        "workspace/innate_skills/grasp_tracker.py",
         "workspace/innate_skills/_pickup_probe.py",
         "workspace/innate_skills/approach.py",
         "sim/props/12_lego.py",
