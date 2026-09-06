@@ -158,6 +158,14 @@ def test_model_grasp_preserves_raised_rigid_hold_without_reseeding_grip(monkeypa
     assert len(skill.manipulation.events) == len(before) + 2
 
 
+def test_pending_stop_at_arrival_prevents_any_grasp_motion():
+    skill = _skill(closes_empty=False)
+    skill.check_cancelled = lambda: (_ for _ in ()).throw(InterruptedError("Stop"))
+    with pytest.raises(InterruptedError, match="Stop"):
+        skill._grasp_at("brick", (0.3, 0))
+    assert skill.manipulation.events == []
+
+
 def test_rigid_floor_close_is_shared_while_soft_and_unknown_keep_unpress():
     for controller in (None, object()):
         for strength in (0.35, 0.6, None):
