@@ -291,6 +291,8 @@ class PickAnyObject(Skill):
         cand = self._choose_cand(cands) if cands else None
         if cand is None:
             return None
+        if self._pickup_policy is not None:
+            self._low_search_allowed = observed["detections"][cands.index(cand)]["low_search"]
         u, v, grip = cand
         if grip is not None:
             lo, hi = GRIP_STRENGTH_RANGE
@@ -567,7 +569,7 @@ class PickAnyObject(Skill):
         stale, and re-commanding it would close the just-opened gripper."""
         a = WRIST_SEARCH_ARM
         pose = [bearing, a[1], a[2], self._p["wrist_pitch"] - a[1] - a[2], a[4], self.manipulation.GRIPPER_OPEN]
-        if self._pickup_policy is not None:
+        if self._pickup_policy is not None and self._low_search_allowed and self._grip_strength < SOFT_GRIP_MIN:
             low = LOW_WRIST_SEARCH_ARM
             candidate = [bearing, low[1], low[2], self._p["wrist_pitch"] - low[1] - low[2], low[4], pose[5]]
             try:
@@ -890,6 +892,7 @@ class PickAnyObject(Skill):
         self._pickup_policy = None
         self._unpress_grasp = True
         self._planned_roll = None
+        self._low_search_allowed = False
         self._nav_pending = False
         if controller == "astra":
             from innate_skills.pickup_policy import PickupPolicy
