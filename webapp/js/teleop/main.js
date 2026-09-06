@@ -22,6 +22,7 @@ import { createJoystick } from "./joystick.js";
 import { createKeyboardDrive, createWasdChips } from "./keyboardDrive.js";
 import { createHeadTilt } from "./headTilt.js";
 import { createSpeedModes } from "./speedModes.js";
+import { createRecordButton } from "./recordButton.js";
 import { createTtsBar } from "./ttsBar.js";
 import { createTelemetry } from "./telemetry.js";
 import { createArmPanel } from "./armPanel.js";
@@ -91,6 +92,8 @@ function buildCockpit(root) {
   // is the sim deployment's feature flag (env-driven; false on the real robot).
   if (!config.simControls && videoStage.audioEl) {
     parts.push(createAudioToggle(rightRail, session, videoStage.audioEl));
+    // Camera MP4 recorder lives in the robot bringup, which the sim doesn't run.
+    parts.push(createRecordButton(rightRail, ros));
   }
   parts.push(
     createSpeedModes(rightRail, ros),
