@@ -114,6 +114,7 @@ def test_real_grasp_path_move_then_close_or_open_abort(monkeypatch, failure):
     decisions = iter([action(), action("abort" if failure == "abort" else "close")])
 
     def locate(*a, **kw):
+        assert kw["state"]["floor_target_rpy_rad"] == [0.0, 1.3, 0.0]
         if failure == "malformed":
             raise ValueError("malformed")
         return {"detections": [next(decisions)]}

@@ -183,6 +183,7 @@ class PickAnyObjectVisualAction(PickAnyObject):
                         "rpy_rad": [round(v, 3) for v in pose.rpy],
                         "claw_angle_rad": round(joints[5], 3),
                         "floor_grasp_ready": at_floor_grasp(pose.position, pose.rpy, self._p),
+                        "floor_target_rpy_rad": [0.0, self._p["arm_pitch"], 0.0],
                         "floor_drop_m": round(max(0.0, pose.position[2] - self._p["floor_z"]), 3),
                         "moves_remaining": MAX_MOVES - moves,
                         "wrist_decisions_remaining": MAX_WRIST_DECISIONS - decision,
