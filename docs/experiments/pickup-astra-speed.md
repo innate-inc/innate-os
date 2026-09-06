@@ -42,6 +42,12 @@ result check at `870b5107f`, applied to both controllers. Any other reliability
 correction needed to establish a working baseline will be identified and
 applied equally before timing candidate optimizations.
 
+The final runner explicitly sets the native simulator's canonical `ARM_HOME`
+targets before reset. Code inspection found that `reset()` otherwise preserves
+the previous run's servo targets. The development pilots reset the scene/object
+but did not normalize that arm state; their preliminary timing is not a matched
+final comparison.
+
 ## Workflow and risks
 
 Current path: fold navigation arm, settle head, Gemini 3.5 Flash localization,

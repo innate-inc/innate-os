@@ -16,6 +16,7 @@ from websockets.sync.client import connect
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "ros2_ws/src/mars_bot/mars_sim_driver"))
 from mars_sim_driver.remote_world import RemoteWorld  # noqa: E402
+from mars_sim_driver.world import ARM_HOME  # noqa: E402
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("label")
@@ -107,6 +108,10 @@ def run():
     if result.returncode:
         raise RuntimeError("Simulator runtime marker missing")
     world = RemoteWorld("127.0.0.1", a.port_base + 5)
+    # reset() restores the CURRENT servo targets, not canonical ARM_HOME.
+    # Set them explicitly so the previous controller's carry pose cannot
+    # change the next trial's starting arm configuration.
+    world.set_joint_targets(ARM_HOME)
     world.reset()
     with connect(f"ws://127.0.0.1:{a.port_base + 6}") as ws:
         ws.send(json.dumps({"op": "drop_prop_at", "name": a.prop, "x": a.x, "y": a.y, "yaw": a.yaw}))
