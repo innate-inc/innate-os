@@ -1,3 +1,22 @@
+> September 6 hardware follow-up: the Astra wrist controller now requests a
+> `grasp_point_2d` on visible material and tracks that persistent point with local
+> Lucas–Kanade features, forward/backward checks and a robust similarity fit.
+> The tracker consumes intermediate camera frames during the existing blocking,
+> FK-verified arm moves. It seeds on the exact model input image, rejects weak
+> geometric support, and requires fresh confirmation after bounded reacquisition.
+> Motion limits and committed grasp/carry behavior are unchanged. The benchmark
+> results below describe the earlier frozen color-tracker implementation; the new
+> controller still requires physical pickup and timing validation.
+>
+> Validation: synthetic translation/rotation/scale, partial feature dropout,
+> blank-image rejection, motion-worker lifetime, and existing descent/cancellation
+> tests. On three recorded stationary sock frames, a manually selected material
+> point remained within 0.3 pixels; the earlier threshold-only blob experiment
+> drifted about 42 pixels. The sparse moving recording loses feature support and
+> cannot validate continuous tracking through motion; it is not counted as a
+> successful pickup replay. Blue's OpenCV 4.11 passed a staged synthetic motion
+> and blank-frame check without commanding the robot.
+
 # Pickup speed experiment
 
 Status: the complete matched-v4 campaign at `dbe4de1ad` passes the fixed speed

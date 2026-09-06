@@ -16,7 +16,7 @@ spec.loader.exec_module(policy)
 def test_observation_rejects_invalid_boxes_and_unsafe_grasp_choices():
     plans = {
         "head": dict(box_2d=[100, 200, 300, 400], grip_strength=0.35, search_clearance="low"),
-        "wrist": dict(box_2d=[100, 200, 300, 400], axis_2d=[200, 220, 200, 380]),
+        "wrist": dict(box_2d=[100, 200, 300, 400], axis_2d=[200, 220, 200, 380], grasp_point_2d=[200, 300]),
     }
     for view, plan in plans.items():
         assert policy.validate_observation({"detections": [plan]}, view)["detections"] == [plan]
@@ -27,6 +27,9 @@ def test_observation_rejects_invalid_boxes_and_unsafe_grasp_choices():
             {"box_2d": [0, 0, float("nan"), 20]},
             {"axis_2d": [100, 100, 100, 100]},
             {"axis_2d": [0, 0, 1001, 100]},
+            {"grasp_point_2d": [200, 500]},
+            {"grasp_point_2d": [float("nan"), 300]},
+            {"grasp_point_2d": [100, 300]},
             {"grip_strength": 0.7},
             {"search_clearance": "unsafe"},
         ):
@@ -89,5 +92,5 @@ def test_wrist_identity_reference_keeps_current_image_first_and_head_coordinates
 
     wrist_fields = bodies[0]["tools"][0]["parameters"]["properties"]["detections"]["items"]["required"]
     head_fields = bodies[1]["tools"][0]["parameters"]["properties"]["detections"]["items"]["required"]
-    assert set(wrist_fields) == {"box_2d", "axis_2d"}
+    assert set(wrist_fields) == {"box_2d", "axis_2d", "grasp_point_2d"}
     assert set(head_fields) == {"box_2d", "grip_strength", "search_clearance"}
