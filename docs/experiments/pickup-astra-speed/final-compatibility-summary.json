@@ -1,0 +1,89 @@
+{
+  "full_sequence_passed": true,
+  "production_revision": "dbe4de1ad36ecd21c3d9eea549effd6cf3b8fc0a",
+  "retained_integration_three_file_hashes_match_frozen_git": true,
+  "checkout_restored_after_recording": true,
+  "integration_revision_reported": "a0c4bb7d2",
+  "separate_stop_fix_pr": "https://github.com/innate-inc/innate-os/pull/781",
+  "pickup_skill_elapsed_s": 20.623448371887207,
+  "held_after_pickup_until_throw_seconds": 79.30368947982788,
+  "held_physics_samples": 5293,
+  "held_lego_z_range_m": [
+    0.1441309944193316,
+    0.14654072134912596
+  ],
+  "held_joint6_range_rad": [
+    0.3129558995573256,
+    0.37033640432418546
+  ],
+  "commanded_approach_m": 0.4,
+  "actual_approach_displacement_m": 0.2608202578681698,
+  "active_mission_final": {
+    "id": "put_it_away",
+    "attempt_id": "aeb34bed-53ab-42f8-9393-ee520276ace3",
+    "state": "passed",
+    "reason": "",
+    "elapsed_s": 142.1,
+    "time_limit_s": null,
+    "goals": [
+      {
+        "label": "LEGO in the box",
+        "done": true
+      }
+    ]
+  },
+  "final_lego_position": [
+    -4.296891441427972,
+    -0.7957149518684697,
+    0.021566412989430322
+  ],
+  "final_crate_position": [
+    -4.339320963568887,
+    -0.9121263110394027,
+    0.06999440941609494
+  ],
+  "usage": [
+    {
+      "model": "gpt-6-astra",
+      "usage": {
+        "input_tokens": 738,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 0
+        },
+        "output_tokens": 98,
+        "output_tokens_details": {
+          "reasoning_tokens": 48
+        },
+        "total_tokens": 836
+      },
+      "service_tier": "default",
+      "elapsed_s": 3.963953460002813,
+      "estimated_cost_usd": 0.01228
+    },
+    {
+      "model": "gpt-6-astra",
+      "usage": {
+        "input_tokens": 1181,
+        "input_tokens_details": {
+          "cache_write_tokens": 1047,
+          "cached_tokens": 0
+        },
+        "output_tokens": 47,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 1228
+      },
+      "service_tier": "default",
+      "elapsed_s": 2.064865460000874,
+      "estimated_cost_usd": 0.0167775
+    }
+  ],
+  "calls": 2,
+  "usage_complete": true,
+  "combined_calls": 279,
+  "combined_estimated_cost_usd": 2.9720095,
+  "first_attempt_retained": "Pickup succeeded and held over100s; resumed navigation stalled and a new unsolicited throw followed a newer keep-holding instruction. This is a failed integration attempt, separate from the passing benchmark.",
+  "stop_verification": "Separate live Stop test and91 Gemini/native tests belong to#781. The final pickup replay held while waiting; it did not itself activate stop_current_skill."
+}

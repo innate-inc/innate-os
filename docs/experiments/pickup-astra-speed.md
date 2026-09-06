@@ -4,7 +4,9 @@ Status: the complete matched-v4 campaign at `dbe4de1ad` passes the fixed speed
 and reliability gates: **53.313% lower median latency, 48.795 s to 22.781 s**,
 with 9/9 durable pickups for each controller. This is a simulator result across
 three repeats of three scenes, not a hardware or population-reliability claim.
-Final pickup-to-throw compatibility and video handoff are being completed.
+Three predeclared original-speed comparison videos are complete and visually
+checked. Final pickup-to-approach-to-throw compatibility also passed with the
+separate shared cancellation fix in draft #781, described below.
 
 ## Final matched result
 
@@ -55,6 +57,30 @@ cumulative list-price cost through this comparison is $2.9138445 across 275
 calls. The final campaign itself used 27 classic calls ($0.123048) and 18 Astra
 calls ($0.249300). Development
 pilots and earlier failed campaigns below remain separate from this result.
+
+## Final compatibility
+
+The final integration at `a0c4bb7d2` used the three exact frozen pickup Git blobs
+plus the separate shared cancellation fix in draft #781. Pickup succeeded in
+20.623 seconds tool-to-result with two Astra calls. The LEGO stayed held for
+79.304 seconds until deliberate throwing: 5,293 physics samples keep its center
+at 0.14413–0.14654m above the floor. A later approach command succeeded (0.4m
+requested, 0.261m observed between tool start and completion), then the throw
+settled the LEGO inside the box and the current mission's physical judge passed.
+The [compatibility summary](pickup-astra-speed/final-compatibility-summary.json)
+records source identity, raw usage, physical measurements and the final result.
+This compatibility timing is separate from the matched benchmark.
+
+The first final compatibility attempt is retained as a failure: pickup succeeded
+in 21.27 seconds and held for over 100 seconds, but navigation stalled after a
+long suspension and the agent issued a new throw after a newer keep-holding
+instruction. #781 owns that sequence-cancellation fix, a separate live Stop
+check and 91 Gemini/native Responses tests. The successful pickup replay waited
+while holding; it did not itself activate `stop_current_skill`. No frozen pickup
+code was changed to repair that agent issue. Total pickup provider accounting,
+including both compatibility attempts, is 279 calls with complete usage and an
+estimated list-price cost of $2.9720095. Agent-loop calls belong to the separate
+onboarding work and are not included in this pickup ledger.
 
 ## Acceptance fixed before implementation
 
