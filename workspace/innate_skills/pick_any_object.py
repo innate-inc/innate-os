@@ -620,6 +620,9 @@ class PickAnyObject(Skill):
                     reason = fail
                     break
                 if self._pickup_policy is not None:
+                    # Inference ran while stationary; resume the camera wait
+                    # budget now. Keep the seed image and require new frames.
+                    last_frame_at = time.monotonic()
                     continue  # require fresh tracked confirmations after reacquisition
                 px = tracker.guess
             streak += 1
