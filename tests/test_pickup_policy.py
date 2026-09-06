@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import threading
 import time
 from pathlib import Path
@@ -57,3 +58,27 @@ def test_incomplete_response_and_call_budget_fail_without_actions():
         instance.locate("brick", "jpeg", time.sleep, lambda: None, view="wrist")
     with pytest.raises(ValueError, match="budget"):
         instance.locate("brick", "jpeg", time.sleep, lambda: None, view="wrist")
+
+
+def test_wrist_identity_reference_keeps_current_image_first_and_head_coordinates_separate():
+    bodies = []
+
+    def transport(_model, body):
+        bodies.append(body)
+        yield {
+            "type": "response.completed",
+            "response": {
+                "status": "completed",
+                "usage": {"input_tokens": 1},
+                "output": [{"type": "function_call", "name": "pickup_observation", "arguments": '{"detections":[]}'}],
+            },
+        }
+
+    instance = policy.PickupPolicy(transport)
+    reference = {"image": "head-jpeg", "box_2d": [100, 200, 300, 400]}
+    instance.locate("red cube", "wrist-jpeg", time.sleep, lambda: None, view="wrist", reference=reference)
+    content = bodies[0]["input"][0]["content"]
+    assert json.loads(content[0]["text"])["head_reference_box_2d"] == reference["box_2d"]
+    assert [item["image_url"].split(",")[1] for item in content[1:]] == ["wrist-jpeg", "head-jpeg"]
+    instance.locate("red cube", "new-head-jpeg", time.sleep, lambda: None, view="head", reference=reference)
+    assert len(bodies[1]["input"][0]["content"]) == 2  # head localization has no stale reference

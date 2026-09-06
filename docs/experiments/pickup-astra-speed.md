@@ -218,3 +218,13 @@ versus 0.3043m/s originally. After the search has settled, the wrist observation
 waits for a new camera frame instead of another fixed pause; frozen video fails
 without inference or grasp. These are candidate optimizations, separate from
 the shared floor-close correction, and require real simulator pilots.
+
+The next pilots exposed a cross-camera identity gap: a correctly localized red
+cube appeared nearly white from wrist glare and the model returned no match.
+The prop had not moved. Wrist requests now include the last accepted head image
+and selected head box as an identity reference, with boxes explicitly restricted
+to the current wrist image. This preserves target continuity under exposure
+changes rather than blindly relaxing color matching. The bounded continuation
+allows 240 cumulative provider calls, retaining the $5 cost review/stop bound
+and mandatory complete usage accounting; the coordinator authorized this modest
+extension before the next campaign.

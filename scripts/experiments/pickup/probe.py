@@ -101,7 +101,9 @@ def install(cls):
     for name in (
         "execute",
         "_detect_px",
+        "_observe_pickup",
         "_wrist_seed",
+        "_wrist_reseed",
         "_wrist_descend",
         "_wrist_done",
         "_goto_search_pose",
@@ -122,7 +124,7 @@ def install(cls):
                 record("phase_start", phase=name)
                 try:
                     result = method(self, *args, **kwargs)
-                    if name in {"_detect_px", "_wrist_seed", "_wrist_done"}:
+                    if name in {"_detect_px", "_observe_pickup", "_wrist_seed", "_wrist_done"}:
                         record("observation", phase=name, result=result)
                     return result
                 finally:
