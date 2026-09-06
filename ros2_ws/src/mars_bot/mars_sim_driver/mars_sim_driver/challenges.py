@@ -357,6 +357,8 @@ class Challenge:
     # Public scenario instructions, never private judging state. Intro Agent
     # reads these alongside the current goal list on every conversational turn.
     agent_guidance: str = field(default="", kw_only=True)
+    # Optional authored first pose (x, y, yaw degrees), applied only on start.
+    spawn: tuple[float, float, float] | None = field(default=None, kw_only=True)
 
     def available_in(self, environment_id: str | None) -> bool:
         return self.environments is None or environment_id in self.environments
@@ -553,7 +555,10 @@ class ChallengeEngine:
                 # gap, waiting to be ticked.
                 self.world_epoch += 1
                 if challenge.reset_world:
-                    self.sim.reset()  # also re-parks every prop (props.py)
+                    if challenge.spawn is None:
+                        self.sim.reset()
+                    else:
+                        self.sim.reset(spawn=challenge.spawn)
                 for drop in challenge.setup:
                     if not self.sim.drop_prop_at(drop.name, drop.x, drop.y, math.radians(drop.yaw_deg)):
                         print(f"[challenges] {challenge.id}: no prop named {drop.name!r} in this world", flush=True)

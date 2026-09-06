@@ -21,9 +21,10 @@ class Scene:
         self.resets = 0
         self.drops = []
 
-    def reset(self):
+    def reset(self, *, spawn=None):
         self.resets += 1
         self.data.time = 0
+        self.spawn = spawn
 
     def drop_prop_at(self, *args):
         self.drops.append(args)
@@ -83,8 +84,9 @@ def test_cleanup_requires_brick_settled_below_rim_and_survives_misses(tmp_path):
 
 
 def test_crossing_must_use_crosswalk_and_retry_from_curb_after_contact(tmp_path):
-    e, _ = engine(tmp_path, "intersection")
+    e, scene = engine(tmp_path, "intersection")
     assert e.start("other_side")
+    assert scene.spawn == (5.2, -5.3, 180.0)
 
     def tick(x, y=-5.3, contact=False):
         return e.tick(1, (x, y, 0), {}, e.world_epoch, traffic_contact=contact)["active"]["state"]
