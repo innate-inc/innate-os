@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Incoming speech spans queueing, playback, and transcript delivery; no paid calls."""
+"""Opted-in incoming speech spans playback and transcript delivery; no paid calls."""
 
 import asyncio
 import io
@@ -24,6 +24,13 @@ from brain_client.skills.registry import SkillRegistry
 
 IDENTITY = {"id": "innate-os/person_identity", "name": "person_identity", "inputs": {}}
 agent_factory = test_local_brain.agent_factory
+
+
+@pytest.fixture(autouse=True)
+def opt_in_listening(monkeypatch):
+    from brain_client.brain.agent import BrainAgent
+    monkeypatch.setattr(BrainAgent, "listening_enabled", lambda self: True)
+
 
 
 def enable_skills(agent, state):
@@ -268,7 +275,7 @@ def test_real_queue_holds_for_twelve_second_playback_then_transcript_turn(speech
         assert started == []
 
     def synthesize(*_args, **_kwargs):
-        assert_blocked()  # gated even before audio exists
+        assert not node.brain._incoming_speech  # synthesis is not acoustic onset
         yield buffer.getvalue()
 
     waited = []
@@ -285,7 +292,7 @@ def test_real_queue_holds_for_twelve_second_playback_then_transcript_turn(speech
         text, voice, time.perf_counter(), on_start
     )
     receive()
-    assert_blocked()  # queued, worker not started
+    assert not node.brain._incoming_speech  # queued synthesis is not acoustic onset
     handler._speech_queue.append(None)
     handler._speech_loop()
     assert waited == [12.0]
@@ -322,7 +329,7 @@ def test_speech_failure_paths_deliver_once_and_release_gate(speech_node, monkeyp
             assert len(attempts) == 2
         item.on_done(False)  # duplicate completion cannot repeat the transcript
     assert not node.brain._incoming_speech
-    assert len([e for e in node.brain._events if e.kind == EventKind.USER]) == 1
+    assert not [e for e in node.brain._events if e.kind == EventKind.USER]
 
 
 @pytest.mark.parametrize("provider", ["gemini", "openai"])
@@ -532,3 +539,28 @@ def test_old_stop_preserves_later_unseen_operator_receipt(agent_factory, provide
     assert not agent._request_stopped and not started
     run_turn(agent)
     assert len(started) == 1
+
+
+def test_queued_simulator_clip_cannot_acquire_hold_after_request_change(speech_node):
+    node, receive, _ = speech_node
+    callbacks = {}
+    node._tts_handler = SimpleNamespace(speak_text_async=lambda text, **kwargs: callbacks.update(kwargs) or True)
+    receive()
+    assert not node.brain._incoming_speech
+    node.brain._request_generation += 1
+    callbacks['on_start']()
+    callbacks['on_done'](True)
+    assert not node.brain._incoming_speech
+    assert not any(e.kind == EventKind.USER for e in node.brain._events)
+
+
+def test_simulator_terminal_before_late_start_never_opens_hold(speech_node):
+    node, receive, _ = speech_node
+    callbacks = {}
+    node._tts_handler = SimpleNamespace(speak_text_async=lambda text, **kwargs: callbacks.update(kwargs) or True)
+    receive()
+    callbacks['on_done'](False)
+    callbacks['on_start']()
+    callbacks['on_done'](True)
+    assert not node.brain._incoming_speech
+    assert not any(e.kind == EventKind.USER for e in node.brain._events)

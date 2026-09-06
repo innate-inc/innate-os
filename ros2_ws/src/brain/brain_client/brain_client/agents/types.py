@@ -243,6 +243,10 @@ class Agent(ABC):
         """
         return TurnIntervals()
 
+    def listen_before_acting(self) -> bool:
+        """Opt in to acoustic-onset holds through completed transcription."""
+        return False
+
     def get_departure_guard(self) -> DepartureGuard | None:
         """Optionally protect a running search from immediate repeat cancellation."""
         return None
