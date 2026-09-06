@@ -10,6 +10,7 @@ with a None or capturing transport.
 """
 
 import json
+import math
 
 import pytest
 
@@ -1245,6 +1246,164 @@ def test_system_prompt_embeds_directive_and_defaults_when_empty():
     assert "Patrol the house" in build_system_prompt("Patrol the house")
     assert "helpful home robot" in build_system_prompt(None)
     assert "helpful home robot" in build_system_prompt("   ")
+
+
+@pytest.fixture
+def calibrated_geometry(monkeypatch):
+    # Load the production pure geometry module without innate's ROS authoring imports.
+    import importlib.util
+    import sys
+    from pathlib import Path
+    from types import ModuleType
+
+    spec = importlib.util.spec_from_file_location("innate.geometry", Path(__file__).parents[1] / "innate/geometry.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    package = ModuleType("innate")
+    package.geometry = module
+    monkeypatch.setitem(sys.modules, "innate", package)
+    return module
+
+
+@pytest.mark.parametrize("value", [True, False, None, "1.2", float("nan"), float("inf"), -1, 0, 0.34, 1.51])
+def test_conversation_standoff_rejects_invalid_values(value):
+    assert grounding.parse_standoff(value) is None
+
+
+def test_conversation_geometry_and_bounded_goals(calibrated_geometry):
+    geometry = calibrated_geometry
+
+    for pitch in (19.47, -15.54):
+        for x, y in ((1.0, 0.0), (2.5, 0.3), (8.0, -0.2)):
+            u, v = geometry.floor_to_pixel(x, y, pitch)
+            actual = grounding.conversation_floor(u * 1000 / 640, v * 1000 / 480, frame_jpeg=FRAME, pitch_deg=pitch)
+            assert actual == pytest.approx((x, y))
+            goal = grounding.approach_goal(*actual, standoff_m=1.2)
+            assert math.hypot(goal["x"], goal["y"]) <= 2.3 + 1e-9
+            assert goal["theta_degrees"] == pytest.approx(math.degrees(math.atan2(y, x)))
+    assert grounding.approach_goal(1, 0, 1.2)["x"] == 0
+    assert grounding.approach_goal(2, 1) == grounding.approach_goal(2, 1, 0.35)
+    assert grounding.conversation_floor(500, 0, frame_jpeg=FRAME, pitch_deg=0) is None
+    assert grounding.conversation_floor(500, 900, frame_jpeg=JPEG, pitch_deg=0) is None
+
+
+@pytest.mark.parametrize("standoff", [None, 0.35, 1.2, True, float("nan")])
+def test_view_approach_through_provider_turn(agent_factory, standoff, calibrated_geometry):
+    from brain_client.skills.registry import SkillRegistry
+
+    geometry = calibrated_geometry
+
+    agent, state = agent_factory(vertical_fov=70, height_cam=0.2, x_cam=0.05)
+    state.registry = SkillRegistry.from_metadata([NAV_SKILL])
+    agent._roster.active_skill_ids = lambda: [NAV_SKILL["id"]]
+    agent._camera.fresh_frame = lambda _: (FRAME, 19.47)
+    agent._pose.current_pose_xyt = lambda: (0.0, 0.0, 0.0)
+    started = []
+    agent._runner.start_task = lambda *a, **k: started.append(a)
+    u, v = geometry.floor_to_pixel(2.5, 0.3, 19.47)
+    args = {"y": round(v * 1000 / 480), "x": round(u * 1000 / 640)}
+    if standoff is not None:
+        args["standoff_m"] = standoff
+    agent._context._transport = lambda model, body: [model_response(call_part("go_to_point_in_view", args))]
+    run_turn(agent)
+    outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+    if standoff is True or (standoff is not None and math.isnan(standoff)):
+        assert not started
+        assert outcome.startswith("rejected")
+    else:
+        assert len(started) == 1
+        if standoff == 1.2:
+            floor = grounding.conversation_floor(args["x"], args["y"], frame_jpeg=FRAME, pitch_deg=19.47)
+        else:
+            floor = grounding.pixel_to_floor(
+                args["x"],
+                args["y"],
+                frame_jpeg=FRAME,
+                pitch_deg=19.47,
+                vertical_fov_deg=70,
+                cam_height=0.2,
+                cam_forward=0.05,
+            )
+        assert started[0][2] == grounding.approach_goal(*floor, standoff_m=standoff or 0.35)
+        assert "event when it finishes" in outcome
+
+
+@pytest.mark.parametrize("target_y", [0.0, 0.4])
+def test_conversation_near_target_does_not_translate(agent_factory, calibrated_geometry, target_y):
+    from brain_client.skills.registry import SkillRegistry
+
+    agent, state = agent_factory()
+    state.registry = SkillRegistry.from_metadata([NAV_SKILL])
+    agent._roster.active_skill_ids = lambda: [NAV_SKILL["id"]]
+    agent._camera.fresh_frame = lambda _: (FRAME, 19.47)
+    agent._pose.current_pose_xyt = lambda: (0.0, 0.0, 0.0)
+    started = []
+    agent._runner.start_task = lambda *a, **k: started.append(a)
+    u, v = calibrated_geometry.floor_to_pixel(1.0, target_y, 19.47)
+    args = {"y": round(v * 1000 / 480), "x": round(u * 1000 / 640), "standoff_m": 1.2}
+    agent._context._transport = lambda model, body: [model_response(call_part("go_to_point_in_view", args))]
+    run_turn(agent)
+    outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+    if target_y == 0:
+        assert not started
+        assert outcome.startswith("already positioned")
+    else:
+        assert len(started) == 1
+        assert started[0][2]["x"] == started[0][2]["y"] == 0.0
+        assert started[0][2]["theta_degrees"] > 5.0
+
+
+@pytest.mark.parametrize("mode", ["navigation", "mapfree"])
+@pytest.mark.parametrize("current", [(0.6, 0.0, 0.0), (-1.0, 0.0, 0.0), (0.3, 0.0, 0.5), None])
+def test_conversation_rebases_target_before_standoff(agent_factory, calibrated_geometry, mode, current):
+    from brain_client.skills.registry import SkillRegistry
+
+    agent, state = agent_factory()
+    state.registry = SkillRegistry.from_metadata([NAV_SKILL])
+    agent._roster.active_skill_ids = lambda: [NAV_SKILL["id"]]
+    agent._camera.fresh_frame = lambda _: (FRAME, 19.47)
+    agent._pose.current_pose_xyt = lambda: (0.0, 0.0, 0.0)
+    agent._pose.cur_nav_mode = mode
+    agent._pose.is_mapfree = mode == "mapfree"
+    started = []
+    agent._runner.start_task = lambda *a, **k: started.append(a)
+    u, v = calibrated_geometry.floor_to_pixel(1.0, 0.0, 19.47)
+    args = {"y": round(v * 1000 / 480), "x": round(u * 1000 / 640), "standoff_m": 1.2}
+
+    def transport(model, body):
+        agent._pose.current_pose_xyt = lambda: current
+        return [model_response(call_part("go_to_point_in_view", args))]
+
+    agent._context._transport = transport
+    run_turn(agent)
+    outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+    if current is None:
+        assert not started
+        assert "needs capture and current" in outcome
+        return
+    # Expected geometry derived independently in the current robot frame.
+    floor = grounding.conversation_floor(args["x"], args["y"], frame_jpeg=FRAME, pitch_deg=19.47)
+    dx, dy = floor[0] - current[0], floor[1] - current[1]
+    c, sn = math.cos(current[2]), math.sin(current[2])
+    x, y = c * dx + sn * dy, -sn * dx + c * dy
+    distance = math.hypot(x, y)
+    heading = math.atan2(y, x)
+    if distance <= 1.2 and abs(math.degrees(heading)) <= 5:
+        assert not started
+        assert outcome.startswith("already positioned")
+        return
+    assert len(started) == 1
+    goal = started[0][2]
+    travel = max(distance - 1.2, 0)
+    gx, gy = travel * math.cos(heading), travel * math.sin(heading)
+    if mode == "navigation":
+        assert goal["x"] == pytest.approx(current[0] + c * gx - sn * gy)
+        assert goal["y"] == pytest.approx(current[1] + sn * gx + c * gy)
+        assert not goal["local_frame"]
+    else:
+        assert goal["x"] == pytest.approx(gx)
+        assert goal["y"] == pytest.approx(gy)
+        assert goal["theta_degrees"] == pytest.approx(math.degrees(heading))
 
 
 if __name__ == "__main__":

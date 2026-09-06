@@ -723,27 +723,70 @@ class BrainAgent:
         if not in_image(*point):
             return "rejected — y and x must be within 0-1000 image coordinates"
         v_norm, u_norm = point
-        floor = grounding.pixel_to_floor(
-            u_norm,
-            v_norm,
-            frame_jpeg=self._frame_at_capture,
-            vertical_fov_deg=self._config.vertical_fov,
-            pitch_deg=self._pitch_at_capture,
-            cam_height=self._config.height_cam,
-            cam_forward=self._config.x_cam,
-        )
+        standoff = grounding.parse_standoff(args.get("standoff_m", grounding.STANDOFF_M))
+        if standoff is None:
+            return "rejected — standoff_m must be a finite number from 0.35 to 1.5 meters"
+        if standoff != grounding.STANDOFF_M:
+            floor = grounding.conversation_floor(
+                u_norm, v_norm, frame_jpeg=self._frame_at_capture, pitch_deg=self._pitch_at_capture
+            )
+        else:
+            floor = grounding.pixel_to_floor(
+                u_norm,
+                v_norm,
+                frame_jpeg=self._frame_at_capture,
+                vertical_fov_deg=self._config.vertical_fov,
+                pitch_deg=self._pitch_at_capture,
+                cam_height=self._config.height_cam,
+                cam_forward=self._config.x_cam,
+            )
         if floor is None:
-            return "rejected — that point is at or above the horizon; point at the floor"
-        inputs = self._adjust_nav_goal(_NAV_TO_POSITION, grounding.approach_goal(*floor))
+            if standoff == grounding.STANDOFF_M:
+                return "rejected — that point is at or above the horizon; point at the floor"
+            return "rejected — that point cannot be projected; use visible floor in the current main camera frame"
+        if standoff == grounding.STANDOFF_M:
+            inputs = self._adjust_nav_goal(_NAV_TO_POSITION, grounding.approach_goal(*floor))
+        else:
+            current_pose = self._pose.current_pose_xyt()
+            if self._pose_at_capture is None or current_pose is None:
+                return "rejected — conversation approach needs capture and current robot poses"
+            # Rebase the target, not a previously shortened goal: a robot that
+            # moved into conversation range must not drive back to its old pose.
+            target = adjust_nav_goal(
+                {"x": floor[0], "y": floor[1], "theta_degrees": 0.0, "local_frame": True},
+                capture_pose=self._pose_at_capture,
+                current_pose=current_pose,
+                is_mapfree=self._pose.is_mapfree,
+            )
+            floor = (target["x"], target["y"])
+            goal = grounding.approach_goal(*floor, standoff_m=standoff)
+            if goal["x"] == goal["y"] == 0.0 and abs(goal["theta_degrees"]) <= 5.0:
+                return "already positioned — no movement needed; continue this encounter without another approach"
+            # This goal is already relative to current_pose. Only convert to the
+            # static map if needed; applying the capture delta again would drift.
+            inputs = adjust_nav_goal(
+                goal,
+                capture_pose=current_pose,
+                current_pose=current_pose,
+                is_mapfree=self._pose.is_mapfree,
+                use_static_map=getattr(self._pose, "cur_nav_mode", None) == "navigation",
+            )
         self._logger.info(
             f"[Brain] go_to_point_in_view ({v_norm:.0f},{u_norm:.0f}) -> floor ({floor[0]:.2f}, {floor[1]:.2f})m, "
             f"goal ({inputs['x']:.2f}, {inputs['y']:.2f}, {inputs['theta_degrees']:.0f}°) "
             f"pitch={self._pitch_at_capture:.0f}°"
         )
         self._start_skill(_NAV_TO_POSITION, inputs)
+        if standoff == grounding.STANDOFF_M:
+            return (
+                f"driving to the floor point {math.hypot(*floor):.1f}m away (stopping ~{grounding.STANDOFF_M}m short) "
+                "— you will get an event when it finishes"
+            )
+        capped = math.hypot(*floor) > grounding.MAX_RANGE_M
         return (
-            f"driving to the floor point {math.hypot(*floor):.1f}m away (stopping ~{grounding.STANDOFF_M}m short) "
-            "— you will get an event when it finishes"
+            f"approaching floor point {math.hypot(*floor):.1f}m away with {standoff}m requested standoff"
+            + (" (capped step; target remains farther away)" if capped else "")
+            + " — you will get an event when it finishes; inspect a fresh main camera image before any next approach"
         )
 
     def _start_skill(self, skill_id: str, inputs: dict) -> None:

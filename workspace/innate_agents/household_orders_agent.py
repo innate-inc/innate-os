@@ -97,7 +97,8 @@ class HouseholdOrdersAgent(Agent):
 Repeat:
 1. Call find_next_person(). With no visible person or SEARCH_UNREACHABLE, call it again. Stop on SEARCH_EXHAUSTED or
    SEARCH_INFRASTRUCTURE_FAILURE. Each new search invalidates the prior encounter_id.
-2. If no person is visible, search again. For a small or distant person centered in view, use go_to_point_in_view once;
+2. If no person is visible, search again. For a small or distant person centered in view with clearly visible feet and floor in the current main
+   camera image, use go_to_point_in_view(standoff_m=1.2) at that floor once;
    when it finishes, always call person_identity(action="identify") exactly once without judging the transient navigation
    frame. For any other visible person, including a cropped, oversized, edge-of-frame, or occluded person, call
    person_identity(action="identify") immediately. It captures its own fresh upward image. After IDENTITY_UNAVAILABLE,
@@ -108,10 +109,21 @@ Repeat:
    or the image was not clearly a too-close resident, search. Never repeat this backward reframing attempt for the same
    observation.
 3. Use the encounter_id returned by identity and immediately call mission_notes(action="get", key=encounter_id).
-   NOTE_FOUND means this resident already confirmed an order, so search again. On NOTE_MISSING ask:
+   NOTE_FOUND means this resident already confirmed an order, so search again. On NOTE_MISSING, before the first
+   greeting, make at most one initial approach (count any approach in step 2) to the visible floor at this resident's feet with go_to_point_in_view(standoff_m=1.2) if needed
+   for conversation distance and facing. Use only the current main camera image, never an identity event image,
+   wrist image, torso pixel, guessed floor point, or remembered coordinates. If feet/floor are cropped, occluded,
+   or ambiguous, do not approach speculatively. When already close and facing them, do not translate.
+   After an approach finishes, re-identify with the current encounter_id and continue only if it is preserved.
+   Then ask immediately: NOTE_MISSING after re-identification must not restart this initial approach. An
+   "already positioned" result means ask immediately without another approach or identity call. If the approach
+   was capped and the resident remains distant, any later retry must use a fresh main camera observation. On failed or cancelled
+   movement preserve identity and notes; handle any incoming reply before recovery. Once positioned ask:
    "Hi, what would you like from DoorDash?"
-4. Only when the required 10-second reply window ends in silence, move forward once with
-   navigate_to_position(x=1.0, y=0, theta_degrees=0, local_frame=true). If it succeeds, re-identify with the current
+4. Only when the required 10-second reply window ends in silence, inspect the fresh main camera image. If a
+   clearly grounded approach is needed, use go_to_point_in_view(standoff_m=1.2) at visible floor at their feet once.
+   Never drive a fixed distance blindly; if already positioned, stay there and re-identify. If floor evidence is
+   missing or ambiguous, search again. If the approach succeeds, re-identify with the current
    encounter_id. If re-identification preserves that encounter_id, repeat the question once and observe the same
    10-second reply window; if it does not, or if movement fails or silence persists after that window, search again.
 5. Keep the current encounter_id, exact resident name, and complete food order in the active conversation, preserving
