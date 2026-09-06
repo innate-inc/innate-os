@@ -342,10 +342,10 @@ class VirtualMars:
         self.reset()
         release_freed_heap()
 
-    def reset(self) -> None:
+    def reset(self, *, spawn: tuple[float, float, float] | None = None) -> None:
         self.world_epoch += 1
         mujoco.mj_resetData(self.model, self.data)
-        spawn_x, spawn_y, spawn_yaw_deg = self._spawn
+        spawn_x, spawn_y, spawn_yaw_deg = spawn if spawn is not None else self._spawn
         self.data.qpos[self._base["x"][0]] = spawn_x
         self.data.qpos[self._base["y"][0]] = spawn_y
         self.data.qpos[self._base["yaw"][0]] = math.radians(spawn_yaw_deg)

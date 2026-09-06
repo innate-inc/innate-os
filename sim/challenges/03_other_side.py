@@ -26,6 +26,7 @@ CHALLENGE = Challenge(
     title="The other side",
     brief="Help MARS reach the opposite sidewalk using the crosswalk, without hitting traffic.",
     environments=("intersection",),
+    spawn=(5.2, -5.3, 180.0),
     setup=[],
     goals=[Goal("Cross safely to the opposite sidewalk", SafeCrossing())],
     agent_guidance=(
