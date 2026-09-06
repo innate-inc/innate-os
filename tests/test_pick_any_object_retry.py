@@ -676,9 +676,12 @@ def test_metric_path_only_closes_after_fresh_head_and_final_wrist_checks(monkeyp
             assert not events
         if failure == "search_changed":
             assert events == [("search",)]
+        if failure != "head":
+            assert skill._metric_open_pregrasp is True
     else:
         skill._grasp_rgbd("cube")
         assert events[-2:] == [("wrist",), ("close",)]
+        assert skill._metric_open_pregrasp is False
         assert [e[1] for e in events if e[0] == "move"] == pytest.approx([0.1, 0.09, 0.08, 0.07, 0.06, 0.05])
         assert [e[2] for e in events if e[0] == "move"] == [2.0, 0.5, 0.5, 0.5, 0.5, 0.5]
 
@@ -706,3 +709,41 @@ def test_metric_entry_preserves_fixed_view_while_existing_controllers_keep_posit
     monkeypatch.setattr("innate_skills.pick_any_object.FloorApproach", lambda *a, **k: approach)
     skill.execute("cube", controller=controller)
     assert events == (["grasp"] if controller == "rgbd" else ["position", "grasp"])
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_metric_open_abort_execute_finally_preserves_posture_and_original_failure(monkeypatch, cancel):
+    class Cancelled(BaseException):
+        pass
+
+    failure = Cancelled("stop") if cancel else exceptions.SkillFailed("wrist veto")
+    transport = ModuleType("brain_client.brain.openai_transport")
+    transport.pick_openai_transport = lambda _: (lambda *a: iter(()), "test")
+    monkeypatch.setitem(sys.modules, transport.__name__, transport)
+    skill = _skill(closes_empty=False)
+    commands = []
+    skill._proxy = object()
+    skill.head = SimpleNamespace(set_position=lambda _: None)
+    skill.mobility = SimpleNamespace(stop=lambda: commands.append("base stop"))
+    skill.manipulation.move_joints = lambda *a, **k: commands.append("initial navigation fold")
+    skill.manipulation.wait = lambda: None
+    skill.say = lambda _: None
+    skill.sleep = lambda _: None
+    skill.fail = lambda text: (_ for _ in ()).throw(exceptions.SkillFailed(text))
+    approach = SimpleNamespace(search=lambda _: (0.3, 0))
+    monkeypatch.setattr("innate_skills.pick_any_object.FloorApproach", lambda *a, **k: approach)
+
+    def veto(*a):
+        skill._metric_open_pregrasp = True
+        # Any cleanup command would be a regression; the real _rest_arm is used.
+        skill.manipulation.move_joints = lambda *a, **k: commands.append("unexpected fold")
+        skill.manipulation.move_to = lambda *a, **k: commands.append("unexpected retreat")
+        skill.manipulation.gripper_close = lambda *a, **k: commands.append("unexpected close")
+        skill.manipulation.torque_off = lambda *a, **k: commands.append("unexpected torque off")
+        raise failure
+
+    skill._grasp_at = veto
+    with pytest.raises(type(failure)) as caught:
+        skill.execute("cube", controller="rgbd")
+    assert caught.value is failure
+    assert commands == ["initial navigation fold", "base stop"]
