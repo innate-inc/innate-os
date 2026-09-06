@@ -7,12 +7,13 @@ it can declare/read ROS parameters, but the dataclass itself is plain data —
 which keeps every consumer testable without a ROS runtime.
 
 Credentials deliberately stay out of the ROS parameter surface: the brain
-reaches Gemini through the Innate proxy (INNATE_SERVICE_KEY) or directly via
-the ``GEMINI_API_KEY`` environment variable (loaded from ``.env`` by launch).
+reaches the selected provider through the Innate proxy (INNATE_SERVICE_KEY)
+or via ``GEMINI_API_KEY`` / ``OPENAI_API_KEY`` in the launch environment.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -40,7 +41,10 @@ class BrainConfig:
     x_cam: float  # camera forward offset from base_link (m)
     height_cam: float  # camera height above the floor (m)
 
-    # --- Local brain (Gemini) ---
+    # --- Local brain ---
+    brain_provider: str  # gemini (default) | openai (experimental Responses)
+    openai_model: str
+    openai_reasoning_effort: str
     gemini_model: str
     gemini_thinking_level: str  # "low" | "high"; "" = model default
     idle_turn_interval: float  # seconds between looks when no skill is running
@@ -54,6 +58,19 @@ class BrainConfig:
 
     # --- Proxy service config (credentials come from env, not params) ---
     cartesia_voice_id: str
+
+    def __post_init__(self) -> None:
+        if self.brain_provider not in ("gemini", "openai"):
+            raise ValueError("brain_provider must be gemini or openai")
+        for name in ("idle_turn_interval", "supervision_turn_interval"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be a finite positive number")
+        if self.brain_provider == "openai":
+            if not self.openai_model.strip():
+                raise ValueError("openai_model must not be empty")
+            if self.openai_reasoning_effort not in ("low", "medium", "high", "xhigh", "max"):
+                raise ValueError("openai_reasoning_effort must be low, medium, high, xhigh or max")
 
     @property
     def proxy_config(self) -> dict:
@@ -100,7 +117,10 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     "vertical_fov": 80.0,
     "x_cam": 0.0197,
     "height_cam": 0.19663,
-    # --- Local brain (Gemini) ---
+    # --- Local brain (provider selection requires a node restart) ---
+    "brain_provider": "gemini",
+    "openai_model": "gpt-6-astra",
+    "openai_reasoning_effort": "low",
     "gemini_model": "gemini-3.6-flash",
     # "minimal" | "low" | "medium" | "high"; "" = model default.
     # Measured on 3.6-flash (2026-08): minimal is ~3x faster than the

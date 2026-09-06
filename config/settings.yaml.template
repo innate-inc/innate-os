@@ -209,6 +209,9 @@
 #     scan_stale_after_sec: 10.0    # seconds without a lidar scan before flagging stale
 #     send_arm_camera_image: true   # also send the arm wrist camera image to the model
 #     log_everything: true          # log every turn's full input
+#     brain_provider: "gemini"       # "openai" opts into experimental Responses; restart the brain node
+#     openai_model: "gpt-6-astra"    # requires OpenAI access through proxy or OPENAI_API_KEY in .env
+#     openai_reasoning_effort: "low" # Astra lowest effort; no separate "light" model
 #     gemini_model: "gemini-3.6-flash"
 #     timezone: ""                  # IANA zone for the clock the agent sees; "" = the robot OS's own
 #     idle_turn_interval: 3.0       # seconds between looks when no skill is running
