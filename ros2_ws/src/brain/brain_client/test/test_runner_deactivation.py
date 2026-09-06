@@ -7,6 +7,7 @@ touch ``_state``, ``_goal_handle``, ``_generation``, and the slot lock.
 """
 
 import threading
+from concurrent.futures import Future
 from types import SimpleNamespace
 
 from brain_client.core.state import BrainState, RunningSkill
@@ -21,6 +22,7 @@ def make_runner(running: RunningSkill | None, goal_handle=None):
     runner._goal_handle = goal_handle
     runner._generation = 0
     runner._slot_lock = threading.Lock()
+    runner._input_interrupted = None
     runner._logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
     runner._stop_robot = lambda: None
     runner._on_task_finished = lambda: None
@@ -208,3 +210,55 @@ def test_generation_is_captured_at_claim_time_so_a_mid_send_disown_orphans_the_g
     assert cancelled == [True]
     assert state.primitive_running is None
     assert runner._goal_handle is None
+
+
+def test_input_cancels_pending_navigation_once_and_keeps_normal_cleanup():
+    navigation = RunningSkill("navigate_to_position", "innate-os/navigate_to_position", "nav1")
+    runner, state = make_runner(navigation)
+    result_future = Future()
+    cancellations, events, cleanup = [], [], []
+
+    def cancel():
+        cancellations.append(True)
+        future = Future()
+        future.set_result(SimpleNamespace(goals_canceling=[1]))
+        return future
+
+    handle = SimpleNamespace(accepted=True, cancel_goal_async=cancel, get_result_async=lambda: result_future)
+    runner.on_event = lambda status, name, detail=None, image=None: events.append((status, detail))
+    runner._stop_robot = lambda: cleanup.append("stop")
+    runner._on_task_finished = lambda: cleanup.append("finished")
+    runner.interrupt_for_input(frozenset({navigation.skill_id}))
+    runner.interrupt_for_input(frozenset({navigation.skill_id}))  # overlapping utterance
+    assert state.primitive_running is navigation and cancellations == []
+    runner._on_goal_response(as_future(handle), runner._generation)
+    assert cancellations == [True] and state.primitive_running is navigation
+    result_future.set_result(
+        SimpleNamespace(
+            result=SimpleNamespace(
+                success=False, success_type="cancelled", skill_type=navigation.skill_id, message="", image_b64=""
+            )
+        )
+    )
+    assert state.primitive_running is None and runner._goal_handle is None
+    assert cleanup == ["stop", "finished"]
+    assert events[0][0] == "interrupted" and "Continue the request" in events[0][1]
+
+
+def test_input_never_cancels_manual_or_unrelated_skills_and_stop_disowns_pending_navigation():
+    nav_id = "innate-os/navigate_to_position"
+    manual = RunningSkill("navigate_to_position", nav_id, manual=True)
+    for running in (manual, BRAIN_RUN):
+        cancellations = []
+        runner, state = make_runner(running, make_handle(cancellations))
+        runner.interrupt_for_input(frozenset({nav_id}))
+        assert cancellations == [] and state.primitive_running is running
+    navigation = RunningSkill("navigate_to_position", nav_id)
+    runner, state = make_runner(navigation)
+    runner.interrupt_for_input(frozenset({nav_id}))
+    old_generation = runner._generation
+    runner.interrupt_for_deactivation()
+    cancellations = []
+    runner._on_goal_response(as_future(make_handle(cancellations)), old_generation)
+    assert cancellations == [True]
+    assert state.primitive_running is None and runner._input_interrupted is None

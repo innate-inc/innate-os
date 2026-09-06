@@ -427,29 +427,46 @@ class BrainClientNode(Node):
             self.get_logger().warning(f"Ignoring invalid environment speech request: {exc}")
             return
 
-        shown = threading.Event()
+        token = self.brain.begin_incoming_speech()
+        callback_lock = threading.Lock()
+        shown = False
+        delivered = False
 
         def show() -> None:
-            if not shown.is_set():
-                shown.set()
-                self.chat.emit(Sender.USER, text, speak=False)
+            nonlocal shown
+            with callback_lock:
+                if shown:
+                    return
+                shown = True
+            self.chat.emit(Sender.USER, text, speak=False)
 
         def deliver(_success: bool) -> None:
-            show()  # a clip that never played still leaves its line on screen
-            if self.state.is_brain_active:
-                self.brain.on_user_message(text)
+            nonlocal delivered
+            with callback_lock:
+                if delivered:
+                    return
+                delivered = True
+            try:
+                show()  # a clip that never played still leaves its line on screen
+            finally:
+                self.brain.finish_incoming_speech(token, text)
 
         if self._tts_handler is None:
             self.get_logger().warning("Environment speech requested while TTS is unavailable")
             deliver(False)
             return
-        queued = self._tts_handler.speak_text_async(
-            text,
-            voice_config={"mode": "id", "id": voice_id},
-            on_start=show,
-            on_done=deliver,
-            protected=True,  # another character's line: agent flushes must not cancel it
-        )
+        try:
+            queued = self._tts_handler.speak_text_async(
+                text,
+                voice_config={"mode": "id", "id": voice_id},
+                on_start=show,
+                on_done=deliver,
+                protected=True,  # another character's line: agent flushes must not cancel it
+            )
+        except Exception as exc:
+            self.get_logger().error(f"Could not queue environment speech: {exc}")
+            deliver(False)
+            return
         if not queued:
             deliver(False)
 
