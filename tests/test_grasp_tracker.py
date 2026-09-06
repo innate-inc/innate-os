@@ -71,3 +71,26 @@ def test_motion_worker_tracks_intermediate_frames_and_joins():
     point = tracker.guess
     time.sleep(0.05)
     assert tracker.guess == point
+
+
+def test_refresh_keeps_material_anchor_through_long_descent():
+    # Repeated zoom and partial occlusion discard original corners. New texture
+    # must replenish support without replacing the chosen material point.
+    rng = np.random.default_rng(19)
+    gray = cv2.GaussianBlur(rng.integers(0, 256, (480, 640), dtype=np.uint8), (3, 3), 0)
+    anchor = np.array([300.0, 240.0])
+    tracker = module.GraspPointTracker(hsv(gray), (220, 160, 160, 160), anchor)
+    initial_ids = tracker.original.copy()
+    for i in range(1, 41):
+        transform = cv2.getRotationMatrix2D(tuple(anchor), i * 0.15, 1 + i * 0.035)
+        transform[:, 2] += [-i * 0.4, i * 0.15]
+        frame = cv2.warpAffine(gray, transform, (640, 480))
+        expected = transform[:, :2] @ anchor + transform[:, 2]
+        result = tracker.update(hsv(frame))
+        assert result is not None, (i, tracker.reason)
+        assert np.linalg.norm(np.asarray(result) - expected) < 1.5
+    assert len(tracker.points) >= 40
+    assert any(np.min(np.linalg.norm(initial_ids - p, axis=2)) > 1 for p in tracker.original)
+    previous = tracker.guess
+    assert tracker.update(hsv(np.zeros_like(gray))) is None
+    assert tracker.guess == previous
