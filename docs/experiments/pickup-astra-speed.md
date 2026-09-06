@@ -1,6 +1,7 @@
 # Pickup speed experiment
 
-Status: development pilots; no speed or reliability improvement claim yet.
+Status: the complete second campaign passes the speed ratios but fails the
+predeclared working-baseline gate. The requested goal remains unproven.
 
 ## Acceptance fixed before implementation
 
@@ -164,3 +165,37 @@ quintic trajectory's computed peak EE speed falls from0.3043to0.2675m/s, with
 the same minimum EE z0.065m. Runtime falls back to the original search whenever
 any joint would travel farther. This is a kinematic check, not collision or
 pickup proof; real simulator validation remains required before comparison.
+
+## Complete second campaign and shared reliability correction
+
+All 18 matched trials at `34fbb11ab` are retained. Astra held 9/9 objects for
+20 seconds. Classic held 6/9: onboarding LEGO 1/3, rotated LEGO 2/3, cube 3/3.
+Successful-trial medians were 27.921 versus 57.869 seconds (51.75% lower), and
+fixed-penalty medians 27.921 versus 68.677 seconds (59.34% lower). Despite those
+ratios, the onboarding baseline fails the required 2/3 success gate. This is
+not proof of the requested improvement against a working baseline.
+
+All recorded source hashes match their frozen Git sources. Starting arm,
+base, and per-scenario object state agree within 1e-5. The report now reconstructs
+the expected files and temporary overlay from the frozen revision, rejecting
+missing or changed working-tree sources even if every trial claims one HEAD.
+Future recordings also include the benchmark runner and scoring scripts.
+
+Real ROS negative checks acknowledged Stop during inference and ended without
+starting a grasp; the late model response did not dispatch motion. An absent
+target failed after the normal three-view scan without a grasp attempt. The
+server represents cancellation with `success_type="cancelled"` while finalizing
+the ROS goal successfully, so the recorder retains that field and the judge
+explicitly rejects cancelled attempts.
+
+Before another campaign, isolate one shared correction: known rigid material
+closes at the existing floor limit without the 1cm pre-close lift, in both
+controllers. Soft/unknown material keeps its previous handling. Every first
+classic onboarding close in the second campaign caught air after that lift;
+several later weak grasps slipped during lift or carry. No search, carry,
+perception, force, floor, or motion-duration change belongs to this correction.
+First run one classic pilot in each unchanged scenario and inspect first-close
+aperture, lift, existing carry motion, and 20-second retention. Only a verified
+correction warrants another frozen matched set with the same acceptance gates.
+The estimated next stage is approximately 60 calls / $0.80, within the existing
+200-call / $5 cumulative review bounds.

@@ -665,6 +665,11 @@ class PickAnyObject(Skill):
 
     def _pre_close_lift(self, x: float, y: float, roll: float, pitch: float, yaw: float) -> None:
         p = self._p
+        if self._grip_strength is not None and self._grip_strength < SOFT_GRIP_MIN:
+            # Shared rigid-grasp correction: a 1cm unpress lifts the pads off
+            # thin objects before closing. Keep the existing floor/force limits
+            # and close there; soft/unknown material keeps its previous handling.
+            return
         if not getattr(self, "_unpress_grasp", True):
             return  # model selected closing at the existing floor limit
         if p["close_lift_m"] <= 0:
