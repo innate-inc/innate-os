@@ -19,6 +19,7 @@ def _tool(view):
             search_clearance={"type": "string", "enum": ["flat", "low", "high"]},
         )
     else:
+        properties["grasp_point_2d"] = {"type": "array", "items": {"type": "number"}}
         properties["axis_2d"] = {"type": "array", "items": {"type": "number"}}
     return {
         "type": "function",
@@ -63,6 +64,10 @@ Use image 2 only for identity, never for output coordinates. Glare can wash a
 colored object almost white in the wrist view; compare its shape and reference
 instead of rejecting it only for changed color. Still reject missing or
 ambiguous targets. Material and clearance were already decided in the head view.
+Return grasp_point_2d [y,x], normalized 0-1000, on a specific visible patch
+of material inside the box that the fingers can pinch. Prefer local texture,
+away from silhouette edges, holes, floor and fingers. For curved fabric choose
+material, never the empty center of its bounding box.
 Return axis_2d as two points on the object's long centerline:
 [y1,x1,y2,x2], normalized 0-1000 in image 1. Use [] for square or round objects.
 Mark the visible axis, not the fingers. Do not calculate an angle: code converts
@@ -87,7 +92,9 @@ def validate_observation(value, view):
     detections = value["detections"]
     if not isinstance(detections, list) or len(detections) > 20:
         raise ValueError("Invalid pickup detections")
-    fields = {"box_2d", "grip_strength", "search_clearance"} if view == "head" else {"box_2d", "axis_2d"}
+    fields = (
+        {"box_2d", "grip_strength", "search_clearance"} if view == "head" else {"box_2d", "axis_2d", "grasp_point_2d"}
+    )
     for detection in detections:
         if not isinstance(detection, dict) or set(detection) != fields:
             raise ValueError("Invalid pickup detection")
@@ -95,6 +102,9 @@ def validate_observation(value, view):
         if not _numbers(box, 4) or not (0 <= box[0] < box[2] <= 1000 and 0 <= box[1] < box[3] <= 1000):
             raise ValueError("Pickup box is empty or outside the image")
         if view == "wrist":
+            point = detection["grasp_point_2d"]
+            if not _numbers(point, 2) or not (box[0] < point[0] < box[2] and box[1] < point[1] < box[3]):
+                raise ValueError("Invalid pickup grasp point")
             axis = detection["axis_2d"]
             if axis != [] and (
                 not _numbers(axis, 4)

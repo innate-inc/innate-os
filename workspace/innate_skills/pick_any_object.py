@@ -425,7 +425,9 @@ class PickAnyObject(Skill):
                 theta = math.atan2(dy, dx) % math.pi
                 roll = ROLL_SIGN * (theta - math.pi / 2)
                 self._planned_roll = max(-ROLL_MAX, min(ROLL_MAX, roll))
-            return (box[0] + box[2] / 2.0, box[1] + box[3] / 2.0), box
+            self._wrist_seed_frame = (hsv, img)
+            point = plan["grasp_point_2d"]
+            return (point[1] * vision.IMG_W / 1000, point[0] * vision.IMG_H / 1000), box
         else:
             self.sleep(self._p["wrist_settle_s"])
             img = self.wrist_image
@@ -500,27 +502,32 @@ class PickAnyObject(Skill):
             return 0.0
         return max(-ROLL_MAX, min(ROLL_MAX, roll))
 
+    def _new_wrist_tracker(self, box, px, raw):
+        if self._pickup_policy is not None:
+            from innate_skills.grasp_tracker import GraspPointTracker
+
+            # Seed on precisely the frame that supplied the model coordinates.
+            hsv, raw = self._wrist_seed_frame
+            return GraspPointTracker(hsv, box, px), raw
+        hsv, raw = self._next_wrist_hsv(raw)
+        return (_BlobTracker(hsv, box, px) if hsv is not None else None), raw
+
     def _wrist_reseed(self, prompt, raw):
-        """Persistent tracking loss: one Gemini look + a fresh color model,
-        since the view has changed. -> (tracker|None, raw, fail_reason)."""
+        """Reacquire within the existing bounded model budget, while stationary."""
         px, box = self._wrist_seed(prompt)
         if px is None:
             return None, raw, "lost track"
-        hsv, raw = self._next_wrist_hsv(raw)
-        if hsv is None:
-            return None, raw, "no wrist frames"
-        tracker = _BlobTracker(hsv, box, px)
-        if not tracker.ok:
-            return None, raw, "lost track"
+        tracker, raw = self._new_wrist_tracker(box, px, raw)
+        if tracker is None or not tracker.ok:
+            return None, raw, "insufficient tracking support"
         return tracker, raw, ""
 
     def _wrist_descend(self, prompt, tx, ty):
-        """Wrist CamShift servo down to wrist_stop_z: nudge toward the wrist
-        box, or step down once the object has been seen inside it twice.
-        A miss gets 2 frames of patience, then a Gemini re-seed (budget =
-        wrist_steps - 1). Color model, not LK: the object grows/deforms
-        during the descent and optical flow slides off.
-        Returns (x, y, z, roll); falls back to (tx, ty, roll 0) if never seen."""
+        """Servo a persistent grasp point; confirm fresh frames before motion.
+
+        Astra uses local feature geometry. Classic retains its color tracker.
+        Tracking loss stops motion and permits one bounded model reacquisition.
+        """
         p = self._p
         try:
             ee = self.manipulation.pose.position
@@ -534,12 +541,9 @@ class PickAnyObject(Skill):
             return self._wrist_done(tx, ty, z, "not seen")
         x, y = (ee[0], ee[1]) if ee else (tx, ty)
 
-        hsv, raw = self._next_wrist_hsv(None)
-        if hsv is None:
-            return self._wrist_done(tx, ty, z, "no wrist frames")
-        tracker = _BlobTracker(hsv, box, px)
-        if not tracker.ok:
-            return self._wrist_done(tx, ty, z, "not seen")
+        tracker, raw = self._new_wrist_tracker(box, px, None)
+        if tracker is None or not tracker.ok:
+            return self._wrist_done(tx, ty, z, "insufficient tracking support")
 
         deadline = time.monotonic() + WRIST_ALIGN_TIMEOUT_S
         axis = None  # last blob axis read high enough to trust
@@ -575,6 +579,8 @@ class PickAnyObject(Skill):
                 if tracker is None:
                     reason = fail
                     break
+                if self._pickup_policy is not None:
+                    continue  # require fresh tracked confirmations after reacquisition
                 px = tracker.guess
             streak += 1
 
@@ -615,8 +621,17 @@ class PickAnyObject(Skill):
                     continue
                 stalled = 0
                 x, y = nx, ny
-                tracker.guess = (p["wrist_box_u"], p["wrist_box_v"])
-            self.manipulation.move_to(x, y, z, pitch=p["wrist_pitch"], duration=p["wrist_move_s"])
+                if self._pickup_policy is None:
+                    tracker.guess = (p["wrist_box_u"], p["wrist_box_v"])
+            if self._pickup_policy is not None:
+                with tracker.during_motion(lambda: self.wrist_image, vision.b64_to_hsv, raw) as motion:
+                    self.manipulation.move_to(x, y, z, pitch=p["wrist_pitch"], duration=p["wrist_move_s"])
+                raw = motion["raw"]
+                if not tracker.ok:
+                    reason = "tracking worker failed"
+                    break
+            else:
+                self.manipulation.move_to(x, y, z, pitch=p["wrist_pitch"], duration=p["wrist_move_s"])
             if stepped_down:
                 # A pure z-hop barely shifts the view: one fresh confirming
                 # frame is enough, so hops chain instead of re-earning 2+2.

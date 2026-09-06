@@ -182,6 +182,7 @@ def test_rigid_floor_close_is_shared_while_soft_and_unknown_keep_unpress():
 
 
 def test_planned_descent_keeps_small_steps_final_confirmation_and_cancel_points(monkeypatch):
+    monkeypatch.setattr("innate_skills.pick_any_object.vision.b64_to_hsv", lambda x: x, raising=False)
     monkeypatch.setattr("innate_skills.pick_any_object.inside_box", lambda *_: True)
 
     def make(cancel_after=None):
@@ -192,8 +193,12 @@ def test_planned_descent_keeps_small_steps_final_confirmation_and_cancel_points(
         moves, frames = [], []
         center = (320, skill._p["wrist_box_v"])
         skill._wrist_seed = lambda _: (center, (300, 300, 40, 40))
-        tracker = SimpleNamespace(ok=True, axis=None, update=lambda _: center)
-        monkeypatch.setattr("innate_skills.pick_any_object._BlobTracker", lambda *_: tracker)
+        from contextlib import nullcontext
+
+        tracker = SimpleNamespace(
+            ok=True, axis=None, update=lambda _: center, during_motion=lambda *_: nullcontext({"raw": None})
+        )
+        skill._new_wrist_tracker = lambda *_: (tracker, None)
 
         def move(x, y, z, **kwargs):
             moves.append((z, kwargs["duration"]))
@@ -293,7 +298,7 @@ def test_wrist_plan_uses_a_fresh_frame_and_refuses_a_frozen_camera(monkeypatch):
     fresh = object()
     seen = []
     skill._next_wrist_hsv = lambda old, **_: (True, fresh) if old is skill.wrist_image else (None, old)
-    plan = {"box_2d": [100, 200, 300, 400], "axis_2d": []}
+    plan = {"box_2d": [100, 200, 300, 400], "axis_2d": [], "grasp_point_2d": [200, 300]}
     skill._observe_pickup = lambda _prompt, image, _view: seen.append(image) or {"detections": [plan]}
     monkeypatch.setattr(
         "innate_skills.pick_any_object.vision.parse_det_boxes", lambda _: [(300, 280, 40, 40)], raising=False
@@ -441,10 +446,12 @@ def test_wrist_plan_keeps_head_material_and_converts_image_axis(monkeypatch, axi
     skill._grip_strength = 0.6
     skill.wrist_image = "old"
     skill._next_wrist_hsv = lambda *_args, **_kwargs: (object(), "new")
-    skill._observe_pickup = lambda *_: {"detections": [{"box_2d": [100, 100, 500, 500], "axis_2d": axis}]}
+    skill._observe_pickup = lambda *_: {
+        "detections": [{"box_2d": [100, 100, 500, 500], "axis_2d": axis, "grasp_point_2d": [300, 300]}]
+    }
     monkeypatch.setattr(
         "innate_skills.pick_any_object.vision.parse_det_boxes", lambda _: [(300, 300, 40, 40)], raising=False
     )
-    assert skill._wrist_seed("sock") == ((320, 320), (300, 300, 40, 40))
+    assert skill._wrist_seed("sock") == ((192, 144), (300, 300, 40, 40))
     assert skill._planned_roll == pytest.approx(roll)
     assert skill._grip_strength == 0.6
