@@ -14,20 +14,23 @@ spec.loader.exec_module(policy)
 
 
 def test_observation_rejects_invalid_boxes_and_unsafe_grasp_choices():
-    plan = dict(box_2d=[100, 200, 300, 400], roll=-1.5, grip_strength=0.35, grasp_style="floor", search_clearance="low")
-    assert policy.validate_observation({"detections": [plan]})["detections"] == [plan]
-    assert policy.validate_observation({"detections": []}) == {"detections": []}
-    for update in (
-        {"box_2d": [100, 200, 100, 400]},
-        {"box_2d": [-1, 0, 200, 200]},
-        {"box_2d": [0, 0, float("nan"), 20]},
-        {"roll": 1.6},
-        {"grip_strength": 0.7},
-        {"grasp_style": "drop"},
-        {"search_clearance": "unsafe"},
-    ):
-        with pytest.raises(ValueError):
-            policy.validate_observation({"detections": [{**plan, **update}]})
+    plans = {
+        "head": dict(box_2d=[100, 200, 300, 400], grip_strength=0.35, search_clearance="low"),
+        "wrist": dict(box_2d=[100, 200, 300, 400], roll=-1.5),
+    }
+    for view, plan in plans.items():
+        assert policy.validate_observation({"detections": [plan]}, view)["detections"] == [plan]
+        assert policy.validate_observation({"detections": []}, view) == {"detections": []}
+        for update in (
+            {"box_2d": [100, 200, 100, 400]},
+            {"box_2d": [-1, 0, 200, 200]},
+            {"box_2d": [0, 0, float("nan"), 20]},
+            {"roll": 1.6},
+            {"grip_strength": 0.7},
+            {"search_clearance": "unsafe"},
+        ):
+            with pytest.raises(ValueError):
+                policy.validate_observation({"detections": [{**plan, **update}]}, view)
 
 
 def test_cancelled_inference_cannot_return_late_action():
@@ -82,3 +85,8 @@ def test_wrist_identity_reference_keeps_current_image_first_and_head_coordinates
     assert [item["image_url"].split(",")[1] for item in content[1:]] == ["wrist-jpeg", "head-jpeg"]
     instance.locate("red cube", "new-head-jpeg", time.sleep, lambda: None, view="head", reference=reference)
     assert len(bodies[1]["input"][0]["content"]) == 2  # head localization has no stale reference
+
+    wrist_fields = bodies[0]["tools"][0]["parameters"]["properties"]["detections"]["items"]["required"]
+    head_fields = bodies[1]["tools"][0]["parameters"]["properties"]["detections"]["items"]["required"]
+    assert set(wrist_fields) == {"box_2d", "roll"}
+    assert set(head_fields) == {"box_2d", "grip_strength", "search_clearance"}

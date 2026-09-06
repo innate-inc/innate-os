@@ -416,8 +416,6 @@ class PickAnyObject(Skill):
                 raise SkillFailed("Pickup target not confidently visible in wrist camera")
             box, plan = min(choices, key=lambda choice: self._wrist_aim_dist(choice[0]))
             self._planned_roll = plan["roll"]
-            self._unpress_grasp = plan["grasp_style"] == "unpress"
-            self._grip_strength = plan["grip_strength"]
             return (box[0] + box[2] / 2.0, box[1] + box[3] / 2.0), box
         else:
             self.sleep(self._p["wrist_settle_s"])
@@ -771,8 +769,6 @@ class PickAnyObject(Skill):
             # thin objects before closing. Keep the existing floor/force limits
             # and close there; soft/unknown material keeps its previous handling.
             return
-        if not getattr(self, "_unpress_grasp", True):
-            return  # model selected closing at the existing floor limit
         if p["close_lift_m"] <= 0:
             return
         try:
@@ -994,7 +990,6 @@ class PickAnyObject(Skill):
         if controller not in {"astra", "classic"}:
             self.fail("Pickup controller must be astra or classic")
         self._pickup_policy = None
-        self._unpress_grasp = True
         self._planned_roll = None
         self._search_clearance = "high"
         self._head_reference = None
