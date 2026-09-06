@@ -98,7 +98,7 @@ class LookInsideCabinet(Skill):
     down — for you to read; it does not judge the contents itself, so look at
     the images and say what is in there. The cabinet must already be open and
     visible: this neither opens doors nor searches other rooms. It ends backed
-    off a little from the cabinet with the arm raised and clear of it."""
+    off a little from the cabinet with the arm folded back to rest."""
 
     manipulation: Manipulation
     mobility: Mobility
@@ -225,9 +225,11 @@ class LookInsideCabinet(Skill):
         return 1
 
     def _back_off(self, approach: FloorApproach) -> None:
-        """Tuck the arm in, then give the cabinet room. In that order: backing
-        up with the gripper still past the front drags it along the shelf, so
-        an arm that will not tuck keeps the base where it is."""
+        """Tuck the arm in, give the cabinet room, then fold to rest. In that
+        order: backing up with the gripper still past the front drags it along
+        the shelf, so an arm that will not tuck keeps the base where it is —
+        and only once the base has given the cabinet room can REST swing the
+        gripper down and forward without sweeping the shelf."""
         try:
             self._lift()
         except ArmFailed as e:
@@ -235,6 +237,7 @@ class LookInsideCabinet(Skill):
             return
         self._out = False
         approach.drive(-self._p["back_off_m"])
+        self._fold()
 
     def _fold(self) -> None:
         """Best-effort teardown, never raises. An arm that got as far as the
@@ -279,7 +282,7 @@ class LookInsideCabinet(Skill):
             return (
                 f"Looked inside '{prompt}' and sent {sent} wrist views from in there — ahead, "
                 f"left, right and down. Read them to say what is in the cabinet. Backed off "
-                f"{self._p['back_off_m']:.2f} m afterwards, arm raised and clear."
+                f"{self._p['back_off_m']:.2f} m afterwards and folded the arm back to rest."
             )
         except ArmFailed as e:
             self.fail(str(e))
@@ -288,8 +291,9 @@ class LookInsideCabinet(Skill):
             self.fail(f"Arm servo failure: {e}")
         finally:
             self.mobility.stop()
-            # Only a run that reached the peek leaves the arm out — that pose
-            # IS the result, and a follow-up run reads the wrist camera from it.
+            # A run that peeked and finished already folded on the way out;
+            # one that peeked and then failed stays raised, because the base
+            # never backed off and REST from there sweeps the shelf.
             if not peeking:
                 self._fold()
             self.head.set_position(0)
