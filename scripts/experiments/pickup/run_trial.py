@@ -101,12 +101,11 @@ def run():
     )
     ros("/tmp/pickup-disable.json", "--disable-only", check=True, timeout=35)
     # Confirm this is a simulator, before any reset or action submission.
-    result = subprocess.run(
-        ["docker", "exec", container, "test", "-f", "/root/innate-os/sim/launcher/.state/innate-os.env"],
-        capture_output=True,
-    )
-    if result.returncode:
-        raise RuntimeError("Simulator runtime marker missing")
+    port = subprocess.check_output(
+        ["docker", "exec", container, "printenv", "INNATE_WORLD_STATE_PORT"], text=True
+    ).strip()
+    if port != str(a.port_base + 6):
+        raise RuntimeError("Container does not use the selected simulator port range")
     world = RemoteWorld("127.0.0.1", a.port_base + 5)
     # reset() restores the CURRENT servo targets, not canonical ARM_HOME.
     # Set them explicitly so the previous controller's carry pose cannot
