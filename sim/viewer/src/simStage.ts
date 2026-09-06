@@ -3,9 +3,15 @@
 // so the webapp's CSS behaves identically. Owns all rendering: primary view
 // full-res every frame, PiP thumbnails scissor-rendered from the same GL
 // context and blitted out.
+//
+// One stage serves every page: detach() parks it out of the DOM, attach()
+// drops it into the next one. Rebuilding it per page refetched ~80 MB of
+// models and never gave the memory back (~450 MB of renderer RSS a switch),
+// which walked a phone into the OS memory killer.
 
 import * as THREE from "three";
-import { SimScene, type CameraMode, type CameraView } from "./scene";
+import { APARTMENT_VIEWER, SimScene, type CameraMode, type CameraView } from "./scene";
+import type { EnvironmentInfo } from "./physics/worldStateController";
 import type { PropInfo } from "./props";
 import { LoadQueue } from "./loadQueue";
 import { THUMB_H, THUMB_W, type SimSession } from "./simSession";
@@ -51,10 +57,29 @@ const PLACEMENT_HINT: Record<PlacementState["kind"], string> = {
   rotating: "Drag to rotate · Release to place.",
 };
 
-export function createSimStage(parent: HTMLElement, session: SimSession): { audioEl: null; destroy: () => void } {
+// Touch has no hover to preview the drop with, and the panel covers the scene
+// being aimed at, so there it steps aside and this replaces its hint.
+const TOUCH_PLACEMENT_HINT: Partial<Record<PlacementState["kind"], string>> = {
+  following: "Tap to place it",
+  rotating: "Drag to rotate · Release to place",
+};
+
+export function createSimStage(
+  parent: HTMLElement,
+  session: SimSession,
+  // Via the ROS node, not the world server: it fails the in-flight arm trajectory.
+  onRespawn: () => void,
+): {
+  audioEl: null;
+  setSafeInsets: (insets: { right?: number }) => void;
+  attach: (parent: HTMLElement) => void;
+  detach: () => void;
+  destroy: () => void;
+} {
   const wrap = document.createElement("div");
-  wrap.className = "video-stage"; // reuse the webapp's stage styling/CSS ladder
-  wrap.style.position = "relative";
+  // The class's position:absolute+inset:0 must survive: overriding it once had
+  // the wrap size itself off the canvas buffer, ignoring window resizes.
+  wrap.className = "video-stage";
   const canvas = document.createElement("canvas");
   canvas.style.width = "100%";
   canvas.style.height = "100%";
@@ -85,6 +110,7 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
     '<span class="sim-scene-toggle-icon sim-scene-toggle-shapes" aria-hidden="true"></span>' +
     '<svg class="sim-scene-toggle-icon sim-scene-toggle-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>';
 
+  const coarsePointer = window.matchMedia("(hover: none)");
   let setupOpen = localStorage.getItem("sim-scene-panel-open") === "true";
   const setSetupOpen = (open: boolean) => {
     setupOpen = open;
@@ -102,6 +128,13 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
     clearPlacementSelection();
   };
   document.addEventListener(PANEL_OPEN_EVENT, onPanelOpen);
+  // Touch only: on a mouse, clicking the scene is how an armed prop gets placed.
+  const onOutsidePointer = (event: PointerEvent) => {
+    if (!setupOpen || !coarsePointer.matches) return;
+    if (event.target instanceof Node && setup.contains(event.target)) return;
+    setSetupOpen(false);
+  };
+  document.addEventListener("pointerdown", onOutsidePointer, true);
   setupToggle.onclick = () => setSetupOpen(!setupOpen);
   setup.append(setupBody, setupToggle);
   debugStack.appendChild(setup);
@@ -132,6 +165,18 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
       onToggle(on);
     };
   };
+
+  const environmentSection = document.createElement("section");
+  environmentSection.className = "sim-scene-section sim-environment-section";
+  environmentSection.hidden = true;
+  const environmentLabel = document.createElement("h3");
+  environmentLabel.textContent = "Environment";
+  const environmentSelect = document.createElement("select");
+  environmentSelect.className = "skill-input";
+  environmentSelect.setAttribute("aria-label", "Environment");
+  environmentSelect.onchange = () => session.switchEnvironment(environmentSelect.value);
+  environmentSection.append(environmentLabel, environmentSelect);
+  setupBody.appendChild(environmentSection);
 
   const objectsSection = document.createElement("section");
   objectsSection.className = "sim-scene-section";
@@ -172,11 +217,19 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
   modeSwitch.append(robotButton, spotButton);
   const placementHint = document.createElement("p");
   placementHint.className = "sim-placement-hint";
+  // Lives on the stage, not in the panel, so it survives the panel closing.
+  const placementToast = document.createElement("p");
+  placementToast.className = "sim-placement-toast";
+  placementToast.hidden = true;
+  wrap.appendChild(placementToast);
   let placement: PlacementState = { kind: "choose-prop" };
   const selectedProp = (): string | null =>
     placement.kind === "following" || placement.kind === "rotating" ? placement.prop : null;
   const refreshPlacementHint = () => {
     placementHint.textContent = PLACEMENT_HINT[placement.kind];
+    const toast = TOUCH_PLACEMENT_HINT[placement.kind];
+    placementToast.hidden = !toast || !coarsePointer.matches;
+    placementToast.textContent = toast ?? "";
   };
   const refreshPlacementUi = () => {
     const choosingSpot = placement.kind !== "near-robot";
@@ -223,7 +276,17 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
   viewAids.appendChild(viewAidsLabel);
   addToggle(viewAids, "Lidar", (on) => session.setLidarVisible(on));
   addToggle(viewAids, "Collisions", (on) => session.setCollisionHullsVisible(on));
-  utilitySection.append(cameraModes, viewAids);
+  const robotRow = document.createElement("div");
+  robotRow.className = "sim-view-aids";
+  const robotRowLabel = document.createElement("span");
+  robotRowLabel.textContent = "Robot";
+  const respawnChip = makeChip("Respawn", "Back to the spawn pose, arm home, every prop parked");
+  respawnChip.onclick = () => {
+    clearPlacementSelection();
+    onRespawn();
+  };
+  robotRow.append(robotRowLabel, respawnChip);
+  utilitySection.append(cameraModes, viewAids, robotRow);
   setupBody.appendChild(utilitySection);
 
   const propChips = new Map<string, HTMLButtonElement>();
@@ -305,11 +368,27 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
   loading.append(bar, loadingLabel, readout);
   wrap.appendChild(loading);
 
-  const setLoading = (text: string) => (loadingLabel.textContent = text);
+  let hideLoadingTimer: ReturnType<typeof setTimeout> | null = null;
+  const setLoading = (text: string) => {
+    if (hideLoadingTimer !== null) clearTimeout(hideLoadingTimer);
+    hideLoadingTimer = null;
+    loading.style.display = "flex";
+    loading.style.opacity = "1";
+    barFill.style.background = "#7dffc4";
+    loadingLabel.style.color = "rgba(255,255,255,.6)";
+    loadingLabel.textContent = text;
+  };
   const mb = (bytes: number) => (bytes / 1e6).toFixed(1);
   const setProgress = (loaded: number, total: number) => {
     barFill.style.width = `${total > 0 ? Math.min(100, (loaded / total) * 100) : 0}%`;
     readout.textContent = `${mb(loaded)} / ${mb(total)} MB`;
+  };
+  // A phase with nothing to download: the world server is rebuilding its
+  // world, so the last load's bar and byte count must not linger under it.
+  const setWaiting = (text: string) => {
+    setLoading(text);
+    barFill.style.width = "0%";
+    readout.textContent = "";
   };
   const failLoading = (text: string) => {
     barFill.style.background = "#ff9f9f";
@@ -318,12 +397,9 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
   };
   const hideLoading = () => {
     loading.style.opacity = "0";
-    loading.style.pointerEvents = "none"; // never shield the stage while fading
-    loading.addEventListener("transitionend", () => loading.remove(), { once: true });
-    // transitionend never fires under prefers-reduced-motion (the webapp
-    // disables all transitions) or when the fade starts pre-paint -- without
-    // this fallback the invisible overlay stayed and ate every click.
-    setTimeout(() => loading.remove(), 700);
+    // transitionend may not fire with reduced motion or before paint.
+    // Keep the overlay for subsequent switches.
+    hideLoadingTimer = setTimeout(() => (loading.style.display = "none"), 700);
   };
   // The scrim fades when the download finishes (see the load sequence below);
   // here we only surface load failures.
@@ -375,6 +451,8 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
     placement = next;
     scene.clearPropPlacementPreview();
     const prop = selectedProp();
+    // Get out of the way of the tap that places it.
+    if (prop !== null && coarsePointer.matches) setSetupOpen(false);
     scene.setPlacementMode(prop !== null);
     canvas.style.cursor = prop ? "crosshair" : "";
     for (const [propName, chip] of propChips) {
@@ -450,6 +528,10 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
     const h = wrap.clientHeight;
     if (!w || !h) return; // hidden (map primary): keep the last real size
     scene.setRenderSize(w, h, Math.min(devicePixelRatio, 2));
+    // setSize cleared the buffer (the spec clears a resized canvas) and the
+    // browser paints before the next rAF, so the stage would flash black.
+    scene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
+    scene.render();
   };
   const observer = new ResizeObserver(resize);
   observer.observe(wrap);
@@ -460,6 +542,19 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
   let thumbCursor = 0;
   let lastTime = performance.now();
   let disposed = false;
+  let attached = true;
+
+  // rAF is throttled for a hidden tab but not for a detached canvas, so a
+  // parked stage would render full-rate into nothing.
+  const startLoop = () => {
+    if (raf !== 0 || !attached || disposed) return;
+    lastTime = performance.now(); // a paused stage must not integrate the gap as one dt
+    raf = requestAnimationFrame(loop);
+  };
+  const stopLoop = () => {
+    cancelAnimationFrame(raf);
+    raf = 0;
+  };
 
   const loop = (now: number) => {
     raf = requestAnimationFrame(loop);
@@ -504,61 +599,112 @@ export function createSimStage(parent: HTMLElement, session: SimSession): { audi
     }
   };
 
-  // One shared bounded queue drives real byte progress for the whole load;
-  // seed an estimate so the bar has a width before Content-Lengths arrive
-  // (apartment ~35 MB + robot ~7 MB), refined as real sizes land.
-  const queue = new LoadQueue(2, ({ loaded, total }) => setProgress(loaded, total));
+  // Estimate apartment + robot bytes until download sizes arrive.
+  let queue = new LoadQueue(2, ({ loaded, total }) => setProgress(loaded, total));
   queue.setEstimatedTotal(42e6);
-  (async () => {
-    try {
-      // Start rendering + accept poses right away: the worldstate socket is
-      // already connecting (session.start), so the robot's placeholder box
-      // snaps to its real spawn pose while the STLs stream, then the mesh
-      // replaces it. Bail at each await if the stage was destroyed mid-load
-      // (SPA remount) -- else we'd mutate a disposed scene.
-      session.stageReady();
-      raf = requestAnimationFrame(loop);
-      // The apartment manifest first (a few KB, unqueued): it draws every
-      // room's placeholder box and frames the camera on them, so the first
-      // frames show the apartment's wireframe layout rather than an empty
-      // void while the meshes are still being fetched.
-      setLoading("loading layout...");
-      const layout = await scene.loadApartmentLayout();
-      if (disposed) return;
-      scene.frameLayout(layout);
-      setLoading("loading robot and apartment...");
-      // Await once: the robot's STLs are now in the shared queue. Enqueue the
-      // apartment rooms after, so they land behind the robot (deterministic
-      // robot-first, no timing guess).
-      const { done: robotDone } = await scene.loadRobot(queue);
-      if (disposed) return;
-      const apartment = scene.streamApartment(queue, layout);
-      // Await twice: the rest of both loads.
-      await Promise.all([robotDone, apartment]);
-      if (disposed) return;
-      hideLoading();
-      // Only now parse the prop models, so they queue behind the robot and
-      // apartment and stay out of the progress bar -- but land well before
-      // anyone clicks a prop chip. See PropLibrary.prefetchModels.
-      scene.prefetchPropModels();
-    } catch (err) {
-      if (!disposed) session.stageError(err);
+  // The robot loads once; environments come and go around it.
+  let robotDone: Promise<unknown> | null = null;
+  let loadedEnvironmentId: string | null = null;
+  let loadVersion = 0;
+  const loadEnvironment = async (environment: EnvironmentInfo | null) => {
+    // Discard superseded loads after each await.
+    const version = ++loadVersion;
+    if (loadedEnvironmentId !== null) {
+      queue.cancel();
+      queue = new LoadQueue(2, ({ loaded, total }) => {
+        if (version === loadVersion) setProgress(loaded, total);
+      });
+      queue.setEstimatedTotal(35e6);
+      scene.unloadEnvironment();
     }
-  })();
+    loadedEnvironmentId = environment?.id ?? "";
+    const name = environment?.display_name.toLowerCase() ?? "apartment";
+    try {
+      // Show layout placeholders while meshes download.
+      setLoading(`loading ${name} layout...`);
+      const layout = await scene.loadApartmentLayout(environment?.viewer ?? APARTMENT_VIEWER);
+      if (disposed || version !== loadVersion) return;
+      scene.frameLayout(layout);
+      setLoading(`loading robot and ${name}...`);
+      // Enqueue robot meshes before rooms to prioritize the robot.
+      const firstLoad = robotDone === null;
+      robotDone ??= (await scene.loadRobot(queue)).done;
+      if (disposed || version !== loadVersion) return;
+      await Promise.all([robotDone, scene.streamApartment(queue, layout)]);
+      if (disposed || version !== loadVersion) return;
+      hideLoading();
+      // Prefetch props after the scene, outside its progress bar.
+      if (firstLoad) scene.prefetchPropModels();
+    } catch (err) {
+      if (disposed || version !== loadVersion) return;
+      if (robotDone === null) {
+        session.stageError(err);
+        return;
+      }
+      console.error(`[sim-viewer] environment '${name}' failed to load:`, err);
+      failLoading(`${name} failed to load -- see the browser console`);
+    }
+  };
+
+  // Accept poses now; load the environment when its roster arrives.
+  session.stageReady();
+  startLoop();
+  let environmentOptionsKey = "";
+  const unsubscribeEnvironment = session.onEnvironment(({ environment, environments, switch: pending }) => {
+    environmentSection.hidden = environments.length < 2;
+    const optionsKey = environments.map(({ id, display_name }) => `${id}\0${display_name}`).join("\n");
+    if (optionsKey !== environmentOptionsKey) {
+      environmentOptionsKey = optionsKey;
+      environmentSelect.replaceChildren(...environments.map(({ id, display_name }) => new Option(display_name, id)));
+    }
+    environmentSelect.value = environment?.id ?? "";
+    environmentSelect.disabled = pending?.state === "loading";
+    if (pending?.state === "loading") {
+      setWaiting(`loading robot and ${pending.display_name.toLowerCase()}...`);
+    } else if (pending?.state === "failed") {
+      console.error("[sim-viewer] environment switch failed:", pending.message);
+      failLoading(`switch to ${pending.display_name.toLowerCase()} failed`);
+      hideLoadingTimer = setTimeout(hideLoading, 4000);
+    }
+    if ((environment?.id ?? "") !== loadedEnvironmentId) void loadEnvironment(environment);
+  });
 
   return {
     audioEl: null, // sim has no robot mic; the pages skip the mic toggle in sim mode
+    setSafeInsets: (insets) => scene.setSafeInsets(insets),
+    attach(next: HTMLElement) {
+      attached = true;
+      next.appendChild(wrap);
+      startLoop();
+      resize();
+      // A page used to get a new scene, so entering one always framed the
+      // robot in free orbit; that is page state, not session state.
+      scene.setCameraMode("free");
+      scene.frameRobot();
+    },
+    detach() {
+      attached = false;
+      stopLoop();
+      // The agent page lifts this into its own layout; take it back before
+      // that page clears its DOM.
+      wrap.appendChild(debugStack);
+      scene.setSafeInsets({ right: 0 }); // the agent dock's inset must not follow the stage
+      clearPlacementSelection(); // an armed prop must not follow the pointer either
+      wrap.remove();
+    },
     destroy() {
       disposed = true;
       queue.cancel(); // stop pulling new downloads for a stage that's gone
       unsubscribe();
       unsubscribeProps();
-      cancelAnimationFrame(raf);
+      unsubscribeEnvironment();
+      stopLoop();
       observer.disconnect();
       longTaskObserver?.disconnect();
       window.removeEventListener("pointerup", finishDrop);
       window.removeEventListener("pointercancel", cancelDrop);
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
+      document.removeEventListener("pointerdown", onOutsidePointer, true);
       scene.dispose();
       wrap.remove();
     },

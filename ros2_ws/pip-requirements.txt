@@ -39,7 +39,6 @@ pyserial
 trimesh
 smbus2
 bluezero
-python-chess
 
 # Text-to-Speech (via innate-proxy-client)
 httpx

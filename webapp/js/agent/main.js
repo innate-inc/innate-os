@@ -2,7 +2,8 @@
 // Agent page entry — the autonomous-control room. Same full-bleed live feed as
 // teleop (WebRTC video + camera/map PiP + telemetry), but the right edge hosts
 // one liquid-glass Agent panel: directive selection, a Start/Stop toggle, the
-// agent's live thinking traces + active skill + chat, and a message composer.
+// agent's live thinking traces + chat, and a message composer. Too narrow for
+// that dock, the same panel docks to the bottom as a sheet (agentSheet.js).
 //
 // The page has two stages behind that one panel: the live camera view, and the
 // Brain monitor (the agent loop instrumented turn by turn) which flips in over
@@ -40,7 +41,10 @@ const config = await getConfig();
 // WebRTC for real robots, the Three.js SimSession in simulation (see
 // robotSession.js).
 const { createSession, releaseSession, createStage } = await robotSessionFactory();
-const MIN_AGENT_VIEW_WIDTH = 1281;
+// Two thresholds, both mirrored in app.css: the dock floats over the feed
+// rather than taking a column, so it survives far below what the monitor needs.
+const COMPACT_LAYOUT_QUERY = "(max-width: 820px)";
+const BRAIN_MONITOR_QUERY = "(max-width: 1280px)";
 
 /** @param {HTMLElement} stage */
 export function mount(stage) {
@@ -56,10 +60,6 @@ export function mount(stage) {
  */
 function buildAgentView(root) {
   const session = createSession();
-  const widthGuard = createWidthGuard(
-    root,
-    config.simControls ? "Simulator" : "Camera view",
-  );
 
   const feedFrame = document.createElement("div");
   feedFrame.className = "agent-feed-frame";
@@ -187,9 +187,50 @@ function buildAgentView(root) {
     });
   }
 
+  const compactLayout = window.matchMedia(COMPACT_LAYOUT_QUERY);
+  const monitorTooNarrow = window.matchMedia(BRAIN_MONITOR_QUERY);
+
+  // The dock floats over the feed, so the canvas's centre is behind it. Video
+  // stages ignore this: a real camera's framing is the robot's to decide.
+  const dockPanel = /** @type {HTMLElement | null} */ (root.querySelector(".agent-panel"));
+  const setSafeInsets = /** @type {{ setSafeInsets?: (i: { right?: number }) => void }} */ (
+    videoStage
+  ).setSafeInsets;
+  const reportSafeArea = () => {
+    const feed = feedFrame.querySelector(".video-stage");
+    if (!setSafeInsets || !dockPanel || !(feed instanceof HTMLElement)) return;
+    // Against the canvas, not the cockpit: past 1400px the feed sits beside
+    // the dock rather than under it, so nothing is covered.
+    const canvas = feed.getBoundingClientRect();
+    const dock = dockPanel.getBoundingClientRect();
+    const covered = compactLayout.matches ? 0 : Math.max(0, canvas.right - dock.left);
+    setSafeInsets({ right: Math.min(covered, canvas.width) });
+  };
+
+  const applyLayout = () => {
+    root.classList.toggle("agent-compact", compactLayout.matches);
+    // Its toggle is hidden at this width, so an open monitor would strand the
+    // page on a stage it cannot leave.
+    if (monitorTooNarrow.matches) setView("live");
+    panel.setCompact(compactLayout.matches);
+    reportSafeArea();
+  };
+  compactLayout.addEventListener("change", applyLayout);
+  monitorTooNarrow.addEventListener("change", applyLayout);
+  const safeAreaObserver = new ResizeObserver(reportSafeArea);
+  safeAreaObserver.observe(root);
+  safeAreaObserver.observe(feedFrame);
+  applyLayout();
+
   const parts = [
     videoStage,
-    widthGuard,
+    {
+      destroy: () => {
+        compactLayout.removeEventListener("change", applyLayout);
+        monitorTooNarrow.removeEventListener("change", applyLayout);
+        safeAreaObserver.disconnect();
+      },
+    },
     ...(challengePanel ? [challengePanel] : []),
     ...(telemetry ? [telemetry] : []),
     // Square, always-live camera tiles (own prefs key so teleop's defaults stay put).
@@ -220,7 +261,7 @@ function buildAgentView(root) {
   session.start();
 
   const entryPath = location.pathname.replace(/\/+$/, "");
-  if (entryPath === "/brain") setView("brain");
+  if (entryPath === "/brain" && !monitorTooNarrow.matches) setView("brain");
   if (entryPath === "/brain" || entryPath === "/agent") {
     history.replaceState({}, "", "/" + location.search + location.hash);
   }
@@ -234,60 +275,3 @@ function buildAgentView(root) {
   };
 }
 
-/**
- * @param {HTMLElement} root
- * @param {string} viewName
- * @returns {{ destroy: () => void }}
- */
-function createWidthGuard(root, viewName) {
-  const guard = document.createElement("aside");
-  guard.className = "agent-width-guard";
-  guard.setAttribute("aria-labelledby", "agent-width-guard-title");
-  guard.innerHTML = `
-    <div class="agent-width-guard-card">
-      <h2 id="agent-width-guard-title" class="agent-width-guard-title">${viewName} unavailable</h2>
-      <p class="agent-width-guard-message">Widen your browser to continue.</p>
-      <div class="agent-width-meter">
-        <div class="agent-width-meter-labels">
-          <span>Current <output class="agent-width-current"></output></span>
-          <span>Minimum <output>${MIN_AGENT_VIEW_WIDTH} px</output></span>
-        </div>
-        <div
-          class="agent-width-meter-track"
-          role="progressbar"
-          aria-label="Browser width"
-          aria-valuemin="0"
-          aria-valuemax="${MIN_AGENT_VIEW_WIDTH}"
-        ><span></span></div>
-      </div>
-    </div>
-  `;
-
-  const current = /** @type {HTMLOutputElement} */ (
-    guard.querySelector(".agent-width-current")
-  );
-  const meter = /** @type {HTMLElement} */ (
-    guard.querySelector(".agent-width-meter-track")
-  );
-  const render = () => {
-    const width = window.innerWidth;
-    const progress = Math.min(width / MIN_AGENT_VIEW_WIDTH, 1);
-    current.textContent = `${width} px`;
-    meter.setAttribute(
-      "aria-valuenow",
-      String(Math.min(width, MIN_AGENT_VIEW_WIDTH)),
-    );
-    guard.style.setProperty("--agent-width-progress", String(progress));
-  };
-
-  window.addEventListener("resize", render);
-  render();
-  root.append(guard);
-
-  return {
-    destroy() {
-      window.removeEventListener("resize", render);
-      guard.remove();
-    },
-  };
-}

@@ -30,9 +30,11 @@ from .constants import (
     WRIST_CAMERA_FOVY,
 )
 from .drive_limits import clamp_cmd_vel
+from .environments import DEFAULT_ENVIRONMENT_ID, Environment
 from .props import PropRegistry
 from .statics import RoomRegistry
-from .world import ARM_HOME, SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG
+from .traffic import TrafficController
+from .world import ARM_HOME
 
 # Stop the base if the last Twist is stale, like a real base watchdog.
 CMD_VEL_TIMEOUT_S = 0.5
@@ -155,11 +157,11 @@ def _texture_cap(render_w: int) -> int | None:
     return 2048 if render_w > CAMERA_WIDTH // 2 else 1024
 
 
-def _model_cache_path(xml: str, asset_files: list[Path]) -> Path:
-    """Cache location for the compiled model, keyed by everything that shapes
-    it: the generated MJCF (which embeds resolved mesh/texture paths, so the
-    texture cap and asset locations are covered), the referenced files'
-    mtime+size, and the MuJoCo version. Compiling 1300+ convex hulls costs
+def _model_cache_path(environment_id: str, xml: str, asset_files: list[Path]) -> Path:
+    """Cache location for the compiled model: one slot per environment pack,
+    keyed by everything that shapes it -- the generated MJCF (which embeds
+    resolved mesh/texture paths, so the texture cap and asset locations are
+    covered), the referenced files' mtime+size, and the MuJoCo version. Compiling 1300+ convex hulls costs
     minutes on weak machines and leaves ~0.4GB of heap debris; loading the
     saved binary takes ~50ms and only the model's real ~120MB."""
     digest = hashlib.sha256()
@@ -171,7 +173,7 @@ def _model_cache_path(xml: str, asset_files: list[Path]) -> Path:
         except OSError:
             continue
         digest.update(f"{path}:{st.st_mtime_ns}:{st.st_size}\n".encode())
-    return ASSETS_DIR / ".model_cache" / f"world-{digest.hexdigest()[:16]}.mjb"
+    return ASSETS_DIR / ".model_cache" / f"world-{environment_id}-{digest.hexdigest()[:16]}.mjb"
 
 
 def release_freed_heap() -> None:
@@ -194,6 +196,7 @@ class VirtualMars:
         split_dir: Path | None = None,
         render_wh: tuple[int, int] | None = None,
         depth_render_wh: tuple[int, int] | None = None,
+        environment: Environment | None = None,
     ):
         # render_wh / depth_render_wh override the offscreen render
         # resolutions (default: the camera-native CAMERA_WIDTH x
@@ -202,7 +205,9 @@ class VirtualMars:
         # rate -- and upscales at the wire; direct/notebook users keep full res.
         self._render_w, self._render_h = render_wh or (CAMERA_WIDTH, CAMERA_HEIGHT)
         self._depth_w, self._depth_h = depth_render_wh or (self._render_w, self._render_h)
-        rooms = world.find_decomposed_rooms(split_dir or ASSETS_DIR / "apartment_split_v2")
+        self.environment = environment or Environment.load(DEFAULT_ENVIRONMENT_ID, ASSETS_DIR)
+        collision_dir = split_dir or self.environment.collision_dir
+        rooms = world.find_decomposed_rooms(collision_dir)
         # Rooms authored as primitives (see statics.py). A world can be built
         # from these ALONE -- a benchmark map has no scanned geometry to
         # decompose -- so the missing-geometry error only fires when there is
@@ -210,15 +215,21 @@ class VirtualMars:
         self.statics = RoomRegistry.load([world.repo_root() / "sim" / "rooms", ASSETS_DIR / "rooms"])
         if not rooms and not self.statics:
             raise RuntimeError(
-                f"no room geometry under {split_dir or ASSETS_DIR} -- run decompose_rooms.py, "
+                f"no room geometry under {collision_dir} -- run decompose_rooms.py, "
                 "add a sim/rooms sidecar, or set VIRTUAL_MARS_ASSETS"
             )
-        visual_dir = ASSETS_DIR / "apartment_visual"
+        visual_dir = self.environment.visual_dir
+        # A bundle room's own spawn wins where one names it; the environment
+        # pack's otherwise. Decided BEFORE the world XML is emitted, which
+        # takes spawn_pose -- deciding it after left the compiled world built
+        # around one pose and the robot reset to another.
+        self._spawn = self.statics.spawn() or self.environment.spawn
         visual_rooms = world.find_visual_rooms(visual_dir) if visual_dir.is_dir() else {}
 
         # Droppable props: sidecars from the tracked source dir plus any the
         # asset bundle shipped, each parked off-map until something places it.
         self.props = PropRegistry.load([world.repo_root() / "sim" / "props", ASSETS_DIR / "props"])
+        self.traffic = TrafficController(self.environment.traffic)
         xml = world.build_world_xml(
             rooms,
             include_placeholder_robot=False,
@@ -226,11 +237,13 @@ class VirtualMars:
             texture_max=_texture_cap(self._render_w),
             props=self.props,
             statics=self.statics,
+            spawn_pose=self._spawn,
+            traffic_bodies=self.traffic.bodies_xml(),
+            traffic_assets=self.traffic.assets_xml(),
         )
         # A primitive room can put the robot somewhere the apartment's spawn
         # would be inside a wall (the default sits 0.16 m off the Gallery's
         # west wall, closer than the base's own half-width).
-        self._spawn = self.statics.spawn() or (SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG)
         # Lidar rays hit only the textured visual meshes (true surfaces, like
         # a real lidar) when available -- without them, fall back to all
         # groups (the collision hulls, ~1cm inflated).
@@ -253,13 +266,15 @@ class VirtualMars:
             # no entry because every number they carry is inlined into that XML,
             # which the cache already keys on.
             Path(__file__).with_name("statics.py"),
+            Path(__file__).with_name("traffic.py"),
+            Path(__file__).with_name("crossroads.py"),
             *(f for pieces in rooms.values() for f in pieces),
             *(p for obj in visual_rooms.values() for p in (obj, obj.with_suffix(".png"))),
             *(f for f in urdf_path.parent.rglob("*") if f.suffix in (".stl", ".dae", ".obj", ".png", ".urdf")),
             # A prop mesh appearing (or being republished) changes the world.
             *self.props.asset_files(),
         ]
-        cache_path = _model_cache_path(xml, asset_files)
+        cache_path = _model_cache_path(self.environment.id, xml, asset_files)
         self.model = None
         if cache_path.exists():
             with contextlib.suppress(Exception):  # noqa: BLE001 -- corrupt cache falls back to compiling
@@ -269,6 +284,7 @@ class VirtualMars:
             robot_spec = world.load_robot_spec(urdf_path)
             world.add_planar_base(robot_spec)
             world.tune_contacts(robot_spec)
+            self.traffic.configure_robot_spec(robot_spec)
             world_spec.attach(robot_spec, frame=world_spec.worldbody.add_frame(), prefix="robot_")
 
             for cam_name, (body_name, forward, up) in CAMERAS.items():
@@ -290,11 +306,14 @@ class VirtualMars:
             del world_spec, robot_spec  # spec copies of every mesh/texture
             with contextlib.suppress(OSError):
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
-                for stale in cache_path.parent.glob("world-*.mjb"):
+                # Only this pack's stale models: switching packs must find the
+                # other pack's compiled world still there.
+                for stale in cache_path.parent.glob(f"world-{self.environment.id}-*.mjb"):
                     if stale != cache_path:
                         stale.unlink(missing_ok=True)
                 mujoco.mj_saveModel(self.model, str(cache_path), None)
         world.style_robot_geoms(self.model)
+        self.traffic.bind(self.model)
         # The planar base pins z at the plane, so the ground's 7mm contact
         # margin reads as permanent penetration -- huge normal force whose
         # friction cone glues the base. The worker's ground has no margin.
@@ -349,20 +368,34 @@ class VirtualMars:
     def reset(self) -> None:
         self.world_epoch += 1
         mujoco.mj_resetData(self.model, self.data)
-        spawn_x, spawn_y, spawn_yaw = self._spawn
+        spawn_x, spawn_y, spawn_yaw_deg = self._spawn
         self.data.qpos[self._base["x"][0]] = spawn_x
         self.data.qpos[self._base["y"][0]] = spawn_y
-        self.data.qpos[self._base["yaw"][0]] = math.radians(spawn_yaw)
+        self.data.qpos[self._base["yaw"][0]] = math.radians(spawn_yaw_deg)
         for qadr, _dadr, home in self._joints.values():
             self.data.qpos[qadr] = home
         mq, _md, source, mult = self._mimic
         self.data.qpos[mq] = mult * ARM_HOME[source]
         self.props.mark_all_parked()  # mj_resetData already re-parked every prop
+        self.traffic.reset(self.data)
         self._cmd_vx = self._cmd_wz = 0.0
         self._cmd_sim_time = -math.inf
         self._hold = None
         self._still_since = None
         mujoco.mj_forward(self.model, self.data)
+
+    def close(self) -> None:
+        """Release the offscreen GL renderers; must run on the thread that
+        rendered with them (macOS GL is main-thread-sensitive)."""
+        for renderer in (self._renderer, self._depth_renderer):
+            if renderer is None:
+                continue
+            # Renderer.close() destroys its GL context, then mjr_freeContext deletes
+            # textures/framebuffers by id on whatever context is *current* -- a newer
+            # world's, after a switch, whose every frame is then noise.
+            renderer._gl_context.make_current()
+            renderer.close()
+        self._renderer = self._depth_renderer = None
 
     def set_cmd_vel(self, vx: float, wz: float) -> None:
         self._cmd_vx, self._cmd_wz = clamp_cmd_vel(vx, wz)
@@ -387,8 +420,11 @@ class VirtualMars:
     def step(self, duration: float) -> None:
         """Advance the sim by `duration` seconds, applying servos each step."""
         end = self.data.time + duration
+        dt = float(self.model.opt.timestep)
         while self.data.time < end:
             self._apply_control()
+            if self.traffic.enabled:
+                self.traffic.step(self.data, dt, self.pose()[:2])
             mujoco.mj_step(self.model, self.data)
             if not np.all(np.isfinite(self.data.qpos)):
                 self.reset()
@@ -830,6 +866,14 @@ class VirtualMars:
         Empty for a mesh world like the apartment, which the viewer loads from
         the asset bundle instead."""
         return self.statics.manifest()
+
+    def traffic_manifest(self) -> list[dict[str, str]]:
+        """Car IDs and colours for observer viewers."""
+        return self.traffic.manifest()
+
+    def traffic_state(self) -> dict | None:
+        """Authoritative traffic state on the same sim clock as robot pose."""
+        return self.traffic.state(self.world_epoch)
 
     def drop_prop_at(self, name: str, x: float, y: float, yaw: float = 0.0) -> bool:
         """Release one prop above (x, y) and let physics settle it onto

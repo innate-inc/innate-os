@@ -155,16 +155,34 @@ ASSETS_IMAGE_PATHSPECS = (
     "sim/environments",
     "sim/tools",
     "sim/viewer/tools",
-    "ros2_ws/src/mars_bot/mars_sim_driver",
     "ros2_ws/src/mars_bot/mars_sim",
+)
+# The driver modules the build imports to compile a world for the nav map --
+# exactly those, not the package: world_server.py, node.py and the bridges
+# never enter the build, and hashing them renamed the image on every edit.
+_DRIVER = "ros2_ws/src/mars_bot/mars_sim_driver/mars_sim_driver"
+ASSETS_IMAGE_DRIVER_FILES = tuple(
+    f"{_DRIVER}/{name}.py"
+    for name in (
+        "__init__",
+        "constants",
+        "core",
+        "crossroads",
+        "drive_limits",
+        "environments",
+        "props",
+        "traffic",
+        "world",
+    )
 )
 # Geometry is carved out by EXCLUSION, so a pathspec added above joins the
 # geometry hash by default: wrongly excluded costs a needless refusal, wrongly
-# included reuses geometry that no longer matches.
-NON_GEOMETRY_PATHSPECS = (
-    "ros2_ws/src/mars_bot/mars_sim_driver",
-    "ros2_ws/src/mars_bot/mars_sim",
-)
+# included reuses geometry that no longer matches. The driver files above are
+# excluded the same way: a driver edit renames the image but must not
+# hard-stop `up` (compute_geometry_inputs_hash), except the authored Crossroads
+# scene spec. Traffic-control logic changes do not alter its generated GLB.
+GEOMETRY_DRIVER_FILES = (f"{_DRIVER}/crossroads.py",)
+NON_GEOMETRY_PATHSPECS = ("ros2_ws/src/mars_bot/mars_sim",)
 GEOMETRY_INPUT_PATHSPECS = tuple(p for p in ASSETS_IMAGE_PATHSPECS if p not in NON_GEOMETRY_PATHSPECS)
 # The SimSession bundle the webapp loads, as its own image
 # (sim/viewer/Dockerfile), addressed by inputs-<compute_viewer_inputs_hash over
@@ -191,6 +209,11 @@ SIM_ASSET_UNITS_DERIVED = (
     "apartment_split",
     "apartment_split_v2",
     "apartment_visual",
+    "backrooms_split",
+    "backrooms_split_v2",
+    "backrooms_visual",
+    "intersection_split_v2",
+    "intersection_visual",
     "map",
 )
 SIM_ASSET_UNITS_AUTHORED = (
@@ -547,7 +570,7 @@ def iter_assets_image_input_files(repo_root: Path) -> list[Path]:
     reason. tests/test_assets_image_inputs.py checks that publish-sim-images.yml
     actually rebuilds when one of these changes.
     """
-    return _collect_input_files(repo_root, ASSETS_IMAGE_INPUT_FILES, ASSETS_IMAGE_PATHSPECS)
+    return _collect_input_files(repo_root, ASSETS_IMAGE_INPUT_FILES + ASSETS_IMAGE_DRIVER_FILES, ASSETS_IMAGE_PATHSPECS)
 
 
 @functools.lru_cache
@@ -574,7 +597,7 @@ def compute_geometry_inputs_hash(repo_root: Path) -> str:
     _hash_input_files(
         digest,
         repo_root,
-        _collect_input_files(repo_root, ASSETS_IMAGE_INPUT_FILES, GEOMETRY_INPUT_PATHSPECS),
+        _collect_input_files(repo_root, ASSETS_IMAGE_INPUT_FILES + GEOMETRY_DRIVER_FILES, GEOMETRY_INPUT_PATHSPECS),
     )
     return digest.hexdigest()
 
@@ -719,6 +742,7 @@ def get_config() -> dict[str, object]:
         "os_image_auto": os_image_auto,
         "os_pull_image": os_pull_image if os_pull_image is not None else True,
         "os_always_build": os_always_build if os_always_build is not None else False,
+        "environment_id": get_nested_str(sim_config, "simulation", "environment") or "apartment",
     }
 
 

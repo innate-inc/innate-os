@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Front-door behaviour: static caching, SPA fallback, path guards, the config
-overlay, the restart guard, the /ws + /worldstate proxy, and /settings.
+"""Front-door behaviour: static caching, SPA fallback, path guards, sim assets,
+the config overlay, the restart guard, the /ws + /worldstate proxy, and /settings.
 
 Pins the contract the aiohttp rewrite must keep. Part of the fast (no-ROS)
 pytest bucket."""
 
-from conftest import fake_ws_upstream, make_app_root, serve, sync
+from conftest import H, fake_ws_upstream, make_app_root, serve, sync
 
 
 @sync
@@ -140,6 +140,24 @@ async def test_path_guards(tmp_path):
         assert (await s.get(base + "/secret.pem")).status == 404
         # a NUL byte in the path -> 404, not a 500 traceback
         assert (await s.get(base + "/%00")).status == 404
+
+
+@sync
+async def test_local_environment_assets_are_served(tmp_path):
+    root = make_app_root(tmp_path)
+    local_environments = tmp_path / "viewer-public" / "local-environments"
+    scene = local_environments / "custom-pack" / "scene.glb"
+    scene.parent.mkdir(parents=True)
+    scene.write_bytes(b"custom glb")
+    routes = dict(H.SIM_VIEWER_ROUTES)
+    assert routes["/local-environments/"] == H.SIM_VIEWER_ROOT / "public" / "local-environments"
+    routes["/local-environments/"] = local_environments
+
+    async with serve(ROOT=root, SIM_VIEWER_ROUTES=routes) as (s, base):
+        response = await s.get(base + "/local-environments/custom-pack/scene.glb")
+        assert response.status == 200
+        assert response.headers["Content-Type"] == "model/gltf-binary"
+        assert await response.read() == b"custom glb"
 
 
 @sync

@@ -19,6 +19,9 @@ import { ros } from "./rosClient.js";
 import { initShell } from "./shell.js";
 import { getConfig } from "./config.js";
 import { SIM_SECTIONS } from "./railLayout.js";
+import { trackKeyboardInset } from "./keyboardInset.js";
+
+trackKeyboardInset();
 
 /**
  * @typedef {{ destroy: () => void }} PageView

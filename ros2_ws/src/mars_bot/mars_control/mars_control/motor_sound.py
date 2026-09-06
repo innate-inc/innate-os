@@ -20,11 +20,12 @@ how hard the robot is working and to keep the audio device fed:
 * throttle demand is the commanded acceleration, which is what makes
   accelerating sound different from cruising at the same speed.
 
-Audio goes to the ALSA ``default`` device, which ``config/alsa/asound.conf``
-defines as dmix + softvol. dmix is what lets this run alongside TTS instead of
-fighting it for the device.
+On hardware, audio goes to the ALSA ``default`` device, which
+``config/alsa/asound.conf`` defines as dmix + softvol. In simulation the same
+synth is streamed as PCM to the browser because the container has no speaker.
 """
 
+import base64
 import json
 import time
 
@@ -54,8 +55,8 @@ keeps the synth running while parked."""
 LIVE_PARAMS = frozenset({"enabled", "volume", "idle_when_stopped", "only_in_mad_mode", "reference_acceleration"})
 """Settable in place. Every other motor_sound.* parameter is baked into the
 synth at construction, so applying one live means rebuilding it."""
-STREAM_PARAMS = frozenset({"sample_rate", "blocksize", "device"})
-"""Baked into the audio stream, which opens once at boot. A live set is
+STREAM_PARAMS = frozenset({"sample_rate", "blocksize", "device", "browser_audio_topic"})
+"""Baked into the audio output, which opens once at boot. A live set is
 rejected outright rather than pretending to apply."""
 
 
@@ -98,8 +99,14 @@ class MotorSoundNode(Node):
         self.create_timer(0.1, self._update_drive)
 
         self._update_drive()
-        self._stream = self._open_stream(params)
-        if self._stream is not None and not self._only_in_mad_mode:
+        browser_topic = str(params["browser_audio_topic"].value)
+        self._browser_audio = self.create_publisher(String, browser_topic, 2) if browser_topic else None
+        self._stream = None if self._browser_audio is not None else self._open_stream(params)
+        if self._browser_audio is not None:
+            self._browser_frames = max(int(params["blocksize"].value), int(params["sample_rate"].value) // 10)
+            self.create_timer(self._browser_frames / int(params["sample_rate"].value), self._publish_browser_audio)
+            self.get_logger().info(f"motor sound streaming to {browser_topic}")
+        if (self._stream is not None or self._browser_audio is not None) and not self._only_in_mad_mode:
             self._synth.trigger_startup()
 
     def _declare_parameters(self):
@@ -144,6 +151,8 @@ class MotorSoundNode(Node):
                 ("motor_sound.sample_rate", 48000),
                 ("motor_sound.blocksize", 512),
                 ("motor_sound.device", ""),
+                # Non-empty only in simulation: the browser is its speaker.
+                ("motor_sound.browser_audio_topic", ""),
             ],
         )
 
@@ -233,18 +242,34 @@ class MotorSoundNode(Node):
         escaping here silently aborts the stream, so it swallows everything and
         outputs silence instead."""
         try:
-            synth = self._synth
-            mono = synth.render(frames)
-            retiring = self._retiring
-            # The identity check covers the instant between _swap_synth parking
-            # the old synth and rebinding _synth: never fade a voice under itself.
-            if retiring is not None and retiring is not synth:
-                self._retiring = None
-                mono = mono + retiring.render(frames) * np.linspace(1.0, 0.0, frames)
+            mono = self._render(frames)
             outdata[:, 0] = mono
             outdata[:, 1] = mono
         except Exception:
             outdata.fill(0.0)
+
+    def _render(self, frames: int) -> np.ndarray:
+        synth = self._synth
+        mono = synth.render(frames)
+        retiring = self._retiring
+        # The identity check covers the instant between _swap_synth parking
+        # the old synth and rebinding _synth: never fade a voice under itself.
+        if retiring is not None and retiring is not synth:
+            self._retiring = None
+            mono = mono + retiring.render(frames) * np.linspace(1.0, 0.0, frames)
+        return mono
+
+    def _publish_browser_audio(self):
+        """Send the same synth to the simulator UI as signed 16-bit mono PCM."""
+        mono = self._render(self._browser_frames)
+        if not np.any(mono):
+            return
+        pcm = (np.clip(mono, -1.0, 1.0) * 32767.0).astype("<i2", copy=False)
+        payload = {
+            "sample_rate": self._synth.sample_rate,
+            "pcm": base64.b64encode(pcm.tobytes()).decode("ascii"),
+        }
+        self._browser_audio.publish(String(data=json.dumps(payload, separators=(",", ":"))))
 
     def _on_robot_info(self, msg: String):
         try:

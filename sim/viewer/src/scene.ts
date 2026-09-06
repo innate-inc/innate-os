@@ -1,5 +1,5 @@
-// SimScene — Three.js scene: the apartment.glb environment (visual only)
-// plus the real MARS robot from its ROS URDF. Convention: Z-up, X-forward
+// SimScene — Three.js scene: the environment pack's glb (visual only) plus
+// the real MARS robot from its ROS URDF. Convention: Z-up, X-forward
 // (REP-103); the URDF loads unrotated, the Y-up glb is rotated on load.
 
 import * as THREE from "three";
@@ -15,9 +15,22 @@ import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
 import { LoadQueue, queuedGLB } from "./loadQueue";
 import { PropLibrary, type PropInfo } from "./props";
+import { TrafficLibrary } from "./traffic";
+import type { TrafficManifest, TrafficState } from "./trafficState";
 
-const APARTMENT_URL = "/models/appartement.glb";
-const APARTMENT_MANIFEST_URL = "/models/apartment/manifest.json";
+/** An environment pack's browser assets as its manifest names them: paths
+ * under sim/viewer/public, which the webapp serves at /models and /physics
+ * (environments.py). A world server that predates packs announces none, and
+ * the apartment is what it is running. */
+export type EnvironmentViewer = Record<string, string>;
+export const APARTMENT_VIEWER: EnvironmentViewer = {
+  type: "split-glb",
+  manifest: "models/apartment/manifest.json",
+  base_dir: "models/apartment",
+  model: "models/appartement.glb",
+  collision_dir: "physics/apartment_collisions_v2",
+};
+const publicUrl = (path: string): string => `/${path.replace(/^\/+/, "")}`;
 // /robot is the mars_sim ROS package itself (served straight from ros2_ws, see
 // webapp/proxy/https_server.py), so the URDF sits at its real path inside it.
 const ROBOT_URDF_URL = "/robot/urdf/mars.urdf";
@@ -43,6 +56,9 @@ export interface ApartmentLayout {
   rooms: { room: ManifestRoom; box: LineSegments2 }[];
   /** No manifest: streamApartment falls back to the monolith glb. */
   monolith: boolean;
+  /** Where the rooms' files live (trailing slash), or the monolith's URL. */
+  baseUrl: string;
+  modelUrl?: string;
 }
 // These URDF links carry no real body geometry — just small marker spheres
 // used to visualize the end-effector / camera optical frames (e.g. in
@@ -185,6 +201,11 @@ export class SimScene {
   private shadowCatcher?: THREE.Mesh;
   private shadowBoxM = SHADOW_BOX_MIN_M;
   private robotXY: [number, number] = [0, 0];
+  private layoutGroup?: THREE.Group;
+  private environmentViewer: EnvironmentViewer = APARTMENT_VIEWER;
+  // Bumped by unloadEnvironment: a load still in flight for the previous
+  // pack must drop its result rather than attach it to the next one.
+  private environmentGeneration = 0;
   private hullsGroup?: THREE.Group;
   private hullsPromise?: Promise<void>;
   private hullsVisible = false;
@@ -203,6 +224,7 @@ export class SimScene {
   private hullMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff88, wireframe: true });
   // Every prop in the world, built from the server's roster (props.ts).
   private props: PropLibrary;
+  private traffic: TrafficLibrary;
   // While true a placement drag owns the pointer and orbit stays off.
   private placementMode = false;
   private cameraMode: CameraMode = "free";
@@ -225,6 +247,8 @@ export class SimScene {
 
   /** Fixed render size (offscreen use, e.g. SimSession); null = track the window. */
   private fixedSize: { width: number; height: number } | null = null;
+  /** Canvas width covered on the right by page chrome (see setSafeInsets). */
+  private safeInsetRight = 0;
 
   constructor(canvas: HTMLCanvasElement, opts: { fixedSize?: { width: number; height: number } } = {}) {
     this.fixedSize = opts.fixedSize ?? null;
@@ -252,6 +276,7 @@ export class SimScene {
       () => this.updateShadowVolume(),
       (model) => this.warmTextures(model),
     );
+    this.traffic = new TrafficLibrary(this.scene, this.hullMaterial, () => this.updateShadowVolume());
 
     this.camera = new THREE.PerspectiveCamera(55, w / h, 0.05, 200);
     this.camera.up.set(0, 0, 1);
@@ -261,7 +286,10 @@ export class SimScene {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.target.set(0, 0, 0.4);
-    this.controls.minDistance = 0.5;
+    // Zoom stops minDistance short of the target and pan scales with the
+    // distance to it, so without this you can only ever approach one point.
+    this.controls.zoomToCursor = true;
+    this.controls.minDistance = 0.15;
     this.controls.maxDistance = 30;
     this.controls.update();
     // Grabbing the camera is a statement that you want it: a drag or a wheel
@@ -425,6 +453,7 @@ export class SimScene {
   setCollisionHullsVisible(visible: boolean): void {
     this.hullsVisible = visible;
     this.props.setHullsVisible(visible);
+    this.traffic.setHullsVisible(visible);
     if (visible && !this.hullsPromise) {
       // ~1300 OBJ fetches; takes seconds on first show. A failure resets the
       // promise so toggling again retries instead of staying dead forever.
@@ -438,9 +467,10 @@ export class SimScene {
   }
 
   private async loadCollisionHulls(): Promise<void> {
+    const generation = this.environmentGeneration;
     const group = new THREE.Group();
     group.rotation.x = Math.PI / 2;
-    const baseUrl = "/physics/apartment_collisions_v2/";
+    const baseUrl = `${publicUrl(this.environmentViewer.collision_dir ?? APARTMENT_VIEWER.collision_dir)}/`;
     const material = this.hullMaterial;
 
     // Fast path: one binary triangle soup (float32 xyz), one fetch, no
@@ -465,6 +495,10 @@ export class SimScene {
         }),
       );
     }
+    if (generation !== this.environmentGeneration) {
+      group.traverse((obj) => obj instanceof THREE.Mesh && obj.geometry.dispose()); // hullMaterial is shared
+      return;
+    }
     group.visible = this.hullsVisible; // honor toggles made while loading
     this.hullsGroup = group;
     this.scene.add(group);
@@ -476,21 +510,37 @@ export class SimScene {
    * the first frame shows the apartment's wireframe layout instead of an empty
    * void, and the camera has something real to frame (see frameLayout).
    */
-  async loadApartmentLayout(): Promise<ApartmentLayout> {
+  async loadApartmentLayout(viewer: EnvironmentViewer = APARTMENT_VIEWER): Promise<ApartmentLayout> {
+    this.environmentViewer = viewer;
+    // Exterior packs need a longer, daylight view. Always restore defaults
+    // on the next pack so an outdoor visit cannot change indoor rendering.
+    const daylight = viewer.atmosphere === "daylight";
+    const background = daylight ? 0xcddbe2 : 0x14161a;
+    this.scene.background = new THREE.Color(background);
+    this.scene.fog = new THREE.FogExp2(background, daylight ? 0.004 : 0.035);
+    this.controls.maxDistance = daylight ? 65 : 30;
     // One parent group holds every room and carries the Y-up -> Z-up rotation,
     // so it's applied once; placeholder boxes and rooms attach underneath.
     const group = new THREE.Group();
     group.rotation.x = Math.PI / 2;
     this.scene.add(group);
+    this.layoutGroup = group;
 
+    const manifestUrl = viewer.type === "glb" || !viewer.manifest ? null : publicUrl(viewer.manifest);
     let manifest: ApartmentManifest | null = null;
-    try {
-      const res = await fetch(APARTMENT_MANIFEST_URL);
-      if (res.ok) manifest = (await res.json()) as ApartmentManifest;
-    } catch {
-      /* no manifest -- fall through to the monolith */
+    if (manifestUrl) {
+      try {
+        const res = await fetch(manifestUrl);
+        if (res.ok) manifest = (await res.json()) as ApartmentManifest;
+      } catch {
+        /* no manifest -- fall through to the monolith */
+      }
     }
-    if (!manifest || !Array.isArray(manifest.rooms)) return { group, rooms: [], monolith: true };
+    if (!manifestUrl || !manifest || !Array.isArray(manifest.rooms)) {
+      const modelUrl = viewer.model ? publicUrl(viewer.model) : undefined;
+      return { group, rooms: [], monolith: true, baseUrl: "", modelUrl };
+    }
+    const baseUrl = viewer.base_dir ? `${publicUrl(viewer.base_dir)}/` : manifestUrl.slice(0, manifestUrl.lastIndexOf("/") + 1);
 
     // Skip a malformed room rather than throwing -- a bad bbox would build a
     // Box3 from Vector3(undefined) and error the whole (visual-only) session.
@@ -511,7 +561,25 @@ export class SimScene {
         group.add(box);
         return { room, box };
       });
-    return { group, rooms, monolith: false };
+    return { group, rooms, monolith: false, baseUrl };
+  }
+
+  /** Dispose environment assets; retain the robot and props for the next pose. */
+  unloadEnvironment(): void {
+    this.traffic.unloadEnvironment();
+    for (const group of [this.layoutGroup, this.hullsGroup]) {
+      if (!group) continue;
+      this.scene.remove(group);
+      group.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        obj.geometry.dispose();
+        if (group === this.layoutGroup) disposeMaterials(obj.material); // hulls share hullMaterial
+      });
+    }
+    this.layoutGroup = this.hullsGroup = this.hullsPromise = this.layoutBounds = undefined;
+    this.environmentGeneration += 1;
+    this.robotRoot.visible = false;
+    this.spawned = false;
   }
 
   /**
@@ -525,23 +593,31 @@ export class SimScene {
     const { group } = layout;
 
     if (layout.monolith) {
-      // Dev-only fallback: a checkout that never ran the split. The published
-      // bundle always ships the manifest and never the monolith, so in prod
-      // this path only runs if the manifest fetch itself failed -- non-fatal,
-      // the sim just runs without the visual environment (robot still works).
+      // Single-glb packs, and the dev fallback for a checkout that never ran
+      // the apartment split (the published bundle always ships the manifest).
+      // Non-fatal: the sim just runs without the visual environment.
       try {
-        const root = await queuedGLB(queue, loader, APARTMENT_URL);
+        if (!layout.modelUrl) throw new Error("the pack names no model");
+        const root = await queuedGLB(queue, loader, layout.modelUrl);
+        if (group !== this.layoutGroup) {
+          disposeObject(root); // the pack was unloaded while this streamed
+          return;
+        }
         this.dressRoom(root);
         group.add(root);
       } catch (err) {
-        console.error("[sim-viewer] apartment unavailable (no manifest, no monolith):", err);
+        console.error("[sim-viewer] environment unavailable (no manifest, no monolith):", err);
       }
       return;
     }
 
     const loadRoom = ({ room, box }: ApartmentLayout["rooms"][number]) =>
-      queuedGLB(queue, loader, `/models/apartment/${room.file}`)
+      queuedGLB(queue, loader, `${layout.baseUrl}${room.file}`)
         .then((root) => {
+          if (group !== this.layoutGroup) {
+            disposeObject(root); // the pack was unloaded while this streamed
+            return;
+          }
           this.dressRoom(root);
           group.add(root);
         })
@@ -577,7 +653,7 @@ export class SimScene {
     this.layoutBounds = bounds;
     if (this.spawned) return;
 
-    const center = bounds.getCenter(new THREE.Vector3());
+    const center = layoutFocus(bounds);
     const size = bounds.getSize(new THREE.Vector3());
     // Pull back far enough that the widest horizontal extent fits the vertical
     // FOV (the horizontal one is wider on any landscape stage), with margin.
@@ -611,6 +687,7 @@ export class SimScene {
         else setFrontSide(obj.material);
       }
     });
+    this.traffic.registerEnvironment(root);
   }
 
   /** A thick wireframe outline of a box, used as a loading placeholder (room or
@@ -781,6 +858,18 @@ export class SimScene {
       const dy = root.position.y - this.robotXY[1];
       if (Math.hypot(dx, dy) <= reach) points.push([root.position.x, root.position.y]);
     }
+    for (const bounds of this.traffic.visibleBounds) {
+      const dx = Math.max(bounds.minX - this.robotXY[0], 0, this.robotXY[0] - bounds.maxX);
+      const dy = Math.max(bounds.minY - this.robotXY[1], 0, this.robotXY[1] - bounds.maxY);
+      if (Math.hypot(dx, dy) <= reach) {
+        points.push(
+          [bounds.minX, bounds.minY],
+          [bounds.minX, bounds.maxY],
+          [bounds.maxX, bounds.minY],
+          [bounds.maxX, bounds.maxY],
+        );
+      }
+    }
     const xs = points.map((pt) => pt[0]);
     const ys = points.map((pt) => pt[1]);
     const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
@@ -855,7 +944,7 @@ export class SimScene {
    * the robot). */
   private flyToOverview(): void {
     const bounds = this.layoutBounds;
-    const center = bounds?.getCenter(new THREE.Vector3()) ?? new THREE.Vector3(...this.robotXY, 0);
+    const center = bounds ? layoutFocus(bounds) : new THREE.Vector3(...this.robotXY, 0);
     let distance = TOP_FALLBACK_HEIGHT_M;
     if (bounds) {
       const size = bounds.getSize(new THREE.Vector3());
@@ -989,6 +1078,16 @@ export class SimScene {
     this.updateShadowVolume(); // the props moved; the box may need to grow or shrink
   }
 
+  /** Adopt the world server's traffic roster. Cars intentionally
+   * stay separate from manipulation props and their Clear/challenge flows. */
+  setTrafficManifest(manifest: TrafficManifest): void {
+    this.traffic.setManifest(manifest);
+  }
+
+  /** Mirror authoritative signal aspects and car poses from MuJoCo. */
+  setTrafficState(state: TrafficState | null): void {
+    this.traffic.setState(state);
+  }
   // Orange accent for the arm links (see ORANGE_LINKS). Cached so every mesh
   // on those links shares one material.
   private orangeMaterial(): THREE.MeshStandardMaterial {
@@ -1099,25 +1198,40 @@ export class SimScene {
     this.robotRoot.visible = true;
     this.robotRoot.position.set(x, y, 0);
     this.robotRoot.rotation.set(0, 0, yaw);
+    this.frameFacing(x, y, yaw);
+    this.renderer.domElement.style.visibility = "";
+    this.followPrevXY = [x, y];
+  }
+
+  /** Re-frame on the robot where it stands (see simStage's attach). */
+  frameRobot(): void {
+    if (!this.spawned) return; // no real pose yet -- spawnAt still owes the first framing
+    this.frameFacing(this.robotRoot.position.x, this.robotRoot.position.y, this.robotRoot.rotation.z);
+  }
+
+  private frameFacing(x: number, y: number, yaw: number): void {
+    this.cameraTween = undefined; // an overview fly-out in flight would drag it straight back off
 
     const forwardX = Math.cos(yaw);
     const forwardY = Math.sin(yaw);
     const leftX = -forwardY;
     const leftY = forwardX;
-    this.camera.position.set(
-      x + forwardX * INITIAL_ORBIT_POSITION.forward + leftX * INITIAL_ORBIT_POSITION.left,
-      y + forwardY * INITIAL_ORBIT_POSITION.forward + leftY * INITIAL_ORBIT_POSITION.left,
-      INITIAL_ORBIT_POSITION.height,
-    );
-    this.controls.target.set(
+    const target = new THREE.Vector3(
       x + forwardX * INITIAL_ORBIT_TARGET.forward + leftX * INITIAL_ORBIT_TARGET.left,
       y + forwardY * INITIAL_ORBIT_TARGET.forward + leftY * INITIAL_ORBIT_TARGET.left,
       INITIAL_ORBIT_TARGET.height,
     );
+    const perch = new THREE.Vector3(
+      x + forwardX * INITIAL_ORBIT_POSITION.forward + leftX * INITIAL_ORBIT_POSITION.left,
+      y + forwardY * INITIAL_ORBIT_POSITION.forward + leftY * INITIAL_ORBIT_POSITION.left,
+      INITIAL_ORBIT_POSITION.height,
+    );
+    // The vertical FOV is fixed and the horizontal narrows with the aspect,
+    // so a portrait stage would crop the arm.
+    const pullback = Math.max(1, 1 / this.camera.aspect);
+    this.camera.position.copy(target).addScaledVector(perch.sub(target), pullback);
+    this.controls.target.copy(target);
     this.controls.update();
-    this.renderer.domElement.style.visibility = "";
-
-    this.followPrevXY = [x, y];
   }
 
   /** Move the robot root to a 2D pose (meters, yaw radians about +Z). */
@@ -1155,6 +1269,7 @@ export class SimScene {
    * the oldest (~16), breaking the live view. */
   dispose(): void {
     this.props.clearPlacementPreview();
+    this.traffic.unloadEnvironment();
     this.placeholderMat?.dispose();
     this.cameraEnv?.dispose(); // a PMREM render target, not a loaded image
     this.controls.dispose();
@@ -1169,14 +1284,33 @@ export class SimScene {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
-    // Portrait stages (phones): bias the orbit framing so the robot reads in
-    // the upper half -- webapp sheets/joystick cover the lower half.
-    if (height > width * 1.2) this.camera.setViewOffset(width, height, 0, height * 0.22, width, height);
-    else this.camera.clearViewOffset();
+    this.applyViewOffset();
     for (const cam of this.robotCameras.values()) {
       cam.aspect = width / height;
       cam.updateProjectionMatrix();
     }
+  }
+
+  /** How much of the canvas's right edge page chrome covers. Only the framing
+   * moves; the whole canvas still renders. */
+  setSafeInsets(insets: { right?: number }): void {
+    const right = Math.max(0, insets.right ?? 0);
+    if (right === this.safeInsetRight) return;
+    this.safeInsetRight = right;
+    this.applyViewOffset();
+  }
+
+  /** Bias the framing off dead centre: sideways for whatever covers the right
+   * edge, upward on a portrait stage. Robot cameras are untouched. */
+  private applyViewOffset(): void {
+    const { width, height } = this.viewSize();
+    const offsetX = this.safeInsetRight / 2;
+    const offsetY = height > width * 1.2 ? height * 0.1 : 0;
+    if (offsetX === 0 && offsetY === 0) {
+      this.camera.clearViewOffset();
+      return;
+    }
+    this.camera.setViewOffset(width, height, offsetX, offsetY, width, height);
   }
 
   /** Render the active view into a sub-rectangle of the canvas (logical px,
@@ -1208,10 +1342,36 @@ export class SimScene {
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.applyViewOffset();
     for (const cam of this.robotCameras.values()) {
       cam.aspect = w / h;
       cam.updateProjectionMatrix();
     }
+  }
+}
+
+/** The flat's centre, on the floor. The bounding box spans floor to ceiling, so
+ * its centre is mid-air -- and zoom stops minDistance short of the target, which
+ * would leave the camera stuck a metre up. */
+function layoutFocus(bounds: THREE.Box3): THREE.Vector3 {
+  const focus = bounds.getCenter(new THREE.Vector3());
+  focus.z = bounds.min.z;
+  return focus;
+}
+
+/** Free a loaded subtree's GPU-bound resources (geometries, materials, textures). */
+function disposeObject(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    obj.geometry.dispose();
+    disposeMaterials(obj.material);
+  });
+}
+
+function disposeMaterials(material: THREE.Material | THREE.Material[]): void {
+  for (const mat of Array.isArray(material) ? material : [material]) {
+    for (const value of Object.values(mat)) if (value instanceof THREE.Texture) value.dispose();
+    mat.dispose();
   }
 }
 

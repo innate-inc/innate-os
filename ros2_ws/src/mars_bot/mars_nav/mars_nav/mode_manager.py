@@ -21,7 +21,7 @@ from brain_messages.srv import ChangeMap, ChangeNavigationMode, DeleteMap, SaveM
 from geometry_msgs.msg import TransformStamped
 from lifecycle_msgs.msg import State
 from lifecycle_msgs.srv import ChangeState, GetState
-from nav2_msgs.srv import LoadMap
+from nav2_msgs.srv import LoadMap, SetInitialPose
 from nav2_simple_commander.robot_navigator import BasicNavigator
 from nav_msgs.msg import Odometry
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -235,6 +235,15 @@ class ModeManager(Node):
         # Reentrant group: change_map_callback blocks the default group while
         # it waits, so a default-group client could never receive its response.
         self._localize_client = self.create_client(Trigger, "/localize", callback_group=self._internal_callbacks_group)
+        # Direct AMCL seeding for the mapping->navigation handoff: AMCL can
+        # accept a pose and still drop it internally on a TF race, so the
+        # handoff re-seeds until map->base_link actually appears.
+        self._amcl_seed_client = self.create_client(
+            SetInitialPose, "/set_initial_pose", callback_group=self._calls_going_outside_group
+        )
+        # (map->base_link TransformStamped, monotonic capture time): where the
+        # robot ended its last mapping session, in the slam session's frame.
+        self._last_mapping_pose = None
         # grid_localizer's status feed: lets the post-switch relocalization
         # wait for confirmation instead of guessing when the new map landed.
         self._last_localization_status = ("", 0.0)
@@ -308,6 +317,7 @@ class ModeManager(Node):
         try:
             tf_time = rclpy.time.Time()
             tf: TransformStamped = self.tf_buffer.lookup_transform("map", "base_link", tf_time)
+            self._last_mapping_pose = (tf, time.monotonic())
             odom_msg = Odometry()
             odom_msg.header.stamp = msg.header.stamp
             odom_msg.header.frame_id = "map"
@@ -716,6 +726,16 @@ class ModeManager(Node):
                 self.get_logger().warning(f"Failed to activate {node_name}. Not proceeding further.")
                 break
 
+            # Costmap2DROS::on_activate blocks UNBOUNDED on canTransform(map->
+            # base_link) — invisibly at --log-level warn — so activating the
+            # costmap-bearing nodes while AMCL holds no pose wedges the whole
+            # mode (17s change_state timeouts, observed live). Nothing
+            # guarantees a pose here: grid_localizer may be absent and the
+            # latched /initialpose replay stale or missing. Confirm
+            # localization first, seeding the end-of-mapping pose if one exists.
+            if mode == NavigationMode.NAV and node_name == "navigation_amcl":
+                self._ensure_localized_before_costmaps()
+
             # Load map immediately after map server is activated (navigation mode only)
             if mode == NavigationMode.NAV and "map_server" in node_name and success:
                 if map_already_loaded:
@@ -753,6 +773,74 @@ class ModeManager(Node):
                 time.sleep(poll_sec)
         if pending:
             self.get_logger().warning(f"Nodes still unsettled after {timeout_sec:.0f}s: {pending}; retrying anyway")
+
+    def _localized_since(self, t0) -> bool:
+        """map->base_link exists with a stamp newer than t0 — only AMCL can
+        have published it (slam is already down), so the seed really took."""
+        try:
+            tf = self.tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
+        except tf2_ros.TransformException:
+            return False
+        return rclpy.time.Time.from_msg(tf.header.stamp) > t0
+
+    def _end_of_mapping_seed(self) -> SetInitialPose.Request | None:
+        """The robot's final mapping pose, while a session just ended.
+
+        The pose is in the slam session's frame: exact for the map that
+        session saved (the finish flow switches to it right after), and only
+        approximate when returning to a previous map — no worse than the
+        latched-replay behavior it replaces, and relocalization refines it.
+        """
+        if self._last_mapping_pose is None:
+            return None
+        tf, captured_at = self._last_mapping_pose
+        if time.monotonic() - captured_at > 120.0:
+            return None
+        request = SetInitialPose.Request()
+        pose = request.pose
+        pose.header.frame_id = "map"
+        pose.pose.pose.position.x = tf.transform.translation.x
+        pose.pose.pose.position.y = tf.transform.translation.y
+        pose.pose.pose.orientation = tf.transform.rotation
+        pose.pose.covariance[0] = 0.1
+        pose.pose.covariance[7] = 0.1
+        pose.pose.covariance[35] = 0.05
+        return request
+
+    def _ensure_localized_before_costmaps(self) -> None:
+        """Bounded wait for AMCL to actually hold a pose, re-seeding as needed.
+
+        Trusts only the outcome — a map->base_link transform published after
+        this method started (only AMCL can produce one; slam is already down)
+        — and re-sends the seed until it appears. On timeout it proceeds with
+        a warning rather than blocking the mode change; the two-pass startup
+        and the lifecycle watchdog remain the backstop.
+        """
+        t0 = self.get_clock().now()
+        seed = self._end_of_mapping_seed()
+        deadline = time.monotonic() + (10.0 if seed is not None else 5.0)
+        next_seed_at = 0.0
+        while time.monotonic() < deadline:
+            if self._localized_since(t0):
+                if seed is not None:
+                    self.get_logger().info("AMCL confirmed localized at the end-of-mapping pose")
+                return
+            if seed is not None and time.monotonic() >= next_seed_at:
+                self.get_logger().info("Seeding AMCL with the end-of-mapping pose")
+                seed.pose.header.stamp = self.get_clock().now().to_msg()
+                call_service(
+                    {"/set_initial_pose": self._amcl_seed_client},
+                    self.get_logger(),
+                    "/set_initial_pose",
+                    seed,
+                    timeout_sec=2.0,
+                )
+                next_seed_at = time.monotonic() + 2.0
+            time.sleep(0.3)
+        self.get_logger().warning(
+            "Activating navigation without confirmed localization; costmap activation may stall "
+            "until a pose is set (relocalize from the app)"
+        )
 
     def _lifecycle_watchdog(self):
         """Restore nodes that crashed and respawned mid-session.

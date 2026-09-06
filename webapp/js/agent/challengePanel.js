@@ -64,6 +64,14 @@ export function createChallengePanel(root, session) {
     if (opened !== PANEL_ID && open) setOpen(false);
   };
   document.addEventListener(PANEL_OPEN_EVENT, onPanelOpen);
+  // Touch only, and never over a live goal list — the rule dismiss() follows.
+  const coarsePointer = window.matchMedia("(hover: none)");
+  const onOutsidePointer = (/** @type {PointerEvent} */ event) => {
+    if (!open || !coarsePointer.matches || challengeRunning) return;
+    if (event.target instanceof Node && dock.contains(event.target)) return;
+    setOpen(false);
+  };
+  document.addEventListener("pointerdown", onOutsidePointer, true);
   launcher.addEventListener("click", () => setOpen(!open));
   // Subtle standing hint back to the docs — reopens the first-run intro
   // (challengeIntro.js) with the tutorial link and preview.
@@ -256,6 +264,7 @@ export function createChallengePanel(root, session) {
       intro?.close();
       unsub();
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
+      document.removeEventListener("pointerdown", onOutsidePointer, true);
       dock.remove();
     },
   };

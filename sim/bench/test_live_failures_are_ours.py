@@ -10,12 +10,11 @@ This is the same defect that was fixed for the in-process path.
 These drive the real `_episode()` against a stubbed socket, because the
 classification is what is under test.
 """
+
 import asyncio
 import json
 import sys
 from pathlib import Path
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ros2_ws/src/mars_bot/mars_sim_driver"))

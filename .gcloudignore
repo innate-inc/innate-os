@@ -37,5 +37,16 @@ sim/.venv/
 !webapp/
 !webapp/proxy/
 !webapp/proxy/**
+# The demo image (sim/demo/Dockerfile) copies these whole.
+!webapp/**
+!scripts/**
+!sim/demo/
+!sim/demo/**
+!sim/props/
+!sim/props/**
+!sim/challenges/
+!sim/challenges/**
+!sim/environments/
+!sim/environments/**
 __pycache__/
 *.pyc

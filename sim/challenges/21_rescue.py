@@ -4,6 +4,7 @@ from mars_sim_driver.challenges import Challenge, Drop, Goal, Hold, Near
 
 CHALLENGE = Challenge(
     id="rescue",
+    environments=("apartment",),
     title="Search & Rescue",
     brief="Someone collapsed somewhere in the apartment. Find them, then stay by their side.",
     # Far NW hallway, body along x (yaw -90: the scan's head axis is +y at

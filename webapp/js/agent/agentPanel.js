@@ -22,6 +22,7 @@ import {
 } from "../constants.js";
 import { createChatStream } from "./chatStream.js";
 import { createDirectiveControls } from "./directiveControls.js";
+import { createAgentSheet } from "./agentSheet.js";
 
 const HISTORY_RECONCILE_MS = 30_000;
 
@@ -47,8 +48,10 @@ const CHAT_EXAMPLES = [
  *   destroy: () => void,
  *   startMic: () => Promise<void>,
  *   stopMic: () => void,
- *   micMount: HTMLElement
+ *   micMount: HTMLElement,
+ *   setCompact: (on: boolean) => void
  * }}
+ *   setCompact swaps the right-edge dock for the bottom sheet (agentSheet.js).
  */
 export function createAgentPanel(root, rosClient, agentState, opts) {
   const selfOrigin = crypto.randomUUID?.() ?? `web-${Date.now()}-${Math.random()}`;
@@ -100,37 +103,25 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   head.append(titleEl, headCopy, headChevron);
 
   // ---- directive + start/stop --------------------------------------------
+  /** @type {ReturnType<typeof createAgentSheet> | undefined} */
+  let sheet; // built below, but onAgentName can fire before that
   const directives = createDirectiveControls(agentState, {
     listId: `agent-directive-list-${selfOrigin}`,
     onAgentName(name) {
       headAgentName.textContent = name;
+      sheet?.setName(name);
       updateHeadLabel();
     },
     onBrainActive(active, justStarted) {
       panel.classList.toggle("active", active);
-      if (justStarted && controlPanel.classList.contains("collapsed")) setControlsCollapsed(false);
+      if (!justStarted) return;
+      if (controlPanel.classList.contains("collapsed")) setControlsCollapsed(false);
+      sheet?.open();
     },
   });
-
-  // ---- active skill -------------------------------------------------------
-  const activeSkill = document.createElement("div");
-  activeSkill.className = "agent-activeskill";
-  const activeSkillLabel = document.createElement("span");
-  activeSkillLabel.className = "microlabel";
-  activeSkillLabel.textContent = "active skill";
-  const activeSkillName = document.createElement("span");
-  activeSkillName.className = "agent-activeskill-name mono";
-  activeSkillName.textContent = "—";
-  activeSkill.title = `the skill the brain is executing right now — ${SKILL_STATUS_UPDATE_TOPIC}`;
-  activeSkill.append(activeSkillLabel, activeSkillName);
 
   // ---- live stream (thoughts + chat + skill runs) -------------------------
-  const chat = createChatStream({
-    onActiveSkill(name) {
-      activeSkillName.textContent = name ?? "—";
-      activeSkill.classList.toggle("on", name !== null);
-    },
-  });
+  const chat = createChatStream();
 
   // ---- composer -----------------------------------------------------------
   const form = document.createElement("form");
@@ -139,25 +130,33 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   input.className = "agent-compose-input";
   input.rows = 1;
   input.setAttribute("aria-label", "Message MARS");
+  input.setAttribute("aria-keyshortcuts", "Enter");
   const placeholder = document.createElement("span");
   placeholder.className = "agent-compose-placeholder";
   placeholder.textContent = CHAT_EXAMPLES[0];
   const micMount = document.createElement("div");
   micMount.className = "agent-compose-mic";
+  const focusHint = document.createElement("button");
+  focusHint.type = "button";
+  focusHint.className = "tts-key tts-focus-key agent-compose-focus-key";
+  focusHint.textContent = "↵";
+  focusHint.setAttribute("aria-label", "Focus agent message input");
+  focusHint.title = "Focus message input (Enter)";
   const send = document.createElement("button");
   send.type = "submit";
   send.className = "agent-compose-send";
   send.innerHTML = '<span class="agent-compose-send-icon" aria-hidden="true"></span>';
   send.setAttribute("aria-label", "Send message");
   send.title = "Send message";
-  form.append(input, placeholder);
+  form.append(input, placeholder, focusHint);
   if (opts.enableMic) form.append(micMount);
   form.append(send);
   function syncComposerAction() {
     const empty = input.value.trim().length === 0;
     send.disabled = empty;
-    send.hidden = Boolean(opts.enableMic && empty);
+    send.hidden = empty;
     micMount.hidden = !opts.enableMic || !empty;
+    focusHint.hidden = !empty;
     placeholder.classList.toggle("hidden", !empty);
   }
   syncComposerAction();
@@ -181,13 +180,41 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     }, 500);
   }, 3500);
 
-  const statusRow = document.createElement("div");
-  statusRow.className = "agent-status-row";
-  statusRow.append(activeSkill);
-  controlPanel.append(head, directives.el, statusRow);
+  controlPanel.append(head, directives.el);
   thoughtsPanel.append(chat.head, chat.wrap, form);
   panel.append(controlPanel, thoughtsPanel);
   root.append(panel);
+
+  const stream = chat.wrap.querySelector(".agent-stream");
+  // Where start/stop lives on the dock, so the sheet can hand it back.
+  const toggleHome = directives.toggleEl.nextElementSibling;
+  sheet = createAgentSheet(panel, {
+    // Never scrolled while closed, so it would open on the oldest turn.
+    onOpen: () => {
+      if (stream instanceof HTMLElement) stream.scrollTop = stream.scrollHeight;
+    },
+  });
+
+  function focusComposer() {
+    sheet?.open();
+    input.focus();
+  }
+  focusHint.addEventListener("click", focusComposer);
+  /** @param {KeyboardEvent} e */
+  function focusComposerOnEnter(e) {
+    if (
+      e.defaultPrevented ||
+      e.key !== "Enter" ||
+      e.repeat ||
+      e.altKey ||
+      e.ctrlKey ||
+      e.metaKey ||
+      e.target !== document.body
+    ) return;
+    e.preventDefault();
+    focusComposer();
+  }
+  window.addEventListener("keydown", focusComposerOnEnter);
 
   // ---- composer -----------------------------------------------------------
   async function startMic() {
@@ -313,7 +340,16 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     startMic,
     stopMic,
     micMount,
+    setCompact(on) {
+      // Compact drops the control panel's header for the sheet's.
+      if (on) sheet.actionSlot.append(directives.toggleEl);
+      else directives.el.insertBefore(directives.toggleEl, toggleHome);
+      // Its switch is hidden here, so a wider visit's choice must not stick.
+      if (on) chat.setMode("compact");
+      sheet.setEnabled(on);
+    },
     destroy() {
+      sheet.destroy();
       mic?.destroy();
       directives.destroy();
       clearInterval(placeholderInterval);
@@ -321,6 +357,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       chat.destroy();
       document.removeEventListener("visibilitychange", onVisible);
       clearInterval(historyPoll);
+      window.removeEventListener("keydown", focusComposerOnEnter);
       unsubConn();
       unsubIn();
       unsubOut();
@@ -329,4 +366,3 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     },
   };
 }
-

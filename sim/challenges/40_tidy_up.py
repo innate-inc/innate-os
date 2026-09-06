@@ -7,6 +7,7 @@ from mars_sim_driver.challenges import Challenge, Drop, Goal, Hold, Near, SkillD
 # ball's 0.0225, and no spot beside the crate is that close to its centre.
 CHALLENGE = Challenge(
     id="tidy_up",
+    environments=("apartment",),
     title="Tidy up",
     # Props are named by APPEARANCE: the words here reach pick_any_object's
     # vision prompt, and a prop name the render does not match finds nothing.

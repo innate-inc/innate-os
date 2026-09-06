@@ -1,0 +1,26 @@
+{
+  "display_name": "Backrooms",
+  "physics": {
+    "collision_dir": "backrooms_split_v2",
+    "visual_dir": "backrooms_visual"
+  },
+  "navigation": {
+    "map_yaml": "map/backrooms.yaml"
+  },
+  "viewer": {
+    "type": "glb",
+    "model": "models/backrooms/backrooms.glb",
+    "collision_dir": "physics/backrooms_collisions"
+  },
+  "spawn": {
+    "x": -30.95,
+    "y": -5.2,
+    "yaw_degrees": 0.0
+  },
+  "attribution": {
+    "name": "Backrooms VR",
+    "author": "carlcapu9",
+    "license": "CC BY 4.0",
+    "source": "https://sketchfab.com/3d-models/backrooms-vr-d9b98eca8d064d0eafcd7f5484bb61ed"
+  }
+}

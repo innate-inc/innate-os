@@ -18,8 +18,8 @@ export function createTelemetry(parent, rosClient) {
 
   const name = item("robot", "robot", "—", ROBOT_INFO_TOPIC);
   const battery = item("battery", "battery", "—", BATTERY_STATE_TOPIC);
-  const link = item("link", "link", "—", "rosbridge websocket to the robot");
-  const agent = item("agent", "agent", "—", `the brain's connection to its agent backend — ${WEBSOCKET_STATUS_TOPIC}`);
+  const link = item("link", "link", "—", "this browser's rosbridge websocket to the robot — live means the page is receiving telemetry");
+  const agent = item("agent", "agent", "—", `whether the brain can reach its model backend, i.e. whether the agent will run — ${WEBSOCKET_STATUS_TOPIC}`);
   wrap.append(name.el, battery.el, link.el, agent.el);
   parent.appendChild(wrap);
   const items = [name, battery, link, agent];
@@ -136,8 +136,10 @@ export function createTelemetry(parent, rosClient) {
         let text = state || "—";
         let ok = false;
         let warn = false;
+        // Where the backend runs is not what the operator needs from this
+        // readout -- only whether starting the agent will work right now.
         if (s?.connected === true) {
-          text = s?.hosted === false ? "local" : "cloud";
+          text = "ready";
           ok = true;
         } else if (["connecting", "authenticating", "starting", "configured"].includes(state)) {
           text = "connecting";

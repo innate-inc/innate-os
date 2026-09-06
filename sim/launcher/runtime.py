@@ -905,6 +905,28 @@ def retitle_step(message: str) -> None:
         step.retitle(message)
 
 
+def _seed_nav_map(config: dict[str, object]) -> None:
+    """Point Nav2's saved-map file at the selected pack before the ROS session
+    starts, so the mode manager boots on it. With several maps installed it
+    would otherwise boot on the alphabetically first one and the world
+    server's map bridge would have to change maps under a stack still coming
+    up, which the mode manager does not survive well."""
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    environment_id = str(config["environment_id"])
+    manifests = [sim_repo / root / environment_id / "manifest.json" for root in ("environments", "environments.local")]
+    manifest = next((path for path in manifests if path.is_file()), None)
+    if manifest is None:
+        return
+    try:
+        map_yaml = json.loads(manifest.read_text(encoding="utf-8"))["navigation"]["map_yaml"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    state = os_repo / "data"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / ".last_map").write_text(f"{Path(str(map_yaml)).name}\n", encoding="utf-8")
+
+
 def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline: bool = False) -> None:
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     os_image = str(config["os_image"]).strip()
@@ -1044,6 +1066,7 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path, *, offline
         ensure_state_dir()
         ROS_INSTALL_STATE_PATH.write_text(f"{ros_inputs_hash}\n", encoding="utf-8")
 
+    _seed_nav_map(config)
     log("Launching ROS simulation nodes inside the OS container...")
     retitle_step("Launching the ROS nodes")
     launch_script = (
@@ -1220,10 +1243,14 @@ def running_stack_from_another_checkout() -> tuple[str, str] | None:
     return None
 
 
-def _bind_refusal(port: int, *, udp: bool) -> int | None:
-    """errno from claiming the port the way Docker will (0.0.0.0, no
-    SO_REUSEADDR), or None when the bind succeeds."""
+def _bind_refusal(port: int, *, udp: bool, reuse: bool = False) -> int | None:
+    """errno from claiming the port the way its consumer will, or None when the
+    bind succeeds. Docker publishes without SO_REUSEADDR; the host world server
+    sets it (socket.create_server), so its probe must too -- a just-stopped
+    server's TIME_WAIT remnants otherwise read as a live collision for ~30s."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as probe:
+        if reuse:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("0.0.0.0", port))
         except OSError as exc:
@@ -1237,11 +1264,12 @@ def _tcp_listener_answers(port: int) -> bool:
     return False
 
 
-def _host_port_free(port: int, *, udp: bool) -> bool:
-    """Whether Docker can still publish this host port. Only EADDRINUSE proves a
-    collision: Linux refuses ports below 1024 to a non-root binder while the
-    daemon that publishes them runs as root, so a free 443 refuses the probe."""
-    refusal = _bind_refusal(port, udp=udp)
+def _host_port_free(port: int, *, udp: bool, reuse: bool = False) -> bool:
+    """Whether the port's consumer can still claim it (reuse: see
+    _bind_refusal). Only EADDRINUSE proves a collision: Linux refuses ports
+    below 1024 to a non-root binder while the daemon that publishes them runs
+    as root, so a free 443 refuses the probe."""
+    refusal = _bind_refusal(port, udp=udp, reuse=reuse)
     if refusal is None:
         return True
     if refusal == errno.EACCES and not udp:
@@ -1277,7 +1305,7 @@ def _suggest_port_base() -> int | None:
     that just failed."""
     for base in range(8600, 9600, 10):
         if all(
-            _host_port_free(base + offset, udp=(spec or "").endswith("/udp"))
+            _host_port_free(base + offset, udp=(spec or "").endswith("/udp"), reuse=spec is None)
             for offset, (_, _, spec) in enumerate(_STACK_PORTS)
         ):
             return base
@@ -1302,7 +1330,7 @@ def refuse_if_ports_taken() -> None:
     taken = [
         (label, port)
         for label, port, spec in _STACK_PORTS
-        if port not in ours and not _host_port_free(port, udp=(spec or "").endswith("/udp"))
+        if port not in ours and not _host_port_free(port, udp=(spec or "").endswith("/udp"), reuse=spec is None)
     ]
     if not taken:
         return
@@ -1933,6 +1961,7 @@ def ensure_viewer_public_assets(config: dict[str, object]) -> None:
         sim_repo / "viewer" / "public" / ".installed-tag",
         label="viewer assets",
         geometry_hash=compute_geometry_inputs_hash(config["os_repo"]),  # type: ignore[arg-type]
+        preserve_subtrees=("local-environments",),
     )
 
 
@@ -1945,6 +1974,7 @@ def install_layer_subtree(
     *,
     label: str,
     geometry_hash: str | None = None,
+    preserve_subtrees: tuple[str, ...] = (),
 ) -> None:
     """Put one subtree of one image layer on disk, idempotently.
 
@@ -1963,6 +1993,11 @@ def install_layer_subtree(
     that moved for an unrelated input does not re-fetch; the ref, so an
     override that renames the image does; and the narrow hash, so an
     unpublished tag can be told from a real change (see ensure_sim_assets).
+
+    `preserve_subtrees` names direct children owned by the local checkout rather
+    than the published layer. They are copied into the staged tree before the
+    atomic replacement so refreshing viewer assets cannot delete licensed,
+    gitignored environment packs.
     """
     parts = marker.read_text().split() if marker.exists() else []
     populated = destination.is_dir() and any(destination.iterdir())
@@ -1997,6 +2032,10 @@ def install_layer_subtree(
         source = staging / subtree
         if not source.is_dir():
             raise StackError(f"{shorten_docker_image_ref(image)} layer {digest[7:19]} has no {subtree}/ subtree.")
+        for preserved_name in preserve_subtrees:
+            preserved = destination / preserved_name
+            if preserved.is_dir():
+                shutil.copytree(preserved, source / preserved_name, dirs_exist_ok=True, symlinks=True)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.rmtree(destination, ignore_errors=True)
         shutil.move(str(source), str(destination))
@@ -2196,11 +2235,11 @@ def _recv_exact(conn: socket.socket, n: int) -> bytes | None:
     return buf
 
 
-def _world_server_ping_reply(port: int, timeout: float = 2.0) -> dict | None:
-    """The server's ping reply (advertises state_port), or None."""
+def _world_server_request(port: int, request: dict, timeout: float = 2.0) -> dict | None:
+    """One driver-RPC round trip; the reply, or None when nothing answers or it says no."""
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=timeout) as conn:
-            payload = json.dumps({"op": "ping"}).encode()
+            payload = json.dumps(request).encode()
             conn.sendall(len(payload).to_bytes(4, "big") + payload)
             header = _recv_exact(conn, 4)
             if header is None:
@@ -2214,13 +2253,31 @@ def _world_server_ping_reply(port: int, timeout: float = 2.0) -> dict | None:
         return None
 
 
+def _world_server_ping_reply(port: int, timeout: float = 2.0) -> dict | None:
+    """The server's ping reply (advertises state_port, binds, environment), or None."""
+    return _world_server_request(port, {"op": "ping"}, timeout)
+
+
 def _world_server_ping(port: int, timeout: float = 2.0) -> bool:
     return _world_server_ping_reply(port, timeout) is not None
 
 
+def _ensure_world_environment(config: dict[str, object]) -> None:
+    """Hot-switch a running server onto the configured environment pack."""
+    wanted = str(config["environment_id"])
+    reply = _world_server_ping_reply(WORLD_SERVER_PORT)
+    if reply is None or reply.get("environment") == wanted:
+        return
+    log(f"Switching the host world server to environment {wanted!r}...")
+    if _world_server_request(WORLD_SERVER_PORT, {"op": "switch_environment", "id": wanted}, timeout=900.0) is None:
+        raise StackError(
+            f"The host world server could not switch to environment {wanted!r}; see `{CLI_SIM} logs world-server`."
+        )
+
+
 def _stop_stale_world_server() -> None:
-    """SIGTERM whatever owns the RPC port (the PID file only covers servers
-    this checkout started)."""
+    """SIGTERM whatever owns the RPC port. `up` is about to bind it, so unlike
+    stop_world_server this does not wait for evidence that we started it."""
     stop_world_server()
     out = subprocess.run(
         ["lsof", "-ti", f"tcp:{WORLD_SERVER_PORT}", "-sTCP:LISTEN"], capture_output=True, text=True, check=False
@@ -2440,8 +2497,9 @@ def _world_model_sources_digest(config: dict[str, object]) -> str:
     driver = mars_bot / "mars_sim_driver" / "mars_sim_driver"
     candidates = sorted((mars_bot / "mars_sim" / "urdf").glob("*"))
     candidates += sorted((mars_bot / "mars_sim" / "meshes").glob("*"))
-    candidates += [driver / name for name in ("world.py", "core.py", "constants.py")]
+    candidates += [driver / name for name in ("world.py", "core.py", "constants.py", "environments.py", "traffic.py")]
     candidates += [sim_repo / "assets" / ".assets-tag"]
+    candidates += sorted((sim_repo / "environments").rglob("manifest.json"))
     digest = hashlib.sha256()
     for f in candidates:
         with contextlib.suppress(OSError):
@@ -2494,6 +2552,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
             with contextlib.suppress(OSError):
                 running_digest = WORLD_SERVER_MODEL_DIGEST_PATH.read_text(encoding="utf-8").strip()
             if _world_model_sources_digest(config) == running_digest:
+                _ensure_world_environment(config)
                 log("Host world server already running.")
                 return endpoint
             log("Host world server compiled different robot/world sources -- restarting it...")
@@ -2531,7 +2590,9 @@ def ensure_world_server(config: dict[str, object]) -> str:
             warn("Falling back to software rendering (OSMesa) -- works on any machine, but renders are slow.")
         log(f"Starting host world server ({label} rendering)...")
         log_offset = WORLD_SERVER_LOG_PATH.stat().st_size if WORLD_SERVER_LOG_PATH.exists() else 0
-        if _start_world_server(uv, sim_repo, bind=bind, mujoco_gl=backend):
+        if _start_world_server(
+            uv, sim_repo, environment_id=str(config["environment_id"]), bind=bind, mujoco_gl=backend
+        ):
             # Record what this server compiled, for the reuse check above.
             WORLD_SERVER_MODEL_DIGEST_PATH.write_text(_world_model_sources_digest(config) + "\n", encoding="utf-8")
             log("Host world server ready.")
@@ -2616,7 +2677,7 @@ def _render_scale_args() -> list[str]:
     return ["--render-scale", str(scale)]
 
 
-def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | None) -> bool:
+def _start_world_server(uv: str, sim_repo: Path, *, environment_id: str, bind: str, mujoco_gl: str | None) -> bool:
     """One world-server start attempt; True once it answers pings."""
     bootstrap = (
         "import sys; sys.path.insert(0, 'ros2_ws/src/mars_bot/mars_sim_driver'); "
@@ -2647,6 +2708,10 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
                 str(WORLD_SERVER_PORT),
                 "--state-port",
                 str(WORLD_STATE_PORT),
+                "--environment",
+                environment_id,
+                "--rosbridge-url",
+                f"ws://127.0.0.1:{SIM_ROSBRIDGE_PORT}",
             ]
             + _render_scale_args(),
             cwd=sim_repo.parent,
@@ -2665,6 +2730,11 @@ def _start_world_server(uv: str, sim_repo: Path, *, bind: str, mujoco_gl: str | 
     next_note = time.monotonic() + 15.0
     while time.monotonic() < deadline:
         if _world_server_ping(WORLD_SERVER_PORT):
+            # Stamped now, not at the spawn: `down` tells our server from a
+            # later squatter by age against this record, and uv only starts
+            # the python that binds after syncing the env -- minutes on a
+            # first run -- so the spawn-time stamp would disown our own server.
+            WORLD_SERVER_PORTS_PATH.touch()
             return True
         if proc.poll() is not None:
             return False  # exited on its own: a real failure, log captured
@@ -2721,15 +2791,107 @@ def _gl_failure_hint(attempt_log: str, backend: str | None) -> str:
     return "no output -- see the full log"
 
 
+def _world_server_pids(ports: list[int]) -> set[int]:
+    """Live world-server processes, found by the ports they are listening on.
+
+    Not by their command line: ps joins argv with spaces and quotes nothing, so
+    no amount of care tells an argument boundary from a space inside a checkout
+    path. The ports are per-checkout and are the thing `down` has to free, so
+    they identify the server exactly -- and unlike the pid file they survive an
+    interrupted `up`. The module check keeps an unrelated squatter on the port
+    from being signalled.
+    """
+    pids: set[int] = set()
+    for port in ports:
+        found = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"], capture_output=True, text=True, check=False
+        )
+        for pid_str in found.stdout.split():
+            with contextlib.suppress(ValueError):
+                pids.add(int(pid_str))
+    pids.discard(os.getpid())
+    return {pid for pid in pids if _is_world_server(pid)}
+
+
+def _is_world_server(pid: int) -> bool:
+    """Whether pid is running the world server's bootstrap -- the module path,
+    not "world_server", so anything merely mentioning the function (this
+    launcher included) cannot match."""
+    out = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, check=False)
+    return "mars_sim_driver.world_server" in out.stdout
+
+
+def _started_before(pid: int, when: float) -> bool:
+    """Whether pid has been running since before `when`.
+
+    The ports record can outlive the server that wrote it -- a crash leaves it
+    behind -- and another checkout may then bind those same ports. It would be
+    a stranger that started after the record was written, so its age tells the
+    two apart. Unreadable age is treated as ours: failing to stop our own
+    server leaves the ports held, which is the louder failure.
+    """
+    out = subprocess.run(["ps", "-p", str(pid), "-o", "etime="], capture_output=True, text=True, check=False)
+    field = out.stdout.strip()
+    if not field:
+        return True
+    # [[DD-]hh:]mm:ss
+    days, _, clock = field.rpartition("-")
+    parts = [float(part) for part in clock.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0.0)
+    seconds = parts[0] * 3600 + parts[1] * 60 + parts[2] + (float(days) * 86400 if days else 0)
+    return time.time() - seconds <= when + WORLD_PORTS_RECORD_GRACE_S
+
+
+# ps reports whole seconds, so a server of ours can look a moment younger than
+# its own record.
+WORLD_PORTS_RECORD_GRACE_S = 5.0
+
+
+def _world_ports_free(ports: list[int], timeout_s: float) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if all(_host_port_free(port, udp=False, reuse=True) for port in ports):
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def stop_world_server() -> None:
-    if not WORLD_SERVER_PID_PATH.exists():
-        return
+    # Only the ports this checkout recorded when it started a server. The
+    # configured ports are no evidence of ownership -- a checkout that never
+    # started one would take them as licence to kill whoever holds the
+    # defaults, which is another checkout's sim.
     try:
-        pid = int(WORLD_SERVER_PID_PATH.read_text().strip())
-        os.kill(pid, signal.SIGTERM)
-        log("Stopped host world server.")
-    except (ValueError, OSError):
-        pass
+        ports = [int(port) for port in WORLD_SERVER_PORTS_PATH.read_text().split()]
+    except (OSError, ValueError):
+        ports = []
+    targets = _world_server_pids(ports) if ports else set()
+    # The record is stamped once the server answers, so a holder that started
+    # after it took the ports after ours died: not ours to stop.
+    with contextlib.suppress(OSError):
+        recorded_at = WORLD_SERVER_PORTS_PATH.stat().st_mtime
+        targets = {pid for pid in targets if _started_before(pid, recorded_at)}
+    if targets:
+        for pid in targets:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGTERM)
+        # An immediate `up` re-checks the port block: return only after
+        # MuJoCo's teardown has actually released the sockets, or the next
+        # run refuses on "world state stream already in use".
+        if _world_ports_free(ports, 15.0):
+            log("Stopped host world server.")
+        else:
+            # Escalate to the same pids, not to whoever holds the ports now: if
+            # ours died during the wait and a stranger took them, that stranger
+            # is not ours to kill.
+            for pid in targets:
+                with contextlib.suppress(OSError):
+                    os.kill(pid, signal.SIGKILL)
+            if _world_ports_free(ports, 5.0):
+                log("Stopped host world server (forced).")
+            else:
+                warn(f"Something else holds the world ports (lsof -nP -iTCP:{ports[-1]}); `{CLI_SIM} up` may refuse.")
     with contextlib.suppress(OSError):  # read-only fs: the kill still counts
         WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
         WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)

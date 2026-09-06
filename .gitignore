@@ -139,6 +139,8 @@ MUJOCO_LOG.TXT
 # extracts these on `up`
 sim/viewer/public/
 sim/viewer/assets/
+# licensed environment packs that must never be published from this repo
+sim/environments.local/
 sim/.sim-assets.tmp*
 
 # generated world caches, per-bundle (hash-keyed, rebuilt on demand)

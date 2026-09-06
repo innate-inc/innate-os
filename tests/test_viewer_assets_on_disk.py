@@ -92,3 +92,30 @@ def test_a_deleted_directory_is_reinstalled(monkeypatch, tmp_path):
 
     assert len(fetches) == 2
     assert (destination / "file.txt").exists()
+
+
+def test_viewer_refresh_preserves_local_environment_packs(monkeypatch, tmp_path):
+    """Custom packs are built beside published assets and must survive an
+    asset-image refresh, while stale files from the old published layer do not."""
+    destination = tmp_path / "public"
+    marker = destination / ".installed-tag"
+    local_scene = destination / "local-environments" / "custom-pack" / "scene.glb"
+    local_scene.parent.mkdir(parents=True)
+    local_scene.write_bytes(b"custom scene")
+    (destination / "stale-published-file.txt").write_text("old")
+
+    digest = "sha256:" + "c" * 64
+    _fake_layer(monkeypatch, tmp_path, "viewer", digest)
+    runtime.install_layer_subtree(
+        "ghcr.io/x/y:new-tag",
+        0,
+        "viewer",
+        destination,
+        marker,
+        label="viewer",
+        preserve_subtrees=("local-environments",),
+    )
+
+    assert local_scene.read_bytes() == b"custom scene"
+    assert not (destination / "stale-published-file.txt").exists()
+    assert (destination / "file.txt").read_text() == "contents"

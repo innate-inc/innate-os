@@ -2,6 +2,12 @@
 # Copy to sim/config.toml or let `./innate-sim setup` create it automatically.
 # Leave values commented to use the built-in defaults.
 
+[simulation]
+# Environment pack the world server loads (a directory under sim/environments).
+# `./innate-sim up --environment NAME` overrides it for one launch, and a
+# running simulator switches from Scene setup in the 3D view.
+# environment = "apartment"
+
 [os]
 # Optional prebuilt Innate OS image. By default ("auto") the launcher tries a
 # content-addressed prebuilt image matching this checkout; failing that, the

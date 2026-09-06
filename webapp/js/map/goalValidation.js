@@ -5,7 +5,7 @@
 
 /**
  * Explain why a world point is not known-free on an occupancy grid.
- * @param {{ width: number, height: number, resolution: number, originX: number, originY: number } | null} grid
+ * @param {{ width: number, height: number, resolution: number, originX: number, originY: number, originYaw?: number } | null} grid
  * @param {ArrayLike<number> | null} cells
  * @param {number} x
  * @param {number} y
@@ -16,8 +16,13 @@ export function goalCellError(grid, cells, x, y, occupiedThreshold) {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return "Choose a valid destination";
   if (!grid || !cells || grid.width <= 0 || grid.height <= 0 || grid.resolution <= 0) return "No navigation map is available";
 
-  const col = Math.floor((x - grid.originX) / grid.resolution);
-  const row = Math.floor((y - grid.originY) / grid.resolution);
+  const dx = x - grid.originX;
+  const dy = y - grid.originY;
+  const yaw = Number(grid.originYaw ?? 0);
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  const col = Math.floor((c * dx + s * dy) / grid.resolution);
+  const row = Math.floor((-s * dx + c * dy) / grid.resolution);
   if (col < 0 || col >= grid.width || row < 0 || row >= grid.height) return "Choose a destination inside the map";
 
   const value = Number(cells[row * grid.width + col]);

@@ -27,9 +27,6 @@ import {
 const SKILL_GROUP_MIN = 3;
 
 /**
- * @param {{ onActiveSkill?: (name: string | null) => void }} [opts]
- *   onActiveSkill reports the skill currently running so the panel can update
- *   its "active skill" chip — that chip lives in the control panel, not here.
  * @returns {{
  *   head: HTMLElement,
  *   wrap: HTMLElement,
@@ -42,7 +39,7 @@ const SKILL_GROUP_MIN = 3;
  *   destroy: () => void,
  * }}
  */
-export function createChatStream(opts = {}) {
+export function createChatStream() {
   // ---- live stream (thoughts + chat + skill runs) -------------------------
   const streamLabel = document.createElement("p");
   streamLabel.className = "microlabel agent-stream-label";
@@ -82,6 +79,15 @@ export function createChatStream(opts = {}) {
     if (wasAtBottom) stream.scrollTop = stream.scrollHeight;
   }
 
+  // A shorter sheet keeps scrollTop, pinning the top of the view and pushing
+  // the newest turn out of sight.
+  let pinnedToBottom = true;
+  stream.addEventListener("scroll", () => {
+    pinnedToBottom = atBottom();
+  });
+  const streamResize = new ResizeObserver(() => settleStreamAfterMutation(pinnedToBottom));
+  streamResize.observe(stream);
+
   /** @param {HTMLElement} el */
   function appendStreamItem(el) {
     stream.append(el);
@@ -110,9 +116,6 @@ export function createChatStream(opts = {}) {
    *  list: HTMLElement | null,
    * } | null} */
   let skillStreak = null;
-  // Name shown in the panel's active-skill chip, so a finishing run only
-  // clears the chip when it is the run that set it.
-  let runningSkill = "";
 
   /** @param {"compact" | "detailed"} mode */
   function setStreamMode(mode) {
@@ -336,13 +339,6 @@ export function createChatStream(opts = {}) {
     const wasAtBottom = atBottom();
     const cls = ["running", "completed", "failed", "interrupted"].includes(status) ? status : "running";
     const displayName = skillDisplayName(name);
-    if (cls === "running") {
-      runningSkill = displayName;
-      opts.onActiveSkill?.(displayName);
-    } else if (runningSkill === displayName) {
-      runningSkill = "";
-      opts.onActiveSkill?.(null);
-    }
 
     let run = skillRuns.get(key);
     if (!run) {
@@ -491,6 +487,7 @@ export function createChatStream(opts = {}) {
     replay,
     setMode: setStreamMode,
     destroy() {
+      streamResize.disconnect();
       for (const timer of compactEnterTimers) clearTimeout(timer);
     },
   };

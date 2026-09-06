@@ -76,6 +76,12 @@ export const WEBSOCKET_STATUS_TOPIC = "/brain/websocket_status";
 
 // Navigation map + odometry for the 2D map page.
 export const MAP_TOPIC = "/map"; // nav_msgs/OccupancyGrid
+// Operator-authored Nav2 keepout mask. This remains separate from /map so
+// localization continues to use the original occupancy map.
+export const KEEPOUT_MASK_TOPIC = "/nav/keepout_filter_mask"; // nav_msgs/OccupancyGrid
+// Editor-facing copy whose private frame suffix binds edits to one exact /map.
+export const KEEPOUT_STATE_TOPIC = "/nav/keepout_mask_state"; // nav_msgs/OccupancyGrid
+export const KEEPOUT_EDIT_TOPIC = "/nav/keepout_mask_edit"; // nav_msgs/OccupancyGrid
 export const ODOM_TOPIC = "/odom"; // nav_msgs/Odometry
 // nav_msgs/Path — the planner's route. Both planner servers are namespaced;
 // there is no root /plan publisher.
@@ -370,5 +376,9 @@ export const STEREO_CALIB_DEFAULT_MIN_CORNERS = 10;
 // estimator gates on it), so whether a frame ever arrives here is a reliable,
 // zero-new-ROS-code proxy for "the robot currently has a calibration file".
 export const MAIN_CAMERA_DEPTH_TOPIC = "/mars/main_camera/depth/image_rect_raw";
+
+// Sim only: put the robot back at its spawn pose, arm home, every prop parked.
+// std_msgs/Bool for the same rws reason as STEREO_CALIB_CAPTURE_TOPIC above.
+export const SIM_RESPAWN_TOPIC = "/virtual_mars/reset";
 
 export const LAST_IP_KEY = "innate.lastRobotIP";

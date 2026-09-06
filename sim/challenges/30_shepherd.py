@@ -4,6 +4,7 @@ from mars_sim_driver.challenges import Challenge, Drop, Goal, Near
 
 CHALLENGE = Challenge(
     id="shepherd",
+    environments=("apartment",),
     title="Shepherd",
     brief="A soccer ball is lying in the apartment. Find it and push it to the dog.",
     # Placements probed for real interior floor (nav-map free + visual-floor

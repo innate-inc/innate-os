@@ -121,9 +121,13 @@ if TYPE_CHECKING:
 
 
 def repo_root() -> Path:
-    """Best-effort repo root for dev checkouts (this file lives at
-    ros2_ws/src/mars_bot/mars_sim_driver/mars_sim_driver/world.py)."""
-    return Path(__file__).resolve().parents[5]
+    """Walk up to the tree that holds sim/ and ros2_ws/. A fixed parents[N] lands
+    on ros2_ws/install once colcon has installed this file, silently."""
+    here = Path(__file__).resolve()
+    for candidate in here.parents:
+        if (candidate / "sim").is_dir() and (candidate / "ros2_ws").is_dir():
+            return candidate
+    return here.parents[5]
 
 
 def default_assets_dir() -> Path:
@@ -216,12 +220,19 @@ def build_world_xml(
     texture_max: int | None = None,
     props: "PropRegistry | None" = None,
     statics: "RoomRegistry | None" = None,
+    spawn_pose: tuple[float, float, float] = (SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG),
+    traffic_bodies: str = "",
+    traffic_assets: str = "",
 ) -> str:
-    """The apartment environment MJCF (floor plane + decomposed room hulls,
-    optionally the textured visual rooms in their own geom group, plus every
-    droppable prop parked off-map -- see props.py).
+    """The environment MJCF (floor plane + decomposed room hulls, optionally
+    the textured visual rooms in their own geom group, plus every droppable
+    prop parked off-map -- see props.py). Environment-owned dynamic bodies such
+    as town traffic are inserted directly under worldbody via traffic_bodies,
+    already expressed in simulator Z-up coordinates.
     texture_max caps the visual textures' resolution (see capped_texture_path).
-    statics adds primitive-authored rooms alongside the meshes -- see statics.py."""
+    statics adds primitive-authored rooms alongside the meshes -- see
+    statics.py -- which is what lets a world be built with no scanned geometry
+    at all."""
     prop_assets = props.assets_xml(VISUAL_GROUP) if props else ""
     prop_bodies = props.bodies_xml(VISUAL_GROUP, COLLISION_GROUP) if props else ""
     collision_group = COLLISION_GROUP if visual_rooms else 0
@@ -260,7 +271,8 @@ def build_world_xml(
         png_path = obj_path.with_suffix(".png")
         if texture_max:
             png_path = capped_texture_path(png_path, texture_max)
-        visual_mesh_lines.append(f'    <mesh name="vis_{room}" file="{obj_path.resolve()}"/>')
+        # shell: a flat part (a floor plane) has no volume, and visuals carry no mass anyway
+        visual_mesh_lines.append(f'    <mesh name="vis_{room}" file="{obj_path.resolve()}" inertia="shell"/>')
         visual_mesh_lines.append(f'    <texture name="tex_{room}" type="2d" file="{png_path.resolve()}"/>')
         visual_mesh_lines.append(f'    <material name="mat_{room}" texture="tex_{room}" specular="0" shininess="0"/>')
         visual_geom_lines.append(
@@ -280,7 +292,7 @@ def build_world_xml(
         else ""
     )
 
-    lx, ly, lz, azimuth, elevation, extent = spawn_camera_view(SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG)
+    lx, ly, lz, azimuth, elevation, extent = spawn_camera_view(*spawn_pose)
 
     return f"""
 <mujoco model="apartment">
@@ -297,6 +309,7 @@ def build_world_xml(
   <asset>
 {chr(10).join(mesh_lines)}
 {chr(10).join(visual_mesh_lines)}{prop_assets}
+{traffic_assets}
   </asset>
   <worldbody>
     <!-- MuJoCo defaults an untyped light to a narrow spotlight.  The viewer's
@@ -310,6 +323,7 @@ def build_world_xml(
 {chr(10).join(geom_lines)}
 {chr(10).join(visual_geom_lines)}
     </body>{static_bodies}{prop_bodies}{robot_body}
+{traffic_bodies}
   </worldbody>
 </mujoco>
 """

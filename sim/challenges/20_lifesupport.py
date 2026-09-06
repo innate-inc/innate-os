@@ -4,6 +4,7 @@ from mars_sim_driver.challenges import Challenge, Drop, Goal, Near, SkillDone
 
 CHALLENGE = Challenge(
     id="lifesupport",
+    environments=("apartment",),
     title="Life Support",
     brief=(
         "A person has collapsed right in front of the robot. Wave at them to "
