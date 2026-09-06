@@ -832,8 +832,6 @@ class PickAnyObject(Skill):
                 self._holding = False
                 self.say("I couldn't get a grip on it.")
                 raise SkillFailed(f"Grasp missed — '{prompt}' is still on the floor (verified after backing up)")
-            self.say("Got it.")
-            return f"Picked up '{prompt}' (verified: floor clear after backing up)"
         except ArmFailed as e:
             # A clean arm give-up is a skill failure, not a crash. SkillFailed
             # and SkillCancelled propagate untouched — the framework owns them.
@@ -845,3 +843,10 @@ class PickAnyObject(Skill):
             self.mobility.stop()
             self._rest_arm(keep_grip=self._holding)
             self.head.set_position(0)
+        # A rigid object can slip during the final fold even after a verified
+        # lift. Report success only after that motion, using the encoder again.
+        if self._gripper_closed_on_air():
+            self._holding = False
+            self.fail(f"'{prompt}' slipped while moving to the carry pose. Ask me to pick it up again.")
+        self.say("Got it.")
+        return f"Picked up '{prompt}' (grip verified after the lift and carry motion)"
