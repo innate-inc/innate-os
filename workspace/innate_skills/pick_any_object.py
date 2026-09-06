@@ -291,6 +291,18 @@ class PickAnyObject(Skill):
         """Best-effort teardown: carry if holding, else fold to rest. Never
         raises. REST, not ZERO: after a failed descent the arm can be near the
         floor, and the zero posture would sweep the gripper through it."""
+        if keep_grip and self._grip_strength is not None and self._grip_strength < SOFT_GRIP_MIN:
+            # A verified raised rigid grasp is already a carry position. Folding
+            # to a fixed wrist roll can eject it. Keep the standing joint/grip
+            # targets; never reseed the squeeze from measured finger aperture.
+            try:
+                j6 = self._arm_joints()[5]
+                z = self.manipulation.pose.z
+                if math.isfinite(z) and z >= self._p["floor_z"] + 0.07 and j6 > GRIPPER_EMPTY_J6 + 0.02:
+                    self.logger.info("[PickAnyObject] keeping the raised rigid grasp for carry")
+                    return
+            except (ArmFailed, ArmUnhealthy, LookupError):
+                pass
         joints = CARRY_ARM + [-self._p["close_strength"]] if keep_grip else list(self.manipulation.REST)
         try:
             self.manipulation.move_joints(joints, duration=3.0)

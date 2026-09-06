@@ -39,7 +39,10 @@ class ThrowObject(Skill):
             arm.gripper_close(strength=arm.GRIPPER_MAX_STRENGTH, duration=0.5)
             self.sleep(0.15)
             self._require_held_object()
-            arm.move_to(0.18, 0.0, 0.18, pitch=1.3, duration=1.5, tolerance_xy=None, tolerance_z=None)
+            # Keep the pickup's finger orientation: unwinding the wrist while
+            # holding a rigid brick can roll it out of an otherwise good grasp.
+            roll = arm.pose.roll
+            arm.move_to(0.18, 0.0, 0.18, roll=roll, pitch=1.3, duration=1.5, tolerance_xy=None, tolerance_z=None)
             self.sleep(0.1)
             self._require_held_object()
             self.check_cancelled()
@@ -48,9 +51,9 @@ class ThrowObject(Skill):
             # late; waypoint grip synchronizes opening with the moving arm.
             arm.follow(
                 [
-                    Waypoint(0.26, 0.0, 0.22, pitch=1.3, duration=0.20),
-                    Waypoint(0.33, 0.0, 0.28, pitch=1.3, duration=0.16, grip=arm.GRIPPER_OPEN),
-                    Waypoint(0.30, 0.0, 0.30, pitch=1.3, duration=0.12),
+                    Waypoint(0.26, 0.0, 0.22, roll=roll, pitch=1.3, duration=0.20),
+                    Waypoint(0.33, 0.0, 0.28, roll=roll, pitch=1.3, duration=0.16, grip=arm.GRIPPER_OPEN),
+                    Waypoint(0.30, 0.0, 0.30, roll=roll, pitch=1.3, duration=0.12),
                 ]
             )
             return "Tossed the held object forward. Check where it landed before declaring the task complete."
