@@ -70,13 +70,23 @@ try:
                     row["cancel_acknowledged"] = bool(cancelled.goals_canceling)
                     break
         result = wait(result_future, max(0, a.timeout - (time.monotonic() - started)))
-        row.update(success=result.result.success, message=result.result.message, status=result.status)
+        row.update(
+            success=result.result.success,
+            success_type=result.result.success_type,
+            message=result.result.message,
+            status=result.status,
+        )
     except TimeoutError:
         row["timed_out"] = True
         wait(handle.cancel_goal_async(), 15)
         # Committed lift/carry may finish after cancel; retain its result.
         result = wait(result_future, 45)
-        row.update(success=False, message=result.result.message, status=result.status)
+        row.update(
+            success=False,
+            success_type=result.result.success_type,
+            message=result.result.message,
+            status=result.status,
+        )
     row.update(completion_wall=time.time(), action_elapsed_s=time.monotonic() - started)
 except Exception as error:
     if "request_wall" not in row:

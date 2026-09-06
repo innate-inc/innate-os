@@ -127,6 +127,10 @@ def run():
         while state.get("wall", 0) < time.time() - 0.2:
             state = json.loads(ws.recv(timeout=5))
     sources = [
+        "scripts/experiments/pickup/run_trial.py",
+        "scripts/experiments/pickup/run_skill.py",
+        "scripts/experiments/pickup/judge.py",
+        "scripts/experiments/pickup/report.py",
         "workspace/innate_skills/pick_any_object.py",
         "workspace/innate_skills/pickup_policy.py",
         "workspace/innate_skills/_pickup_probe.py",

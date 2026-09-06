@@ -34,7 +34,10 @@ durable = durable and all(raised(s) for s in durability)
 if durable:
     origin = durability[0]["objects"][prop][:3]
     durable = all(math.dist(origin, s["objects"][prop][:3]) < 0.02 for s in durability)
-success = bool(result.get("success") and stable and durable and not result.get("timed_out"))
+# The server intentionally finalizes a cancelled skill as a successful ROS
+# goal. Its skill-level success_type, not ROS status alone, distinguishes it.
+cancelled = result.get("success_type") == "cancelled" or result.get("cancel_wall") is not None
+success = bool(result.get("success") and stable and durable and not result.get("timed_out") and not cancelled)
 summary = {
     **result,
     "stable_hold": bool(stable),
