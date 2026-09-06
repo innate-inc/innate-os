@@ -213,6 +213,54 @@ def test_stop_discards_late_native_tool_speech_and_usage(agent_factory, monkeypa
     assert not agent._runtime.running and not agent._turn_in_flight
 
 
+def test_cancelled_sequence_preserves_native_call_outputs_and_requires_new_request(agent_factory):
+    from test_local_brain import WAVE_SKILL
+
+    from brain_client.skills.registry import SkillRegistry
+
+    agent, state = agent_factory()
+    state.registry = SkillRegistry.from_metadata([WAVE_SKILL])
+    agent._roster.active_skill_ids = lambda: [WAVE_SKILL["id"]]
+    agent._runner.has_active_goal = False
+    started, requests = [], []
+    agent._runner.start_task = lambda *args: started.append(args)
+    output = [call_item("stop", "stop_current_skill"), call_item("stale", "wave")]
+
+    def transport(model, body):
+        requests.append(copy.deepcopy(body))
+        return [completed(*output)]
+
+    agent._context = context(transport)
+    agent.on_user_message("Stop and wait")
+    run_turn(agent)
+    output = [call_item("recovery", "wave")]
+    agent.add_event("Navigation is ready again")
+    run_turn(agent)
+    assert started == []
+    assert [tool["name"] for tool in requests[-1]["tools"]] == ["wait"]
+    agent.on_user_message("Thanks, what can you see?")
+    output = [message_item("I can see the room.")]
+    run_turn(agent)
+    output = [call_item("after_conversation", "wave")]
+    run_turn(agent)
+    assert started == []
+    agent.on_user_message("Now wave")
+    output = [call_item("new", "start_new_request"), call_item("too_early", "wave")]
+    run_turn(agent)
+    assert started == []
+    output = [call_item("fresh", "wave")]
+    run_turn(agent)
+    assert len(started) == 1
+    output = [call_item("idle", "wait")]
+    run_turn(agent)
+    # Every committed native call, including rejected stale actions, is answered
+    # exactly once with its original ID. The next Responses request is complete.
+    for request in requests:
+        calls = [i["call_id"] for i in request["input"] if i.get("type") == "function_call"]
+        results = [i["call_id"] for i in request["input"] if i.get("type") == "function_call_output"]
+        assert calls == results
+
+
 def test_cadence_waits_after_completion_and_never_overlaps_requests(agent_factory, monkeypatch):
     agent, state = agent_factory()
     state.current_directive = SimpleNamespace(
