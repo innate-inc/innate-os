@@ -894,7 +894,10 @@ class BrainAgent:
         capped = math.hypot(*floor) > grounding.MAX_RANGE_M
         return (
             f"approaching floor point {math.hypot(*floor):.1f}m away with {standoff}m requested standoff"
-            + (" (capped step; target remains farther away)" if capped else "")
+            + (
+                " (capped step; target remains farther away; conversation distance NOT reached — do not greet yet)"
+                if capped else ""
+            )
             + " — you will get an event when it finishes; inspect a fresh main camera image before any next approach"
         )
 

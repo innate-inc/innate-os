@@ -1553,6 +1553,34 @@ def test_conversation_rebases_target_before_standoff(agent_factory, calibrated_g
         assert goal["theta_degrees"] == pytest.approx(math.degrees(heading))
 
 
+def test_conversation_capped_step_reports_unfinished_approach(agent_factory, calibrated_geometry):
+    from brain_client.skills.registry import SkillRegistry
+
+    agent, state = agent_factory()
+    state.registry = SkillRegistry.from_metadata([NAV_SKILL])
+    agent._roster.active_skill_ids = lambda: [NAV_SKILL["id"]]
+    agent._camera.fresh_frame = lambda _: (FRAME, 19.47)
+    agent._pose.current_pose_xyt = lambda: (0.0, 0.0, 0.0)
+    started = []
+    agent._runner.start_task = lambda *args, **kwargs: started.append(args)
+    # The next observation measures the remaining range after a bounded move.
+    # Tool results distinguish unfinished approach from a final standoff goal.
+    for distance, capped in ((5.1, True), (2.8, False)):
+        u, v = calibrated_geometry.floor_to_pixel(distance, 0.0, 19.47)
+        args = {"y": round(v * 1000 / 480), "x": round(u * 1000 / 640), "standoff_m": 1.2}
+        agent._context._transport = lambda model, body, args=args: [
+            model_response(call_part("go_to_point_in_view", args))
+        ]
+        run_turn(agent)
+        outcome = agent._context._history[-1]["parts"][0]["functionResponse"]["response"]["outcome"]
+        assert ("conversation distance NOT reached" in outcome) is capped
+        assert ("do not greet yet" in outcome) is capped
+        assert "inspect a fresh main camera image" in outcome
+    assert len(started) == 2
+    assert started[0][2]["x"] == pytest.approx(2.3, abs=0.01)
+    assert 1.5 < started[1][2]["x"] < 1.7
+
+
 if __name__ == "__main__":
     import sys
 

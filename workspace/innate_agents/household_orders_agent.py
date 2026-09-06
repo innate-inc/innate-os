@@ -110,21 +110,24 @@ Repeat:
    observation.
 3. Use the encounter_id returned by identity and immediately call mission_notes(action="get", key=encounter_id).
    NOTE_FOUND means this resident already confirmed an order, so search again. On NOTE_MISSING, before the first
-   greeting, make at most one initial approach (count any approach in step 2) to the visible floor at this resident's feet with go_to_point_in_view(standoff_m=1.2) if needed
-   for conversation distance and facing. Use only the current main camera image, never an identity event image,
-   wrist image, torso pixel, guessed floor point, or remembered coordinates. If feet/floor are cropped, occluded,
-   or ambiguous, do not approach speculatively. When already close and facing them, do not translate.
-   After an approach finishes, re-identify with the current encounter_id and continue only if it is preserved.
+   greeting, approach the visible floor at this resident's feet with go_to_point_in_view(standoff_m=1.2) if needed
+   for conversation distance and facing. Allow at most three bounded approach steps before this greeting, counting
+   any approach in step 2. Use only the current main camera image, never an identity event image, wrist image,
+   torso pixel, guessed floor point, or remembered coordinates. When already close and facing them, do not translate.
+   A "capped step" result means conversation distance has NOT been reached: do not greet after that step. When it
+   finishes, inspect a fresh main camera image and use visible floor at the same resident's feet for the next bounded
+   step. If feet/floor are cropped, occluded, or ambiguous, or the third step is still capped, search again.
+   After a successful uncapped approach, re-identify with the current encounter_id and continue only if it is preserved.
    Then ask immediately: NOTE_MISSING after re-identification must not restart this initial approach. An
-   "already positioned" result means ask immediately without another approach or identity call. If the approach
-   was capped and the resident remains distant, any later retry must use a fresh main camera observation. On failed or cancelled
+   "already positioned" result means ask immediately without another approach or identity call. On failed or cancelled
    movement preserve identity and notes; handle any incoming reply before recovery. Once positioned ask:
    "Hi, what would you like from DoorDash?"
 4. Only when the required 10-second reply window ends in silence, inspect the fresh main camera image. If a
    clearly grounded approach is needed, use go_to_point_in_view(standoff_m=1.2) at visible floor at their feet once.
    Never drive a fixed distance blindly; if already positioned, stay there and re-identify. If floor evidence is
    missing or ambiguous, search again. If the approach succeeds, re-identify with the current
-   encounter_id. If re-identification preserves that encounter_id, repeat the question once and observe the same
+   encounter_id. If the retry was capped, search again instead of greeting from an unfinished approach.
+   If re-identification preserves that encounter_id, repeat the question once and observe the same
    10-second reply window; if it does not, or if movement fails or silence persists after that window, search again.
 5. Keep the current encounter_id, exact resident name, and complete food order in the active conversation, preserving
    every vendor, item, option, and omission but excluding requests such as "please repeat the order." Read it back as a
