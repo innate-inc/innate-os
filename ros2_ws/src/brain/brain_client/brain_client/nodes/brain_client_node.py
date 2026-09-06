@@ -126,20 +126,18 @@ class BrainClientNode(Node):
         return None
 
     def _init_tts(self):
-        if self._proxy is None:
-            self.get_logger().info("🔇 Text-to-speech disabled (proxy not available)")
-            return None
         handler = TTSHandler(
             logger=self.get_logger(),
             proxy=self._proxy,
+            voice_id=self.config.cartesia_voice_id,
             tts_status_pub=self.tts_status_pub,
             tts_audio_pub=self.tts_audio_pub,
             simulator_mode=self.config.simulator_mode,
         )
         if handler.is_available():
-            self.get_logger().info(f"🗣️ Text-to-speech enabled (voice: {handler.voice_id})")
+            self.get_logger().info(f"🗣️ Text-to-speech enabled via {handler.backend} (voice: {handler.voice_id})")
         else:
-            self.get_logger().warning("⚠️ TTS handler created but Cartesia client unavailable")
+            self.get_logger().info("🔇 Text-to-speech disabled (no INNATE_SERVICE_KEY or CARTESIA_API_KEY)")
         return handler
 
     def _on_parameter_change(self, params: list[Parameter]) -> SetParametersResult:
@@ -328,8 +326,9 @@ class BrainClientNode(Node):
                         "brain_active": self.state.is_brain_active,
                         "current_directive": self.state.current_directive.id if self.state.current_directive else "",
                         "active_skills": list(self.state.active_skill_ids or []),
-                        # Speech needs the hosted proxy (an Innate service
-                        # key); clients gray out their TTS input without it.
+                        # Speech needs a Cartesia backend (a service key or
+                        # CARTESIA_API_KEY); clients gray out their TTS input
+                        # without one.
                         "tts_available": bool(self._tts_handler is not None and self._tts_handler.is_available()),
                     }
                 )

@@ -874,15 +874,17 @@ exec_in_docker_group() {
 #
 # Only the ANSWER is collected here. Which key goes into .env, and which get
 # commented out, stays in the launcher's wizard (setup_wizard.apply_brain_backend)
-# so that lives in one place. The key reaches it on stdin: never a temp file,
-# never an environment a process listing can show.
+# so that lives in one place. The keys reach it on stdin -- brain key, then the
+# optional Cartesia one, a line each -- never a temp file, never an environment
+# a process listing can show.
 LLM_BACKEND=""
 LLM_KEY=""
+VOICE_KEY=""
 
 draw_llm_options() {
     llm_row=0
-    for llm_label in "Your own Gemini key   get one at https://aistudio.google.com/api-keys" \
-        "Innate service key    from your robot, or ask on https://discord.gg/innate" \
+    for llm_label in "Your own API keys     a Gemini key, plus optional Cartesia for the voice" \
+        "Innate service key    ships with a MARS robot, or ask on https://discord.gg/innate" \
         "None                  run the simulator without an agent"; do
         llm_row=$((llm_row + 1))
         if [ "$llm_row" -eq "$1" ]; then
@@ -899,7 +901,7 @@ ask_llm_backend() {
         return 0
     fi
     printf '\n  %sHow should the robot'"'"'s agent reach a cloud LLM?%s\n' "$BOLD" "$NC"
-    printf '  %sThe agent runs on the robot either way; this is only which key it thinks with.%s\n\n' "$DIM" "$NC"
+    printf '  %sThe agent runs on the robot either way; this is only which keys it uses.%s\n\n' "$DIM" "$NC"
 
     llm_choice=1
     if ! stty_saved=$(stty -g <&3 2>/dev/null); then
@@ -940,20 +942,37 @@ ask_llm_backend() {
     read_llm_key
 }
 
-# Masked, with a length counter: a paste that silently doubled is the failure
-# worth showing, and the key itself never belongs on screen.
+# The brain key, then -- for your own keys -- the optional one that gives the
+# robot a voice. Both travel to the launcher on one pipe, a line each.
 read_llm_key() {
-    [ "$LLM_BACKEND" = "gemini" ] && llm_prompt="Paste your Gemini API key" || llm_prompt="Paste your Innate service key"
+    if [ "$LLM_BACKEND" = "gemini" ]; then
+        read_secret "Paste your Gemini API key"
+        LLM_KEY=$SECRET_VALUE
+        printf '  %sOptional: a Cartesia key lets the robot speak (https://play.cartesia.ai/keys).%s\n' "$DIM" "$NC"
+        read_secret "Paste your Cartesia API key, or Enter to skip" optional
+        VOICE_KEY=$SECRET_VALUE
+    else
+        read_secret "Paste your Innate service key"
+        LLM_KEY=$SECRET_VALUE
+    fi
+}
+
+# Masked, with a length counter: a paste that silently doubled is the failure
+# worth showing, and the key itself never belongs on screen. Answers in
+# SECRET_VALUE; a second argument lets Enter accept an empty one.
+read_secret() {
+    secret_prompt=$1
+    secret_optional=${2:-}
     stty_saved=$(stty -g <&3)
     stty raw -echo <&3
     hide_cursor
-    LLM_KEY=""
+    SECRET_VALUE=""
     while :; do
-        printf '\r\033[K  %s%s: %s%s' "$YELLOW" "$llm_prompt" "$NC" "$(printf '%*s' "${#LLM_KEY}" '' | tr ' ' '*')"
-        [ -n "$LLM_KEY" ] && printf ' %s(%s)%s' "$DIM" "${#LLM_KEY}" "$NC"
+        printf '\r\033[K  %s%s: %s%s' "$YELLOW" "$secret_prompt" "$NC" "$(printf '%*s' "${#SECRET_VALUE}" '' | tr ' ' '*')"
+        [ -n "$SECRET_VALUE" ] && printf ' %s(%s)%s' "$DIM" "${#SECRET_VALUE}" "$NC"
         read_key
         case "$key" in
-            enter) [ -n "$LLM_KEY" ] && break ;;
+            enter) { [ -n "$SECRET_VALUE" ] || [ -n "$secret_optional" ]; } && break ;;
             interrupt)
                 stty "$stty_saved" <&3
                 show_cursor
@@ -961,14 +980,14 @@ read_llm_key() {
                 on_interrupt
                 ;;
             escape | up | down | left | right) ;;
-            "$BACKSPACE" | "$DELETE") LLM_KEY=${LLM_KEY%?} ;;
-            *) LLM_KEY="$LLM_KEY$key" ;;
+            "$BACKSPACE" | "$DELETE") SECRET_VALUE=${SECRET_VALUE%?} ;;
+            *) SECRET_VALUE="$SECRET_VALUE$key" ;;
         esac
     done
     stty "$stty_saved" <&3
     show_cursor
-    printf '\r\033[K  %s%s: %s%s %s(%s)%s\n' "$YELLOW" "$llm_prompt" "$NC" \
-        "$(printf '%*s' "${#LLM_KEY}" '' | tr ' ' '*')" "$DIM" "${#LLM_KEY}" "$NC"
+    printf '\r\033[K  %s%s: %s%s %s(%s)%s\n' "$YELLOW" "$secret_prompt" "$NC" \
+        "$(printf '%*s' "${#SECRET_VALUE}" '' | tr ' ' '*')" "$DIM" "${#SECRET_VALUE}" "$NC"
 }
 
 ask_setup_questions() {
@@ -976,9 +995,10 @@ ask_setup_questions() {
     if [ -n "$LLM_BACKEND" ]; then
         # Already answered, before anything was installed. The launcher writes
         # .env; the key travels down a pipe between our two processes.
-        if printf '%s' "$LLM_KEY" |
+        if printf '%s\n%s' "$LLM_KEY" "$VOICE_KEY" |
             sh -c "cd -- $(shell_quote "$INNATE_DIR") && $BANNER_SHOWN ./innate-sim setup --no-prefetch --backend $LLM_BACKEND"; then
             LLM_KEY=""
+            VOICE_KEY=""
             return 0
         fi
     elif with_docker_group_or_plain "cd -- $(shell_quote "$INNATE_DIR") && $BANNER_SHOWN ./innate-sim setup --no-prefetch"; then
