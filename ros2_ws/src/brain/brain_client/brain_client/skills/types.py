@@ -172,6 +172,7 @@ class RobotStateType(Enum):
     LAST_MAIN_CAMERA_IMAGE_B64 = "last_main_camera_image_b64"
     LAST_WRIST_CAMERA_IMAGE_B64 = "last_wrist_camera_image_b64"
     LAST_DEPTH_IMAGE = "last_depth_image"
+    LAST_RGBD_OBSERVATION = "last_rgbd_observation"
     LAST_ODOM = "last_odom"
     LAST_MAP = "last_map"
     LAST_HEAD_POSITION = "last_head_position"
@@ -505,6 +506,7 @@ class _FeedSpec:
 @cache
 def _feed_specs() -> "tuple[_FeedSpec, ...]":
     # imported lazily: the interface classes pull ROS/Nav2 modules
+    from brain_client.perception.rgbd import RgbdObservation
     from brain_client.robot.head import Head
     from brain_client.robot.manipulation import Manipulation
     from brain_client.robot.mobility import Mobility
@@ -536,6 +538,15 @@ def _feed_specs() -> "tuple[_FeedSpec, ...]":
             "DepthMap",
             ("depth", "depth_image"),
             "depth camera",
+            grace_s=3.0,
+        ),
+        _FeedSpec(
+            RgbdObservation,
+            Camera,
+            RobotStateType.LAST_RGBD_OBSERVATION,
+            "RgbdObservation",
+            ("rgbd",),
+            "calibrated head RGB-D",
             grace_s=3.0,
         ),
         _FeedSpec(Odometry, RobotState, RobotStateType.LAST_ODOM, "Odometry", ("odom",), "odometry"),

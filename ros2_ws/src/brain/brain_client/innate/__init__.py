@@ -63,6 +63,7 @@ may list.
 from typing import TYPE_CHECKING
 
 from brain_client.agents.types import Agent, InputRef, SkillRef
+from brain_client.perception.rgbd import RgbdObservation
 from brain_client.robot.exceptions import ArmFailed, ArmUnhealthy
 from brain_client.skills.types import (
     PhysicalSkill,
@@ -110,6 +111,7 @@ __all__ = [
     "Odometry",
     "Pose",
     "RecallVerdict",
+    "RgbdObservation",
     "Skill",
     "SkillCancelled",
     "SkillFailed",
