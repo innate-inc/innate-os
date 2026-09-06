@@ -774,8 +774,9 @@ def test_stop_cancels_remaining_sequence_until_new_user_request(agent_factory, r
     assert started == []  # conversation alone must not revive the cancelled request
 
     agent.on_user_message("Now wave")
-    response = model_response(call_part(START_REQUEST, {}))
+    response = model_response(call_part(START_REQUEST, {}), call_part("wave", {}))
     run_turn(agent)
+    assert started == []  # the next turn supplies the new task's action schemas
     response = model_response(call_part("wave", {}))
     run_turn(agent)
     assert len(started) == 1

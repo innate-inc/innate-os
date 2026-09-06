@@ -157,6 +157,7 @@ class BrainAgent:
         self._tool_map: dict[str, str] = {}  # gemini function name -> skill id
         self._request_stopped = False  # survives skill completion and history compaction
         self._acting_on_user_request = False
+        self._request_started_this_turn = False
         self._error_streak = 0
         self._activated_at = 0.0
         self._turn_count = 0
@@ -354,6 +355,7 @@ class BrainAgent:
         del self._events[: len(events)]
         events.clear()  # committed: a failure below backs off against an empty peek
         self._acting_on_user_request = user_spoke
+        self._request_started_this_turn = False
         try:
             outcomes = self._act(decision, speaker, context)
         finally:
@@ -576,6 +578,7 @@ class BrainAgent:
             if not self._acting_on_user_request or any(event.kind == EventKind.USER for event in self._events):
                 return "rejected — only a new user instruction can begin a new request"
             self._request_stopped = False
+            self._request_started_this_turn = True
             return "new request accepted — carry out only the user's latest instruction"
         if call.name == STOP_SKILL:
             # Cancelling the actuator alone leaves the rest of a multi-step
@@ -589,6 +592,8 @@ class BrainAgent:
             return outcome
         if any(event.kind == EventKind.USER for event in self._events):
             return "rejected — a newer user message is pending; respond to it before acting"
+        if self._request_started_this_turn:
+            return "rejected — wait for the next update and its action schemas before starting the new request"
         if self._request_stopped:
             return "rejected — the request was cancelled; wait for a new user instruction"
         if not self._state.is_brain_active:
