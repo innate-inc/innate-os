@@ -10,7 +10,7 @@ Run from a clean candidate checkout using the simulator Python environment:
 ```sh
 sim/.venv/bin/python scripts/experiments/pickup/run_trial.py matched-lego-r1-classic \
   --live --container innate-dev-EXACT-ID --port-base 30600 \
-  --output-root /absolute/evidence/directory --max-provider-calls 200 \
+  --output-root /absolute/evidence/directory --max-provider-calls 240 \
   --campaign matched-v1 --scenario-id onboarding-lego --repeat 1 --controller classic
 ```
 
@@ -55,3 +55,6 @@ gate additionally rejects delayed drops in both controllers; this durability
 check is reported separately from the fixed action-plus-two-second latency.
 Use `--cancel-during-astra` for the real inference cancellation check, recording
 its acknowledgement, action status, late provider completion and joint history.
+
+Use `--cancel-during-wrist` to request Stop half a second after wrist localization,
+then verify the actual joint trace and that no grasp starts after cancellation.
