@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import world
+from .environments import Environment
 
 # How far sim time may run backwards before tick() reads it as the world
 # having been rebuilt under the run. Two publish_state callers (the physics
@@ -798,7 +799,12 @@ class ChallengeEngine:
     """
 
     def __init__(
-        self, sim, sim_lock: threading.Lock, roots: list[Path] | None = None, progress_path: Path | None = None
+        self,
+        sim,
+        sim_lock: threading.Lock,
+        roots: list[Path] | None = None,
+        progress_path: Path | None = None,
+        packs: list[Environment] | None = None,
     ):
         self.sim = sim
         self.sim_lock = sim_lock
@@ -817,9 +823,28 @@ class ChallengeEngine:
             assets = world.default_assets_dir()
             if (assets / "rooms").is_dir():
                 roots = [assets / "challenges"]
+                # ... and no environment pack's either: the benchmark runs one
+                # bundle per process this way, its challenges untagged, and
+                # a pack's tagged copy of the same ids would replace them
+                # with ones the loaded environment (the default manifest)
+                # never offers.
+                packs = None
             else:
                 roots = [world.repo_root() / "sim" / "challenges", assets / "challenges"]
         self.challenges = load_challenges(roots)
+        # Environment packs that carry their own challenges (environments.py
+        # `bundle`): loaded now, since the world server switches packs without
+        # rebuilding this engine, and tagged to their pack -- a challenge
+        # authored in a world is coordinates in that world.
+        for pack in packs or []:
+            if pack.challenges_dir is None:
+                continue
+            for cid, challenge in load_challenges([pack.challenges_dir]).items():
+                if challenge.environments is None:
+                    challenge.environments = (pack.id,)
+                if cid in self.challenges:
+                    print(f"[challenges] {pack.id}: {cid!r} replaces a challenge of the same id", flush=True)
+                self.challenges[cid] = challenge
         self.progress_path = progress_path or world.repo_root() / "workspace" / "challenges.json"
         self.progress = self._load_progress()
         self._mutex = threading.Lock()  # engine state (active challenge, events)
@@ -910,7 +935,7 @@ class ChallengeEngine:
         if challenge is None:
             print(f"[challenges] start ignored: unknown id {challenge_id!r}", flush=True)
             return False
-        if not challenge.available_in(self._environment_id()):
+        if not self._offered(challenge):
             print(f"[challenges] start ignored: {challenge_id!r} is not authored for this environment", flush=True)
             return False
         # Nothing is judged while the scene is being built. The world reset and
@@ -1349,14 +1374,21 @@ class ChallengeEngine:
         environment = getattr(self.sim, "environment", None)
         return environment.id if environment is not None else None
 
+    def _offered(self, challenge: Challenge) -> bool:
+        """Whether the loaded world hosts this challenge.
+
+        A pack that carries its own challenges owns its roster outright: an
+        untagged scenario is one nobody pinned to a world, and offering the
+        apartment's in a 9 m authored room puts its props inside walls or off
+        the map, with goals that can never fire."""
+        environment = getattr(self.sim, "environment", None)
+        if getattr(environment, "bundle", None) is not None and challenge.environments is None:
+            return False
+        return challenge.available_in(self._environment_id())
+
     def roster(self) -> list[dict]:
         """Challenge briefs for this environment; sent on connection and world changes."""
-        environment_id = self._environment_id()
-        return [
-            {"id": c.id, "title": c.title, "brief": c.brief}
-            for c in self.challenges.values()
-            if c.available_in(environment_id)
-        ]
+        return [{"id": c.id, "title": c.title, "brief": c.brief} for c in self.challenges.values() if self._offered(c)]
 
     def _block(self, challenge: Challenge | None) -> dict:
         # Only what can change rides the state stream. Progress is a few

@@ -67,6 +67,23 @@ It needs either `INNATE_SERVICE_KEY` (their proxy, preferred) or
 stack once per map, and writes per-category episode JSONs plus a stamped log
 under `sim/bench/results/eval/`.
 
+### In the web app
+
+Every benchmark world is also an environment pack, so innate's own localhost
+stack runs it instead of the apartment -- same rooms, props and challenge
+roster the judge scores, driven by hand or by the brain:
+
+```bash
+./innate-sim up --environment counter     # or pantry, workshop, gallery, rounds, household, bridge, blaze
+```
+
+or set `[simulation] environment = "counter"` in `sim/config.toml`. A running
+simulator switches from **Scene setup / Environment** in the 3D view, and the
+challenges listed there are that world's. The pack is `sim/environments/<name>/`:
+a manifest naming the bundle, and the Nav2 map exported from the same world
+(`export_nav_map.py --environment <name> --out sim/environments/<name>/map`),
+which `up` stages into `sim/assets/map` for the container.
+
 No ROS. `VirtualMars` and `ChallengeEngine` directly, one episode per process,
 `imap_unordered` so results stream to `sim/bench/results/bench_results.json`
 as they land (a sweep that is killed part-way still leaves data -- and they
@@ -186,10 +203,10 @@ search-coverage probe into a contrast probe.
   Deriving this from the hand-written table alone found three and missed
   seventeen, because most of these challenges have no hand plan at all.
 - **No visual replay of a bundle run.** The suite is headless by design and the
-  numbers come from the judge, not from watching. Upstream's sim viewer renders
-  the apartment's decomposed meshes; the authored rooms here are MuJoCo
-  primitives, which it does not draw, so pointing it at a bundle shows an empty
-  world rather than an error. To inspect a specific run: `debug_one.py <map>
+  numbers come from the judge, not from watching. The worlds themselves can be
+  watched -- each is an environment pack the localhost stack loads and the 3D
+  view draws (see *In the web app*) -- but an episode the harness scored is
+  not replayed there. To inspect a specific run: `debug_one.py <map>
   <challenge>` traces one episode with the agent `main.py` would have built,
   printing the goals and their predicates, the plan it chose, and then pose,
   current step and goal state per tick; `check_points.py` answers the other

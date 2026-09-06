@@ -4,6 +4,7 @@
 // world_server.py "two interfaces".
 
 import type { PropInfo } from "../props";
+import type { RoomInfo } from "../roomManifest";
 import type { TrafficManifest, TrafficState } from "../trafficState";
 
 /** What a challenge IS: sent once per connection, like the prop roster,
@@ -87,6 +88,8 @@ export class WorldStateController {
   onProps?: (props: PropInfo[]) => void;
   /** Traffic actor roster, empty outside Crossroads. */
   onTrafficManifest?: (manifest: TrafficManifest) => void;
+  /** Primitive-authored rooms (statics.py), empty for a mesh world like the apartment. */
+  onRooms?: (rooms: RoomInfo[]) => void;
   /** The challenge roster, sent in the same opening frame (challenges.py). */
   onChallenges?: (challenges: ChallengeInfo[]) => void;
   /** The environment roster: in the opening frame, and again on every switch. */
@@ -156,6 +159,7 @@ export class WorldStateController {
       environments?: EnvironmentSummary[];
       switch?: EnvironmentRoster["switch"];
       traffic_manifest?: TrafficManifest;
+      rooms?: RoomInfo[];
     };
     if (
       "props" in parsed ||
@@ -163,7 +167,8 @@ export class WorldStateController {
       "environment" in parsed ||
       "environments" in parsed ||
       "switch" in parsed ||
-      "traffic_manifest" in parsed
+      "traffic_manifest" in parsed ||
+      "rooms" in parsed
     ) {
       // Roster frame, not a state frame: it has no clock, opens the stream and
       // returns whenever the world changes (see world_server.serve_state).
@@ -175,6 +180,7 @@ export class WorldStateController {
       if (parsed.props) this.onProps?.(parsed.props);
       if (parsed.challenges) this.onChallenges?.(parsed.challenges);
       if ("traffic_manifest" in parsed) this.onTrafficManifest?.(parsed.traffic_manifest ?? []);
+      if ("rooms" in parsed) this.onRooms?.(parsed.rooms ?? []);
       return;
     }
     const msg = parsed as unknown as {

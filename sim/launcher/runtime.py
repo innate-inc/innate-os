@@ -905,6 +905,32 @@ def retitle_step(message: str) -> None:
         step.retitle(message)
 
 
+def _stage_pack_maps(sim_repo: Path) -> list[Path]:
+    """Copy the Nav2 map a pack carries itself (map/*.yaml + .pgm beside its
+    manifest) into sim/assets/map, which is where the container's launch
+    script collects Nav2's maps from (scripts/launch_sim_in_tmux.zsh).
+
+    The mesh packs' maps arrive baked into the asset image; a primitive pack
+    (the benchmark worlds, environments.py `bundle`) has no image to ride in,
+    so it tracks its map in the repository instead. Every pack's map is
+    staged, not only the selected one, because a running simulator switches
+    packs from the 3D view and Nav2 has to find the map right then.
+    Returns what was written."""
+    published = sim_repo / "assets" / "map"
+    written: list[Path] = []
+    for root in ("environments", "environments.local"):
+        for source in sorted((sim_repo / root).glob("*/map/*")):
+            if source.suffix not in (".yaml", ".pgm") or not source.is_file():
+                continue
+            target = published / source.name
+            if target.is_file() and target.read_bytes() == source.read_bytes():
+                continue
+            published.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            written.append(target)
+    return written
+
+
 def _seed_nav_map(config: dict[str, object]) -> None:
     """Point Nav2's saved-map file at the selected pack before the ROS session
     starts, so the mode manager boots on it. With several maps installed it
@@ -913,6 +939,7 @@ def _seed_nav_map(config: dict[str, object]) -> None:
     up, which the mode manager does not survive well."""
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    _stage_pack_maps(sim_repo)
     environment_id = str(config["environment_id"])
     manifests = [sim_repo / root / environment_id / "manifest.json" for root in ("environments", "environments.local")]
     manifest = next((path for path in manifests if path.is_file()), None)

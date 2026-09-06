@@ -5,6 +5,10 @@ into navigation mode with it.
 
 Usage: cd sim && uv run bench/export_nav_map.py
        (honours VIRTUAL_MARS_ASSETS, so it exports whichever bundle is loaded)
+       uv run bench/export_nav_map.py --environment counter --out environments/counter/map
+       (a pack by id, named after its manifest's map -- how the benchmark
+       packs' tracked maps are produced; the launcher stages them into
+       sim/assets/map so the container's launch script finds them)
 
 TWO FAULTS THIS FILE USED TO SHIP, both of which made the planner believe it
 could drive where the robot cannot go. See sim/bench/lint_navmap.py, which
@@ -33,6 +37,7 @@ The bug is not visible on a map whose bounds hug its walls, which is why it
 survived: it needs a world with space outside the building to show up.
 """
 
+import argparse
 import math
 import sys
 from collections import deque
@@ -44,6 +49,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sandbox"))
 import _driver_pkg  # noqa: F401
 from mars_sim_driver.core import VirtualMars
+from mars_sim_driver.environments import Environment
 
 RESOLUTION = 0.05
 # Strictly below (255-205)/255 = 0.19608, so grey 205 stays unknown.
@@ -103,7 +109,17 @@ def outer_wall_bbox(grid: np.ndarray) -> tuple[int, int, int, int] | None:
 
 
 def main() -> int:
-    sim = VirtualMars()
+    parser = argparse.ArgumentParser(description="export the loaded world's Nav2 map")
+    parser.add_argument(
+        "--environment", help="a pack by id (sim/environments/ID); default: whatever VIRTUAL_MARS_ASSETS loads"
+    )
+    parser.add_argument("--out", type=Path, help="directory for the .yaml/.pgm (default: sim/assets/map)")
+    args = parser.parse_args()
+    environment = Environment.load(args.environment) if args.environment else None
+    # The apartment's map has always been sim_apartment.*; a pack's is named
+    # by its manifest, which is what the launcher and Nav2 look it up by.
+    basename = Path(environment.map_name).stem if environment else "sim_apartment"
+    sim = VirtualMars(environment=environment)
     # Lidar-consistent map (virtual SLAM at the laser's true height): AMCL
     # localizes against what the lidar actually returns, exactly like a real
     # robot localizing against its own SLAM map. occupancy_grid() (collision
@@ -164,16 +180,16 @@ def main() -> int:
 
     # map_server PGM: 254 free, 0 occupied, 205 unknown; row 0 at the TOP.
     img = np.where(grid == 100, 0, np.where(grid == 0, 254, 205)).astype(np.uint8)[::-1]
-    out = Path(__file__).resolve().parents[1] / "assets" / "map"
+    out = args.out or Path(__file__).resolve().parents[1] / "assets" / "map"
     out.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(img).save(out / "sim_apartment.pgm")
-    (out / "sim_apartment.yaml").write_text(
-        f"image: sim_apartment.pgm\nmode: trinary\nresolution: {RESOLUTION}\n"
+    Image.fromarray(img).save(out / f"{basename}.pgm")
+    (out / f"{basename}.yaml").write_text(
+        f"image: {basename}.pgm\nmode: trinary\nresolution: {RESOLUTION}\n"
         f"origin: [{ox:.4f}, {oy:.4f}, 0.0]\nnegate: 0\noccupied_thresh: 0.65\nfree_thresh: {FREE_THRESH}\n"
     )
     free = int((grid == 0).sum())
     print(
-        f"wrote {out}/sim_apartment.yaml ({grid.shape[1]}x{grid.shape[0]} @ {RESOLUTION}m): "
+        f"wrote {out}/{basename}.yaml ({grid.shape[1]}x{grid.shape[0]} @ {RESOLUTION}m): "
         f"{free} free, {int((grid == 100).sum())} occupied, {int((grid == -1).sum())} unknown "
         f"({dropped} unreachable cells returned to unknown)"
     )

@@ -190,6 +190,17 @@ def release_freed_heap() -> None:
         ctypes.CDLL("libc.so.6").malloc_trim(0)
 
 
+def _roots(assets_subdir: Path, pack_subdir: Path | None) -> list[Path]:
+    """Sidecar roots in override order: the tracked source dir, the asset
+    bundle's, then the environment pack's. Later roots win by name. The pack's
+    is dropped when it IS the asset bundle's (VIRTUAL_MARS_ASSETS pointed at
+    the same directory), so nothing loads twice."""
+    roots = [world.repo_root() / "sim" / assets_subdir.name, assets_subdir]
+    if pack_subdir is not None and pack_subdir.resolve() not in {r.resolve() for r in roots}:
+        roots.append(pack_subdir)
+    return roots
+
+
 class VirtualMars:
     def __init__(
         self,
@@ -211,8 +222,10 @@ class VirtualMars:
         # Rooms authored as primitives (see statics.py). A world can be built
         # from these ALONE -- a benchmark map has no scanned geometry to
         # decompose -- so the missing-geometry error only fires when there is
-        # nothing of either kind.
-        self.statics = RoomRegistry.load([world.repo_root() / "sim" / "rooms", ASSETS_DIR / "rooms"])
+        # nothing of either kind. A bundle pack carries its rooms itself, so
+        # the world it builds through `--environment` is the one the benchmark
+        # builds through VIRTUAL_MARS_ASSETS.
+        self.statics = RoomRegistry.load(_roots(ASSETS_DIR / "rooms", self.environment.rooms_dir))
         if not rooms and not self.statics:
             raise RuntimeError(
                 f"no room geometry under {collision_dir} -- run decompose_rooms.py, "
@@ -228,7 +241,7 @@ class VirtualMars:
 
         # Droppable props: sidecars from the tracked source dir plus any the
         # asset bundle shipped, each parked off-map until something places it.
-        self.props = PropRegistry.load([world.repo_root() / "sim" / "props", ASSETS_DIR / "props"])
+        self.props = PropRegistry.load(_roots(ASSETS_DIR / "props", self.environment.props_dir))
         self.traffic = TrafficController(self.environment.traffic)
         xml = world.build_world_xml(
             rooms,

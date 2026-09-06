@@ -17,6 +17,8 @@ import { LoadQueue, queuedGLB } from "./loadQueue";
 import { PropLibrary, type PropInfo } from "./props";
 import { TrafficLibrary } from "./traffic";
 import type { TrafficManifest, TrafficState } from "./trafficState";
+import { RoomLibrary } from "./rooms";
+import type { RoomInfo } from "./roomManifest";
 
 /** An environment pack's browser assets as its manifest names them: paths
  * under sim/viewer/public, which the webapp serves at /models and /physics
@@ -225,6 +227,8 @@ export class SimScene {
   // Every prop in the world, built from the server's roster (props.ts).
   private props: PropLibrary;
   private traffic: TrafficLibrary;
+  // A primitive-authored world (statics.py), drawn from the roster's "rooms".
+  private rooms: RoomLibrary;
   // While true a placement drag owns the pointer and orbit stays off.
   private placementMode = false;
   private cameraMode: CameraMode = "free";
@@ -277,6 +281,7 @@ export class SimScene {
       (model) => this.warmTextures(model),
     );
     this.traffic = new TrafficLibrary(this.scene, this.hullMaterial, () => this.updateShadowVolume());
+    this.rooms = new RoomLibrary(this.scene, this.hullMaterial, () => this.updateShadowVolume());
 
     this.camera = new THREE.PerspectiveCamera(55, w / h, 0.05, 200);
     this.camera.up.set(0, 0, 1);
@@ -454,7 +459,11 @@ export class SimScene {
     this.hullsVisible = visible;
     this.props.setHullsVisible(visible);
     this.traffic.setHullsVisible(visible);
-    if (visible && !this.hullsPromise) {
+    this.rooms.setHullsVisible(visible);
+    // A primitive pack's geometry IS its collision shape (drawn by RoomLibrary
+    // above); it publishes no hull soup, and the apartment fallback below
+    // would draw the apartment's hulls inside it.
+    if (visible && !this.hullsPromise && this.environmentViewer.type !== "primitives") {
       // ~1300 OBJ fetches; takes seconds on first show. A failure resets the
       // promise so toggling again retries instead of staying dead forever.
       this.hullsPromise = this.loadCollisionHulls().catch((err) => {
@@ -526,6 +535,10 @@ export class SimScene {
     this.scene.add(group);
     this.layoutGroup = group;
 
+    // A primitive-authored pack (the benchmark worlds) ships no glb at all:
+    // its rooms arrive in the roster frame and setRoomManifest draws them.
+    if (viewer.type === "primitives") return { group, rooms: [], monolith: false, baseUrl: "" };
+
     const manifestUrl = viewer.type === "glb" || !viewer.manifest ? null : publicUrl(viewer.manifest);
     let manifest: ApartmentManifest | null = null;
     if (manifestUrl) {
@@ -567,6 +580,7 @@ export class SimScene {
   /** Dispose environment assets; retain the robot and props for the next pose. */
   unloadEnvironment(): void {
     this.traffic.unloadEnvironment();
+    this.rooms.unloadEnvironment();
     for (const group of [this.layoutGroup, this.hullsGroup]) {
       if (!group) continue;
       this.scene.remove(group);
@@ -652,7 +666,12 @@ export class SimScene {
     if (bounds.isEmpty()) return;
     this.layoutBounds = bounds;
     if (this.spawned) return;
+    this.frameBounds(bounds);
+  }
 
+  /** Orbit-camera overview of an extent: the pre-pose framing for a layout
+   * (frameLayout) or for a primitive pack's rooms (setRoomManifest). */
+  private frameBounds(bounds: THREE.Box3): void {
     const center = layoutFocus(bounds);
     const size = bounds.getSize(new THREE.Vector3());
     // Pull back far enough that the widest horizontal extent fits the vertical
@@ -1084,6 +1103,20 @@ export class SimScene {
     this.traffic.setManifest(manifest);
   }
 
+  /** Adopt the world server's room roster (statics.py sidecars): the
+   * primitive-authored geometry of a world that ships no mesh. Sent in the
+   * roster frame like the props; empty for a mesh world like the apartment. */
+  setRoomManifest(rooms: RoomInfo[]): void {
+    this.rooms.setManifest(rooms);
+    const bounds = this.rooms.bounds;
+    if (!bounds) return;
+    // These rooms ARE the layout: "top" frames on them for the rest of the
+    // session and, before the first pose, the orbit camera gets the same
+    // overview the apartment's placeholder boxes give.
+    this.layoutBounds = bounds;
+    if (!this.spawned) this.frameBounds(bounds);
+  }
+
   /** Mirror authoritative signal aspects and car poses from MuJoCo. */
   setTrafficState(state: TrafficState | null): void {
     this.traffic.setState(state);
@@ -1270,6 +1303,7 @@ export class SimScene {
   dispose(): void {
     this.props.clearPlacementPreview();
     this.traffic.unloadEnvironment();
+    this.rooms.unloadEnvironment();
     this.placeholderMat?.dispose();
     this.cameraEnv?.dispose(); // a PMREM render target, not a loaded image
     this.controls.dispose();

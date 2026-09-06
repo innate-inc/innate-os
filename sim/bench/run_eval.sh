@@ -100,7 +100,11 @@ for BUNDLE in $BUNDLES; do
   timeout 300 bash "$REPO/sim/bench/innate_up.sh" down >/dev/null 2>&1
   sleep 2
   export VIRTUAL_MARS_ASSETS="$ASSETS"
-  timeout 900 bash "$REPO/sim/bench/innate_up.sh" up --offline 2>&1 | grep -cE '✓' \
+  # The bundle IS the world here (its rooms ride in through VIRTUAL_MARS_ASSETS),
+  # so the launcher must load the default pack and nothing else: a
+  # `[simulation] environment = "counter"` left in sim/config.toml for the
+  # web app would otherwise put a second authored room into every bench map.
+  timeout 900 bash "$REPO/sim/bench/innate_up.sh" up --offline --environment apartment 2>&1 | grep -cE '✓' \
     | xargs echo "    checks passed:" | tee -a "$LOG"
   OS_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E '^innate-dev' | head -1)
   if [ -z "$OS_CONTAINER" ]; then

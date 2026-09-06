@@ -10,8 +10,13 @@
 #   "Editing anything the image is built from renames it. Push the branch so CI
 #    publishes it, or set INNATE_SIM_ASSETS_IMAGE to one that exists."
 #
-# These are the tags in the local store. The assets and viewer content is
-# unchanged by the benchmark work; only the hash of the surrounding tree moved.
+# These are the tags in the local store. The assets content is unchanged by
+# the benchmark work; only the hash of the surrounding tree moved. The viewer
+# bundle is deliberately NOT pinned: sim/viewer now draws primitive-authored
+# rooms from the roster frame (src/rooms.ts), so a published bundle from
+# before that change would show every benchmark world as an empty box. The
+# launcher builds the bundle from this tree on its own when no published one
+# describes it.
 set -uo pipefail
 # Resolve the repo from this script, not $HOME: run_eval.sh calls this
 # one, so a hardcoded home path here made the whole live path
@@ -34,6 +39,5 @@ pin_if_present() {
 
 pin_if_present INNATE_OS_IMAGE "innate-os-sim-clean-innate:inputs-3acfd3403d107c7672ea0cefd1539c6f4eaa8714f484f0743a4b6138a040ebc3"
 pin_if_present INNATE_SIM_ASSETS_IMAGE "ghcr.io/innate-inc/innate-os-sim-assets:inputs-2dcc207e745947d540d9866e1028f41f6ccc6065c154c7298ce4ec468ad86f5b"
-pin_if_present INNATE_SIM_VIEWER_BUNDLE_IMAGE "ghcr.io/innate-inc/innate-os-sim-viewer:inputs-553758957ded0d4525107c394e69e8a70aeaf3c16376becd691b0a3a991301b4"
 
 exec ./innate-sim "$@"

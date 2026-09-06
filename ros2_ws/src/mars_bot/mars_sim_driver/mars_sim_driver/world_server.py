@@ -114,7 +114,7 @@ class WorldServer:
         self.state_cond = threading.Condition()
         # Challenge judge: evaluated on each published state, driven by
         # observer commands, fed skill events by SkillEventBridge (main()).
-        self.challenges = ChallengeEngine(sim, self.lock)
+        self.challenges = ChallengeEngine(sim, self.lock, packs=self.environments)
         self._challenge_error_at = 0.0  # last throttled challenge-failure log
 
     # --- physics (side thread; MuJoCo stepping is pure CPU) ---
