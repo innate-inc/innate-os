@@ -299,3 +299,11 @@ wrist output contains only box and roll, using the accepted head material.
 The executor already owns rigid floor closing and soft unpressing, so the
 redundant model closing-style choice is removed. The model, reasoning effort,
 reference images, force/motion limits, fresh-frame checks and scorer stay fixed.
+
+The smaller per-view request reduced token usage but did not remove the long
+wrist inference in its LEGO pilot. The next pilot requests an image-space long
+axis as two normalized points instead of a numeric roll. The executor rescales
+horizontal/vertical coordinates to pixels, computes the minor-axis angle and
+clamps it to the unchanged +/-1.5rad limit. Empty axes retain the unrolled grasp
+for square/round objects. Degenerate or invalid axes are rejected. This retains
+continuous grasp angles while moving their trigonometric conversion into code.
