@@ -88,12 +88,14 @@ class RobotStateProvider:
         self._battery_sub = None
         self._amcl_pose_sub = None
         self._scan_sub = None
-        # Gate feeds with this flag, never by destroying subscriptions:
+        # Gate high-rate feeds with this flag, never by destroying subscriptions:
         # destroying one the executor already selected as "ready" crashes the
         # process (InvalidHandle -> rmw_zenoh SIGABRT), easiest to hit right
-        # after a cancel. The subs live on manipulation's private node, parked
+        # after a cancel. Those subs live on manipulation's private node, parked
         # between skills — always-alive feeds (~400 msgs/s) would otherwise
-        # cost ~half a Jetson core while idle.
+        # cost ~half a Jetson core while idle. Low-rate map, keepout and pose
+        # feeds stay on the always-spinning action-server node so changes while
+        # idle are already current when the next skill starts.
         self._active = False
         self._warned_missing = set()  # warn once per missing state, not at 50 Hz
 
@@ -156,8 +158,8 @@ class RobotStateProvider:
             depth=1,
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
         )
-        self._map_sub = feed_node.create_subscription(OccupancyGrid, "/map", self._on_map, latched_qos)
-        self._keepout_map_sub = feed_node.create_subscription(
+        self._map_sub = self._node.create_subscription(OccupancyGrid, "/map", self._on_map, latched_qos)
+        self._keepout_map_sub = self._node.create_subscription(
             OccupancyGrid, "/nav/keepout_filter_mask", self._on_keepout_map, latched_qos
         )
         self._head_position_sub = feed_node.create_subscription(
@@ -165,7 +167,7 @@ class RobotStateProvider:
         )
         self._joint_states_sub = feed_node.create_subscription(JointState, "/joint_states", self._on_joint_states, 10)
         self._battery_sub = feed_node.create_subscription(BatteryState, "/battery_state", self._on_battery, 10)
-        self._amcl_pose_sub = feed_node.create_subscription(
+        self._amcl_pose_sub = self._node.create_subscription(
             PoseWithCovarianceStamped, "/amcl_pose", self._on_amcl_pose, latched_qos
         )
         # the lidar driver publishes with sensor-data QoS (best effort); a
@@ -173,8 +175,8 @@ class RobotStateProvider:
         self._scan_sub = feed_node.create_subscription(LaserScan, "/scan", self._on_scan, qos_profile_sensor_data)
 
     def stop_subscriptions(self) -> None:
-        """Deactivate feeds — subscriptions are deliberately NOT destroyed
-        (see __init__); callbacks early-return and the private executor parks."""
+        """Park high-rate feeds without destroying subscriptions (see __init__).
+        Low-rate latched map, keepout and pose feeds continue updating while idle."""
         self._active = False
         self._manipulation.stop()
         self.last_odom = None
@@ -183,7 +185,6 @@ class RobotStateProvider:
         self.last_battery = None
         self.last_scan = None
         self._lidar_cache = None
-        self._map_cache = None
         self._main_image_cache = None
         self._wrist_image_cache = None
 

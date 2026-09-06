@@ -75,6 +75,45 @@ def absolute_to_local_nav_command(inputs: dict, robot_pose: Pose) -> dict:
     return adjusted
 
 
+def local_to_absolute_nav_command(inputs: dict, robot_pose: Pose) -> dict:
+    """Express a robot-relative goal in the absolute pose/map frame.
+
+    In mapped-navigation mode this lets the static planner own every endpoint,
+    including visually grounded and small backing-up moves.  The brain calls
+    this only after compensating for motion since image capture, so
+    ``robot_pose`` is the frame the adjusted local command is relative to.
+
+    Absolute commands are returned unchanged. The input dict is never mutated.
+    """
+    if not inputs.get("local_frame", False):
+        return inputs
+
+    robot_x, robot_y, robot_theta = robot_pose
+    local_x = inputs.get("x", 0.0)
+    local_y = inputs.get("y", 0.0)
+    use_degrees = "theta" not in inputs and "theta_degrees" in inputs
+    local_theta = math.radians(inputs["theta_degrees"]) if use_degrees else inputs.get("theta", 0.0)
+
+    cos_t = math.cos(robot_theta)
+    sin_t = math.sin(robot_theta)
+    goal_x = robot_x + local_x * cos_t - local_y * sin_t
+    goal_y = robot_y + local_x * sin_t + local_y * cos_t
+    goal_theta = math.atan2(
+        math.sin(robot_theta + local_theta),
+        math.cos(robot_theta + local_theta),
+    )
+
+    adjusted = inputs.copy()
+    adjusted["x"] = goal_x
+    adjusted["y"] = goal_y
+    if use_degrees:
+        adjusted["theta_degrees"] = math.degrees(goal_theta)
+    else:
+        adjusted["theta"] = goal_theta
+    adjusted["local_frame"] = False
+    return adjusted
+
+
 def adjust_local_nav_command(inputs: dict, delta: Delta) -> dict:
     """Re-express a local-frame navigation target after the robot has moved.
 

@@ -86,6 +86,7 @@ def build_tools(
     *,
     can_go_to_point_in_view: bool = False,
     user_spoke: bool = False,
+    can_stop_running: bool = True,
 ) -> list[dict]:
     """One function declaration per available skill, in a native tools block.
 
@@ -100,6 +101,8 @@ def build_tools(
     the reply channel, and the description steers stop away from questions.
     """
     if running_skill_name is not None:
+        if not can_stop_running and not user_spoke:
+            return [{"functionDeclarations": [_WAIT_DECLARATION]}]
         stop = {
             "name": STOP_SKILL,
             "description": f"Abort the currently running skill ({running_skill_name}). "

@@ -216,7 +216,9 @@ def test_stop_discards_late_native_tool_speech_and_usage(agent_factory, monkeypa
 def test_cadence_waits_after_completion_and_never_overlaps_requests(agent_factory, monkeypatch):
     agent, state = agent_factory()
     state.current_directive = SimpleNamespace(
-        get_prompt=lambda: "Wait quietly", get_turn_intervals=lambda: TurnIntervals(idle=0.06, supervision=0.09)
+        get_prompt=lambda: "Wait quietly",
+        get_turn_intervals=lambda: TurnIntervals(idle=0.06, supervision=0.09),
+        get_departure_guard=lambda: None,
     )
     first, third, release = threading.Event(), threading.Event(), threading.Event()
     starts, ends, pauses = [], [], []
