@@ -135,16 +135,19 @@ def default_assets_dir() -> Path:
 
 
 def default_urdf_path() -> Path:
-    """mars.urdf with its mesh STLs next to it. Prefers the installed
-    mars_sim package share (the same file the real bringup feeds
-    robot_state_publisher); falls back to the source tree for non-ROS use
-    (sandboxes, tests)."""
-    try:
-        from ament_index_python.packages import get_package_share_directory
+    """Use the checkout's robot model alongside its simulation code.
 
-        return Path(get_package_share_directory("mars_sim")) / "urdf" / "mars.urdf"
-    except Exception:
-        return repo_root() / "ros2_ws" / "src" / "mars_bot" / "mars_sim" / "urdf" / "mars.urdf"
+    A sourced ROS overlay can point at an older installed URDF whose collision
+    shapes no longer match tune_contacts. Installed-only deployments still
+    resolve the model through the ROS package share.
+    """
+    source = repo_root() / "ros2_ws" / "src" / "mars_bot" / "mars_sim" / "urdf" / "mars.urdf"
+    if source.is_file():
+        return source
+
+    from ament_index_python.packages import get_package_share_directory
+
+    return Path(get_package_share_directory("mars_sim")) / "urdf" / "mars.urdf"
 
 
 def find_decomposed_rooms(split_dir: Path) -> dict[str, list[Path]]:
