@@ -1,0 +1,384 @@
+{
+  "image_sha256": "7ece810ab9954c7751d6cf20156b337412088a12bba4287fdfbe118ce9fec411",
+  "rows": [
+    {
+      "repeat": 0,
+      "case": "idle",
+      "provider": "gemini",
+      "model": "gemini-3.6-flash",
+      "effort": "minimal",
+      "status": "ok",
+      "pass_probe": true,
+      "speech": null,
+      "calls": [
+        "wait"
+      ],
+      "ttft": null,
+      "usage": {
+        "promptTokenCount": 3126,
+        "candidatesTokenCount": 8,
+        "totalTokenCount": 3134,
+        "promptTokensDetails": [
+          {
+            "modality": "IMAGE",
+            "tokenCount": 2128
+          },
+          {
+            "modality": "TEXT",
+            "tokenCount": 998
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "returned_model": "gemini-3.6-flash",
+      "seconds": 4.9213,
+      "estimated_usd": 0.0023745
+    },
+    {
+      "repeat": 0,
+      "case": "idle",
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "status": "ok",
+      "pass_probe": true,
+      "speech": null,
+      "calls": [
+        "wait"
+      ],
+      "ttft": null,
+      "usage": {
+        "input_tokens": 1546,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 1543
+        },
+        "output_tokens": 13,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 1559
+      },
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "seconds": 1.9716,
+      "estimated_usd": 0.002223
+    },
+    {
+      "repeat": 0,
+      "case": "describe",
+      "provider": "gemini",
+      "model": "gemini-3.6-flash",
+      "effort": "minimal",
+      "status": "ok",
+      "pass_probe": true,
+      "speech": "I'm in the living room.",
+      "calls": [
+        "wait"
+      ],
+      "ttft": 0.9994383329994889,
+      "usage": {
+        "promptTokenCount": 3139,
+        "candidatesTokenCount": 16,
+        "totalTokenCount": 3155,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1011
+          },
+          {
+            "modality": "IMAGE",
+            "tokenCount": 2128
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "returned_model": "gemini-3.6-flash",
+      "seconds": 1.04,
+      "estimated_usd": 0.00241425,
+      "strict_speech_only": false
+    },
+    {
+      "repeat": 0,
+      "case": "describe",
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "status": "ok",
+      "pass_probe": true,
+      "speech": "It looks like I\u2019m in the living room.",
+      "calls": [],
+      "ttft": 1.9240621250010008,
+      "usage": {
+        "input_tokens": 1558,
+        "input_tokens_details": {
+          "cache_write_tokens": 1555,
+          "cached_tokens": 0
+        },
+        "output_tokens": 14,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 1572
+      },
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "seconds": 1.9334,
+      "estimated_usd": 0.0201675,
+      "strict_speech_only": true
+    },
+    {
+      "repeat": 0,
+      "case": "stop",
+      "provider": "gemini",
+      "model": "gemini-3.6-flash",
+      "effort": "minimal",
+      "status": "ok",
+      "pass_probe": true,
+      "speech": "Stopping now.",
+      "calls": [
+        "stop_current_skill"
+      ],
+      "ttft": 0.9412814170009369,
+      "usage": {
+        "promptTokenCount": 3182,
+        "candidatesTokenCount": 15,
+        "totalTokenCount": 3197,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1054
+          },
+          {
+            "modality": "IMAGE",
+            "tokenCount": 2128
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "returned_model": "gemini-3.6-flash",
+      "seconds": 1.1049,
+      "estimated_usd": 0.00244275
+    },
+    {
+      "repeat": 0,
+      "case": "stop",
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "status": "ok",
+      "pass_probe": true,
+      "speech": "Stopping now.",
+      "calls": [
+        "stop_current_skill"
+      ],
+      "ttft": 1.6035042500006966,
+      "usage": {
+        "input_tokens": 1596,
+        "input_tokens_details": {
+          "cache_write_tokens": 1593,
+          "cached_tokens": 0
+        },
+        "output_tokens": 25,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 1621
+      },
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "seconds": 1.6173,
+      "estimated_usd": 0.0211925
+    },
+    {
+      "repeat": 1,
+      "case": "idle",
+      "provider": "gemini",
+      "model": "gemini-3.6-flash",
+      "effort": "minimal",
+      "status": "ok",
+      "pass_probe": true,
+      "speech": null,
+      "calls": [
+        "wait"
+      ],
+      "ttft": null,
+      "usage": {
+        "promptTokenCount": 3126,
+        "candidatesTokenCount": 8,
+        "totalTokenCount": 3134,
+        "promptTokensDetails": [
+          {
+            "modality": "IMAGE",
+            "tokenCount": 2128
+          },
+          {
+            "modality": "TEXT",
+            "tokenCount": 998
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "returned_model": "gemini-3.6-flash",
+      "seconds": 0.9353,
+      "estimated_usd": 0.0023745
+    },
+    {
+      "repeat": 1,
+      "case": "idle",
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "status": "ok",
+      "pass_probe": true,
+      "speech": null,
+      "calls": [
+        "wait"
+      ],
+      "ttft": null,
+      "usage": {
+        "input_tokens": 1546,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 1543
+        },
+        "output_tokens": 13,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 1559
+      },
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "seconds": 1.3292,
+      "estimated_usd": 0.002223
+    },
+    {
+      "repeat": 1,
+      "case": "describe",
+      "provider": "gemini",
+      "model": "gemini-3.6-flash",
+      "effort": "minimal",
+      "status": "ok",
+      "pass_probe": true,
+      "speech": "I'm in the living room.",
+      "calls": [
+        "wait"
+      ],
+      "ttft": 1.0014086250012042,
+      "usage": {
+        "promptTokenCount": 3139,
+        "candidatesTokenCount": 16,
+        "totalTokenCount": 3155,
+        "promptTokensDetails": [
+          {
+            "modality": "IMAGE",
+            "tokenCount": 2128
+          },
+          {
+            "modality": "TEXT",
+            "tokenCount": 1011
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "returned_model": "gemini-3.6-flash",
+      "seconds": 1.118,
+      "estimated_usd": 0.00241425,
+      "strict_speech_only": false
+    },
+    {
+      "repeat": 1,
+      "case": "describe",
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "status": "ok",
+      "pass_probe": true,
+      "speech": "It looks like I\u2019m in the living room.",
+      "calls": [],
+      "ttft": 1.8493294999989303,
+      "usage": {
+        "input_tokens": 1558,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 1555
+        },
+        "output_tokens": 14,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 1572
+      },
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "seconds": 1.8634,
+      "estimated_usd": 0.002285,
+      "strict_speech_only": true
+    },
+    {
+      "repeat": 1,
+      "case": "stop",
+      "provider": "gemini",
+      "model": "gemini-3.6-flash",
+      "effort": "minimal",
+      "status": "ok",
+      "pass_probe": true,
+      "speech": "Stopping now.",
+      "calls": [
+        "stop_current_skill"
+      ],
+      "ttft": 0.8017250840002816,
+      "usage": {
+        "promptTokenCount": 3182,
+        "candidatesTokenCount": 15,
+        "totalTokenCount": 3197,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1054
+          },
+          {
+            "modality": "IMAGE",
+            "tokenCount": 2128
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "returned_model": "gemini-3.6-flash",
+      "seconds": 1.0005,
+      "estimated_usd": 0.00244275
+    },
+    {
+      "repeat": 1,
+      "case": "stop",
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "status": "ok",
+      "pass_probe": true,
+      "speech": "Stopping now.",
+      "calls": [
+        "stop_current_skill"
+      ],
+      "ttft": 1.944377166999402,
+      "usage": {
+        "input_tokens": 1596,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 1593
+        },
+        "output_tokens": 25,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 1621
+      },
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "seconds": 1.9597,
+      "estimated_usd": 0.002873
+    }
+  ],
+  "assessment_note": "Description permits a harmless wait tool alongside the correct spoken answer. Original strict_speech_only retained for transparency."
+}
