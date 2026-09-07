@@ -14,11 +14,15 @@ import queue
 import threading
 import urllib.error
 import urllib.request
+import uuid
+from collections import deque
 
 MODEL = "gpt-6-astra"
 SYSTEM = """Open the lower kitchen cabinet using the robot's arm and gripper.
 Use both labeled camera views AND measured telemetry. Work incrementally:
 approach, align, grasp, pull along the hinge arc, release, then visually verify.
+Camera pairs follow the telemetry/action history and are labeled by observation
+step. Use the newest step as current, and the preceding pair for comparison.
 The cabinet has a vertical dark metal handle: 0.12 m long, center 0.30 m above
 floor. These are size priors, NOT a localization or proof of contact.
 Coordinates are base_link metres: +x forward, +y robot left, +z up. Wrist
@@ -98,6 +102,17 @@ def validate_action(arguments):
     return action, tuple(values), note.strip()
 
 
+def _model_telemetry(value):
+    """Reduce numeric noise only in the prompt; never mutate measured state."""
+    if isinstance(value, float):
+        return round(value, 4)
+    if isinstance(value, dict):
+        return {key: _model_telemetry(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_model_telemetry(item) for item in value]
+    return value
+
+
 class CabinetPolicy:
     def __init__(self, *, model=None, transport=None):
         self.model = model or os.environ.get("INNATE_CABINET_MODEL", MODEL)
@@ -114,6 +129,9 @@ class CabinetPolicy:
         self.backend = "innate-proxy" if self.proxy is not None else "direct"
         self.transport = transport or self._post
         self.history = []
+        self.camera_history = deque(maxlen=2)
+        self.cache_key = f"cabinet-{uuid.uuid4().hex}"
+        self.last_usage = None
         self.calls = 0
 
     def _post(self, payload):
@@ -142,27 +160,37 @@ class CabinetPolicy:
             raise RuntimeError(f"OpenAI HTTP {error.code}; check model access, key and quota") from None
 
     def decide(self, observation, images, sleep):
-        content = [{"type": "input_text", "text": json.dumps(observation, allow_nan=False)}]
+        self.last_usage = None
+        telemetry = json.dumps(_model_telemetry(observation), allow_nan=False, separators=(",", ":"))
+        self.history.append({"role": "user", "content": [{"type": "input_text", "text": telemetry}]})
+        content = []
         for name, image in images.items():
             content.extend(
                 [
-                    {"type": "input_text", "text": f"Current {name} camera"},
+                    {
+                        "type": "input_text",
+                        "text": f"Observation step {observation.get('step', self.calls)}: {name} camera",
+                    },
                     {"type": "input_image", "image_url": f"data:image/jpeg;base64,{image}"},
                 ]
             )
-        self.history.append({"role": "user", "content": content})
-        # Retain the newest two pairs of camera frames; keep motion/result history.
-        image_messages = [m for m in self.history if m.get("role") == "user"]
-        for message in image_messages[:-2]:
-            message["content"] = [
-                p if p["type"] != "input_image" else {"type": "input_text", "text": "[older image omitted]"}
-                for p in message["content"]
-            ]
+        self.camera_history.append(content)
+        history = copy.deepcopy(self.history)
+        # Text/actions/reasoning form an append-only prefix. Keep the previous
+        # checkpoint eligible for lookup while writing the new one. Images stay
+        # after both checkpoints: rolling them out cannot invalidate this prefix
+        # or incur cache-write charges for frames we will soon discard.
+        observations = [message for message in history if message.get("role") == "user"]
+        for message in observations[-2:]:
+            message["content"][-1]["prompt_cache_breakpoint"] = {"mode": "explicit"}
+        history.extend({"role": "user", "content": copy.deepcopy(pair)} for pair in self.camera_history if pair)
         payload = {
             "model": self.model,
             "service_tier": "priority",
             "instructions": SYSTEM,
-            "input": copy.deepcopy(self.history),
+            "input": history,
+            "prompt_cache_key": self.cache_key,
+            "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
             "tools": [TOOL],
             "tool_choice": {"type": "function", "name": "cabinet_action"},
             "parallel_tool_calls": False,
@@ -192,6 +220,12 @@ class CabinetPolicy:
         self.calls += 1
         if not ok:
             raise response
+        if response.get("usage") is not None:
+            self.last_usage = {
+                "model": response.get("model", self.model),
+                "service_tier": response.get("service_tier"),
+                "usage": copy.deepcopy(response["usage"]),
+            }
         if response.get("status") != "completed":
             raise RuntimeError("OpenAI response incomplete; no action executed")
         output = response.get("output", [])

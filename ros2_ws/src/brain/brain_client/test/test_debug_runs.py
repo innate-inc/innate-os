@@ -39,6 +39,8 @@ def test_cli_exports_skill_trace_and_camera_frames(tmp_path, monkeypatch):
         run_id="run-export", skill_id="innate-os/open_cabinet_with_gpt", skill_name="open_cabinet_with_gpt", inputs={}
     )
     (run.directory / "00_head_gpt_0.jpg").write_bytes(b"jpeg-data")
+    usage = {"input_tokens": 1500, "input_tokens_details": {"cached_tokens": 1100, "cache_write_tokens": 200}}
+    run.event("gpt_usage", step=0, model="gpt-6-astra", service_tier="fast", usage=usage)
     run.event("gpt_action", action="observe")
     run.finish(status="success", message="done")
 
@@ -50,6 +52,8 @@ def test_cli_exports_skill_trace_and_camera_frames(tmp_path, monkeypatch):
 
     with zipfile.ZipFile(destination) as archive:
         assert "skill/events.jsonl" in archive.namelist()
+        events = [json.loads(line) for line in archive.read("skill/events.jsonl").splitlines()]
+        assert next(event for event in events if event["event"] == "gpt_usage")["usage"] == usage
         assert archive.read("skill/00_head_gpt_0.jpg") == b"jpeg-data"
         assert json.loads(archive.read("skill/summary.json"))["status"] == "success"
         assert json.loads(archive.read("export_manifest.json"))["run_id"] == "run-export"

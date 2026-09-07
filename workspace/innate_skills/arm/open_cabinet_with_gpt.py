@@ -154,7 +154,11 @@ class OpenCabinetWithGpt(Skill):
             self._move_wrist((0.30, 0.0, 0.30), 3.0)
             for step in range(max_steps):
                 observation, frames = self._observe(step)
-                call_id, (action, values, note) = policy.decide(observation, frames, self.sleep)
+                try:
+                    call_id, (action, values, note) = policy.decide(observation, frames, self.sleep)
+                finally:
+                    if getattr(policy, "last_usage", None) is not None:
+                        self.debug_event("gpt_usage", step=step, **policy.last_usage)
                 self.check_cancelled()
                 self.feedback(f"{policy.model} cabinet {step + 1}: {action} — {note}")
                 self.debug_event("gpt_action", model=policy.model, action=action, values=list(values), note=note)

@@ -1,5 +1,6 @@
 """Responses contract and native Skill integration without API or robot motion."""
 
+import copy
 import io
 import json
 import logging
@@ -34,17 +35,79 @@ def reply(action="observe", values=None):
 
 def test_responses_history():
     sent = []
+    snapshots = []
     policy = CabinetPolicy(transport=lambda p: sent.append(p) or reply())
-    for step in range(3):
-        call, action = policy.decide({"step": step}, {"head": "aGVhZA==", "wrist": "d3Jpc3Q="}, time.sleep)
+    for step in range(6):
+        call, action = policy.decide({"step": step}, {"head": f"head{step}", "wrist": f"wrist{step}"}, time.sleep)
+        snapshots.append(copy.deepcopy(sent[-1]))
         assert action[0] == "observe"
         policy.result(call, "observed")
+    assert sent == snapshots  # Later evictions/checkpoints must not rewrite old requests.
     assert sent[0]["model"] == "gpt-6-astra"
     assert sent[0]["service_tier"] == "priority"
+    assert sent[0]["reasoning"] == {"effort": "low"}
+    assert sent[0]["store"] is False
     assert not sent[0]["parallel_tool_calls"]
-    assert sum(p["type"] == "input_image" for m in sent[2]["input"] for p in m.get("content", [])) == 4
-    assert any(m.get("encrypted_content") == "opaque" for m in sent[2]["input"])
-    assert any(m.get("type") == "function_call_output" for m in sent[2]["input"])
+    assert len({request["prompt_cache_key"] for request in sent}) == 1
+    assert CabinetPolicy(transport=reply).cache_key != policy.cache_key
+    previous_prefix = []
+    for step, request in enumerate(sent):
+        assert request["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
+        pairs = min(step + 1, 2)
+        prefix, cameras = copy.deepcopy(request["input"][:-pairs]), request["input"][-pairs:]
+        marked = []
+        for message in prefix:
+            for part in message.get("content", []):
+                assert part["type"] != "input_image"
+                if part.pop("prompt_cache_breakpoint", None):
+                    marked.append(json.loads(part["text"])["step"])
+        assert marked == list(range(step + 1))[-2:]
+        assert prefix[: len(previous_prefix)] == previous_prefix
+        previous_prefix = prefix
+        assert sum(m.get("type") == "reasoning" for m in prefix) == step
+        assert sum(m.get("type") == "function_call_output" for m in prefix) == step
+        for image_step, message in zip(range(step + 1 - pairs, step + 1), cameras, strict=True):
+            for index, camera in enumerate(("head", "wrist")):
+                assert message["content"][2 * index] == {
+                    "type": "input_text",
+                    "text": f"Observation step {image_step}: {camera} camera",
+                }
+                assert message["content"][2 * index + 1] == {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{camera}{image_step}",
+                }
+    assert all("prompt_cache_breakpoint" not in p for m in policy.history for p in m.get("content", []))
+    assert len(policy.camera_history) == 2
+
+
+def test_rounds_prompt_telemetry_without_changing_measurements():
+    sent = []
+    measured = {
+        "step": 4,
+        "wrist_xyz_m": [0.123456789, -0.987654321, 0.3],
+        "grip_commanded": True,
+        "joint_names": ["joint1"],
+        "nested": {"tuple": (1.23456789, 2)},
+    }
+    original = copy.deepcopy(measured)
+    CabinetPolicy(transport=lambda p: sent.append(p) or reply()).decide(measured, {}, time.sleep)
+    assert measured == original
+    assert json.loads(sent[0]["input"][0]["content"][0]["text"]) == {
+        "step": 4,
+        "wrist_xyz_m": [0.1235, -0.9877, 0.3],
+        "grip_commanded": True,
+        "joint_names": ["joint1"],
+        "nested": {"tuple": [1.2346, 2]},
+    }
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_nonfinite_observation_never_reaches_api(value):
+    sent = []
+    policy = CabinetPolicy(transport=lambda p: sent.append(p) or reply())
+    with pytest.raises(ValueError):
+        policy.decide({"wrist_xyz_m": [value, 0, 0]}, {}, time.sleep)
+    assert sent == policy.history == []
 
 
 @pytest.mark.parametrize(
@@ -97,8 +160,37 @@ def test_stop_in_flight():
     ],
 )
 def test_incomplete_or_parallel_output(response):
+    response["usage"] = {"input_tokens": 1200, "input_tokens_details": {"cached_tokens": 1000}}
+    policy = CabinetPolicy(transport=lambda _: response)
     with pytest.raises((RuntimeError, ValueError)):
-        CabinetPolicy(transport=lambda _: response).decide({}, {}, time.sleep)
+        policy.decide({}, {}, time.sleep)
+    assert policy.last_usage["usage"] == response["usage"]  # Even a rejected response incurred usage.
+
+
+def test_usage_resets_after_failed_request():
+    response = {
+        **reply(),
+        "model": "gpt-6-astra",
+        "service_tier": "fast",
+        "usage": {
+            "input_tokens": 1500,
+            "input_tokens_details": {"cached_tokens": 1100, "cache_write_tokens": 200},
+            "output_tokens": 80,
+            "output_tokens_details": {"reasoning_tokens": 10},
+        },
+    }
+    policy = CabinetPolicy(transport=lambda _: response)
+    call, _ = policy.decide({}, {}, time.sleep)
+    assert policy.last_usage == {key: response[key] for key in ("model", "service_tier", "usage")}
+    policy.result(call, "Observed")
+
+    def fail(_):
+        raise RuntimeError("request failed")
+
+    policy.transport = fail
+    with pytest.raises(RuntimeError, match="request failed"):
+        policy.decide({}, {}, time.sleep)
+    assert policy.last_usage is None
 
 
 @pytest.fixture
@@ -141,12 +233,22 @@ def test_native_registration_and_loop(native, monkeypatch):
     assert skill.name == "open_cabinet_with_gpt"
     assert type(skill) in Skill._registry.values()
     sequence = iter([reply("close_gripper"), reply("base_turn", [0.1, 0, 0]), reply("open_gripper"), reply("done")])
-    policy = CabinetPolicy(transport=lambda _: next(sequence))
+    usage = {"input_tokens": 1500, "input_tokens_details": {"cached_tokens": 1100, "cache_write_tokens": 200}}
+    policy = CabinetPolicy(transport=lambda _: {**next(sequence), "usage": usage, "service_tier": "fast"})
+    events = []
+    monkeypatch.setattr(skill, "debug_event", lambda name, **data: events.append((name, data)))
+    skill.manipulation.pose.position = (0.24123456789, 0, 0.25)
     monkeypatch.setattr(skill, "_make_policy", lambda: policy)
     assert "visually reports" in skill.execute(max_steps=4)
     assert calls.count("level") == 4
     assert calls[-2:] == ["base_stop", "arm_stop"]
     assert any("Release gripper" in m.get("output", "") for m in policy.history)
+    assert [data["step"] for name, data in events if name == "gpt_usage"] == [0, 1, 2, 3]
+    assert all(
+        data["usage"] == usage and data["service_tier"] == "fast" for name, data in events if name == "gpt_usage"
+    )
+    assert all(data["wrist_xyz_m"][0] == 0.24123456789 for name, data in events if name == "gpt_observation")
+    assert json.loads(policy.history[0]["content"][0]["text"])["wrist_xyz_m"][0] == 0.2412
 
 
 def test_missing_key_no_motion(native, monkeypatch, proxy_requests):
