@@ -41,10 +41,8 @@ const config = await getConfig();
 // WebRTC for real robots, the Three.js SimSession in simulation (see
 // robotSession.js).
 const { createSession, releaseSession, createStage } = await robotSessionFactory();
-// Two thresholds, both mirrored in app.css: the dock floats over the feed
-// rather than taking a column, so it survives far below what the monitor needs.
+// Mirrored in app.css: the dock becomes a bottom sheet at compact widths.
 const COMPACT_LAYOUT_QUERY = "(max-width: 820px)";
-const BRAIN_MONITOR_QUERY = "(max-width: 1280px)";
 
 /** @param {HTMLElement} stage */
 export function mount(stage) {
@@ -188,7 +186,6 @@ function buildAgentView(root) {
   }
 
   const compactLayout = window.matchMedia(COMPACT_LAYOUT_QUERY);
-  const monitorTooNarrow = window.matchMedia(BRAIN_MONITOR_QUERY);
 
   // The dock floats over the feed, so the canvas's centre is behind it. Video
   // stages ignore this: a real camera's framing is the robot's to decide.
@@ -209,14 +206,10 @@ function buildAgentView(root) {
 
   const applyLayout = () => {
     root.classList.toggle("agent-compact", compactLayout.matches);
-    // Its toggle is hidden at this width, so an open monitor would strand the
-    // page on a stage it cannot leave.
-    if (monitorTooNarrow.matches) setView("live");
     panel.setCompact(compactLayout.matches);
     reportSafeArea();
   };
   compactLayout.addEventListener("change", applyLayout);
-  monitorTooNarrow.addEventListener("change", applyLayout);
   const safeAreaObserver = new ResizeObserver(reportSafeArea);
   safeAreaObserver.observe(root);
   safeAreaObserver.observe(feedFrame);
@@ -227,7 +220,6 @@ function buildAgentView(root) {
     {
       destroy: () => {
         compactLayout.removeEventListener("change", applyLayout);
-        monitorTooNarrow.removeEventListener("change", applyLayout);
         safeAreaObserver.disconnect();
       },
     },
@@ -261,7 +253,7 @@ function buildAgentView(root) {
   session.start();
 
   const entryPath = location.pathname.replace(/\/+$/, "");
-  if (entryPath === "/brain" && !monitorTooNarrow.matches) setView("brain");
+  if (entryPath === "/brain") setView("brain");
   if (entryPath === "/brain" || entryPath === "/agent") {
     history.replaceState({}, "", "/" + location.search + location.hash);
   }

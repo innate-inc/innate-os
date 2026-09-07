@@ -29,16 +29,17 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 14px 402px 16px 18px; /* right clears the docked 360px agent panel + insets */
+  padding: 14px calc(var(--agent-dock-width, 360px) + 2 * var(--agent-dock-gutter, 18px)) 80px 18px;
   gap: 12px;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 /* ---------- head ---------- */
 .br-head {
   display: flex;
   align-items: center;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 10px 14px;
   flex: none;
 }
 .br-esc-hint {
@@ -64,7 +65,8 @@
 
 .br-chips {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
   margin-left: auto;
   flex-wrap: wrap;
 }
@@ -78,7 +80,9 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  white-space: nowrap;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .br-chip b {
   color: var(--text);
@@ -110,42 +114,27 @@
 }
 
 /* ---------- grid ---------- */
-/* Five panels: the mind stream is deliberately absent — the agent panel docked
-   beside the monitor is the canonical thoughts/chat stream, so showing it here
-   too would be the same words twice. Vitals ride as a bottom status strip. */
+/* Vision owns the first fold. Diagnostics keep their natural height below it,
+   so short windows scroll instead of shrinking the camera to a narrow strip. */
 .br-grid {
-  flex: 1;
-  min-height: 0;
+  flex: none;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(320px, 380px) 1fr;
-  grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr) auto auto;
-  grid-template-areas: "loop vision" "actions queue" "voice voice" "vitals vitals";
+  grid-template-columns: minmax(0, 1fr) 250px;
+  grid-template-rows: 220px 240px auto auto auto;
+  grid-template-areas: "vision loop" "vision actions" "queue queue" "voice voice" "vitals vitals";
 }
-/* Breakpoints are viewport-keyed but the monitor only gets the viewport minus
-   the 64px rail and its own 420px of padding (the docked panel) — so the
-   single-column flip lands ~484px above where the grid actually runs out. */
 @media (max-width: 1280px) {
-  .brain-page {
-    overflow-y: auto;
-  }
   .br-grid {
-    grid-template-columns: 1fr;
-    grid-template-rows: none;
-    grid-template-areas: "loop" "vision" "actions" "queue" "voice" "vitals";
-  }
-  .br-panel {
-    height: 420px;
-  }
-  .br-panel-voice {
-    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 220px 260px auto auto auto;
+    grid-template-areas: "vision" "loop" "actions" "queue" "voice" "vitals";
   }
 }
-@media (max-width: 640px) {
-  /* The agent panel docks as a bottom sheet here — full width, scroll above
-     it; no hardware Esc to hint at. */
+@media (max-width: 820px) {
+  /* The agent panel docks as a bottom sheet here. Leave scroll clearance. */
   .brain-page {
-    padding: 14px 18px 48vh;
+    padding: 14px 12px 48vh;
   }
   .br-esc-hint {
     display: none;
@@ -157,13 +146,14 @@
   border-radius: 14px;
   padding: 13px 15px;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 .br-panel h2 {
   font-size: 11px;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.14em;
   color: var(--muted);
   font-weight: 600;
   text-transform: uppercase;
@@ -171,6 +161,7 @@
   display: flex;
   gap: 8px;
   align-items: baseline;
+  flex-wrap: wrap;
 }
 .br-panel h2 .sub {
   letter-spacing: 0;
@@ -181,7 +172,7 @@
 .br-panel-loop { grid-area: loop; align-items: center; }
 .br-panel-vision { grid-area: vision; }
 .br-panel-actions { grid-area: actions; }
-.br-panel-queue { grid-area: queue; }
+.br-panel-queue { grid-area: queue; max-height: 240px; min-height: 110px; }
 
 /* Voice input as a status strip above vitals: engine label, live level meter
    with the VAD threshold as a tick, state chips, counters, last transcript. */
@@ -194,7 +185,7 @@
 }
 .br-panel-voice h2 {
   margin: 0;
-  white-space: nowrap;
+  flex-wrap: wrap;
 }
 .br-panel-voice.stale > :not(h2) {
   opacity: 0.35;
@@ -225,6 +216,7 @@
 }
 .br-vad-chips {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .br-vad-tiles {
@@ -263,6 +255,8 @@
   .br-vad-tiles {
     grid-template-columns: repeat(2, 1fr);
   }
+  .br-panel-voice .br-vad-meter { flex: none; }
+  .br-panel-voice .br-vad-last { flex: none; }
 }
 
 /* Vitals as a bottom status strip: label, tiles, sparkline, history gauge in
@@ -310,8 +304,9 @@
     grid-template-columns: repeat(4, 1fr);
   }
   .br-panel-vitals .br-spark {
-    height: 88px;
+    height: 52px;
   }
+  .br-panel-vitals .br-spark-wrap { flex: none; }
   .br-panel-vitals .br-gauge {
     width: auto;
     margin-top: 12px;
@@ -1063,4 +1058,24 @@
   text-transform: uppercase;
   color: var(--muted);
   margin-bottom: 6px;
+}
+
+/* Keep labels and status readable without forcing the monitor wider than its
+   available space beside the docked chat. */
+.br-panel-loop h2 .sub,
+.br-panel-actions h2 .sub { margin-left: 0; }
+.br-frame-cap { overflow-wrap: anywhere; }
+
+@media (max-width: 1280px) {
+  .br-panel-vision .br-stage {
+    flex: none;
+    height: clamp(260px, 45vh, 480px);
+  }
+  .br-chips { margin-left: 0; }
+}
+@media (max-width: 640px) {
+  .brain-page { padding-top: 64px; } /* clear the floating rail logo */
+  .br-head .br-chips { width: 100%; }
+  .br-panel { padding: 12px; }
+  .br-panel-vitals .br-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

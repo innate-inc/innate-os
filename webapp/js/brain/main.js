@@ -860,6 +860,26 @@ function template() {
     </div>
   </div>
   <div class="br-grid">
+    <section class="br-panel br-panel-vision">
+      <h2>Robot vision <span class="sub br-vision-src">waiting for frames</span></h2>
+      <div class="br-stage">
+        <img class="br-frame" alt="">
+        <div class="br-stage-idle">NO SIGNAL</div>
+        <div class="br-scan"></div>
+        <div class="br-motion-tag" title="Motion woke the brain early — see the event queue">◉ motion</div>
+        <div class="br-ping" title="Where the model asked the robot to drive (go_to_point)"><span class="ringA"></span><span class="ringB"></span><span class="cross"></span></div>
+      </div>
+      <div class="br-film"></div>
+      <div class="br-vision-cap">
+        <span class="br-frame-cap"></span>
+        <button class="br-inspect-btn" hidden title="Everything the model received and returned this turn">inspect turn</button>
+        <span class="br-pose-strip" title="robot pose — /odom">
+          <svg class="br-heading" viewBox="0 0 16 16"><polygon class="br-needle" points="8,1.5 11,12 8,9.5 5,12"/></svg>
+          <span class="br-pose-txt">pose —</span>
+        </span>
+      </div>
+    </section>
+
     <section class="br-panel br-panel-loop">
       <h2>The agent loop <span class="sub br-tools" title="Tools the model may call this turn"></span></h2>
       <svg class="br-loop-svg" viewBox="0 0 300 300">
@@ -879,26 +899,6 @@ function template() {
       </svg>
       <div class="br-loop-sub"></div>
       <div class="br-streak" title="Consecutive inference failures"></div>
-    </section>
-
-    <section class="br-panel br-panel-vision">
-      <h2>Robot vision <span class="sub br-vision-src">waiting for frames</span></h2>
-      <div class="br-stage">
-        <img class="br-frame" alt="">
-        <div class="br-stage-idle">NO SIGNAL</div>
-        <div class="br-scan"></div>
-        <div class="br-motion-tag" title="Motion woke the brain early — see the event queue">◉ motion</div>
-        <div class="br-ping" title="Where the model asked the robot to drive (go_to_point)"><span class="ringA"></span><span class="ringB"></span><span class="cross"></span></div>
-      </div>
-      <div class="br-film"></div>
-      <div class="br-vision-cap">
-        <span class="br-frame-cap"></span>
-        <button class="br-inspect-btn" hidden title="Everything the model received and returned this turn">inspect turn</button>
-        <span class="br-pose-strip" title="robot pose — /odom">
-          <svg class="br-heading" viewBox="0 0 16 16"><polygon class="br-needle" points="8,1.5 11,12 8,9.5 5,12"/></svg>
-          <span class="br-pose-txt">pose —</span>
-        </span>
-      </div>
     </section>
 
     <section class="br-panel br-panel-actions">
