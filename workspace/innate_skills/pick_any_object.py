@@ -714,6 +714,9 @@ class PickAnyObject(Skill):
                 f"[PickAnyObject] grasp attempt {attempt + 1} closed on air; "
                 f"re-centering for retry {attempt + 2}/{retries + 1}"
             )
+            # The close/lift is committed, but a proven miss ends that attempt.
+            # Stop must win before we reopen the claw or move into another one.
+            self.check_cancelled()
             x, y, roll, pitch, yaw = self._prepare_grasp_retry(prompt, x, y)
 
     def _grasp_at(self, prompt, xy):

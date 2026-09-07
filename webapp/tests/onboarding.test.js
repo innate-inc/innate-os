@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { createAgentOnboarding } from "../js/agent/agentOnboarding.js";
 import { createChallengePanel } from "../js/agent/challengePanel.js";
-import { FIRST_MISSIONS, FIRST_RUN_KEY, readFirstRun, saveFirstRun, shouldAutoStartOnboarding, startFirstRun, installMissionPicker } from "../js/onboarding.js";
+import { FIRST_MISSIONS, FIRST_RUN_KEY, ONBOARDING_SEEN_KEY, readFirstRun, saveFirstRun, shouldAutoStartOnboarding, startFirstRun, installMissionPicker } from "../js/onboarding.js";
 
 class Element extends EventTarget {
   children = []; dataset = {}; hidden = false; parent = null; textContent = "";
@@ -298,6 +298,7 @@ console.log("ok - replay drains late activation before reopening the chooser");
 // Opening stops only the owned attempt; a choice starts a fresh mission.
 const oldParent=window.parent, oldReferrer=document.referrer;
 const replies=[];window.parent={postMessage:(data,origin)=>replies.push({data,origin})};document.referrer="https://broker.example/session";
+storage.clear();
 saveFirstRun({phase:"choosing"});
 const worlds=simulator();ui=worlds.mount();ui.choose("put_it_away");await flush();
 const removePicker=installMissionPicker(()=>new Promise(resolve=>startFirstRun(true,resolve)));
@@ -313,12 +314,19 @@ await flush();assert.equal(worlds.calls.aborts.length,0);
 for (const mission of FIRST_MISSIONS) {
   const before=worlds.calls.starts.length, oldAttempt=readFirstRun().attemptId;
   const change={...command,requestId:mission.id};
+  const firstReply=replies.length;
   brokerMessage(change);brokerMessage(change);await flush();
+  // postMessage calls to the same parent preserve this order: the broker sees
+  // busy before either completion, and idle before the acknowledgement.
+  assert.deepEqual(replies.slice(firstReply).map(({data})=>data.type === "controls" ? data.busy : data.type),
+    [true,false,"mission-picker-opened","mission-picker-opened"]);
   assert.equal(replies.at(-1).data.success,true);
   assert.equal(worlds.calls.starts.length,before);
   assert.equal(worlds.calls.aborts.at(-1),oldAttempt);
   assert.equal(worlds.agent.get().brainActive,false);
   assert.equal(readFirstRun().phase,"choosing");
+  assert.equal(storage.has(ONBOARDING_SEEN_KEY),false);
+  assert.equal(replies.some(({data})=>data.type === "completed"),false);
   assert.equal(ui.root.find(el=>el.className==="first-mission").hidden,false);
   brokerMessage({...change,requestId:`already-choosing-${mission.id}`});await flush();
   assert.equal(worlds.calls.starts.length,before);
@@ -352,9 +360,17 @@ brokerMessage({...command,requestId:"failure"});await flush();
 assert.equal(replies.at(-1).data.success,false);
 assert.equal(worlds.calls.aborts.length,abortsBeforeFailure);
 assert.equal(ui.root.find(el=>el.className==="first-mission").hidden,true);
+assert.equal(readFirstRun().phase,"playing");
+assert.equal(storage.has(ONBOARDING_SEEN_KEY),false);
+assert.equal(replies.some(({data})=>data.type === "completed"),false);
 worlds.agent.setDirective=originalActivate;
 brokerMessage({...command,requestId:"retry"});await flush();
 assert.equal(replies.at(-1).data.success,true);assert.equal(readFirstRun().phase,"choosing");
+// Only the actual user-facing Skip (or physical completion) is terminal.
+ui.choose("put_it_away");await flush();ui.skip();await flush();
+assert.equal(replies.filter(({data})=>data.type === "completed").length,1);
+assert.equal(replies.at(-1).data.phase,"skipped");
+assert.equal(storage.get(ONBOARDING_SEEN_KEY),"1");
 ui.flow.destroy();
 // A route with no mounted controller fails immediately, without deferred work.
 brokerMessage({...command,requestId:"unmounted"});await flush();assert.equal(replies.at(-1).data.success,false);

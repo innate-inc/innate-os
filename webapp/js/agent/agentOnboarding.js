@@ -209,7 +209,11 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     restarting = (async () => {
       // Drain the old attempt before replacing its cancellation signal. Late
       // activation acknowledgements must not start MARS behind the chooser.
-      if (active) await finish("skipped");
+      // Changing missions is not a terminal Skip. Cancel this controller's
+      // work without marking onboarding seen or publishing broker completion.
+      // Keep the saved attempt until the stop succeeds so failure is retryable.
+      active = false;
+      clearTimeout(reconnectTimer); abort.abort(); render();
       await Promise.allSettled([operation, activation].filter(Boolean));
       if (destroyed) return false;
       // Picking another mission is distinct from Skip: close this exact

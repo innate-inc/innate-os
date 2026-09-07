@@ -1,4 +1,5 @@
 """The suggestion tool accepts bounded requests and never emits speech/actions."""
+
 import sys
 import unittest
 from pathlib import Path

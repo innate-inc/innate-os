@@ -31,7 +31,7 @@ sys.modules["innate.gemini"] = innate.gemini
 sys.modules["innate.vision"] = innate.vision
 
 exceptions = ModuleType("innate.exceptions")
-for exception_type in ("ArmFailed", "ArmUnhealthy", "SkillFailed"):
+for exception_type in ("ArmFailed", "ArmUnhealthy", "SkillFailed", "SkillCancelled"):
     setattr(exceptions, exception_type, type(exception_type, (Exception,), {}))
 sys.modules["innate.exceptions"] = exceptions
 
@@ -129,6 +129,37 @@ def test_empty_grasp_recenters_twice_but_held_object_does_not_retry(monkeypatch)
     held.sleep = lambda _seconds: None
     assert held._grasp_verified("brick", approach)
     assert approach.moves == []
+
+
+@pytest.mark.parametrize("closes_empty,empties_on_lift", [(True, False), (False, True), (False, False)])
+def test_stop_during_committed_close_prevents_retry_but_preserves_a_held_grasp(
+    monkeypatch, closes_empty, empties_on_lift
+):
+    skill = _skill(closes_empty=closes_empty, empties_on_lift=empties_on_lift)
+    cancelled = False
+
+    def stop_during_settle(_seconds):
+        nonlocal cancelled
+        cancelled = True
+
+    def check_cancelled():
+        if cancelled:
+            raise exceptions.SkillCancelled()
+
+    monkeypatch.setattr("innate_skills.pick_any_object.time.sleep", stop_during_settle)
+    skill.check_cancelled = check_cancelled
+    if closes_empty or empties_on_lift:
+        with pytest.raises(exceptions.SkillCancelled):
+            skill._close_twist_lift("brick", 0.25, 0.0, 0.0, 1.3, 0.0)
+    else:
+        # A held object's committed lift must still finish after Stop.
+        skill._close_twist_lift("brick", 0.25, 0.0, 0.0, 1.3, 0.0)
+        assert skill._holding
+    events = [event[0] for event in skill.manipulation.events]
+    assert events.count("close") == 1
+    assert "open" not in events
+    assert "search" not in events
+    assert events.count("lift") == (0 if closes_empty else 1)
 
 
 def test_pickup_reports_a_drop_during_the_final_carry_motion(monkeypatch):
