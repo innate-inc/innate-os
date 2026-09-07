@@ -12,6 +12,7 @@ import math
 import os
 import re
 import time
+from typing import Literal
 
 from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, base_to_odom, inside_box
 
@@ -1068,7 +1069,7 @@ class PickAnyObject(Skill):
         )
         return held
 
-    def execute(self, prompt: str = "the sock", controller: str = "classic") -> SkillReturn:
+    def execute(self, prompt: str = "the sock", controller: Literal["classic", "astra"] = "classic") -> SkillReturn:
         """Pick up `prompt` from the floor."""
         if self._proxy is None:
             self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
