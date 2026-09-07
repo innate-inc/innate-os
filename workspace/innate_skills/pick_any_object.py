@@ -882,6 +882,7 @@ class PickAnyObject(Skill):
         p = self._p
         retry_z = p["retry_floor_z"]
         self._holding = False
+        self._open_pregrasp = True
         self._prepare_wrist_search(math.atan2(y, x))
         x, y, z, roll = self._wrist_descend(prompt, x, y)
         roll, pitch, yaw = self._grasp_orientation(x, y, roll)
@@ -941,6 +942,7 @@ class PickAnyObject(Skill):
         self._pre_close_lift(x, y, roll, pitch, yaw)
         retries = int(self._p["grasp_retries"])
         for attempt in range(retries + 1):
+            self._open_pregrasp = False  # closure is now committed
             self._close_once()
             empty = self._gripper_closed_on_air()
             lifted = False
@@ -985,7 +987,6 @@ class PickAnyObject(Skill):
         roll, pitch, yaw = self._grasp_orientation(x, y, roll)
         self._push_to_floor(x, y, z, roll, pitch, yaw)
         self.check_cancelled()  # last exit before the fingers commit
-        self._open_pregrasp = False
         self._close_twist_lift(prompt, x, y, roll, pitch, yaw)
 
     def _grasp_verified(self, prompt, approach: FloorApproach):
