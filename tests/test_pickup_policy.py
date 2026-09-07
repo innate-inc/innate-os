@@ -94,16 +94,3 @@ def test_wrist_identity_reference_keeps_current_image_first_and_head_coordinates
     head_fields = bodies[1]["tools"][0]["parameters"]["properties"]["detections"]["items"]["required"]
     assert set(wrist_fields) == {"box_2d", "axis_2d", "grasp_point_2d"}
     assert set(head_fields) == {"box_2d", "grip_strength", "search_clearance"}
-
-
-def test_metric_views_require_upper_material_point_and_boolean_final_veto():
-    head = dict(box_2d=[100, 200, 300, 400], grip_strength=0.35, search_clearance="low", grasp_point_2d=[130, 300])
-    assert policy.validate_observation({"detections": [head]}, "head_metric")
-    for bad in ([100, 300], [200, 500], [], [float("nan"), 300]):
-        with pytest.raises(ValueError):
-            policy.validate_observation({"detections": [{**head, "grasp_point_2d": bad}]}, "head_metric")
-    wrist = dict(box_2d=[100, 200, 300, 400], aligned=False)
-    assert policy.validate_observation({"detections": [wrist]}, "wrist_verify")
-    for bad in ("true", 1, None):
-        with pytest.raises(ValueError):
-            policy.validate_observation({"detections": [{**wrist, "aligned": bad}]}, "wrist_verify")

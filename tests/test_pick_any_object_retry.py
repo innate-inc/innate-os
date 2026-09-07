@@ -142,10 +142,11 @@ def test_empty_grasp_recenters_twice_but_held_object_does_not_retry(monkeypatch)
     assert approach.moves == []
 
 
-def test_model_grasp_preserves_raised_rigid_hold_without_reseeding_grip(monkeypatch):
+@pytest.mark.parametrize("policy", [None, object()])
+def test_grasp_preserves_raised_rigid_hold_without_reseeding_grip(monkeypatch, policy):
     monkeypatch.setattr("innate_skills.pick_any_object.time.sleep", lambda _seconds: None)
     skill = _skill(closes_empty=False)
-    skill._pickup_policy = object()
+    skill._pickup_policy = policy
     skill._close_twist_lift("brick", 0.25, 0, 0, 1.3, 0)
     assert skill._holding
     assert not any(e[0] == "move_to" for e in skill.manipulation.events)
@@ -457,14 +458,15 @@ def test_wrist_plan_keeps_head_material_and_converts_image_axis(monkeypatch, axi
     assert skill._grip_strength == 0.6
 
 
+@pytest.mark.parametrize("policy", [None, object()])
 @pytest.mark.parametrize("recovery", ["returns", "offline", "cancel", "target_missing"])
-def test_camera_disconnect_holds_then_requires_new_grasp_confirmations(monkeypatch, recovery):
+def test_camera_disconnect_holds_then_requires_new_grasp_confirmations(monkeypatch, recovery, policy):
     from contextlib import nullcontext
 
     monkeypatch.setattr("innate_skills.pick_any_object.vision.b64_to_hsv", lambda x: x, raising=False)
     monkeypatch.setattr("innate_skills.pick_any_object.inside_box", lambda *_: True)
     skill = _skill(closes_empty=False)
-    skill._pickup_policy = object()
+    skill._pickup_policy = policy
     skill._planned_roll = 0
     skill.manipulation.pose = SimpleNamespace(position=(0.3, 0, 0.06))
     skill._wrist_seed = lambda _: ((320, 350), (280, 300, 80, 100))
@@ -608,118 +610,12 @@ def test_wrist_tracker_uses_model_seed_and_known_material(monkeypatch, strength,
     assert skill._new_wrist_tracker((10, 20, 30, 40), (25, 40), None) == (tracker, raw)
 
 
-@pytest.mark.parametrize(
-    "failure", [None, "head", "search_changed", "wrist_missing", "wrist_veto", "wrist_changed", "cancel"]
-)
-def test_metric_path_only_closes_after_fresh_head_and_final_wrist_checks(monkeypatch, failure):
-    import base64
-
-    from innate_skills import pickup_rgbd
-
-    skill = _skill(closes_empty=False)
-    point = (0.3, 0.0, 0.04)
-    checks = iter([point, None if failure == "search_changed" else point])
-    monkeypatch.setattr(
-        pickup_rgbd, "revalidate_material_point", lambda *a, **k: None if failure == "head" else next(checks)
-    )
-    monkeypatch.setattr(pickup_rgbd, "compact_upper_surface", lambda *a: point)
-    monkeypatch.setattr(pickup_rgbd, "same_wrist_patch", lambda *a: failure != "wrist_changed")
-    skill.rgbd = object()
-    skill._metric_reference = (
-        object(),
-        dict(grip_strength=0.35, search_clearance="low", box_2d=[100, 100, 300, 300], grasp_point_2d=[150, 200]),
-    )
-    events = []
-
-    def pose(z):
-        return SimpleNamespace(x=0.3, y=0.0, z=z, position=(0.3, 0.0, z), rpy=(0.0, 1.5708, 0.24))
-
-    arm = skill.manipulation
-    arm.pose = pose(0.1)
-    arm.torque_on = lambda: None
-    arm.reachable = lambda *a, **k: True
-
-    def move(x, y, z, **kw):
-        events.append(("move", z, kw["duration"]))
-        arm.pose = pose(z)
-
-    arm.move_to = move
-    skill._prepare_wrist_search = lambda *a: events.append(("search",))
-
-    def floor(*a):
-        arm.pose = pose(0.03)
-        events.append(("floor",))
-
-    skill._push_to_floor = floor
-    skill.wrist_image = "initial"
-    frames = iter([base64.b64encode(b"reference").decode(), base64.b64encode(b"fresh").decode()])
-    skill._next_wrist_hsv = lambda *a, **k: (None, None) if failure == "wrist_missing" else (object(), next(frames))
-
-    def verdict(*a):
-        events.append(("wrist",))
-        return {"detections": [{"box_2d": [100, 100, 300, 300], "aligned": failure != "wrist_veto"}]}
-
-    skill._observe_pickup = verdict
-    skill._arm_joints = lambda: [0.0] * 5 + [arm.GRIPPER_OPEN]
-
-    def cancel():
-        if failure == "cancel" and ("wrist",) in events:
-            raise InterruptedError("stop")
-
-    skill.check_cancelled = cancel
-    skill._close_twist_lift = lambda *a: events.append(("close",))
-    if failure:
-        with pytest.raises((exceptions.SkillFailed, InterruptedError)):
-            skill._grasp_rgbd("cube")
-        assert ("close",) not in events
-        if failure == "head":
-            assert not events
-        if failure == "search_changed":
-            assert events == [("search",)]
-        if failure != "head":
-            assert skill._metric_open_pregrasp is True
-    else:
-        skill._grasp_rgbd("cube")
-        assert events[-2:] == [("wrist",), ("close",)]
-        assert skill._metric_open_pregrasp is False
-        assert [e[1] for e in events if e[0] == "move"] == pytest.approx([0.1, 0.09, 0.08, 0.07, 0.06, 0.05])
-        assert [e[2] for e in events if e[0] == "move"] == [2.0, 0.5, 0.5, 0.5, 0.5, 0.5]
-
-
-@pytest.mark.parametrize("controller", ["classic", "astra", "rgbd"])
-def test_metric_entry_preserves_fixed_view_while_existing_controllers_keep_positioning(monkeypatch, controller):
-    transport = ModuleType("brain_client.brain.openai_transport")
-    transport.pick_openai_transport = lambda _: (lambda *a: iter(()), "test")
-    monkeypatch.setitem(sys.modules, transport.__name__, transport)
-    skill = _skill(closes_empty=False)
-    events = []
-    skill._proxy = object()
-    skill.head = SimpleNamespace(set_position=lambda _: None)
-    skill.mobility = SimpleNamespace(stop=lambda: None)
-    skill.manipulation.move_joints = lambda *a, **k: None
-    skill.manipulation.wait = lambda: None
-    skill.say = lambda _: None
-    skill.sleep = lambda _: None
-    skill._grasp_at = lambda *a: events.append("grasp")
-    skill._grasp_verified = lambda *a: True
-    skill._rest_arm = lambda **k: None
-    approach = SimpleNamespace(
-        search=lambda _: (0.32, 0), position_above=lambda *a: events.append("position") or (0.28, 0)
-    )
-    monkeypatch.setattr("innate_skills.pick_any_object.FloorApproach", lambda *a, **k: approach)
-    skill.execute("cube", controller=controller)
-    assert events == (["grasp"] if controller == "rgbd" else ["position", "grasp"])
-
-
 @pytest.mark.parametrize("cancel", [False, True])
-def test_metric_open_abort_execute_finally_preserves_posture_and_original_failure(monkeypatch, cancel):
+def test_open_abort_execute_finally_preserves_posture_and_original_failure(monkeypatch, cancel):
     class Cancelled(BaseException):
         pass
 
     failure = Cancelled("stop") if cancel else exceptions.SkillFailed("wrist veto")
-    transport = ModuleType("brain_client.brain.openai_transport")
-    transport.pick_openai_transport = lambda _: (lambda *a: iter(()), "test")
-    monkeypatch.setitem(sys.modules, transport.__name__, transport)
     skill = _skill(closes_empty=False)
     commands = []
     skill._proxy = object()
@@ -730,11 +626,11 @@ def test_metric_open_abort_execute_finally_preserves_posture_and_original_failur
     skill.say = lambda _: None
     skill.sleep = lambda _: None
     skill.fail = lambda text: (_ for _ in ()).throw(exceptions.SkillFailed(text))
-    approach = SimpleNamespace(search=lambda _: (0.3, 0))
+    approach = SimpleNamespace(search=lambda _: (0.3, 0), position_above=lambda _, xy: xy)
     monkeypatch.setattr("innate_skills.pick_any_object.FloorApproach", lambda *a, **k: approach)
 
     def veto(*a):
-        skill._metric_open_pregrasp = True
+        skill._open_pregrasp = True
         # Any cleanup command would be a regression; the real _rest_arm is used.
         skill.manipulation.move_joints = lambda *a, **k: commands.append("unexpected fold")
         skill.manipulation.move_to = lambda *a, **k: commands.append("unexpected retreat")
@@ -744,6 +640,37 @@ def test_metric_open_abort_execute_finally_preserves_posture_and_original_failur
 
     skill._grasp_at = veto
     with pytest.raises(type(failure)) as caught:
-        skill.execute("cube", controller="rgbd")
+        skill.execute("cube")
     assert caught.value is failure
     assert commands == ["initial navigation fold", "base stop"]
+
+
+@pytest.mark.parametrize("reason", ["not seen", "no wrist frames", "lost track", "timeout", "reach limit"])
+def test_classic_tracking_failure_cannot_continue_to_blind_grasp(reason):
+    skill = _skill(closes_empty=False)
+    with pytest.raises(exceptions.SkillFailed, match=reason):
+        skill._wrist_done(0.3, 0, 0.08, reason)
+    assert skill.manipulation.events == []
+
+
+def test_classic_camera_generation_change_reacquires_before_tracking():
+    skill = _skill(closes_empty=False)
+    skill.manipulation.pose = SimpleNamespace(position=(0.3, 0, 0.08))
+    skill._wrist_seed = lambda _: ((320, 350), (280, 300, 80, 100))
+    stale = SimpleNamespace(capture_is_current=lambda: False)
+    tracker = SimpleNamespace(ok=True)
+    skill._new_wrist_tracker = lambda *_: (tracker, stale)
+    fresh = object()
+    skill._next_wrist_hsv = lambda *_: (True, fresh)
+    calls = []
+
+    def reseed(_prompt, raw, frame=None):
+        assert raw is fresh and frame == (True, fresh)
+        calls.append("reseed")
+        return None, raw, "target missing after reconnect"
+
+    skill._wrist_reseed = reseed
+    with pytest.raises(exceptions.SkillFailed, match="target missing after reconnect"):
+        PickAnyObject._wrist_descend(skill, "brick", 0.3, 0)
+    assert calls == ["reseed"]
+    assert skill.manipulation.events == []

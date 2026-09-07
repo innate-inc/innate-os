@@ -13,7 +13,7 @@ MODEL = "gpt-6-astra"
 
 def _tool(view):
     properties = {"box_2d": {"type": "array", "items": {"type": "number"}}}
-    if view in {"head", "head_metric"}:
+    if view == "head":
         properties.update(
             grip_strength={"type": "number", "enum": [0.35, 0.60]},
             search_clearance={"type": "string", "enum": ["flat", "low", "high"]},
@@ -21,17 +21,6 @@ def _tool(view):
     else:
         properties["grasp_point_2d"] = {"type": "array", "items": {"type": "number"}}
         properties["axis_2d"] = {"type": "array", "items": {"type": "number"}}
-    if view == "head_metric":
-        properties["grasp_point_2d"] = {"type": "array", "items": {"type": "number"}}
-    if view == "wrist_verify":
-        properties = {"box_2d": properties["box_2d"], "aligned": {"type": "boolean"}}
-    if view == "wrist_action":
-        properties = {
-            "box_2d": properties["box_2d"],
-            "action": {"type": "string", "enum": ["floor", "shift", "close", "abort"]},
-            "delta_xy_m": {"type": "array", "items": {"type": "number"}},
-            "aligned": {"type": "boolean"},
-        }
     return {
         "type": "function",
         "name": "pickup_observation",
@@ -86,26 +75,6 @@ these image points into the gripper's roll and applies the motion limits.
 The executor handles fresh-frame tracking and final centering.
 """
 
-HEAD_METRIC = (
-    HEAD
-    + """For a compact rigid object with a clearly visible upper surface,
-return grasp_point_2d [y,x] normalized 0-1000 at the center of that UPPER
-material surface for a vertical parallel-jaw pinch. Do not choose a front face,
-a texture patch off-center, a hole, or the floor. Return no detections if that
-upper-surface pinch center is ambiguous or the object is long, hollow or soft.
-"""
-)
-WRIST_VERIFY = """Image 1 is the current wrist view with the claw OPEN at its final
-pre-close pose. Image 2 identifies the target from the head view. Return its
-box_2d in image 1 and aligned=true ONLY if the same target is clearly between
-the two open inner gripping pads, with pad contact regions on opposite sides
-and no other object or obstruction in the closing gap. The robot will close
-without another alignment motion. False if either pad or target is occluded,
-if the target is ahead of/behind the pad contact regions, outside the gap,
-touching only one finger, or otherwise ambiguous. Do not use image center as
-a proxy for the gripping gap. Return no detections if target identity is unclear.
-"""
-
 
 def _numbers(value, size):
     return (
@@ -116,7 +85,7 @@ def _numbers(value, size):
 
 
 def validate_observation(value, view):
-    if view not in {"head", "wrist", "head_metric", "wrist_verify", "wrist_action"}:
+    if view not in {"head", "wrist"}:
         raise ValueError("Unknown pickup view")
     if not isinstance(value, dict) or set(value) != {"detections"}:
         raise ValueError("Expected one pickup observation")
@@ -126,29 +95,16 @@ def validate_observation(value, view):
     fields = (
         {"box_2d", "grip_strength", "search_clearance"} if view == "head" else {"box_2d", "axis_2d", "grasp_point_2d"}
     )
-    if view == "head_metric":
-        fields = {"box_2d", "grip_strength", "search_clearance", "grasp_point_2d"}
-    elif view == "wrist_verify":
-        fields = {"box_2d", "aligned"}
-    if view == "wrist_action":
-        fields = {"box_2d", "action", "delta_xy_m", "aligned"}
-        if len(detections) > 1:
-            raise ValueError("Expected at most one visual action")
     for detection in detections:
         if not isinstance(detection, dict) or set(detection) != fields:
             raise ValueError("Invalid pickup detection")
         box = detection["box_2d"]
         if not _numbers(box, 4) or not (0 <= box[0] < box[2] <= 1000 and 0 <= box[1] < box[3] <= 1000):
             raise ValueError("Pickup box is empty or outside the image")
-        if view == "wrist_action":
-            from innate_skills.pickup_visual_action import validate_action
-
-            validate_action(detection)
-        if view in {"wrist", "head_metric"}:
+        if view == "wrist":
             point = detection["grasp_point_2d"]
             if not _numbers(point, 2) or not (box[0] < point[0] < box[2] and box[1] < point[1] < box[3]):
                 raise ValueError("Invalid pickup grasp point")
-        if view == "wrist":
             axis = detection["axis_2d"]
             if axis != [] and (
                 not _numbers(axis, 4)
@@ -156,13 +112,11 @@ def validate_observation(value, view):
                 or math.hypot(axis[2] - axis[0], axis[3] - axis[1]) < 1
             ):
                 raise ValueError("Invalid pickup axis")
-        if view in {"head", "head_metric"}:
+        else:
             if not _numbers([detection["grip_strength"]], 1) or detection["grip_strength"] not in (0.35, 0.60):
                 raise ValueError("Invalid pickup material strength")
             if detection["search_clearance"] not in ("flat", "low", "high"):
                 raise ValueError("Invalid pickup search clearance")
-        if view == "wrist_verify" and type(detection["aligned"]) is not bool:
-            raise ValueError("Invalid wrist alignment verdict")
     return value
 
 
@@ -173,40 +127,20 @@ class PickupPolicy:
         self.calls = 0
         self.max_calls = max_calls
 
-    def locate(self, target, image, sleep, check_cancelled, *, view, reference=None, timeout=95, state=None):
-        if view not in {"head", "wrist", "head_metric", "wrist_verify", "wrist_action"}:
+    def locate(self, target, image, sleep, check_cancelled, *, view, reference=None, timeout=95):
+        if view not in {"head", "wrist"}:
             raise ValueError("Unknown pickup view")
         if self.calls >= self.max_calls:
             raise ValueError("Pickup model-call budget exhausted")
         check_cancelled()
         self.calls += 1
         context = {"target": target, "view": view}
-        if view == "wrist_action" and reference is not None:
-            from innate_skills.pickup_visual_action import identity_reference
-
-            reference = identity_reference(reference)
-            context["head_reference_is_padded_crop"] = reference.get("reference_is_padded_crop", False)
-        if state is not None:
-            context["robot_state"] = state
         images = [{"type": "input_image", "image_url": f"data:image/jpeg;base64,{image}"}]
-        if view in {"wrist", "wrist_verify", "wrist_action"} and reference is not None:
+        if view == "wrist" and reference is not None:
             context["head_reference_box_2d"] = reference["box_2d"]
             images.append({"type": "input_image", "image_url": f"data:image/jpeg;base64,{reference['image']}"})
-        action_instructions = ""
-        if view == "wrist_action":
-            from innate_skills.pickup_visual_action import INSTRUCTIONS
-
-            action_instructions = INSTRUCTIONS
-
         body = {
-            "instructions": ("" if view == "wrist_action" else COMMON)
-            + {
-                "head": HEAD,
-                "wrist": WRIST,
-                "head_metric": HEAD_METRIC,
-                "wrist_verify": WRIST_VERIFY,
-                "wrist_action": action_instructions,
-            }[view],
+            "instructions": COMMON + (HEAD if view == "head" else WRIST),
             "input": [
                 {
                     "role": "user",
