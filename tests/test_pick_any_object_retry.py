@@ -629,8 +629,12 @@ def test_open_abort_execute_finally_preserves_posture_and_original_failure(monke
     approach = SimpleNamespace(search=lambda _: (0.3, 0), position_above=lambda _, xy: xy)
     monkeypatch.setattr("innate_skills.pick_any_object.FloorApproach", lambda *a, **k: approach)
 
+    skill.manipulation.torque_on = lambda: None
+    skill.manipulation.clamp_reach = lambda x, y: (x, y)
+    skill._prepare_wrist_search = lambda _: commands.append("open search")
+
     def veto(*a):
-        skill._open_pregrasp = True
+        assert skill._open_pregrasp is True
         # Any cleanup command would be a regression; the real _rest_arm is used.
         skill.manipulation.move_joints = lambda *a, **k: commands.append("unexpected fold")
         skill.manipulation.move_to = lambda *a, **k: commands.append("unexpected retreat")
@@ -638,11 +642,11 @@ def test_open_abort_execute_finally_preserves_posture_and_original_failure(monke
         skill.manipulation.torque_off = lambda *a, **k: commands.append("unexpected torque off")
         raise failure
 
-    skill._grasp_at = veto
+    skill._wrist_descend = veto
     with pytest.raises(type(failure)) as caught:
         skill.execute("cube")
     assert caught.value is failure
-    assert commands == ["initial navigation fold", "base stop"]
+    assert commands == ["initial navigation fold", "open search", "base stop"]
 
 
 @pytest.mark.parametrize("reason", ["not seen", "no wrist frames", "lost track", "timeout", "reach limit"])
