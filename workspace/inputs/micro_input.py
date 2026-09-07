@@ -37,6 +37,7 @@ import string
 import subprocess
 import threading
 import time
+from collections import deque
 
 import numpy as np
 
@@ -54,6 +55,7 @@ from brain_client.inputs.batch_stt import (
     keyterms_with_name,
     sanitize_keyterms,
 )
+from brain_client.inputs.speech_lifecycle import SpeechLifecycle
 from brain_client.inputs.types import InputDevice
 from brain_client.inputs.vad import silero_detector
 from brain_client.perception.identity import IdentityMonitor
@@ -197,6 +199,13 @@ class MicroInput(InputDevice):
         self._vad_detector = None
         self._agc: SlowAgc | None = None
         self._endpointer: Endpointer | None = None
+        self._endpoint_lock = threading.RLock()  # shared by audio, callbacks and lifecycle timers
+        self._listening_enabled = False
+        self._speech = SpeechLifecycle(self._emit_speech, lock=self._endpoint_lock)
+        self._speech_open = None
+        self._speech_pending = None
+        self._speech_queue = deque()
+        self._speech_ambiguous = False
         self._commit_at = 0.0
         self._streamed_bytes = 0
         self._utterance_count = 0
@@ -208,7 +217,6 @@ class MicroInput(InputDevice):
         self._stop_evt = threading.Event()  # device shutdown only — never cleared mid-session
         self._audio_stop: threading.Event | None = None  # current audio thread's own stop
         self._audio_thread = None
-        self._endpoint_lock = threading.Lock()  # endpointer is fed and flushed from two threads
         self._is_robot_talking = False  # For ducking (mic-specific)
         self._reconnect_thread = None
         self._reconnect_lock = threading.Lock()
@@ -234,6 +242,11 @@ class MicroInput(InputDevice):
     def name(self) -> str:
         return "micro"
 
+    def set_listening_enabled(self, enabled: bool) -> bool:
+        changed = self._listening_enabled != enabled
+        self._listening_enabled = enabled
+        return changed
+
     def set_tts_playing(self, is_playing: bool):
         """
         Called when TTS (text-to-speech) status changes.
@@ -254,12 +267,19 @@ class MicroInput(InputDevice):
         sentence splits in two) or glued to the user's next sentence.
         """
         endpointer = self._endpointer
-        if self._backend in BATCH_BACKENDS or endpointer is None:
+        if self._backend in BATCH_BACKENDS:
+            if self._listening_enabled and self.client is not None:
+                self.client.flush()
+            return
+        if endpointer is None:
             return
         with self._endpoint_lock:
             if not endpointer.in_speech:
                 return
-            endpointer.flush()
+            closed = endpointer.flush()
+            if self._listening_enabled:
+                self._queue_utterance(closed)
+                return
         self._commit_scribe()
 
     def on_open(self):
@@ -305,7 +325,18 @@ class MicroInput(InputDevice):
         mic.start(device=device or "default", sample_rate=DEFAULT_SAMPLE_RATE, channels=DEFAULT_CHANNELS)
         return mic
 
-    def _on_elevenlabs_message(self, ws, message: str):
+    def _on_elevenlabs_message(self, ws, message: str, *, lifecycle: bool | None = None, session=None):
+        with self._endpoint_lock:
+            if session is not None and session is not self._speech:
+                return
+            self._process_elevenlabs_message(ws, message, lifecycle=lifecycle)
+
+    def _session_callback(self, session, callback, *args):
+        with self._endpoint_lock:
+            if session is self._speech:
+                callback(*args)
+
+    def _process_elevenlabs_message(self, ws, message: str, *, lifecycle: bool | None = None):
         """Handle incoming messages from the ElevenLabs Scribe realtime API."""
         try:
             event = json.loads(message)
@@ -317,12 +348,19 @@ class MicroInput(InputDevice):
 
         if etype == "committed_transcript":
             text = event.get("text", "")
+            with self._endpoint_lock:
+                # Opted-in sessions send one locally closed utterance at a time.
+                token, self._speech_pending = self._speech_pending, None
+                if not self._speech_ambiguous:
+                    self._speech.finish(token, text)
+                    self._send_next_utterance()
+
             if text:
                 self._utterance_count += 1
                 latency = f"{round((time.monotonic() - self._commit_at) * 1000)} ms" if self._commit_at else "n/a"
                 self.logger.info(f"🎤 Scribe committed in {latency}: {text[:80]!r}")
             if text and self.is_active():
-                self._on_transcript(text)
+                self._on_transcript(text, lifecycle=lifecycle)
         elif etype == "partial_transcript":
             pass  # interim result — only the committed transcript reaches chat
         elif etype == "session_started":
@@ -335,8 +373,9 @@ class MicroInput(InputDevice):
                     f"Scribe — previous_text carries the vocabulary until the relay forwards repeated params"
                 )
         elif etype == "insufficient_audio_activity":
-            pass  # expected whenever the room is quiet — not worth a log line
+            self._invalidate_speech()  # expected whenever the room is quiet — not worth a log line
         elif etype in ELEVENLABS_ERROR_TYPES:
+            self._invalidate_speech()
             self._failure_count += 1
             self.logger.error(f"❌ ElevenLabs error ({etype}): {event.get('error', event)}")
         else:
@@ -348,11 +387,13 @@ class MicroInput(InputDevice):
 
     def _on_ws_error(self, error):
         """Handle WebSocket error event."""
+        self._invalidate_speech()
         self._failure_count += 1
         self.logger.error(f"[ws error] {error}")
 
     def _on_ws_close(self):
         """Handle WebSocket close event - trigger reconnection."""
+        self._invalidate_speech()
         self.logger.warning("WebSocket closed")
         self._is_connected = False
         self._connect_failures += 1
@@ -445,7 +486,10 @@ class MicroInput(InputDevice):
             sample_rate=DEFAULT_SAMPLE_RATE,
             is_voiced=is_voiced,
             silence_secs=silence_secs,
-            on_transcript=self._on_transcript_if_active,
+            on_transcript=lambda text, enabled=self._listening_enabled: self._on_transcript_if_active(
+                text, lifecycle=enabled
+            ),
+            on_speech=self._emit_speech,
             logger=self.logger,
         )
 
@@ -534,15 +578,22 @@ class MicroInput(InputDevice):
         is_voiced, engine = self._make_vad(cfg)
         # Recreated on every (re)connect: a half-open utterance must not leak
         # across sockets.
-        self._endpointer = Endpointer(sample_rate=DEFAULT_SAMPLE_RATE, is_voiced=is_voiced, silence_secs=silence_secs)
-        self._streamed_bytes = 0
-        self._commit_at = 0.0
-        self._sent_keyterms = keyterms
-        # previous_text is body content, so it survives the proxy relay that
-        # currently collapses the repeated keyterms query params to one.
-        self._scribe_context = _scribe_previous_text(keyterms)
-        self._scribe_first_chunk = True
-
+        with self._endpoint_lock:
+            self._speech.close()
+            self._speech = SpeechLifecycle(self._emit_speech, lock=self._endpoint_lock)
+            self._speech_open = self._speech_pending = None
+            self._speech_queue.clear()
+            self._speech_ambiguous = False
+            self._endpointer = Endpointer(sample_rate=DEFAULT_SAMPLE_RATE, is_voiced=is_voiced, silence_secs=silence_secs)
+            self._streamed_bytes = 0
+            self._commit_at = 0.0
+            self._sent_keyterms = keyterms
+            # previous_text is body content, so it survives the proxy relay that
+            # currently collapses the repeated keyterms query params to one.
+            self._scribe_context = _scribe_previous_text(keyterms)
+            self._scribe_first_chunk = True
+            session = self._speech
+            enabled = self._listening_enabled
         self.logger.info(
             f"📤 Scribe config: model={model}, commit=manual/{engine}, silence={silence_secs}s, "
             f"keyterms={len(keyterms)}, filter_background={filter_background}"
@@ -554,10 +605,12 @@ class MicroInput(InputDevice):
             commit_strategy="manual",
             keyterms=keyterms,
             filter_background_audio=filter_background,
-            on_message=self._on_elevenlabs_message,
+            on_message=lambda *args, session=session, enabled=enabled: self._on_elevenlabs_message(
+                *args, lifecycle=enabled, session=session
+            ),
             on_open=self._on_elevenlabs_open,
-            on_error=self._on_ws_error,
-            on_close=self._on_ws_close,
+            on_error=lambda *args, session=session: self._session_callback(session, self._on_ws_error, *args),
+            on_close=lambda *args, session=session: self._session_callback(session, self._on_ws_close, *args),
         )
         return model
 
@@ -634,14 +687,25 @@ class MicroInput(InputDevice):
         self._reconnect_thread = threading.Thread(target=reconnect_loop, daemon=True)
         self._reconnect_thread.start()
 
-    def _on_transcript_if_active(self, text: str):
+    def _on_transcript_if_active(self, text: str, *, lifecycle: bool | None = None):
         if self.is_active():
-            self._on_transcript(text)
+            self._on_transcript(text, lifecycle=lifecycle)
 
     def _send_chunk(self, chunk: bytes):
         """Hand one PCM chunk to the backend: fed locally (batch) or framed onto the wire."""
         if self._backend in BATCH_BACKENDS:
             self.client.feed(chunk)
+            return
+        if self._listening_enabled:
+            with self._endpoint_lock:
+                if self._speech_ambiguous or self._endpointer is None:
+                    return
+                was_open = self._endpointer.in_speech
+                closed = self._endpointer.feed(chunk)
+                if not was_open and self._endpointer.in_speech:
+                    self._speech_open = self._speech.start()
+                if was_open and not self._endpointer.in_speech:
+                    self._queue_utterance(closed)
             return
         self._send_scribe_audio(chunk, commit=False)
         if self._endpointer is None:
@@ -678,6 +742,54 @@ class MicroInput(InputDevice):
         self._streamed_bytes += len(chunk)
         return sent
 
+    def _emit_speech(self, event: dict) -> None:
+        if not self._listening_enabled:
+            return
+        if event.get("stage") == "finished":
+            event = dict(event, text=strip_leading_punctuation(event.get("text", "")))
+        self.send_data(event, data_type="speech")
+        if event.get("reason") == "timeout" and self._backend not in BATCH_BACKENDS:
+            self._invalidate_speech()
+
+    def _invalidate_speech(self) -> None:
+        with self._endpoint_lock:
+            was_ambiguous = self._speech_ambiguous
+            self._speech_ambiguous = True
+            self._speech.close()
+            self._speech_open = self._speech_pending = None
+            self._speech_queue.clear()
+            if not was_ambiguous and self._listening_enabled and self.is_active() and not self._stop_evt.is_set():
+                self._is_connected = False
+                self._schedule_reconnect()  # bounded existing reconnect; old-session text is discarded
+
+    def _queue_utterance(self, pcm: bytes | None) -> None:
+        token, self._speech_open = self._speech_open, None
+        if pcm is None:
+            self._speech.finish(token, reason="discarded")
+            return
+        self._speech.ended(token)
+        if len(self._speech_queue) >= 3:
+            dropped, _ = self._speech_queue.popleft()
+            self._speech.finish(dropped, reason="backlog_dropped")
+        self._speech_queue.append((token, pcm))
+        self._send_next_utterance()
+
+    def _send_next_utterance(self) -> None:
+        if not self._listening_enabled or self._speech_ambiguous or self._speech_pending is not None:
+            return
+        if not self._speech_queue:
+            return
+        token, pcm = self._speech_queue.popleft()
+        self._speech_pending = token
+        # Same native manual-commit protocol, with bounded local serialization.
+        # No silence/safety commits enter this session and confuse correlation.
+        for offset in range(0, len(pcm), 4800):
+            if not self._send_scribe_audio(pcm[offset : offset + 4800], commit=False):
+                self._invalidate_speech()
+                return
+        if not self._send_scribe_audio(b"", commit=True):
+            self._invalidate_speech()
+
     def _commit_scribe(self) -> None:
         if not self._send_scribe_audio(b"", commit=True):
             # The socket died under us. The vendor buffer dies with the session,
@@ -696,7 +808,7 @@ class MicroInput(InputDevice):
         # count as silence (the batch endpointer holds the same invariant).
         # in_speech is False during a duck — _commit_before_duck closed any open
         # utterance — so this can never commit mid-sentence; the guard is belt.
-        if self._backend in BATCH_BACKENDS or self.client is None:
+        if self._backend in BATCH_BACKENDS or self.client is None or self._listening_enabled:
             return
         self._send_scribe_audio(b"\x00" * nbytes, commit=False)
         if self._safety_commit_due() and (self._endpointer is None or not self._endpointer.in_speech):
@@ -775,6 +887,7 @@ class MicroInput(InputDevice):
     def on_close(self):
         """Stop microphone and disconnect."""
         self._stop_evt.set()
+        self._invalidate_speech()
         if self._audio_stop is not None:
             self._audio_stop.set()
         self._is_connected = False  # Prevent reconnection attempts
@@ -869,14 +982,15 @@ class MicroInput(InputDevice):
 
         return preferred_device["id"] if preferred_device else None
 
-    def _on_transcript(self, text: str) -> None:
+    def _on_transcript(self, text: str, *, lifecycle: bool | None = None) -> None:
         """Called when transcript is ready."""
         text = strip_leading_punctuation(text)
         if not text:
             return
         self.logger.info(f"🎤 Transcript: {text}")
 
-        self.send_data(text, data_type="chat_in")
+        tagged = self._listening_enabled if lifecycle is None else lifecycle
+        self.send_data({"text": text, "speech_lifecycle": True} if tagged else text, data_type="chat_in")
         self._last_transcript = text
         self._send_vad_status()
 

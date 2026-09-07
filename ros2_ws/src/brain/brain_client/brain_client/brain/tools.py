@@ -30,13 +30,19 @@ _GO_TO_POINT_IN_VIEW_DECLARATION = {
         "coordinates (0-1000) of a point ON THE FLOOR: y from the top, x from the left. For an "
         "object, point at the floor at its base. The robot drives to about 0.35 m short of that "
         "spot and turns to face it. Prefer this over navigate_to_position for anything you can "
-        "see. Far targets are approached in capped steps — call it again after arriving."
+        "see. For conversation use standoff_m=1.5 and visible floor at the resident feet in the current main "
+        "camera image, never an older identity or wrist image. If feet/floor are cropped or ambiguous, "
+        "do not invent a point. Far targets are capped steps; inspect a fresh image after arriving."
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "y": {"type": "INTEGER", "description": "0-1000 from image top"},
             "x": {"type": "INTEGER", "description": "0-1000 from image left"},
+            "standoff_m": {
+                "type": "NUMBER",
+                "description": "Optional distance short of target, 0.35 to 1.5 meters; default 0.35, conversation 1.5",
+            },
         },
         "required": ["y", "x"],
     },
@@ -87,6 +93,7 @@ def build_tools(
     *,
     can_go_to_point_in_view: bool = False,
     user_spoke: bool = False,
+    can_stop_running: bool = True,
     request_stopped: bool = False,
 ) -> list[dict]:
     """One function declaration per available skill, in a native tools block.
@@ -101,6 +108,8 @@ def build_tools(
     carrying a user message gets stop_current_skill ALONE — plain text becomes
     the reply channel, and the description steers stop away from questions.
     """
+    if running_skill_name is not None and not can_stop_running and not user_spoke:
+        return [{"functionDeclarations": [_WAIT_DECLARATION]}]
     if running_skill_name is not None or user_spoke:
         stop = {
             "name": STOP_SKILL,
@@ -123,7 +132,7 @@ def build_tools(
                     "continue_task": {
                         "type": "BOOLEAN",
                         "description": (
-                            "Default false. Set true only to replan a failing skill or switch to "
+                            "Default false. Set true only for deliberate replanning or the next step within the still-authorized request, or switch to "
                             "a replacement task the user explicitly requested. Never true when "
                             "the user asks to stop, wait, or keep holding an object."
                         ),

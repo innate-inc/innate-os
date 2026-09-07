@@ -1,0 +1,67 @@
+{
+  "kind": "controlled prompt replay; no autonomous mission, skill dispatch, or navigation measurement",
+  "model": "gpt-6-astra",
+  "effort": "low",
+  "seed": null,
+  "max_calls": 12,
+  "estimated_usd_cap": 6.0,
+  "image_sha256": "7ece810ab9954c7751d6cf20156b337412088a12bba4287fdfbe118ce9fec411",
+  "prompt_sha256": {
+    "baseline": "63cb62f2b75b1536bd09ff3faf1375acdf0e473880f6b9ed27214b923de1c699",
+    "candidate": "2b49a09210a87a7703eb264353adb7f1dc7df32f99f9a69c7f97a4e1a83fd312"
+  },
+  "calls": 12,
+  "estimated_usd": 0.2898135,
+  "rows": [
+    {
+      "arm": "candidate_final",
+      "case": "interrupted_startup",
+      "turn": 1,
+      "events": [
+        "Continue the existing Household Orders task after interrupted startup. A new mission was created but identity and search initialization were interrupted. You have just called mission_run() to resume this mission.",
+        "mission_run completed: RUN_RESUMED {\"run_id\":\"20260906T033348Z-08b4c34d\"}"
+      ],
+      "request_sha256": "63a390ecf30ca0af93cacf6c064bf671cce425d1e17f9e79691536e23d0d3292",
+      "reservation_usd": 0.607,
+      "usage": {
+        "input_tokens": 3433,
+        "input_tokens_details": {
+          "cache_write_tokens": 3430,
+          "cached_tokens": 0
+        },
+        "output_tokens": 18,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 3451
+      },
+      "estimated_usd": 0.043805,
+      "returned_model": "gpt-6-astra",
+      "service_tier": "default",
+      "status": "ok",
+      "speech": null,
+      "calls": [
+        {
+          "name": "person_identity",
+          "args": {
+            "action": "begin"
+          }
+        }
+      ],
+      "pass_probe": true,
+      "seconds": 2.8746
+    }
+  ],
+  "criteria": {
+    "interrupted_startup": "After RUN_RESUMED, initialize identity before search or notes; one silent call"
+  },
+  "prices_usd_per_million": {
+    "input": 10,
+    "cached": 1,
+    "cache_write": 12.5,
+    "output": 50
+  },
+  "prior_calls": 11,
+  "prior_estimated_usd": 0.2460085,
+  "prior_report_sha256": "16ed933d3710f83de9d8624baebbc6ce13a89abd9f21ec6bd083ba1c26d167bb"
+}

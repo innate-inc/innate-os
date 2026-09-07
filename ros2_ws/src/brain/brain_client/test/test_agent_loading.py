@@ -66,6 +66,7 @@ def workspace(tmp_path, monkeypatch):
     saved_path = list(sys.path)
     saved_modules = set(sys.modules)
     saved_registry = dict(Agent._registry)
+    Agent._registry.clear()  # isolate the synthetic workspace from earlier real-agent tests
     agent_initializer._agent_ids_by_module.clear()
     yield tmp_path / "workspace"
     for name in set(sys.modules) - saved_modules:
@@ -425,3 +426,31 @@ def test_build_rejects_invalid_turn_interval_contract(workspace):
 
     assert agents == {}
     assert "must return TurnIntervals" in broken["bad_interval"]
+
+
+def test_build_rejects_invalid_departure_guard_contract(workspace):
+    write(
+        workspace,
+        "innate_agents/bad_guard.py",
+        agent_src("BadGuard", body='def get_departure_guard(self):\n    return {"distance": 1.0}'),
+    )
+
+    classes, _errors = discover_agent_classes(LOGGER)
+    agents, broken = build_agent_instances(classes, LOGGER)
+
+    assert agents == {}
+    assert "must return DepartureGuard or None" in broken["bad_guard"]
+
+
+def test_build_rejects_invalid_interaction_guard_contract(workspace):
+    write(
+        workspace,
+        "innate_agents/bad_interaction_guard.py",
+        agent_src("BadInteractionGuard", body='def get_interaction_guard(self):\n    return {"timeout": 35.0}'),
+    )
+
+    classes, _errors = discover_agent_classes(LOGGER)
+    agents, broken = build_agent_instances(classes, LOGGER)
+
+    assert agents == {}
+    assert "must return InteractionGuard or None" in broken["bad_interaction_guard"]

@@ -1,0 +1,30 @@
+{
+  "route-removed": {
+    "trials": 40,
+    "passed": 40,
+    "median_success_s": 310.3,
+    "p95_success_s": 559.425,
+    "percentile_method": "linear interpolation, position 0.95 * (n - 1)",
+    "min_success_s": 230.7,
+    "max_success_s": 590.5,
+    "duplicate_mission_failures": 0,
+    "attempts": [
+      1
+    ],
+    "seed": null
+  },
+  "facefix": {
+    "trials": 40,
+    "passed": 22,
+    "median_success_s": 599.1,
+    "p95_success_s": 881.58,
+    "percentile_method": "linear interpolation, position 0.95 * (n - 1)",
+    "min_success_s": 453.1,
+    "max_success_s": 892.6,
+    "duplicate_mission_failures": 7,
+    "attempts": [
+      1
+    ],
+    "seed": null
+  }
+}
