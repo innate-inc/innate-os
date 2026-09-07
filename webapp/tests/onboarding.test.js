@@ -151,8 +151,21 @@ assert.equal(sim.calls.starts.length,1);assert.equal(sim.calls.directives.length
 assert.deepEqual(sim.calls.begins.map(([fresh])=>fresh),[true,false]);
 assert.equal(readFirstRun().attemptId,attempt);
 assert.ok(ui.root.find(el=>el.textContent==="Complete the scene goal"));
-ui.skip();await flush();assert.deepEqual(sim.calls.aborts,[attempt]);assert.equal(sim.agent.get().brainActive,false);
+const clearsBeforeSkip=sim.calls.prompts.length;
+ui.skip();await flush();assert.equal(sim.calls.prompts.length,clearsBeforeSkip);assert.deepEqual(sim.calls.aborts,[]);assert.equal(sim.agent.get().brainActive,true);
+assert.equal(sim.challenge.active.attempt_id,attempt);
+assert.deepEqual(sim.calls.directives,["intro_agent"]);
 ui.flow.destroy();ui=sim.mount();assert.equal(ui.flow.isActive(),false);ui.flow.destroy();
+// Replaying after Skip still deliberately closes the existing attempt.
+storage.clear();
+const skippedReplay=simulator();let skippedUi=skippedReplay.mount();
+skippedUi.choose("put_it_away");await flush();
+const skippedToken=skippedReplay.challenge.active.attempt_id;
+skippedUi.skip();await flush();assert.equal(skippedReplay.agent.get().brainActive,true);
+startFirstRun(true);await flush();
+assert.deepEqual(skippedReplay.calls.aborts,[skippedToken]);
+assert.equal(skippedReplay.agent.get().brainActive,false);
+assert.equal(readFirstRun().phase,"choosing");skippedUi.flow.destroy();
 // Skip before any selection must never abort another browser's active mission.
 storage.clear();const other=simulator();other.emitChallenge({list:FIRST_MISSIONS,active:{id:"put_it_away",state:"passed"}});
 ui=other.mount();assert.equal(ui.flow.isActive(),true);ui.skip();await flush();assert.equal(other.calls.aborts.length,0);ui.flow.destroy();
@@ -160,7 +173,7 @@ ui=other.mount();assert.equal(ui.flow.isActive(),true);ui.skip();await flush();a
 storage.clear();const slow=simulator();slow.session.switchEnvironment=id=>slow.calls.switches.push(id);
 ui=slow.mount();ui.choose("way_out");await flush();ui.skip();await flush();
 slow.emitEnvironment({environment:{id:"backrooms"},switch:null});await flush();assert.equal(slow.calls.starts.length,0);ui.flow.destroy();
-// An activation already in flight survives closing the page, but never Skip.
+// Both page close and Skip preserve an activation already requested.
 for (const skip of [false,true]) {
   storage.clear();const pending=simulator();
   let release;
@@ -172,7 +185,8 @@ for (const skip of [false,true]) {
   ui=pending.mount();ui.choose("put_it_away");await flush();
   if(skip) ui.skip(); else ui.flow.destroy();
   release();await flush();
-  assert.equal(pending.agent.get().brainActive,!skip);
+  assert.equal(pending.agent.get().brainActive,true);
+  assert.deepEqual(pending.calls.aborts,[]);
   if(skip) ui.flow.destroy();
 }
 // Physical robot visits do not start the first mission or activate the brain.

@@ -179,7 +179,7 @@ export function createChallengePanel(root, session, onboarding) {
     status.textContent = firstRun.status || "Guide MARS through chat. If something fails, ask it to try again.";
     const actions = document.createElement("div");
     actions.className = "challenge-actions";
-    actions.append(actionButton("Skip mission", () => void onboarding.skip(), "Leave this mission and explore the interface"));
+    actions.append(actionButton("Skip mission", () => void onboarding.skip(), "Reveal the full interface while MARS keeps working"));
     wrap.append(status, actions);
     return wrap;
   }

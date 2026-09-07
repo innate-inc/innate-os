@@ -128,13 +128,9 @@ export function createAgentOnboarding(root, ros, agentState, options) {
       const state = agentState.get();
       if (!state.brainActive || state.currentDirective !== INTRO_AGENT_ID) {
         await agentState.setDirective(INTRO_AGENT_ID);
-        if (!active || destroyed) {
-          // Closing/reopening the page does not stop the robot. An explicit
-          // Skip does, including when its activation acknowledgement was late.
-          const current = agentState.get().currentDirective;
-          if (saved?.phase === "skipped" && (!current || current === INTRO_AGENT_ID)) await agentState.setDirective("");
-          return false;
-        }
+        // Skip and page close only leave the guided UI. An activation already
+        // requested may finish; replay explicitly drains and stops it below.
+        if (!active || destroyed) return false;
       }
       await waitFor(() => agentState.get().brainActive && agentState.get().currentDirective === INTRO_AGENT_ID, "MARS could not start. You can wait here or skip the mission.");
       return active && !destroyed;
@@ -190,16 +186,14 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   }
   async function finish(/** @type {"done"|"skipped"} */ phase) {
     if (!active) return;
-    const owned = !!saved?.attemptId && challenge?.active?.attempt_id === saved.attemptId;
     active = false;
     saved = {...saved, phase}; persist(); markOnboardingSeen();
     publishFirstRunCompletion(phase);
-    clearTimeout(reconnectTimer); abort.abort(); render(); options.onClearSuggestions?.();
-    if (phase === "skipped" && owned) {
-      session.abortChallenge(saved.attemptId);
-      if (agentState.get().currentDirective === INTRO_AGENT_ID) await agentState.setDirective("");
+    clearTimeout(reconnectTimer); abort.abort(); render();
+    if (phase === "done") {
+      options.onClearSuggestions?.();
+      options.onNotice?.("Mission complete. The full interface is ready to explore.");
     }
-    if (phase === "done") options.onNotice?.("Mission complete. The full interface is ready to explore.");
   }
   const unsubBackend = ros.subscribe(WEBSOCKET_STATUS_TOPIC, message => {
     const ready = backendReadinessFromMessage(message);
@@ -221,13 +215,19 @@ export function createAgentOnboarding(root, ros, agentState, options) {
       // Drain the old attempt before replacing its cancellation signal. Late
       // activation acknowledgements must not start MARS behind the chooser.
       if (active) await finish("skipped");
-      else if (saved?.attemptId && challenge?.active?.attempt_id === saved.attemptId
-        && agentState.get().currentDirective === INTRO_AGENT_ID) await agentState.setDirective("");
       await Promise.allSettled([operation, activation].filter(Boolean));
+      if (destroyed) return;
+      // Picking another mission is distinct from Skip: close this exact
+      // attempt and stop its agent before offering a replacement scene.
+      if (saved?.attemptId && challenge?.active?.attempt_id === saved.attemptId) {
+        session.abortChallenge(saved.attemptId);
+        if (agentState.get().currentDirective === INTRO_AGENT_ID) await agentState.setDirective("");
+      }
       if (destroyed) return;
       abort = new AbortController();
       saved = {phase:"choosing"};
       active = true; began = false; taskStarted = false;
+      options.onClearSuggestions?.();
       persist(); render();
     })().catch(error => {
       options.onNotice?.(`Could not open challenges: ${error.message}. Try picking another challenge again.`);
