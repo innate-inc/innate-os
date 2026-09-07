@@ -30,6 +30,16 @@ Only explicit Astra or operator writes create notes. The existing automatic came
 
 A 1,000-note fixture on the development Mac measured p95 read around 9 ms, context preparation including image rendering around 11 ms, and mutations below 3 ms. These are local CPU/storage timings, not Jetson or model-latency measurements. Jetson timing and a physical robot rollout remain unverified.
 
+### Astra prompt caching
+
+Astra uses explicit prompt-cache boundaries on the developer instructions and the last two historical user messages. Both history boundaries are sent on every request: one reuses the preceding request's write, while the newest one extends it. They are selected after stale wrist frames have been masked, and before adding the current scratchpad and camera observation. Fresh data therefore stays current without invalidating the reusable historical prefix or paying to cache the changing suffix. Native reasoning, tool calls, and tool results retain their original content and IDs.
+
+The earlier batched history/image pruning remains in place. A compaction or a change to the system instructions or available tools can still cause a cache miss; subsequent matching turns warm it again. A per-context routing key stays constant across turns. Older OpenAI models retain implicit caching, and Gemini's request format is unchanged. Committed turn traces report `tokens.cached` and, when supplied by OpenAI, `tokens.cache_write`; abandoned requests cannot overwrite these metrics. See the [OpenAI prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching) for cache eligibility and routing limits.
+
+On 2026-09-07, a six-turn before/after test used the actual context adapters and Astra through Blue's proxy with `service_tier=priority`, while the autonomous brain stayed paused. Each variant started with 120 synthetic observation/reply pairs, the robot portrait, three retained head-frame turns, latest-only wrist frames, and wait/map-note tool schemas. Each request changed the head image, wrist image, scratchpad text, and map image; every reply correctly answered the newest input. Requests contained 20,271–21,051 input tokens.
+
+After initial warm-up, reusable turns cached about 6% of input with the old adapter and 95% with explicit boundaries; new cache writes fell from roughly 19,000 to 260 tokens per turn. Both variants crossed the image-pruning threshold after turn four. The candidate dipped to 6% on the following request and recovered to 95% on the next. These are synthetic cache-token measurements, not a measured production hit rate or a clean latency comparison: Blue's network was slow during the run, and physical actions were not executed.
+
 ## Astra tools
 
 Native Responses function declarations use `strict: true`, `additionalProperties: false`, required keys, and nullable optional values. Existing physical skill schemas keep their previous strictness behavior.

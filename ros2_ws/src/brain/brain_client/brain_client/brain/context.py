@@ -128,7 +128,9 @@ class GeminiContext:
         calls, by which point an abandoned turn's orphaned request has already
         serialized its body.
         """
-        contents = [*self._reference, *self._history, *([live_context] if live_context else []), user_message]
+        contents = [*self._reference, *self._history]
+        history_length = len(contents)
+        contents.extend([*([live_context] if live_context else []), user_message])
         if latest_only_images and self._latest_only_turn is not None:
             stale, indexes = self._latest_only_turn
             masked = {
@@ -154,7 +156,7 @@ class GeminiContext:
         parts: list[dict] = []
         last_chunk: dict = {}
         usage: dict = {}
-        for chunk in self._transport(self._model, body):
+        for chunk in self._stream_response(body, history_length=history_length):
             last_chunk = chunk
             if "usageMetadata" in chunk:
                 usage = chunk["usageMetadata"]
@@ -177,6 +179,10 @@ class GeminiContext:
             "usageMetadata": usage,
         }
 
+    def _stream_response(self, body: dict, *, history_length: int):
+        """Provider hook with the boundary before ephemeral context and fresh input."""
+        return self._transport(self._model, body)
+
     def absorb(self, user_message: dict, response: dict, *, latest_only_images: list[int] | None = None) -> Decision:
         """Commit the exchange to history and distill the model's Decision.
 
@@ -197,6 +203,8 @@ class GeminiContext:
             "cached": usage.get("cachedContentTokenCount", 0),
             "output": usage.get("candidatesTokenCount", 0),
         }
+        if "cacheWriteTokenCount" in usage:
+            self.last_usage["cache_write"] = usage["cacheWriteTokenCount"]
         self._history.append(user_message)
         if latest_only_images:
             if self._latest_only_turn is not None:

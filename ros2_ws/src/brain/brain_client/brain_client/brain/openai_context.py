@@ -11,6 +11,7 @@ No server-side conversation is created: an abandoned turn cannot advance it.
 from __future__ import annotations
 
 import json
+import uuid
 
 from brain_client.brain.context import GeminiContext
 
@@ -53,9 +54,10 @@ def _input(contents):
 
 class OpenAIContext(GeminiContext):
     def __init__(self, transport, *, service_tier="auto", **kwargs):
-        super().__init__(self._responses, **kwargs)
+        super().__init__(transport, **kwargs)
         self._service_tier = service_tier
-        self._responses_transport = transport
+        # Group one conversation's requests without mixing independent robots.
+        self._prompt_cache_key = "brain-" + uuid.uuid4().hex
         self.on_native_request = None
 
     def _prune(self):
@@ -72,11 +74,13 @@ class OpenAIContext(GeminiContext):
         super().add_tool_outcomes(outcomes)
         self._prune()
 
-    def _responses(self, model, gemini_body):
+    def _stream_response(self, gemini_body, *, history_length):
+        model = self._model
+        history = _input(gemini_body["contents"][:history_length])
         body = {
             "model": model,
             "instructions": gemini_body["systemInstruction"]["parts"][0]["text"],
-            "input": _input(gemini_body["contents"]),
+            "input": history + _input(gemini_body["contents"][history_length:]),
             "reasoning": {"effort": self._thinking_level},
             "service_tier": self._service_tier,
             "store": False,
@@ -85,6 +89,32 @@ class OpenAIContext(GeminiContext):
             "parallel_tool_calls": False,
             "max_output_tokens": 4096,
         }
+        if model == "gpt-6-astra" or model.startswith("gpt-6-astra-"):
+            # The implicit end-of-input checkpoint includes the fresh wrist frame
+            # and scratchpad, both replaced next turn. Cache the masked historical
+            # prefix instead. Keep TWO boundaries so the previous write remains
+            # explicitly eligible while the history grows. Native assistant and
+            # tool items are replayed verbatim; only newly converted user blocks
+            # receive markers. No cache state or history is mutated by generation.
+            for item in [item for item in history if item.get("role") == "user"][-2:]:
+                item["content"][-1]["prompt_cache_breakpoint"] = {"mode": "explicit"}
+            instructions = body.pop("instructions")
+            if instructions:
+                body["input"].insert(
+                    0,
+                    {
+                        "role": "developer",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": instructions,
+                                "prompt_cache_breakpoint": {"mode": "explicit"},
+                            }
+                        ],
+                    },
+                )
+            body["prompt_cache_options"] = {"mode": "explicit"}
+            body["prompt_cache_key"] = self._prompt_cache_key
         body["tools"] = [
             {
                 "type": "function",
@@ -100,7 +130,7 @@ class OpenAIContext(GeminiContext):
             self.on_native_request(body)
         completed = False
         streamed_text = ""
-        for event in self._responses_transport(model, body):
+        for event in self._transport(model, body):
             kind = event.get("type")
             if kind == "response.output_text.delta":
                 streamed_text += event["delta"]
@@ -147,6 +177,9 @@ class OpenAIContext(GeminiContext):
                     "cachedContentTokenCount": (usage.get("input_tokens_details") or {}).get("cached_tokens", 0),
                     "candidatesTokenCount": usage.get("output_tokens", 0),
                 }
+                details = usage.get("input_tokens_details") or {}
+                if "cache_write_tokens" in details:
+                    chunk["usageMetadata"]["cacheWriteTokenCount"] = details["cache_write_tokens"]
                 yield chunk
                 completed = True
         if not completed:
