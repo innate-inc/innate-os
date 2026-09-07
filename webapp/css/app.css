@@ -11207,7 +11207,8 @@ select.skill-input {
 
 /* Help cards: opaque, compact, and attached to the control they explain. */
 .ui-tour-target { outline: 2px solid #9482ff !important; outline-offset: 5px; }
-.ui-tour-card { position: fixed; z-index: 1200; width: min(330px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px; border: 1px solid #65616f; border-radius: 12px; color: #f8f8fa; background: #25252c; box-shadow: 0 10px 34px #0006; }
+.agent-sheet-header.ui-tour-target { outline-offset: -2px; border-radius: 16px; }
+.ui-tour-card { position: fixed; z-index: 1200; width: min(330px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px; border: 1px solid #65616f; border-radius: 12px; color: #f8f8fa; background: #25252c; box-shadow: 0 10px 34px #0006; overflow: auto; overscroll-behavior: contain; }
 .ui-tour-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .ui-tour-top .microlabel { color: #b7b1cf; font-size: 10px; }
 .ui-tour-top button { width: 28px; height: 28px; border: 0; border-radius: 5px; background: transparent; color: #c7c7d0; font-size: 23px; cursor: pointer; }
