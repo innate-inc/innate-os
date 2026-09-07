@@ -8,6 +8,7 @@
 // that reparents between a small thumbnail and the full stage. No three.js —
 // a canvas + putImageData is all a 2D map needs.
 
+import { createNotesOverlay } from "./notesOverlay.js";
 import { ros } from "../rosClient.js";
 import {
   AMCL_POSE_TOPIC,
@@ -407,6 +408,8 @@ export function createMap(root, opts = {}) {
   // ---- spatial-memory layer state -----------------------------------------
   /** @type {import("./memories.js").MemoryState | null} */
   let memState = null;
+  /** @type {ReturnType<typeof createNotesOverlay> | null} */
+  let notesOverlay = null;
   /** @type {Set<number> | null} ids seen so far; null until the first payload
    * (which adopts everything silently — a page load must not pulse the world) */
   let memKnown = null;
@@ -515,6 +518,7 @@ export function createMap(root, opts = {}) {
       }
     }
     memState = next;
+    notesOverlay?.render();
     // Sight-fan cache: entries self-invalidate on grid/pose mismatch; this
     // just drops fans whose memory no longer exists.
     for (const id of [...memPolyCache.keys()]) {
@@ -1278,6 +1282,7 @@ export function createMap(root, opts = {}) {
   }
 
   function draw() {
+    if (!grid) notesOverlay?.render();
     if (!ctx) return;
     ctx.fillStyle = "#0a0a0c";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1328,6 +1333,7 @@ export function createMap(root, opts = {}) {
       oy = (canvas.height - grid.height * scale) / 2;
     }
     view = { ox, oy, scale };
+    notesOverlay?.render();
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(off, ox, oy, grid.width * scale, grid.height * scale);
 
@@ -2157,6 +2163,25 @@ export function createMap(root, opts = {}) {
     pose = composedPose();
   }
 
+  notesOverlay = createNotesOverlay(root, ros, {
+    canvas,
+    viewKey: () => `${gridRev}|${view?.ox}|${view?.oy}|${view?.scale}|${dpr()}`,
+    matchesMap: (ref) =>
+      !!memState &&
+      ref?.map === memState.map &&
+      memState.fingerprint.length >= 12 &&
+      ref.fingerprint.startsWith(memState.fingerprint),
+    project: (x, y) => {
+      if (!grid || !view) return null;
+      const p = worldToCanvas(x, y);
+      return { x: p.px / dpr(), y: p.py / dpr() };
+    },
+    unproject: (event) => {
+      if (!grid || !view) return null;
+      const p = eventToCanvas(event);
+      return canvasToWorld(p.px, p.py);
+    },
+  });
   syncLayerSubs();
   ensureMapLatch();
   const unsubMap = ros.subscribe(MAP_TOPIC, onMap, 250, "nav_msgs/msg/OccupancyGrid");
@@ -2195,6 +2220,7 @@ export function createMap(root, opts = {}) {
     // Forget "known" memories too, so the new robot's first payload adopts
     // silently instead of pulsing its whole store as new.
     memState = null;
+    notesOverlay?.invalidate();
     memKnown = null;
     memPulses.clear();
     memPolyCache.clear();
@@ -2267,6 +2293,7 @@ export function createMap(root, opts = {}) {
         // dropping both here keeps the old frame's marks off the new grid in
         // the meantime.)
         memState = null;
+        notesOverlay?.invalidate();
         memKnown = null;
         memSearchFloorBrowserS = Date.now() / 1000;
         setMemHover(null);
@@ -2303,6 +2330,7 @@ export function createMap(root, opts = {}) {
      * dropped (see dropFrameState). The keepout layer needs nothing here — it
      * re-joins on the next /map by identity, whenever that arrives. */
     mapChanged() {
+      notesOverlay?.invalidate();
       dropFrameState();
       draw();
     },
@@ -2345,6 +2373,7 @@ export function createMap(root, opts = {}) {
       cancelAnimationFrame(memAnimFrame);
       document.removeEventListener("keydown", onKeyDown);
       ro.disconnect();
+      notesOverlay?.destroy();
       unsubMap();
       unsubConn();
       unsubOdom();

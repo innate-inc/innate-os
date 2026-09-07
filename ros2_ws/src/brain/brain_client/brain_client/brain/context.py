@@ -111,6 +111,7 @@ class GeminiContext:
         on_speech: Callable[[str], None] | None = None,
         *,
         latest_only_images: list[int] | None = None,
+        live_context: dict | None = None,
     ) -> dict:
         """Blocking network call — safe on a worker thread (history is only read).
 
@@ -127,7 +128,7 @@ class GeminiContext:
         calls, by which point an abandoned turn's orphaned request has already
         serialized its body.
         """
-        contents = [*self._reference, *self._history, user_message]
+        contents = [*self._reference, *self._history, *([live_context] if live_context else []), user_message]
         if latest_only_images and self._latest_only_turn is not None:
             stale, indexes = self._latest_only_turn
             masked = {

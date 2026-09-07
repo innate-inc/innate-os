@@ -89,7 +89,7 @@ class OpenAIContext(GeminiContext):
                 "name": tool["name"],
                 "description": tool.get("description", ""),
                 "parameters": _schema(tool.get("parameters", {"type": "object", "properties": {}})),
-                "strict": False,
+                "strict": tool.get("strict", False),
             }
             for group in gemini_body.get("tools", [])
             for tool in group["functionDeclarations"]

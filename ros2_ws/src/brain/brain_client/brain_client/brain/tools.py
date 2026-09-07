@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 
+from brain_client.memory.notes import NOTE_TOOL_NAMES
 from brain_client.skills.registry import SkillMeta
 
 STOP_SKILL = "stop_current_skill"
@@ -66,7 +67,7 @@ def assign_tool_names(skills: list[SkillMeta]) -> list[tuple[str, SkillMeta]]:
     shadow a built-in tool); colliding names get a numeric suffix so a call
     never silently dispatches to the wrong skill.
     """
-    taken = {STOP_SKILL, WAIT, GO_TO_POINT_IN_VIEW}
+    taken = {STOP_SKILL, WAIT, GO_TO_POINT_IN_VIEW, *NOTE_TOOL_NAMES}
     named: list[tuple[str, SkillMeta]] = []
     for meta in skills:
         base = name = tool_name(meta["name"])
