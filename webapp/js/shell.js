@@ -46,7 +46,7 @@ const RIBBON_PULL_PX = 18;
  * and the "agent running" indicator — and return a controller
  * the router uses to reflect the active section on each navigation. Called once
  * by the router, not per page (navigation is client-side now).
- * @param {(path: string) => void} navigate Router navigation, for key shortcuts.
+ * @param {(path: string, options?: {replace?: boolean}) => void} navigate Router navigation, for key shortcuts.
  * @returns {{ setActive: (key: string) => void, firstPageReady: () => void }}
  */
 // iOS ignores user-scalable=no; Safari fires proprietary gesture events for
@@ -56,7 +56,7 @@ document.addEventListener("gesturestart", (e) => {
   if (!(e.target instanceof HTMLCanvasElement)) e.preventDefault();
 });
 
-/** @param {(path: string) => void} navigate */
+/** @param {(path: string, options?: {replace?: boolean}) => void} navigate */
 export function initShell(navigate) {
   // Buttons fire on press-down instead of release, app-wide. Installed here
   // because the router builds the shell exactly once per page load. Idempotent.
@@ -266,7 +266,8 @@ export function initShell(navigate) {
         // The Agent page's own controller resumes or offers the first run
         // when it mounts; the shell only has to land there.
         if (shouldAutoStartOnboarding() && activeKey !== ONBOARDING_START_SECTION) {
-          navigate(pathForKey(ONBOARDING_START_SECTION));
+          // Replace: Back must not land on the page the gate just left.
+          navigate(pathForKey(ONBOARDING_START_SECTION), {replace:true});
         }
       }
     }

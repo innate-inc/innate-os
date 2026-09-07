@@ -298,7 +298,7 @@ class PickAnyObject(Skill):
             try:
                 j6 = self._arm_joints()[5]
                 z = self.manipulation.pose.z
-                if math.isfinite(z) and z >= self._p["floor_z"] + 0.07 and j6 > GRIPPER_EMPTY_J6 + 0.02:
+                if math.isfinite(z) and z >= self._p["floor_z"] + 0.07 and self._aperture_holds(j6):
                     self.logger.info("[PickAnyObject] keeping the raised rigid grasp for carry")
                     return
             except (ArmFailed, ArmUnhealthy, LookupError):
@@ -586,15 +586,19 @@ class PickAnyObject(Skill):
             raise LookupError("joint states missing or short")
         return list(js.position[:6])
 
-    def _gripper_closed_on_air(self) -> bool:
-        """Whether fresh encoder state proves the last close caught nothing.
+    def _aperture_holds(self, j6: float | None) -> bool:
+        """Between closed-on-air and a claw still open after the close command."""
+        return j6 is not None and GRIPPER_EMPTY_J6 + 0.02 < j6 < self.manipulation.GRIPPER_OPEN - 0.05
+
+    def _gripper_empty(self) -> bool:
+        """Whether fresh encoder state proves the claw holds nothing.
 
         Missing state is deliberately inconclusive: never reopen a possibly
         held object merely because telemetry dropped out.
         """
         js = self.joint_states
         j6 = js.position[5] if js is not None and len(js.position) > 5 else None
-        empty = j6 is not None and j6 <= GRIPPER_EMPTY_J6 + 0.02
+        empty = j6 is not None and not self._aperture_holds(j6)
         self.logger.info(f"[PickAnyObject] grip check: j6={j6} -> {'EMPTY' if empty else 'HELD/UNKNOWN'}")
         return empty
 
@@ -631,12 +635,12 @@ class PickAnyObject(Skill):
         p = self._p
         retry_z = p["retry_floor_z"]
         self._holding = False
-        self.check_cancelled()  # proven empty claw: unlike a committed grip, Stop may end the run here
         self.manipulation.gripper_open(duration=1.0)
         self._goto_search_pose(math.atan2(y, x))
         x, y, z, roll = self._wrist_descend(prompt, x, y)
         roll, pitch, yaw = self._grasp_orientation(x, y, roll)
         self._push_to_floor(x, y, z, roll, pitch, yaw, floor_z=retry_z)
+        self.check_cancelled()  # last exit before the fingers commit again
         self._pre_close_lift(x, y, roll, pitch, yaw)
         return x, y, roll, pitch, yaw
 
@@ -693,7 +697,7 @@ class PickAnyObject(Skill):
         retries = int(self._p["grasp_retries"])
         for attempt in range(retries + 1):
             self._close_once()
-            empty = self._gripper_closed_on_air()
+            empty = self._gripper_empty()
             lifted = False
             # Fingers may initially be held apart by a floor/edge contact. A
             # lift distinguishes that from a grasp before the base moves.
@@ -701,7 +705,7 @@ class PickAnyObject(Skill):
                 self._holding = True
                 self._lift_grasp(x, y, roll, yaw)
                 lifted = True
-                empty = self._gripper_closed_on_air()
+                empty = self._gripper_empty()
                 if not empty:
                     return
             if attempt >= retries:
@@ -749,7 +753,7 @@ class PickAnyObject(Skill):
         """
         js = self.joint_states
         j6 = js.position[5] if js is not None and len(js.position) > 5 else None
-        j6_ok = j6 is not None and j6 > GRIPPER_EMPTY_J6 + 0.02
+        j6_ok = self._aperture_holds(j6)
         try:
             ee_z = self.manipulation.pose.z
         except ArmFailed:
@@ -858,7 +862,7 @@ class PickAnyObject(Skill):
             self.head.set_position(0)
         # A rigid object can slip during the final fold even after a verified
         # lift. Report success only after that motion, using the encoder again.
-        if self._gripper_closed_on_air():
+        if self._gripper_empty():
             self._holding = False
             self.fail(f"'{prompt}' slipped while moving to the carry pose. Ask me to pick it up again.")
         self.say("Got it.")

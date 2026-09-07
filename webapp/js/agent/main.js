@@ -190,6 +190,8 @@ function buildAgentView(root) {
     onViewAccess: access => cameraSwitch.setViewAccess(access),
     session,
   });
+  // A first run owns the stage: the brain monitor never covers the chooser or a mission.
+  const unsubStage = onboarding.subscribe(({active}) => { if (active) setView("live"); });
   const simSession = /** @type {any} */ (session);
   const challengePanel =
     typeof simSession.onChallenge === "function" ? createChallengePanel(root, simSession, onboarding) : null;
@@ -260,6 +262,7 @@ function buildAgentView(root) {
     cameraSwitch,
     ...(micControl ? [micControl] : []),
     onboarding,
+    { destroy: unsubStage },
     createInterfaceTour(root, "agent"),
     panel,
     {
@@ -286,7 +289,7 @@ function buildAgentView(root) {
   session.start();
 
   const entryPath = location.pathname.replace(/\/+$/, "");
-  if (entryPath === "/brain" && !monitorTooNarrow.matches) setView("brain");
+  if (entryPath === "/brain" && !monitorTooNarrow.matches && !onboarding?.isActive()) setView("brain");
   if (entryPath === "/brain" || entryPath === "/agent") {
     history.replaceState({}, "", "/" + location.search + location.hash);
   }

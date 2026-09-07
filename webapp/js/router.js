@@ -152,14 +152,15 @@ function dismissBootSplash() {
  * Go to an in-app location, updating history. Preserves the query string so
  * cross-page links like /collect?dir=… reach the page with their params.
  * @param {string} href pathname (+ optional search), e.g. "/collect?dir=x".
+ * @param {{replace?: boolean}} [options] replace the current history entry instead of pushing.
  */
-function navigate(href) {
+function navigate(href, {replace = false} = {}) {
   const url = new URL(href, location.origin);
   const route = routeFor(url.pathname);
   // Dedupe on the path, not the route key: /brain shares Agent's key, but a
   // /brain link clicked from /agent must still render so the monitor opens.
   if (normalize(url.pathname) === normalize(location.pathname) && url.search === location.search) return;
-  history.pushState({}, "", url.pathname + url.search);
+  history[replace ? "replaceState" : "pushState"]({}, "", url.pathname + url.search);
   void render(route);
 }
 

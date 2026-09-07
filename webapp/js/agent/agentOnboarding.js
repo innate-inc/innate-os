@@ -164,7 +164,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   function runConnect(/** @type {boolean} */ fresh) {
     if (operation) return operation;
     operation = connectMission(fresh).catch(error => {
-      if (!active || destroyed) return;
+      if (!active || destroyed || abort.signal.aborted) return; // a reopen cancelled it on purpose
       render(error.message);
       options.onNotice?.(error.message);
       // Reconnect in place after transient startup/disconnection failures. A
@@ -209,16 +209,21 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   function restart() {
     if (!options.enabled || destroyed || restarting) return Promise.resolve(false);
     if (active && !mission()) return Promise.resolve(true);
+    const interrupted = !!(operation || activation);
     restarting = (async () => {
-      // Drain the old attempt before replacing its cancellation signal. Late
-      // activation acknowledgements must not start MARS behind the chooser.
-      // Not Skip: nothing terminal is recorded or published for the broker.
-      if (active) close();
+      // Cancel the attempt's pending work under its own signal and drain it, so
+      // a late activation cannot start MARS behind the chooser. The guided view
+      // stays gated meanwhile: this is not Skip, and nothing terminal is
+      // recorded or published for the broker.
+      clearTimeout(reconnectTimer); abort.abort();
       await Promise.allSettled([operation, activation].filter(Boolean));
       if (destroyed) return false;
-      // Picking another mission is distinct from Skip: close this exact
-      // attempt and stop its agent before offering a replacement scene.
-      if (saved?.attemptId && challenge?.active?.attempt_id === saved.attemptId) {
+      // Picking another mission is distinct from Skip: stop this attempt's agent
+      // and close the attempt. The abort is attempt-scoped, so one the world never
+      // acknowledged, or already replaced, is a server-side no-op.
+      const owned = saved?.attemptId
+        && (challenge?.active?.attempt_id === saved.attemptId || ["starting", "playing"].includes(saved.phase));
+      if (owned) {
         // setDirective refreshes state but absorbs service errors. Keep the
         // attempt owned and retryable unless that refresh confirms the stop.
         if (agentState.get().currentDirective === INTRO_AGENT_ID) {
@@ -237,6 +242,10 @@ export function createAgentOnboarding(root, ros, agentState, options) {
       return true;
     })().catch(error => {
       options.onNotice?.(`Could not change mission: ${error.message}. Try again.`);
+      // Still owned and still gated: give the attempt a live signal back and
+      // resume whatever connection work the cancel interrupted.
+      abort = new AbortController();
+      if (interrupted && active && mission()) void runConnect(false);
       return false;
     }).finally(() => {restarting = null;});
     return restarting;

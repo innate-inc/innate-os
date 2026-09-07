@@ -134,11 +134,15 @@ export function installMissionPicker(onOpen) {
       && typeof data.requestId === "string" && data.requestId.length > 0 && data.requestId.length <= 128) {
       let result = requests.get(data.requestId);
       if (!result) {
-        if (busy) { send({type:"mission-picker-opened", requestId:data.requestId, success:false}); return; }
-        busy = true;
-        controls();
-        result = Promise.resolve().then(onOpen).catch(() => false)
-          .finally(() => {busy = false; controls();});
+        // One answer per id: a request refused while busy stays refused when the
+        // broker re-delivers it, instead of closing a newer mission.
+        if (busy) result = Promise.resolve(false);
+        else {
+          busy = true;
+          controls();
+          result = Promise.resolve().then(onOpen).catch(() => false)
+            .finally(() => {busy = false; controls();});
+        }
         requests.set(data.requestId, result);
         const oldest = requests.keys().next().value;
         if (requests.size > 32 && oldest !== undefined) requests.delete(oldest);
