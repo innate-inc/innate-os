@@ -166,6 +166,10 @@ export function createSkillsMenu(parent, rosClient) {
   function enumValues(schema) {
     return typeof schema === "object" && Array.isArray(schema?.enum) ? schema.enum : [];
   }
+  /** @param {any} schema */
+  function hasEnumDefault(schema) {
+    return schema?.default !== undefined && enumValues(schema).includes(schema.default);
+  }
   /** @param {string} t */
   const isNumeric = (t) => ["int", "integer", "number", "float", "double"].includes(t);
   /** @param {string} t */
@@ -184,7 +188,8 @@ export function createSkillsMenu(parent, rosClient) {
    */
   function valueFor(skillId, paramName, schema) {
     const stored = inputValues.get(skillId)?.[paramName];
-    if (stored !== undefined) return stored;
+    // A previously unset optional enum follows its default once unset is hidden.
+    if (stored !== undefined && !(stored === "" && !isRequired(schema) && hasEnumDefault(schema))) return stored;
     if (typeof schema === "object" && schema?.default !== undefined) {
       return isJson(schemaType(schema)) ? JSON.stringify(schema.default) : String(schema.default);
     }
@@ -854,10 +859,11 @@ export function createSkillsMenu(parent, rosClient) {
 
   /** Enum param as a keyboard-first pill group: the group is one focusable
    *  widget, arrows cycle the value in place (no re-render, so focus holds),
-   *  Enter runs. An optional param gets a leading "—" pill meaning unset.
+   *  Enter runs. Optional enums without a valid default offer "—" for unset.
    *  @param {any} skill @param {string} paramName @param {any} spec @param {any[]} options */
   function renderChoice(skill, paramName, spec, options) {
-    const labels = (isRequired(spec) ? [] : [""]).concat(options.map(String));
+    const allowUnset = !isRequired(spec) && !hasEnumDefault(spec);
+    const labels = (allowUnset ? [""] : []).concat(options.map(String));
     const group = document.createElement("div");
     group.className = "skill-choice";
     group.tabIndex = 0;
