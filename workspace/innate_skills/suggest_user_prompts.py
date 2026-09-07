@@ -14,7 +14,7 @@ class SuggestUserPrompts(Skill):
     Do not interrupt an action or split an already-authorized sequence to offer
     suggestions. Do not suggest success before the scene confirms it. Pass []
     to clear obsolete suggestions. This skill does not reveal camera controls;
-    the interface introduces Main and Arm when the first task action starts.
+    the interface reveals Main, Arm, and third-person views when the first task starts.
     """
 
     def execute(self, prompts: list[str]) -> None:

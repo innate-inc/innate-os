@@ -304,7 +304,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
       placeMap();
       return;
     }
-    const children = roster.filter((name) => name !== primary && (viewAccess === "all" || ["main", "arm"].includes(name))).map(buildCameraTile);
+    const children = roster.filter((name) => name !== primary && (viewAccess === "all" || ["main", "arm", "orbit"].includes(name))).map(buildCameraTile);
     if (viewAccess === "all" && primary !== MAP_ID) children.push(buildMapTile());
     strip.replaceChildren(...children);
     placeMap();
