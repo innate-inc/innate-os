@@ -474,6 +474,8 @@ class SkillsActionServer(Node):
                 (RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64, "main"),
                 (RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64, "wrist"),
                 (RobotStateType.LAST_DEPTH_IMAGE, "depth"),
+                (RobotStateType.LAST_RGBD_OBSERVATION, "main"),
+                (RobotStateType.LAST_RGBD_OBSERVATION, "depth"),
             )
             if state_type in declared_states
         }

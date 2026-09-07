@@ -91,6 +91,7 @@ def generate_launch_description():
                 executable="skills_server.py",
                 name="skills_action_server",
                 output="screen",
+                remappings=[("/mars/main_camera/stream_epoch", "/virtual_mars/world_epoch")],
                 parameters=[
                     {
                         "image_topic": LaunchConfiguration("image_topic"),

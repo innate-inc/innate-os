@@ -183,9 +183,37 @@ class RemoteWorld:
             raise RuntimeError("malformed render_jpeg reply (no blob)")
         return blob
 
-    def render_depth(self, camera: str) -> np.ndarray:
-        meta, blob = self._render_ch.call({"op": "render_depth", "camera": camera})
+    def render_jpeg_capture(self, camera: str) -> tuple[bytes, int]:
+        """Original scene capture time, including when the server serves a cache."""
+        meta, blob = self._render_ch.call({"op": "render_jpeg", "camera": camera})
+        stamp = meta.get("captured_ns")
+        if blob is None or type(stamp) is not int or stamp <= 0:
+            raise RuntimeError("JPEG capture metadata unavailable")
+        return blob, stamp
+
+    def render_depth(self, camera: str, *, include_robot: bool = False) -> np.ndarray:
+        meta, blob = self._render_ch.call({"op": "render_depth", "camera": camera, "include_robot": include_robot})
         if "shape" not in meta or blob is None:
             raise RuntimeError(f"malformed render_depth reply (keys: {sorted(meta)})")
         h, w = meta["shape"]
         return np.frombuffer(blob, dtype=np.float32).reshape(h, w)
+
+    def render_rgbd(self, camera: str) -> tuple[bytes, np.ndarray, int]:
+        """Associated raw RGB/depth with the server's original capture stamp."""
+        meta, blob = self._render_ch.call({"op": "render_rgbd", "camera": camera})
+        try:
+            h, w = meta["shape"]
+            n, stamp = meta["jpeg_size"], meta["captured_ns"]
+            if (
+                meta["dtype"] != "<f4"
+                or h <= 0
+                or w <= 0
+                or n <= 0
+                or stamp <= 0
+                or blob is None
+                or len(blob) != n + h * w * 4
+            ):
+                raise ValueError("invalid RGB-D layout")
+            return blob[:n], np.frombuffer(blob, dtype="<f4", offset=n).reshape(h, w), stamp
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("malformed render_rgbd reply") from exc

@@ -36,7 +36,17 @@ class MainImage(Image):
 
 
 class WristImage(Image):
-    """A wrist-camera frame, declared via ``image: WristImage``."""
+    """A wrist-camera frame, declared via ``image: WristImage``.
+
+    Optional capture/receipt clocks are attached by the camera provider. Legacy
+    constructed frames have no freshness proof and retain None metadata.
+    """
+
+    capture_generation: int | None = None
+    capture_is_current = None
+    capture_ns: int | None = None
+    received_monotonic: float | None = None
+    received_ros_ns: int | None = None
 
 
 class DepthMap(np.ndarray):

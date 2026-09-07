@@ -138,10 +138,11 @@ def inside_box(px, cu, cv, half_u, half_v=None):
 class FloorApproach:
     """Head-camera localize + base servo for one run of a hosting skill."""
 
-    def __init__(self, host: ApproachHost, params: dict, detect: Detect):
+    def __init__(self, host: ApproachHost, params: dict, detect: Detect, *, confirm_arrival: bool = True):
         self.host = host
         self.p = params
         self.detect = detect
+        self.confirm_arrival = confirm_arrival
 
     # --- localize ---
 
@@ -399,6 +400,13 @@ class FloorApproach:
                 seed = None
                 continue
             lost = 0
+            if result == "in_box" and not self.confirm_arrival and _pt is not None:
+                # Three fresh flow frames already confirmed arrival. A caller
+                # with mandatory subsequent target recognition can use that
+                # measured point instead of asking the head model again.
+                arrived = pixel_to_floor(_pt[0], _pt[1], self.p["tilt_deg"])
+                if arrived is not None:
+                    return arrived
             # The flow servo already parked this within `accept`; re-demanding
             # that of a Gemini box edge only re-servos on detector noise.
             xy2, px2 = self._localize_retry(prompt)
