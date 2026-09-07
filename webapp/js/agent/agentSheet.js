@@ -68,8 +68,9 @@ export function createAgentSheet(panel, opts = {}) {
   const snapHeights = () => {
     const full = Math.max(CLOSED_PX, stageHeight() - 28);
     const missionHeight = panel.querySelector(".first-mission-challenge")?.getBoundingClientRect().height ?? 0;
+    const headerHeight = header.getBoundingClientRect().height;
     return {
-      closed: Math.min(full, CLOSED_PX + missionHeight),
+      closed: Math.min(full, headerHeight + 2 + missionHeight),
       half: Math.min(full, Math.max(HALF_MIN_PX, Math.round(stageHeight() * 0.5))),
       full,
     };
