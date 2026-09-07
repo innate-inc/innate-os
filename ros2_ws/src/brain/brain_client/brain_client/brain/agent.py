@@ -96,6 +96,7 @@ class BrainAgent:
         battery: BatteryMonitor | None = None,
         identity: IdentityMonitor | None = None,
         trace: Callable[[str], None] | None = None,
+        on_thinking_changed: Callable[[], None] | None = None,
     ):
         self._logger = node.get_logger()
         self._state = state
@@ -109,6 +110,7 @@ class BrainAgent:
         self._chat = chat
         self._gaze = gaze
         self._trace_sink = trace  # publishes one JSON string per event on /brain/trace
+        self._on_thinking_changed = on_thinking_changed
         self._lidar = ScanHealthReporter(
             scan_health, pose_tracker, chat, self._logger, enabled=not config.simulator_mode
         )
@@ -173,6 +175,11 @@ class BrainAgent:
     def error_streak(self) -> int:
         """Consecutive failed turns (0 = healthy); the node's health topic reads it."""
         return self._error_streak
+
+    @property
+    def thinking(self) -> bool:
+        """A live model request, excluding idle waits and retry backoff."""
+        return self._state.is_brain_active and self._turn_in_flight
 
     # ================= lifecycle =================
     def start(self) -> bool:
@@ -342,11 +349,15 @@ class BrainAgent:
         the orphaned HTTP call finishes and its result is dropped."""
         self._turn_in_flight = True
         try:
+            if self._on_thinking_changed is not None:
+                self._on_thinking_changed()
             return await asyncio.to_thread(
                 context.generate, message, tools, system, speaker.feed, latest_only_images=wrist_frames
             )
         finally:
             self._turn_in_flight = False
+            if self._on_thinking_changed is not None:
+                self._on_thinking_changed()
 
     def _report_recovered(self) -> None:
         if not self._error_streak:
