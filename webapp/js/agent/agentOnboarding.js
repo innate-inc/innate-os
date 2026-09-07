@@ -3,15 +3,10 @@
 // Copyright (c) 2026 Innate Inc
 // The browser owns first-run participation; the world owns mission success.
 import { TTS_TOPIC, WEBSOCKET_STATUS_TOPIC } from "../constants.js";
-import { FIRST_RUN_REQUEST_EVENT, markOnboardingSeen, publishFirstRunCompletion, readFirstRun, saveFirstRun, shouldAutoStartOnboarding } from "../onboarding.js";
+import { FIRST_MISSIONS, FIRST_RUN_REQUEST_EVENT, markOnboardingSeen, publishFirstRunCompletion, readFirstRun, saveFirstRun, shouldAutoStartOnboarding } from "../onboarding.js";
 
 export const INTRO_AGENT_ID = "intro_agent";
 export const VIEW_GUIDANCE = "I’m starting now. Switch to my Main view at the top to see what I see. You can also use Arm view for a closer look at what my gripper is doing.";
-export const FIRST_MISSIONS = [
-  { id: "put_it_away", environment: "apartment", title: "Put it away", setting: "The apartment", brief: "One LEGO brick. One box. A robot that needs your direction.", icon: "brick" },
-  { id: "way_out", environment: "backrooms", title: "Find a way out", setting: "The Backrooms", brief: "Endless yellow rooms. Help MARS find the green exit.", icon: "exit" },
-  { id: "other_side", environment: "intersection", title: "The other side", setting: "Crossroads", brief: "Watch the traffic. Guide MARS safely across the street.", icon: "crossing" },
-];
 export const hasIntroAgent = (/** @type {{agents: {id:string}[]}} */ snapshot) => snapshot.agents.some(({id}) => id === INTRO_AGENT_ID);
 export function backendReadinessFromMessage(/** @type {any} */ message) {
   try {
@@ -45,7 +40,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   const unadvertise = options.enabled ? ros.advertise(TTS_TOPIC, "std_msgs/msg/String") : () => {};
   const views = new Set();
   let abort = new AbortController();
-  let restarting = /** @type {Promise<void>|null} */ (null);
+  let restarting = /** @type {Promise<boolean>|null} */ (null);
   const listeners = new Set();
   const overlay = document.createElement("section");
   overlay.className = "first-mission";
@@ -208,34 +203,47 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     revealTaskViews();
     if (active && saved?.attemptId && value.active?.attempt_id === saved.attemptId && value.active.state === "passed") void finish("done");
   });
-  function restart() {
-    if (!options.enabled || destroyed) return Promise.resolve();
-    if (restarting) return restarting;
+  function restart(/** @type {string=} */ targetEnvironment) {
+    if (!options.enabled || destroyed || restarting) return Promise.resolve(false);
+    const selected = FIRST_MISSIONS.find(item => item.environment === targetEnvironment);
+    if (targetEnvironment && !selected) return Promise.resolve(false);
+    // Opening the selector or reselecting the loaded world never resets progress.
+    if (selected && environment?.environment?.id === targetEnvironment) return Promise.resolve(true);
     restarting = (async () => {
       // Drain the old attempt before replacing its cancellation signal. Late
       // activation acknowledgements must not start MARS behind the chooser.
       if (active) await finish("skipped");
       await Promise.allSettled([operation, activation].filter(Boolean));
-      if (destroyed) return;
+      if (destroyed) return false;
       // Picking another mission is distinct from Skip: close this exact
       // attempt and stop its agent before offering a replacement scene.
       if (saved?.attemptId && challenge?.active?.attempt_id === saved.attemptId) {
         session.abortChallenge(saved.attemptId);
         if (agentState.get().currentDirective === INTRO_AGENT_ID) await agentState.setDirective("");
       }
-      if (destroyed) return;
+      if (destroyed) return false;
       abort = new AbortController();
       saved = {phase:"choosing"};
       active = true; began = false; taskStarted = false;
       options.onClearSuggestions?.();
-      persist(); render();
+      persist();
+      if (selected) {
+        await choose(selected);
+        return !destroyed && saved?.id === selected.id && !statusMessage
+          && (saved.phase === "done" || (active && saved.phase === "playing"));
+      }
+      render();
+      return true;
     })().catch(error => {
-      options.onNotice?.(`Could not open challenges: ${error.message}. Try picking another challenge again.`);
+      options.onNotice?.(`Could not change mission: ${error.message}. Try again.`);
+      return false;
     }).finally(() => {restarting = null;});
     return restarting;
   }
   function start(/** @type {Event} */ event) {
-    if (/** @type {CustomEvent} */ (event).detail?.restart) { void restart(); return; }
+    const detail = /** @type {CustomEvent} */ (event).detail;
+    event.preventDefault();
+    if (detail?.restart) { void restart(detail.environment).then(success => detail.complete?.(success)); return; }
     if (active) { render(); if (mission()) void runConnect(false); }
   }
   window.addEventListener(FIRST_RUN_REQUEST_EVENT, start);

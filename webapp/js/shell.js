@@ -15,7 +15,7 @@ import { installPressActivate } from "./pressActivate.js";
 import {
   ONBOARDING_REQUEST_EVENT,
   initializeFirstRunCompletion,
-  installFirstMissionReplay,
+  installEnvironmentMissions,
   shouldAutoStartOnboarding,
   ONBOARDING_START_SECTION,
   startFirstRun,
@@ -86,7 +86,8 @@ export function initShell(navigate) {
   let checkedFirstPage = false;
   let onboardingPending = false;
   let onboardingRestart = false;
-  let challengeReplayPending = false;
+  /** @type {null | {start:()=>void, cancel:()=>void}} */
+  let environmentMissionPending = null;
 
   /**
    * (Re)build the rail from railRows — links in group order, a divider at each
@@ -229,6 +230,7 @@ export function initShell(navigate) {
    * @param {string} key
    */
   function setActive(key) {
+    if (key !== ONBOARDING_START_SECTION) environmentMissionPending?.cancel();
     activeKey = key;
     applyActive();
     // Every navigation lands here, and none may leave the drawer over the
@@ -245,21 +247,34 @@ export function initShell(navigate) {
       const config = await getConfig();
       if (config?.simControls) {
         await initializeFirstRunCompletion();
-        installFirstMissionReplay(() => {
+        installEnvironmentMissions(environment => new Promise(resolve => {
           closeRailDrawer();
-          if (activeKey === ONBOARDING_START_SECTION) startFirstRun(true);
-          else { challengeReplayPending = true; navigate(pathForKey(ONBOARDING_START_SECTION)); }
-        });
+          if (activeKey === ONBOARDING_START_SECTION) startFirstRun(true, environment, resolve);
+          else {
+            // Failed or superseded route loads must not leave a delayed reset.
+            const cancel = () => {clearTimeout(timeout); environmentMissionPending = null; resolve(false);};
+            const timeout = setTimeout(cancel, 15000);
+            environmentMissionPending = {
+              cancel,
+              start: () => {
+                clearTimeout(timeout);
+                startFirstRun(true, environment, resolve);
+              },
+            };
+            navigate(pathForKey(ONBOARDING_START_SECTION));
+          }
+        }));
       }
       onboardingPending = !!config?.simControls && shouldAutoStartOnboarding();
       if (onboardingPending && activeKey !== ONBOARDING_START_SECTION) {
         navigate(pathForKey(ONBOARDING_START_SECTION));
       }
     }
-    if (challengeReplayPending && activeKey === ONBOARDING_START_SECTION) {
-      challengeReplayPending = false;
+    if (environmentMissionPending && activeKey === ONBOARDING_START_SECTION) {
+      const {start} = environmentMissionPending;
+      environmentMissionPending = null;
       onboardingPending = false;
-      startFirstRun(true);
+      start();
       return;
     }
     if (onboardingPending && activeKey === ONBOARDING_START_SECTION) {

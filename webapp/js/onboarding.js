@@ -18,6 +18,11 @@ export function markOnboardingSeen() {
 
 export const FIRST_RUN_KEY = "innate.firstMission.v1";
 export const FIRST_RUN_REQUEST_EVENT = "innate:first-run-request";
+export const FIRST_MISSIONS = [
+  { id: "put_it_away", environment: "apartment", title: "Put it away", setting: "The apartment", brief: "One LEGO brick. One box. A robot that needs your direction.", icon: "brick" },
+  { id: "way_out", environment: "backrooms", title: "Find a way out", setting: "The Backrooms", brief: "Endless yellow rooms. Help MARS find the green exit.", icon: "exit" },
+  { id: "other_side", environment: "intersection", title: "The other side", setting: "Crossroads", brief: "Watch the traffic. Guide MARS safely across the street.", icon: "crossing" },
+];
 const COMPLETION_CHANNEL = "innate:first-mission:v1";
 /** @type {{phase:string}|null} */
 let inheritedCompletion = null;
@@ -108,28 +113,52 @@ export function shouldAutoStartOnboarding() {
   try { return !localStorage.getItem(ONBOARDING_SEEN_KEY); } catch { return true; }
 }
 
-export function startFirstRun(restart = false) {
-  window.dispatchEvent(new CustomEvent(FIRST_RUN_REQUEST_EVENT, {detail:{restart}}));
+/** @param {boolean} restart
+ * @param {string=} environment
+ * @param {(success:boolean)=>void} [complete] */
+export function startFirstRun(restart = false, environment, complete) {
+  const event = new CustomEvent(FIRST_RUN_REQUEST_EVENT, {cancelable:true, detail:{restart, environment, complete}});
+  window.dispatchEvent(event);
+  if (!event.defaultPrevented) complete?.(false);
 }
 
-/** Only the embedding broker can reopen the chooser; it cannot select or run a mission.
- * @param {()=>void} onChoose */
-export function installFirstMissionReplay(onChoose) {
+/** Installed only in simulator mode. The trusted broker selects a world; the
+ * mission controller owns stopping the old attempt and starting its replacement.
+ * @param {(environment:string)=>Promise<boolean>} onStart */
+export function installEnvironmentMissions(onStart) {
   const origin = embeddingOrigin();
   if (!origin) return () => {};
-  let lastRequest = "";
+  const environments = FIRST_MISSIONS.map(mission => mission.environment);
+  /** @type {Map<string, Promise<boolean>>} */
+  const requests = new Map();
+  let busy = false;
+  let removed = false;
+  const send = (/** @type {any} */ data) => {
+    if (!removed) window.parent.postMessage({channel:COMPLETION_CHANNEL, ...data}, origin);
+  };
+  const controls = () => send({type:"controls", environments, busy});
   const receive = (/** @type {MessageEvent} */ event) => {
     if (event.source !== window.parent || event.origin !== origin) return;
     const data = event.data;
     if (!data || data.channel !== COMPLETION_CHANNEL) return;
     if (data.type === "get-controls") {
-      window.parent.postMessage({channel:COMPLETION_CHANNEL, type:"controls", canChoose:true}, origin);
-    } else if (data.type === "choose" && typeof data.requestId === "string"
-      && data.requestId.length > 0 && data.requestId.length <= 128) {
-      if (data.requestId !== lastRequest) { lastRequest = data.requestId; onChoose(); }
-      window.parent.postMessage({channel:COMPLETION_CHANNEL, type:"choose-accepted", requestId:data.requestId}, origin);
+      controls();
+    } else if (data.type === "start-environment" && environments.includes(data.environment)
+      && typeof data.requestId === "string" && data.requestId.length > 0 && data.requestId.length <= 128) {
+      let result = requests.get(data.requestId);
+      if (!result) {
+        if (busy) { send({type:"environment-started", requestId:data.requestId, success:false}); return; }
+        busy = true;
+        controls();
+        result = Promise.resolve().then(() => onStart(data.environment)).catch(() => false)
+          .finally(() => {busy = false; controls();});
+        requests.set(data.requestId, result);
+        const oldest = requests.keys().next().value;
+        if (requests.size > 32 && oldest !== undefined) requests.delete(oldest);
+      }
+      void result.then(success => send({type:"environment-started", requestId:data.requestId, success}));
     }
   };
   window.addEventListener("message", receive);
-  return () => window.removeEventListener("message", receive);
+  return () => {removed = true; window.removeEventListener("message", receive);};
 }
