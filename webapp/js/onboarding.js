@@ -90,6 +90,7 @@ export function readFirstRun() {
   try {
     const saved = JSON.parse(localStorage.getItem(FIRST_RUN_KEY) || "null");
     if (!saved || typeof saved !== "object") return inheritedCompletion;
+    if (saved.phase === "choosing") return {phase:"choosing"};
     if (["done", "skipped"].includes(saved.phase)) return saved;
     if (!["starting", "playing"].includes(saved.phase)
       || !["put_it_away", "way_out", "other_side"].includes(saved.id)
@@ -102,10 +103,33 @@ export function readFirstRun() {
 
 export function shouldAutoStartOnboarding() {
   const saved = readFirstRun();
+  if (["choosing", "starting", "playing"].includes(saved?.phase)) return true;
   if (saved?.phase === "done" || saved?.phase === "skipped") return false;
   try { return !localStorage.getItem(ONBOARDING_SEEN_KEY); } catch { return true; }
 }
 
-export function startFirstRun() {
-  window.dispatchEvent(new CustomEvent(FIRST_RUN_REQUEST_EVENT));
+export function startFirstRun(restart = false) {
+  window.dispatchEvent(new CustomEvent(FIRST_RUN_REQUEST_EVENT, {detail:{restart}}));
+}
+
+/** Only the embedding broker can reopen the chooser; it cannot select or run a mission.
+ * @param {()=>void} onChoose */
+export function installFirstMissionReplay(onChoose) {
+  const origin = embeddingOrigin();
+  if (!origin) return () => {};
+  let lastRequest = "";
+  const receive = (/** @type {MessageEvent} */ event) => {
+    if (event.source !== window.parent || event.origin !== origin) return;
+    const data = event.data;
+    if (!data || data.channel !== COMPLETION_CHANNEL) return;
+    if (data.type === "get-controls") {
+      window.parent.postMessage({channel:COMPLETION_CHANNEL, type:"controls", canChoose:true}, origin);
+    } else if (data.type === "choose" && typeof data.requestId === "string"
+      && data.requestId.length > 0 && data.requestId.length <= 128) {
+      if (data.requestId !== lastRequest) { lastRequest = data.requestId; onChoose(); }
+      window.parent.postMessage({channel:COMPLETION_CHANNEL, type:"choose-accepted", requestId:data.requestId}, origin);
+    }
+  };
+  window.addEventListener("message", receive);
+  return () => window.removeEventListener("message", receive);
 }

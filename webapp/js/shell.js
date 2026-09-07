@@ -16,6 +16,7 @@ import { installPressActivate } from "./pressActivate.js";
 import {
   ONBOARDING_REQUEST_EVENT,
   initializeFirstRunCompletion,
+  installFirstMissionReplay,
   shouldAutoStartOnboarding,
   ONBOARDING_START_SECTION,
   startFirstRun,
@@ -86,6 +87,7 @@ export function initShell(navigate) {
   let checkedFirstPage = false;
   let onboardingPending = false;
   let onboardingRestart = false;
+  let challengeReplayPending = false;
 
   /**
    * (Re)build the rail from railRows — links in group order, a divider at each
@@ -245,11 +247,24 @@ export function initShell(navigate) {
     if (!checkedFirstPage) {
       checkedFirstPage = true;
       const config = await getConfig();
-      if (config?.simControls) await initializeFirstRunCompletion();
+      if (config?.simControls) {
+        await initializeFirstRunCompletion();
+        installFirstMissionReplay(() => {
+          closeRailDrawer();
+          if (activeKey === ONBOARDING_START_SECTION) startFirstRun(true);
+          else { challengeReplayPending = true; navigate(pathForKey(ONBOARDING_START_SECTION)); }
+        });
+      }
       onboardingPending = !!config?.simControls && shouldAutoStartOnboarding();
       if (onboardingPending && activeKey !== ONBOARDING_START_SECTION) {
         navigate(pathForKey(ONBOARDING_START_SECTION));
       }
+    }
+    if (challengeReplayPending && activeKey === ONBOARDING_START_SECTION) {
+      challengeReplayPending = false;
+      onboardingPending = false;
+      startFirstRun(true);
+      return;
     }
     if (onboardingPending && activeKey === ONBOARDING_START_SECTION) {
       onboardingPending = false;
