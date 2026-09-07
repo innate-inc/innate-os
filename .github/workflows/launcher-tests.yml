@@ -23,7 +23,7 @@ jobs:
 
       - name: Run the host-side test suite
         run: |
-          pip install pytest pyyaml numpy trimesh pillow mujoco
+          pip install pytest pyyaml numpy trimesh pillow mujoco opencv-python-headless
           python -m pytest tests/ -q
 
       - name: Set up Node.js

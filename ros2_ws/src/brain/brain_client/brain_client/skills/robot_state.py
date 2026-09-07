@@ -26,6 +26,7 @@ from sensor_msgs.msg import BatteryState, JointState, LaserScan
 from std_msgs.msg import String
 
 from brain_client.common.geometry import quaternion_to_yaw
+from brain_client.perception.rgbd import RgbdObservation
 from brain_client.skills.types import _DEFAULT_STATE_GRACE_S, InterfaceType, RobotStateType, _state_grace_s
 from brain_client.state.arm import Arm
 from brain_client.state.battery import Battery
@@ -110,6 +111,7 @@ class RobotStateProvider:
             RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64: self.current_main_image,
             RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64: self.current_wrist_image,
             RobotStateType.LAST_DEPTH_IMAGE: self.current_depth,
+            RobotStateType.LAST_RGBD_OBSERVATION: self.current_rgbd,
             RobotStateType.LAST_ODOM: self.current_odom,
             RobotStateType.LAST_MAP: self.current_map,
             RobotStateType.LAST_JOINT_STATES: self.current_joint_states,
@@ -335,8 +337,15 @@ class RobotStateProvider:
         if cached is not None and cached[0] is jpeg:
             return cached[1]
         image = WristImage.from_jpeg(jpeg)
+        capture = self._camera.wrist_capture
+        if capture is not None and capture[0] is jpeg:
+            image.capture_ns, image.received_monotonic, image.received_ros_ns, image.capture_generation = capture[1:]
+            image.capture_is_current = lambda: self._camera.wrist_generation_is_current(capture[4])
         self._wrist_image_cache = (jpeg, image)
         return image
+
+    def current_rgbd(self) -> RgbdObservation | None:
+        return self._camera.rgbd_observation(require_pose=True)
 
     def current_depth(self) -> DepthMap | None:
         depth = self._camera.last_depth_image
@@ -486,7 +495,9 @@ class RobotStateProvider:
         to_inject = {}
         for state_type, getter in pairs:
             value = getter()
-            if value is not None:
+            # A metric observation must disappear when freshness/TF validation
+            # fails; retaining the last injected value would defeat that contract.
+            if value is not None or state_type == RobotStateType.LAST_RGBD_OBSERVATION:
                 to_inject[state_type.value] = value
             else:
                 self._warn_missing(state_type.name)

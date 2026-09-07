@@ -42,6 +42,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import rclpy
+from builtin_interfaces.msg import Time
 from geometry_msgs.msg import TransformStamped, Twist
 from nav_msgs.msg import Odometry
 from PIL import Image as PILImage
@@ -484,13 +485,30 @@ class VirtualMarsNode(Node):
                 last["depth"] = now
                 rendered = True
                 t0 = time.perf_counter()
+                surface_depth = wanted["main"] or self._depth_pub.get_subscription_count() > 0
                 try:
-                    depth = self.sim.render_depth("main")
+                    if wanted["main"]:
+                        jpeg, depth, captured_ns = self.sim.render_rgbd("main")
+                        stamp = Time(sec=captured_ns // 1_000_000_000, nanosec=captured_ns % 1_000_000_000)
+                        self._publish_camera_frames(self._main_pub, self._main_raw_pub, "main", jpeg, stamp)
+                        self._publish_camera_info(stamp)
+                        last["main"] = now
+                    else:
+                        depth = self.sim.render_depth("main", include_robot=surface_depth)
+                        stamp = None
                 except (OSError, RuntimeError) as exc:
                     self.get_logger().warning(f"depth render unavailable ({exc}); skipping frame")
                     continue
+                # Surface depth must respect RGB-visible robot occluders. Nav2's
+                # obstacle cloud deliberately retains its robot-free rendering.
+                self._publish_depth_and_points(depth, stamp, publish_points=not surface_depth)
+                if surface_depth and self._points_pub.get_subscription_count() > 0:
+                    try:
+                        nav_depth = self.sim.render_depth("main")
+                        self._publish_depth_and_points(nav_depth, publish_depth=False)
+                    except (OSError, RuntimeError) as exc:
+                        self.get_logger().warning(f"navigation depth unavailable ({exc}); skipping cloud")
                 cost["depth"] = 0.8 * cost["depth"] + 0.2 * (time.perf_counter() - t0)
-                self._publish_depth_and_points(depth)
             for camera, pub, raw_pub in (
                 ("main", self._main_pub, self._main_raw_pub),
                 ("wrist", self._wrist_pub, self._wrist_raw_pub),
@@ -501,18 +519,24 @@ class VirtualMarsNode(Node):
                 rendered = True
                 t0 = time.perf_counter()
                 try:
-                    jpeg = self.sim.render_jpeg(camera)
+                    jpeg, captured_ns = self.sim.render_jpeg_capture(camera)
                 except (OSError, RuntimeError) as exc:
                     self.get_logger().warning(f"{camera} render unavailable ({exc}); skipping frame")
                     continue
                 cost[camera] = 0.8 * cost[camera] + 0.2 * (time.perf_counter() - t0)
-                self._publish_camera_frames(pub, raw_pub, camera, jpeg)
+                self._publish_camera_frames(
+                    pub,
+                    raw_pub,
+                    camera,
+                    jpeg,
+                    Time(sec=captured_ns // 1_000_000_000, nanosec=captured_ns % 1_000_000_000),
+                )
             if not rendered:
                 time.sleep(0.02)
 
-    def _publish_camera_frames(self, pub, raw_pub, camera: str, jpeg: bytes) -> None:
+    def _publish_camera_frames(self, pub, raw_pub, camera: str, jpeg: bytes, stamp=None) -> None:
         """Publish one camera frame; the server hands us a wire-res JPEG."""
-        stamp = self._stamp()
+        stamp = self._stamp() if stamp is None else stamp
         frame_id = "camera_optical_frame" if camera == "main" else "arm_camera_link"
 
         if pub.get_subscription_count() > 0:
@@ -535,12 +559,12 @@ class VirtualMarsNode(Node):
             msg.data = rgb[:, :, ::-1].tobytes()
             raw_pub.publish(msg)
 
-    def _publish_depth_and_points(self, depth) -> None:
+    def _publish_depth_and_points(self, depth, stamp=None, *, publish_depth=True, publish_points=True) -> None:
         """Any render scale in, fixed wire contract out: depth image 640x480,
         cloud ~160x120."""
-        want_depth = self._depth_pub.get_subscription_count() > 0
-        want_points = self._points_pub.get_subscription_count() > 0
-        stamp = self._stamp()
+        want_depth = publish_depth and self._depth_pub.get_subscription_count() > 0
+        want_points = publish_points and self._points_pub.get_subscription_count() > 0
+        stamp = self._stamp() if stamp is None else stamp
         invalid = (depth < DEPTH_MIN_M) | (depth > DEPTH_MAX_M)
         img_scale = CAMERA_HEIGHT // depth.shape[0]
 
@@ -585,9 +609,9 @@ class VirtualMarsNode(Node):
             msg.data = cloud.tobytes()
             self._points_pub.publish(msg)
 
-    def _publish_camera_info(self) -> None:
+    def _publish_camera_info(self, stamp=None) -> None:
         msg = CameraInfo()
-        msg.header.stamp = self._stamp()
+        msg.header.stamp = self._stamp() if stamp is None else stamp
         msg.header.frame_id = "camera_optical_frame"
         msg.width, msg.height = CAMERA_WIDTH, CAMERA_HEIGHT
         msg.distortion_model = "plumb_bob"

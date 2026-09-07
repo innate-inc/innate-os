@@ -509,7 +509,7 @@ class VirtualMars:
     def render_jpeg(self, camera: str) -> bytes:
         return encode_jpeg(self.render_rgb(camera))
 
-    def update_depth(self, camera: str) -> None:
+    def update_depth(self, camera: str, *, include_robot: bool = False) -> None:
         """Depth counterpart of update_camera. The robot's own geoms (group 0)
         are excluded: the real stereo pipeline can't resolve the arm/head that
         close to the lens (max_disparity limit + edge/speckle filters), so the
@@ -519,7 +519,10 @@ class VirtualMars:
             self._depth_renderer = mujoco.Renderer(self.model, height=self._depth_h, width=self._depth_w)
             self._depth_renderer.enable_depth_rendering()
             self._depth_scene_option = mujoco.MjvOption()
-            self._depth_scene_option.geomgroup[0] = 0
+        # Navigation keeps its historical robot-free obstacle cloud. Metric
+        # camera depth includes visible robot surfaces; it must not see through
+        # an RGB occluder to the background behind it.
+        self._depth_scene_option.geomgroup[0] = int(include_robot)
         self._depth_renderer.update_scene(self.data, camera=camera, scene_option=self._depth_scene_option)
 
     def read_depth(self) -> np.ndarray:
