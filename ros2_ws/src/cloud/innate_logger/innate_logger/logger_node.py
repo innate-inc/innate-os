@@ -81,8 +81,9 @@ class LoggerNode(Node):
         auth_issuer: str = str(self.get_parameter("auth_issuer_url").value)
 
         if not service_key:
-            self.get_logger().fatal("service_key is required")
-            raise RuntimeError("service_key is required")
+            message = "INNATE_SERVICE_KEY is required; set it in the environment or .env and restart the node"
+            self.get_logger().fatal(message)
+            raise RuntimeError(message)
 
         # ── Auth + telemetry client ─────────────────────────────────
         auth = AuthProvider(issuer_url=auth_issuer, service_key=service_key)

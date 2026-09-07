@@ -178,8 +178,12 @@ class TrainingNode(Node):
         pub_sec = float(self.get_parameter("status_publish_interval_sec").value)
 
         if not server_url or not service_key:
-            self.get_logger().fatal("server_url and service_key are required")
-            raise RuntimeError("server_url and service_key are required")
+            message = (
+                "The server_url ROS parameter and INNATE_SERVICE_KEY environment setting are required; "
+                "set the key in the environment or .env and restart the node"
+            )
+            self.get_logger().fatal(message)
+            raise RuntimeError(message)
 
         # ── Shared objects ──────────────────────────────────────────
         config = ClientConfig(
