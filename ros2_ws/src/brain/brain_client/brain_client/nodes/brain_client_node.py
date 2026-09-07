@@ -230,6 +230,7 @@ class BrainClientNode(Node):
             battery=self.battery,
             identity=self.identity,
             trace=lambda payload: self.brain_trace_pub.publish(String(data=payload)),
+            on_thinking_changed=self.publish_agent_status,
         )
         # Heavy traces (request bodies, frames — hundreds of KB per turn) are
         # only serialized while a monitor actually subscribes to /brain/trace.
@@ -326,6 +327,7 @@ class BrainClientNode(Node):
                 data=json.dumps(
                     {
                         "brain_active": self.state.is_brain_active,
+                        "brain_thinking": self.brain.thinking,
                         "current_directive": self.state.current_directive.id if self.state.current_directive else "",
                         "active_skills": list(self.state.active_skill_ids or []),
                         # Speech needs the hosted proxy (an Innate service

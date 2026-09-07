@@ -462,7 +462,7 @@ def agent_factory(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")  # gives the agent a swappable transport
     created = []
 
-    def make(trace=None) -> tuple[BrainAgent, BrainState]:
+    def make(trace=None, on_thinking_changed=None) -> tuple[BrainAgent, BrainState]:
         logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
         node = SimpleNamespace(get_logger=lambda: logger)
         config = SimpleNamespace(
@@ -505,6 +505,7 @@ def agent_factory(monkeypatch):
             chat=chat,
             gaze=SimpleNamespace(pause=lambda: None),
             trace=trace,
+            on_thinking_changed=on_thinking_changed,
         )
         created.append(agent)
         return agent, state
@@ -725,8 +726,28 @@ def test_turn_finishing_after_deactivation_is_dropped_entirely(agent_factory):
     assert agent._turn_in_flight is False
 
 
+@pytest.mark.parametrize("fails", [False, True])
+def test_thinking_status_covers_request_and_clears_before_backoff(agent_factory, monkeypatch, fails):
+    statuses = []
+    agent, _ = agent_factory(on_thinking_changed=lambda: statuses.append(agent.thinking))
+    no_pause(agent, monkeypatch)
+
+    def transport(model, body):
+        assert statuses == [True]  # visible before any response or thought text
+        if fails:
+            raise RuntimeError("offline")
+        return [model_response({"text": "done"})]
+
+    agent._context._transport = transport
+    assert not agent.thinking
+    run_turn(agent)
+    assert statuses == [True, False]
+    assert not agent.thinking
+
+
 def test_stop_cancels_a_turn_mid_think_and_absorbs_nothing(agent_factory):
-    agent, state = agent_factory()
+    statuses = []
+    agent, state = agent_factory(on_thinking_changed=lambda: statuses.append(agent.thinking))
     thinking, release = threading.Event(), threading.Event()
 
     def transport(model, body):
@@ -738,10 +759,12 @@ def test_stop_cancels_a_turn_mid_think_and_absorbs_nothing(agent_factory):
     agent.on_user_message("hi")
     agent.start()
     assert thinking.wait(timeout=5)
+    assert statuses == [True]
 
     agent.stop()  # synchronous: the turn has unwound at its await when this returns
     release.set()  # the orphaned HTTP call finishes on its worker thread...
     time.sleep(0.2)
+    assert statuses == [True, False]
     assert agent._context._history == []  # ...and its response is dropped
     assert not agent._runtime.running
 
