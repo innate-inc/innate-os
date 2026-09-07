@@ -6,8 +6,6 @@
 // judging happens server-side against ground truth; this panel is a thin
 // renderer plus two commands (start/abort).
 
-import { maybeShowChallengeIntro, showChallengeIntro } from "./challengeIntro.js";
-
 // This panel and the sim's scene setup expand over the same corner of the stage,
 // so at most one may be open. Scene setup lives in the separately-built sim
 // viewer bundle (sim/viewer/src/simStage.ts), so the handshake is a document
@@ -60,9 +58,6 @@ export function createChallengePanel(root, session, onboarding) {
     launcher.setAttribute("aria-label", next ? "Close challenges" : "Open challenges");
     if (!next) return;
     document.dispatchEvent(new CustomEvent(PANEL_OPEN_EVENT, { detail: { panel: PANEL_ID } }));
-    if (revealed || firstRun?.active) return;
-    revealed = true;
-    intro = maybeShowChallengeIntro();
   };
   // Deliberately opening the other panel closes this one even mid-run — unlike
   // dismiss(), which protects a live goal list from a stray click on the scene.
@@ -80,30 +75,6 @@ export function createChallengePanel(root, session, onboarding) {
   };
   document.addEventListener("pointerdown", onOutsidePointer, {capture:true});
   launcher.addEventListener("click", () => setOpen(!open));
-  // Subtle standing hint back to the docs — reopens the first-run intro
-  // (challengeIntro.js) with the tutorial link and preview.
-  const tutorial = document.createElement("button");
-  tutorial.type = "button";
-  tutorial.className = "challenge-tutorial-link";
-  // Circled "?" so the hint reads as a clickable help control, not a label
-  // like the CHALLENGES microlabel next to it.
-  const q = document.createElement("span");
-  q.className = "challenge-tutorial-q";
-  q.textContent = "?";
-  q.setAttribute("aria-hidden", "true");
-  const tutorialLabel = document.createElement("span");
-  tutorialLabel.textContent = "Tutorial";
-  tutorial.append(q, tutorialLabel);
-  tutorial.title = "How challenges work, and the tutorial that builds your first skill";
-  tutorial.addEventListener("click", () => {
-    intro?.close();
-    intro = showChallengeIntro();
-  });
-  head.appendChild(tutorial);
-  /** Open intro dialog, if any — closed on page teardown, not leaked. */
-  /** @type {{ close: () => void } | null} */
-  let intro = null;
-  let revealed = false;
 
   const body = document.createElement("div");
   panel.append(head, body);
@@ -127,7 +98,6 @@ export function createChallengePanel(root, session, onboarding) {
     dock.classList.toggle("active", challengeRunning);
     dock.classList.toggle("first-mission-challenge", guided());
     launcher.hidden = guided();
-    tutorial.hidden = !!firstRun?.active;
     const scope = guided() ? firstRun.mission.setting : environmentName;
     title.textContent = scope ? `Challenges · ${scope}` : "Challenges";
     if (guided() && !open) setOpen(true);
@@ -318,7 +288,6 @@ export function createChallengePanel(root, session, onboarding) {
       if (!challengeRunning) setOpen(false);
     },
     destroy() {
-      intro?.close();
       unsub();
       unsubEnvironment?.();
       unsubFirstRun?.();

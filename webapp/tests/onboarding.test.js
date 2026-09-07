@@ -207,26 +207,21 @@ for (const mode of ["fresh", "completed", "playing", "locked"]) {
 document.referrer="";
 console.log("ok - broker completion: pinned source/origin/request, new session, active attempt, and blocked storage");
 
-// Completing or skipping the mission must not trigger a second introduction
-// when the newly revealed Challenges panel is opened.
-const { maybeShowChallengeIntro } = await import("../js/agent/challengeIntro.js");
-for (const phase of ["done", "skipped"]) {
-  localStorage.removeItem("innate.challengeIntroSeen");
-  localStorage.setItem("innate.firstMission.v1", JSON.stringify({phase}));
-  assert.equal(maybeShowChallengeIntro(), null);
-}
-console.log("ok - first-run completion suppresses the redundant challenge introduction");
-
 // Outside the first run, the same panel follows the server's environment roster
-// and retains normal manual challenge controls.
+// and opens directly with normal manual challenge controls on a fresh browser.
 storage.clear();
-localStorage.setItem(FIRST_RUN_KEY,JSON.stringify({phase:"done"}));
-const scoped=simulator();ui=scoped.mount();
+const scoped=simulator();ui=scoped.mount(false);
+ui.root.find(el=>el.className==="agent-challenge-toggle").click();
+assert.ok(ui.root.find(el=>el.className==="agent-challenge-dock").classList.contains("open"));
 scoped.emitEnvironment({environment:{id:"backrooms",display_name:"The Backrooms"},switch:null});
 scoped.emitChallenge({list:[FIRST_MISSIONS[1]],active:null});
 assert.ok(ui.root.find(el=>el.textContent==="Challenges · The Backrooms"));
 assert.ok(ui.root.find(el=>el.textContent==="Find a way out"));
 assert.equal(ui.root.find(el=>el.textContent==="Put it away"),undefined);
+ui.root.find(el=>el.className==="challenge-item").click();
+assert.equal(scoped.calls.starts.at(-1).id,"way_out");
+ui.root.find(el=>el.textContent==="Abort").click();
+assert.equal(scoped.calls.aborts.length,1);
 scoped.emitChallenge({list:[],active:null});
 assert.ok(ui.root.find(el=>el.textContent==="No challenges in this environment yet."));
 ui.flow.destroy();
