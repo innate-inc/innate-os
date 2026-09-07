@@ -28,7 +28,7 @@ error (and clears when you fix it) instead of vanishing.
 Skill IDs are namespaced by package: `innate-os/<name>` for shipped,
 `local/<name>` for yours, `<package>/<name>` for dropped-in packs. Packages
 import each other by bare name (`from innate_skills import arm_utils`). See
-the README at the repo root.
+the [skills guide](../docs/skills/README.md) for authoring and running skills.
 
 A pack that lives elsewhere on disk (a team checkout, a mounted volume) is
 symlinked in rather than copied — it then behaves exactly like a dropped-in

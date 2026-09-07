@@ -101,32 +101,16 @@ The Innate mobile app is available on both iOS and Android. It allows you to con
 
 ## Skills
 
-Skills are the core unit of action on Innate robots.
+Skills are reusable actions: navigate, pick up an object, call a service, or run a learned policy.
 
-A skill can be digital, like calling a tool, a service or another agent; or physical, like navigating, waving, grasping, recording a demonstration, or executing a learned manipulation policy.
-
-- **Execute manually** — Run skills from the `innate` CLI.
-- **Operate from apps** — Trigger skills through the web app or Innate mobile apps.
+- **Execute manually** — Run skills from the CLI, web app, or mobile apps.
 - **Run autonomously** — Let agents select and interrupt skills as the world changes.
-
-### Running a skill
-
-Ask MARS to find and pick up an object from the floor. On a configured robot with Innate vision access, place a sock in view and run:
-
-```bash
-innate skill type innate-os/pick_any_object
-innate skill run innate-os/pick_any_object @prompt="the white sock"
-```
-
-MARS looks for the object, approaches it, grasps it, and checks whether the pick succeeded. Change `@prompt` to describe another object. [See the picking skill](workspace/innate_skills/pick_any_object.py).
 
 <a id="skill-definition"></a>
 
 ### Write a skill
 
-A skill is a Python class. You can control the robot's interfaces directly or build on an existing skill. Here is a custom skill that reuses `PickAnyObject` to pick up a sock.
-
-**Create** `workspace/custom_skills/pick_up_sock.py`:
+Reuse the built-in [picking skill](workspace/innate_skills/pick_any_object.py). On MARS with Innate vision access, save this as `workspace/custom_skills/pick_up_sock.py`:
 
 ```python
 from innate_skills.pick_any_object import PickAnyObject
@@ -143,67 +127,18 @@ class PickUpSock(Skill):
         return self.pick(prompt="the white sock")
 ```
 
-**Save and run it** on the robot:
+<a id="running-a-skill"></a>
+
+Skills load automatically and hot-reload on save. Inspect and run yours:
 
 ```bash
+innate skill type local/pick_up_sock
 innate skill run local/pick_up_sock
 ```
 
-The runtime discovers the class and hot-reloads edits on save. The `pick` annotation declares the skill to reuse; the runtime wires it up. This custom skill runs the same picking behavior and returns its result. Failures and cancellation propagate to the caller.
+<a id="trained-skills"></a>
 
-Change the prompt in your file, save, and run it again to pick up a different object. You can also trigger your skill from the web or mobile app, or give it to an [agent](#agents).
-
-<details>
-<summary>Organizing skills and sharing helpers</summary>
-
-- **Built-in skills** — Located in `workspace/innate_skills/`, with IDs such as `innate-os/pick_any_object`.
-- **Your custom skills** — Stored in `workspace/custom_skills/`, with IDs such as `local/pick_up_sock`. Gitignored and yours to play with.
-- **Skill packs** — Any other folder dropped into `workspace/` loads as its own package (IDs `<folder>/<name>`). A pack that lives elsewhere on disk is symlinked in (`ln -s /opt/team/skills workspace/team_skills`) and works the same, hot reload included. In the simulator, the link target must also be mounted into the container.
-
-Helpers work like normal Python: any `.py` in your skills folder that doesn't define a `Skill` is just a module — `import` it, use relative imports inside subfolders, share across packages by bare name (`from innate_skills import arm_utils`). Device helpers are methods on the interfaces (`self.manipulation.move_to(...)`, `self.mobility.rotate_by(...)`); camera math and Gemini live under `innate` (`from innate import geometry, vision, gemini`).
-
-When writing your own motion loops, use `self.sleep(seconds)` so Stop can interrupt a pause. The framework handles cancellation and brakes the base; put your own cleanup in `try/finally`. Return a message or `SkillOutput` for success, or call `self.fail(message)` to fail the run.
-
-See [the workspace guide](workspace/README.md) for package layout and hot reload.
-
-</details>
-
-### Trained skills
-
-Some physical skills can be learned from demonstrations.
-
-- Record episodes from the phone app or web app.
-- Train a policy with one of the models available on Innate Cloud or locally.
-- Deploy the trained model as a skill.
-
-Start here: [Training overview](https://docs.innate.bot/training/overview). To ship a trained model back to the robot, see [Deploy a trained skill](https://docs.innate.bot/training/deploy-trained-skill).
-
-<details>
-<summary>Replay a recorded motion</summary>
-
-A replay skill plays back a recorded motion file. Save the following as `workspace/custom_skills/greet/metadata.json`, replacing the example recording URL and start/end poses with your own:
-
-```json
-{
-    "name": "greet",
-    "type": "replay",
-    "guidelines": "Greet the user with a friendly arm wave.",
-    "inputs": {},
-    "wheeled": false,
-    "downloads": {
-        "episode_0.h5": "https://your-cdn.com/greet/episode_0.h5"
-    },
-    "execution": {
-        "model_type": "replay",
-        "replay_file": "episode_0.h5",
-        "replay_frequency": 50.0,
-        "start_pose": [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.0],
-        "end_pose": [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.0]
-    }
-}
-```
-
-</details>
+**[Skills guide →](docs/skills/README.md)** — inputs, composition, interfaces, training, replay, and skill packs.
 
 ---
 
@@ -230,9 +165,7 @@ You can find agents in two different directories:
 - **[`workspace/innate_agents/`](workspace/innate_agents/)** — Built-in agents shipped with Innate OS.
 - **[`workspace/custom_agents/`](workspace/custom_agents/)** — Your local agents. Gitignored and yours to play with.
 
-Here is an example of a simple agent to navigate:
-
-A minimal agent file, saved as `workspace/custom_agents/navigate_agent.py`:
+A navigation agent, saved as `workspace/custom_agents/navigate_agent.py`:
 
 ```python
 from brain_client.agents.types import Agent
@@ -256,7 +189,11 @@ class NavigateAgent(Agent):
         return ["micro"]
 
     def get_prompt(self):
-        return "You are a helpful robot. When asked, navigate to the requested location using the navigate_to_position skill."
+        return (
+            "You are a helpful robot. When asked, "
+            "navigate to the requested location "
+            "using the navigate_to_position skill."
+        )
 ```
 
 ### Testing agents in sim
