@@ -140,6 +140,7 @@ class BrainAgent:
         self._context = (
             context_class(
                 transport,
+                **({"service_tier": config.openai_service_tier} if self.provider == "openai" else {}),
                 model=self.model,
                 thinking_level=self.reasoning_effort,
                 max_history=config.history_max_entries,
