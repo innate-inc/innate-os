@@ -189,7 +189,7 @@ function buildAgentView(root) {
   });
   const simSession = /** @type {any} */ (session);
   const challengePanel =
-    typeof simSession.onChallenge === "function" ? createChallengePanel(root, simSession) : null;
+    typeof simSession.onChallenge === "function" ? createChallengePanel(root, simSession, onboarding) : null;
   const isSceneSurface = (/** @type {EventTarget | null} */ target) =>
     target instanceof Element &&
     (target.matches(".video-stage > canvas, .video-stage > video") || target.classList.contains("video-stage"));

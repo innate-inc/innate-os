@@ -39,6 +39,8 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   let activation = /** @type {Promise<boolean>|null} */ (null);
   let reconnectTimer = /** @type {ReturnType<typeof setTimeout>|undefined} */ (undefined);
   let began = false;
+  let statusMessage = "";
+  const views = new Set();
   const abort = new AbortController();
   const listeners = new Set();
   const overlay = document.createElement("section");
@@ -54,7 +56,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     root.classList.toggle("agent-conversation-onboarding", active);
     root.classList.toggle("first-mission-choosing", active && !mission());
     document.body.classList.toggle("agent-conversation-onboarding-active", active);
-    overlay.hidden = !active;
+    overlay.hidden = !active || !!mission();
     document.dispatchEvent(new CustomEvent("innate:first-run-visibility", {detail:{active}}));
   }
   function button(/** @type {string} */ text, /** @type {()=>void} */ click, className = "") {
@@ -63,36 +65,31 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     el.addEventListener("click", click); return el;
   }
   function render(/** @type {string} */ status = "") {
+    statusMessage = status;
     paintVisibility();
     overlay.replaceChildren();
-    if (!active) return;
-    const selected = mission();
-    overlay.classList.toggle("is-playing", !!selected);
-    if (!selected) {
-      const header = document.createElement("div"); header.className = "first-mission-heading";
-      const eyebrow = document.createElement("span"); eyebrow.className = "microlabel"; eyebrow.textContent = "Meet MARS";
-      const title = document.createElement("h1"); title.textContent = "What shall we do first?";
-      const body = document.createElement("p"); body.textContent = "Pick a mission. Give MARS instructions in your own words.";
-      header.append(eyebrow, title, body); overlay.append(header);
-      const choices = document.createElement("div"); choices.className = "first-mission-choices";
-      for (const item of FIRST_MISSIONS) {
-        const choice = button("", () => void choose(item), "first-mission-choice");
-        choice.dataset.mission = item.id;
-        const art = document.createElement("span"); art.className = `first-mission-art ${item.icon}`; art.setAttribute("aria-hidden", "true");
-        const setting = document.createElement("span"); setting.className = "microlabel"; setting.textContent = item.setting;
-        const name = document.createElement("strong"); name.textContent = item.title;
-        const brief = document.createElement("span"); brief.className = "first-mission-brief"; brief.textContent = item.brief;
-        choice.append(art, setting, name, brief); choices.append(choice);
-      }
-      overlay.append(choices);
-    } else {
-      const info = document.createElement("div"); info.className = "first-mission-current";
-      const name = document.createElement("strong"); name.textContent = selected.title;
-      const line = document.createElement("span"); line.className = "first-mission-status"; line.setAttribute("role", "status");
-      line.textContent = status || "Guide MARS through chat. If something fails, ask it to try again.";
-      info.append(name, line); overlay.append(info);
+    for (const view of views) view(snapshot());
+    if (!active || mission()) return;
+    const header = document.createElement("div"); header.className = "first-mission-heading";
+    const eyebrow = document.createElement("span"); eyebrow.className = "microlabel"; eyebrow.textContent = "Meet MARS";
+    const title = document.createElement("h1"); title.textContent = "What shall we do first?";
+    const body = document.createElement("p"); body.textContent = "Pick a mission. Give MARS instructions in your own words.";
+    header.append(eyebrow, title, body); overlay.append(header);
+    const choices = document.createElement("div"); choices.className = "first-mission-choices";
+    for (const item of FIRST_MISSIONS) {
+      const choice = button("", () => void choose(item), "first-mission-choice");
+      choice.dataset.mission = item.id;
+      const art = document.createElement("span"); art.className = `first-mission-art ${item.icon}`; art.setAttribute("aria-hidden", "true");
+      const setting = document.createElement("span"); setting.className = "microlabel"; setting.textContent = item.setting;
+      const name = document.createElement("strong"); name.textContent = item.title;
+      const brief = document.createElement("span"); brief.className = "first-mission-brief"; brief.textContent = item.brief;
+      choice.append(art, setting, name, brief); choices.append(choice);
     }
-    overlay.append(button(selected ? "Skip mission" : "Explore on my own", () => void finish("skipped"), "first-mission-skip"));
+    overlay.append(choices);
+    overlay.append(button("Explore on my own", () => void finish("skipped"), "first-mission-skip"));
+  }
+  function snapshot() {
+    return {active, mission:mission(), attemptId:saved?.attemptId, status:statusMessage};
   }
   function notify() { for (const listener of listeners) listener(); }
   function waitFor(/** @type {()=>boolean} */ predicate, /** @type {string} */ failure, timeout = 20000) {
@@ -208,12 +205,17 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   if (active && mission()) void runConnect(false);
   return {
     isActive: () => active,
+    subscribe(/** @type {(state:ReturnType<typeof snapshot>)=>void} */ view) {
+      views.add(view); view(snapshot()); return () => views.delete(view);
+    },
+    skip: () => finish("skipped"),
     ensureRunning,
     onUserMessage() { options.onSuggestedPrompt?.(null); },
     destroy() {
       destroyed = true; active = false; clearTimeout(reconnectTimer); abort.abort();
       unsubBackend(); unsubState(); unsubEnvironment?.(); unsubChallenge?.();
       window.removeEventListener(FIRST_RUN_REQUEST_EVENT, start);
+      views.clear();
       paintVisibility(); overlay.remove();
     },
   };

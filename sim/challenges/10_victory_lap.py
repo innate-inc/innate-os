@@ -12,6 +12,7 @@ from mars_sim_driver.challenges import Challenge, Goal, SkillDone
 CHALLENGE = Challenge(
     id="victory_lap",
     title="Victory Lap",
+    environments=("apartment",),
     brief=(
         'Tell the robot some cheerful news in the agent chat (e.g. "We won the '
         'championship!"). When it hears the good news, it should celebrate by '

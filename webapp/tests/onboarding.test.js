@@ -2,14 +2,17 @@
 // Copyright (c) 2026 Innate Inc
 import assert from "node:assert/strict";
 import { createAgentOnboarding, FIRST_MISSIONS } from "../js/agent/agentOnboarding.js";
+import { createChallengePanel } from "../js/agent/challengePanel.js";
 import { FIRST_RUN_KEY, readFirstRun, shouldAutoStartOnboarding } from "../js/onboarding.js";
 
 class Element extends EventTarget {
   children = []; dataset = {}; hidden = false; parent = null; textContent = "";
   classList = {values:new Set(), toggle:(name,on)=> on ? this.classList.values.add(name) : this.classList.values.delete(name), contains:name=>this.classList.values.has(name)};
   append(...children) {this.children.push(...children); for (const child of children) child.parent=this;}
+  appendChild(child) {this.append(child); return child;}
   replaceChildren(...children) {this.children=[]; this.append(...children);}
   setAttribute() {}
+  contains(node) { return !!this.find(el=>el===node); }
   remove() {if(this.parent) this.parent.children=this.parent.children.filter(c=>c!==this);}
   click() {this.dispatchEvent(new Event("click"));}
   find(predicate) {if(predicate(this)) return this; for(const child of this.children){const match=child.find(predicate);if(match)return match;}}
@@ -18,6 +21,8 @@ const storage = new Map();
 globalThis.localStorage = {getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)};
 globalThis.document = Object.assign(new EventTarget(),{body:new Element(),createElement:()=>new Element()});
 globalThis.window = new EventTarget();
+globalThis.Node = Element;
+window.matchMedia = () => ({matches:false});
 const flush = async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));};
 function simulator() {
   const callbacks = {environment:new Set(),challenge:new Set(),agent:new Set()};
@@ -25,7 +30,10 @@ function simulator() {
   let challenge = {list:FIRST_MISSIONS,active:null};
   let state = {agents:[{id:"intro_agent"}],currentDirective:"",brainActive:false};
   const calls = {starts:[],switches:[],directives:[],aborts:[],begins:[]};
-  const emitChallenge = value=>{challenge=value; for(const cb of callbacks.challenge)cb(value);};
+  const emitChallenge = value=>{
+    if(value.active) value={...value,active:{goals:[{label:"Complete the scene goal",done:false}],elapsed_s:0,...value.active}};
+    challenge=value; for(const cb of callbacks.challenge)cb(value);
+  };
   const emitEnvironment = value=>{env=value;for(const cb of callbacks.environment)cb(value);};
   const session = {
     onEnvironment(cb){callbacks.environment.add(cb);cb(env);return()=>callbacks.environment.delete(cb);},
@@ -43,6 +51,9 @@ function simulator() {
     const root=new Element();
     const ros={subscribe(_topic,cb){cb({data:'{"connected":true}'});return()=>{};}};
     const flow=createAgentOnboarding(root,ros,agent,{enabled,session,onStart:(...args)=>calls.begins.push(args)});
+    const panel=createChallengePanel(root,session,flow);
+    const destroy=flow.destroy;
+    flow.destroy=()=>{panel.destroy();destroy();};
     return {root,flow,choose:id=>root.find(el=>el.dataset.mission===id).click(),skip:()=>root.find(el=>/Skip mission|Explore on my own/.test(el.textContent)).click()};
   }
   return {mount,session,agent,calls,emitChallenge,emitEnvironment,get challenge(){return challenge;}};
@@ -56,12 +67,22 @@ for(const mission of FIRST_MISSIONS) {
   assert.equal(sim.calls.starts.length,1);
   assert.equal(sim.calls.starts[0].id,mission.id);
   assert.equal(sim.agent.get().currentDirective,"intro_agent");
+  const overlay=ui.root.find(el=>el.className==="first-mission");
+  const dock=ui.root.find(el=>el.className==="agent-challenge-dock");
+  assert.equal(overlay.hidden,true);
+  assert.equal(dock.classList.contains("open"),true);
+  assert.ok(ui.root.find(el=>el.textContent==="Complete the scene goal"));
+  assert.ok(ui.root.find(el=>el.textContent==="Skip mission"));
+  assert.equal(ui.root.find(el=>el.textContent==="Abort"),undefined);
+  assert.equal(ui.root.find(el=>el.textContent==="Retry"),undefined);
   ui.flow.onUserMessage("Can you try that again?");
   sim.emitChallenge({...sim.challenge,active:{...sim.challenge.active,attempt_id:"foreign",state:"passed"}});
   assert.equal(ui.flow.isActive(),true);
+  assert.equal(ui.root.find(el=>el.className==="challenge-banner passed"),undefined);
   sim.emitChallenge({...sim.challenge,active:{id:mission.id,attempt_id:sim.calls.starts[0].attempt_id,state:"passed"}});
   assert.equal(ui.flow.isActive(),false);
   assert.equal(shouldAutoStartOnboarding(),false);
+  assert.ok(ui.root.find(el=>el.className==="challenge-banner passed"));
   ui.flow.destroy();
 }
 // Reopen the page in flight: no restart, prop placement, or second agent start.
@@ -71,6 +92,7 @@ ui.flow.destroy();ui=sim.mount();await flush();
 assert.equal(sim.calls.starts.length,1);assert.equal(sim.calls.directives.length,1);
 assert.deepEqual(sim.calls.begins.map(([fresh])=>fresh),[true,false]);
 assert.equal(readFirstRun().attemptId,attempt);
+assert.ok(ui.root.find(el=>el.textContent==="Complete the scene goal"));
 ui.skip();await flush();assert.deepEqual(sim.calls.aborts,[attempt]);assert.equal(sim.agent.get().brainActive,false);
 ui.flow.destroy();ui=sim.mount();assert.equal(ui.flow.isActive(),false);ui.flow.destroy();
 // Skip before any selection must never abort another browser's active mission.
@@ -153,3 +175,18 @@ for (const phase of ["done", "skipped"]) {
   assert.equal(maybeShowChallengeIntro(), null);
 }
 console.log("ok - first-run completion suppresses the redundant challenge introduction");
+
+// Outside the first run, the same panel follows the server's environment roster
+// and retains normal manual challenge controls.
+storage.clear();
+localStorage.setItem(FIRST_RUN_KEY,JSON.stringify({phase:"done"}));
+const scoped=simulator();ui=scoped.mount();
+scoped.emitEnvironment({environment:{id:"backrooms",display_name:"The Backrooms"},switch:null});
+scoped.emitChallenge({list:[FIRST_MISSIONS[1]],active:null});
+assert.ok(ui.root.find(el=>el.textContent==="Challenges · The Backrooms"));
+assert.ok(ui.root.find(el=>el.textContent==="Find a way out"));
+assert.equal(ui.root.find(el=>el.textContent==="Put it away"),undefined);
+scoped.emitChallenge({list:[],active:null});
+assert.ok(ui.root.find(el=>el.textContent==="No challenges in this environment yet."));
+ui.flow.destroy();
+console.log("ok - first missions reuse the challenge panel; environment roster and empty state follow the scene");
