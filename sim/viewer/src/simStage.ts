@@ -540,10 +540,15 @@ export function createSimStage(
   // The scrim is up whenever the view isn't in steady state: mesh loads, the
   // server rebuilding a world, failures.
   const loadingShown = () => loading.style.display !== "none";
+  // The last real size: the resolution toggle must still apply while the stage
+  // is hidden behind the map, where the agent page keeps the notice visible.
+  let stageW = 0;
+  let stageH = 0;
   let stageVisible = true;
   let slowdownDismissed = sessionStorage.getItem("sim-resolution-dismissed") === "true";
   const resolutionNotice = document.createElement("div");
   resolutionNotice.className = "sim-resolution-notice";
+  resolutionNotice.setAttribute("role", "status");
   resolutionNotice.hidden = !reducedResolution;
   const resolutionText = document.createElement("span");
   const resolutionAction = makeChip("");
@@ -562,7 +567,12 @@ export function createSimStage(
   resolutionAction.onclick = () => {
     reducedResolution = !reducedResolution;
     refreshResolutionNotice();
-    resize();
+    if (stageW) applyRenderSize(stageW, stageH);
+    if (reducedResolution) return;
+    // Back at full resolution the notice would report a stale verdict: hide it
+    // and let the detector speak again.
+    resolutionNotice.hidden = true;
+    slowdown.reset();
   };
   resolutionDismiss.onclick = () => {
     slowdownDismissed = true;
@@ -576,16 +586,19 @@ export function createSimStage(
     const full = Math.min(devicePixelRatio, 2);
     return reducedResolution ? Math.min(full * 0.75, Math.sqrt(MAX_RENDER_PIXELS / (w * h))) : full;
   };
-  const resize = () => {
-    const w = wrap.clientWidth;
-    const h = wrap.clientHeight;
-    stageVisible = w > 0 && h > 0;
-    if (!stageVisible) return; // hidden (map primary): keep the last real size
+  const applyRenderSize = (w: number, h: number) => {
     scene.setRenderSize(w, h, pixelRatio(w, h));
     // setSize cleared the buffer (the spec clears a resized canvas) and the
     // browser paints before the next rAF, so the stage would flash black.
     scene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
     scene.render();
+  };
+  const resize = () => {
+    stageVisible = wrap.clientWidth > 0 && wrap.clientHeight > 0;
+    if (!stageVisible) return; // hidden (map primary): keep the last real size
+    stageW = wrap.clientWidth;
+    stageH = wrap.clientHeight;
+    applyRenderSize(stageW, stageH);
   };
   const observer = new ResizeObserver(resize);
   observer.observe(wrap);
@@ -637,8 +650,8 @@ export function createSimStage(
     scene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
     scene.render();
     frame++;
-    if (!slowdownDismissed && resolutionNotice.hidden &&
-        slowdown.sample(now, session.simulationClock, stageVisible && !loadingShown())) {
+    const watching = !slowdownDismissed && resolutionNotice.hidden;
+    if (watching && slowdown.sample(now, session.simulationClock, stageVisible && !loadingShown())) {
       resolutionNotice.hidden = false;
     }
 

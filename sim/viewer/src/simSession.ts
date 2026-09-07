@@ -15,6 +15,7 @@ import type {
   EnvironmentRoster,
 } from "./physics/worldStateController";
 import type { PropInfo } from "./props";
+import type { SimulationClock } from "./slowdown";
 import { interpolateTraffic } from "./trafficState";
 import type { TrafficManifest, TrafficState } from "./trafficState";
 
@@ -559,9 +560,9 @@ export class SimSession {
   }
 
   /** Latest authoritative simulation clock, independent of viewer interpolation. */
-  get simulationClock(): { t: number; receivedAt: number } | null {
+  get simulationClock(): SimulationClock | null {
     const sample = this.#samples[this.#samples.length - 1];
-    return sample ? { t: sample.t, receivedAt: this.#lastArrival * 1000 } : null;
+    return sample ? { t: sample.t, receivedAtMs: this.#lastArrival * 1000 } : null;
   }
 
   /** Server->browser state delivery lag: cur is the median of the last ~2s,
