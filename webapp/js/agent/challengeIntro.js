@@ -1,10 +1,5 @@
 // @ts-check
-// First-run introduction for the sim challenge panel. Challenges assume
-// context a fresh install doesn't have — notably that the tutorial builds the
-// skill the first challenge waits for — so the first time the panel appears we
-// show a one-time dialog pointing at the simulator tutorial, with a preview of
-// the docs page. After that, the panel keeps only a subtle "Tutorial" link in
-// its header that reopens this dialog on demand.
+// Introduction and developer tutorial for the sim challenge panel.
 
 import { readFirstRun } from "../onboarding.js";
 
@@ -63,15 +58,15 @@ export function showChallengeIntro() {
   const blurb = document.createElement("p");
   blurb.className = "challenge-intro-blurb";
   blurb.textContent =
-    "Timed missions for your robot, judged live against the simulator's ground " +
-    "truth. Start one, clear its goals before the clock runs out, and the sim " +
-    "scores the run.";
+    "Missions for your robot, judged live by the simulator. Choose a challenge " +
+    "in your current environment and guide MARS through its goals. Some " +
+    "challenges have a time limit.";
 
   const note = document.createElement("p");
   note.className = "challenge-intro-blurb";
   note.textContent =
-    "Most challenges expect skills you've taught the robot first — Victory lap, " +
-    "for one, waits for the skill you build in the tutorial.";
+    "Want to build your own robot skills? The tutorial walks you through " +
+    "creating your first one.";
 
   // Docs preview — the whole figure is one link to the tutorial.
   const figure = document.createElement("a");

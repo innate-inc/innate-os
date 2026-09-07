@@ -62,11 +62,17 @@ def test_first_mission_reconnect_and_skip_belong_to_exact_attempt(tmp_path):
 def test_challenges_and_saved_results_belong_to_their_environment(tmp_path):
     e, scene = engine(tmp_path, "apartment")
     assert all(c.environments for c in e.challenges.values())
-    assert "put_it_away" in {c["id"] for c in e.roster()}
+    assert [c["id"] for c in e.roster()] == ["put_it_away", "rescue", "shepherd", "household_orders"]
+    for retired in ("victory_lap", "lifesupport", "tidy_up"):
+        assert not e.start(retired)
+    assert scene.resets == 0
+    e._record("victory_lap", "passed", 10.0)
     e._record("put_it_away", "passed", 12.0)
     # A newly loaded engine gets the saved scene result without browser state.
     e, scene = engine(tmp_path, "apartment")
     assert e._block(None)["progress"]["put_it_away"]["passed"]
+    assert "victory_lap" not in e._block(None)["progress"]
+    assert json.loads((tmp_path / "progress.json").read_text())["challenges"]["victory_lap"]["passed"]
     for environment, expected in [("backrooms", "way_out"), ("intersection", "other_side")]:
         scene.environment.id = environment
         assert [c["id"] for c in e.roster()] == [expected]

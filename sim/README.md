@@ -218,12 +218,17 @@ real robot runs — develop here, deploy there. Start with the docs:
 
 ### Challenges
 
-Scored tasks for what you build: find a collapsed person and stay with them,
-push a soccer ball to the dog, collect food orders from residents, or celebrate
-good news with the skill you wrote.
+Scored tasks for what you build, scoped to the current environment:
+
+| Environment | Challenges |
+|---|---|
+| Apartment | Put it away, Search & Rescue, Shepherd, Household Orders |
+| Backrooms | Find a way out |
+| Crossroads | The other side |
+
 Pick one from the panel at the top-left of the Agent page — it resets the
 world, drops the props the scenario needs, and ticks a goal checklist with a
-timer. Results (passed, attempts, best time) persist in
+timer when the challenge has a time limit. Results (passed, attempts, best time) persist in
 `workspace/challenges.json`.
 
 The **world server** judges, not the robot: goals are read from MuJoCo's own
@@ -257,8 +262,8 @@ CHALLENGE = Challenge(
 ```
 
 `environments` names the packs whose coordinates the drops and goals are
-written in; a challenge that places nothing (Victory Lap) leaves it out and
-is offered in every environment.
+written in. Omitting it offers a challenge in every environment; only do this
+for scenarios that work independently of the environment's layout.
 
 `setup` drops props by name (the sidecars in [`sim/props/`](props/)). Goals
 are judged strictly in order and latch once true. The predicates are `Near`,

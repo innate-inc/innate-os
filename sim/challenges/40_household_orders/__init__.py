@@ -3,7 +3,7 @@
 place_doordash_order is deliberately not in workspace/innate_skills/: it ships
 with the Household Orders agent. On a robot without that agent the checkout
 goal simply never fires -- the same way every skill goal behaves with
-rosbridge down (see 10_victory_lap.py).
+rosbridge down.
 """
 
 from mars_sim_driver.challenges import Challenge, Drop, EventSeen, Goal, SkillDone
