@@ -8,9 +8,9 @@ import { FIRST_RUN_REQUEST_EVENT, markOnboardingSeen, publishFirstRunCompletion,
 export const INTRO_AGENT_ID = "intro_agent";
 export const VIEW_GUIDANCE = "I’m starting now. Switch to my Main view at the top to see what I see. You can also use Arm view for a closer look at what my gripper is doing.";
 export const FIRST_MISSIONS = [
-  { id: "put_it_away", environment: "apartment", title: "Put it away", setting: "The apartment", brief: "One LEGO brick. One box. A robot that needs your direction.", prompt: "Pick up the LEGO brick and put it in the box.", icon: "brick" },
-  { id: "way_out", environment: "backrooms", title: "Find a way out", setting: "The Backrooms", brief: "Endless yellow rooms. Help MARS find the green exit.", prompt: "Find the exit.", icon: "exit" },
-  { id: "other_side", environment: "intersection", title: "The other side", setting: "Crossroads", brief: "Watch the traffic. Guide MARS safely across the street.", prompt: "Help me cross the street.", icon: "crossing" },
+  { id: "put_it_away", environment: "apartment", title: "Put it away", setting: "The apartment", brief: "One LEGO brick. One box. A robot that needs your direction.", icon: "brick" },
+  { id: "way_out", environment: "backrooms", title: "Find a way out", setting: "The Backrooms", brief: "Endless yellow rooms. Help MARS find the green exit.", icon: "exit" },
+  { id: "other_side", environment: "intersection", title: "The other side", setting: "Crossroads", brief: "Watch the traffic. Guide MARS safely across the street.", icon: "crossing" },
 ];
 export const hasIntroAgent = (/** @type {{agents: {id:string}[]}} */ snapshot) => snapshot.agents.some(({id}) => id === INTRO_AGENT_ID);
 export function backendReadinessFromMessage(/** @type {any} */ message) {
@@ -26,7 +26,7 @@ export function backendReadinessFromMessage(/** @type {any} */ message) {
  * @param {HTMLElement} root
  * @param {import('../rosClient.js').RosClient} ros
  * @param {ReturnType<typeof import('../teleop/agentState.js').sharedAgentState>} agentState
- * @param {{enabled:boolean, session:any, onNotice?:(text:string)=>void, onStart?:(fresh:boolean, startedAt:number)=>void, onSuggestedPrompt?:(text:string|null)=>void, onViewAccess?:(access:"hidden"|"cameras"|"all")=>void}} options
+ * @param {{enabled:boolean, session:any, onNotice?:(text:string)=>void, onStart?:(fresh:boolean, startedAt:number)=>void, onClearSuggestions?:()=>void, onViewAccess?:(access:"hidden"|"cameras"|"all")=>void}} options
  */
 export function createAgentOnboarding(root, ros, agentState, options) {
   const session = options.session;
@@ -144,7 +144,6 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   async function connectMission(/** @type {boolean} */ fresh) {
     const selected = mission();
     if (!selected) return;
-    const startingMission = saved.phase === "starting";
     if (!began) { began = true; options.onStart?.(fresh, saved.startedAt); }
     render(fresh ? "Preparing your mission…" : "Reconnecting to your mission…");
     if (saved.phase === "starting") {
@@ -167,7 +166,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     if (!active || destroyed) return;
     saved.phase = "playing"; persist();
     if (challenge.active.state === "passed") { await finish("done"); return; }
-    options.onSuggestedPrompt?.(fresh || startingMission ? selected.prompt : null);
+    options.onClearSuggestions?.();
     render();
     await ensureRunning();
   }
@@ -195,7 +194,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     active = false;
     saved = {...saved, phase}; persist(); markOnboardingSeen();
     publishFirstRunCompletion(phase);
-    clearTimeout(reconnectTimer); abort.abort(); render(); options.onSuggestedPrompt?.(null);
+    clearTimeout(reconnectTimer); abort.abort(); render(); options.onClearSuggestions?.();
     if (phase === "skipped" && owned) {
       session.abortChallenge(saved.attemptId);
       if (agentState.get().currentDirective === INTRO_AGENT_ID) await agentState.setDirective("");
@@ -265,7 +264,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
       if (!active || !saved?.viewsRevealed) return;
       saved.viewChanged = true; persist(); paintVisibility();
     },
-    onUserMessage() { options.onSuggestedPrompt?.(null); },
+    onUserMessage() { options.onClearSuggestions?.(); },
     destroy() {
       destroyed = true; active = false; clearTimeout(reconnectTimer); abort.abort();
       unsubBackend(); unsubState(); unsubEnvironment?.(); unsubChallenge?.();

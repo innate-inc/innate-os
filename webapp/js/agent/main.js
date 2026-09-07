@@ -187,7 +187,7 @@ function buildAgentView(root) {
     enabled: Boolean(config.simControls),
     onNotice: panel.addNotice,
     onStart: panel.beginOnboarding,
-    onSuggestedPrompt: panel.setSuggestedPrompt,
+    onClearSuggestions: panel.clearSuggestedPrompts,
     onViewAccess: access => cameraSwitch.setViewAccess(access),
     session,
   });

@@ -27,14 +27,6 @@ import { createAgentSheet } from "./agentSheet.js";
 
 const HISTORY_RECONCILE_MS = 30_000;
 
-const CHAT_EXAMPLES = [
-  "What can you see?",
-  "What do you remember here?",
-  "Move forward 1ft and wave",
-  "Wave hello",
-  "Move across the room",
-];
-
 /**
  * @param {HTMLElement} root cockpit root — the panel mounts as a right-edge overlay.
  * @param {import("../rosClient.js").RosClient} rosClient
@@ -57,7 +49,7 @@ const CHAT_EXAMPLES = [
  *   setCompact: (on: boolean) => void,
  *   addNotice: (text: string) => void,
  *   beginOnboarding: (fresh: boolean, startedAt: number) => void,
- *   setSuggestedPrompt: (text: string | string[] | null) => void
+ *   clearSuggestedPrompts: () => void
  * }}
  *   setCompact swaps the right-edge dock for the bottom sheet (agentSheet.js).
  */
@@ -141,7 +133,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   input.setAttribute("aria-keyshortcuts", "Enter");
   const placeholder = document.createElement("span");
   placeholder.className = "agent-compose-placeholder";
-  placeholder.textContent = CHAT_EXAMPLES[0];
+  placeholder.textContent = "Message MARS";
   const micMount = document.createElement("div");
   micMount.className = "agent-compose-mic";
   const focusHint = document.createElement("button");
@@ -168,25 +160,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     placeholder.classList.toggle("hidden", !empty);
   }
   syncComposerAction();
-  let placeholderIndex = 0;
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let placeholderSwapTimer = null;
-  const placeholderInterval = setInterval(() => {
-    placeholderIndex = (placeholderIndex + 1) % CHAT_EXAMPLES.length;
-    if (input.value.trim()) {
-      placeholder.textContent = CHAT_EXAMPLES[placeholderIndex];
-      return;
-    }
-    placeholder.classList.add("exiting");
-    placeholderSwapTimer = setTimeout(() => {
-      placeholder.textContent = CHAT_EXAMPLES[placeholderIndex];
-      placeholder.classList.remove("exiting");
-      placeholder.classList.add("entering");
-      void placeholder.offsetWidth;
-      placeholder.classList.remove("entering");
-      placeholderSwapTimer = null;
-    }, 500);
-  }, 3500);
 
   controlPanel.append(head, directives.el);
   thoughtsPanel.append(chat.head, chat.wrap, form);
@@ -398,20 +371,16 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     beginOnboarding(fresh, startedAt) {
       historyFloor = startedAt / 1000;
       lastSnapshot = "";
+      suggestions.clear();
       chat.clear();
       sheet.open();
       if (!fresh) void loadHistory(true);
     },
-    setSuggestedPrompt(text) {
-      suggestions.clear();
-      chat.setSuggestion(text, (selected) => void submitText(selected));
-    },
+    clearSuggestedPrompts: () => suggestions.clear(),
     destroy() {
       sheet.destroy();
       mic?.destroy();
       directives.destroy();
-      clearInterval(placeholderInterval);
-      if (placeholderSwapTimer) clearTimeout(placeholderSwapTimer);
       chat.destroy();
       document.removeEventListener("visibilitychange", onVisible);
       clearInterval(historyPoll);
