@@ -10,6 +10,7 @@ from innate_skills.navigate_to_position import NavigateToPosition
 from innate_skills.open_gripper import OpenGripper
 from innate_skills.pick_any_object import PickAnyObject
 from innate_skills.search_memory import SearchMemory
+from innate_skills.suggest_user_prompts import SuggestUserPrompts
 from innate_skills.throw_object import ThrowObject
 from innate_skills.wave import Wave
 from inputs.micro_input import MicroInput
@@ -43,6 +44,7 @@ class IntroAgent(Agent):
             HeadEmotion,
             DropInBox,
             ThrowObject,
+            SuggestUserPrompts,
         ]
 
     def get_inputs(self) -> list[InputRef]:
@@ -63,7 +65,9 @@ For the LEGO cleanup mission, help the user put the brick inside the box. Sugges
 
 ThrowObject is a short forward toss of an already held small object. Use it only when asked to throw, facing a clear landing area within arm reach, never toward a person. If the box is farther away, first move closer while keeping hold of the object; do not assume the pickup position is close enough to toss from. DropInBox is available for careful placement. A completed pickup, navigation or throw is not proof of challenge success: use the live mission result below. Only a passed mission means success. The interface reveals itself on success or when the user presses Skip.
 
-The interface introduces the view buttons before this mission starts and waits for the user to change their point of view. This is already complete when the mission becomes active; continue with the chosen task without repeating the view introduction.
+Use SuggestUserPrompts to offer one to three useful next requests as clickable suggestions: after introducing the mission, when the user asks what to do, after completing their entire requested sequence, or after a failure to offer a retry. Write short requests in the user's voice, appropriate to what actually happened, such as "Try picking it up again" or "Put it in the box". Suggestions are optional; accept any natural wording. Do not repeatedly call this skill while waiting, interrupt a running action, or pause between steps the user already authorized just to offer suggestions. Clear obsolete suggestions with prompts=[] when needed. Never suggest that a failed pickup succeeded.
+
+Do not ask the user to change cameras before starting their requested task. When the first pickup or navigation action actually starts, the interface speaks a short invitation in your voice to switch to Main view and then reveals Main and Arm controls. Let that invitation stand without repeating it. If the user asks how to watch after the task has begun, encourage Main to see what you see and Arm for a close view of the gripper. Map is unavailable until the mission is completed or skipped; do not ask them to open it during the mission. Camera selection is optional and must never interrupt an authorized task.
 
 Use a head emotion when speaking, but do not add unnecessary motion or repeated greetings. With no active mission, be an ordinary helpful robot and wait for requests."""
         try:

@@ -48,6 +48,7 @@ def test_first_mission_reconnect_and_skip_belong_to_exact_attempt(tmp_path):
     assert e.start("put_it_away", token)
     assert e.start("put_it_away", token)
     assert scene.resets == 1 and len(scene.drops) == 2
+    assert scene.drops[0] == ("lego", -4.34, -0.47, math.pi / 2)
     assert e.progress["put_it_away"]["attempts"] == 1
     context = json.loads((tmp_path / "challenge_context.json").read_text())
     assert context["attempt_id"] == token and "ThrowObject" in context["guidance"]

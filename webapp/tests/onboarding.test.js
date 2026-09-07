@@ -50,7 +50,7 @@ function simulator() {
   function mount(enabled=true, viewGuide=false) {
     const root=new Element();
     const ros={subscribe(_topic,cb){cb({data:'{"connected":true}'});return()=>{};},advertise(){return()=>{};},publish(_topic,message){calls.speech.push(message.data);return true;}};
-    const flow=createAgentOnboarding(root,ros,agent,{enabled,session,onStart:(...args)=>calls.begins.push(args),onViewGuide:viewGuide ? text=>calls.guides.push(text) : undefined,onSuggestedPrompt:text=>calls.prompts.push(text)});
+    const flow=createAgentOnboarding(root,ros,agent,{enabled,session,onStart:(...args)=>calls.begins.push(args),onViewAccess:viewGuide ? access=>calls.guides.push(access) : undefined,onSuggestedPrompt:text=>calls.prompts.push(text)});
     const panel=createChallengePanel(root,session,flow);
     const destroy=flow.destroy;
     flow.destroy=()=>{panel.destroy();destroy();};
@@ -59,41 +59,44 @@ function simulator() {
   return {mount,session,agent,calls,emitChallenge,emitEnvironment,get challenge(){return challenge;}};
 }
 
-// All three missions wait for a browser view selection before starting the
-// challenge clock or the agent. Chat and remounts cannot silently pass it.
+// The task starts without a camera gate. Only task motion introduces Main/Arm;
+// greeting, suggestions, stale events, a foreign attempt and reload do not.
 for (const mission of FIRST_MISSIONS) {
   storage.clear(); const sim=simulator(); let ui=sim.mount(true,true);
-  ui.flow.onViewChange(); // A choice made before the introduction does not count.
   ui.choose(mission.id); await flush();
-  assert.equal(sim.calls.starts.length,0);
-  assert.equal(sim.calls.directives.length,0);
-  assert.equal(sim.calls.guides.length,1);
+  assert.equal(sim.calls.starts.length,1);
+  assert.equal(sim.agent.get().currentDirective,"intro_agent");
+  assert.equal(sim.calls.speech.length,0);
+  assert.equal(sim.calls.guides.at(-1),"hidden");
+  const emit = (skill, timestamp=Date.now()/1000, status="running") => ui.flow.onSkillStatus({skill:`innate-os/${skill}`,status,timestamp});
+  emit("search_memory"); emit("head_emotion"); emit("suggest_user_prompts");
+  emit("pick_any_object",1); emit("pick_any_object",Date.now()/1000,"failed");
+  assert.equal(sim.calls.speech.length,0);
+  const own=sim.challenge;
+  sim.emitChallenge({...own,active:{...own.active,attempt_id:"foreign"}});
+  emit("pick_any_object"); assert.equal(sim.calls.speech.length,0);
+  sim.emitChallenge(own);
+  emit(mission.id === "put_it_away" ? "pick_any_object" : "navigate_to_position");
   assert.equal(sim.calls.speech.length,1);
-  await assert.rejects(ui.flow.ensureRunning(), /Select a different view/);
-  ui.flow.onUserMessage("I changed the view"); await flush();
-  assert.equal(sim.calls.starts.length,0);
+  assert.match(sim.calls.speech[0], /Main.*Arm/);
+  assert.equal(sim.calls.guides.at(-1),"cameras");
+  assert.equal(readFirstRun().viewsRevealed,true);
+  ui.flow.onViewChange();
+  assert.equal(ui.root.classList.contains("first-mission-view-step"),false);
+  emit("pick_any_object"); assert.equal(sim.calls.speech.length,1);
   const token=readFirstRun().attemptId;
   ui.flow.destroy(); ui=sim.mount(true,true); await flush();
   assert.equal(readFirstRun().attemptId,token);
-  assert.equal(sim.calls.starts.length,0);
+  assert.equal(sim.calls.starts.length,1);
   assert.equal(sim.calls.speech.length,1);
-  ui.flow.onViewChange(); await flush();
-  assert.equal(sim.calls.starts.length,1);
-  assert.equal(sim.agent.get().currentDirective,"intro_agent");
-  assert.equal(readFirstRun().viewChanged,true);
-  assert.equal(sim.calls.prompts.at(-1),mission.prompt);
-  ui.flow.destroy(); ui=sim.mount(true,true); await flush();
-  assert.equal(sim.calls.starts.length,1);
-  assert.equal(sim.calls.guides.length,2); // No new guide on the playing remount.
-  ui.skip(); await flush(); ui.flow.destroy();
+  assert.equal(sim.calls.guides.at(-1),"cameras");
+  ui.skip(); await flush();
+  emit("pick_any_object");
+  assert.equal(sim.calls.speech.length,1);
+  assert.equal(sim.calls.guides.at(-1),"all");
+  ui.flow.destroy();
 }
-storage.clear(); const skipView=simulator(); const skippedView=skipView.mount(true,true);
-skippedView.choose("put_it_away"); await flush(); skippedView.skip(); await flush();
-skippedView.flow.onViewChange(); await flush();
-assert.equal(skipView.calls.starts.length,0);
-assert.equal(skipView.calls.directives.length,0);
-skippedView.flow.destroy();
-console.log("ok - view introduction: all missions, speech, local selection, reload and skip");
+console.log("ok - task-start camera invitation: all missions, non-motion, stale/foreign events, reload and skip");
 
 // Three choices work through the real controller/session handshake. Arbitrary
 // speech cannot gate completion, and only the local attempt can finish it.

@@ -23,7 +23,9 @@ CHALLENGE = Challenge(
     title="Put it away",
     brief="A LEGO brick is on the living-room floor. Ask MARS to put it in the cardboard box.",
     environments=("apartment",),
-    setup=[Drop("lego", -4.34, -0.47, yaw_deg=0), Drop("crate", -4.34, -0.90)],
+    # The robot faces -Y: turn the 48 mm long axis along its approach so the
+    # jaws close across the 32 mm side, matching the prop's default grasp pose.
+    setup=[Drop("lego", -4.34, -0.47, yaw_deg=90), Drop("crate", -4.34, -0.90)],
     goals=[Goal("LEGO in the box", Hold(BrickInBox(), 2.0))],
     agent_guidance=(
         "Help the user clean up the red LEGO brick in the living room. The cardboard box is nearby. "

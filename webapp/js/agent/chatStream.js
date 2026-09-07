@@ -8,6 +8,7 @@
 // an entry — so it lives in one module rather than being threaded between
 // several. Nothing here talks to ROS: the panel feeds it messages.
 
+import { isPromptSuggestionSkill } from "./promptSuggestions.js";
 import { CHAT_OUT_TOPIC, SKILL_STATUS_UPDATE_TOPIC } from "../constants.js";
 import {
   formatSkillArgs,
@@ -29,7 +30,7 @@ const SKILL_GROUP_MIN = 3;
 /** The bridge between the agent and this UI is implementation detail, not an
  * action the user asked the robot to perform. @param {string} name */
 export function isInternalOnboardingSkill(name) {
-  return name.replace(/[^a-z0-9]/gi, "").toLowerCase() === "revealonboarding";
+  return isPromptSuggestionSkill(name) || name.replace(/[^a-z0-9]/gi, "").toLowerCase() === "revealonboarding";
 }
 
 /**
@@ -42,7 +43,7 @@ export function isInternalOnboardingSkill(name) {
  *   routeChatOut: (sender: string, text: string, ts: number) => void,
  *   replay: (entries: any[]) => void,
  *   clear: () => void,
- *   setSuggestion: (text: string | null, onSelect?: (text: string) => void) => void,
+ *   setSuggestion: (text: string | string[] | null, onSelect?: (text: string) => void) => void,
  *   setMode: (mode: "compact" | "detailed") => void,
  *   destroy: () => void,
  * }}
@@ -105,13 +106,14 @@ export function createChatStream() {
     else stream.append(el);
   }
 
-  /** Keep one concrete next move directly under the latest message.
-   * @param {string | null} text @param {(text: string) => void} [onSelect] */
+  /** Keep a few optional next requests directly under the latest message.
+   * @param {string | string[] | null} text @param {(text: string) => void} [onSelect] */
   function setSuggestion(text, onSelect) {
     const wasAtBottom = atBottom();
     suggestion?.remove();
     suggestion = null;
-    if (!text || !onSelect) {
+    const prompts = (Array.isArray(text) ? text : text ? [text] : []).filter(p => typeof p === "string" && p.trim()).slice(0, 3);
+    if (!prompts.length || !onSelect) {
       settleStreamAfterMutation(wasAtBottom);
       return;
     }
@@ -120,12 +122,15 @@ export function createChatStream() {
     const label = document.createElement("span");
     label.className = "agent-guided-prompt-label mono";
     label.textContent = "Try asking";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "agent-guided-prompt-button";
-    button.textContent = text;
-    button.addEventListener("click", () => onSelect(text));
-    wrap.append(label, button);
+    wrap.append(label);
+    for (const prompt of prompts) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "agent-guided-prompt-button";
+      button.textContent = prompt;
+      button.addEventListener("click", () => onSelect(prompt));
+      wrap.append(button);
+    }
     suggestion = wrap;
     stream.append(wrap);
     animateCompactEnter(wrap);

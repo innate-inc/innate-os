@@ -13,6 +13,7 @@
 // The thought-grouping + skill-run rendering here is the canonical chat stream
 // (it originated in the old teleop chat pane, since removed).
 
+import { createPromptSuggestions } from "./promptSuggestions.js";
 import { createMicStream } from "./micStream.js";
 import {
   CHAT_IN_TOPIC,
@@ -56,7 +57,7 @@ const CHAT_EXAMPLES = [
  *   setCompact: (on: boolean) => void,
  *   addNotice: (text: string) => void,
  *   beginOnboarding: (fresh: boolean, startedAt: number) => void,
- *   setSuggestedPrompt: (text: string | null) => void
+ *   setSuggestedPrompt: (text: string | string[] | null) => void
  * }}
  *   setCompact swaps the right-edge dock for the bottom sheet (agentSheet.js).
  */
@@ -234,6 +235,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     mic?.stop();
   }
 
+  const suggestions = createPromptSuggestions(prompts => chat.setSuggestion(prompts, selected => void submitText(selected)));
   let sending = false;
   /** @param {string} text */
   async function submitText(text) {
@@ -247,6 +249,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       });
       if (!sent) throw new Error("The robot connection was lost before the message could be sent.");
       chat.addMessage("user", text, timestamp);
+      suggestions.clear();
       opts.onUserMessage?.(text, timestamp);
       return true;
     } catch (error) {
@@ -334,6 +337,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     if (String(payload?.sender ?? "") !== "user") return;
     const text = String(payload?.text ?? "");
     if (!text) return;
+    suggestions.clear();
     chat.addMessage("user", text, Number(payload?.timestamp) || Date.now() / 1000);
   }, undefined, "std_msgs/msg/String");
 
@@ -349,6 +353,9 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const text = String(payload?.text ?? "");
     if (!sender || !text) return;
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
+    if (sender === "user") {
+      suggestions.clear();
+    }
     chat.routeChatOut(sender, text, ts);
     if (sender === "robot") opts.onRobotMessage?.(text, ts);
   }, undefined, "std_msgs/msg/String");
@@ -363,6 +370,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     }
     const name = String(payload?.primitive_name ?? payload?.skill_name ?? payload?.skill_id ?? "");
     const status = String(payload?.status ?? "");
+    if (suggestions.consume(payload)) return;
     if (!name || !status || isInternalOnboardingSkill(name)) return;
     const key = String(payload?.primitive_id ?? payload?.skill_id ?? name);
     const reason = typeof payload?.reason === "string" ? payload.reason : "";
@@ -395,6 +403,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       if (!fresh) void loadHistory(true);
     },
     setSuggestedPrompt(text) {
+      suggestions.clear();
       chat.setSuggestion(text, (selected) => void submitText(selected));
     },
     destroy() {

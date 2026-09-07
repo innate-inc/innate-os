@@ -31,7 +31,7 @@ import { createChallengePanel } from "./challengePanel.js";
 import { createAgentMicControl } from "./agentMicControl.js";
 import { createAgentOnboarding } from "./agentOnboarding.js";
 import { createInterfaceTour } from "../uiTour.js";
-import { initializeFirstRunCompletion } from "../onboarding.js";
+import { initializeFirstRunCompletion, shouldAutoStartOnboarding } from "../onboarding.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
 // marks a sim deployment — used here to drop the (absent) battery readout. Fetched
@@ -90,6 +90,7 @@ function buildAgentView(root) {
     // Real robots have no orbit camera, so their saved choice is untouched.
     primaryOnMount: config.simControls ? "orbit" : undefined,
     onViewChange: () => onboarding?.onViewChange(),
+    viewAccess: config.simControls && shouldAutoStartOnboarding() ? "hidden" : "all",
   });
   const telemetryOverlay = config.simControls ? null : document.createElement("div");
   if (telemetryOverlay) {
@@ -179,6 +180,7 @@ function buildAgentView(root) {
       await onboarding.ensureRunning();
     },
     onUserMessage: () => onboarding?.onUserMessage(),
+    onSkillStatus: event => onboarding?.onSkillStatus(event),
   });
   onboarding = createAgentOnboarding(root, ros, agentState, {
     // Opening a page must never activate autonomous control on physical MARS.
@@ -186,7 +188,7 @@ function buildAgentView(root) {
     onNotice: panel.addNotice,
     onStart: panel.beginOnboarding,
     onSuggestedPrompt: panel.setSuggestedPrompt,
-    onViewGuide: () => cameraSwitch.showViews(),
+    onViewAccess: access => cameraSwitch.setViewAccess(access),
     session,
   });
   const simSession = /** @type {any} */ (session);

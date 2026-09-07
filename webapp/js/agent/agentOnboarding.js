@@ -6,7 +6,7 @@ import { TTS_TOPIC, WEBSOCKET_STATUS_TOPIC } from "../constants.js";
 import { FIRST_RUN_REQUEST_EVENT, markOnboardingSeen, publishFirstRunCompletion, readFirstRun, saveFirstRun, shouldAutoStartOnboarding } from "../onboarding.js";
 
 export const INTRO_AGENT_ID = "intro_agent";
-export const VIEW_GUIDANCE = "Before we begin, try changing your point of view. Select one of the view buttons at the top to see through my main camera, my arm camera, or from above. Then tell me what to do.";
+export const VIEW_GUIDANCE = "I’m starting now. Switch to my Main view at the top to see what I see. You can also use Arm view for a closer look at what my gripper is doing.";
 export const FIRST_MISSIONS = [
   { id: "put_it_away", environment: "apartment", title: "Put it away", setting: "The apartment", brief: "One LEGO brick. One box. A robot that needs your direction.", prompt: "Pick up the LEGO brick and put it in the box.", icon: "brick" },
   { id: "way_out", environment: "backrooms", title: "Find a way out", setting: "The Backrooms", brief: "Endless yellow rooms. Help MARS find the green exit.", prompt: "Find the exit.", icon: "exit" },
@@ -26,7 +26,7 @@ export function backendReadinessFromMessage(/** @type {any} */ message) {
  * @param {HTMLElement} root
  * @param {import('../rosClient.js').RosClient} ros
  * @param {ReturnType<typeof import('../teleop/agentState.js').sharedAgentState>} agentState
- * @param {{enabled:boolean, session:any, onNotice?:(text:string)=>void, onStart?:(fresh:boolean, startedAt:number)=>void, onSuggestedPrompt?:(text:string|null)=>void, onViewGuide?:(text:string)=>void}} options
+ * @param {{enabled:boolean, session:any, onNotice?:(text:string)=>void, onStart?:(fresh:boolean, startedAt:number)=>void, onSuggestedPrompt?:(text:string|null)=>void, onViewAccess?:(access:"hidden"|"cameras"|"all")=>void}} options
  */
 export function createAgentOnboarding(root, ros, agentState, options) {
   const session = options.session;
@@ -41,9 +41,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   let reconnectTimer = /** @type {ReturnType<typeof setTimeout>|undefined} */ (undefined);
   let began = false;
   let statusMessage = "";
-  let awaitingView = false;
-  let viewIntroduced = false;
-  let viewSpoken = saved?.viewSpoken === true;
+  let taskStarted = saved?.taskStarted === true;
   const unadvertise = options.enabled ? ros.advertise(TTS_TOPIC, "std_msgs/msg/String") : () => {};
   const views = new Set();
   let abort = new AbortController();
@@ -61,7 +59,8 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   function paintVisibility() {
     root.classList.toggle("agent-conversation-onboarding", active);
     root.classList.toggle("first-mission-choosing", active && !mission());
-    root.classList.toggle("first-mission-view-step", active && awaitingView);
+    root.classList.toggle("first-mission-view-step", active && saved?.viewsRevealed === true && !saved?.viewChanged);
+    options.onViewAccess?.(!active ? "all" : saved?.viewsRevealed === true ? "cameras" : "hidden");
     document.body.classList.toggle("agent-conversation-onboarding-active", active);
     overlay.hidden = !active || !!mission();
     document.dispatchEvent(new CustomEvent("innate:first-run-visibility", {detail:{active}}));
@@ -96,13 +95,15 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     overlay.append(button("Explore on my own", () => void finish("skipped"), "first-mission-skip"));
   }
   function snapshot() {
-    return {active, mission:mission(), attemptId:saved?.attemptId, awaitingView, status:statusMessage};
+    return {active, mission:mission(), attemptId:saved?.attemptId, status:statusMessage};
   }
-  function speakViewGuide() {
-    if (active && awaitingView && backendReady && !viewSpoken) {
-      viewSpoken = ros.publish(TTS_TOPIC, {data:VIEW_GUIDANCE});
-      if (viewSpoken) { saved.viewSpoken = true; persist(); }
-    }
+  function revealTaskViews() {
+    if (!active || destroyed || !taskStarted || saved?.viewsRevealed || !backendReady
+      || saved?.phase !== "playing" || challenge?.active?.attempt_id !== saved.attemptId || challenge.active.state === "passed") return;
+    // Queue the invitation before exposing the controls. Reconnect retries a
+    // failed publish; a saved reveal never repeats it on a route remount.
+    if (!ros.publish(TTS_TOPIC, {data:VIEW_GUIDANCE})) return;
+    saved.viewsRevealed = true; persist(); render();
   }
   function notify() { for (const listener of listeners) listener(); }
   function waitFor(/** @type {()=>boolean} */ predicate, /** @type {string} */ failure, timeout = 20000) {
@@ -120,7 +121,6 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   }
   async function ensureRunning() {
     if (!active) return false;
-    if (awaitingView) throw new Error("Select a different view at the top before giving MARS your first instruction, or skip the mission.");
     if (saved?.phase !== "playing") throw new Error("Your mission is still loading.");
     if (!activation) activation = (async () => {
       await waitFor(() => backendReady === true && hasIntroAgent(agentState.get()), "MARS is still connecting. You can wait here or skip the mission.");
@@ -160,16 +160,6 @@ export function createAgentOnboarding(root, ros, agentState, options) {
       await waitFor(() => environment.environment?.id === selected.environment && !environment.switch,
         "This environment could not load. You can wait here or skip.", 45000);
       await waitFor(() => challenge?.list?.some((/** @type {any} */ c) => c.id === selected.id), "This mission is unavailable in this simulator.");
-      // Only a deliberate view promotion in this browser opens the gate.
-      // Keep the scene ready but the agent and challenge timer stopped.
-      if (saved.viewChanged !== true && options.onViewGuide) {
-        awaitingView = true;
-        render("First, select a different view using the buttons at the top.");
-        if (!viewIntroduced) { viewIntroduced = true; options.onViewGuide(VIEW_GUIDANCE); }
-        speakViewGuide();
-        await waitFor(() => saved.viewChanged === true, "", 0);
-        awaitingView = false;
-      }
       if (!active || destroyed) return;
       session.startChallenge(selected.id, saved.attemptId);
     }
@@ -195,7 +185,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   }
   async function choose(/** @type {typeof FIRST_MISSIONS[number]} */ selected) {
     if (!active || mission()) return;
-    saved = {id:selected.id, attemptId:crypto.randomUUID(), phase:"starting", startedAt:Date.now(), viewChanged:false};
+    saved = {id:selected.id, attemptId:crypto.randomUUID(), phase:"starting", startedAt:Date.now(), viewsRevealed:false};
     persist();
     await runConnect(true);
   }
@@ -215,13 +205,14 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   const unsubBackend = ros.subscribe(WEBSOCKET_STATUS_TOPIC, message => {
     const ready = backendReadinessFromMessage(message);
     if (ready !== null) backendReady = ready;
-    speakViewGuide();
+    revealTaskViews();
     notify();
   }, undefined, "std_msgs/msg/String");
   const unsubState = agentState.subscribe(notify);
   const unsubEnvironment = session.onEnvironment?.((/** @type {any} */ value) => {environment = value; notify();});
   const unsubChallenge = session.onChallenge?.((/** @type {any} */ value) => {
     challenge = value; notify();
+    revealTaskViews();
     if (active && saved?.attemptId && value.active?.attempt_id === saved.attemptId && value.active.state === "passed") void finish("done");
   });
   function restart() {
@@ -237,7 +228,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
       if (destroyed) return;
       abort = new AbortController();
       saved = {phase:"choosing"};
-      active = true; began = false; awaitingView = false; viewIntroduced = false; viewSpoken = false;
+      active = true; began = false; taskStarted = false;
       persist(); render();
     })().catch(error => {
       options.onNotice?.(`Could not open challenges: ${error.message}. Try picking another challenge again.`);
@@ -260,9 +251,19 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     },
     skip: () => finish("skipped"),
     ensureRunning,
+    onSkillStatus(/** @type {{skill:string,status:string,timestamp:number}} */ event) {
+      if (!active || destroyed || saved?.phase !== "playing" || saved.viewsRevealed
+        || challenge?.active?.attempt_id !== saved.attemptId
+        || event.timestamp * 1000 < saved.startedAt || event.status !== "running") return;
+      const name = event.skill.split("/").at(-1) ?? "";
+      // Thinking, greeting, memory lookup and suggestions are not task motion.
+      if (!name.startsWith("pick_") && !["navigate_to_position", "drop_in_box", "throw_object"].includes(name)) return;
+      taskStarted = true; saved.taskStarted = true; persist();
+      revealTaskViews();
+    },
     onViewChange() {
-      if (!active || !awaitingView || destroyed) return;
-      saved.viewChanged = true; persist(); notify();
+      if (!active || !saved?.viewsRevealed) return;
+      saved.viewChanged = true; persist(); paintVisibility();
     },
     onUserMessage() { options.onSuggestedPrompt?.(null); },
     destroy() {
