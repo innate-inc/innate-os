@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { createAgentOnboarding, FIRST_MISSIONS } from "../js/agent/agentOnboarding.js";
 import { createChallengePanel } from "../js/agent/challengePanel.js";
-import { FIRST_RUN_KEY, readFirstRun, shouldAutoStartOnboarding } from "../js/onboarding.js";
+import { FIRST_RUN_KEY, readFirstRun, saveFirstRun, shouldAutoStartOnboarding, startFirstRun, installFirstMissionReplay } from "../js/onboarding.js";
 
 class Element extends EventTarget {
   children = []; dataset = {}; hidden = false; parent = null; textContent = "";
@@ -190,3 +190,46 @@ scoped.emitChallenge({list:[],active:null});
 assert.ok(ui.root.find(el=>el.textContent==="No challenges in this environment yet."));
 ui.flow.destroy();
 console.log("ok - first missions reuse the challenge panel; environment roster and empty state follow the scene");
+
+// Replay is explicit. It returns to the chooser without starting a world, then
+// initializes a new attempt only after a choice, even in the same environment.
+storage.clear();
+saveFirstRun({phase:"choosing"});
+const replay=simulator();ui=replay.mount();ui.choose("put_it_away");await flush();
+const firstAttempt=replay.calls.starts[0].attempt_id;
+startFirstRun(true);startFirstRun(true);await flush();
+assert.equal(readFirstRun().phase,"choosing");assert.equal(replay.calls.starts.length,1);
+assert.deepEqual(replay.calls.aborts,[firstAttempt]);assert.equal(replay.agent.get().brainActive,false);
+ui.flow.destroy();ui=replay.mount();await flush();
+assert.equal(ui.flow.isActive(),true);assert.ok(ui.root.find(el=>el.dataset.mission==="put_it_away"));
+ui.choose("put_it_away");await flush();assert.equal(replay.calls.starts.length,2);
+assert.notEqual(replay.calls.starts[1].attempt_id,firstAttempt);
+ui.flow.destroy();ui=replay.mount();await flush();assert.equal(ui.flow.isActive(),true);assert.equal(replay.calls.starts.length,2);
+replay.emitChallenge({...replay.challenge,active:{...replay.challenge.active,state:"passed"}});
+startFirstRun(true);await flush();assert.equal(replay.agent.get().brainActive,false);
+ui.choose("way_out");await flush();assert.equal(replay.calls.switches.at(-1),"backrooms");
+assert.equal(replay.calls.starts.at(-1).id,"way_out");ui.flow.destroy();
+console.log("ok - replay stops the owned attempt, persists the chooser and starts a fresh selected challenge");
+
+saveFirstRun({phase:"choosing"});
+const replayPending=simulator();const activate=replayPending.agent.setDirective;let releaseReplay;
+replayPending.agent.setDirective=async id=>{if(id)await new Promise(resolve=>{releaseReplay=resolve;});return activate(id);};
+ui=replayPending.mount();ui.choose("put_it_away");await flush();startFirstRun(true);await flush();
+releaseReplay();await flush();assert.equal(readFirstRun().phase,"choosing");assert.equal(replayPending.agent.get().brainActive,false);
+assert.equal(replayPending.calls.starts.length,1);ui.flow.destroy();
+console.log("ok - replay drains a late agent activation before reopening the chooser");
+
+// The broker command is origin/source pinned, bounded and idempotent.
+const oldParent=window.parent, oldReferrer=document.referrer;
+const replies=[];window.parent={postMessage:(data,origin)=>replies.push({data,origin})};document.referrer="https://broker.example/session";
+let picks=0;const removeReplay=installFirstMissionReplay(()=>picks++);
+function brokerMessage(data,origin="https://broker.example",source=window.parent) {
+ const event=new Event("message");Object.assign(event,{data:{channel:"innate:first-mission:v1",...data},origin,source});window.dispatchEvent(event);
+}
+brokerMessage({type:"get-controls"});assert.equal(replies.pop().data.canChoose,true);
+brokerMessage({type:"choose",requestId:"1"},"https://foreign.example");brokerMessage({type:"choose",requestId:"1"},"https://broker.example",{});
+for(const requestId of [null,"","a".repeat(129)])brokerMessage({type:"choose",requestId});assert.equal(picks,0);
+brokerMessage({type:"choose",requestId:"1"});brokerMessage({type:"choose",requestId:"1"});assert.equal(picks,1);
+assert.equal(replies.pop().data.type,"choose-accepted");removeReplay();brokerMessage({type:"choose",requestId:"2"});assert.equal(picks,1);
+window.parent=oldParent;document.referrer=oldReferrer;
+console.log("ok - only the trusted broker can request the challenge chooser");

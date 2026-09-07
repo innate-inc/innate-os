@@ -41,7 +41,8 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   let began = false;
   let statusMessage = "";
   const views = new Set();
-  const abort = new AbortController();
+  let abort = new AbortController();
+  let restarting = /** @type {Promise<void>|null} */ (null);
   const listeners = new Set();
   const overlay = document.createElement("section");
   overlay.className = "first-mission";
@@ -197,7 +198,30 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     challenge = value; notify();
     if (active && saved?.attemptId && value.active?.attempt_id === saved.attemptId && value.active.state === "passed") void finish("done");
   });
-  function start() { if (active) { render(); if (mission()) void runConnect(false); } }
+  function restart() {
+    if (!options.enabled || destroyed) return Promise.resolve();
+    if (restarting) return restarting;
+    restarting = (async () => {
+      // Drain the old attempt before replacing its cancellation signal. Late
+      // activation acknowledgements must not start MARS behind the chooser.
+      if (active) await finish("skipped");
+      else if (saved?.attemptId && challenge?.active?.attempt_id === saved.attemptId
+        && agentState.get().currentDirective === INTRO_AGENT_ID) await agentState.setDirective("");
+      await Promise.allSettled([operation, activation].filter(Boolean));
+      if (destroyed) return;
+      abort = new AbortController();
+      saved = {phase:"choosing"};
+      active = true; began = false;
+      persist(); render();
+    })().catch(error => {
+      options.onNotice?.(`Could not open challenges: ${error.message}. Try picking another challenge again.`);
+    }).finally(() => {restarting = null;});
+    return restarting;
+  }
+  function start(/** @type {Event} */ event) {
+    if (/** @type {CustomEvent} */ (event).detail?.restart) { void restart(); return; }
+    if (active) { render(); if (mission()) void runConnect(false); }
+  }
   window.addEventListener(FIRST_RUN_REQUEST_EVENT, start);
   render();
   // Route remounts reconnect too; they must not rely on the shell's one-time
