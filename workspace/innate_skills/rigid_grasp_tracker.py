@@ -9,9 +9,7 @@ from innate_skills.grasp_tracker import GraspPointTracker
 
 def _edge_image(image):
     # Align color-image edge energy, not background intensity or a color blob.
-    # Match edges at a scale that tolerates sensor blur and subpixel resampling.
-    # Anchor visibility is checked separately on the unsmoothed color image.
-    image = cv2.GaussianBlur(image.astype(np.float32) / 255, (0, 0), 2.0)
+    image = cv2.GaussianBlur(image.astype(np.float32) / 255, (5, 5), 0.8)
     gx = cv2.Sobel(image, cv2.CV_32F, 1, 0)
     gy = cv2.Sobel(image, cv2.CV_32F, 0, 1)
     energy = gx * gx + gy * gy
@@ -49,16 +47,6 @@ class RigidGraspTracker(GraspPointTracker):
         ] = 255
         if not self.mask.any():
             return
-        # Exclude background inside the model box; this seed support stays fixed.
-        labels = np.where(self.mask > 0, cv2.GC_PR_FGD, cv2.GC_BGD).astype(np.uint8)
-        cv2.circle(labels, (round(point[0] - x0), round(point[1] - y0)), 3, cv2.GC_FGD, -1)
-        background, foreground = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
-        try:
-            cv2.grabCut(np.uint8(self.photo * 255), labels, None, background, foreground, 3, cv2.GC_INIT_WITH_MASK)
-        except cv2.error:
-            return
-        support = np.uint8((labels == cv2.GC_FGD) | (labels == cv2.GC_PR_FGD))
-        self.mask &= cv2.dilate(support, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))) * 255
         edge_pixels = np.argwhere((self.template > 0.2 * np.max(self.template[self.mask > 0])) & (self.mask > 0))
         cells = {}
         for y, x in edge_pixels:
