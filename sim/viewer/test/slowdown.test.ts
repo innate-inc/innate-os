@@ -2,48 +2,40 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SlowdownDetector } from "../src/slowdown.ts";
 
-test("warn only on sustained slow rendering or simulation, excluding inactive/reset periods", () => {
+test("warns only after 6 s of uninterrupted slow frames or slow simulation", () => {
   const detector = new SlowdownDetector();
   let now = 0, t = 0;
-  const window = (fps = 60, speed = 1, active = true) => {
+  const run = (seconds: number, fps: number, speed = 1, active = true) => {
     let warned = false;
-    for (let i = 0; i < fps * 3; i++) {
+    for (let i = 0; i < fps * seconds; i++) {
       now += 1000 / fps;
       t += speed / fps;
-      warned = detector.sample(Math.round(now), { t, receivedAt: Math.round(now) }, active) || warned;
+      warned = detector.sample(now, { t, receivedAt: now }, active) || warned;
     }
     return warned;
   };
-  const begin = () => { detector.reset(); detector.sample(Math.round(now), { t, receivedAt: Math.round(now) }, true); };
-  begin();
-  assert.equal(window(29.5), false);
-  assert.equal(window(29.5), false, "30 Hz cap with scheduling jitter is not a rendering failure");
-  begin();
-  assert.equal(window(), false);
-  assert.equal(window(20), false, "one poor window is insufficient");
-  assert.equal(window(), false, "recovery breaks the streak");
-  assert.equal(window(20), false);
-  assert.equal(window(20), true);
-  begin();
-  assert.equal(window(60, .5), false);
-  assert.equal(window(60, .5), true, "slow physics warns even at 60fps");
-  begin();
-  assert.equal(window(20), false);
-  assert.equal(window(20, .5, false), false, "loading/hidden views reset the detector");
-  assert.equal(window(), false);
-  begin();
-  assert.equal(window(20), false);
-  detector.reset();
-  assert.equal(window(20), false, "environment load discards the previous bad window");
-  assert.equal(detector.sample(now, null, true), false, "no state is not evidence of slowdown");
-  begin();
-  assert.equal(window(20), false);
-  t = -100;
-  assert.equal(window(20), false, "clock rollback resets the window");
-  begin();
-  const frozen = { t, receivedAt: Math.round(now) };
-  for (let i = 0; i < 500; i++) {
-    now += 17;
-    assert.equal(detector.sample(now, frozen, true), false, "a stream stall is not slow physics");
+  const fresh = (fps: number, speed = 1) => { now += 2000; return run(7, fps, speed); };
+
+  assert.equal(fresh(60), false);
+  assert.equal(fresh(29.5), false, "a 30 Hz display with scheduling jitter is healthy");
+  assert.equal(fresh(20), true, "sustained low fps");
+  assert.equal(fresh(60, 0.5), true, "slow physics warns even at 60 fps");
+
+  now += 2000;
+  assert.equal(run(4, 20), false, "too early");
+  now += 2000;
+  assert.equal(run(4, 20), false, "a frame gap (hidden tab, parked stage) restarts the window");
+  assert.equal(run(4, 20, 1, false), false, "an inactive view restarts the window");
+  assert.equal(run(4, 20), false);
+  t = 0;
+  assert.equal(run(4, 20), false, "a clock rollback (world-server restart) restarts the window");
+  assert.equal(run(3, 20), true, "then the same slowness still warns");
+
+  now += 2000;
+  const frozen = { t, receivedAt: now };
+  for (let i = 0; i < 420; i++) {
+    now += 1000 / 60;
+    assert.equal(detector.sample(now, frozen, true), false, "a stalled world stream is not slow physics");
   }
+  assert.equal(detector.sample(now, null, true), false, "no state is not evidence of slowdown");
 });

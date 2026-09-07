@@ -14,7 +14,6 @@ import { APARTMENT_VIEWER, SimScene, type CameraMode, type CameraView } from "./
 import type { EnvironmentInfo } from "./physics/worldStateController";
 import type { PropInfo } from "./props";
 import { LoadQueue } from "./loadQueue";
-import { stagePixelRatio } from "./renderBudget";
 import { SlowdownDetector } from "./slowdown";
 import { THUMB_H, THUMB_W, type SimSession } from "./simSession";
 
@@ -25,6 +24,13 @@ const THUMB_FRAME_DIV = 2;
 // 60fps render cap: uncapped 120Hz rAF doubles the page's GPU/CPU for no
 // visible gain (~75Hz interpolated state) and the load jitters everything.
 const MIN_FRAME_MS = 1000 / 62;
+
+// Opt-in GPU fill budget, independent of display size and Retina scale: ~3 MP
+// matches the tested 2147 x 1420 target, where a DPR-only cap allowed 12 MP.
+const MAX_RENDER_PIXELS = 3_000_000;
+// Module state, not stage state: the choice must outlive the shared stage's
+// rebuild after its linger, while a reload stays the way back to full resolution.
+let reducedResolution = false;
 
 // Scene setup and the webapp's challenge panel expand over the same corner of
 // the stage, so at most one may be open. They ship in separate bundles -- this
@@ -525,40 +531,51 @@ export function createSimStage(
   window.addEventListener("pointerup", finishDrop);
   window.addEventListener("pointercancel", cancelDrop);
 
-  // Full resolution by default. Reduction lasts until reload; only dismissal
-  // is remembered for the tab, so navigating/resizing doesn't nag again.
-  let reducedResolution = false;
+  // Full resolution by default: the notice only offers the reduction. Dismissal
+  // is remembered for the tab so navigating doesn't nag again.
   const slowdown = new SlowdownDetector();
   let environmentReady = false;
   let stageVisible = true;
-  const resetSlowdown = () => slowdown.reset();
-  document.addEventListener("visibilitychange", resetSlowdown);
-  let resolutionDismissed = false;
-  try { resolutionDismissed = sessionStorage.getItem("sim-resolution-dismissed") === "true"; } catch { /* storage unavailable */ }
+  let slowdownDismissed = sessionStorage.getItem("sim-resolution-dismissed") === "true";
   const resolutionNotice = document.createElement("div");
   resolutionNotice.className = "sim-resolution-notice";
-  resolutionNotice.hidden = true;
+  resolutionNotice.hidden = slowdownDismissed || !reducedResolution;
   const resolutionText = document.createElement("span");
-  const resolutionAction = makeChip("Reduce resolution");
+  const resolutionAction = makeChip("");
   const resolutionDismiss = makeChip("×", "Dismiss resolution notice");
   resolutionDismiss.setAttribute("aria-label", "Dismiss resolution notice");
   resolutionNotice.append(resolutionText, resolutionAction, resolutionDismiss);
   debugStack.prepend(resolutionNotice);
-  resolutionAction.onclick = () => { reducedResolution = !reducedResolution; resize(); };
+  const refreshResolutionNotice = () => {
+    resolutionText.textContent = reducedResolution
+      ? "Render resolution reduced until reload."
+      : "Slow rendering or simulation detected. Reducing resolution may help.";
+    resolutionAction.textContent = reducedResolution ? "Use full resolution" : "Reduce resolution";
+  };
+  refreshResolutionNotice();
+  resolutionAction.onclick = () => {
+    reducedResolution = !reducedResolution;
+    refreshResolutionNotice();
+    resize();
+  };
   resolutionDismiss.onclick = () => {
-    resolutionDismissed = true;
+    slowdownDismissed = true;
     resolutionNotice.hidden = true;
-    try { sessionStorage.setItem("sim-resolution-dismissed", "true"); } catch { /* storage unavailable */ }
+    sessionStorage.setItem("sim-resolution-dismissed", "true");
+  };
+  // Reduced: 75% of the display's scale, bounded by the pixel budget -- below 1
+  // on very large windows, where a floor of 1 would defeat it. Logical size,
+  // aspect and CSS overlays are unchanged.
+  const pixelRatio = (w: number, h: number) => {
+    const full = Math.min(devicePixelRatio, 2);
+    return reducedResolution ? Math.min(full * 0.75, Math.sqrt(MAX_RENDER_PIXELS / (w * h))) : full;
   };
   const resize = () => {
     const w = wrap.clientWidth;
     const h = wrap.clientHeight;
-    stageVisible = !!w && !!h;
-    slowdown.reset();
-    if (!w || !h) return; // hidden (map primary): keep the last real size
-    resolutionText.textContent = reducedResolution ? "Render resolution reduced until reload." : "Slow rendering or simulation detected. Reducing resolution may help.";
-    resolutionAction.textContent = reducedResolution ? "Use full resolution" : "Reduce resolution";
-    scene.setRenderSize(w, h, stagePixelRatio(w, h, devicePixelRatio, reducedResolution));
+    stageVisible = w > 0 && h > 0;
+    if (!stageVisible) return; // hidden (map primary): keep the last real size
+    scene.setRenderSize(w, h, pixelRatio(w, h));
     // setSize cleared the buffer (the spec clears a resized canvas) and the
     // browser paints before the next rAF, so the stage would flash black.
     scene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
@@ -585,7 +602,6 @@ export function createSimStage(
   const stopLoop = () => {
     cancelAnimationFrame(raf);
     raf = 0;
-    slowdown.reset();
   };
 
   const loop = (now: number) => {
@@ -614,8 +630,8 @@ export function createSimStage(
     scene.setView(VIEW_FOR[session.primaryCamera] ?? "orbit");
     scene.render();
     frame++;
-    if (!resolutionDismissed && resolutionNotice.hidden &&
-        slowdown.sample(now, session.simulationClock, environmentReady && stageVisible && !document.hidden)) {
+    if (!slowdownDismissed && resolutionNotice.hidden &&
+        slowdown.sample(now, session.simulationClock, environmentReady && stageVisible)) {
       resolutionNotice.hidden = false;
     }
 
@@ -644,7 +660,6 @@ export function createSimStage(
   let loadVersion = 0;
   const loadEnvironment = async (environment: EnvironmentInfo | null) => {
     environmentReady = false;
-    slowdown.reset();
     // Discard superseded loads after each await.
     const version = ++loadVersion;
     if (loadedEnvironmentId !== null) {
@@ -744,7 +759,6 @@ export function createSimStage(
       window.removeEventListener("pointercancel", cancelDrop);
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
       document.removeEventListener("pointerdown", onOutsidePointer, true);
-      document.removeEventListener("visibilitychange", resetSlowdown);
       scene.dispose();
       wrap.remove();
     },

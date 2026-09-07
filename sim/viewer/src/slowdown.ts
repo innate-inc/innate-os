@@ -1,32 +1,41 @@
 export interface SimulationClock { t: number; receivedAt: number }
 
-/** Two consecutive 3s windows: ignore isolated hitches, resets and inactive views. */
-export class SlowdownDetector {
-  private start: { now: number; clock: SimulationClock } | null = null;
-  private frames = 0;
-  private slowWindows = 0;
+const WINDOW_MS = 6000;
+// Headroom under a 30 Hz display and ordinary rAF scheduling jitter.
+const MIN_FPS = 24;
+const MIN_SIM_SPEED = 0.8;
+// A stalled world stream is a connectivity problem, not slow physics.
+const STALE_MS = 500;
+// No rendering loop leaves a gap this long: a hidden tab, a parked stage or a stall.
+const GAP_MS = 1000;
 
-  reset(): void {
-    this.start = null;
-    this.frames = this.slowWindows = 0;
-  }
+/** True once 6 s of uninterrupted frames averaged under 24 fps or advanced the
+ * simulation clock under 0.8x real time. An inactive view, a stale stream, a
+ * clock rollback or a gap between frames restarts the window instead. */
+export class SlowdownDetector {
+  private start: { now: number; t: number } | null = null;
+  private lastNow = -Infinity;
+  private frames = 0;
 
   sample(now: number, clock: SimulationClock | null, active: boolean): boolean {
-    // A stale world stream is a connectivity problem, not measured sim speed.
-    if (!active || !clock || now - clock.receivedAt > 500) { this.reset(); return false; }
-    if (!this.start || clock.t < this.start.clock.t) {
-      this.reset();
-      this.start = { now, clock };
+    const gap = now - this.lastNow;
+    this.lastNow = now;
+    if (!active || !clock || now - clock.receivedAt > STALE_MS) {
+      this.start = null;
+      return false;
+    }
+    if (!this.start || gap > GAP_MS || clock.t < this.start.t) {
+      this.start = { now, t: clock.t };
+      this.frames = 0;
       return false;
     }
     this.frames++;
-    const seconds = (now - this.start.now) / 1000;
-    if (seconds < 3) return false;
-    // Leave headroom for 30 Hz displays and ordinary scheduling jitter.
-    const slow = this.frames / seconds < 24 || (clock.t - this.start.clock.t) / seconds < 0.8;
-    this.slowWindows = slow ? this.slowWindows + 1 : 0;
-    this.start = { now, clock };
+    const elapsed = now - this.start.now;
+    if (elapsed < WINDOW_MS) return false;
+    const seconds = elapsed / 1000;
+    const slow = this.frames / seconds < MIN_FPS || (clock.t - this.start.t) / seconds < MIN_SIM_SPEED;
+    this.start = { now, t: clock.t };
     this.frames = 0;
-    return this.slowWindows >= 2;
+    return slow;
   }
 }
