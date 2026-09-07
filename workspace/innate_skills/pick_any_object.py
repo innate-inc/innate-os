@@ -291,6 +291,18 @@ class PickAnyObject(Skill):
         """Best-effort teardown: carry if holding, else fold to rest. Never
         raises. REST, not ZERO: after a failed descent the arm can be near the
         floor, and the zero posture would sweep the gripper through it."""
+        if keep_grip and self._grip_strength is not None and self._grip_strength < SOFT_GRIP_MIN:
+            # A verified raised rigid grasp is already a carry position. Folding
+            # to a fixed wrist roll can eject it. Keep the standing joint/grip
+            # targets; never reseed the squeeze from measured finger aperture.
+            try:
+                j6 = self._arm_joints()[5]
+                z = self.manipulation.pose.z
+                if math.isfinite(z) and z >= self._p["floor_z"] + 0.07 and j6 > GRIPPER_EMPTY_J6 + 0.02:
+                    self.logger.info("[PickAnyObject] keeping the raised rigid grasp for carry")
+                    return
+            except (ArmFailed, ArmUnhealthy, LookupError):
+                pass
         joints = CARRY_ARM + [-self._p["close_strength"]] if keep_grip else list(self.manipulation.REST)
         try:
             self.manipulation.move_joints(joints, duration=3.0)
@@ -832,8 +844,6 @@ class PickAnyObject(Skill):
                 self._holding = False
                 self.say("I couldn't get a grip on it.")
                 raise SkillFailed(f"Grasp missed — '{prompt}' is still on the floor (verified after backing up)")
-            self.say("Got it.")
-            return f"Picked up '{prompt}' (verified: floor clear after backing up)"
         except ArmFailed as e:
             # A clean arm give-up is a skill failure, not a crash. SkillFailed
             # and SkillCancelled propagate untouched — the framework owns them.
@@ -845,3 +855,10 @@ class PickAnyObject(Skill):
             self.mobility.stop()
             self._rest_arm(keep_grip=self._holding)
             self.head.set_position(0)
+        # A rigid object can slip during the final fold even after a verified
+        # lift. Report success only after that motion, using the encoder again.
+        if self._gripper_closed_on_air():
+            self._holding = False
+            self.fail(f"'{prompt}' slipped while moving to the carry pose. Ask me to pick it up again.")
+        self.say("Got it.")
+        return f"Picked up '{prompt}' (grip verified after the lift and carry motion)"

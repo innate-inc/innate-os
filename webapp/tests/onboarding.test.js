@@ -1,206 +1,235 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import {
-  ONBOARDING_REQUEST_EVENT,
-  ONBOARDING_SEEN_KEY,
-  ONBOARDING_START_SECTION,
-  ONBOARDING_VERSION,
-} from "../js/onboarding.js";
-import {
-  AGENT_ONBOARDING_PROGRESS_KEY,
-  backendReadinessFromMessage,
-  CAPABILITY_RESPONSE,
-  GUIDED_PROMPTS,
-  hasIntroAgent,
-  matchesSkill,
-  ONBOARDING_GREETING,
-  ownedSkillEvent,
-  parseRevealSections,
-  parsePromptStage,
-  REVEAL_SECTIONS,
-} from "../js/agent/agentOnboarding.js";
-import { isInternalOnboardingSkill } from "../js/agent/chatStream.js";
-import {
-  TELEOP_ONBOARDING_PROGRESS_KEY,
-  TELEOP_ONBOARDING_STEPS,
-  SPEECH_UNAVAILABLE_STEP,
-  boundingSpotlightRect,
-  copyForStep,
-  isPickupCompletion,
-  isWaveCompletion,
-  paddedSpotlightRect,
-  positionAboveTarget,
-  resolveAvailableStep,
-  resolvePreviousStep,
-  SPEAK_ADVANCE_MS,
-  runningCopy,
-} from "../js/teleop/teleopOnboarding.js";
+import { createAgentOnboarding, FIRST_MISSIONS } from "../js/agent/agentOnboarding.js";
+import { createChallengePanel } from "../js/agent/challengePanel.js";
+import { FIRST_RUN_KEY, readFirstRun, saveFirstRun, shouldAutoStartOnboarding, startFirstRun, installFirstMissionReplay } from "../js/onboarding.js";
 
-assert.equal(ONBOARDING_SEEN_KEY, `innate.onboardingSeen.v${ONBOARDING_VERSION}`);
-assert.equal(ONBOARDING_VERSION, 4);
-assert.equal(ONBOARDING_REQUEST_EVENT, "innate:onboarding-request");
-assert.equal(ONBOARDING_START_SECTION, "agent");
-assert.equal(TELEOP_ONBOARDING_PROGRESS_KEY, `innate.teleopOnboardingProgress.v${ONBOARDING_VERSION}`);
-assert.match(TELEOP_ONBOARDING_STEPS.intro.body, /microphone to hear what it hears/);
-assert.match(TELEOP_ONBOARDING_STEPS.wave.body, /\{shortcut\}/);
-assert.match(TELEOP_ONBOARDING_STEPS.talk.body, /speech bar/);
-assert.match(TELEOP_ONBOARDING_STEPS.pick.body, /Pick Any Object/);
-assert.match(TELEOP_ONBOARDING_STEPS.pick.body, /red LEGO brick/);
-assert.match(TELEOP_ONBOARDING_STEPS.agent.body, /combine skills/);
-assert.ok(isWaveCompletion({ skillId: "innate-os/wave" }));
-assert.ok(isPickupCompletion({ skillId: "innate-os/pick_any_object" }));
-assert.ok(!isPickupCompletion({ skillId: "innate-os/wave" }));
-assert.equal(resolveAvailableStep("talk", false), "talk");
-assert.equal(resolveAvailableStep("talk", true), "talk");
-assert.equal(resolveAvailableStep("talk", null), "talk");
-assert.equal(copyForStep("talk", false), SPEECH_UNAVAILABLE_STEP);
-assert.equal(copyForStep("talk", true), TELEOP_ONBOARDING_STEPS.talk);
-assert.match(SPEECH_UNAVAILABLE_STEP.body, /INNATE_SERVICE_KEY/);
-assert.match(SPEECH_UNAVAILABLE_STEP.body, /Cartesia/);
-assert.deepEqual(
-  positionAboveTarget(
-    { left: 762, right: 992, top: 658 },
-    { width: 350, height: 184 },
-    { width: 1280, height: 720 },
-  ),
-  { left: 702, top: 458 },
-);
-assert.deepEqual(
-  positionAboveTarget(
-    { left: 80, right: 310, top: 120 },
-    { width: 350, height: 184 },
-    { width: 390, height: 720 },
-  ),
-  { left: 28, top: 12 },
-);
-assert.deepEqual(
-  paddedSpotlightRect(
-    { left: 762, right: 992, top: 658, bottom: 702 },
-    { width: 1280, height: 720 },
-  ),
-  { left: 748, top: 644, width: 258, height: 72 },
-);
-assert.deepEqual(
-  paddedSpotlightRect(
-    { left: 4, right: 386, top: 4, bottom: 716 },
-    { width: 390, height: 720 },
-  ),
-  { left: 0, top: 0, width: 390, height: 720 },
-);
-assert.deepEqual(
-  boundingSpotlightRect([
-    { left: 712, right: 992, top: 108, bottom: 648 },
-    { left: 762, right: 992, top: 658, bottom: 702 },
-  ]),
-  { left: 712, right: 992, top: 108, bottom: 702 },
-);
-assert.equal(resolvePreviousStep("wave", null), "intro");
-assert.equal(resolvePreviousStep("pick", true), "talk");
-assert.equal(resolvePreviousStep("pick", false), "talk");
-assert.ok(SPEAK_ADVANCE_MS >= 2000);
-// A running card is a repaint of its own step, not a step of its own.
-for (const step of ["wave", "pick"]) {
-  assert.equal(runningCopy(step).eyebrow, TELEOP_ONBOARDING_STEPS[step].eyebrow);
-  assert.equal(runningCopy(step).title, "Watch it happen");
+class Element extends EventTarget {
+  children = []; dataset = {}; hidden = false; parent = null; textContent = "";
+  classList = {values:new Set(), toggle:(name,on)=> on ? this.classList.values.add(name) : this.classList.values.delete(name), contains:name=>this.classList.values.has(name)};
+  append(...children) {this.children.push(...children); for (const child of children) child.parent=this;}
+  appendChild(child) {this.append(child); return child;}
+  replaceChildren(...children) {this.children=[]; this.append(...children);}
+  setAttribute() {}
+  contains(node) { return !!this.find(el=>el===node); }
+  remove() {if(this.parent) this.parent.children=this.parent.children.filter(c=>c!==this);}
+  click() {this.dispatchEvent(new Event("click"));}
+  find(predicate) {if(predicate(this)) return this; for(const child of this.children){const match=child.find(predicate);if(match)return match;}}
 }
-assert.equal(AGENT_ONBOARDING_PROGRESS_KEY, `innate.agentOnboarding.v${ONBOARDING_VERSION}`);
-assert.deepEqual(REVEAL_SECTIONS, ["cameras", "controls", "complete"]);
-assert.match(ONBOARDING_GREETING, /^Hi, I’m MARS/);
-assert.doesNotMatch(ONBOARDING_GREETING, /hold Space|type in the chat/i);
-assert.equal(GUIDED_PROMPTS.capabilities, "What can you do?");
-assert.match(CAPABILITY_RESPONSE, /^I am your physical agent/);
-assert.equal(GUIDED_PROMPTS.pickup, "Pick up the Lego in front of you.");
-assert.equal(GUIDED_PROMPTS.deliver, "Go and give it to the person in the corner.");
-assert.equal(hasIntroAgent({ agents: [{ id: "intro_agent" }] }), true);
-assert.equal(hasIntroAgent({ agents: [{ id: "default_agent" }] }), false);
-assert.equal(hasIntroAgent({ agents: [] }), false);
-assert.equal(parsePromptStage({ promptStage: "pickup" }), "pickup");
-assert.equal(parsePromptStage({ promptStage: "deliver" }), "deliver");
-assert.equal(parsePromptStage({ promptStage: "done" }), "done");
-assert.equal(parsePromptStage({ promptStage: "unknown" }), "capabilities");
-assert.deepEqual(
-  parseRevealSections({ revealed: ["controls", "bogus", "cameras", "controls"] }),
-  ["cameras", "controls"],
-);
-assert.deepEqual(parseRevealSections({ revealed: "cameras" }), []);
-assert.equal(backendReadinessFromMessage({ data: '{"state":"ready","connected":true}' }), true);
-assert.equal(backendReadinessFromMessage({ data: '{"state":"invalid_config","connected":false}' }), false);
-assert.equal(backendReadinessFromMessage({ data: '{"state":"starting","connected":false}' }), null);
-assert.ok(isInternalOnboardingSkill("RevealOnboarding"));
-assert.ok(isInternalOnboardingSkill("reveal_onboarding"));
-assert.ok(!isInternalOnboardingSkill("wave"));
-assert.ok(matchesSkill("innate-os/pick_any_object", "pick_any_object"));
-assert.ok(matchesSkill("Open Gripper", "open_gripper"));
-assert.ok(!matchesSkill("close_gripper", "open_gripper"));
-const pickRunning = { skill: "innate-os/pick_any_object", runId: "pick-1", status: "running", timestamp: 20 };
-assert.deepEqual(ownedSkillEvent("pick_any_object", "", pickRunning, 10), { kind: "claim", runId: "pick-1" });
-assert.equal(
-  ownedSkillEvent("pick_any_object", "pick-1", { ...pickRunning, runId: "foreign", status: "completed" }, 10),
-  null,
-);
-assert.deepEqual(
-  ownedSkillEvent("pick_any_object", "pick-1", { ...pickRunning, status: "completed" }, 10),
-  { kind: "completed", runId: "pick-1" },
-);
-assert.equal(ownedSkillEvent("pick_any_object", "", { ...pickRunning, timestamp: 5 }, 10), null);
+const storage = new Map();
+globalThis.localStorage = {getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)};
+globalThis.document = Object.assign(new EventTarget(),{body:new Element(),createElement:()=>new Element()});
+globalThis.window = new EventTarget();
+globalThis.Node = Element;
+window.matchMedia = () => ({matches:false});
+const flush = async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));};
+function simulator() {
+  const callbacks = {environment:new Set(),challenge:new Set(),agent:new Set()};
+  let env = {environment:{id:"apartment"},switch:null};
+  let challenge = {list:FIRST_MISSIONS,active:null};
+  let state = {agents:[{id:"intro_agent"}],currentDirective:"",brainActive:false};
+  const calls = {starts:[],switches:[],directives:[],aborts:[],begins:[]};
+  const emitChallenge = value=>{
+    if(value.active) value={...value,active:{goals:[{label:"Complete the scene goal",done:false}],elapsed_s:0,...value.active}};
+    challenge=value; for(const cb of callbacks.challenge)cb(value);
+  };
+  const emitEnvironment = value=>{env=value;for(const cb of callbacks.environment)cb(value);};
+  const session = {
+    onEnvironment(cb){callbacks.environment.add(cb);cb(env);return()=>callbacks.environment.delete(cb);},
+    onChallenge(cb){callbacks.challenge.add(cb);cb(challenge);return()=>callbacks.challenge.delete(cb);},
+    switchEnvironment(id){calls.switches.push(id);emitEnvironment({environment:{id},switch:null});},
+    startChallenge(id,attempt_id){calls.starts.push({id,attempt_id});emitChallenge({list:FIRST_MISSIONS,active:{id,attempt_id,state:"running"}});},
+    abortChallenge(id){calls.aborts.push(id);},
+  };
+  const agent = {
+    get:()=>state,
+    subscribe(cb){callbacks.agent.add(cb);cb(state);return()=>callbacks.agent.delete(cb);},
+    async setDirective(id){calls.directives.push(id);state={...state,currentDirective:id,brainActive:!!id};for(const cb of callbacks.agent)cb(state);},
+  };
+  function mount(enabled=true) {
+    const root=new Element();
+    const ros={subscribe(_topic,cb){cb({data:'{"connected":true}'});return()=>{};}};
+    const flow=createAgentOnboarding(root,ros,agent,{enabled,session,onStart:(...args)=>calls.begins.push(args)});
+    const panel=createChallengePanel(root,session,flow);
+    const destroy=flow.destroy;
+    flow.destroy=()=>{panel.destroy();destroy();};
+    return {root,flow,choose:id=>root.find(el=>el.dataset.mission===id).click(),skip:()=>root.find(el=>/Skip mission|Explore on my own/.test(el.textContent)).click()};
+  }
+  return {mount,session,agent,calls,emitChallenge,emitEnvironment,get challenge(){return challenge;}};
+}
 
-const appCss = readFileSync(new URL("../css/app.css", import.meta.url), "utf8");
-assert.match(
-  appCss,
-  /\.agent-conversation-onboarding:not\(\.agent-onboarding-show-controls\)[\s\S]*?\.agent-control-panel\s*\{\s*display:\s*none;/,
-);
+// Three choices work through the real controller/session handshake. Arbitrary
+// speech cannot gate completion, and only the local attempt can finish it.
+for(const mission of FIRST_MISSIONS) {
+  storage.clear();const sim=simulator();const ui=sim.mount();
+  ui.choose(mission.id);await flush();
+  assert.equal(sim.calls.starts.length,1);
+  assert.equal(sim.calls.starts[0].id,mission.id);
+  assert.equal(sim.agent.get().currentDirective,"intro_agent");
+  const overlay=ui.root.find(el=>el.className==="first-mission");
+  const dock=ui.root.find(el=>el.className==="agent-challenge-dock");
+  assert.equal(overlay.hidden,true);
+  assert.equal(dock.classList.contains("open"),true);
+  assert.ok(ui.root.find(el=>el.textContent==="Complete the scene goal"));
+  assert.ok(ui.root.find(el=>el.textContent==="Skip mission"));
+  assert.equal(ui.root.find(el=>el.textContent==="Abort"),undefined);
+  assert.equal(ui.root.find(el=>el.textContent==="Retry"),undefined);
+  ui.flow.onUserMessage("Can you try that again?");
+  sim.emitChallenge({...sim.challenge,active:{...sim.challenge.active,attempt_id:"foreign",state:"passed"}});
+  assert.equal(ui.flow.isActive(),true);
+  assert.equal(ui.root.find(el=>el.className==="challenge-banner passed"),undefined);
+  sim.emitChallenge({...sim.challenge,active:{id:mission.id,attempt_id:sim.calls.starts[0].attempt_id,state:"passed"}});
+  assert.equal(ui.flow.isActive(),false);
+  assert.equal(shouldAutoStartOnboarding(),false);
+  assert.ok(ui.root.find(el=>el.className==="challenge-banner passed"));
+  ui.flow.destroy();
+}
+// Reopen the page in flight: no restart, prop placement, or second agent start.
+storage.clear();const sim=simulator();let ui=sim.mount();ui.choose("put_it_away");await flush();
+const attempt=sim.calls.starts[0].attempt_id;
+ui.flow.destroy();ui=sim.mount();await flush();
+assert.equal(sim.calls.starts.length,1);assert.equal(sim.calls.directives.length,1);
+assert.deepEqual(sim.calls.begins.map(([fresh])=>fresh),[true,false]);
+assert.equal(readFirstRun().attemptId,attempt);
+assert.ok(ui.root.find(el=>el.textContent==="Complete the scene goal"));
+ui.skip();await flush();assert.deepEqual(sim.calls.aborts,[attempt]);assert.equal(sim.agent.get().brainActive,false);
+ui.flow.destroy();ui=sim.mount();assert.equal(ui.flow.isActive(),false);ui.flow.destroy();
+// Skip before any selection must never abort another browser's active mission.
+storage.clear();const other=simulator();other.emitChallenge({list:FIRST_MISSIONS,active:{id:"put_it_away",state:"passed"}});
+ui=other.mount();assert.equal(ui.flow.isActive(),true);ui.skip();await flush();assert.equal(other.calls.aborts.length,0);ui.flow.destroy();
+// Skip while the environment is loading: no delayed start can rebuild the scene.
+storage.clear();const slow=simulator();slow.session.switchEnvironment=id=>slow.calls.switches.push(id);
+ui=slow.mount();ui.choose("way_out");await flush();ui.skip();await flush();
+slow.emitEnvironment({environment:{id:"backrooms"},switch:null});await flush();assert.equal(slow.calls.starts.length,0);ui.flow.destroy();
+// An activation already in flight survives closing the page, but never Skip.
+for (const skip of [false,true]) {
+  storage.clear();const pending=simulator();
+  let release;
+  const setDirective=pending.agent.setDirective;
+  pending.agent.setDirective=async id=>{
+    if(id) await new Promise(resolve=>{release=resolve;});
+    return setDirective(id);
+  };
+  ui=pending.mount();ui.choose("put_it_away");await flush();
+  if(skip) ui.skip(); else ui.flow.destroy();
+  release();await flush();
+  assert.equal(pending.agent.get().brainActive,!skip);
+  if(skip) ui.flow.destroy();
+}
+// Physical robot visits do not start the first mission or activate the brain.
+storage.clear();const hardware=simulator();ui=hardware.mount(false);await flush();assert.equal(ui.flow.isActive(),false);assert.equal(hardware.calls.directives.length,0);ui.flow.destroy();
+storage.set(FIRST_RUN_KEY,'{"id":"put_it_away","phase":"playing","attemptId":"broken"}');assert.equal(readFirstRun(),null);
+console.log("ok - first missions: all choices, exact attempt, natural chat, reload, skip, and hardware guard");
 
-const agentOnboardingSource = readFileSync(new URL("../js/agent/agentOnboarding.js", import.meta.url), "utf8");
-assert.match(
-  agentOnboardingSource,
-  /const greeting = greetWhenBrainIsPresent\(startedAt\);/,
-  "resuming an unfinished onboarding session must replay MARS's greeting",
-);
-assert.doesNotMatch(agentOnboardingSource, /ONBOARDING_UI_TOPIC|revealSectionFromMessage/);
-assert.doesNotMatch(
-  agentOnboardingSource,
-  /fresh\s*\?\s*greetWhenBrainIsPresent/,
-  "the greeting must not be limited to a brand-new browser session",
-);
-assert.match(
-  agentOnboardingSource,
-  /if \(fresh\) await options\.prepareEnvironment\?\.\(\);[\s\S]*?const greeting = greetWhenBrainIsPresent/,
-  "a fresh onboarding must finish preparing its environment before MARS greets",
-);
+// A denied write still preserves this tab's attempt across route remounts.
+storage.clear();
+const setItemBeforeDenial=localStorage.setItem;
+localStorage.setItem=()=>{throw Error("Storage denied");};
+const denied=simulator();
+ui=denied.mount();ui.choose("put_it_away");await flush();
+ui.flow.destroy();ui=denied.mount();await flush();
+assert.equal(denied.calls.starts.length,1);
+ui.skip();await flush();ui.flow.destroy();ui=denied.mount();
+assert.equal(ui.flow.isActive(),false);ui.flow.destroy();
+localStorage.setItem=setItemBeforeDenial;
 
-const agentPanelSource = readFileSync(new URL("../js/agent/agentPanel.js", import.meta.url), "utf8");
-const submitTextSource = agentPanelSource.match(
-  /async function submitText\(text\) \{[\s\S]*?\n  \}/,
-)?.[0] ?? "";
-assert.ok(
-  submitTextSource.indexOf("await (opts.ensureRunning") < submitTextSource.indexOf("rosClient.publish(CHAT_IN_TOPIC"),
-  "a local onboarding turn must start the agent before publishing",
-);
-assert.ok(
-  submitTextSource.indexOf("if (!sent) throw") < submitTextSource.indexOf("opts.onUserMessage?.(text, timestamp)"),
-  "the browser must not own an onboarding turn until ROS accepts its publish",
-);
-const remoteChatHandlerSource = agentPanelSource.match(
-  /const unsubIn = rosClient\.subscribe\([\s\S]*?const unsubOut/,
-)?.[0] ?? "";
-assert.doesNotMatch(
-  remoteChatHandlerSource,
-  /onUserMessage/,
-  "another browser's chat echo must not advance this browser's onboarding",
-);
+// Terminal completion travels through the pinned parent, across container origins.
+for (const mode of ["fresh", "completed", "playing", "locked"]) {
+  storage.clear();
+  const module = await import(`../js/onboarding.js?broker=${mode}`);
+  if (mode === "playing") storage.set(FIRST_RUN_KEY, JSON.stringify({id:"way_out", phase:"playing", attemptId:"00000000-0000-0000-0000-000000000001", startedAt:1}));
+  const sent=[];
+  document.referrer="https://sim.example/session";
+  window.parent={postMessage:(data,origin)=>sent.push({data,origin})};
+  const originalSet=localStorage.setItem;
+  if(mode === "locked") localStorage.setItem=()=>{throw Error("Storage blocked");};
+  const ready=module.initializeFirstRunCompletion();
+  const request=sent[0].data;
+  const reply=(origin,source,phase,requestId=request.requestId)=>{
+    const event=new Event("message");
+    Object.assign(event,{origin,source,data:{channel:request.channel,type:"completion",requestId,phase}});
+    window.dispatchEvent(event);
+  };
+  reply("https://wrong.example",window.parent,"done");
+  reply("https://sim.example",{},"done");
+  reply("https://sim.example",window.parent,"done","wrong-request");
+  assert.equal(module.shouldAutoStartOnboarding(),true);
+  reply("https://sim.example",window.parent,mode === "fresh" ? null : "done");
+  await ready;
+  assert.equal(module.shouldAutoStartOnboarding(),["fresh","playing"].includes(mode));
+  if(mode === "playing") assert.equal(module.readFirstRun().phase,"playing");
+  if(["completed","locked"].includes(mode)) assert.equal(sent.at(-1).data.type,"completed");
+  assert.ok(sent.every(message=>message.origin === "https://sim.example"));
+  localStorage.setItem=originalSet;
+}
+document.referrer="";
+console.log("ok - broker completion: pinned source/origin/request, new session, active attempt, and blocked storage");
 
-const agentMainSource = readFileSync(new URL("../js/agent/main.js", import.meta.url), "utf8");
-assert.match(agentMainSource, /switchEnvironment\("backrooms"\)/);
-assert.match(agentMainSource, /prepareEnvironment: prepareBackrooms/);
-assert.match(agentMainSource, /placePropAtRobot\?\.\("resident_blake"\)/);
+// Completing or skipping the mission must not trigger a second introduction
+// when the newly revealed Challenges panel is opened.
+const { maybeShowChallengeIntro } = await import("../js/agent/challengeIntro.js");
+for (const phase of ["done", "skipped"]) {
+  localStorage.removeItem("innate.challengeIntroSeen");
+  localStorage.setItem("innate.firstMission.v1", JSON.stringify({phase}));
+  assert.equal(maybeShowChallengeIntro(), null);
+}
+console.log("ok - first-run completion suppresses the redundant challenge introduction");
 
-const introAgentSource = readFileSync(new URL("../../workspace/innate_agents/intro_agent.py", import.meta.url), "utf8");
-assert.match(introAgentSource, /I am your physical agent, can evolve in the world, do whatever you want, and ask me anything\./);
-assert.match(introAgentSource, /first answer exactly: "Yeah, sure\."/);
-assert.match(introAgentSource, /NavigateToPosition with x=0\.75, y=0, theta_degrees=0, local_frame=true/);
-assert.match(introAgentSource, /then use OpenGripper to drop the LEGO in front of them/);
+// Outside the first run, the same panel follows the server's environment roster
+// and retains normal manual challenge controls.
+storage.clear();
+localStorage.setItem(FIRST_RUN_KEY,JSON.stringify({phase:"done"}));
+const scoped=simulator();ui=scoped.mount();
+scoped.emitEnvironment({environment:{id:"backrooms",display_name:"The Backrooms"},switch:null});
+scoped.emitChallenge({list:[FIRST_MISSIONS[1]],active:null});
+assert.ok(ui.root.find(el=>el.textContent==="Challenges · The Backrooms"));
+assert.ok(ui.root.find(el=>el.textContent==="Find a way out"));
+assert.equal(ui.root.find(el=>el.textContent==="Put it away"),undefined);
+scoped.emitChallenge({list:[],active:null});
+assert.ok(ui.root.find(el=>el.textContent==="No challenges in this environment yet."));
+ui.flow.destroy();
+console.log("ok - first missions reuse the challenge panel; environment roster and empty state follow the scene");
 
-console.log("ok - conversation onboarding contract");
+// Replay is explicit. It returns to the chooser without starting a world, then
+// initializes a new attempt only after a choice, even in the same environment.
+storage.clear();
+saveFirstRun({phase:"choosing"});
+const replay=simulator();ui=replay.mount();ui.choose("put_it_away");await flush();
+const firstAttempt=replay.calls.starts[0].attempt_id;
+startFirstRun(true);startFirstRun(true);await flush();
+assert.equal(readFirstRun().phase,"choosing");assert.equal(replay.calls.starts.length,1);
+assert.deepEqual(replay.calls.aborts,[firstAttempt]);assert.equal(replay.agent.get().brainActive,false);
+ui.flow.destroy();ui=replay.mount();await flush();
+assert.equal(ui.flow.isActive(),true);assert.ok(ui.root.find(el=>el.dataset.mission==="put_it_away"));
+ui.choose("put_it_away");await flush();assert.equal(replay.calls.starts.length,2);
+assert.notEqual(replay.calls.starts[1].attempt_id,firstAttempt);
+ui.flow.destroy();ui=replay.mount();await flush();assert.equal(ui.flow.isActive(),true);assert.equal(replay.calls.starts.length,2);
+replay.emitChallenge({...replay.challenge,active:{...replay.challenge.active,state:"passed"}});
+startFirstRun(true);await flush();assert.equal(replay.agent.get().brainActive,false);
+ui.choose("way_out");await flush();assert.equal(replay.calls.switches.at(-1),"backrooms");
+assert.equal(replay.calls.starts.at(-1).id,"way_out");ui.flow.destroy();
+console.log("ok - replay stops the owned attempt, persists the chooser and starts a fresh selected challenge");
+
+saveFirstRun({phase:"choosing"});
+const replayPending=simulator();const activate=replayPending.agent.setDirective;let releaseReplay;
+replayPending.agent.setDirective=async id=>{if(id)await new Promise(resolve=>{releaseReplay=resolve;});return activate(id);};
+ui=replayPending.mount();ui.choose("put_it_away");await flush();startFirstRun(true);await flush();
+releaseReplay();await flush();assert.equal(readFirstRun().phase,"choosing");assert.equal(replayPending.agent.get().brainActive,false);
+assert.equal(replayPending.calls.starts.length,1);ui.flow.destroy();
+console.log("ok - replay drains a late agent activation before reopening the chooser");
+
+// The broker command is origin/source pinned, bounded and idempotent.
+const oldParent=window.parent, oldReferrer=document.referrer;
+const replies=[];window.parent={postMessage:(data,origin)=>replies.push({data,origin})};document.referrer="https://broker.example/session";
+let picks=0;const removeReplay=installFirstMissionReplay(()=>picks++);
+function brokerMessage(data,origin="https://broker.example",source=window.parent) {
+ const event=new Event("message");Object.assign(event,{data:{channel:"innate:first-mission:v1",...data},origin,source});window.dispatchEvent(event);
+}
+brokerMessage({type:"get-controls"});assert.equal(replies.pop().data.canChoose,true);
+brokerMessage({type:"choose",requestId:"1"},"https://foreign.example");brokerMessage({type:"choose",requestId:"1"},"https://broker.example",{});
+for(const requestId of [null,"","a".repeat(129)])brokerMessage({type:"choose",requestId});assert.equal(picks,0);
+brokerMessage({type:"choose",requestId:"1"});brokerMessage({type:"choose",requestId:"1"});assert.equal(picks,1);
+assert.equal(replies.pop().data.type,"choose-accepted");removeReplay();brokerMessage({type:"choose",requestId:"2"});assert.equal(picks,1);
+window.parent=oldParent;document.referrer=oldReferrer;
+console.log("ok - only the trusted broker can request the challenge chooser");

@@ -529,7 +529,7 @@ def _frame_label(memory: Memory) -> str:
     when = datetime.fromtimestamp(memory.stamp).strftime("%Y-%m-%d %H:%M")
     return (
         f"Frame {memory.id} — recorded {when}, from map position x={memory.x:.2f}m y={memory.y:.2f}m "
-        f"heading={math.degrees(memory.theta):.0f}°"
+        f"heading={math.degrees(memory.theta):.0f}°" + (f" — {memory.label}" if memory.label else "")
     )
 
 

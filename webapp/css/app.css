@@ -484,60 +484,13 @@ select.skill-input {
 
 /* ---- app onboarding ---------------------------------------------------- */
 
-/* Agent onboarding starts as the product itself: MARS plus the ordinary chat,
-   with no card, spotlight, or substitute interaction. Intro Agent reveals the
-   surrounding simulator surfaces through /onboarding/ui as it explains them. */
+/* A mission exposes the simulator, conversation, and its scene challenge. */
 .agent-conversation-onboarding > :is(
-    .overlay-stack-top-left,
-    .agent-stage-view-toggle,
-    .sim-debug-stack,
-    .agent-challenge-dock
+    .overlay-stack-top-left, .agent-stage-view-toggle,
+    .sim-debug-stack
   ),
 .agent-conversation-onboarding .agent-control-panel {
-  visibility: hidden;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-6px);
-}
-
-/* Unlike the floating overlays, the controls share the chat's flex column.
-   Remove them from layout until their reveal so an invisible card cannot
-   shorten the conversation panel. */
-.agent-conversation-onboarding:not(.agent-onboarding-show-controls)
-  .agent-control-panel {
   display: none;
-}
-
-.agent-conversation-onboarding > :is(
-    .overlay-stack-top-left,
-    .agent-stage-view-toggle,
-    .sim-debug-stack,
-    .agent-challenge-dock
-  ),
-.agent-conversation-onboarding .agent-control-panel,
-.agent-cockpit > :is(
-    .overlay-stack-top-left,
-    .agent-stage-view-toggle,
-    .sim-debug-stack,
-    .agent-challenge-dock
-  ),
-.agent-cockpit .agent-control-panel {
-  transition:
-    opacity 260ms cubic-bezier(0.215, 0.61, 0.355, 1),
-    transform 280ms cubic-bezier(0.215, 0.61, 0.355, 1),
-    visibility 0s;
-}
-
-.agent-conversation-onboarding.agent-onboarding-show-cameras
-  > .overlay-stack-top-left,
-.agent-conversation-onboarding.agent-onboarding-show-controls
-  > :is(.agent-stage-view-toggle, .sim-debug-stack, .agent-challenge-dock),
-.agent-conversation-onboarding.agent-onboarding-show-controls
-  .agent-control-panel {
-  visibility: visible;
-  opacity: 1;
-  pointer-events: auto;
-  transform: none;
 }
 
 body.agent-conversation-onboarding-active {
@@ -561,9 +514,8 @@ body.agent-conversation-onboarding-active
   display: none;
 }
 
-/* Compact layouts need the sheet header as a grab surface, but its agent name
-   and Stop control belong to the later controls reveal, not the first frame. */
-.agent-conversation-onboarding:not(.agent-onboarding-show-controls)
+/* Compact layouts keep the sheet grab surface during the mission. */
+.agent-conversation-onboarding
   .agent-sheet-header
   :is(.agent-sheet-glyph, .agent-sheet-name, .agent-sheet-action) {
   visibility: hidden;
@@ -643,239 +595,6 @@ body.agent-conversation-onboarding-active
     ),
   .agent-cockpit .agent-control-panel {
     transition: none;
-  }
-}
-
-/* Conversation-aware Agent coach. */
-.agent-onboarding-active .rail-nav:not(.rail-foot),
-.agent-onboarding-focused .overlay-stack-top-left,
-.agent-onboarding-focused .agent-stage-view-toggle,
-.agent-onboarding-focused .sim-debug-stack,
-.agent-onboarding-focused .agent-challenge-dock {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.rail-nav,
-.overlay-stack-top-left,
-.agent-stage-view-toggle,
-.sim-debug-stack,
-.agent-challenge-dock {
-  transition: opacity 180ms ease;
-}
-
-.agent-onboarding-target {
-  position: relative;
-  outline: 2px solid var(--ctl-accent);
-  outline-offset: 5px;
-  border-radius: 10px;
-  box-shadow: 0 0 0 8px rgb(232 163 61 / 10%);
-  animation: agent-onboarding-ping 2s cubic-bezier(0.455, 0.03, 0.515, 0.955) infinite;
-}
-
-/* The ring's geometry never moves — only its colour and the halo breathe, so
-   the target stays as easy to aim at as any other control.
-   Both ends are pinned: targets are ordinary controls that carry their own
-   box-shadow (the speech bar's inset sheen), and an implicit start taken from
-   that computed value interpolates inset-to-outset, which CSS resolves
-   discretely — the pulse would jump instead of breathe, or not show at all. */
-@keyframes agent-onboarding-ping {
-  0%,
-  100% {
-    outline-color: var(--ctl-accent);
-    box-shadow: 0 0 0 3px rgb(232 163 61 / 26%);
-  }
-
-  50% {
-    outline-color: rgb(247 194 116 / 40%);
-    box-shadow: 0 0 0 13px rgb(232 163 61 / 0%);
-  }
-}
-
-/* Inside the chat scroller the ring has only the list's 14px gutter before
-   overflow clips it, so the halo tightens to fit rather than losing its left arc. */
-.chat-msg.agent-onboarding-target {
-  outline-offset: 3px;
-  box-shadow: 0 0 0 5px rgb(232 163 61 / 10%);
-  animation-name: agent-onboarding-ping-tight;
-}
-
-@keyframes agent-onboarding-ping-tight {
-  0%,
-  100% {
-    outline-color: var(--ctl-accent);
-    box-shadow: 0 0 0 2px rgb(232 163 61 / 26%);
-  }
-
-  50% {
-    outline-color: rgb(247 194 116 / 40%);
-    box-shadow: 0 0 0 9px rgb(232 163 61 / 0%);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .agent-onboarding-target,
-  .chat-msg.agent-onboarding-target {
-    animation: none;
-  }
-}
-
-.agent-onboarding-mask {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 1100;
-  pointer-events: none;
-}
-
-.agent-onboarding-mask-field {
-  fill: #fff;
-}
-
-.agent-onboarding-mask-hole {
-  fill: #000;
-}
-
-.agent-onboarding-mask-shade {
-  fill: rgb(0 0 0 / 64%);
-}
-
-.agent-onboarding-mask-segment {
-  position: fixed;
-  background: rgb(0 0 0 / 78%);
-  backdrop-filter: blur(2px);
-  pointer-events: auto;
-}
-
-.agent-onboarding-card {
-  position: fixed;
-  z-index: 1102;
-  width: min(350px, calc(100vw - 88px));
-  padding: 20px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: 12px;
-  background: rgb(18 20 23 / 94%);
-  backdrop-filter: blur(20px);
-  box-shadow: 0 18px 50px rgb(0 0 0 / 48%);
-}
-
-/* A card that says "watch it happen" must not be standing in front of the
-   robot: while a skill runs it parks top-left, clear of the rail, instead of
-   anchoring beside the Skills menu. !important beats the narrow-screen rule
-   below, the same way .is-intro does. */
-.teleop-onboarding-card.is-running {
-  top: 16px !important;
-  right: auto;
-  bottom: auto !important;
-  left: 76px !important;
-  width: min(280px, calc(100vw - 88px));
-}
-
-.agent-onboarding-card.is-intro {
-  top: 50%;
-  left: calc(50% + 32px);
-  width: min(390px, calc(100vw - 88px));
-  transform: translate(-50%, -50%);
-}
-
-.agent-onboarding-card h2 {
-  margin: 12px 0 8px;
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.agent-onboarding-card p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.agent-onboarding-examples {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  margin-top: 15px;
-}
-
-.agent-onboarding-examples button {
-  padding: 7px 10px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: 999px;
-  background: rgb(255 255 255 / 4%);
-  color: var(--text);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.agent-onboarding-examples button:hover {
-  border-color: var(--accent-dim);
-  color: var(--accent);
-}
-
-.agent-onboarding-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 18px;
-}
-
-.agent-onboarding-actions button,
-.agent-onboarding-actions a {
-  padding: 9px 13px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: 8px;
-  background: rgb(255 255 255 / 4%);
-  color: var(--text);
-  font: inherit;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-decoration: none;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-
-.agent-onboarding-actions .agent-onboarding-primary {
-  border-color: var(--accent-dim);
-  color: var(--accent);
-}
-
-.agent-onboarding-actions .agent-onboarding-quit {
-  margin-right: auto;
-  border-color: transparent;
-  background: none;
-  color: var(--muted);
-}
-
-.agent-onboarding-actions .agent-onboarding-quit:hover {
-  color: var(--text);
-}
-
-@media (max-width: 520px) {
-  .agent-onboarding-card {
-    right: 12px;
-    bottom: 100px;
-    left: 76px !important;
-    top: auto !important;
-    width: auto;
-    padding: 18px;
-  }
-
-  .agent-onboarding-card.is-intro {
-    right: auto;
-    bottom: auto;
-    left: calc(50% + 32px) !important;
-    top: 50% !important;
-    width: min(300px, calc(100vw - 88px));
-    transform: translate(-50%, -50%);
-  }
-
-  .agent-onboarding-card h2 {
-    font-size: 18px;
   }
 }
 
@@ -11432,4 +11151,85 @@ select.skill-input {
   .training-tools .episodes-search {
     flex-basis: 100%;
   }
+}
+
+/* First missions: the only controls before completion are conversation and Skip. */
+.first-mission {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  padding: 32px;
+  overflow: auto;
+  background: rgb(12 12 15 / 94%);
+}
+.first-mission[hidden] { display: none; }
+.first-mission-heading { width: min(920px, 100%); }
+.first-mission-heading .microlabel { color: #a4a4b2; }
+.first-mission-heading h1 { margin: 12px 0; font-size: clamp(28px, 3.6vw, 46px); font-weight: 500; letter-spacing: -.045em; }
+.first-mission-heading p { margin: 0; color: #a8a8b1; font-size: 15px; line-height: 1.5; }
+.first-mission-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; width: min(920px, 100%); }
+.first-mission-choice { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; padding: 16px; border: 1px solid #3b3b43; border-radius: 14px; background: #202025; color: #fafafa; text-align: left; font: inherit; cursor: pointer; }
+.first-mission-choice:hover { background: #292930; border-color: #858392; }
+.first-mission-choice:focus-visible, .first-mission-skip:focus-visible, .ui-tour-card button:focus-visible { outline: 2px solid #9482ff; outline-offset: 4px; }
+.first-mission-choice strong { font-size: 21px; font-weight: 550; letter-spacing: -.02em; }
+.first-mission-choice .microlabel { color: #a5a5af; font-size: 10px; }
+.first-mission-brief { color: #b8b8c2; font-size: 13px; line-height: 1.5; }
+.first-mission-art { display: block; width: 100%; height: 136px; border-radius: 7px; margin-bottom: 6px; background-color: #33333b; background-size: cover; background-position: center; }
+.first-mission-art.brick { background-image: url('/public/first-missions/apartment.jpg'); }
+.first-mission-art.exit { background-image: url('/public/first-missions/backrooms.jpg'); }
+.first-mission-art.crossing { background-image: url('/public/first-missions/intersection.jpg'); }
+.first-mission-skip { flex-shrink: 0; border: 1px solid #515159; border-radius: 8px; padding: 10px 15px; background: #24242a; color: #e6e6ed; font: inherit; font-size: 13px; cursor: pointer; }
+.first-mission-skip:hover { background: #34343c; border-color: #909099; }
+.first-mission-choosing .agent-panel { visibility: hidden; }
+.first-mission-choosing > .agent-challenge-dock { display: none; }
+.agent-cockpit .agent-challenge-dock.first-mission-challenge {
+  top: 16px;
+  bottom: auto !important;
+  left: 16px;
+  width: min(360px, calc(100% - 420px));
+  height: auto;
+}
+.first-mission-challenge .challenge-panel {
+  position: relative;
+  bottom: auto;
+  left: 0;
+  width: 100%;
+  box-sizing: border-box;
+  background: rgb(16 16 20 / 94%);
+}
+.first-mission-challenge .challenge-action { padding: 9px 12px; }
+.first-mission-challenge .challenge-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* Help cards: opaque, compact, and attached to the control they explain. */
+.ui-tour-target { outline: 2px solid #9482ff !important; outline-offset: 5px; }
+.agent-sheet-header.ui-tour-target { outline-offset: -2px; border-radius: 16px; }
+.ui-tour-card { position: fixed; z-index: 1200; width: min(330px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px; border: 1px solid #65616f; border-radius: 12px; color: #f8f8fa; background: #25252c; box-shadow: 0 10px 34px #0006; overflow: auto; overscroll-behavior: contain; }
+.ui-tour-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.ui-tour-top .microlabel { color: #b7b1cf; font-size: 10px; }
+.ui-tour-top button { width: 28px; height: 28px; border: 0; border-radius: 5px; background: transparent; color: #c7c7d0; font-size: 23px; cursor: pointer; }
+.ui-tour-card h2 { margin: 10px 0 8px; font-size: 19px; font-weight: 550; letter-spacing: -.025em; }
+.ui-tour-card p { margin: 0; color: #bdbdc7; font-size: 13px; line-height: 1.6; }
+.ui-tour-actions { display: flex; justify-content: space-between; margin-top: 20px; }
+.ui-tour-actions button { border: 1px solid #55545e; border-radius: 7px; padding: 8px 14px; background: #33333d; color: #f2f2f7; font: inherit; font-size: 12px; cursor: pointer; }
+.ui-tour-actions button:disabled { opacity: .35; cursor: default; }
+.ui-tour-actions .ui-tour-next { border-color: #7965e7; background: #5941ca; }
+@media (max-width: 820px) {
+  .first-mission { padding: 24px 18px; justify-content: flex-start; gap: 22px; }
+  .first-mission-heading { margin-top: max(10px, env(safe-area-inset-top)); }
+  .first-mission-choices { grid-template-columns: 1fr; gap: 10px; }
+  .first-mission-choice { display: grid; grid-template-columns: 90px 1fr; gap: 5px 14px; padding: 12px; }
+  .first-mission-art { grid-row: 1 / 4; height: 100%; min-height: 100px; margin: 0; }
+  .first-mission-choice strong { font-size: 19px; }
+  .agent-cockpit.agent-compact .agent-challenge-dock.first-mission-challenge {
+    top: max(10px, env(safe-area-inset-top));
+    left: 10px;
+    width: calc(100% - 20px);
+    max-width: 420px;
+  }
+  .first-mission-challenge .challenge-panel { max-height: 38dvh; }
 }

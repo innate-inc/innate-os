@@ -379,6 +379,11 @@ export class SimSession {
     this.#controller?.send({ op: "switch_environment", id });
   }
 
+  /** A roster alone may be stale after the observer connection drops. */
+  get environmentConnected(): boolean {
+    return this.#started && this.#lastArrival > 0 && performance.now() / 1000 - this.#lastArrival < 5;
+  }
+
   /** Whether any manipulation prop is currently in the world. Read from
    * ground truth rather than from what this client last asked for, so the
    * stage's button still reads right after a sim reset or another viewer's
@@ -412,13 +417,13 @@ export class SimSession {
   }
 
   /** Start a challenge by id (resets the world and drops its props). */
-  startChallenge(id: string): void {
-    this.#controller?.send({ op: "start_challenge", id });
+  startChallenge(id: string, requestId?: string): void {
+    this.#controller?.send({ op: "start_challenge", id, request_id: requestId });
   }
 
   /** Abort the active challenge (or dismiss a finished one). */
-  abortChallenge(): void {
-    this.#controller?.send({ op: "abort_challenge" });
+  abortChallenge(requestId?: string): void {
+    this.#controller?.send({ op: "abort_challenge", request_id: requestId });
   }
 
   // The sim has no WebRTC microphone track; browser TTS playback is controlled

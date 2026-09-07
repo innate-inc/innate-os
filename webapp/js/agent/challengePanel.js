@@ -19,9 +19,14 @@ const PANEL_ID = "agent-challenges";
 /**
  * @param {HTMLElement} root
  * @param {any} session sim session exposing onChallenge/startChallenge/abortChallenge
+ * @param {any} [onboarding] first-run participation, using the same scene challenge
  * @returns {{ destroy: () => void, dismiss: () => void }}
  */
-export function createChallengePanel(root, session) {
+export function createChallengePanel(root, session, onboarding) {
+  let firstRun = /** @type {any} */ (null);
+  let latest = /** @type {any} */ ({list:[], active:null});
+  let environmentName = "";
+  const guided = () => !!(firstRun?.active && firstRun.mission);
   const dock = document.createElement("div");
   dock.className = "agent-challenge-dock";
   dock.hidden = true;
@@ -29,6 +34,7 @@ export function createChallengePanel(root, session) {
   const panel = document.createElement("section");
   panel.id = "agent-challenge-panel";
   panel.className = "challenge-panel";
+  panel.setAttribute("aria-label", "Challenges");
 
   const head = document.createElement("div");
   head.className = "challenge-head";
@@ -47,13 +53,14 @@ export function createChallengePanel(root, session) {
   let open = false;
   let challengeRunning = false;
   const setOpen = (/** @type {boolean} */ next) => {
+    if (!next && guided()) return;
     open = next;
     dock.classList.toggle("open", next);
     launcher.setAttribute("aria-expanded", String(next));
     launcher.setAttribute("aria-label", next ? "Close challenges" : "Open challenges");
     if (!next) return;
     document.dispatchEvent(new CustomEvent(PANEL_OPEN_EVENT, { detail: { panel: PANEL_ID } }));
-    if (revealed) return;
+    if (revealed || firstRun?.active) return;
     revealed = true;
     intro = maybeShowChallengeIntro();
   };
@@ -71,7 +78,7 @@ export function createChallengePanel(root, session) {
     if (event.target instanceof Node && dock.contains(event.target)) return;
     setOpen(false);
   };
-  document.addEventListener("pointerdown", onOutsidePointer, true);
+  document.addEventListener("pointerdown", onOutsidePointer, {capture:true});
   launcher.addEventListener("click", () => setOpen(!open));
   // Subtle standing hint back to the docs — reopens the first-run intro
   // (challengeIntro.js) with the tutorial link and preview.
@@ -110,17 +117,62 @@ export function createChallengePanel(root, session) {
   /** @type {HTMLElement | null} */
   let timerEl = null;
 
-  const unsub = session.onChallenge((/** @type {any} */ block) => {
+  function render() {
+    const block = latest;
     dock.hidden = false;
-    const active = block.active;
+    // A world switch can deliver the old scene's active challenge while the
+    // selected mission is loading. Never display or control that foreign run.
+    const active = guided() && block.active?.attempt_id !== firstRun.attemptId ? null : block.active;
     challengeRunning = active?.state === "running";
     dock.classList.toggle("active", challengeRunning);
+    dock.classList.toggle("first-mission-challenge", guided());
+    launcher.hidden = guided();
+    tutorial.hidden = !!firstRun?.active;
+    const scope = guided() ? firstRun.mission.setting : environmentName;
+    title.textContent = scope ? `Challenges · ${scope}` : "Challenges";
+    if (guided() && !open) setOpen(true);
     if (timerEl && active) timerEl.textContent = timerText(active);
-    const key = JSON.stringify({ ...block, active: active && { ...active, elapsed_s: null } });
+    const key = JSON.stringify({ ...block, active: active && { ...active, elapsed_s: null }, firstRun, environmentName });
     if (key === renderedKey) return;
     renderedKey = key;
-    body.replaceChildren(active ? renderActive(active, block.list) : renderList(block.list));
+    body.replaceChildren(active ? renderActive(active, block.list) : guided() ? renderPreparing() : renderList(block.list));
+  }
+  const unsub = session.onChallenge((/** @type {any} */ block) => {
+    latest = block;
+    render();
   });
+  const unsubEnvironment = session.onEnvironment?.((/** @type {any} */ value) => {
+    environmentName = value.environment?.display_name || value.environment?.id || "";
+    render();
+  });
+  const unsubFirstRun = onboarding?.subscribe((/** @type {any} */ value) => { firstRun = value; render(); });
+
+  function renderPreparing() {
+    timerEl = null;
+    const wrap = document.createElement("div");
+    wrap.className = "challenge-active";
+    const name = document.createElement("strong");
+    name.className = "challenge-item-title";
+    name.textContent = firstRun.mission.title;
+    const brief = document.createElement("div");
+    brief.className = "challenge-brief";
+    brief.textContent = firstRun.mission.brief;
+    wrap.append(name, brief, guidedActions());
+    return wrap;
+  }
+
+  function guidedActions() {
+    const wrap = document.createElement("div");
+    const status = document.createElement("p");
+    status.className = "challenge-brief";
+    status.setAttribute("role", "status");
+    status.textContent = firstRun.status || "Guide MARS through chat. If something fails, ask it to try again.";
+    const actions = document.createElement("div");
+    actions.className = "challenge-actions";
+    actions.append(actionButton("Skip mission", () => void onboarding.skip(), "Leave this mission and explore the interface"));
+    wrap.append(status, actions);
+    return wrap;
+  }
 
   /** @param {any[]} list */
   function renderList(list) {
@@ -130,7 +182,7 @@ export function createChallengePanel(root, session) {
     if (!list.length) {
       const empty = document.createElement("div");
       empty.className = "challenge-empty";
-      empty.textContent = "No challenges installed (sim/challenges/).";
+      empty.textContent = "No challenges in this environment yet.";
       wrap.append(empty);
       return wrap;
     }
@@ -183,7 +235,8 @@ export function createChallengePanel(root, session) {
     timerEl = document.createElement("span");
     timerEl.className = `challenge-timer${active.state !== "running" ? " final" : ""}`;
     timerEl.textContent = timerText(active);
-    timerEl.title = active.state === "running" ? "Time remaining before the challenge fails" : "Final run time";
+    timerEl.title = active.state !== "running" ? "Final run time"
+      : active.time_limit_s != null ? "Time remaining before the challenge fails" : "Time spent on this challenge";
     titleRow.append(name, timerEl);
     wrap.append(titleRow);
 
@@ -214,6 +267,10 @@ export function createChallengePanel(root, session) {
       wrap.append(banner);
     }
 
+    if (guided()) {
+      wrap.append(guidedActions());
+      return wrap;
+    }
     const actions = document.createElement("div");
     actions.className = "challenge-actions";
     if (active.state === "running") {
@@ -263,8 +320,10 @@ export function createChallengePanel(root, session) {
     destroy() {
       intro?.close();
       unsub();
+      unsubEnvironment?.();
+      unsubFirstRun?.();
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
-      document.removeEventListener("pointerdown", onOutsidePointer, true);
+      document.removeEventListener("pointerdown", onOutsidePointer, {capture:true});
       dock.remove();
     },
   };
