@@ -45,6 +45,7 @@ class BrainConfig:
     brain_provider: str  # gemini (default) | openai (experimental Responses)
     openai_model: str
     openai_reasoning_effort: str
+    openai_service_tier: str  # auto (project default) | default | priority
     gemini_model: str
     gemini_thinking_level: str  # "low" | "high"; "" = model default
     idle_turn_interval: float  # seconds between looks when no skill is running
@@ -66,6 +67,8 @@ class BrainConfig:
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be a finite positive number")
+        if self.openai_service_tier not in ("auto", "default", "priority"):
+            raise ValueError("openai_service_tier must be auto, default or priority")
         if self.brain_provider == "openai":
             if not self.openai_model.strip():
                 raise ValueError("openai_model must not be empty")
@@ -121,6 +124,7 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     "brain_provider": "gemini",
     "openai_model": "gpt-6-astra",
     "openai_reasoning_effort": "low",
+    "openai_service_tier": "auto",
     "gemini_model": "gemini-3.6-flash",
     # "minimal" | "low" | "medium" | "high"; "" = model default.
     # Measured on 3.6-flash (2026-08): minimal is ~3x faster than the

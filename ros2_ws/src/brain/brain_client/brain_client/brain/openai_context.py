@@ -52,8 +52,9 @@ def _input(contents):
 
 
 class OpenAIContext(GeminiContext):
-    def __init__(self, transport, **kwargs):
+    def __init__(self, transport, *, service_tier="auto", **kwargs):
         super().__init__(self._responses, **kwargs)
+        self._service_tier = service_tier
         self._responses_transport = transport
         self.on_native_request = None
 
@@ -77,6 +78,7 @@ class OpenAIContext(GeminiContext):
             "instructions": gemini_body["systemInstruction"]["parts"][0]["text"],
             "input": _input(gemini_body["contents"]),
             "reasoning": {"effort": self._thinking_level},
+            "service_tier": self._service_tier,
             "store": False,
             "stream": True,
             "include": ["reasoning.encrypted_content"],

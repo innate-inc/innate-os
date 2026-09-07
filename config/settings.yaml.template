@@ -211,6 +211,7 @@
 #     log_everything: true          # log every turn's full input
 #     brain_provider: "gemini"       # "openai" opts into experimental Responses; restart the brain node
 #     openai_model: "gpt-6-astra"    # requires OpenAI access through proxy or OPENAI_API_KEY in .env
+#     openai_service_tier: "auto"  # "priority" requests priority processing; restart the brain node
 #     openai_reasoning_effort: "low" # Astra lowest effort; no separate "light" model
 #     gemini_model: "gemini-3.6-flash"
 #     timezone: ""                  # IANA zone for the clock the agent sees; "" = the robot OS's own

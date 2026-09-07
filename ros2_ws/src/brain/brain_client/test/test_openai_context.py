@@ -262,12 +262,13 @@ def test_cadence_waits_after_completion_and_never_overlaps_requests(agent_factor
     assert starts[2] - ends[1] >= 0.08
 
 
-def test_config_selects_native_provider_and_reports_effective_model(agent_factory, monkeypatch):
+@pytest.mark.parametrize("service_tier", ["auto", "default", "priority"])
+def test_config_selects_native_provider_and_reports_effective_model(agent_factory, monkeypatch, service_tier):
     from brain_client.brain import agent as module
     from brain_client.core.config import _PARAM_DEFAULTS, BrainConfig
 
     assert BrainConfig(**_PARAM_DEFAULTS).brain_provider == "gemini"
-    config = BrainConfig(**{**_PARAM_DEFAULTS, "brain_provider": "openai"})
+    config = BrainConfig(**{**_PARAM_DEFAULTS, "brain_provider": "openai", "openai_service_tier": service_tier})
     requests, traces = [], []
 
     def transport(model, body):
@@ -278,6 +279,7 @@ def test_config_selects_native_provider_and_reports_effective_model(agent_factor
     agent, _ = agent_factory(trace=lambda event: traces.append(json.loads(event)), **vars(config))
     assert isinstance(agent._context, OpenAIContext)
     run_turn(agent)
+    assert requests[0]["service_tier"] == service_tier
     assert requests[0]["model"] == "gpt-6-astra"
     assert requests[0]["reasoning"]["effort"] == "low"
     request_trace = next(t for t in traces if t["ev"] == "turn_request")
@@ -291,6 +293,7 @@ def test_config_selects_native_provider_and_reports_effective_model(agent_factor
     "override",
     [
         {"brain_provider": "typo"},
+        {"openai_service_tier": "typo"},
         {"idle_turn_interval": float("nan")},
         {"supervision_turn_interval": 0.0},
         {"brain_provider": "openai", "openai_model": " "},

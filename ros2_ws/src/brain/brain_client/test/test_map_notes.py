@@ -148,6 +148,7 @@ def test_astra_turn_gets_fresh_text_and_image_and_tools_bypass_skill_slot(pad, a
 
     def transport(model, body):
         requests.append(body)
+        assert body["service_tier"] == "priority"
         live = next(
             item
             for item in body["input"]
@@ -183,7 +184,9 @@ def test_astra_turn_gets_fresh_text_and_image_and_tools_bypass_skill_slot(pad, a
     from brain_client.brain import agent as module
 
     monkeypatch.setattr(module, "pick_openai_transport", lambda proxy: (transport, "test"))
-    agent, state = agent_factory(brain_provider="openai", openai_model="gpt-6-astra", openai_reasoning_effort="low")
+    agent, state = agent_factory(
+        brain_provider="openai", openai_model="gpt-6-astra", openai_reasoning_effort="low", openai_service_tier="priority"
+    )
     agent._map_notes = store
     agent._pose.current_pose_xyt = lambda: (1, 1, 0)
     state.primitive_running = RunningSkill("wave", "local/wave")
