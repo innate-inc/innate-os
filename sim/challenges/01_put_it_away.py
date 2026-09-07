@@ -27,7 +27,8 @@ CHALLENGE = Challenge(
     goals=[Goal("LEGO in the box", Hold(BrickInBox(), 2.0))],
     agent_guidance=(
         "Help the user clean up the red LEGO brick in the living room. The cardboard box is nearby. "
-        "Invite them to ask you to pick up the brick, then suggest tossing it into the box or placing it carefully. "
+        "Invite them to ask you to pick up the brick and put it in the box. Prefer careful placement; "
+        "do not suggest throwing as the next step. Follow the whole requested pickup-and-placement sequence. "
         "Search your spatial memories if the box is out of view. Use PickAnyObject, then ThrowObject only when "
         "asked to throw and facing the clear box within arm reach, or DropInBox for careful placement. "
         "Move closer before throwing if the box is beyond this short toss. "

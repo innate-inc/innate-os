@@ -29,7 +29,7 @@ function simulator() {
   let env = {environment:{id:"apartment"},switch:null};
   let challenge = {list:FIRST_MISSIONS,active:null};
   let state = {agents:[{id:"intro_agent"}],currentDirective:"",brainActive:false};
-  const calls = {starts:[],switches:[],directives:[],aborts:[],begins:[]};
+  const calls = {starts:[],switches:[],directives:[],aborts:[],begins:[],guides:[],speech:[],prompts:[]};
   const emitChallenge = value=>{
     if(value.active) value={...value,active:{goals:[{label:"Complete the scene goal",done:false}],elapsed_s:0,...value.active}};
     challenge=value; for(const cb of callbacks.challenge)cb(value);
@@ -47,10 +47,10 @@ function simulator() {
     subscribe(cb){callbacks.agent.add(cb);cb(state);return()=>callbacks.agent.delete(cb);},
     async setDirective(id){calls.directives.push(id);state={...state,currentDirective:id,brainActive:!!id};for(const cb of callbacks.agent)cb(state);},
   };
-  function mount(enabled=true) {
+  function mount(enabled=true, viewGuide=false) {
     const root=new Element();
-    const ros={subscribe(_topic,cb){cb({data:'{"connected":true}'});return()=>{};}};
-    const flow=createAgentOnboarding(root,ros,agent,{enabled,session,onStart:(...args)=>calls.begins.push(args)});
+    const ros={subscribe(_topic,cb){cb({data:'{"connected":true}'});return()=>{};},advertise(){return()=>{};},publish(_topic,message){calls.speech.push(message.data);return true;}};
+    const flow=createAgentOnboarding(root,ros,agent,{enabled,session,onStart:(...args)=>calls.begins.push(args),onViewGuide:viewGuide ? text=>calls.guides.push(text) : undefined,onSuggestedPrompt:text=>calls.prompts.push(text)});
     const panel=createChallengePanel(root,session,flow);
     const destroy=flow.destroy;
     flow.destroy=()=>{panel.destroy();destroy();};
@@ -58,6 +58,42 @@ function simulator() {
   }
   return {mount,session,agent,calls,emitChallenge,emitEnvironment,get challenge(){return challenge;}};
 }
+
+// All three missions wait for a browser view selection before starting the
+// challenge clock or the agent. Chat and remounts cannot silently pass it.
+for (const mission of FIRST_MISSIONS) {
+  storage.clear(); const sim=simulator(); let ui=sim.mount(true,true);
+  ui.flow.onViewChange(); // A choice made before the introduction does not count.
+  ui.choose(mission.id); await flush();
+  assert.equal(sim.calls.starts.length,0);
+  assert.equal(sim.calls.directives.length,0);
+  assert.equal(sim.calls.guides.length,1);
+  assert.equal(sim.calls.speech.length,1);
+  await assert.rejects(ui.flow.ensureRunning(), /Select a different view/);
+  ui.flow.onUserMessage("I changed the view"); await flush();
+  assert.equal(sim.calls.starts.length,0);
+  const token=readFirstRun().attemptId;
+  ui.flow.destroy(); ui=sim.mount(true,true); await flush();
+  assert.equal(readFirstRun().attemptId,token);
+  assert.equal(sim.calls.starts.length,0);
+  assert.equal(sim.calls.speech.length,1);
+  ui.flow.onViewChange(); await flush();
+  assert.equal(sim.calls.starts.length,1);
+  assert.equal(sim.agent.get().currentDirective,"intro_agent");
+  assert.equal(readFirstRun().viewChanged,true);
+  assert.equal(sim.calls.prompts.at(-1),mission.prompt);
+  ui.flow.destroy(); ui=sim.mount(true,true); await flush();
+  assert.equal(sim.calls.starts.length,1);
+  assert.equal(sim.calls.guides.length,2); // No new guide on the playing remount.
+  ui.skip(); await flush(); ui.flow.destroy();
+}
+storage.clear(); const skipView=simulator(); const skippedView=skipView.mount(true,true);
+skippedView.choose("put_it_away"); await flush(); skippedView.skip(); await flush();
+skippedView.flow.onViewChange(); await flush();
+assert.equal(skipView.calls.starts.length,0);
+assert.equal(skipView.calls.directives.length,0);
+skippedView.flow.destroy();
+console.log("ok - view introduction: all missions, speech, local selection, reload and skip");
 
 // Three choices work through the real controller/session handshake. Arbitrary
 // speech cannot gate completion, and only the local attempt can finish it.

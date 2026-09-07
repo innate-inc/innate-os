@@ -486,11 +486,18 @@ select.skill-input {
 
 /* A mission exposes the simulator, conversation, and its scene challenge. */
 .agent-conversation-onboarding > :is(
-    .overlay-stack-top-left, .agent-stage-view-toggle,
+    .agent-stage-view-toggle,
     .sim-debug-stack
   ),
 .agent-conversation-onboarding .agent-control-panel {
   display: none;
+}
+
+.first-mission-choosing > .overlay-stack-top-left { visibility: hidden; }
+.first-mission-view-step .cam-strip {
+  outline: 2px solid var(--accent, #563bff);
+  outline-offset: 5px;
+  border-radius: 8px;
 }
 
 body.agent-conversation-onboarding-active {
@@ -11236,4 +11243,18 @@ select.skill-input {
     max-width: 420px;
   }
   .first-mission-challenge .challenge-panel { max-height: 38dvh; }
+  .first-mission-challenge .challenge-active > .challenge-brief { display: none; }
+}
+
+/* Stack the challenge below the view controls when they cannot fit side by
+   side. Measure the real strip so expanded phone tiles never cover either. */
+@media (max-width: 1200px) {
+  .agent-cockpit.agent-conversation-onboarding .overlay-stack-top-left {
+    top: max(10px, env(safe-area-inset-top));
+    left: 10px;
+    right: auto;
+  }
+  .agent-cockpit.agent-conversation-onboarding .agent-challenge-dock.first-mission-challenge {
+    top: calc(max(10px, env(safe-area-inset-top)) + var(--agent-view-controls-height, 44px) + 10px);
+  }
 }

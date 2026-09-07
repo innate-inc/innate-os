@@ -46,13 +46,13 @@ const MAP_ZOOM_DEFAULT = { small: 6, big: 16 }; // tighter as a thumbnail, wider
  * @param {HTMLElement} parent cockpit root — owns the strip and (when big) the map layer.
  * @param {import("../webrtcSession.js").WebRtcSession} session
  * @param {import("../rosClient.js").RosClient} ros
- * @param {{ storeKey?: string, stripParent?: HTMLElement, primaryOnMount?: string }} [opts]
+ * @param {{ storeKey?: string, stripParent?: HTMLElement, primaryOnMount?: string, onViewChange?: (id: string) => void }} [opts]
  *   storeKey: isolate this strip's prefs (primary view, map state) per page.
  *   primaryOnMount: open on this view every time, ignoring any persisted
  *   primary. Switching views still works and still persists — the next mount
  *   just starts here again. Falls back to the usual default if the view is not
  *   in the roster.
- * @returns {{ destroy: () => void }}
+ * @returns {{ destroy: () => void, showViews: () => void }}
  */
 export function createCameraSwitch(parent, session, ros, opts = {}) {
   const storeKey = opts.storeKey || STORE_KEY;
@@ -212,6 +212,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
     if (id === MAP_ID) mapOn = true;
     else enabledCams.add(id);
     commit();
+    opts.onViewChange?.(id);
   }
 
   // Drop a live view back to off. The strip never shows the primary, so the closed view normally isn't
@@ -434,6 +435,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   }, undefined, "std_msgs/msg/String");
 
   return {
+    showViews() { camsOpen = true; renderCamsToggle(); },
     destroy() {
       unsub?.();
       unsubSession();

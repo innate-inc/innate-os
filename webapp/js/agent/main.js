@@ -89,6 +89,7 @@ function buildAgentView(root) {
     // "top view" every visit rather than whatever was left selected last time.
     // Real robots have no orbit camera, so their saved choice is untouched.
     primaryOnMount: config.simControls ? "orbit" : undefined,
+    onViewChange: () => onboarding?.onViewChange(),
   });
   const telemetryOverlay = config.simControls ? null : document.createElement("div");
   if (telemetryOverlay) {
@@ -185,6 +186,7 @@ function buildAgentView(root) {
     onNotice: panel.addNotice,
     onStart: panel.beginOnboarding,
     onSuggestedPrompt: panel.setSuggestedPrompt,
+    onViewGuide: () => cameraSwitch.showViews(),
     session,
   });
   const simSession = /** @type {any} */ (session);
@@ -239,6 +241,10 @@ function buildAgentView(root) {
   const safeAreaObserver = new ResizeObserver(reportSafeArea);
   safeAreaObserver.observe(root);
   safeAreaObserver.observe(feedFrame);
+  const viewControlsObserver = new ResizeObserver(() => {
+    root.style.setProperty("--agent-view-controls-height", `${cornerStack.getBoundingClientRect().height}px`);
+  });
+  viewControlsObserver.observe(cornerStack);
   applyLayout();
 
   const parts = [
@@ -248,6 +254,7 @@ function buildAgentView(root) {
         compactLayout.removeEventListener("change", applyLayout);
         monitorTooNarrow.removeEventListener("change", applyLayout);
         safeAreaObserver.disconnect();
+        viewControlsObserver.disconnect();
       },
     },
     ...(challengePanel ? [challengePanel] : []),
