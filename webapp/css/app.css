@@ -9021,6 +9021,47 @@ select.skill-input {
   -webkit-user-select: text;
 }
 
+.agent-compose-area {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-thinking {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 16px;
+  padding-left: 4px;
+  color: var(--agent-purple);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.agent-thinking::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--agent-purple-edge);
+  visibility: hidden;
+}
+
+.agent-thinking.active::before {
+  visibility: visible;
+  animation: agent-thinking-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes agent-thinking-pulse {
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-thinking.active::before { animation: none; }
+}
+
 .agent-compose {
   position: relative;
   display: flex;

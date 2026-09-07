@@ -15,6 +15,7 @@
 
 import { createMicStream } from "./micStream.js";
 import {
+  AGENT_STATUS_TOPIC,
   CHAT_IN_TOPIC,
   CHAT_OUT_TOPIC,
   GET_CHAT_HISTORY_SERVICE,
@@ -25,6 +26,9 @@ import { createDirectiveControls } from "./directiveControls.js";
 import { createAgentSheet } from "./agentSheet.js";
 
 const HISTORY_RECONCILE_MS = 30_000;
+// agent_status heartbeats every 3s; don't leave a stale thinking notice up
+// if the brain disappears while rosbridge itself remains connected.
+const THINKING_STALE_MS = 10_000;
 
 const CHAT_EXAMPLES = [
   "What can you see?",
@@ -124,6 +128,39 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   const chat = createChatStream();
 
   // ---- composer -----------------------------------------------------------
+  const composeArea = document.createElement("div");
+  composeArea.className = "agent-compose-area";
+  const thinkingNotice = document.createElement("div");
+  thinkingNotice.className = "agent-thinking";
+  thinkingNotice.setAttribute("role", "status");
+  thinkingNotice.setAttribute("aria-live", "polite");
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let thinkingTimer = null;
+  function clearThinking() {
+    if (thinkingTimer !== null) clearTimeout(thinkingTimer);
+    thinkingTimer = null;
+    thinkingNotice.classList.remove("active");
+    thinkingNotice.textContent = "";
+  }
+  const unsubThinking = rosClient.subscribe(AGENT_STATUS_TOPIC, (msg) => {
+    let status;
+    try {
+      status = JSON.parse(msg?.data ?? "");
+    } catch {
+      return;
+    }
+    if (status?.brain_active !== true || status?.brain_thinking !== true) {
+      clearThinking();
+      return;
+    }
+    if (thinkingTimer !== null) clearTimeout(thinkingTimer);
+    // Heartbeats refresh the timeout without re-announcing the same text.
+    if (!thinkingNotice.classList.contains("active")) {
+      thinkingNotice.textContent = "Thinking…";
+      thinkingNotice.classList.add("active");
+    }
+    thinkingTimer = setTimeout(clearThinking, THINKING_STALE_MS);
+  }, undefined, "std_msgs/msg/String");
   const form = document.createElement("form");
   form.className = "agent-compose";
   const input = document.createElement("textarea");
@@ -181,7 +218,8 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   }, 3500);
 
   controlPanel.append(head, directives.el);
-  thoughtsPanel.append(chat.head, chat.wrap, form);
+  composeArea.append(thinkingNotice, form);
+  thoughtsPanel.append(chat.head, chat.wrap, composeArea);
   panel.append(controlPanel, thoughtsPanel);
   root.append(panel);
 
@@ -281,6 +319,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
 
   const unsubConn = rosClient.onStateChange((s) => {
     if (s === "connected") void loadHistory();
+    else clearThinking();
   });
 
   const onVisible = () => {
@@ -362,6 +401,8 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       unsubIn();
       unsubOut();
       unsubSkill();
+      unsubThinking();
+      clearThinking();
       panel.remove();
     },
   };
