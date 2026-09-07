@@ -41,6 +41,24 @@ const PANEL_OPEN_EVENT = "innate:panel-open";
 const PANEL_ID = "sim-scene-setup";
 
 const VIEW_FOR: Record<string, CameraView> = { main: "main", arm: "arm", orbit: "orbit" };
+
+// Storage access throws in restricted contexts (blocked cookies, opaque
+// origins); a lost preference must not take the stage down.
+type StorageScope = "local" | "session";
+const readFlag = (scope: StorageScope, key: string): boolean => {
+  try {
+    return (scope === "local" ? localStorage : sessionStorage).getItem(key) === "true";
+  } catch {
+    return false;
+  }
+};
+const writeFlag = (scope: StorageScope, key: string, on: boolean): void => {
+  try {
+    (scope === "local" ? localStorage : sessionStorage).setItem(key, String(on));
+  } catch {
+    /* best effort */
+  }
+};
 const ROTATION_DRAG_PX = 6;
 const PROP_FORWARD_ANGLE = Math.PI / 2;
 
@@ -119,13 +137,13 @@ export function createSimStage(
     '<svg class="sim-scene-toggle-icon sim-scene-toggle-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>';
 
   const coarsePointer = window.matchMedia("(hover: none)");
-  let setupOpen = localStorage.getItem("sim-scene-panel-open") === "true";
+  let setupOpen = readFlag("local", "sim-scene-panel-open");
   const setSetupOpen = (open: boolean) => {
     setupOpen = open;
     setup.classList.toggle("open", open);
     setupToggle.setAttribute("aria-expanded", String(open));
     setupToggle.setAttribute("aria-label", open ? "Close scene setup" : "Open scene setup");
-    localStorage.setItem("sim-scene-panel-open", String(open));
+    writeFlag("local", "sim-scene-panel-open", open);
     if (open) document.dispatchEvent(new CustomEvent(PANEL_OPEN_EVENT, { detail: { panel: PANEL_ID } }));
   };
   const onPanelOpen = (event: Event) => {
@@ -545,7 +563,7 @@ export function createSimStage(
   let stageW = 0;
   let stageH = 0;
   let stageVisible = true;
-  let slowdownDismissed = sessionStorage.getItem("sim-resolution-dismissed") === "true";
+  let slowdownDismissed = readFlag("session", "sim-resolution-dismissed");
   const resolutionNotice = document.createElement("div");
   resolutionNotice.className = "sim-resolution-notice";
   resolutionNotice.setAttribute("role", "status");
@@ -577,7 +595,7 @@ export function createSimStage(
   resolutionDismiss.onclick = () => {
     slowdownDismissed = true;
     resolutionNotice.hidden = true;
-    sessionStorage.setItem("sim-resolution-dismissed", "true");
+    writeFlag("session", "sim-resolution-dismissed", true);
   };
   // Reduced: 75% of the display's scale, bounded by the pixel budget -- below 1
   // on very large windows, where a floor of 1 would defeat it. Logical size,
