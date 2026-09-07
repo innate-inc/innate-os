@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Innate Inc
 // The browser owns first-run participation; the world owns mission success.
 import { TTS_TOPIC, WEBSOCKET_STATUS_TOPIC } from "../constants.js";
-import { FIRST_MISSIONS, FIRST_RUN_REQUEST_EVENT, markOnboardingSeen, publishFirstRunCompletion, readFirstRun, saveFirstRun, shouldAutoStartOnboarding } from "../onboarding.js";
+import { FIRST_MISSIONS, FIRST_RUN_REQUEST_EVENT, publishFirstRunCompletion, readFirstRun, saveFirstRun, shouldAutoStartOnboarding } from "../onboarding.js";
 
 export const INTRO_AGENT_ID = "intro_agent";
 export const VIEW_GUIDANCE = "I’m starting now. Switch to my Main view at the top to see what I see. You can also use Arm view for a closer look at what my gripper is doing.";
@@ -179,12 +179,15 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     persist();
     await runConnect(true);
   }
+  function close() {
+    active = false;
+    clearTimeout(reconnectTimer); abort.abort(); render();
+  }
   async function finish(/** @type {"done"|"skipped"} */ phase) {
     if (!active) return;
-    active = false;
-    saved = {...saved, phase}; persist(); markOnboardingSeen();
+    saved = {...saved, phase}; persist();
     publishFirstRunCompletion(phase);
-    clearTimeout(reconnectTimer); abort.abort(); render();
+    close();
     if (phase === "done") {
       options.onClearSuggestions?.();
       options.onNotice?.("Mission complete. The full interface is ready to explore.");
@@ -209,7 +212,8 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     restarting = (async () => {
       // Drain the old attempt before replacing its cancellation signal. Late
       // activation acknowledgements must not start MARS behind the chooser.
-      if (active) await finish("skipped");
+      // Not Skip: nothing terminal is recorded or published for the broker.
+      if (active) close();
       await Promise.allSettled([operation, activation].filter(Boolean));
       if (destroyed) return false;
       // Picking another mission is distinct from Skip: close this exact
@@ -224,12 +228,11 @@ export function createAgentOnboarding(root, ros, agentState, options) {
         if (destroyed) return false;
         session.abortChallenge(saved.attemptId);
       }
+      saved = {phase:"choosing"}; persist();
       if (destroyed) return false;
       abort = new AbortController();
-      saved = {phase:"choosing"};
       active = true; began = false; taskStarted = false;
       options.onClearSuggestions?.();
-      persist();
       render();
       return true;
     })().catch(error => {
@@ -238,13 +241,12 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     }).finally(() => {restarting = null;});
     return restarting;
   }
-  function start(/** @type {Event} */ event) {
+  function reopen(/** @type {Event} */ event) {
     const detail = /** @type {CustomEvent} */ (event).detail;
     event.preventDefault();
-    if (detail?.restart) { void restart().then(success => detail.complete?.(success)); return; }
-    if (active) { render(); if (mission()) void runConnect(false); }
+    void restart().then(success => detail?.complete?.(success));
   }
-  window.addEventListener(FIRST_RUN_REQUEST_EVENT, start);
+  window.addEventListener(FIRST_RUN_REQUEST_EVENT, reopen);
   render();
   // Route remounts reconnect too; they must not rely on the shell's one-time
   // first-page event, nor reset the in-flight skill or world.
@@ -270,12 +272,11 @@ export function createAgentOnboarding(root, ros, agentState, options) {
       if (!active || !saved?.viewsRevealed) return;
       saved.viewChanged = true; persist(); paintVisibility();
     },
-    onUserMessage() { options.onClearSuggestions?.(); },
     destroy() {
       destroyed = true; active = false; clearTimeout(reconnectTimer); abort.abort();
       unsubBackend(); unsubState(); unsubEnvironment?.(); unsubChallenge?.();
       unadvertise();
-      window.removeEventListener(FIRST_RUN_REQUEST_EVENT, start);
+      window.removeEventListener(FIRST_RUN_REQUEST_EVENT, reopen);
       views.clear();
       paintVisibility(); overlay.remove();
     },

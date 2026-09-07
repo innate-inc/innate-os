@@ -43,15 +43,9 @@ function shortcutKbd(label) {
 /**
  * @param {HTMLElement} parent The bottom-bar overlay (shared with the TTS bar).
  * @param {import("../rosClient.js").RosClient} rosClient
- * @param {{
- *   onSkillStarted?: (run: {skillId: string, inputs: Record<string, any>}) => void,
- *   onSkillCompleted?: (run: {skillId: string, inputs: Record<string, any>}) => void,
- *   onSkillEnded?: (run: {skillId: string, ok: boolean}) => void,
- *   onOpenChange?: (open: boolean) => void
- * }} [opts]
  * @returns {{ destroy: () => void }}
  */
-export function createSkillsMenu(parent, rosClient, opts = {}) {
+export function createSkillsMenu(parent, rosClient) {
   const menu = document.createElement("div");
   menu.className = "skills-menu";
 
@@ -283,7 +277,6 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
         },
       },
     );
-    opts.onSkillStarted?.({ skillId: skill.id, inputs: built.inputs });
     run = { skillId: skill.id, cancel, text: "Running…", error: false, canceling: false, done: false };
     render();
     // Touch has no keyboard to hand back to, and focusing the search box there
@@ -313,14 +306,11 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
           canceling: false,
           done: true,
         };
-        if (ok) opts.onSkillCompleted?.({ skillId: skill.id, inputs: built.inputs });
-        opts.onSkillEnded?.({ skillId: skill.id, ok });
         render();
       },
       (err) => {
         if (run?.skillId !== skill.id) return;
         run = { skillId: skill.id, cancel: () => {}, text: err?.message || "Run failed", error: true, canceling: false, done: true };
-        opts.onSkillEnded?.({ skillId: skill.id, ok: false });
         render();
       },
     );
@@ -364,7 +354,6 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
     menu.classList.toggle("open", open);
     btn.classList.toggle("active", open);
     btn.setAttribute("aria-expanded", String(open));
-    opts.onOpenChange?.(open);
     syncActive();
     if (open) {
       render();

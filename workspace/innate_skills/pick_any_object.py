@@ -631,6 +631,7 @@ class PickAnyObject(Skill):
         p = self._p
         retry_z = p["retry_floor_z"]
         self._holding = False
+        self.check_cancelled()  # proven empty claw: unlike a committed grip, Stop may end the run here
         self.manipulation.gripper_open(duration=1.0)
         self._goto_search_pose(math.atan2(y, x))
         x, y, z, roll = self._wrist_descend(prompt, x, y)

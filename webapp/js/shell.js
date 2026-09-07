@@ -84,8 +84,7 @@ export function initShell(navigate) {
   footNav.setAttribute("aria-label", "Utility");
   let activeKey = "";
   let checkedFirstPage = false;
-  let onboardingPending = false;
-  let onboardingRestart = false;
+  let helpPending = false;
   /** @type {null | {start:()=>void, cancel:()=>void}} */
   let missionPickerPending = null;
 
@@ -142,16 +141,13 @@ export function initShell(navigate) {
   }
 
   function requestOnboarding() {
-    onboardingPending = true;
-    onboardingRestart = true;
     // Help shows passive tips. It never restarts the first mission.
     if (activeKey === ONBOARDING_START_SECTION || activeKey === "teleop") {
-      onboardingPending = false;
       window.dispatchEvent(new CustomEvent(ONBOARDING_REQUEST_EVENT));
-      onboardingRestart = false;
-    } else {
-      navigate(pathForKey(ONBOARDING_START_SECTION));
+      return;
     }
+    helpPending = true;
+    navigate(pathForKey(ONBOARDING_START_SECTION));
   }
 
   /** @param {string | null} label */
@@ -230,7 +226,10 @@ export function initShell(navigate) {
    * @param {string} key
    */
   function setActive(key) {
-    if (key !== ONBOARDING_START_SECTION) missionPickerPending?.cancel();
+    if (key !== ONBOARDING_START_SECTION) {
+      missionPickerPending?.cancel();
+      helpPending = false;
+    }
     activeKey = key;
     applyActive();
     // Every navigation lands here, and none may leave the drawer over the
@@ -249,7 +248,7 @@ export function initShell(navigate) {
         await initializeFirstRunCompletion();
         installMissionPicker(() => new Promise(resolve => {
           closeRailDrawer();
-          if (activeKey === ONBOARDING_START_SECTION) startFirstRun(true, resolve);
+          if (activeKey === ONBOARDING_START_SECTION) startFirstRun(resolve);
           else {
             // Failed or superseded route loads must not leave a delayed reset.
             const cancel = () => {clearTimeout(timeout); missionPickerPending = null; resolve(false);};
@@ -258,31 +257,28 @@ export function initShell(navigate) {
               cancel,
               start: () => {
                 clearTimeout(timeout);
-                startFirstRun(true, resolve);
+                startFirstRun(resolve);
               },
             };
             navigate(pathForKey(ONBOARDING_START_SECTION));
           }
         }));
-      }
-      onboardingPending = !!config?.simControls && shouldAutoStartOnboarding();
-      if (onboardingPending && activeKey !== ONBOARDING_START_SECTION) {
-        navigate(pathForKey(ONBOARDING_START_SECTION));
+        // The Agent page's own controller resumes or offers the first run
+        // when it mounts; the shell only has to land there.
+        if (shouldAutoStartOnboarding() && activeKey !== ONBOARDING_START_SECTION) {
+          navigate(pathForKey(ONBOARDING_START_SECTION));
+        }
       }
     }
-    if (missionPickerPending && activeKey === ONBOARDING_START_SECTION) {
+    if (activeKey !== ONBOARDING_START_SECTION) return;
+    if (missionPickerPending) {
       const {start} = missionPickerPending;
       missionPickerPending = null;
-      onboardingPending = false;
+      helpPending = false;
       start();
-      return;
-    }
-    if (onboardingPending && activeKey === ONBOARDING_START_SECTION) {
-      onboardingPending = false;
-      if (onboardingRestart) window.dispatchEvent(new CustomEvent(ONBOARDING_REQUEST_EVENT));
-      else startFirstRun();
-      onboardingRestart = false;
-      return;
+    } else if (helpPending) {
+      helpPending = false;
+      window.dispatchEvent(new CustomEvent(ONBOARDING_REQUEST_EVENT));
     }
   }
 

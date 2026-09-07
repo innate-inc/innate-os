@@ -74,7 +74,7 @@ export function createChallengePanel(root, session, onboarding) {
     if (event.target instanceof Node && dock.contains(event.target)) return;
     setOpen(false);
   };
-  document.addEventListener("pointerdown", onOutsidePointer, {capture:true});
+  document.addEventListener("pointerdown", onOutsidePointer, true);
   launcher.addEventListener("click", () => setOpen(!open));
 
   const body = document.createElement("div");
@@ -303,7 +303,7 @@ export function createChallengePanel(root, session, onboarding) {
       unsubEnvironment?.();
       unsubFirstRun?.();
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
-      document.removeEventListener("pointerdown", onOutsidePointer, {capture:true});
+      document.removeEventListener("pointerdown", onOutsidePointer, true);
       dock.remove();
     },
   };

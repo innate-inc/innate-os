@@ -179,7 +179,6 @@ function buildAgentView(root) {
       if (!onboarding?.isActive()) return fallback();
       await onboarding.ensureRunning();
     },
-    onUserMessage: () => onboarding?.onUserMessage(),
     onSkillStatus: event => onboarding?.onSkillStatus(event),
   });
   onboarding = createAgentOnboarding(root, ros, agentState, {

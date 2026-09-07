@@ -39,8 +39,6 @@ const THINKING_STALE_MS = 10_000;
  *   enableMic?: boolean,
  *   onMicState?: (state: {on: boolean, busy: boolean, level: number, waveform: number[], error: string | null}) => void,
  *   ensureRunning?: (fallback: () => Promise<void>) => Promise<void>,
- *   onUserMessage?: (text: string, timestamp: number) => void,
- *   onRobotMessage?: (text: string, timestamp: number) => void,
  *   onSkillStatus?: (event: {skill: string, runId: string, status: string, timestamp: number}) => void,
  * }} opts
  *   enableMic connects the browser microphone in sim, where the robot has no
@@ -261,7 +259,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       if (!sent) throw new Error("The robot connection was lost before the message could be sent.");
       chat.addMessage("user", text, timestamp);
       suggestions.clear();
-      opts.onUserMessage?.(text, timestamp);
       return true;
     } catch (error) {
       const detail = error instanceof Error ? error.message : "The message could not be sent.";
@@ -364,12 +361,8 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const sender = String(payload?.sender ?? "");
     const text = String(payload?.text ?? "");
     if (!sender || !text) return;
-    const ts = Number(payload?.timestamp) || Date.now() / 1000;
-    if (sender === "user") {
-      suggestions.clear();
-    }
-    chat.routeChatOut(sender, text, ts);
-    if (sender === "robot") opts.onRobotMessage?.(text, ts);
+    if (sender === "user") suggestions.clear();
+    chat.routeChatOut(sender, text, Number(payload?.timestamp) || Date.now() / 1000);
   }, undefined, "std_msgs/msg/String");
 
   const unsubSkill = rosClient.subscribe(SKILL_STATUS_UPDATE_TOPIC, (m) => {

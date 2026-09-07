@@ -108,9 +108,7 @@ function buildCockpit(root) {
     createSkillsMenu(ttsOverlay, ros),
     createArmPanel(armOverlay, ros, { hideServices: !!config.simControls }),
     ...(config.simControls ? [] : [createProfilingPanel(root, session)]),
-    // Teleop is the head-camera control room. Do not let a saved Arm, Top View,
-    // or Map choice make onboarding begin from the wrong perspective.
-    createCameraSwitch(root, session, ros, { primaryOnMount: "main" }),
+    createCameraSwitch(root, session, ros),
     keyboard,
     onboarding,
   );

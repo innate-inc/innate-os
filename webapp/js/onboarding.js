@@ -3,18 +3,8 @@
 // Copyright (c) 2026 Innate Inc
 
 // First missions are browser-local. Help is a separate, passive interface tour.
-export const ONBOARDING_VERSION = 4;
-export const ONBOARDING_SEEN_KEY = `innate.onboardingSeen.v${ONBOARDING_VERSION}`;
 export const ONBOARDING_REQUEST_EVENT = "innate:onboarding-request";
 export const ONBOARDING_START_SECTION = "agent";
-
-export function markOnboardingSeen() {
-  try {
-    localStorage.setItem(ONBOARDING_SEEN_KEY, "1");
-  } catch {
-    // Locked-down browsers may reject storage; onboarding still works.
-  }
-}
 
 export const FIRST_RUN_KEY = "innate.firstMission.v1";
 export const FIRST_RUN_REQUEST_EVENT = "innate:first-run-request";
@@ -98,7 +88,7 @@ export function readFirstRun() {
     if (saved.phase === "choosing") return {phase:"choosing"};
     if (["done", "skipped"].includes(saved.phase)) return saved;
     if (!["starting", "playing"].includes(saved.phase)
-      || !["put_it_away", "way_out", "other_side"].includes(saved.id)
+      || !FIRST_MISSIONS.some(({id}) => id === saved.id)
       || typeof saved.attemptId !== "string"
       || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(saved.attemptId)
       || !Number.isFinite(saved.startedAt) || saved.startedAt <= 0) return null;
@@ -107,16 +97,15 @@ export function readFirstRun() {
 }
 
 export function shouldAutoStartOnboarding() {
-  const saved = readFirstRun();
-  if (["choosing", "starting", "playing"].includes(saved?.phase)) return true;
-  if (saved?.phase === "done" || saved?.phase === "skipped") return false;
-  try { return !localStorage.getItem(ONBOARDING_SEEN_KEY); } catch { return true; }
+  const phase = readFirstRun()?.phase;
+  return phase !== "done" && phase !== "skipped";
 }
 
-/** @param {boolean} restart
+/** Reopen the mission chooser. The mounted Agent page answers by closing the
+ * owned attempt first; with no controller mounted the request fails at once.
  * @param {(success:boolean)=>void} [complete] */
-export function startFirstRun(restart = false, complete) {
-  const event = new CustomEvent(FIRST_RUN_REQUEST_EVENT, {cancelable:true, detail:{restart, complete}});
+export function startFirstRun(complete) {
+  const event = new CustomEvent(FIRST_RUN_REQUEST_EVENT, {cancelable:true, detail:{complete}});
   window.dispatchEvent(event);
   if (!event.defaultPrevented) complete?.(false);
 }

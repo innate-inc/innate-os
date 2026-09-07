@@ -119,7 +119,6 @@ for(const mission of FIRST_MISSIONS) {
   assert.ok(ui.root.find(el=>el.textContent==="Skip mission"));
   assert.equal(ui.root.find(el=>el.textContent==="Abort"),undefined);
   assert.equal(ui.root.find(el=>el.textContent==="Retry"),undefined);
-  ui.flow.onUserMessage("Can you try that again?");
   sim.emitChallenge({...sim.challenge,active:{...sim.challenge.active,attempt_id:"foreign",state:"passed"}});
   assert.equal(ui.flow.isActive(),true);
   assert.equal(ui.root.find(el=>el.className==="challenge-banner passed"),undefined);
@@ -162,7 +161,7 @@ const skippedReplay=simulator();let skippedUi=skippedReplay.mount();
 skippedUi.choose("put_it_away");await flush();
 const skippedToken=skippedReplay.challenge.active.attempt_id;
 skippedUi.skip();await flush();assert.equal(skippedReplay.agent.get().brainActive,true);
-startFirstRun(true);await flush();
+startFirstRun();await flush();
 assert.deepEqual(skippedReplay.calls.aborts,[skippedToken]);
 assert.equal(skippedReplay.agent.get().brainActive,false);
 assert.equal(readFirstRun().phase,"choosing");skippedUi.flow.destroy();
@@ -264,7 +263,7 @@ storage.clear();
 saveFirstRun({phase:"choosing"});
 const replay=simulator();ui=replay.mount();ui.choose("put_it_away");await flush();
 const firstAttempt=replay.calls.starts[0].attempt_id;
-startFirstRun(true);startFirstRun(true);await flush();
+startFirstRun();startFirstRun();await flush();
 assert.equal(readFirstRun().phase,"choosing");assert.equal(replay.calls.starts.length,1);
 assert.deepEqual(replay.calls.aborts,[firstAttempt]);assert.equal(replay.agent.get().brainActive,false);
 ui.flow.destroy();ui=replay.mount();await flush();
@@ -273,7 +272,7 @@ ui.choose("put_it_away");await flush();assert.equal(replay.calls.starts.length,2
 assert.notEqual(replay.calls.starts[1].attempt_id,firstAttempt);
 ui.flow.destroy();ui=replay.mount();await flush();assert.equal(ui.flow.isActive(),true);assert.equal(replay.calls.starts.length,2);
 replay.emitChallenge({...replay.challenge,active:{...replay.challenge.active,state:"passed"}});
-startFirstRun(true);await flush();assert.equal(replay.agent.get().brainActive,false);
+startFirstRun();await flush();assert.equal(replay.agent.get().brainActive,false);
 ui.choose("way_out");await flush();assert.equal(replay.calls.switches.at(-1),"backrooms");
 assert.equal(replay.calls.starts.at(-1).id,"way_out");ui.flow.destroy();
 console.log("ok - replay stops the owned attempt, persists the chooser and starts a fresh selected challenge");
@@ -286,7 +285,7 @@ console.log("ok - replay stops the owned attempt, persists the chooser and start
     return activate(id);
   };
   ui=replayPending.mount();ui.choose("put_it_away");await flush();
-  startFirstRun(true);await flush();assert.equal(replayPending.calls.starts.length,1);
+  startFirstRun();await flush();assert.equal(replayPending.calls.starts.length,1);
   releaseReplay();await flush();
   assert.equal(readFirstRun().phase,"choosing");
   assert.deepEqual(replayPending.calls.directives,["intro_agent",""]);
@@ -300,7 +299,7 @@ const oldParent=window.parent, oldReferrer=document.referrer;
 const replies=[];window.parent={postMessage:(data,origin)=>replies.push({data,origin})};document.referrer="https://broker.example/session";
 saveFirstRun({phase:"choosing"});
 const worlds=simulator();ui=worlds.mount();ui.choose("put_it_away");await flush();
-const removePicker=installMissionPicker(()=>new Promise(resolve=>startFirstRun(true,resolve)));
+const removePicker=installMissionPicker(()=>new Promise(resolve=>startFirstRun(resolve)));
 function brokerMessage(data,origin="https://broker.example",source=window.parent) {
  const event=new Event("message");Object.assign(event,{data:{channel:"innate:first-mission:v1",...data},origin,source});window.dispatchEvent(event);
 }
@@ -315,6 +314,7 @@ for (const mission of FIRST_MISSIONS) {
   const change={...command,requestId:mission.id};
   brokerMessage(change);brokerMessage(change);await flush();
   assert.equal(replies.at(-1).data.success,true);
+  assert.ok(replies.every(r=>r.data.type!=="completed")); // reopening the chooser is not Skip
   assert.equal(worlds.calls.starts.length,before);
   assert.equal(worlds.calls.aborts.at(-1),oldAttempt);
   assert.equal(worlds.agent.get().brainActive,false);
