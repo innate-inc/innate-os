@@ -28,19 +28,21 @@ Start with [skills](#skills), [agents](#agents), [additional inputs](#additional
 
 <table>
   <tr>
-    <td width="64%" align="center" valign="top">
-      <img src="docs/assets/readme/screenshot-webapp-agent-real-mars.png" alt="Innate web app Agent page on a physical MARS robot" width="100%"><br>
-      <sub>Web app</sub>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/readme/skills-chess-door-opening.gif" alt="MARS moves a chess piece, then opens a door using standalone skills" width="100%">
     </td>
-    <td width="36%" rowspan="2" align="center" valign="middle">
-      <img src="docs/assets/readme/screenshot-mobile-card.png" alt="Innate mobile app running an agent" width="100%"><br>
-      <sub>Mobile app</sub>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/readme/agent-clean-room.gif" alt="An agent combines picking up and putting away to tidy a room" width="100%">
     </td>
   </tr>
   <tr>
-    <td width="64%" align="center" valign="top">
-      <a href="https://sim-demo.innate.bot"><img src="docs/assets/readme/screenshot-live-simulator-teleop.png" alt="Teleop on a simulated MARS robot" width="100%"></a><br>
-      <sub><a href="https://sim-demo.innate.bot">Live simulator</a></sub>
+    <td width="50%" valign="top">
+      <strong>Run a skill.</strong> Move a chess piece or open a door.<br>
+      <a href="#write-a-skill">Write your own skill</a>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Run an agent.</strong> Combine picking up and putting away to tidy a room.<br>
+      <a href="#agent-definitions">Build an agent</a>
     </td>
   </tr>
 </table>
@@ -99,100 +101,44 @@ The Innate mobile app is available on both iOS and Android. It allows you to con
 
 ## Skills
 
-Skills are the core unit of action on Innate robots.
+Skills are reusable actions: navigate, pick up an object, call a service, or run a learned policy.
 
-A skill can be digital, like calling a tool, a service or another agent; or physical, like navigating, waving, grasping, recording a demonstration, or executing a learned manipulation policy.
-
-<p align="center">
-  <img src="docs/assets/readme/skills-chess-door-opening.gif" alt="Two standalone physical skills: moving a chess piece, then opening a door" width="520"><br>
-  <sub>Two standalone skill examples, shown sequentially: moving a chess piece, then opening a door.</sub>
-</p>
-
-- **Execute manually** — Run skills from the `innate` CLI.
-- **Operate from apps** — Trigger skills through the web app or Innate mobile apps.
+- **Execute manually** — Run skills from the CLI, web app, or mobile apps.
 - **Run autonomously** — Let agents select and interrupt skills as the world changes.
 
-### Running a skill
+<a id="skill-definition"></a>
 
-On the robot, skills can be inspected and called through the CLI:
+### Write a skill
 
-```bash
-innate skill type innate-os/arm_zero_position
-innate skill run innate-os/arm_zero_position @duration=3
+Reuse the built-in [picking skill](workspace/innate_skills/pick_any_object.py). On MARS with Innate vision access, save this as `workspace/custom_skills/pick_up_sock.py`:
+
+```python
+from innate_skills.pick_any_object import PickAnyObject
+
+from innate import Skill, SkillReturn
+
+
+class PickUpSock(Skill):
+    """Find a white sock on the floor and pick it up."""
+
+    pick: PickAnyObject
+
+    def execute(self) -> SkillReturn:
+        return self.pick(prompt="the white sock")
 ```
 
-Custom skills use the same `@name=value` input syntax.
+<a id="running-a-skill"></a>
 
-### Trained skills
+Skills load automatically and hot-reload on save. Inspect and run yours:
 
-Some physical skills can be learned from demonstrations.
+```bash
+innate skill type local/pick_up_sock
+innate skill run local/pick_up_sock
+```
 
-- Record episodes from the phone app or web app.
-- Train a policy with one of the models available on Innate Cloud or locally.
-- Deploy the trained model as a skill.
+<a id="trained-skills"></a>
 
-Start here: [Training overview](https://docs.innate.bot/training/overview). To ship a trained model back to the robot, see [Deploy a trained skill](https://docs.innate.bot/training/deploy-trained-skill).
-
-You will find skills in two different directories:
-
-- **Built-in skills** — Located in `workspace/innate_skills/`.
-- **Your custom skills** — Stored in `workspace/custom_skills/`. Gitignored and yours to play with.
-- **Skill packs** — Any other folder dropped into `workspace/` loads as its own package (ids `<folder>/<name>`). A pack that lives elsewhere on disk is symlinked in (`ln -s /opt/team/skills workspace/team_skills`) and works the same, hot reload included.
-
-Helpers work like normal Python: any `.py` in your skills folder that doesn't define a `Skill` is just a module — `import` it, use relative imports inside subfolders, share across packages by bare name (`from innate_skills import arm_utils`). Device helpers are methods on the interfaces (`self.manipulation.move_to(...)`, `self.mobility.rotate_by(...)`); camera math and Gemini live under `innate` (`from innate import geometry, vision, gemini`).
-
-### Skill definition
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <strong>Replay skill</strong> — replay a recorded motion file.<br>
-      Saved as <code>workspace/custom_skills/greet/metadata.json</code>:
-      <pre lang="json">{
-    "name": "greet",
-    "type": "replay",
-    "guidelines": "Greet the user with a friendly arm wave.",
-    "inputs": {},
-    "wheeled": false,
-    "downloads": {
-        "episode_0.h5": "https://your-cdn.com/greet/episode_0.h5"
-    },
-    "execution": {
-        "model_type": "replay",
-        "replay_file": "episode_0.h5",
-        "replay_frequency": 50.0,
-        "start_pose": [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.0],
-        "end_pose": [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.0]
-    }
-}</pre>
-    </td>
-    <td width="50%" valign="top">
-      <strong>Code skill</strong> — call the mobility interface to move forward.<br>
-      Saved as <code>workspace/custom_skills/move_forward.py</code>:
-      <pre lang="python">from innate import Mobility, Skill, SkillReturn
-
-
-class MoveForward(Skill):
-    """Move the robot forward by a given distance in meters."""
-
-    mobility: Mobility          # declare what you use; the runtime injects it
-
-    def execute(self, distance_m: float = 0.5) -> SkillReturn:
-        speed = 0.2  # m/s
-        duration = distance_m / speed
-        self.mobility.send_cmd_vel(linear_x=speed, duration=duration)
-        self.sleep(duration)    # like time.sleep, but a Stop unwinds it
-        return f"Moved forward {distance_m} m"
-</pre>
-      The return value is the run's result message; call
-      <code>self.fail(message)</code> to end the run as a failure.
-      Cancellation is the framework's job: <code>self.sleep</code> (and every
-      blocking framework call) raises the moment a Stop lands, the base is
-      braked automatically, and the run reports CANCELLED — skills carry no
-      cancel code.
-    </td>
-  </tr>
-</table>
+**[Skills guide →](docs/skills/README.md)** — inputs, composition, interfaces, training, replay, and skill packs.
 
 ---
 
@@ -208,11 +154,6 @@ An agent consists of:
 - A **system prompt** that defines the robot's behavior
 - An **agent loop** that connects the model to observations, memory, tools, and robot actions
 
-<p align="center">
-  <img src="docs/assets/readme/agent-clean-room.gif" alt="Pick up and put away skills chained in an agent to clean a room" width="520"><br>
-  <sub>Pick up and put away skills chained in an agent to clean a room.</sub>
-</p>
-
 ### Specificities of multimodal agents
 
 Multimodal agents have different constraints than purely digital agents: they need to **observe continuously**, run at a **high frequency** to react, and to be able to **interrupt** a running skill when the world has changed.
@@ -224,9 +165,7 @@ You can find agents in two different directories:
 - **[`workspace/innate_agents/`](workspace/innate_agents/)** — Built-in agents shipped with Innate OS.
 - **[`workspace/custom_agents/`](workspace/custom_agents/)** — Your local agents. Gitignored and yours to play with.
 
-Here is an example of a simple agent to navigate:
-
-A minimal agent file, saved as `workspace/custom_agents/navigate_agent.py`:
+A navigation agent, saved as `workspace/custom_agents/navigate_agent.py`:
 
 ```python
 from brain_client.agents.types import Agent
@@ -250,7 +189,11 @@ class NavigateAgent(Agent):
         return ["micro"]
 
     def get_prompt(self):
-        return "You are a helpful robot. When asked, navigate to the requested location using the navigate_to_position skill."
+        return (
+            "You are a helpful robot. When asked, "
+            "navigate to the requested location "
+            "using the navigate_to_position skill."
+        )
 ```
 
 ### Testing agents in sim
