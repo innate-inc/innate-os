@@ -11,7 +11,6 @@ import { getConfig } from "./config.js";
 import { sharedAgentState } from "./teleop/agentState.js";
 import { createAgentIndicator } from "./agentIndicator.js";
 import { createArmAlert } from "./armAlert.js";
-import { maybeShowAppPromo } from "./appPromo.js";
 import { installPressActivate } from "./pressActivate.js";
 import {
   ONBOARDING_REQUEST_EVENT,
@@ -223,9 +222,6 @@ export function initShell(navigate) {
   void getConfig().then((config) => {
     if (!config?.simControls) createArmAlert(ros);
   });
-
-  // On a phone/tablet, nudge toward the native app (shown once, then remembered).
-  maybeShowAppPromo("/");
 
   /**
    * Reflect the active section: highlight its rail link, hide the agent pill on

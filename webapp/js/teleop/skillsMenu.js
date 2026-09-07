@@ -130,7 +130,7 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
   let selectedId = null;
   /** Folder sections the user expanded (by group path) — folders start closed. @type {Set<string>} */
   const expandedGroups = new Set();
-  /** Per-skill, per-param string values, kept across re-renders. @type {Map<string, Record<string, string>>} */
+  /** Per-param values kept across re-renders; null means unset, distinct from an empty string. @type {Map<string, Record<string, string | null>>} */
   const inputValues = new Map();
   /** Last/in-flight run. `done` marks the terminal state. @type {{ skillId: string, cancel: () => void, text: string, error: boolean, canceling: boolean, done: boolean } | null} */
   let run = null;
@@ -172,6 +172,10 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
   function enumValues(schema) {
     return typeof schema === "object" && Array.isArray(schema?.enum) ? schema.enum : [];
   }
+  /** @param {any} schema */
+  function hasEnumDefault(schema) {
+    return schema?.default !== undefined && enumValues(schema).includes(schema.default);
+  }
   /** @param {string} t */
   const isNumeric = (t) => ["int", "integer", "number", "float", "double"].includes(t);
   /** @param {string} t */
@@ -185,18 +189,21 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
   const hasParams = (skill) => Object.keys(getSkillInputs(skill)).length > 0;
 
   /**
-   * Current string value for a param, falling back to the schema default.
+   * Current param value, falling back to the schema default; null means unset.
    * @param {string} skillId @param {string} paramName @param {any} schema
    */
   function valueFor(skillId, paramName, schema) {
-    const stored = inputValues.get(skillId)?.[paramName];
-    if (stored !== undefined) return stored;
+    const options = enumValues(schema);
+    let stored = inputValues.get(skillId)?.[paramName];
+    if (stored === "" && options.length > 0 && !options.includes("")) stored = null;
+    // A previously unset optional enum follows its default once unset is hidden.
+    if (stored !== undefined && !(stored === null && !isRequired(schema) && hasEnumDefault(schema))) return stored;
     if (typeof schema === "object" && schema?.default !== undefined) {
       return isJson(schemaType(schema)) ? JSON.stringify(schema.default) : String(schema.default);
     }
-    return "";
+    return options.length > 0 ? null : "";
   }
-  /** @param {string} skillId @param {string} paramName @param {string} value */
+  /** @param {string} skillId @param {string} paramName @param {string | null} value */
   function setValue(skillId, paramName, value) {
     const map = inputValues.get(skillId) ?? {};
     map[paramName] = value;
@@ -214,12 +221,13 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
     const out = {};
     for (const [name, spec] of Object.entries(schema)) {
       const t = schemaType(spec);
-      const raw = valueFor(skill.id, name, spec).trim();
-      if (raw === "") {
-        if (isRequired(spec)) return { error: "Required", param: name };
-        continue; // optional + empty → let the skill default it
-      }
       const options = enumValues(spec);
+      const value = valueFor(skill.id, name, spec);
+      const raw = options.length > 0 ? value : (value ?? "").trim();
+      if (raw === null || (raw === "" && !options.includes(""))) {
+        if (isRequired(spec)) return { error: "Required", param: name };
+        continue; // optional + unset → let the skill default it
+      }
       if (options.length > 0) {
         const match = options.find((o) => String(o) === raw);
         if (match === undefined) return { error: "Not an allowed value", param: name };
@@ -865,10 +873,11 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
 
   /** Enum param as a keyboard-first pill group: the group is one focusable
    *  widget, arrows cycle the value in place (no re-render, so focus holds),
-   *  Enter runs. An optional param gets a leading "—" pill meaning unset.
+   *  Enter runs. Optional enums without a valid default offer "—" for unset.
    *  @param {any} skill @param {string} paramName @param {any} spec @param {any[]} options */
   function renderChoice(skill, paramName, spec, options) {
-    const labels = (isRequired(spec) ? [] : [""]).concat(options.map(String));
+    const allowUnset = !isRequired(spec) && !hasEnumDefault(spec);
+    const labels = [...(allowUnset ? [null] : []), ...options.map(String)];
     const group = document.createElement("div");
     group.className = "skill-choice";
     group.tabIndex = 0;
@@ -880,8 +889,8 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
       pill.type = "button";
       pill.tabIndex = -1; // the group is the tab stop; arrows move within it
       pill.className = "skill-choice-opt" + (label === value ? " on" : "");
-      pill.textContent = label === "" ? "—" : label;
-      if (label === "") pill.title = "unset";
+      pill.textContent = label === "" ? '""' : label ?? "—";
+      if (label === null) pill.title = "unset";
       pill.addEventListener("click", () => {
         select(label);
         group.focus();
@@ -890,7 +899,7 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
     });
     group.append(...pills);
 
-    /** @param {string} label */
+    /** @param {string | null} label */
     function select(label) {
       setValue(skill.id, paramName, label);
       for (const [i, pill] of pills.entries()) pill.classList.toggle("on", labels[i] === label);
@@ -909,7 +918,7 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
   function renderParam(skill, paramName, spec) {
     const t = schemaType(spec);
     const options = enumValues(spec);
-    const value = valueFor(skill.id, paramName, spec);
+    const value = valueFor(skill.id, paramName, spec) ?? "";
 
     const rowEl = document.createElement("label");
     rowEl.className = "skill-param";
@@ -953,7 +962,7 @@ export function createSkillsMenu(parent, rosClient, opts = {}) {
         for (const [i, b] of opts.entries()) b.classList.toggle("on", labels[i] === label);
       }
       wireGroupKeys(group, skill, (delta) => {
-        const current = labels.indexOf(valueFor(skill.id, paramName, spec));
+        const current = labels.indexOf(valueFor(skill.id, paramName, spec) ?? "");
         if (current === -1) return select(labels[delta > 0 ? 0 : labels.length - 1]);
         select(labels[(current + delta + labels.length) % labels.length]);
       });

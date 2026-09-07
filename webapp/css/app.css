@@ -9003,6 +9003,47 @@ select.skill-input {
   -webkit-user-select: text;
 }
 
+.agent-compose-area {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-thinking {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 16px;
+  padding-left: 4px;
+  color: var(--agent-purple);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.agent-thinking::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--agent-purple-edge);
+  visibility: hidden;
+}
+
+.agent-thinking.active::before {
+  visibility: visible;
+  animation: agent-thinking-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes agent-thinking-pulse {
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-thinking.active::before { animation: none; }
+}
+
 .agent-compose {
   position: relative;
   display: flex;
@@ -9952,97 +9993,6 @@ select.skill-input {
   .overlay-joystick {
     bottom: 150px;
   }
-}
-
-/* ---- mobile app promo ----------------------------------------------------- */
-/* Shown only on phones/tablets (appPromo.js). Fixed over everything, including
-   the rail (z 40), so it reads as a true interstitial. */
-
-.app-promo-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgb(0 0 0 / 62%);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-}
-
-.app-promo {
-  position: relative;
-  width: 320px;
-  max-width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 14px;
-  padding: 30px 26px 24px;
-  background: var(--panel);
-  border: 1px solid var(--hairline-strong);
-  border-radius: 14px;
-}
-
-.app-promo-close {
-  position: absolute;
-  top: 12px;
-  right: 14px;
-  font-size: 14px;
-  color: var(--muted);
-}
-
-.app-promo-close:hover {
-  color: var(--text);
-}
-
-.app-promo-logo {
-  height: 40px;
-  width: auto;
-}
-
-.app-promo-title {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 600;
-}
-
-.app-promo-blurb {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--muted);
-}
-
-.app-promo-cta {
-  width: 100%;
-  margin-top: 4px;
-  padding: 12px 0;
-  border: 1px solid var(--accent-dim);
-  border-radius: 9px;
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--accent);
-  text-decoration: none;
-  transition: background 150ms ease;
-}
-
-.app-promo-cta:hover {
-  background: var(--accent-faint);
-}
-
-.app-promo-stay {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-  transition: color 150ms ease;
-}
-
-.app-promo-stay:hover {
-  color: var(--text);
 }
 
 /* ---- Nav page (Foxglove-style sensor view) ------------------------------- */
