@@ -26,13 +26,12 @@ subscribes directly to that topic.
 
 ### ROS parameters
 
-All tunables are declared as ROS parameters and can be set via the YAML
+The following settings are ROS parameters and can be set via the YAML
 config file at `config/params.yaml` or overridden on the command line.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `ws_url` | string | env `UNINAVID_WS_URL` or `wss://uninavid-v1.svc.innate.bot` | WebSocket server URL |
-| `service_key` | string | env `INNATE_SERVICE_KEY` | Service key for auth token acquisition |
 | `auth_issuer_url` | string | env `INNATE_AUTH_URL` or `https://auth-v1.svc.innate.bot` | Auth token issuer |
 | `forward_speed` | float | 0.3 | Linear speed (m/s) for the FORWARD action |
 | `turn_speed` | float | 0.8 | Angular speed (rad/s) for the LEFT / RIGHT actions |
@@ -43,14 +42,13 @@ config file at `config/params.yaml` or overridden on the command line.
 | `image_send_hz` | float | 49.0 | Target rate for streaming images to the server |
 | `consecutive_stops_to_complete` | int | 20 | Number of consecutive STOP actions before the goal succeeds |
 
-### Runtime service-key update
+### Service credential
 
-The node also listens to `/brain/backend_config` for JSON payloads containing
-`service_key` or `token`.  This is intentionally shared with the simulator's
-runtime backend override path, so a service key provided from the simulator URL
-can enable future UniNavid goals without restarting the ROS process.  Active
-WebSocket sessions keep their current auth provider; a changed key is used by
-the next navigation goal.
+Set `INNATE_SERVICE_KEY` in the node's process environment or the owner's `.env`
+file. Restart the node after changing the key. The credential is private
+process configuration, not a ROS parameter. Do not publish it to a ROS topic;
+ROS subscribers can read topic messages, and UniNavid no longer consumes
+`/brain/backend_config` credential updates.
 
 ---
 
@@ -58,7 +56,7 @@ the next navigation goal.
 
 1. A `NavigateInstruction` goal arrives.
 2. The node creates an `UninavidWsClient` and calls `connect(instruction)`.
-3. The client opens a WebSocket with a `Bearer` token (if `service_key` is
+3. The client opens a WebSocket with a `Bearer` token (if `INNATE_SERVICE_KEY` is
    configured).  On a **401** response the token is renewed and the
    connection is retried once.
 4. The natural-language **instruction** is sent as the first text frame.

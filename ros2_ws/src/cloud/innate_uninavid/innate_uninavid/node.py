@@ -19,7 +19,6 @@ Manual test::
 
 from __future__ import annotations
 
-import json
 import os
 import statistics
 import threading
@@ -36,13 +35,12 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage
-from std_msgs.msg import Int32MultiArray, String
+from std_msgs.msg import Int32MultiArray
 
 from .ws_client import Action, ClientState, UninavidWsClient
 
 DEFAULT_WS_URL = "wss://uninavid-v1.svc.innate.bot"
 DEFAULT_AUTH_ISSUER_URL = "https://auth-v1.svc.innate.bot"
-RUNTIME_BACKEND_CONFIG_TOPIC = "/brain/backend_config"
 
 # Default drive speeds for UniNavid's discrete actions (overridable via uninavid_node params).
 _DEFAULT_FORWARD_SPEED = 0.3  # m/s, FORWARD action
@@ -87,7 +85,6 @@ class UninavidNode(Node):
             load_dotenv(env_path)
 
         self.declare_parameter("ws_url", os.getenv("UNINAVID_WS_URL", DEFAULT_WS_URL))
-        self.declare_parameter("service_key", os.getenv("INNATE_SERVICE_KEY", ""))
         self.declare_parameter("auth_issuer_url", os.getenv("INNATE_AUTH_URL", DEFAULT_AUTH_ISSUER_URL))
         self.declare_parameter("cmd_duration_sec", 0.1)
         self.declare_parameter("cmd_publish_hz", 50.0)
@@ -108,7 +105,9 @@ class UninavidNode(Node):
         }
 
         self._ws_url = str(self.get_parameter("ws_url").value)
-        service_key = str(self.get_parameter("service_key").value)
+        # ROS parameters and /parameter_events are readable through rosbridge.
+        # Credentials stay in process configuration, never in the ROS graph.
+        service_key = os.getenv("INNATE_SERVICE_KEY", "")
         self._auth_issuer = str(self.get_parameter("auth_issuer_url").value)
         self._config_lock = threading.Lock()
         self._service_key = service_key.strip()
@@ -118,7 +117,7 @@ class UninavidNode(Node):
             self.get_logger().warn(
                 "UniNavid service key is missing. "
                 "Vision navigation goals will fail until INNATE_SERVICE_KEY is "
-                "configured or a runtime service key update is received."
+                "configured and the node is restarted."
             )
 
         self._client: UninavidWsClient | None = None
@@ -134,9 +133,6 @@ class UninavidNode(Node):
         )
         self._cmd = self.create_publisher(Twist, "/cmd_vel", 10)
         self._actions_pub = self.create_publisher(Int32MultiArray, "/vln/actions", 10)
-        self._backend_config_sub = self.create_subscription(
-            String, RUNTIME_BACKEND_CONFIG_TOPIC, self._backend_config_callback, 10
-        )
 
         self._action_server = ActionServer(
             self,
@@ -158,33 +154,6 @@ class UninavidNode(Node):
         if not self._is_configured_service_key(service_key):
             return None
         return AuthProvider(issuer_url=self._auth_issuer, service_key=service_key)
-
-    def _backend_config_callback(self, msg: String) -> None:
-        payload = json.loads(msg.data)
-        service_key = payload.get("service_key") or payload.get("token")
-        if service_key is None:
-            return
-
-        new_service_key = str(service_key).strip()
-        with self._config_lock:
-            if new_service_key == self._service_key:
-                self.get_logger().info("UniNavid service key unchanged.")
-                return
-            self._service_key = new_service_key
-            self._auth = self._make_auth_provider(new_service_key)
-            configured = self._auth is not None
-            active_client = self._client is not None and self._client.state in (
-                ClientState.CONNECTING,
-                ClientState.CONNECTED,
-            )
-
-        if configured:
-            message = "UniNavid service key updated from runtime backend config."
-            if active_client:
-                message += " The new key will be used by the next navigation goal."
-            self.get_logger().info(message)
-        else:
-            self.get_logger().warn("UniNavid received an empty service key; vision navigation remains unavailable.")
 
     # ── Preemption (Nav2 pattern) ─────────────────────────────────────────
 
