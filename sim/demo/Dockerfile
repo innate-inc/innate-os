@@ -88,6 +88,7 @@ RUN --mount=type=cache,target=/root/.cache/ccache,sharing=locked \
     fi
 
 ENV INNATE_OS_ROOT=/root/innate-os \
+    INNATE_PUBLIC_DEMO=1 \
     VIRTUAL_MARS_ASSETS=/root/innate-os/sim/assets \
     VIRTUAL_MARS_REMOTE=127.0.0.1:8799 \
     INNATE_WORLD_STATE_PORT=8800 \

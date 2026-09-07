@@ -6,8 +6,22 @@ hands one to each visitor of sim.innate.bot and destroys it after the lease.
 
 ```bash
 sim/demo/build.sh          # -> us-central1-docker.pkg.dev/innate-managed-infra/sim/innate-os-sim-demo:<sha>
-docker run --rm -p 8080:80 us-central1-docker.pkg.dev/innate-managed-infra/sim/innate-os-sim-demo:latest
+docker run --rm -p 8080:80 --network sim-demo \
+  -e INNATE_DEMO_PROXY_URL=http://sim-credential-relay:8081 \
+  us-central1-docker.pkg.dev/innate-managed-infra/sim/innate-os-sim-demo:latest
 ```
+
+The `sim-demo` network above must already contain the trusted credential relay.
+In production the broker provisions that separately and restricts access with
+network policies. The relay holds the service/provider keys and authenticates
+upstream; the visitor container sends no bearer token. Do not publish the
+relay port or mount credentials into a session to bypass a failed startup.
+
+The image sets `INNATE_PUBLIC_DEMO=1`. Startup refuses credential environment
+variables, owner `.env` / `/etc/innate.env` files, and owner `settings.yaml`.
+Public configuration must provide `INNATE_DEMO_PROXY_URL`; owner direct-provider
+and authenticated-proxy configuration continues to work in the developer sim.
+Deploy this image with the matching credential-relay broker changes.
 
 Every push to main publishes `sha-<commit>` and moves `latest`
 (`.github/workflows/publish-sim-demo.yml`); the broker's `/admin` page picks
@@ -24,6 +38,7 @@ instance has no native GL either way, so the demo runs the world in-container
 | source, assets, viewer | bind-mounted from a checkout | baked in |
 | world server | host process (`uv`) | in-container |
 | `.env`, `~/.ssh`, `~/.gitconfig` | mounted | **absent** |
+| service/provider credentials | operator-owned | **absent**, external relay |
 | `POST /settings.json`, `/restart` | on | **off** (`INNATE_WEBAPP_READONLY=1`) |
 | foxglove, leader receiver | on | off |
 | lifetime | until `down` | `INNATE_DEMO_LEASE_SECONDS` (600) |

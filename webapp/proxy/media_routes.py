@@ -134,7 +134,9 @@ async def thumb_response(request: web.Request) -> web.Response:
     if mp4 is None or not _under_skills_root(mp4) or not mp4.is_file():
         return _plain(404, "Not Found", "no such episode video")
     # Cache beside data/ (not inside it) so thumbnails are never uploaded to the cloud.
-    cache = base / "thumbs" / f"episode_{eid}_{cam}.jpg"
+    cache = _safe_resolve(base / "thumbs" / f"episode_{eid}_{cam}.jpg")
+    if cache is None or not cache.is_relative_to(base):
+        return _plain(404, "Not Found", "no such thumbnail")
     try:
         if not cache.is_file():
             lock = _thumb_locks.setdefault(str(cache), asyncio.Lock())
@@ -231,7 +233,10 @@ def memory_image_response(request: web.Request) -> web.Response:
     if (name != _MAPPING_SESSION and not _MAP_NAME_RE.match(name)) or not memory_id.isdigit():
         return _plain(404, "Not Found", "no such memory")
     try:
-        data = (MEMORY_DIR / name / f"{int(memory_id)}.jpg").read_bytes()
+        target = _safe_resolve(MEMORY_DIR / name / f"{int(memory_id)}.jpg")
+        if target is None or not target.is_relative_to(MEMORY_DIR):
+            return _plain(404, "Not Found", "no such memory")
+        data = target.read_bytes()
     except OSError:
         return _plain(404, "Not Found", "no such memory")
     return web.Response(
@@ -316,10 +321,11 @@ def _failure_excerpt(run_dir) -> str:
     excerpt = ""
     for name in ("process_output.jsonl", "daemon.log", "output.log"):
         path = run_dir / name
-        if not path.is_file():
+        resolved = _safe_resolve(path)
+        if resolved is None or not resolved.is_relative_to(run_dir) or not resolved.is_file():
             continue
         try:
-            with open(path, "rb") as fh:
+            with open(resolved, "rb") as fh:
                 size = fh.seek(0, os.SEEK_END)
                 fh.seek(max(0, size - _TAIL_BYTES))
                 tail = fh.read().decode("utf-8", errors="replace")

@@ -62,6 +62,9 @@ def load_env_file(env_path: Path | None = None) -> None:
     service key still resolves from /etc/innate.env after a repo reset. ``env_path``
     defaults to ``<root>/.env``.
     """
+    if os.environ.get("INNATE_PUBLIC_DEMO", "").strip().lower() in {"1", "true", "yes"}:
+        # No owner .env fallback in a public session, even on a later restart.
+        return
     if env_path is None:
         env_path = innate_os_root() / ".env"
 

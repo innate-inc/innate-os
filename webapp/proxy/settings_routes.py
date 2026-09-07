@@ -7,6 +7,7 @@ page, so the API lives at /settings.json to leave it free.
 """
 
 import asyncio
+import os
 
 from aiohttp import ContentTypeError, web
 
@@ -16,6 +17,10 @@ async def settings_get(request: web.Request) -> web.Response:
     import settings_store
 
     def read():
+        if os.environ.get("INNATE_PUBLIC_DEMO", "").strip().lower() in {"1", "true", "yes"}:
+            # Public images use the committed defaults. Never serialize a
+            # misplaced owner settings file or arbitrary extra overrides.
+            return {"overrides": {}, "exists": False}
         return {"overrides": settings_store.read_overrides(), "exists": settings_store.settings_path().is_file()}
 
     return web.json_response(await asyncio.to_thread(read), headers={"Cache-Control": "no-cache"})

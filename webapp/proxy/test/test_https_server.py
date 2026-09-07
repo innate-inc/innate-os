@@ -143,6 +143,46 @@ async def test_path_guards(tmp_path):
 
 
 @sync
+async def test_private_static_files_and_directory_index_symlinks(tmp_path):
+    root = make_app_root(tmp_path)
+    canary = "synthetic-private-file-canary"
+    for name in (".env", "settings.yaml", "public/.env.local", "public/config.py", "proxy/error.log"):
+        target = root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(canary)
+    outside = tmp_path / "outside.html"
+    outside.write_text(canary)
+    (root / "assets" / "page").mkdir()
+    (root / "assets" / "page" / "index.html").symlink_to(outside)
+    async with serve(ROOT=root) as (s, base):
+        for path in (
+            "/.env",
+            "/%2eenv",
+            "/settings.yaml",
+            "/public/.env.local",
+            "/public/config.py",
+            "/proxy/error.log",
+            "/assets/page/",
+        ):
+            response = await s.get(base + path)
+            assert response.status == 404, path
+            assert canary not in await response.text()
+
+
+@sync
+async def test_public_settings_do_not_serialize_owner_overrides(tmp_path, monkeypatch):
+    import settings_store
+
+    monkeypatch.setenv("INNATE_PUBLIC_DEMO", "1")
+    monkeypatch.setattr(settings_store, "read_overrides", lambda: {"brain": {"api_key": "synthetic-settings-canary"}})
+    root = make_app_root(tmp_path)
+    async with serve(ROOT=root, WEBAPP_READONLY=True) as (s, base):
+        response = await s.get(base + "/settings.json")
+        assert await response.json() == {"overrides": {}, "exists": False}
+        assert (await s.post(base + "/settings.json", json={})).status == 405
+
+
+@sync
 async def test_local_environment_assets_are_served(tmp_path):
     root = make_app_root(tmp_path)
     local_environments = tmp_path / "viewer-public" / "local-environments"
@@ -158,6 +198,25 @@ async def test_local_environment_assets_are_served(tmp_path):
         assert response.status == 200
         assert response.headers["Content-Type"] == "model/gltf-binary"
         assert await response.read() == b"custom glb"
+
+
+@sync
+async def test_model_symlinks_allow_colcon_source_only(tmp_path):
+    root = make_app_root(tmp_path)
+    installed = tmp_path / "model-install"
+    source = tmp_path / "model-source"
+    installed.mkdir()
+    source.mkdir()
+    (source / "mars.urdf").write_text("<robot/>")
+    (installed / "mars.urdf").symlink_to(source / "mars.urdf")
+    outside = tmp_path / "outside.urdf"
+    outside.write_text("synthetic-model-file-canary")
+    (installed / "outside.urdf").symlink_to(outside)
+    async with serve(ROOT=root, MARS_MODEL_ROOT=installed, MARS_MODEL_SOURCE_ROOT=source) as (s, base):
+        response = await s.get(base + "/armsdk/model/mars.urdf")
+        assert response.status == 200 and await response.text() == "<robot/>"
+        response = await s.get(base + "/armsdk/model/outside.urdf")
+        assert response.status == 404 and "synthetic-model-file-canary" not in await response.text()
 
 
 @sync

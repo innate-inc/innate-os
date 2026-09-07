@@ -8,6 +8,10 @@ source /opt/ros/humble/setup.bash
 source /root/innate-os/ros2_ws/install/setup.bash
 set -u
 
+# Fail closed before starting any visitor-reachable process. Credentials belong
+# only in the separately isolated cloud relay, never this container.
+python3 -m innate_proxy.public_demo
+
 : "${INNATE_DEMO_LEASE_SECONDS:=600}"
 : "${INNATE_SIM_RENDER_SCALE:=2}"
 : "${MUJOCO_GL:=osmesa}"

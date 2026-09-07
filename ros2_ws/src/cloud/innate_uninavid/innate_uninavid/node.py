@@ -37,6 +37,8 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Int32MultiArray
 
+from innate_proxy.public_demo import demo_proxy_url, public_demo_enabled
+
 from .ws_client import Action, ClientState, UninavidWsClient
 
 DEFAULT_WS_URL = "wss://uninavid-v1.svc.innate.bot"
@@ -80,11 +82,19 @@ class UninavidNode(Node):
     def __init__(self) -> None:
         super().__init__("uninavid_node")
 
-        env_path = find_dotenv(usecwd=True)
-        if env_path:
-            load_dotenv(env_path)
+        self._public_demo = public_demo_enabled()
+        if not self._public_demo:
+            env_path = find_dotenv(usecwd=True)
+            if env_path:
+                load_dotenv(env_path)
 
-        self.declare_parameter("ws_url", os.getenv("UNINAVID_WS_URL", DEFAULT_WS_URL))
+        if self._public_demo:
+            relay = demo_proxy_url()
+            ws_url = relay.replace("https://", "wss://", 1).replace("http://", "ws://", 1) + "/uninavid/ws"
+        else:
+            ws_url = os.getenv("UNINAVID_WS_URL", DEFAULT_WS_URL)
+
+        self.declare_parameter("ws_url", ws_url)
         self.declare_parameter("auth_issuer_url", os.getenv("INNATE_AUTH_URL", DEFAULT_AUTH_ISSUER_URL))
         self.declare_parameter("cmd_duration_sec", 0.1)
         self.declare_parameter("cmd_publish_hz", 50.0)
@@ -104,7 +114,8 @@ class UninavidNode(Node):
             Action.RIGHT: (0.0, -turn_speed),
         }
 
-        self._ws_url = str(self.get_parameter("ws_url").value)
+        # Public sessions always use the fixed relay, never ROS URL overrides.
+        self._ws_url = ws_url if self._public_demo else str(self.get_parameter("ws_url").value)
         # ROS parameters and /parameter_events are readable through rosbridge.
         # Credentials stay in process configuration, never in the ROS graph.
         service_key = os.getenv("INNATE_SERVICE_KEY", "")
@@ -113,7 +124,7 @@ class UninavidNode(Node):
         self._service_key = service_key.strip()
 
         self._auth: AuthProvider | None = self._make_auth_provider(self._service_key)
-        if self._auth is None:
+        if self._auth is None and not self._public_demo:
             self.get_logger().warn(
                 "UniNavid service key is missing. "
                 "Vision navigation goals will fail until INNATE_SERVICE_KEY is "
@@ -202,7 +213,7 @@ class UninavidNode(Node):
             auth = self._auth
             ws_url = self._ws_url
 
-        if auth is None:
+        if auth is None and not self._public_demo:
             self._cmd.publish(_STOP)
             goal_handle.abort()
             return self._result(

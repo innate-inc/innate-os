@@ -13,8 +13,8 @@
 !sim/demo/**
 
 # Secrets and local state never enter a public image.
-.env
-**/.env
+.env*
+**/.env*
 **/.git
 **/.venv
 **/node_modules
