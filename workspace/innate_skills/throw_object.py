@@ -22,30 +22,43 @@ class ThrowObject(Skill):
     mobility: Mobility
     joint_states: JointStates | None
 
-    def _require_held_object(self) -> None:
+    def _holding_object(self) -> bool:
         joints = self.joint_states
         if joints is None or len(joints.position) < 6:
             self.fail("Cannot confirm that the gripper is holding an object")
         j6 = joints.position[5]
-        if not math.isfinite(j6) or j6 <= -0.06 or j6 >= self.manipulation.GRIPPER_OPEN - 0.05:
-            self.fail("The gripper is empty; pick up the object before throwing it")
+        return math.isfinite(j6) and -0.06 < j6 < self.manipulation.GRIPPER_OPEN - 0.05
+
+    def _rest(self) -> None:
+        # Committed teardown after the release: the run is over.
+        try:
+            self.manipulation.move_joints(list(self.manipulation.REST), duration=3.0)
+        except Exception as e:  # noqa: BLE001 — teardown must not mask the run result
+            self.logger.warning(f"[ThrowObject] rest failed: {e}")
 
     def execute(self) -> SkillReturn:
         self.mobility.stop()
         arm = self.manipulation
+        # Fold to REST only once nothing is held: a cancel mid-carry must not
+        # eject the object, an empty claw must not stay clamped in front of the camera.
+        fold = False
         try:
             if self.wait_for(lambda: self.joint_states, timeout=3.0) is None:
                 self.fail("Cannot read the gripper state")
             arm.torque_on()
             arm.gripper_close(strength=arm.GRIPPER_MAX_STRENGTH, duration=0.5)
             self.sleep(0.15)
-            self._require_held_object()
+            if not self._holding_object():
+                fold = True
+                self.fail("The gripper is empty; pick up the object before throwing it")
             # Keep the pickup's finger orientation: unwinding the wrist while
             # holding a rigid brick can roll it out of an otherwise good grasp.
             roll = arm.pose.roll
             arm.move_to(0.18, 0.0, 0.18, roll=roll, pitch=1.3, duration=1.5, tolerance_xy=None, tolerance_z=None)
             self.sleep(0.1)
-            self._require_held_object()
+            if not self._holding_object():
+                fold = True
+                self.fail("The object slipped before the throw; pick it up again")
             self.check_cancelled()
             # Committed release: finish this short swing before teardown. An
             # independent gripper command would join the swing and release too
@@ -57,8 +70,11 @@ class ThrowObject(Skill):
                     Waypoint(0.30, 0.0, 0.30, roll=roll, pitch=1.3, duration=0.12),
                 ]
             )
+            fold = True
             return "Tossed the held object forward. Check where it landed before declaring the task complete."
         except (ArmFailed, ArmUnhealthy) as error:
             self.fail(f"Throw could not complete: {error}")
         finally:
             self.mobility.stop()
+            if fold:
+                self._rest()

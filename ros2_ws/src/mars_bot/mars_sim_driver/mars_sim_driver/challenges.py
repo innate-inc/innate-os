@@ -813,13 +813,13 @@ class ChallengeEngine:
         encoded = json.dumps(context, ensure_ascii=False)
         if encoded == self._context_json:
             return
+        self._context_json = encoded  # a failed write is reported once, not retried every tick
         path = self.progress_path.with_name("challenge_context.json")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_suffix(".json.tmp")
             temporary.write_text(encoded + "\n")
             temporary.replace(path)
-            self._context_json = encoded
         except OSError as error:
             print(f"[challenges] could not write agent context: {error}", flush=True)
 

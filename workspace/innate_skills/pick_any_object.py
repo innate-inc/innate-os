@@ -71,9 +71,9 @@ PARAMS = {
     # Below image center: the wrist cam sits above the fingertips, so
     # mid-frame aims short of them. Keep the hardware-tuned 350 target on a
     # robot; the simulator camera model needs 310 or the fingertip centre ends
-    # up about 3 cm beyond a floor target. The simulator launcher exports its
-    # world-state port into every service container.
-    "wrist_box_v": 310.0 if os.environ.get("INNATE_WORLD_STATE_PORT") else 350.0,
+    # up about 3 cm beyond a floor target. VIRTUAL_MARS_REMOTE is the signal
+    # the sim cannot run without (its launch fails unset) and hardware never sets.
+    "wrist_box_v": 310.0 if os.environ.get("VIRTUAL_MARS_REMOTE") else 350.0,
     "wrist_half_px": 60.0,
     # The broad box gets the arm down quickly; near the floor, require the
     # object to be genuinely central before committing to a grasp.
@@ -628,7 +628,7 @@ class PickAnyObject(Skill):
             self.manipulation.gripper_close(p["close_strength"], duration=p["close_s"])
         except ArmFailed as e:
             raise ArmUnhealthy(f"gripper would not close: {e}") from e
-        time.sleep(p["close_settle_s"])
+        time.sleep(p["close_settle_s"])  # committed grip: not cancellable, see _close_twist_lift
 
     def _prepare_grasp_retry(self, prompt: str, x: float, y: float) -> tuple[float, float, float, float, float]:
         """Reopen, reacquire the object with the wrist, and descend lower."""
@@ -645,7 +645,8 @@ class PickAnyObject(Skill):
         return x, y, roll, pitch, yaw
 
     def _lift_grasp(self, x: float, y: float, roll: float, yaw: float) -> None:
-        """Lift a closed grasp; joint space keeps a rolled wrist wound."""
+        """Lift a closed grasp; joint space keeps a rolled wrist wound. Sleeps
+        with time.sleep on purpose: the grip is committed (see _close_twist_lift)."""
         p = self._p
         grip = -p["close_strength"]
         # The twist winds FABRIC onto the fingers; on a rigid shell it helps
@@ -692,28 +693,27 @@ class PickAnyObject(Skill):
         The encoder is checked both after closing and after the first lift. A
         floor or edge contact can initially hold the claw open even though no
         object comes up; that miss must also retry before the base backs away.
+        From the close onward this sleeps with time.sleep on purpose: the
+        fingers have committed and a cancel must not unwind mid-grip. Only the
+        retry path, with a proven-empty claw, takes cancellation again.
         """
         self._pre_close_lift(x, y, roll, pitch, yaw)
         retries = int(self._p["grasp_retries"])
         for attempt in range(retries + 1):
             self._close_once()
-            empty = self._gripper_empty()
-            lifted = False
+            # Fingers have committed: teardown carries from here, and only a
+            # proven miss (the retry below) clears the flag.
+            self._holding = True
             # Fingers may initially be held apart by a floor/edge contact. A
             # lift distinguishes that from a grasp before the base moves.
-            if not empty:
-                self._holding = True
+            lifted = not self._gripper_empty()
+            if lifted:
                 self._lift_grasp(x, y, roll, yaw)
-                lifted = True
-                empty = self._gripper_empty()
-                if not empty:
+                if not self._gripper_empty():
                     return
             if attempt >= retries:
-                # Keep the old safe teardown posture even when the final
-                # attempt is empty; verification will report the miss.
-                self._holding = True
                 if not lifted:
-                    self._lift_grasp(x, y, roll, yaw)
+                    self._lift_grasp(x, y, roll, yaw)  # the safe teardown posture; verification reports the miss
                 return
             self.logger.warning(
                 f"[PickAnyObject] grasp attempt {attempt + 1} closed on air; "

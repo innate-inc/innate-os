@@ -14,10 +14,19 @@ export const FIRST_MISSIONS = [
   { id: "other_side", environment: "intersection", title: "The other side", setting: "Crossroads", brief: "Watch the traffic. Guide MARS safely across the street.", icon: "crossing" },
 ];
 const COMPLETION_CHANNEL = "innate:first-mission:v1";
-/** @type {{phase:string}|null} */
-let inheritedCompletion = null;
 /** @type {any} */
 let unstoredFirstRun = null;
+
+/** A v4 UUID. crypto.randomUUID is absent on the plain-http LAN address the sim
+ * proxy also serves, where getRandomValues still works. */
+export function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map(b => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 /** @type {Promise<void>|undefined} */
 let completionReady;
 
@@ -53,7 +62,7 @@ export function initializeFirstRunCompletion() {
   const origin = embeddingOrigin();
   if (!origin) return Promise.resolve();
   completionReady = new Promise(resolve => {
-    const requestId = crypto.randomUUID();
+    const requestId = uuid();
     const finish = () => {
       clearTimeout(timer);
       window.removeEventListener("message", receive);
@@ -67,10 +76,7 @@ export function initializeFirstRunCompletion() {
       if (!data || data.channel !== COMPLETION_CHANNEL || data.type !== "completion"
         || data.requestId !== requestId || ![null, "done", "skipped"].includes(data.phase)) return;
       // A still-running local attempt wins over another session's completion.
-      if (!readFirstRun() && data.phase) {
-        inheritedCompletion = {phase:data.phase};
-        try { localStorage.setItem(FIRST_RUN_KEY, JSON.stringify(inheritedCompletion)); } catch { /* session-only fallback */ }
-      }
+      if (!readFirstRun() && data.phase) saveFirstRun({phase:data.phase});
       finish();
     };
     window.addEventListener("message", receive);
@@ -84,7 +90,7 @@ export function readFirstRun() {
   if (unstoredFirstRun) return unstoredFirstRun;
   try {
     const saved = JSON.parse(localStorage.getItem(FIRST_RUN_KEY) || "null");
-    if (!saved || typeof saved !== "object") return inheritedCompletion;
+    if (!saved || typeof saved !== "object") return null;
     if (saved.phase === "choosing") return {phase:"choosing"};
     if (["done", "skipped"].includes(saved.phase)) return saved;
     if (!["starting", "playing"].includes(saved.phase)
@@ -93,7 +99,7 @@ export function readFirstRun() {
       || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(saved.attemptId)
       || !Number.isFinite(saved.startedAt) || saved.startedAt <= 0) return null;
     return saved;
-  } catch { return inheritedCompletion; }
+  } catch { return null; }
 }
 
 export function shouldAutoStartOnboarding() {
@@ -151,5 +157,6 @@ export function installMissionPicker(onOpen) {
     }
   };
   window.addEventListener("message", receive);
+  controls(); // a broker that asked before this listener existed still learns the control is available
   return () => {removed = true; window.removeEventListener("message", receive);};
 }

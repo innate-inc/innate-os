@@ -515,7 +515,7 @@ body.agent-conversation-onboarding-active
    the transcript. */
 .agent-conversation-onboarding .agent-stream-mode,
 .agent-conversation-onboarding .agent-stream > :is(
-    .chat-msg.system,
+    .chat-msg.system:not(.notice),
     .chat-thoughts
   ) {
   display: none;

@@ -18,14 +18,17 @@ export function createEnvironmentBridge(session: SimSession, retryView: () => vo
   let requested: { id: string; at: number } | null = null;
   let requestFailed = false;
 
-  const publish = () => {
-    if (!parentOrigin) return;
-    // A lost command must not leave the control pending forever. A later
-    // server roster still wins, including a switch completed after reconnect.
+  // A lost command must not leave the control pending forever. A later
+  // server roster still wins, including a switch completed after reconnect.
+  const expire = () => {
     if (requested && Date.now() - requested.at > 8000) {
       requested = null;
       requestFailed = true;
     }
+  };
+  const publish = () => {
+    if (!parentOrigin) return;
+    expire();
     const connected = session.environmentConnected;
     const pending = requested?.id ?? (roster?.switch?.state === "loading" ? roster.switch.id : null);
     window.parent.postMessage({
@@ -36,7 +39,7 @@ export function createEnvironmentBridge(session: SimSession, retryView: () => vo
       pending,
       state: !connected ? "disconnected" : pending ? "loading"
         : requestFailed || roster?.switch?.state === "failed" ? "failed"
-        : view?.id === roster?.environment?.id ? view?.state : "loading",
+        : view && view.id === (roster?.environment?.id ?? "") ? view.state : "loading",
       retryView: connected && view?.state === "failed",
       onboardingActive: document.body.classList.contains("agent-conversation-onboarding-active"),
     }, parentOrigin);
@@ -54,9 +57,12 @@ export function createEnvironmentBridge(session: SimSession, retryView: () => vo
     if (data.type === "get-state") return publish();
     if (data.type === "retry-view" && view?.state === "failed") return retryView();
     if (data.type !== "switch" || typeof data.id !== "string") return;
-    if (document.body.classList.contains("agent-conversation-onboarding-active")) return;
-    if (!session.environmentConnected || requested || roster?.switch?.state === "loading" || view?.state === "loading") return;
-    if (data.id === roster?.environment?.id || !roster?.environments.some(({ id }) => id === data.id)) return;
+    // A refused switch still answers with the current state, so the parent's
+    // control never waits on a command that was never sent.
+    expire();
+    if (document.body.classList.contains("agent-conversation-onboarding-active")) return publish();
+    if (!session.environmentConnected || requested || roster?.switch?.state === "loading" || view?.state === "loading") return publish();
+    if (data.id === roster?.environment?.id || !roster?.environments.some(({ id }) => id === data.id)) return publish();
     requested = { id: data.id, at: Date.now() };
     requestFailed = false;
     session.switchEnvironment(data.id);

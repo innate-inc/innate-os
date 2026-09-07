@@ -23,10 +23,12 @@ class ThrowTests(unittest.TestCase):
         skill.manipulation = SimpleNamespace(
             GRIPPER_OPEN=Manipulation.GRIPPER_OPEN,
             GRIPPER_MAX_STRENGTH=Manipulation.GRIPPER_MAX_STRENGTH,
+            REST=Manipulation.REST,
             pose=SimpleNamespace(roll=-1.5),
             torque_on=Mock(),
             gripper_close=Mock(),
             move_to=Mock(),
+            move_joints=Mock(),
             follow=Mock(),
         )
         skill.sleep = lambda _: skill.check_cancelled()

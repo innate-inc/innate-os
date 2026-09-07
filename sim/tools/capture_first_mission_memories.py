@@ -42,7 +42,7 @@ VIEWS = {
 }
 
 
-def main():
+def main() -> None:
     thumbnails = ROOT / "webapp/public/first-missions"
     thumbnails.mkdir(parents=True, exist_ok=True)
     for name, (challenge_id, views) in VIEWS.items():

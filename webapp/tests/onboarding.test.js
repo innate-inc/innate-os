@@ -74,7 +74,7 @@ for (const mission of FIRST_MISSIONS) {
   assert.deepEqual(sim.calls.prompts,[null]); // No preset before MARS speaks.
   const emit = (skill, timestamp=Date.now()/1000, status="running") => ui.flow.onSkillStatus({skill:`innate-os/${skill}`,status,timestamp});
   emit("search_memory"); emit("head_emotion"); emit("suggest_user_prompts");
-  emit("pick_any_object",1); emit("pick_any_object",Date.now()/1000,"failed");
+  emit("pick_any_object",Date.now()/1000,"failed");
   assert.equal(sim.calls.speech.length,0);
   const own=sim.challenge;
   sim.emitChallenge({...own,active:{...own.active,attempt_id:"foreign"}});

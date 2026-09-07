@@ -39,12 +39,14 @@ import { initializeFirstRunCompletion, shouldAutoStartOnboarding } from "../onbo
 // it synchronously.
 /** @type {any} */
 const config = await getConfig();
-if (config.simControls) await initializeFirstRunCompletion();
+// The broker handshake (up to 1.5 s when unanswered) overlaps the session import.
+const firstRunReady = config.simControls ? initializeFirstRunCompletion() : Promise.resolve();
 
 // Resolved once at import time (the router's dynamic import awaits it):
 // WebRTC for real robots, the Three.js SimSession in simulation (see
 // robotSession.js).
 const { createSession, releaseSession, createStage } = await robotSessionFactory();
+await firstRunReady;
 // Two thresholds, both mirrored in app.css: the dock floats over the feed
 // rather than taking a column, so it survives far below what the monitor needs.
 const COMPACT_LAYOUT_QUERY = "(max-width: 820px)";

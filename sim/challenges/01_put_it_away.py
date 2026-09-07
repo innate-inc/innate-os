@@ -1,10 +1,10 @@
 """An untimed first mission, completed by the brick's actual resting place."""
 
-from mars_sim_driver.challenges import Challenge, Drop, Goal, Hold, Predicate
+from mars_sim_driver.challenges import Challenge, Drop, Goal, Hold, Predicate, WorldState
 
 
 class BrickInBox(Predicate):
-    def update(self, state, events):
+    def update(self, state: WorldState, events: list[dict]) -> bool:
         brick, box = state.objects.get("lego"), state.objects.get("crate")
         if not brick or not box:
             return False

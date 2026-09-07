@@ -143,6 +143,7 @@ export function initShell(navigate) {
   function requestOnboarding() {
     // Help shows passive tips. It never restarts the first mission.
     if (activeKey === ONBOARDING_START_SECTION || activeKey === "teleop") {
+      closeRailDrawer();
       window.dispatchEvent(new CustomEvent(ONBOARDING_REQUEST_EVENT));
       return;
     }
@@ -243,6 +244,7 @@ export function initShell(navigate) {
   async function firstPageReady() {
     if (!checkedFirstPage) {
       checkedFirstPage = true;
+      const bootKey = activeKey;
       const config = await getConfig();
       if (config?.simControls) {
         await initializeFirstRunCompletion();
@@ -264,8 +266,9 @@ export function initShell(navigate) {
           }
         }));
         // The Agent page's own controller resumes or offers the first run
-        // when it mounts; the shell only has to land there.
-        if (shouldAutoStartOnboarding() && activeKey !== ONBOARDING_START_SECTION) {
+        // when it mounts; the shell only has to land there. A page the user
+        // chose while the broker handshake ran stands.
+        if (shouldAutoStartOnboarding() && activeKey === bootKey && activeKey !== ONBOARDING_START_SECTION) {
           // Replace: Back must not land on the page the gate just left.
           navigate(pathForKey(ONBOARDING_START_SECTION), {replace:true});
         }

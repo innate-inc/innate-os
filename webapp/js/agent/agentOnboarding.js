@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Innate Inc
 // The browser owns first-run participation; the world owns mission success.
 import { TTS_TOPIC, WEBSOCKET_STATUS_TOPIC } from "../constants.js";
-import { FIRST_MISSIONS, FIRST_RUN_REQUEST_EVENT, publishFirstRunCompletion, readFirstRun, saveFirstRun, shouldAutoStartOnboarding } from "../onboarding.js";
+import { FIRST_MISSIONS, FIRST_RUN_REQUEST_EVENT, publishFirstRunCompletion, readFirstRun, saveFirstRun, shouldAutoStartOnboarding, uuid } from "../onboarding.js";
 
 export const INTRO_AGENT_ID = "intro_agent";
 export const VIEW_GUIDANCE = "I’m starting now. Switch to my Main view at the top to see what I see. You can also use Arm view for a closer look at what my gripper is doing.";
@@ -21,7 +21,7 @@ export function backendReadinessFromMessage(/** @type {any} */ message) {
  * @param {HTMLElement} root
  * @param {import('../rosClient.js').RosClient} ros
  * @param {ReturnType<typeof import('../teleop/agentState.js').sharedAgentState>} agentState
- * @param {{enabled:boolean, session:any, onNotice?:(text:string)=>void, onStart?:(fresh:boolean, startedAt:number)=>void, onClearSuggestions?:()=>void, onViewAccess?:(access:"hidden"|"cameras"|"all")=>void}} options
+ * @param {{enabled:boolean, session:any, onNotice?:(text:string)=>void, onStart?:(fresh:boolean)=>void, onClearSuggestions?:()=>void, onViewAccess?:(access:"hidden"|"cameras"|"all")=>void}} options
  */
 export function createAgentOnboarding(root, ros, agentState, options) {
   const session = options.session;
@@ -36,7 +36,6 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   let reconnectTimer = /** @type {ReturnType<typeof setTimeout>|undefined} */ (undefined);
   let began = false;
   let statusMessage = "";
-  let taskStarted = saved?.taskStarted === true;
   const unadvertise = options.enabled ? ros.advertise(TTS_TOPIC, "std_msgs/msg/String") : () => {};
   const views = new Set();
   let abort = new AbortController();
@@ -55,7 +54,8 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     root.classList.toggle("agent-conversation-onboarding", active);
     root.classList.toggle("first-mission-choosing", active && !mission());
     root.classList.toggle("first-mission-view-step", active && saved?.viewsRevealed === true && !saved?.viewChanged);
-    options.onViewAccess?.(!active ? "all" : saved?.viewsRevealed === true ? "cameras" : "hidden");
+    // Teardown announces nothing: the camera switch is already gone by then.
+    if (!destroyed) options.onViewAccess?.(!active ? "all" : saved?.viewsRevealed === true ? "cameras" : "hidden");
     document.body.classList.toggle("agent-conversation-onboarding-active", active);
     overlay.hidden = !active || !!mission();
     document.dispatchEvent(new CustomEvent("innate:first-run-visibility", {detail:{active}}));
@@ -93,7 +93,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     return {active, mission:mission(), attemptId:saved?.attemptId, status:statusMessage};
   }
   function revealTaskViews() {
-    if (!active || destroyed || !taskStarted || saved?.viewsRevealed || !backendReady
+    if (!active || destroyed || saved?.taskStarted !== true || saved.viewsRevealed || !backendReady
       || saved?.phase !== "playing" || challenge?.active?.attempt_id !== saved.attemptId || challenge.active.state === "passed") return;
     // Queue the invitation before exposing the controls. Reconnect retries a
     // failed publish; a saved reveal never repeats it on a route remount.
@@ -135,7 +135,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   async function connectMission(/** @type {boolean} */ fresh) {
     const selected = mission();
     if (!selected) return;
-    if (!began) { began = true; options.onStart?.(fresh, saved.startedAt); }
+    if (!began) { began = true; options.onStart?.(fresh); }
     render(fresh ? "Preparing your mission…" : "Reconnecting to your mission…");
     if (saved.phase === "starting") {
       // Only an explicit choice initializes a scene. A retry after a dropped
@@ -175,7 +175,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   }
   async function choose(/** @type {typeof FIRST_MISSIONS[number]} */ selected) {
     if (!active || mission()) return;
-    saved = {id:selected.id, attemptId:crypto.randomUUID(), phase:"starting", startedAt:Date.now(), viewsRevealed:false};
+    saved = {id:selected.id, attemptId:uuid(), phase:"starting", startedAt:Date.now(), viewsRevealed:false};
     persist();
     await runConnect(true);
   }
@@ -236,7 +236,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
       saved = {phase:"choosing"}; persist();
       if (destroyed) return false;
       abort = new AbortController();
-      active = true; began = false; taskStarted = false;
+      active = true; began = false;
       options.onClearSuggestions?.();
       render();
       return true;
@@ -268,13 +268,14 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     skip: () => finish("skipped"),
     ensureRunning,
     onSkillStatus(/** @type {{skill:string,status:string,timestamp:number}} */ event) {
+      // Attempt-scoped, never clock-scoped: the event carries the robot's
+      // wall clock, which need not agree with this browser's.
       if (!active || destroyed || saved?.phase !== "playing" || saved.viewsRevealed
-        || challenge?.active?.attempt_id !== saved.attemptId
-        || event.timestamp * 1000 < saved.startedAt || event.status !== "running") return;
+        || challenge?.active?.attempt_id !== saved.attemptId || event.status !== "running") return;
       const name = event.skill.split("/").at(-1) ?? "";
       // Thinking, greeting, memory lookup and suggestions are not task motion.
       if (!name.startsWith("pick_") && !["navigate_to_position", "drop_in_box", "throw_object"].includes(name)) return;
-      taskStarted = true; saved.taskStarted = true; persist();
+      saved.taskStarted = true; persist();
       revealTaskViews();
     },
     onViewChange() {

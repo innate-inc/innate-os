@@ -1,7 +1,5 @@
 """LEGO brick: a high-contrast manipulation target for onboarding."""
 
-import math
-
 from mars_sim_driver.props import Prop
 
 # Twice a standard 2x3 brick in every dimension: still smaller than the first
@@ -18,6 +16,5 @@ PROP = Prop(
     rgba=(0.88, 0.10, 0.06, 1.0),
     rest_z=0.0096,
     reach=(0.296, 0.011),
-    placement_yaw=math.pi / 2,
     viewer={"kind": "stud_brick"},
 )

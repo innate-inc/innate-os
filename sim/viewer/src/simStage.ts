@@ -608,6 +608,7 @@ export function createSimStage(
   let loadedEnvironmentId: string | null = null;
   let currentEnvironment: EnvironmentInfo | null = null;
   let loadVersion = 0;
+  let propsPrefetched = false;
   const environmentBridge = createEnvironmentBridge(session, () => void loadEnvironment(currentEnvironment));
   const loadEnvironment = async (environment: EnvironmentInfo | null) => {
     // Discard superseded loads after each await.
@@ -631,15 +632,17 @@ export function createSimStage(
       scene.frameLayout(layout);
       setLoading(`loading robot and ${name}...`);
       // Enqueue robot meshes before rooms to prioritize the robot.
-      const firstLoad = robotDone === null;
       robotDone ??= (await scene.loadRobot(queue)).done;
       if (disposed || version !== loadVersion) return;
       await Promise.all([robotDone, scene.streamApartment(queue, layout)]);
       if (disposed || version !== loadVersion) return;
       hideLoading();
       environmentBridge.updateView(loadedEnvironmentId, "ready");
-      // Prefetch props after the scene, outside its progress bar.
-      if (firstLoad) scene.prefetchPropModels();
+      // Prefetch props after the first scene that loads, outside its progress bar.
+      if (!propsPrefetched) {
+        propsPrefetched = true;
+        scene.prefetchPropModels();
+      }
     } catch (err) {
       if (disposed || version !== loadVersion) return;
       environmentBridge.updateView(environment?.id ?? "", "failed");
@@ -649,6 +652,8 @@ export function createSimStage(
       }
       console.error(`[sim-viewer] environment '${name}' failed to load:`, err);
       failLoading(`${name} failed to load -- see the browser console`);
+      // The scene that did load stays usable; the embedding page offers the retry.
+      hideLoadingTimer = setTimeout(hideLoading, 4000);
     }
   };
 

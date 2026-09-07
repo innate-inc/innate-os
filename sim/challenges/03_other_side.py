@@ -1,13 +1,13 @@
 """Cross the south crosswalk, using actual traffic contact as the failure signal."""
 
-from mars_sim_driver.challenges import Challenge, Goal, Predicate
+from mars_sim_driver.challenges import Challenge, Goal, Predicate, WorldState
 
 
 class SafeCrossing(Predicate):
-    def reset(self):
+    def reset(self) -> None:
         self._armed = False
 
-    def update(self, state, events):
+    def update(self, state: WorldState, events: list[dict]) -> bool:
         x, y, _ = state.robot
         if abs(y + 5.3) > 0.8:
             self._armed = False

@@ -24,6 +24,7 @@ concurrently evicted file reads as missing — callers tolerate that.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import math
@@ -310,7 +311,8 @@ class MemoryStore:
         with self._lock:
             if self._dir is None or all(m.id != old.id for m in self._memories):
                 return
-            memory = Memory(old.id, x, y, theta, stamp)
+            # dataclasses.replace: an authored label survives the refresh.
+            memory = dataclasses.replace(old, x=x, y=y, theta=theta, stamp=stamp)
             self._write_image_locked(memory.id, jpeg)
             self._memories = [memory if m.id == old.id else m for m in self._memories]
             self._commit_locked()

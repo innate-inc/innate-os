@@ -27,12 +27,6 @@ import {
 // Runs of the same skill collapse into one group at this many in a row.
 const SKILL_GROUP_MIN = 3;
 
-/** The bridge between the agent and this UI is implementation detail, not an
- * action the user asked the robot to perform. @param {string} name */
-export function isInternalOnboardingSkill(name) {
-  return isPromptSuggestionSkill(name) || name.replace(/[^a-z0-9]/gi, "").toLowerCase() === "revealonboarding";
-}
-
 /**
  * @returns {{
  *   head: HTMLElement,
@@ -259,6 +253,9 @@ export function createChatStream() {
     const el = document.createElement("div");
     el.className = `chat-msg ${kind}`;
     el.classList.toggle("skill-output", label === "skill_output");
+    // Unlabelled system lines are this UI's own notices (send failures, mission
+    // errors); the labelled ones are the brain's lifecycle chatter.
+    el.classList.toggle("notice", kind === "system" && !label);
     if (kind === "system") {
       const tag = document.createElement("span");
       tag.className = "chat-sender mono";
@@ -473,7 +470,7 @@ export function createChatStream() {
     } else if (sender === "user" || sender === "robot") {
       addMessage(sender, text, ts);
     } else {
-      addMessage("system", text, ts, sender || undefined);
+      addMessage("system", text, ts, sender || "system"); // the brain's line, never this UI's notice
     }
   }
 
@@ -485,7 +482,7 @@ export function createChatStream() {
     if (sender === "task_activated") {
       const name = String(e?.text ?? e?.skill_name ?? e?.skillId ?? "");
       const status = String(e?.taskStatus ?? "");
-      if (!name || !status || isInternalOnboardingSkill(name)) return;
+      if (!name || !status || isPromptSuggestionSkill(name)) return;
       const key = String(e?.primitiveId ?? e?.skillId ?? name);
       addSkillRun(key, name, status, ts, typeof e?.failureReason === "string" ? e.failureReason : "", e?.args);
       return;

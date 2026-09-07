@@ -343,6 +343,7 @@ class VirtualMars:
         self._hold = None  # (x, y, yaw) the stopped base is keeping, or None
         self._still_since = None  # sim time the base went quiet, or None
         self.world_epoch = -1
+        self._contact_classes: tuple[frozenset[int], frozenset[int]] | None = None
         self.reset()
         release_freed_heap()
 
@@ -517,15 +518,27 @@ class VirtualMars:
         return contact
 
     def _has_traffic_contact(self) -> bool:
-        for contact in self.data.contact:
+        cars, robot = self._contact_geoms()
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
             if contact.dist > 0:
                 continue
-            names = [self.model.body(int(self.model.geom_bodyid[g])).name or "" for g in contact.geom]
-            if any(name.startswith("traffic_car_") for name in names) and any(
-                name.startswith("robot_") for name in names
-            ):
+            g1, g2 = int(contact.geom1), int(contact.geom2)
+            if (g1 in cars and g2 in robot) or (g2 in cars and g1 in robot):
                 return True
         return False
+
+    def _contact_geoms(self) -> tuple[frozenset[int], frozenset[int]]:
+        """Geom ids of the traffic cars and of the robot. Named lookups per
+        contact per physics step were the cost; the model never changes."""
+        if self._contact_classes is None:
+            body_names = [self.model.body(b).name or "" for b in range(self.model.nbody)]
+            owner = [body_names[int(self.model.geom_bodyid[g])] for g in range(self.model.ngeom)]
+            self._contact_classes = (
+                frozenset(g for g, name in enumerate(owner) if name.startswith("traffic_car_")),
+                frozenset(g for g, name in enumerate(owner) if name.startswith("robot_")),
+            )
+        return self._contact_classes
 
     def render_jpeg(self, camera: str) -> bytes:
         return encode_jpeg(self.render_rgb(camera))

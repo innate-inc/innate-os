@@ -115,7 +115,7 @@ export function createAgentMicControl(root, callbacks) {
       ? "Starting…"
       : isListening
         ? "Listening…"
-        : isUnavailable
+        : isUnavailable || MOBILE_DEVICE
           ? ""
           : "Hold Space";
     const messageText = shouldShowUnavailableMessage

@@ -13,7 +13,7 @@
 // The thought-grouping + skill-run rendering here is the canonical chat stream
 // (it originated in the old teleop chat pane, since removed).
 
-import { createPromptSuggestions } from "./promptSuggestions.js";
+import { createPromptSuggestions, isPromptSuggestionSkill } from "./promptSuggestions.js";
 import { createMicStream } from "./micStream.js";
 import {
   AGENT_STATUS_TOPIC,
@@ -22,7 +22,7 @@ import {
   GET_CHAT_HISTORY_SERVICE,
   SKILL_STATUS_UPDATE_TOPIC,
 } from "../constants.js";
-import { createChatStream, isInternalOnboardingSkill } from "./chatStream.js";
+import { createChatStream } from "./chatStream.js";
 import { createDirectiveControls } from "./directiveControls.js";
 import { createAgentSheet } from "./agentSheet.js";
 
@@ -50,7 +50,7 @@ const THINKING_STALE_MS = 10_000;
  *   micMount: HTMLElement,
  *   setCompact: (on: boolean) => void,
  *   addNotice: (text: string) => void,
- *   beginOnboarding: (fresh: boolean, startedAt: number) => void,
+ *   beginOnboarding: (fresh: boolean) => void,
  *   clearSuggestedPrompts: () => void
  * }}
  *   setCompact swaps the right-edge dock for the bottom sheet (agentSheet.js).
@@ -272,9 +272,15 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   async function submit() {
     const text = input.value.trim();
     if (!text) return;
-    if (await submitText(text)) {
-      if (input.value.trim() === text) input.value = "";
-      input.style.height = "auto";
+    // Clear before the (possibly long) send so nothing typed meanwhile joins a
+    // message already in the transcript; a failed send gets its draft back.
+    const draft = input.value;
+    input.value = "";
+    input.style.height = "auto";
+    syncComposerAction();
+    if (!(await submitText(text)) && !input.value) {
+      input.value = draft;
+      input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
       syncComposerAction();
     }
   }
@@ -300,7 +306,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   // is permanent — the brain's record is the only thing that can close it.
   let loadingHistory = false;
   let lastSnapshot = "";
-  let historyFloor = 0;
 
   /** @param {boolean} [duringOnboarding] */
   async function loadHistory(duringOnboarding = false) {
@@ -314,7 +319,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       const entries = JSON.parse(raw || "[]");
       if (!Array.isArray(entries) || !entries.length) return;
       lastSnapshot = raw;
-      chat.replay(entries.filter((entry) => (Number(entry?.timestamp) || 0) >= historyFloor));
+      chat.replay(entries);
     } catch (err) {
       console.warn("[chat] reconcile failed:", err);
     } finally {
@@ -376,7 +381,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const name = String(payload?.primitive_name ?? payload?.skill_name ?? payload?.skill_id ?? "");
     const status = String(payload?.status ?? "");
     if (suggestions.consume(payload)) return;
-    if (!name || !status || isInternalOnboardingSkill(name)) return;
+    if (!name || !status || isPromptSuggestionSkill(name)) return;
     const key = String(payload?.primitive_id ?? payload?.skill_id ?? name);
     const reason = typeof payload?.reason === "string" ? payload.reason : "";
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
@@ -400,8 +405,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     addNotice(text) {
       chat.addMessage("system", text, Date.now() / 1000);
     },
-    beginOnboarding(fresh, startedAt) {
-      historyFloor = startedAt / 1000;
+    beginOnboarding(fresh) {
       lastSnapshot = "";
       suggestions.clear();
       chat.clear();

@@ -566,7 +566,9 @@ export class SimScene {
 
   /** Dispose environment assets; retain the robot and props for the next pose. */
   unloadEnvironment({ preserveWorldState = false }: { preserveWorldState?: boolean } = {}): void {
-    if (!preserveWorldState) this.traffic.unloadEnvironment();
+    // The signal materials belong to the layout disposed below either way.
+    if (preserveWorldState) this.traffic.releaseSignals();
+    else this.traffic.unloadEnvironment();
     for (const group of [this.layoutGroup, this.hullsGroup]) {
       if (!group) continue;
       this.scene.remove(group);

@@ -112,10 +112,15 @@ export class TrafficLibrary {
     for (const car of this.#cars.values()) car.collision.visible = visible;
   }
 
+  /** Forget the environment's signal materials: the scene disposes them. */
+  releaseSignals(): void {
+    this.#signals = [];
+  }
+
   unloadEnvironment(): void {
     this.#state = null;
     this.#applyState(); // restore fail-safe red before releasing environment materials
-    this.#signals = [];
+    this.releaseSignals();
     this.#roster = [];
     this.#loading = undefined;
     this.#removeCars();
