@@ -1,5 +1,11 @@
 # Attribution
 
+**Crossroads** is original procedural scenery authored by Innate Inc and
+distributed under Apache-2.0, like its generator (`sim/tools/build_intersection.py`).
+Its buildings, roads, sidewalks, curb cuts, signals, vegetation and furniture
+are generated from geometric primitives. No purchased town mesh or texture is
+an input. The traffic cars are also original, code-defined Innate geometry.
+
 The apartment environment is derived from ["Appartement"](https://sketchfab.com/3d-models/appartement-6a7a5fe208344b2e8123a88923dbd5b3) by [SrMonteiro](https://sketchfab.com/crispimrafael), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Changes were made: split per room, convex-decomposed for collision, re-exported for rendering (GLB/MuJoCo meshes), and rasterized into a navigation map.
 
 The backrooms environment is derived from ["Backrooms VR"](https://sketchfab.com/3d-models/backrooms-vr-d9b98eca8d064d0eafcd7f5484bb61ed) by [carlcapu9](https://sketchfab.com/carlcapu9), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Changes were made: the scene was shifted so its floor sits at the origin, convex-decomposed for collision, re-exported per part for MuJoCo rendering (OBJ + PNG), and rasterized into a navigation map; the source GLB is redistributed for viewer rendering.

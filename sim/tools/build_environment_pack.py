@@ -32,11 +32,11 @@ def finish(pack_id: str, glb: Path, viewer_out: Path) -> None:
     write_viewer(pack_id, glb, -floor_y, viewer_out)
 
 
-def write_visuals(pack_id: str, parts: Parts) -> None:
+def write_visuals(pack_id: str, parts: Parts, assets_dir: Path = ASSETS) -> None:
     """One textured OBJ + PNG per part: what the robot's cameras render and the
     lidar hits (world.find_visual_rooms). Like export_visual_rooms.py, except
     trimesh resolves these scenes' textures, so it can do the reading."""
-    out = ASSETS / f"{pack_id}_visual"
+    out = assets_dir / f"{pack_id}_visual"
     for name, geom in parts.items():
         material = geom.visual.material
         image = getattr(material, "baseColorTexture", None)
@@ -54,15 +54,26 @@ def write_visuals(pack_id: str, parts: Parts) -> None:
     print(f"{pack_id}: {len(parts)} textured parts in {out}")
 
 
-def write_nav_map(pack_id: str) -> None:
+def write_nav_map(pack_id: str, assets_dir: Path = ASSETS, *, include_collision_hulls: bool = False) -> None:
     sys.path.insert(0, str(SIM / "sandbox"))
     import _driver_pkg  # noqa: F401
     import export_nav_map as nav
     from mars_sim_driver.core import VirtualMars
     from mars_sim_driver.environments import Environment
+    from mars_sim_driver.world import COLLISION_GROUP, VISUAL_GROUP
 
-    environment = Environment.load(pack_id, ASSETS)
+    environment = Environment.load(pack_id, assets_dir)
     sim = VirtualMars(environment=environment)
+    # Invisible play-area boundaries still constrain static navigation. This
+    # affects only the map bake, not the running robot's camera/lidar surfaces.
+    if include_collision_hulls:
+        static_hulls = (sim.model.geom_bodyid == sim.model.body("apartment").id) & (
+            sim.model.geom_group == COLLISION_GROUP
+        )
+        sim.model.geom_group[static_hulls] = VISUAL_GROUP
+    # Dynamic actors must not become permanent obstacles in the static map.
+    # The scan routines move the robot themselves but preserve mocap poses.
+    sim.data.mocap_pos[:] = (1000.0, 1000.0, -1000.0)
     grid, ox, oy = sim.lidar_occupancy_grid(nav.RESOLUTION)
     # The grid's bounds come from mesh bounding spheres, which long flat floor
     # planes inflate to twice the building; keep one metre around the known.
@@ -80,7 +91,7 @@ def write_nav_map(pack_id: str) -> None:
     img = np.where(grid == 100, nav.PGM_OCCUPIED, np.where(grid == 0, nav.PGM_FREE, nav.PGM_UNKNOWN))
     img = img.astype(np.uint8)[::-1]
     nav._validate_pgm_roundtrip(grid, img)
-    out = ASSETS / "map"
+    out = assets_dir / "map"
     out.mkdir(parents=True, exist_ok=True)
     Image.fromarray(img).save(out / f"{pack_id}.pgm")
     (out / f"{pack_id}.yaml").write_text(

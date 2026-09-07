@@ -135,16 +135,19 @@ def default_assets_dir() -> Path:
 
 
 def default_urdf_path() -> Path:
-    """mars.urdf with its mesh STLs next to it. Prefers the installed
-    mars_sim package share (the same file the real bringup feeds
-    robot_state_publisher); falls back to the source tree for non-ROS use
-    (sandboxes, tests)."""
-    try:
-        from ament_index_python.packages import get_package_share_directory
+    """Use the checkout's robot model alongside its simulation code.
 
-        return Path(get_package_share_directory("mars_sim")) / "urdf" / "mars.urdf"
-    except Exception:
-        return repo_root() / "ros2_ws" / "src" / "mars_bot" / "mars_sim" / "urdf" / "mars.urdf"
+    A sourced ROS overlay can point at an older installed URDF whose collision
+    shapes no longer match tune_contacts. Installed-only deployments still
+    resolve the model through the ROS package share.
+    """
+    source = repo_root() / "ros2_ws" / "src" / "mars_bot" / "mars_sim" / "urdf" / "mars.urdf"
+    if source.is_file():
+        return source
+
+    from ament_index_python.packages import get_package_share_directory
+
+    return Path(get_package_share_directory("mars_sim")) / "urdf" / "mars.urdf"
 
 
 def find_decomposed_rooms(split_dir: Path) -> dict[str, list[Path]]:
@@ -219,10 +222,14 @@ def build_world_xml(
     texture_max: int | None = None,
     props: "PropRegistry | None" = None,
     spawn_pose: tuple[float, float, float] = (SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG),
+    traffic_bodies: str = "",
+    traffic_assets: str = "",
 ) -> str:
     """The apartment environment MJCF (floor plane + decomposed room hulls,
     optionally the textured visual rooms in their own geom group, plus every
-    droppable prop parked off-map -- see props.py).
+    droppable prop parked off-map -- see props.py). Environment-owned dynamic
+    bodies such as town traffic are inserted directly under worldbody via
+    traffic_bodies, already expressed in simulator Z-up coordinates.
     texture_max caps the visual textures' resolution (see capped_texture_path)."""
     prop_assets = props.assets_xml(VISUAL_GROUP) if props else ""
     prop_bodies = props.bodies_xml(VISUAL_GROUP, COLLISION_GROUP) if props else ""
@@ -287,6 +294,7 @@ def build_world_xml(
   <asset>
 {chr(10).join(mesh_lines)}
 {chr(10).join(visual_mesh_lines)}{prop_assets}
+{traffic_assets}
   </asset>
   <worldbody>
     <!-- MuJoCo defaults an untyped light to a narrow spotlight.  The viewer's
@@ -300,6 +308,7 @@ def build_world_xml(
 {chr(10).join(geom_lines)}
 {chr(10).join(visual_geom_lines)}
     </body>{prop_bodies}{robot_body}
+{traffic_bodies}
   </worldbody>
 </mujoco>
 """

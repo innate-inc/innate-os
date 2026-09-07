@@ -40,6 +40,7 @@ class Environment:
     map_name: str
     spawn: tuple[float, float, float]
     viewer: dict[str, str]
+    traffic: bool = False
 
     @classmethod
     def load(cls, environment_id: str, assets_dir: Path | None = None) -> Environment:
@@ -55,6 +56,9 @@ class Environment:
         pose = (float(spawn["x"]), float(spawn["y"]), float(spawn["yaw_degrees"]))
         if not all(math.isfinite(value) for value in pose):
             raise ValueError(f"{path}: spawn pose must be finite")
+        traffic = manifest.get("traffic", False)
+        if not isinstance(traffic, bool):
+            raise ValueError(f"{path}: traffic must be a boolean")
         return cls(
             id=environment_id,
             display_name=str(manifest.get("display_name", environment_id)),
@@ -63,6 +67,7 @@ class Environment:
             map_name=Path(navigation["map_yaml"]).name,
             spawn=pose,
             viewer={key: str(value) for key, value in manifest["viewer"].items()},
+            traffic=traffic,
         )
 
     @classmethod

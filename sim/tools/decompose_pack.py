@@ -16,10 +16,8 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
-import decompose_rooms
 import numpy as np
 import trimesh
-from decompose_rooms import decompose_room
 
 SIM = Path(__file__).resolve().parents[1]
 ASSETS = SIM / "assets"
@@ -47,6 +45,9 @@ def load_parts(glb: Path) -> tuple[Parts, float]:
 
 
 def decompose(pack_id: str, glb: Path, threshold: float) -> None:
+    import decompose_rooms
+    from decompose_rooms import decompose_room
+
     parts, floor_y = load_parts(glb)
     print(f"{pack_id}: floor was at y={floor_y:+.3f}, now at 0")
     decompose_rooms.THRESHOLD_M = threshold
@@ -62,6 +63,8 @@ def decompose(pack_id: str, glb: Path, threshold: float) -> None:
 
 
 def main() -> None:
+    import decompose_rooms
+
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("pack_id")
     parser.add_argument("glb", type=Path)

@@ -13,14 +13,18 @@ All topics and services are under this namespace (i.e. `~/…` expands to `/inna
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `server_url` | string | `$TRAINING_SERVER_URL` or built-in default | Training orchestrator URL |
-| `service_key` | string | `$INNATE_SERVICE_KEY` | Robot service key for auth (required) |
 | `auth_issuer_url` | string | `$INNATE_AUTH_URL` or built-in default | Auth issuer URL for token exchange |
 | `poll_interval_sec` | float | `3.0` | Seconds between server polls for active runs |
 | `status_publish_interval_sec` | float | `1.0` | Seconds between `~/job_statuses` publishes |
 
-Both `server_url` and `service_key` are **required** — the node will abort if either is empty.
+The `server_url` ROS parameter must be non-empty.
 
-A `.env` file in the working directory is loaded automatically via `python-dotenv`.
+## Service credential
+
+`INNATE_SERVICE_KEY` is a **required environment setting**, not a ROS parameter.
+Set it in the node's process environment or the owner's `.env` file; the node
+loads `.env` via `python-dotenv` and aborts if the key is empty. Restart the node
+after changing the key. Never put the credential in ROS parameters or topics.
 
 ---
 

@@ -11,8 +11,8 @@ status updates flow in real time.
 Usage (in a sourced workspace):
 
     # Terminal 1 — start the node
-    ros2 run innate_training_node training_node \
-        --ros-args -p service_key:=<key>
+    # Set INNATE_SERVICE_KEY in the owner's .env, then start the node.
+    ros2 run innate_training_node training_node
 
     # Terminal 2 — run commands
     python3 test/test_training_node.py submit /path/to/skill --name my_skill
