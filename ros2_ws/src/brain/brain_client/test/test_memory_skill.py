@@ -132,6 +132,7 @@ def make_runner(events: list):
     state.primitive_running = RunningSkill(primitive_name="search_memory", skill_id="innate-os/search_memory")
     runner._state = state
     runner._goal_handle = SimpleNamespace()
+    runner._input_interrupted = None
     runner._generation = 0
     runner._slot_lock = threading.Lock()
     runner._logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)

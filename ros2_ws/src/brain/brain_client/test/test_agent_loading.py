@@ -66,6 +66,7 @@ def workspace(tmp_path, monkeypatch):
     saved_path = list(sys.path)
     saved_modules = set(sys.modules)
     saved_registry = dict(Agent._registry)
+    Agent._registry.clear()  # isolate the synthetic workspace from earlier real-agent tests
     agent_initializer._agent_ids_by_module.clear()
     yield tmp_path / "workspace"
     for name in set(sys.modules) - saved_modules:
