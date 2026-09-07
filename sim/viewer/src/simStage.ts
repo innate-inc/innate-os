@@ -567,7 +567,7 @@ export function createSimStage(
   resolutionAction.onclick = () => {
     reducedResolution = !reducedResolution;
     refreshResolutionNotice();
-    if (stageW) applyRenderSize(stageW, stageH);
+    if (stageW > 0) applyRenderSize(stageW, stageH);
     if (reducedResolution) return;
     // Back at full resolution the notice would report a stale verdict: hide it
     // and let the detector speak again.

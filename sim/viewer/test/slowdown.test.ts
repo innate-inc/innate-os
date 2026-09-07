@@ -61,7 +61,8 @@ test("warns only after two consecutive slow windows, never across a discontinuit
   assert.equal(detector.sample(Math.round(now), null, true), false, "no state is not evidence of slowdown");
   begin();
   assert.equal(window(20), false);
-  assert.equal(stalledWindow(60), false, "a stall is no evidence of health either");
+  assert.equal(stalledWindow(60), false, "a stalled window is judged on frame rate alone: healthy clears the streak");
+  assert.equal(window(20), false);
   assert.equal(window(20), true);
   begin();
   assert.equal(stalledWindow(20), false);

@@ -3,15 +3,16 @@ export interface SimulationClock { t: number; receivedAtMs: number }
 const WINDOW_MS = 3000;
 // Headroom under a 30 Hz display and ordinary rAF scheduling jitter.
 const MIN_FPS = 24;
-// Below this the world server is visibly falling behind real time.
 const MIN_SIM_SPEED = 0.8;
-// A second without state is a stalled stream: a connectivity problem, not slow
-// physics, so such a window gets no simulation-speed verdict.
-const STALE_MS = 1000;
+// A stalled stream is a connectivity problem, not slow physics, so a window that
+// saw one gets no simulation-speed verdict. Shorter gaps are tolerated because
+// they cannot by themselves drag a window under MIN_SIM_SPEED.
+const STALE_MS = WINDOW_MS * (1 - MIN_SIM_SPEED);
 
 /** Warns after two consecutive 3 s windows that rendered under 24 fps or
  * advanced the simulation clock under 0.8x real time, so an isolated hitch or
- * a brief dip never does. An inactive view or a clock rollback restarts the
+ * a brief dip never does. A window whose state stream stalled is judged on
+ * frame rate alone. An inactive view or a clock rollback restarts the
  * measurement; the caller must reset() around frame gaps it alone can see (a
  * hidden tab, a parked stage). */
 export class SlowdownDetector {
@@ -47,8 +48,7 @@ export class SlowdownDetector {
     const seconds = elapsed / 1000;
     const slow =
       this.frames / seconds < MIN_FPS || (!this.stalled && (clock.t - this.start.t) / seconds < MIN_SIM_SPEED);
-    if (slow) this.slowWindows++;
-    else if (!this.stalled) this.slowWindows = 0; // a stalled window is no evidence of health either
+    this.slowWindows = slow ? this.slowWindows + 1 : 0;
     this.start = { now, t: clock.t };
     this.frames = 0;
     this.stalled = false;
