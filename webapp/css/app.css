@@ -484,10 +484,10 @@ select.skill-input {
 
 /* ---- app onboarding ---------------------------------------------------- */
 
-/* A mission exposes only the simulator, conversation, and its own Skip action. */
+/* A mission exposes the simulator, conversation, and its scene challenge. */
 .agent-conversation-onboarding > :is(
     .overlay-stack-top-left, .agent-stage-view-toggle,
-    .sim-debug-stack, .agent-challenge-dock
+    .sim-debug-stack
   ),
 .agent-conversation-onboarding .agent-control-panel {
   display: none;
@@ -11185,12 +11185,25 @@ select.skill-input {
 .first-mission-art.crossing { background-image: url('/public/first-missions/intersection.jpg'); }
 .first-mission-skip { flex-shrink: 0; border: 1px solid #515159; border-radius: 8px; padding: 10px 15px; background: #24242a; color: #e6e6ed; font: inherit; font-size: 13px; cursor: pointer; }
 .first-mission-skip:hover { background: #34343c; border-color: #909099; }
-.first-mission.is-playing { inset: 16px auto auto 16px; width: min(560px, calc(100% - 420px)); flex-direction: row; justify-content: space-between; align-items: flex-start; gap: 20px; padding: 14px 16px; border: 1px solid #45454e; border-radius: 12px; background: #202025; overflow: visible; }
-.first-mission-current { display: flex; flex-direction: column; gap: 5px; }
-.first-mission-current strong { font-size: 14px; font-weight: 550; }
-.first-mission-status { color: #b4b4bf; font-size: 12px; line-height: 1.45; }
 .first-mission-choosing .agent-panel { visibility: hidden; }
-.agent-conversation-onboarding > :is(.overlay-stack-top-left, .agent-stage-view-toggle, .sim-debug-stack, .agent-challenge-dock) { display: none; }
+.first-mission-choosing > .agent-challenge-dock { display: none; }
+.agent-cockpit .agent-challenge-dock.first-mission-challenge {
+  top: 16px;
+  bottom: auto !important;
+  left: 16px;
+  width: min(360px, calc(100% - 420px));
+  height: auto;
+}
+.first-mission-challenge .challenge-panel {
+  position: relative;
+  bottom: auto;
+  left: 0;
+  width: 100%;
+  box-sizing: border-box;
+  background: rgb(16 16 20 / 94%);
+}
+.first-mission-challenge .challenge-action { padding: 9px 12px; }
+.first-mission-challenge .challenge-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 /* Help cards: opaque, compact, and attached to the control they explain. */
 .ui-tour-target { outline: 2px solid #9482ff !important; outline-offset: 5px; }
@@ -11211,6 +11224,11 @@ select.skill-input {
   .first-mission-choice { display: grid; grid-template-columns: 90px 1fr; gap: 5px 14px; padding: 12px; }
   .first-mission-art { grid-row: 1 / 4; height: 100%; min-height: 100px; margin: 0; }
   .first-mission-choice strong { font-size: 19px; }
-  .first-mission.is-playing { inset: max(10px, env(safe-area-inset-top)) 10px auto; width: auto; padding: 12px; gap: 12px; }
-  .first-mission.is-playing .first-mission-skip { padding: 9px 11px; font-size: 12px; }
+  .agent-cockpit.agent-compact .agent-challenge-dock.first-mission-challenge {
+    top: max(10px, env(safe-area-inset-top));
+    left: 10px;
+    width: calc(100% - 20px);
+    max-width: 420px;
+  }
+  .first-mission-challenge .challenge-panel { max-height: 38dvh; }
 }

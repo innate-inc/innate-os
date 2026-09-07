@@ -849,7 +849,7 @@ class ChallengeEngine:
                     "attempts": entry.get("attempts", 0),
                 }
                 for cid, entry in self.progress.items()
-                if cid in self.challenges
+                if cid in self.challenges and self.challenges[cid].available_in(self._environment_id())
             },
             "active": None,
         }

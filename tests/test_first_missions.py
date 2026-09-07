@@ -58,6 +58,23 @@ def test_first_mission_reconnect_and_skip_belong_to_exact_attempt(tmp_path):
     assert json.loads((tmp_path / "challenge_context.json").read_text()) is None
 
 
+def test_challenges_and_saved_results_belong_to_their_environment(tmp_path):
+    e, scene = engine(tmp_path, "apartment")
+    assert all(c.environments for c in e.challenges.values())
+    assert "put_it_away" in {c["id"] for c in e.roster()}
+    e._record("put_it_away", "passed", 12.0)
+    # A newly loaded engine gets the saved scene result without browser state.
+    e, scene = engine(tmp_path, "apartment")
+    assert e._block(None)["progress"]["put_it_away"]["passed"]
+    for environment, expected in [("backrooms", "way_out"), ("intersection", "other_side")]:
+        scene.environment.id = environment
+        assert [c["id"] for c in e.roster()] == [expected]
+        assert "put_it_away" not in e._block(None)["progress"]
+        assert not e.start("put_it_away")
+    scene.environment.id = "apartment"
+    assert e._block(None)["progress"]["put_it_away"]["passed"]
+
+
 def test_cleanup_requires_brick_settled_below_rim_and_survives_misses(tmp_path):
     e, _ = engine(tmp_path, "apartment")
     assert e.start("put_it_away")
