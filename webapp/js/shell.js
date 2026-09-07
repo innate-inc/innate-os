@@ -130,7 +130,7 @@ export function initShell(navigate) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "rail-link rail-help";
-    button.title = "Interface help";
+    button.title = "Replay the interface tour";
     button.setAttribute("aria-label", "Interface help");
     button.innerHTML =
       '<span class="rail-ico"><span class="rail-help-mark" aria-hidden="true">?</span></span>' +
