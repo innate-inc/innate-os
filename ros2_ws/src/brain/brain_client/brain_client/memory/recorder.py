@@ -166,6 +166,16 @@ class MemoryRecorder:
         if best is None or sharpness > best.sharpness:
             self._candidate = _Candidate(time.monotonic(), *pose, sharpness, jpeg)
 
+    def note_map_snapshot(self):
+        """Detach notes immediately while the active map or navigation mode changes."""
+        snapshot = self._store.snapshot()
+        if self._nav_mode != "navigation" or self._map_name != snapshot.map_name:
+            return None
+        return snapshot
+
+    def can_anchor_note(self) -> bool:
+        return self.note_map_snapshot() is not None and self._confident()
+
     def _recordable_moment(self) -> bool:
         if self._nav_mode == "mapping":
             return self._mapping_started is not None and self._slam_alive()

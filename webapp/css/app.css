@@ -10980,3 +10980,132 @@ select.skill-input {
     flex-basis: 100%;
   }
 }
+
+/* Map scratchpad shares this overlay in Map and Teleop. */
+.map-notes-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.map-note-pin {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  border: 1px solid #a89bff;
+  border-radius: 4px;
+  background: #29213f;
+  color: #e0dcff;
+  padding: 5px;
+  font: 11px var(--font-mono);
+  cursor: pointer;
+}
+.map-note-pin[aria-pressed="true"] {
+  background: #401ffb;
+  color: white;
+  outline: 3px solid rgb(151 135 255 / 35%);
+}
+.map-notes-toggle {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.map-note-panel {
+  position: absolute;
+  z-index: 12;
+  top: 52px;
+  right: 12px;
+  width: min(300px, calc(100% - 24px));
+  max-height: calc(100% - 110px);
+  overflow: auto;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 8px;
+  padding: 16px;
+}
+.map-note-panel h3 {
+  font-size: 16px;
+  margin: 12px 0;
+}
+.map-note-panel p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  margin: 12px 0;
+}
+.map-note-panel button {
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 5px;
+  padding: 7px 10px;
+  margin: 3px;
+  cursor: pointer;
+}
+.map-note-panel input,
+.map-note-panel textarea,
+.map-note-panel select {
+  display: block;
+  width: 100%;
+  margin: 9px 0;
+  padding: 9px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 5px;
+  font: 16px var(--font-ui);
+}
+.map-note-panel textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+.map-note-panel img {
+  width: 100%;
+  display: block;
+  margin-top: 12px;
+}
+.map-note-panel .map-note-meta {
+  font: 11px var(--font-mono);
+  color: var(--muted);
+}
+.map-note-panel .map-note-status {
+  color: var(--ctl-accent);
+}
+.map-note-list {
+  display: flex;
+  flex-direction: column;
+  margin: 8px 0;
+}
+.map-note-pin[data-anchor="map_point"] {
+  border-radius: 50%;
+}
+/* Clear Teleop's profiling control; thumbnail clicks still promote the map. */
+.cam-map-host.big .map-notes-toggle {
+  left: 50%;
+  right: auto;
+  top: 16px;
+  transform: translateX(-50%);
+}
+.cam-map-host.big .map-note-panel {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+}
+.cam-map-host:not(.big) .map-notes-toggle,
+.cam-map-host:not(.big) .map-note-panel {
+  display: none;
+}
+.cam-map-host:not(.big) .map-note-pin {
+  pointer-events: none;
+  font-size: 0;
+  width: 6px;
+  height: 6px;
+  padding: 0;
+}
