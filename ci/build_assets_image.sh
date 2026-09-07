@@ -13,6 +13,7 @@
 #   IMAGE_TAG           sha-<short12>
 #   IMAGE_INPUTS_HASH   config.compute_assets_image_inputs_hash of the checkout
 #   PUSH_MAIN_TAGS      "true" on main
+#   CACHE_SCOPE         the full ref (refs/heads/... or refs/tags/...); required off main
 #
 # Deliberately NO image.revision label, and so no COMMIT_SHA input: it varies
 # per commit, which changes the config blob and therefore the index digest, so
@@ -24,6 +25,9 @@ IMAGE_PREFIX="${IMAGE_PREFIX:-ghcr.io/innate-inc}"
 # build clobbers it, and cleanup-sim-images.yml cannot pin it against retention.
 : "${IMAGE_INPUTS_HASH:?must be set (config.compute_assets_image_inputs_hash)}"
 : "${IMAGE_TAG:?must be set}"
+if [ "${PUSH_MAIN_TAGS:-false}" != "true" ]; then
+  : "${CACHE_SCOPE:?must be set for a non-main build}"
+fi
 assets_image="${IMAGE_PREFIX}/innate-os-sim-assets"
 inputs_tag="inputs-${IMAGE_INPUTS_HASH}"
 
@@ -54,13 +58,30 @@ if [ "${PUSH_MAIN_TAGS:-false}" = "true" ]; then
   tags+=(--tag "${assets_image}:main")
 fi
 
+# A registry cache export REPLACES the ref's records rather than merging into
+# them, so a branch that wrote `buildcache` would evict main's bakes and cost
+# main's next publish the full 17 minutes. Branches read main's cache and their
+# own, and write only their own (cache-<branch>, aged out by
+# cleanup-sim-images.yml); main alone writes `buildcache`.
+# The hash suffix keeps full refs that sanitise alike from sharing a cache;
+# including refs/heads or refs/tags also separates same-name branches and
+# tags. PUSH_MAIN_TAGS, not the name, says main.
+cache_from=(--cache-from "type=registry,ref=${assets_image}:buildcache")
+cache_ref="buildcache"
+if [ "${PUSH_MAIN_TAGS:-false}" != "true" ]; then
+  scope_slug="$(printf '%s' "${CACHE_SCOPE}" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-80)"
+  scope_hash="$(printf '%s' "${CACHE_SCOPE}" | git hash-object --stdin | cut -c1-8)"
+  cache_ref="cache-${scope_slug}-${scope_hash}"
+  cache_from+=(--cache-from "type=registry,ref=${assets_image}:${cache_ref}")
+fi
+
 DOCKER_BUILDKIT=1 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   --file sim/Dockerfile.assets \
   --build-arg "SIM_RESOURCE_LOG=${SIM_RESOURCE_LOG:-0}" \
   --provenance=false --sbom=false \
-  --cache-from "type=registry,ref=${assets_image}:buildcache" \
-  --cache-to "type=registry,ref=${assets_image}:buildcache,mode=max" \
+  "${cache_from[@]}" \
+  --cache-to "type=registry,ref=${assets_image}:${cache_ref},mode=max" \
   --label "org.opencontainers.image.source=https://github.com/innate-inc/innate-os" \
   "${tags[@]}" \
   --push \

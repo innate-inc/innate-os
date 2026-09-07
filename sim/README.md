@@ -180,8 +180,9 @@ a directory under `sim/environments/` with a `manifest.json` naming its MuJoCo
 collision and visual meshes and Nav2 map (under `sim/assets/`), the browser glb
 or per-room manifest and collision hulls (under `sim/viewer/public/`), and the
 spawn pose -- `sim/environments/backrooms/manifest.json` is the template, and
-`sim/tools/build_environment_pack.py` derives every one of those files from a
-single glTF scene (the asset image runs it; see `sim/Dockerfile.assets`). Meshes are in
+`sim/tools/decompose_pack.py` then `sim/tools/build_environment_pack.py` derive
+every one of those files from a single glTF scene (the asset image runs them;
+see `sim/Dockerfile.assets`). Meshes are in
 meters, glTF Y-up, with the floor at y = 0: physics stands the robot on the
 MJCF ground plane there, and the 3D view's floor grid sits just below it.
 Licensed packs the repository must not ship go in `sim/environments.local/`
