@@ -25,8 +25,8 @@ const THUMB_FRAME_DIV = 2;
 // visible gain (~75Hz interpolated state) and the load jitters everything.
 const MIN_FRAME_MS = 1000 / 62;
 
-// Opt-in GPU fill budget, independent of display size and Retina scale: ~3 MP
-// matches the tested 2147 x 1420 target, where a DPR-only cap allowed 12 MP.
+// Opt-in GPU fill budget (~3 MP), independent of display size and Retina
+// scale; the DPR-only cap alone allows 12 MP.
 const MAX_RENDER_PIXELS = 3_000_000;
 // Module state, not stage state: the choice must outlive the shared stage's
 // rebuild after its linger, while a reload stays the way back to full resolution.
@@ -532,14 +532,19 @@ export function createSimStage(
   window.addEventListener("pointercancel", cancelDrop);
 
   // Full resolution by default: the notice only offers the reduction. Dismissal
-  // is remembered for the tab so navigating doesn't nag again.
+  // is remembered for the tab so navigating doesn't nag again; while reduced the
+  // notice stays as the way back, so it cannot be dismissed.
   const slowdown = new SlowdownDetector();
-  let environmentReady = false;
+  const resetSlowdown = () => slowdown.reset(); // a hidden tab stops rAF without a sample to see it
+  document.addEventListener("visibilitychange", resetSlowdown);
+  // The scrim is up whenever the view isn't in steady state: mesh loads, the
+  // server rebuilding a world, failures.
+  const loadingShown = () => loading.style.display !== "none";
   let stageVisible = true;
   let slowdownDismissed = sessionStorage.getItem("sim-resolution-dismissed") === "true";
   const resolutionNotice = document.createElement("div");
   resolutionNotice.className = "sim-resolution-notice";
-  resolutionNotice.hidden = slowdownDismissed || !reducedResolution;
+  resolutionNotice.hidden = !reducedResolution;
   const resolutionText = document.createElement("span");
   const resolutionAction = makeChip("");
   const resolutionDismiss = makeChip("×", "Dismiss resolution notice");
@@ -551,6 +556,7 @@ export function createSimStage(
       ? "Render resolution reduced until reload."
       : "Slow rendering or simulation detected. Reducing resolution may help.";
     resolutionAction.textContent = reducedResolution ? "Use full resolution" : "Reduce resolution";
+    resolutionDismiss.hidden = reducedResolution;
   };
   refreshResolutionNotice();
   resolutionAction.onclick = () => {
@@ -602,6 +608,7 @@ export function createSimStage(
   const stopLoop = () => {
     cancelAnimationFrame(raf);
     raf = 0;
+    slowdown.reset(); // a parked stage renders nothing; the gap is not slowness
   };
 
   const loop = (now: number) => {
@@ -631,7 +638,7 @@ export function createSimStage(
     scene.render();
     frame++;
     if (!slowdownDismissed && resolutionNotice.hidden &&
-        slowdown.sample(now, session.simulationClock, environmentReady && stageVisible)) {
+        slowdown.sample(now, session.simulationClock, stageVisible && !loadingShown())) {
       resolutionNotice.hidden = false;
     }
 
@@ -659,7 +666,6 @@ export function createSimStage(
   let loadedEnvironmentId: string | null = null;
   let loadVersion = 0;
   const loadEnvironment = async (environment: EnvironmentInfo | null) => {
-    environmentReady = false;
     // Discard superseded loads after each await.
     const version = ++loadVersion;
     if (loadedEnvironmentId !== null) {
@@ -685,7 +691,6 @@ export function createSimStage(
       if (disposed || version !== loadVersion) return;
       await Promise.all([robotDone, scene.streamApartment(queue, layout)]);
       if (disposed || version !== loadVersion) return;
-      environmentReady = true;
       hideLoading();
       // Prefetch props after the scene, outside its progress bar.
       if (firstLoad) scene.prefetchPropModels();
@@ -759,6 +764,7 @@ export function createSimStage(
       window.removeEventListener("pointercancel", cancelDrop);
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
       document.removeEventListener("pointerdown", onOutsidePointer, true);
+      document.removeEventListener("visibilitychange", resetSlowdown);
       scene.dispose();
       wrap.remove();
     },

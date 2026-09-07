@@ -7238,7 +7238,6 @@ select.skill-input {
   background: rgb(8 8 10 / 85%);
   font-size: 12px;
 }
-.sim-resolution-notice[hidden] { display: none; }
 .sim-resolution-notice > span { grid-column: 1 / -1; }
 
 .sim-scene-setup {
