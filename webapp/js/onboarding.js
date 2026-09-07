@@ -114,21 +114,19 @@ export function shouldAutoStartOnboarding() {
 }
 
 /** @param {boolean} restart
- * @param {string=} environment
  * @param {(success:boolean)=>void} [complete] */
-export function startFirstRun(restart = false, environment, complete) {
-  const event = new CustomEvent(FIRST_RUN_REQUEST_EVENT, {cancelable:true, detail:{restart, environment, complete}});
+export function startFirstRun(restart = false, complete) {
+  const event = new CustomEvent(FIRST_RUN_REQUEST_EVENT, {cancelable:true, detail:{restart, complete}});
   window.dispatchEvent(event);
   if (!event.defaultPrevented) complete?.(false);
 }
 
-/** Installed only in simulator mode. The trusted broker selects a world; the
- * mission controller owns stopping the old attempt and starting its replacement.
- * @param {(environment:string)=>Promise<boolean>} onStart */
-export function installEnvironmentMissions(onStart) {
+/** Installed only in simulator mode. The trusted broker can reopen the existing
+ * mission picker; the controller owns stopping the old attempt and scene setup.
+ * @param {()=>Promise<boolean>} onOpen */
+export function installMissionPicker(onOpen) {
   const origin = embeddingOrigin();
   if (!origin) return () => {};
-  const environments = FIRST_MISSIONS.map(mission => mission.environment);
   /** @type {Map<string, Promise<boolean>>} */
   const requests = new Map();
   let busy = false;
@@ -136,27 +134,27 @@ export function installEnvironmentMissions(onStart) {
   const send = (/** @type {any} */ data) => {
     if (!removed) window.parent.postMessage({channel:COMPLETION_CHANNEL, ...data}, origin);
   };
-  const controls = () => send({type:"controls", environments, busy});
+  const controls = () => send({type:"controls", canOpenMissionPicker:true, busy});
   const receive = (/** @type {MessageEvent} */ event) => {
     if (event.source !== window.parent || event.origin !== origin) return;
     const data = event.data;
     if (!data || data.channel !== COMPLETION_CHANNEL) return;
     if (data.type === "get-controls") {
       controls();
-    } else if (data.type === "start-environment" && environments.includes(data.environment)
+    } else if (data.type === "open-mission-picker"
       && typeof data.requestId === "string" && data.requestId.length > 0 && data.requestId.length <= 128) {
       let result = requests.get(data.requestId);
       if (!result) {
-        if (busy) { send({type:"environment-started", requestId:data.requestId, success:false}); return; }
+        if (busy) { send({type:"mission-picker-opened", requestId:data.requestId, success:false}); return; }
         busy = true;
         controls();
-        result = Promise.resolve().then(() => onStart(data.environment)).catch(() => false)
+        result = Promise.resolve().then(onOpen).catch(() => false)
           .finally(() => {busy = false; controls();});
         requests.set(data.requestId, result);
         const oldest = requests.keys().next().value;
         if (requests.size > 32 && oldest !== undefined) requests.delete(oldest);
       }
-      void result.then(success => send({type:"environment-started", requestId:data.requestId, success}));
+      void result.then(success => send({type:"mission-picker-opened", requestId:data.requestId, success}));
     }
   };
   window.addEventListener("message", receive);

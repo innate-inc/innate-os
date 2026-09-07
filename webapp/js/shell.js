@@ -15,7 +15,7 @@ import { installPressActivate } from "./pressActivate.js";
 import {
   ONBOARDING_REQUEST_EVENT,
   initializeFirstRunCompletion,
-  installEnvironmentMissions,
+  installMissionPicker,
   shouldAutoStartOnboarding,
   ONBOARDING_START_SECTION,
   startFirstRun,
@@ -87,7 +87,7 @@ export function initShell(navigate) {
   let onboardingPending = false;
   let onboardingRestart = false;
   /** @type {null | {start:()=>void, cancel:()=>void}} */
-  let environmentMissionPending = null;
+  let missionPickerPending = null;
 
   /**
    * (Re)build the rail from railRows — links in group order, a divider at each
@@ -230,7 +230,7 @@ export function initShell(navigate) {
    * @param {string} key
    */
   function setActive(key) {
-    if (key !== ONBOARDING_START_SECTION) environmentMissionPending?.cancel();
+    if (key !== ONBOARDING_START_SECTION) missionPickerPending?.cancel();
     activeKey = key;
     applyActive();
     // Every navigation lands here, and none may leave the drawer over the
@@ -247,18 +247,18 @@ export function initShell(navigate) {
       const config = await getConfig();
       if (config?.simControls) {
         await initializeFirstRunCompletion();
-        installEnvironmentMissions(environment => new Promise(resolve => {
+        installMissionPicker(() => new Promise(resolve => {
           closeRailDrawer();
-          if (activeKey === ONBOARDING_START_SECTION) startFirstRun(true, environment, resolve);
+          if (activeKey === ONBOARDING_START_SECTION) startFirstRun(true, resolve);
           else {
             // Failed or superseded route loads must not leave a delayed reset.
-            const cancel = () => {clearTimeout(timeout); environmentMissionPending = null; resolve(false);};
+            const cancel = () => {clearTimeout(timeout); missionPickerPending = null; resolve(false);};
             const timeout = setTimeout(cancel, 15000);
-            environmentMissionPending = {
+            missionPickerPending = {
               cancel,
               start: () => {
                 clearTimeout(timeout);
-                startFirstRun(true, environment, resolve);
+                startFirstRun(true, resolve);
               },
             };
             navigate(pathForKey(ONBOARDING_START_SECTION));
@@ -270,9 +270,9 @@ export function initShell(navigate) {
         navigate(pathForKey(ONBOARDING_START_SECTION));
       }
     }
-    if (environmentMissionPending && activeKey === ONBOARDING_START_SECTION) {
-      const {start} = environmentMissionPending;
-      environmentMissionPending = null;
+    if (missionPickerPending && activeKey === ONBOARDING_START_SECTION) {
+      const {start} = missionPickerPending;
+      missionPickerPending = null;
       onboardingPending = false;
       start();
       return;

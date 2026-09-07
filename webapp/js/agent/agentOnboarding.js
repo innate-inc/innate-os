@@ -203,12 +203,9 @@ export function createAgentOnboarding(root, ros, agentState, options) {
     revealTaskViews();
     if (active && saved?.attemptId && value.active?.attempt_id === saved.attemptId && value.active.state === "passed") void finish("done");
   });
-  function restart(/** @type {string=} */ targetEnvironment) {
+  function restart() {
     if (!options.enabled || destroyed || restarting) return Promise.resolve(false);
-    const selected = FIRST_MISSIONS.find(item => item.environment === targetEnvironment);
-    if (targetEnvironment && !selected) return Promise.resolve(false);
-    // Opening the selector or reselecting the loaded world never resets progress.
-    if (selected && environment?.environment?.id === targetEnvironment) return Promise.resolve(true);
+    if (active && !mission()) return Promise.resolve(true);
     restarting = (async () => {
       // Drain the old attempt before replacing its cancellation signal. Late
       // activation acknowledgements must not start MARS behind the chooser.
@@ -218,8 +215,14 @@ export function createAgentOnboarding(root, ros, agentState, options) {
       // Picking another mission is distinct from Skip: close this exact
       // attempt and stop its agent before offering a replacement scene.
       if (saved?.attemptId && challenge?.active?.attempt_id === saved.attemptId) {
+        // setDirective refreshes state but absorbs service errors. Keep the
+        // attempt owned and retryable unless that refresh confirms the stop.
+        if (agentState.get().currentDirective === INTRO_AGENT_ID) {
+          await agentState.setDirective("");
+          if (agentState.get().brainActive) throw new Error("MARS has not stopped yet");
+        }
+        if (destroyed) return false;
         session.abortChallenge(saved.attemptId);
-        if (agentState.get().currentDirective === INTRO_AGENT_ID) await agentState.setDirective("");
       }
       if (destroyed) return false;
       abort = new AbortController();
@@ -227,11 +230,6 @@ export function createAgentOnboarding(root, ros, agentState, options) {
       active = true; began = false; taskStarted = false;
       options.onClearSuggestions?.();
       persist();
-      if (selected) {
-        await choose(selected);
-        return !destroyed && saved?.id === selected.id && !statusMessage
-          && (saved.phase === "done" || (active && saved.phase === "playing"));
-      }
       render();
       return true;
     })().catch(error => {
@@ -243,7 +241,7 @@ export function createAgentOnboarding(root, ros, agentState, options) {
   function start(/** @type {Event} */ event) {
     const detail = /** @type {CustomEvent} */ (event).detail;
     event.preventDefault();
-    if (detail?.restart) { void restart(detail.environment).then(success => detail.complete?.(success)); return; }
+    if (detail?.restart) { void restart().then(success => detail.complete?.(success)); return; }
     if (active) { render(); if (mission()) void runConnect(false); }
   }
   window.addEventListener(FIRST_RUN_REQUEST_EVENT, start);

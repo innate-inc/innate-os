@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { createAgentOnboarding } from "../js/agent/agentOnboarding.js";
 import { createChallengePanel } from "../js/agent/challengePanel.js";
-import { FIRST_MISSIONS, FIRST_RUN_KEY, readFirstRun, saveFirstRun, shouldAutoStartOnboarding, startFirstRun, installEnvironmentMissions } from "../js/onboarding.js";
+import { FIRST_MISSIONS, FIRST_RUN_KEY, readFirstRun, saveFirstRun, shouldAutoStartOnboarding, startFirstRun, installMissionPicker } from "../js/onboarding.js";
 
 class Element extends EventTarget {
   children = []; dataset = {}; hidden = false; parent = null; textContent = "";
@@ -278,7 +278,7 @@ ui.choose("way_out");await flush();assert.equal(replay.calls.switches.at(-1),"ba
 assert.equal(replay.calls.starts.at(-1).id,"way_out");ui.flow.destroy();
 console.log("ok - replay stops the owned attempt, persists the chooser and starts a fresh selected challenge");
 
-for (const target of [undefined,"backrooms"]) {
+{
   saveFirstRun({phase:"choosing"});
   const replayPending=simulator();const activate=replayPending.agent.setDirective;let releaseReplay, delayed=false;
   replayPending.agent.setDirective=async id=>{
@@ -286,67 +286,78 @@ for (const target of [undefined,"backrooms"]) {
     return activate(id);
   };
   ui=replayPending.mount();ui.choose("put_it_away");await flush();
-  startFirstRun(true,target);await flush();assert.equal(replayPending.calls.starts.length,1);
+  startFirstRun(true);await flush();assert.equal(replayPending.calls.starts.length,1);
   releaseReplay();await flush();
-  assert.equal(readFirstRun().phase,target ? "playing" : "choosing");
-  assert.deepEqual(replayPending.calls.directives,target ? ["intro_agent","","intro_agent"] : ["intro_agent",""]);
-  assert.equal(replayPending.calls.starts.length,target ? 2 : 1);ui.flow.destroy();
+  assert.equal(readFirstRun().phase,"choosing");
+  assert.deepEqual(replayPending.calls.directives,["intro_agent",""]);
+  assert.equal(replayPending.calls.starts.length,1);ui.flow.destroy();
 }
-console.log("ok - replay drains late activation before reopening the chooser or starting another world's mission");
+console.log("ok - replay drains late activation before reopening the chooser");
 
-// The actual broker -> controller -> session path selects each world's mission,
-// waits for startup, deduplicates requests, and preserves reload/same-world state.
+// The actual broker -> controller -> session path reuses the initial picker.
+// Opening stops only the owned attempt; a choice starts a fresh mission.
 const oldParent=window.parent, oldReferrer=document.referrer;
 const replies=[];window.parent={postMessage:(data,origin)=>replies.push({data,origin})};document.referrer="https://broker.example/session";
 saveFirstRun({phase:"choosing"});
 const worlds=simulator();ui=worlds.mount();ui.choose("put_it_away");await flush();
-const removeMissions=installEnvironmentMissions(environment=>new Promise(resolve=>startFirstRun(true,environment,resolve)));
+const removePicker=installMissionPicker(()=>new Promise(resolve=>startFirstRun(true,resolve)));
 function brokerMessage(data,origin="https://broker.example",source=window.parent) {
  const event=new Event("message");Object.assign(event,{data:{channel:"innate:first-mission:v1",...data},origin,source});window.dispatchEvent(event);
 }
-brokerMessage({type:"get-controls"});assert.deepEqual(replies.pop().data.environments,FIRST_MISSIONS.map(m=>m.environment));
-const command={type:"start-environment",environment:"backrooms",requestId:"1"};
+brokerMessage({type:"get-controls"});assert.equal(replies.pop().data.canOpenMissionPicker,true);
+const command={type:"open-mission-picker",requestId:"1"};
 brokerMessage(command,"https://foreign.example");brokerMessage(command,"https://broker.example",{});
 for(const requestId of [null,"","a".repeat(129)])brokerMessage({...command,requestId});
-brokerMessage({...command,environment:"unknown"});await flush();assert.equal(worlds.calls.starts.length,1);
-for (const mission of [FIRST_MISSIONS[1],FIRST_MISSIONS[2],FIRST_MISSIONS[0]]) {
+brokerMessage({type:"start-environment",environment:"backrooms",requestId:"old"});
+await flush();assert.equal(worlds.calls.aborts.length,0);
+for (const mission of FIRST_MISSIONS) {
   const before=worlds.calls.starts.length, oldAttempt=readFirstRun().attemptId;
-  const change={...command,environment:mission.environment,requestId:mission.id};
+  const change={...command,requestId:mission.id};
   brokerMessage(change);brokerMessage(change);await flush();
   assert.equal(replies.at(-1).data.success,true);
+  assert.equal(worlds.calls.starts.length,before);
+  assert.equal(worlds.calls.aborts.at(-1),oldAttempt);
+  assert.equal(worlds.agent.get().brainActive,false);
+  assert.equal(readFirstRun().phase,"choosing");
+  assert.equal(ui.root.find(el=>el.className==="first-mission").hidden,false);
+  brokerMessage({...change,requestId:`already-choosing-${mission.id}`});await flush();
+  assert.equal(worlds.calls.starts.length,before);
+  ui.flow.destroy();ui=worlds.mount();await flush(); // Reload stays at the picker.
+  assert.equal(worlds.calls.starts.length,before);
+  ui.choose(mission.id);await flush();
   assert.equal(worlds.calls.starts.length,before+1);
   assert.equal(worlds.calls.starts.at(-1).id,mission.id);
-  assert.equal(worlds.calls.aborts.at(-1),oldAttempt);
+  assert.notEqual(readFirstRun().attemptId,oldAttempt);
   assert.equal(worlds.agent.get().brainActive,true);
+  brokerMessage(change);await flush(); // Replayed request must not close the new mission.
   assert.equal(readFirstRun().phase,"playing");
-  assert.equal(ui.root.find(el=>el.className==="first-mission").hidden,true);
-  brokerMessage({...change,requestId:`same-${mission.id}`});await flush();
-  assert.equal(worlds.calls.starts.length,before+1);
-  ui.flow.destroy();ui=worlds.mount();await flush();
-  assert.equal(worlds.calls.starts.length,before+1);
 }
-// A duplicate of an older request cannot change the current world.
-brokerMessage({...command,requestId:"way_out"});await flush();assert.equal(worlds.calls.starts.length,4);
-// Keep the selector busy until activation finishes; reject a concurrent change.
+// Keep the action busy while its old agent stops; reject concurrent requests.
 const originalActivate=worlds.agent.setDirective;let unblock;
-worlds.agent.setDirective=async id=>{if(id)await new Promise(resolve=>{unblock=resolve;});return originalActivate(id);};
+worlds.agent.setDirective=async id=>{if(!id)await new Promise(resolve=>{unblock=resolve;});return originalActivate(id);};
 brokerMessage({...command,requestId:"slow"});await flush();
 brokerMessage({type:"get-controls"});assert.equal(replies.at(-1).data.busy,true);
-brokerMessage({...command,environment:"intersection",requestId:"concurrent"});await flush();
+brokerMessage({...command,requestId:"concurrent"});await flush();
 assert.equal(replies.at(-1).data.success,false);
-assert.equal(worlds.calls.starts.length,5);
 assert.equal(replies.some(r=>r.data.requestId==="slow"),false);
 unblock();await flush();assert.equal(replies.at(-1).data.success,true);
+assert.equal(readFirstRun().phase,"choosing");assert.equal(worlds.agent.get().brainActive,false);
 worlds.agent.setDirective=originalActivate;
-// Startup failure is acknowledged as failure and remains retryable in the panel.
-worlds.session.startChallenge=()=>{throw Error("Disconnected");};
-brokerMessage({...command,environment:"intersection",requestId:"failure"});await flush();
+ui.choose("put_it_away");await flush();
+// The real state adapter absorbs service errors. A stale active heartbeat must
+// still fail the request and leave the owned attempt available for a retry.
+const abortsBeforeFailure=worlds.calls.aborts.length;
+worlds.agent.setDirective=async()=>{};
+brokerMessage({...command,requestId:"failure"});await flush();
 assert.equal(replies.at(-1).data.success,false);
-let failedStatus;const unsubscribeFailure=ui.flow.subscribe(state=>{failedStatus=state.status;});
-assert.match(failedStatus,/Disconnected/);unsubscribeFailure();
+assert.equal(worlds.calls.aborts.length,abortsBeforeFailure);
+assert.equal(ui.root.find(el=>el.className==="first-mission").hidden,true);
+worlds.agent.setDirective=originalActivate;
+brokerMessage({...command,requestId:"retry"});await flush();
+assert.equal(replies.at(-1).data.success,true);assert.equal(readFirstRun().phase,"choosing");
 ui.flow.destroy();
 // A route with no mounted controller fails immediately, without deferred work.
 brokerMessage({...command,requestId:"unmounted"});await flush();assert.equal(replies.at(-1).data.success,false);
-removeMissions();const count=replies.length;brokerMessage(command);await flush();assert.equal(replies.length,count);
+removePicker();const count=replies.length;brokerMessage(command);await flush();assert.equal(replies.length,count);
 window.parent=oldParent;document.referrer=oldReferrer;
-console.log("ok - environment missions: trusted broker, all worlds, reload, duplicate/concurrent requests and startup failure");
+console.log("ok - broker mission picker: trusted sender, all choices, reload, duplicate/concurrent requests and failed stop");
