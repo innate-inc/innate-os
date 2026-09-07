@@ -20,9 +20,10 @@ const PANEL_ID = "agent-challenges";
  * @param {HTMLElement} root
  * @param {any} session sim session exposing onChallenge/startChallenge/abortChallenge
  * @param {any} [onboarding] first-run participation, using the same scene challenge
- * @returns {{ destroy: () => void, dismiss: () => void }}
+ * @returns {{ destroy: () => void, dismiss: () => void, setCompactHost: (host: HTMLElement | null) => void }}
  */
 export function createChallengePanel(root, session, onboarding) {
+  let compactHost = /** @type {HTMLElement | null} */ (null);
   let firstRun = /** @type {any} */ (null);
   let latest = /** @type {any} */ ({list:[], active:null});
   let environmentName = "";
@@ -117,6 +118,13 @@ export function createChallengePanel(root, session, onboarding) {
   /** @type {HTMLElement | null} */
   let timerEl = null;
 
+  function placeDock() {
+    const host = guided() && compactHost ? compactHost : root;
+    if (dock.parentElement === host) return;
+    if (host === root) root.appendChild(dock);
+    else host.insertBefore(dock, host.querySelector(".agent-thoughts-panel"));
+  }
+
   function render() {
     const block = latest;
     dock.hidden = false;
@@ -126,6 +134,7 @@ export function createChallengePanel(root, session, onboarding) {
     challengeRunning = active?.state === "running";
     dock.classList.toggle("active", challengeRunning);
     dock.classList.toggle("first-mission-challenge", guided());
+    placeDock();
     launcher.hidden = guided();
     tutorial.hidden = !!firstRun?.active;
     const scope = guided() ? firstRun.mission.setting : environmentName;
@@ -163,8 +172,9 @@ export function createChallengePanel(root, session, onboarding) {
 
   function guidedActions() {
     const wrap = document.createElement("div");
+    wrap.className = "challenge-guided-actions";
     const status = document.createElement("p");
-    status.className = "challenge-brief";
+    status.className = `challenge-brief${firstRun.status ? "" : " challenge-guidance-hint"}`;
     status.setAttribute("role", "status");
     status.textContent = firstRun.status || "Guide MARS through chat. If something fails, ask it to try again.";
     const actions = document.createElement("div");
@@ -314,6 +324,7 @@ export function createChallengePanel(root, session, onboarding) {
   }
 
   return {
+    setCompactHost(host) { compactHost = host; placeDock(); },
     dismiss() {
       if (!challengeRunning) setOpen(false);
     },

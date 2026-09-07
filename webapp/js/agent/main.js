@@ -236,6 +236,7 @@ function buildAgentView(root) {
     // page on a stage it cannot leave.
     if (monitorTooNarrow.matches) setView("live");
     panel.setCompact(compactLayout.matches);
+    challengePanel?.setCompactHost(compactLayout.matches ? dockPanel : null);
     reportSafeArea();
   };
   compactLayout.addEventListener("change", applyLayout);
@@ -243,10 +244,6 @@ function buildAgentView(root) {
   const safeAreaObserver = new ResizeObserver(reportSafeArea);
   safeAreaObserver.observe(root);
   safeAreaObserver.observe(feedFrame);
-  const viewControlsObserver = new ResizeObserver(() => {
-    root.style.setProperty("--agent-view-controls-height", `${cornerStack.getBoundingClientRect().height}px`);
-  });
-  viewControlsObserver.observe(cornerStack);
   applyLayout();
 
   const parts = [
@@ -256,7 +253,6 @@ function buildAgentView(root) {
         compactLayout.removeEventListener("change", applyLayout);
         monitorTooNarrow.removeEventListener("change", applyLayout);
         safeAreaObserver.disconnect();
-        viewControlsObserver.disconnect();
       },
     },
     ...(challengePanel ? [challengePanel] : []),

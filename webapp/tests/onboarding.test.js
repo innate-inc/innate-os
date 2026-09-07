@@ -8,8 +8,11 @@ import { FIRST_RUN_KEY, readFirstRun, saveFirstRun, shouldAutoStartOnboarding, s
 class Element extends EventTarget {
   children = []; dataset = {}; hidden = false; parent = null; textContent = "";
   classList = {values:new Set(), toggle:(name,on)=> on ? this.classList.values.add(name) : this.classList.values.delete(name), contains:name=>this.classList.values.has(name)};
-  append(...children) {this.children.push(...children); for (const child of children) child.parent=this;}
+  get parentElement() {return this.parent;}
+  append(...children) {for (const child of children) {child.remove(); this.children.push(child); child.parent=this;}}
   appendChild(child) {this.append(child); return child;}
+  querySelector(selector) {return this.find(el=>el.className===selector.slice(1)) ?? null;}
+  insertBefore(child, before) {child.remove(); const i=this.children.indexOf(before); if(i<0)this.children.push(child);else this.children.splice(i,0,child);child.parent=this;return child;}
   replaceChildren(...children) {this.children=[]; this.append(...children);}
   setAttribute() {}
   contains(node) { return !!this.find(el=>el===node); }
@@ -54,7 +57,7 @@ function simulator() {
     const panel=createChallengePanel(root,session,flow);
     const destroy=flow.destroy;
     flow.destroy=()=>{panel.destroy();destroy();};
-    return {root,flow,choose:id=>root.find(el=>el.dataset.mission===id).click(),skip:()=>root.find(el=>/Skip mission|Explore on my own/.test(el.textContent)).click()};
+    return {root,flow,panel,choose:id=>root.find(el=>el.dataset.mission===id).click(),skip:()=>root.find(el=>/Skip mission|Explore on my own/.test(el.textContent)).click()};
   }
   return {mount,session,agent,calls,emitChallenge,emitEnvironment,get challenge(){return challenge;}};
 }
@@ -126,6 +129,20 @@ for(const mission of FIRST_MISSIONS) {
   assert.ok(ui.root.find(el=>el.className==="challenge-banner passed"));
   ui.flow.destroy();
 }
+// The same guided panel moves into the phone chat sheet and back on resize;
+// Skip restores the normal challenge launcher outside the sheet.
+storage.clear();
+const layoutSim=simulator(), layoutUi=layoutSim.mount(), sheet=new Element();
+layoutUi.root.append(sheet); layoutUi.choose("put_it_away"); await flush();
+const layoutDock=layoutUi.root.find(el=>el.className === "agent-challenge-dock");
+layoutUi.panel.setCompactHost(sheet); assert.equal(layoutDock.parentElement,sheet);
+layoutSim.emitChallenge({...layoutSim.challenge,active:{...layoutSim.challenge.active,elapsed_s:2}});
+assert.equal(layoutDock.parentElement,sheet);
+layoutUi.panel.setCompactHost(null); assert.equal(layoutDock.parentElement,layoutUi.root);
+layoutUi.panel.setCompactHost(sheet); layoutUi.skip(); await flush();
+assert.equal(layoutDock.parentElement,layoutUi.root); layoutUi.flow.destroy();
+console.log("ok - challenge layout: mobile sheet, timer updates, desktop resize and Skip restore");
+
 // Reopen the page in flight: no restart, prop placement, or second agent start.
 storage.clear();const sim=simulator();let ui=sim.mount();ui.choose("put_it_away");await flush();
 const attempt=sim.calls.starts[0].attempt_id;

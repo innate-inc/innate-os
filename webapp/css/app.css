@@ -11199,8 +11199,8 @@ select.skill-input {
 .first-mission-choosing .agent-panel { visibility: hidden; }
 .first-mission-choosing > .agent-challenge-dock { display: none; }
 .agent-cockpit .agent-challenge-dock.first-mission-challenge {
-  top: 16px;
-  bottom: auto !important;
+  top: auto;
+  bottom: 16px !important;
   left: 16px;
   width: min(360px, calc(100% - 420px));
   height: auto;
@@ -11236,25 +11236,49 @@ select.skill-input {
   .first-mission-choice { display: grid; grid-template-columns: 90px 1fr; gap: 5px 14px; padding: 12px; }
   .first-mission-art { grid-row: 1 / 4; height: 100%; min-height: 100px; margin: 0; }
   .first-mission-choice strong { font-size: 19px; }
+  /* Keep the mission in the chat sheet's flow: no floating card over the
+     scene or composer, including while the sheet is dragged or expanded. */
   .agent-cockpit.agent-compact .agent-challenge-dock.first-mission-challenge {
-    top: max(10px, env(safe-area-inset-top));
-    left: 10px;
-    width: calc(100% - 20px);
-    max-width: 420px;
+    position: relative;
+    inset: auto;
+    bottom: auto !important;
+    width: 100%;
+    height: auto;
+    flex-shrink: 0;
+    order: -1;
   }
-  .first-mission-challenge .challenge-panel { max-height: 38dvh; }
-  .first-mission-challenge .challenge-active > .challenge-brief { display: none; }
+  .agent-compact .agent-panel:has(.first-mission-challenge) .agent-sheet-header { order: -2; }
+  .agent-compact .first-mission-challenge .challenge-panel {
+    max-height: 24dvh;
+    padding: 10px 14px;
+    border-radius: 0;
+    border-width: 1px 0;
+    box-shadow: none;
+    background: transparent;
+  }
+  .agent-compact .first-mission-challenge .challenge-head,
+  .agent-compact .first-mission-challenge .challenge-active > .challenge-brief,
+  .agent-compact .first-mission-challenge .challenge-guidance-hint { display: none; }
+  .agent-compact .first-mission-challenge .challenge-active {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 12px;
+  }
+  .agent-compact .first-mission-challenge :is(.challenge-title-row, .challenge-goals) { grid-column: 1; margin: 0; }
+  .agent-compact .first-mission-challenge .challenge-guided-actions { display: contents; }
+  .agent-compact .first-mission-challenge .challenge-guided-actions > .challenge-brief { grid-column: 1 / -1; margin: 0; }
+  .agent-compact .first-mission-challenge .challenge-actions { grid-column: 2; grid-row: 1 / 3; margin: 0; align-self: center; }
+  .agent-compact .first-mission-challenge .challenge-action { min-height: 44px; padding: 8px 10px; }
+  .agent-compact .agent-panel.sheet-closed:has(.first-mission-challenge) { height: auto; }
+  .agent-compact .agent-panel.sheet-closed:has(.first-mission-challenge) .agent-thoughts-panel { display: none; }
+
 }
 
-/* Stack the challenge below the view controls when they cannot fit side by
-   side. Measure the real strip so expanded phone tiles never cover either. */
+/* Keep camera controls at the top when the desktop dock narrows the scene. */
 @media (max-width: 1200px) {
   .agent-cockpit.agent-conversation-onboarding .overlay-stack-top-left {
     top: max(10px, env(safe-area-inset-top));
     left: 10px;
     right: auto;
-  }
-  .agent-cockpit.agent-conversation-onboarding .agent-challenge-dock.first-mission-challenge {
-    top: calc(max(10px, env(safe-area-inset-top)) + var(--agent-view-controls-height, 44px) + 10px);
   }
 }
