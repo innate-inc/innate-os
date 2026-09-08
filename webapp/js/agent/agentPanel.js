@@ -13,6 +13,7 @@
 // The thought-grouping + skill-run rendering here is the canonical chat stream
 // (it originated in the old teleop chat pane, since removed).
 
+import { createPromptSuggestions, isPromptSuggestionSkill } from "./promptSuggestions.js";
 import { createMicStream } from "./micStream.js";
 import {
   AGENT_STATUS_TOPIC,
@@ -30,21 +31,15 @@ const HISTORY_RECONCILE_MS = 30_000;
 // if the brain disappears while rosbridge itself remains connected.
 const THINKING_STALE_MS = 10_000;
 
-const CHAT_EXAMPLES = [
-  "What can you see?",
-  "What do you remember here?",
-  "Move forward 1ft and wave",
-  "Wave hello",
-  "Move across the room",
-];
-
 /**
  * @param {HTMLElement} root cockpit root — the panel mounts as a right-edge overlay.
  * @param {import("../rosClient.js").RosClient} rosClient
  * @param {ReturnType<typeof import("../teleop/agentState.js").sharedAgentState>} agentState
  * @param {{
  *   enableMic?: boolean,
- *   onMicState?: (state: {on: boolean, busy: boolean, level: number, waveform: number[], error: string | null}) => void
+ *   onMicState?: (state: {on: boolean, busy: boolean, level: number, waveform: number[], error: string | null}) => void,
+ *   ensureRunning?: (fallback: () => Promise<void>) => Promise<void>,
+ *   onSkillStatus?: (event: {skill: string, runId: string, status: string, timestamp: number}) => void,
  * }} opts
  *   enableMic connects the browser microphone in sim, where the robot has no
  *   physical microphone (see micStream.js).
@@ -53,7 +48,10 @@ const CHAT_EXAMPLES = [
  *   startMic: () => Promise<void>,
  *   stopMic: () => void,
  *   micMount: HTMLElement,
- *   setCompact: (on: boolean) => void
+ *   setCompact: (on: boolean) => void,
+ *   addNotice: (text: string) => void,
+ *   beginOnboarding: (fresh: boolean) => void,
+ *   clearSuggestedPrompts: () => void
  * }}
  *   setCompact swaps the right-edge dock for the bottom sheet (agentSheet.js).
  */
@@ -170,7 +168,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   input.setAttribute("aria-keyshortcuts", "Enter");
   const placeholder = document.createElement("span");
   placeholder.className = "agent-compose-placeholder";
-  placeholder.textContent = CHAT_EXAMPLES[0];
+  placeholder.textContent = "Message MARS";
   const micMount = document.createElement("div");
   micMount.className = "agent-compose-mic";
   const focusHint = document.createElement("button");
@@ -197,25 +195,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     placeholder.classList.toggle("hidden", !empty);
   }
   syncComposerAction();
-  let placeholderIndex = 0;
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let placeholderSwapTimer = null;
-  const placeholderInterval = setInterval(() => {
-    placeholderIndex = (placeholderIndex + 1) % CHAT_EXAMPLES.length;
-    if (input.value.trim()) {
-      placeholder.textContent = CHAT_EXAMPLES[placeholderIndex];
-      return;
-    }
-    placeholder.classList.add("exiting");
-    placeholderSwapTimer = setTimeout(() => {
-      placeholder.textContent = CHAT_EXAMPLES[placeholderIndex];
-      placeholder.classList.remove("exiting");
-      placeholder.classList.add("entering");
-      void placeholder.offsetWidth;
-      placeholder.classList.remove("entering");
-      placeholderSwapTimer = null;
-    }, 500);
-  }, 3500);
 
   controlPanel.append(head, directives.el);
   composeArea.append(thinkingNotice, form);
@@ -242,6 +221,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   function focusComposerOnEnter(e) {
     if (
       e.defaultPrevented ||
+      root.classList.contains("first-mission-choosing") ||
       e.key !== "Enter" ||
       e.repeat ||
       e.altKey ||
@@ -256,7 +236,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
 
   // ---- composer -----------------------------------------------------------
   async function startMic() {
-    await directives.ensureRunning();
+    await (opts.ensureRunning?.(directives.ensureRunning) ?? directives.ensureRunning());
     await mic?.start();
   }
 
@@ -264,17 +244,45 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     mic?.stop();
   }
 
+  const suggestions = createPromptSuggestions(prompts => chat.setSuggestion(prompts, selected => void submitText(selected)));
+  let sending = false;
+  /** @param {string} text */
+  async function submitText(text) {
+    if (!text || sending) return false;
+    sending = true;
+    try {
+      await (opts.ensureRunning?.(directives.ensureRunning) ?? directives.ensureRunning());
+      const timestamp = Date.now() / 1000;
+      const sent = rosClient.publish(CHAT_IN_TOPIC, {
+        data: JSON.stringify({ text, sender: "user", timestamp, origin: selfOrigin }),
+      });
+      if (!sent) throw new Error("The robot connection was lost before the message could be sent.");
+      chat.addMessage("user", text, timestamp);
+      suggestions.clear();
+      return true;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "The message could not be sent.";
+      chat.addMessage("system", detail, Date.now() / 1000);
+      return false;
+    } finally {
+      sending = false;
+    }
+  }
+
   async function submit() {
     const text = input.value.trim();
     if (!text) return;
-    chat.addMessage("user", text, Date.now() / 1000);
+    // Clear before the (possibly long) send so nothing typed meanwhile joins a
+    // message already in the transcript; a failed send gets its draft back.
+    const draft = input.value;
     input.value = "";
     input.style.height = "auto";
     syncComposerAction();
-    await directives.ensureRunning();
-    rosClient.publish(CHAT_IN_TOPIC, {
-      data: JSON.stringify({ text, sender: "user", timestamp: Date.now() / 1000, origin: selfOrigin }),
-    });
+    if (!(await submitText(text)) && !input.value) {
+      input.value = draft;
+      input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+      syncComposerAction();
+    }
   }
 
   form.addEventListener("submit", (e) => {
@@ -299,7 +307,9 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   let loadingHistory = false;
   let lastSnapshot = "";
 
-  async function loadHistory() {
+  /** @param {boolean} [duringOnboarding] */
+  async function loadHistory(duringOnboarding = false) {
+    if (!duringOnboarding && root.classList.contains("agent-conversation-onboarding")) return;
     if (loadingHistory) return;
     loadingHistory = true;
     try {
@@ -341,6 +351,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     if (String(payload?.sender ?? "") !== "user") return;
     const text = String(payload?.text ?? "");
     if (!text) return;
+    suggestions.clear();
     chat.addMessage("user", text, Number(payload?.timestamp) || Date.now() / 1000);
   }, undefined, "std_msgs/msg/String");
 
@@ -355,6 +366,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const sender = String(payload?.sender ?? "");
     const text = String(payload?.text ?? "");
     if (!sender || !text) return;
+    if (sender === "user") suggestions.clear();
     chat.routeChatOut(sender, text, Number(payload?.timestamp) || Date.now() / 1000);
   }, undefined, "std_msgs/msg/String");
 
@@ -368,10 +380,12 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     }
     const name = String(payload?.primitive_name ?? payload?.skill_name ?? payload?.skill_id ?? "");
     const status = String(payload?.status ?? "");
-    if (!name || !status) return;
+    if (suggestions.consume(payload)) return;
+    if (!name || !status || isPromptSuggestionSkill(name)) return;
     const key = String(payload?.primitive_id ?? payload?.skill_id ?? name);
     const reason = typeof payload?.reason === "string" ? payload.reason : "";
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
+    opts.onSkillStatus?.({ skill: String(payload?.skill_id ?? name), runId: key, status, timestamp: ts });
     chat.addSkillRun(key, name, status, ts, reason, payload?.args);
   }, undefined, "std_msgs/msg/String");
 
@@ -387,12 +401,22 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       if (on) chat.setMode("compact");
       sheet.setEnabled(on);
     },
+    /** @param {string} text */
+    addNotice(text) {
+      chat.addMessage("system", text, Date.now() / 1000);
+    },
+    beginOnboarding(fresh) {
+      lastSnapshot = "";
+      suggestions.clear();
+      chat.clear();
+      sheet.open();
+      if (!fresh) void loadHistory(true);
+    },
+    clearSuggestedPrompts: () => suggestions.clear(),
     destroy() {
       sheet.destroy();
       mic?.destroy();
       directives.destroy();
-      clearInterval(placeholderInterval);
-      if (placeholderSwapTimer) clearTimeout(placeholderSwapTimer);
       chat.destroy();
       document.removeEventListener("visibilitychange", onVisible);
       clearInterval(historyPoll);

@@ -80,6 +80,10 @@ function releaseSimSession() {
   if (!simSession || simHolders === 0) return;
   simHolders -= 1;
   if (simHolders > 0) return;
+  // The demo shell still owns the environment control while this iframe is
+  // on Settings/Navigation. Keep its stage for the lease; removing the frame
+  // releases it. Standalone tabs retain the usual idle cleanup.
+  if (window.parent !== window) return;
   simLinger = setTimeout(() => {
     simLinger = null;
     simStage?.destroy();

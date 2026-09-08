@@ -13,6 +13,9 @@ const LEVEL_GAIN = 6;
 /** Idle bar height so the waveform never collapses to a flat line. */
 const WAVEFORM_FLOOR = 0.12;
 const WAVEFORM_DB_RANGE = 48;
+const MOBILE_DEVICE =
+  /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
 /**
  * @param {HTMLElement} root
@@ -33,13 +36,16 @@ export function createAgentMicControl(root, callbacks) {
 
   const control = document.createElement("div");
   control.className = "agent-mic-control";
+  control.classList.toggle("has-space-shortcut", !MOBILE_DEVICE);
 
   const button = document.createElement("button");
   button.type = "button";
   button.className = "agent-mic-button";
   button.setAttribute("aria-label", "Hold to talk to the agent");
   button.setAttribute("aria-pressed", "false");
-  button.title = "Hold to talk — Spacebar, or click and hold";
+  button.title = MOBILE_DEVICE
+    ? "Hold the microphone button to talk"
+    : "Hold to talk — Spacebar, or click and hold";
 
   const icon = decorativeSpan("agent-mic-icon");
 
@@ -100,12 +106,24 @@ export function createAgentMicControl(root, callbacks) {
       "aria-label",
       isUnavailable ? unavailableReason || "Microphone unavailable" : "Hold to talk to the agent",
     );
-    button.title = isUnavailable ? "" : "Hold to talk — Spacebar, or click and hold";
-    stateLabel.textContent = isWaiting ? "Starting…" : isListening ? "Listening…" : "";
+    button.title = isUnavailable
+      ? ""
+      : MOBILE_DEVICE
+        ? "Hold the microphone button to talk"
+        : "Hold to talk — Spacebar, or click and hold";
+    stateLabel.textContent = isWaiting
+      ? "Starting…"
+      : isListening
+        ? "Listening…"
+        : isUnavailable || MOBILE_DEVICE
+          ? ""
+          : "Hold Space";
     const messageText = shouldShowUnavailableMessage
       ? unavailableReason || "Microphone unavailable"
       : shouldShowHoldHint
-        ? "Hold down your spacebar or mouse to talk"
+        ? MOBILE_DEVICE
+          ? "Hold the microphone button to talk"
+          : "Hold down your spacebar or mouse to talk"
         : "";
     renderMessageBubble(messageText);
   }
@@ -230,14 +248,21 @@ export function createAgentMicControl(root, callbacks) {
 
   function spacebarCanControlMic() {
     if (!(composerInput instanceof HTMLTextAreaElement)) return false;
+    if (root.closest(".first-mission-choosing")) return false;
     // Only a focused composer holding a draft blocks the spacebar; an unsent
     // draft must not disable push-to-talk for the whole page.
     if (document.activeElement === composerInput) return composerInput.value.length === 0;
+    // Space activates a focused button (mission choice, Skip, tour Next, ...).
+    // Only the microphone's own button may turn that activation into a hold.
+    const focused = document.activeElement;
+    if (focused instanceof Element && focused !== button
+      && focused.closest("button, a, input, select, [role=button], .ui-tour-card")) return false;
     return !isTypingContext();
   }
 
   /** @param {KeyboardEvent} event */
   function onWindowKeyDown(event) {
+    if (event.defaultPrevented) return;
     if (event.code !== SPACEBAR_KEY_CODE) {
       cancelPendingSpacebarHold();
       return;
@@ -303,6 +328,11 @@ export function createAgentMicControl(root, callbacks) {
   document.addEventListener("visibilitychange", onDocumentVisibilityChange, listenerOptions);
   document.addEventListener("focusin", onDocumentFocusIn, listenerOptions);
   document.addEventListener("pointerdown", dismissMicMessages, listenerOptions);
+
+  // The initial capture state may match the defaults, so its first setter can
+  // legitimately be a no-op. Render once here so static affordances such as the
+  // desktop-only Space hint are present on the opening frame.
+  renderMicState();
 
   return {
     setEnabled(enabled) {

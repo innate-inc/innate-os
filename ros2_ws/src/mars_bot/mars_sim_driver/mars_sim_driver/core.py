@@ -343,13 +343,14 @@ class VirtualMars:
         self._hold = None  # (x, y, yaw) the stopped base is keeping, or None
         self._still_since = None  # sim time the base went quiet, or None
         self.world_epoch = -1
+        self._contact_classes: tuple[frozenset[int], frozenset[int]] | None = None
         self.reset()
         release_freed_heap()
 
-    def reset(self) -> None:
+    def reset(self, *, spawn: tuple[float, float, float] | None = None) -> None:
         self.world_epoch += 1
         mujoco.mj_resetData(self.model, self.data)
-        spawn_x, spawn_y, spawn_yaw_deg = self._spawn
+        spawn_x, spawn_y, spawn_yaw_deg = spawn if spawn is not None else self._spawn
         self.data.qpos[self._base["x"][0]] = spawn_x
         self.data.qpos[self._base["y"][0]] = spawn_y
         self.data.qpos[self._base["yaw"][0]] = math.radians(spawn_yaw_deg)
@@ -359,6 +360,7 @@ class VirtualMars:
         self.data.qpos[mq] = mult * ARM_HOME[source]
         self.props.mark_all_parked()  # mj_resetData already re-parked every prop
         self.traffic.reset(self.data)
+        self._traffic_contact = False
         self._cmd_vx = self._cmd_wz = 0.0
         self._cmd_sim_time = -math.inf
         self._hold = None
@@ -407,6 +409,8 @@ class VirtualMars:
             if self.traffic.enabled:
                 self.traffic.step(self.data, dt, self.pose()[:2])
             mujoco.mj_step(self.model, self.data)
+            if self.traffic.enabled and not self._traffic_contact:
+                self._traffic_contact = self._has_traffic_contact()
             if not np.all(np.isfinite(self.data.qpos)):
                 self.reset()
                 return
@@ -505,6 +509,36 @@ class VirtualMars:
     def render_rgb(self, camera: str) -> np.ndarray:
         self.update_camera(camera)
         return self.read_rgb()
+
+    def traffic_contact(self) -> bool:
+        """Consume contacts since the previous judge snapshot. A brief collision
+        between observer frames must still invalidate a crossing."""
+        contact = self._traffic_contact
+        self._traffic_contact = False
+        return contact
+
+    def _has_traffic_contact(self) -> bool:
+        cars, robot = self._contact_geoms()
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            if contact.dist > 0:
+                continue
+            g1, g2 = int(contact.geom1), int(contact.geom2)
+            if (g1 in cars and g2 in robot) or (g2 in cars and g1 in robot):
+                return True
+        return False
+
+    def _contact_geoms(self) -> tuple[frozenset[int], frozenset[int]]:
+        """Geom ids of the traffic cars and of the robot. Named lookups per
+        contact per physics step were the cost; the model never changes."""
+        if self._contact_classes is None:
+            body_names = [self.model.body(b).name or "" for b in range(self.model.nbody)]
+            owner = [body_names[int(self.model.geom_bodyid[g])] for g in range(self.model.ngeom)]
+            self._contact_classes = (
+                frozenset(g for g, name in enumerate(owner) if name.startswith("traffic_car_")),
+                frozenset(g for g, name in enumerate(owner) if name.startswith("robot_")),
+            )
+        return self._contact_classes
 
     def render_jpeg(self, camera: str) -> bytes:
         return encode_jpeg(self.render_rgb(camera))

@@ -14,6 +14,7 @@ import { APARTMENT_VIEWER, SimScene, type CameraMode, type CameraView } from "./
 import type { EnvironmentInfo } from "./physics/worldStateController";
 import type { PropInfo } from "./props";
 import { LoadQueue } from "./loadQueue";
+import { createEnvironmentBridge } from "./environmentBridge";
 import { SlowdownDetector } from "./slowdown";
 import { THUMB_H, THUMB_W, type SimSession } from "./simSession";
 
@@ -695,7 +696,10 @@ export function createSimStage(
   // The robot loads once; environments come and go around it.
   let robotDone: Promise<unknown> | null = null;
   let loadedEnvironmentId: string | null = null;
+  let currentEnvironment: EnvironmentInfo | null = null;
   let loadVersion = 0;
+  let propsPrefetched = false;
+  const environmentBridge = createEnvironmentBridge(session, () => void loadEnvironment(currentEnvironment));
   const loadEnvironment = async (environment: EnvironmentInfo | null) => {
     // Discard superseded loads after each await.
     const version = ++loadVersion;
@@ -705,9 +709,10 @@ export function createSimStage(
         if (version === loadVersion) setProgress(loaded, total);
       });
       queue.setEstimatedTotal(35e6);
-      scene.unloadEnvironment();
+      scene.unloadEnvironment({ preserveWorldState: loadedEnvironmentId === environment?.id });
     }
     loadedEnvironmentId = environment?.id ?? "";
+    environmentBridge.updateView(loadedEnvironmentId, "loading");
     const name = environment?.display_name.toLowerCase() ?? "apartment";
     try {
       // Show layout placeholders while meshes download.
@@ -717,22 +722,28 @@ export function createSimStage(
       scene.frameLayout(layout);
       setLoading(`loading robot and ${name}...`);
       // Enqueue robot meshes before rooms to prioritize the robot.
-      const firstLoad = robotDone === null;
       robotDone ??= (await scene.loadRobot(queue)).done;
       if (disposed || version !== loadVersion) return;
       await Promise.all([robotDone, scene.streamApartment(queue, layout)]);
       if (disposed || version !== loadVersion) return;
       hideLoading();
-      // Prefetch props after the scene, outside its progress bar.
-      if (firstLoad) scene.prefetchPropModels();
+      environmentBridge.updateView(loadedEnvironmentId, "ready");
+      // Prefetch props after the first scene that loads, outside its progress bar.
+      if (!propsPrefetched) {
+        propsPrefetched = true;
+        scene.prefetchPropModels();
+      }
     } catch (err) {
       if (disposed || version !== loadVersion) return;
+      environmentBridge.updateView(environment?.id ?? "", "failed");
       if (robotDone === null) {
         session.stageError(err);
         return;
       }
       console.error(`[sim-viewer] environment '${name}' failed to load:`, err);
       failLoading(`${name} failed to load -- see the browser console`);
+      // The scene that did load stays usable; the embedding page offers the retry.
+      hideLoadingTimer = setTimeout(hideLoading, 4000);
     }
   };
 
@@ -741,6 +752,7 @@ export function createSimStage(
   startLoop();
   let environmentOptionsKey = "";
   const unsubscribeEnvironment = session.onEnvironment(({ environment, environments, switch: pending }) => {
+    currentEnvironment = environment;
     environmentSection.hidden = environments.length < 2;
     const optionsKey = environments.map(({ id, display_name }) => `${id}\0${display_name}`).join("\n");
     if (optionsKey !== environmentOptionsKey) {
@@ -788,6 +800,7 @@ export function createSimStage(
       unsubscribe();
       unsubscribeProps();
       unsubscribeEnvironment();
+      environmentBridge.destroy();
       stopLoop();
       observer.disconnect();
       longTaskObserver?.disconnect();

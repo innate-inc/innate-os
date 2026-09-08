@@ -396,7 +396,9 @@ class PropRegistry:
         cos, sin = math.cos(ryaw), math.sin(ryaw)
         x = rx + cos * forward - sin * lateral
         y = ry + sin * forward + cos * lateral
-        self._set_pose(data, name, x, y, prop.rest_z, 0.0)
+        # Robot frame like `reach`: a manipulation target presents the same
+        # grasp axis whichever way the robot faces.
+        self._set_pose(data, name, x, y, prop.rest_z, ryaw)
         return True
 
     def groups(self) -> list[str]:

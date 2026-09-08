@@ -30,6 +30,8 @@ const MODEL_GRACE_MS = 300;
 /** How the browser should place a prop's glb into its MuJoCo body frame. */
 export interface PropViewerDef {
   glb?: string;
+  /** Procedural browser-only visual layered over a simple physics collider. */
+  kind?: "stud_brick";
   /** The model is already in metres, Z-up, and authored around its body origin. */
   preNormalized?: boolean;
   /** Standard glTF Y-up -> scene Z-up. False for a model already authored Z-up. */
@@ -127,6 +129,7 @@ interface PlacementPreview {
  * prop whose mesh is absent falls back on what its `size` implies. */
 function primitiveGeometry(info: PropInfo): THREE.BufferGeometry {
   const s = info.size;
+  if (info.viewer.kind === "stud_brick" && s.length === 3) return studBrickGeometry(s);
   let shape = info.collision;
   if (shape === "open_box") return openBoxGeometry(s, info.wall);
   if (shape !== "box" && shape !== "sphere" && shape !== "cylinder") {
@@ -144,6 +147,28 @@ function primitiveGeometry(info: PropInfo): THREE.BufferGeometry {
   }
   // MuJoCo box sizes are half-extents.
   return new THREE.BoxGeometry(s[0] * 2, s[1] * 2, s[2] * 2);
+}
+
+/** A 2x3 LEGO-like brick in the same body frame as its box collider. */
+function studBrickGeometry([hx, hy, hz]: number[]): THREE.BufferGeometry {
+  const columns = 3;
+  const rows = 2;
+  const studRadius = Math.min(hx / columns, hy / rows) * 0.6;
+  // A standard stud is about 4.8mm wide and 1.8mm tall.
+  const studHeight = studRadius * 0.75;
+  const pieces: THREE.BufferGeometry[] = [new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2)];
+  for (let column = 0; column < columns; column += 1) {
+    for (let row = 0; row < rows; row += 1) {
+      const x = ((column + 0.5) / columns * 2 - 1) * hx;
+      const y = ((row + 0.5) / rows * 2 - 1) * hy;
+      pieces.push(
+        new THREE.CylinderGeometry(studRadius, studRadius, studHeight, 24)
+          .rotateX(Math.PI / 2)
+          .translate(x, y, hz + studHeight / 2),
+      );
+    }
+  }
+  return mergeGeometries(pieces);
 }
 
 /** Floor plus four walls, hollow above — the same five box geoms props.py

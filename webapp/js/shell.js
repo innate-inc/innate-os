@@ -12,6 +12,14 @@ import { sharedAgentState } from "./teleop/agentState.js";
 import { createAgentIndicator } from "./agentIndicator.js";
 import { createArmAlert } from "./armAlert.js";
 import { installPressActivate } from "./pressActivate.js";
+import {
+  ONBOARDING_REQUEST_EVENT,
+  initializeFirstRunCompletion,
+  installMissionPicker,
+  shouldAutoStartOnboarding,
+  ONBOARDING_START_SECTION,
+  startFirstRun,
+} from "./onboarding.js";
 import { FOOTER_SECTIONS, GROUPS, SECTIONS, SIM_SECTIONS, railRows } from "./railLayout.js";
 
 /** @typedef {import("./railLayout.js").Section} Section */
@@ -38,8 +46,8 @@ const RIBBON_PULL_PX = 18;
  * and the "agent running" indicator — and return a controller
  * the router uses to reflect the active section on each navigation. Called once
  * by the router, not per page (navigation is client-side now).
- * @param {(path: string) => void} navigate Router navigation, for key shortcuts.
- * @returns {{ setActive: (key: string) => void }}
+ * @param {(path: string, options?: {replace?: boolean}) => void} navigate Router navigation, for key shortcuts.
+ * @returns {{ setActive: (key: string) => void, firstPageReady: () => void }}
  */
 // iOS ignores user-scalable=no; Safari fires proprietary gesture events for
 // pinch -- cancel them so the app UI never zooms (the 3D canvas keeps its own
@@ -48,7 +56,7 @@ document.addEventListener("gesturestart", (e) => {
   if (!(e.target instanceof HTMLCanvasElement)) e.preventDefault();
 });
 
-/** @param {(path: string) => void} navigate */
+/** @param {(path: string, options?: {replace?: boolean}) => void} navigate */
 export function initShell(navigate) {
   // Buttons fire on press-down instead of release, app-wide. Installed here
   // because the router builds the shell exactly once per page load. Idempotent.
@@ -75,6 +83,10 @@ export function initShell(navigate) {
   footNav.className = "rail-nav rail-foot";
   footNav.setAttribute("aria-label", "Utility");
   let activeKey = "";
+  let checkedFirstPage = false;
+  let helpPending = false;
+  /** @type {null | {start:()=>void, cancel:()=>void}} */
+  let missionPickerPending = null;
 
   /**
    * (Re)build the rail from railRows — links in group order, a divider at each
@@ -88,6 +100,7 @@ export function initShell(navigate) {
       nav.appendChild(row.kind === "divider" ? buildDivider(row.label) : buildLink(row.section));
     }
     footNav.innerHTML = "";
+    footNav.appendChild(buildHelpButton());
     for (const section of FOOTER_SECTIONS) {
       if (!visible || visible.has(section.key)) footNav.appendChild(buildLink(section));
     }
@@ -112,6 +125,30 @@ export function initShell(navigate) {
       `<span class="rail-label">${section.label}</span>` +
       (shortcut ? `<span class="rail-key" aria-hidden="true">${shortcut}</span>` : "");
     return a;
+  }
+
+  function buildHelpButton() {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "rail-link rail-help";
+    button.title = "Replay the interface tour";
+    button.setAttribute("aria-label", "Interface help");
+    button.innerHTML =
+      '<span class="rail-ico"><span class="rail-help-mark" aria-hidden="true">?</span></span>' +
+      '<span class="rail-label">Help</span>';
+    button.addEventListener("click", requestOnboarding);
+    return button;
+  }
+
+  function requestOnboarding() {
+    // Help shows passive tips. It never restarts the first mission.
+    if (activeKey === ONBOARDING_START_SECTION || activeKey === "teleop") {
+      closeRailDrawer();
+      window.dispatchEvent(new CustomEvent(ONBOARDING_REQUEST_EVENT));
+      return;
+    }
+    helpPending = true;
+    navigate(pathForKey(ONBOARDING_START_SECTION));
   }
 
   /** @param {string | null} label */
@@ -147,7 +184,8 @@ export function initShell(navigate) {
   // browser/OS combo like Cmd+1 (tab switch). A removed link (sim-mode filter)
   // simply has no match, so its number is inert.
   window.addEventListener("keydown", (e) => {
-    if (e.altKey || e.ctrlKey || e.metaKey || e.repeat || isTypingContext()) return;
+    if (e.defaultPrevented || document.body.classList.contains("agent-conversation-onboarding-active")
+      || e.altKey || e.ctrlKey || e.metaKey || e.repeat || isTypingContext()) return;
     const section = SECTIONS[Number(e.key) - 1];
     if (!section) return;
     const link = rail.querySelector(`.rail-link[data-section="${section.key}"]`);
@@ -189,6 +227,10 @@ export function initShell(navigate) {
    * @param {string} key
    */
   function setActive(key) {
+    if (key !== ONBOARDING_START_SECTION) {
+      missionPickerPending?.cancel();
+      helpPending = false;
+    }
     activeKey = key;
     applyActive();
     // Every navigation lands here, and none may leave the drawer over the
@@ -199,7 +241,52 @@ export function initShell(navigate) {
     document.title = section ? `Innate · ${section.label}` : "Innate";
   }
 
-  return { setActive };
+  async function firstPageReady() {
+    if (!checkedFirstPage) {
+      checkedFirstPage = true;
+      const bootKey = activeKey;
+      const config = await getConfig();
+      if (config?.simControls) {
+        await initializeFirstRunCompletion();
+        installMissionPicker(() => new Promise(resolve => {
+          closeRailDrawer();
+          if (activeKey === ONBOARDING_START_SECTION) startFirstRun(resolve);
+          else {
+            // Failed or superseded route loads must not leave a delayed reset.
+            const cancel = () => {clearTimeout(timeout); missionPickerPending = null; resolve(false);};
+            const timeout = setTimeout(cancel, 15000);
+            missionPickerPending = {
+              cancel,
+              start: () => {
+                clearTimeout(timeout);
+                startFirstRun(resolve);
+              },
+            };
+            navigate(pathForKey(ONBOARDING_START_SECTION));
+          }
+        }));
+        // The Agent page's own controller resumes or offers the first run
+        // when it mounts; the shell only has to land there. A page the user
+        // chose while the broker handshake ran stands.
+        if (shouldAutoStartOnboarding() && activeKey === bootKey && activeKey !== ONBOARDING_START_SECTION) {
+          // Replace: Back must not land on the page the gate just left.
+          navigate(pathForKey(ONBOARDING_START_SECTION), {replace:true});
+        }
+      }
+    }
+    if (activeKey !== ONBOARDING_START_SECTION) return;
+    if (missionPickerPending) {
+      const {start} = missionPickerPending;
+      missionPickerPending = null;
+      helpPending = false;
+      start();
+    } else if (helpPending) {
+      helpPending = false;
+      window.dispatchEvent(new CustomEvent(ONBOARDING_REQUEST_EVENT));
+    }
+  }
+
+  return { setActive, firstPageReady };
 }
 
 /**

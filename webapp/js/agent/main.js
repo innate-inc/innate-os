@@ -29,6 +29,9 @@ import { sharedAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
 import { createAgentMicControl } from "./agentMicControl.js";
+import { createAgentOnboarding } from "./agentOnboarding.js";
+import { createInterfaceTour } from "../uiTour.js";
+import { initializeFirstRunCompletion, shouldAutoStartOnboarding } from "../onboarding.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
 // marks a sim deployment — used here to drop the (absent) battery readout. Fetched
@@ -36,11 +39,14 @@ import { createAgentMicControl } from "./agentMicControl.js";
 // it synchronously.
 /** @type {any} */
 const config = await getConfig();
+// The broker handshake (up to 1.5 s when unanswered) overlaps the session import.
+const firstRunReady = config.simControls ? initializeFirstRunCompletion() : Promise.resolve();
 
 // Resolved once at import time (the router's dynamic import awaits it):
 // WebRTC for real robots, the Three.js SimSession in simulation (see
 // robotSession.js).
 const { createSession, releaseSession, createStage } = await robotSessionFactory();
+await firstRunReady;
 // Two thresholds, both mirrored in app.css: the dock floats over the feed
 // rather than taking a column, so it survives far below what the monitor needs.
 const COMPACT_LAYOUT_QUERY = "(max-width: 820px)";
@@ -85,6 +91,8 @@ function buildAgentView(root) {
     // "top view" every visit rather than whatever was left selected last time.
     // Real robots have no orbit camera, so their saved choice is untouched.
     primaryOnMount: config.simControls ? "orbit" : undefined,
+    onViewChange: () => onboarding?.onViewChange(),
+    viewAccess: config.simControls && shouldAutoStartOnboarding() ? "hidden" : "all",
   });
   const telemetryOverlay = config.simControls ? null : document.createElement("div");
   if (telemetryOverlay) {
@@ -158,6 +166,8 @@ function buildAgentView(root) {
 
   /** @type {ReturnType<typeof createAgentMicControl> | null} */
   let micControl = null;
+  /** @type {ReturnType<typeof createAgentOnboarding> | null} */
+  let onboarding = null;
   const panel = createAgentPanel(root, ros, agentState, {
     enableMic: Boolean(config.simControls),
     onMicState: (state) => {
@@ -167,10 +177,26 @@ function buildAgentView(root) {
         waveform: state.waveform,
       });
     },
+    ensureRunning: async (fallback) => {
+      if (!onboarding?.isActive()) return fallback();
+      await onboarding.ensureRunning();
+    },
+    onSkillStatus: event => onboarding?.onSkillStatus(event),
   });
+  onboarding = createAgentOnboarding(root, ros, agentState, {
+    // Opening a page must never activate autonomous control on physical MARS.
+    enabled: Boolean(config.simControls),
+    onNotice: panel.addNotice,
+    onStart: panel.beginOnboarding,
+    onClearSuggestions: panel.clearSuggestedPrompts,
+    onViewAccess: access => cameraSwitch.setViewAccess(access),
+    session,
+  });
+  // A first run owns the stage: the brain monitor never covers the chooser or a mission.
+  const unsubStage = onboarding.subscribe(({active}) => { if (active) setView("live"); });
   const simSession = /** @type {any} */ (session);
   const challengePanel =
-    typeof simSession.onChallenge === "function" ? createChallengePanel(root, simSession) : null;
+    typeof simSession.onChallenge === "function" ? createChallengePanel(root, simSession, onboarding) : null;
   const isSceneSurface = (/** @type {EventTarget | null} */ target) =>
     target instanceof Element &&
     (target.matches(".video-stage > canvas, .video-stage > video") || target.classList.contains("video-stage"));
@@ -213,6 +239,7 @@ function buildAgentView(root) {
     // page on a stage it cannot leave.
     if (monitorTooNarrow.matches) setView("live");
     panel.setCompact(compactLayout.matches);
+    challengePanel?.setCompactHost(compactLayout.matches ? dockPanel : null);
     reportSafeArea();
   };
   compactLayout.addEventListener("change", applyLayout);
@@ -236,6 +263,9 @@ function buildAgentView(root) {
     // Square, always-live camera tiles (own prefs key so teleop's defaults stay put).
     cameraSwitch,
     ...(micControl ? [micControl] : []),
+    onboarding,
+    { destroy: unsubStage },
+    createInterfaceTour(root, "agent"),
     panel,
     {
       destroy: () => {
@@ -261,7 +291,7 @@ function buildAgentView(root) {
   session.start();
 
   const entryPath = location.pathname.replace(/\/+$/, "");
-  if (entryPath === "/brain" && !monitorTooNarrow.matches) setView("brain");
+  if (entryPath === "/brain" && !monitorTooNarrow.matches && !onboarding?.isActive()) setView("brain");
   if (entryPath === "/brain" || entryPath === "/agent") {
     history.replaceState({}, "", "/" + location.search + location.hash);
   }
@@ -274,4 +304,3 @@ function buildAgentView(root) {
     },
   };
 }
-

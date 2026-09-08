@@ -205,3 +205,23 @@ def test_kinematic_props_use_mocap_pose_without_a_freejoint():
     assert registry.drop_at(data, prop.name, 1.0, 2.0, math.pi / 2)
     assert data.mocap_pos[0] == [1.0, 2.0, 0.0]
     assert data.mocap_quat[0] == pytest.approx([math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)])
+
+
+def test_place_at_robot_faces_the_prop_along_the_robot_heading():
+    prop = Prop(
+        name="target",
+        kinematic=True,
+        rest_z=0.01,
+        reach=(0.3, 0.1),
+    )
+    registry = PropRegistry({prop.name: prop})
+    model = SimpleNamespace(body=lambda _name: SimpleNamespace(id=0), body_mocapid=[0])
+    data = SimpleNamespace(
+        mocap_pos=[[0.0, 0.0, 0.0]],
+        mocap_quat=[[1.0, 0.0, 0.0, 0.0]],
+    )
+    registry.bind(model)
+
+    assert registry.place_at_robot(data, prop.name, (1.0, 2.0, math.pi / 2))
+    assert data.mocap_pos[0] == pytest.approx([0.9, 2.3, 0.01])
+    assert data.mocap_quat[0] == pytest.approx([math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)])

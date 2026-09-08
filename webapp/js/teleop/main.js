@@ -27,8 +27,10 @@ import { createTelemetry } from "./telemetry.js";
 import { createArmPanel } from "./armPanel.js";
 import { createProfilingPanel } from "./profilingPanel.js";
 import { createSkillsMenu } from "./skillsMenu.js";
+import { createInterfaceTour } from "../uiTour.js";
 import { createCameraSwitch } from "./cameraSwitch.js";
 import { dismissAllConfirms } from "../nav/confirm.js";
+import { setTtsAudioEnabled } from "../ttsAudio.js";
 
 // Runtime feature flags (config.json, served static). Sim-only debug controls are
 // off unless a deployment opts in. Fetched once when this module first loads (the
@@ -85,13 +87,17 @@ function buildCockpit(root) {
 
   const keyboard = createKeyboardDrive(drive);
   const telemetry = telemetryOverlay ? createTelemetry(telemetryOverlay, ros) : null;
+  const onboarding = createInterfaceTour(root, "teleop");
   const parts = [videoStage, ...(telemetry ? [telemetry] : [])];
-  // Robot-mic toggle. Skipped in the sim: the simulator's WebRTC server streams
-  // video only (no microphone), so the toggle would do nothing. config.simControls
-  // is the sim deployment's feature flag (env-driven; false on the real robot).
-  if (!config.simControls && videoStage.audioEl) {
-    parts.push(createAudioToggle(rightRail, session, videoStage.audioEl));
+  // Keep the listen control in the same place on sim and hardware. The sim
+  // starts listening by default; hardware remains opt-in for privacy.
+  if (config.simControls) {
+    setTtsAudioEnabled(true);
+    session.setAudio(true);
   }
+  parts.push(createAudioToggle(rightRail, session, videoStage.audioEl, {
+    onChange: config.simControls ? setTtsAudioEnabled : undefined,
+  }));
   parts.push(
     createSpeedModes(rightRail, ros),
     createHeadTilt(rightRail, ros),
@@ -104,6 +110,7 @@ function buildCockpit(root) {
     ...(config.simControls ? [] : [createProfilingPanel(root, session)]),
     createCameraSwitch(root, session, ros),
     keyboard,
+    onboarding,
   );
   // The sim's main view renders the same head camera (camera_optical_frame at
   // the driver's FOV), so the ribbon projects there too — the overlay swaps the
@@ -123,6 +130,7 @@ function buildCockpit(root) {
       // navigating away doesn't leave one floating over the next page.
       dismissAllConfirms();
       for (const part of parts) part.destroy();
+      if (config.simControls) setTtsAudioEnabled(true);
       releaseSession(session);
       root.innerHTML = "";
     },

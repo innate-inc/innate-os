@@ -8,6 +8,7 @@
 // an entry — so it lives in one module rather than being threaded between
 // several. Nothing here talks to ROS: the panel feeds it messages.
 
+import { isPromptSuggestionSkill } from "./promptSuggestions.js";
 import { CHAT_OUT_TOPIC, SKILL_STATUS_UPDATE_TOPIC } from "../constants.js";
 import {
   formatSkillArgs,
@@ -35,6 +36,8 @@ const SKILL_GROUP_MIN = 3;
  *   addSkillRun: (key: string, name: string, status: string, ts: number, reason: string, args: any) => void,
  *   routeChatOut: (sender: string, text: string, ts: number) => void,
  *   replay: (entries: any[]) => void,
+ *   clear: () => void,
+ *   setSuggestion: (text: string | string[] | null, onSelect?: (text: string) => void) => void,
  *   setMode: (mode: "compact" | "detailed") => void,
  *   destroy: () => void,
  * }}
@@ -88,9 +91,44 @@ export function createChatStream() {
   const streamResize = new ResizeObserver(() => settleStreamAfterMutation(pinnedToBottom));
   streamResize.observe(stream);
 
+  /** @type {HTMLElement | null} */
+  let suggestion = null;
+
   /** @param {HTMLElement} el */
   function appendStreamItem(el) {
-    stream.append(el);
+    if (suggestion?.isConnected) suggestion.before(el);
+    else stream.append(el);
+  }
+
+  /** Keep a few optional next requests directly under the latest message.
+   * @param {string | string[] | null} text @param {(text: string) => void} [onSelect] */
+  function setSuggestion(text, onSelect) {
+    const wasAtBottom = atBottom();
+    suggestion?.remove();
+    suggestion = null;
+    const prompts = (Array.isArray(text) ? text : text ? [text] : []).filter(p => typeof p === "string" && p.trim()).slice(0, 3);
+    if (!prompts.length || !onSelect) {
+      settleStreamAfterMutation(wasAtBottom);
+      return;
+    }
+    const wrap = document.createElement("div");
+    wrap.className = "agent-guided-prompt";
+    const label = document.createElement("span");
+    label.className = "agent-guided-prompt-label mono";
+    label.textContent = "Try asking";
+    wrap.append(label);
+    for (const prompt of prompts) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "agent-guided-prompt-button";
+      button.textContent = prompt;
+      button.addEventListener("click", () => onSelect(prompt));
+      wrap.append(button);
+    }
+    suggestion = wrap;
+    stream.append(wrap);
+    animateCompactEnter(wrap);
+    settleStreamAfterMutation(wasAtBottom);
   }
 
   /** @type {{ wrap: HTMLElement, status: HTMLElement, list: HTMLElement, lastByKind: Record<string, string>, startTs: number, latestTs: number } | null} */
@@ -215,6 +253,9 @@ export function createChatStream() {
     const el = document.createElement("div");
     el.className = `chat-msg ${kind}`;
     el.classList.toggle("skill-output", label === "skill_output");
+    // Unlabelled system lines are this UI's own notices (send failures, mission
+    // errors); the labelled ones are the brain's lifecycle chatter.
+    el.classList.toggle("notice", kind === "system" && !label);
     if (kind === "system") {
       const tag = document.createElement("span");
       tag.className = "chat-sender mono";
@@ -429,7 +470,7 @@ export function createChatStream() {
     } else if (sender === "user" || sender === "robot") {
       addMessage(sender, text, ts);
     } else {
-      addMessage("system", text, ts, sender || undefined);
+      addMessage("system", text, ts, sender || "system"); // the brain's line, never this UI's notice
     }
   }
 
@@ -441,7 +482,7 @@ export function createChatStream() {
     if (sender === "task_activated") {
       const name = String(e?.text ?? e?.skill_name ?? e?.skillId ?? "");
       const status = String(e?.taskStatus ?? "");
-      if (!name || !status) return;
+      if (!name || !status || isPromptSuggestionSkill(name)) return;
       const key = String(e?.primitiveId ?? e?.skillId ?? name);
       addSkillRun(key, name, status, ts, typeof e?.failureReason === "string" ? e.failureReason : "", e?.args);
       return;
@@ -473,8 +514,13 @@ export function createChatStream() {
       replayingHistory = false;
       stream.classList.remove("replaying");
     }
+    if (suggestion) stream.append(suggestion);
     // A reconcile can land while the reader is up in the scrollback.
     stream.scrollTop = wasAtBottom ? stream.scrollHeight : priorTop;
+  }
+
+  function clear() {
+    replay([]);
   }
 
   return {
@@ -485,6 +531,8 @@ export function createChatStream() {
     addSkillRun,
     routeChatOut,
     replay,
+    clear,
+    setSuggestion,
     setMode: setStreamMode,
     destroy() {
       streamResize.disconnect();
