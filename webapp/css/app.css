@@ -788,6 +788,375 @@ select.skill-input {
   pointer-events: none;
 }
 
+/* ---- targeting overlay (teleop/targetingOverlay.js) ----------------------
+   A skill's aim over the main camera. Every marker is a percentage of
+   .tgt-layer, which is the skill's image frame placed on the picture; the
+   markers themselves are hairline amber, greening as the skill locks on. */
+
+.tgt-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.tgt-layer {
+  position: absolute;
+}
+
+.tgt-tag {
+  position: absolute;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: inherit;
+  text-shadow: 0 0 3px rgb(0 0 0 / 80%);
+}
+
+/* Gemini's detection: four corner brackets, the "seen HERE" shape. */
+.tgt-seen {
+  position: absolute;
+  color: var(--accent);
+  animation: tgt-lock 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.tgt-seen i {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  max-width: 45%;
+  max-height: 45%;
+  border: 0 solid currentColor;
+  filter: drop-shadow(0 0 2px rgb(0 0 0 / 70%));
+}
+
+.tgt-seen i:nth-child(1) { top: 0; left: 0; border-width: 1.5px 0 0 1.5px; }
+.tgt-seen i:nth-child(2) { top: 0; right: 0; border-width: 1.5px 1.5px 0 0; }
+.tgt-seen i:nth-child(3) { bottom: 0; right: 0; border-width: 0 1.5px 1.5px 0; }
+.tgt-seen i:nth-child(4) { bottom: 0; left: 0; border-width: 0 0 1.5px 1.5px; }
+
+.tgt-seen .tgt-tag {
+  bottom: calc(100% + 4px);
+  left: 0;
+}
+
+@keyframes tgt-lock {
+  from { transform: scale(1.35); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* The pick box: get the tracked point inside the dashed square and the base
+   stops; the solid inner square is the servo's deadband, what "inside" tests. */
+.tgt-goal {
+  position: absolute;
+  border: 1.5px dashed var(--accent-dim);
+  border-radius: 2px;
+  transition: border-color 200ms ease;
+}
+
+.tgt-accept {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border: 1.5px solid var(--accent-dim);
+  border-radius: 2px;
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+
+.tgt-goal .tgt-tag {
+  bottom: calc(100% + 3px);
+  right: 0;
+  color: var(--accent-dim);
+}
+
+.tgt-goal.inside {
+  border-color: var(--ok);
+}
+
+.tgt-goal.inside .tgt-accept {
+  border-color: var(--ok);
+  box-shadow: 0 0 10px rgb(86 194 140 / 45%);
+}
+
+.tgt-goal.inside .tgt-tag {
+  color: var(--ok);
+}
+
+/* Point markers are centred on their pixel; the tracked point glides between
+   ~10 Hz updates instead of stepping. */
+.tgt-track,
+.tgt-reticle {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  color: var(--accent);
+  filter: drop-shadow(0 0 2px rgb(0 0 0 / 70%));
+}
+
+.tgt-track {
+  transition: left 120ms linear, top 120ms linear;
+}
+
+.tgt-track.inside {
+  color: var(--ok);
+}
+
+.tgt-track .tgt-tag,
+.tgt-reticle .tgt-tag {
+  top: 50%;
+  left: calc(100% + 2px);
+  transform: translateY(-50%);
+}
+
+/* The tracked point ends up in the pick box, whose tag hangs top-right, so
+   this one hangs left. */
+.tgt-track .tgt-tag {
+  left: auto;
+  right: calc(100% + 2px);
+}
+
+/* Steering vector: tracked point -> box centre, in frame coordinates. */
+.tgt-vec {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.tgt-vec.on {
+  opacity: 1;
+}
+
+.tgt-vec-line {
+  stroke: var(--accent-dim);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 5;
+  vector-effect: non-scaling-stroke;
+}
+
+/* While a frame is out to the model: one sweep across the picture. */
+.tgt-scan {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 18%;
+  opacity: 0;
+  background: linear-gradient(90deg, transparent, rgb(232 163 61 / 14%) 85%, rgb(232 163 61 / 55%));
+  transition: opacity 200ms ease;
+}
+
+.tgt-layer.looking .tgt-scan {
+  opacity: 1;
+  animation: tgt-sweep 1.6s linear infinite;
+}
+
+@keyframes tgt-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(560%); }
+}
+
+/* The HUD: skill + prompt, the stage ladder, one live readout. Top-centre is
+   the one stage edge nothing else claims on either cockpit. */
+.tgt-hud {
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 14px 9px;
+  max-width: min(440px, calc(100% - 28px));
+  background: rgb(0 0 0 / 66%);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-color: var(--ctl-edge-accent);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 24%), inset 0 0 0 1px rgb(232 163 61 / 8%);
+  animation: tgt-hud-in 240ms ease both;
+  transition: border-color 300ms ease;
+}
+
+@keyframes tgt-hud-in {
+  from { opacity: 0; transform: translate(-50%, -6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.tgt-hud.ok {
+  border-color: rgb(86 194 140 / 60%);
+}
+
+.tgt-hud.failed {
+  border-color: var(--ctl-edge-danger);
+}
+
+.tgt-hud-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tgt-hud-head .tgt-skill {
+  color: var(--accent);
+  flex: none;
+}
+
+.tgt-prompt {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tgt-stages {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tgt-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ctl-text-off);
+  transition: color 200ms ease;
+}
+
+/* The dot before each stage; a hairline joins consecutive stages. */
+.tgt-stage::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  box-sizing: border-box;
+  flex: none;
+}
+
+.tgt-stage + .tgt-stage {
+  margin-left: 8px;
+  padding-left: 16px;
+}
+
+.tgt-stage + .tgt-stage::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 8px;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.6;
+}
+
+.tgt-stage.done {
+  color: var(--ok);
+}
+
+.tgt-stage.done::before {
+  background: currentColor;
+}
+
+.tgt-stage.active {
+  color: var(--accent);
+}
+
+.tgt-stage.active::before {
+  background: currentColor;
+  box-shadow: 0 0 0 0 rgb(232 163 61 / 60%);
+  animation: tgt-pulse 1.4s ease-out infinite;
+}
+
+@keyframes tgt-pulse {
+  from { box-shadow: 0 0 0 0 rgb(232 163 61 / 60%); }
+  to { box-shadow: 0 0 0 7px rgb(232 163 61 / 0%); }
+}
+
+.tgt-readout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--ctl-text);
+  min-height: 14px;
+}
+
+.tgt-readout-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tgt-hud.looking .tgt-readout-text::after {
+  content: "…";
+  animation: breathe 1.2s ease-in-out infinite;
+}
+
+.tgt-hud.ok .tgt-readout {
+  color: var(--ok);
+}
+
+.tgt-hud.failed .tgt-readout {
+  color: var(--ctl-danger);
+}
+
+/* Wrist descent progress: hover height down to the stop height. */
+.tgt-bar {
+  flex: 1;
+  min-width: 48px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 12%);
+  overflow: hidden;
+}
+
+.tgt-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 250ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tgt-seen,
+  .tgt-hud,
+  .tgt-layer.looking .tgt-scan,
+  .tgt-stage.active::before {
+    animation: none;
+  }
+
+  .tgt-track {
+    transition: none;
+  }
+}
+
+@media (max-width: 780px) {
+  .tgt-hud {
+    top: 10px;
+    padding: 8px 12px 7px;
+    gap: 5px;
+  }
+
+  .tgt-prompt {
+    font-size: 11px;
+  }
+}
+
 .video-status {
   position: absolute;
   inset: 0;

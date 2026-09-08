@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Innate Inc
 import inspect
 import json
+import numbers
 import os
 import sys
 import threading
@@ -38,6 +39,21 @@ SkillReturn = Union[None, str, "SkillOutput"]
 
 TTS_TOPIC = "/brain/tts"
 TTS_STATUS_TOPIC = "/tts/is_playing"
+TELEMETRY_TOPIC = "/brain/skill_telemetry"
+
+
+def _jsonable(value: Any) -> Any:
+    """Telemetry payload -> JSON-safe: floats rounded to 3 dp, numpy scalars
+    coerced, tuples listed."""
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, numbers.Real):
+        return round(float(value), 3)
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    return value
 
 
 class SkillResult(Enum):
@@ -751,6 +767,7 @@ class Skill(ABC):
         # injected by the server before each run (see invoker.py)
         self.skills: SkillInvoker | None = None
         self._say_publisher = None
+        self._telemetry_publisher = None
         self._tts_status_sub = None
         self._tts_playing = None  # last /tts/is_playing value
         self._storage = None
@@ -1001,6 +1018,17 @@ class Skill(ABC):
         self._say_publisher.publish(String(data=text))
         if wait:
             self._wait_for_speech_end(text)
+
+    def telemetry(self, event: str, **fields: Any) -> None:
+        """Publish one ``{skill, ev, t, ...fields}`` JSON event on
+        /brain/skill_telemetry for UIs that draw what the skill is doing
+        (the webapp's targeting overlay). No-op without a run node."""
+        if self.node is None:
+            return
+        if self._telemetry_publisher is None:
+            self._telemetry_publisher = self.node.create_publisher(String, TELEMETRY_TOPIC, 10)
+        payload = {"skill": self.name, "ev": event, "t": time.time(), **fields}
+        self._telemetry_publisher.publish(String(data=json.dumps(_jsonable(payload))))
 
     def _on_tts_status(self, msg: String) -> None:
         self._tts_playing = msg.data

@@ -23,6 +23,7 @@ import { getConfig } from "../config.js";
 import { robotSessionFactory } from "../robotSession.js";
 import { createVideoStage } from "../teleop/videoStage.js";
 import { createTrajectoryOverlay } from "../teleop/trajectoryOverlay.js";
+import { createTargetingOverlay } from "../teleop/targetingOverlay.js";
 import { createTelemetry } from "../teleop/telemetry.js";
 import { createCameraSwitch } from "../teleop/cameraSwitch.js";
 import { sharedAgentState } from "../teleop/agentState.js";
@@ -255,7 +256,10 @@ function buildAgentView(root) {
   // stack instead of a rail.
   const ribbonStage = realVideo?.el ?? feedFrame.querySelector(".video-stage");
   if (ribbonStage instanceof HTMLElement) {
-    parts.push(createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, cornerStack, ros, session));
+    parts.push(
+      createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, cornerStack, ros, session),
+      createTargetingOverlay(ribbonStage, realVideo?.videoEl ?? null, ros, session),
+    );
   }
 
   session.start();

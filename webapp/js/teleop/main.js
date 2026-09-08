@@ -18,6 +18,7 @@ import { robotSessionFactory } from "../robotSession.js";
 import { mountPage } from "../pageMount.js";
 import { createVideoStage, createAudioToggle } from "./videoStage.js";
 import { createTrajectoryOverlay } from "./trajectoryOverlay.js";
+import { createTargetingOverlay } from "./targetingOverlay.js";
 import { createJoystick } from "./joystick.js";
 import { createKeyboardDrive, createWasdChips } from "./keyboardDrive.js";
 import { createHeadTilt } from "./headTilt.js";
@@ -111,7 +112,10 @@ function buildCockpit(root) {
   // the .video-stage class, and both hide the ribbon off the main camera.
   const ribbonStage = realVideo?.el ?? root.querySelector(".video-stage");
   if (ribbonStage instanceof HTMLElement) {
-    parts.push(createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, rightRail, ros, session));
+    parts.push(
+      createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, rightRail, ros, session),
+      createTargetingOverlay(ribbonStage, realVideo?.videoEl ?? null, ros, session),
+    );
   }
 
   session.start();

@@ -45,6 +45,11 @@ then ``out.message`` / ``out.data`` / ``out.ok``, with ``out.status`` a
 SkillResult enum, never a bare string. (Legacy ``(message, SkillResult)``
 tuple returns still work but are deprecated.)
 
+``self.telemetry(event, **fields)`` publishes one JSON event on
+/brain/skill_telemetry for UIs that draw what the skill is doing — the
+webapp's targeting overlay follows pick_any_object's stages and markers
+through it.
+
 Cancellation is the framework's job, not yours. Use ``self.sleep(seconds)``
 instead of ``time.sleep`` and write loops as if cancel didn't exist: every
 blocking framework call (``self.sleep``, ``self.wait_for``, sub-skill calls,

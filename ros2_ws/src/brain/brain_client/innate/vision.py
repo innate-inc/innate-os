@@ -100,14 +100,15 @@ def _center_px(det):
 
 
 def parse_det_cands(text):
-    """All detections -> [(u, v, grip_strength | None)], best first.
-    (u, v) is the grasp_point when given, else the box center."""
+    """All detections -> [(u, v, grip_strength | None, box | None)], best
+    first. (u, v) is the grasp_point when given, else the box center; box is
+    the (x0, y0, x1, y1) px corners when the reply carried one."""
     cands = []
     for det in parse_dets(text):
         px = _grasp_px(det) or _center_px(det)
         if px is None:
             continue
-        cands.append((px[0], px[1], _grip(det)))
+        cands.append((px[0], px[1], _grip(det), _box_corners_px(det)))
     return cands
 
 

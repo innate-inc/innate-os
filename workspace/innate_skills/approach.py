@@ -9,7 +9,7 @@ target touches the floor), so pick and drop share one hardware-tuned approach.
 import math
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from innate import gemini as gemlib
 from innate import vision
@@ -45,6 +45,7 @@ class ApproachHost(Protocol):
     def name(self) -> str: ...
     def sleep(self, seconds: float) -> None: ...
     def say(self, text: str, wait: bool = False) -> None: ...
+    def telemetry(self, event: str, **fields: Any) -> None: ...
 
 
 APPROACH_PARAMS = {
@@ -77,6 +78,8 @@ APPROACH_PARAMS = {
 }
 
 FOLLOW_TIMEOUT_S = 20.0
+# The webapp glides its tracking marker between events; more only floods rosbridge.
+TRACK_TELEMETRY_S = 0.1
 # How far past the park the dead-reckoned target may come before the drive
 # stops: a target filling the frame reads a stable "2 cm short" even with the
 # bumper against it, so only odometry can bound the endgame.
@@ -166,6 +169,7 @@ class FloorApproach:
 
     def search(self, prompt):
         """Scan: straight, right 30°, left 60°. First hit wins. (+yaw=left)"""
+        self.host.telemetry("stage", stage="search")
         for i, turn in enumerate((0.0, -math.radians(30), math.radians(60))):
             if turn:
                 if i == 1:
@@ -185,6 +189,7 @@ class FloorApproach:
         return self.host.mobility.odom_xyt(self.host.odom)
 
     def rotate_by(self, angle):
+        self.host.telemetry("move", kind="rotate", amount=angle)
         return self.host.mobility.rotate_by(
             self.odom_xyt,
             angle,
@@ -196,6 +201,7 @@ class FloorApproach:
         )
 
     def drive(self, dist):
+        self.host.telemetry("move", kind="drive", amount=dist)
         return self.host.mobility.drive(
             self.odom_xyt,
             dist,
@@ -208,6 +214,13 @@ class FloorApproach:
 
     # --- position the base ---
 
+    def _box_centre(self):
+        """The park's head-camera pixel, or None when the tuning puts it off-image."""
+        c = floor_to_pixel(self.p["sweet_x"], self.p["box_y"], self.p["tilt_deg"])
+        if c is None or not (0 <= c[0] < IMG_W and 0 <= c[1] < IMG_H):
+            return None
+        return (c[0], c[1])
+
     def _sweet_box(self):
         """(centre, (hold_u, hold_v), (accept_u, accept_v)). Two boxes because
         two things measure the park: `accept` is the flow servo's deadband,
@@ -216,12 +229,22 @@ class FloorApproach:
         whose box edge jitters tens of pixels cannot resolve millimetres.
         Two axes as well: near the park one image row is ~cm of RANGE but
         sub-mm of bearing, so one tolerance cannot serve both."""
-        c = floor_to_pixel(self.p["sweet_x"], self.p["box_y"], self.p["tilt_deg"])
-        if c is None or not (0 <= c[0] < IMG_W and 0 <= c[1] < IMG_H):
+        c = self._box_centre()
+        if c is None:
             raise SkillFailed("approach box off-image — check tilt_deg/sweet_x")
         hu, hv = self.p["box_half_px"], self.p["box_half_v_px"]
         hold, accept = self.p["hold_frac"], self.p["accept_frac"]
-        return (c[0], c[1]), (hu * hold, hv * hold), (hu * accept, hv * accept)
+        return c, (hu * hold, hv * hold), (hu * accept, hv * accept)
+
+    def box(self):
+        """The pick box for a UI to draw: centre, outer half-extents and the
+        accept deadband, head-camera px; None when off-image."""
+        c = self._box_centre()
+        if c is None:
+            return None
+        hu, hv = self.p["box_half_px"], self.p["box_half_v_px"]
+        accept = self.p["accept_frac"]
+        return {"cu": c[0], "cv": c[1], "hu": hu, "hv": hv, "au": hu * accept, "av": hv * accept}
 
     def _follow_into_box(self, seed_px, max_forward=None):
         """Optical-flow base servo into the sweet box. No Gemini.
@@ -236,6 +259,7 @@ class FloorApproach:
         in_box = 0
         (cu, cv), _half, accept = self._sweet_box()
         t0 = time.monotonic()
+        last_told = 0.0
         anchor, anchor_odo = (u, v), self.odom_xyt()
         seg_start = anchor_odo
         while time.monotonic() - t0 < FOLLOW_TIMEOUT_S:
@@ -264,7 +288,11 @@ class FloorApproach:
                 self.host.mobility.stop()
                 return "lost", None
 
-            if inside_box((u, v), cu, cv, accept[0], accept[1]):
+            inside = inside_box((u, v), cu, cv, accept[0], accept[1])
+            if inside or time.monotonic() - last_told >= TRACK_TELEMETRY_S:
+                last_told = time.monotonic()
+                self.host.telemetry("track", px=(u, v), inside=inside)
+            if inside:
                 in_box += 1
                 self.host.mobility.stop()
                 anchor, anchor_odo = (u, v), self.odom_xyt()
@@ -313,6 +341,7 @@ class FloorApproach:
     def position_above(self, prompt, xy):
         """Flow-follow into the sweet box; Gemini reseed/confirm. Stepwise if
         no cam. Raises SkillFailed if the target cannot be centred."""
+        self.host.telemetry("stage", stage="approach")
         if not self.host.main_image:
             return self._position_stepwise(prompt, xy)
 
