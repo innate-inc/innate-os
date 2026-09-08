@@ -277,6 +277,25 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     setTimeout(() => void panel.submitText("I skipped the tutorial. Who are you, and where is this?", { quiet: true }), 1500);
   }
 
+  // Back to the white room from anywhere: forget the skip, drop the current attempt,
+  // and let auto-start begin a fresh one once the world is Nowhere again.
+  function restartIntro() {
+    try {
+      localStorage.removeItem(SKIP_KEY);
+      sessionStorage.removeItem(ARMED_KEY);
+    } catch {
+      /* fine */
+    }
+    armedAttempt = "";
+    autoStarted = false;
+    graduationReady = false;
+    showCode = false;
+    panel.setOffers([]);
+    session?.abortChallenge?.();
+    if (environment?.environment?.id !== "void") session?.switchEnvironment?.("void");
+    render(true);
+  }
+
   /** Everything the story handed out; nothing it never mentioned. */
   function earnedSkills() {
     return (storyAgent()?.skills ?? []).filter((id) => !UNMENTIONED_SKILLS.has(id));
@@ -500,6 +519,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const lateActs = new Set(["Who am I", "Go through the door"]);
     const codeAvailable = (inStory && lateActs.has(r.label)) || !!out;
     if ((inStory || inVoid) && !out) actions.append(button("Skip intro", skipIntro, "quiet"));
+    if (session && !switching()) actions.append(button(inStory ? "Restart intro" : "Play the intro", restartIntro, "quiet"));
     if (graduated) {
       actions.append(button("Take it to the apartment", graduate, "primary"));
       actions.append(button("Copy the story", () => void copyStory(), "quiet"));
