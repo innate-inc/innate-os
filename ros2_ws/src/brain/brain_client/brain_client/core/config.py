@@ -9,6 +9,7 @@ which keeps every consumer testable without a ROS runtime.
 Credentials deliberately stay out of the ROS parameter surface: the brain
 reaches Gemini through the Innate proxy (INNATE_SERVICE_KEY) or directly via
 the ``GEMINI_API_KEY`` environment variable (loaded from ``.env`` by launch).
+``brain_backend`` swaps Gemini for a VLM served on the robot (BRAIN_BACKEND=local).
 """
 
 from __future__ import annotations
@@ -40,7 +41,10 @@ class BrainConfig:
     x_cam: float  # camera forward offset from base_link (m)
     height_cam: float  # camera height above the floor (m)
 
-    # --- Local brain (Gemini) ---
+    # --- Local brain ---
+    brain_backend: str  # "gemini" | "local" (transport.BackendChoice)
+    local_llm_url: str  # llama-server base URL, brain_backend=local only
+    local_llm_model: str  # model name sent to (and aliased by) llama-server
     gemini_model: str
     gemini_thinking_level: str  # "low" | "high"; "" = model default
     idle_turn_interval: float  # seconds between looks when no skill is running
@@ -100,7 +104,10 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     "vertical_fov": 80.0,
     "x_cam": 0.0197,
     "height_cam": 0.19663,
-    # --- Local brain (Gemini) ---
+    # --- Local brain ---
+    "brain_backend": "gemini",
+    "local_llm_url": "http://127.0.0.1:8080",
+    "local_llm_model": "qwen3.5-2b",
     "gemini_model": "gemini-3.6-flash",
     # "minimal" | "low" | "medium" | "high"; "" = model default.
     # Measured on 3.6-flash (2026-08): minimal is ~3x faster than the

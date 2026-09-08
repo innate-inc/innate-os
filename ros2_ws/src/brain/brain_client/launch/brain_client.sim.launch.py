@@ -46,6 +46,21 @@ def generate_launch_description():
         default_value="True",
         description="Flag to enable full brain turn logging",
     )
+    brain_backend_arg = DeclareLaunchArgument(
+        "brain_backend",
+        default_value=get_env("BRAIN_BACKEND", "gemini"),
+        description="'gemini' (proxy or key) or 'local' (an OpenAI-compatible VLM server at local_llm_url)",
+    )
+    local_llm_url_arg = DeclareLaunchArgument(
+        "local_llm_url",
+        default_value=get_env("LOCAL_LLM_URL", "http://127.0.0.1:8080"),
+        description="llama-server base URL (brain_backend=local)",
+    )
+    local_llm_model_arg = DeclareLaunchArgument(
+        "local_llm_model",
+        default_value=get_env("LOCAL_LLM_MODEL", "qwen3.5-2b"),
+        description="Model name the local server answers to (brain_backend=local)",
+    )
     gemini_model_arg = DeclareLaunchArgument(
         "gemini_model",
         default_value=get_env("GEMINI_MODEL", "gemini-3.6-flash"),
@@ -65,6 +80,9 @@ def generate_launch_description():
                 "current_nav_mode_topic": LaunchConfiguration("current_nav_mode_topic"),
                 "log_everything": LaunchConfiguration("log_everything"),
                 "gemini_model": LaunchConfiguration("gemini_model"),
+                "brain_backend": LaunchConfiguration("brain_backend"),
+                "local_llm_url": LaunchConfiguration("local_llm_url"),
+                "local_llm_model": LaunchConfiguration("local_llm_model"),
                 # Sim camera mount (the config.py defaults are the hardware's).
                 "x_cam": 0.0,
                 "height_cam": 0.2,
@@ -85,6 +103,9 @@ def generate_launch_description():
             current_nav_mode_topic_arg,
             log_everything_arg,
             gemini_model_arg,
+            brain_backend_arg,
+            local_llm_url_arg,
+            local_llm_model_arg,
             brain_client_node,
             Node(
                 package="brain_client",

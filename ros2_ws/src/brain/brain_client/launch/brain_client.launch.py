@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
-from mars_bringup.config_loader import get_env, load_env_file, settings_params
+from mars_bringup.config_loader import get_env, innate_os_root, load_env_file, settings_params
 
 from brain_client.common.logging import get_logging_env_vars
 
@@ -60,6 +61,21 @@ def generate_launch_description():
         default_value=get_env("GEMINI_MODEL", "gemini-3.6-flash"),
         description="Gemini model powering the local brain",
     )
+    brain_backend_arg = DeclareLaunchArgument(
+        "brain_backend",
+        default_value=get_env("BRAIN_BACKEND", "gemini"),
+        description="'gemini' (proxy or key) or 'local' (a VLM served on the robot by llama-server)",
+    )
+    local_llm_url_arg = DeclareLaunchArgument(
+        "local_llm_url",
+        default_value=get_env("LOCAL_LLM_URL", "http://127.0.0.1:8080"),
+        description="llama-server base URL (brain_backend=local)",
+    )
+    local_llm_model_arg = DeclareLaunchArgument(
+        "local_llm_model",
+        default_value=get_env("LOCAL_LLM_MODEL", "qwen3.5-2b"),
+        description="Model name the local server answers to (brain_backend=local)",
+    )
 
     # --- Proxy service configuration ---
     # These are service configs (not credentials) - credentials come from env vars
@@ -82,6 +98,9 @@ def generate_launch_description():
                 "current_nav_mode_topic": LaunchConfiguration("current_nav_mode_topic"),
                 "log_everything": LaunchConfiguration("log_everything"),
                 "gemini_model": LaunchConfiguration("gemini_model"),
+                "brain_backend": LaunchConfiguration("brain_backend"),
+                "local_llm_url": LaunchConfiguration("local_llm_url"),
+                "local_llm_model": LaunchConfiguration("local_llm_model"),
                 # Proxy service config
                 "cartesia_voice_id": LaunchConfiguration("cartesia_voice_id"),
             },
@@ -105,9 +124,23 @@ def generate_launch_description():
             current_nav_mode_topic_arg,
             log_everything_arg,
             gemini_model_arg,
+            brain_backend_arg,
+            local_llm_url_arg,
+            local_llm_model_arg,
             # Proxy service config args
             cartesia_voice_id_arg,
             brain_client_node,
+            # The on-robot VLM, only when chosen: ~3 GB of the Jetson's RAM. It
+            # lives here rather than in a systemd unit so it starts and stops
+            # with the stack (`innate restart`) and needs no sudo to enable.
+            ExecuteProcess(
+                cmd=[str(innate_os_root() / "scripts" / "local_llm_server.sh")],
+                name="local_llm_server",
+                output="screen",
+                respawn=True,
+                respawn_delay=5.0,
+                condition=IfCondition(PythonExpression(["'", LaunchConfiguration("brain_backend"), "' == 'local'"])),
+            ),
             Node(
                 package="brain_client",
                 executable="skills_server.py",

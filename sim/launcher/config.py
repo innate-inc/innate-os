@@ -86,11 +86,13 @@ PUBLISHED_PORT_ENV = {
     "SIM_UDP_PORT": str(SIM_UDP_PORT),
     "SIM_FOXGLOVE_PORT": str(SIM_FOXGLOVE_PORT),
 }
-# How brain_client reaches Gemini: through the Innate proxy with a service key,
-# straight at Google with a Gemini key, or not at all.
+# How brain_client reaches its model: through the Innate proxy with a service key,
+# straight at Google with a Gemini key, a VLM server of its own, or not at all.
 INNATE_BACKEND = "innate"
 GEMINI_BACKEND = "gemini"
+LOCAL_BACKEND = "local"
 NO_BACKEND = "none"
+BRAIN_BACKEND = "BRAIN_BACKEND"
 GEMINI_API_KEY = "GEMINI_API_KEY"
 INNATE_SERVICE_KEY = "INNATE_SERVICE_KEY"
 AUTO_OS_IMAGE = "auto"
@@ -461,13 +463,16 @@ def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
 
 
 def resolve_brain_backend(env: dict[str, str]) -> str:
-    """Which key the in-process brain (brain_client) will use to reach Gemini.
+    """Which way the in-process brain (brain_client) will reach its model.
 
-    The service key wins: it also buys voice, which a Gemini key does not.
-    brain_client's `Backend` (brain/transport.py) makes the real choice and owns
-    this precedence; the launcher runs on the host and cannot import it, so this
+    BRAIN_BACKEND=local wins outright (no key involved); otherwise the service
+    key wins: it also buys voice, which a Gemini key does not. brain_client's
+    `pick_transport` (brain/transport.py) makes the real choice and owns this
+    precedence; the launcher runs on the host and cannot import it, so this
     restates the rule. Change one and change the other.
     """
+    if env.get(BRAIN_BACKEND, "").strip().lower() == LOCAL_BACKEND:
+        return LOCAL_BACKEND
     if is_configured_secret_value(INNATE_SERVICE_KEY, env.get(INNATE_SERVICE_KEY, "")):
         return INNATE_BACKEND
     if is_configured_secret_value(GEMINI_API_KEY, env.get(GEMINI_API_KEY, "")):

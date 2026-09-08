@@ -39,6 +39,7 @@ from config import (
     LEGACY_CLOUD_AGENT_CONTAINER,
     LEGACY_SHARED_CONTAINER,
     LEGACY_SHARED_PROJECT,
+    LOCAL_BACKEND,
     NO_BACKEND,
     OS_BUILD_LOG_PATH,
     OS_CONTAINER_NAME,
@@ -2933,6 +2934,8 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
         llm_level, llm_label = "warn", "no key"
     elif config["brain_backend"] == INNATE_BACKEND:
         llm_level, llm_label = "healthy", "innate proxy"
+    elif config["brain_backend"] == LOCAL_BACKEND:
+        llm_level, llm_label = "healthy", "local llm"
     else:
         llm_level, llm_label = "healthy", "gemini key"
 

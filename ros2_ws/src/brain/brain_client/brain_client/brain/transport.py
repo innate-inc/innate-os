@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""How the brain reaches Gemini: the Innate proxy (managed) or GEMINI_API_KEY (dev).
+"""How the brain reaches its model: the Innate proxy (managed), GEMINI_API_KEY
+(dev), or a VLM served on the robot itself (:mod:`brain_client.brain.local_llm`).
 
 The proxy holds the upstream key and passes native Gemini calls — the turn
 stream and the memory search's blocking generate / context-cache management —
 through untouched (the robot authenticates with its service key); the direct
 path talks to ``generativelanguage.googleapis.com``. Both speak the same wire
-format — a transport only moves payloads and never interprets them.
+format — a transport only moves payloads and never interprets them. The local
+transport is the one exception: it translates that format for llama-server.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import httpx
 
+from brain_client.brain.local_llm import local_transport
 from brain_client.common.enums import StrEnum
 
 if TYPE_CHECKING:
@@ -66,20 +69,33 @@ class GeminiRest:
 
 
 class Backend(StrEnum):
-    """Which way the brain reaches Gemini (surfaced in health and telemetry)."""
+    """Which way the brain reaches its model (surfaced in health and telemetry)."""
 
     PROXY = "innate-proxy"
     DIRECT = "gemini-direct"
+    LOCAL = "local-llm"
     UNCONFIGURED = "unconfigured"
 
 
-def pick_transport(proxy: ProxyClient | None) -> tuple[Transport | None, Backend]:
-    """The way to reach Gemini: the Innate proxy (managed) or GEMINI_API_KEY (dev).
+class BackendChoice(StrEnum):
+    """The ``brain_backend`` setting: Gemini (proxy or key, whichever is configured) or the on-robot VLM."""
+
+    GEMINI = "gemini"
+    LOCAL = "local"
+
+
+def pick_transport(
+    proxy: ProxyClient | None, choice: str = BackendChoice.GEMINI, *, local_url: str = "", local_model: str = ""
+) -> tuple[Transport | None, Backend]:
+    """The way to reach the model: llama-server on the robot when chosen, else
+    the Innate proxy (managed) or GEMINI_API_KEY (dev).
 
     sim/launcher/config.py:resolve_brain_backend predicts this choice from the
     host (it cannot import this module) to label the dashboard; change the
     precedence here and change it there.
     """
+    if choice == BackendChoice.LOCAL:
+        return local_transport(local_url, local_model), Backend.LOCAL
     if proxy is not None and proxy.is_available():
         return proxy_transport(proxy), Backend.PROXY
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()

@@ -31,10 +31,11 @@ from typing import TYPE_CHECKING
 
 from brain_client.brain import grounding
 from brain_client.brain.context import Decision, GeminiContext, ToolCall
+from brain_client.brain.local_llm import LOCAL_HISTORY_MAX_ENTRIES
 from brain_client.brain.loop import LoopThread
 from brain_client.brain.prompt import build_system_prompt, self_reference_turns
 from brain_client.brain.tools import GO_TO_POINT_IN_VIEW, STOP_SKILL, WAIT, assign_tool_names, build_tools
-from brain_client.brain.transport import pick_transport
+from brain_client.brain.transport import Backend, pick_transport
 from brain_client.brain.utils import (
     Event,
     EventKind,
@@ -119,13 +120,20 @@ class BrainAgent:
         if config.timezone.strip() and self._timezone is None:
             self._logger.warn(f"[Brain] Unknown timezone '{config.timezone}' — using the host's local zone")
 
-        transport, self.backend = pick_transport(proxy)
+        transport, self.backend = pick_transport(
+            proxy, config.brain_backend, local_url=config.local_llm_url, local_model=config.local_llm_model
+        )
+        local = self.backend == Backend.LOCAL
+        self.model = config.local_llm_model if local else config.gemini_model
+        max_history = (
+            min(config.history_max_entries, LOCAL_HISTORY_MAX_ENTRIES) if local else config.history_max_entries
+        )
         self._context = (
             GeminiContext(
                 transport,
-                model=config.gemini_model,
+                model=self.model,
                 thinking_level=config.gemini_thinking_level,
-                max_history=config.history_max_entries,
+                max_history=max_history,
                 max_image_turns=config.history_max_image_turns,
                 reference=self_reference_turns(),
             )
@@ -168,7 +176,7 @@ class BrainAgent:
 
     @property
     def available(self) -> bool:
-        """Whether the brain can reach Gemini — true exactly when a context exists."""
+        """Whether the brain has a way to reach a model — true exactly when a context exists."""
         return self._context is not None
 
     @property
@@ -186,8 +194,8 @@ class BrainAgent:
         """Spawn the agent loop; False when it refused (caller must not report active)."""
         if not self.available:
             self._chat.emit_system(
-                "⚠️ The brain has no way to reach Gemini — configure the Innate proxy "
-                "(INNATE_SERVICE_KEY) or set GEMINI_API_KEY in innate-os/.env and restart."
+                "⚠️ The brain has no way to reach a model — configure the Innate proxy "
+                "(INNATE_SERVICE_KEY), set GEMINI_API_KEY, or set BRAIN_BACKEND=local in innate-os/.env and restart."
             )
         if self._runtime.running:
             return True
@@ -239,6 +247,9 @@ class BrainAgent:
         try:
             while True:
                 await self._await_camera()
+                if self._nothing_to_react_to():
+                    await self._pause(self._interval())
+                    continue
                 self._user_spoke.clear()
                 turn = asyncio.ensure_future(self._turn(context))
                 spoke = asyncio.ensure_future(self._user_spoke.wait())
@@ -265,6 +276,15 @@ class BrainAgent:
                 if task is not None:
                     task.cancel()  # stop() can land mid-race; the turn dies with the loop
 
+    def _nothing_to_react_to(self) -> bool:
+        """A local brain turns only for the user and its skills: an idle look is
+        two seconds of GPU a 2B model spends narrating the scene (brain/local_llm.py),
+        and motion alone is not worth one either."""
+        if self.backend != Backend.LOCAL:
+            return False
+        self._events[:] = [event for event in self._events if event.kind != EventKind.MOTION]
+        return not self._events
+
     def _abandon(self, turn: asyncio.Task[None]) -> bool:
         """Cancel a thinking turn the user just talked over — unless it already
         holds the floor. try_abandon is atomic with the reply stream: a plain
@@ -278,7 +298,7 @@ class BrainAgent:
         return True
 
     async def _turn(self, context: GeminiContext) -> None:
-        """One turn: look at the world, think with Gemini, commit, act.
+        """One turn: look at the world, think with the model, commit, act.
 
         ``events`` is a peek at the queue — consumed only when the turn
         commits, so a failed or abandoned turn re-sends the same events.
@@ -471,6 +491,11 @@ class BrainAgent:
     def _build_tools(self, events: list[Event]) -> list[dict]:
         running = self._state.primitive_running
         user_spoke = any(event.kind == EventKind.USER for event in events)
+        if running is None and self.backend == Backend.LOCAL and not user_spoke:
+            # The on-robot model invents skill calls when nobody asked (brain/local_llm.py):
+            # only the user's own words unlock the skills.
+            self._tool_map = {}
+            return build_tools([], None)
         active_ids = set(self._roster.active_skill_ids())
         skills = [meta for meta in self._state.registry.metadata if meta["id"] in active_ids]
         # One naming pass feeds both the declarations and the dispatch map, so
@@ -698,7 +723,7 @@ class BrainAgent:
             TraceEvent.SNAPSHOT,
             active=self._state.is_brain_active,
             backend=self.backend,
-            model=self._config.gemini_model,
+            model=self.model,
             turn=self._turn_count,
             in_flight=self._turn_in_flight,
             thinking_for=self._elapsed() if self._turn_in_flight else 0,

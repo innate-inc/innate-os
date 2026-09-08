@@ -466,6 +466,9 @@ def agent_factory(monkeypatch):
         logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
         node = SimpleNamespace(get_logger=lambda: logger)
         config = SimpleNamespace(
+            brain_backend="gemini",
+            local_llm_url="",
+            local_llm_model="",
             gemini_model="m",
             gemini_thinking_level="",
             history_max_entries=60,

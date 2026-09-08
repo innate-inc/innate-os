@@ -108,7 +108,7 @@ class BrainClientNode(Node):
         self._startup()
 
         self.get_logger().info(
-            f"\033[1;92m[BrainClient] BrainClientNode initialized (local Gemini brain via {self.brain.backend})\033[0m"
+            f"\033[1;92m[BrainClient] BrainClientNode initialized (brain via {self.brain.backend}, {self.brain.model})\033[0m"
         )
 
     # ================= construction helpers =================
