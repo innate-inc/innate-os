@@ -19,6 +19,13 @@ const UNMENTIONED_SKILLS = new Set(["innate-os/open_gripper"]);
 const WAVE = "innate-os/wave";
 const MEMORY = "innate-os/search_memory";
 const GRADUATION_MAX_WAIT_MS = 25_000;
+// Acts the world opens with a line, so MARS speaks before the visitor is asked to move;
+// the give-up path has no "Got it" to hand the brain its turn.
+const ACT_OPENERS = /** @type {Record<string, string>} */ ({
+  "Pick up the can": "Something just landed on the floor in front of you.",
+  "Who am I": "The can is beside the point. Who are you, anyway?",
+  "Go through the door": "A door. Standing on its own, right there.",
+});
 // A grant is a turn for the brain, not only a toolset change: the chip says it out loud.
 const GRANT_LINES = /** @type {Record<string, string>} */ ({
   "innate-os/head_emotion": "Here. You have a face now.",
@@ -326,6 +333,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const granted = agentState.get().activeSkills;
     /** @type {Array<{text: string, kind: string, onSelect: (text: string) => void}>} */
     const chips = [];
+    if (ACT_OPENERS[r.label] && opts.transcript().length <= canWaitFrom) return { chips: [], exclusive: false }; // MARS speaks first
     const personas = r.personas ?? [];
     if (personas.length) {
       // The persona choice owns the row: nothing else competes with it.
@@ -333,7 +341,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       chips.push({ text: "Surprise me", kind: "persona", onSelect: () => choose({ persona: personas[Math.floor(Math.random() * personas.length)] }) });
       return { chips, exclusive: true };
     }
-    if (r.label === "Pick up the can" && opts.transcript().length <= canWaitFrom) return { chips: [], exclusive: false }; // MARS reacts first
     for (const skill of r.wants ?? []) {
       if (granted.has(skill) || INTERNAL_SKILLS.has(skill) || skill === WAVE) continue;
       chips.push({ text: `Give it ${skillLabel(skill)}`, kind: "grant", onSelect: () => grant(skill) });
@@ -398,10 +405,11 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     // Act bookkeeping: transcript marks for the story card, stale chips, the grasp camera.
     if (r && r.act !== seenAct) {
       if (seenAct >= 0) panel.clearSuggestedPrompts();
-      if (r.label === "Pick up the can") {
+      if (ACT_OPENERS[r.label]) {
         canWaitFrom = opts.transcript().length;
-        marks.can = canWaitFrom;
-        setTimeout(() => void panel.narrate("Something just landed on the floor in front of you."), 300);
+        if (r.label === "Pick up the can") marks.can = canWaitFrom;
+        const line = ACT_OPENERS[r.label];
+        setTimeout(() => void panel.narrate(line), 300);
       }
       seenAct = r.act;
     }
