@@ -43,6 +43,6 @@ pin_if_present INNATE_OS_IMAGE "innate-os-sim-clean-innate:inputs-3acfd3403d107c
 # refuses to install a partial geometry store from it. The launcher reuses an
 # installed store whose geometry inputs are unchanged; to seed one, set
 # INNATE_SIM_ASSETS_IMAGE to upstream's published image for the merged base
-# (README, "On Docker Desktop with WSL").
+# (FINDINGS.md, "Bringing the live stack up from this fork").
 
 exec ./innate-sim "$@"
