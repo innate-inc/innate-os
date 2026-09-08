@@ -21,6 +21,13 @@ import { primaryCameraName } from "./trajectoryOverlay.js";
 const SIM_HEAD_LENS = { fx: 200.3, fy: 267.3, cx: 319.1, cy: 248.7 };
 // How long the verdict stays up after the run ends.
 const RESULT_LINGER_MS = 4000;
+// A run whose end never arrived (rosbridge dropped, the server died) must not
+// stay on screen: nothing heard for this long clears it.
+const IDLE_CLEAR_MS = 60000;
+// An event carrying another run's id replaces the shown run only when that
+// run is finished or has gone quiet; while it is live, such events are
+// stragglers from the run before and are dropped.
+const STALE_MS = 2000;
 // A page opened mid-run missed the start event: it draws in the head camera's
 // native frame until the next event, every one of which repeats the run's
 // header, rather than showing nothing until the next run.
@@ -48,6 +55,7 @@ const DEFAULT_FRAME = { w: 640, h: 480 };
 /**
  * One run of a skill, as the overlay understands it.
  * @typedef {{
+ *   id: string,
  *   skill: string,
  *   prompt: string,
  *   stages: string[],
@@ -58,6 +66,7 @@ const DEFAULT_FRAME = { w: 640, h: 480 };
  *   progress: number | null,
  *   result: { ok: boolean, text: string } | null,
  *   markers: Map<string, Marker>,
+ *   seen: number,
  * }} Run
  */
 
@@ -158,10 +167,16 @@ function stageList(v) {
   return Array.isArray(v) ? v.filter((/** @type {unknown} */ s) => typeof s === "string") : [];
 }
 
+/** @param {any} ev @returns {string} the run id the event carries, "" when none */
+function runId(ev) {
+  return typeof ev.run === "string" ? ev.run : "";
+}
+
 /** @param {any} ev a run-start event, or any first event of a run missed at its start
- * @returns {Run} */
-function startRun(ev) {
+ * @param {number} now @returns {Run} */
+function startRun(ev, now) {
   return {
+    id: runId(ev),
     skill: ev.skill,
     prompt: typeof ev.prompt === "string" ? ev.prompt : "",
     stages: stageList(ev.stages),
@@ -172,6 +187,7 @@ function startRun(ev) {
     progress: null,
     result: null,
     markers: new Map(),
+    seen: now,
   };
 }
 
@@ -208,21 +224,30 @@ function endRun(run, ev) {
 /**
  * Fold one overlay event into the run. Returns the run to keep showing, or
  * null when there is none. A run ends with its result set; the caller decides
- * how long that lingers. A finished run's own stray events never revive it,
- * but another skill's first event opens a fresh run over the verdict.
+ * how long that lingers. Events are matched to the run by the id the SDK
+ * stamps on them: a finished run's own stragglers never revive it, another
+ * run's end never closes it, and another run's first event opens a fresh run
+ * over a verdict or a run gone quiet.
  * @param {Run | null} run
  * @param {any} ev
+ * @param {number} [now]
  * @returns {Run | null}
  */
-export function applyEvent(run, ev) {
+export function applyEvent(run, ev, now = Date.now()) {
   if (!ev || typeof ev !== "object" || typeof ev.ev !== "string" || typeof ev.skill !== "string") return run;
+  const isEnd = ev.ev === "run" && ev.state === "end";
+  if (run && runId(ev) !== run.id) {
+    if (isEnd || (!run.result && now - run.seen < STALE_MS)) return run;
+    run = null;
+  }
   if (ev.ev === "run") {
-    if (ev.state === "start") return startRun(ev);
-    if (ev.state === "end" && run && !run.result) endRun(run, ev);
+    if (ev.state === "start") return startRun(ev, now);
+    if (isEnd && run && !run.result) endRun(run, ev);
     return run;
   }
-  if (run?.result && ev.skill === run.skill) return run;
-  if (!run || run.result) run = startRun(ev);
+  if (run?.result) return run;
+  run ??= startRun(ev, now);
+  run.seen = now;
   adoptHeader(run, ev);
   switch (ev.ev) {
     case "stage":
@@ -296,11 +321,20 @@ function createRunStore() {
   let run = null;
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let lingerTimer;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let idleTimer;
   /** @type {Set<() => void>} */
   const listeners = new Set();
 
   function notify() {
     for (const cb of listeners) cb();
+  }
+
+  function clear() {
+    clearTimeout(lingerTimer);
+    clearTimeout(idleTimer);
+    run = null;
+    notify();
   }
 
   /** @param {any} msg std_msgs/String */
@@ -317,6 +351,8 @@ function createRunStore() {
     const next = applyEvent(run, ev);
     if (next !== run) clearTimeout(lingerTimer); // a new run replaces a lingering verdict
     run = next;
+    clearTimeout(idleTimer);
+    if (run && !run.result) idleTimer = setTimeout(clear, IDLE_CLEAR_MS);
     // Only the transition into a verdict arms the linger: later events of a
     // finished run (or a stray one) must not keep pushing it out.
     if (run?.result && !ended) {
@@ -329,6 +365,10 @@ function createRunStore() {
   }
 
   ros.subscribe(SKILL_OVERLAY_TOPIC, onOverlay, undefined, "std_msgs/msg/String");
+  // The end of a run published while the socket was down is gone for good.
+  ros.onStateChange((state) => {
+    if (state !== "connected" && run) clear();
+  });
   return {
     run: () => run,
     /** @param {() => void} cb */

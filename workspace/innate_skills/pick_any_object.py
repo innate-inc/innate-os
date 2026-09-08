@@ -265,7 +265,7 @@ class PickAnyObject(Skill):
             "Empty list if not present.",
             self._p["settle_s"],
         )
-        cands = vision.parse_det_cands(text)
+        cands = vision.parse_det_cands_boxed(text)
         cand = self._choose_cand(cands) if cands else None
         if cand is None:
             self.overlay.clear("target")

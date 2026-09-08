@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol
 
@@ -28,6 +29,27 @@ Publish = Callable[[str], None]
 
 class _Logger(Protocol):
     def warning(self, msg: str) -> None: ...
+
+
+# The run every overlay event belongs to, process-wide like the run cancel
+# latch: a sub-skill's overlay draws into its root's run, and the UI drops
+# stragglers from a run that has already ended.
+_run_id = ""
+_run_drew = False
+
+
+def start_run() -> str:
+    """Server hook: open a run for the root skill about to execute."""
+    global _run_id, _run_drew
+    _run_id = uuid.uuid4().hex[:8]
+    _run_drew = False
+    return _run_id
+
+
+def end_run() -> None:
+    global _run_id, _run_drew
+    _run_id = ""
+    _run_drew = False
 
 
 def _jsonable(value: Any) -> Any:
@@ -56,7 +78,6 @@ class Overlay:
         self._publish = publish
         self._logger = logger
         self._header: dict[str, Any] = {}
-        self._active = False
         self._last_mark: dict[str, tuple[float, dict[str, Any]]] = {}
         self._last_readout: tuple[str, bool, float | None] | None = None
 
@@ -119,11 +140,11 @@ class Overlay:
         self._emit("clear", ids=list(ids), view=view)
 
     def end(self, ok: bool, cancelled: bool, text: str) -> None:
-        """Close the run with its result. The server's call, made after execute() returns."""
-        if not self._active:
+        """Close the run with its result. The server's call on the root skill,
+        made after execute() returns; silent when nothing in the run drew."""
+        if not _run_drew:
             return
         self._emit("run", state="end", ok=ok, cancelled=cancelled, text=text)
-        self._active = False
         self._header = {}
         self._last_mark.clear()
         self._last_readout = None
@@ -142,10 +163,11 @@ class Overlay:
         self._emit("mark", id=id, **fields)
 
     def _emit(self, event: str, **fields: Any) -> None:
-        payload = {"skill": self._skill, "ev": event, "t": time.time(), **self._header, **fields}
+        global _run_drew
+        payload = {"skill": self._skill, "run": _run_id, "ev": event, "t": time.time(), **self._header, **fields}
         try:
             self._publish(json.dumps(_jsonable(payload)))
         except Exception as e:  # noqa: BLE001 — a side channel must never become the run's failure
             self._logger.warning(f"[{self._skill}] overlay '{event}' dropped: {e}")
             return
-        self._active = True
+        _run_drew = True

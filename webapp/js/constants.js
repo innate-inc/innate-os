@@ -163,7 +163,8 @@ export const MEMORY_SEARCH_TOPIC = "/brain/memory_search";
 export const SKILL_STATUS_UPDATE_TOPIC = "/brain/skill_status_update";
 
 // What a running skill draws over the cameras, for the targeting overlay
-// (std_msgs/String JSON: {skill, ev, t, ...} from Skill.overlay in the SDK).
+// (std_msgs/String JSON: {skill, run, ev, t, ...} from Skill.overlay in the SDK;
+// `run` is the id the server stamps on every event of one root skill's run).
 // {ev:"run", state:"start", prompt, stages:[...], frame:[w,h]} opens a run and
 // the server's {ev:"run", state:"end", ok, cancelled, text} closes it; between
 // them {ev:"stage", name}, {ev:"readout", text, busy, progress}, {ev:"mark", id,
