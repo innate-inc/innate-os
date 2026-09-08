@@ -149,6 +149,10 @@ def test_astra_turn_gets_fresh_text_and_image_and_tools_bypass_skill_slot(pad, a
     def transport(model, body):
         requests.append(body)
         assert body["service_tier"] == "priority"
+        system = next(item for item in body["input"] if item.get("role") == "developer")["content"][0]["text"]
+        assert "Quietly maintain your map notes, including while idle" in system
+        assert all(name in system for name in NOTE_TOOL_NAMES)
+        assert system.index("Map scratchpad:") < system.index("Your directive:")
         live = next(
             item
             for item in body["input"]
@@ -185,7 +189,10 @@ def test_astra_turn_gets_fresh_text_and_image_and_tools_bypass_skill_slot(pad, a
 
     monkeypatch.setattr(module, "pick_openai_transport", lambda proxy: (transport, "test"))
     agent, state = agent_factory(
-        brain_provider="openai", openai_model="gpt-6-astra", openai_reasoning_effort="low", openai_service_tier="priority"
+        brain_provider="openai",
+        openai_model="gpt-6-astra",
+        openai_reasoning_effort="low",
+        openai_service_tier="priority",
     )
     agent._map_notes = store
     agent._pose.current_pose_xyt = lambda: (1, 1, 0)
@@ -212,6 +219,31 @@ def test_astra_turn_gets_fresh_text_and_image_and_tools_bypass_skill_slot(pad, a
         ToolCall("remove_map_note", {"note_id": note["id"], "expected_revision": 1}, "delete1")
     )
     assert len(store.snapshot()["notes"]) == 1
+
+
+@pytest.mark.parametrize("provider,has_store", [("gemini", True), ("openai", False)])
+def test_scratchpad_prompt_is_absent_when_note_tools_are_unavailable(
+    pad, agent_factory, monkeypatch, provider, has_store
+):
+    from brain_client.brain import agent as module
+
+    requests = []
+
+    def transport(model, body):
+        requests.append(body)
+        if provider == "openai":
+            return [completed(call_item())]
+        return [test_local_brain.model_response(test_local_brain.call_part("wait", {}))]
+
+    monkeypatch.setattr(module, "pick_openai_transport", lambda proxy: (transport, "test"))
+    agent, _ = agent_factory(brain_provider=provider, openai_model="gpt-6-astra", openai_reasoning_effort="low")
+    agent._map_notes = pad[0] if has_store else None
+    if provider == "gemini":
+        agent._context._transport = transport
+    run_turn(agent)
+    assert len(requests) == 1
+    assert all(name not in json.dumps(requests[0]) for name in NOTE_TOOL_NAMES)
+    assert "Map scratchpad:" not in json.dumps(requests[0])
 
 
 def test_geometry_change_namespaces_notes_and_near_query_is_bounded(pad, tmp_path):

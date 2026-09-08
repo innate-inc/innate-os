@@ -334,6 +334,7 @@ class BrainAgent:
             directive.get_prompt() if directive else None,
             identity=self._identity.current if self._identity is not None else None,
             running_guidance=self._running_guidance(self._state.primitive_running),
+            map_notes_enabled=self._map_notes is not None and self.provider == "openai",
         )
         if self._state.log_everything:
             self._logger.info(f"[Brain] Turn input:\n{text}")
