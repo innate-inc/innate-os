@@ -78,7 +78,8 @@ export function createNotesOverlay(root, ros, geometry) {
         operation,
         arguments: args,
         map_ref: snapshot?.map_ref,
-        request_id: crypto.randomUUID(),
+        // Robot HTTP origins lack randomUUID; getRandomValues is available there too.
+        request_id: Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join(""),
       }),
     });
     const result = JSON.parse(reply.response);
