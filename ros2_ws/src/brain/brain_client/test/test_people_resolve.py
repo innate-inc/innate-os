@@ -786,6 +786,37 @@ def test_forgetting_a_tag_drops_its_belief():
     assert resolver.identity("P1").person_id is None
 
 
+def test_a_forgotten_track_is_suppressed_and_never_re_enrols():
+    """RFC section 8: forget_person "suppresses the live track". Without that,
+    the person who just asked to be forgotten walks straight back into the
+    roster as a new id, because the track is still standing there enrolling."""
+    roster = FakeRoster()
+    resolver = Resolver(roster)
+    enrol_frames(resolver)
+    resolver.resolve([FakeTrack(first_seen=99.0, last_seen=102.4)], 102.4)
+    assert len(roster.created) == 1
+
+    roster.people.clear()  # what PeopleStore.forget did to the record
+    resolver.forget("P1")
+
+    enrol_frames(resolver, start=110.0)
+    resolver.resolve([FakeTrack(first_seen=99.0, last_seen=112.4)], 112.4)
+    assert len(roster.created) == 1
+    assert resolver.identity("P1").person_id is None
+
+
+def test_the_suppression_dies_with_the_track_it_was_set_on():
+    """A tag is never reused, so the next person to carry one enrols normally."""
+    roster = FakeRoster()
+    resolver = Resolver(roster)
+    resolver.forget("P1")
+    resolver.resolve([FakeTrack("P2", 0.0, 0.0)], 0.0)  # P1 is gone from the tracker
+
+    enrol_frames(resolver)
+    resolver.resolve([FakeTrack(first_seen=99.0, last_seen=102.4)], 102.4)
+    assert len(roster.created) == 1
+
+
 def test_resolve_drops_the_beliefs_of_tracks_that_are_gone():
     resolver = Resolver(roster_with())
     commit_theo(resolver)

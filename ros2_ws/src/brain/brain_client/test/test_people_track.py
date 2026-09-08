@@ -79,6 +79,22 @@ def test_a_tag_is_never_reused_after_its_track_dies():
     assert [t.tag for t in tracks] == ["P2"]
 
 
+def test_a_restart_resumes_the_counter_instead_of_handing_out_p1_again():
+    """The people node respawns under launch, and its latched snapshot outlives
+    it: a skill looping on ``find("P1")`` would find a stranger under the old
+    tag two seconds later (RFC 5.3.7)."""
+    tracker = Tracker(first_tag=7)
+    assert [t.tag for t in tracker.update([detection()], 100.0)] == ["P7"]
+    assert tracker.next_tag == 8
+
+
+def test_the_counter_a_restart_would_resume_from_is_readable():
+    tracker = Tracker()
+    assert tracker.next_tag == 1
+    tracker.update([detection(), detection(shifted(BOX, dx=0.3))], 100.0)
+    assert tracker.next_tag == 3
+
+
 def test_a_tracked_person_keeps_their_tag_across_frames():
     tracker = Tracker()
     tracks = tracker.update([detection()], 100.0)

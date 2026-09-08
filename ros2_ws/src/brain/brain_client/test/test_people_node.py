@@ -551,14 +551,14 @@ def test_every_declared_parameter_reaches_a_config_field():
 # ------------------------------------------------------- one tick, end to end
 
 
-def _adapters(store: PeopleStore, tmp_path):
+def _adapters(store: PeopleStore, tmp_path, *, frames=None, scribe=None):
     """The real adapters around a real engine with scripted backends; the node
     itself is a mock, so every ROS call is recorded rather than made."""
     from brain_client.people.backends import Backends, FixedDetector
     from brain_client.people.engine import EngineConfig, PeopleEngine
     from brain_client.people.types import Detection
 
-    detector = FixedDetector([[Detection(box=(0.10, 0.30, 0.93, 0.56), score=0.9)]])
+    detector = FixedDetector(frames or [[Detection(box=(0.10, 0.30, 0.93, 0.56), score=0.9)]])
     backends = Backends(
         detector=detector,
         locator=None,
@@ -574,7 +574,7 @@ def _adapters(store: PeopleStore, tmp_path):
         store=store,
         engine=engine,
         engine_config=engine_config,
-        scribe=None,
+        scribe=scribe,
         transport=None,
     )
 
@@ -604,6 +604,110 @@ def test_one_tick_turns_a_frame_into_the_published_snapshot(store, tmp_path):
     assert [track.tag for track in adapters.tracks()] == ["P1"]
 
 
+def _jpeg():
+    cv2 = pytest.importorskip("cv2")
+    ok, buffer = cv2.imencode(".jpg", np.full((480, 640, 3), 120, dtype=np.uint8))
+    assert ok
+    return bytes(buffer)
+
+
+def _walking(step: int) -> bytes:
+    """A frame with a large block in a different place each step — motion the
+    gate cannot mistake for an exposure change."""
+    cv2 = pytest.importorskip("cv2")
+    frame = np.full((480, 640, 3), 100, np.uint8)
+    left = 40 + 60 * step
+    cv2.rectangle(frame, (left, 60), (left + 160, 420), (230, 230, 230), -1)
+    ok, buffer = cv2.imencode(".jpg", frame)
+    assert ok
+    return bytes(buffer)
+
+
+def _left(store, tmp_path):
+    """A node whose one tracked person walks out of frame on the second tick."""
+    from brain_client.people.types import Detection
+
+    adapters = _adapters(store, tmp_path, frames=[[Detection(box=(0.10, 0.30, 0.93, 0.56), score=0.9)], []])
+    adapters._sensors.brain_active = True
+    jpeg = _jpeg()
+    start = time.time()
+    for step, moment in enumerate((start, start + 3.0)):
+        adapters._sensors._frame = na.CameraFrame(na.stamp_ns(step + 1, 0), jpeg)
+        adapters._tick(moment)
+    return adapters, jpeg, start + 3.0
+
+
+def test_a_track_that_only_lingers_lost_lets_the_node_back_onto_the_idle_clock(store, tmp_path):
+    """The tracker keeps a lost track for five minutes so it can be re-associated;
+    counting it as "somebody is here" would hold the whole duty cycle (RFC 4.6)
+    at 5 Hz for those five minutes with nobody in the room."""
+    adapters, jpeg, last = _left(store, tmp_path)
+    assert [track.lost for track in adapters._engine.tracks()] == [True]
+
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(3, 0), jpeg)
+    adapters._tick(last + 0.3)
+    assert adapters._last_tick == last  # idle: 0.5 Hz, so that tick was not due
+
+
+def _image(data: bytes, sec: int = 1):
+    return SimpleNamespace(data=data, header=SimpleNamespace(stamp=SimpleNamespace(sec=sec, nanosec=0)))
+
+
+def test_the_motion_gate_lifts_an_empty_room_off_the_idle_clock(store, tmp_path, monkeypatch):
+    """RFC 4.6: nobody tracked is 0.5 Hz until the scene changes, and then 5 Hz
+    for ten seconds. It is the brain's gate, run here on this node's own stream
+    rather than duplicated as a second rule."""
+    pytest.importorskip("cv2")
+    from brain_client.perception import motion_gate
+
+    clock = [1000.0]
+    monkeypatch.setattr(motion_gate.time, "monotonic", lambda: clock[0])
+    adapters = _adapters(store, tmp_path, frames=[[]])
+    adapters._sensors.brain_active = True
+    now = time.time()
+    assert adapters._sensors.motion(now) is False
+
+    for step in range(3):
+        adapters._sensors._on_compressed_image(_image(_walking(step), sec=step + 1))
+        clock[0] += motion_gate.MOTION_SAMPLE_SEC
+    assert adapters._sensors.motion(now) is True
+
+    adapters._tick(now)
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(9, 0), _jpeg())
+    adapters._tick(now + 0.3)  # idle would have skipped this; the burst does not
+    assert adapters._last_tick == now + 0.3
+
+
+def test_a_still_room_never_opens_the_motion_burst(store, tmp_path, monkeypatch):
+    pytest.importorskip("cv2")
+    from brain_client.perception import motion_gate
+
+    clock = [1000.0]
+    monkeypatch.setattr(motion_gate.time, "monotonic", lambda: clock[0])
+    adapters = _adapters(store, tmp_path, frames=[[]])
+    for step in range(4):
+        adapters._sensors._on_compressed_image(_image(_jpeg(), sec=step + 1))
+        clock[0] += motion_gate.MOTION_SAMPLE_SEC
+    assert adapters._sensors.motion(time.time()) is False
+
+
+def test_a_tick_the_engine_skipped_never_restamps_the_boxes_with_a_newer_frame(store, tmp_path):
+    """RFC section 7: the stamp the brain pairs on must name the frame the boxes
+    were measured on. The node's sampling clock and the engine's detect clock are
+    two clocks; only the engine knows which frame it actually looked at."""
+    adapters, jpeg, last = _left(store, tmp_path)
+
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(9, 0), jpeg)
+    adapters._tick(last + 2.05)  # due for the node, and the engine skips nothing
+    measured = json.loads(na.String.call_args.kwargs["data"])["frame_stamp_ns"]
+    assert measured == "9000000000"
+
+    adapters._engine._last_detect = last + 100.0  # the engine will skip the next frame
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(10, 0), jpeg)
+    adapters._tick(last + 4.1)
+    assert json.loads(na.String.call_args.kwargs["data"])["frame_stamp_ns"] == "9000000000"
+
+
 def test_an_idle_node_still_latches_its_health(store, tmp_path):
     adapters = _adapters(store, tmp_path)
     adapters._sensors.brain_active = False  # the brain is deactivated and always_on is off
@@ -620,6 +724,17 @@ def _served(adapters, handler_name: str, **request):
     """One service call against the real handler, with the .srv's own fields."""
     response = SimpleNamespace(success=False, message="", json="", person_id="")
     return getattr(adapters, handler_name)(SimpleNamespace(**request), response)
+
+
+def test_the_tag_counter_is_persisted_so_a_respawn_does_not_reissue_p1(store, tmp_path):
+    """respawn=True brings this node back in two seconds with its latched
+    snapshot still on the wire; a skill holding P1 must not be handed a
+    different person under that tag."""
+    adapters, _jpeg, _last = _left(store, tmp_path)
+    assert adapters._engine.tracker.next_tag == 2
+
+    adapters._store_tick()
+    assert PeopleStore(tmp_path / "people").next_tag() == 2
 
 
 def test_the_get_service_answers_the_snapshot_and_the_roster(store, tmp_path):
@@ -671,6 +786,25 @@ def test_the_forget_service_tombstones_the_person(store, tmp_path):
     assert store.person_ids() == []
     assert store.is_tombstoned(ana)
     assert not _served(adapters, "_svc_forget", who=ana).success  # the id is gone for good
+
+
+def test_forgetting_someone_reaches_the_work_the_scribe_still_has_in_flight(store, tmp_path):
+    """RFC section 10: deletion removes the caches too. A window queued by an
+    outage still carries their transcript, and would be spent on Gemini the
+    moment the connection came back."""
+    from brain_client.people.scribe import Scribe, Speaker, TagView, Utterance, Window
+
+    ana = enrol(store, "Ana")
+    scribe = Scribe(store, None, model="m", queue_path=tmp_path / "queue.jsonl")
+    seen = (TagView(tag="P1", state=IdentityState.KNOWN, person_id=ana, name="Ana"),)
+    scribe.process(Window((Utterance("u_1", NOW, Speaker.USER, "I'm Ana", seen),)), NOW)
+    assert scribe.queued == 1
+
+    adapters = _adapters(store, tmp_path, scribe=scribe)
+    assert _served(adapters, "_svc_forget", who=ana).success
+    adapters._scribe_cycle(0.0)
+
+    assert scribe.queued == 0
 
 
 def test_the_collection_switch_is_stored_and_shows_in_the_snapshot(store, tmp_path):

@@ -53,6 +53,7 @@ from brain_client.people.quality import EgoMotionTracker
 from brain_client.people.scribe import ChangeKind, Speaker, TagView, Utterance, is_memory_question
 from brain_client.people.surfacing import PeopleEvents, build_snapshot, choose_attention
 from brain_client.people.types import SNAPSHOT_SCHEMA, HealthDict, HealthState, IdentityState, TrackState
+from brain_client.perception.motion_gate import MotionGate
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -102,7 +103,11 @@ SNAPSHOT_HEARTBEAT_SEC = 5.0
 that is the heartbeat that keeps an idle node's health readable."""
 
 LOST_GRACE_SEC = 60.0  # a lost track rides the snapshot this long, as "just left view"
-NATIVE_SKEW_NS = 130_000_000  # the driver's own cap on the native-vs-published capture skew
+NATIVE_SKEW_NS = 130_000_000
+"""How far a native buffer's stamp may sit from the published frame's and still be
+the same capture: two frames at 15 fps. The driver's own kMaxNativeSkewNs is a
+wider PTS-reset guard, not this — a buffer further out than this is a different
+moment, and cropping a face out of it would move the face."""
 TALKING_RANGE_M = 3.0
 SPEAKING_HOLD_SEC = 3.0  # how long one chat_in message keeps a track marked as the speaker
 HINT_TTL_SEC = 120.0  # a disambiguation question ages out with the exchange it came from
@@ -546,10 +551,20 @@ class PeopleSensors:
     and are created and destroyed on the executor thread (see the module
     docstring) through :meth:`set_camera_enabled` and :meth:`set_native_enabled`."""
 
-    def __init__(self, node: Node, config: PeopleNodeConfig, *, on_camera: Callable[[CameraModel], None]):
+    def __init__(
+        self,
+        node: Node,
+        config: PeopleNodeConfig,
+        *,
+        on_camera: Callable[[CameraModel], None],
+        motion_burst_sec: float,
+    ):
         self._node = node
         self._config = config
         self._on_camera = on_camera
+        self._motion = MotionGate()  # the brain's gate, on this node's own stream (RFC 4.6)
+        self._motion_burst_sec = motion_burst_sec
+        self._motion_until = 0.0
         self._lock = threading.Lock()
         self._frame: CameraFrame | None = None
         self._natives: deque[tuple[int, bytes]] = deque(maxlen=4)
@@ -579,6 +594,7 @@ class PeopleSensors:
                 if subscription is not None:
                     self._node.destroy_subscription(subscription)
             self._image_sub = self._info_sub = None
+            self._motion = MotionGate()  # a restart must not diff against pre-stop frames
             with self._lock:
                 self._frame = None
             return
@@ -625,13 +641,24 @@ class PeopleSensors:
         with self._lock:
             return self._map_name, self._pose
 
+    def motion(self, now: float) -> bool:
+        """Whether the scene changed recently enough to be worth looking at
+        properly — the burst of RFC 4.6, off the same gate the brain wakes on."""
+        return now < self._motion_until
+
     # --- callbacks ---
 
     def _on_compressed_image(self, msg: CompressedImage) -> None:
         if not msg.data:
             return
+        data = bytes(msg.data)
         with self._lock:
-            self._frame = CameraFrame(stamp_ns(msg.header.stamp.sec, msg.header.stamp.nanosec), bytes(msg.data))
+            self._frame = CameraFrame(stamp_ns(msg.header.stamp.sec, msg.header.stamp.nanosec), data)
+            ego = self._ego.state(time.time())
+        # Outside the lock: the gate decodes, and the engine thread must never
+        # wait on a decode to read the frame it is about to work on.
+        if self._motion.observe(data, ego.head_pitch_deg, ego.recently_driven):
+            self._motion_until = time.time() + self._motion_burst_sec
 
     def _on_raw_image(self, msg: Image) -> None:
         if not msg.data:
@@ -719,7 +746,9 @@ class PeopleAdapters:
         self._scribe = scribe
         self._transport = transport
         self._events = PeopleEvents()
-        self._sensors = PeopleSensors(node, config, on_camera=engine.set_camera)
+        self._sensors = PeopleSensors(
+            node, config, on_camera=engine.set_camera, motion_burst_sec=engine_config.motion_burst_sec
+        )
 
         self._lock = threading.Lock()
         self._tracks: tuple[TrackState, ...] = ()
@@ -738,6 +767,7 @@ class PeopleAdapters:
         self._last_frame_at = 0.0
 
         self._chat: queue.Queue[Utterance] = queue.Queue(maxsize=64)
+        self._forgets: queue.Queue[str] = queue.Queue(maxsize=8)
         self._recalls: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=8)
         self._descriptions: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=8)
 
@@ -762,6 +792,7 @@ class PeopleAdapters:
         self._stop.set()
         for thread in self._threads:
             thread.join(timeout=2.0)
+        self._store.set_next_tag(self._engine.tracker.next_tag)
         self._store.flush()
 
     def tracks(self) -> tuple[TrackState, ...]:
@@ -787,6 +818,7 @@ class PeopleAdapters:
 
     def _store_tick(self) -> None:
         try:
+            self._store.set_next_tag(self._engine.tracker.next_tag)
             self._store.flush()
             if time.monotonic() - self._expired_at >= EXPIRE_EVERY_SEC:
                 self._expired_at = time.monotonic()
@@ -853,6 +885,9 @@ class PeopleAdapters:
         )
         if response.success:
             self._suppress(person_id)
+            # The queue and the open window are the scribe thread's; handing it
+            # the id keeps this off the executor and off its file (RFC 10).
+            _offer(self._forgets, person_id)
         return response
 
     def _svc_set_collection(
@@ -958,8 +993,15 @@ class PeopleAdapters:
             self._stop.wait(IDLE_POLL_SEC)
             return
         ego = self._sensors.ego(now)
+        motion = self._sensors.motion(now)
+        # Live tracks only: a lost one lingers for five minutes so it can be
+        # re-associated, and counting it would hold the duty cycle at 5 Hz for
+        # those five minutes with nobody in the room (RFC 4.6).
         period = decode_period(
-            self._engine_config, tracked=bool(self._engine.tracks()), driving=ego.recently_driven, motion=False
+            self._engine_config,
+            tracked=any(not track.lost for track in self._engine.tracks()),
+            driving=ego.recently_driven,
+            motion=motion,
         )
         if now - self._last_tick < period:
             return
@@ -977,7 +1019,16 @@ class PeopleAdapters:
         with self._lock:
             speaking = held_speaking(self._speaking, now)
         tracks = self._engine.tick(
-            image, native, now, ego, None, motion=False, map_name=map_name, pose=pose, speaking=speaking
+            image,
+            native,
+            now,
+            ego,
+            None,
+            motion=motion,
+            map_name=map_name,
+            pose=pose,
+            speaking=speaking,
+            frame_stamp_ns=stamp_text(frame.stamp_ns),
         )
         self._want_native = wants_native(tracks, now, refresh_sec=self._engine_config.face_refresh_sec)
         resolutions = self._engine.resolutions()
@@ -985,7 +1036,9 @@ class PeopleAdapters:
         with self._lock:
             self._tracks = tuple(resolved)
         self._after_tick(image, resolved, resolutions, now)
-        self._publish_snapshot(now, resolved, stamp_text(frame.stamp_ns), (image.shape[1], image.shape[0]))
+        # The engine's stamp, not this frame's: a tick its own duty cycle skipped
+        # measured nothing, and the brain draws only on the frame it measured.
+        self._publish_snapshot(now, resolved, self._engine.frame_stamp_ns, (image.shape[1], image.shape[0]))
 
     def _after_tick(
         self, image: np.ndarray, tracks: Sequence[TrackState], resolutions: Mapping[str, Resolution], now: float
@@ -1086,6 +1139,7 @@ class PeopleAdapters:
         if scribe is None:
             self._stop.wait(1.0)
             return last_tick
+        self._run_forgets(scribe)
         try:
             message = self._chat.get(timeout=0.5)
         except queue.Empty:
@@ -1109,6 +1163,14 @@ class PeopleAdapters:
             elif change.kind is ChangeKind.NAME_CANDIDATE:
                 with self._lock:
                     self._hints[change.tag] = (change.text, time.time())
+
+    def _run_forgets(self, scribe: Scribe) -> None:
+        while True:
+            try:
+                person_id = self._forgets.get_nowait()
+            except queue.Empty:
+                return
+            scribe.forget(person_id)
 
     def _run_recalls(self, scribe: Scribe) -> None:
         while True:

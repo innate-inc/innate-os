@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import stat
 
 import numpy as np
 import pytest
@@ -558,6 +559,27 @@ def test_retention_windows_are_configurable(tmp_path):
 
 
 # ---------------------------------------------------------------- on disk
+
+
+def test_the_store_is_private_to_the_robot(tmp_path):
+    """RFC section 10: face templates are special-category data and the files
+    under data/people/ are mode 0700, person directories included."""
+    root = tmp_path / "people"
+    store = PeopleStore(root)
+    person_id = enrol(store)
+
+    assert stat.S_IMODE(root.stat().st_mode) == store_module.DIR_MODE
+    assert stat.S_IMODE((root / person_id).stat().st_mode) == store_module.DIR_MODE
+
+
+def test_the_scribes_queue_lands_inside_that_directory_with_the_same_mode(tmp_path):
+    """The queue holds transcripts and person ids waiting on a connection; it is
+    the same data under the same lock-and-key as the roster beside it."""
+    from brain_client.people.scribe import WindowQueue
+
+    root = tmp_path / "people"
+    WindowQueue(root / "scribe_queue.jsonl").clear()
+    assert stat.S_IMODE(root.stat().st_mode) == store_module.DIR_MODE
 
 
 def test_no_temporary_files_survive_a_burst_of_writes(store: PeopleStore, tmp_path):

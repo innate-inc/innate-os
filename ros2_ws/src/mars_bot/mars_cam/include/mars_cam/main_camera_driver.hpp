@@ -351,7 +351,7 @@ class MainCameraDriver : public rclcpp::Node {
 
     // Native MJPG branch: the sensor's own buffers, teed off before the decoder.
     // All of this is touched only from frame_thread_, which is joined before the pipeline is released.
-    bool publish_native_{true};
+    bool publish_native_{false};
     double native_fps_{5.0};
     double native_publish_interval_{0.0};
     GstElement* native_pipeline_{nullptr};

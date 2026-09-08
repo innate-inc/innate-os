@@ -13,9 +13,10 @@ The last second of frames is kept, not just the newest one: the people engine
 analyses a frame off this same stream and names it by its header stamp, and its
 boxes may only be drawn on that exact frame (docs/rfc/people-memory.md 7).
 
-Also hosts the motion gate: a cheap frame-diff on the main camera that lets the
-brain wake for an immediate turn when the scene changes (someone walks in,
-waves) instead of waiting out its idle interval.
+It also runs the motion gate on that stream, so the brain wakes for an immediate
+turn when the scene changes (someone walks in, waves) instead of waiting out its
+idle interval. The gate itself is :mod:`brain_client.perception.motion_gate`,
+shared with the people engine so there is one rule and not two.
 """
 
 from __future__ import annotations
@@ -26,20 +27,13 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import cv2
-import numpy as np
 from geometry_msgs.msg import Twist
 from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
 
-_MOTION_SAMPLE_SEC = 0.25  # compare at most one frame pair per this interval
-_MOTION_PIXEL_DELTA = 25  # gray-level change for a pixel to count as "moved"
-_MOTION_MIN_FRACTION = 0.02  # fraction of moved pixels that counts as motion
-_MOTION_HOT_SAMPLES = 2  # hot samples within the window before firing
-_MOTION_WINDOW = 4  # samples the debounce looks back over (~1s of frames)
-_MOTION_COOLDOWN_SEC = 10.0  # minimum gap between fires; sustained motion re-fires at this rate
-_MOTION_HEAD_PITCH_EPS = 0.8  # deg between samples; more means the head is moving, not the scene
+from brain_client.perception.motion_gate import MotionGate
+
 _DRIVE_SUPPRESS_SEC = 1.5  # after a nonzero cmd_vel: frames lag the command and blur outlasts the stop
 _RING_SEC = 1.5  # frame history kept for stamp pairing; the engine ticks at 5 Hz, ~300ms behind
 _RING_FRAMES = 12  # hard cap on the ring (~600 KB of JPEG at the 7.5 Hz publish rate)
@@ -55,64 +49,6 @@ class _Frame:
     jpeg: bytes
     pitch: float
     stamp_ns: int
-
-
-class _MotionGate:
-    """Fires on scene change while the robot itself is holding still.
-
-    Every _MOTION_SAMPLE_SEC the newest JPEG is decoded at 1/8 linear scale to
-    grayscale (~1% of the pixels, sub-ms on the Jetson), blurred, and diffed
-    against the previous sample. Firing needs _MOTION_HOT_SAMPLES hot samples
-    within the last _MOTION_WINDOW, landing on a hot one: a wave is a short
-    burst and one cold sample mid-burst must not reset it (measured on-robot:
-    a wave is ~2-3 hot samples over ~0.5-0.75s, sometimes gapped), while a
-    single-sample exposure step still never fires. Ego-motion makes every
-    pixel "move", so the caller passes ``suppressed`` while the robot drives
-    itself (a skill running) and the gate goes cold on its own when the head
-    pitch moved between samples. The baseline updates on every sample
-    regardless, so coming out of suppression never diffs against an ancient
-    frame.
-    """
-
-    def __init__(self):
-        self._prev: np.ndarray | None = None
-        self._prev_pitch = 0.0
-        self._last_sample = 0.0
-        self._last_fired = 0.0
-        self._recent: list[bool] = []  # hot flags of the last few samples
-        self.peak_fraction = 0.0  # largest fraction since last consume_peak()
-
-    def consume_peak(self) -> float:
-        """Read-and-reset the peak moved fraction (snapshot telemetry)."""
-        peak, self.peak_fraction = self.peak_fraction, 0.0
-        return peak
-
-    def observe(self, jpeg: bytes, head_pitch: float, suppressed: bool) -> bool:
-        now = time.monotonic()
-        if now - self._last_sample < _MOTION_SAMPLE_SEC:
-            return False
-        self._last_sample = now
-        frame = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_REDUCED_GRAYSCALE_8)
-        if frame is None:
-            return False
-        frame = cv2.GaussianBlur(frame, (5, 5), 0)
-        prev, self._prev = self._prev, frame
-        head_moved = abs(head_pitch - self._prev_pitch) > _MOTION_HEAD_PITCH_EPS
-        self._prev_pitch = head_pitch
-        if suppressed or head_moved or prev is None or prev.shape != frame.shape:
-            self._recent.clear()
-            return False
-        moved_fraction = float((cv2.absdiff(prev, frame) > _MOTION_PIXEL_DELTA).mean())
-        self.peak_fraction = max(self.peak_fraction, moved_fraction)
-        self._recent.append(moved_fraction >= _MOTION_MIN_FRACTION)
-        del self._recent[:-_MOTION_WINDOW]
-        if not self._recent[-1] or sum(self._recent) < _MOTION_HOT_SAMPLES:
-            return False
-        if now - self._last_fired < _MOTION_COOLDOWN_SEC:
-            return False
-        self._last_fired = now
-        self._recent.clear()
-        return True
 
 
 class CameraCapture:
@@ -132,7 +68,7 @@ class CameraCapture:
         # robot is moving itself, so ego-motion never reads as scene motion.
         self.on_motion: Callable[[], None] | None = None
         self.motion_suppressed: Callable[[], bool] = lambda: False
-        self._motion = _MotionGate()
+        self._motion = MotionGate()
 
     def start(self) -> None:
         if self._image_sub is not None:
@@ -163,7 +99,7 @@ class CameraCapture:
         self._image_sub = self._arm_sub = self._head_sub = self._cmd_vel_sub = None
         self._ring.clear()
         self._arm = None
-        self._motion = _MotionGate()  # a restart must not diff against pre-stop frames
+        self._motion = MotionGate()  # a restart must not diff against pre-stop frames
 
     def _on_image(self, msg: CompressedImage) -> None:
         if not msg.data:

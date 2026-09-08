@@ -293,6 +293,7 @@ class Resolver:
         self._body = body
         self._config = config
         self._beliefs: dict[str, _Belief] = {}
+        self._suppressed: set[str] = set()
 
     @property
     def config(self) -> ResolverConfig:
@@ -407,7 +408,16 @@ class Resolver:
         return self._identity_of(belief) if belief is not None else Identity()
 
     def forget(self, tag: str) -> None:
+        """Drop everything believed about a tag and stop it enrolling.
+
+        RFC section 8: forgetting a person suppresses their live track. The
+        person is standing in front of the robot when they ask, and without
+        this the next five face frames put them straight back on the roster
+        under a new id. The suppression dies with the tag (tags are never
+        reused), so the next track to carry one enrols normally.
+        """
         self._beliefs.pop(tag, None)
+        self._suppressed.add(tag)
 
     def apply_split(self, tag: str, new_tag: str) -> None:
         """RFC 5.3.4: both tags resolve afresh, and everything learned since the
@@ -444,6 +454,7 @@ class Resolver:
         known_tags = {t.tag for t in tracks}
         for tag in [t for t in self._beliefs if t not in known_tags]:
             del self._beliefs[tag]
+        self._suppressed &= known_tags
         return resolutions
 
     def _resolve_one(self, track: TrackView, now: float) -> Resolution:
@@ -642,7 +653,7 @@ class Resolver:
         nobody, on a track that has been here long enough to be a person rather
         than a passer-by. Body evidence never gets here."""
         config = self._config
-        if now - track.first_seen < config.min_track_sec:
+        if track.tag in self._suppressed or now - track.first_seen < config.min_track_sec:
             return None
         if not self._roster.collection_enabled() or not self._roster.can_enrol():
             return None

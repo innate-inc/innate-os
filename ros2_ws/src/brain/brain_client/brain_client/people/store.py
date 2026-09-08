@@ -94,7 +94,7 @@ OUTFIT_TTL_SEC = 48 * 3600.0
 RETENTION_UNNAMED_DAYS = 14.0
 RETENTION_NAMED_DAYS = 548.0  # 18 months unseen, the Amazon Astro Visual ID rule
 _SIGHTING_COMMIT_SEC = 30.0  # the engine records a sighting per tick; disk sees one per half minute
-_DIR_MODE = 0o700  # templates and thumbnails are special-category data (RFC section 10)
+DIR_MODE = 0o700  # templates and thumbnails are special-category data (RFC section 10)
 
 
 class AuditAction(StrEnum):
@@ -205,7 +205,7 @@ class PeopleStore:
             self._outfits[person_id] = []
             self._heights[person_id] = []
             self._thumbs[person_id] = []
-            self._person_dir(person_id).mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
+            self._person_dir(person_id).mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
             if thumbnail:
                 self._add_thumbnail_locked(person_id, thumbnail)
             self._commit_person_locked(person_id, now)
@@ -731,7 +731,7 @@ class PeopleStore:
         used = [_thumb_number(thumb) for thumb in thumbs]
         thumb_id = f"thumb_{max(used, default=-1) + 1}"
         directory = self._person_dir(person_id)
-        directory.mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
+        directory.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
         tmp = directory / f"{thumb_id}.jpg.tmp"
         tmp.write_bytes(jpeg)
         os.replace(tmp, directory / f"{thumb_id}.jpg")
@@ -754,14 +754,14 @@ class PeopleStore:
         if profile is None:
             return
         directory = self._person_dir(person_id)
-        directory.mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
+        directory.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
         _write_json(directory / "person.json", profile_to_dict(profile))
         self._committed[person_id] = now
         self._pending.discard(person_id)
 
     def _commit_templates_locked(self, person_id: str) -> None:
         directory = self._person_dir(person_id)
-        directory.mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
+        directory.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
         faces = self._faces.get(person_id, [])
         outfits = self._outfits.get(person_id, [])
         heights = self._heights.get(person_id, [])
@@ -794,7 +794,7 @@ class PeopleStore:
         os.replace(tmp, directory / "templates.npz")
 
     def _commit_index_locked(self) -> None:
-        self._root.mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
+        self._root.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
         _write_json(
             self._root / "index.json",
             {
@@ -817,7 +817,7 @@ class PeopleStore:
         )
 
     def _audit_locked(self, action: AuditAction, person_id: str, stamp: float, **detail: object) -> None:
-        self._root.mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
+        self._root.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
         line = json.dumps({"stamp": stamp, "action": str(action), "person_id": person_id, **detail})
         with self.audit_path.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
@@ -826,7 +826,7 @@ class PeopleStore:
     def _load(self) -> None:
         index = _read_json(self._root / "index.json")
         if index is None:
-            self._root.mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
+            self._root.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
             return
         if index.get("version") != INDEX_VERSION:
             return  # a future/older index is not ours to interpret; the roster starts empty

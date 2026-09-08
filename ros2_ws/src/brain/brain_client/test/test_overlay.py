@@ -108,6 +108,18 @@ def test_nothing_to_draw_returns_the_frame_untouched():
     assert overlay.draw_people(jpeg, snapshot(person(bbox=[500, 500, 500, 500]))) is jpeg
 
 
+def test_a_track_that_left_view_is_never_drawn():
+    """A lost track's box is where the tracker thinks the person would be, kept
+    for re-association; drawn, it puts a name on an empty patch of the picture
+    (the webapp overlay drops it for the same reason)."""
+    jpeg = frame_jpeg()
+    assert overlay.draw_people(jpeg, snapshot(person(lost=True))) is jpeg
+    drawn = overlay.draw_people(jpeg, snapshot(person(lost=True), person(tag="P4", bbox=[100, 100, 400, 400])))
+    assert drawn is not None and drawn != jpeg
+    changes = changed(decode(jpeg), decode(drawn))
+    assert changes[400:800, 300:700].max() < 40  # the lost person's box is not there
+
+
 def test_a_head_box_is_used_when_there_is_no_body_box():
     jpeg = frame_jpeg()
     drawn = overlay.draw_people(jpeg, snapshot(person(bbox=None, head_bbox=[200, 300, 400, 500])))

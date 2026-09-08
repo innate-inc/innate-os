@@ -29,6 +29,7 @@ from brain_client.people.geometry import CameraModel
 from brain_client.people.node_adapters import PARAM_DEFAULTS, PeopleAdapters, config_from_params
 from brain_client.people.scribe import Scribe
 from brain_client.people.store import PeopleStore
+from brain_client.people.track import Tracker
 
 if TYPE_CHECKING:
     from brain_client.people.scribe import Transport
@@ -70,6 +71,10 @@ class PeopleNode(Node):
             backends,
             store,
             camera=CameraModel.published_default(self.config.camera_height_m),
+            # The counter resumes where the last run left it: this node respawns
+            # under launch and its latched snapshot outlives the restart, so a
+            # reissued P<n> would name a stranger to a skill still holding it.
+            tracker=Tracker(first_tag=store.next_tag()),
             config=engine_config,
         )
         transport = self._transport()

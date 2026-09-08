@@ -116,6 +116,7 @@ class PeopleEngine:
         self._states: list[TrackState] = []
         self._resolutions: dict[str, Resolution] = {}
         self._last_detect = 0.0
+        self._frame_stamp_ns: str | None = None
         self._last_native_decode = 0.0
         self._last_frame_stamp = 0.0
         self._last_native_stamp = 0.0
@@ -140,6 +141,14 @@ class PeopleEngine:
 
     def tracks(self) -> list[TrackState]:
         return list(self._states)
+
+    @property
+    def frame_stamp_ns(self) -> str | None:
+        """The header stamp of the frame these boxes were measured on, which the
+        brain pairs its overlay by (RFC section 7). It only moves on a tick that
+        actually ran detection, so a tick the duty cycle skipped never restamps
+        yesterday's boxes onto today's picture."""
+        return self._frame_stamp_ns
 
     def resolutions(self) -> dict[str, Resolution]:
         """This tick's outcomes: enrolments, conflicts and switches the node
@@ -175,6 +184,7 @@ class PeopleEngine:
         map_name: str | None = None,
         pose: Pose | None = None,
         speaking: Collection[str] = (),
+        frame_stamp_ns: str | None = None,
     ) -> list[TrackState]:
         del scan_legs  # leg clustering is Phase 2; the signature is already its seat
         if native_jpeg:
@@ -187,6 +197,7 @@ class PeopleEngine:
         if now - self._last_detect < self._detect_period(now, ego):
             return self._states
         self._last_detect = now
+        self._frame_stamp_ns = frame_stamp_ns
 
         frame = native_frames.unsquash_published(frame_bgr)
         detections = self._backends.detector.detect(frame)

@@ -39,6 +39,7 @@ from brain_client.people.memory import (
     FactSource,
     profile_to_dict,
 )
+from brain_client.people.store import DIR_MODE
 from brain_client.people.types import IdentityState
 
 if TYPE_CHECKING:
@@ -188,6 +189,13 @@ class WindowBuffer:
 
     def pending(self) -> int:
         return len(self._messages)
+
+    def forget(self, person_id: str) -> None:
+        """Drop the buffered lines a forgotten person was in view for, before
+        they can be sent anywhere (RFC section 10)."""
+        self._messages = [
+            message for message in self._messages if all(view.person_id != person_id for view in message.in_view)
+        ]
 
     def _close(self) -> Window:
         window = Window(tuple(self._messages))
@@ -521,6 +529,10 @@ def _apply_name(
     person_id = view.person_id
     if not view.nameable:
         return _candidate(name, referents, store, now, reason="the track is neither confirmed nor enrolling")
+    # RFC 6.3: the robot's own use of a name is reinforcing evidence, never the
+    # trigger — it may only settle a name a person was already heard to give.
+    if quoted.speaker is Speaker.ROBOT and not _heard_before(store, person_id, name.name):
+        return _candidate(name, referents, store, now, reason="only the robot said the name, and nobody else has")
     on_file = store.name_of(person_id)
     correcting = bool(on_file) and on_file != name.name
     if correcting and not (name.correction and name.introduction in (Introduction.SELF, Introduction.OWNER)):
@@ -663,6 +675,12 @@ def _asked_to_remember(window: Window, tag: str) -> bool:
     )
 
 
+def _heard_before(store: PeopleStore, person_id: str, name: str) -> bool:
+    """Whether this name is already waiting as a candidate on this person."""
+    profile = store.profile(person_id)
+    return profile is not None and any(candidate.name == name for candidate in profile.name_candidates)
+
+
 def _fact_ids(store: PeopleStore, person_id: str) -> set[str]:
     profile = store.profile(person_id)
     return {fact.id for fact in profile.facts} if profile is not None else set()
@@ -716,6 +734,17 @@ class WindowQueue:
         self._windows = []
         self._commit()
 
+    def forget(self, person_id: str) -> int:
+        """Drop every queued window the person was in view for, and say how many.
+        Deleting someone has to reach the work still in flight, or the outage
+        that queued it sends their transcript to Gemini when it clears."""
+        kept = [window for window in self._windows if person_id not in window.person_ids()]
+        dropped = len(self._windows) - len(kept)
+        if dropped:
+            self._windows = kept
+            self._commit()
+        return dropped
+
     def __len__(self) -> int:
         return len(self._windows)
 
@@ -724,7 +753,7 @@ class WindowQueue:
         self._windows = fresh[-self._limit :]
 
     def _commit(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
         tmp = self._path.with_name(self._path.name + ".tmp")
         tmp.write_text("".join(json.dumps(window_to_dict(window)) + "\n" for window in self._windows), encoding="utf-8")
         os.replace(tmp, self._path)
@@ -942,6 +971,12 @@ class Scribe:
             if output is not None:
                 changes.extend(apply(output, window, self._store, now))
         return changes
+
+    def forget(self, person_id: str) -> None:
+        """Everything about a forgotten person that has not been written yet:
+        the open window and the queue an outage filled (RFC section 10)."""
+        self._buffer.forget(person_id)
+        self._queue.forget(person_id)
 
     def recall(self, person_id: str, question: str) -> str:
         """Deep recall over one person's memory; empty when it adds nothing."""

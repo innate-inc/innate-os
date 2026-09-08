@@ -39,7 +39,9 @@ def draw_people(jpeg: bytes, snapshot: PeopleSnapshotDict) -> bytes | None:
     when the JPEG cannot be decoded — the caller then sends the plain frame and
     tells the model the positions are not drawn.
     """
-    people = [person for person in (snapshot.get("people") or []) if _box_of(person)]
+    # A lost track's box is where the tracker believes the person would be, kept
+    # so they are re-associated on return; drawing it names an empty patch.
+    people = [p for p in (snapshot.get("people") or []) if not p.get("lost") and _box_of(p)]
     if not people:
         return jpeg
     frame = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)

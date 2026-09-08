@@ -547,6 +547,34 @@ def test_a_third_party_introduction_without_a_referent_stays_a_candidate(store: 
     assert changes[0].kind is ChangeKind.NAME_CANDIDATE
 
 
+def test_the_robots_own_words_never_commit_a_name_on_their_own(store: PeopleStore):
+    """RFC 6.3: the agent's own use of a name is reinforcing evidence, never the
+    trigger. Gemini hears "nice to meet you, Ana" in the robot's half of the
+    transcript, and a scribe that commits on it names whoever happens to be in
+    front of the robot after the model guessed a name out loud."""
+    person_id = enrol(store)
+    window = Window((said("Nice to meet you, Ana", speaker=Speaker.ROBOT, in_view=(view("P2", person_id),)),))
+    changes = apply(name_output(quote="Nice to meet you, Ana"), window, store, NOW)
+    assert changes[0].kind is ChangeKind.NAME_CANDIDATE
+    assert store.name_of(person_id) is None
+
+
+def test_the_robot_confirming_a_name_already_heard_commits_it(store: PeopleStore):
+    """The other half of 6.3: with two people in view the name waits as a
+    candidate, and the agent saying it to a tag it can resolve settles it."""
+    first, second = enrol(store, NOW), enrol(store, NOW + 1)
+    heard = Window((said("I'm Ana", in_view=(view("P2", first), view("P3", second))),))
+    apply(name_output(quote="I'm Ana"), heard, store, NOW)
+
+    answered = Window((said("Nice to meet you, Ana", id_="u_2", speaker=Speaker.ROBOT, in_view=(view("P2", first),)),))
+    changes = apply(
+        name_output(quote="Nice to meet you, Ana", utterance="u_2", referent="P2"), answered, store, NOW + 5
+    )
+    assert changes[0].kind is ChangeKind.NAME
+    assert store.name_of(first) == "Ana"
+    assert store.name_of(second) is None
+
+
 def test_a_name_never_commits_onto_an_unsettled_track(store: PeopleStore):
     person_id = enrol(store)
     window = Window((said("Hi, I'm Ana", in_view=(view("P2", person_id, state=IdentityState.UNKNOWN),)),))
@@ -706,6 +734,42 @@ def test_a_torn_queue_line_costs_only_that_window(tmp_path):
     good = json.dumps(window_to_dict(Window((said("kept"),))))
     path.write_text("{ torn\n" + good + "\n")
     assert [window.messages[0].text for window in WindowQueue(path).pending(NOW)] == ["kept"]
+
+
+def test_forgetting_a_person_drops_the_windows_still_waiting_on_them(tmp_path):
+    """RFC section 10: deletion removes the live store and the caches. A queued
+    window carries the person's transcript and id to Gemini on reconnect, which
+    is exactly what "forget me" was supposed to stop."""
+    path = tmp_path / "queue.jsonl"
+    queue = WindowQueue(path)
+    theirs = Window((said("I'm Ana", in_view=(view("P2", "person_1", name="Ana"),)),))
+    others = Window((said("hello", id_="u_2", in_view=(view("P3", "person_2"),)),))
+    queue.push(theirs, NOW)
+    queue.push(others, NOW)
+
+    assert queue.forget("person_1") == 1
+    assert queue.pending(NOW) == [others]
+    assert WindowQueue(path).pending(NOW) == [others]
+
+
+def test_forgetting_a_person_drops_the_messages_still_buffered_about_them():
+    buffer = WindowBuffer()
+    buffer.add(said("I'm Ana", in_view=(view("P2", "person_1"),)))
+    buffer.add(said("hello", id_="u_2", in_view=(view("P3", "person_2"),)))
+    buffer.forget("person_1")
+    window = buffer.due(NOW + WINDOW_IDLE_SEC)
+    assert window is not None and [message.id for message in window.messages] == ["u_2"]
+
+
+def test_the_scribe_forgets_a_person_in_both_places(store: PeopleStore, tmp_path):
+    scribe = Scribe(store, None, model="m", queue_path=tmp_path / "queue.jsonl")
+    scribe.observe(said("I'm Ana", in_view=(view("P2", "person_1"),)), NOW)
+    scribe.process(Window((said("I'm Ana", id_="u_9", in_view=(view("P2", "person_1"),)),)), NOW)
+    assert scribe.queued == 1
+
+    scribe.forget("person_1")
+    assert scribe.queued == 0
+    assert scribe.tick(NOW + WINDOW_IDLE_SEC) == []
 
 
 def test_a_window_survives_serialization_with_its_views():

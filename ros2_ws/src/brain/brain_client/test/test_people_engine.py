@@ -280,6 +280,29 @@ def test_the_engine_throttles_a_caller_that_ticks_at_frame_rate():
     assert detector.calls <= 6  # 5 Hz over one second, plus the opening tick
 
 
+def test_the_frame_stamp_names_the_frame_the_boxes_were_measured_on():
+    """RFC section 7: the brain draws only on the frame the engine measured, and
+    it finds it by this stamp. A tick the duty cycle skipped must keep the stamp
+    of the frame the boxes still come from, or a name lands on a newer picture."""
+    engine, detector, _roster = build()
+    engine.tick(scene(), None, 100.0, still(100.0), frame_stamp_ns="1000")
+    assert engine.frame_stamp_ns == "1000"
+
+    engine.tick(scene(), None, 100.05, still(100.05), frame_stamp_ns="2000")
+    assert detector.calls == 1  # throttled: nothing was measured on frame 2000
+    assert engine.frame_stamp_ns == "1000"
+
+    engine.tick(scene(), None, 100.3, still(100.3), frame_stamp_ns="3000")
+    assert engine.frame_stamp_ns == "3000"
+
+
+def test_the_frame_stamp_is_empty_until_a_frame_has_been_through_detection():
+    engine, _detector, _roster = build()
+    assert engine.frame_stamp_ns is None
+    engine.tick(None, None, 100.0, still(100.0), frame_stamp_ns="1000")
+    assert engine.frame_stamp_ns is None
+
+
 # ------------------------------------------------------------- ego-motion
 
 

@@ -7,8 +7,9 @@ that keep a blurred person attached), constant-velocity prediction between
 frames, and a long lost-track memory: a track that leaves the frame keeps its
 tag and its body-embedding buffer for ``track_memory_sec`` and is re-associated
 when a matching person walks back in. Tags are the ``P<n>`` the model sees —
-monotonic, never reused within a session, stable across a lost-and-recovered
-gap.
+monotonic, never reused, stable across a lost-and-recovered gap; the counter
+starts where the last run left it, because a respawned node's snapshot reaches
+skills that are still holding the old tags.
 
 PURE module: numpy for the embedding cosine, no ROS, no cv2.
 """
@@ -101,10 +102,10 @@ class TrackerConfig:
 class Tracker:
     """Owns the live and lost track sets and the tag counter."""
 
-    def __init__(self, config: TrackerConfig | None = None) -> None:
+    def __init__(self, config: TrackerConfig | None = None, *, first_tag: int = 1) -> None:
         self._config = config or TrackerConfig()
         self._tracks: dict[str, Track] = {}
-        self._next_tag = 1
+        self._next_tag = max(1, first_tag)
         self._recovered: list[str] = []
 
     # ------------------------------------------------------------- accessors
@@ -112,6 +113,13 @@ class Tracker:
     @property
     def config(self) -> TrackerConfig:
         return self._config
+
+    @property
+    def next_tag(self) -> int:
+        """The number the next ``P<n>`` will carry. The node persists it: the
+        latched snapshot outlives a respawn, and a tag reissued to somebody else
+        would let a running skill act on the wrong person (RFC 5.3.7)."""
+        return self._next_tag
 
     def get(self, tag: str) -> Track | None:
         return self._tracks.get(tag)

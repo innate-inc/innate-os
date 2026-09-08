@@ -33,8 +33,10 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
     this->declare_parameter<int>("jpeg_quality", 80);
     this->declare_parameter<bool>("publish_compressed", true);
     this->declare_parameter<int>("compressed_frame_interval", 3);
-    this->declare_parameter<bool>("publish_stereo", false);    // Combined stereo image for legacy compatibility
-    this->declare_parameter<bool>("publish_native", true);     // Tee the sensor's own MJPG buffers to a lazy topic
+    this->declare_parameter<bool>("publish_stereo", false);  // Combined stereo image for legacy compatibility
+    // Off by default, and off in config/stereo_depth_estimator.yaml: the tee'd pipeline replaces the
+    // proven cv::VideoCapture capture path and has not been run on a Jetson yet.
+    this->declare_parameter<bool>("publish_native", false);    // Tee the sensor's own MJPG buffers to a lazy topic
     this->declare_parameter<double>("native_fps", 5.0);        // Rate cap for the native topic while subscribed
     this->declare_parameter<int>("exposure", -1);              // -1 means use current value
     this->declare_parameter<int>("gain", -1);                  // -1 means use current value
