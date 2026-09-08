@@ -30,10 +30,19 @@ const DEFAULT_FRAME = { w: 640, h: 480 };
 /** @typedef {{ cu: number, cv: number, hu: number, hv: number, au: number, av: number }} PickBox */
 /** @typedef {{ left: number, top: number, width: number, height: number }} Rect */
 /**
- * The stream as laid out on the page: intrinsic size, the video element's box
- * within the stage, and how object-fit places the picture in that box.
- * @typedef {{ w: number, h: number, box: Rect, fit: string }} VideoLayout
+ * The stream as laid out on the page: intrinsic size, the video element's
+ * content box within the stage, and how object-fit / object-position place the
+ * picture in that box (position as the computed "x y" string).
+ * @typedef {{ w: number, h: number, box: Rect, fit: string, position: string }} VideoLayout
  */
+
+/** One object-position component -> where the picture's slack goes.
+ * @param {string} term "50%" or "12px" @param {number} slack box minus picture */
+function positionOffset(term, slack) {
+  if (term.endsWith("%")) return (slack * parseFloat(term)) / 100;
+  if (term.endsWith("px")) return parseFloat(term);
+  return slack / 2;
+}
 /**
  * One run of a skill, as the overlay understands it.
  * @typedef {{
@@ -76,7 +85,13 @@ export function frameRect(frame, video, cw, ch) {
     else if (fit !== "fill") sx = sy = Math.min(sx, sy);
     const width = w * sx;
     const height = h * sy;
-    return { left: box.left + (box.width - width) / 2, top: box.top + (box.height - height) / 2, width, height };
+    const [px = "50%", py = "50%"] = (video.position || "").split(/\s+/);
+    return {
+      left: box.left + positionOffset(px, box.width - width),
+      top: box.top + positionOffset(py, box.height - height),
+      width,
+      height,
+    };
   }
   const sy = ch / frame.h;
   const sx = sy * (SIM_LENS.fy / SIM_LENS.fx);
@@ -317,11 +332,19 @@ export function createTargetingOverlay(stage, video, ros, session) {
     if (!video) return null;
     const s = stage.getBoundingClientRect();
     const v = video.getBoundingClientRect();
+    const style = getComputedStyle(video);
+    // object-fit lays the picture out in the content box, inside any border.
     return {
       w: video.videoWidth,
       h: video.videoHeight,
-      box: { left: v.left - s.left, top: v.top - s.top, width: v.width, height: v.height },
-      fit: getComputedStyle(video).objectFit || "contain",
+      box: {
+        left: v.left - s.left + video.clientLeft,
+        top: v.top - s.top + video.clientTop,
+        width: video.clientWidth,
+        height: video.clientHeight,
+      },
+      fit: style.objectFit || "contain",
+      position: style.objectPosition || "50% 50%",
     };
   }
 
