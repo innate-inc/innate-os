@@ -10,6 +10,7 @@ code, start from what it *does*:
 | `core/` | The activate/deactivate/reset state machine and directive switching (`lifecycle`), typed `config`, and the shared `state`. |
 | `perception/` | Turning sensors into what the agent sees: `camera`, `pose`/`pose_tracking`, `scan_health`, `gaze`. |
 | `memory/` | Persistent per-map spatial memory: `store` (JSON index + JPEGs on disk), pure `selection` (which viewpoints earn a slot), `recorder` (the always-on ROS adapter that captures them). |
+| `people/` | The subconscious for people, in its own node (`nodes/people_node.py`): pure `geometry`/`quality`/`track`/`resolve`/`engine` (who is in view and who they are), `store` + `memory` (the roster and what they told the robot, under `data/people/`), `scribe` (one Gemini call per conversation window), `surfacing` (the `/brain/people` snapshot, the attention line, the wake events), `description`, `sdk_parse`, and the ROS glue in `node_adapters`. |
 | `skills/` | The skill system: `registry`, `roster` (available + directive-active sets), `runner` (action lifecycle), `loader`, `hot_reload`, and the public `types` SDK base classes. |
 | `agents/` | Directives/behaviours: `loader`, `initializer`, and the public `types` SDK base class. |
 | `inputs/` | Input-device subsystem and its public `types` SDK base class. |

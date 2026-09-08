@@ -188,6 +188,10 @@ _SETTINGS_DOUBLE_KEYS = frozenset(
         "vertical_fov",
         "x_cam",
         "height_cam",
+        # people_node
+        "retention_unnamed_days",
+        "retention_named_days",
+        "camera_height_m",
         "idle_turn_interval",
         "supervision_turn_interval",
         "scan_stale_after_sec",
@@ -253,6 +257,15 @@ def settings_params() -> list:
     if not _load_settings_yaml():
         return []
     return [str(_settings_yaml_path())]
+
+
+def node_setting(node: str, key: str, default=None):
+    """One node's value from settings.yaml, for a launch file that has to decide
+    something before the node exists — such as whether to start it at all, which
+    a parameter cannot answer once ``respawn`` would bring it straight back."""
+    block = _load_settings_yaml().get(node, {})
+    params = block.get("ros__parameters", {}) if isinstance(block, dict) else {}
+    return params.get(key, default) if isinstance(params, dict) else default
 
 
 def _settings_global_params() -> dict:

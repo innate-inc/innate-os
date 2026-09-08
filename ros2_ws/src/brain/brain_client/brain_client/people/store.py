@@ -372,6 +372,14 @@ class PeopleStore:
             named = sum(1 for profile in self._people.values() if profile.named)
             return named, len(self._people) - named
 
+    def capacity_full(self) -> bool:
+        """Whether either cap has been reached, so background enrolment has
+        stopped (RFC section 9). :meth:`can_enrol` is the same test plus the
+        owner's collection switch, which is a choice and not a full roster —
+        the Settings page must tell the two apart."""
+        named, unnamed = self.counts()
+        return unnamed >= MAX_UNNAMED or named + unnamed >= MAX_NAMED + MAX_UNNAMED
+
     # -------------------------------------------------------------- the memory
     def profile(self, person_id: str) -> Profile | None:
         with self._lock:

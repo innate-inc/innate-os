@@ -111,6 +111,9 @@ def _person(
         "state": str(identity.state),
         "evidence": [str(evidence) for evidence in identity.evidence],
         "confidence": round(identity.confidence, 3),
+        # The second candidate, so a conflict reads "Theo or Ana" in the brain's
+        # block instead of naming only the one the score happened to favour.
+        "runner_up_name": identity.runner_up_name,
         "bbox": per_mille(track.box),
         "head_bbox": per_mille(track.head_box) if track.head_box is not None else None,
         "range_m": round(track.range_m, 2) if track.range_m is not None else None,

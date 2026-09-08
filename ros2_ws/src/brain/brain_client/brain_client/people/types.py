@@ -308,6 +308,7 @@ class HealthDict(TypedDict, total=False):
     face_model: str
     body_model: str
     gpu: str
+    scribe: str  # none | unavailable | ok | stale
 
 
 class RecentPersonDict(TypedDict, total=False):

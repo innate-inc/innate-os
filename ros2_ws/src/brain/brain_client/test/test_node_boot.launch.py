@@ -9,12 +9,13 @@ broken import, or an undeclared runtime dependency fails here instead of at
 robot boot. CI runs this under both install modes (copy and --symlink-install,
 see ci/run_integration_tests.sh), which see different failure classes.
 
-Launches the real skills server and brain client node (sim mode, no Gemini
-credentials — the brain reports itself unconfigured, which is part of what we
-assert), then requires:
+Launches the real skills server, brain client node and people node (sim mode,
+no Gemini credentials — the brain reports itself unconfigured, which is part of
+what we assert), then requires:
   - /brain/available_skills     -> the skills server is up and loaded a roster
   - /brain/agent_status         -> brain_client_node finished its startup
   - /brain/websocket_status     -> the brain health report is well-formed JSON
+  - /brain/people               -> people_node latched its first snapshot
 
 Run:
   colcon test --packages-select brain_client --ctest-args -R test_node_boot
@@ -59,15 +60,25 @@ def generate_test_description():
         output="screen",
         parameters=[{"simulator_mode": True}],
     )
+    people_node = launch_ros.actions.Node(
+        package="brain_client",
+        executable="people_node.py",
+        name="people_node",
+        output="screen",
+        # No model download in CI: a missing face model is a health flag, and the
+        # node must still come up and publish its snapshot without one.
+        parameters=[{"simulator_mode": True, "allow_model_download": False, "scribe": False}],
+    )
     return (
         launch.LaunchDescription(
             [
                 brain_client,
                 skills_server,
+                people_node,
                 launch_testing.actions.ReadyToTest(),
             ]
         ),
-        {"brain_client": brain_client, "skills_server": skills_server},
+        {"brain_client": brain_client, "skills_server": skills_server, "people_node": people_node},
     )
 
 
@@ -109,3 +120,10 @@ class TestNodesBoot(unittest.TestCase):
         # rather than crash or claim readiness.
         self.assertIn(health.get("backend"), ("unconfigured", "innate-proxy", "gemini-direct"))
         self.assertIn("connected", health)
+
+        # Latched, and published as a health heartbeat every 5s even with no
+        # camera in CI — so this asserts the node booted, not that it can see.
+        people = json.loads(self._wait_for_message("/brain/people", String, timeout_sec=30.0).data)
+        self.assertEqual(people.get("schema"), 1)
+        self.assertIn("camera", people.get("health", {}))
+        self.assertEqual(people.get("people"), [])
