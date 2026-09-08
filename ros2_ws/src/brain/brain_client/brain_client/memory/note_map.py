@@ -13,6 +13,8 @@ import cv2
 import numpy as np
 import yaml
 
+from brain_client.memory.note_regions import region_metrics
+
 
 class NoteMapRenderer:
     def __init__(self, data_dir: Path):
@@ -88,6 +90,56 @@ class NoteMapRenderer:
             x, y = self._pixel(point, grid)
             return 0 <= x < grid[0].shape[1] and 0 <= y < grid[0].shape[0]
 
+    def image_geometry(self, ref):
+        """The full annotated image, including margins, frozen with each observation."""
+        with self._lock:
+            grid = self._load(ref) if ref else None
+            if grid is None:
+                return None
+            image, resolution, origin = grid
+            scale = min(576 / image.shape[1], 448 / image.shape[0])
+            w, h = max(1, round(image.shape[1] * scale)), max(1, round(image.shape[0] * scale))
+            return {
+                "width": max(w + 48, 400),
+                "height": h + 72,
+                "map_rect": [24, 36, w, h],
+                "grid_size": [image.shape[1], image.shape[0]],
+                "resolution": resolution,
+                "origin": list(origin),
+            }
+
+    def region_from_image(self, ref, vertices, geometry):
+        """Convert Astra's 0..1000 image polygon to the saved map's metric frame."""
+        if geometry is None or geometry != self.image_geometry(ref):
+            raise ValueError("Map image is unavailable or changed")
+        if not isinstance(vertices, list) or not 3 <= len(vertices) <= 12:
+            raise ValueError("Use 3 to 12 vertices on the map image")
+        left, top, w, h = geometry["map_rect"]
+        cols, rows = geometry["grid_size"]
+        ox, oy, yaw = geometry["origin"]
+        resolution = geometry["resolution"]
+        region = []
+        for vertex in vertices:
+            if (
+                not isinstance(vertex, dict)
+                or set(vertex) != {"x", "y"}
+                or any(not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 1000 for v in vertex.values())
+            ):
+                raise ValueError("Coordinates must be integers from 0 to 1000")
+            u = (vertex["x"] * geometry["width"] / 1000 - left) / w
+            v = (vertex["y"] * geometry["height"] / 1000 - top) / h
+            if not (0 <= u <= 1 and 0 <= v <= 1):
+                raise ValueError("Region vertices must be inside the map, not its caption or margins")
+            x, y = u * cols * resolution, (1 - v) * rows * resolution
+            region.append(
+                [
+                    round(ox + math.cos(yaw) * x - math.sin(yaw) * y, 4),
+                    round(oy + math.sin(yaw) * x + math.cos(yaw) * y, 4),
+                ]
+            )
+        area, center = region_metrics(region)
+        return region, round(area, 4), [round(v, 4) for v in center]
+
     def render(self, snapshot, pose, selected):
         with self._lock:
             if pose is not None and (len(pose) != 3 or not all(math.isfinite(v) for v in pose)):
@@ -102,16 +154,28 @@ class NoteMapRenderer:
             if key == self._cache_key:
                 return self._cache
             image, resolution, origin = grid
-            scale = min(576 / image.shape[1], 448 / image.shape[0])
-            w, h = max(1, round(image.shape[1] * scale)), max(1, round(image.shape[0] * scale))
-            canvas = np.full((h + 72, max(w + 48, 400), 3), 245, np.uint8)
+            geometry = self.image_geometry(snapshot["map_ref"])
+            _, _, w, h = geometry["map_rect"]
+            canvas = np.full((geometry["height"], geometry["width"], 3), 245, np.uint8)
             canvas[36 : 36 + h, 24 : 24 + w] = cv2.cvtColor(
                 cv2.resize(image, (w, h), interpolation=cv2.INTER_NEAREST), cv2.COLOR_GRAY2BGR
             )
 
             def pixel(point):
                 x, y = self._pixel(point, grid)
-                return round(24 + x * scale), round(36 + y * scale)
+                return round(24 + x * w / image.shape[1]), round(36 + y * h / image.shape[0])
+
+            # One blended layer keeps walls visible, even with many overlapping notes.
+            regions = [
+                (n, np.array([pixel(p) for p in n["region"]], np.int32)) for n in snapshot["notes"] if n.get("region")
+            ]
+            tint = canvas.copy()
+            for _, polygon in regions:
+                cv2.fillPoly(tint, [polygon], (251, 31, 64))
+            cv2.addWeighted(tint, 0.12, canvas, 0.88, 0, dst=canvas)
+            selected_ids = {n["id"] for n in selected}
+            for note, polygon in regions:
+                cv2.polylines(canvas, [polygon], True, (200, 80, 60), 2 if note["id"] in selected_ids else 1)
 
             cv2.putText(
                 canvas, "MAP SCRATCHPAD | metres", (16, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (30, 30, 30), 1, cv2.LINE_AA

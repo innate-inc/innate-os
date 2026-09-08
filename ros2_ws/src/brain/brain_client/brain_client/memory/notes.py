@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 
+from brain_client.memory.note_regions import note_distance
+
 
 class NoteError(ValueError):
     def __init__(self, message, **details):
@@ -29,6 +31,7 @@ class NoteObservation:
     image: bytes | None
     stamp: float
     monotonic: float
+    map_image: dict | None = None
 
 
 def _integer(value, minimum=1):
@@ -87,8 +90,15 @@ class MapNotes:
     def observe(self, pose, image):
         if not self._can_anchor():
             pose = None
+        ref = self.map_ref()
         return NoteObservation(
-            self.map_ref(), "obs_" + uuid.uuid4().hex[:12], pose, image, time.time(), time.monotonic()
+            ref,
+            "obs_" + uuid.uuid4().hex[:12],
+            pose,
+            image,
+            time.time(),
+            time.monotonic(),
+            self.renderer.image_geometry(ref) if self.renderer is not None else None,
         )
 
     def snapshot(self):
@@ -115,6 +125,7 @@ class MapNotes:
         compact = [
             {k: n[k] for k in ("id", "revision", "title", "anchor", "x", "y", "theta", "observed_at", "certainty")}
             | {"text": n["text"][:180]}
+            | {k: n[k] for k in ("region", "area_m2", "viewpoint") if k in n}
             for n in notes
         ]
         text = (
@@ -124,15 +135,29 @@ class MapNotes:
                     "map_ref": observation.map_ref,
                     "revision": snapshot["revision"],
                     "observation_id": observation.id,
+                    "map_image": {k: observation.map_image[k] for k in ("width", "height", "map_rect")}
+                    if observation.map_image
+                    else None,
                     "notes": compact,
                     "total": len(snapshot["notes"]),
                 },
                 ensure_ascii=False,
             )
         )
-        image = self.renderer.render(snapshot, observation.pose, notes) if self.renderer is not None else None
+        image = (
+            self.renderer.render(snapshot, observation.pose, notes)
+            if self.renderer is not None and observation.map_image == self.renderer.image_geometry(snapshot["map_ref"])
+            else None
+        )
         if image:
-            text += "\nAttached map: grid orientation shown in its caption; note IDs match this text. Squares are observation viewpoints, not measured object positions. Coordinates are metres. Camera evidence is available via read_map_notes."
+            text += (
+                "\nAttached MAP SCRATCHPAD image: outline the area a note describes with map_region vertices "
+                "(x,y integers 0-1000 over the FULL image, x from left, y from top). map_rect is [left,top,width,height] "
+                "in pixels; vertices must be inside that map rectangle. Use the map image, not the camera image. "
+                "Stored region vertices and label x/y are metres; a label is not a navigation goal. "
+                "Outlined regions describe areas. Squares are legacy observation viewpoints, not object positions. "
+                "Camera evidence and its separate viewpoint are available via read_map_notes."
+            )
         return text, image
 
     @staticmethod
@@ -141,7 +166,7 @@ class MapNotes:
 
         def score(n):
             matches = sum(w in (n["title"] + " " + n["text"]).lower() for w in words)
-            distance = math.hypot(n["x"] - pose[0], n["y"] - pose[1]) if pose else 0
+            distance = note_distance(n, pose[0], pose[1]) if pose else 0
             return (-matches, distance, -n["updated_at"])
 
         return sorted(notes, key=score)
@@ -155,7 +180,15 @@ class MapNotes:
                     raise NoteError("INVALID_ARGUMENT")
                 allowed = {
                     "read_map_notes": {"query", "note_ids", "near", "include_evidence", "limit"},
-                    "write_map_note": {"note_id", "expected_revision", "title", "text", "certainty", "observation_id"}
+                    "write_map_note": {
+                        "note_id",
+                        "expected_revision",
+                        "title",
+                        "text",
+                        "certainty",
+                        "observation_id",
+                        "map_region",
+                    }
                     | ({"map_point"} if operator else set()),
                     "remove_map_note": {"note_id", "expected_revision"},
                 }.get(operation)
@@ -232,7 +265,7 @@ class MapNotes:
             note = {"id": "N" + uuid.uuid4().hex[:16], "revision": 1}
             image = None
         if operator and args.get("map_point") is not None:
-            if args.get("observation_id") is not None:
+            if args.get("observation_id") is not None or args.get("map_region") is not None:
                 raise NoteError("INVALID_ANCHOR")
             point = args["map_point"]
             if (
@@ -244,8 +277,10 @@ class MapNotes:
             if self.renderer is None or not self.renderer.contains(self.map_ref(), point):
                 raise NoteError("INVALID_ANCHOR")
             note.update(anchor="map_point", x=point[0], y=point[1], theta=0, observed_at=time.time())
+            for field in ("region", "area_m2", "viewpoint"):
+                note.pop(field, None)
             image = None
-        elif args.get("observation_id") is not None or "anchor" not in note:
+        elif args.get("observation_id") is not None or args.get("map_region") is not None or "anchor" not in note:
             if (
                 observation is None
                 or observation.map_ref != self.map_ref()
@@ -257,11 +292,21 @@ class MapNotes:
                 raise NoteError("OBSERVATION_EXPIRED")
             if any(not math.isfinite(v) for v in observation.pose):
                 raise NoteError("INVALID_ANCHOR")
+            vertices = args.get("map_region")
+            if vertices is not None:
+                if self.renderer is None or observation.map_image is None:
+                    raise NoteError("MAP_IMAGE_UNAVAILABLE")
+                try:
+                    region, area, center = self.renderer.region_from_image(
+                        self.map_ref(), vertices, observation.map_image
+                    )
+                except ValueError as error:
+                    raise NoteError("INVALID_REGION", detail=str(error)) from error
+                note.update(anchor="map_region", region=region, area_m2=area, x=center[0], y=center[1], theta=0)
+            elif note.get("anchor") != "map_region":
+                raise NoteError("REGION_REQUIRED", detail="Outline the area on the current MAP SCRATCHPAD image")
             note.update(
-                anchor="observation",
-                x=observation.pose[0],
-                y=observation.pose[1],
-                theta=observation.pose[2],
+                viewpoint={"x": observation.pose[0], "y": observation.pose[1], "theta": observation.pose[2]},
                 observed_at=observation.stamp,
             )
             image = observation.image
@@ -323,7 +368,7 @@ class MapNotes:
                 or near["radius_m"] <= 0
             ):
                 raise NoteError("INVALID_ARGUMENT")
-            notes = [n for n in notes if math.hypot(n["x"] - near["x"], n["y"] - near["y"]) <= near["radius_m"]]
+            notes = [n for n in notes if note_distance(n, near["x"], near["y"]) <= near["radius_m"]]
         notes = self._rank(notes, query, observation.pose if observation else None)[:limit]
         revision = self._db.execute("SELECT coalesce(sum(revision),0) FROM notes WHERE map_key=?", (key,)).fetchone()[0]
         result = {"ok": True, "map_ref": json.loads(key), "revision": revision, "notes": notes}
@@ -362,7 +407,7 @@ NOTE_TOOLS = [
     },
     {
         "name": "write_map_note",
-        "description": "Remember a useful visual observation on this map, or correct an existing note. New notes require the observation_id supplied in current scratchpad context; their pin means seen FROM this pose, not the object's exact position. Set note_id and expected_revision to null to create. To edit without relocating, use its ID/revision and observation_id=null. Avoid duplicating existing notes.",
+        "description": "Remember an area you recognize on the current MAP SCRATCHPAD image. New notes require map_region: outline that area with 3-12 ordered polygon vertices, x/y integers 0-1000 over the FULL map image (not the camera). Do not anchor the area at your own position. Supply the current observation_id to bind its map and camera evidence. Set note_id and expected_revision to null to create. To change a region, provide the existing ID/revision, a new map_region and current observation_id. Set map_region=null to retain the area, and observation_id=null to retain its camera evidence. Reuse an existing note for the same area; avoid duplicates.",
         "strict": True,
         "parameters": _schema(
             {
@@ -372,6 +417,17 @@ NOTE_TOOLS = [
                 "text": {"type": "string"},
                 "certainty": {"type": "string", "enum": ["observed", "uncertain"]},
                 "observation_id": {"type": ["string", "null"]},
+                "map_region": {
+                    "type": ["array", "null"],
+                    "minItems": 3,
+                    "maxItems": 12,
+                    "items": _schema(
+                        {
+                            "x": {"type": "integer", "minimum": 0, "maximum": 1000},
+                            "y": {"type": "integer", "minimum": 0, "maximum": 1000},
+                        }
+                    ),
+                },
             }
         ),
     },

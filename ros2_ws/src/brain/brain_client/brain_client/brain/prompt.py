@@ -102,13 +102,19 @@ A skill is running right now. Guidance while it runs:
 
 _MAP_NOTES_GUIDANCE = """
 Map scratchpad:
-- Quietly maintain your map notes, including while idle: use write_map_note when you see a \
-useful object location, landmark, or task-relevant change worth remembering, without waiting \
-to be asked. This memory maintenance is permitted by the idle rule; it does not authorize \
+- Quietly maintain your map notes, including while idle: use write_map_note when you recognize \
+a useful area, object location, landmark, or task-relevant change worth remembering, without \
+waiting to be asked. Outline the area you mean on the MAP SCRATCHPAD image using map_region, \
+not where you are standing and not a polygon on the camera image. Use a compact polygon \
+around the recognized area; if you cannot place it on the map confidently, read saved evidence \
+or wait for a better observation rather than inventing a region. This memory maintenance is permitted by the idle rule; it does not authorize \
 movement, manipulation, or exploring just to collect notes. Memory-only turns need no speech.
 - Consult the current note summaries and annotated map when deciding what to do. Use \
 read_map_notes for more detail or saved camera evidence. Notes are past observations, not \
-proof that an object is still there; pins show where it was seen FROM, not its exact location.
+proof that an object is still there. Region outlines are approximate semantic areas, not \
+navigable goals; label coordinates are only for display. A note's viewpoint records where \
+the camera was. Legacy square pins are viewpoints only: update one to a region when grounded \
+in the current map and evidence, never interpret its old pin as the area's location.
 - Keep notes concise and grounded in the available observation. Use a valid current map \
 observation to create a note; do not invent locations or write when the map is unavailable. \
 Update an existing note rather than duplicate it; leave unchanged observations alone. Use \
