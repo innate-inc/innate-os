@@ -38,6 +38,11 @@ pin_if_present() {
 }
 
 pin_if_present INNATE_OS_IMAGE "innate-os-sim-clean-innate:inputs-3acfd3403d107c7672ea0cefd1539c6f4eaa8714f484f0743a4b6138a040ebc3"
-pin_if_present INNATE_SIM_ASSETS_IMAGE "ghcr.io/innate-inc/innate-os-sim-assets:inputs-2dcc207e745947d540d9866e1028f41f6ccc6065c154c7298ce4ec468ad86f5b"
+# The assets image is no longer pinned here: the layer that pin named predates
+# the worlds upstream added (backrooms, intersection), and the merged launcher
+# refuses to install a partial geometry store from it. The launcher reuses an
+# installed store whose geometry inputs are unchanged; to seed one, set
+# INNATE_SIM_ASSETS_IMAGE to upstream's published image for the merged base
+# (README, "On Docker Desktop with WSL").
 
 exec ./innate-sim "$@"

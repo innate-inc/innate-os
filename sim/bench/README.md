@@ -70,6 +70,21 @@ relays only for loopback and the Docker networks and refuses everything else
 with 403; a bridge network with its own subnet goes in `GEMINI_SHIM_ALLOW`
 (comma-separated CIDRs).
 
+On Docker Desktop with WSL, bringing the stack up from this fork needed three
+launcher knobs (8 Sep 2026): `INNATE_SIM_ALLOW_HOST_BIND=1`, because the bind
+fallback fails closed (see the PR); `INNATE_SIM_ASSETS_IMAGE` naming
+upstream's published assets image for the merged base
+(`ghcr.io/innate-inc/innate-os-sim-assets:inputs-<hash>`, the hash being
+`config.compute_assets_image_inputs_hash` over the upstream commit) when the
+launcher refuses a partial geometry store -- a store installed before upstream
+added the backrooms and intersection worlds is one; and, for the `--offline`
+restarts `run_eval.sh` does, `INNATE_SIM_VIEWER_BUNDLE_IMAGE` naming the
+`innate-os-sim-viewer-local:inputs-<hash>` bundle a first online `up` built,
+since offline the launcher looks for the unpublished ghcr name. Two more
+things: `innate-sim down` can leave the host world server holding ports 8799
+and 8800 (kill `mars_sim_driver.world_server`), and a container write can
+leave `data/` root-owned (chown it back, or `up` dies on `data/.last_map`).
+
 ### In the web app
 
 Every benchmark world is also an environment pack, so innate's own localhost

@@ -110,7 +110,7 @@ for BUNDLE in $BUNDLES; do
   # so the launcher must load the default pack and nothing else: a
   # `[simulation] environment = "counter"` left in sim/config.toml for the
   # web app would otherwise put a second authored room into every bench map.
-  timeout 900 bash "$REPO/sim/bench/innate_up.sh" up --offline --environment apartment 2>&1 | grep -cE '✓' \
+  timeout 900 bash "$REPO/sim/bench/innate_up.sh" up --offline --environment apartment 2>&1 | grep -cE '✓|✔' \
     | xargs echo "    checks passed:" | tee -a "$LOG"
   # THIS checkout's container, by the launcher's naming rule (os_container.py):
   # the first `innate-dev*` listed could be another checkout's stack.

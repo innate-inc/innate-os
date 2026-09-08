@@ -113,10 +113,15 @@ the recorded numbers, and the direction of each is known:
   on the porch, outside the south wall, and the exported map left all 627 of
   its cells unknown -- `allow_unknown: false` refuses to plan there. So on the
   live path `blaze_l1`..`l4` (two in category 2, two in category 3) could not
-  be completed however well the robot played. The 5/45 stands as the count of
-  passes, but its denominator was 41 achievable, not 45: category 2 was 2 of
-  15 achievable, category 3 was 0 of 13. The in-process numbers are unaffected
-  (that path plans on the physics world, not the map).
+  be completed however well the robot played, so the 5/45 recorded on Aug 17
+  had 41 achievable challenges, not 45. Blaze was re-run live on 8 Sep 2026 on
+  the corrected map, with H21 and H22 fixed as well: `blaze_l1`..`l4` 0/4,
+  0 of 11 goals, every brief and narrator line delivered, 287 model calls,
+  $2.73 -- the same outcome as before, now on a map the robot could have
+  completed. So the live baseline is 5/45 with all 45 achievable; the composite
+  is the 41 episodes of the Aug 17 sweep plus these four. The in-process
+  numbers were never affected (that path plans on the physics world, not the
+  map).
 - **H22 could only have lowered the live score.** The live judge posted every
   robot utterance as an `answer`, the structured channel where three distinct
   wrong values mean the robot is enumerating and disqualify the episode. A
@@ -249,7 +254,9 @@ run the same night re-executed all four bundles fresh -- landing, after
 every repair, on the identical headline totals. The lesson is recorded here
 because it is the project's oldest one wearing a new coat: the REPORTING
 pipeline can also fail quietly, so the final aggregation asserts it holds
-exactly 45 same-day episodes before it prints a number.
+exactly 45 same-day episodes before it prints a number. Blaze's four were
+re-run on 8 Sep 2026 on the corrected nav map (H24 below): 0/4 again, so the
+column's totals stand, over 45 achievable challenges rather than 41.
 | observation+conversation | 2/13 | 3/13 |
 | simple instruction | 2/17 | 2/17 |
 | long-horizon | 0/15 | 0/15 |
