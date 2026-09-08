@@ -6,6 +6,16 @@
     trajectory_rate_hz: 100.0
     max_jerk: 150.0  # rad/s³ jerk limit for trajectories (0 = disabled)
 
+    # Where the arm folds to on its own: after boot, and whenever arm torque
+    # comes back (torque_on, reboot + torque_on, servo recovery), so it never
+    # stays wherever it fell. Radians in the /mars/arm/state convention; j6
+    # is replaced by the standing grip target. The fold stops at the first
+    # joint that meets resistance. Same fold as Manipulation.REST in
+    # brain_client; /mars/arm/rest triggers it on demand. auto_rest: false
+    # keeps the service and disables the automatic folds.
+    rest_pose: [1.5708, -1.2195, 1.5723, -0.3, 0.0, 0.0]
+    auto_rest: true
+
     # =============================================================
     # Joint Configuration for Mars Arm (nav2-style)
     # =============================================================

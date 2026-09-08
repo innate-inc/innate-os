@@ -674,7 +674,9 @@ class Manipulation:
     # --- servo power / recovery ---
 
     def torque_on(self) -> bool:
-        success = self._call_trigger(self._torque_on_client, "Torque on", "Torque enabled on arm")
+        """Enable arm torque. Off→on also folds the arm to rest (~3 s, stops
+        at an obstacle) before the driver replies; already-on is a no-op."""
+        success = self._call_trigger(self._torque_on_client, "Torque on", "Torque enabled on arm", timeout_sec=10.0)
         if success:
             self._torque_enabled = True
             self._torque_stamp = time.monotonic()

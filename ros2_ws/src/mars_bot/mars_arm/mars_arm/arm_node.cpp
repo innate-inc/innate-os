@@ -82,10 +82,19 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     this->declare_parameter("trajectory_rate_hz", 30.0);
     this->declare_parameter("max_jerk", 0.0);  // rad/s³, 0 = disabled
     this->declare_parameter("joints", std::vector<std::string>{});
+    this->declare_parameter("rest_pose", std::vector<double>{1.5708, -1.2195, 1.5723, -0.3, 0.0, 0.0});
+    this->declare_parameter("auto_rest", true);
 
     int baud_rate = this->get_parameter("baud_rate").as_int();
     control_frequency_ = this->get_parameter("control_frequency").as_double();
     auto joint_names_param = this->get_parameter("joints").as_string_array();
+    auto rest_pose_param = this->get_parameter("rest_pose").as_double_array();
+    if (rest_pose_param.size() != rest_pose_.size()) {
+        throw std::runtime_error("rest_pose must list 6 joint positions, got " +
+                                 std::to_string(rest_pose_param.size()));
+    }
+    std::copy(rest_pose_param.begin(), rest_pose_param.end(), rest_pose_.begin());
+    auto_rest_ = this->get_parameter("auto_rest").as_bool();
 
     // Load joint configurations from sub-parameters (nav2 style)
     loadJointConfigs(joint_names_param);
@@ -139,6 +148,10 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     arm_fix_error_service_ = this->create_service<std_srvs::srv::Trigger>(
         "/mars/arm/fix_error",
         std::bind(&MarsArmNode::armFixErrorCallback, this, std::placeholders::_1, std::placeholders::_2),
+        rmw_qos_profile_services_default, service_callback_group_);
+
+    arm_rest_service_ = this->create_service<std_srvs::srv::Trigger>(
+        "/mars/arm/rest", std::bind(&MarsArmNode::armRestCallback, this, std::placeholders::_1, std::placeholders::_2),
         rmw_qos_profile_services_default, service_callback_group_);
 
     arm_goto_js_service_ = this->create_service<mars_msgs::srv::GotoJS>(
@@ -201,10 +214,26 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
         this->add_on_set_parameters_callback(std::bind(&MarsArmNode::onParameterChange, this, std::placeholders::_1));
     RCLCPP_DEBUG(this->get_logger(), "PID hot-reload enabled (use ros2 param set or pid_hot_reload.py)");
 
-    RCLCPP_INFO(this->get_logger(), "Mars Arm Node ready!");
+    // The boot fold needs the control loop, which only runs once the executor
+    // spins — after this constructor returns — so it waits for the first
+    // joint state and then retires. Same callback group as the goto services:
+    // a client's early goto queues behind it instead of fighting it.
+    if (auto_rest_) {
+        rest_on_boot_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(500),
+            [this] {
+                {
+                    std::lock_guard<std::mutex> lock(joint_state_mutex_);
+                    if (latest_joint_positions_.empty())
+                        return;
+                }
+                rest_on_boot_timer_->cancel();
+                foldToRest("boot");
+            },
+            service_callback_group_);
+    }
 
-    // No homing here: the control timer consumes trajectories, and it only
-    // fires once the executor spins — after this constructor returns.
+    RCLCPP_INFO(this->get_logger(), "Mars Arm Node ready!");
 }
 
 }  // namespace mars_arm

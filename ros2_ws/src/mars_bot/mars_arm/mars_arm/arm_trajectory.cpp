@@ -57,7 +57,7 @@ std::vector<std::vector<double>> MarsArmNode::computeCubicSplineTrajectory(const
 // ========== PLAN AND EXECUTE ==========
 
 bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
-                                           GainMode trajectory_gain_mode) {
+                                           GainMode trajectory_gain_mode, ContactGuard* guard) {
     // Block the idle gain decay for the whole call; the guard stamps the
     // quiet period's start on every exit path.
     trajectory_executing_ = true;
@@ -136,8 +136,19 @@ bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_pos
 
     // Execute trajectory by sending each waypoint with a sleep
     auto sleep_duration = std::chrono::duration<double>(dt);
+    const auto started = std::chrono::steady_clock::now();
+    int strikes = 0;
     for (size_t i = 0; i < interpolated_trajectory.size(); ++i) {
         const auto& point = interpolated_trajectory[i];
+
+        if (guard != nullptr && trackingLost(*guard, started, strikes)) {
+            holdArmWhereItIs();
+            RCLCPP_WARN(this->get_logger(),
+                        "Trajectory stopped: joint %d is %.2f rad behind its command (obstacle?) — holding the arm "
+                        "where it is",
+                        guard->blocked_joint + 1, guard->blocked_error_rad);
+            return false;
+        }
 
         // Re-assert per waypoint: an idle-decay check racing the switch above
         // can stomp the mode once, leaving the trajectory on soft gains.
@@ -165,6 +176,126 @@ bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_pos
     // control loop decays it after a quiet period — holding an idle arm stiff
     // overheated joint 2.
     return true;
+}
+
+bool MarsArmNode::trackingLost(ContactGuard& guard, std::chrono::steady_clock::time_point since, int& strikes) {
+    std::array<double, 6> written{};
+    {
+        std::lock_guard<std::mutex> lock(arm_command_mutex_);
+        if (written_at_ < since) {
+            return false;  // the control loop has not written this trajectory yet
+        }
+        written = written_target_;
+    }
+    std::vector<double> measured;
+    {
+        std::lock_guard<std::mutex> lock(joint_state_mutex_);
+        measured = latest_joint_positions_;
+    }
+    int worst_joint = -1;
+    double worst_error = 0.0;
+    for (size_t j = 0; j < 5 && j < measured.size(); ++j) {
+        const double error = std::abs(measured[j] - written[j]);
+        if (error > worst_error) {
+            worst_error = error;
+            worst_joint = static_cast<int>(j);
+        }
+    }
+    if (worst_error <= guard.max_error_rad) {
+        guard.locked_on = true;
+        strikes = 0;
+        return false;
+    }
+    if (!guard.locked_on) {
+        const double waited_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - since).count();
+        if (waited_s < kContactLockOnTimeoutS) {
+            return false;
+        }
+    } else if (++strikes < kContactStrikes) {
+        return false;
+    }
+    guard.blocked_joint = worst_joint;
+    guard.blocked_error_rad = worst_error;
+    return true;
+}
+
+// Retarget the arm to where it actually is so the servos stop pushing; the
+// grip target (j6) is kept, it was never part of the collision.
+void MarsArmNode::holdArmWhereItIs() {
+    std::vector<double> measured;
+    {
+        std::lock_guard<std::mutex> lock(joint_state_mutex_);
+        measured = latest_joint_positions_;
+    }
+    std::lock_guard<std::mutex> lock(arm_command_mutex_);
+    for (size_t j = 0; j < 5 && j < measured.size(); ++j) {
+        latest_target_[j] = measured[j];
+    }
+    has_target_ = true;
+}
+
+// ========== REST FOLD ==========
+
+namespace {
+
+RestOutcome stoppedBy(const ContactGuard& guard, const char* stage) {
+    if (guard.blocked_joint < 0) {
+        return {false, std::string("rest ") + stage + " rejected (see the arm log)"};
+    }
+    std::ostringstream detail;
+    detail << "rest " << stage << " stopped: joint " << guard.blocked_joint + 1 << " met resistance (" << std::fixed
+           << std::setprecision(2) << guard.blocked_error_rad << " rad behind its command); holding the arm there";
+    return {false, detail.str()};
+}
+
+}  // namespace
+
+RestOutcome MarsArmNode::foldToRest(const char* trigger) {
+    if (!arm_torque_enabled_) {
+        return {false, "rest fold skipped: arm torque is off"};
+    }
+    std::vector<double> measured;
+    {
+        std::lock_guard<std::mutex> lock(joint_state_mutex_);
+        measured = latest_joint_positions_;
+    }
+    if (measured.size() != 6) {
+        return {false, "rest fold skipped: no joint state"};
+    }
+    double grip;
+    {
+        std::lock_guard<std::mutex> lock(arm_command_mutex_);
+        // j6 is current-based position control: re-commanding it above the
+        // standing grip target zeroes the preload and drops a held object.
+        grip = latest_target_[5];
+    }
+    RCLCPP_INFO(this->get_logger(), "Folding the arm to rest (%s)", trigger);
+    ContactGuard guard{kRestContactErrorRad};
+    if (measured[3] - rest_pose_[3] > kHangingWristRad) {
+        std::vector<double> lift = measured;
+        lift[1] = kLiftShoulderRad;
+        lift[2] = kLiftElbowRad;
+        lift[5] = grip;
+        RCLCPP_INFO(this->get_logger(), "Lifting the hanging gripper clear of the ground first");
+        if (!planAndExecuteTrajectory(lift, kRestLiftDurationS, GainMode::SCHEDULED, &guard)) {
+            return stoppedBy(guard, "lift");
+        }
+        guard = ContactGuard{kRestContactErrorRad};
+    }
+    std::vector<double> target(rest_pose_.begin(), rest_pose_.end());
+    target[5] = grip;
+    if (planAndExecuteTrajectory(target, kRestFoldDurationS, GainMode::SCHEDULED, &guard)) {
+        return {true, "arm folded to rest"};
+    }
+    return stoppedBy(guard, "fold");
+}
+
+void MarsArmNode::armRestCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+                                  std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/rest");
+    const RestOutcome outcome = foldToRest("service");
+    response->success = outcome.at_rest;
+    response->message = outcome.detail;
 }
 
 bool MarsArmNode::planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,

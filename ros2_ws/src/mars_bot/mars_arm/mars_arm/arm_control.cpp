@@ -301,6 +301,11 @@ void MarsArmNode::controlTimerCallback() {
                         rad = -rad;
                     cmd_msg.position[i] = rad;
                 }
+                {
+                    std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
+                    std::copy(cmd_msg.position.begin(), cmd_msg.position.end(), written_target_.begin());
+                    written_at_ = std::chrono::steady_clock::now();
+                }
                 arm_command_state_pub_->publish(cmd_msg);
             } else if (has_head_command_.load()) {
                 std::lock_guard<std::mutex> head_lock(head_command_mutex_);

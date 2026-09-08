@@ -212,8 +212,9 @@ export const ARM_REBOOT_CONFIRM =
   "Reboot the arm servos? Any running task stops, the head recenters to level, and torque re-enables automatically once the servos come back.";
 
 // Enable/disable torque on the 6 arm servos (std_srvs/Trigger). torque_on syncs
-// the target to the current pose first, so the arm holds where it is rather
-// than snapping. A reboot leaves the arm torque-off.
+// the target to the current pose (no snap), then folds the arm to its rest
+// pose — ~3 s, stopping early if a joint meets an obstacle — before replying.
+// A reboot leaves the arm torque-off.
 export const ARM_TORQUE_ON_SERVICE = "/mars/arm/torque_on";
 export const ARM_TORQUE_OFF_SERVICE = "/mars/arm/torque_off";
 

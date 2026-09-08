@@ -18,7 +18,7 @@ run unchanged -- see README "Virtual MARS driver".
   sub /mars/arm/commands                          std_msgs/Float64MultiArray (6x rad, best-effort)
   sub /mars/head/set_position                     std_msgs/Int32 (degrees)
   srv /mars/arm/goto_js, /goto_js_v2, /goto_js_trajectory (mars_msgs, if built)
-  srv /mars/arm/torque_on|torque_off|reboot       std_srvs/Trigger (no-ops)
+  srv /mars/arm/torque_on|torque_off|reboot|rest  std_srvs/Trigger (no-ops)
   srv /mars/head/set_ai_position                  std_srvs/Trigger (-20 deg)
 
 The URDF's static frames (base_footprint, base_laser, camera_optical_frame,
@@ -180,7 +180,7 @@ class VirtualMarsNode(Node):
             )
         else:
             self.get_logger().warning("mars_msgs not importable -- /mars/arm/goto_js* services disabled")
-        for name in ("torque_on", "torque_off", "reboot", "fix_error"):
+        for name in ("torque_on", "torque_off", "reboot", "fix_error", "rest"):
             self.create_service(Trigger, f"/mars/arm/{name}", self._on_trigger_noop, callback_group=services)
         self.create_service(Trigger, "/mars/head/set_ai_position", self._on_head_ai_position, callback_group=services)
 
