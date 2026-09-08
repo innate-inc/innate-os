@@ -22,8 +22,8 @@ const GRADUATION_MAX_WAIT_MS = 25_000;
 // Acts the world opens with a line, so MARS speaks before the visitor is asked to move;
 // the give-up path has no "Got it" to hand the brain its turn.
 const ACT_OPENERS = /** @type {Record<string, string>} */ ({
-  "Pick up the can": "Something just landed on the floor in front of you.",
-  "Who am I": "The can is beside the point. Who are you, anyway?",
+  "Pick up the bar": "Something just landed on the floor in front of you.",
+  "Who am I": "That thing is beside the point. Who are you, anyway?",
   "Go through the door": "A door. Standing on its own, right there.",
 });
 // A grant is a turn for the brain, not only a toolset change: the chip says it out loud.
@@ -407,14 +407,14 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       if (seenAct >= 0) panel.clearSuggestedPrompts();
       if (ACT_OPENERS[r.label]) {
         canWaitFrom = opts.transcript().length;
-        if (r.label === "Pick up the can") marks.can = canWaitFrom;
+        if (r.label === "Pick up the bar") marks.can = canWaitFrom;
         const line = ACT_OPENERS[r.label];
         setTimeout(() => void panel.narrate(line), 300);
       }
       seenAct = r.act;
     }
     if (who && marks.persona < 0 && r) marks.persona = opts.transcript().length;
-    const wantSide = r?.label === "Pick up the can" ? 0.9 : 0;
+    const wantSide = r?.label === "Pick up the bar" ? 0.9 : 0;
     if (r && wantSide !== cameraSide) setCamera(wantSide);
 
     // The door: the running skill stops, chips freeze, the world speaks, and it goes white until the Backrooms are in.

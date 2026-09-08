@@ -18,7 +18,7 @@ from mars_sim_driver.challenges import ChallengeRuntime, Drop, Predicate, Runtim
 
 STORY = "nowhere"
 DOOR = "void_door"
-CAN = "can"
+CAN = "bar"
 SUGGEST = "innate-os/suggest_user_prompts"
 PERSONAS = ("a grumpy cat", "an over-enthusiastic golden retriever", "a pirate captain", "a Shakespearean actor")
 PROFILE_KEYS = ("persona", "name")
@@ -61,7 +61,8 @@ class Act:
 def _can_when_settled(state: WorldState, runtime: NowhereRuntime) -> list[Drop] | None:
     if math.dist(runtime.act_origin, state.robot[:2]) < 0.6 or not runtime.still_for(state, 1.0):
         return None
-    return [Drop(CAN, *ahead(state, 0.5)[:2])]
+    # Long axis along the approach, so the jaws close across the short side.
+    return [Drop(CAN, *ahead(state, 0.5))]
 
 
 def _can_landed(state: WorldState, events: list[dict], runtime: NowhereRuntime) -> bool:
@@ -122,23 +123,23 @@ ACTS = (
         nudge="Long silence. In character: if you can drive, drive two metres and stop; if not, ask again to be allowed to. Never mention buttons, tools or capabilities.",
     ),
     Act(
-        "Pick up the can",
+        "Pick up the bar",
         ("innate-os/pick_any_object",),
-        "A small blue can is on the floor right in front of you. It appeared the moment you stopped, which is "
-        "unsettling. Ask for hands, then pick it up. If a pickup fails, say so in one line and ask whether to try "
-        "again; do not narrate the mechanics. Good things to suggest: 'Pick up the can.', 'Try again.'",
+        "A small orange bar is on the floor right in front of you. It appeared the moment you stopped, which is "
+        "unsettling. Ask for hands, then pick it up (call it 'the orange bar'). If a pickup fails, say so in one line and ask whether to try "
+        "again; do not narrate the mechanics. Good things to suggest: 'Pick up the bar.', 'Try again.'",
         _lifted_can,
-        nudge="The can is still on the floor. In character, ask plainly for hands, or for another try. Never mention buttons, tools or capabilities.",
+        nudge="The bar is still on the floor. In character, ask plainly for hands, or for another try. Never mention buttons, tools or capabilities.",
         give_up_skill="pick_any_object",
         give_up_failures=2,
         give_up_after_s=240.0,
-        give_up_note="You could not pick up the can and the world has given up on it: the can is beside the point "
+        give_up_note="You could not pick up the bar and the world has given up on it: the bar is beside the point "
         "now. Be briefly indignant that this place moves the goalposts, then move on.",
     ),
     Act(
         "Who am I",
         ("innate-os/wave",),
-        "If you are holding the can, look at it through your camera and say what you actually see, in one line. "
+        "If you are holding the bar, look at it through your camera and say what you actually see, in one line. "
         "Then stop and ask the real question: who are you, exactly? The person built you, so the person decides. "
         "Ask them to pick a personality for you (they will see choices) and wait. The moment runtime.persona is "
         "set, become it completely: announce yourself in that voice in ONE line with at most one catchphrase, "
