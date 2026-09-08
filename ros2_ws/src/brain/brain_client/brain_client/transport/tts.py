@@ -20,8 +20,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from brain_client.common.logging import UniversalLogger
+from brain_client.transport.cartesia import TtsBackend, TtsTransport, pick_tts
 from innate_proxy import ProxyClient
-from innate_proxy.adapters.cartesia import ProxyCartesiaClient
 
 
 @dataclass(frozen=True)
@@ -48,18 +48,17 @@ class TTSHandler:
     """
     Handles text-to-speech conversion using Cartesia API and audio playback via aplay.
 
-    Requires a ProxyClient instance for accessing Cartesia services.
-    Voice ID starts at proxy.config["cartesia_voice_id"] and is swappable at
-    runtime through set_voice; every utterance reads the current one.
+    Reaches Cartesia through the Innate proxy, or directly with CARTESIA_API_KEY
+    when there is no service key (see transport/cartesia.py for the precedence).
+    The voice is swappable at runtime through set_voice; every utterance reads
+    the current one.
     """
-
-    # Default voice ID (Alfred)
-    DEFAULT_VOICE_ID = "9fdaae0b-f885-4813-b589-3c07cf9d5fea"
 
     def __init__(
         self,
         logger,
-        proxy: ProxyClient,
+        proxy: ProxyClient | None,
+        voice_id: str,
         tts_status_pub=None,
         tts_audio_pub=None,
         simulator_mode: bool = False,
@@ -69,7 +68,8 @@ class TTSHandler:
 
         Args:
             logger: ROS logger instance or any logger
-            proxy: ProxyClient instance (required)
+            proxy: ProxyClient instance, or None to fall back to CARTESIA_API_KEY
+            voice_id: Cartesia voice the robot starts speaking in
             tts_status_pub: Optional ROS publisher for /tts/is_playing status
             tts_audio_pub: Optional ROS publisher for /tts/audio (base64 WAV).
                 Used in simulator mode where there is no audio device — the
@@ -78,18 +78,17 @@ class TTSHandler:
                 ``tts_audio_pub`` rather than played locally via aplay.
         """
         self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
-        self._proxy: ProxyClient = proxy
-        # Get voice ID from proxy config, fall back to default
-        self.voice_id: str = proxy.config.get("cartesia_voice_id", self.DEFAULT_VOICE_ID)
-        self._cartesia_client: ProxyCartesiaClient | None = None
+        self._proxy: ProxyClient | None = proxy
+        self.voice_id: str = voice_id
+        self._tts: TtsTransport | None = None
+        self.backend: TtsBackend = TtsBackend.UNCONFIGURED
         self.is_playing: bool = False
         self.play_lock = threading.Lock()
         self.tts_status_pub = tts_status_pub
         self.tts_audio_pub = tts_audio_pub
         self._simulator_mode = simulator_mode
 
-        # Initialize Cartesia client
-        self._init_client()
+        self._init_transport()
 
         # Async speech is played in order by one worker so back-to-back calls
         # aren't dropped; bounded so a runaway say() loop can't build a backlog.
@@ -103,34 +102,31 @@ class TTSHandler:
         self._closing = threading.Event()
         threading.Thread(target=self._speech_loop, daemon=True).start()
 
-    def _init_client(self):
-        """Initialize the Cartesia client via proxy."""
-        try:
-            self._cartesia_client = self._proxy.cartesia
-            self.logger.info(f"✅ Cartesia TTS initialized via proxy (voice: {self.voice_id})")
-            # Pre-warm the TCP+TLS connection to the proxy so the first
-            # TTS request doesn't pay the cold-start penalty (~1-2s).
-            threading.Thread(target=self._warmup_connection, daemon=True).start()
-        except Exception as e:
-            self.logger.error(f"❌ Failed to initialize Cartesia client: {e}")
-            self.logger.error("TTS proxy not properly initialized in BrainClientNode")
-            self._cartesia_client = None
+    def _init_transport(self) -> None:
+        """Pick the way out to Cartesia and pre-warm it."""
+        self._tts, self.backend = pick_tts(self._proxy)
+        if self._tts is None:
+            return  # BrainClientNode._init_tts reports the missing key
+        self.logger.info(f"✅ Cartesia TTS initialized via {self.backend} (voice: {self.voice_id})")
+        # Pre-warm the TCP+TLS connection so the first TTS request doesn't pay
+        # the cold-start penalty (~1-2s).
+        threading.Thread(target=self._warmup_connection, daemon=True).start()
 
-    def _warmup_connection(self):
-        """Open a TCP+TLS connection to the proxy so httpx can reuse it."""
+    def _warmup_connection(self) -> None:
+        """Open a TCP+TLS connection to the backend so httpx can reuse it."""
+        if self._tts is None:
+            return
         try:
             t0 = time.perf_counter()
-            client = self._proxy.get_sync_client()
-            # Any request to the proxy host warms the connection pool.
-            client.head(self._proxy.proxy_url)
+            self._tts.warmup()
             dt = (time.perf_counter() - t0) * 1000
-            self.logger.info(f"⏱️ Proxy connection pre-warmed in {dt:.0f}ms")
+            self.logger.info(f"⏱️ {self.backend} connection pre-warmed in {dt:.0f}ms")
         except Exception as e:
-            self.logger.debug(f"Proxy warmup failed (non-fatal): {e}")
+            self.logger.debug(f"TTS warmup failed (non-fatal): {e}")
 
     def is_available(self) -> bool:
         """Check if TTS is available and configured."""
-        return self._cartesia_client is not None
+        return self._tts is not None
 
     def set_voice(self, voice_id: str) -> None:
         """Speak in a different voice from the next utterance on.
@@ -226,15 +222,15 @@ class TTSHandler:
         The speaker path gets raw PCM; the sim path keeps WAV — browser decoders
         need the container.
         """
-        if self._cartesia_client is None:
-            raise RuntimeError("Cartesia client unavailable (is_available() gates all callers)")
+        if self._tts is None:
+            raise RuntimeError("Cartesia transport unavailable (is_available() gates all callers)")
         if for_speaker:
             output_format = {"container": "raw", "encoding": "pcm_s16le", "sample_rate": self.SPEAKER_SAMPLE_RATE}
             generation_config = {"speed": self.SPEAKER_SPEED}
         else:
             output_format = {"container": "wav", "encoding": "pcm_s16le", "sample_rate": 44100}
             generation_config = None
-        return self._cartesia_client.tts.bytes_stream(
+        return self._tts.stream(
             model_id="sonic-3.5",
             transcript=text,
             voice=voice,
@@ -541,10 +537,10 @@ class TTSHandler:
             self._speech_cv.notify()
         for callback in dropped:
             callback(False)  # a dangling environment-speech ack would wait out its 30s watchdog
-        if self._cartesia_client:
+        if self._tts is not None:
+            self._tts.close()
+            self._tts = None
             self.logger.info("🔇 TTS handler closed")
-            # Cartesia client doesn't need explicit cleanup in sync mode
-            self._cartesia_client = None
 
 
 def _finalize_wav(data: bytes) -> bytes:

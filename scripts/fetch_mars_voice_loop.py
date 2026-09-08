@@ -41,7 +41,7 @@ sys.path.insert(0, str(REPO / "ros2_ws/src/cloud/clients/proxy-client"))
 sys.path.insert(0, str(REPO / "ros2_ws/src/cloud/clients/auth-client"))
 
 DEFAULT_VOICE = "9fdaae0b-f885-4813-b589-3c07cf9d5fea"
-"""The robot's default TTS voice, matching ``TTSHandler.DEFAULT_VOICE_ID``."""
+"""The robot's default TTS voice, matching ``BrainConfig.cartesia_voice_id``."""
 TRANSCRIPT = "Rrrrrrrrrrrrrr"
 """Scored best of ten spellings: the longest steady voiced run, and the lowest
 pitch among those that hold -- which leaves the most headroom before playing

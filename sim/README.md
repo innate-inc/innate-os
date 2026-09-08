@@ -137,16 +137,18 @@ skips it and leaves the downloading to the first `up`.
 
 `setup` asks how the robot's AI agent reaches a cloud LLM. The agent loop
 itself always runs on the robot (`brain_client`); the choice is only about
-which key it thinks with:
+which keys it uses:
 
-- **Your own Gemini key** — the choice for most people. Create a
+- **Your own API keys** — the choice for most people. Create a
   [Gemini API key](https://aistudio.google.com/api-keys) and the agent calls
-  Google directly with it. Everything works except voice: the web app's speak
-  bar is disabled without a service key.
+  Google directly with it. `setup` then offers an optional
+  [Cartesia key](https://play.cartesia.ai/keys) for the robot's voice; skip it
+  and everything works except speech (the web app's speak bar stays disabled).
 - **Innate service key** — pick this if you already have one: it ships with a
-  MARS robot, and we hand them out to people building on the simulator. The
-  agent calls Gemini through Innate's proxy and the robot speaks. Ask on
-  [Discord](https://discord.gg/innate) if you would like one.
+  MARS robot, and we hand them out to people building on the simulator. One key
+  reaches both Gemini and Cartesia through Innate's proxy, so the robot speaks
+  without a second key. Ask on [Discord](https://discord.gg/innate) if you
+  would like one.
 - **None** — no agent; you can still drive, navigate, and trigger skills
   manually.
 
