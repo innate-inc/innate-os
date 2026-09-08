@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Innate Inc
 // Shared by the Map page and Teleop; note pins never dispatch navigation.
 /** @typedef {{map: string, fingerprint: string, frame?: string}} MapRef */
-/** @typedef {{id: string, revision: number, title: string, text: string, x: number, y: number, anchor: string, observed_at: number, certainty: string, has_evidence: boolean}} Note */
+/** @typedef {{id: string, revision: number, title: string, text: string, x: number, y: number, anchor: string, observed_at: number, certainty: string, has_evidence: boolean, region?: number[][], area_m2?: number, viewpoint?: {x: number, y: number, theta: number}}} Note */
 /** @typedef {{map_ref: MapRef | null, revision: number, notes: Note[]}} Snapshot */
 /** @typedef {{canvas: HTMLCanvasElement, viewKey: () => string, matchesMap: (ref: MapRef | null) => boolean, project: (x: number, y: number) => {x: number, y: number} | null, unproject: (e: PointerEvent) => {x: number, y: number} | null}} Geometry */
 const TOPIC = "/brain/map_notes";
@@ -35,6 +35,10 @@ function errorText(error) {
 /** @param {HTMLElement} root @param {import("../rosClient.js").RosClient} ros @param {Geometry} geometry */
 export function createNotesOverlay(root, ros, geometry) {
   const layer = el("div", "", "map-notes-layer");
+  const regions = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  regions.classList.add("map-note-regions");
+  regions.setAttribute("aria-hidden", "true");
+  layer.append(regions);
   const toggle = button("Notes", () => {
     panel.hidden = !panel.hidden;
     adding = false;
@@ -251,7 +255,9 @@ export function createNotesOverlay(root, ros, geometry) {
       el("p", note.text),
       el(
         "p",
-        `${note.id} · ${note.anchor === "observation" ? "Seen from here" : "Known map position"} · (${note.x.toFixed(1)}, ${note.y.toFixed(1)}) m`,
+        note.region
+          ? `${note.id} · Approximate area · ${note.area_m2?.toFixed(1)} m²`
+          : `${note.id} · ${note.anchor === "observation" ? "Seen from here" : "Known map position"} · (${note.x.toFixed(1)}, ${note.y.toFixed(1)}) m`,
         "map-note-meta",
       ),
       el(
@@ -260,6 +266,8 @@ export function createNotesOverlay(root, ros, geometry) {
         "map-note-meta",
       ),
     );
+    if (note.viewpoint)
+      panel.append(el("p", `Captured from (${note.viewpoint.x.toFixed(1)}, ${note.viewpoint.y.toFixed(1)}) m`, "map-note-meta"));
     if (note.has_evidence)
       panel.append(
         button("View captured image", async () => {
@@ -320,9 +328,23 @@ export function createNotesOverlay(root, ros, geometry) {
     layer.hidden = !visible || !usable;
     toggle.textContent = usable && snapshot ? `Notes ${snapshot.notes.length}` : "Notes";
     if (!usable || !snapshot) {
-      layer.replaceChildren();
+      layer.replaceChildren(regions);
+      regions.replaceChildren();
       pins.clear();
       return;
+    }
+    regions.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    regions.replaceChildren();
+    for (const note of snapshot.notes) {
+      if (!note.region?.length) continue;
+      const points = note.region.map(([x, y]) => geometry.project(x, y));
+      if (points.some((p) => !p || !Number.isFinite(p.x) || !Number.isFinite(p.y))) continue;
+      const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+      polygon.setAttribute("points", points.map((p) => `${p?.x},${p?.y}`).join(" "));
+      polygon.dataset.noteId = note.id;
+      polygon.dataset.selected = String(note.id === selected);
+      polygon.dataset.certainty = note.certainty;
+      regions.append(polygon);
     }
     const alive = new Set();
     /** @type {Map<string, {button: HTMLButtonElement, count: number}>} */

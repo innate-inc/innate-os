@@ -55,6 +55,11 @@ def main():
         page.get_by_role("button", name="Notes 3", exact=True).click()
         page.locator(".map-note-panel").get_by_role("button", name="Blue bowl", exact=True).click()
         panel = page.locator(".map-note-panel")
+        expect(panel).to_contain_text("Approximate area")
+        expect(panel).to_contain_text("Captured from (-1.0, 0.0) m")
+        expect(page.locator(".map-note-regions polygon")).to_have_count(3)
+        selected_region = page.locator('.map-note-regions polygon[data-selected="true"]')
+        expect(selected_region).to_have_count(1)
         panel.get_by_role("button", name="View captured image", exact=True).click()
         expect(panel.locator("img")).to_be_visible()
         assert panel.locator("img").evaluate("img=>img.naturalWidth") > 0
@@ -62,6 +67,8 @@ def main():
         page.get_by_role("textbox", name="Note text", exact=True).fill("On the top kitchen shelf.")
         panel.get_by_role("button", name="Save note", exact=True).click()
         expect(panel).to_contain_text("On the top kitchen shelf.")
+        expect(panel).to_contain_text("Approximate area")
+        expect(selected_region).to_have_count(1)
         expect(panel.get_by_role("button", name="Edit", exact=True)).to_be_visible()
         # A second writer updates the same revision while the browser editor is open.
         panel.get_by_role("button", name="Edit", exact=True).click()
@@ -79,7 +86,9 @@ def main():
         expect(panel).to_contain_text("Concurrent agent correction")
         # Restore the fixture note and verify creation by clicking the real map canvas.
         panel.get_by_role("button", name="Edit", exact=True).click()
-        page.get_by_role("textbox", name="Note text", exact=True).fill("On the kitchen table. Seen from here.")
+        page.get_by_role("textbox", name="Note text", exact=True).fill(
+            "On the kitchen table, within the outlined area."
+        )
         panel.get_by_role("button", name="Save note", exact=True).click()
         expect(panel.get_by_role("button", name="All notes", exact=True)).to_be_visible()
         panel.get_by_role("button", name="All notes", exact=True).click()
@@ -100,15 +109,33 @@ def main():
         expect(panel).to_contain_text("Keys on the side table.")
         panel.get_by_role("button", name="Remove", exact=True).click()
         expect(page.get_by_role("button", name="Notes 3", exact=True)).to_be_visible()
+        panel.get_by_role("button", name="Blue bowl", exact=True).click()
+        expect(panel).to_contain_text("Approximate area")
+        expect(selected_region).to_have_count(1)
+        region_before = selected_region.get_attribute("points")
+        # Region outlines follow the same pan/zoom transform as the map canvas.
+        bounds = page.locator(".map-canvas").bounding_box()
+        page.mouse.move(bounds["x"] + 300, bounds["y"] + 300)
+        page.mouse.wheel(0, -200)
+        page.wait_for_function(
+            "before=>document.querySelector('.map-note-regions polygon[data-selected=true]')?.getAttribute('points')!==before",
+            arg=region_before,
+        )
         page.reload()
         expect(page.get_by_role("button", name="Notes 3", exact=True)).to_be_visible(timeout=15000)
         page.goto(args.url + "/nav")
         expect(page.get_by_role("button", name="Notes 3", exact=True)).to_be_visible(timeout=15000)
         page.get_by_role("button", name="Notes 3", exact=True).click()
         panel.get_by_role("button", name="Blue bowl", exact=True).click()
+        expect(panel).to_contain_text("Approximate area")
+        expect(page.locator('.map-note-regions polygon[data-selected="true"]')).to_have_count(1)
         if args.screenshots:
             args.screenshots.mkdir(parents=True, exist_ok=True)
+            panel.get_by_role("button", name="All notes", exact=True).click()
+            panel.get_by_role("button", name="Charging corner", exact=True).click()
             page.screenshot(path=str(args.screenshots / "map-scratchpad.png"))
+            panel.get_by_role("button", name="All notes", exact=True).click()
+            panel.get_by_role("button", name="Blue bowl", exact=True).click()
         # A small screen must expose the full editor and its Save button without overflow.
         page.set_viewport_size({"width": 390, "height": 844})
         panel.get_by_role("button", name="Edit", exact=True).click()
@@ -125,6 +152,13 @@ def main():
         assert panel.locator("img").evaluate("img=>img.naturalWidth") > 0
         panel.get_by_role("button", name="Edit", exact=True).click()
         expect(panel.get_by_role("button", name="Save note", exact=True)).to_be_in_viewport()
+        panel.get_by_role("button", name="Cancel", exact=True).click()
+        panel.get_by_role("button", name="Remove", exact=True).click()
+        expect(page.get_by_role("button", name="Notes 2", exact=True)).to_be_visible()
+        expect(page.locator(".map-note-regions polygon")).to_have_count(2)
+        page.reload()
+        expect(page.get_by_role("button", name="Notes 2", exact=True)).to_be_visible(timeout=15000)
+        expect(page.locator(".map-note-regions polygon")).to_have_count(2)
         assert not any(message.get("op") == "send_action_goal" for message in sent), (
             "Note interaction dispatched a physical action"
         )
@@ -139,7 +173,7 @@ def main():
         assert not errors, json.dumps(errors)
         browser.close()
         print(
-            "Passed: map detach/restore, read evidence, edit, concurrent edit conflict, create by map click, Teleop read/remove, reload, mobile editor; no page errors."
+            "Passed: map detach/restore, regions on both surfaces, zoom alignment, read evidence, edit, concurrent edit conflict, create by map click, Teleop read/remove, reload, mobile editor, persisted area removal; no page errors."
         )
 
 

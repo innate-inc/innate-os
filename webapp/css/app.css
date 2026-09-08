@@ -11380,6 +11380,27 @@ select.skill-input {
   pointer-events: none;
   overflow: hidden;
 }
+.map-note-regions {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.map-note-regions polygon {
+  fill: rgb(64 31 251 / 9%);
+  stroke: #8b7bff;
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+.map-note-regions polygon[data-selected="true"] {
+  fill: rgb(64 31 251 / 18%);
+  stroke: #b8adff;
+  stroke-width: 2.5px;
+}
+.map-note-regions polygon[data-certainty="uncertain"] {
+  stroke-dasharray: 5 4;
+}
 .map-note-pin {
   position: absolute;
   transform: translate(-50%, -50%);
