@@ -94,6 +94,11 @@ class Agent(ABC):
         """
         pass
 
+    def initial_skill_ids(self) -> list[str] | None:
+        """The subset of skill_ids() active the moment this agent is armed. None
+        means all of them; an agent whose skills are granted over time returns []."""
+        return None
+
     def skill_ids(self) -> list[str]:
         """get_skills() normalized to id strings — the only form the rest of
         the system (registration, cloud agent, webapp) ever consumes. A class

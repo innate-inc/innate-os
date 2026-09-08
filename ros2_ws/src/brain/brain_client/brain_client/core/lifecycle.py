@@ -108,8 +108,10 @@ class BrainLifecycle:
             self._chat.emit_system(f"Error: Unknown directive '{name}'. Available directives: {available}")
             self._logger.error(f"Unknown directive: {name}")
             return
-        self._state.current_directive = self._state.directives[name]
-        self._state.active_skill_ids = list(self._state.current_directive.skill_ids())
+        directive = self._state.directives[name]
+        self._state.current_directive = directive
+        initial = directive.initial_skill_ids()
+        self._state.active_skill_ids = list(directive.skill_ids() if initial is None else initial)
         self._logger.info(f"Activated directive: {name}")
         self._chat.clear()
         self._brain.reset()

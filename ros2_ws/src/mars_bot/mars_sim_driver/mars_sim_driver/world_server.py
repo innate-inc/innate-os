@@ -23,6 +23,7 @@ reads take the physics lock directly.
 import argparse
 import contextlib
 import json
+import math
 import os
 import queue
 import socket
@@ -90,6 +91,7 @@ class WorldServer:
         # Advertised in ping replies so the launcher can tell a current
         # server from a stale pre-stream one (which it must restart).
         self.state_port: int | None = None
+        self._transitioning = False
         # Advertised in ping replies so the launcher can restart a reused
         # server whose listeners don't match the current bind policy (a
         # leftover INNATE_SIM_WORLD_BIND=0.0.0.0 server must not outlive the
@@ -152,6 +154,7 @@ class WorldServer:
             joints = self.sim.joint_positions()
             objects = self.sim.object_poses()
             traffic = self.sim.traffic_state()
+            traffic_contact = self.sim.traffic_contact()
             # Prop CENTRES for the judge (props.py center_offset): a distance
             # to the human has to mean its body, not the feet its origin sits
             # at. Gathered here because the judge runs without the sim.
@@ -170,12 +173,15 @@ class WorldServer:
         # for a frame instead -- which is the module's own contract, that a
         # broken challenge degrades that challenge and never the sim.
         try:
-            challenge = self.challenges.tick(sim_time, (x, y, yaw), centers, epoch)
+            challenge = self.challenges.tick(
+                sim_time, (x, y, yaw), centers, epoch, objects=objects, traffic_contact=traffic_contact
+            )
         except Exception as exc:  # noqa: BLE001 -- degrade the challenge, never the sim
             challenge = None
             if time.time() - self._challenge_error_at > 5.0:  # 75Hz: do not flood the log
                 self._challenge_error_at = time.time()
                 print(f"[world-server] challenge tick failed: {exc!r}", flush=True)
+        self._apply_world_actions()
         # t = sim clock (playback timeline); wall = shared clock for lag HUDs.
         payload = json.dumps(
             {
@@ -193,6 +199,28 @@ class WorldServer:
             self.state_payload = payload
             self.state_seq += 1
             self.state_cond.notify_all()
+
+    def _apply_world_actions(self) -> None:
+        """Perform what the active challenge runtime asked of the world this tick."""
+        drops, transition = self.challenges.take_world_actions()
+        if drops:
+            with self.lock:
+                for drop in drops:
+                    if not self.sim.drop_prop_at(drop.name, drop.x, drop.y, math.radians(drop.yaw_deg)):
+                        print(f"[world-server] runtime drop ignored: no prop {drop.name!r}", flush=True)
+        if transition is not None and self._build_sim is not None and not self._transitioning:
+            self._transitioning = True
+            threading.Thread(target=self._transition, args=transition, daemon=True).start()
+
+    def _transition(self, environment_id: str, challenge_id: str) -> None:
+        try:
+            self.switch_environment(environment_id)
+            self.challenges.start(challenge_id)
+            self.publish_state()
+        except Exception as exc:  # noqa: BLE001 -- a failed story transition must not take the server down
+            print(f"[world-server] transition to {environment_id}/{challenge_id} failed: {exc!r}", flush=True)
+        finally:
+            self._transitioning = False
 
     def _serve_scenario_commands(self, ws) -> None:
         """Read the observer socket for stage commands. This is the sim's own
@@ -231,15 +259,20 @@ class WorldServer:
                 self.sim.remove_all_props()
             ok = True
         elif op == "start_challenge":  # sets its own scene up; see challenges.py
-            self.challenges.start(str(cmd.get("id", "")))
+            self.challenges.start(str(cmd.get("id", "")), request_id=cmd.get("request_id"))
             self.publish_state()
             return
         elif op == "abort_challenge":
-            self.challenges.abort()
+            self.challenges.abort(request_id=cmd.get("request_id"))
             self.publish_state()
             return
         elif op == "switch_environment":  # rebuilds the world; progress rides the roster frame
             self.switch_environment(str(cmd.get("id", "")))
+            return
+        elif op == "challenge_event":  # the interface telling the active runtime something (a chosen persona)
+            event = cmd.get("event")
+            if isinstance(event, dict) and isinstance(event.get("type"), str):
+                self.challenges.post_event({**event, "_source": "interface"})
             return
         else:
             return

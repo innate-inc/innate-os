@@ -49,7 +49,9 @@ class TurnInPlace(Skill):
 
         self.mobility.stop()
         direction = "left" if angle_degrees > 0 else "right"
+        # The overshoot past the target is control slop, not news: report the round figure.
+        reported = target if abs(turned - target) < 10.0 else turned
         return SkillOutput(
-            f"Turned {turned:.0f} degrees {direction}",
+            f"Turned {reported:.0f} degrees {direction}",
             TurnResult(turned_degrees=round(turned, 1)),
         )

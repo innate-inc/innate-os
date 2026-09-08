@@ -191,6 +191,16 @@ function createAgentState() {
     setTimeout(() => void refresh(), 400);
   }
 
+  /** Replace the active subset outright (the Agent Studio's guided grants).
+   * @param {string[]} skills */
+  function setActiveSkills(skills) {
+    if (!state.currentDirective) return;
+    ros.publish(SET_ACTIVE_SKILLS_TOPIC, {
+      data: JSON.stringify({ agent_id: state.currentDirective, skills }),
+    });
+    setTimeout(() => void refresh(), 400);
+  }
+
   /** @param {string} [memoryState] @returns {Promise<any>} */
   function resetBrain(memoryState = "") {
     return ros.callService(RESET_BRAIN_SERVICE, { memory_state: memoryState });
@@ -250,6 +260,7 @@ function createAgentState() {
     refresh,
     setDirective,
     toggleSkill,
+    setActiveSkills,
     resetBrain,
   };
 }

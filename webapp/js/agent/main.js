@@ -29,6 +29,8 @@ import { createCameraSwitch } from "../teleop/cameraSwitch.js";
 import { sharedAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
+import { createAgentStudio } from "./agentStudio.js";
+import { CANCEL_SKILL_SERVICE } from "../constants.js";
 import { createAgentMicControl } from "./agentMicControl.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
@@ -159,6 +161,8 @@ function buildAgentView(root) {
 
   /** @type {ReturnType<typeof createAgentMicControl> | null} */
   let micControl = null;
+  /** @type {string[]} */
+  const robotLines = [];
   const panel = createAgentPanel(root, ros, agentState, {
     enableMic: Boolean(config.simControls),
     onMicState: (state) => {
@@ -168,10 +172,18 @@ function buildAgentView(root) {
         waveform: state.waveform,
       });
     },
+    onRobotMessage: (text) => {
+      robotLines.push(text);
+      if (robotLines.length > 40) robotLines.shift();
+    },
   });
   const simSession = /** @type {any} */ (session);
   const challengePanel =
     typeof simSession.onChallenge === "function" ? createChallengePanel(root, simSession) : null;
+  const studio = createAgentStudio(root, agentState, challengePanel ? simSession : null, panel, {
+    transcript: () => robotLines,
+    cancelSkill: () => ros.callService(CANCEL_SKILL_SERVICE, {}),
+  });
   const isSceneSurface = (/** @type {EventTarget | null} */ target) =>
     target instanceof Element &&
     (target.matches(".video-stage > canvas, .video-stage > video") || target.classList.contains("video-stage"));
@@ -237,6 +249,7 @@ function buildAgentView(root) {
     // Square, always-live camera tiles (own prefs key so teleop's defaults stay put).
     cameraSwitch,
     ...(micControl ? [micControl] : []),
+    studio,
     panel,
     {
       destroy: () => {

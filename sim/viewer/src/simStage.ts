@@ -469,6 +469,14 @@ export function createSimStage(
     cameraMode = index;
     refreshCameraSwitch();
   };
+  // The webapp (the onboarding story) can pick a mode without owning the scene.
+  const onCameraModeRequest = (event: Event) => {
+    const detail = (event as CustomEvent<CameraMode | { mode: CameraMode; side?: number }>).detail;
+    const mode = typeof detail === "string" ? detail : detail?.mode;
+    scene.chaseSide = typeof detail === "object" && typeof detail?.side === "number" ? detail.side : 0;
+    if (CAMERA_MODES.includes(mode)) scene.setCameraMode(mode);
+  };
+  document.addEventListener("innate:camera-mode", onCameraModeRequest);
 
   function setPlacement(next: PlacementState): void {
     if (placement.kind === "rotating" && canvas.hasPointerCapture(placement.drag.pointerId)) {

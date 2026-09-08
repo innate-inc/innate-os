@@ -11372,3 +11372,231 @@ select.skill-input {
     flex-basis: 100%;
   }
 }
+
+/* ---- Agent Studio (v0) --------------------------------------------------- */
+/* What the selected agent can do, one switch per skill. Bottom-left, under the
+   challenge dock; the chat owns the right edge. */
+.agent-studio {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 30;
+  width: min(320px, calc(100% - 32px));
+  padding: 14px 16px 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 12px;
+  background: rgb(16 16 20 / 92%);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: var(--text);
+}
+.agent-studio-head { display: flex; flex-direction: column; gap: 2px; }
+.agent-studio-head .microlabel { color: var(--muted); }
+.agent-studio-title { font-size: 15px; font-weight: 550; letter-spacing: -0.01em; }
+.agent-studio-note { margin: 8px 0 10px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.agent-studio.story .agent-studio-note { color: #c9c3ff; }
+.agent-studio-action {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid #7965e7;
+  border-radius: 8px;
+  background: #5941ca;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.agent-studio-action:disabled { opacity: 0.5; cursor: wait; }
+.agent-studio-skills { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.agent-studio-skill {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 34px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 4%);
+}
+.agent-studio-skill.locked { opacity: 0.45; }
+.agent-studio-skill.wanted { background: rgb(132 112 255 / 18%); outline: 1px solid #8470ff; animation: agent-studio-pulse 1.4s ease-in-out infinite; }
+.agent-studio-skill-name { font-size: 13px; text-transform: capitalize; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-studio-skill-state { color: var(--muted); font-size: 9px; }
+.agent-studio-skill.wanted .agent-studio-skill-state { color: #c9c3ff; }
+.agent-studio-toggle {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border: 0;
+  border-radius: 10px;
+  background: #3a3a42;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.agent-studio-toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #d8d8de;
+  transition: transform 140ms ease;
+}
+.agent-studio-toggle[aria-checked="true"] { background: #5941ca; }
+.agent-studio-toggle[aria-checked="true"]::after { transform: translateX(14px); }
+.agent-studio-toggle:disabled { cursor: not-allowed; }
+.agent-studio-toggle:focus-visible { outline: 2px solid #9482ff; outline-offset: 2px; }
+@keyframes agent-studio-pulse {
+  0%, 100% { outline-color: #8470ff; }
+  50% { outline-color: rgb(132 112 255 / 25%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-studio-skill.wanted { animation: none; }
+}
+@media (max-width: 820px) {
+  .agent-studio { display: none; }
+}
+
+/* ---- suggestion chips under the latest message (ported from #779) ------ */
+.agent-guided-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 2px 0 8px 2px;
+}
+
+.agent-guided-prompt-label {
+  color: rgb(255 255 255 / 48%);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.agent-guided-prompt-button {
+  position: relative;
+  max-width: min(100%, 430px);
+  padding: 10px 38px 10px 13px;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: left;
+  background: #34343a;
+  border: 1px solid #34343a;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 140ms ease;
+}
+
+.agent-guided-prompt-button::after {
+  position: absolute;
+  top: 50%;
+  right: 13px;
+  content: "→";
+  color: rgb(255 255 255 / 62%);
+  transform: translateY(-50%);
+}
+
+.agent-guided-prompt-button:active {
+  transform: scale(0.985);
+}
+
+.agent-guided-prompt-button:focus-visible {
+  outline: 2px solid var(--agent-purple);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .agent-guided-prompt-button:hover {
+    border-color: rgb(255 255 255 / 32%);
+  }
+}
+
+
+/* Agent Studio: story reveal, offers, code pane */
+.agent-studio-persona { display: block; margin-top: 2px; color: #c9c3ff; font-size: 12px; }
+.agent-studio-name { display: flex; gap: 6px; margin: 0 0 10px; }
+.agent-studio-name input {
+  flex: 1; min-width: 0; padding: 8px 10px;
+  border: 1px solid var(--hairline-strong); border-radius: 8px;
+  background: rgb(255 255 255 / 5%); color: var(--text); font: inherit; font-size: 13px;
+}
+.agent-studio-name button {
+  padding: 8px 12px; border: 1px solid #55545e; border-radius: 8px;
+  background: #33333d; color: #f2f2f7; font: inherit; font-size: 12px; cursor: pointer;
+}
+.agent-studio-empty { color: var(--muted); font-size: 12px; padding: 6px 8px; }
+.agent-studio-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.agent-studio-actions .agent-studio-action { width: auto; margin: 0; padding: 8px 12px; font-size: 12px; }
+.agent-studio-action.quiet { background: transparent; border-color: #4a4a54; color: #d8d8de; }
+.agent-studio-action.quiet:hover { border-color: #8a8a96; }
+.agent-studio-code {
+  max-height: 34vh; margin: 10px 0 0; padding: 10px 12px; overflow: auto;
+  border: 1px solid var(--hairline-strong); border-radius: 8px;
+  background: #0f0f12; color: #d6d6de; font-size: 11px; line-height: 1.5; white-space: pre;
+}
+.agent-studio-foot { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; white-space: pre-wrap; }
+.agent-guided-prompt-button.grant { background: #5941ca; border-color: #7965e7; }
+.agent-guided-prompt-button.grant::after { content: "＋"; }
+.agent-guided-prompt-button.persona { background: #2a2a31; border-color: #55545e; }
+
+/* The door out of Nowhere: everything goes white until the next world is in. */
+.agent-whiteout {
+  position: absolute; inset: 0; z-index: 80;
+  background: #fff; opacity: 0; pointer-events: none;
+  transition: opacity 900ms ease;
+}
+.agent-whiteout.on { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .agent-whiteout { transition: none; } }
+
+/* While the Nowhere story runs, the robot and the chat are the whole interface. */
+body.story-active :is(.rail, .rail-ribbon, .rail-scrim) { display: none; }
+body.story-active { grid-template-columns: minmax(0, 1fr); }
+.agent-cockpit.story-active > :is(.agent-stage-view-toggle, .sim-debug-stack, .agent-challenge-dock) { display: none; }
+.agent-cockpit.story-active .agent-control-panel { display: none; }
+.agent-cockpit.story-active .agent-stream > .chat-msg.skill-output { display: none; }
+.agent-cockpit.story-active .agent-stream > .chat-msg.system { display: none; }
+/* Offers are rebuilt only when they change, but never let an enter animation leave them dim. */
+.agent-stream.compact > .agent-guided-prompt.compact-entering { animation: none; opacity: 1; }
+
+/* The agent file, shown as a sheet over the stage rather than a block in the panel. */
+.agent-code-sheet {
+  position: absolute; inset: 16px 16px 16px 16px; z-index: 70;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--hairline-strong); border-radius: 12px;
+  background: rgb(14 14 18 / 96%); color: #d6d6de;
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.agent-code-sheet[hidden] { display: none; }
+.agent-code-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--hairline-strong); }
+.agent-code-head strong { font-size: 14px; font-weight: 550; }
+.agent-code-head span { color: var(--muted); font-size: 12px; }
+.agent-code-head button { border: 1px solid #55545e; border-radius: 7px; padding: 6px 12px; background: #33333d; color: #f2f2f7; font: inherit; font-size: 12px; cursor: pointer; }
+.agent-code-body { flex: 1; min-height: 0; margin: 0; padding: 14px 18px; overflow: auto; font-size: 12.5px; line-height: 1.55; white-space: pre; tab-size: 4; }
+.agent-code-body .tok-str { color: #b8d7a3; }
+.agent-code-body .tok-com { color: #7f8592; font-style: italic; }
+.agent-code-body .tok-kw { color: #c792ea; }
+.agent-code-body .tok-name { color: #ffd479; }
+.agent-code-body .tok-dec { color: #82aaff; }
+.agent-code-body .tok-num { color: #f78c6c; }
+.agent-code-foot { padding: 10px 16px; border-top: 1px solid var(--hairline-strong); color: var(--muted); font-size: 12px; }
+@media (max-width: 1400px) { .agent-code-sheet { right: 16px; } }
+/* In the story a failure is a setback, not an alarm. */
+.agent-cockpit.story-active .agent-stream .chat-skill.failed { border-left-color: #d9a441; }
+.agent-cockpit.story-active .agent-stream .chat-skill.failed .chat-skill-status { color: #d9a441; }
+/* Whoever is running the story, its lifecycle pills are not part of it. */
+body.story-agent .agent-stream > .chat-msg.system { display: none; }
+/* The world speaking: centred, quiet, never a bubble the visitor did not type. */
+.agent-stream > .chat-msg.system.narrator,
+body.story-agent .agent-stream > .chat-msg.system.narrator,
+.agent-cockpit.story-active .agent-stream > .chat-msg.system.narrator { display: flex; justify-content: center; }
+.chat-msg.system.narrator .chat-sender { display: none; }
+.chat-msg.system.narrator .chat-bubble,
+.chat-msg.system.narrator > :not(.chat-sender) { background: transparent; border: 0; color: #9d9dab; font-style: italic; font-size: 12px; text-align: center; }
+/* A first-timer does not need the model's reasoning; keep it in Detailed. */
+body.story-agent .agent-stream.compact > .chat-thoughts,
+.agent-cockpit.story-active .agent-stream.compact > .chat-thoughts { display: none; }
