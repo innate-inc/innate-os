@@ -3,7 +3,8 @@
 Web cockpit for the Innate robot — one zero-build app whose pages share the
 same modules:
 
-- **Agent** (`/`) — autonomous control, camera views, and the Brain monitor.
+- **Agent** (`/`) — autonomous control, camera views, the Brain monitor, and
+  the people overlay (who the robot recognizes, boxed on the live feed).
 - **Teleop** (`/teleop`) — live video, joystick/keyboard drive, head tilt,
   robot speech, telemetry, and leader-arm USB follow.
 - **Nav** (`js/nav/`) — live navigation view: the map widget with laser scan /
@@ -107,6 +108,7 @@ js/
 | Speech     | `/brain/tts`                  | `{data: text}`                            |
 | Battery    | `/battery_state`              | `sensor_msgs/BatteryState` (0.2 Hz)       |
 | Robot info | `/robot/info`                 | JSON-in-String `{robot_name, version, …}` |
+| People     | `/brain/people`               | JSON-in-String snapshot of who is in view: per-mille boxes, tags, names, health. Latched, ≤ 5 Hz. The roster behind it is read and edited over the `/brain/people/{get,rename,merge,forget,set_collection}` services (Settings › Brain client › People). |
 | Arm follow | `/leader_positions`           | `Int32MultiArray` of 6 raw Dynamixel ticks (2048 = center); robot converts to `/mars/arm/commands` |
 | Video/mic  | `/webrtc/start` → offer on `/webrtc/offer`, answer on `/webrtc/answer`, ICE via `/webrtc/ice_in` / `/webrtc/ice_out` | start payload `{data: '{"source":"live","audio":bool}'}`; the robot rebuilds its pipeline on every start, so toggling audio re-handshakes (debounced, freeze-frame kept) |
 

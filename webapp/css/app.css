@@ -162,6 +162,7 @@ button {
 .prof-select,
 .record-skill,
 .set-ctl select.set-text,
+.set-people-merge,
 select.episodes-tool,
 select.skill-input {
   -webkit-appearance: none;
@@ -781,6 +782,16 @@ select.skill-input {
 }
 
 .traj-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* People boxes ride above the route ribbon: both are absolutely positioned in
+   the stage, and a name over a person matters more than a metre of ribbon. */
+.people-canvas {
   position: absolute;
   inset: 0;
   width: 100%;

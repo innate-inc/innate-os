@@ -15,6 +15,7 @@
 import { ROBOT_INFO_TOPIC, SET_VOLUME_SERVICE, SHUTDOWN_SERVICE } from "../constants.js";
 import { ros } from "../rosClient.js";
 import { SETTINGS_PAGES } from "./catalog.js";
+import { PEOPLE_STYLE, createPeopleCard } from "./people.js";
 import { GROUP_EXPAND_MS, SETTINGS_STYLE } from "./styles.js";
 
 // Assigned per mount by mount() at the bottom. The volume control uses the shared
@@ -425,7 +426,7 @@ function setGroupOpen(/** @type {GroupUI} */ ui, /** @type {boolean} */ open) {
 
 function buildSettingsPage() {
   styleEl = document.createElement("style");
-  styleEl.textContent = SETTINGS_STYLE;
+  styleEl.textContent = SETTINGS_STYLE + PEOPLE_STYLE;
   document.head.appendChild(styleEl);
 
   const page = textEl("div", "settings-page");
@@ -505,6 +506,15 @@ function buildSettingsPage() {
       speaker.append(textEl("h2", "set-section-title", "Speaker"), volumeControl.section);
       groupInner.appendChild(speaker);
     }
+    // Live like the volume control, not a yaml knob: the roster lives in the
+    // robot's people store and every edit is a service call (settings/people.js).
+    const peopleCard = settingsPage.hasPeople ? createPeopleCard(ros) : null;
+    if (peopleCard) {
+      const people = textEl("section", "set-page-section");
+      people.append(textEl("h2", "set-section-title", "People"), peopleCard.section);
+      groupInner.appendChild(people);
+      cleanups.push(peopleCard.destroy);
+    }
 
     /** @type {GroupUI} */
     const ui = { section, dot, entries: [] };
@@ -518,6 +528,16 @@ function buildSettingsPage() {
         row: volumeControl.row,
         group: ui,
         breadcrumb: `${settingsPage.title} · Speaker`,
+        extraSearchSources: [pageSearchSource],
+      });
+    }
+    if (peopleCard) {
+      addSearchTarget({
+        label: peopleCard.label,
+        description: peopleCard.description,
+        row: peopleCard.row,
+        group: ui,
+        breadcrumb: `${settingsPage.title} · People`,
         extraSearchSources: [pageSearchSource],
       });
     }

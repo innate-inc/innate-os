@@ -156,6 +156,63 @@ export const FORGET_MEMORY_SERVICE = "/brain/forget_memory";
 // search still sees it; clients gate the animation on the payload's stamp.
 export const MEMORY_SEARCH_TOPIC = "/brain/memory_search";
 
+// ---- People memory ----------------------------------------------------------
+// Who the robot recognizes in front of it (brain_client/people, people_node).
+// std_msgs/String carrying JSON — the PeopleSnapshotDict of docs/rfc/people-memory.md:
+// {schema, stamp, frame_stamp_ns, image_size:[w,h], health, collection_enabled,
+//  attention, people:[{tag:"P3", person_id, name, state, evidence, confidence,
+//  bbox, head_bbox, range_m, bearing_deg, tracked_sec, lost, description, ...}],
+//  recent}. Boxes are Gemini's per-mille ints [ymin, xmin, ymax, xmax] of the
+// published 640x480 left frame — the same convention the model sees, so a box
+// drawn here and a box the agent reasons about are the same rectangle.
+// Latched (TRANSIENT_LOCAL, depth 1) and published at up to 5 Hz while any
+// track is live, at least every 5 s as a health heartbeat, so a snapshot that
+// stops arriving means the node stopped, not that the robot is alone.
+export const PEOPLE_TOPIC = "/brain/people";
+// One message per people event (enrolled | reentered | name_learned |
+// disambiguation | conflict | recalled), std_msgs/String JSON PeopleEventDict
+// {kind, stamp, tag, person_id, name, text, image_b64}. The brain narrates
+// these; the webapp does not subscribe yet.
+export const PEOPLE_EVENTS_TOPIC = "/brain/people_events";
+// Server-side throttle for the snapshot subscription. The node already caps
+// itself at 5 Hz; asking rws for the same ceiling keeps a future faster
+// publisher from driving the overlay's redraws.
+export const PEOPLE_THROTTLE_MS = 200;
+// A snapshot older than this is not drawn: the boxes describe one camera frame,
+// and a frame two seconds stale no longer matches what the video shows.
+export const PEOPLE_SNAPSHOT_FRESH_MS = 2000;
+
+// people_node services (brain_messages srvs). GetPeople returns the live
+// snapshot as `json`, plus the full roster (thumbnails as base64 JPEG) when
+// asked — that read is what the Settings page's People card lists. The
+// mutations are the owner's controls: rename binds a name (and records the
+// consent path in `source`), merge folds one record into another, forget
+// deletes everything about a person and tombstones the id, set_collection is
+// the "never collect" preference (it stops enrolment, it does not delete).
+export const GET_PEOPLE_SERVICE = "/brain/people/get";
+export const RENAME_PERSON_SERVICE = "/brain/people/rename";
+export const MERGE_PEOPLE_SERVICE = "/brain/people/merge";
+export const FORGET_PERSON_SERVICE = "/brain/people/forget";
+export const SET_PEOPLE_COLLECTION_SERVICE = "/brain/people/set_collection";
+// The .srv type behind each of those, keyed by service name. rws resolves a
+// call against the live graph so nothing sends these, but the request builders
+// in js/settings/people.js are written against the .srv fields and
+// tests/people.test.js checks them against this table.
+export const PEOPLE_SERVICE_TYPES = {
+  [GET_PEOPLE_SERVICE]: "brain_messages/srv/GetPeople",
+  [RENAME_PERSON_SERVICE]: "brain_messages/srv/RenamePerson",
+  [MERGE_PEOPLE_SERVICE]: "brain_messages/srv/MergePeople",
+  [FORGET_PERSON_SERVICE]: "brain_messages/srv/ForgetPerson",
+  [SET_PEOPLE_COLLECTION_SERVICE]: "brain_messages/srv/SetPeopleCollection",
+};
+// The people node answers from memory, so a call that hasn't come back in three
+// seconds means nothing is there to answer it — the card says so rather than
+// spinning for the client's 10 s default.
+export const PEOPLE_SERVICE_TIMEOUT_MS = 3000;
+// Where a name typed into the Settings page came from (RenamePerson.source,
+// stored as the consent path next to the profile).
+export const PEOPLE_RENAME_SOURCE_APP = "app";
+
 // Skill-execution status (std_msgs/String JSON: {primitive_name|skill_name,
 // status: running|completed|failed|interrupted, primitive_id, ...}), published
 // as the agent runs primitives. Separate from chat_out — the chat surfaces it so

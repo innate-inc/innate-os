@@ -29,6 +29,7 @@ import { sharedAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
 import { createAgentMicControl } from "./agentMicControl.js";
+import { createPeopleOverlay } from "./peopleOverlay.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
 // marks a sim deployment — used here to drop the (absent) battery readout. Fetched
@@ -256,6 +257,9 @@ function buildAgentView(root) {
   const ribbonStage = realVideo?.el ?? feedFrame.querySelector(".video-stage");
   if (ribbonStage instanceof HTMLElement) {
     parts.push(createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, cornerStack, ros, session));
+    // Who the robot recognizes, boxed on the same stage — this is the page
+    // where knowing the agent is looking at "P3 · Theo" is the whole point.
+    parts.push(createPeopleOverlay(ribbonStage, realVideo?.videoEl ?? null, ros));
   }
 
   session.start();

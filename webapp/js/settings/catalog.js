@@ -74,6 +74,8 @@
  * @property {string} summary  Index subtitle.
  * @property {string} [note]  Page introduction under the h1.
  * @property {boolean} [hasSpeakerVolume]  Inject the live speaker-volume control.
+ * @property {boolean} [hasPeople]  Inject the live People card (roster, rename,
+ *   merge, forget, and the collection switch — js/settings/people.js).
  * @property {PageSection[]} sections
  */
 
@@ -300,6 +302,7 @@ export const SETTINGS_PAGES = [
     ],
   },
   {
+    hasPeople: true,
     icon: "cloud.svg",
     title: "Brain client",
     summary: "What the brain sees, how often it looks, and its models",

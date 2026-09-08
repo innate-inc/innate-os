@@ -327,6 +327,26 @@ class PeopleSnapshotDict(TypedDict, total=False):
     recent: list[RecentPersonDict]
 
 
+class RosterEntryDict(TypedDict, total=False):
+    """One roster row for the Settings page (``GetPeople`` with ``include_roster``)."""
+
+    person_id: str
+    name: str | None
+    unnamed: bool
+    encounters: int
+    last_seen: LastSeenDict | None
+    description: str | None
+    thumbnail: str | None  # base64 JPEG, only with ``include_thumbnails``
+
+
+class PeopleRosterDict(PeopleSnapshotDict, total=False):
+    """The ``GetPeople`` answer: the live snapshot plus the roster. A missing
+    ``roster`` key reads as "service unavailable" in the webapp, never as empty."""
+
+    roster: list[RosterEntryDict]
+    capacity_full: bool
+
+
 class PeopleEventDict(TypedDict, total=False):
     kind: str
     stamp: float
