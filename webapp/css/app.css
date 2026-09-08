@@ -987,6 +987,13 @@ select.skill-input {
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 
+/* The Agent page's camera tiles sit along the top of the feed, so its HUD
+   takes the bottom edge, which only the challenge dock (far left) shares. */
+.agent-cockpit .tgt-hud {
+  top: auto;
+  bottom: 14px;
+}
+
 .tgt-hud.ok {
   border-color: rgb(86 194 140 / 60%);
 }
