@@ -317,7 +317,8 @@ class PickAnyObject(Skill):
         # identical twins the box nearest the servo aim point is ours.
         box = min(boxes, key=self._wrist_aim_dist) if boxes else None
         px = (box[0] + box[2] / 2.0, box[1] + box[3] / 2.0) if box else None
-        self.telemetry("wrist", state="seed", px=px)
+        corners = (box[0], box[1], box[0] + box[2], box[1] + box[3]) if box else None
+        self.telemetry("wrist", state="seed", px=px, box=corners)
         return px, box
 
     def _wrist_aim_dist(self, box):
@@ -447,7 +448,17 @@ class PickAnyObject(Skill):
             inside = inside_box(px, p["wrist_box_u"], p["wrist_box_v"], p["wrist_half_px"])
             if time.monotonic() - last_told >= WRIST_TELEMETRY_S:
                 last_told = time.monotonic()
-                self.telemetry("wrist", state="track", px=px, z=z, stop=p["wrist_stop_z"], inside=inside)
+                blob = tracker.axis
+                self.telemetry(
+                    "wrist",
+                    state="track",
+                    px=px,
+                    z=z,
+                    stop=p["wrist_stop_z"],
+                    inside=inside,
+                    box=self._wrist_box(),
+                    axis=blob[0] if blob is not None and blob[1] >= MIN_ELONGATION else None,
+                )
             centered = centered + 1 if inside else 0
             if streak < 2:
                 continue  # watch one more frame before trusting it
@@ -730,6 +741,11 @@ class PickAnyObject(Skill):
         align = ["align"] if self._p["wrist_steps"] >= 1 else []
         return ["search", "approach", *align, "grasp", "verify"]
 
+    def _wrist_box(self) -> dict[str, float]:
+        """The wrist servo's goal square for a UI, wrist-image px."""
+        p = self._p
+        return {"u": p["wrist_box_u"], "v": p["wrist_box_v"], "half": p["wrist_half_px"]}
+
     def execute(self, prompt: str = "the sock") -> SkillReturn:
         """Pick up `prompt` from the floor."""
         if self._proxy is None:
@@ -749,7 +765,13 @@ class PickAnyObject(Skill):
 
             approach = FloorApproach(self, self._p, self._detect_px)
             self.telemetry(
-                "run", state="start", prompt=prompt, frame=(IMG_W, IMG_H), box=approach.box(), stages=self._stages()
+                "run",
+                state="start",
+                prompt=prompt,
+                frame=(IMG_W, IMG_H),
+                box=approach.box(),
+                wrist_box=self._wrist_box(),
+                stages=self._stages(),
             )
             self.say(f"Looking for {prompt}.")
             xy = approach.search(prompt)

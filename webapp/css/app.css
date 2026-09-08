@@ -917,26 +917,37 @@ select.skill-input {
   right: calc(100% + 2px);
 }
 
-/* Steering vector: tracked point -> box centre, in frame coordinates. */
+/* Frame-coordinate lines: the steering vector (tracked point -> box centre)
+   and the blob's long axis on the wrist camera. */
 .tgt-vec {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   overflow: visible;
+}
+
+.tgt-vec-line,
+.tgt-axis-line {
+  stroke: var(--accent-dim);
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
   opacity: 0;
   transition: opacity 200ms ease;
 }
 
-.tgt-vec.on {
-  opacity: 1;
+.tgt-vec-line {
+  stroke-dasharray: 4 5;
 }
 
-.tgt-vec-line {
-  stroke: var(--accent-dim);
-  stroke-width: 1.2;
-  stroke-dasharray: 4 5;
-  vector-effect: non-scaling-stroke;
+.tgt-axis-line {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.tgt-vec-line.on,
+.tgt-axis-line.on {
+  opacity: 1;
 }
 
 /* While a frame is out to the model: one sweep across the picture. */
