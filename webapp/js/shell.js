@@ -194,7 +194,7 @@ export function initShell(navigate) {
     // Every navigation lands here, and none may leave the drawer over the
     // page it just opened -- a number key and Back produce no rail click.
     closeRailDrawer();
-    agentIndicator.el.style.display = key === "agent" ? "none" : "";
+    agentIndicator.el.toggleAttribute("data-off-route", key === "agent");
     const section = SECTIONS.find((s) => s.key === key);
     document.title = section ? `Innate · ${section.label}` : "Innate";
   }

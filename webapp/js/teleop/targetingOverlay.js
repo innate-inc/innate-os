@@ -1,16 +1,15 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// Targeting overlay — what a manipulation skill is doing, drawn over the robot's
-// cameras. On the head camera: the object it detected (corner brackets), the
-// pick box the base steers it into, the tracked point gliding toward that box
-// and the spot the fingers will close on. On the wrist camera: the servo's goal
-// square, Gemini's wrist detection and the colour blob the descent follows,
-// with its long axis. Plus a HUD of the run's stages on either. Driven entirely
-// by /brain/skill_telemetry: a run declares its stages up front and every
-// marker arrives in image pixels, so nothing here is specific to one skill.
+// Targeting overlay — what a running skill draws over the robot's cameras.
+// Driven entirely by /brain/skill_overlay (Skill.overlay in the SDK): a run
+// declares its stage ladder, keeps one readout line and a progress bar in a
+// HUD, and places markers by id — brackets, boxes, points, reticles, lines —
+// in image pixels of its frame, on the head ("main") or wrist ("arm") camera.
+// Nothing here is specific to one skill.
 
-import { SKILL_TELEMETRY_TOPIC } from "../constants.js";
+import { SKILL_OVERLAY_TOPIC } from "../constants.js";
+import { ros } from "../rosClient.js";
 import { primaryCameraName } from "./trajectoryOverlay.js";
 
 // The sim renders the head camera with the driver's lens
@@ -20,28 +19,46 @@ import { primaryCameraName } from "./trajectoryOverlay.js";
 // point rather than the frame's middle. The wrist camera is a plain fovy in
 // both (square pixels, centred), so its frame just fits by height.
 const SIM_HEAD_LENS = { fx: 200.3, fy: 267.3, cx: 319.1, cy: 248.7 };
-// Half-length of the blob's drawn long axis, in frame px.
-const AXIS_HALF_PX = 45;
 // How long the verdict stays up after the run ends.
 const RESULT_LINGER_MS = 4000;
-// A page opened mid-run missed the start event that carries the frame size and
-// the stage list: it draws in the head camera's native frame and learns the
-// stages, prompt and pick box from the events that repeat them, rather than
-// showing nothing until the next run.
+// A page opened mid-run missed the start event: it draws in the head camera's
+// native frame until the next event, every one of which repeats the run's
+// header, rather than showing nothing until the next run.
 const DEFAULT_FRAME = { w: 640, h: 480 };
 
 /** @typedef {{ w: number, h: number }} Size */
 /** @typedef {[number, number]} Px */
 /** @typedef {[number, number, number, number]} Corners x0, y0, x1, y1 */
-/** @typedef {{ cu: number, cv: number, hu: number, hv: number, au: number, av: number }} PickBox */
-/** @typedef {{ u: number, v: number, half: number }} WristBox */
 /** @typedef {{ left: number, top: number, width: number, height: number }} Rect */
 /** @typedef {"main" | "arm"} View the two robot cameras a run draws on */
+/** @typedef {"bracket" | "box" | "point" | "reticle" | "vector" | "line"} Kind */
+/**
+ * One marker, as the skill placed it: geometry in frame px, `locked` greens it.
+ * @typedef {{
+ *   id: string, kind: Kind, view: View, label: string, locked: boolean,
+ *   corners: Corners | null, inner: number | null, px: Px | null, a: Px | null, b: Px | null,
+ * }} Marker
+ */
 /**
  * The stream as laid out on the page: intrinsic size, the video element's
  * content box within the stage, and how object-fit / object-position place the
  * picture in that box (position as the computed "x y" string).
  * @typedef {{ w: number, h: number, box: Rect, fit: string, position: string }} VideoLayout
+ */
+/**
+ * One run of a skill, as the overlay understands it.
+ * @typedef {{
+ *   skill: string,
+ *   prompt: string,
+ *   stages: string[],
+ *   stage: string | null,
+ *   frame: Size,
+ *   readout: string,
+ *   busy: boolean,
+ *   progress: number | null,
+ *   result: { ok: boolean, text: string } | null,
+ *   markers: Map<string, Marker>,
+ * }} Run
  */
 
 /** One object-position component -> where the picture's slack goes.
@@ -51,40 +68,6 @@ function positionOffset(term, slack) {
   if (term.endsWith("px")) return parseFloat(term);
   return slack / 2;
 }
-/**
- * One run of a skill, as the overlay understands it.
- * @typedef {{
- *   skill: string,
- *   prompt: string,
- *   stages: string[],
- *   frame: Size,
- *   box: PickBox | null,
- *   wristBox: WristBox | null,
- *   stage: string | null,
- *   looking: boolean,
- *   seen: { px: Px | null, box: Corners | null } | null,
- *   track: { px: Px, inside: boolean } | null,
- *   grasp: Px | null,
- *   wristSeen: { px: Px | null, box: Corners | null } | null,
- *   wristTrack: { px: Px, inside: boolean, axis: number | null } | null,
- *   descent: { top: number, z: number, stop: number } | null,
- *   readout: string,
- *   result: { ok: boolean, text: string } | null,
- * }} Run
- */
-
-/**
- * What to draw for one camera: every geometry in frame px, null = not drawn.
- * @typedef {{
- *   seen: Corners | null,
- *   goal: { rect: Rect, accept: Size | null, inside: boolean } | null,
- *   track: { px: Px, inside: boolean } | null,
- *   vec: [Px, Px] | null,
- *   axis: { px: Px, angle: number } | null,
- *   reticle: Px | null,
- *   tags: { seen: string, goal: string, track: string },
- * }} Markers
- */
 
 /**
  * Where the skill's image frame lands on the stage. On hardware the skill sees
@@ -124,245 +107,155 @@ export function frameRect(frame, video, cw, ch, view = "main") {
   return { left: cw / 2 - lens.cx * sx, top: ch / 2 - lens.cy * sy, width: frame.w * sx, height: frame.h * sy };
 }
 
-/** @param {any} v @returns {v is Px} */
-function isPx(v) {
-  return Array.isArray(v) && v.length >= 2 && Number.isFinite(v[0]) && Number.isFinite(v[1]);
+/** @param {any} v @returns {Px | null} */
+function px(v) {
+  return Array.isArray(v) && v.length >= 2 && Number.isFinite(v[0]) && Number.isFinite(v[1]) ? [v[0], v[1]] : null;
 }
 
-/** @param {any} v @returns {v is Corners} */
-function isBox(v) {
-  return Array.isArray(v) && v.length >= 4 && v.slice(0, 4).every(Number.isFinite);
+/** @param {any} v @returns {Corners | null} */
+function corners(v) {
+  if (!Array.isArray(v) || v.length < 4 || !v.slice(0, 4).every(Number.isFinite)) return null;
+  return [Math.min(v[0], v[2]), Math.min(v[1], v[3]), Math.max(v[0], v[2]), Math.max(v[1], v[3])];
 }
 
-/** @param {any} v @returns {PickBox | null} */
-function pickBox(v) {
-  if (!v || typeof v !== "object") return null;
-  const b = { cu: v.cu, cv: v.cv, hu: v.hu, hv: v.hv, au: v.au, av: v.av };
-  return Object.values(b).every((n) => Number.isFinite(n) && n >= 0) && b.hu > 0 && b.hv > 0 ? b : null;
-}
-
-/** @param {any} v @returns {WristBox | null} */
-function wristBox(v) {
-  if (!v || typeof v !== "object") return null;
-  const b = { u: v.u, v: v.v, half: v.half };
-  return Object.values(b).every(Number.isFinite) && b.half > 0 ? b : null;
-}
-
-/** @param {any} v @returns {{ px: Px | null, box: Corners | null }} */
-function sighting(v) {
-  return { px: isPx(v.px) ? [v.px[0], v.px[1]] : null, box: isBox(v.box) ? [v.box[0], v.box[1], v.box[2], v.box[3]] : null };
-}
-
-/** @param {number} n */
-function metres(n) {
-  return n >= 1 ? `${n.toFixed(2)} m` : `${Math.round(n * 100)} cm`;
-}
-
-/** @type {Record<string, string>} what each stage reads as while nothing finer is known */
-const STAGE_READOUT = {
-  search: "scanning the floor",
-  approach: "steering onto it",
-  align: "aligning the wrist camera",
-  grasp: "reaching down",
-  verify: "backing up to check",
+/** @type {Record<Kind, (ev: any) => boolean>} what each kind needs to be drawable */
+const KIND_GEOMETRY = {
+  bracket: (ev) => corners(ev.corners) !== null,
+  box: (ev) => corners(ev.corners) !== null,
+  point: (ev) => px(ev.px) !== null,
+  reticle: (ev) => px(ev.px) !== null,
+  vector: (ev) => px(ev.a) !== null && px(ev.b) !== null,
+  line: (ev) => px(ev.a) !== null && px(ev.b) !== null,
 };
+
+/** @param {any} ev a mark event @returns {Marker | null} */
+function marker(ev) {
+  const kind = /** @type {Kind} */ (ev.kind);
+  if (typeof ev.id !== "string" || !ev.id || !(kind in KIND_GEOMETRY) || !KIND_GEOMETRY[kind](ev)) return null;
+  const inner = Number.isFinite(ev.inner) && ev.inner > 0 && ev.inner <= 1 ? ev.inner : null;
+  return {
+    id: ev.id,
+    kind,
+    view: ev.view === "arm" ? "arm" : "main",
+    label: typeof ev.label === "string" ? ev.label : "",
+    locked: ev.locked === true,
+    corners: corners(ev.corners),
+    inner,
+    px: px(ev.px),
+    a: px(ev.a),
+    b: px(ev.b),
+  };
+}
+
+/** @param {any} v @returns {Size | null} */
+function size(v) {
+  if (!Array.isArray(v) || !(Number(v[0]) > 0) || !(Number(v[1]) > 0)) return null;
+  return { w: Number(v[0]), h: Number(v[1]) };
+}
+
+/** @param {any} v @returns {string[]} */
+function stageList(v) {
+  return Array.isArray(v) ? v.filter((/** @type {unknown} */ s) => typeof s === "string") : [];
+}
 
 /** @param {any} ev a run-start event, or any first event of a run missed at its start
  * @returns {Run} */
 function startRun(ev) {
-  const frame = Array.isArray(ev.frame) ? { w: Number(ev.frame[0]), h: Number(ev.frame[1]) } : DEFAULT_FRAME;
   return {
-    skill: typeof ev.skill === "string" ? ev.skill : "skill",
+    skill: ev.skill,
     prompt: typeof ev.prompt === "string" ? ev.prompt : "",
-    stages: Array.isArray(ev.stages) ? ev.stages.filter((/** @type {unknown} */ s) => typeof s === "string") : [],
-    frame: frame.w > 0 && frame.h > 0 ? frame : DEFAULT_FRAME,
-    box: pickBox(ev.box),
-    wristBox: wristBox(ev.wrist_box),
+    stages: stageList(ev.stages),
     stage: null,
-    looking: false,
-    seen: null,
-    track: null,
-    grasp: null,
-    wristSeen: null,
-    wristTrack: null,
-    descent: null,
+    frame: size(ev.frame) ?? DEFAULT_FRAME,
     readout: "starting",
+    busy: false,
+    progress: null,
     result: null,
+    markers: new Map(),
   };
 }
 
 /**
- * Fold one telemetry event into the run. Returns the run to keep showing, or
+ * Every event repeats the run's header (prompt, stage list, frame, current
+ * stage); a run opened from whichever message came first catches up here.
+ * @param {Run} run @param {any} ev
+ */
+function adoptHeader(run, ev) {
+  const stages = stageList(ev.stages);
+  if (stages.length > run.stages.length) run.stages = stages;
+  if (!run.prompt && typeof ev.prompt === "string") run.prompt = ev.prompt;
+  run.frame = size(ev.frame) ?? run.frame;
+  const stage = ev.ev === "stage" ? ev.name : ev.stage;
+  if (typeof stage !== "string" || !stage || stage === run.stage) return;
+  if (!run.stages.includes(stage)) run.stages.push(stage);
+  run.stage = stage;
+}
+
+/** @param {Run} run @param {any} ev a run-end event */
+function endRun(run, ev) {
+  run.markers.clear();
+  run.busy = false;
+  run.progress = null;
+  const text = typeof ev.text === "string" && ev.text ? ev.text : "";
+  run.result = ev.cancelled
+    ? { ok: false, text: "stopped" }
+    : ev.ok === true
+      ? { ok: true, text: text || "done" }
+      : { ok: false, text: `failed · ${text || "no reason given"}` };
+  run.readout = run.result.text;
+}
+
+/**
+ * Fold one overlay event into the run. Returns the run to keep showing, or
  * null when there is none. A run ends with its result set; the caller decides
- * how long that lingers.
+ * how long that lingers. A finished run's own stray events never revive it,
+ * but another skill's first event opens a fresh run over the verdict.
  * @param {Run | null} run
  * @param {any} ev
  * @returns {Run | null}
  */
 export function applyEvent(run, ev) {
   if (!ev || typeof ev !== "object" || typeof ev.ev !== "string" || typeof ev.skill !== "string") return run;
-  if (ev.ev === "run" && ev.state === "start") return startRun(ev);
-  if (ev.ev === "run" && ev.state !== "end") return run;
-  if (run?.result || (run && ev.skill !== run.skill)) return run;
-  if (!run) {
-    if (ev.ev === "run") return null; // the end of a run never seen
-    run = startRun(ev);
+  if (ev.ev === "run") {
+    if (ev.state === "start") return startRun(ev);
+    if (ev.state === "end" && run && !run.result) endRun(run, ev);
+    return run;
   }
+  if (run?.result && ev.skill === run.skill) return run;
+  if (!run || run.result) run = startRun(ev);
+  adoptHeader(run, ev);
   switch (ev.ev) {
-    case "run":
-      if (ev.state !== "end") break;
-      run.seen = run.track = run.grasp = run.wristSeen = run.wristTrack = null;
-      run.looking = false;
-      run.result = ev.ok
-        ? { ok: true, text: "picked up" }
-        : { ok: false, text: ev.cancelled ? "stopped" : `failed · ${ev.reason || "no reason given"}` };
-      run.readout = run.result.text;
-      break;
     case "stage":
-      if (typeof ev.stage !== "string") break;
-      if (!run.stages.includes(ev.stage)) run.stages.push(ev.stage);
-      if (!run.prompt && typeof ev.prompt === "string") run.prompt = ev.prompt;
-      run.stage = ev.stage;
-      run.readout = STAGE_READOUT[ev.stage] ?? ev.stage;
-      if (ev.stage !== "approach") run.track = null;
-      if (ev.stage !== "align") run.wristSeen = run.wristTrack = run.descent = null; // the arm moves on, the view with it
-      if (ev.stage === "verify") run.grasp = null;
+      if (typeof ev.name !== "string") break;
+      run.readout = ev.name;
+      run.busy = false;
       break;
-    case "look":
-      run.looking = ev.state === "ask";
-      if (ev.state === "ask") {
-        run.readout = run.stage === "search" ? "looking for it" : "taking another look";
-      } else if (ev.state === "seen") {
-        run.seen = sighting(ev);
-        run.track = null;
-        const dist = Number.isFinite(ev.dist) ? ` · ${metres(ev.dist)} ahead` : "";
-        const more = Number.isFinite(ev.n) && ev.n > 1 ? ` · ${ev.n} matches` : "";
-        run.readout = `spotted${dist}${more}`;
-      } else {
-        run.seen = run.track = null;
-        run.readout = "not in view";
-      }
+    case "readout":
+      if (typeof ev.text !== "string") break;
+      run.readout = ev.text;
+      run.busy = ev.busy === true;
+      run.progress = Number.isFinite(ev.progress) ? Math.min(1, Math.max(0, ev.progress)) : null;
       break;
-    case "move": {
-      // The picture is about to change under every pixel marker.
-      run.seen = run.track = run.grasp = null;
-      const amount = Number(ev.amount) || 0;
-      if (ev.kind === "rotate") {
-        const deg = Math.round(Math.abs(amount) * (180 / Math.PI));
-        run.readout = `turning ${deg}° ${amount >= 0 ? "left" : "right"}`;
-      } else {
-        run.readout = `${amount >= 0 ? "driving" : "backing up"} ${metres(Math.abs(amount))}`;
-      }
+    case "mark": {
+      const m = marker(ev);
+      if (m) run.markers.set(m.id, m);
       break;
     }
-    case "track": {
-      if (!isPx(ev.px)) break;
-      run.box ??= pickBox(ev.box);
-      run.seen = null;
-      run.track = { px: [ev.px[0], ev.px[1]], inside: ev.inside === true };
-      const off = run.box ? Math.round(Math.hypot(ev.px[0] - run.box.cu, ev.px[1] - run.box.cv)) : null;
-      run.readout = run.track.inside ? "in the pick box" : off === null ? "tracking" : `steering · ${off} px off`;
+    case "clear": {
+      const ids = Array.isArray(ev.ids) ? ev.ids : [];
+      if (ids.length) ids.forEach((/** @type {unknown} */ id) => run?.markers.delete(String(id)));
+      else if (ev.view === "main" || ev.view === "arm") {
+        for (const [id, m] of run.markers) if (m.view === ev.view) run.markers.delete(id);
+      } else run.markers.clear();
       break;
     }
-    case "parked":
-      if (run.track) run.track.inside = true;
-      run.readout = "parked over it";
-      break;
-    case "grasp":
-      if (ev.step === "target") {
-        run.grasp = isPx(ev.px) ? [ev.px[0], ev.px[1]] : null;
-        run.readout = "grasp point set";
-      } else if (ev.step === "descend") run.readout = "reaching to the floor";
-      else if (ev.step === "close") run.readout = "closing the gripper";
-      else if (ev.step === "lift") run.readout = "lifting";
-      break;
-    case "wrist":
-      if (ev.state === "seed") {
-        run.wristSeen = isPx(ev.px) ? sighting(ev) : null;
-        run.wristTrack = null;
-        run.readout = run.wristSeen ? "wrist camera has it" : "wrist camera can't see it";
-      } else if (ev.state === "track" && Number.isFinite(ev.z)) {
-        const stop = Number.isFinite(ev.stop) ? ev.stop : 0;
-        run.descent = { top: run.descent?.top ?? ev.z, z: ev.z, stop };
-        run.wristBox ??= wristBox(ev.box);
-        if (isPx(ev.px)) {
-          run.wristSeen = null;
-          run.wristTrack = { px: [ev.px[0], ev.px[1]], inside: ev.inside === true, axis: Number.isFinite(ev.axis) ? ev.axis : null };
-        }
-        run.readout = `${ev.inside ? "descending" : "centring"} · ${Math.round(ev.z * 100)} cm up`;
-      } else if (ev.state === "done") {
-        run.readout = typeof ev.reason === "string" ? `wrist align: ${ev.reason}` : "wrist align done";
-      }
-      break;
-    case "verify":
-      run.readout = ev.held ? "holding it" : "missed it";
-      break;
     default:
       break;
   }
   return run;
 }
 
-/** @param {Corners} c @returns {Rect} */
-function cornersRect([x0, y0, x1, y1]) {
-  return { left: x0, top: y0, width: x1 - x0, height: y1 - y0 };
-}
-
-/** @param {Px} px @param {number} half @returns {Rect} */
-function squareAround(px, half) {
-  return { left: px[0] - half, top: px[1] - half, width: 2 * half, height: 2 * half };
-}
-
-/** A sighting's frame: its box, or a small square around its point.
- * @param {{ px: Px | null, box: Corners | null } | null} s @returns {Corners | null} */
-function seenCorners(s) {
-  if (s?.box) return s.box;
-  if (s?.px) return [s.px[0] - 20, s.px[1] - 20, s.px[0] + 20, s.px[1] + 20];
-  return null;
-}
-
-/** The head camera's markers: detection, pick box, flow track, grasp point.
- * @param {Run} run @returns {Markers} */
-export function headMarkers(run) {
-  const { box, track } = run;
-  const goal =
-    box && run.stage === "approach"
-      ? {
-          rect: { left: box.cu - box.hu, top: box.cv - box.hv, width: 2 * box.hu, height: 2 * box.hv },
-          accept: { w: box.au / box.hu, h: box.av / box.hv },
-          inside: !!track?.inside,
-        }
-      : null;
-  return {
-    seen: seenCorners(run.seen),
-    goal,
-    track,
-    vec: track && box && !track.inside ? [track.px, [box.cu, box.cv]] : null,
-    axis: null,
-    reticle: run.grasp,
-    tags: { seen: "target", goal: "pick box", track: "tracking" },
-  };
-}
-
-/** The wrist camera's markers: Gemini's seed, the servo box, the tracked blob.
- * @param {Run} run @returns {Markers} */
-export function wristMarkers(run) {
-  const { wristBox: box, wristTrack: track } = run;
-  const goal =
-    box && run.stage === "align"
-      ? { rect: squareAround([box.u, box.v], box.half), accept: null, inside: !!track?.inside }
-      : null;
-  return {
-    seen: seenCorners(run.wristSeen),
-    goal,
-    track: track && { px: track.px, inside: track.inside },
-    vec: track && box && !track.inside ? [track.px, [box.u, box.v]] : null,
-    axis: track && track.axis !== null ? { px: track.px, angle: track.axis } : null,
-    reticle: null,
-    tags: { seen: "wrist target", goal: "wrist box", track: "blob" },
-  };
-}
-
+const SVG_NS = "http://www.w3.org/2000/svg";
 const SVG_OPEN =
   '<svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="currentColor" ' +
   'stroke-width="1.6" aria-hidden="true">';
@@ -372,18 +265,89 @@ const RETICLE_SVG =
   '<line x1="24" y1="3" x2="24" y2="14"/><line x1="24" y1="34" x2="24" y2="45"/>' +
   '<line x1="3" y1="24" x2="14" y2="24"/><line x1="34" y1="24" x2="45" y2="24"/>' +
   '<circle cx="24" cy="24" r="2.2" fill="currentColor" stroke="none"/>';
-// Small diamond: the point optical flow is holding on to.
-const TRACK_SVG = '<path d="M24 11 37 24 24 37 11 24Z"/><circle cx="24" cy="24" r="1.8" fill="currentColor" stroke="none"/>';
+// Small diamond: a point the skill is holding on to.
+const POINT_SVG = '<path d="M24 11 37 24 24 37 11 24Z"/><circle cx="24" cy="24" r="1.8" fill="currentColor" stroke="none"/>';
+const TAG = '<span class="tgt-tag mono"></span>';
+
+/** @type {Record<"bracket" | "box" | "point" | "reticle", string>} */
+const TEMPLATES = {
+  bracket: `<i></i><i></i><i></i><i></i>${TAG}`,
+  box: `${TAG}<div class="tgt-inner"></div>`,
+  point: `${SVG_OPEN}${POINT_SVG}</svg>${TAG}`,
+  reticle: `${SVG_OPEN}${RETICLE_SVG}</svg>${TAG}`,
+};
+
+/**
+ * The run as last heard on the topic, kept for the whole session so a page
+ * switch mid-run (Agent to Teleop) draws the run in full at once instead of
+ * waiting for events to trickle in. Built on first use; pages drop their own
+ * listeners on unmount and nothing destroys the store itself.
+ * @returns {{ run: () => Run | null, subscribe: (cb: () => void) => () => void }}
+ */
+export function sharedTargetingRun() {
+  return (_store ??= createRunStore());
+}
+
+/** @type {ReturnType<typeof createRunStore> | undefined} */
+let _store;
+
+function createRunStore() {
+  /** @type {Run | null} */
+  let run = null;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let lingerTimer;
+  /** @type {Set<() => void>} */
+  const listeners = new Set();
+
+  function notify() {
+    for (const cb of listeners) cb();
+  }
+
+  /** @param {any} msg std_msgs/String */
+  function onOverlay(msg) {
+    if (typeof msg?.data !== "string") return;
+    /** @type {any} */
+    let ev;
+    try {
+      ev = JSON.parse(msg.data);
+    } catch {
+      return;
+    }
+    const ended = !!run?.result;
+    const next = applyEvent(run, ev);
+    if (next !== run) clearTimeout(lingerTimer); // a new run replaces a lingering verdict
+    run = next;
+    // Only the transition into a verdict arms the linger: later events of a
+    // finished run (or a stray one) must not keep pushing it out.
+    if (run?.result && !ended) {
+      lingerTimer = setTimeout(() => {
+        run = null;
+        notify();
+      }, RESULT_LINGER_MS);
+    }
+    notify();
+  }
+
+  ros.subscribe(SKILL_OVERLAY_TOPIC, onOverlay, undefined, "std_msgs/msg/String");
+  return {
+    run: () => run,
+    /** @param {() => void} cb */
+    subscribe(cb) {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+  };
+}
 
 /**
  * @param {HTMLElement} stage the .video-stage the markers pin to
  * @param {HTMLVideoElement | null} video the stage's video on hardware; null in
  *   the sim, where a canvas renders the head camera at the stage's size
- * @param {import("../rosClient.js").RosClient} ros
  * @param {import("../webrtcSession.js").WebRtcSession} session
  * @returns {{ destroy: () => void }}
  */
-export function createTargetingOverlay(stage, video, ros, session) {
+export function createTargetingOverlay(stage, video, session) {
+  const store = sharedTargetingRun();
   const clip = document.createElement("div");
   clip.className = "tgt-clip";
   clip.hidden = true;
@@ -391,15 +355,9 @@ export function createTargetingOverlay(stage, video, ros, session) {
   // of it, so a resize only moves this one element.
   const layer = document.createElement("div");
   layer.className = "tgt-layer";
-  layer.innerHTML =
-    '<div class="tgt-scan"></div>' +
-    '<svg class="tgt-vec" preserveAspectRatio="none" aria-hidden="true">' +
-    '<line class="tgt-vec-line"/><line class="tgt-axis-line"/></svg>' +
-    '<div class="tgt-seen" hidden><i></i><i></i><i></i><i></i><span class="tgt-tag mono">target</span></div>' +
-    '<div class="tgt-goal" hidden><span class="tgt-tag mono">pick box</span><div class="tgt-accept"></div></div>' +
-    `<div class="tgt-track" hidden>${SVG_OPEN}${TRACK_SVG}</svg><span class="tgt-tag mono">tracking</span></div>` +
-    `<div class="tgt-reticle" hidden>${SVG_OPEN}${RETICLE_SVG}</svg><span class="tgt-tag mono">grasp</span></div>`;
+  layer.innerHTML = '<div class="tgt-scan"></div><svg class="tgt-lines" preserveAspectRatio="none" aria-hidden="true"></svg>';
   clip.appendChild(layer);
+  const lines = /** @type {SVGSVGElement} */ (/** @type {unknown} */ (layer.querySelector(".tgt-lines")));
 
   const hud = document.createElement("div");
   hud.className = "overlay tgt-hud";
@@ -410,18 +368,6 @@ export function createTargetingOverlay(stage, video, ros, session) {
     '<div class="tgt-readout mono"><span class="tgt-readout-text"></span><span class="tgt-bar" hidden><span class="tgt-bar-fill"></span></span></div>';
   stage.append(clip, hud);
 
-  const q = (/** @type {string} */ sel) => /** @type {HTMLElement} */ (layer.querySelector(sel));
-  const seenEl = q(".tgt-seen");
-  const goalEl = q(".tgt-goal");
-  const acceptEl = q(".tgt-accept");
-  const trackEl = q(".tgt-track");
-  const reticleEl = q(".tgt-reticle");
-  const vecEl = /** @type {SVGSVGElement} */ (/** @type {unknown} */ (layer.querySelector(".tgt-vec")));
-  const vecLine = /** @type {SVGLineElement} */ (/** @type {unknown} */ (layer.querySelector(".tgt-vec-line")));
-  const axisLine = /** @type {SVGLineElement} */ (/** @type {unknown} */ (layer.querySelector(".tgt-axis-line")));
-  const seenTag = /** @type {HTMLElement} */ (seenEl.querySelector(".tgt-tag"));
-  const goalTag = /** @type {HTMLElement} */ (goalEl.querySelector(".tgt-tag"));
-  const trackTag = /** @type {HTMLElement} */ (trackEl.querySelector(".tgt-tag"));
   const skillEl = /** @type {HTMLElement} */ (hud.querySelector(".tgt-skill"));
   const promptEl = /** @type {HTMLElement} */ (hud.querySelector(".tgt-prompt"));
   const stagesEl = /** @type {HTMLElement} */ (hud.querySelector(".tgt-stages"));
@@ -429,10 +375,10 @@ export function createTargetingOverlay(stage, video, ros, session) {
   const barEl = /** @type {HTMLElement} */ (hud.querySelector(".tgt-bar"));
   const barFill = /** @type {HTMLElement} */ (hud.querySelector(".tgt-bar-fill"));
 
-  /** @type {Run | null} */
-  let run = null;
-  /** @type {ReturnType<typeof setTimeout> | undefined} */
-  let lingerTimer;
+  /** The DOM for each marker on screen, by id; a marker keeps its element
+   * between updates so a point glides instead of stepping.
+   * @type {Map<string, HTMLElement | SVGLineElement>} */
+  const els = new Map();
 
   /** The robot camera on the stage, or null when another view (map, orbit) is up.
    * @returns {View | null} */
@@ -441,29 +387,67 @@ export function createTargetingOverlay(stage, video, ros, session) {
     return name === "main" || name === "arm" ? name : null;
   }
 
-  /** @param {HTMLElement} el @param {Px} px @param {Size} frame */
-  function pin(el, px, frame) {
-    el.style.left = `${(px[0] / frame.w) * 100}%`;
-    el.style.top = `${(px[1] / frame.h) * 100}%`;
-    el.hidden = false;
+  /** @param {Marker} m @returns {HTMLElement | SVGLineElement} */
+  function elementFor(m) {
+    let el = els.get(m.id);
+    if (el && el.dataset.kind !== m.kind) {
+      el.remove();
+      el = undefined;
+    }
+    if (el) return el;
+    if (m.kind === "vector" || m.kind === "line") {
+      el = document.createElementNS(SVG_NS, "line");
+      lines.appendChild(el);
+    } else {
+      el = document.createElement("div");
+      el.innerHTML = TEMPLATES[m.kind];
+      layer.appendChild(el);
+    }
+    el.setAttribute("class", `tgt-${m.kind}`);
+    el.dataset.kind = m.kind;
+    els.set(m.id, el);
+    return el;
   }
 
-  /** @param {HTMLElement} el @param {Rect} r @param {Size} frame */
-  function place(el, r, frame) {
-    el.style.left = `${(r.left / frame.w) * 100}%`;
-    el.style.top = `${(r.top / frame.h) * 100}%`;
-    el.style.width = `${(r.width / frame.w) * 100}%`;
-    el.style.height = `${(r.height / frame.h) * 100}%`;
-    el.hidden = false;
+  /** @param {Marker} m @param {Size} frame */
+  function draw(m, frame) {
+    const el = elementFor(m);
+    el.classList.toggle("locked", m.locked);
+    if (el instanceof SVGLineElement) {
+      const [a, b] = [/** @type {Px} */ (m.a), /** @type {Px} */ (m.b)];
+      el.setAttribute("x1", String(a[0]));
+      el.setAttribute("y1", String(a[1]));
+      el.setAttribute("x2", String(b[0]));
+      el.setAttribute("y2", String(b[1]));
+      return;
+    }
+    const tag = /** @type {HTMLElement} */ (el.querySelector(".tgt-tag"));
+    tag.textContent = m.label;
+    tag.hidden = !m.label;
+    if (m.corners) {
+      const [x0, y0, x1, y1] = m.corners;
+      el.style.left = `${(x0 / frame.w) * 100}%`;
+      el.style.top = `${(y0 / frame.h) * 100}%`;
+      el.style.width = `${((x1 - x0) / frame.w) * 100}%`;
+      el.style.height = `${((y1 - y0) / frame.h) * 100}%`;
+    } else if (m.px) {
+      el.style.left = `${(m.px[0] / frame.w) * 100}%`;
+      el.style.top = `${(m.px[1] / frame.h) * 100}%`;
+    }
+    const inner = /** @type {HTMLElement | null} */ (el.querySelector(".tgt-inner"));
+    if (inner) {
+      inner.hidden = m.inner === null;
+      if (m.inner !== null) inner.style.width = inner.style.height = `${m.inner * 100}%`;
+    }
   }
 
-  /** @param {SVGLineElement} line @param {Px} a @param {Px} b */
-  function segment(line, a, b) {
-    line.setAttribute("x1", String(a[0]));
-    line.setAttribute("y1", String(a[1]));
-    line.setAttribute("x2", String(b[0]));
-    line.setAttribute("y2", String(b[1]));
-    line.classList.add("on");
+  /** @param {Set<string>} keep marker ids drawn this pass */
+  function prune(keep) {
+    for (const [id, el] of els) {
+      if (keep.has(id)) continue;
+      el.remove();
+      els.delete(id);
+    }
   }
 
   /** @returns {VideoLayout | null} */
@@ -488,6 +472,7 @@ export function createTargetingOverlay(stage, video, ros, session) {
   }
 
   function placeLayer() {
+    const run = store.run();
     if (!run) return;
     const rect = frameRect(run.frame, videoLayout(), stage.clientWidth, stage.clientHeight, view() ?? "main");
     layer.hidden = !rect;
@@ -498,23 +483,24 @@ export function createTargetingOverlay(stage, video, ros, session) {
     layer.style.height = `${rect.height}px`;
   }
 
-  function renderStages() {
-    if (!run) return;
+  /** @param {Run} run */
+  function renderStages(run) {
     const doneUpTo = run.stage ? run.stages.indexOf(run.stage) : -1;
     stagesEl.replaceChildren(
       ...run.stages.map((name, i) => {
         const li = document.createElement("li");
         li.className = "tgt-stage";
         li.textContent = name;
-        const done = run?.result?.ok ? true : i < doneUpTo;
+        const done = run.result?.ok ? true : i < doneUpTo;
         li.classList.toggle("done", done);
-        li.classList.toggle("active", !run?.result && i === doneUpTo);
+        li.classList.toggle("active", !run.result && i === doneUpTo);
         return li;
       }),
     );
   }
 
   function render() {
+    const run = store.run();
     const cam = view();
     const show = !!run && cam !== null;
     clip.hidden = !show || !!run?.result;
@@ -524,108 +510,43 @@ export function createTargetingOverlay(stage, video, ros, session) {
 
     skillEl.textContent = run.skill.replace(/_/g, " ");
     promptEl.textContent = run.prompt ? `“${run.prompt}”` : "";
-    renderStages();
+    renderStages(run);
     readoutEl.textContent = run.readout;
     hud.classList.toggle("ok", !!run.result?.ok);
     hud.classList.toggle("failed", !!run.result && !run.result.ok);
-    hud.classList.toggle("looking", run.looking);
-    if (run.descent) {
-      const span = run.descent.top - run.descent.stop;
-      const done = span > 0 ? Math.min(1, Math.max(0, (run.descent.top - run.descent.z) / span)) : 1;
-      barFill.style.width = `${done * 100}%`;
-      barEl.hidden = false;
-    } else {
-      barEl.hidden = true;
-    }
-    if (run.result) return;
-
-    const { frame } = run;
-    // The sweep is a head-camera look; the wrist stage tracks continuously.
-    layer.classList.toggle("looking", run.looking && cam === "main");
-    const m = cam === "main" ? headMarkers(run) : wristMarkers(run);
-    seenTag.textContent = m.tags.seen;
-    goalTag.textContent = m.tags.goal;
-    trackTag.textContent = m.tags.track;
-
-    if (m.seen) place(seenEl, cornersRect(m.seen), frame);
-    else seenEl.hidden = true;
-
-    if (m.goal) {
-      place(goalEl, m.goal.rect, frame);
-      acceptEl.hidden = !m.goal.accept;
-      if (m.goal.accept) {
-        acceptEl.style.width = `${m.goal.accept.w * 100}%`;
-        acceptEl.style.height = `${m.goal.accept.h * 100}%`;
-      }
-      goalEl.classList.toggle("inside", m.goal.inside);
-    } else {
-      goalEl.hidden = true;
-    }
-
-    if (m.track) {
-      pin(trackEl, m.track.px, frame);
-      trackEl.classList.toggle("inside", m.track.inside);
-    } else {
-      trackEl.hidden = true;
-    }
-
-    vecEl.setAttribute("viewBox", `0 0 ${frame.w} ${frame.h}`);
-    // The steering vector: tracked point -> the box it is being driven into.
-    if (m.vec) segment(vecLine, m.vec[0], m.vec[1]);
-    else vecLine.classList.remove("on");
-    // The blob's long axis: the side the fingers will roll onto.
-    if (m.axis) {
-      const [u, v] = m.axis.px;
-      const du = Math.cos(m.axis.angle) * AXIS_HALF_PX;
-      const dv = Math.sin(m.axis.angle) * AXIS_HALF_PX;
-      segment(axisLine, [u - du, v - dv], [u + du, v + dv]);
-    } else {
-      axisLine.classList.remove("on");
-    }
-
-    if (m.reticle) pin(reticleEl, m.reticle, frame);
-    else reticleEl.hidden = true;
-  }
-
-  /** @param {any} msg std_msgs/String */
-  function onTelemetry(msg) {
-    if (typeof msg?.data !== "string") return;
-    /** @type {any} */
-    let ev;
-    try {
-      ev = JSON.parse(msg.data);
-    } catch {
+    hud.classList.toggle("busy", run.busy);
+    barEl.hidden = run.progress === null;
+    if (run.progress !== null) barFill.style.width = `${run.progress * 100}%`;
+    if (run.result) {
+      prune(new Set());
       return;
     }
-    const ended = !!run?.result;
-    const next = applyEvent(run, ev);
-    if (next !== run) clearTimeout(lingerTimer); // a new run replaces a lingering verdict
-    run = next;
-    // Only the transition into a verdict arms the linger: later events of a
-    // finished run (or a stray one) must not keep pushing it out.
-    if (run?.result && !ended) {
-      lingerTimer = setTimeout(() => {
-        run = null;
-        render();
-      }, RESULT_LINGER_MS);
+
+    layer.classList.toggle("busy", run.busy);
+    lines.setAttribute("viewBox", `0 0 ${run.frame.w} ${run.frame.h}`);
+    const drawn = new Set();
+    for (const m of run.markers.values()) {
+      if (m.view !== cam) continue;
+      draw(m, run.frame);
+      drawn.add(m.id);
     }
-    render();
+    prune(drawn);
   }
 
-  const unsub = ros.subscribe(SKILL_TELEMETRY_TOPIC, onTelemetry, undefined, "std_msgs/msg/String");
+  const unsubStore = store.subscribe(render);
   const resize = new ResizeObserver(placeLayer);
   resize.observe(stage);
   if (video) resize.observe(video); // its box moves with media queries the stage's size does not
   video?.addEventListener("resize", placeLayer);
   const unsubSession = session.onChange(render);
+  render(); // a run already under way draws at once
 
   return {
     destroy() {
-      unsub();
+      unsubStore();
       unsubSession();
       resize.disconnect();
       video?.removeEventListener("resize", placeLayer);
-      clearTimeout(lingerTimer);
       clip.remove();
       hud.remove();
     },

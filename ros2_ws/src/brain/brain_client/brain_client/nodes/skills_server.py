@@ -451,9 +451,14 @@ class SkillsActionServer(Node):
         """
         previous_run_cancel = swap_run_cancel(skill._cancel_latch())
         try:
-            return self._run_code_skill_prepared(skill, entry, skill_type, inputs, goal_handle)
+            output = self._run_code_skill_prepared(skill, entry, skill_type, inputs, goal_handle)
+        except Exception as e:
+            skill.overlay.end(ok=False, cancelled=False, text=str(e))
+            raise
         finally:
             swap_run_cancel(previous_run_cancel)
+        skill.overlay.end(ok=output.ok, cancelled=output.status is SkillResult.CANCELLED, text=output.message)
+        return output
 
     def _run_code_skill_prepared(self, skill, entry, skill_type, inputs, goal_handle) -> SkillOutput:
         skill._begin_run(goal_handle)

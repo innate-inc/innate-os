@@ -9,10 +9,9 @@ No depth camera — URDF + pinhole model.
 
 import math
 import re
-import sys
 import time
 
-from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, base_to_odom, inside_box
+from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, base_to_odom, inside_box, metres
 
 from innate import (
     Head,
@@ -105,7 +104,8 @@ WRIST_ALIGN_TIMEOUT_S = 60.0
 WRIST_MAX_JUMP_PX = 80.0
 WRIST_SEG_MIN_SCORE = 25.0
 WRIST_CAM_ABOVE_EE = 0.07
-WRIST_TELEMETRY_S = 0.1
+# Half-length of the blob's drawn long axis, wrist-image px.
+AXIS_HALF_PX = 45
 # Wrist roll to the blob's minor axis (the gripper's 81 mm jaw is narrower
 # than most objects' long side). Blobs rounder than MIN_ELONGATION have no
 # axis worth chasing; below AXIS_MIN_Z the fingers straddle the blob in the
@@ -246,7 +246,7 @@ class PickAnyObject(Skill):
     def _detect_px(self, prompt):
         """Head frame -> grasp pixel of the remembered target, or None. Also
         records Gemini's per-object grip_strength for the close."""
-        self.telemetry("look", state="ask")
+        self.overlay.readout("looking for it", busy=True)
         text, img = ask_head(
             self,
             self._proxy,
@@ -268,7 +268,8 @@ class PickAnyObject(Skill):
         cands = vision.parse_det_cands(text)
         cand = self._choose_cand(cands) if cands else None
         if cand is None:
-            self.telemetry("look", state="miss", n=len(cands))
+            self.overlay.clear("target")
+            self.overlay.readout("not in view")
             return None
         u, v, grip, box = cand
         if grip is not None:
@@ -277,8 +278,16 @@ class PickAnyObject(Skill):
         seen = self._sighting(cand)
         if seen is not None:
             self._last_seen = seen
-        self.telemetry("look", state="seen", px=(u, v), box=box, dist=seen[2] if seen else None, n=len(cands))
+        self._draw_sighting((u, v), box, seen[2] if seen else None, len(cands))
         return (u, v)
+
+    def _draw_sighting(self, px, box, dist, n):
+        ui = self.overlay
+        ui.clear("track", "steer")
+        ui.bracket("target", box or (px[0] - 20, px[1] - 20, px[0] + 20, px[1] + 20), label="target")
+        ahead = f" · {metres(dist)} ahead" if dist is not None else ""
+        matches = f" · {n} matches" if n > 1 else ""
+        ui.readout(f"spotted{ahead}{matches}")
 
     def _rest_arm(self, keep_grip):
         """Best-effort teardown: carry if holding, else fold to rest. Never
@@ -317,8 +326,12 @@ class PickAnyObject(Skill):
         # identical twins the box nearest the servo aim point is ours.
         box = min(boxes, key=self._wrist_aim_dist) if boxes else None
         px = (box[0] + box[2] / 2.0, box[1] + box[3] / 2.0) if box else None
-        corners = (box[0], box[1], box[0] + box[2], box[1] + box[3]) if box else None
-        self.telemetry("wrist", state="seed", px=px, box=corners)
+        if box:
+            corners = (box[0], box[1], box[0] + box[2], box[1] + box[3])
+            self.overlay.bracket("wrist-target", corners, label="wrist target", view="arm")
+            self.overlay.readout("wrist camera has it")
+        else:
+            self.overlay.readout("wrist camera can't see it")
         return px, box
 
     def _wrist_aim_dist(self, box):
@@ -348,8 +361,29 @@ class PickAnyObject(Skill):
     ) -> tuple[float, float, float, float]:
         roll = self._grasp_roll(axis)
         self.logger.info(f"[PickAnyObject] wrist stage: {reason} (z={z:.3f}, roll={math.degrees(roll):+.0f} deg)")
-        self.telemetry("wrist", state="done", reason=reason, z=z, roll=roll)
+        self.overlay.readout(f"wrist align: {reason}")
         return x, y, z, roll
+
+    def _draw_wrist(self, px, inside, z, top, blob):
+        """The servo box, the tracked blob with its long axis, and the descent."""
+        p = self._p
+        ui = self.overlay
+        u, v, half = p["wrist_box_u"], p["wrist_box_v"], p["wrist_half_px"]
+        ui.clear("wrist-target")
+        ui.box("wrist-box", (u - half, v - half, u + half, v + half), label="wrist box", view="arm", locked=inside)
+        ui.point("blob", px, label="blob", view="arm", locked=inside)
+        if inside:
+            ui.clear("wrist-steer")
+        else:
+            ui.vector("wrist-steer", px, (u, v), view="arm")
+        if blob is not None and blob[1] >= MIN_ELONGATION:
+            du, dv = math.cos(blob[0]) * AXIS_HALF_PX, math.sin(blob[0]) * AXIS_HALF_PX
+            ui.line("axis", (px[0] - du, px[1] - dv), (px[0] + du, px[1] + dv), view="arm")
+        else:
+            ui.clear("axis")
+        span = top - p["wrist_stop_z"]
+        progress = min(1.0, max(0.0, (top - z) / span)) if span > 0 else 1.0
+        ui.readout(f"{'descending' if inside else 'centring'} · {round(z * 100)} cm up", progress=progress)
 
     @staticmethod
     def _grasp_roll(axis: vision.Axis | None) -> float:
@@ -406,7 +440,7 @@ class PickAnyObject(Skill):
             return self._wrist_done(tx, ty, z, "not seen")
 
         deadline = time.monotonic() + WRIST_ALIGN_TIMEOUT_S
-        last_told = 0.0
+        top = z
         axis = None  # last blob axis read high enough to trust
         streak = 0  # verified matches since the arm last moved
         centered = 0  # consecutive matches INSIDE the box
@@ -446,19 +480,7 @@ class PickAnyObject(Skill):
             err_u = px[0] - p["wrist_box_u"]
             err_v = px[1] - p["wrist_box_v"]
             inside = inside_box(px, p["wrist_box_u"], p["wrist_box_v"], p["wrist_half_px"])
-            if time.monotonic() - last_told >= WRIST_TELEMETRY_S:
-                last_told = time.monotonic()
-                blob = tracker.axis
-                self.telemetry(
-                    "wrist",
-                    state="track",
-                    px=px,
-                    z=z,
-                    stop=p["wrist_stop_z"],
-                    inside=inside,
-                    box=self._wrist_box(),
-                    axis=blob[0] if blob is not None and blob[1] >= MIN_ELONGATION else None,
-                )
+            self._draw_wrist(px, inside, z, top, tracker.axis)
             centered = centered + 1 if inside else 0
             if streak < 2:
                 continue  # watch one more frame before trusting it
@@ -536,7 +558,7 @@ class PickAnyObject(Skill):
         Contact just stalls the final segments; abort if still high."""
         p = self._p
         self.check_cancelled()
-        self.telemetry("grasp", step="descend")
+        self.overlay.readout("reaching to the floor")
         rungs = [z for z in (p["descend_z1"], p["descend_z2"], p["descend_z3"], p["floor_z"]) if z < z_from - 1e-6]
         if rungs:
             # grip=GRIPPER_OPEN re-asserts an open claw even if it drifted
@@ -601,7 +623,7 @@ class PickAnyObject(Skill):
         # in the twist/lift below (e.g. ArmUnhealthy from the LookupError
         # fallback) must not release a just-grasped object on the way home.
         self._holding = True
-        self.telemetry("grasp", step="lift")
+        self.overlay.readout("lifting")
         time.sleep(p["close_settle_s"])
 
         grip = -p["close_strength"]
@@ -644,8 +666,10 @@ class PickAnyObject(Skill):
             )
 
     def _aim(self, x: float, y: float) -> None:
-        """Tell the UI where the fingers will close: base xy and its head-camera pixel."""
-        self.telemetry("grasp", step="target", xy=(x, y), px=floor_to_pixel(x, y, self._p["tilt_deg"]))
+        """Show where the fingers will close, on the head camera."""
+        px = floor_to_pixel(x, y, self._p["tilt_deg"])
+        if px is not None:
+            self.overlay.reticle("grasp", px, label="grasp")
 
     def _grasp_at(self, prompt, xy):
         """Full grasp at floor xy (base_link)."""
@@ -658,26 +682,29 @@ class PickAnyObject(Skill):
         # if the claw stays shut.
         self.manipulation.gripper_open(duration=1.0)
         if p["wrist_steps"] >= 1:
-            self.telemetry("stage", stage="align", prompt=prompt)
+            self.overlay.stage("align")
+            self.overlay.readout("aligning the wrist camera")
             self._goto_search_pose(math.atan2(y, x))
             x, y, z, roll = self._wrist_descend(prompt, x, y)
+            self.overlay.clear(view="arm")  # the arm moves on, the view with it
             self._aim(x, y)
         else:
             z, roll = p["hover_z"], 0.0
             self.manipulation.move_to(x, y, z, pitch=p["arm_pitch"], duration=p["hover_s"])
 
-        self.telemetry("stage", stage="grasp", prompt=prompt)
+        self.overlay.stage("grasp")
         roll, pitch, yaw = self._grasp_orientation(x, y, roll)
         self._push_to_floor(x, y, z, roll, pitch, yaw)
         self.check_cancelled()  # last exit before the fingers commit
-        self.telemetry("grasp", step="close")
+        self.overlay.readout("closing the gripper")
         self._close_twist_lift(x, y, roll, pitch, yaw)
 
     def _grasp_verified(self, prompt, approach: FloorApproach):
         """Back up, then check floor clear + gripper not open. Gemini gets both
         cameras: the wrist view can show the object in the fingers, so a held
         object isn't mistaken for a dropped one."""
-        self.telemetry("stage", stage="verify", prompt=prompt)
+        self.overlay.stage("verify")
+        self.overlay.clear("grasp")
         approach.drive(-VERIFY_BACKUP_M)
         self.sleep(self._p["settle_s"])
         js = self.joint_states
@@ -734,17 +761,12 @@ class PickAnyObject(Skill):
             f"[PickAnyObject] verify: floor={floor_text!r} j6={j6} "
             f"({len(images)} cams) -> {'HELD' if held else 'NOT HELD'}"
         )
-        self.telemetry("verify", held=held)
+        self.overlay.readout("holding it" if held else "missed it")
         return held
 
     def _stages(self) -> list[str]:
         align = ["align"] if self._p["wrist_steps"] >= 1 else []
         return ["search", "approach", *align, "grasp", "verify"]
-
-    def _wrist_box(self) -> dict[str, float]:
-        """The wrist servo's goal square for a UI, wrist-image px."""
-        p = self._p
-        return {"u": p["wrist_box_u"], "v": p["wrist_box_v"], "half": p["wrist_half_px"]}
 
     def execute(self, prompt: str = "the sock") -> SkillReturn:
         """Pick up `prompt` from the floor."""
@@ -756,7 +778,6 @@ class PickAnyObject(Skill):
         self._holding = False
         self._last_seen = None
         self._coasts = 0
-        picked = False
         try:
             self.head.set_position(int(round(self._p["tilt_deg"])))
             # Fold clear of the head camera before searching
@@ -764,19 +785,11 @@ class PickAnyObject(Skill):
             self.manipulation.move_joints(NAV_ARM, duration=3.0)
 
             approach = FloorApproach(self, self._p, self._detect_px)
-            self.telemetry(
-                "run",
-                state="start",
-                prompt=prompt,
-                frame=(IMG_W, IMG_H),
-                box=approach.box(),
-                wrist_box=self._wrist_box(),
-                stages=self._stages(),
-            )
+            self.overlay.begin(prompt, stages=self._stages(), frame=(IMG_W, IMG_H))
             self.say(f"Looking for {prompt}.")
             xy = approach.search(prompt)
             xy = approach.position_above(prompt, xy)
-            self.telemetry("parked", xy=xy)
+            self.overlay.readout("parked over it")
             self.say("Picking it up.")
             self._grasp_at(prompt, xy)
             # _close_twist_lift latched self._holding the moment the fingers
@@ -786,7 +799,6 @@ class PickAnyObject(Skill):
                 self.say("I couldn't get a grip on it.")
                 raise SkillFailed(f"Grasp missed — '{prompt}' is still on the floor (verified after backing up)")
             self.say("Got it.")
-            picked = True
             return f"Picked up '{prompt}' (verified: floor clear after backing up)"
         except ArmFailed as e:
             # A clean arm give-up is a skill failure, not a crash. SkillFailed
@@ -799,7 +811,3 @@ class PickAnyObject(Skill):
             self.mobility.stop()
             self._rest_arm(keep_grip=self._holding)
             self.head.set_position(0)
-            # Inside finally the in-flight exception is still the handled one,
-            # so this reads the failure the run is ending on.
-            error = sys.exc_info()[1]
-            self.telemetry("run", state="end", ok=picked, cancelled=self.cancelled, reason=str(error or ""))

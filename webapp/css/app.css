@@ -789,9 +789,9 @@ select.skill-input {
 }
 
 /* ---- targeting overlay (teleop/targetingOverlay.js) ----------------------
-   A skill's aim over the main camera. Every marker is a percentage of
-   .tgt-layer, which is the skill's image frame placed on the picture; the
-   markers themselves are hairline amber, greening as the skill locks on. */
+   What a running skill draws over the cameras. Every marker is a percentage
+   of .tgt-layer, which is the skill's image frame placed on the picture; the
+   markers themselves are hairline amber, greening when the skill locks them. */
 
 .tgt-clip {
   position: absolute;
@@ -812,17 +812,17 @@ select.skill-input {
   text-transform: uppercase;
   white-space: nowrap;
   color: inherit;
-  text-shadow: 0 0 3px rgb(0 0 0 / 80%);
+  text-shadow: 0 0 3px rgb(0 0 0 / 85%), 0 1px 2px rgb(0 0 0 / 70%);
 }
 
-/* Gemini's detection: four corner brackets, the "seen HERE" shape. */
-.tgt-seen {
+/* Corner brackets: the "seen HERE" shape. */
+.tgt-bracket {
   position: absolute;
   color: var(--accent);
   animation: tgt-lock 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-.tgt-seen i {
+.tgt-bracket i {
   position: absolute;
   width: 12px;
   height: 12px;
@@ -832,12 +832,12 @@ select.skill-input {
   filter: drop-shadow(0 0 2px rgb(0 0 0 / 70%));
 }
 
-.tgt-seen i:nth-child(1) { top: 0; left: 0; border-width: 1.5px 0 0 1.5px; }
-.tgt-seen i:nth-child(2) { top: 0; right: 0; border-width: 1.5px 1.5px 0 0; }
-.tgt-seen i:nth-child(3) { bottom: 0; right: 0; border-width: 0 1.5px 1.5px 0; }
-.tgt-seen i:nth-child(4) { bottom: 0; left: 0; border-width: 0 0 1.5px 1.5px; }
+.tgt-bracket i:nth-child(1) { top: 0; left: 0; border-width: 1.5px 0 0 1.5px; }
+.tgt-bracket i:nth-child(2) { top: 0; right: 0; border-width: 1.5px 1.5px 0 0; }
+.tgt-bracket i:nth-child(3) { bottom: 0; right: 0; border-width: 0 1.5px 1.5px 0; }
+.tgt-bracket i:nth-child(4) { bottom: 0; left: 0; border-width: 0 0 1.5px 1.5px; }
 
-.tgt-seen .tgt-tag {
+.tgt-bracket .tgt-tag {
   bottom: calc(100% + 4px);
   left: 0;
 }
@@ -847,16 +847,17 @@ select.skill-input {
   to { transform: scale(1); opacity: 1; }
 }
 
-/* The pick box: get the tracked point inside the dashed square and the base
-   stops; the solid inner square is the servo's deadband, what "inside" tests. */
-.tgt-goal {
+/* A goal box: dashed outline, with an optional solid inner square for the
+   deadband the skill actually tests against. */
+.tgt-box {
   position: absolute;
   border: 1.5px dashed var(--accent-dim);
   border-radius: 2px;
+  filter: drop-shadow(0 0 2px rgb(0 0 0 / 70%));
   transition: border-color 200ms ease;
 }
 
-.tgt-accept {
+.tgt-inner {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -866,28 +867,28 @@ select.skill-input {
   transition: border-color 200ms ease, box-shadow 200ms ease;
 }
 
-.tgt-goal .tgt-tag {
+.tgt-box .tgt-tag {
   bottom: calc(100% + 3px);
   right: 0;
-  color: var(--accent-dim);
+  color: var(--accent);
 }
 
-.tgt-goal.inside {
+.tgt-box.locked {
   border-color: var(--ok);
 }
 
-.tgt-goal.inside .tgt-accept {
+.tgt-box.locked .tgt-inner {
   border-color: var(--ok);
   box-shadow: 0 0 10px rgb(86 194 140 / 45%);
 }
 
-.tgt-goal.inside .tgt-tag {
+.tgt-box.locked .tgt-tag {
   color: var(--ok);
 }
 
-/* Point markers are centred on their pixel; the tracked point glides between
-   ~10 Hz updates instead of stepping. */
-.tgt-track,
+/* Point markers are centred on their pixel; a point glides between ~10 Hz
+   updates instead of stepping. */
+.tgt-point,
 .tgt-reticle {
   position: absolute;
   transform: translate(-50%, -50%);
@@ -895,31 +896,30 @@ select.skill-input {
   filter: drop-shadow(0 0 2px rgb(0 0 0 / 70%));
 }
 
-.tgt-track {
+.tgt-point {
   transition: left 120ms linear, top 120ms linear;
 }
 
-.tgt-track.inside {
+.tgt-point.locked {
   color: var(--ok);
 }
 
-.tgt-track .tgt-tag,
+.tgt-point .tgt-tag,
 .tgt-reticle .tgt-tag {
   top: 50%;
   left: calc(100% + 2px);
   transform: translateY(-50%);
 }
 
-/* The tracked point ends up in the pick box, whose tag hangs top-right, so
-   this one hangs left. */
-.tgt-track .tgt-tag {
+/* A point usually ends up in a box, whose tag hangs top-right, so this one
+   hangs left. */
+.tgt-point .tgt-tag {
   left: auto;
   right: calc(100% + 2px);
 }
 
-/* Frame-coordinate lines: the steering vector (tracked point -> box centre)
-   and the blob's long axis on the wrist camera. */
-.tgt-vec {
+/* Frame-coordinate lines: a dashed steering vector, or a plain line. */
+.tgt-lines {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -927,30 +927,23 @@ select.skill-input {
   overflow: visible;
 }
 
-.tgt-vec-line,
-.tgt-axis-line {
+.tgt-vector,
+.tgt-line {
   stroke: var(--accent-dim);
   stroke-width: 1.2;
   vector-effect: non-scaling-stroke;
-  opacity: 0;
-  transition: opacity 200ms ease;
 }
 
-.tgt-vec-line {
+.tgt-vector {
   stroke-dasharray: 4 5;
 }
 
-.tgt-axis-line {
+.tgt-line {
   stroke: var(--accent);
   stroke-width: 1.5;
 }
 
-.tgt-vec-line.on,
-.tgt-axis-line.on {
-  opacity: 1;
-}
-
-/* While a frame is out to the model: one sweep across the picture. */
+/* While the skill is busy (a frame out to a model): one sweep across the picture. */
 .tgt-scan {
   position: absolute;
   top: 0;
@@ -962,7 +955,7 @@ select.skill-input {
   transition: opacity 200ms ease;
 }
 
-.tgt-layer.looking .tgt-scan {
+.tgt-layer.busy .tgt-scan {
   opacity: 1;
   animation: tgt-sweep 1.6s linear infinite;
 }
@@ -973,7 +966,9 @@ select.skill-input {
 }
 
 /* The HUD: skill + prompt, the stage ladder, one live readout. Top-centre is
-   the one stage edge nothing else claims on either cockpit. */
+   the one stage edge nothing else claims on either cockpit — except the
+   "<agent> is running" pill while the brain is active, which the HUD then
+   sits under. */
 .tgt-hud {
   top: 14px;
   left: 50%;
@@ -996,6 +991,10 @@ select.skill-input {
 @keyframes tgt-hud-in {
   from { opacity: 0; transform: translate(-50%, -6px); }
   to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
+  top: 68px;
 }
 
 /* The Agent page's camera tiles sit along the top of the feed, so its HUD
@@ -1119,7 +1118,7 @@ select.skill-input {
   white-space: nowrap;
 }
 
-.tgt-hud.looking .tgt-readout-text::after {
+.tgt-hud.busy .tgt-readout-text::after {
   content: "…";
   animation: breathe 1.2s ease-in-out infinite;
 }
@@ -1132,7 +1131,7 @@ select.skill-input {
   color: var(--ctl-danger);
 }
 
-/* Wrist descent progress: hover height down to the stop height. */
+/* The readout's progress bar, when the skill reports one. */
 .tgt-bar {
   flex: 1;
   min-width: 48px;
@@ -1151,14 +1150,14 @@ select.skill-input {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tgt-seen,
+  .tgt-bracket,
   .tgt-hud,
-  .tgt-layer.looking .tgt-scan,
+  .tgt-layer.busy .tgt-scan,
   .tgt-stage.active::before {
     animation: none;
   }
 
-  .tgt-track {
+  .tgt-point {
     transition: none;
   }
 }
@@ -10184,6 +10183,12 @@ select.skill-input {
   font-size: 13px;
   text-decoration: none;
   transition: border-color 150ms ease, background 150ms ease;
+}
+
+/* The Agent page has its own Start/Stop; the shell marks the pill off-route
+   there so styles that sit under it (the targeting HUD) can tell. */
+.agent-indicator[data-off-route] {
+  display: none;
 }
 
 /* The rule above shifts it by half the rail's column, which this layout has

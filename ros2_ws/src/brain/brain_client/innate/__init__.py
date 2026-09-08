@@ -45,11 +45,13 @@ then ``out.message`` / ``out.data`` / ``out.ok``, with ``out.status`` a
 SkillResult enum, never a bare string. (Legacy ``(message, SkillResult)``
 tuple returns still work but are deprecated.)
 
-``self.telemetry(event, **fields)`` publishes one JSON event on
-/brain/skill_telemetry for UIs that draw what the skill is doing — the
-webapp's targeting overlay follows pick_any_object's stages and markers
-through it. Open a run with ``telemetry("run", state="start", ...)`` and
-close it with ``state="end"``; events outside a run are dropped.
+``self.overlay`` draws what the skill is doing over the robot's cameras in
+the webapp: ``overlay.begin(prompt, stages=[...])`` declares the run,
+``overlay.stage(name)`` and ``overlay.readout(text)`` drive the HUD, and
+``overlay.bracket`` / ``box`` / ``point`` / ``reticle`` / ``vector`` /
+``line`` place markers by id in image pixels (``view="arm"`` for the wrist
+camera); ``overlay.clear(*ids)`` removes them. The run closes by itself with
+the skill's result.
 
 Cancellation is the framework's job, not yours. Use ``self.sleep(seconds)``
 instead of ``time.sleep`` and write loops as if cancel didn't exist: every
@@ -70,6 +72,7 @@ from typing import TYPE_CHECKING
 
 from brain_client.agents.types import Agent, InputRef, SkillRef
 from brain_client.robot.exceptions import ArmFailed, ArmUnhealthy
+from brain_client.skills.overlay import Overlay
 from brain_client.skills.types import (
     PhysicalSkill,
     Skill,
@@ -114,6 +117,7 @@ __all__ = [
     "Map",
     "Mobility",
     "Odometry",
+    "Overlay",
     "Pose",
     "RecallVerdict",
     "Skill",

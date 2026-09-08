@@ -23,6 +23,7 @@ from typing_extensions import Self
 from brain_client.common.dynamic_loader import class_name_to_snake_case
 from brain_client.common.logging import UniversalLogger
 from brain_client.common.script_paths import Source
+from brain_client.skills.overlay import OVERLAY_TOPIC, Overlay
 
 if TYPE_CHECKING:
     from brain_client.skills.invoker import SkillInvoker
@@ -38,19 +39,6 @@ SkillReturn = Union[None, str, "SkillOutput"]
 
 TTS_TOPIC = "/brain/tts"
 TTS_STATUS_TOPIC = "/tts/is_playing"
-TELEMETRY_TOPIC = "/brain/skill_telemetry"
-
-
-def _jsonable(value: Any) -> Any:
-    """Telemetry payload -> JSON-safe: floats rounded to 3 dp, numpy scalars
-    (bool_ included) unboxed to their Python value, tuples listed."""
-    if isinstance(value, dict):
-        return {k: _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if hasattr(value, "item"):
-        value = value.item()
-    return round(value, 3) if isinstance(value, float) else value
 
 
 class SkillResult(Enum):
@@ -764,8 +752,8 @@ class Skill(ABC):
         # injected by the server before each run (see invoker.py)
         self.skills: SkillInvoker | None = None
         self._say_publisher = None
-        self._telemetry_publisher = None
-        self._telemetry_open = False
+        self._overlay: Overlay | None = None
+        self._overlay_publisher = None
         self._tts_status_sub = None
         self._tts_playing = None  # last /tts/is_playing value
         self._storage = None
@@ -1017,26 +1005,21 @@ class Skill(ABC):
         if wait:
             self._wait_for_speech_end(text)
 
-    def telemetry(self, event: str, **fields: Any) -> None:
-        """Publish one ``{skill, ev, t, ...fields}`` JSON event on
-        /brain/skill_telemetry for UIs that draw what the skill is doing (the
-        webapp's targeting overlay). Events belong to a run: ``telemetry("run",
-        state="start", ...)`` opens one, ``state="end"`` closes it, and events
-        outside a run are dropped, so a collaborator shared with a skill that
-        never opened one stays silent. Best effort — never raises into the run."""
-        if event == "run":
-            self._telemetry_open = fields.get("state") == "start"
-        elif not self._telemetry_open:
-            return
+    @property
+    def overlay(self) -> Overlay:
+        """What this skill draws over the cameras (see skills/overlay.py):
+        ``self.overlay.stage("approach")``, ``self.overlay.point("track", px)``,
+        ``self.overlay.readout("steering onto it")``."""
+        if self._overlay is None:
+            self._overlay = Overlay(self.name, self._publish_overlay, self.logger)
+        return self._overlay
+
+    def _publish_overlay(self, payload: str) -> None:
         if self.node is None:
             return
-        try:
-            if self._telemetry_publisher is None:
-                self._telemetry_publisher = self.node.create_publisher(String, TELEMETRY_TOPIC, 10)
-            payload = {"skill": self.name, "ev": event, "t": time.time(), **fields}
-            self._telemetry_publisher.publish(String(data=json.dumps(_jsonable(payload))))
-        except Exception as e:  # noqa: BLE001 — a side channel must never become the run's failure
-            self.logger.warning(f"[{self.name}] telemetry '{event}' dropped: {e}")
+        if self._overlay_publisher is None:
+            self._overlay_publisher = self.node.create_publisher(String, OVERLAY_TOPIC, 10)
+        self._overlay_publisher.publish(String(data=payload))
 
     def _on_tts_status(self, msg: String) -> None:
         self._tts_playing = msg.data
