@@ -647,7 +647,7 @@ class PickAnyObject(Skill):
         # if the claw stays shut.
         self.manipulation.gripper_open(duration=1.0)
         if p["wrist_steps"] >= 1:
-            self.telemetry("stage", stage="align")
+            self.telemetry("stage", stage="align", prompt=prompt)
             self._goto_search_pose(math.atan2(y, x))
             x, y, z, roll = self._wrist_descend(prompt, x, y)
             self._aim(x, y)
@@ -655,7 +655,7 @@ class PickAnyObject(Skill):
             z, roll = p["hover_z"], 0.0
             self.manipulation.move_to(x, y, z, pitch=p["arm_pitch"], duration=p["hover_s"])
 
-        self.telemetry("stage", stage="grasp")
+        self.telemetry("stage", stage="grasp", prompt=prompt)
         roll, pitch, yaw = self._grasp_orientation(x, y, roll)
         self._push_to_floor(x, y, z, roll, pitch, yaw)
         self.check_cancelled()  # last exit before the fingers commit
@@ -666,7 +666,7 @@ class PickAnyObject(Skill):
         """Back up, then check floor clear + gripper not open. Gemini gets both
         cameras: the wrist view can show the object in the fingers, so a held
         object isn't mistaken for a dropped one."""
-        self.telemetry("stage", stage="verify")
+        self.telemetry("stage", stage="verify", prompt=prompt)
         approach.drive(-VERIFY_BACKUP_M)
         self.sleep(self._p["settle_s"])
         js = self.joint_states

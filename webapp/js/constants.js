@@ -164,9 +164,11 @@ export const SKILL_STATUS_UPDATE_TOPIC = "/brain/skill_status_update";
 
 // What a running skill is looking at, for the targeting overlay drawn over the
 // main camera (std_msgs/String JSON: {skill, ev, t, ...} from Skill.telemetry()).
-// A run opens with {ev:"run", state:"start", stages:[...], frame:[w,h], box}
-// and closes with state:"end"; in between, markers arrive in image pixels of
-// that frame (look/track/grasp) alongside stage changes and readouts.
+// A run opens with {ev:"run", state:"start", prompt, stages:[...], frame:[w,h],
+// box} and closes with state:"end"; in between, markers arrive in image pixels
+// of that frame (look/track/grasp) alongside stage changes and readouts. Stage
+// events repeat the prompt and track events the box, so a page that missed the
+// start still recovers them. The SDK drops events outside a run.
 export const SKILL_TELEMETRY_TOPIC = "/brain/skill_telemetry";
 
 // Per-step ACT inference timing breakdown (std_msgs/String carrying JSON), published

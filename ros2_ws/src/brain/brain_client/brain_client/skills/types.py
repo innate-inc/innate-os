@@ -2,7 +2,6 @@
 # Copyright (c) 2026 Innate Inc
 import inspect
 import json
-import numbers
 import os
 import sys
 import threading
@@ -44,16 +43,14 @@ TELEMETRY_TOPIC = "/brain/skill_telemetry"
 
 def _jsonable(value: Any) -> Any:
     """Telemetry payload -> JSON-safe: floats rounded to 3 dp, numpy scalars
-    coerced, tuples listed."""
-    if value is None or isinstance(value, (bool, int, str)):
-        return value
-    if isinstance(value, numbers.Real):
-        return round(float(value), 3)
+    (bool_ included) unboxed to their Python value, tuples listed."""
     if isinstance(value, dict):
         return {k: _jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_jsonable(v) for v in value]
-    return value
+    if hasattr(value, "item"):
+        value = value.item()
+    return round(value, 3) if isinstance(value, float) else value
 
 
 class SkillResult(Enum):
@@ -768,6 +765,7 @@ class Skill(ABC):
         self.skills: SkillInvoker | None = None
         self._say_publisher = None
         self._telemetry_publisher = None
+        self._telemetry_open = False
         self._tts_status_sub = None
         self._tts_playing = None  # last /tts/is_playing value
         self._storage = None
@@ -1021,14 +1019,24 @@ class Skill(ABC):
 
     def telemetry(self, event: str, **fields: Any) -> None:
         """Publish one ``{skill, ev, t, ...fields}`` JSON event on
-        /brain/skill_telemetry for UIs that draw what the skill is doing
-        (the webapp's targeting overlay). No-op without a run node."""
+        /brain/skill_telemetry for UIs that draw what the skill is doing (the
+        webapp's targeting overlay). Events belong to a run: ``telemetry("run",
+        state="start", ...)`` opens one, ``state="end"`` closes it, and events
+        outside a run are dropped, so a collaborator shared with a skill that
+        never opened one stays silent. Best effort — never raises into the run."""
+        if event == "run":
+            self._telemetry_open = fields.get("state") == "start"
+        elif not self._telemetry_open:
+            return
         if self.node is None:
             return
-        if self._telemetry_publisher is None:
-            self._telemetry_publisher = self.node.create_publisher(String, TELEMETRY_TOPIC, 10)
-        payload = {"skill": self.name, "ev": event, "t": time.time(), **fields}
-        self._telemetry_publisher.publish(String(data=json.dumps(_jsonable(payload))))
+        try:
+            if self._telemetry_publisher is None:
+                self._telemetry_publisher = self.node.create_publisher(String, TELEMETRY_TOPIC, 10)
+            payload = {"skill": self.name, "ev": event, "t": time.time(), **fields}
+            self._telemetry_publisher.publish(String(data=json.dumps(_jsonable(payload))))
+        except Exception as e:  # noqa: BLE001 — a side channel must never become the run's failure
+            self.logger.warning(f"[{self.name}] telemetry '{event}' dropped: {e}")
 
     def _on_tts_status(self, msg: String) -> None:
         self._tts_playing = msg.data

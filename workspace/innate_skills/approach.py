@@ -169,7 +169,7 @@ class FloorApproach:
 
     def search(self, prompt):
         """Scan: straight, right 30°, left 60°. First hit wins. (+yaw=left)"""
-        self.host.telemetry("stage", stage="search")
+        self.host.telemetry("stage", stage="search", prompt=prompt)
         for i, turn in enumerate((0.0, -math.radians(30), math.radians(60))):
             if turn:
                 if i == 1:
@@ -258,6 +258,7 @@ class FloorApproach:
         grid = vision.grid_pts(u, v)
         in_box = 0
         (cu, cv), _half, accept = self._sweet_box()
+        box = self.box()  # rides every track event so a UI joining mid-run gets the box too
         t0 = time.monotonic()
         last_told = 0.0
         anchor, anchor_odo = (u, v), self.odom_xyt()
@@ -291,7 +292,7 @@ class FloorApproach:
             inside = inside_box((u, v), cu, cv, accept[0], accept[1])
             if inside or time.monotonic() - last_told >= TRACK_TELEMETRY_S:
                 last_told = time.monotonic()
-                self.host.telemetry("track", px=(u, v), inside=inside)
+                self.host.telemetry("track", px=(u, v), inside=inside, box=box)
             if inside:
                 in_box += 1
                 self.host.mobility.stop()
@@ -341,7 +342,7 @@ class FloorApproach:
     def position_above(self, prompt, xy):
         """Flow-follow into the sweet box; Gemini reseed/confirm. Stepwise if
         no cam. Raises SkillFailed if the target cannot be centred."""
-        self.host.telemetry("stage", stage="approach")
+        self.host.telemetry("stage", stage="approach", prompt=prompt)
         if not self.host.main_image:
             return self._position_stepwise(prompt, xy)
 

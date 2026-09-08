@@ -21,13 +21,19 @@ const SIM_LENS = { fx: 200.3, fy: 267.3, cx: 319.1, cy: 248.7 };
 const RESULT_LINGER_MS = 4000;
 // A page opened mid-run missed the start event that carries the frame size and
 // the stage list: it draws in the head camera's native frame and learns the
-// stages as they come, rather than showing nothing until the next run.
+// stages, prompt and pick box from the events that repeat them, rather than
+// showing nothing until the next run.
 const DEFAULT_FRAME = { w: 640, h: 480 };
 
 /** @typedef {{ w: number, h: number }} Size */
 /** @typedef {[number, number]} Px */
 /** @typedef {{ cu: number, cv: number, hu: number, hv: number, au: number, av: number }} PickBox */
 /** @typedef {{ left: number, top: number, width: number, height: number }} Rect */
+/**
+ * The stream as laid out on the page: intrinsic size, the video element's box
+ * within the stage, and how object-fit places the picture in that box.
+ * @typedef {{ w: number, h: number, box: Rect, fit: string }} VideoLayout
+ */
 /**
  * One run of a skill, as the overlay understands it.
  * @typedef {{
@@ -48,23 +54,29 @@ const DEFAULT_FRAME = { w: 640, h: 480 };
  */
 
 /**
- * Where the skill's image frame lands on the stage. Hardware letterboxes the
- * stream (object-fit: contain) and the skill sees that same picture, so the
- * frame is the video's rectangle; the sim has no stream, its canvas renders the
- * head camera at the stage's own size (see SIM_LENS).
+ * Where the skill's image frame lands on the stage. On hardware the skill sees
+ * the same picture the stream shows, so the frame is wherever object-fit put
+ * that picture inside the video element — the cockpits letterbox it (contain),
+ * the Agent page crops it (cover) at some widths. The sim has no stream: its
+ * canvas renders the head camera at the stage's own size (see SIM_LENS).
  * @param {Size} frame the skill's image size
- * @param {Size | null} video the stream's intrinsic size, null in the sim
+ * @param {VideoLayout | null} video the stream on the page, null in the sim
  * @param {number} cw @param {number} ch stage size
  * @returns {Rect | null}
  */
 export function frameRect(frame, video, cw, ch) {
   if (!cw || !ch || !frame.w || !frame.h) return null;
   if (video) {
-    if (!video.w || !video.h) return null;
-    const fit = Math.min(cw / video.w, ch / video.h);
-    const width = video.w * fit;
-    const height = video.h * fit;
-    return { left: (cw - width) / 2, top: (ch - height) / 2, width, height };
+    const { w, h, box, fit } = video;
+    if (!w || !h || !box.width || !box.height) return null;
+    let sx = box.width / w;
+    let sy = box.height / h;
+    if (fit === "cover") sx = sy = Math.max(sx, sy);
+    else if (fit === "none") sx = sy = 1;
+    else if (fit !== "fill") sx = sy = Math.min(sx, sy);
+    const width = w * sx;
+    const height = h * sy;
+    return { left: box.left + (box.width - width) / 2, top: box.top + (box.height - height) / 2, width, height };
   }
   const sy = ch / frame.h;
   const sx = sy * (SIM_LENS.fy / SIM_LENS.fx);
@@ -153,6 +165,7 @@ export function applyEvent(run, ev) {
     case "stage":
       if (typeof ev.stage !== "string") break;
       if (!run.stages.includes(ev.stage)) run.stages.push(ev.stage);
+      if (!run.prompt && typeof ev.prompt === "string") run.prompt = ev.prompt;
       run.stage = ev.stage;
       run.readout = STAGE_READOUT[ev.stage] ?? ev.stage;
       if (ev.stage !== "approach") run.track = null;
@@ -169,7 +182,7 @@ export function applyEvent(run, ev) {
         const more = Number.isFinite(ev.n) && ev.n > 1 ? ` · ${ev.n} matches` : "";
         run.readout = `spotted${dist}${more}`;
       } else {
-        run.seen = null;
+        run.seen = run.track = null;
         run.readout = "not in view";
       }
       break;
@@ -187,6 +200,7 @@ export function applyEvent(run, ev) {
     }
     case "track": {
       if (!isPx(ev.px)) break;
+      run.box ??= pickBox(ev.box);
       run.seen = null;
       run.track = { px: [ev.px[0], ev.px[1]], inside: ev.inside === true };
       const off = run.box ? Math.round(Math.hypot(ev.px[0] - run.box.cu, ev.px[1] - run.box.cv)) : null;
@@ -298,10 +312,22 @@ export function createTargetingOverlay(stage, video, ros, session) {
     el.hidden = false;
   }
 
+  /** @returns {VideoLayout | null} */
+  function videoLayout() {
+    if (!video) return null;
+    const s = stage.getBoundingClientRect();
+    const v = video.getBoundingClientRect();
+    return {
+      w: video.videoWidth,
+      h: video.videoHeight,
+      box: { left: v.left - s.left, top: v.top - s.top, width: v.width, height: v.height },
+      fit: getComputedStyle(video).objectFit || "contain",
+    };
+  }
+
   function placeLayer() {
     if (!run) return;
-    const size = video ? { w: video.videoWidth, h: video.videoHeight } : null;
-    const rect = frameRect(run.frame, size, stage.clientWidth, stage.clientHeight);
+    const rect = frameRect(run.frame, videoLayout(), stage.clientWidth, stage.clientHeight);
     layer.hidden = !rect;
     if (!rect) return;
     layer.style.left = `${rect.left}px`;
@@ -415,11 +441,13 @@ export function createTargetingOverlay(stage, video, ros, session) {
     } catch {
       return;
     }
+    const ended = !!run?.result;
     const next = applyEvent(run, ev);
-    if (next !== run) clearTimeout(lingerTimer);
+    if (next !== run) clearTimeout(lingerTimer); // a new run replaces a lingering verdict
     run = next;
-    if (run?.result) {
-      clearTimeout(lingerTimer);
+    // Only the transition into a verdict arms the linger: later events of a
+    // finished run (or a stray one) must not keep pushing it out.
+    if (run?.result && !ended) {
       lingerTimer = setTimeout(() => {
         run = null;
         render();
@@ -431,6 +459,7 @@ export function createTargetingOverlay(stage, video, ros, session) {
   const unsub = ros.subscribe(SKILL_TELEMETRY_TOPIC, onTelemetry, undefined, "std_msgs/msg/String");
   const resize = new ResizeObserver(placeLayer);
   resize.observe(stage);
+  if (video) resize.observe(video); // its box moves with media queries the stage's size does not
   video?.addEventListener("resize", placeLayer);
   const unsubSession = session.onChange(render);
 

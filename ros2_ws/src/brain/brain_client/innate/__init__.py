@@ -48,7 +48,8 @@ tuple returns still work but are deprecated.)
 ``self.telemetry(event, **fields)`` publishes one JSON event on
 /brain/skill_telemetry for UIs that draw what the skill is doing — the
 webapp's targeting overlay follows pick_any_object's stages and markers
-through it.
+through it. Open a run with ``telemetry("run", state="start", ...)`` and
+close it with ``state="end"``; events outside a run are dropped.
 
 Cancellation is the framework's job, not yours. Use ``self.sleep(seconds)``
 instead of ``time.sleep`` and write loops as if cancel didn't exist: every
