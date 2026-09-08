@@ -102,6 +102,7 @@ class FaceObservation:
     stamp: float
     box: Box
     size_px: float  # face height in NATIVE pixels
+    real_px: float  # face height in the crop's own pixels; equal to size_px on the native path
     yaw_deg: float
     pitch_deg: float  # positive = seen from below
     sharpness: float

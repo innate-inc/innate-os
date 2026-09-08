@@ -70,7 +70,6 @@ if TYPE_CHECKING:
     from brain_client.people.store import PeopleStore
     from brain_client.people.types import (
         AttentionDict,
-        PeopleEventDict,
         PeopleRosterDict,
         PeopleSnapshotDict,
         Pose,
@@ -118,6 +117,15 @@ TICK_POLL_SEC = 0.05
 SCRIBE_TICK_SEC = 2.0
 STORE_TICK_SEC = 60.0
 EXPIRE_EVERY_SEC = 3600.0
+
+IDEMPOTENCY_KEYS = 64
+"""How many mutation keys the node answers a retry from. A key is spent within
+seconds of being minted, so this is a few minutes of the busiest Settings page."""
+DECISION_SKEW_SEC = 1.0
+"""How far a track may have started past the frame stamp it was measured on and
+still belong to that snapshot: the stamp is the capture, and the tracker's clock
+starts when the tick that decoded the frame ran, a camera latency later."""
+STALE_DECISION_MESSAGE = "that tag was issued after the snapshot you decided on; look again"
 
 _TAG_RE = re.compile(r"^P\d+$", re.IGNORECASE)
 
@@ -462,6 +470,18 @@ def chat_out_utterance(
     return Utterance(id=uid, stamp=now, speaker=Speaker.ROBOT, text=text, in_view=tuple(in_view))
 
 
+@dataclass(frozen=True)
+class Recall:
+    """What a deep recall came back with, on its way from the scribe thread to
+    the engine thread. It crosses as data because :class:`PeopleEvents` reads
+    then writes its cooldown dicts, and only the engine thread may touch it."""
+
+    person_id: str
+    name: str | None
+    text: str
+    stamp: float
+
+
 def recall_person(subject: str, tracks: Sequence[TrackState], roster: Sequence[RosterEntryDict]) -> str | None:
     """Who a memory question is about (RFC 6.4). ``is_memory_question`` hands
     back a name, a ``P<n>`` tag or a bare pronoun; a pronoun resolves against
@@ -478,6 +498,63 @@ def recall_person(subject: str, tracks: Sequence[TrackState], roster: Sequence[R
 
 
 # ============================================================= pure: services
+
+
+@dataclass(frozen=True)
+class MutationResult:
+    """What a mutation answered, kept so a retry can be answered the same way.
+    ``person_id`` is empty for the services whose response has no such field."""
+
+    success: bool
+    message: str
+    person_id: str = ""
+
+
+class MutationLog:
+    """The answers the last :data:`IDEMPOTENCY_KEYS` idempotency keys got.
+
+    A call carrying a key this node has already answered is a retry — a reply
+    the caller never received, a second tap on the Settings page — and RFC
+    section 8 answers it from here rather than merging two people twice. An
+    empty key is no key: those calls are always fresh mutations.
+    """
+
+    def __init__(self, limit: int = IDEMPOTENCY_KEYS) -> None:
+        self._limit = limit
+        self._answers: dict[str, MutationResult] = {}
+
+    def answered(self, key: str) -> MutationResult | None:
+        return self._answers.get(key.strip()) if key.strip() else None
+
+    def remember(self, key: str, result: MutationResult) -> None:
+        key = key.strip()
+        if not key:
+            return
+        self._answers.pop(key, None)  # re-inserted last, so a live key is not the one evicted
+        self._answers[key] = result
+        while len(self._answers) > self._limit:
+            del self._answers[next(iter(self._answers))]
+
+
+def tag_newer_than_decision(who: str, tracks: Sequence[TrackState], decided_on_stamp_ns: str) -> bool:
+    """Whether ``who`` names a live tag whose track started after the snapshot
+    the caller decided on (RFC section 8). A caller acting on a tag its snapshot
+    never carried is answering about somebody it has not seen, so the mutation
+    is refused instead of landing on whoever holds that tag now."""
+    decided_on = _stamp_seconds(decided_on_stamp_ns)
+    query = who.strip()
+    if decided_on is None or not _TAG_RE.match(query):
+        return False
+    track = next((t for t in tracks if t.tag.upper() == query.upper()), None)
+    return track is not None and track.first_seen > decided_on + DECISION_SKEW_SEC
+
+
+def _stamp_seconds(stamp_ns: str) -> float | None:
+    """``frame_stamp_ns`` as epoch seconds; None when there is no stamp to check."""
+    try:
+        return int(stamp_ns) / 1e9
+    except (TypeError, ValueError):
+        return None
 
 
 def resolve_who(
@@ -746,6 +823,7 @@ class PeopleAdapters:
         self._scribe = scribe
         self._transport = transport
         self._events = PeopleEvents()
+        self._mutations = MutationLog()
         self._sensors = PeopleSensors(
             node, config, on_camera=engine.set_camera, motion_burst_sec=engine_config.motion_burst_sec
         )
@@ -760,7 +838,7 @@ class PeopleAdapters:
         self._hints: dict[str, tuple[str, float]] = {}
         self._enrolling: dict[str, float] = {}
         self._speaking: tuple[str, float] | None = None
-        self._pending_events: deque[PeopleEventDict] = deque(maxlen=32)
+        self._pending_recalls: deque[Recall] = deque(maxlen=32)
         self._want_native = False
         self._uid = 0
         self._expired_at = time.monotonic()
@@ -768,6 +846,7 @@ class PeopleAdapters:
 
         self._chat: queue.Queue[Utterance] = queue.Queue(maxsize=64)
         self._forgets: queue.Queue[str] = queue.Queue(maxsize=8)
+        self._suppressions: queue.Queue[str] = queue.Queue(maxsize=8)
         self._recalls: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=8)
         self._descriptions: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=8)
 
@@ -847,47 +926,18 @@ class PeopleAdapters:
         return response
 
     def _svc_rename(self, request: RenamePerson.Request, response: RenamePerson.Response) -> RenamePerson.Response:
-        person_id, message = self._resolve(request.who)
-        name = request.name.strip()
-        if person_id is None or not name:
-            response.success = False
-            response.message = message or "a name cannot be empty"
-            response.person_id = ""
-            return response
-        response.success, response.message = self._write(
-            lambda: self._store.rename(person_id, name, request.source or "app"), f"could not rename {person_id}"
-        )
-        if response.success:
-            self._store.clear_name_candidates(person_id)
-        response.person_id = person_id
+        result = self._mutate(request.idempotency_key, lambda: self._rename(request))
+        response.success, response.message, response.person_id = result.success, result.message, result.person_id
         return response
 
     def _svc_merge(self, request: MergePeople.Request, response: MergePeople.Response) -> MergePeople.Response:
-        source, source_message = self._resolve(request.source_id)
-        target, target_message = self._resolve(request.target_id)
-        if source is None or target is None:
-            response.success = False
-            response.message = source_message or target_message
-            return response
-        response.success, response.message = self._write(
-            lambda: self._store.merge(source, target), "those two cannot be merged"
-        )
+        result = self._mutate(request.idempotency_key, lambda: self._merge(request))
+        response.success, response.message = result.success, result.message
         return response
 
     def _svc_forget(self, request: ForgetPerson.Request, response: ForgetPerson.Response) -> ForgetPerson.Response:
-        person_id, message = self._resolve(request.who)
-        if person_id is None:
-            response.success = False
-            response.message = message
-            return response
-        response.success, response.message = self._write(
-            lambda: self._store.forget(person_id), f"could not forget {person_id}"
-        )
-        if response.success:
-            self._suppress(person_id)
-            # The queue and the open window are the scribe thread's; handing it
-            # the id keeps this off the executor and off its file (RFC 10).
-            _offer(self._forgets, person_id)
+        result = self._mutate(request.idempotency_key, lambda: self._forget(request))
+        response.success, response.message = result.success, result.message
         return response
 
     def _svc_set_collection(
@@ -897,6 +947,61 @@ class PeopleAdapters:
         response.success = True
         response.message = ""
         return response
+
+    def _rename(self, request: RenamePerson.Request) -> MutationResult:
+        stale = self._stale(request.decided_on_stamp_ns, request.who)
+        if stale is not None:
+            return stale
+        person_id, message = self._resolve(request.who)
+        name = request.name.strip()
+        if person_id is None or not name:
+            return MutationResult(False, message or "a name cannot be empty")
+        success, message = self._write(
+            lambda: self._store.rename(person_id, name, request.source or "app"), f"could not rename {person_id}"
+        )
+        if success:
+            self._store.clear_name_candidates(person_id)
+        return MutationResult(success, message, person_id)
+
+    def _merge(self, request: MergePeople.Request) -> MutationResult:
+        stale = self._stale(request.decided_on_stamp_ns, request.source_id, request.target_id)
+        if stale is not None:
+            return stale
+        source, source_message = self._resolve(request.source_id)
+        target, target_message = self._resolve(request.target_id)
+        if source is None or target is None:
+            return MutationResult(False, source_message or target_message)
+        success, message = self._write(lambda: self._store.merge(source, target), "those two cannot be merged")
+        return MutationResult(success, message)
+
+    def _forget(self, request: ForgetPerson.Request) -> MutationResult:
+        stale = self._stale(request.decided_on_stamp_ns, request.who)
+        if stale is not None:
+            return stale
+        person_id, message = self._resolve(request.who)
+        if person_id is None:
+            return MutationResult(False, message)
+        success, message = self._write(lambda: self._store.forget(person_id), f"could not forget {person_id}")
+        if success:
+            self._suppress(person_id)
+            # The queue and the open window are the scribe thread's; handing it
+            # the id keeps this off the executor and off its file (RFC 10).
+            _offer(self._forgets, person_id)
+        return MutationResult(success, message)
+
+    def _mutate(self, idempotency_key: str, write: Callable[[], MutationResult]) -> MutationResult:
+        answered = self._mutations.answered(idempotency_key)
+        if answered is not None:
+            return answered
+        result = write()
+        self._mutations.remember(idempotency_key, result)
+        return result
+
+    def _stale(self, decided_on_stamp_ns: str, *who: str) -> MutationResult | None:
+        tracks = self.tracks()
+        if any(tag_newer_than_decision(one, tracks, decided_on_stamp_ns) for one in who):
+            return MutationResult(False, STALE_DECISION_MESSAGE)
+        return None
 
     def _write(self, mutate: Callable[[], bool], failure: str) -> tuple[bool, str]:
         """A store write, answered either way: a full disk must reach the
@@ -912,10 +1017,11 @@ class PeopleAdapters:
 
     def _suppress(self, person_id: str) -> None:
         """A forgotten person must stop being that person on the live track, or
-        the next tick names an id that no longer exists."""
+        the next tick names an id that no longer exists. The resolver is the
+        engine thread's, so the tag crosses to it and :meth:`_tick` applies it."""
         for track in self.tracks():
             if track.identity.person_id == person_id:
-                self._engine.resolver.forget(track.tag)
+                _offer(self._suppressions, track.tag)
 
     def _on_chat_in(self, msg: String) -> None:
         payload = _payload(msg.data)
@@ -984,12 +1090,13 @@ class PeopleAdapters:
             self._stop.wait(TICK_POLL_SEC)
 
     def _tick(self, now: float) -> None:
+        self._apply_suppressions()
         active = engine_active(
             enabled=self._config.enabled, always_on=self._config.always_on, brain_active=self._sensors.brain_active
         )
         if not active:
             self._want_native = False
-            self._publish_snapshot(now, (), None, (640, 480))
+            self._publish_snapshot(now, (), None, (640, 480), consume=False)
             self._stop.wait(IDLE_POLL_SEC)
             return
         ego = self._sensors.ego(now)
@@ -1011,7 +1118,7 @@ class PeopleAdapters:
         if frame is None or image is None:
             if frame is not None:
                 self._logger.warn("[People] undecodable camera frame", throttle_duration_sec=10.0)
-            self._publish_snapshot(now, self.tracks(), None, (640, 480))
+            self._publish_snapshot(now, self.tracks(), None, (640, 480), consume=False)
             return
         self._last_frame_at = now
         native = self._sensors.native_for(frame.stamp_ns) if self._want_native else None
@@ -1038,7 +1145,19 @@ class PeopleAdapters:
         self._after_tick(image, resolved, resolutions, now)
         # The engine's stamp, not this frame's: a tick its own duty cycle skipped
         # measured nothing, and the brain draws only on the frame it measured.
-        self._publish_snapshot(now, resolved, self._engine.frame_stamp_ns, (image.shape[1], image.shape[0]))
+        self._publish_snapshot(
+            now, resolved, self._engine.frame_stamp_ns, (image.shape[1], image.shape[0]), consume=True
+        )
+
+    def _apply_suppressions(self) -> None:
+        """The forgotten tags the services queued, dropped from the resolver here
+        where nothing else is reading its beliefs."""
+        while True:
+            try:
+                tag = self._suppressions.get_nowait()
+            except queue.Empty:
+                return
+            self._engine.resolver.forget(tag)
 
     def _after_tick(
         self, image: np.ndarray, tracks: Sequence[TrackState], resolutions: Mapping[str, Resolution], now: float
@@ -1069,8 +1188,17 @@ class PeopleAdapters:
             _offer(self._descriptions, (person_id, crop))
 
     def _publish_snapshot(
-        self, now: float, tracks: Sequence[TrackState], frame_stamp: str | None, image_size: tuple[int, int]
+        self,
+        now: float,
+        tracks: Sequence[TrackState],
+        frame_stamp: str | None,
+        image_size: tuple[int, int],
+        *,
+        consume: bool,
     ) -> None:
+        """``consume`` clears the scribe's "learned:" lines, and only the tick
+        that published their events may do it: a tick with no frame publishes no
+        events, so clearing there loses the name the brain never heard about."""
         visible = publishable_tracks(tracks, now)
         learned, hints = self._lines(now)
         attention = seek_hint(choose_attention(visible, now), visible, seek_faces=self._config.seek_faces)
@@ -1094,6 +1222,8 @@ class PeopleAdapters:
         self._published = snapshot
         self._last_publish = now
         self._snapshot_pub.publish(String(data=json.dumps(snapshot)))
+        if not consume:
+            return
         with self._lock:
             self._learned.clear()  # the "learned:" line is shown once (decision 7)
 
@@ -1101,8 +1231,12 @@ class PeopleAdapters:
         learned, hints = self._lines(now)
         events = self._events.emit(tracks, now, enrolled=enrolled, learned=learned, hints=hints)
         with self._lock:
-            while self._pending_events:
-                events.append(self._pending_events.popleft())
+            recalls = list(self._pending_recalls)
+            self._pending_recalls.clear()
+        for recall in recalls:
+            event = self._events.recalled(recall.person_id, recall.name, recall.text, recall.stamp)
+            if event is not None:
+                events.append(event)
         for event in events:
             self._events_pub.publish(String(data=json.dumps(event)))
 
@@ -1179,10 +1313,9 @@ class PeopleAdapters:
             except queue.Empty:
                 return
             answer = scribe.recall(person_id, question)
-            event = self._events.recalled(person_id, self._store.name_of(person_id), answer, time.time())
-            if event is not None:
-                with self._lock:
-                    self._pending_events.append(event)
+            recall = Recall(person_id, self._store.name_of(person_id), answer, time.time())
+            with self._lock:
+                self._pending_recalls.append(recall)
 
     def _run_descriptions(self) -> None:
         if self._transport is None:

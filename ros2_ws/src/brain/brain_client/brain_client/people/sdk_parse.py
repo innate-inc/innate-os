@@ -59,11 +59,17 @@ class RecentPerson:
 
 @dataclass(frozen=True)
 class PeopleView:
-    """One parsed snapshot: who is in view, and who was seen before them."""
+    """One parsed snapshot: who is in view, and who was seen before them.
+
+    ``frame_stamp_ns`` names the frame the boxes were measured on, as the
+    decimal string the node published; a mutation quotes it back as the
+    snapshot it was decided on (RFC section 8).
+    """
 
     stamp: float = 0.0
     people: tuple[PersonInView, ...] = ()
     recent: tuple[RecentPerson, ...] = ()
+    frame_stamp_ns: str = ""
 
     def is_fresh(self, now: float) -> bool:
         return self.stamp > 0.0 and now - self.stamp <= SNAPSHOT_FRESH_SEC
@@ -120,6 +126,7 @@ def parse_snapshot(json_text: str) -> PeopleView:
         stamp=_as_float(payload.get("stamp")) or 0.0,
         people=_people(payload.get("people")),
         recent=_recent(payload.get("recent")),
+        frame_stamp_ns=_as_str(payload.get("frame_stamp_ns")) or "",
     )
 
 

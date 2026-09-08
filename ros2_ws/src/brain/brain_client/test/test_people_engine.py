@@ -32,13 +32,22 @@ from brain_client.people.backends import (
 )
 from brain_client.people.engine import EngineConfig, PeopleEngine
 from brain_client.people.geometry import CameraModel
-from brain_client.people.quality import EgoMotion
+from brain_client.people.quality import FACE_MIN_MATCH_REAL_PX, EgoMotion
 from brain_client.people.resolve import Resolution, Resolver
-from brain_client.people.types import Detection, FaceTemplate, HealthDict, HealthState, IdentityState, Pose
+from brain_client.people.types import (
+    Detection,
+    FaceObservation,
+    FaceTemplate,
+    HealthDict,
+    HealthState,
+    IdentityState,
+    Pose,
+)
 
 FRAME_SIZE = (480, 640)
 NATIVE_SIZE = (720, 2560)
 PERSON = (0.20, 0.36, 0.86, 0.52)
+FAR_PERSON = (0.30, 0.44, 0.452, 0.478)  # far enough that the face is 42 native-equivalent pixels
 
 
 class FakeRoster:
@@ -120,6 +129,18 @@ class RecordingLocator(CenterFaceLocator):
     def locate(self, crop_bgr: np.ndarray):
         self.crop_heights.append(crop_bgr.shape[0])
         return super().locate(crop_bgr)
+
+
+class RecordingResolver(Resolver):
+    """Keeps every face observation the engine judged worth handing over."""
+
+    def __init__(self, roster) -> None:
+        super().__init__(roster)
+        self.faces: list[FaceObservation] = []
+
+    def observe_face(self, tag: str, observation: FaceObservation) -> None:
+        self.faces.append(observation)
+        super().observe_face(tag, observation)
 
 
 class SplitOnceResolver(Resolver):
@@ -360,6 +381,36 @@ def test_the_native_buffer_gives_the_locator_far_more_pixels():
     published_crop = locator.crop_heights[-1]
     engine.tick(scene(), native_jpeg(), 100.25, still(100.25))
     assert locator.crop_heights[-1] > published_crop
+
+
+def _far_person(*, native: bool) -> tuple:
+    """One tick on someone whose face is 42 native-equivalent pixels: 21 real
+    ones out of the published 640x360 frame, 42 out of the native crop."""
+    roster = FakeRoster()
+    resolver = RecordingResolver(roster)
+    engine, _detector, _roster = build(boxes=[[FAR_PERSON]], roster=roster, resolver=resolver)
+    native_buffer = native_jpeg(FAR_PERSON) if native else None
+    states = engine.tick(scene(FAR_PERSON), native_buffer, 100.0, still(100.0))
+    return states[0], resolver.faces
+
+
+def test_a_face_cropped_from_the_published_frame_is_detect_only():
+    """RFC section 9: with the native topic gone the face range is 1.3 m. The
+    box is the same in both paths, so the native-equivalent size cannot tell
+    them apart — only the pixels the crop really carried can."""
+    state, faces = _far_person(native=False)
+    assert state.frames_with_face == 1 and state.head_box is not None
+    assert (state.head_box[2] - state.head_box[0]) * 360 == pytest.approx(21.0, abs=1.0)
+    assert faces == []  # it keeps the track alive; it says nothing about who
+
+
+def test_the_same_face_out_of_the_native_crop_carries_enough_pixels_to_match():
+    state, faces = _far_person(native=True)
+    assert state.frames_with_face == 1
+    (observation,) = faces
+    assert observation.real_px == pytest.approx(observation.size_px)
+    assert observation.real_px >= FACE_MIN_MATCH_REAL_PX
+    assert observation.embedding is not None
 
 
 def test_native_health_is_unavailable_until_the_topic_arrives():

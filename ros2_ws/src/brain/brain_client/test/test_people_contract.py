@@ -421,6 +421,7 @@ def test_a_model_upgrade_starts_a_new_template_space_rather_than_comparing_acros
                 stamp=NOW + step,
                 box=(0.2, 0.4, 0.8, 0.55),
                 size_px=64.0,
+                real_px=64.0,
                 yaw_deg=0.0,
                 pitch_deg=0.0,
                 sharpness=200.0,

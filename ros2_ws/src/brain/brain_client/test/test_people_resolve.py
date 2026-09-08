@@ -149,6 +149,7 @@ def face(
         stamp=stamp,
         box=box,
         size_px=size_px,
+        real_px=size_px,  # these come off the native crop, where the two are one measurement
         yaw_deg=yaw,
         pitch_deg=pitch,
         sharpness=200.0,
@@ -428,7 +429,7 @@ def test_face_templates_of_a_different_model_are_never_compared():
 
 def test_a_face_observation_without_an_embedding_says_nothing():
     resolver = Resolver(roster_with())
-    resolver.observe_face("P1", FaceObservation(100.0, BOX, 64.0, 0.0, 0.0, 200.0, 130.0, 1.0, "", None))
+    resolver.observe_face("P1", FaceObservation(100.0, BOX, 64.0, 64.0, 0.0, 0.0, 200.0, 130.0, 1.0, "", None))
     resolver.resolve([FakeTrack(last_seen=100.0)], 100.0)
     assert resolver.identity("P1").state is IdentityState.UNKNOWN
 

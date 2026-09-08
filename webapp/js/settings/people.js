@@ -53,25 +53,30 @@ export function getPeopleRequest() {
   return { include_roster: true, include_thumbnails: true };
 }
 
+// Every mutation below carries the two optional .srv fields empty. The card acts
+// on the person ids the roster listed, never on a live tag, so there is no
+// snapshot to have decided on; and a mutation only leaves here on a click that
+// is followed by a fresh GetPeople, so a retry key would never be spent.
+
 /**
  * RenamePerson. `who` is a person id here (the card never renames a live tag),
  * and `source` records the consent path stored with the profile.
  * @param {string} who @param {string} name
  */
 export function renamePersonRequest(who, name) {
-  return { who, name, source: PEOPLE_RENAME_SOURCE_APP };
+  return { who, name, source: PEOPLE_RENAME_SOURCE_APP, idempotency_key: "", decided_on_stamp_ns: "" };
 }
 
 /** MergePeople: fold `sourceId` into `targetId`, keeping the target's identity.
  * @param {string} sourceId @param {string} targetId */
 export function mergePeopleRequest(sourceId, targetId) {
-  return { source_id: sourceId, target_id: targetId };
+  return { source_id: sourceId, target_id: targetId, idempotency_key: "", decided_on_stamp_ns: "" };
 }
 
 /** ForgetPerson: delete everything about them and tombstone the id.
  * @param {string} who */
 export function forgetPersonRequest(who) {
-  return { who };
+  return { who, idempotency_key: "", decided_on_stamp_ns: "" };
 }
 
 /** SetPeopleCollection: the "never collect" preference.

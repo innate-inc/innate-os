@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from brain_messages.srv import ForgetPerson, RenamePerson
@@ -95,6 +96,7 @@ class People:
         episodes, thumbnails — and tombstone their id. Irreversible."""
         request = ForgetPerson.Request()
         request.who = str(who)
+        self._decide(request)
         return self._call(self._forget_client, request, FORGET_SERVICE)
 
     def rename(self, who: str, name: str) -> tuple[bool, str]:
@@ -104,7 +106,16 @@ class People:
         request.who = str(who)
         request.name = str(name)
         request.source = RENAME_SOURCE
+        self._decide(request)
         return self._call(self._rename_client, request, RENAME_SERVICE)
+
+    def _decide(self, request: Any) -> None:
+        """RFC section 8: a mutation names the snapshot it was decided on, so a
+        tag issued after it fails instead of landing on a stranger, and carries
+        a key of its own, so a reply lost on the way back costs a repeat and not
+        a second deletion."""
+        request.idempotency_key = str(uuid.uuid4())
+        request.decided_on_stamp_ns = self._view().frame_stamp_ns
 
     def _view(self) -> PeopleView:
         with self._lock:

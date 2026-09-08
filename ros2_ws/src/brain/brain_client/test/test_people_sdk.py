@@ -16,9 +16,10 @@ import importlib.util
 import json
 import logging
 import sys
+import uuid
 from collections.abc import MutableSequence
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -89,6 +90,7 @@ from innate_skills.people import approach_person as approach  # noqa: E402 — n
 from innate_skills.people.approach_person import ApproachPerson  # noqa: E402 — needs the stubs above
 from innate_skills.people.forget_person import ForgetPerson  # noqa: E402 — needs the stubs above
 
+from brain_client.robot.people import People  # noqa: E402 — needs the stubs above
 from brain_client.skills.types import (  # noqa: E402 — needs the stubs above
     InterfaceType,
     SkillCancelled,
@@ -180,6 +182,12 @@ def test_parse_reads_a_whole_snapshot():
     assert ana.state is IdentityState.POSSIBLE and ana.head_bbox is None
     (marc,) = view.recent
     assert (marc.person_id, marc.name, marc.map_name) == ("person_11aa22bb", "Marc", "home")
+
+
+def test_parse_keeps_the_frame_stamp_the_boxes_were_measured_on():
+    """The stamp a mutation quotes back as the snapshot it was decided on."""
+    assert parse_snapshot(SNAPSHOT_TEXT).frame_stamp_ns == "1788818400123456789"
+    assert parse_snapshot(json.dumps({"stamp": NOW, "people": []})).frame_stamp_ns == ""
 
 
 def test_parse_drops_lost_tracks():
@@ -281,6 +289,52 @@ def test_a_snapshot_is_only_fresh_while_the_engine_keeps_confirming_it():
     assert view.is_fresh(NOW) and view.is_fresh(NOW + SNAPSHOT_FRESH_SEC)
     assert not view.is_fresh(NOW + SNAPSHOT_FRESH_SEC + 0.1)
     assert not EMPTY_VIEW.is_fresh(NOW)
+
+
+# ---------- the mutations a skill makes ----------
+
+
+def _people_interface() -> People:
+    """The real interface around a mock node: every ROS call is recorded."""
+    node = MagicMock()
+    node.create_client.side_effect = lambda *args, **kwargs: MagicMock()
+    people = People(node, logging.getLogger("test_people_sdk"))
+    people._on_snapshot(SimpleNamespace(data=SNAPSHOT_TEXT))
+    return people
+
+
+def test_a_mutation_says_which_snapshot_it_was_decided_on():
+    """RFC section 8: the node refuses a tag issued after the snapshot the
+    caller was looking at rather than acting on whoever holds it now."""
+    people = _people_interface()
+
+    assert people.forget("P3")[0]
+    forget = people._forget_client.call_async.call_args.args[0]
+    assert forget.who == "P3"
+    assert forget.decided_on_stamp_ns == SNAPSHOT["frame_stamp_ns"]
+
+    people.rename("P3", "Theo")
+    rename = people._rename_client.call_async.call_args.args[0]
+    assert rename.decided_on_stamp_ns == SNAPSHOT["frame_stamp_ns"]
+
+
+def test_every_mutation_carries_its_own_retry_key():
+    people = _people_interface()
+    request = people._forget_client.call_async
+
+    people.forget("P3")
+    first = request.call_args.args[0].idempotency_key
+    people.forget("P3")
+    second = request.call_args.args[0].idempotency_key
+    assert uuid.UUID(first).version == 4 and first != second
+
+
+def test_a_mutation_before_the_first_snapshot_claims_no_decision():
+    node = MagicMock()
+    node.create_client.side_effect = lambda *args, **kwargs: MagicMock()
+    people = People(node, logging.getLogger("test_people_sdk"))
+    people.forget("Ana")
+    assert people._forget_client.call_async.call_args.args[0].decided_on_stamp_ns == ""
 
 
 # ---------- the fakes the skills run against ----------

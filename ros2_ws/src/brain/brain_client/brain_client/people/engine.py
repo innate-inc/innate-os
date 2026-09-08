@@ -280,6 +280,7 @@ class PeopleEngine:
         hit = max(hits, key=lambda h: h.h)
         box = _hit_box(hit, origin, scale, source.shape[1], source.shape[0])
         size_px = (box[2] - box[0]) * native_camera.height
+        real_px = (box[2] - box[0]) * source.shape[0]
         if not quality.face_detectable(size_px):
             return
 
@@ -292,7 +293,7 @@ class PeopleEngine:
         yaw, pitch = pose_from_landmarks(hit.landmarks)
         sharpness = quality.crop_sharpness(upscaled)
         luminance = quality.crop_luminance(upscaled)
-        if not self._passes_face_gates(size_px, yaw, pitch, sharpness, luminance):
+        if not self._passes_face_gates(size_px, real_px, yaw, pitch, sharpness, luminance):
             return
         bucket = quality.pose_bucket(yaw, pitch)
         if not self._independence.accept(track.tag, now, box, bucket):
@@ -308,6 +309,7 @@ class PeopleEngine:
                 stamp=now,
                 box=box,
                 size_px=size_px,
+                real_px=real_px,
                 yaw_deg=yaw,
                 pitch_deg=pitch,
                 sharpness=sharpness,
@@ -315,14 +317,16 @@ class PeopleEngine:
                 quality=score,
                 model=embedder.model if embedder is not None else "",
                 embedding=embedding if embedding is not None and embedding.size else None,
-                thumbnail=self._thumbnail(upscaled, size_px, yaw, pitch),
+                thumbnail=self._thumbnail(upscaled, size_px, real_px, yaw, pitch),
             ),
         )
 
     @staticmethod
-    def _passes_face_gates(size_px: float, yaw: float, pitch: float, sharpness: float, luminance: float) -> bool:
+    def _passes_face_gates(
+        size_px: float, real_px: float, yaw: float, pitch: float, sharpness: float, luminance: float
+    ) -> bool:
         return (
-            quality.face_size_ok(size_px)
+            quality.face_size_ok(size_px, real_px=real_px)
             and quality.face_pose_ok(yaw, pitch)
             and quality.face_sharp_enough(sharpness, size_px)
             and quality.luminance_ok(luminance)
@@ -437,10 +441,10 @@ class PeopleEngine:
         return runtime
 
     @staticmethod
-    def _thumbnail(crop_bgr: np.ndarray, size_px: float, yaw: float, pitch: float) -> bytes | None:
+    def _thumbnail(crop_bgr: np.ndarray, size_px: float, real_px: float, yaw: float, pitch: float) -> bytes | None:
         """Only enrolment-grade crops are worth keeping; everything else would
         cost a JPEG encode per frame for a picture nobody stores."""
-        if not quality.face_size_ok(size_px, quality.Purpose.ENROL):
+        if not quality.face_size_ok(size_px, quality.Purpose.ENROL, real_px=real_px):
             return None
         if not quality.face_pose_ok(yaw, pitch, quality.Purpose.ENROL):
             return None

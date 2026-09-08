@@ -18,6 +18,7 @@ from brain_client.people.quality import (
     FACE_MIN_DETECT_PX,
     FACE_MIN_ENROL_PX,
     FACE_MIN_MATCH_PX,
+    FACE_MIN_MATCH_REAL_PX,
     HEAD_PITCH_EPS_DEG,
     LUMINANCE_MAX,
     LUMINANCE_MIN,
@@ -70,6 +71,23 @@ def test_matching_needs_forty_native_pixels_of_face():
 def test_enrolling_needs_more_face_than_matching():
     assert face_size_ok(FACE_MIN_ENROL_PX - 1, Purpose.MATCH)
     assert not face_size_ok(FACE_MIN_ENROL_PX - 1, Purpose.ENROL)
+
+
+def test_a_face_out_of_the_published_frame_needs_real_pixels_as_well():
+    """RFC section 9: with the native topic gone the face range is 1.3 m, not
+    2.5 m. ``size_px`` is native-equivalent whichever frame the crop came from,
+    so the gate also asks how many pixels the crop actually carried — a face of
+    42 native-equivalent pixels is 21 real ones in the published 640x360 frame,
+    and upscaling them does not put the detail back."""
+    assert not face_size_ok(FACE_MIN_MATCH_PX + 2.0, real_px=21.0)
+    assert not face_size_ok(FACE_MIN_MATCH_PX, real_px=FACE_MIN_MATCH_REAL_PX - 0.1)
+    assert face_size_ok(FACE_MIN_MATCH_PX, real_px=FACE_MIN_MATCH_REAL_PX)
+    assert face_size_ok(FACE_MIN_MATCH_PX)  # a native crop's pixels are its own size
+
+
+def test_enrolling_from_a_published_crop_needs_the_same_real_pixels():
+    assert not face_size_ok(FACE_MIN_ENROL_PX, Purpose.ENROL, real_px=FACE_MIN_MATCH_REAL_PX - 0.1)
+    assert face_size_ok(FACE_MIN_ENROL_PX, Purpose.ENROL, real_px=FACE_MIN_ENROL_PX)
 
 
 def test_body_matching_and_outfit_templates_have_different_floors():

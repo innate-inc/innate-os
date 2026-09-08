@@ -117,9 +117,12 @@ test("the request values are the ones the services are documented to take", () =
   assert.deepEqual(getPeopleRequest(), { include_roster: true, include_thumbnails: true });
   // "app" is the consent path stored with the profile — a name typed here is
   // the owner naming someone, not the person saying their own name.
-  assert.deepEqual(renamePersonRequest("P3", "Theo"), { who: "P3", name: "Theo", source: "app" });
-  assert.deepEqual(mergePeopleRequest("a", "b"), { source_id: "a", target_id: "b" });
-  assert.deepEqual(forgetPersonRequest("person_7f92a1b3"), { who: "person_7f92a1b3" });
+  // The card mutates the ids the roster listed, so it has no snapshot to have
+  // decided on, and its calls are single clicks with nothing to retry.
+  const decided = { idempotency_key: "", decided_on_stamp_ns: "" };
+  assert.deepEqual(renamePersonRequest("P3", "Theo"), { who: "P3", name: "Theo", source: "app", ...decided });
+  assert.deepEqual(mergePeopleRequest("a", "b"), { source_id: "a", target_id: "b", ...decided });
+  assert.deepEqual(forgetPersonRequest("person_7f92a1b3"), { who: "person_7f92a1b3", ...decided });
   assert.deepEqual(setCollectionRequest(false), { enabled: false });
 });
 

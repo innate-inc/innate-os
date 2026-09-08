@@ -10,7 +10,9 @@ instants — so every gate here is a veto, and what survives carries a weight
 
 Face sizes are always NATIVE pixels (the 1280x720 left eye); a measurement taken
 from the published 640x480 frame is converted before it gets here, or the gates
-would silently move with the frame path.
+would silently move with the frame path. That conversion is a claim about scale
+and not about detail, so the match gate also asks how many rows the crop really
+had (:data:`FACE_MIN_MATCH_REAL_PX`).
 
 PURE module: numpy and cv2 for the pixel measures, no ROS, no I/O.
 """
@@ -31,6 +33,12 @@ from brain_client.people.types import Box
 FACE_MIN_DETECT_PX = 24.0  # enough to say "a face, roughly there" (~3.5 m)
 FACE_MIN_MATCH_PX = 40.0  # ~2.5 m, the 10 px interpupillary floor for ArcFace-class models
 FACE_MIN_ENROL_PX = 48.0
+FACE_MIN_MATCH_REAL_PX = 25.0  # 10 px between the eyes on the un-squashed 640x360 frame: ~1.3 m (RFC 1.3)
+"""Rows the crop really carried, whichever frame it came from. A published crop
+is half the sensor's vertical resolution, so its 40 native-equivalent pixels are
+20 real ones and no upscale puts the detail back: this floor is what turns a
+missing native topic into RFC section 9's 1.3 m face range instead of a silent
+2.5 m claim."""
 FACE_MAX_YAW_MATCH_DEG = 45.0
 FACE_MAX_YAW_ENROL_DEG = 30.0
 # Pitch is signed positive when the face is seen from below, which is the pose
@@ -111,8 +119,12 @@ def face_detectable(size_px: float) -> bool:
     return size_px >= FACE_MIN_DETECT_PX
 
 
-def face_size_ok(size_px: float, purpose: Purpose = Purpose.MATCH) -> bool:
-    return size_px >= (FACE_MIN_ENROL_PX if purpose is Purpose.ENROL else FACE_MIN_MATCH_PX)
+def face_size_ok(size_px: float, purpose: Purpose = Purpose.MATCH, *, real_px: float | None = None) -> bool:
+    """Both floors: the native-equivalent height the thresholds are calibrated
+    on, and :data:`FACE_MIN_MATCH_REAL_PX` of the crop's own rows. ``real_px``
+    None is a native crop, where the two are the same measurement."""
+    native_floor = FACE_MIN_ENROL_PX if purpose is Purpose.ENROL else FACE_MIN_MATCH_PX
+    return size_px >= native_floor and (size_px if real_px is None else real_px) >= FACE_MIN_MATCH_REAL_PX
 
 
 def face_pose_ok(yaw_deg: float, pitch_deg: float, purpose: Purpose = Purpose.MATCH) -> bool:

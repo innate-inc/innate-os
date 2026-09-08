@@ -16,6 +16,7 @@ import importlib.abc
 import importlib.util
 import json
 import sys
+import threading
 import time
 from collections.abc import MutableSequence
 from dataclasses import replace
@@ -25,7 +26,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from brain_client.people.resolve import Resolution
+from brain_client.people.resolve import Resolution, Resolver
 from brain_client.people.scribe import Change, ChangeKind
 from brain_client.people.store import MAX_NAMED, MAX_UNNAMED, PeopleStore
 from brain_client.people.surfacing import PeopleEvents, build_snapshot
@@ -551,7 +552,7 @@ def test_every_declared_parameter_reaches_a_config_field():
 # ------------------------------------------------------- one tick, end to end
 
 
-def _adapters(store: PeopleStore, tmp_path, *, frames=None, scribe=None):
+def _adapters(store: PeopleStore, tmp_path, *, frames=None, scribe=None, resolver=None):
     """The real adapters around a real engine with scripted backends; the node
     itself is a mock, so every ROS call is recorded rather than made."""
     from brain_client.people.backends import Backends, FixedDetector
@@ -567,7 +568,7 @@ def _adapters(store: PeopleStore, tmp_path, *, frames=None, scribe=None):
         health={"face_model": "unavailable", "body_model": "unavailable", "gpu": "none"},
     )
     engine_config = EngineConfig()
-    engine = PeopleEngine(backends, store, config=engine_config)
+    engine = PeopleEngine(backends, store, config=engine_config, resolver=resolver)
     return na.PeopleAdapters(
         MagicMock(),
         na.PeopleNodeConfig(scribe=False, simulator_mode=True),
@@ -721,9 +722,11 @@ def test_an_idle_node_still_latches_its_health(store, tmp_path):
 
 
 def _served(adapters, handler_name: str, **request):
-    """One service call against the real handler, with the .srv's own fields."""
+    """One service call against the real handler, with the .srv's own fields —
+    the two optional ones empty unless the test is about them."""
+    fields = {"idempotency_key": "", "decided_on_stamp_ns": "", **request}
     response = SimpleNamespace(success=False, message="", json="", person_id="")
-    return getattr(adapters, handler_name)(SimpleNamespace(**request), response)
+    return getattr(adapters, handler_name)(SimpleNamespace(**fields), response)
 
 
 def test_the_tag_counter_is_persisted_so_a_respawn_does_not_reissue_p1(store, tmp_path):
@@ -834,3 +837,207 @@ def test_a_learned_name_is_shown_once_and_then_cleared(store, tmp_path):
     adapters._sensors._frame = na.CameraFrame(na.stamp_ns(3, 0), bytes(buffer))
     adapters._tick(now + 2.0)
     assert json.loads(na.String.call_args.kwargs["data"])["people"][0]["learned"] is None
+
+
+def test_a_tick_with_no_frame_leaves_the_learned_line_for_the_tick_that_wakes_the_brain(store, tmp_path):
+    """Shown once means published once *with* its wake event. A tick that found
+    no frame publishes no events at all, so consuming the line there loses the
+    "P1 = Ana from here on" the brain was supposed to hear about."""
+    pytest.importorskip("cv2")
+    adapters = _adapters(store, tmp_path)
+    jpeg = _jpeg()
+    adapters._sensors.brain_active = True
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), jpeg)
+    now = time.time()
+    adapters._tick(now)
+    line = 'P1 said "I\'m Ana" — P1 = Ana from here on'
+    adapters._apply_changes([Change(ChangeKind.NAME, "P1", None, line)])
+
+    adapters._tick(now + 1.0)  # no frame arrived; the engine measured nothing
+    assert adapters._learned == {"P1": line}
+
+    na.String.reset_mock()
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), jpeg)
+    adapters._tick(now + 2.0)
+    published = [json.loads(call.kwargs["data"]) for call in na.String.call_args_list]
+    assert any(payload.get("kind") == "name_learned" for payload in published)
+    assert published[-1]["people"][0]["learned"] == line
+    assert adapters._learned == {}
+
+
+class _RecordingEvents(PeopleEvents):
+    """Every use of the shared cooldown state, with the thread that made it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.threads: list[str] = []
+
+    def emit(self, tracks, now, *, enrolled=None, learned=None, hints=None):
+        self.threads.append(threading.current_thread().name)
+        return super().emit(tracks, now, enrolled=enrolled, learned=learned, hints=hints)
+
+    def recalled(self, person_id, name, text, now):
+        self.threads.append(threading.current_thread().name)
+        return super().recalled(person_id, name, text, now)
+
+
+def test_a_deep_recall_crosses_to_the_engine_thread_as_data(store, tmp_path):
+    """PeopleEvents keeps its per-person cooldowns in dicts it reads and then
+    writes, so one thread owns it: the scribe hands its answer over as data and
+    the tick that publishes the events decides whether it is one."""
+    pytest.importorskip("cv2")
+    ana = enrol(store, "Ana")
+    adapters = _adapters(store, tmp_path)
+    adapters._events = _RecordingEvents()
+    scribe = SimpleNamespace(recall=lambda person_id, question: "Ana asked for the blue socks.")
+    adapters._recalls.put((ana, "what did Ana ask for?"))
+
+    scribe_thread = threading.Thread(target=adapters._run_recalls, args=(scribe,), name="people_scribe")
+    scribe_thread.start()
+    scribe_thread.join()
+    assert [recall.text for recall in adapters._pending_recalls] == ["Ana asked for the blue socks."]
+
+    adapters._sensors.brain_active = True
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    na.String.reset_mock()
+    adapters._tick(time.time())
+
+    published = [json.loads(call.kwargs["data"]) for call in na.String.call_args_list]
+    recalled = [payload for payload in published if payload.get("kind") == "recalled"]
+    assert len(recalled) == 1 and recalled[0]["text"].startswith("Recalled about Ana")
+    assert set(adapters._events.threads) == {threading.current_thread().name}
+
+
+class _RecordingResolver(Resolver):
+    """The engine's resolver, with a note of who asked it to forget a tag."""
+
+    def __init__(self, roster) -> None:
+        super().__init__(roster)
+        self.forgotten: list[str] = []
+
+    def forget(self, tag: str) -> None:
+        self.forgotten.append(tag)
+        super().forget(tag)
+
+
+def test_forgetting_someone_suppresses_their_track_on_the_engine_thread(store, tmp_path):
+    """The resolver belongs to the engine thread. A service handler that reached
+    into it would be dropping beliefs while ``resolve()`` walks them, so the tag
+    is queued and the next tick applies it."""
+    pytest.importorskip("cv2")
+    ana = enrol(store, "Ana")
+    resolver = _RecordingResolver(store)
+    adapters = _adapters(store, tmp_path, resolver=resolver)
+    adapters._sensors.brain_active = True
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    now = time.time()
+    adapters._tick(now)
+    tracked = adapters.tracks()[0]
+    with adapters._lock:
+        adapters._tracks = (replace(tracked, identity=Identity(state=IdentityState.FAMILIAR, person_id=ana)),)
+
+    assert _served(adapters, "_svc_forget", who=ana).success
+    assert resolver.forgotten == []
+
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), _jpeg())
+    adapters._tick(now + 1.0)
+    assert resolver.forgotten == ["P1"]
+
+
+# ------------------------------------------------- idempotency and staleness
+
+
+def test_a_retried_mutation_is_answered_from_the_first_call(store, tmp_path):
+    """RFC section 8: a mutation carries an idempotency key, and a retry — a
+    dropped reply, a second tap on the Settings page — gets the first answer
+    back rather than writing again."""
+    ana = enrol(store)
+    adapters = _adapters(store, tmp_path)
+
+    first = _served(adapters, "_svc_rename", who=ana, name="Ana", source="app", idempotency_key="k1")
+    assert first.success and first.person_id == ana and store.name_of(ana) == "Ana"
+
+    store.rename(ana, "Theo", "app")  # somebody named them again in between
+    repeat = _served(adapters, "_svc_rename", who=ana, name="Ana", source="app", idempotency_key="k1")
+    assert repeat.success and repeat.person_id == ana
+    assert store.name_of(ana) == "Theo"  # the retry answered, it did not write
+
+
+def test_a_mutation_without_a_key_is_always_a_fresh_mutation(store, tmp_path):
+    ana = enrol(store)
+    adapters = _adapters(store, tmp_path)
+    assert _served(adapters, "_svc_rename", who=ana, name="Ana", source="app").success
+    store.rename(ana, "Theo", "app")
+    assert _served(adapters, "_svc_rename", who=ana, name="Ana", source="app").success
+    assert store.name_of(ana) == "Ana"
+
+
+def test_the_node_remembers_the_last_keys_and_forgets_the_ones_before_them():
+    log = na.MutationLog(limit=2)
+    log.remember("k1", na.MutationResult(True, "", "person_a"))
+    assert log.answered("k1") == na.MutationResult(True, "", "person_a")
+    assert log.answered("k2") is None
+
+    log.remember("", na.MutationResult(True, "", ""))
+    assert log.answered("") is None  # no key, nothing to answer from
+
+    log.remember("k2", na.MutationResult(True, "", ""))
+    log.remember("k3", na.MutationResult(True, "", ""))
+    assert log.answered("k1") is None and log.answered("k3") is not None
+
+
+def test_a_tag_issued_after_the_snapshot_the_caller_decided_on_is_a_different_question():
+    tracks = [track(tag="P3")]  # first seen 40 s ago
+    decided_before = str(int((NOW - 60.0) * 1e9))
+    decided_after = str(int((NOW - 10.0) * 1e9))
+    assert na.tag_newer_than_decision("P3", tracks, decided_before)
+    assert not na.tag_newer_than_decision("P3", tracks, decided_after)
+    assert not na.tag_newer_than_decision("P3", tracks, "")  # no stamp, no check
+    assert not na.tag_newer_than_decision("P3", tracks, "not a stamp")
+    assert not na.tag_newer_than_decision("person_7f92a1b3", tracks, decided_before)  # an id is not a tag
+    assert not na.tag_newer_than_decision("P9", tracks, decided_before)
+
+
+def test_a_track_born_on_the_frame_the_caller_decided_on_is_still_that_track():
+    """The header stamp is the capture; the tracker's clock starts when the tick
+    that decoded that frame ran, a camera latency later."""
+    tracks = [track(tag="P3")]
+    assert not na.tag_newer_than_decision("P3", tracks, str(int((NOW - 40.05) * 1e9)))
+
+
+def test_forgetting_a_tag_from_a_snapshot_that_predates_it_says_to_look_again(store, tmp_path):
+    pytest.importorskip("cv2")
+    ana = enrol(store, "Ana")
+    adapters = _adapters(store, tmp_path)
+    adapters._sensors.brain_active = True
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    now = time.time()
+    adapters._tick(now)
+    tracked = adapters.tracks()[0]
+    with adapters._lock:
+        adapters._tracks = (replace(tracked, identity=Identity(state=IdentityState.FAMILIAR, person_id=ana)),)
+
+    stale = str(int((tracked.first_seen - 30.0) * 1e9))
+    answer = _served(adapters, "_svc_forget", who="P1", decided_on_stamp_ns=stale)
+    assert not answer.success and "look again" in answer.message
+    assert store.person_ids() == [ana]
+
+    assert _served(adapters, "_svc_forget", who="P1").success  # no stamp, no check
+    assert store.person_ids() == []
+
+
+def test_merging_checks_both_tags_against_the_snapshot_they_were_chosen_on(store, tmp_path):
+    pytest.importorskip("cv2")
+    ana, theo = enrol(store, "Ana"), enrol(store, "Theo")
+    adapters = _adapters(store, tmp_path)
+    adapters._sensors.brain_active = True
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._tick(time.time())
+    tracked = adapters.tracks()[0]
+    with adapters._lock:
+        adapters._tracks = (replace(tracked, identity=Identity(state=IdentityState.FAMILIAR, person_id=theo)),)
+
+    stale = str(int((tracked.first_seen - 30.0) * 1e9))
+    answer = _served(adapters, "_svc_merge", source_id=ana, target_id="P1", decided_on_stamp_ns=stale)
+    assert not answer.success and "look again" in answer.message
+    assert sorted(store.person_ids()) == sorted([ana, theo])

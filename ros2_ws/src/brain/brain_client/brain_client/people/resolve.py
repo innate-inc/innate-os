@@ -638,7 +638,7 @@ class Resolver:
         thresholds: FaceThresholds,
         best_similarity: float,
     ) -> None:
-        if not quality.face_size_ok(observation.size_px, quality.Purpose.ENROL):
+        if not quality.face_size_ok(observation.size_px, quality.Purpose.ENROL, real_px=observation.real_px):
             return
         if not quality.face_pose_ok(observation.yaw_deg, observation.pitch_deg, quality.Purpose.ENROL):
             return
