@@ -134,6 +134,7 @@ class Identity:
     evidence: tuple[Evidence, ...] = ()
     runner_up_id: str | None = None
     runner_up_confidence: float = 0.0
+    runner_up_name: str | None = None  # for the conflict wording "unsure (Theo or Ana)"
 
 
 @dataclass(frozen=True)
@@ -282,6 +283,7 @@ class PersonInViewDict(TypedDict, total=False):
     state: str
     evidence: list[str]
     confidence: float
+    runner_up_name: str | None
     bbox: list[int]
     head_bbox: list[int] | None
     range_m: float | None

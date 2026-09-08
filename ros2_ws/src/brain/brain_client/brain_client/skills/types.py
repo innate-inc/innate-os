@@ -187,6 +187,7 @@ class InterfaceType(Enum):
     MOBILITY = "mobility"
     HEAD = "head"
     MEMORY = "memory"
+    PEOPLE = "people"
 
 
 class SkillStorage:
@@ -508,6 +509,7 @@ def _feed_specs() -> "tuple[_FeedSpec, ...]":
     from brain_client.robot.head import Head
     from brain_client.robot.manipulation import Manipulation
     from brain_client.robot.mobility import Mobility
+    from brain_client.robot.people import People
     from brain_client.robot.spatial_memory import SpatialMemory
     from brain_client.state.arm import Arm
     from brain_client.state.battery import Battery
@@ -526,6 +528,7 @@ def _feed_specs() -> "tuple[_FeedSpec, ...]":
         _FeedSpec(Mobility, Interface, InterfaceType.MOBILITY, "Mobility", ("mobility",)),
         _FeedSpec(Head, Interface, InterfaceType.HEAD, "Head", ("head",)),
         _FeedSpec(SpatialMemory, Interface, InterfaceType.MEMORY, "SpatialMemory", ("memory",)),
+        _FeedSpec(People, Interface, InterfaceType.PEOPLE, "People", ("people",)),
         # cameras start per run (and sim renders on demand) — longer grace
         _FeedSpec(MainImage, Camera, main, "MainImage", ("image", "main_image"), "main camera", grace_s=3.0),
         _FeedSpec(WristImage, Camera, wrist, "WristImage", ("wrist_image",), "wrist camera", grace_s=3.0),

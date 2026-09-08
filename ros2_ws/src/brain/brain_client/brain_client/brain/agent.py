@@ -29,7 +29,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from brain_client.brain import grounding
+from brain_client.brain import grounding, overlay, people_context
 from brain_client.brain.context import Decision, GeminiContext, ToolCall
 from brain_client.brain.loop import LoopThread
 from brain_client.brain.prompt import build_system_prompt, self_reference_turns
@@ -57,10 +57,12 @@ if TYPE_CHECKING:
 
     from brain_client.core.config import BrainConfig
     from brain_client.core.state import BrainState, RunningSkill
+    from brain_client.people.types import PeopleSnapshotDict
     from brain_client.perception.battery import BatteryMonitor
     from brain_client.perception.camera import CameraCapture
     from brain_client.perception.gaze_control import GazeController
     from brain_client.perception.identity import IdentityMonitor
+    from brain_client.perception.people_feed import PeopleFeed
     from brain_client.perception.pose import Pose
     from brain_client.perception.pose_tracking import PoseTracker
     from brain_client.perception.scan_health import ScanHealthMonitor
@@ -76,6 +78,8 @@ _MAX_EVENT_IMAGES = 4  # newest event images sent per turn; older ones arrive as
 _MAX_RERUNS = 2  # nonstop user speech cannot starve the loop
 _EVENT_TURN_GAP = 1.0  # floor between event-driven turns (feedback chatter); user speech skips it
 _DROP_EVENTS_AFTER = 3  # failed turns before the peeked events are dropped (the batch may be the poison)
+_PEOPLE_FRESH_SEC = 2.0  # older, and the snapshot's boxes describe a scene the frame no longer shows
+_PEOPLE_CONTEXT_ENTRIES = 6  # chat entries the people block ranks its facts against
 
 
 class BrainAgent:
@@ -91,6 +95,7 @@ class BrainAgent:
         roster: SkillRoster,
         chat: ChatManager,
         gaze: GazeController,
+        people_feed: PeopleFeed | None = None,
         proxy: ProxyClient | None = None,
         scan_health: ScanHealthMonitor | None = None,
         battery: BatteryMonitor | None = None,
@@ -109,6 +114,7 @@ class BrainAgent:
         self._roster = roster
         self._chat = chat
         self._gaze = gaze
+        self._people = people_feed  # None when the people node is not part of this build
         self._trace_sink = trace  # publishes one JSON string per event on /brain/trace
         self._on_thinking_changed = on_thinking_changed
         self._lidar = ScanHealthReporter(
@@ -436,7 +442,8 @@ class BrainAgent:
         are latest-only in history (the wrist camera).
         """
         self._pose_at_capture = self._pose.current_pose_xyt()
-        frame = self._camera.fresh_frame(_FRESH_FRAME_SEC)  # (jpeg, head pitch at frame arrival)
+        snapshot = self._people.latest() if self._people is not None else None
+        frame, boxes_drawn = self._head_frame(snapshot)  # (jpeg, head pitch at frame arrival)
         head_jpeg = self._frame_at_capture = frame[0] if frame is not None else None
         self._pitch_at_capture = frame[1] if frame is not None else 0.0
         arm_jpeg = self._camera.fresh_arm_jpeg(_FRESH_FRAME_SEC)
@@ -455,8 +462,45 @@ class BrainAgent:
             running_skill=running.primitive_name if running else None,
             events=events,
             has_wrist_frame=arm_jpeg is not None,
+            people_text=self._people_text(snapshot, events, boxes_drawn),
         )
         return text, frames
+
+    def _head_frame(self, snapshot: PeopleSnapshotDict | None) -> tuple[tuple[bytes, float] | None, bool]:
+        """The head frame the model will see, and whether it carries the boxes.
+
+        Pairing is exact or absent: the tags may only be drawn on the very
+        frame the people engine measured them on, so a snapshot naming a frame
+        the ring no longer holds falls back to the freshest frame with nothing
+        drawn (and the block says so).
+        """
+        drawn = self._drawn_frame(snapshot)
+        if drawn is not None:
+            return drawn, True
+        return self._camera.fresh_frame(_FRESH_FRAME_SEC), False
+
+    def _drawn_frame(self, snapshot: PeopleSnapshotDict | None) -> tuple[bytes, float] | None:
+        if snapshot is None or not snapshot.get("people"):
+            return None
+        if time.time() - float(snapshot.get("stamp") or 0.0) > _PEOPLE_FRESH_SEC:
+            return None
+        stamp_ns = people_context.frame_stamp_ns(snapshot)
+        if stamp_ns is None:
+            return None
+        frame = self._camera.frame_for_stamp(stamp_ns, _FRESH_FRAME_SEC)
+        if frame is None:
+            return None
+        drawn = overlay.draw_people(frame[0], snapshot)
+        if drawn is None or drawn is frame[0]:
+            return None  # undecodable, or nothing drawable: the block must not claim boxes
+        return drawn, frame[1]
+
+    def _people_text(self, snapshot: PeopleSnapshotDict | None, events: list[Event], boxes_drawn: bool) -> str | None:
+        if snapshot is None:
+            return None
+        recent = self._chat.history[-_PEOPLE_CONTEXT_ENTRIES:]
+        conversation = [(str(entry.get("sender", "")), str(entry.get("text", ""))) for entry in recent]
+        return people_context.render(snapshot, [event.text for event in events], conversation, time.time(), boxes_drawn)
 
     def _now(self) -> datetime:
         """Wall clock as an aware datetime, so the status line can name the zone."""

@@ -21,6 +21,7 @@ class EventKind(StrEnum):
     INFO = "info"
     USER = "user"
     MOTION = "motion"
+    PEOPLE = "people"
 
 
 @dataclass(frozen=True)
@@ -92,10 +93,12 @@ def observation_text(
     running_skill: str | None,
     events: list[Event],
     has_wrist_frame: bool,
+    people_text: str | None = None,
 ) -> str:
-    """The text half of a turn input: robot status and new events. Running-skill
-    guidance rides the system instruction, not here — stored per turn it would
-    be re-billed in every history entry (see brain/prompt.py)."""
+    """The text half of a turn input: robot status, who is in view, and new
+    events. Running-skill guidance rides the system instruction, not here —
+    stored per turn it would be re-billed in every history entry (see
+    brain/prompt.py)."""
     status = f"[{clock_text(now)} | t+{uptime_s}s]"
     if pose is not None:
         status += f" pose: x={pose[0]:.2f}m y={pose[1]:.2f}m heading={math.degrees(pose[2]):.0f}°"
@@ -104,6 +107,8 @@ def observation_text(
     if running_skill:
         status += f" | running skill: {running_skill}"
     lines = [status]
+    if people_text:
+        lines.append(people_text)
     lines += [f"- {event.text}" for event in events]
     if has_wrist_frame:
         lines.append("(second image is the arm wrist camera)")

@@ -5,12 +5,18 @@
 Starts/stops the (lazily imported) ``ROSPersonTracker`` based on brain-active state
 and whether the current directive opts into gaze, and pauses/resumes it around
 skill execution. The heavy tracker import is deferred so directives that don't use
-gaze never pay for it.
+gaze never pay for it, and the people feed is handed straight through: with the
+people node running, the tracker follows its attention instead of detecting faces
+of its own.
 """
 
 from __future__ import annotations
 
 import threading
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from brain_client.perception.people_feed import PeopleFeed
 
 
 def _tracker_class():
@@ -20,10 +26,11 @@ def _tracker_class():
 
 
 class GazeController:
-    def __init__(self, node, state):
+    def __init__(self, node, state, people: PeopleFeed | None = None):
         self._node = node
         self._logger = node.get_logger()
         self._state = state
+        self._people = people
         self._tracker = None
         # pause() runs on the agent's loop thread; everything else on the ROS
         # executor. RLock because update() calls stop().
@@ -37,7 +44,7 @@ class GazeController:
                 directive = None
             if directive is not None and self._tracker is None:
                 try:
-                    self._tracker = _tracker_class()(self._node)
+                    self._tracker = _tracker_class()(self._node, people=self._people)
                     self._tracker.start()
                     self._logger.info(f"👁️ Gaze tracker started for directive '{directive.id}'")
                 except Exception as e:

@@ -28,7 +28,8 @@ One rule covers interfaces, cameras and robot state: annotate what you read.
 ``arm: Arm``, ``map: Map``, ``joint_states: JointStates``,
 ``head_position: HeadState``, ``image: MainImage`` / ``WristImage`` /
 ``DepthMap``, ``mobility: Mobility``, ``head: Head``,
-``memory: SpatialMemory`` (recall over the robot's spatial memory). A plain annotation is
+``memory: SpatialMemory`` (recall over the robot's spatial memory),
+``people: People`` (who the robot can see, by tag or name). A plain annotation is
 guaranteed inside execute() — the server waits for the first value and fails
 the run up front if none arrives — so no None guards are needed; ``| None``
 (``head: Head | None``) makes it best effort instead, injected when available
@@ -108,6 +109,8 @@ __all__ = [
     "Map",
     "Mobility",
     "Odometry",
+    "People",
+    "PersonInView",
     "Pose",
     "RecallVerdict",
     "Skill",
@@ -128,9 +131,11 @@ __all__ = [
 # (PEP 562): `from innate import Mobility` imports them on first use only.
 # Type checkers can't follow __getattr__, so they read the imports below.
 if TYPE_CHECKING:
+    from brain_client.people.sdk_parse import PersonInView
     from brain_client.robot.head import Head
     from brain_client.robot.manipulation import Manipulation, Waypoint
     from brain_client.robot.mobility import Mobility
+    from brain_client.robot.people import People
     from brain_client.robot.spatial_memory import RecallVerdict, SpatialMemory
 
 _LAZY_INTERFACES = {
@@ -140,6 +145,8 @@ _LAZY_INTERFACES = {
     "Waypoint": ("brain_client.robot.manipulation", "Waypoint"),
     "SpatialMemory": ("brain_client.robot.spatial_memory", "SpatialMemory"),
     "RecallVerdict": ("brain_client.robot.spatial_memory", "RecallVerdict"),
+    "People": ("brain_client.robot.people", "People"),
+    "PersonInView": ("brain_client.people.sdk_parse", "PersonInView"),
 }
 
 

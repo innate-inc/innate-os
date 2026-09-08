@@ -31,6 +31,7 @@ from brain_client.perception.camera_provider import CameraProvider
 from brain_client.robot.head import Head
 from brain_client.robot.manipulation import Manipulation
 from brain_client.robot.mobility import Mobility
+from brain_client.robot.people import People
 from brain_client.robot.spatial_memory import SpatialMemory
 from brain_client.skills.catalog import SkillRepository
 from brain_client.skills.cli_bridge import SkillCliBridge, SkillCliGoalHandle
@@ -86,6 +87,7 @@ class SkillsActionServer(Node):
         self.mobility = Mobility(self, self.get_logger(), self.cmd_vel_topic)
         self.head = Head(self, self.get_logger(), self.head_position_topic)
         self.spatial_memory = SpatialMemory(self, self.get_logger())
+        self.people = People(self, self.get_logger())
 
         self.robot_state = RobotStateProvider(
             self,
@@ -94,6 +96,7 @@ class SkillsActionServer(Node):
             mobility=self.mobility,
             head=self.head,
             memory=self.spatial_memory,
+            people=self.people,
             head_current_position_topic=self.head_current_position_topic,
         )
 

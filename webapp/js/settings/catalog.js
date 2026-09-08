@@ -312,7 +312,7 @@ export const SETTINGS_PAGES = [
         title: "Sensing",
         note: "What the brain sees each turn. The camera figures ground a pointed pixel to a floor target, so they follow the hardware, not taste.",
         knobs: [
-          { path: ["brain_client_node", P, "vertical_fov"], label: "Camera vertical FOV", default: 80, type: "float", unit: "°", doc: "Camera vertical field of view" },
+          { path: ["brain_client_node", P, "vertical_fov"], label: "Camera vertical FOV", default: 84, type: "float", unit: "°", doc: "Camera vertical field of view" },
           { path: ["brain_client_node", P, "x_cam"], label: "Camera forward offset", default: 0.0197, type: "float", unit: "m", doc: "Camera forward offset from base_link" },
           { path: ["brain_client_node", P, "height_cam"], label: "Camera height", default: 0.19663, type: "float", unit: "m", doc: "Camera height above the floor" },
           { path: ["brain_client_node", P, "scan_stale_after_sec"], label: "Scan stale after", default: 10, type: "float", unit: "s", doc: "Seconds without a lidar scan before flagging stale" },

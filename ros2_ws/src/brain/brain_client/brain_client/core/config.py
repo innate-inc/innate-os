@@ -97,8 +97,12 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     "log_everything": False,
     "simulator_mode": False,
     # --- Camera geometry ---
-    "vertical_fov": 80.0,
+    # 2*atan(360/400.8) from the factory intrinsics (FY 267.3 = 400.8*480/720).
+    "vertical_fov": 84.0,
     "x_cam": 0.0197,
+    # The URDF puts the camera 0.26 m above the floor (head joint z 0.2588);
+    # this value is 6 cm lower and the two grounding paths disagree until
+    # somebody measures the real robot with a tape.
     "height_cam": 0.19663,
     # --- Local brain (Gemini) ---
     "gemini_model": "gemini-3.6-flash",

@@ -38,6 +38,7 @@ from brain_client.state.odometry import Odometry
 from brain_client.state.pose import Pose
 
 if TYPE_CHECKING:
+    from brain_client.robot.people import People
     from brain_client.robot.spatial_memory import SpatialMemory
 
 
@@ -51,6 +52,7 @@ class RobotStateProvider:
         mobility,
         head,
         memory: SpatialMemory,
+        people: People,
         head_current_position_topic: str,
     ):
         self._node = node
@@ -60,6 +62,7 @@ class RobotStateProvider:
         self._mobility = mobility
         self._head = head
         self._memory = memory
+        self._people = people
         self._head_current_position_topic = head_current_position_topic
 
         self.last_odom = None
@@ -132,6 +135,8 @@ class RobotStateProvider:
                 skill.inject_interface(interface_type, self._head)
             elif interface_type == InterfaceType.MEMORY:
                 skill.inject_interface(interface_type, self._memory)
+            elif interface_type == InterfaceType.PEOPLE:
+                skill.inject_interface(interface_type, self._people)
 
     # --- subscriptions ---
     def start_subscriptions(self) -> None:

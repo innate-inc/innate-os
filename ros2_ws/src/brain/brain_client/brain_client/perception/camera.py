@@ -9,6 +9,10 @@ one (a dead camera otherwise serves its last frame forever). The head pitch
 (degrees, negative = looking down) is tracked because the pixel->floor
 grounding needs the camera angle at frame-capture time.
 
+The last second of frames is kept, not just the newest one: the people engine
+analyses a frame off this same stream and names it by its header stamp, and its
+boxes may only be drawn on that exact frame (docs/rfc/people-memory.md 7).
+
 Also hosts the motion gate: a cheap frame-diff on the main camera that lets the
 brain wake for an immediate turn when the scene changes (someone walks in,
 waves) instead of waiting out its idle interval.
@@ -18,7 +22,9 @@ from __future__ import annotations
 
 import json
 import time
+from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -35,6 +41,20 @@ _MOTION_WINDOW = 4  # samples the debounce looks back over (~1s of frames)
 _MOTION_COOLDOWN_SEC = 10.0  # minimum gap between fires; sustained motion re-fires at this rate
 _MOTION_HEAD_PITCH_EPS = 0.8  # deg between samples; more means the head is moving, not the scene
 _DRIVE_SUPPRESS_SEC = 1.5  # after a nonzero cmd_vel: frames lag the command and blur outlasts the stop
+_RING_SEC = 1.5  # frame history kept for stamp pairing; the engine ticks at 5 Hz, ~300ms behind
+_RING_FRAMES = 12  # hard cap on the ring (~600 KB of JPEG at the 7.5 Hz publish rate)
+
+
+@dataclass(frozen=True)
+class _Frame:
+    """One captured frame: ``pitch`` is the head angle when it arrived (the
+    grounding geometry) and ``stamp_ns`` its ROS header stamp (the identity
+    every other consumer of this stream names it by)."""
+
+    arrival: float  # monotonic
+    jpeg: bytes
+    pitch: float
+    stamp_ns: int
 
 
 class _MotionGate:
@@ -103,9 +123,7 @@ class CameraCapture:
         self._arm_sub = None
         self._head_sub = None
         self._cmd_vel_sub = None
-        # (monotonic arrival time, jpeg, head pitch at arrival) — the pitch is
-        # stamped with the frame so grounding uses the geometry it was taken at.
-        self._image: tuple[float, bytes, float] | None = None
+        self._ring: deque[_Frame] = deque(maxlen=_RING_FRAMES)
         self._arm: tuple[float, bytes] | None = None
         self._last_drive = 0.0  # monotonic time of the last nonzero cmd_vel
         self.current_head_pitch = 0.0  # degrees; negative = looking down
@@ -143,16 +161,20 @@ class CameraCapture:
             if sub is not None:
                 self._node.destroy_subscription(sub)
         self._image_sub = self._arm_sub = self._head_sub = self._cmd_vel_sub = None
-        self._image = self._arm = None
+        self._ring.clear()
+        self._arm = None
         self._motion = _MotionGate()  # a restart must not diff against pre-stop frames
 
     def _on_image(self, msg: CompressedImage) -> None:
-        if msg.data:
-            self._image = (time.monotonic(), bytes(msg.data), self.current_head_pitch)
-            if self.on_motion is not None and self._motion.observe(
-                self._image[1], self.current_head_pitch, self.motion_suppressed()
-            ):
-                self.on_motion()
+        if not msg.data:
+            return
+        stamp = msg.header.stamp
+        frame = _Frame(time.monotonic(), bytes(msg.data), self.current_head_pitch, stamp.sec * 10**9 + stamp.nanosec)
+        self._ring.append(frame)
+        while len(self._ring) > 1 and frame.arrival - self._ring[0].arrival > _RING_SEC:
+            self._ring.popleft()
+        if self.on_motion is not None and self._motion.observe(frame.jpeg, frame.pitch, self.motion_suppressed()):
+            self.on_motion()
 
     def _on_arm(self, msg: CompressedImage) -> None:
         if msg.data:
@@ -180,20 +202,39 @@ class CameraCapture:
         return self._motion.consume_peak()
 
     def fresh_image_jpeg(self, max_age_sec: float) -> bytes | None:
-        return _fresh(self._image, max_age_sec)
+        frame = self._fresh_frame(max_age_sec)
+        return frame.jpeg if frame is not None else None
 
     def fresh_frame(self, max_age_sec: float) -> tuple[bytes, float] | None:
         """Newest main frame as (jpeg, head pitch at its arrival), or None if stale."""
-        frame = self._image
-        if frame is None or time.monotonic() - frame[0] > max_age_sec:
-            return None
-        return frame[1], frame[2]
+        frame = self._fresh_frame(max_age_sec)
+        return (frame.jpeg, frame.pitch) if frame is not None else None
+
+    def frame_for_stamp(self, stamp_ns: int, max_age_sec: float) -> tuple[bytes, float] | None:
+        """The ring frame with exactly this ROS header stamp, as (jpeg, head
+        pitch at its arrival), or None when it has aged out.
+
+        The match is exact on purpose: drawing another consumer's boxes on a
+        neighbouring frame would put a name on the wrong person.
+        """
+        now = time.monotonic()
+        for frame in reversed(self._ring):
+            if frame.stamp_ns != stamp_ns:
+                continue
+            return (frame.jpeg, frame.pitch) if now - frame.arrival <= max_age_sec else None
+        return None
 
     def fresh_arm_jpeg(self, max_age_sec: float) -> bytes | None:
         return _fresh(self._arm, max_age_sec)
 
+    def _fresh_frame(self, max_age_sec: float) -> _Frame | None:
+        if not self._ring:
+            return None
+        frame = self._ring[-1]
+        return frame if time.monotonic() - frame.arrival <= max_age_sec else None
 
-def _fresh(frame: tuple[float, bytes] | tuple[float, bytes, float] | None, max_age_sec: float) -> bytes | None:
+
+def _fresh(frame: tuple[float, bytes] | None, max_age_sec: float) -> bytes | None:
     if frame is None or time.monotonic() - frame[0] > max_age_sec:
         return None
     return frame[1]

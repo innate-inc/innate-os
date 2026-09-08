@@ -100,7 +100,7 @@ class CameraProvider(Node):
         if "depth" in feeds and self._depth_sub is None:
             self._depth_sub = self.create_subscription(
                 Image,
-                "/camera/depth/image_raw",
+                "/mars/main_camera/depth/image_rect_raw",
                 self._depth_cb,
                 self._IMAGE_QOS,
             )
