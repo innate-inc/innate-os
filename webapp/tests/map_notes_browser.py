@@ -5,6 +5,8 @@
 Start brain_client/test/map_notes_fixture.py and rosbridge_websocket on 9090,
 serve webapp with its /ws proxy, then:
   python webapp/tests/map_notes_browser.py --url http://localhost:8765 --chrome /path/to/chrome
+For the robot's plain-HTTP browser environment, use --url http://notes-fixture.test:8765
+--expect-insecure. Chromium resolves this test-only hostname to the local fixture.
 Requires Playwright. The URL MUST point at the local fixture, which exposes
 /test/change_map; this script verifies that endpoint before any writes.
 """
@@ -21,15 +23,21 @@ def main():
     parser.add_argument("--url", required=True)
     parser.add_argument("--chrome")
     parser.add_argument("--screenshots", type=Path)
+    parser.add_argument("--expect-insecure", action="store_true")
     args = parser.parse_args()
     with sync_playwright() as p:
-        browser = p.chromium.launch(**({"executable_path": args.chrome} if args.chrome else {}))
+        browser = p.chromium.launch(
+            args=["--host-resolver-rules=MAP notes-fixture.test 127.0.0.1"],
+            **({"executable_path": args.chrome} if args.chrome else {}),
+        )
         page = browser.new_page(viewport={"width": 1400, "height": 950})
         errors = []
         sent = []
         page.on("websocket", lambda ws: ws.on("framesent", lambda frame: sent.append(json.loads(frame))))
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(args.url + "/nav")
+        if args.expect_insecure:
+            assert page.evaluate("!isSecureContext && typeof crypto.randomUUID === 'undefined'")
         page.evaluate(
             "async()=>{const {ros}=await import('/js/rosClient.js');window.testRos=ros;ros.connect(location.hostname)}"
         )
@@ -61,7 +69,7 @@ def main():
         result = page.evaluate("""async()=>{
           const snap=JSON.parse((await testRos.callService('/brain/map_notes',{request:JSON.stringify({operation:'snapshot'})})).response);
           const note=snap.notes.find(n=>n.title==='Blue bowl');
-          return JSON.parse((await testRos.callService('/brain/map_notes',{request:JSON.stringify({operation:'write_map_note',map_ref:snap.map_ref,request_id:crypto.randomUUID(),arguments:{note_id:note.id,expected_revision:note.revision,title:note.title,text:'Concurrent agent correction',certainty:'observed',observation_id:null}})})).response);
+          return JSON.parse((await testRos.callService('/brain/map_notes',{request:JSON.stringify({operation:'write_map_note',map_ref:snap.map_ref,request_id:'fixture-concurrent-'+Date.now(),arguments:{note_id:note.id,expected_revision:note.revision,title:note.title,text:'Concurrent agent correction',certainty:'observed',observation_id:null}})})).response);
         }""")
         assert result["ok"]
         panel.get_by_role("button", name="Save note", exact=True).click()
@@ -112,9 +120,22 @@ def main():
         expect(page.get_by_role("button", name="Notes 3", exact=True)).to_be_visible(timeout=15000)
         page.get_by_role("button", name="Notes 3", exact=True).click()
         panel.get_by_role("button", name="Blue bowl", exact=True).click()
+        panel.get_by_role("button", name="View captured image", exact=True).click()
+        expect(panel.locator("img")).to_be_visible()
+        assert panel.locator("img").evaluate("img=>img.naturalWidth") > 0
         panel.get_by_role("button", name="Edit", exact=True).click()
         expect(panel.get_by_role("button", name="Save note", exact=True)).to_be_in_viewport()
-        assert not any(message.get("op") == "send_action_goal" for message in sent), "Note interaction dispatched a physical action"
+        assert not any(message.get("op") == "send_action_goal" for message in sent), (
+            "Note interaction dispatched a physical action"
+        )
+        request_ids = [
+            json.loads(message["args"]["request"])["request_id"]
+            for message in sent
+            if message.get("op") == "call_service"
+            and message.get("service") == "/brain/map_notes"
+            and "request_id" in json.loads(message["args"]["request"])
+        ]
+        assert len(request_ids) == len(set(request_ids)), "Note requests reused an idempotency key"
         assert not errors, json.dumps(errors)
         browser.close()
         print(
