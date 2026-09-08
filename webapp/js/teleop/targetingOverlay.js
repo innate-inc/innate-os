@@ -225,7 +225,7 @@ export function applyEvent(run, ev) {
       run.stage = ev.stage;
       run.readout = STAGE_READOUT[ev.stage] ?? ev.stage;
       if (ev.stage !== "approach") run.track = null;
-      if (ev.stage !== "align") run.wristSeen = run.wristTrack = null; // the arm moves on, the view with it
+      if (ev.stage !== "align") run.wristSeen = run.wristTrack = run.descent = null; // the arm moves on, the view with it
       if (ev.stage === "verify") run.grasp = null;
       break;
     case "look":
