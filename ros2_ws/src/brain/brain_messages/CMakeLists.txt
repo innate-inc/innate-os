@@ -36,6 +36,7 @@ set(srv_files
   "srv/DeleteEpisode.srv"
   "srv/CopyEpisode.srv"
   "srv/ForgetMemory.srv"
+  "srv/MapNotes.srv"
 )
 
 set(msg_files

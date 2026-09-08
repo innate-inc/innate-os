@@ -1,0 +1,5 @@
+# JSON request: operation, arguments, map_ref, request_id.
+string request
+---
+# JSON result. Mutations acknowledge only persisted writes.
+string response

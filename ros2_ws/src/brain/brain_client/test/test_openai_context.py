@@ -48,7 +48,11 @@ def completed(*output, status="completed"):
         "response": {
             "status": status,
             "output": list(output),
-            "usage": {"input_tokens": 120, "input_tokens_details": {"cached_tokens": 40}, "output_tokens": 12},
+            "usage": {
+                "input_tokens": 120,
+                "input_tokens_details": {"cached_tokens": 40, "cache_write_tokens": 60},
+                "output_tokens": 12,
+            },
         },
     }
 
@@ -56,10 +60,10 @@ def completed(*output, status="completed"):
 def context(transport, **kwargs):
     return OpenAIContext(
         transport,
-        model="gpt-6-astra",
+        model=kwargs.pop("model", "gpt-6-astra"),
         thinking_level="low",
         max_history=kwargs.pop("max_history", 60),
-        max_image_turns=1,
+        max_image_turns=kwargs.pop("max_image_turns", 1),
         **kwargs,
     )
 
@@ -94,12 +98,13 @@ def test_native_replay_preserves_call_ids_reasoning_images_and_tool_schema():
 
     body = requests[-1]
     assert body["model"] == "gpt-6-astra" and body["reasoning"] == {"effort": "low"}
-    assert body["instructions"] == "SYSTEM" and body["store"] is False
+    assert body["input"][0]["role"] == "developer"
+    assert body["input"][0]["content"][0]["text"] == "SYSTEM" and body["store"] is False
     assert body["parallel_tool_calls"] is False
     assert body["include"] == ["reasoning.encrypted_content"]
-    assert body["input"][0]["content"][0]["text"] == "Pinned reference"
-    assert body["input"][2:4] == [reasoning, native_call]
-    assert body["input"][4] == {
+    assert body["input"][1]["content"][0]["text"] == "Pinned reference"
+    assert body["input"][3:5] == [reasoning, native_call]
+    assert body["input"][5] == {
         "type": "function_call_output",
         "call_id": "call_nav",
         "output": json.dumps({"outcome": "started"}),
@@ -116,7 +121,108 @@ def test_native_replay_preserves_call_ids_reasoning_images_and_tool_schema():
     assert schema["properties"]["x"]["type"] == "number"
     assert schema["properties"]["local_frame"]["type"] == "boolean"
     assert schema["properties"]["mode"]["enum"] == ["fast", "safe"]
-    assert ctx.last_usage == {"prompt": 120, "cached": 40, "output": 12}
+    assert ctx.last_usage == {"prompt": 120, "cached": 40, "cache_write": 60, "output": 12}
+
+
+def cache_prefixes(body):
+    """Rendered input prefixes selected for reuse, ignoring cache metadata."""
+    items, prefixes = [], []
+    for item in copy.deepcopy(body["input"]):
+        parts = item.pop("content", None)
+        items.append(item)
+        if parts is not None:
+            item["content"] = []
+            for part in parts:
+                marker = part.pop("prompt_cache_breakpoint", None)
+                item["content"].append(part)
+                if marker:
+                    assert marker == {"mode": "explicit"}
+                    prefixes.append(copy.deepcopy(items))
+    return prefixes
+
+
+def test_cache_boundary_survives_wrist_replacement_and_fresh_scratchpad():
+    requests = []
+
+    def transport(model, body):
+        requests.append(copy.deepcopy(body))
+        return [completed(call_item(f"call_{len(requests)}"))]
+
+    ctx = context(transport, max_image_turns=10, service_tier="priority")
+    tools = build_tools(assign_tool_names([NAV_SKILL]), None)
+    for turn in range(4):
+        user = ctx.user_message(f"Observation {turn}", [JPEG, f"wrist-{turn}".encode()])
+        notes = ctx.user_message(f"Map notes revision {turn}", [f"map-{turn}".encode()])
+        before = copy.deepcopy(ctx._history)
+        response = ctx.generate(user, tools, "SYSTEM", latest_only_images=[1], live_context=notes)
+        assert ctx._history == before  # neither cache marking nor wrist masking commits the request
+        request = requests[-1]
+        prefixes = cache_prefixes(request)
+        assert request["prompt_cache_options"] == {"mode": "explicit"}
+        assert request["service_tier"] == "priority"
+        assert 1 <= len(prefixes) <= 3
+        if turn >= 2:
+            # The prior write is still an explicitly selected prefix after another
+            # exchange, including its tool call/result, has entered the history.
+            assert cache_prefixes(requests[-2])[-1] in prefixes
+        for prefix in prefixes:
+            assert "Map notes revision" not in json.dumps(prefix)
+            assert f"Observation {turn}" not in json.dumps(prefix)
+        assert request["input"][-2]["content"][0]["text"] == f"Map notes revision {turn}"
+        images = [
+            p["image_url"] for item in request["input"] for p in item.get("content", []) if p["type"] == "input_image"
+        ]
+        for old in range(turn):
+            assert "data:image/jpeg;base64," + base64.b64encode(f"wrist-{old}".encode()).decode() not in images
+            assert "data:image/jpeg;base64," + base64.b64encode(f"map-{old}".encode()).decode() not in images
+        decision = ctx.absorb(user, response, latest_only_images=[1])
+        ctx.add_tool_outcomes([(decision.calls[0], "ok")])
+    assert len({r["prompt_cache_key"] for r in requests}) == 1
+    ctx.clear()
+    ctx.generate(ctx.user_message("New conversation", []), [], "SYSTEM")
+    assert len(cache_prefixes(requests[-1])) == 1
+    assert "Observation" not in json.dumps(requests[-1])
+    assert ctx.last_usage == {}
+
+
+@pytest.mark.parametrize("max_history,max_images", [(6, 10), (60, 1)])
+def test_cache_recovers_after_batched_history_or_image_pruning(max_history, max_images):
+    requests = []
+
+    def transport(model, body):
+        requests.append(copy.deepcopy(body))
+        return [completed(call_item(f"call_{len(requests)}"))]
+
+    ctx = context(transport, max_history=max_history, max_image_turns=max_images)
+    recovered = False
+    misses = 0
+    for turn in range(8):
+        user = ctx.user_message(f"Observation {turn}", [JPEG])
+        response = ctx.generate(user, [], "SYSTEM")
+        if turn >= 2:
+            shared = cache_prefixes(requests[-2])[-1] in cache_prefixes(requests[-1])
+            if not shared:
+                misses += 1
+            recovered |= bool(misses and shared)
+        decision = ctx.absorb(user, response)
+        ctx.add_tool_outcomes([(decision.calls[0], "ok")])
+    assert misses and recovered
+
+
+def test_older_openai_models_keep_implicit_caching():
+    requests = []
+
+    def transport(model, body):
+        requests.append(copy.deepcopy(body))
+        return [completed(message_item("OK"))]
+
+    ctx = context(transport, model="gpt-5.4")
+    user = ctx.user_message("Observation", [JPEG])
+    ctx.absorb(user, ctx.generate(user, [], "SYSTEM"))
+    ctx.generate(ctx.user_message("Next observation", []), [], "SYSTEM")
+    for body in requests:
+        assert body["instructions"] == "SYSTEM"
+        assert "prompt_cache" not in json.dumps(body)
 
 
 @pytest.mark.parametrize("prefix", ["", "I am ", "I am in the kitchen."])
@@ -262,12 +368,13 @@ def test_cadence_waits_after_completion_and_never_overlaps_requests(agent_factor
     assert starts[2] - ends[1] >= 0.08
 
 
-def test_config_selects_native_provider_and_reports_effective_model(agent_factory, monkeypatch):
+@pytest.mark.parametrize("service_tier", ["auto", "default", "priority"])
+def test_config_selects_native_provider_and_reports_effective_model(agent_factory, monkeypatch, service_tier):
     from brain_client.brain import agent as module
     from brain_client.core.config import _PARAM_DEFAULTS, BrainConfig
 
     assert BrainConfig(**_PARAM_DEFAULTS).brain_provider == "gemini"
-    config = BrainConfig(**{**_PARAM_DEFAULTS, "brain_provider": "openai"})
+    config = BrainConfig(**{**_PARAM_DEFAULTS, "brain_provider": "openai", "openai_service_tier": service_tier})
     requests, traces = [], []
 
     def transport(model, body):
@@ -278,19 +385,21 @@ def test_config_selects_native_provider_and_reports_effective_model(agent_factor
     agent, _ = agent_factory(trace=lambda event: traces.append(json.loads(event)), **vars(config))
     assert isinstance(agent._context, OpenAIContext)
     run_turn(agent)
+    assert requests[0]["service_tier"] == service_tier
     assert requests[0]["model"] == "gpt-6-astra"
     assert requests[0]["reasoning"]["effort"] == "low"
     request_trace = next(t for t in traces if t["ev"] == "turn_request")
     assert request_trace["body"]["input"] and "contents" not in request_trace["body"]
     end = next(t for t in traces if t["ev"] == "turn_end")
     assert (end["provider"], end["model"], end["reasoning_effort"]) == ("openai", "gpt-6-astra", "low")
-    assert end["tokens"] == {"prompt": 120, "cached": 40, "output": 12}
+    assert end["tokens"] == {"prompt": 120, "cached": 40, "cache_write": 60, "output": 12}
 
 
 @pytest.mark.parametrize(
     "override",
     [
         {"brain_provider": "typo"},
+        {"openai_service_tier": "typo"},
         {"idle_turn_interval": float("nan")},
         {"supervision_turn_interval": 0.0},
         {"brain_provider": "openai", "openai_model": " "},

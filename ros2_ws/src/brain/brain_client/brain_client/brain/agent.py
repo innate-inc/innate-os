@@ -49,6 +49,7 @@ from brain_client.brain.utils import (
     parse_view_point,
     resolve_timezone,
 )
+from brain_client.memory.notes import NOTE_TOOL_NAMES, NOTE_TOOLS
 from brain_client.perception.scan_health import ScanHealthReporter
 from brain_client.transport.chat import Sender
 
@@ -94,12 +95,16 @@ class BrainAgent:
         chat: ChatManager,
         gaze: GazeController,
         proxy: ProxyClient | None = None,
+        map_notes=None,
         scan_health: ScanHealthMonitor | None = None,
         battery: BatteryMonitor | None = None,
         identity: IdentityMonitor | None = None,
         trace: Callable[[str], None] | None = None,
         on_thinking_changed: Callable[[], None] | None = None,
     ):
+        self._map_notes = map_notes
+        self._note_observation = None
+        self._note_query = ""
         self._logger = node.get_logger()
         self._state = state
         self._config = config
@@ -135,6 +140,7 @@ class BrainAgent:
         self._context = (
             context_class(
                 transport,
+                **({"service_tier": config.openai_service_tier} if self.provider == "openai" else {}),
                 model=self.model,
                 thinking_level=self.reasoning_effort,
                 max_history=config.history_max_entries,
@@ -223,6 +229,8 @@ class BrainAgent:
         if not unwound:
             self._logger.error("[Brain] Agent loop did not unwind within 5s")
         self._events.clear()
+        self._note_observation = None
+        self._note_query = ""
         return unwound
 
     def reset(self) -> None:
@@ -326,12 +334,30 @@ class BrainAgent:
             directive.get_prompt() if directive else None,
             identity=self._identity.current if self._identity is not None else None,
             running_guidance=self._running_guidance(self._state.primitive_running),
+            map_notes_enabled=self._map_notes is not None and self.provider == "openai",
         )
         if self._state.log_everything:
             self._logger.info(f"[Brain] Turn input:\n{text}")
         self._trace_turn_start(text, frames, tools, system, context)
 
-        response = await self._generate(context, message, tools, system, speaker, wrist_frames)
+        live_context = None
+        if self._map_notes is not None and self.provider == "openai":
+            map_pose = self._pose_at_capture if not self._pose.is_mapfree else None
+            self._note_observation = self._map_notes.observe(map_pose, self._frame_at_capture)
+            user_events = [event.text for event in events if event.kind == EventKind.USER]
+            if user_events:
+                self._note_query = user_events[-1][:300]
+            note_text, note_image = self._map_notes.context(self._note_observation, self._note_query)
+            live_context = GeminiContext.user_message(note_text, [note_image] if note_image else [])
+        response = await self._generate(
+            context,
+            message,
+            tools,
+            system,
+            speaker,
+            wrist_frames,
+            **({"live_context": live_context} if live_context else {}),
+        )
         latency = self._elapsed()
         self._report_recovered()
         if not self._state.is_brain_active:
@@ -366,6 +392,7 @@ class BrainAgent:
         system: str,
         speaker: SpeechStreamer,
         wrist_frames: list[int],
+        live_context: dict | None = None,
     ) -> dict:
         """The only blocking call, on a worker thread. Cancellation unwinds HERE —
         the orphaned HTTP call finishes and its result is dropped."""
@@ -374,7 +401,13 @@ class BrainAgent:
             if self._on_thinking_changed is not None:
                 self._on_thinking_changed()
             return await asyncio.to_thread(
-                context.generate, message, tools, system, speaker.feed, latest_only_images=wrist_frames
+                context.generate,
+                message,
+                tools,
+                system,
+                speaker.feed,
+                latest_only_images=wrist_frames,
+                **({"live_context": live_context} if live_context else {}),
             )
         finally:
             self._turn_in_flight = False
@@ -505,9 +538,14 @@ class BrainAgent:
         # the name the model calls always resolves to the skill it was declared for.
         named = assign_tool_names(skills)
         self._tool_map = {name: meta["id"] for name, meta in named}
-        if running is not None:
-            return build_tools([], running.primitive_name, user_spoke=user_spoke)
-        return build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids)
+        tools = (
+            build_tools([], running.primitive_name, user_spoke=user_spoke)
+            if running is not None
+            else build_tools(named, None, can_go_to_point_in_view=_NAV_TO_POSITION in active_ids)
+        )
+        if self._map_notes is not None and self.provider == "openai":
+            tools[0]["functionDeclarations"].extend(NOTE_TOOLS)
+        return tools
 
     # ================= act =================
     def _act(self, decision: Decision, speaker: SpeechStreamer, context: GeminiContext) -> list[tuple[ToolCall, str]]:
@@ -564,6 +602,21 @@ class BrainAgent:
             # (a goal that slips through anyway is cancelled by the runner's
             # generation bump, but this keeps the robot from twitching first).
             return "rejected — the brain is deactivating"
+        if call.name in NOTE_TOOL_NAMES and self._map_notes is not None and self.provider == "openai":
+            observation = self._note_observation
+            result = self._map_notes.execute(
+                call.name,
+                call.args,
+                ref=observation.map_ref if observation else None,
+                call_id=call.id,
+                observation=observation,
+                valid=lambda: self._state.is_brain_active,
+            )
+            for note_id, image in result.pop("images", []):
+                self.add_event(
+                    f"Historical camera evidence for note {note_id} (not a current camera view).", image=image
+                )
+            return json.dumps(result, ensure_ascii=False)
         # Only names declared this turn resolve: falling back to the full
         # registry would let a hallucinated call bypass the active-skill allowlist.
         # The map is a turn old by now and the roster can change under it, so

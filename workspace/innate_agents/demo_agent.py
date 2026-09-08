@@ -12,7 +12,7 @@ from innate_skills.search_memory import SearchMemory
 from innate_skills.wave import Wave
 from inputs.micro_input import MicroInput
 
-from brain_client.agents.types import Agent, InputRef, SkillRef
+from brain_client.agents.types import Agent, InputRef, SkillRef, TurnIntervals
 
 
 class DemoAgent(Agent):
@@ -43,6 +43,9 @@ class DemoAgent(Agent):
             CheckBattery,
             DropInBox,
         ]
+
+    def get_turn_intervals(self) -> TurnIntervals:
+        return TurnIntervals(idle=1.0, supervision=1.0)
 
     def get_inputs(self) -> list[InputRef]:
         """Enable microphone input to hear user"""

@@ -12,6 +12,7 @@ service surface, and spins. The agent loop itself lives in
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 import time
 from collections import deque
@@ -36,6 +37,9 @@ from brain_client.common.script_paths import get_innate_os_root
 from brain_client.core.config import BrainConfig
 from brain_client.core.lifecycle import BrainLifecycle
 from brain_client.core.state import BrainState
+from brain_client.memory.note_bridge import NoteBridge
+from brain_client.memory.note_map import NoteMapRenderer
+from brain_client.memory.notes import MapNotes
 from brain_client.memory.recorder import MemoryRecorder
 from brain_client.memory.store import MemoryStore
 from brain_client.perception.battery import BatteryMonitor
@@ -195,6 +199,18 @@ class BrainClientNode(Node):
             cache_state=self.memory_search.cache_state if self.memory_search is not None else None,
             positions_pub=self.create_publisher(String, "/brain/memory_positions", LATCHED_QOS),
         )
+        self.map_notes = None
+        self.note_bridge = None
+        try:
+            self.map_notes = MapNotes(
+                get_innate_os_root() / "data",
+                self.memory_recorder.note_map_snapshot,
+                NoteMapRenderer(get_innate_os_root() / "data"),
+                self.memory_recorder.can_anchor_note,
+            )
+            self.note_bridge = NoteBridge(self, self.map_notes)
+        except (sqlite3.Error, OSError) as error:
+            self.get_logger().error(f"[Map notes] scratchpad unavailable: {error}")
         # Search verdicts for the webapp's map (latched: a page opened after the
         # search still sees the last one; clients gate on the payload's stamp).
         self.memory_search_pub = self.create_publisher(String, "/brain/memory_search", LATCHED_QOS)
@@ -226,6 +242,7 @@ class BrainClientNode(Node):
             chat=self.chat,
             gaze=self.gaze,
             proxy=self._proxy,
+            map_notes=self.map_notes,
             scan_health=self.scan_health,
             battery=self.battery,
             identity=self.identity,
@@ -700,6 +717,10 @@ class BrainClientNode(Node):
     def destroy_node(self):
         self.exit_event.set()
         self.brain.shutdown()
+        if self.note_bridge is not None:
+            self.note_bridge.timer.cancel()
+        if self.map_notes is not None:
+            self.map_notes.close()
         if self.memory_search_server is not None:
             self.memory_search_server.shutdown()
         if self._agent_status_heartbeat is not None and not self._agent_status_heartbeat.is_canceled():
