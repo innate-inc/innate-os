@@ -473,7 +473,10 @@ bool MainCameraDriver::initializeNativePipeline() {
                         gst_element_state_get_name(state), gst_element_state_get_name(pending));
         }
     }
-    if (ret == GST_STATE_CHANGE_FAILURE) {
+    // A pipeline still mid-transition delivers no buffers, and captureFrame() would then pull an
+    // empty main_sink for the life of the node: ASYNC is as fatal here as FAILURE, and failing lets
+    // the caller fall back to the single-branch cv::VideoCapture.
+    if (ret != GST_STATE_CHANGE_SUCCESS && ret != GST_STATE_CHANGE_NO_PREROLL) {
         RCLCPP_ERROR(this->get_logger(), "Native pipeline failed to reach PLAYING");
         drainNativeBus();
         shutdownNativePipeline();
