@@ -145,6 +145,7 @@ class DropInBox(Skill):
         """Head frame -> the container's near floor-contact pixel, or None.
         Bottom edge midpoint, NOT the centre: a point at rim height
         back-projects far past the box (a 0.15 m rim at 0.6 m reads 0.88)."""
+        self.overlay.readout("looking for it", busy=True)
         text, img = ask_head(
             self,
             self._proxy,
@@ -162,13 +163,27 @@ class DropInBox(Skill):
         self._near_rim_v = _near_rim_v(text)
         if box is None:
             self._box_u = self._box_top_v = None
+            self.overlay.clear("target", "rim")
+            self.overlay.readout("not in view")
             return None
         x, y, w, h = box
+        self._draw_container((x, y, x + w, y + h))
         self._box_u = min(float(IMG_W - 1), x + w / 2.0)
         self._box_top_v = float(y)
         px = (self._box_u, min(float(IMG_H - 1), float(y + h)))
         self._measure_rim(px)
         return self._park_if_clipped(px, float(y + h))
+
+    def _draw_container(self, corners: tuple[float, float, float, float]) -> None:
+        """The container's box and the near rim the gripper will reach over."""
+        ui = self.overlay
+        ui.clear("track", "steer")
+        ui.bracket("target", corners, label="container")
+        if self._near_rim_v is None:
+            ui.clear("rim")
+        else:
+            ui.line("rim", (corners[0], self._near_rim_v), (corners[2], self._near_rim_v))
+        ui.readout("spotted")
 
     def _park_if_clipped(self, px: tuple[float, float], contact_v: float) -> tuple[float, float]:
         """A floor-contact row at or past the frame bottom means the container
@@ -300,6 +315,8 @@ class DropInBox(Skill):
         z = rim + p["release_clear_m"]
         x, y = self.manipulation.clamp_reach(self._release_x(near_x, z), near_y)
 
+        self.overlay.stage("release")
+        self.overlay.readout(f"reaching over the rim · {round(z * 100)} cm up")
         self.manipulation.torque_on()
         self._lift_clear(y)
         try:
@@ -317,9 +334,11 @@ class DropInBox(Skill):
         self._over_rim = True
 
         self.check_cancelled()  # last exit before the object leaves the claw
+        self.overlay.readout("opening the gripper")
         self.manipulation.gripper_open(duration=1.0)
         self._released = True
         self.sleep(p["release_settle_s"])
+        self.overlay.readout("lifting out")
         # Out of the container BEFORE anything drives: the verification backs
         # the base up 0.15 m, and doing that with the claw still hooked over
         # the rim drags the container along with it.
@@ -357,6 +376,7 @@ class DropInBox(Skill):
 
     def _landed(self, prompt: str, approach: FloorApproach) -> bool:
         """Back up, then look for evidence the object did NOT go in."""
+        self.overlay.stage("verify")
         approach.drive(-VERIFY_BACKUP_M)
         self.sleep(self._p["settle_s"])
         main_img, wrist_img = self.main_image, self.wrist_image
@@ -385,6 +405,7 @@ class DropInBox(Skill):
         )
         missed = _yes_no(text)
         self.logger.info(f"[DropInBox] landed: reply={text!r} -> {missed is not True}")
+        self.overlay.readout("still outside" if missed else "in the box")
         # No usable verdict is not a failure: the claw is open and the object
         # is no longer held, which is as much as this skill promised.
         return missed is not True
@@ -415,9 +436,11 @@ class DropInBox(Skill):
 
             self._carry_pose(self._p["travel_joints"])
             approach = FloorApproach(self, self._p, self._detect_px)
+            self.overlay.begin(prompt, stages=["search", "approach", "release", "verify"], frame=(IMG_W, IMG_H))
             self.say(f"Looking for {prompt}.")
             xy = approach.search(prompt)
             xy = approach.position_above(prompt, xy)
+            self.overlay.readout("parked at the rim")
             self.say("Dropping it in.")
             _x, _y, released_z = self._release_at(xy[0], xy[1])
 

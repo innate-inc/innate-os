@@ -32,6 +32,7 @@ from brain_client.robot.head import Head
 from brain_client.robot.manipulation import Manipulation
 from brain_client.robot.mobility import Mobility
 from brain_client.robot.spatial_memory import SpatialMemory
+from brain_client.skills import overlay
 from brain_client.skills.catalog import SkillRepository
 from brain_client.skills.cli_bridge import SkillCliBridge, SkillCliGoalHandle
 from brain_client.skills.invoker import SkillInvoker
@@ -450,9 +451,19 @@ class SkillsActionServer(Node):
         and unwind on cancel without any plumbing from the skill.
         """
         previous_run_cancel = swap_run_cancel(skill._cancel_latch())
+        root = overlay.enter_run()  # a nested code skill draws into its parent's run
         try:
-            return self._run_code_skill_prepared(skill, entry, skill_type, inputs, goal_handle)
+            output = self._run_code_skill_prepared(skill, entry, skill_type, inputs, goal_handle)
+            if root:
+                skill.overlay.end(ok=output.ok, cancelled=output.status is SkillResult.CANCELLED, text=output.message)
+            return output
+        except Exception as e:
+            if root:
+                skill.overlay.end(ok=False, cancelled=False, text=str(e))
+            raise
         finally:
+            if root:
+                overlay.end_run()
             swap_run_cancel(previous_run_cancel)
 
     def _run_code_skill_prepared(self, skill, entry, skill_type, inputs, goal_handle) -> SkillOutput:

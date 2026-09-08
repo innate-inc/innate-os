@@ -788,6 +788,392 @@ select.skill-input {
   pointer-events: none;
 }
 
+/* ---- targeting overlay (teleop/targetingOverlay.js) ----------------------
+   What a running skill draws over the cameras. Every marker is a percentage
+   of .tgt-layer, which is the skill's image frame placed on the picture; the
+   markers themselves are hairline amber, greening when the skill locks them. */
+
+.tgt-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.tgt-layer {
+  position: absolute;
+}
+
+.tgt-tag {
+  position: absolute;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: inherit;
+  text-shadow: 0 0 3px rgb(0 0 0 / 85%), 0 1px 2px rgb(0 0 0 / 70%);
+}
+
+/* Corner brackets: the "seen HERE" shape. */
+.tgt-bracket {
+  position: absolute;
+  color: var(--accent);
+  animation: tgt-lock 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.tgt-bracket i {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  max-width: 45%;
+  max-height: 45%;
+  border: 0 solid currentColor;
+  filter: drop-shadow(0 0 2px rgb(0 0 0 / 70%));
+}
+
+.tgt-bracket i:nth-child(1) { top: 0; left: 0; border-width: 1.5px 0 0 1.5px; }
+.tgt-bracket i:nth-child(2) { top: 0; right: 0; border-width: 1.5px 1.5px 0 0; }
+.tgt-bracket i:nth-child(3) { bottom: 0; right: 0; border-width: 0 1.5px 1.5px 0; }
+.tgt-bracket i:nth-child(4) { bottom: 0; left: 0; border-width: 0 0 1.5px 1.5px; }
+
+.tgt-bracket .tgt-tag {
+  bottom: calc(100% + 4px);
+  left: 0;
+}
+
+@keyframes tgt-lock {
+  from { transform: scale(1.35); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* A goal box: dashed outline, with an optional solid inner square for the
+   deadband the skill actually tests against. */
+.tgt-box {
+  position: absolute;
+  border: 1.5px dashed var(--accent-dim);
+  border-radius: 2px;
+  filter: drop-shadow(0 0 2px rgb(0 0 0 / 70%));
+  transition: border-color 200ms ease;
+}
+
+.tgt-inner {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border: 1.5px solid var(--accent-dim);
+  border-radius: 2px;
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+
+.tgt-box .tgt-tag {
+  bottom: calc(100% + 3px);
+  right: 0;
+  color: var(--accent);
+}
+
+.tgt-box.locked {
+  border-color: var(--ok);
+}
+
+.tgt-box.locked .tgt-inner {
+  border-color: var(--ok);
+  box-shadow: 0 0 10px rgb(86 194 140 / 45%);
+}
+
+.tgt-box.locked .tgt-tag {
+  color: var(--ok);
+}
+
+/* Point markers are centred on their pixel; a point glides between ~10 Hz
+   updates instead of stepping. */
+.tgt-point,
+.tgt-reticle {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  color: var(--accent);
+  filter: drop-shadow(0 0 2px rgb(0 0 0 / 70%));
+}
+
+.tgt-point {
+  transition: left 120ms linear, top 120ms linear;
+}
+
+.tgt-point.locked {
+  color: var(--ok);
+}
+
+.tgt-point .tgt-tag,
+.tgt-reticle .tgt-tag {
+  top: 50%;
+  left: calc(100% + 2px);
+  transform: translateY(-50%);
+}
+
+/* A point usually ends up in a box, whose tag hangs top-right, so this one
+   hangs left. */
+.tgt-point .tgt-tag {
+  left: auto;
+  right: calc(100% + 2px);
+}
+
+/* Frame-coordinate lines: a dashed steering vector, or a plain line. */
+.tgt-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.tgt-vector,
+.tgt-line {
+  stroke: var(--accent-dim);
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.tgt-vector {
+  stroke-dasharray: 4 5;
+}
+
+.tgt-line {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+/* While the skill is busy (a frame out to a model): one sweep across the picture. */
+.tgt-scan {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 18%;
+  opacity: 0;
+  background: linear-gradient(90deg, transparent, rgb(232 163 61 / 14%) 85%, rgb(232 163 61 / 55%));
+  transition: opacity 200ms ease;
+}
+
+.tgt-layer.busy .tgt-scan {
+  opacity: 1;
+  animation: tgt-sweep 1.6s linear infinite;
+}
+
+@keyframes tgt-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(560%); }
+}
+
+/* The HUD: skill + prompt, the stage ladder, one live readout. Top-centre is
+   the one stage edge nothing else claims on either cockpit — except the
+   "<agent> is running" pill while the brain is active, which the HUD then
+   sits under. */
+.tgt-hud {
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 14px 9px;
+  max-width: min(440px, calc(100% - 28px));
+  background: rgb(0 0 0 / 66%);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-color: var(--ctl-edge-accent);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 24%), inset 0 0 0 1px rgb(232 163 61 / 8%);
+  animation: tgt-hud-in 240ms ease both;
+  transition: border-color 300ms ease;
+}
+
+@keyframes tgt-hud-in {
+  from { opacity: 0; transform: translate(-50%, -6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
+  top: 68px;
+}
+
+/* The Agent page's camera tiles sit along the top of the feed, so its HUD
+   takes the bottom edge, which only the challenge dock (far left) shares. */
+.agent-cockpit .tgt-hud {
+  top: auto;
+  bottom: 14px;
+}
+
+.tgt-hud.ok {
+  border-color: rgb(86 194 140 / 60%);
+}
+
+.tgt-hud.failed {
+  border-color: var(--ctl-edge-danger);
+}
+
+.tgt-hud-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tgt-hud-head .tgt-skill {
+  color: var(--accent);
+  flex: none;
+}
+
+.tgt-prompt {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tgt-stages {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tgt-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ctl-text-off);
+  transition: color 200ms ease;
+}
+
+/* The dot before each stage; a hairline joins consecutive stages. */
+.tgt-stage::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  box-sizing: border-box;
+  flex: none;
+}
+
+.tgt-stage + .tgt-stage {
+  margin-left: 8px;
+  padding-left: 16px;
+}
+
+.tgt-stage + .tgt-stage::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 8px;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.6;
+}
+
+.tgt-stage.done {
+  color: var(--ok);
+}
+
+.tgt-stage.done::before {
+  background: currentColor;
+}
+
+.tgt-stage.active {
+  color: var(--accent);
+}
+
+.tgt-stage.active::before {
+  background: currentColor;
+  box-shadow: 0 0 0 0 rgb(232 163 61 / 60%);
+  animation: tgt-pulse 1.4s ease-out infinite;
+}
+
+@keyframes tgt-pulse {
+  from { box-shadow: 0 0 0 0 rgb(232 163 61 / 60%); }
+  to { box-shadow: 0 0 0 7px rgb(232 163 61 / 0%); }
+}
+
+.tgt-readout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--ctl-text);
+  min-height: 14px;
+}
+
+.tgt-readout-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tgt-hud.busy .tgt-readout-text::after {
+  content: "…";
+  animation: breathe 1.2s ease-in-out infinite;
+}
+
+.tgt-hud.ok .tgt-readout {
+  color: var(--ok);
+}
+
+.tgt-hud.failed .tgt-readout {
+  color: var(--ctl-danger);
+}
+
+/* The readout's progress bar, when the skill reports one. */
+.tgt-bar {
+  flex: 1;
+  min-width: 48px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 12%);
+  overflow: hidden;
+}
+
+.tgt-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 250ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tgt-bracket,
+  .tgt-hud,
+  .tgt-layer.busy .tgt-scan,
+  .tgt-stage.active::before {
+    animation: none;
+  }
+
+  .tgt-point {
+    transition: none;
+  }
+}
+
+@media (max-width: 780px) {
+  .tgt-hud {
+    top: 10px;
+    padding: 8px 12px 7px;
+    gap: 5px;
+  }
+
+  .tgt-prompt {
+    font-size: 11px;
+  }
+}
+
 .video-status {
   position: absolute;
   inset: 0;
@@ -9797,6 +10183,12 @@ select.skill-input {
   font-size: 13px;
   text-decoration: none;
   transition: border-color 150ms ease, background 150ms ease;
+}
+
+/* The Agent page has its own Start/Stop; the shell marks the pill off-route
+   there so styles that sit under it (the targeting HUD) can tell. */
+.agent-indicator[data-off-route] {
+  display: none;
 }
 
 /* The rule above shifts it by half the rail's column, which this layout has
