@@ -38,7 +38,9 @@ def counter():
     patch = pytest.MonkeyPatch()
     patch.delenv("VIRTUAL_MARS_ASSETS", raising=False)
     patch.setattr(_core, "ASSETS_DIR", _world.default_assets_dir())
-    mars = _core.VirtualMars(render_wh=(64, 48), depth_render_wh=(64, 48), environment=Environment.load("counter", ASSETS))
+    mars = _core.VirtualMars(
+        render_wh=(64, 48), depth_render_wh=(64, 48), environment=Environment.load("counter", ASSETS)
+    )
     try:
         yield mars
     finally:
