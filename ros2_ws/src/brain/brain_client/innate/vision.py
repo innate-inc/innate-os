@@ -187,10 +187,18 @@ def track_point(prev_gray, gray, grid):
 # Color seg for growing/deforming objects (LK slides off fabric during descent).
 _SEG_BINS = [16, 8, 8]
 _SEG_RANGES = [0, 180, 0, 256, 0, 256]
+_SEG_MIN_SUPPORT_FRAC = 0.005
 
 
 def seg_model(hsv, box):
-    """Object/floor hist-ratio LUT for back-projection, or None."""
+    """Object/floor hist-ratio LUT for back-projection, or None.
+
+    A colour is fully object once it is more common inside the box than in
+    the ring around it. The ratio is capped there before scaling: scaled to
+    its maximum instead, one face that no floor colour shares (a saturated
+    side lit against a light floor) becomes the whole model and a paler face
+    of the same object drops to nothing, so the tracker follows a face rather
+    than the object."""
     x, y, w, h = box
     obj = hsv[y : y + h, x : x + w]
     rx0, ry0 = max(0, x - w // 2), max(0, y - h // 2)
@@ -198,9 +206,11 @@ def seg_model(hsv, box):
     h_obj = cv2.calcHist([obj], [0, 1, 2], None, _SEG_BINS, _SEG_RANGES)
     h_ring = cv2.calcHist([ring], [0, 1, 2], None, _SEG_BINS, _SEG_RANGES)
     ratio = h_obj / (np.maximum(h_ring - h_obj, 0.0) + 1.0)
-    if ratio.max() <= 0:
+    ratio[h_obj < _SEG_MIN_SUPPORT_FRAC * h_obj.sum()] = 0.0  # a few stray pixels are not a colour of the object
+    weight = np.minimum(ratio, 1.0)
+    if weight.max() <= 0:
         return None
-    return (255.0 * ratio / ratio.max()).astype(np.uint8)
+    return (255.0 * weight).astype(np.uint8)
 
 
 # Blob shape: major-axis angle in image coordinates (radians from +u toward
