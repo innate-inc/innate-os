@@ -155,10 +155,10 @@ const PAGE_HTML = `
     <button class="armsdk-go" data-cmd="torque_on" title="Stiffen the servos so the arm holds and accepts moves">Torque on</button>
     <button class="armsdk-warn" data-cmd="torque_off" title="Go limp — also the abort path; fires mid-motion">Torque off</button>
     <button data-cmd="rest" title="Move to the SDK rest pose">Rest</button>
-    <button class="armsdk-warn" data-el="rebootBtn" title="recover() — reboot the servos, settle, torque back on">⟳ Reboot arm</button>
+    <button class="armsdk-warn" data-el="rebootBtn" title="recover() — reboot any tripped servo; the rest of the arm keeps holding">⟳ Reboot arm</button>
     <span class="spacer"></span>
     <label title="max_ee_speed — end-effector speed cap applied to every move">speed cap <input type="number" data-el="speedcap" value="0.20" step="0.05" min="0.05"> m/s</label>
-    <label title="After each cartesian move the SDK FK-checks the settled pose against the target (5 cm xy / 10 cm z). A miss triggers recover() — servo reboot + torque on — then one retry before raising ArmUnhealthy. Off = moves are unverified; you just see the error here.">
+    <label title="After each cartesian move the SDK FK-checks the settled pose against the target (5 cm xy / 10 cm z). A miss triggers recover() — reboots any tripped servo — then one retry before raising ArmUnhealthy. Off = moves are unverified; you just see the error here.">
       <input type="checkbox" data-el="verify"> verified moves</label>
   </div>
 
@@ -549,7 +549,7 @@ export function mount(stage) {
   el("closeBtn").addEventListener("click", () => cmd("gripper_close", { strength: +input("grip").value }));
   el("rebootBtn").addEventListener("click", () => {
     if (!window.confirm("Reboot the arm servos? Any running motion stops; torque re-enables automatically.")) return;
-    cmd("recover"); // SDK recover() = reboot + settle + torque back on
+    cmd("recover"); // SDK recover() = reboot the tripped servos, settle
   });
   el("copyJoints").addEventListener("click", () => {
     const joints = lastState.joints;

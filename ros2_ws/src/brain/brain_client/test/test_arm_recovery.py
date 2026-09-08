@@ -33,6 +33,7 @@ def make_recovery(active=True, running=None, has_goal=False):
     r._chat = SimpleNamespace(emit_system=lambda t: log["chat"].append(t))
     r._brain = SimpleNamespace(add_event=lambda t, **k: log["events"].append(t))
     r._fix_client = SimpleNamespace(service_is_ready=lambda: False)
+    r._rest_client = SimpleNamespace(service_is_ready=lambda: False)
     r._in_flight = False
     r._attempts = 0
     r._last_attempt_at = 0.0
@@ -90,9 +91,10 @@ def test_attempts_cap_and_rearm_on_healthy(monkeypatch):
 def test_recover_stops_the_running_skill_and_reports(monkeypatch):
     r, log = make_recovery(running=RunningSkill(primitive_name="pick_any_object", skill_id="local/pick"), has_goal=True)
     r._call_fix_error = lambda: (True, "rebooted servo(s) 3 and re-enabled their torque")
+    r._call_rest = lambda: (True, "arm folded to rest")
     r._recover(HW_ERROR, attempt=1)
     assert log["cancelled"] == ["goal"]
-    assert any("rebooted servo(s) 3" in e for e in log["events"])
+    assert any("rebooted servo(s) 3" in e and "folded to rest" in e for e in log["events"])
     assert any("✅" in c for c in log["chat"])
     assert r._attempts == 0  # success closes the episode
     assert r._in_flight is False
@@ -121,3 +123,7 @@ def test_call_fix_error_paths():
     assert ok and "cleared on its own" in detail
     r._fix_client = client("dynamixel port wedged", success=False)
     assert r._call_fix_error() == (False, "dynamixel port wedged")
+
+    assert r._call_rest() == (False, "/mars/arm/rest unavailable")
+    r._rest_client = client("rest fold stopped: joint 2 met resistance", success=False)
+    assert r._call_rest() == (False, "rest fold stopped: joint 2 met resistance")

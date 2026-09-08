@@ -86,17 +86,15 @@ class MarsArmNode : public rclcpp::Node {
     std::vector<std::vector<double>> computeCubicSplineTrajectory(const std::vector<double>& start,
                                                                   const std::vector<double>& goal, double duration,
                                                                   double dt);
-    // With a guard, the trajectory stops and holds the arm where it is as soon
-    // as a joint stops following its command (an obstacle); the guard reports
-    // which joint.
     bool planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
-                                  GainMode trajectory_gain_mode = GainMode::SCHEDULED, ContactGuard* guard = nullptr);
-    bool trackingLost(ContactGuard& guard, std::chrono::steady_clock::time_point since, int& strikes);
+                                  GainMode trajectory_gain_mode = GainMode::SCHEDULED,
+                                  TrajectoryGuard* guard = nullptr);
+    bool guardTripped(TrajectoryGuard& guard);
     void holdArmWhereItIs();
     // Fold to rest_pose keeping the standing grip, stopping at the first
-    // obstacle. Runs after boot and whenever arm torque comes back, so the
-    // arm never stays wherever it fell.
+    // obstacle; runs after boot and whenever arm torque comes back on.
     RestOutcome foldToRest(const char* trigger);
+    RestOutcome runRestFold(const char* trigger);
     void armRestCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                          std::shared_ptr<std_srvs::srv::Trigger::Response> response);
     bool planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,
@@ -136,14 +134,12 @@ class MarsArmNode : public rclcpp::Node {
     std::array<double, 6> latest_target_{};
     bool has_target_{false};
     // What the pass-through last wrote (after joint-limit clamping) and when:
-    // the contact guard measures tracking error against what the servos were
-    // actually told, not the raw waypoint. Also under arm_command_mutex_.
+    // the guard measures tracking error against what the servos were actually
+    // told, not the raw waypoint. Also under arm_command_mutex_.
     std::array<double, 6> written_target_{};
     std::chrono::steady_clock::time_point written_at_{};
-
-    // Rest fold (see foldToRest)
-    std::array<double, 6> rest_pose_{};
-    bool auto_rest_{true};
+    // Last /mars/arm/commands arrival; a guarded fold yields to it.
+    std::atomic<std::chrono::steady_clock::time_point> stream_command_at_{std::chrono::steady_clock::time_point{}};
     rclcpp::TimerBase::SharedPtr rest_on_boot_timer_;
 
     // Joint state tracking for planning
@@ -176,6 +172,8 @@ class MarsArmNode : public rclcpp::Node {
     rclcpp::CallbackGroup::SharedPtr timer_callback_group_;
     rclcpp::CallbackGroup::SharedPtr service_callback_group_;
     rclcpp::CallbackGroup::SharedPtr health_callback_group_;
+    // torque_off alone: it must land during a fold or goto, not queue behind it.
+    rclcpp::CallbackGroup::SharedPtr stop_callback_group_;
 
     // Mutex to protect Dynamixel serial bus access
     std::mutex dynamixel_mutex_;

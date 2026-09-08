@@ -165,6 +165,10 @@ void MarsArmNode::configureServosLocked(bool enable_torque) {
     } catch (const std::exception& e) {
         RCLCPP_ERROR(this->get_logger(), "Failed to move head to default position: %s", e.what());
     }
+    // The pass-through re-sends this with every arm command; left at the
+    // power-on reading it drags the head back off level on the first fold.
+    std::lock_guard<std::mutex> head_lock(head_command_mutex_);
+    latest_head_command_ = logicalAngleToEncoder(0.0);
 }
 
 // ========== POSITION SYNC HELPER ==========
@@ -296,6 +300,7 @@ void MarsArmNode::armCommandCallback(const std_msgs::msg::Float64MultiArray::Sha
         for (int i = 0; i < 6; ++i)
             latest_target_[i] = msg->data[i];
         has_target_ = true;
+        stream_command_at_ = std::chrono::steady_clock::now();
 
         // Switch to teleop gains when streaming commands arrive
         if (gain_mode_ != GainMode::TELEOP) {
@@ -328,6 +333,7 @@ void MarsArmNode::armTorqueOnCallback(const std::shared_ptr<std_srvs::srv::Trigg
         } catch (const std::exception& e) {
             RCLCPP_WARN(this->get_logger(), "Failed to sync on torque on: %s", e.what());
         }
+        arm_torque_enabled_ = true;  // under the bus lock, so a racing torque_off's `false` lands after
     } catch (const std::exception& e) {
         response->success = false;
         response->message = std::string("Failed: ") + e.what();
@@ -335,14 +341,13 @@ void MarsArmNode::armTorqueOnCallback(const std::shared_ptr<std_srvs::srv::Trigg
         return;
     }
 
-    arm_torque_enabled_ = true;
     response->success = true;
     response->message = "Enabled torque for all arm servos";
     RCLCPP_INFO(this->get_logger(), "Successfully enabled torque for all arm servos");
     // Only on the off→on edge: a skill re-asserting torque mid-task must not
     // have the arm folded out from under it. Success stays true either way —
-    // torque IS on; a blocked fold is reported in the message.
-    if (was_off && auto_rest_) {
+    // torque IS on; a stopped fold is reported in the message.
+    if (was_off && this->get_parameter("auto_rest").as_bool()) {
         response->message += "; " + foldToRest("torque on").detail;
     }
 }
@@ -410,35 +415,16 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
                                       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/fix_error");
     try {
+        std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+
         // Scan all servos and collect those with hardware errors
         std::vector<int> error_servo_ids;
-        {
-            std::lock_guard<std::mutex> lock(dynamixel_mutex_);
-            for (const auto& config : joint_configs_) {
-                uint8_t hw_status = dynamixel_->readHardwareErrorStatus(config.servo_id);
-                if (hw_status != 0) {
-                    RCLCPP_WARN(this->get_logger(), "Servo %d has hardware error: %s", config.servo_id,
-                                describeHardwareError(hw_status, config.servo_id).c_str());
-                    error_servo_ids.push_back(config.servo_id);
-                }
-            }
-
-            if (!error_servo_ids.empty()) {
-                // Reboot only the errored servos
-                for (int servo_id : error_servo_ids) {
-                    RCLCPP_INFO(this->get_logger(), "Rebooting servo %d...", servo_id);
-                    dynamixel_->reboot(servo_id);
-                }
-
-                // Wait for servos to come back online after reboot
-                RCLCPP_INFO(this->get_logger(), "Waiting for rebooted servos to come back online...");
-                std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-
-                // Reconfigure and torque-on only the rebooted servos
-                for (int servo_id : error_servo_ids) {
-                    RCLCPP_INFO(this->get_logger(), "Reconfiguring servo %d...", servo_id);
-                    configureServoByIdLocked(servo_id, true);
-                }
+        for (const auto& config : joint_configs_) {
+            uint8_t hw_status = dynamixel_->readHardwareErrorStatus(config.servo_id);
+            if (hw_status != 0) {
+                RCLCPP_WARN(this->get_logger(), "Servo %d has hardware error: %s", config.servo_id,
+                            describeHardwareError(hw_status, config.servo_id).c_str());
+                error_servo_ids.push_back(config.servo_id);
             }
         }
 
@@ -458,16 +444,26 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
             return;
         }
 
+        // Reboot only the errored servos
+        for (int servo_id : error_servo_ids) {
+            RCLCPP_INFO(this->get_logger(), "Rebooting servo %d...", servo_id);
+            dynamixel_->reboot(servo_id);
+        }
+
+        // Wait for servos to come back online after reboot
+        RCLCPP_INFO(this->get_logger(), "Waiting for rebooted servos to come back online...");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+
+        // Reconfigure and torque-on only the rebooted servos
+        for (int servo_id : error_servo_ids) {
+            RCLCPP_INFO(this->get_logger(), "Reconfiguring servo %d...", servo_id);
+            configureServoByIdLocked(servo_id, true);
+        }
+
         // Build JSON response with error IDs and status
         json result;
         result["error_ids"] = error_ids_json;
         result["status"] = "fixed";
-        // A rebooted joint went limp and sagged; the fold puts the arm back
-        // somewhere a drive can start from. Outside the bus lock: the fold
-        // runs through the control loop.
-        if (auto_rest_) {
-            result["rest"] = foldToRest("servo recovery").detail;
-        }
 
         response->success = true;
         response->message = result.dump();

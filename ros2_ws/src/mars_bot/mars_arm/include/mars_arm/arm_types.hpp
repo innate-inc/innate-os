@@ -8,6 +8,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
+#include <chrono>
 
 namespace mars_arm {
 
@@ -26,31 +27,31 @@ static constexpr double kScheduledHoldTimeoutS = 5.0;
 // that jolt shook a carried object out of the gripper. At the folded rest
 // pose — the long-idle case the decay exists for — these loads are ~0.
 static constexpr int kDecayMaxLoad = 100;
-// Rest fold: how long the fold takes, and the contact guard on it. The guard
-// trips when an arm joint lags this far behind the command the control loop
-// wrote for it, for this many consecutive 10 ms waypoints — the signature of
-// an obstacle in the path (a single bad bus read is not contact). Position
-// error rather than load: lifting the arm off the floor loads the shoulder as
-// much as a light obstacle does, but a servo that can lift never lags.
-// An unobstructed fold from the floor peaks just under 0.10 rad on hardware.
-// The guard only arms once every joint has tracked within the limit: a limp
-// arm falls past its joint limits, so the first (clamped) command can sit
-// 0.5 rad away and the servo needs a moment at profile speed to close that
-// gap. A joint that never gets there within the lock-on timeout is blocked.
+// Rest fold. The guard trips when an arm joint sits this far behind the
+// command the control loop wrote for it (position, not load: lifting the arm
+// off the floor loads the shoulder like a light obstacle would, but a servo
+// that can lift never lags) for this many consecutive 10 ms waypoints.
+// Unobstructed folds from the floor peak just under 0.10 rad on hardware. A
+// joint is guarded once it has tracked within the limit, or after the lock-on
+// timeout: a limp shoulder falls ~0.5 rad past its software limit and needs a
+// moment at profile speed to close that gap.
 static constexpr double kRestFoldDurationS = 3.0;
 static constexpr double kRestContactErrorRad = 0.20;
 static constexpr int kContactStrikes = 5;
 static constexpr double kContactLockOnTimeoutS = 1.0;
-// A gripper hanging this far below its rest pitch has usually been carrying
-// the collapsed arm's weight on its tip (a limp arm settles on it), and the
-// wrist servo stalls at its current limit trying to pitch it up under that
-// load — measured on hardware, joint 4 at 1.75 A. So the fold first lifts the
-// wrist clear with the shoulder and elbow (forearm level, wrist ~10 cm above
-// the shoulder, gripper still hanging), then folds.
+static constexpr double kAtRestRad = 0.05;
+// A gripper hanging this far below its rest pitch is usually carrying the
+// collapsed arm's weight on its tip, and the wrist servo stalls at its
+// current limit (joint 4 at 1.75 A on hardware) trying to pitch it up. So
+// the shoulder and elbow lift the wrist clear first (forearm level, wrist
+// ~10 cm above the shoulder, gripper still hanging).
 static constexpr double kHangingWristRad = 0.5;
 static constexpr double kLiftShoulderRad = -0.9;
 static constexpr double kLiftElbowRad = 0.9;
 static constexpr double kRestLiftDurationS = 1.5;
+// j1-j5. The gripper (j6) is never guarded or retargeted: a gripping claw's
+// standing position error IS the grip force.
+static constexpr size_t kArmJoints = 5;
 
 inline bool isX330(const std::string& motor_type) {
     return motor_type.find("330") != std::string::npos;
@@ -95,14 +96,16 @@ struct GainProfile {
 // Gain mode: SCHEDULED = interpolate near/far by extension, TELEOP = flat teleop gains
 enum class GainMode { SCHEDULED, TELEOP };
 
-// Passed to a trajectory to stop it at the first joint that meets resistance;
-// filled in with the culprit when it trips. j6 is never guarded: a gripping
-// claw's standing position error IS the grip force.
-struct ContactGuard {
+// Stops a guarded trajectory at the first joint that meets resistance, when
+// torque goes off, or when a streaming command takes the arm over; says why.
+struct TrajectoryGuard {
+    explicit TrajectoryGuard(double max_error) : max_error_rad(max_error) {}
     double max_error_rad;
-    bool locked_on = false;  // every guarded joint has tracked within max_error_rad at least once
-    int blocked_joint = -1;  // 0-based; -1 until the guard trips
-    double blocked_error_rad = 0.0;
+    std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+    std::array<bool, kArmJoints> locked_on{};
+    int strikes = 0;
+    int blocked_joint = -1;  // 0-based; set when a joint met resistance
+    std::string stop_reason;
 };
 
 struct RestOutcome {

@@ -422,8 +422,8 @@ function buildArmServices(rosClient) {
     const turnOn = !torqueOn;
     const prev = torqueOn;
     // Optimistic: show the new state right away, then confirm/revert on the
-    // service result. The robot's torque_on walks 6 servos (~600 ms) before it
-    // replies, so waiting for the reply felt laggy.
+    // service result. torque_on walks 6 servos and then folds the arm to rest
+    // (~5 s) before it replies, so waiting for the reply would feel dead.
     torqueOn = turnOn;
     toggling = true;
     render();
@@ -437,6 +437,8 @@ function buildArmServices(rosClient) {
         flash(res.message || "Torque toggle failed", true);
       } else {
         torqueOn = turnOn; // re-assert in case a stale status arrived mid-call
+        // The reply says whether the rest fold completed or stopped short.
+        if (turnOn && res && res.message) flash(res.message, false);
       }
     } catch (err) {
       torqueOn = prev; // revert on timeout / disconnect

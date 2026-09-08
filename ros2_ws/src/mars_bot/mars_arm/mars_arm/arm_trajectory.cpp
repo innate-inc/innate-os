@@ -57,7 +57,7 @@ std::vector<std::vector<double>> MarsArmNode::computeCubicSplineTrajectory(const
 // ========== PLAN AND EXECUTE ==========
 
 bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
-                                           GainMode trajectory_gain_mode, ContactGuard* guard) {
+                                           GainMode trajectory_gain_mode, TrajectoryGuard* guard) {
     // Block the idle gain decay for the whole call; the guard stamps the
     // quiet period's start on every exit path.
     trajectory_executing_ = true;
@@ -136,17 +136,14 @@ bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_pos
 
     // Execute trajectory by sending each waypoint with a sleep
     auto sleep_duration = std::chrono::duration<double>(dt);
-    const auto started = std::chrono::steady_clock::now();
-    int strikes = 0;
     for (size_t i = 0; i < interpolated_trajectory.size(); ++i) {
         const auto& point = interpolated_trajectory[i];
 
-        if (guard != nullptr && trackingLost(*guard, started, strikes)) {
-            holdArmWhereItIs();
-            RCLCPP_WARN(this->get_logger(),
-                        "Trajectory stopped: joint %d is %.2f rad behind its command (obstacle?) — holding the arm "
-                        "where it is",
-                        guard->blocked_joint + 1, guard->blocked_error_rad);
+        if (guard != nullptr && guardTripped(*guard)) {
+            if (guard->blocked_joint >= 0) {
+                holdArmWhereItIs();
+            }
+            RCLCPP_WARN(this->get_logger(), "Trajectory stopped: %s", guard->stop_reason.c_str());
             return false;
         }
 
@@ -178,11 +175,19 @@ bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_pos
     return true;
 }
 
-bool MarsArmNode::trackingLost(ContactGuard& guard, std::chrono::steady_clock::time_point since, int& strikes) {
+bool MarsArmNode::guardTripped(TrajectoryGuard& guard) {
+    if (!arm_torque_enabled_) {
+        guard.stop_reason = "arm torque went off";
+        return true;
+    }
+    if (stream_command_at_.load() > guard.started) {
+        guard.stop_reason = "a streaming arm command took over";
+        return true;
+    }
     std::array<double, 6> written{};
     {
         std::lock_guard<std::mutex> lock(arm_command_mutex_);
-        if (written_at_ < since) {
+        if (written_at_ < guard.started) {
             return false;  // the control loop has not written this trajectory yet
         }
         written = written_target_;
@@ -192,35 +197,39 @@ bool MarsArmNode::trackingLost(ContactGuard& guard, std::chrono::steady_clock::t
         std::lock_guard<std::mutex> lock(joint_state_mutex_);
         measured = latest_joint_positions_;
     }
+    const double waited_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - guard.started).count();
     int worst_joint = -1;
     double worst_error = 0.0;
-    for (size_t j = 0; j < 5 && j < measured.size(); ++j) {
+    for (size_t j = 0; j < kArmJoints && j < measured.size(); ++j) {
         const double error = std::abs(measured[j] - written[j]);
+        if (error <= guard.max_error_rad) {
+            guard.locked_on[j] = true;
+            continue;
+        }
+        if (!guard.locked_on[j] && waited_s < kContactLockOnTimeoutS) {
+            continue;
+        }
         if (error > worst_error) {
             worst_error = error;
             worst_joint = static_cast<int>(j);
         }
     }
-    if (worst_error <= guard.max_error_rad) {
-        guard.locked_on = true;
-        strikes = 0;
+    if (worst_joint < 0) {
+        guard.strikes = 0;
         return false;
     }
-    if (!guard.locked_on) {
-        const double waited_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - since).count();
-        if (waited_s < kContactLockOnTimeoutS) {
-            return false;
-        }
-    } else if (++strikes < kContactStrikes) {
+    if (++guard.strikes < kContactStrikes) {
         return false;
     }
     guard.blocked_joint = worst_joint;
-    guard.blocked_error_rad = worst_error;
+    std::ostringstream reason;
+    reason << "joint " << worst_joint + 1 << " met resistance (" << std::fixed << std::setprecision(2) << worst_error
+           << " rad behind its command); holding the arm where it is";
+    guard.stop_reason = reason.str();
     return true;
 }
 
-// Retarget the arm to where it actually is so the servos stop pushing; the
-// grip target (j6) is kept, it was never part of the collision.
+// Retarget the arm to where it actually is so the servos stop pushing.
 void MarsArmNode::holdArmWhereItIs() {
     std::vector<double> measured;
     {
@@ -228,7 +237,7 @@ void MarsArmNode::holdArmWhereItIs() {
         measured = latest_joint_positions_;
     }
     std::lock_guard<std::mutex> lock(arm_command_mutex_);
-    for (size_t j = 0; j < 5 && j < measured.size(); ++j) {
+    for (size_t j = 0; j < kArmJoints && j < measured.size(); ++j) {
         latest_target_[j] = measured[j];
     }
     has_target_ = true;
@@ -236,23 +245,23 @@ void MarsArmNode::holdArmWhereItIs() {
 
 // ========== REST FOLD ==========
 
-namespace {
-
-RestOutcome stoppedBy(const ContactGuard& guard, const char* stage) {
-    if (guard.blocked_joint < 0) {
-        return {false, std::string("rest ") + stage + " rejected (see the arm log)"};
+RestOutcome MarsArmNode::foldToRest(const char* trigger) {
+    const RestOutcome outcome = runRestFold(trigger);
+    if (outcome.at_rest) {
+        RCLCPP_INFO(this->get_logger(), "Rest fold (%s): %s", trigger, outcome.detail.c_str());
+    } else {
+        RCLCPP_WARN(this->get_logger(), "Rest fold (%s): %s", trigger, outcome.detail.c_str());
     }
-    std::ostringstream detail;
-    detail << "rest " << stage << " stopped: joint " << guard.blocked_joint + 1 << " met resistance (" << std::fixed
-           << std::setprecision(2) << guard.blocked_error_rad << " rad behind its command); holding the arm there";
-    return {false, detail.str()};
+    return outcome;
 }
 
-}  // namespace
-
-RestOutcome MarsArmNode::foldToRest(const char* trigger) {
+RestOutcome MarsArmNode::runRestFold(const char* trigger) {
     if (!arm_torque_enabled_) {
         return {false, "rest fold skipped: arm torque is off"};
+    }
+    std::vector<double> rest = this->get_parameter("rest_pose").as_double_array();
+    if (rest.size() != 6) {
+        return {false, "rest fold skipped: rest_pose must list 6 joint positions"};
     }
     std::vector<double> measured;
     {
@@ -260,34 +269,40 @@ RestOutcome MarsArmNode::foldToRest(const char* trigger) {
         measured = latest_joint_positions_;
     }
     if (measured.size() != 6) {
-        return {false, "rest fold skipped: no joint state"};
+        return {false, "rest fold skipped: no joint state yet"};
     }
     double grip;
     {
         std::lock_guard<std::mutex> lock(arm_command_mutex_);
         // j6 is current-based position control: re-commanding it above the
         // standing grip target zeroes the preload and drops a held object.
-        grip = latest_target_[5];
+        grip = has_target_ ? latest_target_[5] : measured[5];
+    }
+    double away = 0.0;
+    for (size_t j = 0; j < kArmJoints; ++j) {
+        away = std::max(away, std::abs(measured[j] - rest[j]));
+    }
+    if (away < kAtRestRad) {
+        return {true, "arm already at rest"};
     }
     RCLCPP_INFO(this->get_logger(), "Folding the arm to rest (%s)", trigger);
-    ContactGuard guard{kRestContactErrorRad};
-    if (measured[3] - rest_pose_[3] > kHangingWristRad) {
+    if (measured[3] - rest[3] > kHangingWristRad) {
         std::vector<double> lift = measured;
         lift[1] = kLiftShoulderRad;
         lift[2] = kLiftElbowRad;
         lift[5] = grip;
         RCLCPP_INFO(this->get_logger(), "Lifting the hanging gripper clear of the ground first");
+        TrajectoryGuard guard{kRestContactErrorRad};
         if (!planAndExecuteTrajectory(lift, kRestLiftDurationS, GainMode::SCHEDULED, &guard)) {
-            return stoppedBy(guard, "lift");
+            return {false, "rest lift stopped: " + guard.stop_reason};
         }
-        guard = ContactGuard{kRestContactErrorRad};
     }
-    std::vector<double> target(rest_pose_.begin(), rest_pose_.end());
-    target[5] = grip;
-    if (planAndExecuteTrajectory(target, kRestFoldDurationS, GainMode::SCHEDULED, &guard)) {
+    rest[5] = grip;
+    TrajectoryGuard guard{kRestContactErrorRad};
+    if (planAndExecuteTrajectory(rest, kRestFoldDurationS, GainMode::SCHEDULED, &guard)) {
         return {true, "arm folded to rest"};
     }
-    return stoppedBy(guard, "fold");
+    return {false, "rest fold stopped: " + guard.stop_reason};
 }
 
 void MarsArmNode::armRestCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,

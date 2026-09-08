@@ -181,6 +181,12 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
             RCLCPP_INFO(this->get_logger(), "Hot-reload: max_jerk = %.1f rad/s³", param.as_double());
             continue;
         }
+        // rest_pose and auto_rest are read on the fly by each fold
+        if (name == "rest_pose" && param.as_double_array().size() != 6) {
+            result.successful = false;
+            result.reason = "rest_pose must list 6 joint positions";
+            return result;
+        }
 
         // Match pattern: joint_N.<suffix>
         if (name.size() >= 8 && name.substr(0, 6) == "joint_") {

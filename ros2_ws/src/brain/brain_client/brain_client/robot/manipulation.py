@@ -207,6 +207,7 @@ class Manipulation:
         self._torque_on_client = self.node.create_client(Trigger, "/mars/arm/torque_on")
         self._torque_off_client = self.node.create_client(Trigger, "/mars/arm/torque_off")
         self._reboot_servos_client = self.node.create_client(Trigger, "/mars/arm/reboot")
+        self._fix_error_client = self.node.create_client(Trigger, "/mars/arm/fix_error")
 
         self.logger.info("Manipulation initialized")
 
@@ -371,8 +372,8 @@ class Manipulation:
         radians) and return the settled pose.
 
         FK-verified: if the settled pose is off by more than ``tolerance_xy``
-        / ``tolerance_z``, recover (reboot + torque on) and retry once, then
-        raise ArmUnhealthy. ``tolerance_z`` is looser because descents
+        / ``tolerance_z``, recover (reboot any tripped servo) and retry once,
+        then raise ArmUnhealthy. ``tolerance_z`` is looser because descents
         legitimately stop early on contact; either tolerance may be None to
         skip that axis, and with both None the move is unverified — the
         service result is trusted, failure raises ArmFailed, no recovery.
@@ -659,7 +660,7 @@ class Manipulation:
             if j6 is None or j6 >= self._GRIPPER_SHUT_J6:
                 return
             if attempt == 1:
-                self.logger.warning(f"Gripper did not open (j6={j6:.3f}); rebooting servos, then retrying")
+                self.logger.warning(f"Gripper did not open (j6={j6:.3f}); rebooting tripped servos, then retrying")
                 self.recover()
         raise ArmUnhealthy("gripper did not open (servo tripped shut)")
 
@@ -707,15 +708,14 @@ class Manipulation:
         return success
 
     def recover(self) -> None:
-        """Reboot servos, re-enable torque, settle (~2.5 s); preserves the
-        standing grip target so a mid-pick retry keeps the grip preload."""
-        grip = self._grip_target
-        self.logger.warning("[arm] recovering (reboot + torque on)")
-        self.reboot_servos()
-        time.sleep(2.0)  # committed: teardown-safe by design
-        self.torque_on()
+        """Reboot, reconfigure and re-torque the servos that latched a
+        hardware error (an overload trip leaves the servo limp); the rest of
+        the arm keeps holding, so a mid-pick retry resumes where it stopped.
+        A full reboot + torque_on would fold the arm to rest instead."""
+        self.stream_stop()  # never stream across a servo power-cycle
+        self.logger.warning("[arm] recovering (rebooting tripped servos)")
+        self._call_trigger(self._fix_error_client, "Fix error", "Tripped servos rebooted", timeout_sec=10.0)
         time.sleep(0.5)  # committed: servo re-init settle
-        self._grip_target = grip
 
     # --- internals ---
 
@@ -931,7 +931,7 @@ class Manipulation:
             if not result.success:
                 self.logger.error(f"{action_name} failed: {result.message}")
                 return False
-            self.logger.info(success_msg)
+            self.logger.info(result.message or success_msg)
             return True
         except Exception as e:
             self.logger.error(f"Exception calling {action_name}: {e}")
