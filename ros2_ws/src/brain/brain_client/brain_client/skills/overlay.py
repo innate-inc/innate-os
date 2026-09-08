@@ -33,17 +33,21 @@ class _Logger(Protocol):
 
 # The run every overlay event belongs to, process-wide like the run cancel
 # latch: a sub-skill's overlay draws into its root's run, and the UI drops
-# stragglers from a run that has already ended.
+# stragglers from a run that has already ended. Nested code skills re-enter
+# the server's run body, so only the outermost entry owns the run.
 _run_id = ""
 _run_drew = False
 
 
-def start_run() -> str:
-    """Server hook: open a run for the root skill about to execute."""
+def enter_run() -> bool:
+    """Server hook around a code skill's execute(): opens a run when none is
+    open and returns whether this caller owns it (and so must end it)."""
     global _run_id, _run_drew
+    if _run_id:
+        return False
     _run_id = uuid.uuid4().hex[:8]
     _run_drew = False
-    return _run_id
+    return True
 
 
 def end_run() -> None:
