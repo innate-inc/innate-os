@@ -1,0 +1,8 @@
+# Request — fold ``source_id`` into ``target_id`` (templates, outfits, facts, episodes,
+# open loops), keeping the target's id and name. Explicit and audited; the engine never
+# merges on its own.
+string source_id
+string target_id
+---
+bool success
+string message

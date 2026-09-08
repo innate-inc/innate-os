@@ -1,0 +1,9 @@
+# Request — the people node's current snapshot (the same JSON as /brain/people) and,
+# on demand, the full roster with per-person memory digests and thumbnails for the
+# Settings page. Thumbnails ride as base64 JPEG and are only included when asked.
+bool include_roster
+bool include_thumbnails
+---
+bool success
+string message
+string json

@@ -1,0 +1,7 @@
+# Request — delete everything known about a person: templates, outfits, facts, episodes,
+# thumbnails. ``who`` is a live track tag or a person id. The id is tombstoned so a stale
+# reference fails loudly instead of naming a stranger; the live track is suppressed.
+string who
+---
+bool success
+string message

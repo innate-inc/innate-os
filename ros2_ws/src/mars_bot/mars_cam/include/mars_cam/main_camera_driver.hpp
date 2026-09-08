@@ -14,10 +14,14 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 
 #include <turbojpeg.h>
+
+#include <gst/gst.h>
+#include <gst/app/gstappsink.h>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
@@ -191,6 +195,62 @@ class MainCameraDriver : public rclcpp::Node {
     std::string createGStreamerPipeline();
 
     /**
+     * @brief Open the single-branch pipeline through cv::VideoCapture
+     * @return true if successful, false otherwise
+     */
+    bool openVideoCapture();
+
+    /**
+     * @brief Create the pipeline string that tees the sensor's MJPG buffers to a second appsink
+     * @return Pipeline string with named "main_sink" and "native_sink" appsinks
+     */
+    std::string createNativeGStreamerPipeline();
+
+    /**
+     * @brief v4l2src + MJPG caps, the source both pipeline variants start from
+     */
+    std::string captureBranch() const;
+
+    /**
+     * @brief NVDEC decode + VIC rotate/scale + appsink, the branch that feeds the published frames
+     * @param sink_name Optional " name=..." appended to the appsink element
+     */
+    std::string decodeBranch(const std::string& sink_name) const;
+
+    /**
+     * @brief Build and start the tee'd pipeline, taking main_sink_/native_sink_ from it
+     * @return true if the pipeline reached PLAYING, false if the caller must fall back
+     */
+    bool initializeNativePipeline();
+
+    /**
+     * @brief Stop and release the tee'd pipeline and its appsinks
+     */
+    void shutdownNativePipeline();
+
+    /**
+     * @brief Pop the tee'd pipeline's bus, logging anything it reported as an error
+     */
+    void drainNativeBus();
+
+    /**
+     * @brief Capture one BGR frame, from main_sink_ when the tee'd pipeline runs, else from cap_
+     * @param frame Output frame at publish_stereo_width x publish_stereo_height
+     * @return true if a frame was captured
+     */
+    bool captureFrame(cv::Mat& frame);
+
+    /**
+     * @brief Publish the sensor's own MJPG buffer, throttled to native_fps and only while subscribed
+     */
+    void publishNativeFrame();
+
+    /**
+     * @brief Stamp for a native buffer, offset from the published frame's stamp by the PTS delta
+     */
+    rclcpp::Time nativeStampFor(GstBuffer* buffer);
+
+    /**
      * @brief Initialize V4L2 controls for manual exposure/gain control
      * @return true if successful, false otherwise
      */
@@ -248,6 +308,7 @@ class MainCameraDriver : public rclcpp::Node {
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr right_pub_;  // Right camera raw
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr stereo_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr native_pub_;
 
     // Camera info publishers + calibration
     rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_pub_;
@@ -287,6 +348,18 @@ class MainCameraDriver : public rclcpp::Node {
 
     // Stereo image publishing (combined left+right for legacy compatibility)
     bool publish_stereo_{false};
+
+    // Native MJPG branch: the sensor's own buffers, teed off before the decoder.
+    // All of this is touched only from frame_thread_, which is joined before the pipeline is released.
+    bool publish_native_{true};
+    double native_fps_{5.0};
+    double native_publish_interval_{0.0};
+    GstElement* native_pipeline_{nullptr};
+    GstElement* main_sink_{nullptr};
+    GstElement* native_sink_{nullptr};
+    GstClockTime main_frame_pts_{GST_CLOCK_TIME_NONE};
+    rclcpp::Time last_frame_stamp_;
+    rclcpp::Time last_native_publish_;
 
     // V4L2 control interface
     int camera_fd_{-1};

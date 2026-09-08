@@ -16,6 +16,10 @@ main_camera_driver:
     publish_compressed: true
     compressed_frame_interval: 2
     publish_stereo: false
+    # Off until the tee'd capture path is verified on a Jetson (RFC people-memory 4.1): with it off the
+    # driver runs the pre-existing cv::VideoCapture path unchanged and the people node reports native: unavailable.
+    publish_native: false   # Tee the sensor's own 2560x720 MJPG buffers to /mars/main_camera/native/compressed
+    native_fps: 5.0        # Rate cap for that topic; it only publishes while something subscribes
     exposure: -1
     gain: -1
     default_gain: 110

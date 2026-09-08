@@ -36,6 +36,11 @@ set(srv_files
   "srv/DeleteEpisode.srv"
   "srv/CopyEpisode.srv"
   "srv/ForgetMemory.srv"
+  "srv/GetPeople.srv"
+  "srv/RenamePerson.srv"
+  "srv/MergePeople.srv"
+  "srv/ForgetPerson.srv"
+  "srv/SetPeopleCollection.srv"
 )
 
 set(msg_files

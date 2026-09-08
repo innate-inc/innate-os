@@ -1,0 +1,6 @@
+# Request — the owner's collection preference. ``enabled`` false stops enrolment and
+# recognition (tracking continues anonymously); the setting persists in the store.
+bool enabled
+---
+bool success
+string message

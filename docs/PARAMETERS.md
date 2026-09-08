@@ -47,7 +47,7 @@ To tune something, **uncomment a whole stanza** (the `node:`, `ros__parameters:`
 | `bringup` `battery` | `warning_percentage` / `critical_percentage` | `20` / `10` |
 | `bringup` `safety` (hard `/cmd_vel` clamp) | `max_speed` / `max_angular_speed` | `0.4` / `2.5` |
 | `mars_arm` | `max_jerk` | `150.0` |
-| `main_camera_driver` (hardware) | `width/height` (capture), `publish_stereo_width/height`, `publish_left_width/height` (published size; downstream follows it automatically), `fps`, `jpeg_quality`, `auto_exposure_mode`, `exposure`, `gain`, `default_gain`, `target_brightness`, `ae_kp` | see template |
+| `main_camera_driver` (hardware) | `width/height` (capture), `publish_stereo_width/height`, `publish_left_width/height` (published size; downstream follows it automatically), `fps`, `jpeg_quality`, `auto_exposure_mode`, `exposure`, `gain`, `default_gain`, `target_brightness`, `ae_kp`, `publish_native` / `native_fps` (the lazy native MJPG topic `/mars/main_camera/native/compressed` and its rate cap) | see template |
 | `arm_camera_driver` (hardware) | `width/height` (capture), `fps` | see template |
 | `webrtc_streamer` (teleop stream) | `main_width/main_height`, `arm_width/arm_height` (encode size per camera) | see template |
 | `manipulation_server` | `inference_hz`, `speed`, `n_action_steps` (0=auto), `temporal_ensemble_coeff` | `25.0`, `1.5`, `0`, `0.0` |

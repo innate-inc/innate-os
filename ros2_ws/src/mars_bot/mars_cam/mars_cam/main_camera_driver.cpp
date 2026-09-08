@@ -7,11 +7,21 @@ using namespace std::chrono_literals;
 
 namespace mars_cam {
 
+namespace {
+// Bounded so a camera that stopped delivering cannot wedge the destructor's thread join.
+constexpr GstClockTime kMainPullTimeout = 500 * GST_MSECOND;
+// Decode latency puts the native buffer at most a frame or two ahead of the frame just published;
+// anything further apart is a PTS reset, not the same capture, and must not stamp the message.
+constexpr int64_t kMaxNativeSkewNs = 200000000;
+}  // namespace
+
 MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("main_camera_driver", options) {
     // Declare parameters with defaults
     this->declare_parameter<std::string>("data_directory", "/home/jetson1/innate-os/data");
     this->declare_parameter<std::string>("camera_symlink", "3D");
-    this->declare_parameter<int>("width", 1280);  // Capture at 1280x480 (640x480 per side)
+    // Defaults only: the composable launch loads config/stereo_depth_estimator.yaml, which captures
+    // 2560x720 (1280x720 per eye) and publishes 1280x480 (640x480 per eye).
+    this->declare_parameter<int>("width", 1280);
     this->declare_parameter<int>("height", 480);
     this->declare_parameter<int>("publish_left_width", 640);  // Publish left at 640x480
     this->declare_parameter<int>("publish_left_height", 480);
@@ -24,6 +34,8 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
     this->declare_parameter<bool>("publish_compressed", true);
     this->declare_parameter<int>("compressed_frame_interval", 3);
     this->declare_parameter<bool>("publish_stereo", false);    // Combined stereo image for legacy compatibility
+    this->declare_parameter<bool>("publish_native", true);     // Tee the sensor's own MJPG buffers to a lazy topic
+    this->declare_parameter<double>("native_fps", 5.0);        // Rate cap for the native topic while subscribed
     this->declare_parameter<int>("exposure", -1);              // -1 means use current value
     this->declare_parameter<int>("gain", -1);                  // -1 means use current value
     this->declare_parameter<int>("default_gain", 110);         // Default gain for auto-exposure mode
@@ -51,6 +63,9 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
     publish_compressed_ = this->get_parameter("publish_compressed").as_bool();
     compressed_frame_interval_ = this->get_parameter("compressed_frame_interval").as_int();
     publish_stereo_ = this->get_parameter("publish_stereo").as_bool();
+    publish_native_ = this->get_parameter("publish_native").as_bool();
+    native_fps_ = this->get_parameter("native_fps").as_double();
+    native_publish_interval_ = native_fps_ > 0.0 ? 1.0 / native_fps_ : 0.0;
 
     // Get V4L2 control parameters
     exposure_setting_ = this->get_parameter("exposure").as_int();
@@ -191,9 +206,19 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
     if (initializeCamera()) {
         camera_initialized_ = true;
 
+        // Created only once the tee is confirmed running, so an absent topic is the signal that
+        // the native branch is unavailable rather than a publisher that never publishes.
+        if (publish_native_) {
+            native_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+                "/mars/main_camera/native/compressed",
+                rclcpp::SensorDataQoS().keep_last(1).reliability(rclcpp::ReliabilityPolicy::BestEffort));
+        }
+
         // Initialize frame timing tracking
         frame_timestamps_.clear();
         last_stats_print_ = this->now();
+        last_frame_stamp_ = last_stats_print_;
+        last_native_publish_ = last_stats_print_;
 
         // Start frame processing thread
         frame_thread_running_ = true;
@@ -221,6 +246,7 @@ MainCameraDriver::~MainCameraDriver() {
     if (cap_.isOpened()) {
         cap_.release();
     }
+    shutdownNativePipeline();
 
     // Close V4L2 control file descriptor
     if (camera_fd_ != -1) {
@@ -240,30 +266,16 @@ bool MainCameraDriver::initializeCamera() {
         return false;
     }
 
-    // Create GStreamer pipeline
-    std::string pipeline = createGStreamerPipeline();
-    RCLCPP_DEBUG(this->get_logger(), "GStreamer pipeline: %s", pipeline.c_str());
-
-    // Open camera with GStreamer backend
-    cap_.open(pipeline, cv::CAP_GSTREAMER);
-
-    if (!cap_.isOpened()) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to open camera with GStreamer");
-        return false;
+    // The tee'd pipeline owns the device when the native branch is on; cv::VideoCapture cannot
+    // expose a second appsink, and V4L2 refuses a second streaming open of the same node.
+    if (publish_native_ && !initializeNativePipeline()) {
+        RCLCPP_ERROR(this->get_logger(),
+                     "Native MJPG branch failed to start; falling back to the single-branch pipeline");
+        publish_native_ = false;
     }
 
-    // Verify camera settings
-    int actual_width = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_WIDTH));
-    int actual_height = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_HEIGHT));
-    double actual_fps = cap_.get(cv::CAP_PROP_FPS);
-
-    RCLCPP_DEBUG(this->get_logger(), "Camera opened successfully:");
-    RCLCPP_DEBUG(this->get_logger(), "  Actual resolution: %dx%d", actual_width, actual_height);
-    RCLCPP_DEBUG(this->get_logger(), "  Actual FPS: %.1f", actual_fps);
-
-    if (actual_width != capture_width_ || actual_height != capture_height_) {
-        RCLCPP_WARN(this->get_logger(), "Resolution mismatch! Requested: %dx%d, Got: %dx%d", capture_width_,
-                    capture_height_, actual_width, actual_height);
+    if (!publish_native_ && !openVideoCapture()) {
+        return false;
     }
 
     // Initialize V4L2 controls
@@ -340,32 +352,67 @@ bool MainCameraDriver::initializeCamera() {
     return true;
 }
 
-std::string MainCameraDriver::createGStreamerPipeline() {
-    // Use MJPG format for better performance with this camera
-    // Pipeline: capture at full resolution, then downscale in GStreamer (hardware accelerated)
-    // appsink properties:
-    //   max-buffers=1  - Only keep 1 frame in queue (always get newest)
-    //   drop=true      - Drop old frames if queue is full (prevents memory buildup)
-    //   sync=false     - Don't sync to clock (process as fast as possible)
+bool MainCameraDriver::openVideoCapture() {
+    std::string pipeline = createGStreamerPipeline();
+    RCLCPP_DEBUG(this->get_logger(), "GStreamer pipeline: %s", pipeline.c_str());
 
+    cap_.open(pipeline, cv::CAP_GSTREAMER);
+
+    if (!cap_.isOpened()) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to open camera with GStreamer");
+        return false;
+    }
+
+    int actual_width = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_WIDTH));
+    int actual_height = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_HEIGHT));
+    double actual_fps = cap_.get(cv::CAP_PROP_FPS);
+
+    RCLCPP_DEBUG(this->get_logger(), "Camera opened successfully:");
+    RCLCPP_DEBUG(this->get_logger(), "  Actual resolution: %dx%d", actual_width, actual_height);
+    RCLCPP_DEBUG(this->get_logger(), "  Actual FPS: %.1f", actual_fps);
+
+    if (actual_width != capture_width_ || actual_height != capture_height_) {
+        RCLCPP_WARN(this->get_logger(), "Resolution mismatch! Requested: %dx%d, Got: %dx%d", capture_width_,
+                    capture_height_, actual_width, actual_height);
+    }
+
+    return true;
+}
+
+std::string MainCameraDriver::captureBranch() const {
+    // MJPG straight off the sensor: io-mode=2 is mmap, and do-timestamp=true stamps every buffer
+    // with its capture time, which is what pairs a native buffer with the frame published from it.
+    return "v4l2src device=" + camera_device_ +
+           " io-mode=2 do-timestamp=true ! "
+           "image/jpeg,width=" +
+           std::to_string(capture_width_) + ",height=" + std::to_string(capture_height_) +
+           ",framerate=" + std::to_string(static_cast<int>(fps_)) + "/1 ! ";
+}
+
+std::string MainCameraDriver::decodeBranch(const std::string& sink_name) const {
     // For Jetson, use nvv4l2decoder for hardware JPEG decode (NVDEC engine) and
     // nvvidconv for hardware-accelerated scaling and rotation (VIC engine).
     // The two NVIDIA elements communicate via NVMM zero-copy buffers.
     // flip-method=2 rotates 180 degrees, interpolation-method=4 uses Smart interpolation
     // videoconvert handles final BGRx→BGR for OpenCV.
-    std::string pipeline = "v4l2src device=" + camera_device_ +
-                           " io-mode=2 do-timestamp=true ! "
-                           "image/jpeg,width=" +
-                           std::to_string(capture_width_) + ",height=" + std::to_string(capture_height_) +
-                           ",framerate=" + std::to_string(static_cast<int>(fps_)) +
-                           "/1 ! "
-                           "nvv4l2decoder mjpeg=true ! "
-                           "nvvidconv flip-method=2 interpolation-method=4 ! "
-                           "video/x-raw,width=" +
-                           std::to_string(publish_stereo_width_) + ",height=" + std::to_string(publish_stereo_height_) +
-                           ",format=BGRx ! "
-                           "videoconvert ! video/x-raw,format=BGR ! "
-                           "appsink max-buffers=1 drop=true sync=false";
+    // appsink properties:
+    //   max-buffers=1  - Only keep 1 frame in queue (always get newest)
+    //   drop=true      - Drop old frames if queue is full (prevents memory buildup)
+    //   sync=false     - Don't sync to clock (process as fast as possible)
+    return "nvv4l2decoder mjpeg=true ! "
+           "nvvidconv flip-method=2 interpolation-method=4 ! "
+           "video/x-raw,width=" +
+           std::to_string(publish_stereo_width_) + ",height=" + std::to_string(publish_stereo_height_) +
+           ",format=BGRx ! "
+           "videoconvert ! video/x-raw,format=BGR ! "
+           "appsink" +
+           sink_name + " max-buffers=1 drop=true sync=false";
+}
+
+std::string MainCameraDriver::createGStreamerPipeline() {
+    // Use MJPG format for better performance with this camera
+    // Pipeline: capture at full resolution, then downscale in GStreamer (hardware accelerated)
+    std::string pipeline = captureBranch() + decodeBranch("");
 
     // Alternative pipeline using videoscale (fallback if nvvidconv fails):
     // "v4l2src device=" + camera_device_ + " io-mode=2 do-timestamp=true ! "
@@ -381,6 +428,104 @@ std::string MainCameraDriver::createGStreamerPipeline() {
     // Note: Rotation would need to be done in OpenCV with this fallback
 
     return pipeline;
+}
+
+std::string MainCameraDriver::createNativeGStreamerPipeline() {
+    // The same decode branch, with a tee ahead of it so a second appsink also receives the sensor's
+    // own MJPG buffers. Neither leg gets a queue: appsink drop=true never blocks its chain function,
+    // so the tee pushes to the native leg from the v4l2src thread without stalling the decode leg.
+    return captureBranch() + "tee name=capture_tee capture_tee. ! " + decodeBranch(" name=main_sink") +
+           " capture_tee. ! appsink name=native_sink max-buffers=1 drop=true sync=false emit-signals=false";
+}
+
+bool MainCameraDriver::initializeNativePipeline() {
+    gst_init(nullptr, nullptr);
+
+    const std::string desc = createNativeGStreamerPipeline();
+    RCLCPP_DEBUG(this->get_logger(), "Native GStreamer pipeline: %s", desc.c_str());
+
+    GError* error = nullptr;
+    native_pipeline_ = gst_parse_launch(desc.c_str(), &error);
+    if (error) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to create native pipeline: %s", error->message);
+        g_error_free(error);
+        shutdownNativePipeline();
+        return false;
+    }
+
+    main_sink_ = gst_bin_get_by_name(GST_BIN(native_pipeline_), "main_sink");
+    native_sink_ = gst_bin_get_by_name(GST_BIN(native_pipeline_), "native_sink");
+    if (!main_sink_ || !native_sink_) {
+        RCLCPP_ERROR(this->get_logger(), "Native pipeline missing main_sink or native_sink");
+        shutdownNativePipeline();
+        return false;
+    }
+
+    GstStateChangeReturn ret = gst_element_set_state(native_pipeline_, GST_STATE_PLAYING);
+    if (ret == GST_STATE_CHANGE_ASYNC) {
+        GstState state = GST_STATE_VOID_PENDING;
+        GstState pending = GST_STATE_VOID_PENDING;
+        ret = gst_element_get_state(native_pipeline_, &state, &pending, 5 * GST_SECOND);
+        if (ret == GST_STATE_CHANGE_ASYNC) {
+            RCLCPP_WARN(this->get_logger(), "Native pipeline still changing state (state=%s, pending=%s)",
+                        gst_element_state_get_name(state), gst_element_state_get_name(pending));
+        }
+    }
+    if (ret == GST_STATE_CHANGE_FAILURE) {
+        RCLCPP_ERROR(this->get_logger(), "Native pipeline failed to reach PLAYING");
+        drainNativeBus();
+        shutdownNativePipeline();
+        return false;
+    }
+
+    RCLCPP_INFO(this->get_logger(),
+                "Native MJPG tee running: %dx%d on /mars/main_camera/native/compressed, up to %.1f Hz while subscribed",
+                capture_width_, capture_height_, native_fps_);
+    return true;
+}
+
+void MainCameraDriver::shutdownNativePipeline() {
+    if (native_pipeline_) {
+        gst_element_set_state(native_pipeline_, GST_STATE_NULL);
+    }
+    if (main_sink_) {
+        gst_object_unref(main_sink_);
+        main_sink_ = nullptr;
+    }
+    if (native_sink_) {
+        gst_object_unref(native_sink_);
+        native_sink_ = nullptr;
+    }
+    if (native_pipeline_) {
+        gst_object_unref(native_pipeline_);
+        native_pipeline_ = nullptr;
+    }
+}
+
+void MainCameraDriver::drainNativeBus() {
+    if (!native_pipeline_) {
+        return;
+    }
+
+    GstBus* bus = gst_element_get_bus(native_pipeline_);
+    if (!bus) {
+        return;
+    }
+    // Nothing else watches this bus, so every message has to be popped or the queue grows for the
+    // life of the node; only errors are worth reporting.
+    while (GstMessage* msg = gst_bus_pop(bus)) {
+        if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
+            GError* err = nullptr;
+            gchar* debug = nullptr;
+            gst_message_parse_error(msg, &err, &debug);
+            RCLCPP_ERROR(this->get_logger(), "Native pipeline error from %s: %s (%s)", GST_MESSAGE_SRC_NAME(msg),
+                         err ? err->message : "unknown", debug ? debug : "");
+            g_clear_error(&err);
+            g_free(debug);
+        }
+        gst_message_unref(msg);
+    }
+    gst_object_unref(bus);
 }
 
 bool MainCameraDriver::initializeV4L2Controls() {
@@ -465,6 +610,48 @@ int MainCameraDriver::getV4L2Control(int control_id) {
     return ctrl.value;
 }
 
+bool MainCameraDriver::captureFrame(cv::Mat& frame) {
+    if (!main_sink_) {
+        return cap_.read(frame);
+    }
+    drainNativeBus();
+
+    GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(main_sink_), kMainPullTimeout);
+    if (!sample) {
+        return false;
+    }
+
+    int width = 0;
+    int height = 0;
+    GstCaps* caps = gst_sample_get_caps(sample);
+    GstBuffer* buffer = gst_sample_get_buffer(sample);
+    if (caps) {
+        GstStructure* video = gst_caps_get_structure(caps, 0);
+        gst_structure_get_int(video, "width", &width);
+        gst_structure_get_int(video, "height", &height);
+    }
+
+    GstMapInfo map;
+    bool captured = false;
+    if (buffer && width > 0 && height > 0 && gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+        // videoconvert pads every BGR row out to a multiple of 4 bytes, so the stride is not width*3.
+        const size_t stride = map.size / static_cast<size_t>(height);
+        if (stride >= static_cast<size_t>(width) * 3) {
+            cv::Mat(height, width, CV_8UC3, map.data, stride).copyTo(frame);
+            main_frame_pts_ = GST_BUFFER_PTS(buffer);
+            captured = true;
+        }
+        gst_buffer_unmap(buffer, &map);
+    }
+    gst_sample_unref(sample);
+
+    if (!captured) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Unusable sample from main_sink (%dx%d)",
+                             width, height);
+    }
+    return captured;
+}
+
 void MainCameraDriver::frameProcessingLoop() {
     RCLCPP_INFO(this->get_logger(), "Frame processing loop started");
 
@@ -473,7 +660,7 @@ void MainCameraDriver::frameProcessingLoop() {
     while (frame_thread_running_ && rclcpp::ok()) {
         try {
             // Capture frame
-            bool success = cap_.read(frame);
+            bool success = captureFrame(frame);
 
             if (!success || frame.empty()) {
                 RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Failed to capture frame");
@@ -486,6 +673,7 @@ void MainCameraDriver::frameProcessingLoop() {
 
             // Process and publish frame
             processAndPublishFrame(frame);
+            publishNativeFrame();
 
             // Update statistics and log every 1000 frames (~33 seconds at 30 fps)
             updateFrameStats();
@@ -504,6 +692,7 @@ void MainCameraDriver::frameProcessingLoop() {
 
 void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
     auto current_time = this->now();
+    last_frame_stamp_ = current_time;
 
     // Frame is already rotated and downscaled to publish_stereo_width x publish_stereo_height by GStreamer
     // Verify dimensions match expected publish resolution
@@ -659,6 +848,56 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
             }
         }
     }
+}
+
+void MainCameraDriver::publishNativeFrame() {
+    if (!native_sink_ || !native_pub_ || native_pub_->get_subscription_count() == 0) {
+        return;
+    }
+    if ((last_frame_stamp_ - last_native_publish_).seconds() < native_publish_interval_) {
+        return;
+    }
+
+    // Non-blocking: drop=true leaves only the newest buffer in the sink, so not pulling is the whole
+    // cost of the branch while nobody subscribes — cheaper than pulling and discarding on the throttle.
+    GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(native_sink_), 0);
+    if (!sample) {
+        return;
+    }
+
+    GstBuffer* buffer = gst_sample_get_buffer(sample);
+    GstMapInfo map;
+    if (buffer && gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+        // The sensor's own buffer: MJPG, both eyes side by side, unrotated (2560x720 as configured).
+        // The left eye published on /mars/main_camera/left/image_raw is its right half, rotated 180°.
+        auto native_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+        native_msg->header.stamp = nativeStampFor(buffer);
+        native_msg->header.frame_id = frame_id_;
+        native_msg->format = "jpeg";
+        native_msg->data.assign(map.data, map.data + map.size);
+        gst_buffer_unmap(buffer, &map);
+
+        native_pub_->publish(std::move(native_msg));
+        last_native_publish_ = last_frame_stamp_;
+    }
+    gst_sample_unref(sample);
+}
+
+rclcpp::Time MainCameraDriver::nativeStampFor(GstBuffer* buffer) {
+    const GstClockTime pts = GST_BUFFER_PTS(buffer);
+    if (!GST_CLOCK_TIME_IS_VALID(pts) || !GST_CLOCK_TIME_IS_VALID(main_frame_pts_)) {
+        return last_frame_stamp_;
+    }
+
+    // Both legs of the tee carry the v4l2src capture PTS, so this is the real capture-time offset
+    // between the MJPG buffer being published and the frame processAndPublishFrame just stamped.
+    const int64_t skew_ns = static_cast<int64_t>(pts) - static_cast<int64_t>(main_frame_pts_);
+    if (skew_ns < -kMaxNativeSkewNs || skew_ns > kMaxNativeSkewNs) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
+                             "Native buffer %.0f ms from the published frame; using the frame's stamp", skew_ns / 1e6);
+        return last_frame_stamp_;
+    }
+    return last_frame_stamp_ + rclcpp::Duration::from_nanoseconds(skew_ns);
 }
 
 void MainCameraDriver::applyAutoExposure(const cv::Mat& frame) {

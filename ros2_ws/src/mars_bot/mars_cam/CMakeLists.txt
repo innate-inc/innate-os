@@ -65,8 +65,8 @@ add_library(main_camera_driver_component SHARED
   mars_cam/stereo_calibration.cpp
 )
 target_compile_definitions(main_camera_driver_component PRIVATE BUILDING_COMPONENT_LIBRARY)
-target_include_directories(main_camera_driver_component PRIVATE ${TURBOJPEG_INCLUDE_DIRS})
-target_link_libraries(main_camera_driver_component ${OpenCV_LIBS} ${TURBOJPEG_LIBRARIES})
+target_include_directories(main_camera_driver_component PRIVATE ${TURBOJPEG_INCLUDE_DIRS} ${GSTREAMER_INCLUDE_DIRS})
+target_link_libraries(main_camera_driver_component ${OpenCV_LIBS} ${TURBOJPEG_LIBRARIES} ${GSTREAMER_LIBRARIES})
 if(nlohmann_json_FOUND)
   target_link_libraries(main_camera_driver_component nlohmann_json::nlohmann_json)
 elseif(NLOHMANN_JSON_FOUND)
@@ -164,8 +164,8 @@ add_executable(main_camera_driver
   mars_cam/main_camera_driver.cpp
   mars_cam/stereo_calibration.cpp
 )
-target_include_directories(main_camera_driver PRIVATE ${TURBOJPEG_INCLUDE_DIRS})
-target_link_libraries(main_camera_driver ${OpenCV_LIBS} ${TURBOJPEG_LIBRARIES})
+target_include_directories(main_camera_driver PRIVATE ${TURBOJPEG_INCLUDE_DIRS} ${GSTREAMER_INCLUDE_DIRS})
+target_link_libraries(main_camera_driver ${OpenCV_LIBS} ${TURBOJPEG_LIBRARIES} ${GSTREAMER_LIBRARIES})
 if(nlohmann_json_FOUND)
   target_link_libraries(main_camera_driver nlohmann_json::nlohmann_json)
 elseif(NLOHMANN_JSON_FOUND)

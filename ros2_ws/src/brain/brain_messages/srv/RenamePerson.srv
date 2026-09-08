@@ -1,0 +1,11 @@
+# Request — bind or replace a person's name. ``who`` is a live track tag ("P3") or a
+# person id ("person_7f92a1b3"); ``source`` records where the name came from
+# ("app", "skill", "conversation") and is stored as the consent path. Names are not
+# unique: renaming never merges two records.
+string who
+string name
+string source
+---
+bool success
+string message
+string person_id
