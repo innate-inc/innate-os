@@ -2,6 +2,8 @@
 
 Astra can explicitly remember, inspect, correct, and remove short observations on the current saved map. Navigation and Teleop show the same notes. No observer model runs in the background.
 
+When note tools are available, the internal prompt directs the main agent to quietly record useful object locations, landmarks, and task-relevant changes without waiting to be asked. It consults current notes, updates rather than duplicates them, and removes obsolete notes without treating an object leaving view as evidence that it is gone. Note maintenance may happen while idle or during a skill; it does not authorize exploration or other physical actions, and must not delay user replies. Agents without note tools receive no scratchpad guidance.
+
 On every decision, the main agent receives both a current text snapshot and a compact **annotated map image**. It does not need a read tool call to discover the five most relevant notes. This context is inserted immediately before the current camera observation and is never absorbed into conversation history. The next request reflects edits and removals; an inference already in progress may still describe its earlier snapshot. Historical tool results are explicitly superseded by the current scratchpad.
 
 The UI below is the actual webapp against a synthetic map and ROS fixture:

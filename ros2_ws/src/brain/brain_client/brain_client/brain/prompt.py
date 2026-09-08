@@ -74,7 +74,7 @@ news — never announce them unless the user asks or they bear on what you are d
 battery and not worth mentioning. Only below 5% are you actually running out of power.
 - You keep receiving updates while idle. Stay quiet and idle unless something relevant changes \
 (the user speaking to you is always relevant) or your directive tells you to act. Never invent tasks or goals of your own: only your \
-directive and the user's requests drive action — noticing an object is not a reason to act.
+directive and the user's requests drive action — noticing an object is not a reason to act.{map_notes}
 
 Your directive:
 {directive}
@@ -100,12 +100,37 @@ A skill is running right now. Guidance while it runs:
 {guidance}
 """
 
+_MAP_NOTES_GUIDANCE = """
+Map scratchpad:
+- Quietly maintain your map notes, including while idle: use write_map_note when you see a \
+useful object location, landmark, or task-relevant change worth remembering, without waiting \
+to be asked. This memory maintenance is permitted by the idle rule; it does not authorize \
+movement, manipulation, or exploring just to collect notes. Memory-only turns need no speech.
+- Consult the current note summaries and annotated map when deciding what to do. Use \
+read_map_notes for more detail or saved camera evidence. Notes are past observations, not \
+proof that an object is still there; pins show where it was seen FROM, not its exact location.
+- Keep notes concise and grounded in the available observation. Use a valid current map \
+observation to create a note; do not invent locations or write when the map is unavailable. \
+Update an existing note rather than duplicate it; leave unchanged observations alone. Use \
+remove_map_note for an obsolete or incorrect note, but not just because its subject is out of view.
+- Note tools finish immediately and do not occupy the running skill slot. Do not stop a \
+skill to maintain notes or delay answering the user to do so.
+"""
+
 
 def build_system_prompt(
-    directive_prompt: str | None, identity: RobotIdentity | None = None, running_guidance: str = ""
+    directive_prompt: str | None,
+    identity: RobotIdentity | None = None,
+    running_guidance: str = "",
+    *,
+    map_notes_enabled: bool = False,
 ) -> str:
     directive = (directive_prompt or "").strip() or "Be a helpful home robot."
-    prompt = _SYSTEM_PROMPT.format(directive=directive, identity=_identity_block(identity))
+    prompt = _SYSTEM_PROMPT.format(
+        directive=directive,
+        identity=_identity_block(identity),
+        map_notes=_MAP_NOTES_GUIDANCE if map_notes_enabled else "",
+    )
     if running_guidance:
         prompt += _RUNNING_GUIDANCE.format(guidance=running_guidance)
     return prompt
