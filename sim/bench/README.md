@@ -65,7 +65,10 @@ bash sim/bench/run_eval.sh counter      # one map
 It needs either `INNATE_SERVICE_KEY` (their proxy, preferred) or
 `GEMINI_BASE_URL` (a local shim, `gemini_shim.py`) in `.env`. It restarts the
 stack once per map, and writes per-category episode JSONs plus a stamped log
-under `sim/bench/results/eval/`.
+under `sim/bench/results/eval/`. The shim injects your Gemini key, so it
+relays only for loopback and the Docker networks and refuses everything else
+with 403; a bridge network with its own subnet goes in `GEMINI_SHIM_ALLOW`
+(comma-separated CIDRs).
 
 ### In the web app
 

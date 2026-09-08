@@ -231,7 +231,10 @@ class WorldServer:
                 self.sim.remove_all_props()
             ok = True
         elif op == "start_challenge":  # sets its own scene up; see challenges.py
-            self.challenges.start(str(cmd.get("id", "")))
+            # A run started from the web app has nobody else to speak the
+            # narrator's lines, so they go to the robot over chat; the live
+            # runner speaks them itself and sends chat_cues: false.
+            self.challenges.start(str(cmd.get("id", "")), chat_cues=bool(cmd.get("chat_cues", True)))
             self.publish_state()
             return
         elif op == "abort_challenge":

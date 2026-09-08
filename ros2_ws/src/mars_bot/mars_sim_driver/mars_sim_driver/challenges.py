@@ -881,6 +881,9 @@ class ChallengeEngine:
         self._cues_fired: set[int] = set()
         self.transcript: list[dict] = []  # every cue spoken, in order, with its sim time
         self._cue_sink = None  # set by the runner that has somewhere to deliver speech
+        # Per run: with no sink, deliver cues through the chat outbox (the web
+        # app's runs ask for this; the runners deliver cues themselves).
+        self._chat_cues = False
         # -- metrics, accumulated from ground truth the tick already holds --
         # Deliberately only what the ENGINE can see. Turn counts and token
         # spend belong to the agent and are reported by the runner; mixing the
@@ -930,7 +933,11 @@ class ChallengeEngine:
 
     # -- commands (observer connection threads) --
 
-    def start(self, challenge_id: str) -> bool:
+    def start(self, challenge_id: str, chat_cues: bool = False) -> bool:
+        """Begin a run. `chat_cues`: with no cue sink installed, speak the
+        narrator's lines to the robot through the chat outbox (see
+        _deliver_cue). The world server passes True for a run the web app
+        starts; the bench and live runners deliver cues themselves."""
         challenge = self.challenges.get(challenge_id)
         if challenge is None:
             print(f"[challenges] start ignored: unknown id {challenge_id!r}", flush=True)
@@ -938,6 +945,7 @@ class ChallengeEngine:
         if not self._offered(challenge):
             print(f"[challenges] start ignored: {challenge_id!r} is not authored for this environment", flush=True)
             return False
+        self._chat_cues = chat_cues
         # Nothing is judged while the scene is being built. The world reset and
         # the drops take the sim lock, which the physics thread keeps grabbing
         # between ticks, so a tick lands in the middle of this -- and it must
@@ -1342,12 +1350,31 @@ class ChallengeEngine:
                 self.tempt_name = cue.tempt
                 self.tempt_min_m = None
             print(f"[narrator] {challenge.id} +{line['t']:.1f}s ({cue.kind}): {cue.text}", flush=True)
-            sink = self._cue_sink
-            if sink is not None:
-                try:
-                    sink(line)
-                except Exception as exc:  # noqa: BLE001 -- delivery is best effort
-                    print(f"[narrator] sink failed: {exc!r}", flush=True)
+            self._deliver_cue(line)
+
+    def _deliver_cue(self, line: dict) -> None:
+        """Where a narrator line goes beyond the transcript. Callers hold _mutex.
+
+        A runner that installed a sink gets it: the bench runner hands the line
+        to its agent, the live runner polls the transcript and speaks it
+        itself, counting an undelivered line as a harness fault. With no sink
+        and a run that asked for it -- the web app's, where nothing else can
+        -- the line goes through the chat outbox, which ChallengeChatBridge
+        publishes to /brain/chat_in exactly like an NPC reply, so the robot
+        hears the question it is about to be judged on; before this, a
+        scripted challenge started from the web app waited for an answer to a
+        question neither the robot nor the operator was given. A run with
+        neither (the oracle's) still has the transcript.
+        """
+        sink = self._cue_sink
+        if sink is not None:
+            try:
+                sink(line)
+            except Exception as exc:  # noqa: BLE001 -- delivery is best effort
+                print(f"[narrator] sink failed: {exc!r}", flush=True)
+        elif self._chat_cues:
+            self._queue_chat_input({"sender": "user", "text": str(line.get("text", "")), "timestamp": time.time()})
+            self._chat_ready.notify_all()
 
     def set_cue_sink(self, sink) -> None:
         """Where spoken lines go. The bench runner hands them to its agent; the
@@ -1614,6 +1641,38 @@ class SkillEventBridge:
         self.url = url
         threading.Thread(target=self._run, daemon=True).start()
 
+    @classmethod
+    def event_for(cls, message: str) -> dict | None:
+        """The engine event one rosbridge frame carries, or None.
+
+        A skill lifecycle update is posted as it is. The robot's speech becomes
+        a `say` event, NOT `answer`: `answer` is the structured channel where a
+        wrong value is a guess and three guesses disqualify the episode
+        (Answered), and the live robot has no such channel -- it only talks.
+        Turning its talk into claims meant three progress remarks ("on my
+        way", "checking the counter", "one moment") before the right count
+        disqualified the correct answer that followed, while the in-process
+        agent's identical speech, arriving as `say`, passed. Both are judged
+        by the same whole-word rule now.
+
+        Only the ROBOT's own speech, and `sender == "robot"` is the whole
+        test. chat_out carries robot | robot_thoughts | system | skill_output:
+        an exclusion list let the inner monologue and every tool result answer
+        the question for it, so a thought containing the right number scored
+        as the robot saying it.
+        """
+        frame = json.loads(message)
+        topic = frame.get("topic")
+        if topic == cls.TOPIC:
+            return json.loads(frame["msg"]["data"])
+        if topic == cls.CHAT_TOPIC:
+            said = json.loads(frame["msg"]["data"])
+            if said.get("sender") == "robot":
+                text = str(said.get("text", ""))
+                if text.strip():
+                    return {"type": "say", "text": text}
+        return None
+
     def _run(self) -> None:
         try:
             from websockets.sync.client import connect
@@ -1635,25 +1694,9 @@ class SkillEventBridge:
                         # the connection -- a teardown here sleeps 5s, and
                         # rosbridge does not replay what was published meanwhile.
                         try:
-                            frame = json.loads(message)
-                            if frame.get("topic") == self.TOPIC:
-                                self.engine.post_event(json.loads(frame["msg"]["data"]))
-                            elif frame.get("topic") == self.CHAT_TOPIC:
-                                said = json.loads(frame["msg"]["data"])
-                                # Only the ROBOT's own speech, and `sender ==
-                                # "robot"` is the whole test. chat_out carries
-                                # robot | robot_thoughts | system |
-                                # skill_output: an exclusion list let the inner
-                                # monologue and every tool result answer the
-                                # question for it, so a thought containing the
-                                # right number scored as the robot saying it.
-                                # live_runner.py already counts utterances this
-                                # way; the judge did not, which is the worse
-                                # half of the same bug.
-                                if said.get("sender") == "robot":
-                                    text = str(said.get("text", ""))
-                                    if text.strip():
-                                        self.engine.post_event({"type": "answer", "value": text})
+                            event = self.event_for(message)
+                            if event is not None:
+                                self.engine.post_event(event)
                         except Exception as exc:  # noqa: BLE001 -- junk on the bus; keep listening
                             print(f"[challenges] ignoring skill event: {exc!r}", flush=True)
             except Exception:  # noqa: BLE001,S110 -- rosbridge down/restarting; retry

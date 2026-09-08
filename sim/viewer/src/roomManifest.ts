@@ -15,6 +15,8 @@ export interface RoomGeom {
   rgba: number[];
   /** False for decor (floor seams, skirting): drawn, never collided with. */
   collide: boolean;
+  /** The sidecar's name for the geom; "ceiling" marks a lid (see isCeiling). */
+  name?: string;
 }
 
 export interface RoomInfo {
@@ -51,6 +53,16 @@ export function isValidRoomGeom(geom: unknown): geom is RoomGeom {
     return false;
   }
   return g.size.slice(0, arity).every((v) => v > 0);
+}
+
+/** A room's lid. Real in the sim -- the robot's camera sees it instead of
+ * black sky -- but never drawn here: the observer looks in from above, and
+ * an opaque BoxGeometry at ceiling height hides the robot and every prop
+ * under it. The apartment gets its cutaway from an inward-facing shell and
+ * front-face culling, which a closed box cannot give, so the lid is left out
+ * by name (statics.py names it "ceiling"). */
+export function isCeiling(geom: RoomGeom): boolean {
+  return geom.name === "ceiling";
 }
 
 /** Radius of the sphere enclosing the geom in its own frame, so a bound built

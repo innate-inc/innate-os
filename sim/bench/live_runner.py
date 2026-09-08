@@ -299,7 +299,10 @@ async def _episode(
             if challenge_id not in ids:
                 raise _LiveHarnessFault(f"{challenge_id!r} not on the live server's roster")
 
-            await ws.send(json.dumps({"op": "start_challenge", "id": challenge_id}))
+            # chat_cues false: this runner speaks the narrator's lines itself
+            # (below), counting an undelivered one as a harness fault, so the
+            # server must not voice them as well.
+            await ws.send(json.dumps({"op": "start_challenge", "id": challenge_id, "chat_cues": False}))
             # Asked but not yet confirmed. If the stream dies here, whether the
             # challenge started is not something this end can know.
             ep.started = None

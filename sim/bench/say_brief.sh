@@ -20,13 +20,10 @@ print("import subprocess, json")
 print(f"subprocess.run(['ros2','topic','pub','--once','/brain/chat_in','std_msgs/String',"
       f"{json.dumps(json.dumps({'data': msg}))}], timeout=40, check=True)")
 PY
-# Upstream gives each checkout its own stack, so the container carries a
-# per-checkout suffix. Discover it rather than hardcoding `innate-dev`.
-OS_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E '^innate-dev' | head -1)
-if [ -z "$OS_CONTAINER" ]; then
-  echo "no innate-dev* container is running" >&2
-  exit 1
-fi
+# os_container.py picks THIS checkout's container by the launcher's own
+# naming rule; `head -1` over `innate-dev*` could pick another checkout's
+# stack when two are running, and succeed against the wrong robot.
+OS_CONTAINER=$(python3 "$(dirname "${BASH_SOURCE[0]}")/os_container.py") || exit 1
 if ! docker cp "$PAYLOAD" "$OS_CONTAINER":"$PAYLOAD" >/dev/null 2>&1; then
   echo "could not copy the brief payload into $OS_CONTAINER" >&2
   exit 1

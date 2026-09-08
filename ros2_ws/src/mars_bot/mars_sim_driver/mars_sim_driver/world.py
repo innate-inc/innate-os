@@ -238,7 +238,16 @@ def build_world_xml(
     collision_group = COLLISION_GROUP if visual_rooms else 0
     # Authored rooms are already z-up, so they sit in the worldbody as their own
     # fixed bodies rather than under "apartment" and its Y-up correction quat.
-    static_bodies = statics.bodies_xml(VISUAL_GROUP, collision_group) if statics else ""
+    # Every geom of theirs goes in VISUAL_GROUP, the collidable ones included:
+    # a primitive room IS its own visual, and every sensor has to see it.
+    # Group 0 is the robot's own, which update_depth() hides (the real stereo
+    # pipeline cannot resolve the arm at the lens), so a room put there had
+    # walls in the camera image and none in the depth stream that feeds the
+    # costmap's voxel layer -- measured on counter: 1,995 of 3,072 depth
+    # pixels changed when its geoms moved group. COLLISION_GROUP is hidden
+    # from every render and from the lidar whenever visual rooms exist.
+    # VISUAL_GROUP is drawn, depth-rendered and lidar-hit in every world.
+    static_bodies = statics.bodies_xml(VISUAL_GROUP, VISUAL_GROUP) if statics else ""
 
     # A static room brings its own floor at z=0, which the ground plane would
     # both z-fight with and duplicate. Drop the plane out of the way; it stays

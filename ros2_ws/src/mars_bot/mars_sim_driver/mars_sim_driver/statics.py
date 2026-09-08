@@ -17,10 +17,13 @@ XML, so the model cache -- which keys on that XML -- already sees any sidecar
 edit; there is no asset_files() to register (contrast props.py, where a
 republished mesh changes the world without changing a single character of XML).
 
-Geom groups follow the rest of the world (see world.py): a collidable geom goes
-in the same group as the room collision geometry, and a decor geom -- floor
-seams, skirting -- is VISUAL_GROUP with contacts disabled, so it is drawn but
-never touched.
+Every geom goes in VISUAL_GROUP (world.py says why: the robot's own group is
+hidden from the depth camera and the collision-hull group from every render,
+and a room built from primitives is its own visual). A decor geom -- floor
+seams, skirting -- has contacts disabled as well, so it is drawn but never
+touched. A geom named "ceiling" is a lid the robot's camera sees instead of
+black sky; the observer's 3D view leaves it out (sim/viewer/src/rooms.ts), the
+way the apartment's inward-facing shell gives that view its cutaway.
 """
 
 from dataclasses import dataclass, field
@@ -165,6 +168,7 @@ class RoomRegistry:
                         "quat": list(g.quat),
                         "rgba": list(g.rgba),
                         "collide": g.collide,
+                        "name": g.name,
                     }
                     for g in room.geoms
                 ],

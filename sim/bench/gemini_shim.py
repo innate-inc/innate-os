@@ -37,11 +37,21 @@ incrementally and buffering would change its timing.
 Then GEMINI_BASE_URL=http://host.docker.internal:<port> in .env, which is how
 the container reaches a host process -- the webapp already talks to the host
 world server the same way.
+
+WHO IT ANSWERS. It injects the developer's key into everything it relays, and
+Docker needs it listening on every interface (the container arrives through
+host.docker.internal, never loopback), so on a LAN-reachable host anyone who
+found port 8099 could bill that key. Requests are relayed only from loopback,
+Docker's default address pools (172.16/12) and Docker Desktop's host gateway
+(192.168.65/24); anything else gets 403 before a byte goes upstream.
+GEMINI_SHIM_ALLOW adds CIDRs (comma-separated) for a bridge network with its
+own subnet, and GEMINI_SHIM_BIND narrows the listener.
 """
 
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 import sys
 import time
@@ -54,6 +64,40 @@ OPENAI_PATH = "/v1/chat/completions"  # what innate/gemini.py sends
 OPENAI_UPSTREAM = "/v1beta/openai/chat/completions"  # where Google serves it
 CHUNK = 8192
 
+# Clients the shim relays for. Everything else is refused with 403 (see the
+# module docstring): a listener on every interface, which Docker needs, must
+# not inject the key for the LAN.
+TRUSTED_NETWORKS = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("172.16.0.0/12"),  # Docker's default address pools
+    ipaddress.ip_network("192.168.65.0/24"),  # Docker Desktop's host gateway
+)
+
+
+def allowed_networks(extra: str = "") -> tuple:
+    """TRUSTED_NETWORKS plus the comma-separated CIDRs in `extra`
+    (GEMINI_SHIM_ALLOW). Raises ValueError for a CIDR that is not one, at
+    startup rather than on the first request."""
+    networks = list(TRUSTED_NETWORKS)
+    for cidr in extra.split(","):
+        cidr = cidr.strip()
+        if cidr:
+            networks.append(ipaddress.ip_network(cidr, strict=False))
+    return tuple(networks)
+
+
+def trusted(client_ip: str, networks: tuple = TRUSTED_NETWORKS) -> bool:
+    """Whether a request from client_ip may be relayed with the key injected."""
+    try:
+        ip = ipaddress.ip_address(client_ip.split("%")[0])
+    except ValueError:
+        return False
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip in net for net in networks)
+
+
 # Headers worth carrying upstream. Everything else is either hop-by-hop or
 # ours to set: Host must not be the shim's, and auth is injected per route.
 FORWARD_REQUEST_HEADERS = ("content-type", "accept", "x-goog-upload-protocol")
@@ -64,6 +108,7 @@ FORWARD_RESPONSE_HEADERS = ("content-type",)
 
 class Handler(BaseHTTPRequestHandler):
     api_key = ""
+    networks = TRUSTED_NETWORKS
     # HTTP/1.1 with CHUNKED framing, and this is not a style choice.
     #
     # Google serves the turn stream chunked, which is self-terminating: the
@@ -129,6 +174,14 @@ class Handler(BaseHTTPRequestHandler):
     def _relay(self, method: str) -> None:
         started = time.time()
         first_at: float | None = None  # when the first upstream byte was relayed
+
+        # Before the body is read and before anything goes upstream: a client
+        # off loopback and the Docker networks gets nothing but the refusal.
+        client = self.client_address[0]
+        if not trusted(client, self.networks):
+            self._fail(403, b'{"error": "shim relays only for loopback and the Docker networks"}', False)
+            print(f"{method} {self.path.split('?')[0]} -> 403 (client {client} is not trusted)", flush=True)
+            return
 
         # A chunked request body has no Content-Length, and reading zero bytes
         # would forward an EMPTY body upstream while the caller believes it
@@ -245,9 +298,20 @@ def main() -> int:
         print("GEMINI_API_KEY is not set; nothing to inject", file=sys.stderr)
         return 2
     Handler.api_key = key
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    extra = os.environ.get("GEMINI_SHIM_ALLOW", "")
+    try:
+        Handler.networks = allowed_networks(extra)
+    except ValueError:
+        print(f"GEMINI_SHIM_ALLOW must be comma-separated CIDRs, not {extra!r}", file=sys.stderr)
+        return 2
+    bind = os.environ.get("GEMINI_SHIM_BIND", "0.0.0.0")
+    server = ThreadingHTTPServer((bind, port), Handler)
     print(
-        f"gemini shim on :{port} -> {UPSTREAM}  ({OPENAI_PATH} -> {OPENAI_UPSTREAM}, everything else passed through)",
+        f"gemini shim on {bind}:{port} -> {UPSTREAM}  ({OPENAI_PATH} -> {OPENAI_UPSTREAM}, everything else passed through)",
+        flush=True,
+    )
+    print(
+        "relaying for " + ", ".join(str(net) for net in Handler.networks) + "; anything else gets 403",
         flush=True,
     )
     server.serve_forever()

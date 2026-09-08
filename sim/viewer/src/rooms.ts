@@ -5,7 +5,7 @@
 // built from a manifest, torn down on unloadEnvironment.
 
 import * as THREE from "three";
-import { isValidRoomGeom, roomBounds, type RoomGeom, type RoomInfo } from "./roomManifest";
+import { isCeiling, isValidRoomGeom, roomBounds, type RoomGeom, type RoomInfo } from "./roomManifest";
 
 /** THREE geometry for a MuJoCo primitive. Sizes are half-extents; MuJoCo
  * stands a cylinder or capsule on +z where THREE's is Y-up, hence rotateX. */
@@ -51,6 +51,7 @@ export class RoomLibrary {
           console.warn(`[sim-viewer] skipping malformed geom in room '${room.name}':`, geom);
           continue;
         }
+        if (isCeiling(geom)) continue; // the lid would hide the room from the top camera
         const [r, g, b, a] = geom.rgba;
         const mesh = new THREE.Mesh(
           roomGeometry(geom),

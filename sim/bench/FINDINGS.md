@@ -40,7 +40,7 @@ in two independent live runs.
 
 ## Every fault found, and whose it was
 
-48 entries. One line each; the full account of any of them is in
+56 entries. One line each; the full account of any of them is in
 `FINDINGS_FULL.md` under the same id.
 
 | id | class | finding |
@@ -93,6 +93,49 @@ in two independent live runs.
 | `L3` | TASK | Navigation plans through walls it has never looked at — theirs |
 | `L4` | TASK | The exported nav map claimed the world outside the building — mine |
 | `L5` | TASK | "Assume perfect map" is an assumption this agent cannot use |
+| `H21` | HARNESS | The benchmark's rooms were invisible to the robot's depth camera |
+| `H22` | HARNESS | The live judge heard every remark as a claim: three remarks disqualified the right answer after them |
+| `H23` | HARNESS | The last permitted move was charged to the budget and never driven |
+| `H24` | HARNESS | The blaze map left the porch unknown, so Nav2 could not plan to where every blaze challenge ends |
+| `H25` | HARNESS | The key-injecting shim relayed for anyone on the LAN |
+| `H26` | HARNESS | The helpers took the first `innate-dev*` container, which could be another checkout's |
+| `H27` | HARNESS | A failed map export ran the next map on the previous map |
+| `H28` | HARNESS | A scripted challenge started from the web app asked a question nobody delivered |
+
+### Found after the recorded runs (H21-H28)
+
+An adversarial review of the merge-ready diff (GPT-6 Astra at its highest
+reasoning setting, 8 Sep 2026) found eight more harness faults. All are fixed
+in this tree, each with a test that fails on the old code. Three of them touch
+the recorded numbers, and the direction of each is known:
+
+- **H24 puts a ceiling under the live baseline.** Every blaze challenge ends
+  on the porch, outside the south wall, and the exported map left all 627 of
+  its cells unknown -- `allow_unknown: false` refuses to plan there. So on the
+  live path `blaze_l1`..`l4` (two in category 2, two in category 3) could not
+  be completed however well the robot played. The 5/45 stands as the count of
+  passes, but its denominator was 41 achievable, not 45: category 2 was 2 of
+  15 achievable, category 3 was 0 of 13. The in-process numbers are unaffected
+  (that path plans on the physics world, not the map).
+- **H22 could only have lowered the live score.** The live judge posted every
+  robot utterance as an `answer`, the structured channel where three distinct
+  wrong values mean the robot is enumerating and disqualify the episode. A
+  robot that narrates its progress three times and then answers correctly was
+  disqualified on the live path and passed on the in-process one. Whether any
+  recorded episode hit it is not recoverable from the results files, which
+  keep the verdict and not the transcript; the fix is a `say` event on both
+  paths, judged by the same whole-word rule.
+- **H21's direction is not known.** The rooms' geoms were in the robot's own
+  geom group, which the depth camera hides so the arm does not mark itself an
+  obstacle -- so in every benchmark world the costmap's voxel layer saw props
+  and no walls, while the lidar layer saw everything. The two live runs agree
+  with each other on every category, which bounds what it can have changed,
+  and the audit's certified-solvable count came from the in-process path.
+- **H23 affects the in-process agents only**, and only when the turn budget
+  ran out on a `forward` or `turn`: that move was recorded and never made.
+- H25-H28 are operational: the shim's exposure, the wrong container with two
+  stacks up, a stale map after a failed export, and cues the web app's runs
+  never delivered. None of them can have produced a number.
 
 
 ## HARNESS or AGENT -- embodiment is a constraint, not a third verdict
@@ -296,8 +339,8 @@ Stated here rather than discovered later.
    confusing, ambiguous, or badly worded — only that some agent could satisfy
    the goals. Every challenge here still needs a human to read it.
 
-9. **Rooms have no ceiling geom, and their walls are separate boxes, not a
-   sealed shell.** At most camera angles this is invisible (the background
+9. **Most rooms have no ceiling geom (counter, bridge and pantry carry a
+   decor lid), and their walls are separate boxes, not a sealed shell.** At most camera angles this is invisible (the background
    above wall-height is a flat black "sky," same as any open-air view). At a
    narrow band of oblique angles near a wall corner, the seam between two
    non-abutting wall pieces can let that black background show through as a

@@ -35,6 +35,17 @@ fails the build on the first and is the regression test for the second.
 
 The bug is not visible on a map whose bounds hug its walls, which is why it
 survived: it needs a world with space outside the building to show up.
+
+3. AUTHORED FLOOR OUTSIDE THE WALLS, CLIPPED. The fix for 2 kept the wall
+   envelope and nothing else, and blaze's porch is outside the walls by
+   design: it is where every one of its challenges ends ("saved" means the
+   object is on it). All 627 of its cells shipped unknown, and Nav2 with
+   `allow_unknown: false` refuses to plan there, so the live robot could never
+   have completed a blaze challenge however well it played. A floor slab -- a
+   collidable, level box with its top at z = 0 -- says where the robot may
+   stand as precisely as a wall says where it may not, so the slabs join the
+   envelope; the ground plane half a metre below the porch does not, and the
+   cells past its edge stay unknown. Found by an adversarial review.
 """
 
 import argparse
@@ -108,6 +119,34 @@ def outer_wall_bbox(grid: np.ndarray) -> tuple[int, int, int, int] | None:
     return min(rows), max(rows), min(cols), max(cols)
 
 
+def floor_slabs(statics) -> list[tuple[float, float, float, float]]:
+    """(xmin, ymin, xmax, ymax) of every authored floor slab: a collidable,
+    unrotated box whose top face is the floor (z = 0 within 2 cm). Walls,
+    furniture, decor seams and tilted geoms are not floor."""
+    slabs = []
+    for room in statics.rooms.values():
+        for g in room.geoms:
+            if g.type != "box" or not g.collide or abs(g.quat[0]) < 0.999:
+                continue
+            if abs(g.pos[2] + g.size[2]) > 0.02:
+                continue
+            slabs.append((g.pos[0] - g.size[0], g.pos[1] - g.size[1], g.pos[0] + g.size[0], g.pos[1] + g.size[1]))
+    return slabs
+
+
+def slab_cells(slabs, ox: float, oy: float, shape: tuple[int, int]):
+    """Each slab as an inclusive (r0, r1, c0, c1) cell box on the grid,
+    clipped to it; a slab wholly off the grid yields nothing."""
+    rows, cols = shape
+    for xmin, ymin, xmax, ymax in slabs:
+        r0 = max(0, int(math.floor((ymin - oy) / RESOLUTION)))
+        r1 = min(rows - 1, int(math.floor((ymax - oy) / RESOLUTION)))
+        c0 = max(0, int(math.floor((xmin - ox) / RESOLUTION)))
+        c1 = min(cols - 1, int(math.floor((xmax - ox) / RESOLUTION)))
+        if r0 <= r1 and c0 <= c1:
+            yield r0, r1, c0, c1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="export the loaded world's Nav2 map")
     parser.add_argument(
@@ -149,10 +188,15 @@ def main() -> int:
             f"ERROR: robot cell {seed} is outside the wall envelope rows {r0}-{r1} cols {c0}-{c1}; refusing to export"
         )
         return 1
+    inside = np.zeros(grid.shape, dtype=bool)
+    inside[r0 : r1 + 1, c0 : c1 + 1] = True
+    # Authored floor outside the walls is part of the map (fault 3 above):
+    # blaze's porch, where every blaze challenge ends.
+    slabs = floor_slabs(sim.statics) if sim.statics else []
+    for sr0, sr1, sc0, sc1 in slab_cells(slabs, ox, oy, grid.shape):
+        inside[sr0 : sr1 + 1, sc0 : sc1 + 1] = True
     bounded = grid.copy()
-    outside = np.ones(grid.shape, dtype=bool)
-    outside[r0 : r1 + 1, c0 : c1 + 1] = False
-    bounded[outside] = -1  # the apron is not part of the building
+    bounded[~inside] = -1  # the apron is not part of the building
     reach = reachable_from(bounded, seed)
     if not reach.any():
         # The robot is not standing on a scanned free cell (spawned on a pad,

@@ -112,3 +112,36 @@ def test_pack_challenges_load_tagged_to_their_pack(tmp_path):
         assert tagged == expected, pack.id
         engine.sim.environment = pack
         assert {c["id"] for c in engine.roster()} == expected, pack.id
+
+
+def test_a_web_app_run_hears_its_cues(tmp_path):
+    """Started from the web app, a scripted challenge's narrator lines reach
+    the robot through the chat outbox; started by a runner that installed a
+    sink, or by the oracle, they do not."""
+    from types import SimpleNamespace
+
+    packs = [Environment.load(BUNDLE, ASSETS)]
+    engine = ChallengeEngine(_sim(packs[0]), threading.Lock(), roots=[], progress_path=tmp_path / "p.json", packs=packs)
+    line = {"t": 3.0, "kind": "ambient", "text": "Is anyone there?"}
+    # A run in progress, as start() would leave it; only what _deliver_cue reads.
+    engine.active = SimpleNamespace(id="x")
+    engine.state = "running"
+
+    engine._chat_cues = False  # the oracle's run
+    with engine._mutex:
+        engine._deliver_cue(line)
+    assert engine.next_chat_input(timeout=0) is None
+
+    engine._chat_cues = True  # the web app's run
+    with engine._mutex:
+        engine._deliver_cue(line)
+    token, payload = engine.next_chat_input(timeout=0)
+    assert payload["text"] == "Is anyone there?" and payload["sender"] == "user"
+    assert engine.chat_input_is_current(token)
+
+    heard = []
+    engine.set_cue_sink(heard.append)  # a runner's run: the sink, not the outbox
+    with engine._mutex:
+        engine._deliver_cue(line)
+    assert heard == [line]
+    assert engine.next_chat_input(timeout=0) is None

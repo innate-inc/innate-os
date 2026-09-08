@@ -238,20 +238,25 @@ class BrainAgent:
 
     @property
     def done(self) -> bool:
-        return self._done or self.turns >= self.max_turns
+        # A primitive still in flight keeps the episode open. The decision that
+        # queued it was charged to the turn budget, and act() has to drive it:
+        # ending the moment the count was reached left the last permitted
+        # `forward` or `turn` paid for and never performed.
+        return self._done or (self.turns >= self.max_turns and self._prim is None)
 
     # -- control tick -------------------------------------------------------
 
     def act(self, mars, t: float) -> None:
-        if self.done:
-            mars.set_cmd_vel(0.0, 0.0)
-            return
-
-        # A primitive in flight owns the robot until it finishes.
+        # A primitive in flight owns the robot until it finishes -- including
+        # the one the final turn issued, which is why this comes before `done`.
         if self._prim is not None:
             if self._step_primitive(mars, t):
                 return
             self._prim = None
+
+        if self.done:
+            mars.set_cmd_vel(0.0, 0.0)
+            return
 
         # A model call in flight: hold still and wait.
         if self._thread is not None:

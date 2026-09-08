@@ -137,13 +137,10 @@ print("skills enabled:", len(SKILLS), "->", ", ".join(s.split("/")[-1] for s in 
 if FAILED:
     raise SystemExit("priming failed -- " + "; ".join(FAILED))
 PY
-# Upstream gives each checkout its own stack, so the container carries a
-# per-checkout suffix. Discover it rather than hardcoding `innate-dev`.
-OS_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E '^innate-dev' | head -1)
-if [ -z "$OS_CONTAINER" ]; then
-  echo "no innate-dev* container is running" >&2
-  exit 1
-fi
+# os_container.py picks THIS checkout's container by the launcher's own
+# naming rule; `head -1` over `innate-dev*` could pick another checkout's
+# stack when two are running, and succeed against the wrong robot.
+OS_CONTAINER=$(python3 "$(dirname "${BASH_SOURCE[0]}")/os_container.py") || exit 1
 if ! docker cp "$PRIME" "$OS_CONTAINER":"$PRIME" >/dev/null; then
   echo "could not copy the prime payload into $OS_CONTAINER" >&2
   exit 1

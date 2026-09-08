@@ -131,3 +131,39 @@ exit 0
     )
     nasty = 'Bring the "red" cup -- it' + chr(39) + "s $URGENT; rm -rf /; 100% now"
     assert run(SAY, bindir, nasty).returncode == 0
+
+
+def test_the_container_is_this_checkouts() -> None:
+    """With two stacks up, the helpers must not pick the other checkout's."""
+    from os_container import choose
+
+    assert choose("innate-dev-aaaa", "innate-dev", ["innate-dev-bbbb", "innate-dev-aaaa"]) == ("innate-dev-aaaa", "")
+    assert choose("innate-dev-aaaa", "innate-dev", ["innate-dev", "innate-dev-bbbb"])[0] == "innate-dev"
+    name, note = choose("innate-dev-aaaa", "innate-dev", ["innate-dev-bbbb", "postgres"])
+    assert name == "innate-dev-bbbb" and "innate-dev-aaaa" in note
+    name, note = choose("innate-dev-aaaa", "innate-dev", ["innate-dev-bbbb", "innate-dev-cccc"])
+    assert name == "" and "several" in note
+    name, note = choose("innate-dev-aaaa", "innate-dev", ["postgres"])
+    assert name == "" and "no innate-dev" in note
+
+
+def test_the_expected_name_is_the_launchers() -> None:
+    """The naming rule is restated in os_container.py; pin it to the launcher's."""
+    from os_container import REPO, expected_name
+
+    launcher = subprocess.run(
+        [sys.executable, "-c", "import config; print(config.OS_CONTAINER_NAME)"],
+        cwd=REPO / "sim" / "launcher",
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    ).stdout.strip()
+    assert expected_name() == launcher
+
+
+def test_two_stacks_and_neither_ours_fails_loudly(bindir):
+    stub(bindir, "docker", 'case "$1" in ps) echo innate-dev-one; echo innate-dev-two;; esac\nexit 0\n')
+    r = run(SAY, bindir, "brief")
+    assert r.returncode != 0
+    assert "several innate-dev" in r.stderr

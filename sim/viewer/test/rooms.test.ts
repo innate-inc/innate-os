@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { geomRadius, isValidRoomGeom, roomBounds, type RoomInfo } from "../src/roomManifest.ts";
+import { geomRadius, isCeiling, isValidRoomGeom, roomBounds, type RoomInfo } from "../src/roomManifest.ts";
 
 const box = { type: "box", size: [1, 2, 0.5], pos: [10, 0, 0.5], quat: [1, 0, 0, 0], rgba: [1, 1, 1, 1], collide: true } as const;
 const lamp = { type: "cylinder", size: [0.025, 0.015], pos: [0, 5, 1.2], quat: [0, 0, 0, 1], rgba: [1, 1, 1, 1], collide: false } as const;
@@ -30,4 +30,14 @@ test("a malformed geom is skipped rather than thrown on", () => {
   // A bad geom does not poison the bounds of the good ones beside it.
   const rooms = [{ name: "r", title: "R", geoms: [box, { ...box, pos: [1, NaN, 0] }] }] as unknown as RoomInfo[];
   assert.deepEqual(roomBounds(rooms), roomBounds([{ name: "r", title: "R", geoms: [box] }]));
+});
+
+test("a ceiling is real in the sim but not drawn over the observer's view", () => {
+  // Counter's lid: a decor box at z = 1.43 spanning the whole room. Drawn as a
+  // closed box it hid the robot and every prop from the top camera.
+  const lid = { ...box, name: "ceiling", collide: false, size: [2.3, 1.8, 0.03], pos: [0, 0, 1.43] } as const;
+  assert.ok(isValidRoomGeom(lid)); // still a valid geom: it stays in the bounds
+  assert.ok(isCeiling(lid));
+  assert.ok(!isCeiling(box));
+  assert.ok(!isCeiling({ ...box, name: "floor" }));
 });

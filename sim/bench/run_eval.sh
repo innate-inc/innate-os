@@ -84,17 +84,23 @@ for BUNDLE in $BUNDLES; do
   fi
 
   echo "--- map" | tee -a "$LOG"
-  ( cd sim && VIRTUAL_MARS_ASSETS="$ASSETS" MUJOCO_GL=osmesa \
-      "$(command -v uv || echo "$HOME/.local/bin/uv")" run bench/export_nav_map.py 2>&1 | tail -1 ) | tee -a "$LOG"
+  # The export's STATUS decides, not its last line: a failed export leaves the
+  # previous bundle's sim_apartment.* on disk, the lint below passes that map,
+  # and the stack comes up localised against a room that is not loaded.
+  MAP_LOG="$REPO/$OUT/map-$BUNDLE-$STAMP.log"
+  if ! ( cd sim && VIRTUAL_MARS_ASSETS="$ASSETS" MUJOCO_GL=osmesa \
+        "$(command -v uv || echo "$HOME/.local/bin/uv")" run bench/export_nav_map.py > "$MAP_LOG" 2>&1 ); then
+    tail -3 "$MAP_LOG" | tee -a "$LOG"
+    echo "    map export failed -- skipping $BUNDLE" | tee -a "$LOG"
+    continue
+  fi
+  tail -1 "$MAP_LOG" | tee -a "$LOG"
   if ! ./sim/.venv/bin/python sim/bench/lint_navmap.py sim/assets/map/sim_apartment.yaml \
        2>&1 | tail -2 | tee -a "$LOG" | grep -q '^OK'; then
     echo "    map failed its lint -- skipping $BUNDLE" | tee -a "$LOG"
     continue
   fi
 
-  # The OS container used to be plain `innate-dev`; since upstream gave each
-  # checkout its own stack it carries a per-checkout suffix. Discover it
-  # rather than hardcoding, so this keeps working either way.
   OS_CONTAINER=""
   echo "--- restart" | tee -a "$LOG"
   timeout 300 bash "$REPO/sim/bench/innate_up.sh" down >/dev/null 2>&1
@@ -106,9 +112,10 @@ for BUNDLE in $BUNDLES; do
   # web app would otherwise put a second authored room into every bench map.
   timeout 900 bash "$REPO/sim/bench/innate_up.sh" up --offline --environment apartment 2>&1 | grep -cE '✓' \
     | xargs echo "    checks passed:" | tee -a "$LOG"
-  OS_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E '^innate-dev' | head -1)
-  if [ -z "$OS_CONTAINER" ]; then
-    echo "    no innate-dev* container is running -- skipping $BUNDLE" | tee -a "$LOG"
+  # THIS checkout's container, by the launcher's naming rule (os_container.py):
+  # the first `innate-dev*` listed could be another checkout's stack.
+  if ! OS_CONTAINER=$(./sim/.venv/bin/python sim/bench/os_container.py 2>&1); then
+    echo "    $OS_CONTAINER -- skipping $BUNDLE" | tee -a "$LOG"
     continue
   fi
   echo "    container: $OS_CONTAINER" | tee -a "$LOG"
