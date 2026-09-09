@@ -7,15 +7,6 @@ using json = nlohmann::json;
 
 namespace mars_arm {
 
-namespace {
-
-double jointRad(int encoder, int joint_index) {
-    const double rad = ((encoder - 2048) * 2 * M_PI) / 4096.0;
-    return flippedJoint(static_cast<size_t>(joint_index)) ? -rad : rad;
-}
-
-}  // namespace
-
 // ========== SERVO INITIALIZATION ==========
 
 void MarsArmNode::initializeServos() {
@@ -174,10 +165,6 @@ void MarsArmNode::configureServosLocked(bool enable_torque) {
     } catch (const std::exception& e) {
         RCLCPP_ERROR(this->get_logger(), "Failed to move head to default position: %s", e.what());
     }
-    // The pass-through re-sends this with every arm command; left at the
-    // power-on reading it drags the head back off level on the first fold.
-    std::lock_guard<std::mutex> head_lock(head_command_mutex_);
-    latest_head_command_ = logicalAngleToEncoder(0.0);
 }
 
 // ========== POSITION SYNC HELPER ==========
@@ -325,6 +312,7 @@ void MarsArmNode::armCommandCallback(const std_msgs::msg::Float64MultiArray::Sha
             latest_target_[i] = msg->data[i];
         has_target_ = true;
         stream_command_at_ = std::chrono::steady_clock::now();
+        rest_pending_ = false;
 
         // Switch to teleop gains when streaming commands arrive
         if (gain_mode_ != GainMode::TELEOP) {
@@ -358,6 +346,7 @@ void MarsArmNode::armTorqueOnCallback(const std::shared_ptr<std_srvs::srv::Trigg
             RCLCPP_WARN(this->get_logger(), "Failed to sync on torque on: %s", e.what());
         }
         arm_torque_enabled_ = true;  // under the bus lock, so a racing torque_off's `false` lands after
+        rest_pending_ = true;
     } catch (const std::exception& e) {
         response->success = false;
         response->message = std::string("Failed: ") + e.what();
@@ -486,6 +475,7 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
             RCLCPP_WARN(this->get_logger(), "Could not read the rebooted servos; their next command may snap: %s",
                         e.what());
         }
+        rest_pending_ = true;
 
         // Build JSON response with error IDs and status
         json result;
