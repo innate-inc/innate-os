@@ -223,8 +223,24 @@ interface LeaderArmState {
   connected: boolean;
   /** Latest raw servo ticks (signed, 2048 = center), ordered by servo id. */
   positions: number[] | null;
+  /** Present Current per servo in mA, signed by direction, ordered by servo id. */
+  currents: number[] | null;
   /** Position rounds per second over the last second. */
   rate: number;
+  error: string | null;
+}
+
+/** Live state of the leader-arm reachability guard (js/leaderGuard.js). */
+interface LeaderGuardState {
+  /** Limits known and the guard allowed to hold — false until mars_arm answers. */
+  armed: boolean;
+  /** Servo ids currently held at a boundary. */
+  holding: number[];
+  /** Summed |Present Current| across all servos, mA. */
+  drawMa: number;
+  /** Per-servo goal current the guard is currently allowing, mA. */
+  allocatedMa: number;
+  /** Set when the guard cut torque to stay inside the budget. */
   error: string | null;
 }
 

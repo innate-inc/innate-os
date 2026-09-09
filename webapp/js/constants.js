@@ -209,6 +209,35 @@ export const WEBRTC_ACTIVE_STREAMS_TOPIC = "/webrtc/active_streams"; // robot ->
 // Same topic the mobile app uses for its non-UDP fallback path.
 export const LEADER_POSITIONS_TOPIC = "/leader_positions";
 
+// ---- Leader-arm reachability guard ----------------------------------------
+// The leader arm turns freely; the follower does not — joint_1 stops at ±90°
+// where the arm meets the body. The guard reads the follower's real
+// position_limits off mars_arm and holds the leader at that boundary, so the
+// operator feels the wall instead of commanding a pose the robot cannot reach.
+//
+// Limits are read live rather than copied: arm_config.yaml is retuned, and a
+// stale copy here would either fence off reachable travel or fail to fence off
+// unreachable travel. rcl_interfaces/srv/GetParameters, one call per joint
+// name; position_limits comes back as PARAMETER_DOUBLE_ARRAY.
+export const ARM_PARAMS_NODE = "/mars_arm";
+export const ARM_GET_PARAMETERS_SERVICE = `${ARM_PARAMS_NODE}/get_parameters`;
+export const PARAMETER_DOUBLE_ARRAY = 8;
+export const ARM_POSITION_LIMITS_PARAMS = [1, 2, 3, 4, 5, 6].map((n) => `joint_${n}.position_limits`);
+
+// Which joints the guard actually holds. The machinery below is generic over
+// all six; only joint_1's body collision is enforced today, the rest await
+// bench time to confirm the wall feels right before they are switched on.
+export const JOINT_GUARD_ENABLED = [true, false, false, false, false, false];
+
+// Total draw across all six servos. The leader is bus-powered from whatever
+// machine it is plugged into, so this is a property of that host, not of the
+// robot — it lives in localStorage per device (leaderBudget.js), surfaced on
+// the Settings page. 900 mA is the ceiling the operator may not raise past.
+export const LEADER_CURRENT_BUDGET_DEFAULT_MA = 750;
+export const LEADER_CURRENT_BUDGET_MIN_MA = 100;
+export const LEADER_CURRENT_CEILING_MA = 900;
+export const LEADER_CURRENT_BUDGET_KEY = "innate.leaderCurrentBudgetMa";
+
 // Reboot the arm servos (std_srvs/Trigger → {success, message}). Power-cycles
 // and reconfigures all 7 servos (6 arm joints + head), recenters the head to
 // 0°, re-torques the head, and leaves the *arm* limp. Same service the mobile
