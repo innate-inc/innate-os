@@ -242,6 +242,39 @@ void MarsArmNode::holdArmWhereItIs() {
 
 // ========== REST FOLD ==========
 
+void MarsArmNode::idleRestCallback() {
+    if (!this->get_parameter("auto_rest").as_bool() || !arm_torque_enabled_ || trajectory_executing_) {
+        return;
+    }
+    const auto last_command =
+        std::max({stream_command_at_.load(), last_trajectory_end_.load(), last_service_at_.load()});
+    if (std::chrono::duration<double>(std::chrono::steady_clock::now() - last_command).count() < kRestWhenIdleS) {
+        return;
+    }
+    std::vector<double> measured;
+    {
+        std::lock_guard<std::mutex> lock(joint_state_mutex_);
+        measured = latest_joint_positions_;
+    }
+    if (measured.size() != 6 || !onFloor(measured[1], measured[2], measured[3])) {
+        return;
+    }
+    if (idle_rest_acted_) {
+        double moved = 0.0;
+        for (size_t j = 0; j < kArmJoints; ++j) {
+            moved = std::max(moved, std::abs(measured[j] - idle_rest_acted_at_[j]));
+        }
+        if (moved < kAtRestRad) {
+            return;
+        }
+    }
+    foldToRest("idle");
+    idle_rest_acted_ = true;
+    std::lock_guard<std::mutex> lock(joint_state_mutex_);
+    std::copy_n(latest_joint_positions_.begin(), std::min<size_t>(6, latest_joint_positions_.size()),
+                idle_rest_acted_at_.begin());
+}
+
 RestOutcome MarsArmNode::foldToRest(const char* trigger) {
     const RestOutcome outcome = runRestFold(trigger);
     if (outcome.at_rest) {
@@ -284,8 +317,7 @@ RestOutcome MarsArmNode::runRestFold(const char* trigger) {
     }
     RCLCPP_INFO(this->get_logger(), "Folding the arm to rest (%s)", trigger);
     std::string stopped;
-    if (gripperTip(measured[1], measured[2], measured[3]).z <= kGripperTipLowM &&
-        !liftOffTheFloor(measured, grip, stopped)) {
+    if (onFloor(measured[1], measured[2], measured[3]) && !liftOffTheFloor(measured, grip, stopped)) {
         return {false, "rest lift stopped: " + stopped};
     }
     rest[5] = grip;
@@ -303,7 +335,7 @@ RestOutcome MarsArmNode::runRestFold(const char* trigger) {
     return {false, "rest fold stopped: " + stopped};
 }
 
-// See kGripperTipLowM: the tip goes up before anything slides along the floor.
+// See kOnFloorM: the tip goes up before anything slides along the floor.
 bool MarsArmNode::liftOffTheFloor(const std::vector<double>& measured, double grip, std::string& stopped) {
     std::vector<double> lift = measured;
     lift[5] = grip;
@@ -340,6 +372,7 @@ bool MarsArmNode::foldStage(const std::vector<double>& target, double duration, 
 void MarsArmNode::armRestCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
                                   std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/rest");
+    last_service_at_ = std::chrono::steady_clock::now();
     const RestOutcome outcome = foldToRest("service");
     response->success = outcome.at_rest;
     response->message = outcome.detail;

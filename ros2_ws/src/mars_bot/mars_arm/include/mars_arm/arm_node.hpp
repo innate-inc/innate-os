@@ -95,7 +95,9 @@ class MarsArmNode : public rclcpp::Node {
     bool guardTripped(TrajectoryGuard& guard);
     void holdArmWhereItIs();
     // Fold to rest_pose keeping the standing grip, stopping at the first
-    // obstacle; runs after boot and whenever arm torque comes back on.
+    // obstacle. The idle watchdog runs it whenever the arm has been left
+    // lying on the floor with nothing commanding it.
+    void idleRestCallback();
     RestOutcome foldToRest(const char* trigger);
     RestOutcome runRestFold(const char* trigger);
     bool liftOffTheFloor(const std::vector<double>& measured, double grip, std::string& stopped);
@@ -145,7 +147,15 @@ class MarsArmNode : public rclcpp::Node {
     std::chrono::steady_clock::time_point written_at_{};
     // Last /mars/arm/commands arrival; a guarded fold yields to it.
     std::atomic<std::chrono::steady_clock::time_point> stream_command_at_{std::chrono::steady_clock::time_point{}};
-    rclcpp::TimerBase::SharedPtr rest_on_boot_timer_;
+    // Last arm service call; with stream_command_at_ and last_trajectory_end_
+    // it is what the idle watchdog means by "nothing is commanding the arm".
+    std::atomic<std::chrono::steady_clock::time_point> last_service_at_{std::chrono::steady_clock::time_point{}};
+    rclcpp::TimerBase::SharedPtr idle_rest_timer_;
+    // Where the watchdog last acted: it acts once per situation, so a fold
+    // that stopped at an obstacle is not pushed again until something has
+    // moved the arm.
+    std::array<double, 6> idle_rest_acted_at_{};
+    bool idle_rest_acted_{false};
 
     // Joint state tracking for planning
     std::vector<double> latest_joint_positions_;

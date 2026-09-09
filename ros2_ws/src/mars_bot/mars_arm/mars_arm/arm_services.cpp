@@ -342,10 +342,9 @@ void MarsArmNode::armCommandCallback(const std_msgs::msg::Float64MultiArray::Sha
 void MarsArmNode::armTorqueOnCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
                                       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/torque_on");
-    bool was_off = false;
+    last_service_at_ = std::chrono::steady_clock::now();
     try {
         std::lock_guard<std::mutex> lock(dynamixel_mutex_);
-        was_off = !arm_torque_enabled_.load();
 
         for (int id = 1; id <= 6; ++id) {
             RCLCPP_INFO(this->get_logger(), "  Enabling torque on servo %d", id);
@@ -369,17 +368,12 @@ void MarsArmNode::armTorqueOnCallback(const std::shared_ptr<std_srvs::srv::Trigg
     response->success = true;
     response->message = "Enabled torque for all arm servos";
     RCLCPP_INFO(this->get_logger(), "Successfully enabled torque for all arm servos");
-    // Only on the off→on edge: skills call torque_on as a precondition while
-    // it is already on, and must not have the arm folded away for it. Success
-    // stays true either way — torque IS on; a stopped fold is in the message.
-    if (was_off && this->get_parameter("auto_rest").as_bool()) {
-        response->message += "; " + foldToRest("torque on").detail;
-    }
 }
 
 void MarsArmNode::armTorqueOffCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
                                        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/torque_off");
+    last_service_at_ = std::chrono::steady_clock::now();
     try {
         std::lock_guard<std::mutex> lock(dynamixel_mutex_);
 
@@ -402,6 +396,7 @@ void MarsArmNode::armTorqueOffCallback(const std::shared_ptr<std_srvs::srv::Trig
 void MarsArmNode::armRebootServosCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
                                           std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/reboot");
+    last_service_at_ = std::chrono::steady_clock::now();
     try {
         std::lock_guard<std::mutex> lock(dynamixel_mutex_);
 
@@ -439,6 +434,7 @@ void MarsArmNode::armRebootServosCallback(const std::shared_ptr<std_srvs::srv::T
 void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
                                       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/fix_error");
+    last_service_at_ = std::chrono::steady_clock::now();
     try {
         std::lock_guard<std::mutex> lock(dynamixel_mutex_);
 

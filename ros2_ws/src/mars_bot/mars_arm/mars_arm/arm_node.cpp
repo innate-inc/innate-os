@@ -207,24 +207,10 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
         this->add_on_set_parameters_callback(std::bind(&MarsArmNode::onParameterChange, this, std::placeholders::_1));
     RCLCPP_DEBUG(this->get_logger(), "PID hot-reload enabled (use ros2 param set or pid_hot_reload.py)");
 
-    // The boot fold needs the control loop, which only runs once the executor
-    // spins — after this constructor returns — so the timer waits for the
-    // first joint state, then retires. Same callback group as the goto
-    // services: a client's early goto queues behind it instead of fighting it.
-    rest_on_boot_timer_ = this->create_wall_timer(
-        std::chrono::milliseconds(500),
-        [this] {
-            {
-                std::lock_guard<std::mutex> lock(joint_state_mutex_);
-                if (latest_joint_positions_.empty())
-                    return;
-            }
-            if (rest_on_boot_timer_)
-                rest_on_boot_timer_->cancel();
-            if (this->get_parameter("auto_rest").as_bool())
-                foldToRest("boot");
-        },
-        service_callback_group_);
+    // Same callback group as the goto services: a fold and a goto never run
+    // at the same time, and a client's goto queues behind a fold in flight.
+    idle_rest_timer_ = this->create_wall_timer(std::chrono::seconds(1), std::bind(&MarsArmNode::idleRestCallback, this),
+                                               service_callback_group_);
 
     RCLCPP_INFO(this->get_logger(), "Mars Arm Node ready!");
 }

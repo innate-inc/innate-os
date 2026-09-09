@@ -36,14 +36,21 @@ static constexpr int kDecayMaxLoad = 100;
 // joint is guarded once it has tracked within the limit, or after the lock-on
 // timeout: a limp shoulder falls ~0.5 rad past its software limit and needs a
 // moment at profile speed to close that gap.
+// An arm left lying on the floor this long with no command of any kind
+// (streamed target, trajectory, service) folds itself. Longer than any gap
+// between the commands a skill sends while its gripper is at the floor, and
+// a service resets it, so a skill recovering a tripped servo keeps the arm.
+static constexpr double kRestWhenIdleS = 5.0;
 static constexpr double kRestFoldDurationS = 3.0;
 static constexpr double kRestContactErrorRad = 0.20;
 static constexpr int kContactStrikes = 5;
 static constexpr double kContactLockOnTimeoutS = 1.0;
 static constexpr double kAtRestRad = 0.05;
-// A gripper tip at or below shoulder height is on the floor, and loop carpet
-// hooks the fingertips the moment they slide, so the tip goes up before
-// anything moves along the floor. A gripper lying nearly flat pivots up with
+// The floor is ~5.5 cm below the shoulder joint on MARS (a collapsed tip
+// measures -5 to -6 cm) and the rest pose keeps wrist and tip ~2 cm above
+// it, so a wrist or tip below this is lying on the floor. Loop carpet hooks
+// the fingertips the moment they slide, so the tip goes up before anything
+// moves along the floor. A gripper lying nearly flat pivots up with
 // the whole arm about the shoulder: its wrist is on the floor and cannot
 // lift it (the wrist servo pulled 1.3 A trying). One pointing down
 // moderately levels about the wrist, which then carries only the gripper. A
@@ -51,7 +58,7 @@ static constexpr double kAtRestRad = 0.05;
 // level, ~10 cm above the shoulder), slower than the fold: raising an
 // extended arm is the heaviest move here, and at 1.5 s the shoulder fell
 // 0.22 rad behind at a quarter of its torque.
-static constexpr double kGripperTipLowM = 0.0;
+static constexpr double kOnFloorM = -0.02;
 static constexpr double kFlatGripperRad = 0.3;
 static constexpr double kWristLevelMaxPitchRad = 0.785;
 static constexpr double kRestLevelDurationS = 1.0;
@@ -77,21 +84,27 @@ inline bool flippedJoint(size_t joint) {
     return joint == 1 || joint == 2 || joint == 3 || joint == 5;
 }
 
-// Gripper tip in the arm's plane, metres from the shoulder joint (x forward,
-// z up), from the upper arm, forearm and wrist-to-tip link lengths.
+// Wrist and gripper tip in the arm's plane, metres from the shoulder joint
+// (x forward, z up), from the upper arm, forearm and wrist-to-tip links.
 struct PlanarPoint {
     double x;
     double z;
 };
-inline PlanarPoint gripperTip(double q2, double q3, double q4) {
+inline PlanarPoint wristPoint(double q2, double q3) {
     constexpr double L2_x = 0.02825, L2_z = 0.12125;
     constexpr double L3_x = 0.1375, L3_z = 0.0045;
+    const double a2 = q2, a23 = q2 + q3;
+    return {L2_x * std::cos(a2) + L2_z * std::sin(a2) + L3_x * std::cos(a23) + L3_z * std::sin(a23),
+            -L2_x * std::sin(a2) + L2_z * std::cos(a2) - L3_x * std::sin(a23) + L3_z * std::cos(a23)};
+}
+inline PlanarPoint gripperTip(double q2, double q3, double q4) {
     constexpr double L45_x = 0.110838;
-    const double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
-    return {L2_x * std::cos(a2) + L2_z * std::sin(a2) + L3_x * std::cos(a23) + L3_z * std::sin(a23) +
-                L45_x * std::cos(a234),
-            -L2_x * std::sin(a2) + L2_z * std::cos(a2) - L3_x * std::sin(a23) + L3_z * std::cos(a23) -
-                L45_x * std::sin(a234)};
+    const PlanarPoint wrist = wristPoint(q2, q3);
+    const double a234 = q2 + q3 + q4;
+    return {wrist.x + L45_x * std::cos(a234), wrist.z - L45_x * std::sin(a234)};
+}
+inline bool onFloor(double q2, double q3, double q4) {
+    return std::min(wristPoint(q2, q3).z, gripperTip(q2, q3, q4).z) <= kOnFloorM;
 }
 
 inline bool isX330(const std::string& motor_type) {

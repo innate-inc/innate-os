@@ -6,15 +6,11 @@
 // limp arm is never what the operator wanted — every caller re-enabled torque by
 // hand — so re-enabling is part of the flow here.
 
-import {
-  ARM_REBOOT_SERVICE,
-  ARM_REBOOT_TIMEOUT_MS,
-  ARM_TORQUE_ON_SERVICE,
-  ARM_TORQUE_ON_TIMEOUT_MS,
-} from "./constants.js";
+import { ARM_REBOOT_SERVICE, ARM_REBOOT_TIMEOUT_MS, ARM_TORQUE_ON_SERVICE } from "./constants.js";
 
 // The servos re-initialize for a beat after the power-cycle; torque_on issued
-// too early lands on a servo that is not listening yet.
+// too early lands on a servo that is not listening yet. Matches the settle in
+// Manipulation.recover().
 const SERVO_REINIT_MS = 2000;
 
 /**
@@ -38,7 +34,7 @@ export async function rebootArmAndEnableTorque(rosClient) {
   await new Promise((resolve) => setTimeout(resolve, SERVO_REINIT_MS));
 
   try {
-    const res = await rosClient.callService(ARM_TORQUE_ON_SERVICE, {}, ARM_TORQUE_ON_TIMEOUT_MS);
+    const res = await rosClient.callService(ARM_TORQUE_ON_SERVICE, {});
     if (res && res.success === false) {
       return { ok: true, torqueOn: false, message: res.message || "Rebooted — torque re-enable failed" };
     }

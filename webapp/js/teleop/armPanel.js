@@ -18,7 +18,6 @@ import {
   LEADER_POSITIONS_TOPIC,
   ARM_REBOOT_CONFIRM,
   ARM_TORQUE_ON_SERVICE,
-  ARM_TORQUE_ON_TIMEOUT_MS,
   ARM_TORQUE_OFF_SERVICE,
   ARM_STATUS_TOPIC,
 } from "../constants.js";
@@ -423,8 +422,8 @@ function buildArmServices(rosClient) {
     const turnOn = !torqueOn;
     const prev = torqueOn;
     // Optimistic: show the new state right away, then confirm/revert on the
-    // service result. torque_on walks 6 servos and then folds the arm to rest
-    // (up to ~9 s) before it replies, so waiting for the reply would feel dead.
+    // service result. The robot's torque_on walks 6 servos (~600 ms) before it
+    // replies, so waiting for the reply felt laggy.
     torqueOn = turnOn;
     toggling = true;
     render();
@@ -432,7 +431,6 @@ function buildArmServices(rosClient) {
       const res = await rosClient.callService(
         turnOn ? ARM_TORQUE_ON_SERVICE : ARM_TORQUE_OFF_SERVICE,
         {},
-        turnOn ? ARM_TORQUE_ON_TIMEOUT_MS : undefined,
       );
       if (res && res.success === false) {
         torqueOn = prev; // revert — the robot rejected it
