@@ -70,6 +70,7 @@ export function createDirectiveControls(agentState, opts) {
   // the dropdown switches the running directive live. brain-active drives the
   // toggle label (Start <-> Stop). We remember the last non-empty directive so
   // Stop -> Start resumes the same one even though the brain reports "" when idle.
+  let compact = false;
   let lastDirective = "";
   let applying = false;
   let wasBrainActive = false;
@@ -114,7 +115,10 @@ export function createDirectiveControls(agentState, opts) {
     const agent = agentState.get().agents.find((candidate) => candidate.id === id);
     directiveValue.textContent = agent?.name ?? id;
     opts.onAgentName(directiveValue.textContent ?? "");
+    // Running, the brain owns which agent is armed and reports the switch back; idle,
+    // this pick is the only record of it, so redraw the rows against it.
     if (agentState.get().brainActive) void withApplying(() => agentState.setDirective(id));
+    else renderRoster();
   }
 
   /** @param {KeyboardEvent} event */
@@ -158,10 +162,13 @@ export function createDirectiveControls(agentState, opts) {
     const { agents, broken, currentDirective, brainActive } = agentState.get();
     if (currentDirective) lastDirective = currentDirective;
 
-    const demo = agents.find((a) => /demo\s*agent/i.test(a.name) || /demo/i.test(a.id));
-    const armed = currentDirective || lastDirective || demo?.id || (agents[0]?.id ?? "");
+    const demo = agents.find((a) => a.listed && (/demo\s*agent/i.test(a.name) || /demo/i.test(a.id)));
+    // While a switch is in flight the person's pick is the truth; the brain confirms it next frame.
+    const armed =
+      (applying && selectedDirective) || currentDirective || lastDirective || demo?.id || (agents.find((a) => a.listed)?.id ?? "");
     directiveList.replaceChildren();
     for (const agent of agents) {
+      if (!agent.listed) continue; // a story fixture is armed by the story, never picked
       const option = document.createElement("button");
       option.type = "button";
       option.className = "agent-directive-option";
@@ -206,7 +213,7 @@ export function createDirectiveControls(agentState, opts) {
       empty.textContent = "No agents available";
       directiveList.append(empty);
     }
-    if (opts.onCreate) {
+    if (opts.onCreate && !compact) {
       const create = document.createElement("button");
       create.type = "button";
       create.className = "agent-directive-option create";
@@ -301,6 +308,12 @@ export function createDirectiveControls(agentState, opts) {
     armedId: () => selectedDirective,
     /** Pick an agent the way the dropdown would (a just-created one). @param {string} id */
     arm: (id) => chooseDirective(id, undefined),
+    /** Phones have no room for the editor, so they are not offered a new agent either.
+     * @param {boolean} on */
+    setCompact(on) {
+      compact = on;
+      renderRoster();
+    },
     // The compact sheet parks this in its header; moved, not duplicated.
     toggleEl: toggleBtn,
     ensureRunning,

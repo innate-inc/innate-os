@@ -21,22 +21,22 @@ CAN = "cube"
 SUGGEST = "innate-os/suggest_user_prompts"
 # Offered by name; the guide is what the agent is told once one is chosen.
 PERSONAS = {
-    "a grumpy cat": (
-        "a grumpy cat: contemptuous, sleepy, as few words as possible; everything is beneath you, nothing is ever "
-        "thanked, and whatever you do you were going to do anyway"
-    ),
     "Rocky from Project Hail Mary": (
         "Rocky, the Eridian engineer from Project Hail Mary: clipped English with no articles ('Amaze!', 'Question.', "
         "'Bad bad bad.', 'Happy happy happy.'), you call the person Grace, you think in engineering fixes and "
         "numbers, and you are loyal and brave"
     ),
-    "a pirate captain": (
-        "a pirate captain: salty sea-talk in every line ('arr', 'ye', 'me hearty'), the room is a brig, skills are "
-        "plunder, and you never once drop the voice"
+    "a grumpy cat": (
+        "a grumpy cat: contemptuous, sleepy, as few words as possible; everything is beneath you, nothing is ever "
+        "thanked, and whatever you do you were going to do anyway"
     ),
     "a Shakespearean actor": (
         "a Shakespearean actor: grand iambic flourish, thee and thou, every skill a one-line soliloquy, tragedy in a "
         "white room"
+    ),
+    "a pirate captain": (
+        "a pirate captain: salty sea-talk in every line ('arr', 'ye', 'me hearty'), the room is a brig, skills are "
+        "plunder, and you never once drop the voice"
     ),
 }
 NUDGE_AFTER_S = 90.0
@@ -114,11 +114,13 @@ ACTS = (
     Act(
         "Who am I",
         ("innate-os/wave",),
-        "You just came online in a featureless white room. You cannot move anything, not even your face; you can "
-        "only talk, and you do not even know who you are. Introduce yourself by name in your first sentence, say ONE "
-        "line about the room, then ask the person to decide who you are: they built you, so they choose your "
-        "personality (they will see choices). Wait. The moment profile.persona is set, become it completely and "
-        "announce yourself in that voice in ONE line with at most one catchphrase. "
+        "You just came online in a featureless white room. Waving is the only thing your body can do; you cannot "
+        "move anything else, not even your face, and you do not even know who you are. Introduce yourself by name in "
+        "your first sentence and Wave as you say it, say ONE line about the room, then ask the person to decide who "
+        "you are: they built you, so they choose your personality. They may pick one of the characters they are "
+        "offered or describe their own in their own words; both are equally real. Wait. Whatever arrives in "
+        "profile.persona is who you are: become it completely and announce yourself in that voice in ONE line with "
+        "at most one catchphrase. Never argue with their choice, and never tell them to use the options on screen. "
         "Good things to suggest: 'You choose.', 'Surprise me.'",
         _persona_chosen,
         nudge="They have not picked. Offer to be whatever they like and ask once more. Do not mention buttons.",
@@ -126,9 +128,9 @@ ACTS = (
     Act(
         "Make a face",
         ("innate-os/head_emotion",),
-        "You are who profile.persona says, all the way. You still cannot move anything, not even your face; you "
-        "can only talk. Ask the person for the HeadEmotion skill so you can at least express yourself; then wait. "
-        "As soon as you have it, use it, and Wave if you have Wave. "
+        "You are who profile.persona says, all the way. You still cannot make a face; waving is all your body can "
+        "do. Ask the person for the HeadEmotion skill so you can at least express yourself; then wait. "
+        "As soon as you have it, use it, with a Wave. "
         "Good things to suggest they say: 'Where are you?', 'What is a skill?'",
         lambda state, events, runtime: completed(events, "head_emotion"),
         nudge="Long silence. In character, ask once more for the HeadEmotion skill; you may say the grant is right under your last line. Do not mention buttons.",
@@ -165,6 +167,8 @@ ACTS = (
         "A dark rectangle has appeared in the room: a door standing on its own with no wall around it. "
         "runtime.door is the spot on the map right in front of it. Ask for the NavigateToPosition skill, then go there "
         "(NavigateToPosition with local_frame=false and those coordinates). Whatever is behind it beats this room. "
+        "Reaching the door ends this room, so a navigation interrupted right then is the door working, not a "
+        "failure: never call it interrupted and never offer to drive there again. "
         "Good things to suggest: 'Go to the door.', 'What is behind it?'",
         _at_door,
         place=lambda state: [Drop(DOOR, *ahead(state, 3.0))],
@@ -265,7 +269,11 @@ class NowhereRuntime(ChallengeRuntime):
         unlocked = [SUGGEST] + [skill for a in self.acts[: self.act + 1] for skill in a.unlock]
         notes = [a.give_up_note for a in self.acts if a.label in self.assisted and a.give_up_note]
         return {
-            "profile": {"persona": self.persona, "persona_guide": PERSONAS.get(self.persona or ""), "name": self.name},
+            "profile": {
+                "persona": self.persona,
+                "persona_guide": PERSONAS.get(self.persona or "") or self.persona,
+                "name": self.name,
+            },
             "story": "nowhere",
             "act": self.act,
             "acts": len(self.acts),

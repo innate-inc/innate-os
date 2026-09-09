@@ -192,10 +192,13 @@ function buildAgentView(root) {
     typeof simSession.onChallenge === "function" ? createChallengePanel(root, simSession) : null;
   const studio = createAgentStudio(root, agentState, challengePanel ? simSession : null, panel, {
     showView: (/** @type {string} */ id) => cameraSwitch.promote(id),
+    revealCameras: () => cameraSwitch.revealCams(),
     armedAgent: () => panel.armedAgentId(),
     armAgent: panel.armAgent,
     onCreateAgent: panel.setCreateAgentHandler,
     directivesEl: panel.directivesEl,
+    dockDirectives: panel.dockDirectives,
+    dockStartStop: panel.dockStartStop,
     // Every skill the brain can run, for the detail's "Add skill" chooser.
     skillRoster: (/** @type {(rows: any[]) => void} */ cb) =>
       ros.subscribe(
@@ -265,6 +268,7 @@ function buildAgentView(root) {
     // page on a stage it cannot leave.
     if (monitorTooNarrow.matches) setView("live");
     panel.setCompact(compactLayout.matches);
+    studio.setCompact(compactLayout.matches);
     reportSafeArea();
   };
   compactLayout.addEventListener("change", applyLayout);

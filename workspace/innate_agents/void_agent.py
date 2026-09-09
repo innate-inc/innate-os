@@ -28,7 +28,7 @@ class VoidAgent(Agent):
 
     @property
     def display_name(self) -> str:
-        return "MARS (first boot)"
+        return "MARS (Intro)"
 
     def get_skills(self) -> list[SkillRef]:
         return [
@@ -43,7 +43,12 @@ class VoidAgent(Agent):
         ]
 
     def initial_skill_ids(self) -> list[str]:
-        return ["innate-os/suggest_user_prompts"]
+        # Waving is the one thing it can do before anyone grants it anything, so it can
+        # say hello with its body in its first line.
+        return ["innate-os/suggest_user_prompts", "innate-os/wave"]
+
+    def listed(self) -> bool:
+        return False  # the story arms it; picked by hand it is a robot with no skills
 
     def get_inputs(self) -> list[InputRef]:
         return [MicroInput]

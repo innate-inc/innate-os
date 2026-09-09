@@ -273,6 +273,8 @@ def save_agent(state: BrainState, spec: AgentSpec, source: str) -> tuple[Path, s
     if path is None:
         raise StudioError(f"cannot locate the file of '{spec.id}'")
     content = source or _render_over(state, spec, path, existing is None)
+    # custom_agents is gitignored, so a fresh checkout (and the demo image built from one) has no such directory.
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     return path, content
 

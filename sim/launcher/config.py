@@ -72,6 +72,9 @@ def _resolve_port(name: str, offset: int, classic: int) -> int:
 
 SIM_HTTPS_PORT = _resolve_port("SIM_HTTPS_PORT", 0, 443)
 SIM_HTTP_PORT = _resolve_port("SIM_HTTP_PORT", 1, 80)
+# `up --intro` opens this pack, where the first-run story is authored.
+INTRO_ENVIRONMENT_ID = "void"
+
 SIM_ROSBRIDGE_PORT = _resolve_port("SIM_ROSBRIDGE_PORT", 2, 9090)
 SIM_UDP_PORT = _resolve_port("SIM_UDP_PORT", 3, 9999)
 SIM_FOXGLOVE_PORT = _resolve_port("SIM_FOXGLOVE_PORT", 4, 8765)
@@ -743,6 +746,7 @@ def get_config() -> dict[str, object]:
         "os_pull_image": os_pull_image if os_pull_image is not None else True,
         "os_always_build": os_always_build if os_always_build is not None else False,
         "environment_id": get_nested_str(sim_config, "simulation", "environment") or "apartment",
+        "intro": False,
     }
 
 

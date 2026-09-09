@@ -100,6 +100,12 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
     camsOpen = !camsOpen;
     renderCamsToggle();
   });
+  /** Show the tiles where they collapse behind the toggle: pointing at one is pointless while it is hidden. */
+  function revealCams() {
+    if (camsOpen) return;
+    camsOpen = true;
+    renderCamsToggle();
+  }
   tightStage.addEventListener("change", renderCamsToggle);
 
   /** @type {string[]} */ let roster = []; // camera names in m-line order
@@ -435,6 +441,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
 
   return {
     promote,
+    revealCams,
     destroy() {
       unsub?.();
       unsubSession();

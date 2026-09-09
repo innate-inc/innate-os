@@ -169,7 +169,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   syncComposerAction();
 
   composeArea.append(thinkingNotice, form);
-  thoughtsPanel.append(chat.head, chat.wrap, composeArea);
+  thoughtsPanel.append(directives.el, chat.head, chat.wrap, composeArea);
   panel.append(thoughtsPanel);
   root.append(panel);
 
@@ -411,10 +411,21 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     },
     // The agent picker and its Start/Stop, for whoever shows the agent's detail.
     directivesEl: directives.el,
+    /** Lend the picker to the agent detail, or take it back. @param {HTMLElement | null} host */
+    dockDirectives(host) {
+      if (host) host.prepend(directives.el);
+      else thoughtsPanel.prepend(directives.el);
+    },
+    /** Lend Start/Stop to the detail's header, or take it back. @param {HTMLElement | null} host */
+    dockStartStop(host) {
+      if (host) host.append(directives.toggleEl);
+      else directives.el.insertBefore(directives.toggleEl, toggleHome);
+    },
     startMic,
     stopMic,
     micMount,
     setCompact(on) {
+      directives.setCompact(on);
       // Compact drops the control panel's header for the sheet's.
       if (on) sheet.actionSlot.append(directives.toggleEl);
       else directives.el.insertBefore(directives.toggleEl, toggleHome);

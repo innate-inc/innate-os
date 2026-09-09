@@ -45,6 +45,10 @@ from .challenges import ChallengeChatBridge, ChallengeEngine, SkillEventBridge
 from .core import CAMERA_HEIGHT, CAMERA_WIDTH, VirtualMars, encode_jpeg, release_freed_heap
 from .environments import DEFAULT_ENVIRONMENT_ID, Environment, NavMapBridge
 
+# `--intro`: the first-run story and the world it is authored for.
+INTRO_CHALLENGE_ID = "nowhere"
+INTRO_ENVIRONMENT_ID = "void"
+
 # Depth renders at the pointcloud grid: identical published cloud, 16x less fill.
 DEPTH_WH = (CAMERA_WIDTH // 4, CAMERA_HEIGHT // 4)
 
@@ -91,6 +95,8 @@ class WorldServer:
         # Advertised in ping replies so the launcher can tell a current
         # server from a stale pre-stream one (which it must restart).
         self.state_port: int | None = None
+        # `up --intro`: the challenge waiting for the first observer, then None.
+        self.opening_challenge: str | None = None
         # Advertised in ping replies so the launcher can restart a reused
         # server whose listeners don't match the current bind policy (a
         # leftover INNATE_SIM_WORLD_BIND=0.0.0.0 server must not outlive the
@@ -277,6 +283,7 @@ class WorldServer:
         """One observer connection: push each new state, latest-wins (a slow
         client skips states instead of queueing lag), and accept the stage
         commands above on the way back."""
+        self._start_opening_challenge()
         threading.Thread(target=self._serve_scenario_commands, args=(ws,), daemon=True).start()
         # Send roster metadata on connection and changes, not every physics tick.
         last_seq = last_roster = -1
@@ -293,6 +300,17 @@ class WorldServer:
                 ws.send(payload)
         except Exception:  # noqa: BLE001,S110 -- client gone; the stream just ends
             pass
+
+    def _start_opening_challenge(self) -> None:
+        """`up --intro` opens a world with a challenge already chosen, but nothing
+        runs until someone is watching: the first observer starts it, and its clock
+        starts with them rather than with the server."""
+        if self.opening_challenge is None:
+            return
+        challenge_id, self.opening_challenge = self.opening_challenge, None
+        if not self.challenges.start(challenge_id):
+            print(f"[world-server] --intro: {challenge_id!r} did not start here", flush=True)
+        self.publish_state()
 
     # --- environment packs (environments.py) ---
 
@@ -455,6 +473,9 @@ class WorldServer:
         if op == "switch_environment":  # the launcher's `up --environment` on a running server
             self.switch_environment(str(req["id"]))
             return {"ok": True}, None
+        if op == "intro":  # the launcher's `up --intro`, on a fresh server or a running one
+            self.opening_challenge = INTRO_CHALLENGE_ID
+            return {"ok": True}, None
         if op == "state":
             with self.lock:
                 x, y, yaw = self.sim.pose()
@@ -550,6 +571,11 @@ def main() -> None:
         help="Environment pack to load: sim/environments/NAME/manifest.json",
     )
     parser.add_argument(
+        "--intro",
+        action="store_true",
+        help="Start the first-run story for the first observer that connects",
+    )
+    parser.add_argument(
         "--rosbridge-url",
         default="ws://127.0.0.1:9090",
         help="The stack's rosbridge, for the best-effort challenge and Nav2-map bridges",
@@ -564,6 +590,7 @@ def main() -> None:
     environment = Environment.load(args.environment)
     print(f"[world-server] loading VirtualMars ({environment.id}, render scale {args.render_scale})...", flush=True)
     server = WorldServer(build_sim(environment), build_sim=build_sim)
+    server.opening_challenge = INTRO_CHALLENGE_ID if args.intro else None
     server.sim.step(0.5)  # settle from the spawn drop before clients look
 
     # Boot self-test: prove GL works before accepting clients, and report

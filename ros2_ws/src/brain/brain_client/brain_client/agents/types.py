@@ -185,6 +185,12 @@ class Agent(ABC):
                 )
         return names
 
+    def listed(self) -> bool:
+        """Whether people may pick this agent themselves. A fixture the interface arms on
+        its own — the first-run story's robot, which starts with no skills — says False and
+        stays out of the roster, where it would only look broken."""
+        return True
+
     def uses_gaze(self) -> bool:
         """
         Whether this agent uses person-tracking gaze.

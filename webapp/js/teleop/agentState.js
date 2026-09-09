@@ -22,7 +22,7 @@ import {
 /**
  * @typedef {{
  *   id: string, name: string, prompt: string, skills: string[],
- *   source: "shipped" | "user", listen: boolean, gaze: boolean,
+ *   source: "shipped" | "user", listen: boolean, gaze: boolean, listed: boolean,
  *   path: string, editable: boolean,
  * }} AgentEntry
  * @typedef {{ id: string, name: string, error: string, path: string }} BrokenEntry
@@ -129,6 +129,7 @@ function createAgentState() {
           skills: Array.isArray(a.skills) ? a.skills.map(String) : [],
           // Agent detail fields: innate agents and files edited in code are read-only.
           source: a.source === "shipped" ? /** @type {const} */ ("shipped") : /** @type {const} */ ("user"),
+          listed: a.listed !== false,
           listen: a.listen === true,
           gaze: a.gaze === true,
           path: typeof a.path === "string" ? a.path : "",

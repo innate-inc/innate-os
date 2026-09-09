@@ -693,6 +693,7 @@ class BrainClientNode(Node):
                         "prompt": directive.get_prompt(),
                         "skills": directive.skill_ids(),
                         "source": getattr(directive, "source", "user"),
+                        "listed": directive.listed(),
                         **studio_fields(directive),
                     }
                 )

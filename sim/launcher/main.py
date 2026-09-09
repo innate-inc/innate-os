@@ -14,6 +14,7 @@ if sys.version_info < (3, 10):  # noqa: UP036
 from config import (
     CLI_SIM,
     ENV_PATH,
+    INTRO_ENVIRONMENT_ID,
     LOG_TARGETS,
     NO_BACKEND,
     OS_SESSION_LOG_PATH,
@@ -357,6 +358,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="Environment pack to load (sim/environments/NAME); overrides [simulation].environment in sim/config.toml",
     )
+    up_parser.add_argument(
+        "--intro",
+        action="store_true",
+        help=f"Open on the first-run story: loads the {INTRO_ENVIRONMENT_ID!r} pack and starts the intro for the "
+        "first browser that connects (nothing runs before that)",
+    )
     sim_subparsers.add_parser(
         "down",
         prog=f"{CLI_SIM} down",
@@ -434,6 +441,9 @@ def main() -> int:
         elif args.sim_command == "up":
             if args.environment:
                 config["environment_id"] = args.environment
+            elif args.intro:
+                config["environment_id"] = INTRO_ENVIRONMENT_ID
+            config["intro"] = args.intro
             cmd_up(
                 config,
                 watch=not args.once,
