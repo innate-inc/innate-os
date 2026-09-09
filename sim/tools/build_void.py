@@ -68,7 +68,9 @@ def textured(mesh: trimesh.Trimesh, name: str, grey: int) -> trimesh.Trimesh:
 def build(viewer_out: Path = SIM / "viewer/public", assets_dir: Path = SIM / "assets") -> None:
     room, ceiling = design()
     parts = {
-        color: textured(trimesh.util.concatenate(meshes), color, 250 if color == "void-floor" else 255)
+        # 235 reads white through the viewer's tone curve (which tops out near 237) yet
+        # leaves a shadow room to read; 255 would clip every shading step flat.
+        color: textured(trimesh.util.concatenate(meshes), color, 235 if color == "void-floor" else 255)
         for color, meshes in room.parts.items()
     }
     models = viewer_out / "models" / PACK_ID

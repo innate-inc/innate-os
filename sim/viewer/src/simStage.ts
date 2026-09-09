@@ -471,9 +471,11 @@ export function createSimStage(
   };
   // The webapp (the onboarding story) can pick a mode without owning the scene.
   const onCameraModeRequest = (event: Event) => {
-    const detail = (event as CustomEvent<CameraMode | { mode: CameraMode; side?: number }>).detail;
+    const detail = (event as CustomEvent<CameraMode | { mode: CameraMode; side?: number; back?: number; height?: number }>).detail;
     const mode = typeof detail === "string" ? detail : detail?.mode;
     scene.chaseSide = typeof detail === "object" && typeof detail?.side === "number" ? detail.side : 0;
+    scene.chaseBack = typeof detail === "object" && typeof detail?.back === "number" ? detail.back : null;
+    scene.chaseHeight = typeof detail === "object" && typeof detail?.height === "number" ? detail.height : null;
     if (CAMERA_MODES.includes(mode)) scene.setCameraMode(mode);
   };
   document.addEventListener("innate:camera-mode", onCameraModeRequest);
@@ -776,9 +778,11 @@ export function createSimStage(
       startLoop();
       resize();
       // A page used to get a new scene, so entering one always framed the
-      // robot in free orbit; that is page state, not session state.
+      // robot in free orbit; that is page state, not session state. Whoever
+      // steers the camera from outside (the story) hears about it and re-asserts.
       scene.setCameraMode("free");
       scene.frameRobot();
+      document.dispatchEvent(new CustomEvent("innate:camera-reset"));
     },
     detach() {
       attached = false;

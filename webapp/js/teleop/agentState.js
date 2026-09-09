@@ -19,7 +19,7 @@ import {
 
 /**
  * @typedef {{
- *   agents: Array<{ id: string, name: string, skills: string[] }>,
+ *   agents: Array<{ id: string, name: string, prompt: string, skills: string[] }>,
  *   broken: Array<{ id: string, name: string, error: string }>,
  *   currentDirective: string,
  *   activeSkills: Set<string>,
@@ -116,6 +116,7 @@ function createAgentState() {
         .map((a) => ({
           id: String(a.id),
           name: String(a.display_name || a.id),
+          prompt: String(a.prompt ?? ""),
           skills: Array.isArray(a.skills) ? a.skills.map(String) : [],
         }));
       // Agents that failed to load (broken module/class). Shown disabled with
@@ -191,7 +192,7 @@ function createAgentState() {
     setTimeout(() => void refresh(), 400);
   }
 
-  /** Replace the active subset outright (the Agent Studio's guided grants).
+  /** Replace the active subset outright (the agent detail panel's guided grants).
    * @param {string[]} skills */
   function setActiveSkills(skills) {
     if (!state.currentDirective) return;

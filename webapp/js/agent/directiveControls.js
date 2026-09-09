@@ -278,6 +278,9 @@ export function createDirectiveControls(agentState, opts) {
 
   return {
     el: controls,
+    // The agent the picker shows, running or not: a chosen agent is selected
+    // even before Start (the studio names it).
+    armedId: () => selectedDirective,
     // The compact sheet parks this in its header; moved, not duplicated.
     toggleEl: toggleBtn,
     ensureRunning,

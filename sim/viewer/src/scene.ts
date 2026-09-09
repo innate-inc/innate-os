@@ -117,12 +117,13 @@ const KEY_LIGHT_OFFSET: [number, number, number] = [2.0, -1.5, 3.0];
 // shadows look sharp or blocky. 0.7m is the floor (a robot 0.35m across with
 // a 0.36m reach, props dropped within 0.35m): 0.68mm per texel at 2048. Past
 // SHADOW_BOX_MAX_M it stops growing and distant props lose their shadow
-// rather than blurring the robot's, which is the part being looked at.
+// rather than blurring the robot's, which is the part being looked at; the cap
+// is set so nothing in the story ever falls out of it.
 const SHADOW_BOX_MIN_M = 0.7;
-const SHADOW_BOX_MAX_M = 3.0;
+const SHADOW_BOX_MAX_M = 5.0; // fits the whole story: the void door 3 m out, the Backrooms exit 8.3 m away
 const SHADOW_BOX_STEP_M = 0.25; // quantised, so the box does not resize every frame
 const SHADOW_MARGIN_M = 0.5; // the robot's own extent plus the throw of its shadow
-const SHADOW_MAP_PX = 2048;
+const SHADOW_MAP_PX = 4096; // at the 5 m cap this is still 2.4mm per texel, sharper than 2048 ever was at 3 m
 
 // Initial orbit framing used when a pose is snapped in (see spawnAt below).
 const INITIAL_ORBIT_POSITION = { forward: 0.61, left: 0.02, height: 0.25 };
@@ -211,6 +212,10 @@ export class SimScene {
   private chase = { back: CHASE_BACK_M, height: CHASE_HEIGHT_M, target: CHASE_TARGET_HEIGHT_M };
   /** Lateral offset of the chase perch (robot frame, +left); the story steps aside for the grasp. */
   chaseSide = 0;
+  /** Distance behind the robot, when the caller overrides the atmosphere's default; negative puts the camera in front, facing it. */
+  chaseBack: number | null = null;
+  /** Perch height, when the caller overrides the atmosphere's default; higher looks down over the robot at what lies ahead. */
+  chaseHeight: number | null = null;
   private hullsPromise?: Promise<void>;
   private hullsVisible = false;
   // Shared fat-line material for placeholder boxes (LineBasicMaterial's
@@ -1006,10 +1011,11 @@ export class SimScene {
   private updateChase(dt: number): void {
     const [x, y] = this.robotXY;
     const yaw = this.robotRoot.rotation.z;
+    const back = this.chaseBack ?? this.chase.back;
     const desired = new THREE.Vector3(
-      x - Math.cos(yaw) * this.chase.back - Math.sin(yaw) * this.chaseSide,
-      y - Math.sin(yaw) * this.chase.back + Math.cos(yaw) * this.chaseSide,
-      this.chase.height,
+      x - Math.cos(yaw) * back - Math.sin(yaw) * this.chaseSide,
+      y - Math.sin(yaw) * back + Math.cos(yaw) * this.chaseSide,
+      this.chaseHeight ?? this.chase.height,
     );
     const target = new THREE.Vector3(x, y, this.chase.target);
     const alpha = 1 - Math.exp(-CHASE_LAG_HZ * dt);

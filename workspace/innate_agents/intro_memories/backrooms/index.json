@@ -4,11 +4,11 @@
   "memories": [
     {
       "id": 1,
-      "x": 3.1999999976447984,
+      "x": -16.30000000235519,
       "y": -5.2000001484774225,
-      "theta": -1.4858995141302834e-07,
-      "stamp": 1788665603.167267,
-      "label": "Green exit at the far end of the Backrooms corridor"
+      "theta": -1.4858995132855068e-07,
+      "stamp": 1788925967.6508312,
+      "label": "Green exit down the Backrooms corridor"
     }
   ]
 }

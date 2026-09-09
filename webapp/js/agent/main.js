@@ -30,7 +30,7 @@ import { sharedAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
 import { createAgentStudio } from "./agentStudio.js";
-import { CANCEL_SKILL_SERVICE } from "../constants.js";
+import { CANCEL_SKILL_SERVICE, SKILL_OVERLAY_TOPIC } from "../constants.js";
 import { createAgentMicControl } from "./agentMicControl.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
@@ -163,6 +163,24 @@ function buildAgentView(root) {
   let micControl = null;
   /** @type {string[]} */
   const robotLines = [];
+  let robotLineCount = 0; // keeps counting after the window above starts dropping old lines
+  // The story's camera stays on the page's front framing until the robot first drives.
+  let motionSeen = false;
+  let lastMotionAt = 0;
+  let recalledAt = 0;
+  let turnedAt = 0;
+  /** @type {Set<(event: any) => void>} */
+  const overlayListeners = new Set();
+  const unsubOverlay = ros.subscribe(SKILL_OVERLAY_TOPIC, (m) => {
+    if (typeof m?.data !== "string") return;
+    let event;
+    try {
+      event = JSON.parse(m.data);
+    } catch {
+      return;
+    }
+    for (const cb of overlayListeners) cb(event);
+  }, undefined, "std_msgs/msg/String");
   const panel = createAgentPanel(root, ros, agentState, {
     enableMic: Boolean(config.simControls),
     onMicState: (state) => {
@@ -174,15 +192,35 @@ function buildAgentView(root) {
     },
     onRobotMessage: (text) => {
       robotLines.push(text);
+      robotLineCount += 1;
       if (robotLines.length > 40) robotLines.shift();
+    },
+    onSkillStatus: ({ skill, status }) => {
+      if (status === "running" && /(^|\/)(move_straight|navigate_to_position)$/.test(skill)) {
+        motionSeen = true;
+        lastMotionAt = Date.now();
+      }
+      if (status === "running" && /(^|\/)turn_in_place$/.test(skill)) turnedAt = Date.now();
+      if (status === "completed" && /(^|\/)search_memory$/.test(skill)) recalledAt = Date.now();
     },
   });
   const simSession = /** @type {any} */ (session);
   const challengePanel =
     typeof simSession.onChallenge === "function" ? createChallengePanel(root, simSession) : null;
   const studio = createAgentStudio(root, agentState, challengePanel ? simSession : null, panel, {
+    showView: (/** @type {string} */ id) => cameraSwitch.promote(id),
+    armedAgent: () => panel.armedAgentId(),
+    directivesEl: panel.directivesEl,
     transcript: () => robotLines,
+    spokenCount: () => robotLineCount,
     cancelSkill: () => ros.callService(CANCEL_SKILL_SERVICE, {}),
+    motion: { seen: () => motionSeen, lastAt: () => lastMotionAt, reset: () => { motionSeen = false; lastMotionAt = 0; } },
+    recalledAt: () => recalledAt,
+    turnedAt: () => turnedAt,
+    overlay: (/** @type {(event: any) => void} */ cb) => {
+      overlayListeners.add(cb);
+      return () => overlayListeners.delete(cb);
+    },
   });
   const isSceneSurface = (/** @type {EventTarget | null} */ target) =>
     target instanceof Element &&
@@ -285,6 +323,7 @@ function buildAgentView(root) {
 
   return {
     destroy() {
+      unsubOverlay();
       for (const part of parts) part.destroy();
       releaseSession(session);
       root.innerHTML = "";

@@ -434,6 +434,7 @@ export function createCameraSwitch(parent, session, ros, opts = {}) {
   }, undefined, "std_msgs/msg/String");
 
   return {
+    promote,
     destroy() {
       unsub?.();
       unsubSession();

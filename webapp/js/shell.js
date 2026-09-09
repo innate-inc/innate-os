@@ -13,6 +13,7 @@ import { createAgentIndicator } from "./agentIndicator.js";
 import { createArmAlert } from "./armAlert.js";
 import { installPressActivate } from "./pressActivate.js";
 import { FOOTER_SECTIONS, GROUPS, SECTIONS, SIM_SECTIONS, railRows } from "./railLayout.js";
+import { PLAY_INTRO_KEY } from "./agent/agentStudio.js";
 
 /** @typedef {import("./railLayout.js").Section} Section */
 
@@ -75,6 +76,10 @@ export function initShell(navigate) {
   footNav.className = "rail-nav rail-foot";
   footNav.setAttribute("aria-label", "Utility");
   let activeKey = "";
+  // Sim only: the onboarding story is the sim's front door, so its way back in
+  // sits with Settings rather than inside the page it restarts.
+  /** @type {HTMLAnchorElement | null} */
+  let introEntry = null;
 
   /**
    * (Re)build the rail from railRows — links in group order, a divider at each
@@ -88,6 +93,7 @@ export function initShell(navigate) {
       nav.appendChild(row.kind === "divider" ? buildDivider(row.label) : buildLink(row.section));
     }
     footNav.innerHTML = "";
+    if (introEntry) footNav.appendChild(introEntry);
     for (const section of FOOTER_SECTIONS) {
       if (!visible || visible.has(section.key)) footNav.appendChild(buildLink(section));
     }
@@ -127,6 +133,28 @@ export function initShell(navigate) {
     return div;
   }
 
+  function buildIntroEntry() {
+    const a = document.createElement("a");
+    a.className = "rail-link";
+    a.href = pathForKey("agent");
+    a.title = "Play the intro";
+    a.setAttribute("aria-label", "Play the intro");
+    a.innerHTML =
+      '<span class="rail-ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M10 8.5 16 12l-6 3.5z"/></svg></span>' +
+      '<span class="rail-label">Play the intro</span>';
+    a.addEventListener("click", () => {
+      // The Agent page may be mounting or already mounted; the flag covers the
+      // first case and the event the second.
+      try {
+        sessionStorage.setItem(PLAY_INTRO_KEY, "1");
+      } catch {
+        /* private mode: the event below still covers an open Agent page */
+      }
+      document.dispatchEvent(new CustomEvent("innate:play-intro"));
+    });
+    return a;
+  }
+
   function applyActive() {
     for (const link of rail.querySelectorAll(".rail-link")) {
       const el = /** @type {HTMLElement} */ (link);
@@ -164,7 +192,9 @@ export function initShell(navigate) {
   // rail without them once the (env-driven) config says we're in sim mode.
   void getConfig().then((config) => {
     // {} on any failure → assume real robot, keep every section.
-    if (config?.simControls) renderNav(SIM_SECTIONS);
+    if (!config?.simControls) return;
+    introEntry = buildIntroEntry();
+    renderNav(SIM_SECTIONS);
   });
 
   // Play robot speech (/tts/audio) regardless of which page is open; idempotent.

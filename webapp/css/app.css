@@ -686,7 +686,6 @@ select.skill-input {
   color: var(--danger);
 }
 
-
 .connect-layer {
   display: grid;
   place-items: center;
@@ -3451,7 +3450,6 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
   color: inherit;
 }
 
-
 /* ---- logging page --------------------------------------------------------- */
 
 .logging {
@@ -4794,7 +4792,6 @@ select.episodes-tool {
   opacity: 0.5;
   cursor: progress;
 }
-
 
 /* video pair */
 .video-pair {
@@ -8555,25 +8552,12 @@ select.skill-input {
   pointer-events: none;
 }
 
-.agent-control-panel,
 .agent-thoughts-panel {
   backdrop-filter: blur(30px) saturate(1.1) brightness(0.82);
   -webkit-backdrop-filter: blur(30px) saturate(1.1) brightness(0.82);
   border-radius: 18px;
   box-shadow: 0 14px 44px rgb(0 0 0 / 48%);
   pointer-events: auto;
-}
-
-.agent-control-panel {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  background: rgb(8 8 10 / 42%);
-  border: 1px solid rgb(255 255 255 / 14%);
 }
 
 .agent-thoughts-panel {
@@ -8643,100 +8627,6 @@ select.skill-input {
     bottom: var(--agent-dock-gutter);
     left: auto;
   }
-}
-
-.agent-head {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-height: 32px;
-  gap: 12px;
-  padding: 0;
-  color: inherit;
-  background: transparent;
-  border: 0;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.agent-control-panel.collapsed .agent-controls {
-  display: none;
-}
-
-.agent-head-copy {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.agent-head-label {
-  color: rgb(231 231 234 / 58%);
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.agent-head-agent-name {
-  min-width: 0;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.25;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-head-chev {
-  display: flex;
-  margin-left: auto;
-  color: var(--muted);
-  opacity: 0.62;
-  transform: rotate(90deg);
-  transition: transform 180ms cubic-bezier(0.645, 0.045, 0.355, 1), color 150ms ease, opacity 150ms ease;
-}
-
-.agent-control-panel.collapsed .agent-head-chev {
-  transform: rotate(0);
-}
-
-.agent-head:focus-visible {
-  outline: 2px solid var(--ctl-accent);
-  outline-offset: 4px;
-  border-radius: 6px;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .agent-head:hover .agent-head-chev {
-    color: var(--text);
-    opacity: 1;
-  }
-}
-
-.agent-title {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-}
-
-.agent-title-icon {
-  width: 22px;
-  height: 22px;
-  color: #fff;
-  filter: drop-shadow(0 0 6px rgb(255 255 255 / 62%));
-}
-
-.agent-panel.active .agent-title-icon {
-  color: #ffd08a;
-  filter: drop-shadow(0 0 4px rgb(255 181 94)) drop-shadow(0 0 12px rgb(242 145 48 / 90%));
-  transform-origin: center;
-  will-change: transform, opacity;
-  animation: agent-title-active-pulse 2s cubic-bezier(0.455, 0.03, 0.515, 0.955) infinite;
 }
 
 @keyframes agent-title-active-pulse {
@@ -9963,7 +9853,6 @@ select.skill-input {
     transition: height 260ms cubic-bezier(0.23, 1, 0.32, 1);
   }
 
-  .agent-compact .agent-control-panel,
   .agent-compact .agent-thoughts-panel {
     padding: 12px 14px;
     background: transparent;
@@ -9972,15 +9861,6 @@ select.skill-input {
     border: 0;
     border-radius: 0;
     box-shadow: none;
-  }
-
-  .agent-compact .agent-control-panel {
-    padding-top: 0;
-  }
-
-  /* The sheet's header already names the agent and carries its start/stop. */
-  .agent-compact .agent-head {
-    display: none;
   }
 
   .agent-compact .agent-thoughts-panel {
@@ -10050,7 +9930,7 @@ select.skill-input {
   }
 
   /* Closed, the rest must leave the tab order, not merely be clipped. */
-  .agent-compact .agent-panel.sheet-closed :is(.agent-control-panel, .agent-thoughts-panel) {
+  .agent-compact .agent-panel.sheet-closed .agent-thoughts-panel {
     visibility: hidden;
   }
 }
@@ -11373,14 +11253,51 @@ select.skill-input {
   }
 }
 
-/* ---- Agent Studio (v0) --------------------------------------------------- */
+/* ---- Agent detail (v0) --------------------------------------------------- */
 /* What the selected agent can do, one switch per skill. Bottom-left, under the
    challenge dock; the chat owns the right edge. */
-.agent-studio {
+.agent-studio-dock {
+  /* The same inset as the scene setup and the challenge dock it sits opposite. */
   position: absolute;
-  left: 16px;
-  bottom: 16px;
+  left: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+  top: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
   z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.agent-studio-dock-toggle {
+  display: grid; align-items: center; gap: 0 12px; padding: 10px 14px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  max-width: min(340px, calc(100vw - 120px)); text-align: left;
+  color: rgb(255 255 255 / 88%); background: rgb(8 8 10 / 76%);
+  backdrop-filter: blur(20px) saturate(1.1); -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border: 1px solid rgb(255 255 255 / 18%); border-radius: 14px; cursor: pointer;
+}
+.agent-studio-dock-toggle:hover { border-color: rgb(255 255 255 / 32%); }
+.agent-studio-dock-icon { grid-row: 1 / 3; width: 22px; height: 22px; }
+.agent-studio-dock-toggle .microlabel { grid-column: 2; color: rgb(255 255 255 / 55%); }
+.agent-studio-dock-toggle .agent-studio-title { grid-column: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-studio-dock-chevron { grid-row: 1 / 3; grid-column: 3; display: grid; place-items: center; width: 18px; height: 18px; color: rgb(255 255 255 / 55%); transition: transform 160ms ease; }
+.agent-studio-dock-chevron svg { width: 18px; height: 18px; }
+.agent-studio-dock.open .agent-studio-dock-chevron { transform: rotate(180deg); }
+.agent-studio .agent-controls { margin: 0 0 10px; }
+/* Bottom-left, where the scene setup sits once the story is over. */
+.agent-skip-ahead {
+  position: absolute; z-index: 30;
+  left: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+  bottom: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+  padding: 9px 14px;
+  color: rgb(255 255 255 / 88%); background: rgb(8 8 10 / 76%);
+  backdrop-filter: blur(20px) saturate(1.1); -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border: 1px solid rgb(255 255 255 / 18%); border-radius: 12px;
+  font: inherit; font-size: 13px; cursor: pointer;
+}
+.agent-skip-ahead:hover { color: #fff; border-color: rgb(255 255 255 / 32%); }
+.agent-studio-dock:not(.open) .agent-studio { display: none; }
+.agent-studio {
+  position: static;
   width: min(320px, calc(100% - 32px));
   padding: 14px 16px 12px;
   border: 1px solid var(--hairline-strong);
@@ -11420,7 +11337,7 @@ select.skill-input {
 }
 .agent-studio-skill.locked { opacity: 0.45; }
 .agent-studio-skill.wanted { background: rgb(132 112 255 / 18%); outline: 1px solid #8470ff; animation: agent-studio-pulse 1.4s ease-in-out infinite; }
-.agent-studio-skill-name { font-size: 13px; text-transform: capitalize; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-studio-skill-name { font-size: 13px; font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-studio-skill-state { color: var(--muted); font-size: 9px; }
 .agent-studio-skill.wanted .agent-studio-skill-state { color: #c9c3ff; }
 .agent-studio-toggle {
@@ -11516,8 +11433,7 @@ select.skill-input {
   }
 }
 
-
-/* Agent Studio: story reveal, offers, code pane */
+/* Agent detail: story reveal and offers */
 .agent-studio-persona { display: block; margin-top: 2px; color: #c9c3ff; font-size: 12px; }
 .agent-studio-name { display: flex; gap: 6px; margin: 0 0 10px; }
 .agent-studio-name input {
@@ -11525,21 +11441,36 @@ select.skill-input {
   border: 1px solid var(--hairline-strong); border-radius: 8px;
   background: rgb(255 255 255 / 5%); color: var(--text); font: inherit; font-size: 13px;
 }
-.agent-studio-name button {
+.agent-studio-name button,
+.agent-studio-prompt button {
   padding: 8px 12px; border: 1px solid #55545e; border-radius: 8px;
   background: #33333d; color: #f2f2f7; font: inherit; font-size: 12px; cursor: pointer;
+}
+.agent-studio-prompt { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
+.agent-studio-prompt textarea {
+  width: 100%; box-sizing: border-box; min-height: 56px; resize: vertical; padding: 8px 10px;
+  border: 1px solid var(--hairline-strong); border-radius: 8px;
+  background: rgb(255 255 255 / 5%); color: var(--text); font: inherit; font-size: 13px; line-height: 1.4;
+}
+.agent-studio-prompt button { align-self: flex-end; }
+.agent-studio-promptview { margin: 0 0 10px; font-size: 12px; }
+.agent-studio-promptview > summary { color: var(--muted); cursor: pointer; }
+.agent-studio-promptview > p {
+  max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 8px 10px;
+  border: 1px solid var(--hairline-strong); border-radius: 8px;
+  background: rgb(255 255 255 / 4%); color: var(--text); line-height: 1.45; white-space: pre-wrap;
 }
 .agent-studio-empty { color: var(--muted); font-size: 12px; padding: 6px 8px; }
 .agent-studio-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .agent-studio-actions .agent-studio-action { width: auto; margin: 0; padding: 8px 12px; font-size: 12px; }
 .agent-studio-action.quiet { background: transparent; border-color: #4a4a54; color: #d8d8de; }
 .agent-studio-action.quiet:hover { border-color: #8a8a96; }
+.agent-studio-link { display: inline-block; text-decoration: none; text-align: center; }
 .agent-studio-code {
   max-height: 34vh; margin: 10px 0 0; padding: 10px 12px; overflow: auto;
   border: 1px solid var(--hairline-strong); border-radius: 8px;
   background: #0f0f12; color: #d6d6de; font-size: 11px; line-height: 1.5; white-space: pre;
 }
-.agent-studio-foot { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; white-space: pre-wrap; }
 .agent-guided-prompt-button.grant { background: #5941ca; border-color: #7965e7; }
 .agent-guided-prompt-button.grant::after { content: "＋"; }
 .agent-guided-prompt-button.persona { background: #2a2a31; border-color: #55545e; }
@@ -11551,40 +11482,26 @@ select.skill-input {
   transition: opacity 900ms ease;
 }
 .agent-whiteout.on { opacity: 1; }
+.agent-drag-hint {
+  position: absolute; left: 50%; bottom: 120px; z-index: 30;
+  padding: 8px 14px; border-radius: 999px;
+  background: rgb(16 16 20 / 85%); color: #fff; font-size: 13px; letter-spacing: 0.01em;
+  pointer-events: none; animation: cam-tile-cue 1.2s ease-in-out infinite;
+}
+.agent-drag-hint::before { content: "\2194\00a0"; }
+@media (prefers-reduced-motion: reduce) { .agent-drag-hint { animation: none; transform: translateX(-50%); } }
 @media (prefers-reduced-motion: reduce) { .agent-whiteout { transition: none; } }
 
 /* While the Nowhere story runs, the robot and the chat are the whole interface. */
 body.story-active :is(.rail, .rail-ribbon, .rail-scrim) { display: none; }
+/* Scene setup and challenges wait for the end of the story: the story is the tutorial for both. */
+body.story-active :is(.sim-scene-setup, .agent-challenge-dock) { display: none; }
 body.story-active { grid-template-columns: minmax(0, 1fr); }
 .agent-cockpit.story-active > :is(.agent-stage-view-toggle, .sim-debug-stack, .agent-challenge-dock) { display: none; }
-.agent-cockpit.story-active .agent-control-panel { display: none; }
 .agent-cockpit.story-active .agent-stream > .chat-msg.skill-output { display: none; }
 .agent-cockpit.story-active .agent-stream > .chat-msg.system { display: none; }
 /* Offers are rebuilt only when they change, but never let an enter animation leave them dim. */
 .agent-stream.compact > .agent-guided-prompt.compact-entering { animation: none; opacity: 1; }
-
-/* The agent file, shown as a sheet over the stage rather than a block in the panel. */
-.agent-code-sheet {
-  position: absolute; inset: 16px 16px 16px 16px; z-index: 70;
-  display: flex; flex-direction: column;
-  border: 1px solid var(--hairline-strong); border-radius: 12px;
-  background: rgb(14 14 18 / 96%); color: #d6d6de;
-  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-}
-.agent-code-sheet[hidden] { display: none; }
-.agent-code-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--hairline-strong); }
-.agent-code-head strong { font-size: 14px; font-weight: 550; }
-.agent-code-head span { color: var(--muted); font-size: 12px; }
-.agent-code-head button { border: 1px solid #55545e; border-radius: 7px; padding: 6px 12px; background: #33333d; color: #f2f2f7; font: inherit; font-size: 12px; cursor: pointer; }
-.agent-code-body { flex: 1; min-height: 0; margin: 0; padding: 14px 18px; overflow: auto; font-size: 12.5px; line-height: 1.55; white-space: pre; tab-size: 4; }
-.agent-code-body .tok-str { color: #b8d7a3; }
-.agent-code-body .tok-com { color: #7f8592; font-style: italic; }
-.agent-code-body .tok-kw { color: #c792ea; }
-.agent-code-body .tok-name { color: #ffd479; }
-.agent-code-body .tok-dec { color: #82aaff; }
-.agent-code-body .tok-num { color: #f78c6c; }
-.agent-code-foot { padding: 10px 16px; border-top: 1px solid var(--hairline-strong); color: var(--muted); font-size: 12px; }
-@media (max-width: 1400px) { .agent-code-sheet { right: 16px; } }
 /* In the story a failure is a setback, not an alarm. */
 .agent-cockpit.story-active .agent-stream .chat-skill.failed { border-left-color: #d9a441; }
 .agent-cockpit.story-active .agent-stream .chat-skill.failed .chat-skill-status { color: #d9a441; }
@@ -11600,3 +11517,16 @@ body.story-agent .agent-stream > .chat-msg.system.narrator,
 /* A first-timer does not need the model's reasoning; keep it in Detailed. */
 body.story-agent .agent-stream.compact > .chat-thoughts,
 .agent-cockpit.story-active .agent-stream.compact > .chat-thoughts { display: none; }
+/* The recalled memory is a place on the map: draw the eye there for a moment. */
+.cam-tile.cam-tile-pulse { outline: 2px solid #9482ff; outline-offset: 4px; animation: cam-tile-pulse 1.2s ease-in-out infinite; }
+@keyframes cam-tile-pulse { 0%, 100% { outline-color: #9482ff; } 50% { outline-color: rgb(148 130 255 / 20%); } }
+@media (prefers-reduced-motion: reduce) { .cam-tile.cam-tile-pulse { animation: none; } }
+/* A camera cue names itself: a badge inside the pulsing tile says where to click. */
+.cam-tile .cam-tile-cue {
+  position: absolute; left: 50%; top: 8px; transform: translateX(-50%); z-index: 2;
+  padding: 4px 9px; border-radius: 999px; background: #9482ff; color: #fff;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; pointer-events: none;
+  animation: cam-tile-cue 1.2s ease-in-out infinite;
+}
+@keyframes cam-tile-cue { 0%, 100% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(1.08); } }
+@media (prefers-reduced-motion: reduce) { .cam-tile .cam-tile-cue { animation: none; } }

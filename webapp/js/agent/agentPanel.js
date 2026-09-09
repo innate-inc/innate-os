@@ -56,7 +56,7 @@ const THINKING_STALE_MS = 10_000;
  *   clearSuggestedPrompts: () => void,
  *   setOffers: (offers: Array<{text: string, kind: string, onSelect: (text: string) => void}>) => void,
  *   submitText: (text: string) => Promise<boolean>,
- *   narrate: (text: string) => Promise<boolean>,
+ *   narrate: (text: string, how?: { quiet?: boolean, local?: boolean }) => Promise<boolean>,
  *   setDisplayName: (name: string | null) => void,
  *   isBusy: () => boolean
  * }}
@@ -70,71 +70,26 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
 
   const panel = document.createElement("section");
   panel.className = "overlay agent-panel";
-  const controlPanel = document.createElement("section");
-  controlPanel.className = "agent-control-panel";
   const thoughtsPanel = document.createElement("section");
   thoughtsPanel.className = "agent-thoughts-panel";
-
-  // ---- header -------------------------------------------------------------
-  const head = document.createElement("button");
-  head.type = "button";
-  head.className = "agent-head";
-  head.setAttribute("aria-label", "Collapse agent controls");
-  head.setAttribute("aria-expanded", "true");
-  const titleEl = document.createElement("span");
-  titleEl.className = "agent-title";
-  titleEl.innerHTML =
-    '<svg class="agent-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5l1.7 6.8 6.8 1.7-6.8 1.7L12 20.5l-1.7-6.8L3.5 12l6.8-1.7z"/></svg>';
-  const headCopy = document.createElement("span");
-  headCopy.className = "agent-head-copy";
-  const headLabel = document.createElement("span");
-  headLabel.className = "agent-head-label";
-  headLabel.textContent = "Agent";
-  const headAgentName = document.createElement("span");
-  headAgentName.className = "agent-head-agent-name";
-  headAgentName.textContent = "—";
-  headCopy.append(headLabel, headAgentName);
-  const headChevron = document.createElement("span");
-  headChevron.className = "agent-head-chev";
-  headChevron.innerHTML =
-    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9,6 15,12 9,18"/></svg>';
-  /** @param {boolean} collapsed */
-  function setControlsCollapsed(collapsed) {
-    controlPanel.classList.toggle("collapsed", collapsed);
-    head.setAttribute("aria-expanded", String(!collapsed));
-    updateHeadLabel();
-  }
-  function updateHeadLabel() {
-    const action = controlPanel.classList.contains("collapsed") ? "Expand" : "Collapse";
-    head.setAttribute("aria-label", `${action} controls for ${headAgentName.textContent}`);
-  }
-  head.addEventListener("click", () => setControlsCollapsed(!controlPanel.classList.contains("collapsed")));
-  head.append(titleEl, headCopy, headChevron);
 
   // ---- directive + start/stop --------------------------------------------
   /** @type {ReturnType<typeof createAgentSheet> | undefined} */
   let sheet; // built below, but onAgentName can fire before that
-  // The story can name the robot; the header then shows that name, not the directive's.
+  // The story can name the robot; the sheet then shows that name, not the directive's.
   /** @type {string | null} */
   let displayNameOverride = null;
   let directiveName = "—";
-  function applyHeadName() {
-    const name = displayNameOverride ?? directiveName;
-    headAgentName.textContent = name;
-    sheet?.setName(name);
-    updateHeadLabel();
-  }
+  const applyName = () => sheet?.setName(displayNameOverride ?? directiveName);
   const directives = createDirectiveControls(agentState, {
     listId: `agent-directive-list-${selfOrigin}`,
     onAgentName(name) {
       directiveName = name;
-      applyHeadName();
+      applyName();
     },
     onBrainActive(active, justStarted) {
       panel.classList.toggle("active", active);
-      if (!justStarted) return;
-      if (controlPanel.classList.contains("collapsed")) setControlsCollapsed(false);
-      sheet?.open();
+      if (justStarted) sheet?.open();
     },
   });
 
@@ -212,10 +167,9 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   }
   syncComposerAction();
 
-  controlPanel.append(head, directives.el);
   composeArea.append(thinkingNotice, form);
   thoughtsPanel.append(chat.head, chat.wrap, composeArea);
-  panel.append(controlPanel, thoughtsPanel);
+  panel.append(thoughtsPanel);
   root.append(panel);
 
   const stream = chat.wrap.querySelector(".agent-stream");
@@ -279,18 +233,19 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   /** @param {string} text */
   /** Texts this page sent lately: the brain echoes user lines on chat_out, and one bubble is enough. */
   const sentTexts = new Map();
-  /** Lines the world spoke through this page; a history replay must not turn them into visitor bubbles. */
-  const narratorTexts = new Set();
-  /** @param {string} text @param {{ narrator?: boolean, quiet?: boolean }} [how] a narrator line is the world speaking, not the visitor; quiet keeps a failed send off the screen */
+  /** @param {string} text @param {{ narrator?: boolean, quiet?: boolean, local?: boolean }} [how] narrator styles the line as the world speaking rather than the visitor; quiet keeps a failed send off the screen; local shows the line without telling the brain */
   async function submitText(text, how = {}) {
     if (!text || sending) return false;
     sending = true;
     // The bubble lands the moment the person acts, not after the round trip.
     const timestamp = Date.now() / 1000;
     sentTexts.set(text.trim(), Date.now());
-    if (how.narrator) narratorTexts.add(text.trim());
     if (how.narrator) chat.addMessage("system", text, timestamp, "narrator");
     else chat.addMessage("user", text, timestamp);
+    if (how.local) {
+      sending = false;
+      return true; // a stage direction for the visitor only; the brain is busy and must not be nudged
+    }
     try {
       await (opts.ensureRunning?.(directives.ensureRunning) ?? directives.ensureRunning());
       const frame = { data: JSON.stringify({ text, sender: "user", timestamp, origin: selfOrigin }) };
@@ -358,15 +313,14 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       const entries = JSON.parse(raw || "[]");
       if (!Array.isArray(entries) || !entries.length) return;
       lastSnapshot = raw;
-      chat.replay(
-        entries
-          .filter((entry) => (Number(entry?.timestamp) || 0) >= historyFloor)
-          .map((entry) =>
-            String(entry?.sender ?? "") === "user" && narratorTexts.has(String(entry?.text ?? "").trim())
-              ? { ...entry, narrator: true }
-              : entry,
-          ),
-      );
+      const shown = entries.filter((entry) => (Number(entry?.timestamp) || 0) >= historyFloor);
+      chat.replay(shown);
+      // A reloaded page must know the robot has spoken: the story's chips wait on it.
+      for (const entry of shown) {
+        if (String(entry?.sender ?? "") === "robot") {
+          opts.onRobotMessage?.(String(entry.text ?? ""), Number(entry.timestamp) || Date.now() / 1000);
+        }
+      }
     } catch (err) {
       console.warn("[chat] reconcile failed:", err);
     } finally {
@@ -450,6 +404,9 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   }, undefined, "std_msgs/msg/String");
 
   return {
+    armedAgentId: () => directives.armedId(),
+    // The agent picker and its Start/Stop, for whoever shows the agent's detail.
+    directivesEl: directives.el,
     startMic,
     stopMic,
     micMount,
@@ -485,11 +442,11 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     },
     submitText,
     /** @param {string} text */
-    narrate: (text) => submitText(text, { narrator: true }),
+    narrate: (text, how = {}) => submitText(text, { ...how, narrator: true }),
     /** @param {string | null} name */
     setDisplayName(name) {
       displayNameOverride = name;
-      applyHeadName();
+      applyName();
     },
     isBusy: () => runningSkills.size > 0,
     destroy() {

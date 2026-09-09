@@ -50,7 +50,7 @@ TONEMAP_EXPOSURE = 1.5  # sim/viewer's renderer.toneMappingExposure
 # small: without ARB_clip_control (macOS) MuJoCo's caster pass offsets depth by
 # ~16 texels, which erases an object's base and leaves a detached shadow.
 SHADOW_BOX_MIN_M = 1.5
-SHADOW_BOX_MAX_M = 3.0
+SHADOW_BOX_MAX_M = 5.0  # far enough for the Backrooms exit; matches sim/viewer's cap
 SHADOW_BOX_MARGIN_M = 0.5
 # Shadows cost ~2x per frame on native GL and ~3x on software GL, where the
 # frame time already starves the stack; VIRTUAL_MARS_SHADOWS=0/1 overrides.
