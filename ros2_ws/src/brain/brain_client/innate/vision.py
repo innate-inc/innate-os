@@ -187,11 +187,25 @@ def track_point(prev_gray, gray, grid):
 # Color seg for growing/deforming objects (LK slides off fabric during descent).
 _SEG_BINS = [16, 8, 8]
 _SEG_RANGES = [0, 180, 0, 256, 0, 256]
+# Hue is sensor noise below the first saturation bin. A white AirPods case is
+# S < 32 almost everywhere, and that noise scatters it over six hue bins, so
+# normalising the ratio to its peak left one shard — 16% of the case — above
+# _BLOB_MIN_LIKELIHOOD and the tracked centroid wandered over whichever shard
+# won. Folding every grey pixel into one hue bin puts 83% of the case there.
+# Saturated pixels keep their hue: the S index already separates them.
+_SEG_GREY_S = 256 // _SEG_BINS[1]
+
+
+def _fold_grey_hue(hsv: np.ndarray) -> np.ndarray:
+    folded = hsv.copy()
+    folded[:, :, 0][hsv[:, :, 1] < _SEG_GREY_S] = 0
+    return folded
 
 
 def seg_model(hsv, box):
     """Object/floor hist-ratio LUT for back-projection, or None."""
     x, y, w, h = box
+    hsv = _fold_grey_hue(hsv)
     obj = hsv[y : y + h, x : x + w]
     rx0, ry0 = max(0, x - w // 2), max(0, y - h // 2)
     ring = hsv[ry0 : y + h + h // 2, rx0 : x + w + w // 2]
@@ -276,7 +290,7 @@ def seg_track(
     hsv: np.ndarray, model: np.ndarray, window: Window, min_score: float = 25.0
 ) -> tuple[tuple[float, float] | None, Window, float, Axis | None]:
     """Back-project + CamShift -> (center|None, window, score, axis|None)."""
-    bp = _backproject(hsv, model)
+    bp = _backproject(_fold_grey_hue(hsv), model)
     crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 1)
     rot, window = cv2.CamShift(bp, window, crit)
     x, y, w, h = window
