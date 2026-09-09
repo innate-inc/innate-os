@@ -45,6 +45,9 @@ static constexpr double kRestFoldDurationS = 3.0;
 static constexpr double kRestContactErrorRad = 0.20;
 static constexpr int kContactStrikes = 5;
 static constexpr double kContactLockOnTimeoutS = 1.0;
+// A guarded trajectory is done when the arm has arrived, not when its last
+// command was sent: an obstacle at the target is met on the last waypoints.
+static constexpr double kSettleTimeoutS = 1.0;
 static constexpr double kAtRestRad = 0.05;
 // The floor is ~5.5 cm below the shoulder joint on MARS (a collapsed tip
 // measures -5 to -6 cm) and the rest pose keeps wrist and tip ~2 cm above
@@ -158,6 +161,7 @@ struct TrajectoryGuard {
     std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
     std::array<bool, kArmJoints> locked_on{};
     std::array<int, kArmJoints> strikes{};
+    bool tracking = false;   // every guarded joint was within max_error_rad at the last check
     int blocked_joint = -1;  // 0-based; set when a joint met resistance
     std::string stop_reason;
 };

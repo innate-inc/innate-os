@@ -166,6 +166,21 @@ bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_pos
         }
     }
 
+    if (guard != nullptr) {
+        const auto settle_deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(kSettleTimeoutS);
+        while (true) {
+            std::this_thread::sleep_for(sleep_duration);
+            if (guardTripped(*guard)) {
+                holdArmWhereItIs();
+                RCLCPP_WARN(this->get_logger(), "Trajectory stopped: %s", guard->stop_reason.c_str());
+                return false;
+            }
+            if (guard->tracking || std::chrono::steady_clock::now() > settle_deadline) {
+                break;
+            }
+        }
+    }
+
     RCLCPP_INFO(this->get_logger(), "Trajectory execution complete");
 
     // Deliberately KEEP the trajectory's gain mode for the hold: dropping to
@@ -200,6 +215,7 @@ bool MarsArmNode::guardTripped(TrajectoryGuard& guard) {
     const double waited_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - guard.started).count();
     int blocked_joint = -1;
     double blocked_error = 0.0;
+    guard.tracking = true;
     for (size_t j = 0; j < kArmJoints && j < measured.size(); ++j) {
         const double error = std::abs(measured[j] - written[j]);
         if (error <= guard.max_error_rad) {
@@ -207,6 +223,7 @@ bool MarsArmNode::guardTripped(TrajectoryGuard& guard) {
             guard.strikes[j] = 0;
             continue;
         }
+        guard.tracking = false;
         if (!guard.locked_on[j] && waited_s < kContactLockOnTimeoutS) {
             continue;
         }
@@ -306,7 +323,7 @@ RestOutcome MarsArmNode::runRestFold(const char* trigger) {
         std::lock_guard<std::mutex> lock(arm_command_mutex_);
         // j6 is current-based position control: re-commanding it above the
         // standing grip target zeroes the preload and drops a held object.
-        grip = has_target_ ? latest_target_[5] : measured[5];
+        grip = clampToJointRange(5, has_target_ ? latest_target_[5] : measured[5]);
     }
     double away = 0.0;
     for (size_t j = 0; j < kArmJoints; ++j) {
