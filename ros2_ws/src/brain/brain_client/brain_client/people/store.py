@@ -23,7 +23,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -787,32 +787,33 @@ class PeopleStore:
         faces = self._faces.get(person_id, [])
         outfits = self._outfits.get(person_id, [])
         heights = self._heights.get(person_id, [])
+        # dict[str, Any]: numpy 2's savez stubs would otherwise bind a grouped array to allow_pickle
+        payload: dict[str, Any] = {
+            **_grouped([(template.model, template.embedding) for template in faces], "face_embeddings"),
+            "face_meta": json.dumps(
+                [
+                    {
+                        "model": template.model,
+                        "stamp": template.stamp,
+                        "pose_bucket": template.pose_bucket,
+                        "quality": template.quality,
+                        "thumbnail_id": template.thumbnail_id,
+                    }
+                    for template in faces
+                ]
+            ),
+            **_grouped([(outfit.model, outfit.embedding) for outfit in outfits], "outfit_embeddings"),
+            "outfit_meta": json.dumps(
+                [
+                    {"model": outfit.model, "stamp": outfit.stamp, "thumbnail_id": outfit.thumbnail_id}
+                    for outfit in outfits
+                ]
+            ),
+            "height_samples": np.array(heights, dtype=np.float32).reshape(-1, 2),
+        }
         tmp = directory / "templates.npz.tmp"
         with tmp.open("wb") as handle:
-            np.savez(
-                handle,
-                **_grouped([(template.model, template.embedding) for template in faces], "face_embeddings"),
-                face_meta=json.dumps(
-                    [
-                        {
-                            "model": template.model,
-                            "stamp": template.stamp,
-                            "pose_bucket": template.pose_bucket,
-                            "quality": template.quality,
-                            "thumbnail_id": template.thumbnail_id,
-                        }
-                        for template in faces
-                    ]
-                ),
-                **_grouped([(outfit.model, outfit.embedding) for outfit in outfits], "outfit_embeddings"),
-                outfit_meta=json.dumps(
-                    [
-                        {"model": outfit.model, "stamp": outfit.stamp, "thumbnail_id": outfit.thumbnail_id}
-                        for outfit in outfits
-                    ]
-                ),
-                height_samples=np.array(heights, dtype=np.float32).reshape(-1, 2),
-            )
+            np.savez(handle, **payload)
         os.chmod(tmp, FILE_MODE)
         os.replace(tmp, directory / "templates.npz")
 
