@@ -376,7 +376,7 @@ class PeopleStore:
 
     def set_collection(self, enabled: bool, now: float | None = None) -> None:
         """The owner's "never collect" preference: a collection control, not a
-        deletion. Tracking continues anonymously."""
+        deletion. People on file are still recognized; nothing new is learned."""
         stamp = _now(now)
         with self._lock:
             if self._collection_enabled == enabled:
@@ -904,8 +904,8 @@ class PeopleStore:
         leaves embeddings and thumbnails the roster, expiry, forget and the
         Settings page can never see again."""
         for directory in sorted(self._root.glob("person_*")):
-            if directory.name in indexed or not directory.is_dir():
-                continue
+            if not directory.is_dir() or (directory.name in indexed and (directory / "person.json").is_file()):
+                continue  # an indexed person whose profile is gone is a delete that failed halfway
             try:
                 shutil.rmtree(directory)
             except OSError:

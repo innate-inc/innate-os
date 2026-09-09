@@ -143,10 +143,11 @@ class ResolverConfig:
     population_sigma_m: float = 0.09
     enrol_face_frames: int = 5
     enrol_span_sec: float = 2.0
+    enrol_template_frames: int = 10  # the store keeps ten; the newest ten of the buffer are the gallery
     min_track_sec: float = 2.0
     reconfirm_body_sec: float = 3.0
     template_interval_sec: float = 5.0
-    height_interval_sec: float = 1.0
+    height_interval_sec: float = 30.0  # measured at 1 Hz; the store keeps 64 samples across encounters
     # Under the store's own 30 s sighting debounce, so last_seen never lags it.
     sighting_interval_sec: float = 10.0
     max_frame_llr: float = 3.0
@@ -689,12 +690,13 @@ class Resolver:
             return None
         if not self._roster.collection_enabled() or not self._roster.can_enrol():
             return None
-        # The whole buffer, not its last five: frames arriving faster than one
-        # per 0.4 s would otherwise never span the two seconds, and a person who
-        # keeps looking at the robot would never enrol.
+        # The span is judged on the whole buffer, so frames arriving faster than
+        # one per 0.4 s still cover the two seconds; consistency and the gallery
+        # on its newest frames, so one odd crop blocks for two seconds, not five.
         faces = list(belief.enrol_faces)
         if len(faces) < config.enrol_face_frames or faces[-1].stamp - faces[0].stamp < config.enrol_span_sec:
             return None
+        faces = faces[-config.enrol_template_frames :]
         # Only frames that matched nobody are in this buffer (RFC 5.4); a
         # lifetime maximum over every impostor comparison would eventually cross
         # reject on any track and block its enrolment for good.

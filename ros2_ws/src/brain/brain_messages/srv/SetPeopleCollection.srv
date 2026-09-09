@@ -1,6 +1,7 @@
 # Request — the owner's collection preference. ``enabled`` false stops everything that
 # adds to the record: enrolment, the scribe, descriptions and template learning. People
-# already on file go on being recognized, and the setting persists in the store.
+# already on file go on being recognized, and when and where they were seen is still noted
+# so their retention clock counts from the last recognition. The setting persists in the store.
 # No idempotency key or decided-on stamp: setting a flag to a value is idempotent by
 # nature, and it names nobody, so there is no snapshot to have decided on.
 bool enabled

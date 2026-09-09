@@ -53,9 +53,9 @@ export const PEOPLE_FULL_TEXT =
  * people node one JPEG read per person, under the store's lock and on its
  * single-threaded executor, so only a card the operator is looking at asks for
  * them.
- * @param {boolean} [includeThumbnails]
+ * @param {boolean} includeThumbnails
  */
-export function getPeopleRequest(includeThumbnails = false) {
+export function getPeopleRequest(includeThumbnails) {
   return { include_roster: true, include_thumbnails: includeThumbnails };
 }
 

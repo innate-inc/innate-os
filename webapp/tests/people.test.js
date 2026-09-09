@@ -117,7 +117,7 @@ test("the request values are the ones the services are documented to take", () =
   // Thumbnails are a JPEG read per person on the people node's single-threaded
   // executor, so the default request leaves them out: only the card, once it is
   // actually on screen, asks for them.
-  assert.deepEqual(getPeopleRequest(), { include_roster: true, include_thumbnails: false });
+  assert.deepEqual(getPeopleRequest(false), { include_roster: true, include_thumbnails: false });
   assert.deepEqual(getPeopleRequest(true), { include_roster: true, include_thumbnails: true });
   // "app" is the consent path stored with the profile — a name typed here is
   // the owner naming someone, not the person saying their own name.

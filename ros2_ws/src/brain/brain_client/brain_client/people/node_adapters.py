@@ -1293,8 +1293,9 @@ class PeopleAdapters:
         self._snapshot_pub.publish(String(data=json.dumps(snapshot)))
         if not consume:
             return
+        shown = {tag for person in snapshot.get("people", ()) if person.get("learned") and (tag := person.get("tag"))}
         with self._lock:
-            for tag in learned:  # shown once (decision 7) — and only what was shown
+            for tag in shown:  # shown once (decision 7) — and only what was shown
                 self._learned.pop(tag, None)
 
     def _publish_events(

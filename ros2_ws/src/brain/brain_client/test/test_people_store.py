@@ -894,6 +894,17 @@ def test_a_directory_the_index_does_not_name_is_swept_on_load(store: PeopleStore
     assert actions.count("swept") == 2
 
 
+def test_an_indexed_person_whose_profile_is_gone_is_swept_on_load(store: PeopleStore, tmp_path):
+    """A forget that failed halfway through rmtree can leave templates behind an
+    index entry with no person.json: unloadable, unforgettable, unexpirable."""
+    kept, half_deleted = enrol(store, NOW), enrol(store, NOW + 1)
+    (tmp_path / "people" / half_deleted / "person.json").unlink()
+
+    reopened = PeopleStore(tmp_path / "people")
+    assert not (tmp_path / "people" / half_deleted).exists()
+    assert reopened.person_ids() == [kept]
+
+
 def test_a_forget_that_cannot_delete_the_files_is_not_reported_as_done(store: PeopleStore, tmp_path, monkeypatch):
     """``ignore_errors=True`` answered "forgotten" with the face templates still
     on the card; the node's write boundary turns the OSError into a failure the

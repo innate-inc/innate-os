@@ -745,6 +745,20 @@ def test_one_stray_frame_above_reject_does_not_stop_a_later_enrolment():
     assert len(roster.created) == 1
 
 
+def test_one_odd_crop_among_the_oldest_frames_does_not_block_a_long_buffer():
+    """Twenty-five frames are five seconds of natural head motion; judged all
+    at once, one turned-away crop at the start would hold enrolment for the
+    whole buffer, and the gallery would be the ten oldest crops."""
+    roster = FakeRoster()
+    resolver = Resolver(roster)
+    resolver.observe_face("P1", face(100.0, B_VECTOR))
+    for index in range(1, 25):
+        resolver.observe_face("P1", face(100.0 + 0.2 * index, probe(0.05), box=_moved(index)))
+    resolver.resolve([FakeTrack(first_seen=95.0, last_seen=104.8)], 104.8)
+    assert len(roster.created) == 1
+    assert len(roster.created[0]) == 10
+
+
 def test_a_passer_by_seen_for_under_two_seconds_never_enrols():
     roster = FakeRoster()
     resolver = Resolver(roster)
@@ -862,7 +876,7 @@ def test_height_samples_are_written_while_a_track_is_committed():
     assert roster.heights and roster.heights[0][0] == "person_a"
 
 
-def test_a_height_is_written_once_per_measurement_not_once_per_second():
+def test_a_height_that_stopped_being_measured_is_not_rewritten():
     """The store keeps the last 64 samples, so a long encounter re-writing its
     own running mean every second evicts every other encounter's."""
     roster = roster_with()
@@ -872,6 +886,19 @@ def test_a_height_is_written_once_per_measurement_not_once_per_second():
     for step in range(1, 120):
         resolver.resolve([FakeTrack(last_seen=end + step)], end + step)
     assert len(roster.heights) == 1
+
+
+def test_a_height_measured_every_second_reaches_the_store_twice_a_minute():
+    """The engine measures at 1 Hz; written at that rate, one two-minute
+    encounter would fill the store's 64 samples with its own running mean."""
+    roster = roster_with()
+    resolver = Resolver(roster)
+    resolver.observe_height("P1", 1.72, 0.01)
+    end = commit_theo(resolver)
+    for step in range(1, 120):
+        resolver.observe_height("P1", 1.72 + 0.0001 * step, 0.01)
+        resolver.resolve([FakeTrack(last_seen=end + step)], end + step)
+    assert 1 <= len(roster.heights) <= 5
 
 
 def test_nothing_is_learned_while_collection_is_off():
