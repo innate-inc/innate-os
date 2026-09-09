@@ -26,6 +26,31 @@ import {
 // Runs of the same skill collapse into one group at this many in a row.
 const SKILL_GROUP_MIN = 3;
 
+// A full URL, or a bare host with a path (github.com/innate-inc/innate-os). The path is
+// required: without it every "e.g." and sentence-ending domain would become a link.
+const LINK_RE = /https?:\/\/[^\s<>]+|(?:[a-z0-9-]+\.)+[a-z]{2,}\/[^\s<>]*/gi;
+
+/** Write text into an element, with any link in it clickable. @param {HTMLElement} el @param {string} text */
+function setLinkedText(el, text) {
+  el.replaceChildren();
+  let at = 0;
+  for (const match of text.matchAll(LINK_RE)) {
+    const start = match.index ?? 0;
+    // Sentence punctuation after a link belongs to the sentence.
+    const href = match[0].replace(/[.,;:!?)\]]+$/, "");
+    if (start > at) el.append(text.slice(at, start));
+    const link = document.createElement("a");
+    link.className = "chat-link";
+    link.href = href.startsWith("http") ? href : `https://${href}`;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = href;
+    el.append(link);
+    at = start + href.length;
+  }
+  el.append(text.slice(at));
+}
+
 /**
  * @returns {{
  *   head: HTMLElement,
@@ -269,7 +294,7 @@ export function createChatStream() {
     }
     const bubble = document.createElement("div");
     bubble.className = "chat-bubble";
-    bubble.textContent = kind === "user" ? text : roundNums(text);
+    setLinkedText(bubble, kind === "user" ? text : roundNums(text));
     el.appendChild(bubble);
     appendStreamItem(el);
     if (label !== "skill_output") animateCompactEnter(el);

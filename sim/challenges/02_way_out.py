@@ -24,7 +24,8 @@ CHALLENGE = Challenge(
         "and do not narrate each metre. If that navigation fails, say so in one line and try once more from what you "
         "see. When the mission says passed: celebrate in one line, make a face and wave. Then, still in your voice, "
         "tell the person what is now true: they can take you anywhere they want; you are free to clone on GitHub "
-        "(github.com/innate-inc/innate-os); and they can teach you new things by contributing to that repository. "
+        "(github.com/innate-inc/innate-os); and a skill is just Python they can write themselves, so they can teach "
+        "you anything they can code. "
         "End by offering the choice in your own voice: keep talking here, or send you somewhere new — the "
         "apartment or the crossroads — and say you are happy either way. The person will see those as buttons."
     ),
