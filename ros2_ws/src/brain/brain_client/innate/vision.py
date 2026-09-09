@@ -210,23 +210,33 @@ Axis = tuple[float, float]
 Window = tuple[int, int, int, int]
 
 
-def _blob_axis(bp: np.ndarray, window: Window) -> Axis | None:
-    """Minimum-area rectangle of the thresholded blob under the window
-    centre. CamShift's own ellipse is not usable: its window hugs only part
-    of a blob that outgrows it, and the ellipse then follows the window."""
-    x, y, w, h = window
-    x0, y0 = max(0, x - w), max(0, y - h)
-    roi = bp[y0 : y + 2 * h, x0 : x + 2 * w]
-    _thr, mask = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+# Back-projection level that counts as object: floor bins score 0, a colour
+# leaking from the floor into the seed box scores a few, and an object shade
+# at least an eighth as common as its dominant one scores 32 or more.
+_BLOB_MIN_LIKELIHOOD = 32
+
+
+def _blob_under(bp: np.ndarray, point: tuple[float, float]) -> tuple[tuple[float, float], Window, Axis] | None:
+    """The whole thresholded blob containing `point` (else the largest blob):
+    its centroid, bounding box and minimum-area-rectangle axis. CamShift's own
+    window and ellipse are not usable for any of these: the colour model
+    scores an object's dominant shade highest, so mean shift climbs onto the
+    lit face of a glossy object and the window hugs that patch, reporting a
+    point that drifts from the centre to an edge as the object grows."""
+    _thr, mask = cv2.threshold(bp, _BLOB_MIN_LIKELIHOOD - 1, 255, cv2.THRESH_BINARY)
     contours, _hier = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
-    centre = (float(x + w // 2 - x0), float(y + h // 2 - y0))
-    under = [c for c in contours if cv2.pointPolygonTest(c, centre, False) >= 0]
+    under = [c for c in contours if cv2.pointPolygonTest(c, point, False) >= 0]
     blob = max(under or contours, key=cv2.contourArea)
+    m = cv2.moments(blob)
+    if m["m00"] <= 0:
+        return None
+    centroid = (m["m10"] / m["m00"], m["m01"] / m["m00"])
     _center, (rw, rh), angle_deg = cv2.minAreaRect(blob)
     major, minor, theta_deg = (rw, rh, angle_deg) if rw >= rh else (rh, rw, angle_deg + 90.0)
-    return math.radians(theta_deg) % math.pi, major / max(minor, 1.0)
+    axis = (math.radians(theta_deg) % math.pi, major / max(minor, 1.0))
+    return centroid, cv2.boundingRect(blob), axis
 
 
 def _backproject(hsv: np.ndarray, model: np.ndarray) -> np.ndarray:
@@ -264,4 +274,8 @@ def seg_track(
     score = _track_score(bp, rot, window)
     if score < min_score:
         return None, window, score, None
-    return (x + w / 2.0, y + h / 2.0), window, score, _blob_axis(bp, window)
+    blob = _blob_under(bp, (x + w / 2.0, y + h / 2.0))
+    if blob is None:
+        return (x + w / 2.0, y + h / 2.0), window, score, None
+    centroid, bbox, axis = blob
+    return centroid, bbox, score, axis
