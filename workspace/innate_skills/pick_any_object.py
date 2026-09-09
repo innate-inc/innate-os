@@ -101,6 +101,11 @@ PARAMS = {
 
 FOLLOW_TIMEOUT_S = 20.0
 WRIST_ALIGN_TIMEOUT_S = 60.0
+# A CamShift centre further than WRIST_JUMP_PX from the followed point is a
+# window hop until it repeats in place WRIST_JUMP_CONFIRM frames running;
+# beyond WRIST_MAX_JUMP_PX it is a miss, which after 3 frames re-seeds.
+WRIST_JUMP_PX = 40.0
+WRIST_JUMP_CONFIRM = 3
 WRIST_MAX_JUMP_PX = 80.0
 WRIST_SEG_MIN_SCORE = 25.0
 WRIST_CAM_ABOVE_EE = 0.07
@@ -139,6 +144,9 @@ class _BlobTracker:
         self.model = vision.seg_model(hsv, box)
         self.window = box
         self.guess = px
+        self.observed = False  # guess is an expectation until a frame confirms it
+        self.pending = None
+        self.hits = 0
         self.misses = 0
         self.axis: vision.Axis | None = None
 
@@ -146,19 +154,40 @@ class _BlobTracker:
     def ok(self):
         return self.model is not None
 
+    def expect(self, px):
+        """The arm moved: follow from px and forget any half-confirmed hop."""
+        self.guess, self.observed, self.pending, self.hits = px, False, None, 0
+
     def update(self, hsv):
-        """Blob center, or None on miss (keeps last window for retry)."""
+        """Followed blob center, or None on miss (keeps last window for
+        retry). A hop past WRIST_JUMP_PX returns the old center and keeps the
+        old window, so the next frame re-tests it from where the blob was;
+        the hop is followed only once it has repeated WRIST_JUMP_CONFIRM
+        frames running."""
         pt, window, _score, axis = vision.seg_track(hsv, self.model, self.window, min_score=WRIST_SEG_MIN_SCORE)
-        if pt is not None and math.hypot(pt[0] - self.guess[0], pt[1] - self.guess[1]) > WRIST_MAX_JUMP_PX:
-            pt = None
-        if pt is None:
+        if pt is None or _dist(pt, self.guess) > WRIST_MAX_JUMP_PX:
             self.misses += 1
             return None
         self.misses = 0
-        self.window = window
-        self.guess = pt
-        self.axis = axis
+        if self.observed and _dist(pt, self.guess) > WRIST_JUMP_PX and not self._hop_confirmed(pt):
+            return self.guess
+        self.window, self.guess, self.axis, self.observed = window, pt, axis, True
+        self.pending, self.hits = None, 0
         return pt
+
+    def _hop_confirmed(self, pt):
+        if self.pending is not None and _dist(pt, self.pending) <= WRIST_JUMP_PX:
+            self.hits += 1
+        else:
+            self.pending, self.hits = pt, 1
+        if self.hits < WRIST_JUMP_CONFIRM:
+            return False
+        self.pending, self.hits = None, 0
+        return True
+
+
+def _dist(a, b):
+    return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
 class PickAnyObject(Skill):
@@ -365,7 +394,7 @@ class PickAnyObject(Skill):
         self.overlay.readout(f"wrist align: {reason}")
         return x, y, z, roll
 
-    def _draw_wrist(self, px, inside, z, top, blob):
+    def _draw_wrist(self, px, inside, z, top, blob, pending):
         """The servo box, the tracked blob with its long axis, and the descent."""
         p = self._p
         ui = self.overlay
@@ -373,6 +402,10 @@ class PickAnyObject(Skill):
         ui.clear("wrist-target")
         ui.box("wrist-box", (u - half, v - half, u + half, v + half), label="wrist box", view="arm", locked=inside)
         ui.point("blob", px, label="blob", view="arm", locked=inside)
+        if pending is None:
+            ui.clear("hop")
+        else:
+            ui.point("hop", pending, label="hop?", view="arm")
         if inside:
             ui.clear("wrist-steer")
         else:
@@ -490,7 +523,7 @@ class PickAnyObject(Skill):
             centered = centered + 1 if inside else 0
             if axis is None and centered >= 2:
                 axis = self._axis_lock(z, tracker.axis)
-            self._draw_wrist(px, inside, z, top, axis if axis is not None else tracker.axis)
+            self._draw_wrist(px, inside, z, top, axis if axis is not None else tracker.axis, tracker.pending)
             if streak < 2:
                 continue  # watch one more frame before trusting it
             if inside and centered < 2:
@@ -521,7 +554,7 @@ class PickAnyObject(Skill):
                     continue
                 stalled = 0
                 x, y = nx, ny
-                tracker.guess = (p["wrist_box_u"], p["wrist_box_v"])
+                tracker.expect((p["wrist_box_u"], p["wrist_box_v"]))
             self.manipulation.move_to(x, y, z, pitch=p["wrist_pitch"], duration=p["wrist_move_s"])
             if stepped_down:
                 # A pure z-hop barely shifts the view: one fresh confirming
