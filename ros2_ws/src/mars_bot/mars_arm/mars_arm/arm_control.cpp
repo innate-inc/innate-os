@@ -291,6 +291,13 @@ void MarsArmNode::controlTimerCallback() {
                     cmd_msg.position[i] = rad;
                 }
                 arm_command_state_pub_->publish(cmd_msg);
+
+                // Why each joint was held back, if it was. A teleop client uses
+                // this to push back only for a real physical boundary — the arm
+                // merely lagging is not something to put in the operator's hand.
+                std_msgs::msg::Int32MultiArray reason_msg;
+                reason_msg.data.assign(constraint_reason_.begin(), constraint_reason_.end());
+                constraint_pub_->publish(reason_msg);
             } else if (has_head_command_.load()) {
                 std::lock_guard<std::mutex> head_lock(head_command_mutex_);
                 int head_enc = latest_head_command_;
@@ -347,6 +354,7 @@ void MarsArmNode::recordLoopTiming(std::array<std::chrono::steady_clock::time_po
 }
 
 std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>& command_data) {
+    constraint_reason_.fill(kConstraintNone);
     // ===== INTELLIGENT JOINT LIMITS =====
     // Kept exactly as it was: a known-good baseline. The body keepout below adds
     // refusals on top and never removes one, so a mis-specified box can only
@@ -380,6 +388,7 @@ std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>
         }
 
         if (joint2_pos < joint2_min_limit) {
+            constraint_reason_[1] = kConstraintJointLimit;
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                  "Joint2 limited due to joint1=%.3f: requested %.3f, clamped to %.3f", joint1_pos,
                                  joint2_pos, joint2_min_limit);
@@ -410,7 +419,12 @@ std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>
                 if (poseHitsBody(probe[0], probe[1], probe[2], probe[3], self_collision_)) hi = mid;
                 else lo = mid;
             }
-            for (int j = 0; j < 4; ++j) command_data[j] = safe[j] + lo * (want[j] - safe[j]);
+            for (int j = 0; j < 4; ++j) {
+                // Only flag joints the retreat actually moved: the operator should
+                // feel the joint that is blocked, not every joint in the arm.
+                if (std::fabs(command_data[j] - want[j]) > 1e-6) constraint_reason_[j] = kConstraintBodyStop;
+                command_data[j] = safe[j] + lo * (want[j] - safe[j]);
+            }
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                  "Body keepout: pose would strike the chassis, held at %.0f%% of the way there",
                                  lo * 100.0);
@@ -425,8 +439,11 @@ std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>
                                                    command_data[3], self_collision_);
             const double scale = approachScale(clearance, self_collision_);
             if (scale < 1.0 && have_safe_pose_) {
-                for (int j = 0; j < 4; ++j)
-                    command_data[j] = last_safe_pose_[j] + scale * (command_data[j] - last_safe_pose_[j]);
+                for (int j = 0; j < 4; ++j) {
+                    const double eased = last_safe_pose_[j] + scale * (command_data[j] - last_safe_pose_[j]);
+                    if (std::fabs(eased - command_data[j]) > 1e-6) constraint_reason_[j] = kConstraintBodyApproach;
+                    command_data[j] = eased;
+                }
                 RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                       "Body keepout: %.0f mm clear, accepting %.0f%% of the requested move",
                                       clearance * 1000.0, scale * 100.0);

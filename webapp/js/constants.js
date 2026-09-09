@@ -253,6 +253,13 @@ export const JOINT_DIRECTION_FLIPPED = [false, true, true, true, false, true];
 // proportional to that gap, so the operator is pushed to a reachable state
 // instead of sailing on while the arm quietly goes somewhere else.
 export const ARM_COMMAND_STATE_TOPIC = "/mars/arm/command_state";
+// Per-joint reason mars_arm held a command back (std_msgs/Int32MultiArray,
+// mirroring ConstraintReason in arm_types.hpp). This is what separates a wall
+// from the arm merely not keeping up: only a physical boundary belongs in the
+// operator's hand, so a joint reporting NONE is never pushed on however far it
+// has diverged.
+export const ARM_CONSTRAINT_TOPIC = "/mars/arm/constraint";
+export const CONSTRAINT_NONE = 0;
 // Ticks of divergence below which nothing is done — sensor noise and the
 // follower's normal tracking lag must not feel like a wall.
 export const DIVERGENCE_DEADBAND_TICKS = 25;

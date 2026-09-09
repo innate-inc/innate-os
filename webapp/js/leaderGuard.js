@@ -15,11 +15,13 @@
 
 import {
   ARM_COMMAND_STATE_TOPIC,
+  ARM_CONSTRAINT_TOPIC,
   ARM_GET_PARAMETERS_SERVICE,
   ARM_POSITION_LIMITS_PARAMS,
   DIVERGENCE_DEADBAND_TICKS,
   DIVERGENCE_FLOOR_MA,
   DIVERGENCE_MA_PER_TICK,
+  CONSTRAINT_NONE,
   DIVERGENCE_STALE_MS,
   J1_FRONT_ARC_HI,
   J1_FRONT_ARC_LO,
@@ -102,6 +104,9 @@ export class LeaderGuard {
   #budgetMa = readBudget();
   /** @type {(() => void) | null} */ #unsubBudget = null;
   /** @type {(() => void) | null} */ #unsubAccepted = null;
+  /** @type {(() => void) | null} */ #unsubConstraint = null;
+  /** @type {number[] | null} */ #constrained = null;
+  #constrainedAt = 0;
   // The pose mars_arm last accepted, in leader ticks. Null until it reports.
   /** @type {number[] | null} */ #accepted = null;
   #acceptedAt = 0;
@@ -222,6 +227,19 @@ export class LeaderGuard {
    * un-flipped, so it converts straight to leader ticks.
    */
   #subscribeAccepted() {
+    if (this.#unsubConstraint === null) {
+      this.#unsubConstraint = this.#rosClient.subscribe(
+        ARM_CONSTRAINT_TOPIC,
+        (msg) => {
+          const data = msg && Array.isArray(msg.data) ? msg.data : null;
+          if (!data) return;
+          this.#constrained = data.slice(0, this.#ids.length);
+          this.#constrainedAt = performance.now();
+        },
+        undefined,
+        "std_msgs/msg/Int32MultiArray",
+      );
+    }
     if (this.#unsubAccepted) return;
     this.#unsubAccepted = this.#rosClient.subscribe(
       ARM_COMMAND_STATE_TOPIC,
@@ -245,9 +263,14 @@ export class LeaderGuard {
    */
   #divergence(positions) {
     const accepted = this.#accepted;
-    const fresh = accepted && performance.now() - this.#acceptedAt < DIVERGENCE_STALE_MS;
-    if (!fresh) return this.#ids.map(() => null);
+    const now = performance.now();
+    const fresh = accepted && now - this.#acceptedAt < DIVERGENCE_STALE_MS;
+    // No reason report, or a stale one, means no constraint is known — and an
+    // unexplained gap is exactly the case that must NOT be pushed on.
+    const reasons = this.#constrained && now - this.#constrainedAt < DIVERGENCE_STALE_MS ? this.#constrained : null;
+    if (!fresh || !reasons) return this.#ids.map(() => null);
     return this.#ids.map((_, i) => {
+      if ((reasons[i] ?? CONSTRAINT_NONE) === CONSTRAINT_NONE) return null;
       const tick = positions[i];
       const want = accepted[i];
       return tick === undefined || want === undefined ? null : tick - want;
@@ -448,6 +471,8 @@ export class LeaderGuard {
     this.#unsubBudget = null;
     this.#unsubAccepted?.();
     this.#unsubAccepted = null;
+    this.#unsubConstraint?.();
+    this.#unsubConstraint = null;
     this.releaseAll();
     this.#listeners.clear();
   }

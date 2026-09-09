@@ -49,6 +49,17 @@ inline double horizReach(double q2, double q3, double q4) {
                     kL3_z * std::sin(a23) + kL45_x * std::cos(a234));
 }
 
+// Why a joint's command was changed. Published on /mars/arm/constraint so a
+// leader-arm client can push back for a real physical boundary and stay silent
+// for everything else — a joint that simply cannot keep up is not a constraint
+// the operator should feel.
+enum ConstraintReason : int {
+    kConstraintNone = 0,
+    kConstraintJointLimit = 1,  // the joint's own range, incl. the joint_1/joint_2 rule
+    kConstraintBodyStop = 2,    // would intersect the body: refused outright
+    kConstraintBodyApproach = 3,  // nearing the body: the move is being eased off
+};
+
 // ---- Body keepout ----------------------------------------------------------
 // The arm must not intersect the robot's own body, but it MUST be free to reach
 // down — over a table edge, say — so the constraint is where the arm is in

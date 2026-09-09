@@ -5,6 +5,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_msgs/msg/int32_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/empty.hpp>
@@ -156,6 +157,11 @@ class MarsArmNode : public rclcpp::Node {
     SelfCollisionConfig self_collision_;
     std::array<double, 4> last_safe_pose_{};
     bool have_safe_pose_ = false;
+    // Why each joint's command was altered this cycle, if it was. Published so a
+    // teleop client can tell a physical constraint from the arm merely lagging —
+    // only the former is worth pushing back on the operator's hand.
+    std::array<int, 6> constraint_reason_{};
+    rclcpp::Publisher<std_msgs::msg::Int32MultiArray>::SharedPtr constraint_pub_;
 
     // Callback groups for parallel execution
     rclcpp::CallbackGroup::SharedPtr timer_callback_group_;
