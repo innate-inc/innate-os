@@ -42,9 +42,8 @@ export async function rebootArmAndEnableTorque(rosClient) {
     if (res && res.success === false) {
       return { ok: true, torqueOn: false, message: res.message || "Rebooted — torque re-enable failed" };
     }
-    // The reply also says whether the arm folded to rest or stopped short.
-    return { ok: true, torqueOn: true, message: (res && res.message) || "Servos rebooted, torque on" };
   } catch {
     return { ok: true, torqueOn: false, message: "Rebooted — torque re-enable failed" };
   }
+  return { ok: true, torqueOn: true, message: "Servos rebooted, torque on" };
 }

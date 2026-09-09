@@ -25,7 +25,6 @@ drops a held object. Motions therefore carry the last *commanded* j6 (the
 standing grip target) by default — grip once, then move freely.
 """
 
-import json
 import math
 import threading
 import time
@@ -38,7 +37,6 @@ import rclpy.executors
 from geometry_msgs.msg import PoseStamped, Twist
 from mars_msgs.msg import ArmStatus
 from mars_msgs.srv import GotoJS, GotoJSTrajectory
-from rclpy.client import Client
 from rclpy.node import Node
 from rclpy.subscription import Subscription
 from sensor_msgs.msg import JointState
@@ -710,28 +708,17 @@ class Manipulation:
             self._grip_target = None
         return success
 
-    def recover(self) -> bool:
+    def recover(self) -> None:
         """Reboot, reconfigure and re-torque the servos that latched a
         hardware error (an overload trip leaves the servo limp); the rest of
         the arm keeps holding, so a mid-pick retry resumes where it stopped.
-        A full reboot + torque_on would fold the arm to rest instead. True
-        when a servo was rebooted; False when nothing was latched (the retry
-        then runs as is) or the call failed."""
+        A full reboot + torque_on would fold the arm to rest instead. Raises
+        ArmUnhealthy when the recovery itself fails."""
         self.stream_stop()  # never stream across a servo power-cycle
         self.logger.warning("[arm] recovering (rebooting tripped servos)")
-        response = self._trigger(self._fix_error_client, "Fix error", timeout_sec=10.0)
+        if not self._call_trigger(self._fix_error_client, "Fix error", "Tripped servos rebooted", timeout_sec=10.0):
+            raise ArmUnhealthy("arm recovery failed")
         time.sleep(0.5)  # committed: servo re-init settle
-        if response is None or not response.success:
-            return False
-        try:
-            rebooted = json.loads(response.message).get("error_ids", [])
-        except (json.JSONDecodeError, AttributeError):
-            rebooted = []
-        if not rebooted:
-            self.logger.info("[arm] no servo had a latched error; retrying as is")
-            return False
-        self.logger.info(f"[arm] rebooted servo(s) {', '.join(str(i) for i in rebooted)}")
-        return True
 
     # --- internals ---
 
@@ -935,24 +922,20 @@ class Manipulation:
             return False
         return True
 
-    def _call_trigger(self, client: Client, action_name: str, success_msg: str, timeout_sec: float = 2.0) -> bool:
-        result = self._trigger(client, action_name, timeout_sec)
-        if result is None:
-            return False
-        if not result.success:
-            self.logger.error(f"{action_name} failed: {result.message}")
-            return False
-        self.logger.info(result.message or success_msg)
-        return True
-
-    def _trigger(self, client: Client, action_name: str, timeout_sec: float) -> Trigger.Response | None:
-        """The service's response, or None when it is unavailable, times out
-        or the call raises (logged)."""
+    def _call_trigger(self, client, action_name: str, success_msg: str, timeout_sec: float = 2.0) -> bool:
         if not client.service_is_ready():
             self.logger.error(f"[Manipulation] {action_name} service not ready")
-            return None
+            return False
+
         try:
-            return self._await_result(client.call_async(Trigger.Request()), action_name, timeout_sec)
-        except Exception as e:  # noqa: BLE001 — a wedged rclpy client must not take the skill down
+            result = self._await_result(client.call_async(Trigger.Request()), action_name, timeout_sec)
+            if result is None:
+                return False
+            if not result.success:
+                self.logger.error(f"{action_name} failed: {result.message}")
+                return False
+            self.logger.info(success_msg)
+            return True
+        except Exception as e:
             self.logger.error(f"Exception calling {action_name}: {e}")
-            return None
+            return False

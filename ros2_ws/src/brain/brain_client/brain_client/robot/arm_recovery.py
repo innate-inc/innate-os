@@ -8,9 +8,8 @@ the same way — the servo drops torque and stays limp until rebooted, so while
 the brain is active this: stops whatever skill is running (a pick flailing on
 a limp arm helps nobody), tells the model what happened, calls
 ``/mars/arm/fix_error`` (reboots exactly the errored servos, then reconfigures
-and re-torques them), folds the arm to rest (``/mars/arm/rest``, so it is not
-left sagging where the limp joint fell), and reports the outcome. The same
-recovery the webapp's "Reboot arm" + torque buttons do by hand.
+and re-torques them), and reports the outcome. The same recovery the webapp's
+"Reboot arm" + torque buttons do by hand.
 
 Transient warnings in the same status stream ("high load", "high temperature",
 comm hiccups) are NOT latched errors and never trigger a reboot.
@@ -28,17 +27,12 @@ from __future__ import annotations
 import json
 import threading
 import time
-from typing import TYPE_CHECKING
 
 from mars_msgs.msg import ArmStatus
 from std_srvs.srv import Trigger
 
-if TYPE_CHECKING:
-    from rclpy.client import Client
-
 ARM_STATUS_TOPIC = "/mars/arm/status"
 FIX_ERROR_SERVICE = "/mars/arm/fix_error"
-REST_SERVICE = "/mars/arm/rest"
 
 # The latched-error marker in ArmStatus.error (see arm_services.cpp,
 # describeHardwareError) — "high load"/"high temperature" don't carry it.
@@ -47,7 +41,6 @@ _HARDWARE_ERROR_MARKER = "hardware error"
 _MAX_ATTEMPTS_PER_EPISODE = 3
 _RETRY_GAP_SEC = 10.0  # between attempts while the error persists
 _FIX_TIMEOUT_SEC = 25.0  # reboot walks the servos and "takes a few seconds"
-_REST_TIMEOUT_SEC = 15.0  # a fold from the floor is up to ~9 s
 
 
 class ArmRecovery:
@@ -58,7 +51,6 @@ class ArmRecovery:
         self._chat = chat
         self._brain = brain
         self._fix_client = node.create_client(Trigger, FIX_ERROR_SERVICE)
-        self._rest_client = node.create_client(Trigger, REST_SERVICE)
         self._in_flight = False
         self._attempts = 0
         self._last_attempt_at = 0.0
@@ -99,12 +91,8 @@ class ArmRecovery:
             ok, detail = self._call_fix_error()
             if ok:
                 self._attempts = 0  # this episode is over; a new trip starts fresh
-                rested, rest_detail = self._call_rest()
-                self._chat.emit_system(f"{'✅' if rested else '⚠️'} Arm recovered: {detail}; {rest_detail}")
-                self._brain.add_event(
-                    f"Arm recovery succeeded: {detail}; {rest_detail}. "
-                    + ("The arm is at rest and usable again." if rested else "The arm is usable but not at rest.")
-                )
+                self._chat.emit_system(f"✅ Arm recovered: {detail}")
+                self._brain.add_event(f"Arm recovery succeeded: {detail}. The arm is usable again.")
             else:
                 self._logger.error(f"[ArmRecovery] fix_error failed: {detail}")
                 final = attempt >= _MAX_ATTEMPTS_PER_EPISODE
@@ -136,11 +124,19 @@ class ArmRecovery:
         return False
 
     def _call_fix_error(self) -> tuple[bool, str]:
-        response, failure = self._call(self._fix_client, FIX_ERROR_SERVICE, _FIX_TIMEOUT_SEC)
-        if response is None:
-            return False, failure
-        if not response.success:
-            return False, response.message
+        """Call /mars/arm/fix_error and wait; the main spin loop resolves the future."""
+        if not self._fix_client.service_is_ready():
+            return False, f"{FIX_ERROR_SERVICE} unavailable"
+        future = self._fix_client.call_async(Trigger.Request())
+        deadline = time.monotonic() + _FIX_TIMEOUT_SEC
+        while not future.done():
+            if time.monotonic() > deadline:
+                future.cancel()
+                return False, "timed out waiting for the arm to reboot"
+            time.sleep(0.2)
+        response = future.result()
+        if response is None or not response.success:
+            return False, (response.message if response else "no response")
         # message is JSON: {"error_ids": [...], "status": "fixed" | "no_errors"}
         try:
             result = json.loads(response.message)
@@ -150,24 +146,3 @@ class ArmRecovery:
             return True, "no latched errors found — the trip cleared on its own"
         ids = ", ".join(str(i) for i in result.get("error_ids", []))
         return True, f"rebooted servo(s) {ids} and re-enabled their torque"
-
-    def _call_rest(self) -> tuple[bool, str]:
-        response, failure = self._call(self._rest_client, REST_SERVICE, _REST_TIMEOUT_SEC)
-        if response is None:
-            return False, failure
-        return response.success, response.message or ("arm at rest" if response.success else "rest fold failed")
-
-    def _call(self, client: Client, service: str, timeout_sec: float) -> tuple[Trigger.Response | None, str]:
-        """Call a Trigger service and wait (the main spin loop resolves the
-        future); the response, or None with the reason."""
-        if not client.service_is_ready():
-            return None, f"{service} unavailable"
-        future = client.call_async(Trigger.Request())
-        deadline = time.monotonic() + timeout_sec
-        while not future.done():
-            if time.monotonic() > deadline:
-                future.cancel()
-                return None, f"timed out waiting for {service}"
-            time.sleep(0.2)
-        response = future.result()
-        return (response, "") if response is not None else (None, f"no response from {service}")

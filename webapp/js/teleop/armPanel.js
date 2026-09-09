@@ -439,9 +439,6 @@ function buildArmServices(rosClient) {
         flash(res.message || "Torque toggle failed", true);
       } else {
         torqueOn = turnOn; // re-assert in case a stale status arrived mid-call
-        // The reply says whether the rest fold completed or stopped short
-        // ("... stopped: joint 2 met resistance ..."), which deserves the warn style.
-        if (turnOn && res && res.message) flash(res.message, res.message.includes("stopped"));
       }
     } catch (err) {
       torqueOn = prev; // revert on timeout / disconnect

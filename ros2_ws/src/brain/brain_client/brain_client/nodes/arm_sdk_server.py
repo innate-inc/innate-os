@@ -113,7 +113,7 @@ def state():
 
 
 def tolerances(body):
-    """Verified moves FK-check and auto-recover (reboot any tripped servo) on a miss;
+    """Verified moves FK-check and auto-recover (servo reboot) on a miss;
     default off for a jog console — the UI shows the settled error instead."""
     if body.get("verify"):
         return {}  # move_to defaults: tolerance_xy=0.05, tolerance_z=0.10
