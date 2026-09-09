@@ -240,10 +240,10 @@ interface LeaderGuardState {
   drawMa: number;
   /** Per-servo goal current the guard is currently allowing, mA. */
   allocatedMa: number;
-  /** 1-based joint the follower is furthest from following, 0 if it is keeping up. */
-  divergedJoint: number;
-  /** Signed ticks between the leader and the pose mars_arm accepted. */
-  divergedTicks: number;
+  /** 1-based joint the guard is holding hardest, 0 if the arm is free. */
+  blockedJoint: number;
+  /** Signed ticks past the limit on that joint. */
+  blockedTicks: number;
   /** Millimetres of room left before the arm meets the body; -1 if unknown. */
   clearanceMm: number;
   /** Set when the guard cut torque to stay inside the budget. */

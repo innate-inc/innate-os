@@ -14,18 +14,14 @@
 // disagrees with the allocation.
 
 import {
-  ARM_COMMAND_STATE_TOPIC,
-  ARM_CONSTRAINT_TOPIC,
   ARM_GET_PARAMETERS_SERVICE,
   ARM_POSITION_LIMITS_PARAMS,
   BODY_LOOKAHEAD_S,
   BODY_MARGIN_M,
   BODY_SLOW_MARGIN_M,
-  DIVERGENCE_DEADBAND_TICKS,
-  DIVERGENCE_FLOOR_MA,
-  DIVERGENCE_MA_PER_TICK,
-  CONSTRAINT_NONE,
-  DIVERGENCE_STALE_MS,
+  HOLD_DEADBAND_TICKS,
+  HOLD_FLOOR_MA,
+  HOLD_MA_PER_TICK,
   J1_FRONT_ARC_HI,
   J1_FRONT_ARC_LO,
   J1_RAMP_HI,
@@ -42,7 +38,7 @@ import { readBudget, onBudgetChange } from "./leaderBudget.js";
 import {
   allocateCurrent,
   clampTick,
-  divergenceCurrent,
+  holdCurrent,
   isOutside,
   joint2FloorRad,
   limitsToBand,
@@ -69,10 +65,10 @@ const BACKOFF = 0.8;
 // Below this a hold is too weak to be felt; release instead of pretending.
 const MIN_USEFUL_MA = 40;
 
-const DIVERGENCE_SHAPE = {
-  deadband: DIVERGENCE_DEADBAND_TICKS,
-  maPerTick: DIVERGENCE_MA_PER_TICK,
-  floorMa: DIVERGENCE_FLOOR_MA,
+const HOLD_SHAPE = {
+  deadband: HOLD_DEADBAND_TICKS,
+  maPerTick: HOLD_MA_PER_TICK,
+  floorMa: HOLD_FLOOR_MA,
   maxMa: LEADER_CURRENT_CEILING_MA,
 };
 
@@ -95,8 +91,8 @@ export class LeaderGuard {
     holding: [],
     drawMa: 0,
     allocatedMa: 0,
-    divergedJoint: 0,
-    divergedTicks: 0,
+    blockedJoint: 0,
+    blockedTicks: 0,
     clearanceMm: -1,
     error: null,
   };
@@ -211,7 +207,6 @@ export class LeaderGuard {
       const band = limitsToBand(value.double_array_value ?? [], JOINT_DIRECTION_FLIPPED[i]);
       if (band) this.#bands.set(id, band);
     });
-    this.#subscribeAccepted();
     if (!this.#bands.size) return;
     this.#prepareMode();
     this.#patch({ armed: true, error: null });
@@ -232,61 +227,6 @@ export class LeaderGuard {
     this.#modeReady = true;
   }
 
-  /**
-   * Track what mars_arm actually accepted. Its message is in radians and already
-   * un-flipped, so it converts straight to leader ticks.
-   */
-  #subscribeAccepted() {
-    if (this.#unsubConstraint === null) {
-      this.#unsubConstraint = this.#rosClient.subscribe(
-        ARM_CONSTRAINT_TOPIC,
-        (msg) => {
-          const data = msg && Array.isArray(msg.data) ? msg.data : null;
-          if (!data) return;
-          this.#constrained = data.slice(0, this.#ids.length);
-          this.#constrainedAt = performance.now();
-        },
-        undefined,
-        "std_msgs/msg/Int32MultiArray",
-      );
-    }
-    if (this.#unsubAccepted) return;
-    this.#unsubAccepted = this.#rosClient.subscribe(
-      ARM_COMMAND_STATE_TOPIC,
-      (msg) => {
-        const pos = msg && Array.isArray(msg.position) ? msg.position : null;
-        if (!pos || pos.length < this.#ids.length) return;
-        this.#accepted = pos.slice(0, this.#ids.length).map((/** @type {number} */ rad) => radToTick(rad));
-        this.#acceptedAt = performance.now();
-      },
-      undefined,
-      "sensor_msgs/msg/JointState",
-    );
-  }
-
-  /**
-   * Signed divergence per joint in ticks, leader minus what the robot accepted,
-   * or null while that report is missing or stale. Stale must read as absent:
-   * pushing toward a pose the arm may already have left is worse than going limp.
-   * @param {number[]} positions
-   * @returns {(number | null)[]}
-   */
-  #divergence(positions) {
-    const accepted = this.#accepted;
-    const now = performance.now();
-    const fresh = accepted && now - this.#acceptedAt < DIVERGENCE_STALE_MS;
-    // No reason report, or a stale one, means no constraint is known — and an
-    // unexplained gap is exactly the case that must NOT be pushed on.
-    const reasons = this.#constrained && now - this.#constrainedAt < DIVERGENCE_STALE_MS ? this.#constrained : null;
-    if (!fresh || !reasons) return this.#ids.map(() => null);
-    return this.#ids.map((_, i) => {
-      if ((reasons[i] ?? CONSTRAINT_NONE) === CONSTRAINT_NONE) return null;
-      const tick = positions[i];
-      const want = accepted[i];
-      return tick === undefined || want === undefined ? null : tick - want;
-    });
-  }
-
   /** @param {boolean} on Turning the guard off releases anything held. */
   setEnabled(on) {
     if (this.#enabled === on) return;
@@ -305,8 +245,13 @@ export class LeaderGuard {
   }
 
   /**
-   * One position round. Decides which joints are out of reach, holds them at the
-   * boundary, and keeps the total draw inside the budget.
+   * One position round. Decides which joints are being held — by their own band,
+   * or because the pose would put the arm in the body — and keeps the total draw
+   * inside the budget.
+   *
+   * Everything here comes from the leader's own ticks. The robot is never asked
+   * what it did with a command: a joint that cannot reach an angle, or cannot
+   * reach it fast enough, is not a wall and must not feel like one.
    * @param {LeaderArmState} state
    */
   update(state) {
@@ -331,11 +276,7 @@ export class LeaderGuard {
     if (this.#trip(drawMa)) return;
 
     const before = this.#holding.size;
-    // Local first: this is the only source fast enough to matter on a quick
-    // swing. The robot's report still covers constraints the webapp cannot
-    // model, and stays the authority on what the arm will actually accept.
     const body = this.#bodyCheck(state.positions);
-    const diverged = this.#divergence(state.positions);
     /** @type {Map<number, number>} */
     const goals = new Map();
     /** @type {Map<number, number>} */
@@ -347,23 +288,19 @@ export class LeaderGuard {
       const tick = state.positions?.[i];
       if (tick === undefined) return;
 
-      // Two reasons to push back, and divergence wins where both apply: it is
-      // what the robot actually did, while the band is only our model of it.
-      // A body hit is expressed as a divergence from the last clear pose, so it
-      // flows through the same push-toward-a-reachable-state path.
-      const bodyError = body.hit && body.target ? tick - body.target[i] : null;
-      const error =
-        bodyError !== null && Math.abs(bodyError) > Math.abs(diverged[i] ?? 0) ? bodyError : diverged[i];
-      const beyond = error !== null && Math.abs(error) > DIVERGENCE_DEADBAND_TICKS;
+      // Only a joint the geometry blames for the contact is pushed on: a joint
+      // that merely happens to be moving while another is the problem is not
+      // the operator's to feel.
+      const error = body.hit && body.target && body.blamed?.[i] ? tick - body.target[i] : null;
+      const beyond = error !== null && Math.abs(error) > HOLD_DEADBAND_TICKS;
       const band = this.band(id);
       const outside = !!band && isOutside(tick, band, HYSTERESIS_TICKS, this.#holding.has(id));
 
       if (beyond) {
         this.#holding.add(id);
-        // Drive to the pose the robot accepted — the operator is pushed toward a
-        // reachable state, not merely stopped at a boundary.
+        // Drive back to the last pose that cleared the body.
         goals.set(id, tick - /** @type {number} */ (error));
-        wants.set(id, divergenceCurrent(/** @type {number} */ (error), DIVERGENCE_SHAPE));
+        wants.set(id, holdCurrent(/** @type {number} */ (error), HOLD_SHAPE));
         if (Math.abs(/** @type {number} */ (error)) > Math.abs(worstTicks)) {
           worstTicks = /** @type {number} */ (error);
           worstJoint = i + 1;
@@ -387,8 +324,8 @@ export class LeaderGuard {
     this.#patch({
       holding: [...this.#holding],
       drawMa,
-      divergedJoint: worstJoint,
-      divergedTicks: Math.round(worstTicks),
+      blockedJoint: worstJoint,
+      blockedTicks: Math.round(worstTicks),
       clearanceMm: Number.isFinite(body.clearance) ? Math.round(body.clearance * 1000) : -1,
     });
   }
@@ -452,9 +389,10 @@ export class LeaderGuard {
    * Whether the leader's own pose would put the arm in the body, and where to
    * push back to if so. Computed here rather than read off the robot: the
    * robot's verdict is a round trip old, and a fast swing is finished inside
-   * that window.
+   * that window — and because only the geometry, never the robot's behaviour,
+   * decides whether the operator feels anything.
    * @param {number[]} positions
-   * @returns {{ hit: boolean, target: number[] | null, clearance: number }}
+   * @returns {{ hit: boolean, target: number[] | null, clearance: number, blamed: boolean[] | null }}
    */
   #bodyCheck(positions) {
     const rads = ticksToRads(positions);
@@ -463,9 +401,31 @@ export class LeaderGuard {
     const hit = poseHitsBody(rads, margin);
     if (!hit) {
       this.#lastClear = positions.slice();
-      return { hit: false, target: null, clearance };
+      return { hit: false, target: null, clearance, blamed: null };
     }
-    return { hit: true, target: this.#lastClear, clearance };
+    return { hit: true, target: this.#lastClear, clearance, blamed: this.#blame(rads, clearance) };
+  }
+
+  /**
+   * Which joints actually cause the contact. Revert one at a time to its last
+   * clear value and keep the ones that buy clearance.
+   *
+   * "Every joint that differs from the last clear pose" is the wrong answer: any
+   * joint being driven differs, so a four-joint move blamed four joints and the
+   * whole arm stiffened at once.
+   * @param {number[]} rads @param {number} base
+   * @returns {boolean[]}
+   */
+  #blame(rads, base) {
+    const clear = this.#lastClear;
+    if (!clear) return this.#ids.map(() => false);
+    const clearRads = ticksToRads(clear);
+    return this.#ids.map((_, j) => {
+      if (j > 3) return false; // joints 5 and 6 cannot move the arm through space
+      const probe = rads.slice();
+      probe[j] = clearRads[j];
+      return bodyClearance(probe) > base + 1e-4;
+    });
   }
 
   /** @param {number[]} positions @returns {boolean} */
@@ -507,8 +467,8 @@ export class LeaderGuard {
   }
 
   /**
-   * Point every held servo at its target — the pose the robot accepted where the
-   * follower diverged, the band edge otherwise. Goal current is already set, so
+   * Point every held servo at its target — the last pose that cleared the body
+   * where the body is the limit, the band edge otherwise. Goal current is already set, so
    * the servo walks there under a capped push rather than snapping.
    * @param {Map<number, number>} goals Target tick per servo id.
    */
@@ -527,10 +487,6 @@ export class LeaderGuard {
   destroy() {
     this.#unsubBudget?.();
     this.#unsubBudget = null;
-    this.#unsubAccepted?.();
-    this.#unsubAccepted = null;
-    this.#unsubConstraint?.();
-    this.#unsubConstraint = null;
     this.releaseAll();
     this.#listeners.clear();
   }
@@ -542,8 +498,8 @@ export class LeaderGuard {
       next.armed === this.#state.armed &&
       next.drawMa === this.#state.drawMa &&
       next.allocatedMa === this.#state.allocatedMa &&
-      next.divergedJoint === this.#state.divergedJoint &&
-      next.divergedTicks === this.#state.divergedTicks &&
+      next.blockedJoint === this.#state.blockedJoint &&
+      next.blockedTicks === this.#state.blockedTicks &&
       next.clearanceMm === this.#state.clearanceMm &&
       next.error === this.#state.error &&
       next.holding.join() === this.#state.holding.join()

@@ -256,10 +256,10 @@ export function createArmPanel(parent, rosClient, opts = {}) {
       // Draw is only worth showing once the guard can actually spend it.
       // Divergence is the headline when it happens: the arm is not where the
       // operator put it, and that matters more than the rate.
-      if (g.divergedJoint) {
+      if (g.blockedJoint) {
         // Clearance is the number to tune BODY_MARGIN_M against, so show it.
         const room = g.clearanceMm >= 0 ? ` · ${g.clearanceMm} mm` : "";
-        status.textContent = `joint ${g.divergedJoint} blocked${room} · ${g.drawMa} mA`;
+        status.textContent = `joint ${g.blockedJoint} blocked${room} · ${g.drawMa} mA`;
         status.classList.add("warn");
       } else {
         status.textContent = g.armed ? `${state.rate} Hz · ${g.drawMa} mA` : `${state.rate} Hz`;
@@ -297,13 +297,13 @@ export function createArmPanel(parent, rosClient, opts = {}) {
     limitsBtn.hidden = !reading;
     limitsBtn.textContent = !guard.enabled
       ? "Limits off"
-      : g.divergedJoint
+      : g.blockedJoint
         ? "Not following"
         : g.armed
           ? `Limits on${g.holding.length ? " — holding" : ""}`
           : "Limits — no robot";
     limitsBtn.classList.toggle("active", guard.enabled && g.armed);
-    limitsBtn.classList.toggle("holding", g.holding.length > 0 || g.divergedJoint > 0);
+    limitsBtn.classList.toggle("holding", g.holding.length > 0 || g.blockedJoint > 0);
 
     note.hidden = !reading || engaged;
     note.textContent = "follower snaps to leader pose";

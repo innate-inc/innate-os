@@ -243,34 +243,6 @@ export const JOINT_DIRECTION_FLIPPED = [false, true, true, true, false, true];
 // This is only part of the robot's rule. mars_arm also runs a body keepout that
 // tests where the arm actually is, which no per-joint band can express — the
 // leader learns about that from the follower diverging, not from a mirror.
-// What mars_arm actually accepted, after every limit, clamp and keepout — in
-// radians and already un-flipped into the same convention the leader publishes
-// (arm_control.cpp publishes it right after applyLimitsAndConvertToEncoder).
-//
-// This is how the leader learns about constraints no per-joint band can express:
-// the gap between what it asked for and what came back IS the constraint,
-// whatever produced it. The leader drives toward the accepted pose with force
-// proportional to that gap, so the operator is pushed to a reachable state
-// instead of sailing on while the arm quietly goes somewhere else.
-export const ARM_COMMAND_STATE_TOPIC = "/mars/arm/command_state";
-// Per-joint reason mars_arm held a command back (std_msgs/Int32MultiArray,
-// mirroring ConstraintReason in arm_types.hpp). This is what separates a wall
-// from the arm merely not keeping up: only a physical boundary belongs in the
-// operator's hand, so a joint reporting NONE is never pushed on however far it
-// has diverged.
-export const ARM_CONSTRAINT_TOPIC = "/mars/arm/constraint";
-export const CONSTRAINT_NONE = 0;
-// Ticks of divergence below which nothing is done — sensor noise and the
-// follower's normal tracking lag must not feel like a wall.
-export const DIVERGENCE_DEADBAND_TICKS = 25;
-// mA of hold per tick of divergence past the deadband, and the floor a hold
-// starts at so it is felt immediately rather than fading in.
-export const DIVERGENCE_MA_PER_TICK = 4;
-export const DIVERGENCE_FLOOR_MA = 120;
-// A command_state older than this is treated as absent: better to go limp than
-// to keep pushing toward a pose the robot may have left.
-export const DIVERGENCE_STALE_MS = 500;
-
 // ---- Body keepout, enforced here rather than awaited from the robot --------
 // The robot's answer arrives a round trip late, and a round trip is long enough
 // for a fast move to be over before the operator feels anything. The webapp
@@ -287,6 +259,12 @@ export const BODY_SLOW_MARGIN_M = 0.09;
 // than creeping does. Backlash and plastic flex mean the arm keeps travelling
 // after the command stops; the faster it closes, the sooner the wall must be.
 export const BODY_LOOKAHEAD_S = 0.18;
+
+// Force curve for a hold. A step in at the deadband then a ramp: a wall has to
+// be felt the moment it exists, and a curve starting from zero reads as no wall.
+export const HOLD_DEADBAND_TICKS = 25;
+export const HOLD_MA_PER_TICK = 4;
+export const HOLD_FLOOR_MA = 120;
 
 export const J2_RESTRICTED_MIN_RAD = -0.5;
 export const J1_FRONT_ARC_LO = -1.0;

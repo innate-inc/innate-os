@@ -45,10 +45,10 @@ export function limitsToBand(positionLimits, flipped = false) {
  * between. Mirrors arm_control.cpp's joint limits so the operator sees the same
  * boundary the follower enforces.
  *
- * The robot also runs a body keepout that this cannot express — it tests where
- * the arm actually is, so reaching down in front stays free while folding back
- * over the chassis does not. Divergence, not this band, is what tells the leader
- * about that one.
+ * The body keepout is separate and lives in armGeometry.js: it tests where the
+ * arm actually is, so reaching down in front stays free while folding back over
+ * the chassis does not. No per-joint band can express that, which is why it is
+ * computed geometrically rather than as a limit on any one joint.
  * @param {number} joint1Rad
  * @param {number} baseMinRad Joint 2's unrestricted floor.
  * @param {{ restrictedMin: number, arcLo: number, arcHi: number, rampLo: number, rampHi: number }} shape
@@ -121,14 +121,14 @@ export function totalCurrent(currents) {
 }
 
 /**
- * Hold current for a joint the follower could not follow. A step at the
- * deadband, then a ramp: force has to be felt the moment the arm stops
- * tracking, and a curve starting from zero reads as no wall at all.
- * @param {number} errorTicks Signed divergence, leader minus accepted.
+ * Hold current for a joint being held at a limit. A step at the deadband, then a
+ * ramp: a wall has to be felt the moment it exists, and a curve starting from
+ * zero reads as no wall at all.
+ * @param {number} errorTicks Signed ticks past the limit.
  * @param {{ deadband: number, maPerTick: number, floorMa: number, maxMa: number }} shape
  * @returns {number} mA, 0 inside the deadband.
  */
-export function divergenceCurrent(errorTicks, shape) {
+export function holdCurrent(errorTicks, shape) {
   const over = Math.abs(errorTicks) - shape.deadband;
   if (over <= 0) return 0;
   return Math.min(shape.maxMa, shape.floorMa + over * shape.maPerTick);
