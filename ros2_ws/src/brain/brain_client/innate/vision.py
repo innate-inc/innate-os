@@ -238,17 +238,30 @@ def _backproject(hsv: np.ndarray, model: np.ndarray) -> np.ndarray:
     return model[np.clip(ih, 0, _SEG_BINS[0] - 1), i_s, iv]
 
 
+def _track_score(bp: np.ndarray, rot: Any, window: Window) -> float:
+    """Mean likelihood inside CamShift's rotated rectangle. Its axis-aligned
+    window is mostly floor around a thin diagonal object (a pen), and a mean
+    over that fails a track that is sitting on the object."""
+    x, y, w, h = window
+    roi = bp[y : y + h, x : x + w]
+    mask = np.zeros(roi.shape, np.uint8)
+    corners = np.round(cv2.boxPoints(rot) - (x, y)).astype(np.int32)
+    cv2.fillPoly(mask, [corners], 255)
+    inside = roi[mask > 0]
+    return float(inside.mean()) if inside.size else float(roi.mean())
+
+
 def seg_track(
     hsv: np.ndarray, model: np.ndarray, window: Window, min_score: float = 25.0
 ) -> tuple[tuple[float, float] | None, Window, float, Axis | None]:
     """Back-project + CamShift -> (center|None, window, score, axis|None)."""
     bp = _backproject(hsv, model)
     crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 1)
-    _rot, window = cv2.CamShift(bp, window, crit)
+    rot, window = cv2.CamShift(bp, window, crit)
     x, y, w, h = window
     if w < 4 or h < 4 or w * h > 0.4 * IMG_W * IMG_H:
         return None, window, 0.0, None
-    score = float(bp[y : y + h, x : x + w].mean())
+    score = _track_score(bp, rot, window)
     if score < min_score:
         return None, window, score, None
     return (x + w / 2.0, y + h / 2.0), window, score, _blob_axis(bp, window)
