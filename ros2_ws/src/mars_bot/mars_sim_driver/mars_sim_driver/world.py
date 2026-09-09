@@ -96,6 +96,14 @@ ARM_HOME = {
     "joint_head": 0.0,
 }
 
+# sim/viewer's key light (scene.ts KEY_LIGHT_OFFSET); the renderer moves it with the robot.
+KEY_LIGHT_OFFSET = (2.0, -1.5, 3.0)
+# sim/viewer's background and FogExp2 density per atmosphere (scene.ts).
+SKY_RGB = {"daylight": (0.80, 0.86, 0.89), "void": (1.0, 1.0, 1.0)}
+SKY_RGB_DEFAULT = (0.08, 0.086, 0.10)
+FOG_DENSITY = {"daylight": 0.004, "void": 0.16}
+FOG_DENSITY_DEFAULT = 0.035
+
 # Visual conventions matching sim/viewer's Three.js render.
 ORANGE_LINKS = {"link1", "link3", "link5"}
 BRIGHT_ORANGE = (1.0, 0.5, 0.0, 1.0)
@@ -224,6 +232,7 @@ def build_world_xml(
     spawn_pose: tuple[float, float, float] = (SPAWN_X, SPAWN_Y, SPAWN_YAW_DEG),
     traffic_bodies: str = "",
     traffic_assets: str = "",
+    atmosphere: str | None = None,
 ) -> str:
     """The apartment environment MJCF (floor plane + decomposed room hulls,
     optionally the textured visual rooms in their own geom group, plus every
@@ -278,6 +287,12 @@ def build_world_xml(
     )
 
     lx, ly, lz, azimuth, elevation, extent = spawn_camera_view(*spawn_pose)
+    sky = " ".join(f"{c:g}" for c in SKY_RGB.get(atmosphere or "", SKY_RGB_DEFAULT))
+    # MuJoCo fog is a linear ramp in units of extent; 0.3/d..1.5/d brackets the
+    # viewer's exp2 curve between ~9% and ~89%.
+    fog_density = FOG_DENSITY.get(atmosphere or "", FOG_DENSITY_DEFAULT)
+    fog_start, fog_end = 0.3 / fog_density / extent, 1.5 / fog_density / extent
+    key_pos = " ".join(f"{spawn_pose[i] + KEY_LIGHT_OFFSET[i]:g}" for i in range(2)) + f" {KEY_LIGHT_OFFSET[2]:g}"
 
     return f"""
 <mujoco model="apartment">
@@ -289,19 +304,31 @@ def build_world_xml(
        claw no matter the friction (MuJoCo docs, "Preventing slip"). -->
   <visual>
     <global azimuth="{azimuth}" elevation="{elevation}" offwidth="1280" offheight="960"/>
+    <!-- Fixed-function lighting sums the lights and clips each channel at 1. The
+         environments are baked (unlit in the viewer), so the lights below sum to ~1
+         from every surface orientation. The headlight's diffuse/specular are
+         view-dependent and washed lit faces white: ambient only. -->
+    <headlight ambient="0.55 0.55 0.55" diffuse="0 0 0" specular="0 0 0"/>
+    <map shadowclip="1.2" fogstart="{fog_start:g}" fogend="{fog_end:g}"/>
+    <quality shadowsize="8192"/>
+    <rgba fog="{sky} 1"/>
   </visual>
   <statistic center="{lx} {ly} {lz}" extent="{extent}"/>
   <asset>
+    <texture type="skybox" builtin="flat" rgb1="{sky}" rgb2="{sky}" width="32" height="32"/>
 {chr(10).join(mesh_lines)}
 {chr(10).join(visual_mesh_lines)}{prop_assets}
 {traffic_assets}
   </asset>
   <worldbody>
-    <!-- MuJoCo defaults an untyped light to a narrow spotlight.  The viewer's
-         key and fill are directional, so make that contract explicit here to
-         avoid dark cones at the apartment perimeter. -->
-    <light type="directional" pos="4 -3 6" dir="-4 3 -6" diffuse="1 1 1"/>
-    <light type="directional" castshadow="false" pos="-4 3 3" dir="4 -3 -3" diffuse="0.67 0.8 1"/>
+    <!-- Key light casts the shadows; the up light lights ceilings; three horizontal
+         fills 120 degrees apart light walls near-uniformly (0.87-1x). Untyped lights
+         default to narrow spotlights, hence type="directional". -->
+    <light type="directional" pos="{key_pos}" dir="-2 1.5 -3" diffuse="0.58 0.58 0.58" specular="0 0 0"/>
+    <light type="directional" castshadow="false" pos="0 0 0" dir="0 0 1" diffuse="0.45 0.45 0.45" specular="0 0 0"/>
+    <light type="directional" castshadow="false" pos="0 0 3" dir="1 0 0" diffuse="0.45 0.45 0.45" specular="0 0 0"/>
+    <light type="directional" castshadow="false" pos="0 0 3" dir="-0.5 0.866 0" diffuse="0.45 0.45 0.45" specular="0 0 0"/>
+    <light type="directional" castshadow="false" pos="0 0 3" dir="-0.5 -0.866 0" diffuse="0.45 0.45 0.45" specular="0 0 0"/>
     <geom name="ground" type="plane" size="20 20 0.1" friction="0.9 0.01 0.001" margin="0.007"
           solref="0.01 1" rgba="0.35 0.35 0.35 1" group="{collision_group}"/>
     <body name="apartment" quat="0.7071068 0.7071068 0 0">
