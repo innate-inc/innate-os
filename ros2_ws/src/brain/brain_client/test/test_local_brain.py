@@ -450,8 +450,8 @@ import threading  # noqa: E402
 import time  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
-from brain_client.brain.agent import _PEOPLE_FRESH_SEC, BrainAgent  # noqa: E402
-from brain_client.brain.utils import Event, EventKind, FrameLabel  # noqa: E402
+from brain_client.brain.agent import BrainAgent  # noqa: E402
+from brain_client.brain.utils import Event, EventKind  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
 from brain_client.transport.chat import SpeechStreamer  # noqa: E402
 
@@ -462,7 +462,7 @@ def agent_factory(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")  # gives the agent a swappable transport
     created = []
 
-    def make(trace=None, on_thinking_changed=None, people=None) -> tuple[BrainAgent, BrainState]:
+    def make(trace=None, on_thinking_changed=None) -> tuple[BrainAgent, BrainState]:
         logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
         node = SimpleNamespace(get_logger=lambda: logger)
         config = SimpleNamespace(
@@ -480,16 +480,13 @@ def agent_factory(monkeypatch):
         camera = SimpleNamespace(
             fresh_image_jpeg=lambda max_age: JPEG,
             fresh_frame=lambda max_age: (JPEG, -10.0),
-            frame_for_stamp=lambda stamp_ns, max_age: None,
             fresh_arm_jpeg=lambda max_age: None,
             current_head_pitch=-10.0,
             motion_peak=lambda: 0.0,
-            recently_driven=False,
         )
         pose = SimpleNamespace(current_pose_xyt=lambda: None, is_mapfree=False)
         spoken = []
         chat = SimpleNamespace(
-            history=[],
             emit_system=lambda *a, **k: None,
             emit=lambda *a, **k: None,
             emit_thoughts=lambda *a, **k: None,
@@ -507,7 +504,6 @@ def agent_factory(monkeypatch):
             roster=SimpleNamespace(active_skill_ids=lambda: []),
             chat=chat,
             gaze=SimpleNamespace(pause=lambda: None),
-            people_feed=people,
             trace=trace,
             on_thinking_changed=on_thinking_changed,
         )
@@ -1118,138 +1114,6 @@ def test_trace_reports_the_turn_lifecycle(agent_factory, monkeypatch):
     snapshot = traces[7]
     # History: the user turn, the model turn, and the wait call's functionResponse.
     assert snapshot["active"] is False and snapshot["backend"] == "gemini-direct" and snapshot["history"] == 3
-
-
-# ---------- people in view ----------
-
-PAIRED_STAMP_NS = 1788818400123456789
-PAIRED_JPEG = b"\xff\xd8\xff\xe0thepairedframe"
-
-
-def people_snapshot(**overrides) -> dict:
-    snapshot = {
-        "schema": 1,
-        "stamp": time.time(),
-        "frame_stamp_ns": str(PAIRED_STAMP_NS),
-        "image_size": [640, 480],
-        "people": [
-            {
-                "tag": "P3",
-                "person_id": "person_7f92a1b3",
-                "name": "Theo",
-                "state": "known",
-                "evidence": ["face"],
-                "bbox": [100, 300, 930, 560],
-                "tracked_sec": 41.2,
-                "lost": False,
-                "description": "Man, 30s, glasses.",
-            }
-        ],
-        "recent": [],
-    }
-    return {**snapshot, **overrides}
-
-
-def with_people(agent_factory, snapshot: dict, monkeypatch) -> BrainAgent:
-    """An agent whose camera ring still holds the frame the snapshot names."""
-    from brain_client.brain import overlay
-
-    agent, _ = agent_factory(people=SimpleNamespace(latest=lambda: snapshot))
-    agent._camera.frame_for_stamp = lambda stamp_ns, max_age: (
-        (PAIRED_JPEG, -3.0) if stamp_ns == PAIRED_STAMP_NS else None
-    )
-    monkeypatch.setattr(overlay, "draw_people", lambda jpeg, snapshot: jpeg + b"+boxes")
-    return agent
-
-
-def test_look_draws_on_the_frame_the_engine_measured(agent_factory, monkeypatch):
-    # The tags only mean anything on that exact frame, and the geometry the
-    # turn captures must be that frame's, not the freshest one's.
-    agent = with_people(agent_factory, people_snapshot(), monkeypatch)
-    text, frames = agent._look([])
-
-    assert frames[0] == (FrameLabel.HEAD, PAIRED_JPEG + b"+boxes")
-    assert agent._frame_at_capture == PAIRED_JPEG + b"+boxes"
-    assert agent._pitch_at_capture == -3.0
-    assert "P3 = Theo (known, face)." in text
-    assert "not drawn this turn" not in text
-
-
-def test_look_falls_back_to_the_freshest_frame_when_the_pairing_fails(agent_factory, monkeypatch):
-    agent = with_people(agent_factory, people_snapshot(frame_stamp_ns="999"), monkeypatch)
-    text, frames = agent._look([])
-
-    assert frames[0] == (FrameLabel.HEAD, JPEG)
-    assert agent._pitch_at_capture == -10.0
-    assert "People in view (positions not drawn this turn):" in text
-
-
-def test_a_robot_that_just_drove_gets_the_freshest_frame_and_no_boxes(agent_factory, monkeypatch):
-    # The turn's pose is read now; a paired frame is up to a snapshot older than
-    # that, and a floor point grounded across a drive lands somewhere else.
-    agent = with_people(agent_factory, people_snapshot(), monkeypatch)
-    agent._camera.recently_driven = True
-    text, frames = agent._look([])
-
-    assert frames[0] == (FrameLabel.HEAD, JPEG)
-    assert agent._pitch_at_capture == -10.0
-    assert "People in view (positions not drawn this turn):" in text
-
-
-def test_the_drawn_frame_may_be_no_older_than_the_boxes_on_it(agent_factory, monkeypatch):
-    agent = with_people(agent_factory, people_snapshot(), monkeypatch)
-    asked: list[float] = []
-
-    def frame_for_stamp(stamp_ns, max_age):
-        asked.append(max_age)
-        return (PAIRED_JPEG, -3.0)
-
-    agent._camera.frame_for_stamp = frame_for_stamp
-    agent._look([])
-
-    assert asked == [_PEOPLE_FRESH_SEC]
-
-
-def test_a_stale_snapshot_never_puts_names_on_a_current_frame(agent_factory, monkeypatch):
-    agent = with_people(agent_factory, people_snapshot(stamp=time.time() - 5.0), monkeypatch)
-    text, frames = agent._look([])
-
-    assert frames[0] == (FrameLabel.HEAD, JPEG)
-    assert "not drawn this turn" in text
-
-
-def test_an_undecodable_paired_frame_is_not_sent_with_boxes_claimed(agent_factory, monkeypatch):
-    """draw_people answers None when the JPEG will not decode: the turn then
-    takes the freshest frame and the block says the positions are not drawn."""
-    from brain_client.brain import overlay
-
-    agent = with_people(agent_factory, people_snapshot(), monkeypatch)
-    monkeypatch.setattr(overlay, "draw_people", lambda jpeg, snapshot: None)
-    text, frames = agent._look([])
-
-    assert frames[0] == (FrameLabel.HEAD, JPEG)
-    assert "People in view (positions not drawn this turn):" in text
-
-
-def test_a_snapshot_with_nothing_drawable_never_claims_the_boxes_are_there(agent_factory, monkeypatch):
-    """draw_people hands back the frame it was given when no box is drawable
-    (every track lost, or none has one) — same picture, so nothing was marked."""
-    from brain_client.brain import overlay
-
-    agent = with_people(agent_factory, people_snapshot(), monkeypatch)
-    monkeypatch.setattr(overlay, "draw_people", lambda jpeg, snapshot: jpeg)
-    text, frames = agent._look([])
-
-    assert frames[0] == (FrameLabel.HEAD, JPEG)
-    assert "People in view (positions not drawn this turn):" in text
-
-
-def test_no_people_feed_leaves_the_turn_exactly_as_it_was(agent_factory):
-    agent, _ = agent_factory()
-    text, frames = agent._look([])
-
-    assert frames[0] == (FrameLabel.HEAD, JPEG)
-    assert "People in view" not in text
 
 
 # ---------- skill events ----------
