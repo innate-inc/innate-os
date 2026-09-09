@@ -70,7 +70,7 @@ PARAMS = {
     # Below image center: the wrist cam sits above the fingertips, so
     # mid-frame aims short of them. 350 is the hardware-tuned parallax bias.
     "wrist_box_v": 350.0,
-    "wrist_half_px": 60.0,
+    "wrist_half_px": 50.0,
     "wrist_kx": -0.04,
     "wrist_ky": -0.04,
     "wrist_step_max": 0.04,
