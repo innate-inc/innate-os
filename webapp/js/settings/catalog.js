@@ -120,6 +120,19 @@ const VAD_ENGINE_OPTIONS = [
   { value: "energy", label: "Energy threshold" },
 ];
 
+// InspireFace is a prototype the appliance may not depend on: its models are
+// research-only under InsightFace's terms, so provisioning does not ship them.
+const FACE_BACKEND_OPTIONS = [
+  { value: "opencv", label: "OpenCV (YuNet + SFace)" },
+  { value: "inspireface", label: "InspireFace (prototype)" },
+  { value: "none", label: "None — detect people, recognize nobody" },
+];
+
+const TICK_SOURCE_OPTIONS = [
+  { value: "compressed", label: "Compressed (JPEG)" },
+  { value: "raw", label: "Raw image" },
+];
+
 /** @type {SettingsPage[]} */
 export const SETTINGS_PAGES = [
   {
@@ -244,6 +257,8 @@ export const SETTINGS_PAGES = [
           { path: ["main_camera_driver", P, "publish_left_height"], label: "Image height", default: 480, type: "int", unit: "px", doc: "Streamed main-camera image height" },
           { path: ["main_camera_driver", P, "fps"], label: "Frame rate", default: 30, type: "float", unit: "fps", doc: "Camera frame rate" },
           { path: ["main_camera_driver", P, "jpeg_quality"], label: "JPEG quality", default: 80, type: "int", doc: "JPEG compression quality (1–100)", min: 1, max: 100, slider: true },
+          { path: ["main_camera_driver", P, "publish_native"], label: "Native MJPG topic", default: false, type: "bool", doc: "Tee the sensor's own 2560×720 MJPG buffers to a second topic, which person recognition reads at full sensor resolution. Off by default: it swaps the proven capture path for a GStreamer tee, and the topic does not exist at all while this is off" },
+          { path: ["main_camera_driver", P, "native_fps"], label: "Native topic rate", default: 5, type: "float", unit: "fps", doc: "Rate cap for that topic, applied only while something subscribes. 0 is unthrottled — every frame the sensor delivers, not off", min: 0, max: 30 },
         ],
       },
       {
@@ -350,6 +365,22 @@ export const SETTINGS_PAGES = [
           { path: ["input_manager_node", P, "stt_vad_silence_secs"], label: "Silence to end turn", default: 0.5, type: "float", unit: "s", doc: "Silence that closes an utterance (every backend)", subsection: "Speech to text" },
           { path: ["input_manager_node", P, "stt_agc_max_db"], label: "Mic gain ceiling", default: 24, type: "float", unit: "dB", doc: "Software AGC max boost toward -6 dBFS peak; 0 disables", subsection: "Speech to text" },
           { path: ["input_manager_node", P, "stt_filter_background_audio"], label: "Filter background", default: true, type: "bool", doc: "Scribe realtime: server-side gate against nearby conversations and ambient noise", subsection: "Speech to text" },
+        ],
+      },
+      {
+        title: "Person recognition",
+        note: "How the people node recognizes the people it meets and how long it remembers them. Read once when that node starts, so a change here needs a restart. Who it knows — names, merges, forgetting, and whether it may learn anyone new — is the live People card below.",
+        knobs: [
+          { path: ["people_node", P, "always_on"], label: "Run while deactivated", default: false, type: "bool", doc: "Keep recognizing people while the brain is deactivated, rather than only while it is running", subsection: "When it looks" },
+          { path: ["people_node", P, "tick_source"], label: "Camera topic", default: "compressed", type: "string", options: TICK_SOURCE_OPTIONS, doc: "Which left-eye topic the engine samples. The brain's frame ring holds only the compressed one, so \"Raw image\" costs the overlay its boxes — the stamps no longer pair", subsection: "When it looks" },
+          { path: ["people_node", P, "seek_faces"], label: "Approach for a face", default: false, type: "bool", doc: "Let the people block suggest walking closer to someone whose face has not been seen yet", subsection: "When it looks" },
+          { path: ["people_node", P, "prefer_backend"], label: "Face stack", default: "opencv", type: "string", options: FACE_BACKEND_OPTIONS, doc: "Which face detector and recognizer to load. An unavailable stack falls back rather than stopping the node", subsection: "Recognition" },
+          { path: ["people_node", P, "allow_model_download"], label: "Fetch a missing model", default: true, type: "bool", doc: "Download a face model once if it is not on disk. Provisioning normally ships them; with neither, the robot still sees people but recognizes nobody", subsection: "Recognition" },
+          { path: ["people_node", P, "camera_height_m"], label: "Camera height", default: 0.26, type: "float", unit: "m", doc: "Lens height above the floor. Sets the floor ray that turns a person's box into a distance", min: 0.05, max: 2, subsection: "Recognition" },
+          { path: ["people_node", P, "scribe"], label: "Write down what people say", default: true, type: "bool", doc: "Turn what someone says about themselves into their notes — one Gemini call per conversation window", subsection: "Memory" },
+          { path: ["people_node", P, "gemini_model"], label: "People model", default: "gemini-3.6-flash", type: "string", doc: "Gemini model behind the descriptions and the scribe", subsection: "Memory" },
+          { path: ["people_node", P, "retention_unnamed_days"], label: "Keep unnamed people", default: 14, type: "float", unit: "days", doc: "Days an unnamed person survives unseen before being forgotten", min: 1, max: 3650, subsection: "Memory" },
+          { path: ["people_node", P, "retention_named_days"], label: "Keep named people", default: 548, type: "float", unit: "days", doc: "Days a named person survives unseen (548 = 18 months)", min: 1, max: 3650, subsection: "Memory" },
         ],
       },
       {

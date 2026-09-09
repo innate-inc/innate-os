@@ -36,7 +36,10 @@ from brain_client.perception.motion_gate import MotionGate
 
 _DRIVE_SUPPRESS_SEC = 1.5  # after a nonzero cmd_vel: frames lag the command and blur outlasts the stop
 _RING_SEC = 1.5  # frame history kept for stamp pairing; the engine ticks at 5 Hz, ~300ms behind
-_RING_FRAMES = 12  # hard cap on the ring (~600 KB of JPEG at the 7.5 Hz publish rate)
+# Only _RING_SEC may decide what the ring holds: 12 frames were 1.5 s at neither
+# publish rate (1.47 s at the robot's 7.5 Hz, 1.1 s at the sim's 10 Hz), so a
+# late tick found its own frame evicted and the boxes stopped being drawn.
+_RING_FRAMES = 24  # hard cap on the ring (~1.2 MB of JPEG)
 
 
 @dataclass(frozen=True)

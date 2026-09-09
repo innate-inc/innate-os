@@ -177,6 +177,18 @@ class CountingResolver(Resolver):
         super().on_reassociated(tag, now)
 
 
+class StillRecordingResolver(Resolver):
+    """Remembers what each tick told it about the robot holding still."""
+
+    def __init__(self, roster) -> None:
+        super().__init__(roster)
+        self.stillness: list[bool] = []
+
+    def resolve(self, tracks, now, *, still=True, map_name=None, pose=None):
+        self.stillness.append(still)
+        return super().resolve(tracks, now, still=still, map_name=map_name, pose=pose)
+
+
 class SplitOnceResolver(Resolver):
     """Asks the engine to split the first track it ever resolves."""
 
@@ -184,8 +196,8 @@ class SplitOnceResolver(Resolver):
         super().__init__(roster)
         self.fired = False
 
-    def resolve(self, tracks, now, *, map_name=None, pose=None):
-        resolutions = super().resolve(tracks, now, map_name=map_name, pose=pose)
+    def resolve(self, tracks, now, *, still=True, map_name=None, pose=None):
+        resolutions = super().resolve(tracks, now, still=still, map_name=map_name, pose=pose)
         if not self.fired and resolutions:
             self.fired = True
             tag = next(iter(resolutions))
@@ -381,6 +393,18 @@ def test_a_moving_head_also_stops_the_evidence():
     assert engine.tick(scene(), None, 100.0, ego)[0].frames_with_face == 0
 
 
+def test_the_resolver_is_told_which_ticks_gathered_no_evidence():
+    """The switch hysteresis is spent in evidence, and a tick that skipped the
+    gathering supplied none: the resolver can only pause its timer if the engine
+    passes its own stillness through."""
+    roster = FakeRoster()
+    resolver = StillRecordingResolver(roster)
+    engine, _detector, _roster = build(roster=roster, resolver=resolver)
+    engine.tick(scene(), None, 100.0, still(100.0))
+    engine.tick(scene(), None, 101.0, EgoMotion(stamp=101.0, last_drive=101.0))
+    assert resolver.stillness == [True, False]
+
+
 # ---------------------------------------------------------------- geometry
 
 
@@ -539,11 +563,18 @@ def test_a_person_who_stays_and_matches_nobody_is_enrolled():
 
 
 def test_the_enrolment_is_reported_in_the_tick_resolutions():
+    """The node turns the enrolling tick's resolutions into a people event, so
+    the id has to be reported on the tick that created it and on no other."""
     engine, detector, _roster = build()
-    walk_in_place(engine, detector)
-    enrolled = [r.enrolled_id for r in engine.resolutions().values() if r.enrolled_id]
-    assert engine.tracks()[0].identity.person_id is not None
-    assert enrolled or engine.tracks()[0].identity.person_id is not None
+    enrolled: list[str] = []
+    now = 1000.0
+    for index in range(8):
+        box = shifted(PERSON, 0.03 * (index % 2))
+        detector.boxes = [[box]]
+        engine.tick(scene(box), None, now, still(now))
+        enrolled += [r.enrolled_id for r in engine.resolutions().values() if r.enrolled_id]
+        now += 0.5
+    assert enrolled == [engine.tracks()[0].identity.person_id]
 
 
 def test_a_passer_by_seen_for_under_two_seconds_is_never_enrolled():

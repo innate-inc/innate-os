@@ -259,7 +259,7 @@ function buildAgentView(root) {
     parts.push(createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, cornerStack, ros, session));
     // Who the robot recognizes, boxed on the same stage — this is the page
     // where knowing the agent is looking at "P3 · Theo" is the whole point.
-    parts.push(createPeopleOverlay(ribbonStage, realVideo?.videoEl ?? null, ros));
+    parts.push(createPeopleOverlay(ribbonStage, realVideo?.videoEl ?? null, ros, session));
   }
 
   session.start();

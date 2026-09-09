@@ -135,11 +135,14 @@ def test_a_reader_survives_the_ring_emptying_underneath_it(eager_thread_switches
 
     executor = threading.Thread(target=churn, name="fake-executor", daemon=True)
     executor.start()
+    emptied = 0
     try:
         deadline = time.monotonic() + _RACE_SEC
         while time.monotonic() < deadline:
             ring.frame_for_stamp(_UNKNOWN_STAMP, 3.0)
-            ring.fresh_frame(3.0)
+            if ring.fresh_frame(3.0) is None:
+                emptied += 1
     finally:
         stop.set()
         executor.join(timeout=5.0)
+    assert emptied > 0  # the reads really did land on a cleared ring, not only on a filled one

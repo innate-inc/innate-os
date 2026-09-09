@@ -16,12 +16,12 @@ from brain_client.people.surfacing import (
     ATTENTION_NEAR_M,
     DIGEST_STATES,
     FACE_STALE_SEC,
+    RECENT_WINDOW_SEC,
     REENTRY_GAP_SEC,
     PeopleEvents,
     build_snapshot,
     choose_attention,
     per_mille,
-    start_of_day,
 )
 from brain_client.people.types import (
     SNAPSHOT_SCHEMA,
@@ -68,6 +68,7 @@ def track(
     speaking: bool = False,
     lost: bool = False,
     first_seen: float = NOW - 41.2,
+    last_seen: float = NOW,
     frames_with_face: int = 3,
     last_face_stamp: float | None = NOW,
     confidence: float = 0.91,
@@ -84,7 +85,7 @@ def track(
             evidence=(Evidence.FACE,),
         ),
         first_seen=first_seen,
-        last_seen=NOW,
+        last_seen=last_seen,
         lost=lost,
         range_m=range_m,
         bearing_deg=-4.0,
@@ -193,10 +194,14 @@ def test_recent_lists_who_was_seen_today_but_is_not_in_view(store: PeopleStore):
     assert snapshot["recent"][0]["name"] == "Marc"
 
 
-def test_recent_stops_at_the_start_of_the_day(store: PeopleStore):
-    yesterday = enrol(store, NOW)
-    store.record_sighting(yesterday, start_of_day(NOW) - 3600, "hallway", None)
-    assert build_snapshot([], store, HEALTH, NOW)["recent"] == []
+def test_recent_reaches_back_a_day_so_the_sdks_window_is_not_cut_at_midnight(store: PeopleStore):
+    """``People.recently_seen(minutes)`` is answered out of this list; a window
+    that ended at local midnight said "nobody in the last hour" at 00:30."""
+    evening = enrol(store, NOW)
+    store.record_sighting(evening, NOW - 20 * 3600, "hallway", None)
+    older = enrol(store, NOW)
+    store.record_sighting(older, NOW - RECENT_WINDOW_SEC - 60.0, "hallway", None)
+    assert [entry["person_id"] for entry in build_snapshot([], store, HEALTH, NOW)["recent"]] == [evening]
 
 
 def test_the_snapshot_mirrors_a_collection_opt_out(store: PeopleStore):
@@ -204,9 +209,13 @@ def test_the_snapshot_mirrors_a_collection_opt_out(store: PeopleStore):
     assert build_snapshot([], store, HEALTH, NOW)["collection_enabled"] is False
 
 
-def test_a_lost_track_still_rides_the_snapshot_flagged_as_lost(store: PeopleStore):
-    snapshot = build_snapshot([track(lost=True)], store, HEALTH, NOW)
+def test_a_lost_track_rides_the_snapshot_with_how_long_ago_it_was_seen(store: PeopleStore):
+    """Without the age every reader has to say "just left view" for the whole
+    minute a lost track lingers."""
+    snapshot = build_snapshot([track(lost=True, last_seen=NOW - 42.0)], store, HEALTH, NOW)
     assert snapshot["people"][0]["lost"] is True
+    assert snapshot["people"][0]["lost_sec"] == 42.0
+    assert build_snapshot([track()], store, HEALTH, NOW)["people"][0]["lost_sec"] is None
 
 
 # -------------------------------------------------------------- attention

@@ -87,13 +87,17 @@ class ApproachPerson(Skill):
                 if person is None or distance is None:
                     if time.monotonic() - last_fix > LOST_GRACE_SEC:
                         self.fail(lost_message(label, seen=person is not None))
+                    arrived.clear()  # a look that measured nothing breaks the run
                     self.mobility.stop()
                     self.sleep(LOOP_PERIOD)
                     continue
 
                 last_fix = time.monotonic()
-                bearing = person.bearing_deg if person.bearing_deg is not None else 0.0
-                if abs(distance - TARGET_RANGE_M) <= RANGE_TOL_M and abs(bearing) <= FACING_TOL_DEG:
+                bearing = person.bearing_deg
+                # No bearing is not "straight ahead": it is not knowing, and
+                # standing still on it would report facing somebody sideways.
+                facing = bearing is not None and abs(bearing) <= FACING_TOL_DEG
+                if abs(distance - TARGET_RANGE_M) <= RANGE_TOL_M and facing:
                     arrived.add(person.stamp)
                     self.mobility.stop()
                     if len(arrived) >= ARRIVE_FRAMES:
@@ -103,7 +107,7 @@ class ApproachPerson(Skill):
                         )
                 else:
                     arrived.clear()
-                    self._drive(distance - TARGET_RANGE_M, bearing)
+                    self._drive(distance - TARGET_RANGE_M, bearing if bearing is not None else 0.0)
 
                 if time.monotonic() > deadline:
                     self.fail(f"Gave up approaching {label}, still {distance:.2f} m away.")

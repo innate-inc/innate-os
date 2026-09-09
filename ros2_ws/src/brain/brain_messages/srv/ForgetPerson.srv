@@ -3,8 +3,9 @@
 # reference fails loudly instead of naming a stranger; the live track is suppressed.
 string who
 # Optional. A caller-generated id (a uuid4) that makes a retry harmless: the node keeps
-# its last 64 keys with the answer each one got and replays that answer instead of
-# mutating twice. Empty means no key, and every call is a fresh mutation.
+# the last 64 keys it answered SUCCESSFULLY and replays that answer instead of mutating
+# twice. A call that failed is not remembered, so its retry is a fresh attempt at the
+# mutation it never made. Empty means no key, and every call is a fresh mutation.
 string idempotency_key
 # Optional. The ``frame_stamp_ns`` of the /brain/people snapshot this call was decided
 # on. When ``who`` names a live tag whose track started after that frame, the call

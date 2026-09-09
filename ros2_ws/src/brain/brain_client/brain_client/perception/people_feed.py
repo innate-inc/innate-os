@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Innate Inc
 """The brain's window onto the people node.
 
-Two subscriptions and no logic: ``/brain/people`` (latched, ≤ 5 Hz) is the
+Two subscriptions and one gate: ``/brain/people`` (latched, ≤ 5 Hz) is the
 snapshot the turn's People block and overlay are rendered from, and
 ``/brain/people_events`` carries the handful of things worth waking a turn for
 (a name learned, a known person back after ten minutes, a deep recall). Both
@@ -11,6 +11,8 @@ no callback — and the latched snapshot means a brain activated later starts
 with the roster it left behind rather than an empty scene.
 
 Recognition itself lives in the people node; nothing here decides anything.
+The gate is only that: a snapshot of another schema, or one carrying numbers a
+reader would have to guard against, never reaches the brain at all.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ if TYPE_CHECKING:
 
 SNAPSHOT_TOPIC = "/brain/people"
 EVENTS_TOPIC = "/brain/people_events"
+_NUMBERS = ("tracked_sec", "range_m", "bearing_deg", "lost_sec")
 
 _SNAPSHOT_QOS = QoSProfile(
     depth=1,
@@ -76,16 +79,27 @@ class PeopleFeed:
         return snapshot
 
     def _on_snapshot(self, msg: String) -> None:
-        parsed = self._parse(msg.data, SNAPSHOT_TOPIC)
-        if parsed is not None:
-            self._snapshot = cast("PeopleSnapshotDict", parsed)
+        """The one gate between the people node and the turn. The snapshot is
+        latched TRANSIENT_LOCAL, so a payload the block or the overlay chokes
+        on is replayed to every restart until the node publishes again — a
+        single malformed message would end every turn until a reboot."""
+        parsed = self._parse(msg.data, SNAPSHOT_TOPIC, require_schema=True)
+        if parsed is None:
+            return
+        if not _numeric(parsed.get("stamp")):
+            self._warn_once(f"[People] Ignoring a snapshot with no usable stamp on {SNAPSHOT_TOPIC}")
+            return
+        parsed["people"] = _drawable(parsed.get("people"))
+        self._snapshot = cast("PeopleSnapshotDict", parsed)
 
     def _on_event(self, msg: String) -> None:
-        parsed = self._parse(msg.data, EVENTS_TOPIC)
+        # Events carry no schema of their own: they are read one field at a
+        # time and nothing latches them.
+        parsed = self._parse(msg.data, EVENTS_TOPIC, require_schema=False)
         if parsed is not None and self.on_event is not None:
             self.on_event(cast("PeopleEventDict", parsed))
 
-    def _parse(self, payload: str, topic: str) -> dict | None:
+    def _parse(self, payload: str, topic: str, *, require_schema: bool) -> dict | None:
         try:
             parsed = json.loads(payload)
         except (json.JSONDecodeError, TypeError):
@@ -93,13 +107,41 @@ class PeopleFeed:
             return None
         if not isinstance(parsed, dict):
             return None
-        schema = parsed.get("schema", SNAPSHOT_SCHEMA)
+        schema = parsed.get("schema", None if require_schema else SNAPSHOT_SCHEMA)
         if schema == SNAPSHOT_SCHEMA:
             return parsed
-        if not self._warned_schema:
-            self._warned_schema = True
-            self._logger.warn(f"[People] Ignoring schema {schema} on {topic}; this brain reads {SNAPSHOT_SCHEMA}")
+        self._warn_once(f"[People] Ignoring schema {schema} on {topic}; this brain reads {SNAPSHOT_SCHEMA}")
         return None
+
+    def _warn_once(self, message: str) -> None:
+        """A publisher out of step is out of step at 5 Hz."""
+        if self._warned_schema:
+            return
+        self._warned_schema = True
+        self._logger.warn(message)
+
+
+def _drawable(people: object) -> list[dict]:
+    """The snapshot's people, minus any whose numbers the block and the overlay
+    would have to parse: they read a box straight through ``int()`` and a stamp
+    through ``float()``, and one entry that raises there costs the whole turn."""
+    if not isinstance(people, list):
+        return []
+    return [person for person in people if isinstance(person, dict) and _measured(person)]
+
+
+def _measured(person: dict) -> bool:
+    if any(not _numeric(person[key]) for key in _NUMBERS if person.get(key) is not None):
+        return False
+    return all(_box(person[key]) for key in ("bbox", "head_bbox") if person.get(key) is not None)
+
+
+def _box(value: object) -> bool:
+    return isinstance(value, list) and len(value) == 4 and all(_numeric(edge) for edge in value)
+
+
+def _numeric(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def decode_event_image(event: PeopleEventDict) -> bytes | None:

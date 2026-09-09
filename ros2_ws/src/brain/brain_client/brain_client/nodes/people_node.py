@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
 _ACCESSOR = {str: "string_value", bool: "bool_value", int: "integer_value", float: "double_value"}
 _QUEUE_FILE = "scribe_queue.jsonl"
+_SKIPPABLE_SPIN_ERRORS = ("RCLError", "InvalidHandle")
 
 
 class PeopleNode(Node):
@@ -49,11 +50,6 @@ class PeopleNode(Node):
                 for name, default in PARAM_DEFAULTS.items()
             }
         )
-        self.adapters: PeopleAdapters | None = None
-        if not self.config.enabled:
-            self.get_logger().info("[People] disabled by parameter; the node will exit")
-            return
-
         store = PeopleStore(
             self.config.data_dir,
             retention_unnamed_days=self.config.retention_unnamed_days,
@@ -89,7 +85,7 @@ class PeopleNode(Node):
         elif self.config.scribe:
             self.get_logger().warning("[People] no Gemini transport: the scribe is off, recognition is not")
 
-        self.adapters = PeopleAdapters(
+        self.adapters: PeopleAdapters = PeopleAdapters(
             self,
             self.config,
             store=store,
@@ -121,8 +117,7 @@ class PeopleNode(Node):
         return rest.post if rest is not None else None
 
     def destroy_node(self) -> bool:
-        if self.adapters is not None:
-            self.adapters.shutdown()
+        self.adapters.shutdown()
         return super().destroy_node()
 
 
@@ -130,20 +125,19 @@ def main(args: list[str] | None = None) -> None:
     rclpy.init(args=args)
     node = PeopleNode()
     try:
-        if node.adapters is None:
-            return
-        # Manual spin so a transient deserialization error (a corrupted
-        # CompressedImage on either camera topic) is logged and skipped instead
-        # of killing the node, exactly as brain_client_node does.
+        # Manual spin so a transient middleware error is logged and skipped
+        # instead of killing the node, exactly as brain_client_node does: a
+        # corrupted CompressedImage on either camera topic (RCLError), and an
+        # entity torn down between two spins (InvalidHandle).
         while rclpy.ok():
             try:
                 rclpy.spin_once(node, timeout_sec=0.5)
             except KeyboardInterrupt:
                 raise
             except Exception as error:
-                if "RCLError" not in type(error).__name__:
+                if not any(name in type(error).__name__ for name in _SKIPPABLE_SPIN_ERRORS):
                     raise
-                node.get_logger().warn(f"Skipping deserialization error (message dropped): {error}")
+                node.get_logger().warn(f"Skipping {type(error).__name__} (message dropped): {error}")
     except KeyboardInterrupt:
         node.get_logger().info("KeyboardInterrupt, shutting down.")
     finally:

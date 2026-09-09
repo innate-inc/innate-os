@@ -4,10 +4,12 @@
 
 The people node already detected and chose everyone in view on this same camera
 stream (docs/rfc/people-memory.md section 5.5), so the gaze loop takes its
-answer instead of loading a second face model: the attention target's head box
-when there is one, otherwise the nearest live person's, and the top of their
-body box while no face has been located yet. PURE module: no rclpy, no cv2 —
-the tracker around it is the part that cannot be unit-tested.
+answer instead of loading a second face model — the one argument the whole gaze
+path rests on, stated here and referenced from ``gaze.py``. The answer is the
+attention target's head box when there is one, otherwise the nearest live
+person's, and the top of their body box while no face has been located yet.
+PURE module: no rclpy, no cv2 — the tracker around it is the part that cannot
+be unit-tested.
 """
 
 from __future__ import annotations

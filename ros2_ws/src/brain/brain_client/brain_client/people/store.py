@@ -73,7 +73,7 @@ if TYPE_CHECKING:
     from brain_client.people.types import Pose
 
 INDEX_VERSION = 1
-MAX_NAMED = 10
+MAX_NAMED = 10  # the RFC's design point; whether an owner rename may exceed it is undecided, so rename is ungated
 MAX_UNNAMED = 20
 MAX_FACE_TEMPLATES = 10
 MAX_THUMBNAILS = 3
@@ -84,6 +84,8 @@ RETENTION_NAMED_DAYS = 548.0  # 18 months unseen, the Amazon Astro Visual ID rul
 _SIGHTING_COMMIT_SEC = 30.0  # the engine records a sighting per tick; disk sees one per half minute
 MAX_OUTFITS = 8
 MAX_FACTS = 200  # a profile a scribe writes to for a year would otherwise grow without end
+MAX_EPISODES = 200  # one encounter is one episode: a regular of two years is thousands, in a file read whole
+MAX_OPEN_LOOPS = 50
 EPISODE_SUMMARY_LIMIT = 300
 DIR_MODE = 0o700  # templates and thumbnails are special-category data (RFC section 10)
 FILE_MODE = 0o600
@@ -103,6 +105,7 @@ class AuditAction(StrEnum):
     COLLECTION = "collection"
     CONSOLIDATED = "consolidated"
     SWEPT = "swept"
+    REBUILT = "rebuilt"
 
 
 class PeopleStore:
@@ -217,7 +220,7 @@ class PeopleStore:
             self._faces[person_id] = _prune_faces(templates)
             if thumbnail:
                 self._add_thumbnail_locked(person_id, thumbnail)
-            self._commit_templates_locked(person_id)
+            self._templates_pending.add(person_id)
 
     def add_outfit(self, person_id: str, outfit: OutfitTemplate) -> None:
         with self._lock:
@@ -229,13 +232,13 @@ class PeopleStore:
                 if outfit.stamp - existing.stamp <= OUTFIT_TTL_SEC
             ]
             self._outfits[person_id] = _with_outfit(kept, outfit)
-            self._commit_templates_locked(person_id)
+            self._templates_pending.add(person_id)
 
     def add_height_sample(self, person_id: str, height_m: float, variance: float) -> None:
-        """The resolver sends one of these a second per settled person, so the
-        sample lands in memory and the templates file waits for the next
-        :meth:`flush` — rewriting every face and outfit vector per second is
-        ~90 MB an hour of eMMC writes per person in view."""
+        """The sample lands in memory and templates.npz waits for the next
+        :meth:`flush`, as every template edit does: the resolver sends one of
+        these a second per settled person and a commit rewrites every face and
+        outfit vector, which is ~90 MB an hour of eMMC per person in view."""
         with self._lock:
             if person_id not in self._people:
                 return
@@ -257,7 +260,8 @@ class PeopleStore:
             if new_encounter and last_seen is not None:
                 episodes = close_episode(episodes, last_seen.stamp)
             if latest_open(episodes) is None:
-                episodes = open_episode(episodes, self._episode_at(episodes, now, map_name, pose))
+                opened = open_episode(episodes, self._episode_at(episodes, now, map_name, pose))
+                episodes = _capped_episodes(opened)
             self._people[person_id] = replace(
                 profile,
                 last_seen=LastSeen(
@@ -275,7 +279,7 @@ class PeopleStore:
                 self._commit_index_locked()
 
     def flush(self, now: float | None = None) -> None:
-        """Write out the sightings and height samples deferred by the commit
+        """Write out the sightings and the template edits deferred by the commit
         interval, and close the episodes of people who have left (shutdown, or a
         node timer)."""
         stamp = _now(now)
@@ -439,7 +443,7 @@ class PeopleStore:
             if profile is None or not text.strip():
                 return None
             fact = self._build_fact_locked(profile, text, kind, now, attribution, source, confidence, importance)
-            self._people[person_id] = replace(profile, facts=_capped((*profile.facts, fact)))
+            self._people[person_id] = replace(profile, facts=_with_new_fact((*profile.facts, fact)))
             self._commit_person_locked(person_id, now)
             return fact.id
 
@@ -463,7 +467,7 @@ class PeopleStore:
             if profile is None or not text.strip():
                 return None
             fact = self._build_fact_locked(profile, text, kind, now, attribution, source, confidence, importance)
-            self._people[person_id] = replace(profile, facts=_capped(supersede(profile.facts, fact_id, fact)))
+            self._people[person_id] = replace(profile, facts=_with_new_fact(supersede(profile.facts, fact_id, fact)))
             self._commit_person_locked(person_id, now)
             self._audit_locked(AuditAction.FACT_SUPERSEDED, person_id, now, fact_id=fact_id, replacement=fact.id)
             return fact.id
@@ -482,7 +486,7 @@ class PeopleStore:
                 due=due,
                 source=source,
             )
-            self._people[person_id] = replace(profile, open_loops=(*profile.open_loops, loop))
+            self._people[person_id] = replace(profile, open_loops=_capped_loops((*profile.open_loops, loop)))
             self._commit_person_locked(person_id, now)
             return loop.id
 
@@ -515,7 +519,9 @@ class PeopleStore:
             if profile is None:
                 return None
             episode = replace(self._episode_at(profile.episodes, now, map_name, pose), present=present)
-            self._people[person_id] = replace(profile, episodes=open_episode(profile.episodes, episode))
+            self._people[person_id] = replace(
+                profile, episodes=_capped_episodes(open_episode(profile.episodes, episode))
+            )
             self._commit_person_locked(person_id, now)
             return episode.id
 
@@ -832,6 +838,8 @@ class PeopleStore:
         tmp = directory / "templates.npz.tmp"
         with tmp.open("wb") as handle:
             np.savez(handle, **payload)
+            handle.flush()
+            os.fsync(handle.fileno())  # savez leaves the handle open: a torn npz costs the whole gallery
         os.chmod(tmp, FILE_MODE)
         os.replace(tmp, directory / "templates.npz")
         self._templates_pending.discard(person_id)
@@ -869,14 +877,19 @@ class PeopleStore:
     # -------------------------------------------------------------- loading
     def _load(self) -> None:
         _secure_dir(self._root)
-        index = _read_json(self._root / "index.json")
-        if index is None:
+        path = self._root / "index.json"
+        index = _read_json(path)
+        if index is None and not path.exists():
+            return  # nothing has ever been written here
+        if index is None or index.get("version") != INDEX_VERSION:
+            # A torn write or an index a newer build wrote is not evidence that
+            # nobody is on file, and the next commit would name nobody either:
+            # the person directories are the roster until one parses again.
+            self._rebuild_roster(index)
             return
-        if index.get("version") != INDEX_VERSION:
-            return  # a future/older index is not ours to interpret; the roster starts empty
         self._collection_enabled = bool(index.get("collection_enabled", True))
         self._next_tag = int(index.get("next_tag", 1) or 1)
-        self._tombstones = {str(person_id) for person_id in index.get("tombstones", []) if person_id}
+        self._tombstones = _tombstone_ids(index)
         indexed = [
             str(entry.get("id", "")) for entry in index.get("people", []) if isinstance(entry, dict) and entry.get("id")
         ]
@@ -888,6 +901,26 @@ class PeopleStore:
             except Exception:  # noqa: BLE001 — a malformed record must not crash-loop a respawning node
                 continue  # whatever of them did load stays; the rest of the roster is not theirs to cost
         self._sweep_orphans(set(indexed) - self._tombstones)
+
+    def _rebuild_roster(self, index: dict | None) -> None:
+        """The roster read back off the directories themselves, keeping the
+        fields of an unversioned index that are safe to take at face value.
+        Nothing is swept on this boot: a directory this misses is one whose
+        profile did not parse now, not an orphan, and the index the next commit
+        writes names everyone who did — a superset of an unreadable one."""
+        if index is not None:
+            self._collection_enabled = bool(index.get("collection_enabled", True))
+            tag = index.get("next_tag")
+            self._next_tag = tag if isinstance(tag, int) and tag > 0 else self._next_tag
+            self._tombstones = _tombstone_ids(index)
+        for directory in sorted(self._root.glob("person_*")):
+            if not directory.is_dir() or directory.name in self._tombstones:
+                continue
+            try:
+                self._load_person(directory.name)
+            except Exception:  # noqa: BLE001 — one malformed record must not cost the rest of the roster
+                continue
+        self._audit_locked(AuditAction.REBUILT, "", time.time(), people=len(self._people))
 
     def _load_person(self, person_id: str) -> None:
         profile = self._load_profile(person_id)
@@ -973,9 +1006,7 @@ def _last_seen_dict(profile: Profile) -> LastSeenDict | None:
 def _merged_profile(source: Profile, target: Profile) -> Profile:
     """Everything the source knew, under the target's identity. Ids are
     re-issued so two profiles' ``f_01`` do not collide."""
-    facts = list(target.facts)
-    for fact in source.facts:
-        facts.append(replace(fact, id=next_sequence_id("f", (existing.id for existing in facts))))
+    facts = _merged_facts(source.facts, target.facts)
     episodes = list(target.episodes)
     for episode in source.episodes:
         episodes.append(replace(episode, id=next_sequence_id("e", (existing.id for existing in episodes))))
@@ -1001,22 +1032,62 @@ def _merged_profile(source: Profile, target: Profile) -> Profile:
             default=None,
         ),
         encounters=target.encounters + source.encounters,
-        facts=_capped(tuple(sorted(facts, key=lambda fact: fact.first_confirmed))),
-        episodes=tuple(sorted(episodes, key=lambda episode: episode.start)),
-        open_loops=tuple(loops),
+        facts=_capped(tuple(sorted(facts, key=lambda fact: fact.first_confirmed)), MAX_FACTS),
+        episodes=_capped_episodes(tuple(sorted(episodes, key=lambda episode: episode.start))),
+        open_loops=_capped_loops(tuple(loops)),
         name_candidates=(*target.name_candidates, *source.name_candidates)[-MAX_NAME_CANDIDATES:],
     )
 
 
-def _capped(facts: tuple[Fact, ...]) -> tuple[Fact, ...]:
+def _merged_facts(source: tuple[Fact, ...], target: tuple[Fact, ...]) -> list[Fact]:
+    """The source's facts under fresh ids. Their supersede pointers are remapped
+    through the same reissue: left alone, a source fact's ``f_02`` names one of
+    the target's facts instead of its own replacement."""
+    reissued: dict[str, str] = {}
+    taken = [fact.id for fact in target]
+    for fact in source:
+        reissued[fact.id] = next_sequence_id("f", taken)
+        taken.append(reissued[fact.id])
+    moved = [
+        replace(fact, id=reissued[fact.id], superseded_by=reissued.get(fact.superseded_by or "", fact.superseded_by))
+        for fact in source
+    ]
+    return [*target, *moved]
+
+
+def _with_new_fact(facts: tuple[Fact, ...]) -> tuple[Fact, ...]:
+    """``facts`` ends with the one just written, which is never a drop
+    candidate: an appearance note is the least important thing on file yet
+    :meth:`PeopleStore.add_fact` returns its id, and a replacement dropped at
+    the cap leaves the fact it superseded pointing at nothing."""
+    *older, added = facts
+    return (*_capped(tuple(older), MAX_FACTS - 1), added)
+
+
+def _capped(facts: tuple[Fact, ...], limit: int) -> tuple[Fact, ...]:
     """Facts only ever accumulate, so at the cap the record sheds what it can
     spare: superseded records oldest first, then the least important live ones.
     What the owner entered is never dropped, even over the cap."""
-    if len(facts) <= MAX_FACTS:
+    if len(facts) <= limit:
         return facts
     droppable = sorted((fact for fact in facts if fact.attribution is not Attribution.OWNER), key=_drop_order)
-    dropped = {fact.id for fact in droppable[: len(facts) - MAX_FACTS]}
+    dropped = {fact.id for fact in droppable[: len(facts) - limit]}
     return tuple(fact for fact in facts if fact.id not in dropped)
+
+
+def _capped_episodes(episodes: tuple[Episode, ...]) -> tuple[Episode, ...]:
+    """The oldest encounters go; the open one is always the last."""
+    return episodes[-MAX_EPISODES:]
+
+
+def _capped_loops(loops: tuple[OpenLoop, ...]) -> tuple[OpenLoop, ...]:
+    """An open loop is shown for as long as it is open, so at the cap the done
+    ones go first and only then the oldest still-open promise."""
+    if len(loops) <= MAX_OPEN_LOOPS:
+        return loops
+    droppable = sorted(loops, key=lambda loop: (not loop.done, loop.created))
+    dropped = {loop.id for loop in droppable[: len(loops) - MAX_OPEN_LOOPS]}
+    return tuple(loop for loop in loops if loop.id not in dropped)
 
 
 def _drop_order(fact: Fact) -> tuple[bool, float, float]:
@@ -1109,7 +1180,10 @@ def _secure_dir(path: Path) -> None:
 
 def _write_json(path: Path, payload: dict) -> None:
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    with tmp.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload))
+        handle.flush()
+        os.fsync(handle.fileno())  # a power cut between write and replace would leave a torn index
     os.chmod(tmp, FILE_MODE)
     os.replace(tmp, path)
 
@@ -1120,6 +1194,11 @@ def _read_json(path: Path) -> dict | None:
     except (OSError, json.JSONDecodeError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _tombstone_ids(index: dict) -> set[str]:
+    listed = index.get("tombstones")
+    return {str(person_id) for person_id in listed if person_id} if isinstance(listed, list) else set()
 
 
 def _now(now: float | None) -> float:

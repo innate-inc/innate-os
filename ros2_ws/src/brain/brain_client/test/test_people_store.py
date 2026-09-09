@@ -19,8 +19,10 @@ from brain_client.people import store as store_module
 from brain_client.people.memory import EPISODE_IDLE_SEC, Attribution, FactKind, FactSource, latest_open
 from brain_client.people.store import (
     EPISODE_SUMMARY_LIMIT,
+    MAX_EPISODES,
     MAX_FACE_TEMPLATES,
     MAX_FACTS,
+    MAX_OPEN_LOOPS,
     MAX_OUTFITS,
     MAX_THUMBNAILS,
     MAX_UNNAMED,
@@ -154,6 +156,7 @@ def test_templates_of_two_embedding_spaces_live_side_by_side_on_disk(store: Peop
         person_id, face(model="inspireface", embedding=np.ones(512, dtype=np.float32) / 512**0.5), None
     )
     store.add_outfit(person_id, OutfitTemplate(embedding=unit(0, 256), model="osnet", stamp=NOW))
+    store.flush(now=NOW)  # template edits ride the flush the node runs on its tick
 
     reopened = PeopleStore(tmp_path / "people")
     assert [t.embedding.shape for t in reopened.face_templates(person_id, "sface")] == [(128,)]
@@ -223,6 +226,31 @@ def test_height_samples_reach_the_disk_on_the_flush_not_once_per_sample(store: P
     os.utime(path, (0, 0))
     store.flush(now=NOW)
     assert path.stat().st_mtime == 0  # the flush that wrote them cleared the mark
+
+
+def test_a_burst_of_templates_costs_one_npz_write_and_not_one_per_template(store: PeopleStore, tmp_path, monkeypatch):
+    """A face and an outfit filed together rewrote the whole file twice, per
+    template interval, per person in view — the eMMC cost height samples were
+    already moved off."""
+    person_id = enrol(store)
+    written: list[str] = []
+    commit = store_module.PeopleStore._commit_templates_locked
+
+    def counted(self: PeopleStore, who: str) -> None:
+        written.append(who)
+        commit(self, who)
+
+    monkeypatch.setattr(store_module.PeopleStore, "_commit_templates_locked", counted)
+    for index in range(10):
+        store.add_face_template(person_id, face(stamp=NOW + index), None)
+        store.add_outfit(person_id, OutfitTemplate(embedding=unit(index), model="osnet", stamp=NOW + index))
+    assert written == []
+
+    store.flush(now=NOW + 10)
+    assert written == [person_id]
+    reopened = PeopleStore(tmp_path / "people")
+    assert len(reopened.face_templates(person_id, "sface")) == MAX_FACE_TEMPLATES
+    assert len(reopened.outfits(person_id, "osnet", NOW + 10)) == MAX_OUTFITS
 
 
 def test_a_sighting_moves_last_seen_and_counts_a_new_encounter_only_across_a_gap(store: PeopleStore):
@@ -403,6 +431,43 @@ def test_merge_reissues_colliding_record_ids(store: PeopleStore):
     profile = store.profile(target)
     assert profile is not None
     assert sorted(item.id for item in profile.facts) == ["f_01", "f_02"]
+
+
+def test_merge_remaps_the_supersede_pointers_it_reissues_ids_for(store: PeopleStore):
+    """A source fact's ``f_02`` names one of the target's facts once the ids
+    have been re-issued — a correction pointing at somebody else's record."""
+    source, target = enrol(store, NOW), enrol(store, NOW + 1)
+    store.add_fact(target, "likes pasta", FactKind.PREFERENCE, now=NOW, attribution=Attribution.SELF)
+    stale = store.add_fact(source, "drinks tea", FactKind.PREFERENCE, now=NOW, attribution=Attribution.SELF)
+    assert stale is not None
+    store.supersede_fact(
+        source, stale, "drinks coffee now", FactKind.PREFERENCE, now=NOW + 60, attribution=Attribution.SELF
+    )
+
+    assert store.merge(source, target, now=NOW + 120) is True
+    profile = store.profile(target)
+    assert profile is not None
+    by_text = {fact.text: fact for fact in profile.facts}
+    assert by_text["drinks tea"].superseded_by == by_text["drinks coffee now"].id
+    assert by_text["likes pasta"].superseded_by is None
+    digest = store.digest(target, NOW + 120)
+    assert digest is not None
+    assert sorted(item["text"] for item in digest["facts"]) == ["drinks coffee now", "likes pasta"]
+
+
+def test_a_merge_keeps_both_histories_under_the_caps(store: PeopleStore):
+    source, target = enrol(store, NOW), enrol(store, NOW + 1)
+    for person in (source, target):
+        for index in range(MAX_EPISODES // 2 + 1):
+            store.open_episode(person, NOW + index * 1000)
+        for index in range(MAX_OPEN_LOOPS // 2 + 1):
+            store.add_open_loop(person, f"loop {index}", now=NOW + index)
+
+    assert store.merge(source, target, now=NOW + 10) is True
+    profile = store.profile(target)
+    assert profile is not None
+    assert len(profile.episodes) == MAX_EPISODES
+    assert len(profile.open_loops) == MAX_OPEN_LOOPS
 
 
 def test_merge_gives_an_unnamed_target_the_source_name(store: PeopleStore):
@@ -614,6 +679,101 @@ def test_facts_stay_under_the_cap_and_never_drop_what_the_owner_entered(store: P
     assert "works upstairs" in texts  # owner-entered and the least important of all
     assert "drinks tea" not in texts  # superseded records go first
     assert "note 0" not in texts and texts[-1] == f"note {MAX_FACTS - 1}"
+
+
+def test_the_fact_just_added_is_never_the_one_the_cap_drops(store: PeopleStore):
+    """An appearance note comes in at the lowest importance in the system, so
+    at the cap it was dropped by the very call that returned its id."""
+    person_id = enrol(store)
+    for index in range(MAX_FACTS):
+        store.add_fact(
+            person_id,
+            f"note {index}",
+            FactKind.BIOGRAPHY,
+            now=NOW + index,
+            attribution=Attribution.SELF,
+            importance=0.9,
+        )
+    fact_id = store.add_fact(
+        person_id,
+        "red jacket today",
+        FactKind.APPEARANCE,
+        now=NOW + MAX_FACTS,
+        attribution=Attribution.ROBOT,
+        importance=0.2,
+    )
+    profile = store.profile(person_id)
+    assert profile is not None and fact_id is not None
+    assert len(profile.facts) == MAX_FACTS
+    assert fact_id in {fact.id for fact in profile.facts}
+
+
+def test_a_supersede_at_the_cap_never_drops_the_replacement_it_points_at(store: PeopleStore):
+    """The dropped replacement left the original pointing at an id that is not
+    there — invisible, because surfaceable() hides a superseded fact."""
+    person_id = enrol(store)
+    stale = store.add_fact(
+        person_id, "drinks tea", FactKind.PREFERENCE, now=NOW, attribution=Attribution.OWNER, importance=0.9
+    )
+    assert stale is not None
+    for index in range(MAX_FACTS - 1):
+        store.add_fact(
+            person_id,
+            f"note {index}",
+            FactKind.BIOGRAPHY,
+            now=NOW + index,
+            attribution=Attribution.SELF,
+            importance=0.9,
+        )
+    replacement = store.supersede_fact(
+        person_id,
+        stale,
+        "drinks coffee now",
+        FactKind.PREFERENCE,
+        now=NOW + MAX_FACTS,
+        attribution=Attribution.SELF,
+        importance=0.05,
+    )
+    profile = store.profile(person_id)
+    assert profile is not None
+    ids = {fact.id for fact in profile.facts}
+    assert len(profile.facts) == MAX_FACTS
+    assert replacement in ids
+    assert all(fact.superseded_by in ids for fact in profile.facts if fact.superseded_by is not None)
+
+
+def test_episodes_stay_under_the_cap_and_keep_the_most_recent(store: PeopleStore):
+    """One encounter is one episode: a regular of two years would otherwise
+    carry thousands in a person.json read whole on every load."""
+    person_id = enrol(store)
+    for index in range(MAX_EPISODES + 5):
+        store.open_episode(person_id, NOW + index * 1000)
+    profile = store.profile(person_id)
+    assert profile is not None
+    assert len(profile.episodes) == MAX_EPISODES
+    assert profile.episodes[-1].start == NOW + (MAX_EPISODES + 4) * 1000
+    assert latest_open(profile.episodes) is not None
+
+
+def test_open_loops_stay_under_the_cap_and_shed_the_completed_ones_first(store: PeopleStore):
+    person_id = enrol(store)
+    done = store.add_open_loop(person_id, "old and done", now=NOW)
+    assert done is not None
+    store.complete_open_loop(person_id, done, now=NOW + 1)
+    for index in range(MAX_OPEN_LOOPS):
+        store.add_open_loop(person_id, f"loop {index}", now=NOW + 2 + index)
+    profile = store.profile(person_id)
+    assert profile is not None
+    texts = [loop.text for loop in profile.open_loops]
+    assert len(texts) == MAX_OPEN_LOOPS
+    assert "old and done" not in texts and texts[-1] == f"loop {MAX_OPEN_LOOPS - 1}"
+
+    store.add_open_loop(person_id, "the newest promise", now=NOW + 500)
+    profile = store.profile(person_id)
+    assert profile is not None
+    texts = [loop.text for loop in profile.open_loops]
+    assert len(texts) == MAX_OPEN_LOOPS
+    assert texts[0] == "loop 1" and texts[-1] == "the newest promise"
 
 
 def test_an_episode_note_lands_on_the_open_episode_only(store: PeopleStore):
@@ -922,16 +1082,74 @@ def test_a_forget_that_cannot_delete_the_files_is_not_reported_as_done(store: Pe
     assert (tmp_path / "people" / person_id / "templates.npz").is_file()
 
 
-def test_an_unreadable_index_starts_an_empty_roster(store: PeopleStore, tmp_path):
-    enrol(store)
+def test_an_unreadable_index_rebuilds_the_roster_from_the_directories(store: PeopleStore, tmp_path):
+    """An index that does not parse is not evidence that nobody is on file: an
+    empty roster would commit an index naming nobody, and the boot after that
+    would sweep every person directory it no longer recognizes."""
+    first, second = enrol(store, NOW), enrol(store, NOW + 1)
+    store.rename(second, "Ana", "app", now=NOW + 1)
     (tmp_path / "people" / "index.json").write_text("]not json[")
-    assert PeopleStore(tmp_path / "people").person_ids() == []
+
+    reopened = PeopleStore(tmp_path / "people")
+    assert sorted(reopened.person_ids()) == sorted([first, second])
+    assert reopened.name_of(second) == "Ana"
+    assert (tmp_path / "people" / first).is_dir()
+
+    reopened.flush(now=NOW + 2)
+    named = [entry["id"] for entry in json.loads((tmp_path / "people" / "index.json").read_text())["people"]]
+    assert sorted(named) == sorted([first, second])
+    assert sorted(PeopleStore(tmp_path / "people").person_ids()) == sorted([first, second])
 
 
-def test_an_index_from_a_future_version_is_not_interpreted(store: PeopleStore, tmp_path):
-    enrol(store)
+def test_an_index_from_a_future_version_rebuilds_rather_than_forgetting_everyone(store: PeopleStore, tmp_path):
+    """A rollback after an INDEX_VERSION bump must not cost the roster its
+    people, their templates and their memory."""
+    person_id = enrol(store)
     path = tmp_path / "people" / "index.json"
     data = json.loads(path.read_text())
-    data["version"] = 99
+    data["version"] = store_module.INDEX_VERSION + 1
     path.write_text(json.dumps(data))
+
+    reopened = PeopleStore(tmp_path / "people")
+    assert reopened.person_ids() == [person_id]
+    assert len(reopened.face_templates(person_id, "sface")) == 1
+    assert json.loads(reopened.audit_path.read_text().splitlines()[-1])["action"] == "rebuilt"
+
+
+def test_a_rebuild_keeps_the_tombstones_and_the_collection_switch(store: PeopleStore, tmp_path):
+    """Person ids and track tags are never reused and "never collect" is the
+    owner's decision: all three survive an index this build cannot interpret."""
+    forgotten = enrol(store, NOW)
+    kept = enrol(store, NOW + 1)
+    store.forget(forgotten, now=NOW + 2)
+    store.set_collection(False, now=NOW + 3)
+    store.set_next_tag(7)
+    path = tmp_path / "people" / "index.json"
+    data = json.loads(path.read_text())
+    data["version"] = store_module.INDEX_VERSION + 1
+    path.write_text(json.dumps(data))
+
+    reopened = PeopleStore(tmp_path / "people")
+    assert reopened.person_ids() == [kept]
+    assert reopened.is_tombstoned(forgotten)
+    assert reopened.collection_enabled() is False
+    assert reopened.next_tag() == 7
+
+
+def test_a_flush_after_an_unreadable_index_never_leaves_an_empty_roster(store: PeopleStore, tmp_path):
+    """The store's own flush ends in an index commit, so an empty roster would
+    be written over the people on disk within one store tick."""
+    person_id = enrol(store)
+    (tmp_path / "people" / "index.json").write_text("")
+
+    reopened = PeopleStore(tmp_path / "people")
+    reopened.flush(now=NOW + 1)
+    assert json.loads((tmp_path / "people" / "index.json").read_text())["people"] != []
+
+    once_more = PeopleStore(tmp_path / "people")
+    assert once_more.person_ids() == [person_id]
+    assert (tmp_path / "people" / person_id / "person.json").is_file()
+
+
+def test_a_missing_index_still_starts_an_empty_roster(tmp_path):
     assert PeopleStore(tmp_path / "people").person_ids() == []

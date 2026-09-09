@@ -5,19 +5,20 @@
 The people node already detected everyone on this same stream, so the brain
 must load InspireFace only when that feed is really gone — an empty room is the
 common case, and the node says "nobody" at a heartbeat, not at 5 Hz.
-``gaze`` imports rclpy and the message packages at module level, so they are
-fabricated here for the duration of the import (the same ``sys.meta_path`` stub
-``test_people_node.py`` uses; a real installation wins).
+``gaze`` and ``people_feed`` import rclpy and the message packages at module
+level, so they are fabricated here for the duration of the import (the same
+``sys.meta_path`` stub ``test_people_node.py`` uses; a real installation wins).
 """
 
 from __future__ import annotations
 
 import importlib.abc
 import importlib.util
+import json
 import sys
 import time
 from collections.abc import MutableSequence
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -57,6 +58,7 @@ _STUB_FINDER = _StubFinder()
 sys.meta_path.append(_STUB_FINDER)
 
 from brain_client.perception import gaze  # noqa: E402 — needs the stubs above
+from brain_client.perception.people_feed import PeopleFeed  # noqa: E402 — same
 
 # The stubs live exactly as long as the import above: every other test module in
 # this session must go on finding ROS missing, because it is.
@@ -65,16 +67,12 @@ for _stubbed in [name for name, module in sys.modules.items() if isinstance(modu
     del sys.modules[_stubbed]
 
 
-class FakeFeed:
-    """PeopleFeed's read side: the latest snapshot, if it is young enough."""
-
-    def __init__(self, snapshot: dict | None):
-        self._snapshot = snapshot
-
-    def fresh(self, max_age_sec: float) -> dict | None:
-        if self._snapshot is None or time.time() - float(self._snapshot.get("stamp") or 0.0) > max_age_sec:
-            return None
-        return self._snapshot
+def feed(snapshot: dict) -> PeopleFeed:
+    """The real feed around a mock node, holding one snapshot: what the gaze
+    loop reads is ``PeopleFeed.fresh``, so that is what these exercise."""
+    made = PeopleFeed(MagicMock())
+    made._on_snapshot(SimpleNamespace(data=json.dumps(snapshot)))
+    return made
 
 
 def snapshot(age_sec: float, people: list[dict] | None = None) -> dict:
@@ -97,11 +95,11 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
     """The real tracker around a mock node, with the two things that reach
     hardware recorded rather than done."""
 
-    def build(feed) -> tuple[gaze.ROSPersonTracker, list[str]]:
+    def build(people: PeopleFeed | None) -> tuple[gaze.ROSPersonTracker, list[str]]:
         # Where ROS is installed these two build real nodes and fail before rclpy.init
         monkeypatch.setattr(gaze, "Head", MagicMock())
         monkeypatch.setattr(gaze, "Mobility", MagicMock())
-        made = gaze.ROSPersonTracker(MagicMock(), people=feed)
+        made = gaze.ROSPersonTracker(MagicMock(), people=people)
         calls: list[str] = []
         monkeypatch.setattr(made, "_ensure_detector", lambda: calls.append("detector"))
         monkeypatch.setattr(made._gaze, "recenter", lambda: calls.append("recenter"))
@@ -114,13 +112,13 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
 def test_an_idle_people_node_is_not_a_reason_to_load_a_second_face_model(tracker):
     """The node heartbeats every 5 s with nobody in view, so a 4 s-old empty
     snapshot is a live feed saying the room is empty — not a missing one."""
-    made, calls = tracker(FakeFeed(snapshot(4.0)))
+    made, calls = tracker(feed(snapshot(4.0)))
     made._track_once()
     assert calls == ["recenter"]
 
 
 def test_a_feed_that_has_said_nothing_for_three_heartbeats_earns_the_detector(tracker):
-    made, calls = tracker(FakeFeed(snapshot(gaze._FEED_ABSENT_SEC + 1.0)))
+    made, calls = tracker(feed(snapshot(gaze._FEED_ABSENT_SEC + 1.0)))
     made._track_once()
     assert "detector" in calls
 
@@ -132,6 +130,6 @@ def test_no_people_node_at_all_falls_back_to_detection(tracker):
 
 
 def test_a_fresh_snapshot_with_somebody_in_it_is_the_whole_answer(tracker):
-    made, calls = tracker(FakeFeed(snapshot(0.1, [person()])))
+    made, calls = tracker(feed(snapshot(0.1, [person()])))
     made._track_once()
     assert calls == ["track"]

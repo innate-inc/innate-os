@@ -174,13 +174,41 @@ export function isFresh(receivedAt, now) {
 }
 
 /**
+ * Whether an arriving snapshot may replace the one on screen. Only the latched
+ * replay — the first message after subscribing, which rws hands out however old
+ * it is — is judged on `stamp`, and an unstamped one never is. Live arrivals
+ * always pass: `stamp` is the robot's wall clock, so one NTP step backwards
+ * would otherwise blank the overlay for the life of the page (same replay-only
+ * policy as map/memories.js).
+ * @param {number} stamp the snapshot's robot-clock stamp, in seconds
+ * @param {number} nowS Date.now() / 1000
+ * @param {boolean} replay whether this is the first message since subscribing
+ * @returns {boolean}
+ */
+export function acceptsSnapshot(stamp, nowS, replay) {
+  if (!replay || !stamp) return true;
+  return nowS - stamp < PEOPLE_SNAPSHOT_FRESH_MS / 1000;
+}
+
+/** SimSession names the primary camera with a bare string, WebRtcSession with
+ * an {index, name} pair — both call the head camera "main". (A copy of
+ * teleop/trajectoryOverlay.js's private helper, which guards the same stage.)
+ * @param {any} session @returns {string | undefined} */
+export function primaryCameraName(session) {
+  const cam = session.primaryCamera;
+  return typeof cam === "string" ? cam : cam?.name;
+}
+
+/**
  * @param {HTMLElement} stage the .video-stage the video (or sim canvas) fills
  * @param {HTMLVideoElement | null} video the stage's video element on hardware;
  *   null in sim, where a Three.js canvas renders the head camera at stage size
  * @param {import("../rosClient.js").RosClient} ros
+ * @param {import("../webrtcSession.js").WebRtcSession} session the stage's
+ *   session, read for which camera it is currently showing
  * @returns {{ destroy: () => void }}
  */
-export function createPeopleOverlay(stage, video, ros) {
+export function createPeopleOverlay(stage, video, ros, session) {
   const canvas = document.createElement("canvas");
   canvas.className = "people-canvas";
   canvas.hidden = true;
@@ -194,6 +222,7 @@ export function createPeopleOverlay(stage, video, ros) {
   let staleTimer;
   let raf = 0;
   let sized = false;
+  let seen = false;
 
   function schedule() {
     if (!raf) raf = requestAnimationFrame(draw);
@@ -213,9 +242,9 @@ export function createPeopleOverlay(stage, video, ros) {
   function onSnapshot(payload) {
     const next = parseSnapshot(payload);
     if (!next) return;
-    // rws replays a latched topic on every (re)subscribe, so an older snapshot
-    // can arrive after a newer one. The newest frame wins.
-    if (snapshot && next.stamp && next.stamp < snapshot.stamp) return;
+    const replay = !seen;
+    seen = true;
+    if (!acceptsSnapshot(next.stamp, Date.now() / 1000, replay)) return;
     snapshot = next;
     receivedAt = performance.now();
     clearTimeout(staleTimer);
@@ -234,7 +263,9 @@ export function createPeopleOverlay(stage, video, ros) {
     canvas.hidden = true;
 
     const people = snapshot && isFresh(receivedAt, performance.now()) ? snapshot.people : [];
-    if (!people.length) return;
+    // The boxes are the head camera's frame: on the wrist camera or the sim's
+    // orbit view they would name whoever happens to be under that rectangle.
+    if (!people.length || primaryCameraName(session) !== "main") return;
 
     const cw = stage.clientWidth;
     const ch = stage.clientHeight;

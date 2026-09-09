@@ -18,16 +18,11 @@ class ForgetPerson(Skill):
     people: People
 
     def execute(self, who: str) -> SkillReturn:
-        done, message = self.people.forget(self._target(who))
+        # A tag is handed over as the view it was read from, so the node can refuse
+        # it once the track has changed hands; a name or id goes through untouched,
+        # since only the node can see that two people answer to one name.
+        target = self.people.find(who) if _TAG.match(who.strip()) else None
+        done, message = self.people.forget(target or who)
         if not done:
             self.fail(message or f"I don't know anyone called {who}.")
         return message or f"Done — I've forgotten {who}."
-
-    def _target(self, who: str) -> str:
-        """A tag stands for one track, so address the record behind it -- the tag
-        dies with the track, the id does not. Anything else goes through
-        untouched: only the node can see that two people answer to one name."""
-        if not _TAG.match(who.strip()):
-            return who
-        person = self.people.find(who)
-        return (person.person_id or who) if person is not None else who

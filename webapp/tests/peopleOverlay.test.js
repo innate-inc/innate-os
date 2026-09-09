@@ -10,10 +10,12 @@
 import assert from "node:assert/strict";
 import {
   STATE_COLORS,
+  acceptsSnapshot,
   boxRect,
   containRect,
   isFresh,
   parseSnapshot,
+  primaryCameraName,
   stateColor,
   tagLabel,
 } from "../js/agent/peopleOverlay.js";
@@ -176,6 +178,31 @@ test("a snapshot older than two seconds stops being drawn", () => {
   assert.equal(isFresh(arrived, arrived + 1_999), true);
   assert.equal(isFresh(arrived, arrived + 2_000), false);
   assert.equal(isFresh(arrived, arrived + 60_000), false);
+});
+
+test("the head camera is 'main' under both session shapes", () => {
+  // The boxes belong to the head camera's frame. The sim opens the Agent page
+  // on "orbit", and either stage can be switched to the wrist, so the draw
+  // guard reads this on every frame.
+  assert.equal(primaryCameraName({ primaryCamera: "main" }), "main");
+  assert.equal(primaryCameraName({ primaryCamera: { index: 0, name: "main" } }), "main");
+  assert.equal(primaryCameraName({ primaryCamera: "orbit" }), "orbit");
+  assert.equal(primaryCameraName({ primaryCamera: { index: 1, name: "wrist" } }), "wrist");
+  assert.equal(primaryCameraName({ primaryCamera: null }), undefined);
+});
+
+test("only the latched replay is judged on its stamp", () => {
+  // The stamp is the ROBOT's clock. An NTP step backwards mid-session makes
+  // every later snapshot look older than the one on screen; judging live
+  // arrivals on that would leave the page with no boxes for the rest of its
+  // life, so the gate is the first message and nothing after it.
+  assert.equal(acceptsSnapshot(NOW - 3_600, NOW, false), true);
+  assert.equal(acceptsSnapshot(NOW - 0.1, NOW, true), true);
+  // A page opened long after the robot last saw anyone must not paint that
+  // hours-old frame over the live camera.
+  assert.equal(acceptsSnapshot(NOW - 3_600, NOW, true), false);
+  // Nothing to judge: an unstamped snapshot draws rather than being dropped.
+  assert.equal(acceptsSnapshot(0, NOW, true), true);
 });
 
 console.log(`\n${passed} passed`);

@@ -106,7 +106,6 @@ def track(
     state: IdentityState = IdentityState.KNOWN,
     person_id: str | None = None,
     name: str | None = None,
-    runner_up_name: str | None = None,
     range_m: float | None = 1.8,
     lost: bool = False,
     last_seen: float = NOW,
@@ -117,7 +116,7 @@ def track(
         tag=tag,
         box=(0.1, 0.3, 0.93, 0.56),
         head_box=(0.1, 0.38, 0.26, 0.48),
-        identity=Identity(state=state, person_id=person_id, name=name, confidence=0.9, runner_up_name=runner_up_name),
+        identity=Identity(state=state, person_id=person_id, name=name, confidence=0.9),
         first_seen=NOW - 40.0,
         last_seen=last_seen,
         lost=lost,
@@ -200,10 +199,9 @@ def test_the_native_buffer_pairs_by_nearest_stamp_inside_the_drivers_skew_cap():
 
 
 def test_the_engine_runs_while_the_brain_is_active_or_always_on():
-    assert na.engine_active(enabled=True, always_on=False, brain_active=True)
-    assert na.engine_active(enabled=True, always_on=True, brain_active=False)
-    assert not na.engine_active(enabled=True, always_on=False, brain_active=False)
-    assert not na.engine_active(enabled=False, always_on=True, brain_active=True)
+    assert na.engine_active(always_on=False, brain_active=True)
+    assert na.engine_active(always_on=True, brain_active=False)
+    assert not na.engine_active(always_on=False, brain_active=False)
 
 
 def test_the_tick_is_sampled_at_the_engines_own_detect_cadence():
@@ -228,6 +226,53 @@ def test_the_lazy_native_topic_is_wanted_only_while_a_track_needs_a_face():
     assert not na.wants_native([], NOW)
 
 
+def test_the_native_subscription_is_held_instead_of_toggling_at_every_face_refresh():
+    """One settled person makes wants_native alternate at the refresh interval;
+    following it literally created and destroyed a subscription every few
+    seconds for as long as they stood there."""
+    held = na.native_deadline(True, NOW, 0.0, hold_sec=30.0)
+    assert held == NOW + 30.0
+    assert na.native_deadline(False, NOW + 6.0, held, hold_sec=30.0) == held  # refresh not due: still held
+    assert NOW + 6.0 < held
+    assert na.native_deadline(False, NOW + 31.0, held, hold_sec=30.0) == held  # and then it lapses
+    assert NOW + 31.0 > held
+
+
+def test_one_settled_person_never_makes_the_node_resubscribe(store, tmp_path, monkeypatch):
+    """The engine thread's answer alternates by design — a settled face ages
+    past the refresh, the native frame it earns renews it — and what the 1 Hz
+    timer acts on must not, or standing in the room costs a create/destroy pair
+    every few seconds."""
+    pytest.importorskip("cv2")
+    adapters = _adapters(store, tmp_path)
+    adapters._sensors.brain_active = True
+    answers = iter([True, False, True, False, False])
+    monkeypatch.setattr(na, "wants_native", lambda tracks, now, refresh_sec=5.0: next(answers, False))
+    now = time.time()
+    wanted: list[bool] = []
+    for step in range(5):
+        adapters._sensors._frame = na.CameraFrame(na.stamp_ns(step + 1, 0), _jpeg())
+        adapters._tick(now + step * 3.0)
+        wanted.append(adapters._want_native)
+    assert wanted == [True] * 5  # twelve seconds of alternation, one subscription
+
+
+def test_the_native_subscription_is_dropped_once_the_room_is_empty(store, tmp_path, monkeypatch):
+    pytest.importorskip("cv2")
+    adapters = _adapters(store, tmp_path)
+    adapters._sensors.brain_active = True
+    answers = iter([True])
+    monkeypatch.setattr(na, "wants_native", lambda tracks, now, refresh_sec=5.0: next(answers, False))
+    now = time.time()
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._tick(now)
+    assert adapters._want_native
+
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), _jpeg())
+    adapters._tick(now + na.NATIVE_HOLD_SEC + 1.0)
+    assert not adapters._want_native
+
+
 # ------------------------------------------------------------- the snapshot
 
 
@@ -246,14 +291,12 @@ def test_a_camera_that_went_quiet_claims_nobody_rather_than_freezing_the_scene()
 
 
 def test_a_one_person_two_tracks_clash_reads_as_conflict_without_losing_the_name():
-    tracks = [track(person_id="person_a", name="Theo", runner_up_name="Ana")]
+    tracks = [track(person_id="person_a", name="Theo")]
     resolutions = {"P3": Resolution(tag="P3", identity=tracks[0].identity, conflict_with="P1")}
     resolved = na.apply_conflicts(tracks, resolutions)
     assert resolved[0].identity.state is IdentityState.CONFLICT
     assert resolved[0].identity.person_id == "person_a"
     assert resolved[0].identity.name == "Theo"
-    # The rival is this person's own other track, not a second candidate.
-    assert resolved[0].identity.runner_up_name is None
 
 
 def test_a_track_without_a_clash_is_handed_through_untouched():
@@ -265,7 +308,7 @@ def test_a_track_without_a_clash_is_handed_through_untouched():
 
 def test_the_conflict_override_reaches_the_snapshot_and_raises_one_event(store):
     person_id = enrol(store, "Theo")
-    tracks = [track(state=IdentityState.KNOWN, person_id=person_id, name="Theo", runner_up_name="Ana")]
+    tracks = [track(state=IdentityState.KNOWN, person_id=person_id, name="Theo")]
     resolutions = {"P3": Resolution(tag="P3", identity=tracks[0].identity, conflict_with="P1")}
     resolved = na.apply_conflicts(tracks, resolutions)
 
@@ -273,17 +316,10 @@ def test_the_conflict_override_reaches_the_snapshot_and_raises_one_event(store):
     person = snapshot["people"][0]
     assert person["state"] == "conflict"
     assert person["name"] == "Theo" and person["person_id"] == person_id
-    assert person["runner_up_name"] is None
     assert person["digest"] is None  # memories stay shut while it is unclear whose they are
 
     events = PeopleEvents().emit(resolved, NOW)
     assert [event["kind"] for event in events if event["kind"] == EventKind.CONFLICT] == [EventKind.CONFLICT]
-
-
-def test_the_snapshot_carries_the_runner_up_so_a_conflict_can_be_worded(store):
-    person_id = enrol(store, "Theo")
-    tracks = [track(state=IdentityState.POSSIBLE, person_id=person_id, name="Theo", runner_up_name="Ana")]
-    assert build_snapshot(tracks, store, HEALTH, NOW)["people"][0]["runner_up_name"] == "Ana"
 
 
 def test_seek_faces_names_the_skill_that_would_get_the_face():
@@ -494,7 +530,9 @@ def test_the_store_reports_a_full_roster_so_the_settings_page_can_say_so(store):
         enrol(store)
     assert store.capacity_full() is True
     assert store.can_enrol() is False
-    assert len(store.person_ids()) == MAX_UNNAMED <= MAX_NAMED + MAX_UNNAMED
+    assert len(store.person_ids()) == MAX_UNNAMED
+    # Full on unnamed people alone: the named half of the roster is untouched.
+    assert MAX_NAMED > 0 and store.counts() == (0, MAX_UNNAMED)
 
 
 def test_a_collection_switch_is_not_a_full_roster(store):
@@ -509,7 +547,6 @@ def test_a_collection_switch_is_not_a_full_roster(store):
 def test_the_parameters_map_onto_the_config_the_node_builds():
     config = na.config_from_params(
         {
-            "enabled": True,
             "always_on": True,
             "seek_faces": True,
             "scribe": False,
@@ -535,7 +572,7 @@ def test_the_parameters_map_onto_the_config_the_node_builds():
 def test_the_defaults_are_the_documented_ones():
     config = na.config_from_params({})
     assert config == na.PeopleNodeConfig()
-    assert config.enabled and config.scribe and config.allow_model_download
+    assert config.scribe and config.allow_model_download
     assert not config.always_on and not config.seek_faces and not config.simulator_mode
     assert config.prefer_backend == "opencv"
     assert config.camera_height_m == 0.26
@@ -658,11 +695,21 @@ def test_a_track_that_only_lingers_lost_lets_the_node_back_onto_the_idle_clock(s
 
     adapters._sensors._frame = na.CameraFrame(na.stamp_ns(3, 0), jpeg)
     adapters._tick(last + 0.3)
-    assert adapters._last_tick == last  # idle: 0.5 Hz, so that tick was not due
+    assert adapters._sensors._frame is not None  # idle: 0.5 Hz, so the frame was never taken
 
 
 def _image(data: bytes, sec: int = 1):
     return SimpleNamespace(data=data, header=SimpleNamespace(stamp=SimpleNamespace(sec=sec, nanosec=0)))
+
+
+def _raw(jpeg: bytes, sec: int = 1):
+    """The same picture as an Image message: decoded here, since that is what
+    the driver publishes on the raw topic."""
+    cv2 = pytest.importorskip("cv2")
+    pixels = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    message = _image(pixels.tobytes(), sec)
+    message.encoding, message.width, message.height = "bgr8", pixels.shape[1], pixels.shape[0]
+    return message
 
 
 def test_the_motion_gate_lifts_an_empty_room_off_the_idle_clock(store, tmp_path, monkeypatch):
@@ -687,7 +734,36 @@ def test_the_motion_gate_lifts_an_empty_room_off_the_idle_clock(store, tmp_path,
     adapters._tick(now)
     adapters._sensors._frame = na.CameraFrame(na.stamp_ns(9, 0), _jpeg())
     adapters._tick(now + 0.3)  # idle would have skipped this; the burst does not
-    assert adapters._last_tick == now + 0.3
+    assert adapters._sensors._frame is None  # the tick ran and took the frame
+
+
+def test_the_motion_gate_is_fed_on_the_raw_tick_source_too(store, tmp_path, monkeypatch):
+    """The gate reads JPEG, so on tick_source=raw nothing ever reached it and
+    sensors.motion() was False for the life of the node."""
+    pytest.importorskip("cv2")
+    from brain_client.perception import motion_gate
+
+    clock = [1000.0]
+    monkeypatch.setattr(motion_gate.time, "monotonic", lambda: clock[0])
+    adapters = _adapters(store, tmp_path, frames=[[]])
+    now = time.time()
+
+    for step in range(3):
+        adapters._sensors._on_raw_image(_raw(_walking(step), sec=step + 1))
+        clock[0] += motion_gate.MOTION_SAMPLE_SEC
+    assert adapters._sensors.motion(now) is True
+
+
+def test_a_raw_frame_is_re_encoded_only_at_the_gates_own_sample_interval():
+    """One encode per gate sample is the price of feeding it; one per frame at
+    15 Hz would not be."""
+    pytest.importorskip("cv2")
+    raw = na.CameraFrame(1, np.full((8, 12, 3), 120, np.uint8).tobytes(), encoding="bgr8", width=12, height=8)
+    assert na.motion_jpeg(raw, sampled_at=0.0, now=na.MOTION_SAMPLE_SEC) is not None
+    assert na.motion_jpeg(raw, sampled_at=0.0, now=na.MOTION_SAMPLE_SEC / 2) is None
+    # A compressed frame is already what the gate reads, and is never throttled.
+    jpeg = na.CameraFrame(1, _jpeg())
+    assert na.motion_jpeg(jpeg, sampled_at=0.0, now=0.0) == jpeg.data
 
 
 def test_a_still_room_never_opens_the_motion_burst(store, tmp_path, monkeypatch):
@@ -701,6 +777,23 @@ def test_a_still_room_never_opens_the_motion_burst(store, tmp_path, monkeypatch)
         adapters._sensors._on_compressed_image(_image(_jpeg(), sec=step + 1))
         clock[0] += motion_gate.MOTION_SAMPLE_SEC
     assert adapters._sensors.motion(time.time()) is False
+
+
+def test_a_slow_tick_is_not_due_again_the_instant_it_returns(store, tmp_path, monkeypatch):
+    """The period is counted from when the work finished, not from when it
+    started: a tick slower than its own period would otherwise run back to back
+    exactly when the Jetson is too busy to afford it."""
+    pytest.importorskip("cv2")
+    adapters = _adapters(store, tmp_path)
+    adapters._sensors.brain_active = True
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    elapsed = iter([0.0, 0.9])  # monotonic before and after the engine's work
+    monkeypatch.setattr(na.time, "monotonic", lambda: next(elapsed, 0.9))
+    now = time.time()
+
+    adapters._tick(now)
+
+    assert adapters._last_tick == pytest.approx(now + 0.9, abs=1e-3)  # relative approx is useless at epoch scale
 
 
 def test_a_tick_the_engine_skipped_never_restamps_the_boxes_with_a_newer_frame(store, tmp_path):
@@ -882,7 +975,7 @@ def test_collection_off_keeps_the_conversation_out_of_the_scribe(store, tmp_path
     adapters._on_chat_out(SimpleNamespace(data=json.dumps({"sender": "robot", "text": "she asked for socks"})))
 
     assert adapters._chat.qsize() == 1  # nothing new was buffered
-    assert adapters._recalls.get_nowait() == (ana, "do you remember what Ana asked for?")
+    assert adapters._recalls.get_nowait() == (ana, "do you remember what Ana asked for?", False)
 
 
 def test_collection_off_never_sends_a_crop_for_a_description(store, tmp_path):
@@ -918,10 +1011,10 @@ def test_forgetting_someone_takes_back_the_description_and_the_recall_in_flight(
         calls.append(path)
         return {"candidates": [{"content": {"parts": [{"text": json.dumps({"description": "red jacket"})}]}}]}
 
-    scribe = SimpleNamespace(recall=lambda person_id, question: "Ana asked for the blue socks.")
+    scribe = SimpleNamespace(recall=lambda person_id, question, alone_in_view=False: "Ana asked for the blue socks.")
     adapters = _adapters(store, tmp_path, scribe=scribe, transport=transport)
     adapters._descriptions.put((ana, b"jpeg"))
-    adapters._recalls.put((ana, "what did Ana ask for?"))
+    adapters._recalls.put((ana, "what did Ana ask for?", True))
 
     assert _served(adapters, "_svc_forget", who=ana).success
     adapters._run_descriptions()
@@ -929,6 +1022,31 @@ def test_forgetting_someone_takes_back_the_description_and_the_recall_in_flight(
 
     assert calls == []
     assert list(adapters._pending_recalls) == []
+
+
+def test_a_mutation_answered_done_is_never_dropped_on_its_way_to_the_engine(store, tmp_path):
+    """The services answer "forgotten"/"merged" and hand the engine thread the
+    belief to drop or rebind. A bounded queue there silently discarded them
+    while the engine was busy, and the track went on publishing a name for
+    somebody the store no longer has (RFC section 10)."""
+    pytest.importorskip("cv2")
+    ana, theo = enrol(store, "Ana"), enrol(store, "Theo")
+    adapters = _adapters(store, tmp_path)
+    adapters._sensors.brain_active = True
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._tick(time.time())
+    tracked = adapters.tracks()[0]
+    with adapters._lock:
+        adapters._tracks = (replace(tracked, identity=Identity(state=IdentityState.FAMILIAR, person_id=ana)),)
+    for index in range(32):  # _offer, so this fills a bounded queue instead of blocking on one
+        na._offer(adapters._suppressions, f"P{index + 100}")
+        na._offer(adapters._rebinds, (f"person_older_{index}", theo))
+
+    assert _served(adapters, "_svc_forget", who="P1").success
+    assert _served(adapters, "_svc_merge", source_id=theo, target_id=enrol(store, "Zoe")).success
+
+    assert tracked.tag in list(adapters._suppressions.queue)
+    assert theo in [source for source, _ in adapters._rebinds.queue]
 
 
 def test_a_forget_is_never_dropped_behind_a_full_handoff(store, tmp_path):
@@ -1035,7 +1153,7 @@ def test_a_tick_with_no_frame_leaves_the_learned_line_for_the_tick_that_wakes_th
     adapters._apply_changes([Change(ChangeKind.NAME, "P1", None, line)])
 
     adapters._tick(now + 1.0)  # no frame arrived; the engine measured nothing
-    assert adapters._learned == {"P1": line}
+    assert {tag: text for tag, (text, _) in adapters._learned.items()} == {"P1": line}
 
     na.String.reset_mock()
     adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), jpeg)
@@ -1065,7 +1183,8 @@ def test_a_name_committed_mid_tick_waits_for_the_tick_that_can_announce_it(store
     adapters._tick(now)
 
     assert json.loads(na.String.call_args.kwargs["data"])["people"][0]["learned"] is None
-    assert adapters._learned == {"P1": line}  # kept for the tick that can raise its event
+    # kept for the tick that can raise its event
+    assert {tag: text for tag, (text, _) in adapters._learned.items()} == {"P1": line}
 
     del adapters._events.emit
     na.String.reset_mock()
@@ -1075,6 +1194,79 @@ def test_a_name_committed_mid_tick_waits_for_the_tick_that_can_announce_it(store
     assert any(payload.get("kind") == "name_learned" for payload in published)
     assert published[-1]["people"][0]["learned"] == line
     assert adapters._learned == {}
+
+
+def test_the_tick_ages_out_lines_and_enrolments_keyed_by_a_tag_that_left(store, tmp_path):
+    """Tags are never reused, so a line whose track is gone can never be shown
+    and an enrolment note can never be read again: only the tick sweeps them,
+    and the enrolment note used to wait for a chat message that may never come."""
+    pytest.importorskip("cv2")
+    adapters = _adapters(store, tmp_path)
+    now = time.time()
+    with adapters._lock:
+        adapters._learned = {"P9": ('P9 said "I\'m Zoe"', now - na.LEARNED_TTL_SEC - 1.0)}
+        adapters._hints = {"P8": ("two people are in view", now - na.HINT_TTL_SEC - 1.0)}
+        adapters._enrolling = {"P7": now - na.ENROLLING_SEC - 1.0, "P6": now}
+
+    adapters._tick(now)  # the brain is inactive: even an idle tick sweeps
+
+    assert adapters._learned == {} and adapters._hints == {}
+    assert list(adapters._enrolling) == ["P6"]
+
+
+def test_a_recall_asked_in_company_never_fetches_a_sensitive_fact(store, tmp_path):
+    """RFC 6.3: a sensitive fact surfaces through deep recall when the person
+    asks. The answer is spoken out loud, so with somebody else in the room it is
+    not even sent to Gemini."""
+    from brain_client.people.memory import Attribution, FactKind, FactSource
+
+    ana = enrol(store, "Ana")
+    store.add_fact(
+        ana,
+        "takes medication for her heart",
+        FactKind.SENSITIVE,
+        now=NOW,
+        attribution=Attribution.SELF,
+        source=FactSource("u_1", NOW, "I take medication for my heart", "P1"),
+    )
+    store.add_fact(
+        ana,
+        "likes pasta",
+        FactKind.PREFERENCE,
+        now=NOW,
+        attribution=Attribution.SELF,
+        source=FactSource("u_2", NOW, "I like pasta", "P1"),
+    )
+    sent: list[dict] = []
+
+    def transport(path: str, body: dict, timeout: float | None) -> dict:
+        sent.append(body)
+        return {"candidates": [{"content": {"parts": [{"text": json.dumps({"found": False, "answer": ""})}]}}]}
+
+    scribe = Scribe(store, transport, model="m", queue_path=tmp_path / "queue.jsonl")
+
+    scribe.recall(ana, "what did she say about her health?")
+    scribe.recall(ana, "what did she say about her health?", alone_in_view=True)
+
+    in_company, alone = (json.dumps(body) for body in sent)
+    assert "medication" not in in_company and "likes pasta" in in_company
+    assert "medication" in alone
+
+
+def test_a_recall_says_whether_the_subject_was_alone_when_they_asked(store, tmp_path):
+    ana, theo = enrol(store, "Ana"), enrol(store, "Theo")
+    adapters = _adapters(store, tmp_path, scribe=_fake_scribe(store, tmp_path))
+    alone = [track(tag="P1", person_id=ana, name="Ana")]
+    company = [*alone, track(tag="P2", person_id=theo, name="Theo")]
+
+    assert na.alone_in_view(ana, alone)
+    assert not na.alone_in_view(ana, company)
+    assert not na.alone_in_view(ana, [replace(alone[0], lost=True)])
+
+    adapters._maybe_recall("do you remember what Ana said?", company)
+    assert adapters._recalls.get_nowait()[2] is False
+    adapters._maybe_recall("do you remember what Ana said?", alone)
+    assert adapters._recalls.get_nowait()[2] is True
 
 
 def test_a_chat_line_that_is_not_a_memory_question_never_builds_the_roster(store, tmp_path):
@@ -1121,8 +1313,8 @@ def test_a_deep_recall_crosses_to_the_engine_thread_as_data(store, tmp_path):
     ana = enrol(store, "Ana")
     adapters = _adapters(store, tmp_path)
     adapters._events = _RecordingEvents()
-    scribe = SimpleNamespace(recall=lambda person_id, question: "Ana asked for the blue socks.")
-    adapters._recalls.put((ana, "what did Ana ask for?"))
+    scribe = SimpleNamespace(recall=lambda person_id, question, alone_in_view=False: "Ana asked for the blue socks.")
+    adapters._recalls.put((ana, "what did Ana ask for?", True))
 
     scribe_thread = threading.Thread(target=adapters._run_recalls, args=(scribe,), name="people_scribe")
     scribe_thread.start()

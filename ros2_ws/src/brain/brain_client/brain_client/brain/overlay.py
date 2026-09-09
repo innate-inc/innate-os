@@ -101,8 +101,8 @@ def _box_of(person: PersonInViewDict) -> tuple[int, int, int, int] | None:
     """Per-mille [ymin, xmin, ymax, xmax], the person's body box or, failing
     that, their head."""
     box = person.get("bbox") or person.get("head_bbox")
-    if not box or len(box) != 4:
-        return None
+    if not box or len(box) != 4 or not all(isinstance(value, (int, float)) for value in box):
+        return None  # the feed validates the wire, but a box that is not numbers must never reach _look
     ymin, xmin, ymax, xmax = (int(value) for value in box)
     if ymax <= ymin or xmax <= xmin:
         return None

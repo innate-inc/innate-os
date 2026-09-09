@@ -287,7 +287,16 @@ RESPONSE_SCHEMA = {
                     "referent": {"type": "STRING", "description": "tag the transcript names, else empty"},
                     "correction": {"type": "BOOLEAN"},
                 },
-                "required": ["who", "name", "confidence", "quote", "utterance", "introduction", "referent"],
+                "required": [
+                    "who",
+                    "name",
+                    "confidence",
+                    "quote",
+                    "utterance",
+                    "introduction",
+                    "referent",
+                    "correction",
+                ],
             },
         },
         "open_loops": {
@@ -442,10 +451,10 @@ _REMEMBER = re.compile(
 )
 _NOT_REMEMBER = re.compile(
     r"\b((do|did|does|would|will|can|could)\s?(not|n'?t)|never|stop|no need to|rather not)"
-    r"\s+(?:\w+\s+){0,3}?(remember|note|keep|memoris|memoriz)"
+    r"\s+(?:\w+\s+){0,3}?(remember|note|keep|memoris|memoriz|writ|jot|record)"
 )
 _RECALLING = re.compile(
-    r"\bremember when\b|\b(do|did|does|can|could|would|will|have)\s+(you|we|i|they|he|she)\s+"
+    r"\bremember when\b|\b(do|did|does|can|could|would|will|have)(n'?t)?\s+(you|we|i|they|he|she)\s+"
     r"(?:\w+\s+){0,2}?(remember|recall)\b"
 )
 _COUNTS = {2: "two", 3: "three", 4: "four", 5: "five"}
@@ -543,36 +552,56 @@ def _apply_name(
     if not referents:
         return Change(ChangeKind.REJECTED, name.who, None, name.name, reason="no tracked person for that tag")
     if name.introduction is Introduction.OTHER:
-        return _candidate(name, referents, store, now, reason="the words are not an introduction")
+        return _candidate(name, referents, quoted, store, now, reason="the words are not an introduction")
     if quoted is None:
         # Without the line it came from there is no way to check who was in
         # view when it was said, and a name is never committed on trust.
-        return _candidate(name, referents, store, now, reason="the quoted words are not in this window")
+        return _candidate(name, referents, quoted, store, now, reason="the quoted words are not in this window")
     if len(referents) > 1:
-        return _candidate(name, referents, store, now, reason="more than one person could be the referent")
+        return _candidate(name, referents, quoted, store, now, reason="more than one person could be the referent")
     view = referents[0]
     if view.person_id is None:
         return Change(ChangeKind.REJECTED, view.tag, None, name.name, reason="no tracked person for that tag")
     person_id = view.person_id
     if not view.nameable:
-        return _candidate(name, referents, store, now, reason="the track is neither confirmed nor enrolling")
+        return _candidate(name, referents, quoted, store, now, reason="the track is neither confirmed nor enrolling")
     # RFC 6.3: the robot's own use of a name is reinforcing evidence, never the
     # trigger — it may only settle a name a person was already heard to give.
     if quoted.speaker is Speaker.ROBOT and not _heard_before(store, person_id, name.name):
-        return _candidate(name, referents, store, now, reason="only the robot said the name, and nobody else has")
-    on_file = store.name_of(person_id)
+        return _candidate(
+            name, referents, quoted, store, now, reason="only the robot said the name, and nobody else has"
+        )
+    profile = store.profile(person_id)
+    on_file = profile.names.preferred if profile is not None else None
+    consent = profile.consent.how if profile is not None else None
     correcting = bool(on_file) and on_file != name.name
     if correcting and not (name.correction and name.introduction in (Introduction.SELF, Introduction.OWNER)):
         return _candidate(
             name,
             referents,
+            quoted,
             store,
             now,
             reason=f"another name is on file ({on_file})",
             hint=f"heard '{name.quote}' but {view.tag} is already {on_file}; ask if that is a correction",
         )
-    source = ConsentPath.APP if name.introduction is Introduction.OWNER else ConsentPath.CONVERSATION
-    store.rename(person_id, name.name, str(source), now=now)
+    # RFC 6.3: the owner's app entry always wins, so a conversation may talk
+    # over it only when the owner is the one talking.
+    if correcting and consent == ConsentPath.APP and name.introduction is not Introduction.OWNER:
+        return _candidate(
+            name,
+            referents,
+            quoted,
+            store,
+            now,
+            reason=f"the app named {view.tag} {on_file}",
+            hint=f"heard '{name.quote}' but the app named {view.tag} {on_file}; the owner changes that in the app",
+        )
+    # A name heard as it already stands keeps the path it was set on: restamping
+    # an app entry as conversational would open the gate above to the next one.
+    source = consent if consent and on_file == name.name else str(ConsentPath.CONVERSATION)
+    if not store.rename(person_id, name.name, source, now=now):
+        return Change(ChangeKind.REJECTED, view.tag, person_id, name.name, reason="the store refused the name")
     store.clear_name_candidates(person_id, now)
     if correcting:
         return Change(
@@ -593,19 +622,24 @@ def _apply_name(
 def _candidate(
     name: ScribeName,
     referents: Sequence[TagView],
+    quoted: Utterance | None,
     store: PeopleStore,
     now: float,
     *,
     reason: str,
     hint: str | None = None,
 ) -> Change:
-    """A name that did not meet the commit rules: stored against every person
-    it could belong to, and surfaced as a question the agent may ask."""
-    for view in referents:
-        if view.person_id is not None:
-            store.add_name_candidate(
-                view.person_id, name.name, now=now, quote=name.quote, tag=view.tag, confidence=name.confidence
-            )
+    """A name that did not meet the commit rules: surfaced as a question the
+    agent may ask, and filed against every person it could belong to — but only
+    when a person said it. A candidate carries no speaker, so one filed from the
+    robot's own line reads back as the introduction :func:`_heard_before` looks
+    for, and the robot's next mention commits a name nobody ever gave."""
+    if quoted is not None and quoted.speaker is Speaker.USER:
+        for view in referents:
+            if view.person_id is not None:
+                store.add_name_candidate(
+                    view.person_id, name.name, now=now, quote=name.quote, tag=view.tag, confidence=name.confidence
+                )
     return Change(
         ChangeKind.NAME_CANDIDATE,
         referents[0].tag,
@@ -735,8 +769,14 @@ def _quoted_message(window: Window, utterance_id: str, quote: str) -> Utterance 
     if utterance_id:
         cited = next((message for message in window.messages if message.id == utterance_id), None)
         if cited is not None:
-            return cited if needle in _normalize(cited.text) else None
-    return next((message for message in window.messages if needle in _normalize(message.text)), None)
+            return cited if _quotes(cited.text, needle) else None
+    return next((message for message in window.messages if _quotes(message.text, needle)), None)
+
+
+def _quotes(text: str, needle: str) -> bool:
+    """Whether the line really carries those words. On word bounds: a bare
+    substring makes "Ana" a quote of "do you like bananas"."""
+    return re.search(rf"\b{re.escape(needle)}\b", _normalize(text)) is not None
 
 
 def asks_to_remember(text: str) -> bool:
@@ -1120,15 +1160,23 @@ class Scribe:
         self._buffer.forget(person_id)
         self._queue.forget(person_id)
 
-    def recall(self, person_id: str, question: str) -> str:
-        """Deep recall over one person's memory; empty when it adds nothing."""
+    def recall(self, person_id: str, question: str, *, alone_in_view: bool = False) -> str:
+        """Deep recall over one person's memory; empty when it adds nothing.
+
+        ``alone_in_view`` is whether the subject is the only person the robot
+        can see. RFC 6.3 lets a sensitive fact surface through deep recall when
+        the person asks, so with anybody else there it is not even sent: an
+        answer is spoken out loud, and the room would hear it."""
         profile = self._store.profile(person_id)
         if profile is None or self._transport is None or self._revoked(person_id):
             return ""
+        record = profile_to_dict(profile)
+        if not alone_in_view:
+            record["facts"] = [fact for fact in record["facts"] if fact.get("kind") != FactKind.SENSITIVE]
         try:
             response = self._transport(
                 GENERATE_PATH.format(model=self._model),
-                recall_request(profile_to_dict(profile), question),
+                recall_request(record, question),
                 RECALL_TIMEOUT_SEC,
             )
         except Exception as error:  # noqa: BLE001 — a failed recall is silence, never a broken turn
@@ -1137,11 +1185,13 @@ class Scribe:
         return parse_recall(response)
 
     def _commit(self, output: ScribeOutput, window: Window, now: float) -> list[Change]:
-        """The proposal turned into writes, gated a second time: a forget that
-        landed during the Gemini call takes back what that call was about to
-        write."""
+        """The proposal turned into writes, gated a second time: a forget — or
+        the owner switching collection off — during the Gemini call takes back
+        what that call was about to write."""
         window = self._live(window)
-        return apply(output, window, self._store, now) if window.messages else []
+        if not window.messages or not self._store.collection_enabled():
+            return []
+        return apply(output, window, self._store, now)
 
     def _live(self, window: Window) -> Window:
         return without_revoked(window, self._revoked)

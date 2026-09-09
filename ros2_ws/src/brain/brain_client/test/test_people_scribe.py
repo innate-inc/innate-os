@@ -169,6 +169,23 @@ def test_the_request_carries_the_system_text_the_window_and_the_schema():
     assert body["generationConfig"]["responseMimeType"] == "application/json"
 
 
+def test_the_schema_asks_for_every_field_the_name_rules_read():
+    """A field the schema does not require is a field Gemini omits: with
+    "correction" optional the spoken-correction path never runs in production,
+    however many tests build a ScribeName with the flag already set."""
+    schema = build_request(Window(()))["generationConfig"]["responseSchema"]
+    assert set(schema["properties"]["name_candidates"]["items"]["required"]) == {
+        "who",
+        "name",
+        "confidence",
+        "quote",
+        "utterance",
+        "introduction",
+        "referent",
+        "correction",
+    }
+
+
 def test_the_window_text_names_the_people_their_state_and_the_facts_on_file(store: PeopleStore):
     person_id = enrol(store)
     store.add_fact(person_id, "likes pasta", FactKind.PREFERENCE, now=NOW, attribution=Attribution.SELF)
@@ -401,6 +418,18 @@ def test_a_quote_the_line_it_cites_does_not_contain_is_not_a_quote(store: People
     assert store.name_of(person_id) is None
 
 
+def test_a_quote_buried_inside_a_longer_word_is_not_a_quote(store: PeopleStore):
+    """The fallback match was a bare substring of punctuation-stripped text, so
+    "Ana" was quoted from "do you like bananas" — and the line it picks decides
+    who was in view, who consented, and who a name belongs to."""
+    person_id = enrol(store)
+    window = Window((said("do you like bananas", in_view=(view("P2", person_id),)),))
+    output = ScribeOutput(facts=(ScribeFact(who="P2", text="is called Ana", quote="Ana", utterance=""),))
+    changes = apply(output, window, store, NOW)
+    assert changes[0].kind is ChangeKind.REJECTED
+    assert changes[0].reason == "the quote is not in this window"
+
+
 def test_the_scribe_supersedes_the_fact_it_names(store: PeopleStore):
     person_id = enrol(store)
     old = store.add_fact(person_id, "drinks tea", FactKind.PREFERENCE, now=NOW, attribution=Attribution.SELF)
@@ -588,6 +617,27 @@ def test_only_an_affirmative_request_to_remember_reads_as_consent():
     assert not asks_to_remember("do you remember my name?")
     assert not asks_to_remember("remember when we talked about it")
     assert not asks_to_remember("I have diabetes")
+    assert not asks_to_remember("don't write that down")
+    assert not asks_to_remember("never write this down")
+    assert not asks_to_remember("didn't you write that down")
+    assert not asks_to_remember("no need to jot that down")
+
+
+def test_a_refusal_to_write_it_down_is_a_refusal(store: PeopleStore):
+    """The negation only reached "remember/note/keep", while the request side
+    also reads "write this down" — so a refused diagnosis was written down."""
+    person_id = enrol(store)
+    seen = (view("P2", person_id),)
+    for refusal in ("I'd rather you didn't write that down", "never write this down"):
+        window = Window(
+            (
+                said("I have diabetes", id_="u_1", in_view=seen),
+                said(refusal, id_="u_2", stamp=NOW + 1, in_view=seen),
+            )
+        )
+        assert apply(diagnosis(), window, store, NOW)[0].kind is ChangeKind.REJECTED
+    profile = store.profile(person_id)
+    assert profile is not None and profile.facts == ()
 
 
 def test_a_second_person_in_view_makes_the_remember_request_somebody_elses(store: PeopleStore):
@@ -802,9 +852,37 @@ def test_the_robot_confirming_a_name_already_heard_commits_it(store: PeopleStore
     assert store.name_of(second) is None
 
 
+def test_a_name_only_the_robot_ever_said_never_settles_itself(store: PeopleStore):
+    """A candidate records no speaker, so one filed from the robot's own line
+    read back as the human introduction ``_heard_before`` looks for: the agent
+    guessing "Ana" out loud twice committed a name nobody ever gave."""
+    person_id = enrol(store)
+    seen = (view("P2", person_id),)
+    for index in range(2):
+        guess = said("Nice to meet you, Ana", id_=f"u_{index}", stamp=NOW + index, speaker=Speaker.ROBOT, in_view=seen)
+        changes = apply(
+            name_output(quote="Nice to meet you, Ana", utterance=f"u_{index}"), Window((guess,)), store, NOW + index
+        )
+        assert changes[0].kind is ChangeKind.NAME_CANDIDATE
+    assert store.name_of(person_id) is None
+    profile = store.profile(person_id)
+    assert profile is not None and profile.name_candidates == ()
+
+
 def test_a_name_never_commits_onto_an_unsettled_track(store: PeopleStore):
     person_id = enrol(store)
     window = Window((said("Hi, I'm Ana", in_view=(view("P2", person_id, state=IdentityState.UNKNOWN),)),))
+    changes = apply(name_output(), window, store, NOW)
+    assert changes[0].kind is ChangeKind.NAME_CANDIDATE
+    assert changes[0].reason == "the track is neither confirmed nor enrolling"
+    assert store.name_of(person_id) is None
+
+
+def test_a_possible_match_cannot_take_a_name(store: PeopleStore):
+    """RFC 5.3.6: POSSIBLE is the body tracker's guess with no face behind it.
+    A name landing there names whoever the tracker happens to be following."""
+    person_id = enrol(store)
+    window = Window((said("Hi, I'm Ana", in_view=(view("P2", person_id, state=IdentityState.POSSIBLE),)),))
     changes = apply(name_output(), window, store, NOW)
     assert changes[0].kind is ChangeKind.NAME_CANDIDATE
     assert changes[0].reason == "the track is neither confirmed nor enrolling"
@@ -834,7 +912,10 @@ def test_a_correction_by_the_person_supersedes_the_name_with_an_audit_line(store
     assert json.loads(store.audit_path.read_text().splitlines()[-1])["action"] == "renamed"
 
 
-def test_the_owner_naming_someone_wins_and_records_the_app_consent_path(store: PeopleStore):
+def test_the_owner_naming_someone_out_loud_wins_but_is_still_a_conversation(store: PeopleStore):
+    """The owner speaking overrides a name on file, and the consent path says
+    where it came from: stamping the app path over a spoken naming makes it
+    indistinguishable from the entry the owner typed into the app."""
     person_id = enrol(store)
     store.rename(person_id, "Ana", "conversation", now=NOW)
     window = Window((said("her name is Anna", in_view=(view("P2", person_id, name="Ana"),)),))
@@ -845,7 +926,47 @@ def test_the_owner_naming_someone_wins_and_records_the_app_consent_path(store: P
         NOW + 60,
     )
     profile = store.profile(person_id)
-    assert profile is not None and profile.names.preferred == "Anna" and profile.consent.how == "app"
+    assert profile is not None and profile.names.preferred == "Anna" and profile.consent.how == "conversation"
+
+
+def test_a_conversation_never_overwrites_the_name_the_app_set(store: PeopleStore):
+    """RFC 6.3: the owner's app entry wins. Only the owner may talk over it."""
+    person_id = enrol(store)
+    store.rename(person_id, "Ana", "app", now=NOW)
+    seen = (view("P2", person_id, name="Ana"),)
+    correction = name_output(name="Anna", quote="it's Anna, two n's", correction=True)
+
+    changes = apply(correction, Window((said("it's Anna, two n's", in_view=seen),)), store, NOW + 60)
+    assert changes[0].kind is ChangeKind.NAME_CANDIDATE
+    assert store.name_of(person_id) == "Ana"
+    profile = store.profile(person_id)
+    assert profile is not None and profile.consent.how == "app"
+
+    owner = name_output(name="Anna", quote="her name is Anna", introduction=Introduction.OWNER, correction=True)
+    changes = apply(owner, Window((said("her name is Anna", in_view=seen),)), store, NOW + 120)
+    assert changes[0].kind is ChangeKind.NAME
+    assert store.name_of(person_id) == "Anna"
+
+
+def test_hearing_the_app_name_again_leaves_the_app_entry_where_it_was(store: PeopleStore):
+    """Restamping the entry as conversational because somebody said the name it
+    already holds would hand the next self-correction the entry the gate above
+    just refused it."""
+    person_id = enrol(store)
+    store.rename(person_id, "Ana", "app", now=NOW)
+    window = Window((said("Hi, I'm Ana", in_view=(view("P2", person_id, name="Ana"),)),))
+    assert apply(name_output(), window, store, NOW + 10)[0].kind is ChangeKind.NAME
+    profile = store.profile(person_id)
+    assert profile is not None and profile.consent.how == "app"
+
+
+def test_a_rename_the_store_refuses_is_never_announced(store: PeopleStore):
+    """The write's answer was dropped, so a name that was never stored still
+    came back as a NAME change and the robot announced it."""
+    window = Window((said("Hi, I'm Ana", in_view=(view("P2", "person_gone"),)),))
+    changes = apply(name_output(), window, store, NOW)
+    assert changes[0].kind is ChangeKind.REJECTED
+    assert changes[0].reason == "the store refused the name"
 
 
 def test_words_that_are_not_an_introduction_never_commit_a_name(store: PeopleStore):
@@ -1165,6 +1286,21 @@ def test_collection_off_buffers_nothing_and_spends_nothing(store: PeopleStore, t
     assert scribe.observe(said("and jazz", id_="u_2", stamp=NOW + 1, in_view=(view("P2", person_id),)), NOW + 1) == []
     assert scribe.tick(NOW + WINDOW_IDLE_SEC + 1) == []
     assert bodies == []
+    profile = store.profile(person_id)
+    assert profile is not None and profile.facts == ()
+
+
+def test_collection_switched_off_during_the_call_writes_nothing(store: PeopleStore, tmp_path):
+    """The switch was read when the window was taken and never again, so the
+    answer to a call that outlived it was still written down."""
+    person_id = enrol(store)
+
+    def transport(path: str, body: dict, timeout: float | None) -> dict:
+        store.set_collection(False)
+        return response(EMPTY | {"appearance_notes": [{"who": "P2", "text": "red jacket"}]})
+
+    scribe = Scribe(store, transport, model="gemini-flash", queue_path=tmp_path / "queue.jsonl")
+    assert scribe.process(Window((said("hello", in_view=(view("P2", person_id),)),)), NOW) == []
     profile = store.profile(person_id)
     assert profile is not None and profile.facts == ()
 

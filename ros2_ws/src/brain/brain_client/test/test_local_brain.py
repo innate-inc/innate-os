@@ -1218,6 +1218,32 @@ def test_a_stale_snapshot_never_puts_names_on_a_current_frame(agent_factory, mon
     assert "not drawn this turn" in text
 
 
+def test_an_undecodable_paired_frame_is_not_sent_with_boxes_claimed(agent_factory, monkeypatch):
+    """draw_people answers None when the JPEG will not decode: the turn then
+    takes the freshest frame and the block says the positions are not drawn."""
+    from brain_client.brain import overlay
+
+    agent = with_people(agent_factory, people_snapshot(), monkeypatch)
+    monkeypatch.setattr(overlay, "draw_people", lambda jpeg, snapshot: None)
+    text, frames = agent._look([])
+
+    assert frames[0] == (FrameLabel.HEAD, JPEG)
+    assert "People in view (positions not drawn this turn):" in text
+
+
+def test_a_snapshot_with_nothing_drawable_never_claims_the_boxes_are_there(agent_factory, monkeypatch):
+    """draw_people hands back the frame it was given when no box is drawable
+    (every track lost, or none has one) — same picture, so nothing was marked."""
+    from brain_client.brain import overlay
+
+    agent = with_people(agent_factory, people_snapshot(), monkeypatch)
+    monkeypatch.setattr(overlay, "draw_people", lambda jpeg, snapshot: jpeg)
+    text, frames = agent._look([])
+
+    assert frames[0] == (FrameLabel.HEAD, JPEG)
+    assert "People in view (positions not drawn this turn):" in text
+
+
 def test_no_people_feed_leaves_the_turn_exactly_as_it_was(agent_factory):
     agent, _ = agent_factory()
     text, frames = agent._look([])

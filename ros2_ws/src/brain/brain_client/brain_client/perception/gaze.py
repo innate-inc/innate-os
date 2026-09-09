@@ -5,8 +5,8 @@ Gaze System - Person tracking for MARS robot.
 
 Features:
 - Follows whoever the people node is watching (its boxes ride /brain/people),
-  and falls back to InspireFace detection only while that feed is absent — an
-  idle node saying "nobody" is an answer, and never loads a second face model
+  and falls back to InspireFace detection only while that feed is absent — see
+  perception/gaze_targets.py for why that feed is the whole answer
 - Wheel-based panning (robot turns to face people)
 
 Hardware: MARS robot
@@ -48,7 +48,7 @@ class FaceDetector:
     """Face detector using InspireFace SDK."""
 
     def __init__(self, min_confidence: float = 0.5):
-        import inspireface as isf  # deferred: gaze driven by the people node never loads the SDK
+        import inspireface as isf  # deferred: the fallback path is the only one that loads the SDK
 
         param = isf.SessionCustomParameter()
         self._session = isf.InspireFaceSession(
@@ -248,8 +248,7 @@ class ROSPersonTracker:
         self._thread.start()
 
     def _ensure_detector(self) -> None:
-        """Load InspireFace once, in the background, and only when the people
-        node is not already telling us where to look."""
+        """Load InspireFace once, in the background, on the fallback path only."""
         if self._detector_requested:
             return
         self._detector_requested = True
@@ -302,10 +301,6 @@ class ROSPersonTracker:
         self._recenter_when_idle()
 
     def _follow_snapshot(self, snapshot: PeopleSnapshotDict) -> None:
-        """The people node's engine detected and chose everyone in view on this
-        same stream, so a fresh snapshot is the whole answer: running a second
-        face model to reach it would cost the Jetson a model for nothing.
-        """
         box = gaze_targets.gaze_box(snapshot)
         if box is None:
             self._recenter_when_idle()

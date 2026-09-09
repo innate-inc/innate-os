@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import datetime
+from typing import TypeGuard
 
 from brain_client.people.types import (
     AttentionDict,
@@ -42,6 +43,7 @@ _MAX_FACTS = 4
 _MAX_RECENT = 4
 _STALE_SNAPSHOT_SEC = 10.0  # older, and "in view" is a claim about a scene that has moved on
 _LAST_SEEN_QUIET_SEC = 60.0  # they are standing here: "last seen just now" is noise
+_JUST_LEFT_SEC = 10.0  # longer gone than this and the block stops mentioning them at all
 _RECENCY_HALF_LIFE_SEC = 30 * 86400.0
 _RECENCY_FLOOR = 0.3  # an old fact stays rankable, so importance can still win
 _CONTEXT_WEIGHT = 1.5  # a fact the conversation is about outranks one twice as important
@@ -100,10 +102,17 @@ def frame_stamp_ns(snapshot: PeopleSnapshotDict) -> int | None:
 def _in_view(snapshot: PeopleSnapshotDict, now: float) -> list[PersonInViewDict]:
     """The snapshot's people, live ones first — empty once the snapshot is too
     old to describe the scene the frame shows."""
-    if now - float(snapshot.get("stamp") or 0.0) > _STALE_SNAPSHOT_SEC:
+    if now - _number(snapshot.get("stamp")) > _STALE_SNAPSHOT_SEC:
         return []
     people = snapshot.get("people") or []
-    return [p for p in people if not p.get("lost")] + [p for p in people if p.get("lost")]
+    return [p for p in people if not p.get("lost")] + [p for p in people if _just_left(p)]
+
+
+def _just_left(person: PersonInViewDict) -> bool:
+    """A lost track rides the snapshot for a minute so it can be re-associated;
+    "just left view" stops being true long before that runs out."""
+    lost_sec = person.get("lost_sec")
+    return bool(person.get("lost")) and (lost_sec is None or _number(lost_sec) <= _JUST_LEFT_SEC)
 
 
 def _people_lines(people: list[PersonInViewDict], now: float, context: set[str], boxes_drawn: bool) -> list[str]:
@@ -181,17 +190,14 @@ def _identity_phrase(person: PersonInViewDict) -> str:
         return f"{tag} = probably {name} (by {evidence}{unseen})"
     if state in (IdentityState.FAMILIAR, IdentityState.KNOWN, IdentityState.POSSIBLE):
         return f"{tag} = someone you have met before, no name on file (by {evidence})"
-    return f"{tag} = unknown (tracked {_duration(float(person.get('tracked_sec') or 0.0))})"
+    return f"{tag} = unknown (tracked {_duration(_number(person.get('tracked_sec')))})"
 
 
 def _conflict_candidates(person: PersonInViewDict) -> str:
-    runner_up = _clean(person.get("runner_up_name"))
-    names = [name for name in (_clean(person.get("name")), runner_up) if name]
-    if len(names) >= 2:
-        return f"{names[0]} or {names[1]}"
-    if names:
-        return f"maybe {names[0]}, the evidence disagrees"
-    return "the evidence disagrees"
+    """A conflict is one person on two live tracks, so there is never a second
+    name to offer — only the belief the resolver kept, and the doubt."""
+    name = _clean(person.get("name"))
+    return f"maybe {name}, the evidence disagrees" if name else "the evidence disagrees"
 
 
 def _evidence_text(person: PersonInViewDict) -> str:
@@ -205,9 +211,14 @@ def _box_text(person: PersonInViewDict) -> str:
     pointed at with go_to_point_in_view — only ever printed beside the very
     frame it was measured on."""
     box = person.get("bbox") or person.get("head_bbox")
-    if not box or len(box) != 4:
+    if not box or len(box) != 4 or not all(_is_number(edge) for edge in box):
         return ""
-    return "[" + ", ".join(str(int(value)) for value in box) + "]"
+    ymin, xmin, ymax, xmax = (int(edge) for edge in box)
+    # The overlay refuses to draw a degenerate box, so printing one points the
+    # model at coordinates nothing was marked on (brain/overlay.py _box_of).
+    if ymax <= ymin or xmax <= xmin:
+        return ""
+    return f"[{ymin}, {xmin}, {ymax}, {xmax}]"
 
 
 def _facts_line(person: PersonInViewDict, now: float, context: set[str], allowance: int) -> str | None:
@@ -253,8 +264,8 @@ def _rank_facts(digest: PersonDigestDict, now: float, context: set[str]) -> list
 
 
 def _fact_score(fact: FactDict, now: float, context: set[str]) -> float:
-    importance = float(fact.get("importance") or 0.5)
-    age = max(0.0, now - float(fact.get("last_confirmed") or now))
+    importance = _number(fact.get("importance")) or 0.5
+    age = max(0.0, now - (_number(fact.get("last_confirmed")) or now))
     recency = _RECENCY_FLOOR + (1.0 - _RECENCY_FLOOR) * 0.5 ** (age / _RECENCY_HALF_LIFE_SEC)
     words = _words(fact.get("text") or "")
     overlap = len(words & context) / len(words) if words else 0.0
@@ -265,12 +276,12 @@ def _history_line(person: PersonInViewDict, now: float) -> str | None:
     digest: PersonDigestDict = person.get("digest") or {}
     last_seen: LastSeenDict = digest.get("last_seen") or {}
     parts: list[str] = []
-    stamp = float(last_seen.get("stamp") or 0.0)
+    stamp = _number(last_seen.get("stamp"))
     if stamp and now - stamp >= _LAST_SEEN_QUIET_SEC:
         where = _clean(last_seen.get("map"))
         ago = _ago(now - stamp)
         parts.append(f"Last seen {ago} in {where}." if where else f"Last seen {ago}.")
-    encounters = int(digest.get("encounters") or 0)
+    encounters = int(_number(digest.get("encounters")))
     if encounters > 1:
         parts.append(f"{encounters} encounters.")
     return "  " + " ".join(parts) if parts else None
@@ -297,16 +308,16 @@ def _recent_lines(snapshot: PeopleSnapshotDict, now: float, people: list[PersonI
         for entry in (snapshot.get("recent") or [])
         if _clean(entry.get("name"))
         and entry.get("person_id") not in in_view
-        and datetime.fromtimestamp(float(entry.get("last_seen") or 0.0)).date() == today
+        and datetime.fromtimestamp(_number(entry.get("last_seen"))).date() == today
     ]
     if not seen:
         return []
-    newest = sorted(seen, key=lambda entry: float(entry.get("last_seen") or 0.0))[-_MAX_RECENT:]
+    newest = sorted(seen, key=lambda entry: _number(entry.get("last_seen")))[-_MAX_RECENT:]
     return ["Seen earlier today: " + ", ".join(_recent_text(entry) for entry in newest) + "."]
 
 
 def _recent_text(entry: RecentPersonDict) -> str:
-    clock = datetime.fromtimestamp(float(entry.get("last_seen") or 0.0)).strftime("%H:%M")
+    clock = datetime.fromtimestamp(_number(entry.get("last_seen"))).strftime("%H:%M")
     where = _clean(entry.get("map"))
     return f"{_clean(entry.get('name'))} ({clock}, {where})" if where else f"{_clean(entry.get('name'))} ({clock})"
 
@@ -333,6 +344,17 @@ def _tokens(text: str) -> int:
 def _sentence(text: str) -> str:
     """The node's own wording, terminated — the block is read as prose."""
     return text if text[-1] in ".!?…" else text + "."
+
+
+def _is_number(value: object) -> TypeGuard[int | float]:
+    """A JSON number; a bool is not one, however much ``isinstance`` says so."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _number(value: object) -> float:
+    """A wire number, or 0.0. The feed drops a snapshot whose numbers are not
+    numbers, and the block still never raises inside a turn over one."""
+    return float(value) if _is_number(value) else 0.0
 
 
 def _clean(value: object) -> str | None:

@@ -6,7 +6,7 @@
 Three jobs, all pure. :func:`build_snapshot` turns the engine's tracks plus the
 store into the ``/brain/people`` payload — boxes in Gemini's per-mille
 convention, a memory digest for everyone the robot has a claim on, and the
-people it saw earlier today. :func:`choose_attention` decides whose face is
+people it saw over the last day. :func:`choose_attention` decides whose face is
 worth chasing next and says so in one line the agent can act on in
 conversation. :class:`PeopleEvents` turns changes into the bounded, per-person
 cooled-down wake events on ``/brain/people_events``.
@@ -18,7 +18,6 @@ the scribe already decided. PURE module: no rclpy, no cv2, no network.
 from __future__ import annotations
 
 import base64
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 from brain_client.people.types import SETTLED_STATES, SNAPSHOT_SCHEMA, EventKind, IdentityState
@@ -40,6 +39,11 @@ if TYPE_CHECKING:
 
 DIGEST_STATES = (IdentityState.FAMILIAR, IdentityState.POSSIBLE, IdentityState.KNOWN)
 """Who gets a memory digest: everyone the robot has a claim on, tentative or not."""
+
+RECENT_WINDOW_SEC = 86400.0
+"""How far back the ``recent`` digest reaches. A day, not local midnight: the
+skill SDK's ``recently_seen(minutes)`` reads this list, and a window that ended
+at midnight silently answered "nobody in the last hour" at 00:30."""
 
 ATTENTION_NEAR_M = 2.0  # "any unresolved person within 2 m" (RFC 5.5)
 FACE_STALE_SEC = 5.0  # a face seen longer ago than this reads as "turned aside"
@@ -83,7 +87,7 @@ def build_snapshot(
     ]
     in_view = {track.identity.person_id for track in tracks if track.identity.person_id}
     recent: list[RecentPersonDict] = [
-        entry for entry in store.recent(start_of_day(now)) if entry.get("person_id") not in in_view
+        entry for entry in store.recent(now - RECENT_WINDOW_SEC) if entry.get("person_id") not in in_view
     ]
     return {
         "schema": SNAPSHOT_SCHEMA,
@@ -111,25 +115,20 @@ def _person(
         "state": str(identity.state),
         "evidence": [str(evidence) for evidence in identity.evidence],
         "confidence": round(identity.confidence, 3),
-        # The second candidate, so a conflict reads "Theo or Ana" in the brain's
-        # block instead of naming only the one the score happened to favour.
-        "runner_up_name": identity.runner_up_name,
         "bbox": per_mille(track.box),
         "head_bbox": per_mille(track.head_box) if track.head_box is not None else None,
         "range_m": round(track.range_m, 2) if track.range_m is not None else None,
         "bearing_deg": round(track.bearing_deg, 1) if track.bearing_deg is not None else None,
         "tracked_sec": round(max(0.0, now - track.first_seen), 1),
         "lost": track.lost,
+        # A lost track rides the snapshot for a minute; without its age every
+        # reader has to say "just left view" for the whole minute.
+        "lost_sec": round(max(0.0, now - track.last_seen), 1) if track.lost else None,
         "description": store.description(person_id) if person_id is not None else None,
         "hint": hint,
         "learned": learned,
         "digest": digest,
     }
-
-
-def start_of_day(now: float) -> float:
-    """Local midnight — "seen earlier today" means today where the robot is."""
-    return datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
 
 
 # ------------------------------------------------------------------ attention

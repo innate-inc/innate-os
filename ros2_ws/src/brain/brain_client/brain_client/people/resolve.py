@@ -241,7 +241,7 @@ class _Belief:
     committed: str | None = None
     state: IdentityState = IdentityState.UNKNOWN
     committed_at: float = 0.0
-    pressure_since: dict[str, float] = field(default_factory=dict)
+    pressure_since: dict[str, float] = field(default_factory=dict)  # on the still clock, not wall time
     enrol_faces: list[FaceObservation] = field(default_factory=list)
     pending_faces: list[_PendingFace] = field(default_factory=list)
     last_body: BodyObservation | None = None
@@ -296,6 +296,9 @@ class Resolver:
         self._config = config
         self._beliefs: dict[str, _Belief] = {}
         self._suppressed: set[str] = set()
+        self._still_clock = 0.0
+        self._last_resolve_at: float | None = None
+        self._last_still = True
 
     @property
     def config(self) -> ResolverConfig:
@@ -457,6 +460,7 @@ class Resolver:
         belief.resumed_at = now
         belief.state = IdentityState.POSSIBLE
         belief.pending_faces.clear()
+        belief.pressure_since.clear()  # a lead measured before the gap is not two seconds of this encounter
         # The run of agreeing outfit frames restarts with the track: reconfirmation
         # wants agreement since the resume, and a stamp taken before the gap is
         # never replaced while the frames keep agreeing.
@@ -471,9 +475,11 @@ class Resolver:
         tracks: Sequence[TrackView],
         now: float,
         *,
+        still: bool = True,
         map_name: str | None = None,
         pose: Pose | None = None,
     ) -> dict[str, Resolution]:
+        self._advance_still_clock(now, still)
         live = [t for t in tracks if not t.lost]
         resolutions = {track.tag: self._resolve_one(track, now) for track in live}
         self._enforce_one_live_track(live, resolutions)
@@ -484,6 +490,14 @@ class Resolver:
             del self._beliefs[tag]
         self._suppressed &= known_tags
         return resolutions
+
+    def _advance_still_clock(self, now: float, still: bool) -> None:
+        """The switch hysteresis is spent in evidence, not in wall clock: the
+        engine gathers nothing while the robot moves, so an interval that found
+        it moving at either end must not age a pressure nothing could refute."""
+        if still and self._last_still and self._last_resolve_at is not None:
+            self._still_clock += max(0.0, now - self._last_resolve_at)
+        self._last_resolve_at, self._last_still = now, still
 
     def _resolve_one(self, track: TrackView, now: float) -> Resolution:
         belief = self._belief(track.tag)
@@ -543,7 +557,10 @@ class Resolver:
 
     def _qualifies(self, belief: _Belief, person_id: str, score: float, runner_up: float) -> bool:
         """The accept line: accumulated evidence, a margin over the runner-up,
-        and three independent face frames spanning a second."""
+        three independent face frames spanning a second, and one frame that
+        accepted outright — the body cap plus frames merely above the
+        calibration midpoint clears the score on its own, and that is a
+        stranger in the right jacket."""
         candidate = belief.candidates.get(person_id)
         if person_id == NEW_PERSON or candidate is None:
             return False
@@ -552,6 +569,7 @@ class Resolver:
             and score - runner_up >= self._config.margin_log_odds
             and candidate.face_frames >= self._config.min_face_frames
             and candidate.face_span() >= self._config.min_face_span_sec
+            and candidate.last_accept_stamp is not None
         )
 
     def _tentative_state(self, best_id: str, best_score: float, runner_up: float) -> IdentityState:
@@ -586,8 +604,8 @@ class Resolver:
             if score - mine < self._config.margin_log_odds:
                 belief.pressure_since.pop(person_id, None)
                 continue
-            since = belief.pressure_since.setdefault(person_id, now)
-            if now - since < self._config.switch_margin_sec:
+            since = belief.pressure_since.setdefault(person_id, self._still_clock)
+            if self._still_clock - since < self._config.switch_margin_sec:
                 continue
             belief.pressure_since.clear()
             if person_id == NEW_PERSON:
@@ -733,7 +751,9 @@ class Resolver:
         person_id = belief.committed
         if person_id is None or belief.state not in SETTLED_STATES:
             return
-        if resolution.split_requested or resolution.conflict_with is not None:
+        # split_pending is the split this tick decided; split_requested is the
+        # report it makes on the next one. Neither may learn.
+        if resolution.split_requested or belief.split_pending or resolution.conflict_with is not None:
             return  # the evidence disagrees: nothing this track saw is safe to write
         if now - belief.last_sighting_write >= self._config.sighting_interval_sec:
             belief.last_sighting_write = now
@@ -820,7 +840,6 @@ class Resolver:
                 state=IdentityState.UNKNOWN,
                 runner_up_id=leader,
                 runner_up_confidence=self._posterior(ranked, leader),
-                runner_up_name=self._roster.name_of(leader) if leader else None,
             )
         runner_up = next((pid for pid, _ in ranked if pid not in (person_id, NEW_PERSON)), None)
         return Identity(
@@ -831,7 +850,6 @@ class Resolver:
             evidence=self._evidence(belief, person_id),
             runner_up_id=runner_up,
             runner_up_confidence=self._posterior(ranked, runner_up),
-            runner_up_name=self._roster.name_of(runner_up) if runner_up else None,
         )
 
     @staticmethod

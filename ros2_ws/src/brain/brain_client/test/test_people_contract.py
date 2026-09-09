@@ -256,7 +256,7 @@ def test_the_snapshot_carries_every_field_its_consumers_read(scene):
         "state",
         "evidence",
         "confidence",
-        "runner_up_name",
+        "lost_sec",
         "bbox",
         "head_bbox",
         "range_m",
@@ -338,13 +338,18 @@ def test_the_engines_stamp_and_the_brains_ring_name_the_same_frame(monkeypatch):
 
 def test_the_ring_holds_a_tick_and_a_half_of_frames_and_no_more(monkeypatch):
     """The engine ticks at 5 Hz and publishes a few hundred milliseconds later;
-    the ring has to outlive that and nothing else."""
+    the ring has to outlive that and nothing else. It is the 1.5 s window that
+    has to say so: at the sim's 10 Hz that is sixteen frames, and a frame cap
+    that trimmed first would hand the brain a window it never asked for."""
     ring = _Ring(monkeypatch)
-    stamps = [ring.arrive(1000 + step, 0) for step in range(30)]
+    stamps: list[int] = []
+    for step in range(30):
+        ring.monotonic[0] = 1000.0 + 0.1 * step  # the sim publishes at 10 Hz
+        stamps.append(ring.arrive(1000 + step, 0))
 
     assert ring.capture.frame_for_stamp(stamps[-1], 3.0) is not None
-    assert ring.capture.frame_for_stamp(stamps[-8], 3.0) is not None  # ~1.0 s back
-    assert ring.capture.frame_for_stamp(stamps[-20], 3.0) is None  # ~2.5 s back: gone
+    assert ring.capture.frame_for_stamp(stamps[-15], 3.0) is not None  # 1.4 s back: inside the window
+    assert ring.capture.frame_for_stamp(stamps[-17], 3.0) is None  # 1.6 s back: the window trimmed it
     assert ring.capture.frame_for_stamp(stamps[0], 3.0) is None
 
 

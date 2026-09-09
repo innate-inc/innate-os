@@ -68,6 +68,7 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions& options) : Node("m
     publish_stereo_ = this->get_parameter("publish_stereo").as_bool();
     publish_native_ = this->get_parameter("publish_native").as_bool();
     native_fps_ = this->get_parameter("native_fps").as_double();
+    // native_fps 0 is unthrottled, not off: every 2560x720 MJPG buffer reaches the topic.
     native_publish_interval_ = native_fps_ > 0.0 ? 1.0 / native_fps_ : 0.0;
 
     // Get V4L2 control parameters

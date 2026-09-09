@@ -53,10 +53,11 @@ def generate_launch_description():
         description="Gemini model powering the local brain",
     )
 
-    # Read before the process starts, not as a parameter: a disabled node exits,
-    # and respawn would bring it straight back every two seconds. On by default
-    # here and off on hardware: the simulator is where this is developed, and
-    # RFC section 12 ships Phase 0 to robots behind the switch.
+    # Whether to run the people node is decided here and nowhere else — a
+    # parameter cannot answer it, because a node that exits is one respawn
+    # restarts every two seconds. On by default here and off on hardware: the
+    # simulator is where this is developed, and RFC section 12 ships Phase 0 to
+    # robots behind the switch.
     people_enabled_arg = DeclareLaunchArgument(
         "people_enabled",
         default_value=str(node_setting("people_node", "enabled", True)),

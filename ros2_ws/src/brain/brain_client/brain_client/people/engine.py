@@ -203,7 +203,9 @@ class PeopleEngine:
         if ego.still:
             self._gather_evidence(tracks, frame, native_jpeg, now)
 
-        self._resolutions = self._resolver.resolve(self._tracker.all_tracks(), now, map_name=map_name, pose=pose)
+        self._resolutions = self._resolver.resolve(
+            self._tracker.all_tracks(), now, still=ego.still, map_name=map_name, pose=pose
+        )
         self._apply_splits()
         self._states = self._build_states(speaking, now)
         return self._states

@@ -25,6 +25,7 @@ from collections import deque
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
 
+import cv2
 import numpy as np
 from brain_messages.srv import ForgetPerson, GetPeople, MergePeople, RenamePerson, SetPeopleCollection
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
@@ -49,7 +50,7 @@ from brain_client.people.scribe import (
 )
 from brain_client.people.surfacing import PeopleEvents, build_snapshot, choose_attention
 from brain_client.people.types import SNAPSHOT_SCHEMA, HealthDict, HealthState, IdentityState, TrackState
-from brain_client.perception.motion_gate import MotionGate
+from brain_client.perception.motion_gate import MOTION_SAMPLE_SEC, MotionGate
 from brain_client.transport.chat import Sender
 
 if TYPE_CHECKING:
@@ -104,9 +105,12 @@ NATIVE_SKEW_NS = 130_000_000
 the same capture: two frames at 15 fps. The driver's own kMaxNativeSkewNs is a
 wider PTS-reset guard, not this — a buffer further out than this is a different
 moment, and cropping a face out of it would move the face."""
+NATIVE_HOLD_SEC = 30.0  # how long the native subscription is held once anything wanted it
+MOTION_JPEG_QUALITY = 50  # the gate diffs an eighth-scale gray image; anything finer is thrown away
 TALKING_RANGE_M = 3.0
 SPEAKING_HOLD_SEC = 3.0  # how long one chat_in message keeps a track marked as the speaker
 HINT_TTL_SEC = 120.0  # a disambiguation question ages out with the exchange it came from
+LEARNED_TTL_SEC = 120.0  # and so does a "P5 = Zoe" line whose track left before it could be shown
 ENROLLING_SEC = 60.0  # how long after enrolment a track still counts as "enrolling" to the scribe
 SEEK_MIN_RANGE_M = 1.5  # closer than this, walking over gains nothing the head tilt cannot
 IDLE_POLL_SEC = 0.5
@@ -165,9 +169,11 @@ class TickSource(StrEnum):
 
 @dataclass(frozen=True)
 class PeopleNodeConfig:
-    """The node's ROS parameters as plain data."""
+    """The node's ROS parameters as plain data. Whether to run at all is not
+    one of them: the launch file reads that from settings.yaml before starting
+    the process, because a node that exits is a node ``respawn`` restarts every
+    two seconds."""
 
-    enabled: bool = True
     always_on: bool = False
     seek_faces: bool = False
     scribe: bool = True
@@ -195,7 +201,6 @@ class PeopleNodeConfig:
 
 
 PARAM_DEFAULTS: dict[str, bool | str | float] = {
-    "enabled": True,
     "always_on": False,
     "seek_faces": False,
     "scribe": True,
@@ -273,6 +278,22 @@ def decode_frame(frame: CameraFrame) -> np.ndarray | None:
     return np.array(image if frame.encoding == "bgr8" else image[:, :, ::-1], dtype=np.uint8, order="C")
 
 
+def motion_jpeg(frame: CameraFrame, sampled_at: float, *, now: float | None = None) -> bytes | None:
+    """The frame as the JPEG :class:`MotionGate` reads, or None when the gate
+    would throw it away anyway. A raw frame has to be re-encoded to reach a gate
+    written against the compressed topic, so it is only encoded at the gate's
+    own sample interval — the quality is spent on an eighth-scale gray diff."""
+    if frame.encoding == "jpeg":
+        return frame.data
+    if (now if now is not None else time.monotonic()) - sampled_at < MOTION_SAMPLE_SEC:
+        return None
+    image = decode_frame(frame)
+    if image is None:
+        return None
+    ok, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), MOTION_JPEG_QUALITY])
+    return bytes(buffer) if ok else None
+
+
 def pair_native(
     frame_stamp: int, buffers: Sequence[tuple[int, bytes]], *, max_skew_ns: int = NATIVE_SKEW_NS
 ) -> bytes | None:
@@ -292,10 +313,10 @@ def pair_native(
 # =========================================================== pure: duty cycle
 
 
-def engine_active(*, enabled: bool, always_on: bool, brain_active: bool) -> bool:
+def engine_active(*, always_on: bool, brain_active: bool) -> bool:
     """Whether the engine should be looking at all (RFC 3.1): the brain's
     lifecycle drives it unless the owner asked for "always on"."""
-    return enabled and (always_on or brain_active)
+    return always_on or brain_active
 
 
 def decode_period(config: EngineConfig, *, tracked: bool, driving: bool, motion: bool) -> float:
@@ -321,6 +342,14 @@ def wants_native(tracks: Sequence[TrackState], now: float, *, refresh_sec: float
         if track.last_face_stamp is None or now - track.last_face_stamp >= refresh_sec:
             return True
     return False
+
+
+def native_deadline(wanted: bool, now: float, deadline: float, *, hold_sec: float = NATIVE_HOLD_SEC) -> float:
+    """Until when the native subscription is held. One settled person makes
+    :func:`wants_native` alternate at the face-refresh interval, and following
+    that literally would create and destroy a subscription every few seconds
+    for as long as they stand there."""
+    return max(deadline, now + hold_sec) if wanted else deadline
 
 
 # ============================================================ pure: snapshots
@@ -349,16 +378,15 @@ def fresh_tracks(
 def apply_conflicts(tracks: Sequence[TrackState], resolutions: Mapping[str, Resolution]) -> list[TrackState]:
     """One person cannot be two live tracks (RFC 5.3.4). The resolver reports
     the clash and keeps the loser's belief; the snapshot has to *say* it, so
-    the track reads ``conflict`` — person and name kept, runner-up dropped,
-    since the rival identity is itself and not a second candidate."""
+    the track reads ``conflict``, person and name kept — the rival identity is
+    this person's own other track, never a second candidate."""
     resolved: list[TrackState] = []
     for track in tracks:
         resolution = resolutions.get(track.tag)
         if resolution is None or resolution.conflict_with is None:
             resolved.append(track)
             continue
-        identity = replace(track.identity, state=IdentityState.CONFLICT, runner_up_name=None)
-        resolved.append(replace(track, identity=identity))
+        resolved.append(replace(track, identity=replace(track.identity, state=IdentityState.CONFLICT)))
     return resolved
 
 
@@ -495,6 +523,15 @@ def recall_person(subject: str, tracks: Sequence[TrackState], roster: Sequence[R
             return entry.get("person_id")
     in_view = {track.identity.person_id for track in tracks if not track.lost and track.identity.person_id}
     return in_view.pop() if len(in_view) == 1 else None
+
+
+def alone_in_view(person_id: str, tracks: Sequence[TrackState]) -> bool:
+    """Whether the subject of a recall is the only person the robot can see.
+    The scribe keeps sensitive facts out of an answer that anyone else is
+    standing there to hear (RFC 6.3), the same one-plausible-referent rule that
+    gates writing one."""
+    live = [track for track in tracks if not track.lost]
+    return len(live) == 1 and live[0].identity.person_id == person_id
 
 
 # ============================================================= pure: services
@@ -642,6 +679,7 @@ class PeopleSensors:
         self._motion = MotionGate()  # the brain's gate, on this node's own stream (RFC 4.6)
         self._motion_burst_sec = motion_burst_sec
         self._motion_until = 0.0
+        self._motion_sampled = 0.0
         self._lock = threading.Lock()
         self._frame: CameraFrame | None = None
         self._natives: deque[tuple[int, bytes]] = deque(maxlen=4)
@@ -728,26 +766,37 @@ class PeopleSensors:
     def _on_compressed_image(self, msg: CompressedImage) -> None:
         if not msg.data:
             return
-        data = bytes(msg.data)
-        with self._lock:
-            self._frame = CameraFrame(stamp_ns(msg.header.stamp.sec, msg.header.stamp.nanosec), data)
-            ego = self._ego.state(time.time())
-        # Outside the lock: the gate decodes, and the engine thread must never
-        # wait on a decode to read the frame it is about to work on.
-        if self._motion.observe(data, ego.head_pitch_deg, ego.recently_driven):
-            self._motion_until = time.time() + self._motion_burst_sec
+        frame = CameraFrame(stamp_ns(msg.header.stamp.sec, msg.header.stamp.nanosec), bytes(msg.data))
+        self._observe(frame)
 
     def _on_raw_image(self, msg: Image) -> None:
         if not msg.data:
             return
-        with self._lock:
-            self._frame = CameraFrame(
+        self._observe(
+            CameraFrame(
                 stamp_ns(msg.header.stamp.sec, msg.header.stamp.nanosec),
                 bytes(msg.data),
                 encoding=msg.encoding or "bgr8",
                 width=msg.width,
                 height=msg.height,
             )
+        )
+
+    def _observe(self, frame: CameraFrame) -> None:
+        """The newest frame for the engine, and the same frame through the duty
+        cycle's motion gate — on either tick source, or ``motion`` is False for
+        the life of a node started on the raw one."""
+        with self._lock:
+            self._frame = frame
+            ego = self._ego.state(time.time())
+        # Outside the lock: the gate decodes, and the engine thread must never
+        # wait on a decode to read the frame it is about to work on.
+        jpeg = motion_jpeg(frame, self._motion_sampled)
+        if jpeg is None:
+            return
+        self._motion_sampled = time.monotonic()
+        if self._motion.observe(jpeg, ego.head_pitch_deg, ego.recently_driven):
+            self._motion_until = time.time() + self._motion_burst_sec
 
     def _on_native(self, msg: CompressedImage) -> None:
         if not msg.data:
@@ -834,22 +883,27 @@ class PeopleAdapters:
         self._published: PeopleSnapshotDict | None = None
         self._last_publish = 0.0
         self._last_tick = 0.0
-        self._learned: dict[str, str] = {}
+        self._learned: dict[str, tuple[str, float]] = {}
         self._hints: dict[str, tuple[str, float]] = {}
         self._enrolling: dict[str, float] = {}
         self._speaking: tuple[str, float] | None = None
         self._forgotten: set[str] = set()
         self._pending_recalls: deque[Recall] = deque(maxlen=32)
         self._want_native = False
+        self._native_until = 0.0
         self._uid = 0
         self._expired_at = time.monotonic()
         self._last_frame_at = 0.0
 
         self._chat: queue.Queue[Utterance] = queue.Queue(maxsize=64)
-        self._forgets: queue.Queue[str] = queue.Queue()  # unbounded: a dropped forget is one that never happened
-        self._suppressions: queue.Queue[str] = queue.Queue(maxsize=8)
-        self._rebinds: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=8)
-        self._recalls: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=8)
+        # Unbounded, all three: a mutation the services already answered "done"
+        # is not one the engine thread may drop. A dropped suppression keeps
+        # publishing a forgotten person's name, a dropped rebind leaves the
+        # track on a tombstoned id (RFC section 10).
+        self._forgets: queue.Queue[str] = queue.Queue()
+        self._suppressions: queue.Queue[str] = queue.Queue()
+        self._rebinds: queue.Queue[tuple[str, str]] = queue.Queue()
+        self._recalls: queue.Queue[tuple[str, str, bool]] = queue.Queue(maxsize=8)
         self._descriptions: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=8)
 
         self._snapshot_pub: Publisher = node.create_publisher(String, SNAPSHOT_TOPIC, SNAPSHOT_QOS)
@@ -896,9 +950,7 @@ class PeopleAdapters:
     # ------------------------------------------------------ executor thread
 
     def _activation_tick(self) -> None:
-        active = engine_active(
-            enabled=self._config.enabled, always_on=self._config.always_on, brain_active=self._sensors.brain_active
-        )
+        active = engine_active(always_on=self._config.always_on, brain_active=self._sensors.brain_active)
         self._sensors.set_camera_enabled(active)
         self._sensors.set_native_enabled(active and self._want_native)
 
@@ -989,7 +1041,7 @@ class PeopleAdapters:
         success, message = self._write(lambda: self._store.merge(source, target), "those two cannot be merged")
         if success:
             # The resolver is the engine thread's, like the forget suppressions.
-            _offer(self._rebinds, (source, target))
+            self._rebinds.put((source, target))
         return MutationResult(success, message)
 
     def _forget(self, request: ForgetPerson.Request) -> MutationResult:
@@ -1058,7 +1110,7 @@ class PeopleAdapters:
         engine thread's, so the tag crosses to it and :meth:`_tick` applies it."""
         for track in self.tracks():
             if track.identity.person_id == person_id:
-                _offer(self._suppressions, track.tag)
+                self._suppressions.put(track.tag)
 
     def _on_chat_in(self, msg: String) -> None:
         payload = _payload(msg.data)
@@ -1103,7 +1155,7 @@ class PeopleAdapters:
             return
         person_id = recall_person(subject, tracks, roster)
         if person_id is not None:
-            _offer(self._recalls, (person_id, text))
+            _offer(self._recalls, (person_id, text, alone_in_view(person_id, tracks)))
 
     def _next_uid(self) -> str:
         with self._lock:
@@ -1112,8 +1164,7 @@ class PeopleAdapters:
 
     def _views(self, tracks: Sequence[TrackState], now: float) -> tuple[TagView, ...]:
         with self._lock:
-            self._enrolling = {tag: at for tag, at in self._enrolling.items() if now - at <= ENROLLING_SEC}
-            enrolling = list(self._enrolling)
+            enrolling = [tag for tag, at in self._enrolling.items() if now - at <= ENROLLING_SEC]
         return tag_views(tracks, enrolling)
 
     # -------------------------------------------------------- engine thread
@@ -1137,11 +1188,10 @@ class PeopleAdapters:
     def _tick(self, now: float) -> None:
         self._apply_suppressions()
         self._apply_rebinds()
-        active = engine_active(
-            enabled=self._config.enabled, always_on=self._config.always_on, brain_active=self._sensors.brain_active
-        )
+        active = engine_active(always_on=self._config.always_on, brain_active=self._sensors.brain_active)
         if not active:
             self._want_native = False
+            self._native_until = 0.0
             self._publish_snapshot(now, (), None, (640, 480), self._lines(now), consume=False)
             self._stop.wait(IDLE_POLL_SEC)
             return
@@ -1158,7 +1208,18 @@ class PeopleAdapters:
         )
         if now - self._last_tick < period:
             return
-        self._last_tick = now
+        started = time.monotonic()
+        try:
+            self._measure(now, ego, motion)
+        finally:
+            # Stamped when the work finished, not when it started: a tick slower
+            # than its own period would otherwise fall due the instant it
+            # returned, running the engine back to back on a saturated Jetson.
+            self._last_tick = now + (time.monotonic() - started)
+
+    def _measure(self, now: float, ego: EgoMotion, motion: bool) -> None:
+        """One frame through the engine, published. Called only when the duty
+        cycle says a tick is due."""
         frame = self._sensors.take_frame()
         image = decode_frame(frame) if frame is not None else None
         if frame is None or image is None:
@@ -1187,7 +1248,10 @@ class PeopleAdapters:
         # seconds later must not hand P<n> to a second person (a no-op unless
         # this tick minted one).
         self._store.set_next_tag(self._engine.tracker.next_tag)
-        self._want_native = wants_native(tracks, now, refresh_sec=self._engine_config.face_refresh_sec)
+        self._native_until = native_deadline(
+            wants_native(tracks, now, refresh_sec=self._engine_config.face_refresh_sec), now, self._native_until
+        )
+        self._want_native = now < self._native_until
         resolutions = self._engine.resolutions()
         resolved = apply_conflicts(tracks, resolutions)
         with self._lock:
@@ -1316,9 +1380,17 @@ class PeopleAdapters:
             self._events_pub.publish(String(data=json.dumps(event)))
 
     def _lines(self, now: float) -> ScribeLines:
+        """The scribe's lines, and the tick's sweep of everything keyed by a
+        tag: a tag is never reused, so an entry whose track left would otherwise
+        wait for a tick that can never come."""
         with self._lock:
             self._hints = {tag: line for tag, line in self._hints.items() if now - line[1] <= HINT_TTL_SEC}
-            return dict(self._learned), {tag: text for tag, (text, _) in self._hints.items()}
+            self._learned = {tag: line for tag, line in self._learned.items() if now - line[1] <= LEARNED_TTL_SEC}
+            self._enrolling = {tag: at for tag, at in self._enrolling.items() if now - at <= ENROLLING_SEC}
+            return (
+                {tag: text for tag, (text, _) in self._learned.items()},
+                {tag: text for tag, (text, _) in self._hints.items()},
+            )
 
     def _health(self, now: float) -> PeopleHealthDict:
         health = cast("PeopleHealthDict", dict(self._engine.health(now, native_wanted=self._want_native)))
@@ -1367,7 +1439,7 @@ class PeopleAdapters:
         for change in changes:
             if change.kind is ChangeKind.NAME:
                 with self._lock:
-                    self._learned[change.tag] = change.text
+                    self._learned[change.tag] = (change.text, time.time())
                     self._hints.pop(change.tag, None)
             elif change.kind is ChangeKind.NAME_CANDIDATE:
                 with self._lock:
@@ -1384,14 +1456,14 @@ class PeopleAdapters:
     def _run_recalls(self, scribe: Scribe) -> None:
         while True:
             try:
-                person_id, question = self._recalls.get_nowait()
+                person_id, question, alone = self._recalls.get_nowait()
             except queue.Empty:
                 return
             # Nothing about a forgotten person: not the Gemini call, and not the
             # event either when the forget lands while the call is in flight.
             if self._revoked(person_id):
                 continue
-            answer = scribe.recall(person_id, question)
+            answer = scribe.recall(person_id, question, alone_in_view=alone)
             if self._revoked(person_id):
                 continue
             recall = Recall(person_id, self._store.name_of(person_id), answer, time.time())
@@ -1424,9 +1496,11 @@ def _payload(data: str) -> dict | None:
 
 
 def _offer(destination: queue.Queue[Any], item: Any) -> None:
-    """Never block a ROS callback or the engine thread on a full queue: what
-    waits behind these is a Gemini call, and dropping one costs less than
-    stalling the executor."""
+    """Never block a ROS callback on a full queue. Only the bounded queues reach
+    here — a transcript line, a recall question, a crop for a description — and
+    what waits behind all three is a Gemini call, so dropping one costs less
+    than stalling the executor. A mutation already answered "done" is never
+    offered: those queues are unbounded."""
     try:
         destination.put_nowait(item)
     except queue.Full:

@@ -70,9 +70,10 @@ def generate_launch_description():
         description="Cartesia Alfred voice id",
     )
 
-    # Read before the process starts, not as a parameter: a disabled node exits,
-    # and respawn would bring it straight back every two seconds. Off by default
-    # on hardware: RFC section 12 ships Phase 0 experimental, behind the switch.
+    # Whether to run the people node is decided here and nowhere else — a
+    # parameter cannot answer it, because a node that exits is one respawn
+    # restarts every two seconds. Off by default on hardware: RFC section 12
+    # ships Phase 0 experimental, behind the switch.
     people_enabled_arg = DeclareLaunchArgument(
         "people_enabled",
         default_value=str(node_setting("people_node", "enabled", False)),
@@ -120,10 +121,8 @@ def generate_launch_description():
             cartesia_voice_id_arg,
             people_enabled_arg,
             brain_client_node,
-            # The robot's subconscious for people. Its own process because every
-            # face and body model is a native library: a segfault here must not
-            # take the brain, TTS and chat with it, and the brain runs
-            # unannotated while it restarts.
+            # The robot's subconscious for people; its own process for the
+            # reasons in brain_client/nodes/people_node.py.
             Node(
                 package="brain_client",
                 executable="people_node.py",

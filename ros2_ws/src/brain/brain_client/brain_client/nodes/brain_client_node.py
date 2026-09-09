@@ -15,6 +15,7 @@ import json
 import threading
 import time
 from collections import deque
+from typing import TYPE_CHECKING
 
 import rclpy
 from brain_messages.srv import ForgetMemory, GetAvailableDirectives, GetChatHistory, ReloadSkillsAgents, ResetBrain
@@ -38,7 +39,6 @@ from brain_client.core.lifecycle import BrainLifecycle
 from brain_client.core.state import BrainState
 from brain_client.memory.recorder import MemoryRecorder
 from brain_client.memory.store import MemoryStore
-from brain_client.people.types import PeopleEventDict
 from brain_client.perception.battery import BatteryMonitor
 from brain_client.perception.camera import CameraCapture
 from brain_client.perception.gaze_control import GazeController
@@ -54,6 +54,9 @@ from brain_client.skills.runner import PrimitiveRunner
 from brain_client.skills.workspace_import import format_load_error, unique_key
 from brain_client.transport.chat import ChatManager, Sender
 from brain_client.transport.tts import TTSHandler
+
+if TYPE_CHECKING:
+    from brain_client.people.types import PeopleEventDict
 
 LATCHED_QOS = QoSProfile(
     depth=1,

@@ -139,7 +139,6 @@ class Identity:
     evidence: tuple[Evidence, ...] = ()
     runner_up_id: str | None = None
     runner_up_confidence: float = 0.0
-    runner_up_name: str | None = None  # for the conflict wording "unsure (Theo or Ana)"
 
 
 @dataclass(frozen=True)
@@ -288,13 +287,13 @@ class PersonInViewDict(TypedDict, total=False):
     state: str
     evidence: list[str]
     confidence: float
-    runner_up_name: str | None
     bbox: list[int]
     head_bbox: list[int] | None
     range_m: float | None
     bearing_deg: float | None
     tracked_sec: float
     lost: bool
+    lost_sec: float | None  # how long ago a lost track was last seen; None while it is live
     description: str | None
     hint: str | None  # e.g. "heard 'I'm Ana' but two people are in view; if it matters, ask which one"
     learned: str | None  # e.g. "P5 said \"I'm Zoe\" — P5 = Zoe from here on"; shown once

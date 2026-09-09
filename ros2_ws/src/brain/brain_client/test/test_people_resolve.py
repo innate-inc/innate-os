@@ -278,14 +278,14 @@ def test_a_close_runner_up_blocks_the_commit():
     assert resolver.identity("P1").state is not IdentityState.KNOWN
 
 
-def test_the_runner_up_is_reported_by_name_for_the_conflict_wording():
+def test_the_runner_up_is_reported_with_its_own_confidence():
     resolver = Resolver(roster_with())
     for step in range(6):
         resolver.observe_face("P1", face(100.0 + 0.4 * step, probe(0.55, 0.44), quality=0.3))
     resolver.resolve([FakeTrack(last_seen=102.0)], 102.0)
     identity = resolver.identity("P1")
     assert identity.runner_up_id == "person_b"
-    assert identity.runner_up_name == "Ana"
+    assert 0.0 < identity.runner_up_confidence < identity.confidence
 
 
 def test_confidence_is_an_accumulated_posterior_not_a_cosine():
@@ -334,6 +334,21 @@ def test_body_evidence_never_reaches_known_however_long_it_agrees():
         resolver.observe_body("P1", body(1000.0 + step, probe(0.99)), 1000.0 + step)
         resolver.resolve([FakeTrack(last_seen=1000.0 + step)], 1000.0 + step)
     assert resolver.identity("P1").state is IdentityState.POSSIBLE
+
+
+def test_sub_accept_faces_and_a_matching_outfit_never_reach_known():
+    """RFC 5.3.6 from the other side: a stranger in Theo's jacket scores the
+    body cap, and faces that never cross accept must not make up the difference.
+    A name needs one frame that accepted outright, not three near misses."""
+    resolver = Resolver(fresh_outfit_roster())
+    for step in range(2):
+        resolver.observe_body("P1", body(1000.0 + step, probe(0.99)), 1000.0 + step)
+    for step in range(3):  # cosine 0.40: above the calibration midpoint, below accept
+        resolver.observe_face("P1", face(1000.0 + 0.6 * step, probe(0.40), quality=0.2))
+    resolver.resolve([FakeTrack(last_seen=1002.0)], 1002.0)
+    identity = resolver.identity("P1")
+    assert identity.person_id == "person_a"
+    assert identity.state is IdentityState.POSSIBLE
 
 
 def test_body_evidence_never_enrols_anybody():
@@ -523,6 +538,36 @@ def test_switching_happens_once_the_margin_has_held():
     assert resolutions["P1"].switched_from == "person_a"
 
 
+def test_the_switch_timer_pauses_while_the_robot_is_moving():
+    """Two seconds of evidence, not of wall clock: the engine gathers nothing
+    while the robot moves, so a lead nothing can refute must not age into a
+    switch. The seconds start again once the robot holds still."""
+    resolver = Resolver(roster_with())
+    end = commit_theo(resolver)
+    pressure = push_toward_b(resolver, end + 1.0)
+    for step in range(6):  # three seconds of driving on frozen scores
+        stamp = pressure + 0.5 * step
+        resolver.resolve([FakeTrack(last_seen=stamp)], stamp, still=False)
+    assert resolver.identity("P1").person_id == "person_a"
+
+    for step in range(6):
+        stamp = pressure + 3.0 + 0.5 * step
+        resolver.resolve([FakeTrack(last_seen=stamp)], stamp)
+    assert resolver.identity("P1").person_id == "person_b"
+
+
+def test_a_reassociation_starts_the_switch_pressure_again():
+    """The pressure is per encounter: a track that went lost and walked back in
+    must not switch on a lead measured before the gap."""
+    resolver = Resolver(roster_with())
+    end = commit_theo(resolver)
+    pressure = push_toward_b(resolver, end + 1.0)
+    resolver.resolve([FakeTrack(last_seen=pressure)], pressure)
+    resolver.on_reassociated("P1", pressure + 0.1)
+    resolver.resolve([FakeTrack(last_seen=pressure + 2.1)], pressure + 2.1)
+    assert resolver.identity("P1").person_id == "person_a"
+
+
 def test_pressure_that_fades_never_switches():
     resolver = Resolver(roster_with())
     end = commit_theo(resolver)
@@ -609,6 +654,23 @@ def test_sustained_frames_that_belong_to_nobody_split_a_committed_track():
         resolver.observe_face("P1", face(stamp, probe(0.0), box=_moved(step)))
         requested = requested or resolver.resolve([FakeTrack(last_seen=stamp)], stamp)["P1"].split_requested
     assert requested
+
+
+def test_the_tick_that_decides_a_split_writes_nothing_onto_the_person_it_rejected():
+    """The split is latched for the next tick, but the decision is taken on this
+    one: the person the resolver has just stopped believing in must not collect
+    a sighting out of the same tick."""
+    roster = roster_with()
+    resolver = Resolver(roster, config=ResolverConfig(sighting_interval_sec=0.0))
+    end = commit_theo(resolver)
+    deciding = end
+    for step in range(20):
+        stamp = end + 1.0 + 0.4 * step
+        resolver.observe_face("P1", face(stamp, probe(0.0), box=_moved(step)))
+        if resolver.resolve([FakeTrack(last_seen=stamp)], stamp)["P1"].split_requested:
+            break
+        deciding = stamp
+    assert [stamp for _pid, stamp in roster.sightings if stamp >= deciding] == []
 
 
 def test_one_bad_angle_on_the_person_themselves_never_splits_the_track():

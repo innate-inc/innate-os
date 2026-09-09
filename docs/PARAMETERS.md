@@ -47,13 +47,13 @@ To tune something, **uncomment a whole stanza** (the `node:`, `ros__parameters:`
 | `bringup` `battery` | `warning_percentage` / `critical_percentage` | `20` / `10` |
 | `bringup` `safety` (hard `/cmd_vel` clamp) | `max_speed` / `max_angular_speed` | `0.4` / `2.5` |
 | `mars_arm` | `max_jerk` | `150.0` |
-| `main_camera_driver` (hardware) | `width/height` (capture), `publish_stereo_width/height`, `publish_left_width/height` (published size; downstream follows it automatically), `fps`, `jpeg_quality`, `auto_exposure_mode`, `exposure`, `gain`, `default_gain`, `target_brightness`, `ae_kp`, `publish_native` / `native_fps` (the lazy native MJPG topic `/mars/main_camera/native/compressed` and its rate cap) | see template |
+| `main_camera_driver` (hardware) | `width/height` (capture), `publish_stereo_width/height`, `publish_left_width/height` (published size; downstream follows it automatically), `fps`, `jpeg_quality`, `auto_exposure_mode`, `exposure`, `gain`, `default_gain`, `target_brightness`, `ae_kp`, `publish_native` / `native_fps` (the lazy native MJPG topic `/mars/main_camera/native/compressed` and its rate cap — `0` is unthrottled, every capture-resolution buffer; `publish_native: false` is what turns the topic off) | see template |
 | `arm_camera_driver` (hardware) | `width/height` (capture), `fps` | see template |
 | `webrtc_streamer` (teleop stream) | `main_width/main_height`, `arm_width/arm_height` (encode size per camera) | see template |
 | `manipulation_server` | `inference_hz`, `speed`, `n_action_steps` (0=auto), `temporal_ensemble_coeff` | `25.0`, `1.5`, `0`, `0.0` |
 | `navigation_grid_localizer` | `max_score_threshold`, `max_range`, `auto_localize_timeout` | `0.3`, `12.0`, `30.0` |
 | `brain_client_node` | `cartesia_voice_id` (TTS voice), `vertical_fov`, `pose_image_interval`, `scan_stale_after_sec`, `send_depth`, `send_arm_camera_image`, `log_everything`, STT/transcribe models | see template |
-| `people_node` (recognition + person memory; **experimental**, `enabled: true` turns it on) | `enabled`, `always_on`, `seek_faces`, `scribe`, `prefer_backend`, `tick_source`, `allow_model_download`, `retention_unnamed_days` / `retention_named_days`, `camera_height_m`, `gemini_model` | `false`, `false`, `false`, `true`, `"opencv"`, `"compressed"`, `true`, `14.0` / `548.0`, `0.26`, see template |
+| `people_node` (recognition + person memory; **experimental**, `enabled: true` turns it on — read by the launch file before the process starts, so it takes a reboot) | `enabled` (launch-time only), `always_on`, `seek_faces`, `scribe`, `prefer_backend`, `tick_source`, `allow_model_download`, `retention_unnamed_days` / `retention_named_days`, `camera_height_m`, `gemini_model` | `false`, `false`, `false`, `true`, `"opencv"`, `"compressed"`, `true`, `14.0` / `548.0`, `0.26`, see template |
 | `uninavid_node` (VLN) | `forward_speed`, `turn_speed`, `cmd_duration_sec`, `image_send_hz`, `consecutive_stops_to_complete`, `cmd_publish_hz`, `poll_period_sec` | `0.3` / `0.8`, rest see template |
 
 > **Driving caps vs the safety clamp.** `motion_control` is the *driving feel* cap: the

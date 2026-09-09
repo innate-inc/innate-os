@@ -45,6 +45,7 @@ def person(**overrides) -> dict:
         "bearing_deg": -4.0,
         "tracked_sec": 41.2,
         "lost": False,
+        "lost_sec": None,
         "description": "Man, 30s, glasses.",
         "hint": None,
         "learned": None,
@@ -135,16 +136,31 @@ def test_familiar_person_has_no_name_to_use():
     assert "- P6 = someone you have met before, no name on file (by face, clothes)." in text
 
 
-def test_conflict_names_both_candidates_and_degrades_to_one():
-    both = render(snapshot([person(tag="P4", state="conflict", runner_up_name="Ana")]))
-    assert "- P4 = unsure (Theo or Ana)." in both
-    alone = render(snapshot([person(tag="P4", state="conflict")]))
-    assert "- P4 = unsure (maybe Theo, the evidence disagrees)." in alone
+def test_conflict_offers_the_one_belief_it_kept_and_says_it_is_unsure():
+    """A conflict is one person on two live tracks, so there is never a second
+    name — the rival identity is this person's own other track."""
+    named = render(snapshot([person(tag="P4", state="conflict")]))
+    assert "- P4 = unsure (maybe Theo, the evidence disagrees)." in named
+    nameless = render(snapshot([person(tag="P4", state="conflict", name=None)]))
+    assert "- P4 = unsure (the evidence disagrees)." in nameless
 
 
 def test_a_track_that_just_left_is_marked_rather_than_claimed_present():
-    text = render(snapshot([person(tag="P3", lost=True)]))
+    text = render(snapshot([person(tag="P3", lost=True, lost_sec=4.0)]))
     assert "- P3 = Theo (known, face), just left view." in text
+
+
+def test_somebody_who_left_a_minute_ago_is_not_still_just_leaving():
+    """A lost track rides the snapshot for a minute so the tracker can
+    re-associate it; the block would go on saying "just left view" the whole
+    time, with nobody in the room."""
+    gone = snapshot([person(tag="P3", lost=True, lost_sec=55.0)])
+    assert people_context.render(gone, [], [], NOW, True) is None
+    assert "just left view" in render(snapshot([person(tag="P3", lost=True, lost_sec=9.0)]))
+
+
+def test_a_node_too_old_to_say_how_long_ago_is_believed():
+    assert "just left view" in render(snapshot([person(tag="P3", lost=True, lost_sec=None)]))
 
 
 def test_the_box_rides_the_text_so_a_tag_can_be_pointed_at():
@@ -159,6 +175,26 @@ def test_a_track_that_just_left_never_carries_a_box():
     still_there, left = [line for line in text.splitlines() if line.startswith("- ")]
     assert "just left view" in left and "box [" not in left
     assert "box [100, 300, 930, 560]" in still_there
+
+
+def test_a_degenerate_box_is_left_out_rather_than_pointed_at():
+    """brain/overlay.py refuses to draw one, so printing it names coordinates
+    with nothing marked on them."""
+    flat = render(snapshot([person(bbox=[300, 100, 300, 560], head_bbox=None)]))
+    assert "box [" not in flat
+
+
+def test_a_number_that_is_not_a_number_never_raises_inside_a_turn():
+    """The feed drops these before they reach here; the block still never ends
+    a turn over one, because /brain/people is latched and would replay it."""
+    junk = snapshot(
+        [person(bbox=["a", 1, 2, 3], head_bbox=None, tracked_sec="soon", state="unknown", name=None)],
+        recent=[{"person_id": "p", "name": "Marc", "last_seen": None, "map": None}],
+    )
+    text = render(junk)
+    assert "- P3 = unknown (tracked 0 s)." in text and "box [" not in text
+    # and a stamp that is not a stamp reads as "this describes no scene at all"
+    assert people_context.render(snapshot([person()], stamp="now"), [], [], NOW, True) is None
 
 
 def test_the_box_stays_behind_when_the_model_is_looking_at_another_frame():

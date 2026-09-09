@@ -16,6 +16,7 @@ import importlib.util
 import json
 import logging
 import sys
+import time
 import uuid
 from collections.abc import MutableSequence
 from dataclasses import replace
@@ -295,24 +296,41 @@ def test_a_snapshot_is_only_fresh_while_the_engine_keeps_confirming_it():
 # ---------- the mutations a skill makes ----------
 
 
-def _people_interface() -> People:
-    """The real interface around a mock node: every ROS call is recorded."""
+def _people_interface(**overrides) -> People:
+    """The real interface around a mock node, holding a snapshot young enough
+    for ``in_view`` to answer from: every ROS call is recorded."""
     node = MagicMock()
     node.create_client.side_effect = lambda *args, **kwargs: MagicMock()
     people = People(node, logging.getLogger("test_people_sdk"))
-    people._on_snapshot(SimpleNamespace(data=SNAPSHOT_TEXT))
+    people._on_snapshot(SimpleNamespace(data=json.dumps({**SNAPSHOT, "stamp": time.time(), **overrides})))
     return people
 
 
 def test_a_mutation_says_which_snapshot_it_was_decided_on():
     """RFC section 8: the node refuses a tag issued after the snapshot the
-    caller was looking at rather than acting on whoever holds it now."""
+    caller was looking at rather than acting on whoever holds it now. The
+    person carries that snapshot with them, so handing one back is exact."""
     people = _people_interface()
+    theo = people.find("P3")
+    assert theo is not None
 
-    assert people.forget("P3")[0]
+    assert people.forget(theo)[0]
     forget = people._forget_client.call_async.call_args.args[0]
     assert forget.who == "P3"
-    assert forget.decided_on_stamp_ns == SNAPSHOT["frame_stamp_ns"]
+    assert int(forget.decided_on_stamp_ns) == int(theo.stamp * 1e9)
+
+
+def test_a_tag_is_decided_on_the_snapshot_it_was_read_from_not_the_newest_one():
+    """A tag on its own carries no snapshot, so the check would be off if the
+    newest one were quoted back — nothing can be newer than that."""
+    people = _people_interface()
+    assert people.in_view()  # the read the tag came from
+
+    later = json.dumps({**SNAPSHOT, "stamp": time.time(), "frame_stamp_ns": "1788818430123456789"})
+    people._on_snapshot(SimpleNamespace(data=later))
+    assert people.forget("P3")[0]
+
+    assert people._forget_client.call_async.call_args.args[0].decided_on_stamp_ns == SNAPSHOT["frame_stamp_ns"]
 
 
 def test_forget_is_the_only_mutation_a_skill_can_make():
@@ -365,7 +383,7 @@ class FakePeople:
             return None
         return replace(answer, stamp=NOW + (len(self.asked) - 1) // 2)
 
-    def forget(self, who: str) -> tuple[bool, str]:
+    def forget(self, who: PersonInView | str) -> tuple[bool, str]:
         self.forgotten.append(who)
         return self._forget
 
@@ -426,6 +444,33 @@ def test_arriving_counts_snapshots_and_not_loop_iterations():
     assert len(people.asked) > approach.ARRIVE_FRAMES
 
 
+def test_a_look_that_lost_the_person_breaks_the_run_of_arrivals():
+    """ARRIVE_FRAMES counts consecutive snapshots: a look that measured nothing
+    has to start the count again, or the robot reports arrival off three looks
+    with a lost one in the middle."""
+    parked = person(approach.TARGET_RANGE_M)
+    people = FakePeople([parked, parked, None, parked])
+    output = build(ApproachPerson, people, FakeMobility()).execute(who="P3")
+
+    assert output.ok
+    # two looks, one that saw nobody, and then three fresh snapshots in a row
+    assert len(people.asked) == 7
+
+
+def test_a_person_whose_bearing_is_unknown_is_not_somebody_you_are_facing():
+    """A missing bearing read as 0 degrees, which passes the facing test: at the
+    target range the robot stopped and said it was facing somebody it could be
+    side-on to. Not knowing is not facing, so it keeps servoing."""
+    people = FakePeople([person(approach.TARGET_RANGE_M, bearing_deg=None)])
+    mobility = FakeMobility()
+    skill = build(ApproachPerson, people, mobility)
+    skill._cancelled = True  # the latch stops the loop after exactly one pass
+
+    with pytest.raises(SkillCancelled):
+        skill.execute(who="P3")
+    assert mobility.commands  # it went on servoing instead of counting an arrival
+
+
 def test_approach_person_turns_toward_the_person_before_driving_at_them():
     people = FakePeople([person(3.0, bearing_deg=40.0)])
     mobility = FakeMobility()
@@ -484,7 +529,8 @@ def test_lost_message_says_which_kind_of_lost():
 def test_forget_person_addresses_the_record_a_tag_stands_for():
     people = FakePeople([person(1.5)])
     assert build(ForgetPerson, people).execute(who="P3") == "Done, I've forgotten Theo."
-    assert people.forgotten == ["person_7f92a1b3"]  # the tag dies with the track; the id does not
+    (target,) = people.forgotten
+    assert target.tag == "P3" and target.stamp > 0.0  # the view it was read from, not a bare tag
 
 
 def test_forget_person_leaves_a_name_for_the_node_to_rule_on():
@@ -499,7 +545,8 @@ def test_forget_person_leaves_a_name_for_the_node_to_rule_on():
 def test_forget_person_falls_back_to_the_tag_for_someone_with_no_record_yet():
     people = FakePeople([PersonInView(tag="P5")])
     build(ForgetPerson, people).execute(who="P5")
-    assert people.forgotten == ["P5"]
+    (target,) = people.forgotten
+    assert target.tag == "P5" and target.person_id is None  # the node rules on the tag itself
 
 
 def test_forget_person_passes_an_unseen_name_straight_to_the_node():
