@@ -9889,12 +9889,12 @@ select.skill-input {
 }
 
 /* ---- compact Agent layout ------------------------------------------------ */
-/* Two thresholds, both mirrored in main.js: the dock floats over the feed
-   rather than taking a column, so the monitor stands down long before it. */
-
-@media (max-width: 1280px) {
+/* Keep inspection available at every width; on compact screens its return
+   control sits above the closed chat sheet. */
+@media (max-width: 820px) {
   .agent-cockpit .agent-stage-view-toggle {
-    display: none;
+    right: var(--agent-overlay-inset);
+    bottom: calc(var(--agent-overlay-inset) + var(--agent-sheet-closed) + 10px);
   }
 }
 
