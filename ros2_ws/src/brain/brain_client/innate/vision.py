@@ -216,19 +216,30 @@ Window = tuple[int, int, int, int]
 _BLOB_MIN_LIKELIHOOD = 32
 
 
-def _blob_under(bp: np.ndarray, point: tuple[float, float]) -> tuple[tuple[float, float], Window, Axis] | None:
-    """The whole thresholded blob containing `point` (else the largest blob):
-    its centroid, bounding box and minimum-area-rectangle axis. CamShift's own
-    window and ellipse are not usable for any of these: the colour model
-    scores an object's dominant shade highest, so mean shift climbs onto the
-    lit face of a glossy object and the window hugs that patch, reporting a
-    point that drifts from the centre to an edge as the object grows."""
+def _overlaps(c: np.ndarray, window: Window) -> bool:
+    x, y, w, h = cv2.boundingRect(c)
+    wx, wy, ww, wh = window
+    return x < wx + ww and wx < x + w and y < wy + wh and wy < y + h
+
+
+def _blob_under(bp: np.ndarray, window: Window) -> tuple[tuple[float, float], Window, Axis] | None:
+    """The whole thresholded blob under the CamShift window's centre (else
+    the largest one overlapping the window; never one elsewhere in the frame,
+    which would hand the track to a same-coloured twin): its centroid,
+    bounding box and minimum-area-rectangle axis. CamShift's own window and
+    ellipse are not usable for any of these: the colour model scores an
+    object's dominant shade highest, so mean shift climbs onto the lit face
+    of a glossy object and the window hugs that patch, reporting a point that
+    drifts from the centre to an edge as the object grows."""
     _thr, mask = cv2.threshold(bp, _BLOB_MIN_LIKELIHOOD - 1, 255, cv2.THRESH_BINARY)
     contours, _hier = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
+    x, y, w, h = window
+    centre = (x + w / 2.0, y + h / 2.0)
+    under = [c for c in contours if cv2.pointPolygonTest(c, centre, False) >= 0]
+    near = under or [c for c in contours if _overlaps(c, window)]
+    if not near:
         return None
-    under = [c for c in contours if cv2.pointPolygonTest(c, point, False) >= 0]
-    blob = max(under or contours, key=cv2.contourArea)
+    blob = max(near, key=cv2.contourArea)
     m = cv2.moments(blob)
     if m["m00"] <= 0:
         return None
@@ -274,7 +285,7 @@ def seg_track(
     score = _track_score(bp, rot, window)
     if score < min_score:
         return None, window, score, None
-    blob = _blob_under(bp, (x + w / 2.0, y + h / 2.0))
+    blob = _blob_under(bp, window)
     if blob is None:
         return (x + w / 2.0, y + h / 2.0), window, score, None
     centroid, bbox, axis = blob
