@@ -2,9 +2,10 @@
 # Copyright (c) 2026 Innate Inc
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from mars_bringup.config_loader import get_env, load_env_file, settings_params
+from mars_bringup.config_loader import get_env, load_env_file, node_setting, settings_params
 
 from brain_client.common.logging import get_logging_env_vars
 
@@ -68,6 +69,15 @@ def generate_launch_description():
         default_value=get_env("CARTESIA_VOICE_ID", "9fdaae0b-f885-4813-b589-3c07cf9d5fea"),
         description="Cartesia Alfred voice id",
     )
+    # Whether to run the people node is decided here and nowhere else: a
+    # parameter cannot answer it, because a node that exits is one respawn
+    # restarts every two seconds.
+    people_enabled_arg = DeclareLaunchArgument(
+        "people_enabled",
+        default_value=str(node_setting("people_node", "enabled", False)),
+        description="Run the people node (recognizes the people the robot meets; experimental)",
+    )
+
     brain_client_node = Node(
         package="brain_client",
         executable="brain_client_node.py",
@@ -107,7 +117,20 @@ def generate_launch_description():
             gemini_model_arg,
             # Proxy service config args
             cartesia_voice_id_arg,
+            people_enabled_arg,
             brain_client_node,
+            # Recognition runs beside the brain, not inside it: the models are
+            # native libraries, and a segfault there must not take the turn loop.
+            Node(
+                package="brain_client",
+                executable="people_node.py",
+                name="people_node",
+                condition=IfCondition(LaunchConfiguration("people_enabled")),
+                output="screen",
+                respawn=True,
+                respawn_delay=2.0,
+                parameters=[{"simulator_mode": LaunchConfiguration("simulator_mode")}, *settings_params()],
+            ),
             Node(
                 package="brain_client",
                 executable="skills_server.py",

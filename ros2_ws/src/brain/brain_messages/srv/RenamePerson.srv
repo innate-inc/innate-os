@@ -1,0 +1,9 @@
+# Request — give a person a name, or replace the one they have. ``who`` is a person id
+# ("person_7f92a1b3") or a name already on file; empty means whoever is in view, which is
+# what "this is Theo" means, and it fails rather than guess when that is not one person.
+string who
+string name
+---
+bool success
+string message
+string person_id

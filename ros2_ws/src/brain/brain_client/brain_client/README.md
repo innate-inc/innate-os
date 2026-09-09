@@ -10,6 +10,7 @@ code, start from what it *does*:
 | `core/` | The activate/deactivate/reset state machine and directive switching (`lifecycle`), typed `config`, and the shared `state`. |
 | `perception/` | Turning sensors into what the agent sees: `camera`, `pose`/`pose_tracking`, `scan_health`, `gaze`. |
 | `memory/` | Persistent per-map spatial memory: `store` (JSON index + JPEGs on disk), pure `selection` (which viewpoints earn a slot), `recorder` (the always-on ROS adapter that captures them). |
+| `people/` | Recognizing the people the robot meets, in its own node (`nodes/people_node.py`): `models` (YuNet, SFace, OSNet, HOG), `recognize` (face names a person, outfit carries the name while they are turned away), `roster` (who is on file, under `data/people/`). |
 | `skills/` | The skill system: `registry`, `roster` (available + directive-active sets), `runner` (action lifecycle), `loader`, `hot_reload`, and the public `types` SDK base classes. |
 | `agents/` | Directives/behaviours: `loader`, `initializer`, and the public `types` SDK base class. |
 | `inputs/` | Input-device subsystem and its public `types` SDK base class. |

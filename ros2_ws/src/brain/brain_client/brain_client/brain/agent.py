@@ -29,7 +29,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from brain_client.brain import grounding
+from brain_client.brain import grounding, people_context
 from brain_client.brain.context import Decision, GeminiContext, ToolCall
 from brain_client.brain.loop import LoopThread
 from brain_client.brain.prompt import build_system_prompt, self_reference_turns
@@ -61,6 +61,7 @@ if TYPE_CHECKING:
     from brain_client.perception.camera import CameraCapture
     from brain_client.perception.gaze_control import GazeController
     from brain_client.perception.identity import IdentityMonitor
+    from brain_client.perception.people_feed import PeopleFeed
     from brain_client.perception.pose import Pose
     from brain_client.perception.pose_tracking import PoseTracker
     from brain_client.perception.scan_health import ScanHealthMonitor
@@ -76,6 +77,7 @@ _MAX_EVENT_IMAGES = 4  # newest event images sent per turn; older ones arrive as
 _MAX_RERUNS = 2  # nonstop user speech cannot starve the loop
 _EVENT_TURN_GAP = 1.0  # floor between event-driven turns (feedback chatter); user speech skips it
 _DROP_EVENTS_AFTER = 3  # failed turns before the peeked events are dropped (the batch may be the poison)
+_PEOPLE_FRESH_SEC = 2.0  # a snapshot older than this no longer describes the frame in this turn
 
 
 class BrainAgent:
@@ -91,6 +93,7 @@ class BrainAgent:
         roster: SkillRoster,
         chat: ChatManager,
         gaze: GazeController,
+        people_feed: PeopleFeed | None = None,
         proxy: ProxyClient | None = None,
         scan_health: ScanHealthMonitor | None = None,
         battery: BatteryMonitor | None = None,
@@ -109,6 +112,7 @@ class BrainAgent:
         self._roster = roster
         self._chat = chat
         self._gaze = gaze
+        self._people = people_feed  # None when the people node is not part of this build
         self._trace_sink = trace  # publishes one JSON string per event on /brain/trace
         self._on_thinking_changed = on_thinking_changed
         self._lidar = ScanHealthReporter(
@@ -455,8 +459,16 @@ class BrainAgent:
             running_skill=running.primitive_name if running else None,
             events=events,
             has_wrist_frame=arm_jpeg is not None,
+            people_text=self._people_text(),
         )
         return text, frames
+
+    def _people_text(self) -> str | None:
+        """Who the people node says is in the picture, or nothing at all: a
+        snapshot older than the frame the model is looking at describes a room
+        it has since moved on from."""
+        snapshot = self._people.fresh(_PEOPLE_FRESH_SEC) if self._people is not None else None
+        return None if snapshot is None else people_context.render(snapshot)
 
     def _now(self) -> datetime:
         """Wall clock as an aware datetime, so the status line can name the zone."""

@@ -214,6 +214,18 @@
 #     idle_turn_interval: 3.0       # seconds between looks when no skill is running
 #     supervision_turn_interval: 5.0  # seconds between looks while a skill runs
 
+# ── People (recognize the people the robot meets) ─────────────────────
+# The people node recognizes faces, carries an identity on the person's outfit
+# while they are turned away, and keeps a face gallery per person under
+# data/people/ (data/people_sim/ in the simulator). Everything stays on the
+# robot. EXPERIMENTAL and shipped off: `enabled` is read by the launch file
+# before the process starts, so turning it on takes a reboot, not a restart.
+# people_node:
+#   ros__parameters:
+#     enabled: true                 # run the people node at all; read at launch (default: false)
+#     allow_model_download: true    # fetch the YuNet and SFace models once if they are missing
+#     tick_hz: 2.0                  # how often a frame is looked at
+
 # ── Voice & speech (voice loop) ───────────────────────────────────────
 # input_manager_node runs the voice / transcription loop; its model settings live
 # here. The TTS voice is shared globally — set it once under /** above (it

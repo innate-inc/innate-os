@@ -92,6 +92,7 @@ def observation_text(
     running_skill: str | None,
     events: list[Event],
     has_wrist_frame: bool,
+    people_text: str | None = None,
 ) -> str:
     """The text half of a turn input: robot status and new events. Running-skill
     guidance rides the system instruction, not here — stored per turn it would
@@ -104,6 +105,8 @@ def observation_text(
     if running_skill:
         status += f" | running skill: {running_skill}"
     lines = [status]
+    if people_text:
+        lines.append(people_text)
     lines += [f"- {event.text}" for event in events]
     if has_wrist_frame:
         lines.append("(second image is the arm wrist camera)")

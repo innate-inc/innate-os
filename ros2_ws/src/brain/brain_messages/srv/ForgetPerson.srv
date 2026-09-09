@@ -1,0 +1,7 @@
+# Request — delete everything about a person: their name, their face gallery, their outfit.
+# ``who`` reads as in RenamePerson. Irreversible, and meant to be: it is the answer to
+# somebody asking not to be remembered.
+string who
+---
+bool success
+string message
