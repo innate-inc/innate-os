@@ -1,0 +1,7 @@
+# Keeps SHA-pinned actions current; without it a pin never advances.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

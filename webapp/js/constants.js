@@ -162,6 +162,18 @@ export const MEMORY_SEARCH_TOPIC = "/brain/memory_search";
 // operators can see which skills the agent is executing.
 export const SKILL_STATUS_UPDATE_TOPIC = "/brain/skill_status_update";
 
+// What a running skill draws over the cameras, for the targeting overlay
+// (std_msgs/String JSON: {skill, run, ev, t, ...} from Skill.overlay in the SDK;
+// `run` is the id the server stamps on every event of one root skill's run).
+// {ev:"run", state:"start", prompt, stages:[...], frame:[w,h]} opens a run and
+// the server's {ev:"run", state:"end", ok, cancelled, text} closes it; between
+// them {ev:"stage", name}, {ev:"readout", text, busy, progress}, {ev:"mark", id,
+// kind, view, label, locked, corners|px|a,b} and {ev:"clear", ids|view} arrive,
+// every marker in image pixels of the run's frame. Every event repeats the
+// run's header (prompt, stages, frame, current stage) and unchanged markers
+// repeat once a second, so a page that missed the start still recovers them.
+export const SKILL_OVERLAY_TOPIC = "/brain/skill_overlay";
+
 // Per-step ACT inference timing breakdown (std_msgs/String carrying JSON), published
 // by the manipulation server while a learned behavior runs. Drives the Profiling page.
 export const INFERENCE_PROFILE_TOPIC = "/brain/manipulation/inference_profile";

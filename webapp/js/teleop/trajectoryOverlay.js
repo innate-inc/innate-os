@@ -278,7 +278,7 @@ export function ribbon(pts, vw, bottomY, anchorBottom = true) {
 /** SimSession names the primary camera with a bare string, WebRtcSession with
  * an {index, name} pair — both call the head camera "main".
  * @param {any} session @returns {string | undefined} */
-function primaryCameraName(session) {
+export function primaryCameraName(session) {
   const cam = session.primaryCamera;
   return typeof cam === "string" ? cam : cam?.name;
 }

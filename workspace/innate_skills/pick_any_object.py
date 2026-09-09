@@ -11,7 +11,7 @@ import math
 import re
 import time
 
-from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, base_to_odom, inside_box
+from innate_skills.approach import APPROACH_PARAMS, FloorApproach, ask_head, base_to_odom, inside_box, metres
 
 from innate import (
     Head,
@@ -29,7 +29,7 @@ from innate import (
 )
 from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
-from innate.geometry import pixel_to_floor
+from innate.geometry import IMG_H, IMG_W, floor_to_pixel, pixel_to_floor
 
 GRIPPER_EMPTY_J6 = -0.085
 VERIFY_BACKUP_M = 0.15
@@ -104,6 +104,8 @@ WRIST_ALIGN_TIMEOUT_S = 60.0
 WRIST_MAX_JUMP_PX = 80.0
 WRIST_SEG_MIN_SCORE = 25.0
 WRIST_CAM_ABOVE_EE = 0.07
+# Half-length of the blob's drawn long axis, wrist-image px.
+AXIS_HALF_PX = 45
 # Wrist roll to the blob's minor axis (the gripper's 81 mm jaw is narrower
 # than most objects' long side). Blobs rounder than MIN_ELONGATION have no
 # axis worth chasing; below AXIS_MIN_Z the fingers straddle the blob in the
@@ -252,6 +254,7 @@ class PickAnyObject(Skill):
     def _detect_px(self, prompt):
         """Head frame -> grasp pixel of the remembered target, or None. Also
         records Gemini's per-object grip_strength for the close."""
+        self.overlay.readout("looking for it", busy=True)
         text, img = ask_head(
             self,
             self._proxy,
@@ -270,18 +273,29 @@ class PickAnyObject(Skill):
             "Empty list if not present.",
             self._p["settle_s"],
         )
-        cands = vision.parse_det_cands(text)
+        cands = vision.parse_det_cands_boxed(text)
         cand = self._choose_cand(cands) if cands else None
         if cand is None:
+            self.overlay.clear("target")
+            self.overlay.readout("not in view")
             return None
-        u, v, grip = cand
+        u, v, grip, box = cand
         if grip is not None:
             lo, hi = GRIP_STRENGTH_RANGE
             self._grip_strength = max(lo, min(hi, grip))
         seen = self._sighting(cand)
         if seen is not None:
             self._last_seen = seen
+        self._draw_sighting((u, v), box, seen[2] if seen else None, len(cands))
         return (u, v)
+
+    def _draw_sighting(self, px, box, dist, n):
+        ui = self.overlay
+        ui.clear("track", "steer")
+        ui.bracket("target", box or (px[0] - 20, px[1] - 20, px[0] + 20, px[1] + 20), label="target")
+        ahead = f" · {metres(dist)} ahead" if dist is not None else ""
+        matches = f" · {n} matches" if n > 1 else ""
+        ui.readout(f"spotted{ahead}{matches}")
 
     def _rest_arm(self, keep_grip):
         """Best-effort teardown: carry if holding, else fold to rest. Never
@@ -320,6 +334,12 @@ class PickAnyObject(Skill):
         # identical twins the box nearest the servo aim point is ours.
         box = min(boxes, key=self._wrist_aim_dist) if boxes else None
         px = (box[0] + box[2] / 2.0, box[1] + box[3] / 2.0) if box else None
+        if box:
+            corners = (box[0], box[1], box[0] + box[2], box[1] + box[3])
+            self.overlay.bracket("wrist-target", corners, label="wrist target", view="arm")
+            self.overlay.readout("wrist camera has it")
+        else:
+            self.overlay.readout("wrist camera can't see it")
         return px, box
 
     def _wrist_aim_dist(self, box):
@@ -349,7 +369,29 @@ class PickAnyObject(Skill):
     ) -> tuple[float, float, float, float]:
         roll = self._grasp_roll(axis)
         self.logger.info(f"[PickAnyObject] wrist stage: {reason} (z={z:.3f}, roll={math.degrees(roll):+.0f} deg)")
+        self.overlay.readout(f"wrist align: {reason}")
         return x, y, z, roll
+
+    def _draw_wrist(self, px, inside, z, top, blob):
+        """The servo box, the tracked blob with its long axis, and the descent."""
+        p = self._p
+        ui = self.overlay
+        u, v, half = p["wrist_box_u"], p["wrist_box_v"], p["wrist_half_px"]
+        ui.clear("wrist-target")
+        ui.box("wrist-box", (u - half, v - half, u + half, v + half), label="wrist box", view="arm", locked=inside)
+        ui.point("blob", px, label="blob", view="arm", locked=inside)
+        if inside:
+            ui.clear("wrist-steer")
+        else:
+            ui.vector("wrist-steer", px, (u, v), view="arm")
+        if blob is not None and blob[1] >= MIN_ELONGATION:
+            du, dv = math.cos(blob[0]) * AXIS_HALF_PX, math.sin(blob[0]) * AXIS_HALF_PX
+            ui.line("axis", (px[0] - du, px[1] - dv), (px[0] + du, px[1] + dv), view="arm")
+        else:
+            ui.clear("axis")
+        span = top - p["wrist_stop_z"]
+        progress = min(1.0, max(0.0, (top - z) / span)) if span > 0 else 1.0
+        ui.readout(f"{'descending' if inside else 'centring'} · {round(z * 100)} cm up", progress=progress)
 
     @staticmethod
     def _grasp_roll(axis: vision.Axis | None) -> float:
@@ -406,6 +448,7 @@ class PickAnyObject(Skill):
             return self._wrist_done(tx, ty, z, "not seen")
 
         deadline = time.monotonic() + WRIST_ALIGN_TIMEOUT_S
+        top = z
         axis = None  # last blob axis read high enough to trust
         streak = 0  # verified matches since the arm last moved
         centered = 0  # consecutive matches INSIDE the box
@@ -445,6 +488,7 @@ class PickAnyObject(Skill):
             err_u = px[0] - p["wrist_box_u"]
             err_v = px[1] - p["wrist_box_v"]
             inside = inside_box(px, p["wrist_box_u"], p["wrist_box_v"], p["wrist_half_px"])
+            self._draw_wrist(px, inside, z, top, tracker.axis)
             centered = centered + 1 if inside else 0
             if streak < 2:
                 continue  # watch one more frame before trusting it
@@ -522,6 +566,7 @@ class PickAnyObject(Skill):
         Contact just stalls the final segments; abort if still high."""
         p = self._p
         self.check_cancelled()
+        self.overlay.readout("reaching to the floor")
         rungs = [z for z in (p["descend_z1"], p["descend_z2"], p["descend_z3"], p["floor_z"]) if z < z_from - 1e-6]
         if rungs:
             # grip=GRIPPER_OPEN re-asserts an open claw even if it drifted
@@ -586,6 +631,7 @@ class PickAnyObject(Skill):
         # in the twist/lift below (e.g. ArmUnhealthy from the LookupError
         # fallback) must not release a just-grasped object on the way home.
         self._holding = True
+        self.overlay.readout("lifting")
         time.sleep(p["close_settle_s"])
 
         grip = -p["close_strength"]
@@ -627,31 +673,46 @@ class PickAnyObject(Skill):
                 x, y, 0.22, roll=roll, pitch=p["arm_pitch"], yaw=yaw, duration=2.0, tolerance_xy=0.10
             )
 
+    def _aim(self, x: float, y: float) -> None:
+        """Show where the fingers will close, on the head camera."""
+        px = floor_to_pixel(x, y, self._p["tilt_deg"])
+        if px is not None:
+            self.overlay.reticle("grasp", px, label="grasp")
+
     def _grasp_at(self, prompt, xy):
         """Full grasp at floor xy (base_link)."""
         p = self._p
         x, y = self.manipulation.clamp_reach(xy[0] - p["grasp_x_off"], xy[1])
+        self._aim(x, y)
 
         self.manipulation.torque_on()
         # gripper_open reboots + retries a tripped servo, raising ArmUnhealthy
         # if the claw stays shut.
         self.manipulation.gripper_open(duration=1.0)
         if p["wrist_steps"] >= 1:
+            self.overlay.stage("align")
+            self.overlay.readout("aligning the wrist camera")
             self._goto_search_pose(math.atan2(y, x))
             x, y, z, roll = self._wrist_descend(prompt, x, y)
+            self.overlay.clear(view="arm")  # the arm moves on, the view with it
+            self._aim(x, y)
         else:
             z, roll = p["hover_z"], 0.0
             self.manipulation.move_to(x, y, z, pitch=p["arm_pitch"], duration=p["hover_s"])
 
+        self.overlay.stage("grasp")
         roll, pitch, yaw = self._grasp_orientation(x, y, roll)
         self._push_to_floor(x, y, z, roll, pitch, yaw)
         self.check_cancelled()  # last exit before the fingers commit
+        self.overlay.readout("closing the gripper")
         self._close_twist_lift(x, y, roll, pitch, yaw)
 
     def _grasp_verified(self, prompt, approach: FloorApproach):
         """Back up, then check floor clear + gripper not open. Gemini gets both
         cameras: the wrist view can show the object in the fingers, so a held
         object isn't mistaken for a dropped one."""
+        self.overlay.stage("verify")
+        self.overlay.clear("grasp")
         approach.drive(-VERIFY_BACKUP_M)
         self.sleep(self._p["settle_s"])
         js = self.joint_states
@@ -708,7 +769,12 @@ class PickAnyObject(Skill):
             f"[PickAnyObject] verify: floor={floor_text!r} j6={j6} "
             f"({len(images)} cams) -> {'HELD' if held else 'NOT HELD'}"
         )
+        self.overlay.readout("holding it" if held else "missed it")
         return held
+
+    def _stages(self) -> list[str]:
+        align = ["align"] if self._p["wrist_steps"] >= 1 else []
+        return ["search", "approach", *align, "grasp", "verify"]
 
     def execute(self, prompt: str = "the sock") -> SkillReturn:
         """Pick up `prompt` from the floor."""
@@ -727,9 +793,11 @@ class PickAnyObject(Skill):
             self.manipulation.move_joints(NAV_ARM, duration=3.0)
 
             approach = FloorApproach(self, self._p, self._detect_px)
+            self.overlay.begin(prompt, stages=self._stages(), frame=(IMG_W, IMG_H))
             self.say(f"Looking for {prompt}.")
             xy = approach.search(prompt)
             xy = approach.position_above(prompt, xy)
+            self.overlay.readout("parked over it")
             self.say("Picking it up.")
             self._grasp_at(prompt, xy)
             # _close_twist_lift latched self._holding the moment the fingers

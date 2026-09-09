@@ -11,7 +11,6 @@ import { getConfig } from "./config.js";
 import { sharedAgentState } from "./teleop/agentState.js";
 import { createAgentIndicator } from "./agentIndicator.js";
 import { createArmAlert } from "./armAlert.js";
-import { maybeShowAppPromo } from "./appPromo.js";
 import { installPressActivate } from "./pressActivate.js";
 import { FOOTER_SECTIONS, GROUPS, SECTIONS, SIM_SECTIONS, railRows } from "./railLayout.js";
 
@@ -184,9 +183,6 @@ export function initShell(navigate) {
     if (!config?.simControls) createArmAlert(ros);
   });
 
-  // On a phone/tablet, nudge toward the native app (shown once, then remembered).
-  maybeShowAppPromo("/");
-
   /**
    * Reflect the active section: highlight its rail link, hide the agent pill on
    * the Agent route, and title the tab.
@@ -198,7 +194,7 @@ export function initShell(navigate) {
     // Every navigation lands here, and none may leave the drawer over the
     // page it just opened -- a number key and Back produce no rail click.
     closeRailDrawer();
-    agentIndicator.el.style.display = key === "agent" ? "none" : "";
+    agentIndicator.el.toggleAttribute("data-off-route", key === "agent");
     const section = SECTIONS.find((s) => s.key === key);
     document.title = section ? `Innate · ${section.label}` : "Innate";
   }
