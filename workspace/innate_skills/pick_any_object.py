@@ -210,8 +210,9 @@ def _dist(a, b):
 def _fills_the_view(window) -> bool:
     """The blob runs off two frame borders: its visible centroid is biased
     toward the frame centre by an unknown amount, so the servo can only
-    steer it further out. The xy centred while it was whole is the best
-    estimate there is."""
+    steer it further out. Once the object has been centred whole, that xy
+    is the best estimate there is; before that, steering on the biased
+    centroid still beats a blind grasp."""
     x, y, w, h = window
     edges = (x <= 1) + (y <= 1) + (x + w >= IMG_W - 1) + (y + h >= IMG_H - 1)
     return edges >= 2
@@ -516,6 +517,7 @@ class PickAnyObject(Skill):
         streak = 0  # verified matches since the arm last moved
         centered = 0  # consecutive matches INSIDE the box
         stalled = 0  # consecutive steps eaten by the reach clamp
+        descended = False  # a z-step has happened, so x, y were centred once
         reason = "reached stop z"
         while z > p["wrist_stop_z"] + 1e-6:
             # Explicit cancel point: with a fresh frame already buffered (the
@@ -545,7 +547,7 @@ class PickAnyObject(Skill):
                     reason = fail
                     break
                 px = tracker.guess
-            if _fills_the_view(tracker.window):
+            if descended and _fills_the_view(tracker.window):
                 reason = "fills the view"
                 break
             streak += 1
@@ -564,6 +566,7 @@ class PickAnyObject(Skill):
 
             stepped_down = centered >= 2
             if stepped_down:
+                descended = True
                 z = max(p["wrist_stop_z"], z - p["wrist_z_step"])
                 # Descending IS progress: only consecutive clamped nudges count
                 # as stalled, or three clamps spread across a long tracking
