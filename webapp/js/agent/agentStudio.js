@@ -377,6 +377,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
 
   function restartIntro() {
     write(localStorage, SKIP_KEY, "");
+    write(localStorage, DRAG_HINT_KEY, ""); // asking for the story again means asking for all of it
     write(sessionStorage, ARMED_KEY, "");
     armedAttempt = "";
     autoStarted = false;

@@ -261,6 +261,7 @@ export function createChatStream() {
     el.className = `chat-msg ${kind}`;
     el.classList.toggle("skill-output", label === "skill_output");
     el.classList.toggle("narrator", label === "narrator");
+    el.dataset.ts = String(ts);
     if (kind === "system") {
       const tag = document.createElement("span");
       tag.className = "chat-sender mono";
@@ -499,11 +500,13 @@ export function createChatStream() {
 
   /** Replace the transcript with a history snapshot. The snapshot already
    *  includes anything the live stream just showed, so reset and replay it
-   *  wholesale rather than trying to merge.
+   *  wholesale rather than trying to merge -- except the world's own lines,
+   *  which the brain never recorded and only this page can put back.
    *  @param {any[]} entries */
   function replay(entries) {
     const wasAtBottom = atBottom();
     const priorTop = stream.scrollTop;
+    const narrated = [...stream.querySelectorAll(":scope > .chat-msg.narrator")];
     stream.replaceChildren();
     for (const timer of compactEnterTimers) clearTimeout(timer);
     compactEnterTimers.clear();
@@ -519,12 +522,23 @@ export function createChatStream() {
       replayingHistory = false;
       stream.classList.remove("replaying");
     }
+    for (const line of narrated) restoreNarrated(line);
     if (suggestion) stream.append(suggestion);
     // A reconcile can land while the reader is up in the scrollback.
     stream.scrollTop = wasAtBottom ? stream.scrollHeight : priorTop;
   }
 
+  /** Put a world line back where its timestamp says it belongs. @param {HTMLElement} line */
+  function restoreNarrated(line) {
+    const at = Number(line.dataset.ts) || 0;
+    const later = [...stream.children].find(
+      (item) => item instanceof HTMLElement && Number(item.dataset.ts) > at,
+    );
+    stream.insertBefore(line, later ?? null);
+  }
+
   function clear() {
+    for (const line of stream.querySelectorAll(":scope > .chat-msg.narrator")) line.remove();
     replay([]);
   }
 
