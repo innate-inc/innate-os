@@ -257,7 +257,9 @@ export function createArmPanel(parent, rosClient, opts = {}) {
       // Divergence is the headline when it happens: the arm is not where the
       // operator put it, and that matters more than the rate.
       if (g.divergedJoint) {
-        status.textContent = `joint ${g.divergedJoint} limited by the robot · ${g.drawMa} mA`;
+        // Clearance is the number to tune BODY_MARGIN_M against, so show it.
+        const room = g.clearanceMm >= 0 ? ` · ${g.clearanceMm} mm` : "";
+        status.textContent = `joint ${g.divergedJoint} blocked${room} · ${g.drawMa} mA`;
         status.classList.add("warn");
       } else {
         status.textContent = g.armed ? `${state.rate} Hz · ${g.drawMa} mA` : `${state.rate} Hz`;

@@ -271,6 +271,23 @@ export const DIVERGENCE_FLOOR_MA = 120;
 // to keep pushing toward a pose the robot may have left.
 export const DIVERGENCE_STALE_MS = 500;
 
+// ---- Body keepout, enforced here rather than awaited from the robot --------
+// The robot's answer arrives a round trip late, and a round trip is long enough
+// for a fast move to be over before the operator feels anything. The webapp
+// computes the same geometry locally (armGeometry.js) so the wall lands in the
+// hand immediately; the robot keeps its own copy as the authority.
+//
+// Clearance demanded around the body. Larger than the robot's own margin on
+// purpose: the leader is where the operator's momentum lives, and stopping the
+// *hand* early is what stops the arm overshooting through backlash and flex.
+export const BODY_MARGIN_M = 0.03;
+// Inside this the hold begins to build rather than arriving all at once.
+export const BODY_SLOW_MARGIN_M = 0.09;
+// Motion is projected this far ahead, so approaching fast reserves more room
+// than creeping does. Backlash and plastic flex mean the arm keeps travelling
+// after the command stops; the faster it closes, the sooner the wall must be.
+export const BODY_LOOKAHEAD_S = 0.18;
+
 export const J2_RESTRICTED_MIN_RAD = -0.5;
 export const J1_FRONT_ARC_LO = -1.0;
 export const J1_FRONT_ARC_HI = 1.0;

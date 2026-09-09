@@ -18,6 +18,9 @@ import {
   ARM_CONSTRAINT_TOPIC,
   ARM_GET_PARAMETERS_SERVICE,
   ARM_POSITION_LIMITS_PARAMS,
+  BODY_LOOKAHEAD_S,
+  BODY_MARGIN_M,
+  BODY_SLOW_MARGIN_M,
   DIVERGENCE_DEADBAND_TICKS,
   DIVERGENCE_FLOOR_MA,
   DIVERGENCE_MA_PER_TICK,
@@ -33,6 +36,7 @@ import {
   LEADER_CURRENT_CEILING_MA,
   PARAMETER_DOUBLE_ARRAY,
 } from "./constants.js";
+import { bodyClearance, poseHitsBody, ticksToRads } from "./armGeometry.js";
 import { OPERATING_MODE_CURRENT_POSITION } from "./dynamixel.js";
 import { readBudget, onBudgetChange } from "./leaderBudget.js";
 import {
@@ -93,6 +97,7 @@ export class LeaderGuard {
     allocatedMa: 0,
     divergedJoint: 0,
     divergedTicks: 0,
+    clearanceMm: -1,
     error: null,
   };
   #enabled = true;
@@ -107,6 +112,11 @@ export class LeaderGuard {
   /** @type {(() => void) | null} */ #unsubConstraint = null;
   /** @type {number[] | null} */ #constrained = null;
   #constrainedAt = 0;
+  // The last leader pose that cleared the body, and the clearance trend used to
+  // reserve room for a fast approach.
+  /** @type {number[] | null} */ #lastClear = null;
+  #prevClearance = Infinity;
+  #prevClearanceAt = 0;
   // The pose mars_arm last accepted, in leader ticks. Null until it reports.
   /** @type {number[] | null} */ #accepted = null;
   #acceptedAt = 0;
@@ -321,6 +331,10 @@ export class LeaderGuard {
     if (this.#trip(drawMa)) return;
 
     const before = this.#holding.size;
+    // Local first: this is the only source fast enough to matter on a quick
+    // swing. The robot's report still covers constraints the webapp cannot
+    // model, and stays the authority on what the arm will actually accept.
+    const body = this.#bodyCheck(state.positions);
     const diverged = this.#divergence(state.positions);
     /** @type {Map<number, number>} */
     const goals = new Map();
@@ -335,7 +349,11 @@ export class LeaderGuard {
 
       // Two reasons to push back, and divergence wins where both apply: it is
       // what the robot actually did, while the band is only our model of it.
-      const error = diverged[i];
+      // A body hit is expressed as a divergence from the last clear pose, so it
+      // flows through the same push-toward-a-reachable-state path.
+      const bodyError = body.hit && body.target ? tick - body.target[i] : null;
+      const error =
+        bodyError !== null && Math.abs(bodyError) > Math.abs(diverged[i] ?? 0) ? bodyError : diverged[i];
       const beyond = error !== null && Math.abs(error) > DIVERGENCE_DEADBAND_TICKS;
       const band = this.band(id);
       const outside = !!band && isOutside(tick, band, HYSTERESIS_TICKS, this.#holding.has(id));
@@ -371,6 +389,7 @@ export class LeaderGuard {
       drawMa,
       divergedJoint: worstJoint,
       divergedTicks: Math.round(worstTicks),
+      clearanceMm: Number.isFinite(body.clearance) ? Math.round(body.clearance * 1000) : -1,
     });
   }
 
@@ -408,6 +427,45 @@ export class LeaderGuard {
     }
     this.#writeCurrents(backed);
     return false;
+  }
+
+  /**
+   * How much room to demand right now. The static margin plus whatever the arm
+   * would cover in BODY_LOOKAHEAD_S at its current closing speed: creeping up to
+   * the body may use the full range, swinging at it may not. This is what stops
+   * a fast move overshooting through backlash and flex after the command halts.
+   * @param {number} clearance @param {number} now
+   * @returns {number}
+   */
+  #demandedMargin(clearance, now) {
+    const dt = (now - this.#prevClearanceAt) / 1000;
+    let closing = 0;
+    if (this.#prevClearanceAt && dt > 0 && dt < 0.2 && Number.isFinite(this.#prevClearance)) {
+      closing = Math.max(0, (this.#prevClearance - clearance) / dt);
+    }
+    this.#prevClearance = clearance;
+    this.#prevClearanceAt = now;
+    return BODY_MARGIN_M + closing * BODY_LOOKAHEAD_S;
+  }
+
+  /**
+   * Whether the leader's own pose would put the arm in the body, and where to
+   * push back to if so. Computed here rather than read off the robot: the
+   * robot's verdict is a round trip old, and a fast swing is finished inside
+   * that window.
+   * @param {number[]} positions
+   * @returns {{ hit: boolean, target: number[] | null, clearance: number }}
+   */
+  #bodyCheck(positions) {
+    const rads = ticksToRads(positions);
+    const clearance = bodyClearance(rads);
+    const margin = this.#demandedMargin(clearance, performance.now());
+    const hit = poseHitsBody(rads, margin);
+    if (!hit) {
+      this.#lastClear = positions.slice();
+      return { hit: false, target: null, clearance };
+    }
+    return { hit: true, target: this.#lastClear, clearance };
   }
 
   /** @param {number[]} positions @returns {boolean} */
@@ -486,6 +544,7 @@ export class LeaderGuard {
       next.allocatedMa === this.#state.allocatedMa &&
       next.divergedJoint === this.#state.divergedJoint &&
       next.divergedTicks === this.#state.divergedTicks &&
+      next.clearanceMm === this.#state.clearanceMm &&
       next.error === this.#state.error &&
       next.holding.join() === this.#state.holding.join()
     ) {

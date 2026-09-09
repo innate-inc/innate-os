@@ -244,6 +244,8 @@ interface LeaderGuardState {
   divergedJoint: number;
   /** Signed ticks between the leader and the pose mars_arm accepted. */
   divergedTicks: number;
+  /** Millimetres of room left before the arm meets the body; -1 if unknown. */
+  clearanceMm: number;
   /** Set when the guard cut torque to stay inside the budget. */
   error: string | null;
 }
