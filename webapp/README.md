@@ -153,6 +153,16 @@ serial driver.
   `position_limits`, so the wall follows a retune rather than a copied number,
   and the guard arms only once rosbridge is up. Ticks on the wire are clamped
   to the same band whether or not the servo hold is winning.
+- **The band is not just per-joint.** `arm_control.cpp` drives joints 2, 3, 4
+  and 6 in the opposite sense to the command it receives, so their bands mirror
+  to `[-hi, -lo]` here (`joint_1` is symmetric, which is why it reads correctly
+  either way). More importantly, `joint_2`'s floor tightens to −0.5 rad while
+  `joint_1` is in the front arc and ramps back as it swings clear — the real
+  anti-self-collision rule, and the reason independent per-joint limits let the
+  arm reach the frame. The guard mirrors both, so `joint_2`'s shaded zone grows
+  and shrinks as you rotate `joint_1`, and you feel the restriction the follower
+  would otherwise apply by silently clamping you. Those constants live in
+  `arm_control.cpp`, not `arm_config.yaml`; the copies must change together.
 - **Current budget.** Holding costs power, and the arm draws from *this*
   machine's USB, so the total across all six servos is capped (default 750 mA,
   900 mA hard ceiling) and split across whatever is being held. A watchdog on

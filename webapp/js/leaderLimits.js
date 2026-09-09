@@ -21,17 +21,42 @@ export function tickToRad(tick) {
 }
 
 /**
- * A follower joint's [lo, hi] radian limits as a tick band. Rounds inward so a
+ * A follower joint's [lo, hi] radian limits as a tick band in the frame the
+ * leader publishes. A flipped joint's band mirrors to [-hi, -lo], because
+ * mars_arm negates the command before it reaches the servo. Rounds inward so a
  * clamped tick always converts back to a radian the follower accepts — rounding
  * outward would hand it a goal one tick past its own limit.
  * @param {number[]} positionLimits
+ * @param {boolean} [flipped]
  * @returns {Band | null} null if the parameter isn't a usable pair.
  */
-export function limitsToBand(positionLimits) {
+export function limitsToBand(positionLimits, flipped = false) {
   if (positionLimits.length !== 2) return null;
   const [lo, hi] = positionLimits;
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo >= hi) return null;
-  return { min: Math.ceil(radToTick(lo)), max: Math.floor(radToTick(hi)) };
+  const [min, max] = flipped ? [-hi, -lo] : [lo, hi];
+  return { min: Math.ceil(radToTick(min)), max: Math.floor(radToTick(max)) };
+}
+
+/**
+ * Joint 2's floor given where joint 1 is, in radians. Full travel with the arm
+ * swung clear behind the ramp, tightened to `restrictedMin` across the front arc
+ * where lowering joint 2 folds the arm into the body, and linearly interpolated
+ * between. Mirrors arm_control.cpp so the operator feels the same boundary the
+ * follower enforces instead of silently diverging from it.
+ * @param {number} joint1Rad
+ * @param {number} baseMinRad Joint 2's unrestricted floor.
+ * @param {{ restrictedMin: number, arcLo: number, arcHi: number, rampLo: number, rampHi: number }} shape
+ * @returns {number}
+ */
+export function joint2FloorRad(joint1Rad, baseMinRad, shape) {
+  const { restrictedMin, arcLo, arcHi, rampLo, rampHi } = shape;
+  if (restrictedMin <= baseMinRad) return baseMinRad;
+  const ramp = (/** @type {number} */ t) => restrictedMin + t * (baseMinRad - restrictedMin);
+  if (joint1Rad < rampLo || joint1Rad >= rampHi) return baseMinRad;
+  if (joint1Rad < arcLo) return Math.max(baseMinRad, ramp((arcLo - joint1Rad) / (arcLo - rampLo)));
+  if (joint1Rad < arcHi) return Math.max(baseMinRad, restrictedMin);
+  return Math.max(baseMinRad, ramp((joint1Rad - arcHi) / (rampHi - arcHi)));
 }
 
 /** @param {number} tick @param {Band} band @returns {number} */

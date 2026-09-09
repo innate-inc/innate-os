@@ -229,6 +229,25 @@ export const ARM_POSITION_LIMITS_PARAMS = [1, 2, 3, 4, 5, 6].map((n) => `joint_$
 // bench time to confirm the wall feels right before they are switched on.
 export const JOINT_GUARD_ENABLED = [true, false, false, false, false, false];
 
+// mars_arm drives joints 2, 3, 4 and 6 in the opposite sense to the command it
+// receives (arm_control.cpp applyLimitsAndConvertToEncoder, flip_indices
+// {1,2,3,5}), so a config band [lo, hi] is [-hi, -lo] in the frame the leader
+// publishes. joint_1's band is symmetric, which is why it read correctly while
+// this was missing.
+export const JOINT_DIRECTION_FLIPPED = [false, true, true, true, false, true];
+
+// The real anti-self-collision rule, and the reason per-joint limits alone let
+// the arm reach the frame: joint_2's floor tightens to J2_RESTRICTED_MIN_RAD
+// while joint_1 is in the front arc, ramping back to its full range as joint_1
+// swings clear. Mirrors arm_control.cpp's "intelligent joint limits" — these
+// numbers live in that file, not in arm_config.yaml, so the two copies must be
+// changed together.
+export const J2_RESTRICTED_MIN_RAD = -0.5;
+export const J1_FRONT_ARC_LO = -1.0;
+export const J1_FRONT_ARC_HI = 1.0;
+export const J1_RAMP_LO = -1.35;
+export const J1_RAMP_HI = 1.25;
+
 // Total draw across all six servos. The leader is bus-powered from whatever
 // machine it is plugged into, so this is a property of that host, not of the
 // robot — it lives in localStorage per device (leaderBudget.js), surfaced on

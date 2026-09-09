@@ -16,13 +16,36 @@
 import {
   ARM_GET_PARAMETERS_SERVICE,
   ARM_POSITION_LIMITS_PARAMS,
+  J1_FRONT_ARC_HI,
+  J1_FRONT_ARC_LO,
+  J1_RAMP_HI,
+  J1_RAMP_LO,
+  J2_RESTRICTED_MIN_RAD,
+  JOINT_DIRECTION_FLIPPED,
   JOINT_GUARD_ENABLED,
   LEADER_CURRENT_CEILING_MA,
   PARAMETER_DOUBLE_ARRAY,
 } from "./constants.js";
 import { OPERATING_MODE_CURRENT_POSITION } from "./dynamixel.js";
 import { readBudget, onBudgetChange } from "./leaderBudget.js";
-import { allocateCurrent, clampTick, isOutside, limitsToBand, totalCurrent } from "./leaderLimits.js";
+import {
+  allocateCurrent,
+  clampTick,
+  isOutside,
+  joint2FloorRad,
+  limitsToBand,
+  radToTick,
+  tickToRad,
+  totalCurrent,
+} from "./leaderLimits.js";
+
+const J2_SHAPE = {
+  restrictedMin: J2_RESTRICTED_MIN_RAD,
+  arcLo: J1_FRONT_ARC_LO,
+  arcHi: J1_FRONT_ARC_HI,
+  rampLo: J1_RAMP_LO,
+  rampHi: J1_RAMP_HI,
+};
 
 // Re-entry margin, ~3.5°. A joint resting exactly on the limit would otherwise
 // toggle the wall every round.
@@ -45,6 +68,7 @@ export class LeaderGuard {
   /** @type {import("./rosClient.js").RosClient} */ #rosClient;
   /** @type {number[]} */ #ids;
   /** @type {Map<number, import("./leaderLimits.js").Band>} */ #bands = new Map();
+  /** @type {Map<number, import("./leaderLimits.js").Band>} */ #effective = new Map();
   /** @type {Set<number>} */ #holding = new Set();
   /** @type {Set<(state: LeaderGuardState) => void>} */ #listeners = new Set();
   /** @type {LeaderGuardState} */ #state = {
@@ -100,9 +124,33 @@ export class LeaderGuard {
     return this.#ids.filter((_, i) => JOINT_GUARD_ENABLED[i]);
   }
 
-  /** @param {number} id @returns {import("./leaderLimits.js").Band | undefined} */
+  /**
+   * The band as it stands this round — joint 2's moves with joint 1, so callers
+   * must not cache it across rounds.
+   * @param {number} id @returns {import("./leaderLimits.js").Band | undefined}
+   */
   band(id) {
-    return this.#bands.get(id);
+    return this.#effective.get(id) ?? this.#bands.get(id);
+  }
+
+  /**
+   * Joint 2's floor rides on where joint 1 is: lowering it across the front arc
+   * folds the arm into the frame, so the reachable band narrows there and opens
+   * again as joint 1 swings clear. Static per-joint bands cannot express that,
+   * which is how the arm reached the body while every joint was "in range".
+   * @param {number[]} positions
+   */
+  #recomputeBands(positions) {
+    this.#effective.clear();
+    const joint1 = positions[0];
+    for (const [id, band] of this.#bands) {
+      if (this.#ids.indexOf(id) !== 1 || joint1 === undefined) {
+        this.#effective.set(id, band);
+        continue;
+      }
+      const floor = joint2FloorRad(tickToRad(joint1), tickToRad(band.min), J2_SHAPE);
+      this.#effective.set(id, { min: Math.max(band.min, Math.ceil(radToTick(floor))), max: band.max });
+    }
   }
 
   /**
@@ -126,7 +174,7 @@ export class LeaderGuard {
       const id = this.#ids[i];
       if (id === undefined || !JOINT_GUARD_ENABLED[i]) return;
       if (!value || value.type !== PARAMETER_DOUBLE_ARRAY) return;
-      const band = limitsToBand(value.double_array_value ?? []);
+      const band = limitsToBand(value.double_array_value ?? [], JOINT_DIRECTION_FLIPPED[i]);
       if (band) this.#bands.set(id, band);
     });
     if (!this.#bands.size) return;
@@ -171,6 +219,7 @@ export class LeaderGuard {
    */
   update(state) {
     if (!state.positions || !state.currents) return;
+    this.#recomputeBands(state.positions);
     const drawMa = totalCurrent(state.currents);
 
     if (!this.#enabled || !this.#state.armed) {
@@ -191,7 +240,7 @@ export class LeaderGuard {
 
     const before = this.#holding.size;
     this.#ids.forEach((id, i) => {
-      const band = this.#bands.get(id);
+      const band = this.band(id);
       const tick = state.positions?.[i];
       if (!band || tick === undefined) return;
       const outside = isOutside(tick, band, HYSTERESIS_TICKS, this.#holding.has(id));
@@ -251,7 +300,7 @@ export class LeaderGuard {
   /** @param {number[]} positions @returns {boolean} */
   #allInside(positions) {
     return this.#ids.every((id, i) => {
-      const band = this.#bands.get(id);
+      const band = this.band(id);
       const tick = positions[i];
       if (!band || tick === undefined) return true;
       return !isOutside(tick, band, HYSTERESIS_TICKS, false);
@@ -286,7 +335,7 @@ export class LeaderGuard {
     /** @type {number[]} */
     const fresh = [];
     this.#ids.forEach((id, i) => {
-      const band = this.#bands.get(id);
+      const band = this.band(id);
       const tick = positions[i];
       if (!band || tick === undefined || !this.#holding.has(id)) return;
       goals.set(id, clampTick(tick, band));
