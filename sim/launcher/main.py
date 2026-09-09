@@ -149,10 +149,12 @@ def cmd_up(
             ensure_viewer_public_assets(config)
         with live_step("bundle", "Fetching the 3D viewer bundle", "3D viewer bundle"):
             ensure_sim_viewer_bundle(config, offline=offline)
+        # From here an interrupt must tear down: the world step can run for
+        # minutes (uv sync, MuJoCo compile) with its server already spawned.
+        started = True
         with live_step("world", "Starting the physics world", "physics world"):
             config["world_endpoint"] = ensure_world_server(config)
 
-        started = True
         try:
             with live_step("os", "Starting the Innate OS container", "Innate OS container"):
                 ensure_os_container(config, os_env_file, offline=offline)
