@@ -15,6 +15,7 @@
 // pose. Both are transcribed from mars_sim/urdf/mars.urdf and must change
 // together.
 
+import { BODY_MARGIN_M } from "./constants.js";
 import { tickToRad } from "./leaderLimits.js";
 
 // Link offsets, the joint origins in mars.urdf.
@@ -29,14 +30,19 @@ const SHOULDER_X = 0.086, SHOULDER_Y = -0.05285, SHOULDER_Z = 0.0845;
 /**
  * Boxes covering the body, in base_link metres. The arm mount is deliberately
  * absent — the arm is bolted to it and would always read as touching.
- * @type {{ minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number }[]}
+ * `pad` is the clearance demanded around that box. Per-box because one global
+ * figure cannot work: the shoulder sits 51 mm from the chassis and never moves
+ * further away, so a global pad near that blocks the arm at rest. The chassis
+ * keeps a small pad; the turret and neck above it — what joint_2 folds back
+ * into — get much more. Must match self_collision.box_pads in arm_config.yaml.
+ * @type {{ minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number, pad: number }[]}
  */
 export const BODY_BOXES = [
-  { minX: -0.1526, minY: -0.091, minZ: 0.0, maxX: 0.0352, maxY: 0.091, maxZ: 0.1676 }, // chassis
-  { minX: -0.229, minY: -0.0829, minZ: 0.0169, maxX: -0.1501, maxY: 0.0829, maxZ: 0.0763 }, // rear tray
-  { minX: -0.1155, minY: -0.052, minZ: 0.1676, maxX: 0.0101, maxY: 0.052, maxZ: 0.198 }, // lidar turret
-  { minX: -0.0612, minY: -0.0427, minZ: 0.196, maxX: -0.0102, maxY: 0.0427, maxZ: 0.235 }, // neck lower
-  { minX: -0.0653, minY: -0.018, minZ: 0.235, maxX: -0.0279, maxY: 0.018, maxZ: 0.2716 }, // neck upper
+  { minX: -0.1526, minY: -0.091, minZ: 0.0, maxX: 0.0352, maxY: 0.091, maxZ: 0.1676, pad: 0.015 }, // chassis
+  { minX: -0.229, minY: -0.0829, minZ: 0.0169, maxX: -0.1501, maxY: 0.0829, maxZ: 0.0763, pad: 0.015 }, // rear tray
+  { minX: -0.1155, minY: -0.052, minZ: 0.1676, maxX: 0.0101, maxY: 0.052, maxZ: 0.198, pad: 0.055 }, // lidar turret
+  { minX: -0.0612, minY: -0.0427, minZ: 0.196, maxX: -0.0102, maxY: 0.0427, maxZ: 0.235, pad: 0.055 }, // neck lower
+  { minX: -0.0653, minY: -0.018, minZ: 0.235, maxX: -0.0279, maxY: 0.018, maxZ: 0.2716, pad: 0.055 }, // neck upper
 ];
 
 /**
@@ -116,7 +122,9 @@ export function segmentHitsBox(a, b, box, m) {
 export function poseHitsBody(rads, margin) {
   const pts = armPoints(rads);
   for (let i = 0; i + 1 < pts.length; i++) {
-    for (const box of BODY_BOXES) if (segmentHitsBox(pts[i], pts[i + 1], box, margin)) return true;
+    for (const box of BODY_BOXES) {
+      if (segmentHitsBox(pts[i], pts[i + 1], box, Math.max(margin, box.pad))) return true;
+    }
   }
   return false;
 }
@@ -140,7 +148,11 @@ export function bodyClearance(rads) {
     for (let k = 0; k <= samples; k++) {
       const t = k / samples;
       const q = [a[0] + t * d[0], a[1] + t * d[1], a[2] + t * d[2]];
-      for (const box of BODY_BOXES) near = Math.min(near, pointBoxDistance(q, box));
+      // Distance less that box's extra pad, so a box demanding more room reads
+      // as closer and one clearance number still drives the taper.
+      for (const box of BODY_BOXES) {
+        near = Math.min(near, pointBoxDistance(q, box) - Math.max(0, box.pad - BODY_MARGIN_M));
+      }
     }
     const halfSpacing = (0.5 * Math.hypot(d[0], d[1], d[2])) / samples;
     best = Math.min(best, Math.max(0, near - halfSpacing));

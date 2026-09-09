@@ -63,7 +63,7 @@
     # =============================================================
     self_collision:
       enabled: true
-      margin: 0.015        # hard stop: m of clearance demanded around each box
+      margin: 0.015        # floor under every box's own pad
       slow_margin: 0.070   # inside this the arm eases off, decelerating into the stop
       bisect_steps: 8      # resolution of the walk back to a clear pose
       boxes: [
@@ -78,6 +78,14 @@
         # neck upper: origin (-0.0466, 0, 0.2533), size 0.0374 x 0.036 x 0.0366
         -0.0653, -0.0180,  0.2350,  -0.0279,  0.0180,  0.2716,
       ]
+      # Clearance demanded per box, in the order above. One global figure cannot
+      # work: the shoulder sits 51 mm from the chassis and never moves further
+      # away, so a global pad near that blocks the arm at rest — which is what
+      # made every joint report as blocked. The chassis and rear tray keep a
+      # small pad; the turret and neck, which is what joint_2 folds back into,
+      # get much more, since that is where backlash and flex actually land the
+      # arm on the robot.
+      box_pads: [0.015, 0.015, 0.055, 0.055, 0.055]
 
     joints: ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "joint_7"]
 

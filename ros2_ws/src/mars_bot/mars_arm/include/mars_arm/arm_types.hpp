@@ -74,6 +74,12 @@ static constexpr double kWristFromElbow = 0.063;
 
 struct BodyBox {
     double min_x, min_y, min_z, max_x, max_y, max_z;
+    // Clearance demanded around THIS box. Per-box because one global figure
+    // cannot work: the shoulder is bolted 51 mm from the chassis and never
+    // moves further away, so any global margin near that blocks the arm at
+    // rest. The chassis therefore gets a small pad and the parts the arm
+    // actually swings into — the turret and neck above it — get a large one.
+    double pad = 0.015;
     bool contains(double x, double y, double z, double m) const {
         return x >= min_x - m && x <= max_x + m && y >= min_y - m && y <= max_y + m && z >= min_z - m &&
                z <= max_z + m;
@@ -82,7 +88,7 @@ struct BodyBox {
 
 struct SelfCollisionConfig {
     std::vector<BodyBox> boxes;
-    double margin = 0.015;       // hard stop: clearance demanded around each box
+    double margin = 0.015;       // floor under every box's own pad
     double slow_margin = 0.070;  // soft zone: motion is scaled back inside this
     int bisect_steps = 8;        // resolution of the walk back toward a safe pose
     bool enabled = true;
@@ -169,7 +175,7 @@ inline bool poseHitsBody(double q1, double q2, double q3, double q4, const SelfC
     }
     for (int i = 0; i + 1 < ArmPlanarPoints::kCount; ++i)
         for (const auto& b : c.boxes)
-            if (segmentHitsBox(pts[i], pts[i + 1], b, c.margin)) return true;
+            if (segmentHitsBox(pts[i], pts[i + 1], b, std::max(c.margin, b.pad))) return true;
     return false;
 }
 
@@ -198,7 +204,10 @@ inline double bodyClearance(double q1, double q2, double q3, double q4, const Se
         for (int k = 0; k <= kSamplesPerLink; ++k) {
             const double t = static_cast<double>(k) / kSamplesPerLink;
             const double q[3] = {pts[i][0] + t * dx, pts[i][1] + t * dy, pts[i][2] + t * dz};
-            for (const auto& b : c.boxes) near = std::min(near, pointBoxDistance(q, b));
+            // Distance to each box less its own pad: a box demanding more room
+            // reads as closer, so one clearance number still drives the taper.
+            for (const auto& b : c.boxes)
+                near = std::min(near, pointBoxDistance(q, b) - (std::max(c.margin, b.pad) - c.margin));
         }
         // The true closest point can sit midway between two samples, so a raw
         // sampled minimum over-reads by up to half the spacing — enough, on these

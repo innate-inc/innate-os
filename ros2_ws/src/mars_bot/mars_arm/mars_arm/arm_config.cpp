@@ -173,6 +173,7 @@ void MarsArmNode::loadSelfCollisionConfig() {
     // Flat [min_x,min_y,min_z, max_x,max_y,max_z] sextets in base_link — ROS
     // parameters have no nested arrays.
     this->declare_parameter("self_collision.boxes", std::vector<double>{});
+    this->declare_parameter("self_collision.box_pads", std::vector<double>{});
 
     self_collision_.enabled = this->get_parameter("self_collision.enabled").as_bool();
     self_collision_.margin = this->get_parameter("self_collision.margin").as_double();
@@ -183,8 +184,13 @@ void MarsArmNode::loadSelfCollisionConfig() {
     if (flat.size() % 6 != 0) {
         throw std::runtime_error("self_collision.boxes must be a multiple of 6 (min_xyz, max_xyz per box)");
     }
+    const auto pads = this->get_parameter("self_collision.box_pads").as_double_array();
+    if (!pads.empty() && pads.size() != flat.size() / 6) {
+        throw std::runtime_error("self_collision.box_pads must have one entry per box, or be empty");
+    }
     for (size_t i = 0; i + 5 < flat.size(); i += 6) {
         BodyBox b{flat[i], flat[i + 1], flat[i + 2], flat[i + 3], flat[i + 4], flat[i + 5]};
+        b.pad = pads.empty() ? self_collision_.margin : pads[i / 6];
         if (b.min_x > b.max_x || b.min_y > b.max_y || b.min_z > b.max_z) {
             throw std::runtime_error("self_collision.boxes: a box has min greater than max");
         }
@@ -199,6 +205,9 @@ void MarsArmNode::loadSelfCollisionConfig() {
     if (self_collision_.slow_margin < self_collision_.margin) {
         throw std::runtime_error("self_collision.slow_margin must be >= margin");
     }
+    for (const auto& b : self_collision_.boxes)
+        RCLCPP_INFO(this->get_logger(), "  keepout box x[%.3f %.3f] z[%.3f %.3f] pad %.0f mm", b.min_x, b.max_x,
+                    b.min_z, b.max_z, b.pad * 1000.0);
     RCLCPP_INFO(this->get_logger(), "Body keepout: %s, %zu boxes, stop %.0f mm, ease from %.0f mm, %d bisection steps",
                 self_collision_.enabled ? "on" : "OFF", self_collision_.boxes.size(),
                 self_collision_.margin * 1000.0, self_collision_.slow_margin * 1000.0,
