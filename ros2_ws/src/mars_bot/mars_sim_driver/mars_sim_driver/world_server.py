@@ -604,13 +604,15 @@ def main() -> None:
     server.sim.render_rgb("main")
     first_ms = (time.perf_counter() - t0) * 1000
     t1 = time.perf_counter()
-    frame = server.sim.render_rgb("main")
+    server.sim.render_rgb("main")
     steady_ms = (time.perf_counter() - t1) * 1000
     # A context can be created "successfully" yet render nothing (seen on a
     # Raspberry Pi: EGL came up with GL_OUT_OF_MEMORY warnings and produced
-    # blank frames). A real render of the spawn view always has texture;
-    # refuse to serve garbage so the launcher's ladder falls to the next
-    # backend instead.
+    # blank frames). The wrist camera always has the arm in view, so its frame
+    # has texture in every world -- the spawn view does not: Nowhere renders
+    # one flat white under software GL. Refuse to serve garbage so the
+    # launcher's ladder falls to the next backend instead.
+    frame = server.sim.render_rgb("wrist")
     if float(frame.std()) < 1.0:
         print(
             "[world-server] GL self-test produced a blank image -- the GL context is not actually "

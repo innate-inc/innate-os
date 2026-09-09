@@ -50,7 +50,8 @@ WORLD_PID=$!
 
 # sim_driver dies on its first RPC if the world is not up yet.
 for _ in $(seq 1 120); do
-    if grep -q "GL self-test" "$WORLD_LOG" 2>/dev/null; then break; fi
+    # The success line only: the failure line begins the same way.
+    if grep -q "GL self-test (" "$WORLD_LOG" 2>/dev/null; then break; fi
     if ! kill -0 "$WORLD_PID" 2>/dev/null; then
         echo "[demo] world server died on boot:" >&2
         cat "$WORLD_LOG" >&2
@@ -58,7 +59,7 @@ for _ in $(seq 1 120); do
     fi
     sleep 0.5
 done
-grep "GL self-test" "$WORLD_LOG" || { echo "[demo] world server never reported GL readiness" >&2; exit 1; }
+grep "GL self-test (" "$WORLD_LOG" || { echo "[demo] world server never reported GL readiness" >&2; exit 1; }
 
 echo "[demo] starting ROS fleet"
 /root/innate-os/sim/demo/launch_demo.zsh
