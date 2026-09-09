@@ -148,6 +148,14 @@ test("parseSnapshot rejects garbage rather than throwing", () => {
   assert.equal(parseSnapshot({ data: JSON.stringify({ stamp: NOW }) }), null);
 });
 
+test("a snapshot from another schema is ignored, an unversioned one is not", () => {
+  // Boxes and states from a schema this app does not know are not the ones it
+  // draws, so they are dropped here as they are in the brain's people_feed.py.
+  assert.equal(parseSnapshot(msg({ ...SNAPSHOT, schema: 2 })), null);
+  assert.equal(parseSnapshot(msg({ ...SNAPSHOT, schema: "1" })), null);
+  assert.equal(parseSnapshot(msg({ stamp: NOW, people: [] }))?.people.length, 0);
+});
+
 test("an empty people list parses to an empty overlay, not to null", () => {
   // "The node is running and nobody is there" is a real answer, and it is what
   // takes the previous boxes down.

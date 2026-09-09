@@ -49,14 +49,6 @@ def as_face(box: Box) -> dict[str, float]:
     }
 
 
-def frame_shape(snapshot: PeopleSnapshotDict) -> tuple[int, int]:
-    """The measured frame as (height, width); the published 640x480 by default."""
-    size = snapshot.get("image_size") or []
-    if len(size) != 2:
-        return (480, 640)
-    return (int(size[1]), int(size[0]))
-
-
 def _nearest(snapshot: PeopleSnapshotDict) -> PersonInViewDict | None:
     live = [person for person in (snapshot.get("people") or []) if not person.get("lost")]
     return min(live, key=_range_m) if live else None

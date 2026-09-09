@@ -52,8 +52,6 @@ FEET_CUTOFF = 0.98
 # Faces live in the top of a person box; YuNet runs on this fraction of it.
 HEAD_REGION_FRACTION = 0.4
 
-_ADULT_EYE_HEIGHT_M = 1.60
-
 
 def published_to_native(x: float, y: float) -> tuple[float, float]:
     return (x * NATIVE_SCALE_X, y * NATIVE_SCALE_Y)
@@ -61,25 +59,6 @@ def published_to_native(x: float, y: float) -> tuple[float, float]:
 
 def native_to_published(x: float, y: float) -> tuple[float, float]:
     return (x / NATIVE_SCALE_X, y / NATIVE_SCALE_Y)
-
-
-def native_pixel_size(object_m: float, range_m: float, focal_px: float = NATIVE_FOCAL_PX) -> float:
-    """Native pixel height of an object ``object_m`` tall at ``range_m``."""
-    if range_m <= 0.0:
-        return 0.0
-    return focal_px * object_m / range_m
-
-
-def elevation_deg(target_height_m: float, range_m: float, camera_height_m: float = CAMERA_HEIGHT_M) -> float:
-    """How far above the lens a target sits, in degrees — how steeply a knee-high
-    robot looks up at a standing adult's face."""
-    if range_m <= 0.0:
-        return 90.0
-    return math.degrees(math.atan((target_height_m - camera_height_m) / range_m))
-
-
-def eye_elevation_deg(range_m: float, camera_height_m: float = CAMERA_HEIGHT_M) -> float:
-    return elevation_deg(_ADULT_EYE_HEIGHT_M, range_m, camera_height_m)
 
 
 def box_center(box: Box) -> tuple[float, float]:
@@ -174,10 +153,6 @@ class CameraModel:
             self.camera_height_m,
         )
 
-    @property
-    def k_matrix(self) -> tuple[tuple[float, float, float], ...]:
-        return ((self.fx, 0.0, self.cx), (0.0, self.fy, self.cy), (0.0, 0.0, 1.0))
-
     def pixel_of(self, x_norm: float, y_norm: float) -> tuple[float, float]:
         return (x_norm * self.width, y_norm * self.height)
 
@@ -197,13 +172,6 @@ class CameraModel:
         u, v = self.pixel_of(cx_norm, cy_norm)
         dx, dy, _ = self.ray(u, v, head_pitch_deg)
         return math.degrees(math.atan2(dy, dx))
-
-    def elevation_of(self, box: Box, head_pitch_deg: float = 0.0) -> float:
-        """Elevation of the box centre above the optical horizon, in degrees."""
-        cx_norm, cy_norm = box_center(box)
-        u, v = self.pixel_of(cx_norm, cy_norm)
-        dx, dy, dz = self.ray(u, v, head_pitch_deg)
-        return math.degrees(math.atan2(dz, math.hypot(dx, dy)))
 
     def floor_range(self, box: Box, head_pitch_deg: float = 0.0) -> float | None:
         """Ground range to the person whose box bottom is their floor contact,

@@ -48,9 +48,15 @@ export const PEOPLE_FULL_TEXT =
 
 // ---- request bodies (exactly the .srv request fields) ----------------------
 
-/** GetPeople: the snapshot plus the roster the card lists, thumbnails included. */
-export function getPeopleRequest() {
-  return { include_roster: true, include_thumbnails: true };
+/**
+ * GetPeople: the snapshot plus the roster the card lists. A thumbnail costs the
+ * people node one JPEG read per person, under the store's lock and on its
+ * single-threaded executor, so only a card the operator is looking at asks for
+ * them.
+ * @param {boolean} [includeThumbnails]
+ */
+export function getPeopleRequest(includeThumbnails = false) {
+  return { include_roster: true, include_thumbnails: includeThumbnails };
 }
 
 // Every mutation below carries the two optional .srv fields empty. The card acts
@@ -263,6 +269,10 @@ export function createPeopleCard(ros) {
   let roster = null;
   let busy = false;
   let destroyed = false;
+  // Settings builds every group when the page opens, so a card that loaded on
+  // sight would make the people node read a thumbnail per person off disk
+  // whenever anyone opens Settings for anything, and again on every reconnect.
+  let shown = false;
 
   /** @param {string} message @param {"ok" | "err" | "muted"} kind */
   function setStatus(message, kind) {
@@ -311,6 +321,7 @@ export function createPeopleCard(ros) {
 
   /** @param {boolean} [keepStatus] leave a failure message in place */
   async function refresh(keepStatus = false) {
+    if (!shown) return;
     if (ros.state !== "connected") {
       roster = null;
       render();
@@ -321,7 +332,7 @@ export function createPeopleCard(ros) {
     if (!keepStatus) setStatus("Loading the roster…", "muted");
     try {
       /** @type {{ success?: boolean, message?: string, json?: string }} */
-      const res = await ros.callService(GET_PEOPLE_SERVICE, getPeopleRequest(), PEOPLE_SERVICE_TIMEOUT_MS);
+      const res = await ros.callService(GET_PEOPLE_SERVICE, getPeopleRequest(true), PEOPLE_SERVICE_TIMEOUT_MS);
       if (destroyed) return;
       const parsed = res?.success === false ? null : parseRoster(res?.json ?? "");
       roster = parsed;
@@ -481,8 +492,19 @@ export function createPeopleCard(ros) {
     void mutate(SET_PEOPLE_COLLECTION_SERVICE, setCollectionRequest(enabled), "Couldn't change the setting");
   });
 
+  // A collapsed accordion group (settings/main.js) clips its body to nothing,
+  // so intersecting the viewport answers "expanded and scrolled to" without
+  // that module having to tell the card when it is on screen.
+  const visibility = new IntersectionObserver((entries) => {
+    const visible = entries.some((entry) => entry.isIntersecting);
+    if (visible === shown) return;
+    shown = visible;
+    if (shown) void refresh();
+  });
+  visibility.observe(section);
+
   const unsubState = ros.onStateChange(() => {
-    // Fires immediately with the current state, which is what loads the card.
+    // Fires immediately with the current state; loads the card once it is shown.
     void refresh();
   });
 
@@ -493,6 +515,7 @@ export function createPeopleCard(ros) {
     description: PEOPLE_CARD_DOC,
     destroy() {
       destroyed = true;
+      visibility.disconnect();
       unsubState();
       dismissAllConfirms();
     },

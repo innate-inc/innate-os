@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import shutil
 import time
 from dataclasses import replace
@@ -82,6 +83,8 @@ RETENTION_UNNAMED_DAYS = 14.0
 RETENTION_NAMED_DAYS = 548.0  # 18 months unseen, the Amazon Astro Visual ID rule
 _SIGHTING_COMMIT_SEC = 30.0  # the engine records a sighting per tick; disk sees one per half minute
 MAX_OUTFITS = 8
+MAX_FACTS = 200  # a profile a scribe writes to for a year would otherwise grow without end
+EPISODE_SUMMARY_LIMIT = 300
 DIR_MODE = 0o700  # templates and thumbnails are special-category data (RFC section 10)
 FILE_MODE = 0o600
 OUTFIT_SAME_COSINE = 0.9  # above this it is the same clothes again, not another outfit
@@ -99,6 +102,7 @@ class AuditAction(StrEnum):
     EXPIRED = "expired"
     COLLECTION = "collection"
     CONSOLIDATED = "consolidated"
+    SWEPT = "swept"
 
 
 class PeopleStore:
@@ -120,13 +124,14 @@ class PeopleStore:
         self._collection_enabled = True
         self._next_tag = 1
         self._people: dict[str, Profile] = {}
-        self._tombstones: list[str] = []
+        self._tombstones: set[str] = set()
         self._faces: dict[str, list[FaceTemplate]] = {}
         self._outfits: dict[str, list[OutfitTemplate]] = {}
         self._heights: dict[str, list[tuple[float, float]]] = {}
         self._thumbs: dict[str, list[str]] = {}
         self._committed: dict[str, float] = {}  # person id -> stamp of its last disk write
         self._pending: set[str] = set()
+        self._templates_pending: set[str] = set()
         self._load()
 
     @property
@@ -227,12 +232,16 @@ class PeopleStore:
             self._commit_templates_locked(person_id)
 
     def add_height_sample(self, person_id: str, height_m: float, variance: float) -> None:
+        """The resolver sends one of these a second per settled person, so the
+        sample lands in memory and the templates file waits for the next
+        :meth:`flush` — rewriting every face and outfit vector per second is
+        ~90 MB an hour of eMMC writes per person in view."""
         with self._lock:
             if person_id not in self._people:
                 return
             samples = [*self._heights.get(person_id, ()), (height_m, variance)]
             self._heights[person_id] = samples[-64:]
-            self._commit_templates_locked(person_id)
+            self._templates_pending.add(person_id)
 
     def record_sighting(self, person_id: str, now: float, map_name: str | None, pose: Pose | None) -> None:
         """Called every tick a person is resolved: one encounter is one episode,
@@ -266,14 +275,17 @@ class PeopleStore:
                 self._commit_index_locked()
 
     def flush(self, now: float | None = None) -> None:
-        """Write out sightings deferred by the commit interval, and close the
-        episodes of people who have left (shutdown, or a node timer)."""
+        """Write out the sightings and height samples deferred by the commit
+        interval, and close the episodes of people who have left (shutdown, or a
+        node timer)."""
         stamp = _now(now)
         with self._lock:
             for person_id in list(self._people):
                 self._close_idle_episode_locked(person_id, stamp)
             for person_id in list(self._pending):
                 self._commit_person_locked(person_id, stamp)
+            for person_id in list(self._templates_pending):
+                self._commit_templates_locked(person_id)
             self._commit_index_locked()
 
     def _close_idle_episode_locked(self, person_id: str, now: float) -> None:
@@ -427,7 +439,7 @@ class PeopleStore:
             if profile is None or not text.strip():
                 return None
             fact = self._build_fact_locked(profile, text, kind, now, attribution, source, confidence, importance)
-            self._people[person_id] = replace(profile, facts=(*profile.facts, fact))
+            self._people[person_id] = replace(profile, facts=_capped((*profile.facts, fact)))
             self._commit_person_locked(person_id, now)
             return fact.id
 
@@ -451,7 +463,7 @@ class PeopleStore:
             if profile is None or not text.strip():
                 return None
             fact = self._build_fact_locked(profile, text, kind, now, attribution, source, confidence, importance)
-            self._people[person_id] = replace(profile, facts=supersede(profile.facts, fact_id, fact))
+            self._people[person_id] = replace(profile, facts=_capped(supersede(profile.facts, fact_id, fact)))
             self._commit_person_locked(person_id, now)
             self._audit_locked(AuditAction.FACT_SUPERSEDED, person_id, now, fact_id=fact_id, replacement=fact.id)
             return fact.id
@@ -518,7 +530,8 @@ class PeopleStore:
 
     def note_episode(self, person_id: str, summary: str, now: float | None = None) -> bool:
         """The scribe's episode note lands on the open episode; without one it
-        is dropped rather than invented against an older encounter."""
+        is dropped rather than invented against an older encounter. One
+        encounter is many windows, so the notes accumulate."""
         stamp = _now(now)
         with self._lock:
             profile = self._people.get(person_id)
@@ -527,7 +540,7 @@ class PeopleStore:
             episode = latest_open(profile.episodes)
             if episode is None:
                 return False
-            noted = replace(episode, summary=summary.strip())
+            noted = replace(episode, summary=_noted(episode.summary, summary.strip()))
             self._people[person_id] = replace(
                 profile,
                 episodes=tuple(noted if existing.id == episode.id else existing for existing in profile.episodes),
@@ -733,8 +746,13 @@ class PeopleStore:
                 return person_id
 
     def _drop_locked(self, person_id: str) -> None:
+        """The files go first: a delete that could not reach the disk must be
+        reported as the failure it is, not as a person who is gone from the
+        roster and still on the card."""
+        directory = self._person_dir(person_id)
+        if directory.exists():
+            shutil.rmtree(directory)
         self._forget_locked(person_id)
-        shutil.rmtree(self._person_dir(person_id), ignore_errors=True)
 
     def _forget_locked(self, person_id: str) -> None:
         self._people.pop(person_id, None)
@@ -744,8 +762,8 @@ class PeopleStore:
         self._thumbs.pop(person_id, None)
         self._committed.pop(person_id, None)
         self._pending.discard(person_id)
-        if person_id not in self._tombstones:
-            self._tombstones.append(person_id)
+        self._templates_pending.discard(person_id)
+        self._tombstones.add(person_id)
 
     def _add_thumbnail_locked(self, person_id: str, jpeg: bytes) -> str:
         thumbs = self._thumbs.setdefault(person_id, [])
@@ -816,6 +834,7 @@ class PeopleStore:
             np.savez(handle, **payload)
         os.chmod(tmp, FILE_MODE)
         os.replace(tmp, directory / "templates.npz")
+        self._templates_pending.discard(person_id)
 
     def _commit_index_locked(self) -> None:
         _secure_dir(self._root)
@@ -836,7 +855,7 @@ class PeopleStore:
                     }
                     for profile in self._people.values()
                 ],
-                "tombstones": list(self._tombstones),
+                "tombstones": sorted(self._tombstones),
             },
         )
 
@@ -857,18 +876,41 @@ class PeopleStore:
             return  # a future/older index is not ours to interpret; the roster starts empty
         self._collection_enabled = bool(index.get("collection_enabled", True))
         self._next_tag = int(index.get("next_tag", 1) or 1)
-        self._tombstones = [str(person_id) for person_id in index.get("tombstones", []) if person_id]
-        for entry in index.get("people", []):
-            person_id = str(entry.get("id", "")) if isinstance(entry, dict) else ""
-            if not person_id or person_id in self._tombstones:
+        self._tombstones = {str(person_id) for person_id in index.get("tombstones", []) if person_id}
+        indexed = [
+            str(entry.get("id", "")) for entry in index.get("people", []) if isinstance(entry, dict) and entry.get("id")
+        ]
+        for person_id in indexed:
+            if person_id in self._tombstones:
                 continue
-            profile = self._load_profile(person_id)
-            if profile is None:
+            try:
+                self._load_person(person_id)
+            except Exception:  # noqa: BLE001 — a malformed record must not crash-loop a respawning node
+                continue  # whatever of them did load stays; the rest of the roster is not theirs to cost
+        self._sweep_orphans(set(indexed) - self._tombstones)
+
+    def _load_person(self, person_id: str) -> None:
+        profile = self._load_profile(person_id)
+        if profile is None:
+            return
+        self._people[person_id] = profile
+        _secure_dir(self._person_dir(person_id))
+        self._load_templates(person_id)
+        self._thumbs[person_id] = _thumbnail_ids(self._person_dir(person_id))
+
+    def _sweep_orphans(self, indexed: set[str]) -> None:
+        """A crash between writing a person's files and committing the index —
+        this node is designed around native-library crashes with a 2 s respawn —
+        leaves embeddings and thumbnails the roster, expiry, forget and the
+        Settings page can never see again."""
+        for directory in sorted(self._root.glob("person_*")):
+            if directory.name in indexed or not directory.is_dir():
                 continue
-            self._people[person_id] = profile
-            _secure_dir(self._person_dir(person_id))
-            self._load_templates(person_id)
-            self._thumbs[person_id] = _thumbnail_ids(self._person_dir(person_id))
+            try:
+                shutil.rmtree(directory)
+            except OSError:
+                continue  # a sweep that cannot delete waits for the next boot
+            self._audit_locked(AuditAction.SWEPT, directory.name, time.time())
 
     def _load_profile(self, person_id: str) -> Profile | None:
         data = _read_json(self._person_dir(person_id) / "person.json")
@@ -887,31 +929,38 @@ class PeopleStore:
                 outfit_meta = json.loads(str(data["outfit_meta"]))
                 heights = np.asarray(data["height_samples"], dtype=np.float32)
                 groups = {key: np.asarray(data[key], dtype=np.float32) for key in data.files if "embeddings" in key}
-        except (OSError, KeyError, ValueError, json.JSONDecodeError):
+            faces = [
+                FaceTemplate(
+                    embedding=embedding,
+                    model=str(meta.get("model", "")),
+                    stamp=float(meta.get("stamp", 0.0)),
+                    pose_bucket=str(meta.get("pose_bucket", "frontal")),
+                    quality=float(meta.get("quality", 0.0)),
+                    thumbnail_id=meta.get("thumbnail_id"),
+                )
+                for meta, embedding in zip(face_meta, _ungrouped(groups, face_meta, "face_embeddings"), strict=True)
+                if embedding is not None
+            ]
+            outfits = [
+                OutfitTemplate(
+                    embedding=embedding,
+                    model=str(meta.get("model", "")),
+                    stamp=float(meta.get("stamp", 0.0)),
+                    thumbnail_id=meta.get("thumbnail_id"),
+                )
+                for meta, embedding in zip(
+                    outfit_meta, _ungrouped(groups, outfit_meta, "outfit_embeddings"), strict=True
+                )
+                if embedding is not None
+            ]
+            samples = [(float(value), float(variance)) for value, variance in heights.reshape(-1, 2)]
+        except (OSError, AttributeError, KeyError, TypeError, ValueError):
+            # Parsing lives inside the try because this runs in the node's
+            # constructor under respawn: one malformed file crash-loops it.
             return  # unreadable templates cost recognition, never the memory
-        self._faces[person_id] = [
-            FaceTemplate(
-                embedding=embedding,
-                model=str(meta.get("model", "")),
-                stamp=float(meta.get("stamp", 0.0)),
-                pose_bucket=str(meta.get("pose_bucket", "frontal")),
-                quality=float(meta.get("quality", 0.0)),
-                thumbnail_id=meta.get("thumbnail_id"),
-            )
-            for meta, embedding in zip(face_meta, _ungrouped(groups, face_meta, "face_embeddings"), strict=True)
-            if embedding is not None
-        ]
-        self._outfits[person_id] = [
-            OutfitTemplate(
-                embedding=embedding,
-                model=str(meta.get("model", "")),
-                stamp=float(meta.get("stamp", 0.0)),
-                thumbnail_id=meta.get("thumbnail_id"),
-            )
-            for meta, embedding in zip(outfit_meta, _ungrouped(groups, outfit_meta, "outfit_embeddings"), strict=True)
-            if embedding is not None
-        ]
-        self._heights[person_id] = [(float(value), float(variance)) for value, variance in heights.reshape(-1, 2)]
+        self._faces[person_id] = faces
+        self._outfits[person_id] = outfits
+        self._heights[person_id] = samples
 
 
 def _last_seen_dict(profile: Profile) -> LastSeenDict | None:
@@ -952,11 +1001,41 @@ def _merged_profile(source: Profile, target: Profile) -> Profile:
             default=None,
         ),
         encounters=target.encounters + source.encounters,
-        facts=tuple(sorted(facts, key=lambda fact: fact.first_confirmed)),
+        facts=_capped(tuple(sorted(facts, key=lambda fact: fact.first_confirmed))),
         episodes=tuple(sorted(episodes, key=lambda episode: episode.start)),
         open_loops=tuple(loops),
         name_candidates=(*target.name_candidates, *source.name_candidates)[-MAX_NAME_CANDIDATES:],
     )
+
+
+def _capped(facts: tuple[Fact, ...]) -> tuple[Fact, ...]:
+    """Facts only ever accumulate, so at the cap the record sheds what it can
+    spare: superseded records oldest first, then the least important live ones.
+    What the owner entered is never dropped, even over the cap."""
+    if len(facts) <= MAX_FACTS:
+        return facts
+    droppable = sorted((fact for fact in facts if fact.attribution is not Attribution.OWNER), key=_drop_order)
+    dropped = {fact.id for fact in droppable[: len(facts) - MAX_FACTS]}
+    return tuple(fact for fact in facts if fact.id not in dropped)
+
+
+def _drop_order(fact: Fact) -> tuple[bool, float, float]:
+    live = fact.superseded_by is None
+    return (live, fact.importance if live else 0.0, fact.first_confirmed)
+
+
+def _noted(summary: str, note: str) -> str:
+    """The encounter's notes, one window's at a time, bounded to whole
+    sentences: replacing the summary would keep only the last window of a
+    twenty-minute conversation."""
+    if note in summary:
+        return summary
+    joined = f"{summary} {note}".strip()
+    if len(joined) <= EPISODE_SUMMARY_LIMIT:
+        return joined
+    tail = joined[-EPISODE_SUMMARY_LIMIT:]
+    sentence = re.search(r"[.!?]\s+", tail)
+    return tail[sentence.end() :] if sentence is not None else tail.lstrip()
 
 
 def _prune_faces(templates: list[FaceTemplate]) -> list[FaceTemplate]:

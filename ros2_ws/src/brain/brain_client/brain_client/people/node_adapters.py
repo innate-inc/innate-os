@@ -39,10 +39,18 @@ from brain_client.common.script_paths import get_innate_os_root
 from brain_client.people import description, native_frames
 from brain_client.people.geometry import CameraModel
 from brain_client.people.quality import EgoMotionTracker
-from brain_client.people.scribe import ChangeKind, Speaker, TagView, Utterance, is_memory_question
+from brain_client.people.scribe import (
+    ChangeKind,
+    Speaker,
+    TagView,
+    Utterance,
+    is_memory_question,
+    mentions_memory,
+)
 from brain_client.people.surfacing import PeopleEvents, build_snapshot, choose_attention
 from brain_client.people.types import SNAPSHOT_SCHEMA, HealthDict, HealthState, IdentityState, TrackState
 from brain_client.perception.motion_gate import MotionGate
+from brain_client.transport.chat import Sender
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -115,6 +123,9 @@ DECISION_SKEW_SEC = 1.0
 still belong to that snapshot: the stamp is the capture, and the tracker's clock
 starts when the tick that decoded the frame ran, a camera latency later."""
 STALE_DECISION_MESSAGE = "that tag was issued after the snapshot you decided on; look again"
+
+ScribeLines = tuple[dict[str, str], dict[str, str]]
+"""The scribe's per-tag ``learned`` and ``hint`` lines, read once per tick."""
 
 _TAG_RE = re.compile(r"^P\d+$", re.IGNORECASE)
 
@@ -451,7 +462,7 @@ def chat_out_utterance(
     """A ``/brain/chat_out`` entry as one transcript line. Only what the robot
     said out loud and what a skill reported count; thoughts and system notes
     were never spoken, and would read to the scribe as speech."""
-    if payload.get("sender") not in ("robot", "skill_output"):
+    if payload.get("sender") not in (Sender.ROBOT, Sender.SKILL_OUTPUT):
         return None
     text = str(payload.get("text") or "").strip()
     if not text:
@@ -855,6 +866,11 @@ class PeopleAdapters:
         node.create_timer(STORE_TICK_SEC, self._store_tick)
 
     def start(self) -> None:
+        if self._config.tick_source == TickSource.RAW:
+            self._logger.warning(
+                f"[People] tick_source=raw: the brain's frame ring holds only {COMPRESSED_IMAGE_TOPIC}, "
+                "so it cannot pair these stamps and the overlay draws no boxes"
+            )
         for thread in self._threads:
             thread.start()
 
@@ -988,9 +1004,12 @@ class PeopleAdapters:
             with self._lock:
                 self._forgotten.add(person_id)
             self._suppress(person_id)
-            # The queue and the open window are the scribe thread's; handing it
-            # the id keeps this off the executor and off its file (RFC 10).
-            self._forgets.put(person_id)
+            if self._scribe is not None:
+                # The queue and the open window are the scribe thread's; handing
+                # it the id keeps this off the executor and off its file (RFC 10).
+                # Without a scribe nothing drains this queue, and the tombstone
+                # is what revokes the work either way.
+                self._forgets.put(person_id)
         return MutationResult(success, message)
 
     def _mutate(self, idempotency_key: str, write: Callable[[], MutationResult]) -> MutationResult:
@@ -998,7 +1017,10 @@ class PeopleAdapters:
         if answered is not None:
             return answered
         result = write()
-        self._mutations.remember(idempotency_key, result)
+        if result.success:
+            # A failure wrote nothing, so its retry is a fresh mutation — and a
+            # memoized full disk would answer the retry the key exists for.
+            self._mutations.remember(idempotency_key, result)
         return result
 
     def _stale(self, decided_on_stamp_ns: str, *who: str) -> MutationResult | None:
@@ -1071,7 +1093,9 @@ class PeopleAdapters:
             _offer(self._chat, utterance)
 
     def _maybe_recall(self, text: str, tracks: Sequence[TrackState]) -> None:
-        if self._scribe is None:
+        # The roster is built under the store lock every tick contends on, and
+        # almost no chat line is a memory question.
+        if self._scribe is None or not mentions_memory(text):
             return
         roster = self._store.roster()
         subject = is_memory_question(text, [entry.get("name") or "" for entry in roster])
@@ -1118,7 +1142,7 @@ class PeopleAdapters:
         )
         if not active:
             self._want_native = False
-            self._publish_snapshot(now, (), None, (640, 480), consume=False)
+            self._publish_snapshot(now, (), None, (640, 480), self._lines(now), consume=False)
             self._stop.wait(IDLE_POLL_SEC)
             return
         ego = self._sensors.ego(now)
@@ -1140,7 +1164,7 @@ class PeopleAdapters:
         if frame is None or image is None:
             if frame is not None:
                 self._logger.warn("[People] undecodable camera frame", throttle_duration_sec=10.0)
-            self._publish_snapshot(now, self.tracks(), None, (640, 480), consume=False)
+            self._publish_snapshot(now, self.tracks(), None, (640, 480), self._lines(now), consume=False)
             return
         self._last_frame_at = now
         native = self._sensors.native_for(frame.stamp_ns) if self._want_native else None
@@ -1168,11 +1192,14 @@ class PeopleAdapters:
         resolved = apply_conflicts(tracks, resolutions)
         with self._lock:
             self._tracks = tuple(resolved)
-        self._after_tick(image, resolved, resolutions, now)
+        # Read once: a name the scribe commits between the events and the
+        # snapshot would be consumed by the snapshot with no event to announce it.
+        lines = self._lines(now)
+        self._after_tick(image, resolved, resolutions, now, lines)
         # The engine's stamp, not this frame's: a tick its own duty cycle skipped
         # measured nothing, and the brain draws only on the frame it measured.
         self._publish_snapshot(
-            now, resolved, self._engine.frame_stamp_ns, (image.shape[1], image.shape[0]), consume=True
+            now, resolved, self._engine.frame_stamp_ns, (image.shape[1], image.shape[0]), lines, consume=True
         )
 
     def _apply_suppressions(self) -> None:
@@ -1196,7 +1223,12 @@ class PeopleAdapters:
             self._engine.resolver.rebind(source, target)
 
     def _after_tick(
-        self, image: np.ndarray, tracks: Sequence[TrackState], resolutions: Mapping[str, Resolution], now: float
+        self,
+        image: np.ndarray,
+        tracks: Sequence[TrackState],
+        resolutions: Mapping[str, Resolution],
+        now: float,
+        lines: ScribeLines,
     ) -> None:
         """What the resolver decided this tick, turned into wake events, an
         enrolment thumbnail, and the one description a new person earns."""
@@ -1211,7 +1243,7 @@ class PeopleAdapters:
             with self._lock:
                 self._enrolling[tag] = now
             self._queue_description(resolution.enrolled_id, image, tracks, tag)
-        self._publish_events(tracks, now, enrolled)
+        self._publish_events(tracks, now, enrolled, lines)
 
     def _queue_description(self, person_id: str, image: np.ndarray, tracks: Sequence[TrackState], tag: str) -> None:
         if self._scribe is None or not self._store.collection_enabled() or self._store.description(person_id):
@@ -1229,6 +1261,7 @@ class PeopleAdapters:
         tracks: Sequence[TrackState],
         frame_stamp: str | None,
         image_size: tuple[int, int],
+        lines: ScribeLines,
         *,
         consume: bool,
     ) -> None:
@@ -1236,7 +1269,7 @@ class PeopleAdapters:
         that published their events may do it: a tick with no frame publishes no
         events, so clearing there loses the name the brain never heard about."""
         visible = publishable_tracks(tracks, now)
-        learned, hints = self._lines(now)
+        learned, hints = lines
         attention = seek_hint(choose_attention(visible, now), visible, seek_faces=self._config.seek_faces)
         snapshot = build_snapshot(
             visible,
@@ -1261,10 +1294,13 @@ class PeopleAdapters:
         if not consume:
             return
         with self._lock:
-            self._learned.clear()  # the "learned:" line is shown once (decision 7)
+            for tag in learned:  # shown once (decision 7) — and only what was shown
+                self._learned.pop(tag, None)
 
-    def _publish_events(self, tracks: Sequence[TrackState], now: float, enrolled: Mapping[str, bytes | None]) -> None:
-        learned, hints = self._lines(now)
+    def _publish_events(
+        self, tracks: Sequence[TrackState], now: float, enrolled: Mapping[str, bytes | None], lines: ScribeLines
+    ) -> None:
+        learned, hints = lines
         events = self._events.emit(tracks, now, enrolled=enrolled, learned=learned, hints=hints)
         with self._lock:
             recalls = list(self._pending_recalls)
@@ -1278,13 +1314,13 @@ class PeopleAdapters:
         for event in events:
             self._events_pub.publish(String(data=json.dumps(event)))
 
-    def _lines(self, now: float) -> tuple[dict[str, str], dict[str, str]]:
+    def _lines(self, now: float) -> ScribeLines:
         with self._lock:
             self._hints = {tag: line for tag, line in self._hints.items() if now - line[1] <= HINT_TTL_SEC}
             return dict(self._learned), {tag: text for tag, (text, _) in self._hints.items()}
 
     def _health(self, now: float) -> PeopleHealthDict:
-        health = cast("PeopleHealthDict", dict(self._engine.health(now)))
+        health = cast("PeopleHealthDict", dict(self._engine.health(now, native_wanted=self._want_native)))
         health["scribe"] = str(self._scribe_health())
         return health
 

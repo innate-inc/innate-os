@@ -11,7 +11,6 @@ import math
 import pytest
 
 from brain_client.people.geometry import (
-    CAMERA_HEIGHT_M,
     CX,
     CY,
     FX,
@@ -21,11 +20,8 @@ from brain_client.people.geometry import (
     CameraModel,
     box_center,
     box_size,
-    elevation_deg,
-    eye_elevation_deg,
     feet_visible,
     head_region,
-    native_pixel_size,
     native_to_published,
     pose_from_landmarks,
     published_to_native,
@@ -86,36 +82,6 @@ def test_camera_info_fallback_scales_to_the_frame_size_it_was_given():
     model = CameraModel.from_camera_info(None, 1280, 960)
     assert model.fx == pytest.approx(2 * FX)
     assert model.fy == pytest.approx(2 * FY)
-
-
-def test_k_matrix_is_the_row_major_intrinsic():
-    model = CameraModel.published_default()
-    assert model.k_matrix == ((FX, 0.0, CX), (0.0, FY, CY), (0.0, 0.0, 1.0))
-
-
-# ------------------------------------------------------- the RFC 1.3 table
-
-
-@pytest.mark.parametrize(
-    ("range_m", "face_px", "body_px"),
-    [(1.0, 64, 681), (1.5, 43, 454), (2.0, 32, 341), (2.5, 26, 272), (3.0, 21, 227), (5.0, 13, 136)],
-)
-def test_native_pixel_sizes_reproduce_the_rfc_table(range_m, face_px, body_px):
-    assert native_pixel_size(0.16, range_m) == pytest.approx(face_px, abs=1.0)
-    assert native_pixel_size(1.70, range_m) == pytest.approx(body_px, abs=1.0)
-
-
-@pytest.mark.parametrize(("range_m", "degrees"), [(1.0, 53), (1.5, 42), (2.0, 34), (3.0, 24), (5.0, 15)])
-def test_eye_elevation_reproduces_the_rfc_table(range_m, degrees):
-    assert round(eye_elevation_deg(range_m)) == degrees
-
-
-def test_elevation_of_the_camera_plane_is_zero():
-    assert elevation_deg(CAMERA_HEIGHT_M, 2.0) == pytest.approx(0.0)
-
-
-def test_native_pixel_size_of_a_zero_range_target_is_zero_rather_than_infinite():
-    assert native_pixel_size(1.7, 0.0) == 0.0
 
 
 # ------------------------------------------------------------ boxes and rays
@@ -195,12 +161,6 @@ def test_head_pitch_tilted_down_shortens_the_range_of_the_same_pixel():
 def test_head_pitch_tilted_up_puts_the_feet_pixel_above_the_horizon():
     model = CameraModel.published_default()
     assert model.floor_range(person_box(2.0), 15.0) is None
-
-
-def test_elevation_of_a_box_above_the_centre_is_positive():
-    model = CameraModel.published_default()
-    assert model.elevation_of((0.05, 0.4, 0.15, 0.6)) > 0
-    assert model.elevation_of((0.85, 0.4, 0.95, 0.6)) < 0
 
 
 def test_box_pixels_and_height_are_in_the_model_own_resolution():

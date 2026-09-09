@@ -12,7 +12,7 @@ injected :class:`RosterView`."""
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Protocol
 
 from brain_client.people import quality
@@ -106,6 +106,7 @@ class BodyThresholds:
     calibration: Calibration = Calibration.between(0.50, 0.60, span=1.0)
 
 
+DEFAULT_BODY_THRESHOLDS = BodyThresholds()
 OSNET_BODY_THRESHOLDS = BodyThresholds(
     accept=0.78, reject=0.68, margin=0.07, calibration=Calibration.between(0.68, 0.78, span=1.0)
 )
@@ -114,6 +115,11 @@ OSNET_BODY_THRESHOLDS = BodyThresholds(
 def face_thresholds_for(model: str) -> FaceThresholds:
     """Thresholds for an embedding-space id such as ``"sface-2021-128"``."""
     return INSPIREFACE_THRESHOLDS if model.startswith("inspireface") else SFACE_THRESHOLDS
+
+
+def body_thresholds_for(model: str) -> BodyThresholds:
+    """Thresholds for a body embedding-space id such as ``"osnet-x0_25-msmt17-512"``."""
+    return OSNET_BODY_THRESHOLDS if model.startswith("osnet") else DEFAULT_BODY_THRESHOLDS
 
 
 @dataclass(frozen=True)
@@ -141,7 +147,8 @@ class ResolverConfig:
     reconfirm_body_sec: float = 3.0
     template_interval_sec: float = 5.0
     height_interval_sec: float = 1.0
-    sighting_interval_sec: float = 60.0
+    # Under the store's own 30 s sighting debounce, so last_seen never lags it.
+    sighting_interval_sec: float = 10.0
     max_frame_llr: float = 3.0
     max_total_log_odds: float = 12.0
 
@@ -207,8 +214,9 @@ class _Candidate:
         # Outfit evidence only counts in this person's favour once it has agreed
         # on min_body_frames frames; a single agreeing frame is a coincidence.
         body = self.body if self.body <= 0.0 or self.body_frames >= min_body_frames else 0.0
-        soft = min(body + self.height + self.continuity, config.body_cap_log_odds)
-        return max(-config.max_total_log_odds, min(config.max_total_log_odds, self.face + soft))
+        # Symmetric: what cannot reach `known` on its own may not veto one either.
+        soft = _clamp(body + self.height + self.continuity, config.body_cap_log_odds)
+        return _clamp(self.face + soft, config.max_total_log_odds)
 
     def face_span(self) -> float:
         if self.first_face is None or self.last_face is None:
@@ -235,10 +243,10 @@ class _Belief:
     pressure_since: dict[str, float] = field(default_factory=dict)
     enrol_faces: list[FaceObservation] = field(default_factory=list)
     pending_faces: list[_PendingFace] = field(default_factory=list)
-    best_roster_cosine: float = 0.0
     last_body: BodyObservation | None = None
     height_sum: float = 0.0
     height_count: int = 0
+    height_written_count: int = 0
     height_variance: float = 0.0
     last_template_write: float = 0.0
     last_height_write: float = 0.0
@@ -247,6 +255,7 @@ class _Belief:
     resumed_at: float = 0.0
     split_pending: bool = False
     face_model: str = ""
+    body_model: str = ""
 
     def candidate(self, person_id: str) -> _Candidate:
         found = self.candidates.get(person_id)
@@ -277,12 +286,12 @@ class Resolver:
         roster: RosterView,
         *,
         face: FaceThresholds | None = None,
-        body: BodyThresholds = BodyThresholds(),
+        body: BodyThresholds | None = None,
         config: ResolverConfig = DEFAULT_CONFIG,
     ) -> None:
         self._roster = roster
         self._face_override = face
-        self._body = body
+        self._body_override = body
         self._config = config
         self._beliefs: dict[str, _Belief] = {}
         self._suppressed: set[str] = set()
@@ -305,7 +314,6 @@ class Resolver:
 
         similarities = self._roster_similarities(embedding, observation.model)
         best_id, best_similarity = _best(similarities)
-        belief.best_roster_cosine = max(belief.best_roster_cosine, best_similarity)
 
         for person_id, similarity in similarities.items():
             candidate = belief.candidate(person_id)
@@ -334,16 +342,21 @@ class Resolver:
         embedding = observation.embedding
         if embedding is None or not observation.model:
             return
+        belief.body_model = observation.model
+        thresholds = self._body_thresholds(observation.model)
         weight = quality.body_quality_score(height_px=observation.height_px, score=1.0, sharpness=observation.sharpness)
         scored: dict[str, tuple[float, float]] = {}
         for person_id in self._roster.person_ids():
-            best = self._best_outfit(person_id, embedding, observation.model, now)
+            best = self._best_outfit(person_id, embedding, observation.model, now, thresholds)
             if best is not None:  # None: nothing on file, or every outfit is past 48 h
                 scored[person_id] = best
-        agreeing = self._agreeing_outfit(scored)
+        agreeing = self._agreeing_outfit(scored, thresholds)
         for person_id, (llr, _similarity) in scored.items():
             candidate = belief.candidate(person_id)
-            candidate.body += _clamp(llr * weight, self._config.max_frame_llr)
+            frame_llr = _clamp(llr * weight, self._config.max_frame_llr)
+            # Bounded both ways at the cap the outfit can reach: a jacket the
+            # person changed must not out-argue the faces that named them.
+            candidate.body = _clamp(candidate.body + frame_llr, self._config.body_cap_log_odds)
             if person_id != agreeing:
                 candidate.body_agree_since = None
                 continue
@@ -351,16 +364,19 @@ class Resolver:
             if candidate.body_agree_since is None:
                 candidate.body_agree_since = observation.stamp
 
-    def _agreeing_outfit(self, scored: dict[str, tuple[float, float]]) -> str | None:
+    @staticmethod
+    def _agreeing_outfit(scored: dict[str, tuple[float, float]], thresholds: BodyThresholds) -> str | None:
         """The one person this outfit frame agrees with, or None. Two people in
         similar clothes agree with nobody: the margin is what says so."""
         ranked = sorted(scored.items(), key=lambda item: -item[1][1])
-        if not ranked or ranked[0][1][1] < self._body.accept:
+        if not ranked or ranked[0][1][1] < thresholds.accept:
             return None
         runner_up = ranked[1][1][1] if len(ranked) > 1 else -1.0
-        return ranked[0][0] if ranked[0][1][1] - runner_up >= self._body.margin else None
+        return ranked[0][0] if ranked[0][1][1] - runner_up >= thresholds.margin else None
 
-    def _best_outfit(self, person_id: str, embedding: np.ndarray, model: str, now: float) -> tuple[float, float] | None:
+    def _best_outfit(
+        self, person_id: str, embedding: np.ndarray, model: str, now: float, thresholds: BodyThresholds
+    ) -> tuple[float, float] | None:
         """The strongest live outfit as (age-weighted llr, its raw cosine). An
         outfit's evidence fades with its age, so an expired one is silence
         rather than a mismatch."""
@@ -372,7 +388,7 @@ class Resolver:
             if age_weight <= 0.0:
                 continue
             similarity = cosine(embedding, outfit.embedding)
-            scored = (self._body.calibration.llr(similarity) * age_weight, similarity)
+            scored = (thresholds.calibration.llr(similarity) * age_weight, similarity)
             if best is None or scored[0] > best[0]:
                 best = scored
         return best
@@ -512,7 +528,8 @@ class Resolver:
     # ------------------------------------------------------------- decisions
 
     def _ranked(self, belief: _Belief) -> list[tuple[str, float]]:
-        scores = [(c.person_id, c.total(self._config, self._body.min_frames)) for c in belief.candidates.values()]
+        min_frames = self._body_thresholds(belief.body_model).min_frames
+        scores = [(c.person_id, c.total(self._config, min_frames)) for c in belief.candidates.values()]
         scores.sort(key=lambda item: (-item[1], item[0]))
         return scores
 
@@ -639,13 +656,7 @@ class Resolver:
                 continue
             belief = self._belief(track.tag)
             belief.state = IdentityState.POSSIBLE
-            resolutions[track.tag] = Resolution(
-                tag=track.tag,
-                identity=self._identity_of(belief),
-                enrolled_id=resolution.enrolled_id,
-                conflict_with=first,
-                switched_from=resolution.switched_from,
-            )
+            resolutions[track.tag] = replace(resolution, identity=self._identity_of(belief), conflict_with=first)
 
     # -------------------------------------------------------------- learning
 
@@ -665,7 +676,9 @@ class Resolver:
         del belief.pending_faces[:-10]
         if best_similarity <= thresholds.reject:
             belief.enrol_faces.append(observation)
-            del belief.enrol_faces[:-10]
+            # 5 s of the 5 Hz face cadence: ten frames only span 1.8 s, so the
+            # two-second enrol window would never be reachable on hardware.
+            del belief.enrol_faces[:-25]
 
     def _try_enrol(self, belief: _Belief, track: TrackView, now: float) -> str | None:
         """RFC 5.4: five self-consistent face frames over two seconds matching
@@ -682,8 +695,10 @@ class Resolver:
         faces = list(belief.enrol_faces)
         if len(faces) < config.enrol_face_frames or faces[-1].stamp - faces[0].stamp < config.enrol_span_sec:
             return None
-        thresholds = self._thresholds(belief.face_model)
-        if belief.best_roster_cosine > thresholds.reject or not _self_consistent(faces, thresholds.self_similar):
+        # Only frames that matched nobody are in this buffer (RFC 5.4); a
+        # lifetime maximum over every impostor comparison would eventually cross
+        # reject on any track and block its enrolment for good.
+        if not _self_consistent(faces, self._thresholds(belief.face_model).self_similar):
             return None
         templates = [_template(face, face.embedding) for face in faces if face.embedding is not None]
         if len(templates) < config.enrol_face_frames:
@@ -718,11 +733,11 @@ class Resolver:
             return
         if resolution.split_requested or resolution.conflict_with is not None:
             return  # the evidence disagrees: nothing this track saw is safe to write
-        if not self._roster.collection_enabled():
-            return
         if now - belief.last_sighting_write >= self._config.sighting_interval_sec:
             belief.last_sighting_write = now
             self._roster.record_sighting(person_id, now, map_name, pose)
+        if not self._roster.collection_enabled():
+            return  # RFC section 10: collection off stops learning, not recognising
         self._write_face(belief, person_id, now)
         self._write_height(belief, person_id, now)
 
@@ -753,7 +768,10 @@ class Resolver:
         mean = belief.height_mean
         if mean is None or now - belief.last_height_write < self._config.height_interval_sec:
             return
+        if belief.height_count == belief.height_written_count:
+            return  # the store keeps 64 samples; copies of one mean would evict every other encounter
         belief.last_height_write = now
+        belief.height_written_count = belief.height_count
         self._roster.add_height_sample(person_id, mean, belief.height_variance)
 
     # ---------------------------------------------------------------- pieces
@@ -768,6 +786,9 @@ class Resolver:
 
     def _thresholds(self, model: str) -> FaceThresholds:
         return self._face_override or face_thresholds_for(model)
+
+    def _body_thresholds(self, model: str) -> BodyThresholds:
+        return self._body_override or body_thresholds_for(model)
 
     def _roster_similarities(self, embedding: np.ndarray, model: str) -> dict[str, float]:
         similarities: dict[str, float] = {}

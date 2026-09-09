@@ -15,7 +15,12 @@
 // so once one stops arriving the boxes go away rather than following whatever
 // the camera moved on to.
 
-import { PEOPLE_SNAPSHOT_FRESH_MS, PEOPLE_THROTTLE_MS, PEOPLE_TOPIC } from "../constants.js";
+import {
+  PEOPLE_SNAPSHOT_FRESH_MS,
+  PEOPLE_SNAPSHOT_SCHEMA,
+  PEOPLE_THROTTLE_MS,
+  PEOPLE_TOPIC,
+} from "../constants.js";
 
 /** Box coordinates are thousandths of the frame, not pixels or fractions. */
 const PER_MILLE = 1000;
@@ -64,6 +69,10 @@ export function parseSnapshot(payload) {
   } catch {
     return null;
   }
+  // A node publishing another schema means its boxes and states are not the
+  // ones drawn here; the brain's people_feed.py drops those the same way. An
+  // absent field is the current schema, as it is there.
+  if (data?.schema !== undefined && data.schema !== PEOPLE_SNAPSHOT_SCHEMA) return null;
   if (!Array.isArray(data?.people)) return null;
   /** @type {DrawablePerson[]} */
   const people = [];
@@ -184,9 +193,20 @@ export function createPeopleOverlay(stage, video, ros) {
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let staleTimer;
   let raf = 0;
+  let sized = false;
 
   function schedule() {
     if (!raf) raf = requestAnimationFrame(draw);
+  }
+
+  /** The backing store in device pixels. A ResizeObserver's first callback runs
+   * after that frame's rAF, so the first snapshot can paint while the canvas is
+   * still its 300x150 default — which is what the DPR below would read back. */
+  function sizeBackingStore() {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(stage.clientWidth * dpr);
+    canvas.height = Math.round(stage.clientHeight * dpr);
+    sized = true;
   }
 
   /** @param {any} payload */
@@ -225,6 +245,7 @@ export function createPeopleOverlay(stage, video, ros) {
     if (video && (!vw || !vh)) return;
     const rect = containRect(vw, vh, cw, ch);
     canvas.hidden = false;
+    if (!sized) sizeBackingStore();
 
     // Derive DPR from the backing store so a monitor move cannot desync it.
     const dpr = canvas.width / cw;
@@ -264,9 +285,7 @@ export function createPeopleOverlay(stage, video, ros) {
   }
 
   const resize = new ResizeObserver(() => {
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(stage.clientWidth * dpr);
-    canvas.height = Math.round(stage.clientHeight * dpr);
+    sizeBackingStore();
     schedule();
   });
   resize.observe(stage);

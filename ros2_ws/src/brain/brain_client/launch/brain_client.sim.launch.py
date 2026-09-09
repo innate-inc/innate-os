@@ -54,7 +54,9 @@ def generate_launch_description():
     )
 
     # Read before the process starts, not as a parameter: a disabled node exits,
-    # and respawn would bring it straight back every two seconds.
+    # and respawn would bring it straight back every two seconds. On by default
+    # here and off on hardware: the simulator is where this is developed, and
+    # RFC section 12 ships Phase 0 to robots behind the switch.
     people_enabled_arg = DeclareLaunchArgument(
         "people_enabled",
         default_value=str(node_setting("people_node", "enabled", True)),

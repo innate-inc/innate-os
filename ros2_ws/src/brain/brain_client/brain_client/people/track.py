@@ -154,7 +154,11 @@ class Tracker:
         low = [d for d in detections if self._config.low_score <= d.score < self._config.high_score]
 
         taken, pending = self._associate(candidates, high, predictions, self._config.iou_high * loosen, now)
-        self._associate(pending, low, predictions, self._config.iou_low * loosen, now)
+        # The low-score pass exists to hold a tracked box through a blur, so it
+        # only sees live tracks: a 0.1-0.5 false positive must not revive a lost
+        # tag and hand a stranger the identity that went with it.
+        live_pending = [t for t in pending if not t.lost]
+        self._associate(live_pending, low, predictions, self._config.iou_low * loosen, now)
 
         for index, detection in enumerate(high):
             if index not in taken:
@@ -259,7 +263,12 @@ class Tracker:
     def reassociate(self, tag: str, embedding: np.ndarray, model: str, now: float) -> str | None:
         """Fold a freshly spawned track into the lost track whose outfit it
         matches, restoring that track's tag. Returns the restored tag, or None
-        when nobody matches and the new track keeps its own."""
+        when nobody matches and the new track keeps its own.
+
+        The caller learns the tag from the return value and resumes its identity
+        on this tick, so the recovery is not also queued for
+        :meth:`take_recovered` — resuming twice would demote it again.
+        """
         track = self._tracks.get(tag)
         if track is None or embedding.size == 0:
             return None
@@ -284,7 +293,6 @@ class Tracker:
         revived.lost_since = None
         revived.velocity = track.velocity
         del self._tracks[tag]
-        self._recovered.append(best_tag)
         self.note_body(best_tag, embedding, model)
         return best_tag
 

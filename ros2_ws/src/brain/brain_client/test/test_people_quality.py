@@ -13,13 +13,13 @@ import pytest
 from brain_client.people.quality import (
     BODY_MIN_MATCH_PX,
     BODY_MIN_OUTFIT_PX,
-    BODY_MIN_SCORE,
     DRIVE_SUPPRESS_SEC,
     FACE_MIN_DETECT_PX,
     FACE_MIN_ENROL_PX,
     FACE_MIN_MATCH_PX,
     FACE_MIN_MATCH_REAL_PX,
     HEAD_PITCH_EPS_DEG,
+    HEAD_PITCH_WINDOW_SEC,
     LUMINANCE_MAX,
     LUMINANCE_MIN,
     YAW_RATE_MAX,
@@ -28,7 +28,6 @@ from brain_client.people.quality import (
     IndependenceGate,
     Purpose,
     body_quality_score,
-    body_score_ok,
     body_sharp_enough,
     body_size_ok,
     box_movement,
@@ -94,11 +93,6 @@ def test_body_matching_and_outfit_templates_have_different_floors():
     assert body_size_ok(BODY_MIN_MATCH_PX)
     assert not body_size_ok(BODY_MIN_OUTFIT_PX - 1, Purpose.ENROL)
     assert body_size_ok(BODY_MIN_OUTFIT_PX, Purpose.ENROL)
-
-
-def test_body_detection_confidence_gate():
-    assert body_score_ok(BODY_MIN_SCORE)
-    assert not body_score_ok(BODY_MIN_SCORE - 0.01)
 
 
 # ------------------------------------------------------------- pose gates
@@ -291,7 +285,7 @@ def test_an_old_drive_command_no_longer_suppresses():
 
 
 def test_a_moving_head_suppresses_decisions():
-    assert not EgoMotion(stamp=100.0, head_pitch_delta_deg=HEAD_PITCH_EPS_DEG).still
+    assert not EgoMotion(stamp=100.0, head_pitch_range_deg=HEAD_PITCH_EPS_DEG).still
 
 
 def test_a_turning_base_suppresses_decisions():
@@ -314,8 +308,28 @@ def test_the_tracker_reports_a_head_step_then_forgets_it():
     tracker = EgoMotionTracker()
     tracker.note_head_pitch(10.0, 0.0)
     tracker.note_head_pitch(10.2, 5.0)
-    assert not tracker.state(10.3).still
-    assert tracker.state(10.2 + DRIVE_SUPPRESS_SEC + 0.1).still
+    assert not tracker.state(10.25).still
+    assert tracker.state(10.2 + HEAD_PITCH_WINDOW_SEC + 0.1).still
+
+
+def test_a_seek_at_two_hundred_hertz_reads_as_a_moving_head():
+    """On hardware the head publishes off the 200 Hz arm loop, where a 20 deg/s
+    seek is 0.1 deg per message — a per-message delta reads it as perfectly still
+    and lets every smeared frame through."""
+    tracker = EgoMotionTracker()
+    for step in range(100):
+        stamp = 10.0 + 0.005 * step
+        tracker.note_head_pitch(stamp, 0.1 * step)  # 20 deg/s at 200 Hz
+        assert tracker.state(stamp).head_pitch_deg == pytest.approx(0.1 * step)
+    assert not tracker.state(10.5).still
+
+
+def test_encoder_jitter_at_two_hundred_hertz_is_still_a_still_head():
+    tracker = EgoMotionTracker()
+    for step in range(100):
+        stamp = 10.0 + 0.005 * step
+        tracker.note_head_pitch(stamp, -12.0 + 0.1 * (step % 2))
+    assert tracker.state(10.5).still
 
 
 def test_the_tracker_carries_the_latest_head_pitch_into_the_state():

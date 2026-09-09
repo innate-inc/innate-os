@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     from brain_client.people.geometry import CameraModel
     from brain_client.people.types import Box
 
-NATIVE_BUFFER_WIDTH, NATIVE_BUFFER_HEIGHT = 2560, 720
 UNSQUASHED_SIZE = (PUBLISHED_WIDTH, round(PUBLISHED_HEIGHT * 0.75))  # 640x360: true proportions
 FACE_CROP_MIN_PX = 160  # YuNet loses small faces below this; the crop is upscaled instead
 
@@ -59,11 +58,6 @@ def left_eye(buffer: np.ndarray) -> np.ndarray:
 def decode_left_eye(jpeg: bytes, *, reduced: bool = False) -> np.ndarray | None:
     buffer = decode(jpeg, reduced=reduced)
     return None if buffer is None else left_eye(buffer)
-
-
-def is_native_buffer(image: np.ndarray) -> bool:
-    """A full-resolution native buffer, as opposed to a reduced or published one."""
-    return image.shape[1] == NATIVE_BUFFER_WIDTH and image.shape[0] == NATIVE_BUFFER_HEIGHT
 
 
 def unsquash_published(frame_bgr: np.ndarray) -> np.ndarray:

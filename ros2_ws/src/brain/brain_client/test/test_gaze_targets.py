@@ -98,8 +98,3 @@ def test_a_box_becomes_the_centre_and_size_the_controller_steers_on():
     assert face["center_y"] == pytest.approx(0.18)
     assert face["width"] == pytest.approx(0.10)
     assert face["height"] == pytest.approx(0.16)
-
-
-def test_the_frame_shape_is_rows_then_columns():
-    assert gaze_targets.frame_shape(snapshot()) == (480, 640)
-    assert gaze_targets.frame_shape(snapshot(image_size=[])) == (480, 640)

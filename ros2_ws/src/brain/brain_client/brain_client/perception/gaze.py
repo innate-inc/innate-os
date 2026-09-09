@@ -5,8 +5,8 @@ Gaze System - Person tracking for MARS robot.
 
 Features:
 - Follows whoever the people node is watching (its boxes ride /brain/people),
-  and falls back to InspireFace detection only while that feed is absent or
-  stale — a fresh feed never loads a second face model
+  and falls back to InspireFace detection only while that feed is absent — an
+  idle node saying "nobody" is an answer, and never loads a second face model
 - Wheel-based panning (robot turns to face people)
 
 Hardware: MARS robot
@@ -39,6 +39,9 @@ if TYPE_CHECKING:
     from brain_client.perception.people_feed import PeopleFeed
 
 _SNAPSHOT_FRESH_SEC = 1.0  # older than this and the boxes are aiming at where someone was
+# The node heartbeats every 5 s with nobody in view: three missed beats, not one
+# quiet second, are what earn the second face model this process avoids loading.
+_FEED_ABSENT_SEC = 15.0
 
 
 class FaceDetector:
@@ -120,7 +123,7 @@ class GazeController:
             self._thread.join(timeout=1.0)
             self._thread = None
 
-    def track_face(self, face: dict, frame_shape: tuple[int, int]):
+    def track_face(self, face: dict):
         """Track a detected face by pointing at its center."""
         # Pan error (positive = face is on right = turn right)
         pan_error = (face["center_x"] - 0.5) * self.CAMERA_HFOV
@@ -284,11 +287,19 @@ class ROSPersonTracker:
                 time.sleep(dt - elapsed)
 
     def _track_once(self) -> None:
-        snapshot = self._people.fresh(_SNAPSHOT_FRESH_SEC) if self._people is not None else None
-        if snapshot is None:
+        if self._people is None:
             self._detect_and_track()
             return
-        self._follow_snapshot(snapshot)
+        snapshot = self._people.fresh(_SNAPSHOT_FRESH_SEC)
+        if snapshot is not None:
+            self._follow_snapshot(snapshot)
+            return
+        if self._people.fresh(_FEED_ABSENT_SEC) is None:
+            self._detect_and_track()
+            return
+        # The feed is alive and its last word is older than a second: that is an
+        # idle node saying the room is empty, not boxes worth aiming at.
+        self._recenter_when_idle()
 
     def _follow_snapshot(self, snapshot: PeopleSnapshotDict) -> None:
         """The people node's engine detected and chose everyone in view on this
@@ -299,7 +310,7 @@ class ROSPersonTracker:
         if box is None:
             self._recenter_when_idle()
             return
-        self._gaze.track_face(gaze_targets.as_face(box), gaze_targets.frame_shape(snapshot))
+        self._gaze.track_face(gaze_targets.as_face(box))
         self._last_face_time = time.time()
 
     def _detect_and_track(self) -> None:
@@ -319,7 +330,7 @@ class ROSPersonTracker:
             self._recenter_when_idle()
             return
         best = max(faces, key=lambda f: f["width"] * f["height"])
-        self._gaze.track_face(best, (frame.shape[0], frame.shape[1]))
+        self._gaze.track_face(best)
         self._last_face_time = time.time()
 
     def _recenter_when_idle(self) -> None:

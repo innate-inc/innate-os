@@ -11,7 +11,8 @@ namespace {
 // Bounded so a camera that stopped delivering cannot wedge the destructor's thread join.
 constexpr GstClockTime kMainPullTimeout = 500 * GST_MSECOND;
 // Decode latency puts the native buffer at most a frame or two ahead of the frame just published;
-// anything further apart is a PTS reset, not the same capture, and must not stamp the message.
+// anything further apart is a PTS reset, not the same capture, and is only worth a warning — the
+// buffer still carries its own capture time, for a consumer's pairing to accept or reject.
 constexpr int64_t kMaxNativeSkewNs = 200000000;
 }  // namespace
 
@@ -898,9 +899,11 @@ rclcpp::Time MainCameraDriver::nativeStampFor(GstBuffer* buffer) {
     // between the MJPG buffer being published and the frame processAndPublishFrame just stamped.
     const int64_t skew_ns = static_cast<int64_t>(pts) - static_cast<int64_t>(main_frame_pts_);
     if (skew_ns < -kMaxNativeSkewNs || skew_ns > kMaxNativeSkewNs) {
+        // Stamping it with the published frame's time would show a consumer a perfect match for a
+        // buffer known to be far from it; its own capture time lets their pairing reject it.
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
-                             "Native buffer %.0f ms from the published frame; using the frame's stamp", skew_ns / 1e6);
-        return last_frame_stamp_;
+                             "Native buffer %.0f ms from the published frame; stamping it at its own capture time",
+                             skew_ns / 1e6);
     }
     return last_frame_stamp_ + rclcpp::Duration::from_nanoseconds(skew_ns);
 }

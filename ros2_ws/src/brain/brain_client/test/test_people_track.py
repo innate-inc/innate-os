@@ -138,6 +138,17 @@ def test_the_low_score_pass_keeps_a_blurred_detection_attached():
     assert tracks[0].last_seen == 100.2
 
 
+def test_the_low_score_pass_never_revives_a_lost_track():
+    """A 0.1-0.5 box is kept only to hold a track that is already being followed;
+    letting one revive a lost tag would hand a false positive that person's name."""
+    tracker = Tracker()
+    tracker.update([detection()], 100.0)
+    tracker.update([], 102.0)
+    tracker.update([detection(score=0.2)], 102.5)
+    assert tracker.live() == []
+    assert [t.tag for t in tracker.lost()] == ["P1"]
+
+
 def test_a_low_score_detection_alone_never_starts_a_track():
     tracker = Tracker()
     assert tracker.update([detection(score=0.2)], 100.0) == []
@@ -232,15 +243,18 @@ def test_body_reassociation_restores_the_lost_tag():
     assert [t.tag for t in tracker.live()] == ["P1"]
 
 
-def test_a_reassociated_track_is_reported_as_recovered():
+def test_a_reassociated_track_is_not_also_queued_as_recovered():
+    """The caller has the restored tag in the return value and resumes it on the
+    spot; queueing it here too would resume it a second time next tick, demoting
+    a track that had just been reconfirmed."""
     tracker = Tracker()
     tracker.update([detection()], 100.0)
     tracker.note_body("P1", unit(1, 0, 0), "osnet")
     tracker.update([], 102.0)
     tracker.update([detection(shifted(BOX, dx=0.4))], 200.0)
     tracker.take_recovered()
-    tracker.reassociate("P2", unit(1, 0, 0), "osnet", 200.0)
-    assert tracker.take_recovered() == ["P1"]
+    assert tracker.reassociate("P2", unit(1, 0, 0), "osnet", 200.0) == "P1"
+    assert tracker.take_recovered() == []
 
 
 def test_a_different_outfit_keeps_the_new_tag():

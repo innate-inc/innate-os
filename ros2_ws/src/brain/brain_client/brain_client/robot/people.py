@@ -18,10 +18,11 @@ when a person asks to be forgotten — says so. Declared like any interface::
 republished at up to 5 Hz while anyone is tracked, and go empty once that
 snapshot goes stale — a latched message outlives the node that published it,
 and a skill must never drive at a position no engine is confirming any more.
-``forget`` and ``rename`` are the only mutations the agent surface has; each
-returns ``(ok, message)`` with a message written to be said out loud, and
-neither blocks longer than a few seconds whether or not a people node is
-listening.
+``forget`` is the one mutation the skill surface has: it returns
+``(ok, message)`` with a message written to be said out loud, and never blocks
+longer than a few seconds whether or not a people node is listening. Naming is
+not on this surface — the name rules of RFC 6.3 are the node's, and the app and
+the scribe are the two paths that commit one.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from brain_messages.srv import ForgetPerson, RenamePerson
+from brain_messages.srv import ForgetPerson
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from std_msgs.msg import String
@@ -46,10 +47,6 @@ if TYPE_CHECKING:
 
 PEOPLE_TOPIC = "/brain/people"
 FORGET_SERVICE = "/brain/people/forget"
-RENAME_SERVICE = "/brain/people/rename"
-
-# The consent path a name learned this way is stored under (see the .srv).
-RENAME_SOURCE = "skill"
 
 _LATCHED_QOS = QoSProfile(
     depth=1,
@@ -75,7 +72,6 @@ class People:
         group = ReentrantCallbackGroup()
         node.create_subscription(String, PEOPLE_TOPIC, self._on_snapshot, _LATCHED_QOS, callback_group=group)
         self._forget_client = node.create_client(ForgetPerson, FORGET_SERVICE, callback_group=group)
-        self._rename_client = node.create_client(RenamePerson, RENAME_SERVICE, callback_group=group)
 
     def in_view(self) -> list[PersonInView]:
         """Everyone the engine is tracking right now, nearest first."""
@@ -98,16 +94,6 @@ class People:
         request.who = str(who)
         self._decide(request)
         return self._call(self._forget_client, request, FORGET_SERVICE)
-
-    def rename(self, who: str, name: str) -> tuple[bool, str]:
-        """Bind or replace a person's name. Names are not unique and renaming
-        never merges two people."""
-        request = RenamePerson.Request()
-        request.who = str(who)
-        request.name = str(name)
-        request.source = RENAME_SOURCE
-        self._decide(request)
-        return self._call(self._rename_client, request, RENAME_SERVICE)
 
     def _decide(self, request: Any) -> None:
         """RFC section 8: a mutation names the snapshot it was decided on, so a

@@ -384,6 +384,18 @@ def test_event_payloads_are_shaped_for_the_wire():
     assert event["stamp"] == NOW
 
 
+def test_cooldowns_older_than_the_longest_one_are_forgotten():
+    """Tags are never reused and this node runs for weeks: an entry that can no
+    longer suppress anything is leaked memory."""
+    events = PeopleEvents()
+    events.emit([track("P3", person_id="person_1")], NOW)
+    assert events._last
+
+    longest = max(events._cooldowns.values())
+    events.emit([track("P4", person_id="person_2")], NOW + longest + 1)
+    assert [key[1] for key in events._last] == ["person_2"]
+
+
 def test_the_cooldowns_are_configurable():
     events = PeopleEvents(cooldowns={EventKind.REENTERED: 0.0}, reentry_gap_sec=0.0)
     person = track(person_id="person_1")

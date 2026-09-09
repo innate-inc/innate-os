@@ -172,6 +172,7 @@ _SETTINGS_DOUBLE_KEYS = frozenset(
         "mad.max_angular_acceleration",
         # main_camera_driver
         "fps",
+        "native_fps",
         "target_brightness",
         "ae_kp",
         # manipulation_server

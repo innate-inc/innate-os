@@ -57,7 +57,6 @@ class HealthState(StrEnum):
     OK = "ok"
     STALE = "stale"
     UNAVAILABLE = "unavailable"
-    ERROR = "error"
     NONE = "none"
 
 
@@ -310,7 +309,7 @@ class AttentionDict(TypedDict, total=False):
 
 class HealthDict(TypedDict, total=False):
     camera: str
-    native: str
+    native: str  # "none" while no track wants a face: the node unsubscribed, the driver is fine
     face_model: str
     body_model: str
     gpu: str

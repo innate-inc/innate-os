@@ -15,21 +15,23 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
+from people_fakes import (
+    CenterFaceLocator,
+    ColorBodyEmbedder,
+    ColorFaceEmbedder,
+    fake_backends,
+    mean_color_embedding,
+)
 
 from brain_client.people import native_frames
 from brain_client.people.backends import (
     YUNET,
     Backend,
     Backends,
-    CenterFaceLocator,
-    ColorBodyEmbedder,
-    ColorFaceEmbedder,
     HogPersonDetector,
     NullBodyEmbedder,
     ensure_model,
-    fake_backends,
     load_backends,
-    mean_color_embedding,
 )
 from brain_client.people.engine import EngineConfig, PeopleEngine
 from brain_client.people.geometry import CameraModel, head_region
@@ -161,6 +163,18 @@ class RecordingResolver(Resolver):
     def observe_face(self, tag: str, observation: FaceObservation) -> None:
         self.faces.append(observation)
         super().observe_face(tag, observation)
+
+
+class CountingResolver(Resolver):
+    """Records every tag the engine asked it to resume after a re-association."""
+
+    def __init__(self, roster) -> None:
+        super().__init__(roster)
+        self.resumed: list[str] = []
+
+    def on_reassociated(self, tag: str, now: float) -> None:
+        self.resumed.append(tag)
+        super().on_reassociated(tag, now)
 
 
 class SplitOnceResolver(Resolver):
@@ -363,7 +377,7 @@ def test_face_evidence_is_gathered_once_the_robot_holds_still():
 
 def test_a_moving_head_also_stops_the_evidence():
     engine, _detector, _roster = build()
-    ego = EgoMotion(stamp=100.0, head_pitch_delta_deg=2.0)
+    ego = EgoMotion(stamp=100.0, head_pitch_range_deg=2.0)
     assert engine.tick(scene(), None, 100.0, ego)[0].frames_with_face == 0
 
 
@@ -568,6 +582,40 @@ def test_the_split_track_resolves_afresh():
     assert engine.resolver.identity("P2").person_id is None
 
 
+# ------------------------------------------------------------ re-association
+
+LEAVES_AND_RETURNS = [[PERSON], [], [shifted(PERSON, 0.3)]]
+"""One person, then an empty room long enough to lose the track, then the same
+person somewhere else — which the outfit embedding folds back onto the old tag."""
+
+
+def walk_out_and_back(engine: PeopleEngine, *, native: bool = False) -> None:
+    for now, box in ((100.0, PERSON), (104.0, PERSON), (110.0, shifted(PERSON, 0.3))):
+        engine.tick(scene(box), native_jpeg(box) if native else None, now, still(now))
+
+
+def test_a_re_association_resumes_the_identity_exactly_once():
+    """The tracker hands the restored tag straight back, so the engine resumes it
+    on this tick. Queueing it for ``take_recovered`` as well resumed it again the
+    next tick, throwing away the reconfirmation it had just been given."""
+    roster = FakeRoster()
+    resolver = CountingResolver(roster)
+    engine, _detector, _roster = build(boxes=LEAVES_AND_RETURNS, roster=roster, resolver=resolver)
+    walk_out_and_back(engine)
+    engine.tick(scene(shifted(PERSON, 0.3)), None, 110.4, still(110.4))
+    assert [t.tag for t in engine.tracker.live()] == ["P1"]
+    assert resolver.resumed == ["P1"]
+
+
+def test_a_re_association_leaves_nothing_behind_under_the_retired_tag():
+    engine, _detector, _roster = build(boxes=LEAVES_AND_RETURNS)
+    walk_out_and_back(engine, native=True)
+    assert [t.tag for t in engine.tracker.live()] == ["P1"]
+    # _build_states is what normally cleans the gate up, and it only ever sees
+    # tags the tracker still knows about, so a tag retired here leaks for good.
+    assert set(engine._independence._last) == {"P1"}
+
+
 # ------------------------------------------------------------------ outputs
 
 
@@ -645,11 +693,6 @@ def test_a_reduced_decode_halves_the_native_buffer():
 def test_decoding_an_empty_payload_is_none_rather_than_a_crash():
     assert native_frames.decode(b"") is None
     assert native_frames.decode_left_eye(b"\x00\x01") is None
-
-
-def test_a_full_resolution_buffer_is_recognised():
-    full = native_frames.decode(native_jpeg())
-    assert full is not None and native_frames.is_native_buffer(full)
 
 
 def test_the_published_frame_is_un_squashed_to_true_proportions():

@@ -368,79 +368,79 @@ def profile_to_dict(profile: Profile) -> dict:
 def profile_from_dict(data: dict) -> Profile:
     """Parse person.json. Tolerant of missing keys — a profile written by an
     older build must load rather than take the person out of the roster."""
-    names = _dict(data.get("names"))
-    description = _dict(data.get("description")) if data.get("description") else None
-    consent = _dict(data.get("consent"))
-    last_seen = _dict(data.get("last_seen")) if data.get("last_seen") else None
+    names = as_dict(data.get("names"))
+    description = as_dict(data.get("description")) if data.get("description") else None
+    consent = as_dict(data.get("consent"))
+    last_seen = as_dict(data.get("last_seen")) if data.get("last_seen") else None
     return Profile(
         id=str(data.get("id", "")),
         names=Names(
-            preferred=_optional_str(names.get("preferred")),
-            aliases=tuple(str(alias) for alias in _list(names.get("aliases"))),
+            preferred=optional_str(names.get("preferred")),
+            aliases=tuple(str(alias) for alias in as_list(names.get("aliases"))),
         ),
-        relationship=_member(Relationship, data.get("relationship"), Relationship.UNKNOWN),
+        relationship=enum_member(Relationship, data.get("relationship"), Relationship.UNKNOWN),
         description=(
             None
             if description is None
             else Description(
                 text=str(description.get("text", "")),
-                stamp=_float(description.get("stamp")),
-                thumbnail_id=_optional_str(description.get("thumbnail_id")),
+                stamp=as_float(description.get("stamp")),
+                thumbnail_id=optional_str(description.get("thumbnail_id")),
             )
         ),
-        consent=Consent(how=_optional_str(consent.get("how")), stamp=_float(consent.get("stamp"))),
-        created=_float(data.get("created")),
+        consent=Consent(how=optional_str(consent.get("how")), stamp=as_float(consent.get("stamp"))),
+        created=as_float(data.get("created")),
         last_seen=(
             None
             if last_seen is None
             else LastSeen(
-                stamp=_float(last_seen.get("stamp")),
-                map=_optional_str(last_seen.get("map")),
-                x=_optional_float(last_seen.get("x")),
-                y=_optional_float(last_seen.get("y")),
+                stamp=as_float(last_seen.get("stamp")),
+                map=optional_str(last_seen.get("map")),
+                x=optional_float(last_seen.get("x")),
+                y=optional_float(last_seen.get("y")),
             )
         ),
-        encounters=int(_float(data.get("encounters"))),
-        facts=tuple(_fact_from_dict(_dict(entry)) for entry in _list(data.get("facts"))),
-        episodes=tuple(_episode_from_dict(_dict(entry)) for entry in _list(data.get("episodes"))),
-        open_loops=tuple(_loop_from_dict(_dict(entry)) for entry in _list(data.get("open_loops"))),
-        name_candidates=tuple(_candidate_from_dict(_dict(entry)) for entry in _list(data.get("name_candidates"))),
-        retention_days=_optional_float(data.get("retention_days")),
+        encounters=int(as_float(data.get("encounters"))),
+        facts=tuple(_fact_from_dict(as_dict(entry)) for entry in as_list(data.get("facts"))),
+        episodes=tuple(_episode_from_dict(as_dict(entry)) for entry in as_list(data.get("episodes"))),
+        open_loops=tuple(_loop_from_dict(as_dict(entry)) for entry in as_list(data.get("open_loops"))),
+        name_candidates=tuple(_candidate_from_dict(as_dict(entry)) for entry in as_list(data.get("name_candidates"))),
+        retention_days=optional_float(data.get("retention_days")),
     )
 
 
 def _fact_from_dict(data: dict) -> Fact:
-    source = _dict(data.get("source"))
+    source = as_dict(data.get("source"))
     return Fact(
         id=str(data.get("id", "")),
         text=str(data.get("text", "")),
-        kind=_member(FactKind, data.get("kind"), FactKind.BIOGRAPHY),
-        confidence=_float(data.get("confidence")),
-        attribution=_member(Attribution, data.get("attribution"), Attribution.UNCERTAIN),
+        kind=enum_member(FactKind, data.get("kind"), FactKind.BIOGRAPHY),
+        confidence=as_float(data.get("confidence")),
+        attribution=enum_member(Attribution, data.get("attribution"), Attribution.UNCERTAIN),
         source=FactSource(
             utterance_id=str(source.get("utterance_id", "")),
-            stamp=_float(source.get("stamp")),
+            stamp=as_float(source.get("stamp")),
             quote=str(source.get("quote", "")),
             speaker_tag=str(source.get("speaker_tag", "")),
         ),
-        first_confirmed=_float(data.get("first_confirmed")),
-        last_confirmed=_float(data.get("last_confirmed")),
-        superseded_by=_optional_str(data.get("superseded_by")),
-        importance=_float(data.get("importance")),
+        first_confirmed=as_float(data.get("first_confirmed")),
+        last_confirmed=as_float(data.get("last_confirmed")),
+        superseded_by=optional_str(data.get("superseded_by")),
+        importance=as_float(data.get("importance")),
     )
 
 
 def _episode_from_dict(data: dict) -> Episode:
     return Episode(
         id=str(data.get("id", "")),
-        start=_float(data.get("start")),
-        end=_optional_float(data.get("end")),
-        map=_optional_str(data.get("map")),
-        x=_optional_float(data.get("x")),
-        y=_optional_float(data.get("y")),
-        present=tuple(str(tag) for tag in _list(data.get("present"))),
+        start=as_float(data.get("start")),
+        end=optional_float(data.get("end")),
+        map=optional_str(data.get("map")),
+        x=optional_float(data.get("x")),
+        y=optional_float(data.get("y")),
+        present=tuple(str(tag) for tag in as_list(data.get("present"))),
         summary=str(data.get("summary", "")),
-        events=tuple(str(event) for event in _list(data.get("events"))),
+        events=tuple(str(event) for event in as_list(data.get("events"))),
     )
 
 
@@ -448,8 +448,8 @@ def _loop_from_dict(data: dict) -> OpenLoop:
     return OpenLoop(
         id=str(data.get("id", "")),
         text=str(data.get("text", "")),
-        created=_float(data.get("created")),
-        due=_optional_str(data.get("due")),
+        created=as_float(data.get("created")),
+        due=optional_str(data.get("due")),
         source=str(data.get("source", "")),
         done=bool(data.get("done", False)),
     )
@@ -458,35 +458,35 @@ def _loop_from_dict(data: dict) -> OpenLoop:
 def _candidate_from_dict(data: dict) -> NameCandidate:
     return NameCandidate(
         name=str(data.get("name", "")),
-        stamp=_float(data.get("stamp")),
+        stamp=as_float(data.get("stamp")),
         quote=str(data.get("quote", "")),
         tag=str(data.get("tag", "")),
-        confidence=_float(data.get("confidence")),
+        confidence=as_float(data.get("confidence")),
     )
 
 
-def _member(enum: type[_E], value: object, default: _E) -> _E:
+def enum_member(enum: type[_E], value: object, default: _E) -> _E:
     try:
         return enum(str(value))
     except ValueError:
         return default
 
 
-def _dict(value: object) -> dict:
+def as_dict(value: object) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _list(value: object) -> list:
+def as_list(value: object) -> list:
     return value if isinstance(value, list) else []
 
 
-def _float(value: object) -> float:
-    return float(value) if isinstance(value, (int, float)) else 0.0
+def as_float(value: object, default: float = 0.0) -> float:
+    return float(value) if isinstance(value, (int, float)) else default
 
 
-def _optional_float(value: object) -> float | None:
-    return None if value is None else _float(value)
+def optional_float(value: object) -> float | None:
+    return None if value is None else as_float(value)
 
 
-def _optional_str(value: object) -> str | None:
+def optional_str(value: object) -> str | None:
     return None if value is None else str(value)

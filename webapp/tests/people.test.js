@@ -99,7 +99,7 @@ const ROSTER_JSON = JSON.stringify({
 
 test("every request body is exactly its .srv request fields", () => {
   const bodies = {
-    [GET_PEOPLE_SERVICE]: getPeopleRequest(),
+    [GET_PEOPLE_SERVICE]: getPeopleRequest(true),
     [RENAME_PERSON_SERVICE]: renamePersonRequest("person_7f92a1b3", "Theo"),
     [MERGE_PEOPLE_SERVICE]: mergePeopleRequest("person_11aa22bb", "person_7f92a1b3"),
     [FORGET_PERSON_SERVICE]: forgetPersonRequest("person_7f92a1b3"),
@@ -114,7 +114,11 @@ test("every request body is exactly its .srv request fields", () => {
 });
 
 test("the request values are the ones the services are documented to take", () => {
-  assert.deepEqual(getPeopleRequest(), { include_roster: true, include_thumbnails: true });
+  // Thumbnails are a JPEG read per person on the people node's single-threaded
+  // executor, so the default request leaves them out: only the card, once it is
+  // actually on screen, asks for them.
+  assert.deepEqual(getPeopleRequest(), { include_roster: true, include_thumbnails: false });
+  assert.deepEqual(getPeopleRequest(true), { include_roster: true, include_thumbnails: true });
   // "app" is the consent path stored with the profile — a name typed here is
   // the owner naming someone, not the person saying their own name.
   // The card mutates the ids the roster listed, so it has no snapshot to have

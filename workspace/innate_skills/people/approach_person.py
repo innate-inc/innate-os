@@ -17,7 +17,10 @@ TURN_FIRST_DEG = 25.0
 
 LOOP_PERIOD = 0.1
 CMD_DURATION = 0.4  # cmd_vel deadman: the base stops if this loop dies
-ARRIVE_FRAMES = 3  # consecutive in-band snapshots before the approach is done
+# Consecutive in-band snapshots before the approach is done — counted by their
+# stamps: this loop runs at 10 Hz against a snapshot published at up to 5 Hz, so
+# counting iterations would declare arrival on one look at the person.
+ARRIVE_FRAMES = 3
 
 MAX_LINEAR = 0.25
 MAX_REVERSE = 0.10
@@ -74,7 +77,7 @@ class ApproachPerson(Skill):
 
         deadline = time.monotonic() + TIMEOUT_SEC
         last_fix = time.monotonic()
-        arrived = 0
+        arrived: set[float] = set()  # the distinct snapshots that saw them in the band
         try:
             while True:
                 # Re-read every loop: the person is walking too, and a snapshot
@@ -91,15 +94,15 @@ class ApproachPerson(Skill):
                 last_fix = time.monotonic()
                 bearing = person.bearing_deg if person.bearing_deg is not None else 0.0
                 if abs(distance - TARGET_RANGE_M) <= RANGE_TOL_M and abs(bearing) <= FACING_TOL_DEG:
-                    arrived += 1
+                    arrived.add(person.stamp)
                     self.mobility.stop()
-                    if arrived >= ARRIVE_FRAMES:
+                    if len(arrived) >= ARRIVE_FRAMES:
                         return SkillOutput(
                             f"Standing {distance:.2f} m from {label}, facing them.",
                             ApproachResult(tag=tag, name=person.name, range_m=round(distance, 2)),
                         )
                 else:
-                    arrived = 0
+                    arrived.clear()
                     self._drive(distance - TARGET_RANGE_M, bearing)
 
                 if time.monotonic() > deadline:

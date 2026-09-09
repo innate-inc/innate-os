@@ -169,6 +169,10 @@ export const MEMORY_SEARCH_TOPIC = "/brain/memory_search";
 // track is live, at least every 5 s as a health heartbeat, so a snapshot that
 // stops arriving means the node stopped, not that the robot is alone.
 export const PEOPLE_TOPIC = "/brain/people";
+// The snapshot layout this app reads (brain_client/people/types.py
+// SNAPSHOT_SCHEMA). A snapshot that declares another one is ignored rather than
+// read through the wrong shape, exactly as the brain's own people_feed.py does.
+export const PEOPLE_SNAPSHOT_SCHEMA = 1;
 // One message per people event (enrolled | reentered | name_learned |
 // disambiguation | conflict | recalled), std_msgs/String JSON PeopleEventDict
 // {kind, stamp, tag, person_id, name, text, image_b64}. The brain narrates

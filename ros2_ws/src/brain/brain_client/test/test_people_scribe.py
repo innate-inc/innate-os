@@ -18,6 +18,7 @@ import pytest
 from brain_client.people import description
 from brain_client.people.memory import Attribution, FactKind
 from brain_client.people.scribe import (
+    DRAIN_PER_CYCLE,
     QUEUE_HORIZON_SEC,
     WINDOW_IDLE_SEC,
     WINDOW_MAX_MESSAGES,
@@ -156,6 +157,14 @@ def test_the_request_carries_the_system_text_the_window_and_the_schema():
         "episode_note",
         "appearance_notes",
         "sensitive",
+    }
+    # A loop must cite its words like a fact does, or nothing checks who made it
+    assert set(schema["properties"]["open_loops"]["items"]["required"]) == {
+        "who",
+        "text",
+        "due",
+        "quote",
+        "utterance",
     }
     assert body["generationConfig"]["responseMimeType"] == "application/json"
 
@@ -311,6 +320,36 @@ def test_a_fact_quoted_from_a_line_the_person_was_not_in_view_for_is_refused(sto
     profile = store.profile(person_id)
     assert profile is not None and [fact.text for fact in profile.facts] == ["drinks tea"]
     assert profile.facts[0].superseded_by is None
+
+
+def test_a_fact_lands_on_the_person_the_tag_stood_for_when_the_words_were_said(store: PeopleStore):
+    """The resolver may switch a committed track to another person inside one
+    window, so P2 is Ana on the quoted line and Bob on the last one. The
+    window's view of P2 is Bob's, and Ana's sentence is not his."""
+    ana, bob = enrol(store, NOW), enrol(store, NOW + 1)
+    window = Window(
+        (
+            said("I love pasta", id_="u_1", in_view=(view("P2", ana),)),
+            said("hello", id_="u_9", stamp=NOW + 30, in_view=(view("P2", bob),)),
+        )
+    )
+    output = ScribeOutput(
+        facts=(
+            ScribeFact(
+                who="P2",
+                text="likes pasta",
+                kind=FactKind.PREFERENCE,
+                attribution=Attribution.SELF,
+                quote="I love pasta",
+                utterance="u_1",
+            ),
+        )
+    )
+    changes = apply(output, window, store, NOW)
+    assert changes[0].kind is ChangeKind.FACT and changes[0].person_id == ana
+    for person_id, texts in ((ana, ["likes pasta"]), (bob, [])):
+        profile = store.profile(person_id)
+        assert profile is not None and [fact.text for fact in profile.facts] == texts
 
 
 def test_a_fact_about_a_tag_with_no_tracked_person_is_refused(store: PeopleStore):
@@ -549,6 +588,48 @@ def test_only_an_affirmative_request_to_remember_reads_as_consent():
     assert not asks_to_remember("do you remember my name?")
     assert not asks_to_remember("remember when we talked about it")
     assert not asks_to_remember("I have diabetes")
+
+
+def test_a_second_person_in_view_makes_the_remember_request_somebody_elses(store: PeopleStore):
+    """An utterance records who was *visible*, never who spoke: with two people
+    in view "Alice is on chemo, remember that" is the other one asking, and a
+    sensitive fact is written only on its subject's own request (RFC 6.3)."""
+    alice, bob = enrol(store, NOW), enrol(store, NOW + 1)
+    third_party = "Alice is on chemo, remember that"
+    window = Window((said(third_party, in_view=(view("P2", alice), view("P3", bob))),))
+    output = ScribeOutput(
+        sensitive=(
+            ScribeFact(
+                who="P2",
+                text="is on chemo",
+                kind=FactKind.SENSITIVE,
+                attribution=Attribution.THIRD_PARTY,
+                quote=third_party,
+                utterance="u_1",
+            ),
+        )
+    )
+    changes = apply(output, window, store, NOW)
+    assert changes[0].kind is ChangeKind.REJECTED
+    assert changes[0].reason == "sensitive and nobody asked the robot to remember it"
+    profile = store.profile(alice)
+    assert profile is not None and profile.facts == ()
+
+    herself = "I'm on chemo, remember that"
+    alone = Window((said(herself, in_view=(view("P2", alice),)),))
+    asked = ScribeOutput(
+        sensitive=(
+            ScribeFact(
+                who="P2",
+                text="is on chemo",
+                kind=FactKind.SENSITIVE,
+                attribution=Attribution.SELF,
+                quote=herself,
+                utterance="u_1",
+            ),
+        )
+    )
+    assert apply(asked, alone, store, NOW)[0].kind is ChangeKind.FACT
 
 
 def test_a_remember_request_from_someone_else_does_not_unlock_a_sensitive_fact(store: PeopleStore):
@@ -806,11 +887,34 @@ def test_a_name_for_a_tag_with_no_person_is_refused(store: PeopleStore):
 def test_an_open_loop_is_stored_with_its_due_date(store: PeopleStore):
     person_id = enrol(store)
     window = Window((said("can you find the blue socks by tomorrow", in_view=(view("P2", person_id),)),))
-    output = ScribeOutput(open_loops=(ScribeLoop(who="P2", text="find the blue socks", due="2026-09-09"),))
+    output = ScribeOutput(
+        open_loops=(
+            ScribeLoop(
+                who="P2",
+                text="find the blue socks",
+                due="2026-09-09",
+                quote="can you find the blue socks by tomorrow",
+                utterance="u_1",
+            ),
+        )
+    )
     changes = apply(output, window, store, NOW)
     assert changes[0].kind is ChangeKind.OPEN_LOOP
     digest = store.digest(person_id, NOW)
     assert digest is not None and digest["open_loops"][0]["due"] == "2026-09-09"
+
+
+def test_an_open_loop_the_model_cites_nothing_for_is_refused(store: PeopleStore):
+    """The schema asks for the words and the line; without them the promise
+    lands on the named person with nothing to check it against."""
+    person_id = enrol(store)
+    window = Window((said("can you find the blue socks", in_view=(view("P2", person_id),)),))
+    output = ScribeOutput(open_loops=(ScribeLoop(who="P2", text="find the blue socks"),))
+    changes = apply(output, window, store, NOW)
+    assert changes[0].kind is ChangeKind.REJECTED
+    assert changes[0].reason == "the quote is not in this window"
+    digest = store.digest(person_id, NOW)
+    assert digest is not None and digest["open_loops"] == []
 
 
 def test_an_open_loop_cited_from_a_line_its_person_missed_is_refused(store: PeopleStore):
@@ -831,6 +935,24 @@ def test_an_open_loop_cited_from_a_line_its_person_missed_is_refused(store: Peop
     assert digest is not None and digest["open_loops"] == []
 
 
+def test_an_open_loop_lands_on_the_person_the_tag_stood_for_when_it_was_promised(store: PeopleStore):
+    ana, bob = enrol(store, NOW), enrol(store, NOW + 1)
+    window = Window(
+        (
+            said("find my blue socks", id_="u_1", in_view=(view("P2", ana),)),
+            said("hello", id_="u_9", stamp=NOW + 30, in_view=(view("P2", bob),)),
+        )
+    )
+    output = ScribeOutput(
+        open_loops=(ScribeLoop(who="P2", text="find the blue socks", quote="find my blue socks", utterance="u_1"),)
+    )
+    changes = apply(output, window, store, NOW)
+    assert changes[0].kind is ChangeKind.OPEN_LOOP and changes[0].person_id == ana
+    for person_id, texts in ((ana, ["find the blue socks"]), (bob, [])):
+        digest = store.digest(person_id, NOW)
+        assert digest is not None and [loop["text"] for loop in digest["open_loops"]] == texts
+
+
 def test_an_open_loop_for_an_untracked_tag_is_refused(store: PeopleStore):
     window = Window((said("find the socks", in_view=(view("P2", None),)),))
     output = ScribeOutput(open_loops=(ScribeLoop(who="P2", text="find the socks"),))
@@ -847,6 +969,23 @@ def test_an_appearance_note_is_an_encounter_note_not_a_fact_about_the_person(sto
     assert profile is not None and profile.facts[0].kind is FactKind.APPEARANCE
     digest = store.digest(person_id, NOW)
     assert digest is not None and digest["facts"] == []
+
+
+def test_a_fresh_appearance_note_supersedes_the_last_one_instead_of_piling_up(store: PeopleStore):
+    """One conversation is many windows, each describing the same jacket."""
+    person_id = enrol(store)
+    window = Window((said("hello", in_view=(view("P2", person_id),)),))
+    apply(ScribeOutput(appearance_notes=(ScribeNote(who="P2", text="red jacket, glasses"),)), window, store, NOW)
+    changes = apply(
+        ScribeOutput(appearance_notes=(ScribeNote(who="P2", text="red jacket, glasses, blue scarf"),)),
+        window,
+        store,
+        NOW + 30,
+    )
+    assert changes[0].kind is ChangeKind.APPEARANCE
+    profile = store.profile(person_id)
+    assert profile is not None
+    assert [fact.text for fact in profile.facts if fact.superseded_by is None] == ["red jacket, glasses, blue scarf"]
 
 
 def test_an_episode_note_lands_on_everyone_with_an_open_episode(store: PeopleStore):
@@ -949,10 +1088,11 @@ def test_the_scribe_forgets_a_person_in_both_places(store: PeopleStore, tmp_path
     assert scribe.tick(NOW + WINDOW_IDLE_SEC) == []
 
 
-def test_a_line_that_was_in_flight_when_the_forget_landed_goes_without_them(store: PeopleStore, tmp_path):
+def test_every_line_a_forgotten_person_was_in_view_for_goes_whole(store: PeopleStore, tmp_path):
     """RFC section 10: a forget has to reach the work already in the air. The
-    utterance was built while they were still on file and is only consumed now,
-    so their view comes out of it — and a line only they were in view for goes."""
+    utterances were built while they were still on file, and a line they were
+    visible for is *their words* however many other people stood there — taking
+    only their view out sends the sentence up as somebody else's."""
     ana, theo = enrol(store, NOW), enrol(store, NOW + 1)
     bodies: list[dict] = []
 
@@ -963,13 +1103,48 @@ def test_a_line_that_was_in_flight_when_the_forget_landed_goes_without_them(stor
     scribe = Scribe(store, transport, model="gemini-flash", queue_path=tmp_path / "queue.jsonl")
     store.forget(ana)
     scribe.forget(ana)
-    scribe.observe(said("hello", in_view=(view("P2", ana), view("P3", theo))), NOW)
+    scribe.observe(said("I see a cardiologist", in_view=(view("P2", ana), view("P3", theo))), NOW)
     scribe.observe(said("just them", id_="u_2", stamp=NOW + 1, in_view=(view("P2", ana),)), NOW + 1)
+    scribe.observe(said("nice weather", id_="u_3", stamp=NOW + 2, in_view=(view("P3", theo),)), NOW + 2)
 
-    assert scribe.tick(NOW + WINDOW_IDLE_SEC + 1) == []
+    assert scribe.tick(NOW + WINDOW_IDLE_SEC + 3) == []
     sent = bodies[0]["contents"][0]["parts"][0]["text"]
     assert "P3" in sent and "P2" not in sent
-    assert "just them" not in sent
+    assert "nice weather" in sent
+    assert "cardiologist" not in sent and "just them" not in sent
+
+
+def test_a_forgotten_persons_words_never_become_a_fact_about_who_stood_beside_them(store: PeopleStore, tmp_path):
+    ana, theo = enrol(store, NOW), enrol(store, NOW + 1)
+    quote = "I see a cardiologist — remember that"
+
+    def transport(path: str, body: dict, timeout: float | None) -> dict:
+        return response(
+            EMPTY
+            | {
+                "sensitive": [
+                    {
+                        "who": "P3",
+                        "kind": "sensitive",
+                        "text": "sees a cardiologist",
+                        "confidence": 0.9,
+                        "attribution": "self",
+                        "quote": quote,
+                        "utterance": "u_1",
+                        "supersedes": "",
+                    }
+                ]
+            }
+        )
+
+    scribe = Scribe(store, transport, model="gemini-flash", queue_path=tmp_path / "queue.jsonl")
+    window = Window((said(quote, in_view=(view("P2", ana), view("P3", theo))),))
+    store.forget(ana)
+    scribe.forget(ana)
+
+    assert scribe.process(window, NOW) == []
+    profile = store.profile(theo)
+    assert profile is not None and profile.facts == ()
 
 
 def test_collection_off_buffers_nothing_and_spends_nothing(store: PeopleStore, tmp_path):
@@ -1063,6 +1238,29 @@ def test_a_drain_stops_at_the_first_failure_and_keeps_the_rest(store: PeopleStor
     scribe = Scribe(store, dead, model="gemini-flash", queue_path=queue_path)
     assert scribe.drain(NOW + 10) == []
     assert scribe.queued == 3
+
+
+def test_a_drain_spends_a_couple_of_windows_a_call_and_leaves_the_backlog(store: PeopleStore, tmp_path):
+    """Each queued window is a blocking Gemini call on the one thread that also
+    carries the live chat, the recalls and the forgets; an hour of backlog is
+    240 of them, and draining it whole stops the conversation for minutes."""
+    queue_path = tmp_path / "queue.jsonl"
+    queue = WindowQueue(queue_path)
+    for index in range(5):
+        queue.push(Window((said(f"m{index}", id_=f"u_{index}", stamp=NOW + index),)), NOW + index)
+    calls: list[dict] = []
+
+    def transport(path: str, body: dict, timeout: float | None) -> dict:
+        calls.append(body)
+        return response(EMPTY)
+
+    scribe = Scribe(store, transport, model="gemini-flash", queue_path=queue_path)
+    assert scribe.drain(NOW + 10) == []
+    assert len(calls) == DRAIN_PER_CYCLE == 2
+    assert scribe.queued == 3
+
+    scribe.drain(NOW + 10)
+    assert scribe.queued == 1
 
 
 def test_the_worker_spends_a_window_as_soon_as_the_message_cap_fills_it(store: PeopleStore, tmp_path):

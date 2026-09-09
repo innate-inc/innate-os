@@ -18,6 +18,7 @@ import logging
 import sys
 import uuid
 from collections.abc import MutableSequence
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
@@ -228,18 +229,18 @@ def test_parse_keeps_the_fields_it_understands_when_the_rest_is_junk():
     assert view.recent == (RecentPerson(person_id="person_11aa22bb", last_seen=0.0),)
 
 
-def test_parse_ignores_schema_drift():
-    view = parse_snapshot(
-        json.dumps(
-            {
-                "schema": 7,
-                "stamp": NOW,
-                "mood": "curious",
-                "people": [{"tag": "P3", "range_m": 2.0, "gait": "brisk"}],
-            }
-        )
-    )
-    assert [p.tag for p in view.people] == ["P3"] and view.people[0].range_m == 2.0
+def test_parse_ignores_a_snapshot_written_to_another_schema():
+    """A field that moved would otherwise be read as if it had not, and this
+    SDK drives a robot at whatever it makes of it."""
+    drifted = {"schema": 7, "stamp": NOW, "people": [{"tag": "P3", "range_m": 2.0}]}
+    assert parse_snapshot(json.dumps(drifted)) == EMPTY_VIEW
+    # A snapshot that names no schema is this one: the field was always there.
+    assert parse_snapshot(json.dumps({k: v for k, v in drifted.items() if k != "schema"})).people[0].tag == "P3"
+
+
+def test_parse_keeps_unknown_fields_inside_the_schema_it_reads():
+    view = parse_snapshot(json.dumps({"schema": 1, "stamp": NOW, "mood": "curious", "people": [{"tag": "P3"}]}))
+    assert [p.tag for p in view.people] == ["P3"]
 
 
 # ---------- the questions a skill asks ----------
@@ -313,9 +314,11 @@ def test_a_mutation_says_which_snapshot_it_was_decided_on():
     assert forget.who == "P3"
     assert forget.decided_on_stamp_ns == SNAPSHOT["frame_stamp_ns"]
 
-    people.rename("P3", "Theo")
-    rename = people._rename_client.call_async.call_args.args[0]
-    assert rename.decided_on_stamp_ns == SNAPSHOT["frame_stamp_ns"]
+
+def test_forget_is_the_only_mutation_a_skill_can_make():
+    """RFC 6.3 keeps the name rules in the node: the app and the scribe commit
+    a name, and a skill has no way to bypass either."""
+    assert not hasattr(_people_interface(), "rename")
 
 
 def test_every_mutation_carries_its_own_retry_key():
@@ -342,7 +345,9 @@ def test_a_mutation_before_the_first_snapshot_claims_no_decision():
 
 class FakePeople:
     """The People interface as a skill sees it: ``find`` answers from a script,
-    repeating the last answer once the script runs out."""
+    repeating the last answer once the script runs out. The node publishes at up
+    to 5 Hz and a skill loop reads at 10 Hz, so every second answer carries the
+    stamp of the one before it — the same look at the room."""
 
     def __init__(self, script=(), *, forget=(True, "Done, I've forgotten Theo.")):
         self._script = list(script)
@@ -353,8 +358,12 @@ class FakePeople:
     def find(self, name_or_tag: str):
         self.asked.append(name_or_tag)
         if len(self._script) > 1:
-            return self._script.pop(0)
-        return self._script[0] if self._script else None
+            answer = self._script.pop(0)
+        else:
+            answer = self._script[0] if self._script else None
+        if answer is None:
+            return None
+        return replace(answer, stamp=NOW + (len(self.asked) - 1) // 2)
 
     def forget(self, who: str) -> tuple[bool, str]:
         self.forgotten.append(who)
@@ -405,6 +414,16 @@ def test_approach_person_drives_until_the_person_is_in_the_band_and_reports_the_
     assert people.asked[0] == "Theo" and set(people.asked[1:]) == {"P3"}
     assert mobility.commands and all(0.0 < linear <= approach.MAX_LINEAR for linear, _ in mobility.commands)
     assert mobility.stops >= approach.ARRIVE_FRAMES
+
+
+def test_arriving_counts_snapshots_and_not_loop_iterations():
+    """The loop runs at 10 Hz against a ≤5 Hz snapshot, so counting iterations
+    declares the approach finished on fewer looks than it claims."""
+    people = FakePeople([person(approach.TARGET_RANGE_M)])
+    output = build(ApproachPerson, people, FakeMobility()).execute(who="P3")
+
+    assert output.ok
+    assert len(people.asked) > approach.ARRIVE_FRAMES
 
 
 def test_approach_person_turns_toward_the_person_before_driving_at_them():

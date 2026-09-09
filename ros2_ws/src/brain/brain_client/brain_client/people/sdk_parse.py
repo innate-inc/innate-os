@@ -20,7 +20,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from brain_client.people.types import Box, IdentityState
+from brain_client.people.types import SNAPSHOT_SCHEMA, Box, IdentityState
 
 SNAPSHOT_FRESH_SEC = 3.0
 """How old a snapshot may be and still say who is in front of the robot: the
@@ -33,9 +33,12 @@ class PersonInView:
     """One person the engine is tracking right now. ``bbox``/``head_bbox`` are
     normalized ``(ymin, xmin, ymax, xmax)`` of the published 640x480 frame,
     ``bearing_deg`` is positive to the robot's left, and ``state`` is what the
-    accumulated evidence supports — only ``known`` carries a confirmed name."""
+    accumulated evidence supports — only ``known`` carries a confirmed name.
+    ``stamp`` is the snapshot this measurement came from: a loop reading faster
+    than the node publishes sees the same stamp twice, which is one look."""
 
     tag: str
+    stamp: float = 0.0
     person_id: str | None = None
     name: str | None = None
     state: IdentityState = IdentityState.UNKNOWN
@@ -115,29 +118,31 @@ EMPTY_VIEW = PeopleView()
 
 def parse_snapshot(json_text: str) -> PeopleView:
     """The latest ``/brain/people`` message as a view; an empty view for
-    anything that is not a snapshot object."""
+    anything that is not a snapshot object, and for a schema this SDK does not
+    read — a field that moved would otherwise be acted on as if it had not."""
     try:
         payload = json.loads(json_text) if json_text else None
     except (json.JSONDecodeError, TypeError):
         return EMPTY_VIEW
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or payload.get("schema", SNAPSHOT_SCHEMA) != SNAPSHOT_SCHEMA:
         return EMPTY_VIEW
+    stamp = _as_float(payload.get("stamp")) or 0.0
     return PeopleView(
-        stamp=_as_float(payload.get("stamp")) or 0.0,
-        people=_people(payload.get("people")),
+        stamp=stamp,
+        people=_people(payload.get("people"), stamp),
         recent=_recent(payload.get("recent")),
         frame_stamp_ns=_as_str(payload.get("frame_stamp_ns")) or "",
     )
 
 
-def _people(raw: Any) -> tuple[PersonInView, ...]:
+def _people(raw: Any, stamp: float) -> tuple[PersonInView, ...]:
     if not isinstance(raw, list):
         return ()
-    parsed = (_person(entry) for entry in raw if isinstance(entry, dict))
+    parsed = (_person(entry, stamp) for entry in raw if isinstance(entry, dict))
     return tuple(person for person in parsed if person is not None)
 
 
-def _person(entry: dict[str, Any]) -> PersonInView | None:
+def _person(entry: dict[str, Any], stamp: float) -> PersonInView | None:
     tag = _as_str(entry.get("tag"))
     # A lost track rides the snapshot for a minute so the brain can still talk
     # about the person; nobody is in view any more, so the SDK drops it.
@@ -145,6 +150,7 @@ def _person(entry: dict[str, Any]) -> PersonInView | None:
         return None
     return PersonInView(
         tag=tag,
+        stamp=stamp,
         person_id=_as_str(entry.get("person_id")),
         name=_as_str(entry.get("name")),
         state=_as_state(entry.get("state")),

@@ -198,12 +198,19 @@ class PeopleEvents:
         """The events this tick earns. ``enrolled`` maps the tag of a person the
         engine just created to the crop worth showing once; ``learned`` and
         ``hints`` are the scribe's per-tag lines."""
+        self._prune(now)
         events: list[PeopleEventDict] = []
         for track in tracks:
             if track.lost:
                 continue
             events.extend(self._for_track(track, now, enrolled or {}, learned or {}, hints or {}))
         return events
+
+    def _prune(self, now: float) -> None:
+        """Half these keys are tags, which are never reused, so an entry older
+        than the longest cooldown can never suppress anything again."""
+        horizon = max(self._cooldowns.values(), default=0.0)
+        self._last = {key: last for key, last in self._last.items() if now - last <= horizon}
 
     def recalled(self, person_id: str, name: str | None, text: str, now: float) -> PeopleEventDict | None:
         """A deep recall that came back with something (RFC 6.4)."""

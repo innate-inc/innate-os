@@ -19,6 +19,7 @@ PURE module: numpy and cv2 for the pixel measures, no ROS, no I/O.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 
 import cv2
@@ -48,7 +49,6 @@ FACE_MAX_PITCH_ENROL_DEG = 25.0
 
 BODY_MIN_MATCH_PX = 96.0
 BODY_MIN_OUTFIT_PX = 128.0  # a 256x128 ReID input, which holds to ~5.3 m
-BODY_MIN_SCORE = 0.5
 
 LUMINANCE_MIN, LUMINANCE_MAX = 40.0, 220.0
 
@@ -68,6 +68,10 @@ INDEPENDENCE_BOX_MOVE = 0.05  # centre travel as a fraction of the box's own siz
 # decision is made inside these windows (perception/camera.py's own rule).
 DRIVE_SUPPRESS_SEC = 1.5
 HEAD_PITCH_EPS_DEG = 0.8
+# /mars/head/current_position comes off the 200 Hz arm loop, where a 20 deg/s
+# seek is 0.1 deg per message; the head is judged on how far it travelled inside
+# this window instead, which that seek fills with ~6 deg and jitter with ~0.2.
+HEAD_PITCH_WINDOW_SEC = 0.3
 YAW_RATE_MAX = 0.2  # rad/s
 
 _YAW_BUCKET_DEG = 20.0
@@ -148,10 +152,6 @@ def luminance_ok(luminance: float) -> bool:
 
 def body_size_ok(height_px: float, purpose: Purpose = Purpose.MATCH) -> bool:
     return height_px >= (BODY_MIN_OUTFIT_PX if purpose is Purpose.ENROL else BODY_MIN_MATCH_PX)
-
-
-def body_score_ok(score: float) -> bool:
-    return score >= BODY_MIN_SCORE
 
 
 def body_sharp_enough(sharpness: float) -> bool:
@@ -271,7 +271,7 @@ class EgoMotion:
     stamp: float = 0.0
     last_drive: float = -1e9  # epoch seconds of the last nonzero cmd_vel
     head_pitch_deg: float = 0.0
-    head_pitch_delta_deg: float = 0.0
+    head_pitch_range_deg: float = 0.0  # pitch travel over the last HEAD_PITCH_WINDOW_SEC
     yaw_rate: float = 0.0
 
     @property
@@ -280,7 +280,7 @@ class EgoMotion:
 
     @property
     def head_moving(self) -> bool:
-        return abs(self.head_pitch_delta_deg) >= HEAD_PITCH_EPS_DEG
+        return self.head_pitch_range_deg >= HEAD_PITCH_EPS_DEG
 
     @property
     def turning(self) -> bool:
@@ -306,30 +306,32 @@ class EgoMotionTracker:
     last_drive: float = field(default=-1e9)
     head_pitch_deg: float = 0.0
     yaw_rate: float = 0.0
-    _pitch_at: float = field(default=0.0, repr=False)
-    _pitch_delta: float = field(default=0.0, repr=False)
+    _pitches: deque[tuple[float, float]] = field(default_factory=deque, repr=False)
 
     def note_cmd_vel(self, stamp: float, linear_x: float, linear_y: float, angular_z: float) -> None:
         if any((linear_x, linear_y, angular_z)):
             self.last_drive = stamp
 
     def note_head_pitch(self, stamp: float, pitch_deg: float) -> None:
-        self._pitch_delta = pitch_deg - self.head_pitch_deg
         self.head_pitch_deg = pitch_deg
-        self._pitch_at = stamp
+        self._pitches.append((stamp, pitch_deg))
+        self._trim(stamp)
 
     def note_yaw_rate(self, stamp: float, yaw_rate: float) -> None:
         self.yaw_rate = yaw_rate
         del stamp  # rate is instantaneous; only the latest reading matters
 
     def state(self, now: float) -> EgoMotion:
-        # A pitch step older than the drive window is over; keep the last known
-        # pitch but stop reporting the head as moving.
-        delta = self._pitch_delta if now - self._pitch_at < DRIVE_SUPPRESS_SEC else 0.0
+        self._trim(now)
+        pitches = [pitch for _stamp, pitch in self._pitches]
         return EgoMotion(
             stamp=now,
             last_drive=self.last_drive,
             head_pitch_deg=self.head_pitch_deg,
-            head_pitch_delta_deg=delta,
+            head_pitch_range_deg=max(pitches) - min(pitches) if len(pitches) > 1 else 0.0,
             yaw_rate=self.yaw_rate,
         )
+
+    def _trim(self, now: float) -> None:
+        while self._pitches and now - self._pitches[0][0] > HEAD_PITCH_WINDOW_SEC:
+            self._pitches.popleft()

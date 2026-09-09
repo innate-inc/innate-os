@@ -113,6 +113,7 @@ __all__ = [
     "PersonInView",
     "Pose",
     "RecallVerdict",
+    "RecentPerson",
     "Skill",
     "SkillCancelled",
     "SkillFailed",
@@ -131,7 +132,7 @@ __all__ = [
 # (PEP 562): `from innate import Mobility` imports them on first use only.
 # Type checkers can't follow __getattr__, so they read the imports below.
 if TYPE_CHECKING:
-    from brain_client.people.sdk_parse import PersonInView
+    from brain_client.people.sdk_parse import PersonInView, RecentPerson
     from brain_client.robot.head import Head
     from brain_client.robot.manipulation import Manipulation, Waypoint
     from brain_client.robot.mobility import Mobility
@@ -147,6 +148,7 @@ _LAZY_INTERFACES = {
     "RecallVerdict": ("brain_client.robot.spatial_memory", "RecallVerdict"),
     "People": ("brain_client.robot.people", "People"),
     "PersonInView": ("brain_client.people.sdk_parse", "PersonInView"),
+    "RecentPerson": ("brain_client.people.sdk_parse", "RecentPerson"),
 }
 
 

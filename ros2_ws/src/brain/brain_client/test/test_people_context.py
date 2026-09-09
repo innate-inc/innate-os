@@ -152,6 +152,15 @@ def test_the_box_rides_the_text_so_a_tag_can_be_pointed_at():
     assert "box [100, 300, 930, 560]" in text
 
 
+def test_a_track_that_just_left_never_carries_a_box():
+    """overlay.draw_people skips lost tracks on purpose, so their coordinates
+    point the model at a patch of picture with nothing marked on it."""
+    text = render(snapshot([person(lost=True), person(tag="P4")]))
+    still_there, left = [line for line in text.splitlines() if line.startswith("- ")]
+    assert "just left view" in left and "box [" not in left
+    assert "box [100, 300, 930, 560]" in still_there
+
+
 def test_the_box_stays_behind_when_the_model_is_looking_at_another_frame():
     # Pointing go_to_point_in_view at coordinates measured on a frame the model
     # was never shown aims it at whatever now stands in that part of the picture.

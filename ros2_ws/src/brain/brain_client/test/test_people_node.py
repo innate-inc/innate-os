@@ -564,7 +564,9 @@ def test_every_declared_parameter_reaches_a_config_field():
 def _adapters(store: PeopleStore, tmp_path, *, frames=None, scribe=None, resolver=None, transport=None):
     """The real adapters around a real engine with scripted backends; the node
     itself is a mock, so every ROS call is recorded rather than made."""
-    from brain_client.people.backends import Backends, FixedDetector
+    from people_fakes import FixedDetector
+
+    from brain_client.people.backends import Backends
     from brain_client.people.engine import EngineConfig, PeopleEngine
     from brain_client.people.types import Detection
 
@@ -728,6 +730,9 @@ def test_an_idle_node_still_latches_its_health(store, tmp_path):
     assert payload["people"] == []
     assert payload["health"]["camera"] == "unavailable"
     assert adapters._want_native is False  # nothing to look at, so the lazy topic stays unsubscribed
+    # "we did not ask" is not "the driver has no native branch": the node
+    # unsubscribes whenever no track wants a face, which is most of the time.
+    assert payload["health"]["native"] == "none"
 
 
 def _served(adapters, handler_name: str, **request):
@@ -930,7 +935,7 @@ def test_a_forget_is_never_dropped_behind_a_full_handoff(store, tmp_path):
     """The handoff to the scribe was a bounded queue with a silent drop, so a
     forget arriving behind eight others revoked nothing at all."""
     ana = enrol(store, "Ana")
-    adapters = _adapters(store, tmp_path)
+    adapters = _adapters(store, tmp_path, scribe=_fake_scribe(store, tmp_path))
     for index in range(16):
         na._offer(adapters._forgets, f"person_older_{index}")
 
@@ -940,6 +945,18 @@ def test_a_forget_is_never_dropped_behind_a_full_handoff(store, tmp_path):
     while not adapters._forgets.empty():
         handed.append(adapters._forgets.get_nowait())
     assert ana in handed
+    assert adapters._revoked(ana)
+
+
+def test_a_node_with_no_scribe_queues_no_forgets_for_a_thread_that_does_not_exist(store, tmp_path):
+    """Without a Gemini transport (or with scribe: false) no thread ever drains
+    this queue; the tombstone and _forgotten are what revoke the work anyway."""
+    ana = enrol(store, "Ana")
+    adapters = _adapters(store, tmp_path)  # scribe=None
+
+    assert _served(adapters, "_svc_forget", who=ana).success
+
+    assert adapters._forgets.empty()
     assert adapters._revoked(ana)
 
 
@@ -956,6 +973,19 @@ def test_a_full_disk_answers_the_collection_service_instead_of_killing_the_node(
     answer = _served(adapters, "_svc_set_collection", enabled=False)
 
     assert not answer.success and answer.message
+
+
+def test_a_mutation_that_failed_on_a_full_disk_is_retried_not_replayed(store, tmp_path, monkeypatch):
+    """The idempotency key exists so a caller can retry; memoizing the OSError
+    would answer every retry with the failure the retry was meant to escape."""
+    ana = enrol(store)
+    adapters = _adapters(store, tmp_path)
+    monkeypatch.setattr(store, "rename", _full_disk)
+    assert not _served(adapters, "_svc_rename", who=ana, name="Ana", source="app", idempotency_key="k1").success
+
+    monkeypatch.undo()
+    answer = _served(adapters, "_svc_rename", who=ana, name="Ana", source="app", idempotency_key="k1")
+    assert answer.success and store.name_of(ana) == "Ana"
 
 
 def test_a_full_disk_clearing_name_candidates_still_reports_the_rename(store, tmp_path, monkeypatch):
@@ -1014,6 +1044,57 @@ def test_a_tick_with_no_frame_leaves_the_learned_line_for_the_tick_that_wakes_th
     assert any(payload.get("kind") == "name_learned" for payload in published)
     assert published[-1]["people"][0]["learned"] == line
     assert adapters._learned == {}
+
+
+def test_a_name_committed_mid_tick_waits_for_the_tick_that_can_announce_it(store, tmp_path):
+    """The scribe writes on its own thread. A line landing between the events
+    and the snapshot used to be published with no wake event behind it, so the
+    tick reads the lines once and consumes only what it showed."""
+    pytest.importorskip("cv2")
+    adapters = _adapters(store, tmp_path)
+    line = 'P1 said "I\'m Ana" — P1 = Ana from here on'
+
+    def emit_then_scribe(tracks, now, *, enrolled=None, learned=None, hints=None):
+        adapters._apply_changes([Change(ChangeKind.NAME, "P1", None, line)])
+        return PeopleEvents.emit(adapters._events, tracks, now, enrolled=enrolled, learned=learned, hints=hints)
+
+    adapters._events.emit = emit_then_scribe
+    adapters._sensors.brain_active = True
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    now = time.time()
+    adapters._tick(now)
+
+    assert json.loads(na.String.call_args.kwargs["data"])["people"][0]["learned"] is None
+    assert adapters._learned == {"P1": line}  # kept for the tick that can raise its event
+
+    del adapters._events.emit
+    na.String.reset_mock()
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), _jpeg())
+    adapters._tick(now + 1.0)
+    published = [json.loads(call.kwargs["data"]) for call in na.String.call_args_list]
+    assert any(payload.get("kind") == "name_learned" for payload in published)
+    assert published[-1]["people"][0]["learned"] == line
+    assert adapters._learned == {}
+
+
+def test_a_chat_line_that_is_not_a_memory_question_never_builds_the_roster(store, tmp_path):
+    """The roster is built under the store lock the engine thread contends on,
+    and almost no chat line asks the robot to remember anything."""
+    enrol(store, "Ana")
+    adapters = _adapters(store, tmp_path, scribe=_fake_scribe(store, tmp_path))
+    rosters: list[bool] = []
+    original = store.roster
+
+    def counted(*args, **kwargs):
+        rosters.append(True)
+        return original(*args, **kwargs)
+
+    store.roster = counted
+    adapters._maybe_recall("put the socks in the box", adapters.tracks())
+    assert rosters == []
+
+    adapters._maybe_recall("do you remember what Ana asked for?", adapters.tracks())
+    assert rosters != []
 
 
 class _RecordingEvents(PeopleEvents):

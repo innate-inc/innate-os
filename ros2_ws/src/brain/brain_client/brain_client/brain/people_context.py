@@ -158,7 +158,9 @@ def _header_line(person: PersonInViewDict, boxes_drawn: bool) -> str:
     description = _clean(person.get("description"))
     if description:
         line += f" {_sentence(description)}"
-    box = _box_text(person) if boxes_drawn else ""
+    # A lost track is deliberately not drawn (overlay.draw_people), so its
+    # coordinates would point the model at an empty patch of the picture.
+    box = _box_text(person) if boxes_drawn and not person.get("lost") else ""
     if box:
         line += f" box {box}"
     return line
@@ -183,9 +185,7 @@ def _identity_phrase(person: PersonInViewDict) -> str:
 
 
 def _conflict_candidates(person: PersonInViewDict) -> str:
-    # runner_up_name is not in the published contract yet (see the report):
-    # without it a conflict degrades to the one candidate the snapshot names.
-    runner_up = _clean(dict(person).get("runner_up_name"))
+    runner_up = _clean(person.get("runner_up_name"))
     names = [name for name in (_clean(person.get("name")), runner_up) if name]
     if len(names) >= 2:
         return f"{names[0]} or {names[1]}"

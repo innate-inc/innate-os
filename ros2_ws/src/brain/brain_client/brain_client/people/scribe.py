@@ -16,8 +16,8 @@ import json
 import os
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, TypeVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from brain_client.brain.transport import GENERATE_PATH
 from brain_client.common.enums import StrEnum
@@ -27,9 +27,14 @@ from brain_client.people.memory import (
     ConsentPath,
     FactKind,
     FactSource,
+    as_dict,
+    as_float,
+    as_list,
+    enum_member,
+    optional_str,
     profile_to_dict,
 )
-from brain_client.people.store import DIR_MODE
+from brain_client.people.store import DIR_MODE, FILE_MODE
 from brain_client.people.types import IdentityState
 
 if TYPE_CHECKING:
@@ -38,8 +43,6 @@ if TYPE_CHECKING:
 
     from brain_client.people.memory import Fact
     from brain_client.people.store import PeopleStore
-
-_E = TypeVar("_E", bound=StrEnum)
 
 Transport = Callable[[str, dict, float | None], dict]
 """(api path, request body, timeout) -> parsed response; GeminiRest.post's shape."""
@@ -51,6 +54,7 @@ WINDOW_IDLE_SEC = 8.0
 WINDOW_MAX_MESSAGES = 12
 QUEUE_HORIZON_SEC = 3600.0  # one hour of windows survives an outage; older ones are dropped
 QUEUE_MAX_WINDOWS = 240
+DRAIN_PER_CYCLE = 2  # windows per drain: a backlog must not hold up the live conversation
 SCRIBE_TIMEOUT_SEC = 20.0
 RECALL_TIMEOUT_SEC = 20.0
 _MAX_CONTEXT_FACTS = 20  # the existing facts the scribe is shown per person, so it can supersede
@@ -158,19 +162,18 @@ class Change:
 # ------------------------------------------------------------ window buffer
 
 
-def line_without_revoked(message: Utterance, revoked: Revoked) -> Utterance | None:
-    """One transcript line with a forgotten person's view taken out, or None
-    when the line was only about them (RFC section 10)."""
-    kept = tuple(view for view in message.in_view if not revoked(view.person_id))
-    if len(kept) == len(message.in_view):
-        return message
-    return replace(message, in_view=kept) if kept else None
+def line_unless_revoked(message: Utterance, revoked: Revoked) -> Utterance | None:
+    """One transcript line, or None when anyone who was in view for it has been
+    forgotten (RFC section 10). Their words are the whole line, so keeping it
+    for whoever else stood there writes a forgotten person's sentence onto
+    their neighbour."""
+    return None if any(revoked(view.person_id) for view in message.in_view) else message
 
 
 def without_revoked(window: Window, revoked: Revoked) -> Window:
     """The window as it stands after a forget: deletion has to reach the work
     already in flight, or it lands a moment later anyway."""
-    lines = (line_without_revoked(message, revoked) for message in window.messages)
+    lines = (line_unless_revoked(message, revoked) for message in window.messages)
     return Window(tuple(line for line in lines if line is not None))
 
 
@@ -295,10 +298,10 @@ RESPONSE_SCHEMA = {
                     "who": {"type": "STRING"},
                     "text": {"type": "STRING"},
                     "due": {"type": "STRING", "description": "YYYY-MM-DD or empty"},
-                    "quote": {"type": "STRING"},
-                    "utterance": {"type": "STRING"},
+                    "quote": {"type": "STRING", "description": "the exact words the promise was made in"},
+                    "utterance": {"type": "STRING", "description": "the id of the line quoted"},
                 },
-                "required": ["who", "text", "due"],
+                "required": ["who", "text", "due", "quote", "utterance"],
             },
         },
         "episode_note": {"type": "STRING"},
@@ -412,17 +415,21 @@ def parse_output(response: dict) -> ScribeOutput | None:
     if data is None:
         return None
     return ScribeOutput(
-        facts=tuple(_fact(entry) for entry in _list(data.get("facts")) if _dict(entry).get("text")),
-        name_candidates=tuple(_name(entry) for entry in _list(data.get("name_candidates")) if _dict(entry).get("name")),
-        open_loops=tuple(_loop(entry) for entry in _list(data.get("open_loops")) if _dict(entry).get("text")),
+        facts=tuple(_fact(entry) for entry in as_list(data.get("facts")) if as_dict(entry).get("text")),
+        name_candidates=tuple(
+            _name(entry) for entry in as_list(data.get("name_candidates")) if as_dict(entry).get("name")
+        ),
+        open_loops=tuple(_loop(entry) for entry in as_list(data.get("open_loops")) if as_dict(entry).get("text")),
         episode_note=str(data.get("episode_note") or ""),
         appearance_notes=tuple(
-            ScribeNote(who=str(_dict(entry).get("who", "")), text=str(_dict(entry).get("text", "")))
-            for entry in _list(data.get("appearance_notes"))
-            if _dict(entry).get("text")
+            ScribeNote(who=str(as_dict(entry).get("who", "")), text=str(as_dict(entry).get("text", "")))
+            for entry in as_list(data.get("appearance_notes"))
+            if as_dict(entry).get("text")
         ),
         sensitive=tuple(
-            _fact(entry, kind=FactKind.SENSITIVE) for entry in _list(data.get("sensitive")) if _dict(entry).get("text")
+            _fact(entry, kind=FactKind.SENSITIVE)
+            for entry in as_list(data.get("sensitive"))
+            if as_dict(entry).get("text")
         ),
     )
 
@@ -469,15 +476,24 @@ def _apply_fact(
     view = views.get(fact.who)
     if view is None or view.person_id is None:
         return Change(ChangeKind.REJECTED, fact.who, None, fact.text, reason="no tracked person for that tag")
-    person_id = view.person_id
     quoted = _quoted_message(window, fact.utterance, fact.quote)
     if quoted is None:
-        return Change(ChangeKind.REJECTED, fact.who, person_id, fact.text, reason="the quote is not in this window")
+        return Change(
+            ChangeKind.REJECTED, fact.who, view.person_id, fact.text, reason="the quote is not in this window"
+        )
     # RFC 6.3: a fact is written only if its subject was in view during the line
     # it was quoted from. Writing it anyway puts the room's words on one
     # person's record, and lets them supersede a fact that was really theirs.
-    if quoted.view(fact.who) is None:
-        return Change(ChangeKind.REJECTED, fact.who, person_id, fact.text, reason="not in view during the quoted line")
+    subject = quoted.view(fact.who)
+    if subject is None:
+        return Change(
+            ChangeKind.REJECTED, fact.who, view.person_id, fact.text, reason="not in view during the quoted line"
+        )
+    # The tag as it stood on that line, not the window's latest: the resolver
+    # may switch a committed track to another person inside one window.
+    person_id = subject.person_id
+    if person_id is None:
+        return Change(ChangeKind.REJECTED, fact.who, None, fact.text, reason="no tracked person for that tag")
     if fact.kind is FactKind.SENSITIVE and not _consented(window, fact.who, quoted):
         return Change(
             ChangeKind.REJECTED,
@@ -613,13 +629,22 @@ def _apply_loop(
     view = views.get(loop.who)
     if view is None or view.person_id is None:
         return Change(ChangeKind.REJECTED, loop.who, None, loop.text, reason="no tracked person for that tag")
-    person_id = view.person_id
-    cited = bool(loop.utterance or loop.quote)
+    # Same rule as a fact, and for the same reason: an uncited promise — the
+    # schema asks for the words and the line — lands on the named person with
+    # nothing to check it against (RFC 6.3).
     quoted = _quoted_message(window, loop.utterance, loop.quote)
-    if cited and (quoted is None or quoted.view(loop.who) is None):
-        # Same rule as a fact: a promise the model cites is only this person's
-        # if they were in view while it was made (RFC 6.3).
-        return Change(ChangeKind.REJECTED, loop.who, person_id, loop.text, reason="not in view during the quoted line")
+    if quoted is None:
+        return Change(
+            ChangeKind.REJECTED, loop.who, view.person_id, loop.text, reason="the quote is not in this window"
+        )
+    subject = quoted.view(loop.who)
+    if subject is None:
+        return Change(
+            ChangeKind.REJECTED, loop.who, view.person_id, loop.text, reason="not in view during the quoted line"
+        )
+    person_id = subject.person_id
+    if person_id is None:
+        return Change(ChangeKind.REJECTED, loop.who, None, loop.text, reason="no tracked person for that tag")
     record = store.add_open_loop(person_id, loop.text, now=now, due=loop.due or None, source="scribe")
     if record is None:
         return Change(ChangeKind.REJECTED, loop.who, person_id, loop.text, reason="the store refused the loop")
@@ -633,19 +658,47 @@ def _apply_appearance(note: ScribeNote, views: Mapping[str, TagView], store: Peo
     person_id = view.person_id
     # An appearance note is about today's encounter, not about the person: it
     # rides the profile as a low-importance note and never the digest.
-    record = store.add_fact(
-        person_id,
-        note.text,
-        FactKind.APPEARANCE,
-        now=now,
-        attribution=Attribution.ROBOT,
-        source=FactSource(stamp=now),
-        confidence=0.5,
-        importance=0.2,
-    )
+    record = _write_appearance(store, person_id, note.text, now)
     if record is None:
         return Change(ChangeKind.REJECTED, note.who, person_id, note.text, reason="the store refused the note")
     return Change(ChangeKind.APPEARANCE, note.who, person_id, note.text, record_id=record)
+
+
+def _write_appearance(store: PeopleStore, person_id: str, text: str, now: float) -> str | None:
+    """Today's look, superseding the one it replaces: a long conversation is
+    many windows, and each one would otherwise file the same jacket again."""
+    previous = _open_appearance(store, person_id)
+    source = FactSource(stamp=now)
+    if previous is None:
+        return store.add_fact(
+            person_id,
+            text,
+            FactKind.APPEARANCE,
+            now=now,
+            attribution=Attribution.ROBOT,
+            source=source,
+            confidence=0.5,
+            importance=0.2,
+        )
+    return store.supersede_fact(
+        person_id,
+        previous,
+        text,
+        FactKind.APPEARANCE,
+        now=now,
+        attribution=Attribution.ROBOT,
+        source=source,
+        confidence=0.5,
+        importance=0.2,
+    )
+
+
+def _open_appearance(store: PeopleStore, person_id: str) -> str | None:
+    profile = store.profile(person_id)
+    if profile is None:
+        return None
+    live = (fact for fact in reversed(profile.facts) if fact.superseded_by is None)
+    return next((fact.id for fact in live if fact.kind is FactKind.APPEARANCE), None)
 
 
 def _apply_episode_note(note: str, views: Mapping[str, TagView], store: PeopleStore, now: float) -> list[Change]:
@@ -704,9 +757,19 @@ def _consented(window: Window, tag: str, quoted: Utterance) -> bool:
     index = next((at for at, message in enumerate(window.messages) if message is quoted), -1)
     if index < 0:
         return False
-    return any(
-        message.speaker is Speaker.USER and message.view(tag) is not None and asks_to_remember(message.text)
-        for message in window.messages[max(index - 1, 0) : index + 2]
+    return any(_asked_alone(message, tag) for message in window.messages[max(index - 1, 0) : index + 2])
+
+
+def _asked_alone(message: Utterance, tag: str) -> bool:
+    """A line asking the robot to remember, with the subject as the only person
+    in view. An utterance records who was *visible*, never who spoke, so with
+    somebody else in the room "Alice is on chemo, remember that" is their
+    request and not hers — the same one-plausible-referent rule the passive
+    naming path uses (RFC 6.3)."""
+    return (
+        message.speaker is Speaker.USER
+        and tuple(view.tag for view in message.in_view) == (tag,)
+        and asks_to_remember(message.text)
     )
 
 
@@ -802,6 +865,7 @@ class WindowQueue:
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
         tmp = self._path.with_name(self._path.name + ".tmp")
         tmp.write_text("".join(json.dumps(window_to_dict(window)) + "\n" for window in self._windows), encoding="utf-8")
+        os.chmod(tmp, FILE_MODE)  # verbatim transcripts and person ids, like every other store file
         os.replace(tmp, self._path)
 
 
@@ -831,8 +895,8 @@ def window_to_dict(window: Window) -> dict:
 
 def window_from_dict(data: dict) -> Window:
     messages = []
-    for entry in _list(data.get("messages")):
-        message = _dict(entry)
+    for entry in as_list(data.get("messages")):
+        message = as_dict(entry)
         messages.append(
             Utterance(
                 id=str(message.get("id", "")),
@@ -841,13 +905,13 @@ def window_from_dict(data: dict) -> Window:
                 text=str(message.get("text", "")),
                 in_view=tuple(
                     TagView(
-                        tag=str(_dict(view).get("tag", "")),
-                        state=_state(_dict(view).get("state")),
-                        person_id=_optional_str(_dict(view).get("person_id")),
-                        name=_optional_str(_dict(view).get("name")),
-                        enrolling=bool(_dict(view).get("enrolling", False)),
+                        tag=str(as_dict(view).get("tag", "")),
+                        state=_state(as_dict(view).get("state")),
+                        person_id=optional_str(as_dict(view).get("person_id")),
+                        name=optional_str(as_dict(view).get("name")),
+                        enrolling=bool(as_dict(view).get("enrolling", False)),
                     )
-                    for view in _list(message.get("in_view"))
+                    for view in as_list(message.get("in_view"))
                 ),
             )
         )
@@ -898,6 +962,13 @@ _RECALL_SCHEMA = {
     },
     "required": ["found", "answer"],
 }
+
+
+def mentions_memory(text: str) -> bool:
+    """Whether the line even reaches for the past — the cheap half of
+    :func:`is_memory_question`, so a caller can skip building a roster for the
+    chat lines (almost all of them) that are not memory questions."""
+    return _MEMORY_VERB.search(text.lower()) is not None
 
 
 def is_memory_question(text: str, known_names: Iterable[str]) -> str | None:
@@ -985,7 +1056,7 @@ class Scribe:
         message was queued, because it may have flipped in between."""
         if not self._store.collection_enabled():
             return []
-        live = line_without_revoked(message, self._revoked)
+        live = line_unless_revoked(message, self._revoked)
         if live is None:
             return []
         window = self._buffer.add(live)
@@ -1017,13 +1088,16 @@ class Scribe:
             return []
         return [] if output is None else self._commit(output, window, now)
 
-    def drain(self, now: float) -> list[Change]:
-        """Spend the queued windows, oldest first, stopping at the first
-        failure — the connection is still down and the rest can wait."""
+    def drain(self, now: float, limit: int = DRAIN_PER_CYCLE) -> list[Change]:
+        """Spend up to ``limit`` queued windows, oldest first, stopping at the
+        first failure — the connection is still down and the rest can wait.
+        Each one is a blocking Gemini call on the thread that also carries the
+        live chat, so an hour of backlog is drained a couple of windows at a
+        time rather than all 240 in one cycle."""
         if not self._store.collection_enabled():
             return []
         changes: list[Change] = []
-        for queued in self._queue.pending(now):
+        for queued in self._queue.pending(now)[:limit]:
             window = self._live(queued)
             if not window.messages:
                 self._queue.pop(queued)
@@ -1102,13 +1176,13 @@ class Scribe:
 
 
 def _fact(entry: object, kind: FactKind | None = None) -> ScribeFact:
-    data = _dict(entry)
+    data = as_dict(entry)
     return ScribeFact(
         who=str(data.get("who", "")),
         text=str(data.get("text", "")),
-        kind=kind or _member(FactKind, data.get("kind"), FactKind.BIOGRAPHY),
-        confidence=_float(data.get("confidence"), 0.5),
-        attribution=_member(Attribution, data.get("attribution"), Attribution.UNCERTAIN),
+        kind=kind or enum_member(FactKind, data.get("kind"), FactKind.BIOGRAPHY),
+        confidence=as_float(data.get("confidence"), 0.5),
+        attribution=enum_member(Attribution, data.get("attribution"), Attribution.UNCERTAIN),
         quote=str(data.get("quote", "")),
         utterance=str(data.get("utterance", "")),
         supersedes=str(data.get("supersedes") or ""),
@@ -1116,21 +1190,21 @@ def _fact(entry: object, kind: FactKind | None = None) -> ScribeFact:
 
 
 def _name(entry: object) -> ScribeName:
-    data = _dict(entry)
+    data = as_dict(entry)
     return ScribeName(
         who=str(data.get("who", "")),
         name=str(data.get("name", "")).strip(),
-        confidence=_float(data.get("confidence"), 0.0),
+        confidence=as_float(data.get("confidence"), 0.0),
         quote=str(data.get("quote", "")),
         utterance=str(data.get("utterance", "")),
-        introduction=_member(Introduction, data.get("introduction"), Introduction.OTHER),
+        introduction=enum_member(Introduction, data.get("introduction"), Introduction.OTHER),
         referent=str(data.get("referent") or ""),
         correction=bool(data.get("correction", False)),
     )
 
 
 def _loop(entry: object) -> ScribeLoop:
-    data = _dict(entry)
+    data = as_dict(entry)
     return ScribeLoop(
         who=str(data.get("who", "")),
         text=str(data.get("text", "")),
@@ -1155,27 +1229,4 @@ def _normalize(text: str) -> str:
 
 
 def _state(value: object) -> IdentityState:
-    return _member(IdentityState, value, IdentityState.UNKNOWN)
-
-
-def _member(enum: type[_E], value: object, default: _E) -> _E:
-    try:
-        return enum(str(value))
-    except ValueError:
-        return default
-
-
-def _dict(value: object) -> dict:
-    return value if isinstance(value, dict) else {}
-
-
-def _list(value: object) -> list:
-    return value if isinstance(value, list) else []
-
-
-def _float(value: object, default: float) -> float:
-    return float(value) if isinstance(value, (int, float)) else default
-
-
-def _optional_str(value: object) -> str | None:
-    return None if value is None else str(value)
+    return enum_member(IdentityState, value, IdentityState.UNKNOWN)

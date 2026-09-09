@@ -145,10 +145,14 @@ class PeopleEngine:
         turns into ``/brain/people_events`` entries."""
         return dict(self._resolutions)
 
-    def health(self, now: float) -> HealthDict:
+    def health(self, now: float, *, native_wanted: bool = True) -> HealthDict:
+        """``native_wanted`` False is the node saying it unsubscribed from the
+        native topic because no track needs a face: the silence is a choice, not
+        a fault, and reporting it as stale would read as a broken driver."""
+        native = self._freshness(self._last_native_stamp, now, self._config.native_stale_sec)
         return HealthDict(
             camera=str(self._freshness(self._last_frame_stamp, now, self._config.camera_stale_sec)),
-            native=str(self._freshness(self._last_native_stamp, now, self._config.native_stale_sec)),
+            native=str(native if native_wanted else HealthState.NONE),
             face_model=self._backends.health.get("face_model", str(HealthState.UNAVAILABLE)),
             body_model=self._backends.health.get("body_model", str(HealthState.UNAVAILABLE)),
             gpu=self._backends.health.get("gpu", str(HealthState.NONE)),
@@ -361,6 +365,7 @@ class PeopleEngine:
             return
         self._runtime[recovered] = self._runtime.pop(track.tag, _Runtime())
         self._runtime[recovered].reid_tried = True
+        self._independence.forget(track.tag)  # the tag is retired here, so _build_states never sees it again
         self._resolver.forget(track.tag)
         self._resolver.on_reassociated(recovered, now)
 

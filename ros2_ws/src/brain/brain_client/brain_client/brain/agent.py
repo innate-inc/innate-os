@@ -78,7 +78,7 @@ _MAX_EVENT_IMAGES = 4  # newest event images sent per turn; older ones arrive as
 _MAX_RERUNS = 2  # nonstop user speech cannot starve the loop
 _EVENT_TURN_GAP = 1.0  # floor between event-driven turns (feedback chatter); user speech skips it
 _DROP_EVENTS_AFTER = 3  # failed turns before the peeked events are dropped (the batch may be the poison)
-_PEOPLE_FRESH_SEC = 2.0  # older, and the snapshot's boxes describe a scene the frame no longer shows
+_PEOPLE_FRESH_SEC = 1.5  # camera.py's ring holds 1.5 s, so anything older has no frame to pair with
 _PEOPLE_CONTEXT_ENTRIES = 6  # chat entries the people block ranks its facts against
 
 

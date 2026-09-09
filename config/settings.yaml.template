@@ -161,6 +161,8 @@
 #     default_gain: 110             # gain used in auto-exposure mode (0-255)
 #     target_brightness: 128.0      # auto-exposure target brightness (0-255)
 #     ae_kp: 0.8                    # auto-exposure proportional gain
+#     publish_native: false         # tee the sensor's own MJPG buffers to a lazy topic (people recognition)
+#     native_fps: 5.0               # rate cap for that native topic while anyone subscribes
 
 # ── Camera: arm/wrist (hardware only) ─────────────────────────────────
 # arm_camera_driver:
@@ -218,12 +220,13 @@
 # The people node tracks who is in view, recognizes them from face and outfit,
 # and keeps what they told the robot under data/people/ (data/people_sim/ in the
 # simulator). Everything stays on the robot; Settings › People is the owner's
-# switch for collection, names and forgetting. `enabled: false` stops the node —
-# launch reads it before starting the process, so it takes a reboot, not a
-# restart. The native MJPG topic it reads is the camera driver's `native_fps`.
+# switch for collection, names and forgetting. `enabled` stops or starts the
+# node — launch reads it before starting the process, so it takes a reboot, not
+# a restart; it is EXPERIMENTAL and ships off, so `enabled: true` here is what
+# turns it on. The native MJPG topic it reads is the camera driver's `native_fps`.
 # people_node:
 #   ros__parameters:
-#     enabled: true                 # run the people node at all
+#     enabled: true                 # run the people node at all (default: false)
 #     always_on: false              # keep recognizing while the brain is deactivated
 #     seek_faces: false             # let the block suggest walking closer for a face
 #     scribe: true                  # write down what people say about themselves (one Gemini call per window)

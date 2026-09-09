@@ -71,11 +71,12 @@ def generate_launch_description():
     )
 
     # Read before the process starts, not as a parameter: a disabled node exits,
-    # and respawn would bring it straight back every two seconds.
+    # and respawn would bring it straight back every two seconds. Off by default
+    # on hardware: RFC section 12 ships Phase 0 experimental, behind the switch.
     people_enabled_arg = DeclareLaunchArgument(
         "people_enabled",
-        default_value=str(node_setting("people_node", "enabled", True)),
-        description="Run the people node (recognition and person memory)",
+        default_value=str(node_setting("people_node", "enabled", False)),
+        description="Run the people node (recognition and person memory; experimental, off by default)",
     )
 
     brain_client_node = Node(

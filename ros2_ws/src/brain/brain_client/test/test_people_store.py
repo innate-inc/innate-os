@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import stat
 
 import numpy as np
@@ -17,7 +18,9 @@ import pytest
 from brain_client.people import store as store_module
 from brain_client.people.memory import EPISODE_IDLE_SEC, Attribution, FactKind, FactSource, latest_open
 from brain_client.people.store import (
+    EPISODE_SUMMARY_LIMIT,
     MAX_FACE_TEMPLATES,
+    MAX_FACTS,
     MAX_OUTFITS,
     MAX_THUMBNAILS,
     MAX_UNNAMED,
@@ -92,6 +95,7 @@ def test_a_reopened_store_has_the_roster_the_first_one_left(store: PeopleStore, 
     store.add_outfit(person_id, OutfitTemplate(embedding=EMB, model="osnet", stamp=NOW))
     store.add_height_sample(person_id, 1.7, 0.01)
     store.rename(person_id, "Ana", "conversation", now=NOW)
+    store.flush(now=NOW)  # height samples ride the flush the node runs on its tick
 
     reopened = PeopleStore(tmp_path / "people")
     assert reopened.person_ids() == [person_id]
@@ -197,6 +201,28 @@ def test_height_is_a_robust_mean_of_the_samples(store: PeopleStore):
 
 def test_height_is_none_without_samples(store: PeopleStore):
     assert store.height(enrol(store)) is None
+
+
+def test_height_samples_reach_the_disk_on_the_flush_not_once_per_sample(store: PeopleStore, tmp_path):
+    """The resolver sends one sample a second per settled person, and a
+    templates commit rewrites every face and outfit vector: writing on each one
+    is ~90 MB an hour of eMMC per person in view."""
+    person_id = enrol(store)
+    path = tmp_path / "people" / person_id / "templates.npz"
+    os.utime(path, (0, 0))
+    for _ in range(60):
+        store.add_height_sample(person_id, 1.7, 0.01)
+    assert path.stat().st_mtime == 0
+
+    store.flush(now=NOW)
+    assert path.stat().st_mtime != 0
+    reopened = PeopleStore(tmp_path / "people")
+    height = reopened.height(person_id)
+    assert height is not None and height.samples == 60
+
+    os.utime(path, (0, 0))
+    store.flush(now=NOW)
+    assert path.stat().st_mtime == 0  # the flush that wrote them cleared the mark
 
 
 def test_a_sighting_moves_last_seen_and_counts_a_new_encounter_only_across_a_gap(store: PeopleStore):
@@ -540,6 +566,56 @@ def test_the_digest_carries_only_the_last_three_episode_summaries(store: PeopleS
     assert [episode["summary"] for episode in digest["episodes"]] == ["episode 2", "episode 3", "episode 4"]
 
 
+def test_episode_notes_accumulate_over_the_encounter_and_stay_bounded(store: PeopleStore):
+    """One encounter is many scribe windows: replacing the summary kept only
+    the last window's note of a twenty-minute conversation."""
+    person_id = enrol(store)
+    store.open_episode(person_id, NOW)
+    store.note_episode(person_id, "Came into the kitchen.", now=NOW + 5)
+    store.note_episode(person_id, "Asked about the socks.", now=NOW + 10)
+    profile = store.profile(person_id)
+    assert profile is not None
+    assert profile.episodes[0].summary == "Came into the kitchen. Asked about the socks."
+
+    for index in range(40):
+        store.note_episode(person_id, f"Then sentence {index}.", now=NOW + 20 + index)
+    profile = store.profile(person_id)
+    assert profile is not None
+    summary = profile.episodes[0].summary
+    assert len(summary) <= EPISODE_SUMMARY_LIMIT
+    assert summary.startswith("Then sentence ") and summary.endswith("Then sentence 39.")
+
+
+def test_facts_stay_under_the_cap_and_never_drop_what_the_owner_entered(store: PeopleStore):
+    """A profile the scribe writes to for a year would otherwise grow without
+    end, and person.json is read whole on every load."""
+    person_id = enrol(store)
+    store.add_fact(
+        person_id, "works upstairs", FactKind.IDENTITY, now=NOW, attribution=Attribution.OWNER, importance=0.1
+    )
+    stale = store.add_fact(person_id, "drinks tea", FactKind.PREFERENCE, now=NOW, attribution=Attribution.SELF)
+    assert stale is not None
+    store.supersede_fact(
+        person_id, stale, "drinks coffee", FactKind.PREFERENCE, now=NOW + 1, attribution=Attribution.SELF
+    )
+    for index in range(MAX_FACTS):
+        store.add_fact(
+            person_id,
+            f"note {index}",
+            FactKind.APPEARANCE,
+            now=NOW + index,
+            attribution=Attribution.ROBOT,
+            importance=0.2,
+        )
+    profile = store.profile(person_id)
+    assert profile is not None
+    texts = [fact.text for fact in profile.facts]
+    assert len(texts) == MAX_FACTS
+    assert "works upstairs" in texts  # owner-entered and the least important of all
+    assert "drinks tea" not in texts  # superseded records go first
+    assert "note 0" not in texts and texts[-1] == f"note {MAX_FACTS - 1}"
+
+
 def test_an_episode_note_lands_on_the_open_episode_only(store: PeopleStore):
     person_id = enrol(store)
     assert store.note_episode(person_id, "nothing is open", now=NOW) is False
@@ -740,8 +816,10 @@ def test_the_scribes_queue_lands_inside_that_directory_with_the_same_mode(tmp_pa
     from brain_client.people.scribe import WindowQueue
 
     root = tmp_path / "people"
-    WindowQueue(root / "scribe_queue.jsonl").clear()
+    path = root / "scribe_queue.jsonl"
+    WindowQueue(path).clear()
     assert stat.S_IMODE(root.stat().st_mode) == store_module.DIR_MODE
+    assert stat.S_IMODE(path.stat().st_mode) == store_module.FILE_MODE
 
 
 def test_no_temporary_files_survive_a_burst_of_writes(store: PeopleStore, tmp_path):
@@ -773,6 +851,64 @@ def test_unreadable_templates_cost_recognition_not_the_memory(store: PeopleStore
     assert reopened.face_templates(person_id, "sface") == []
     digest = reopened.digest(person_id, NOW)
     assert digest is not None and len(digest["facts"]) == 1
+
+
+def test_a_malformed_templates_file_costs_that_person_their_gallery_not_the_boot(store: PeopleStore, tmp_path):
+    """The parsing has to sit inside the same try as the read: _load_templates
+    runs in the node's constructor, and the launch file respawns it after two
+    seconds, so one bad file crash-loops the robot's people memory for good."""
+    kept, broken = enrol(store, NOW), enrol(store, NOW + 1)
+    np.savez(
+        tmp_path / "people" / broken / "templates.npz",
+        face_meta="[1]",
+        outfit_meta="[]",
+        height_samples=np.zeros(3, dtype=np.float32),
+        face_embeddings__=np.ones((1, 4), dtype=np.float32),
+    )
+
+    reopened = PeopleStore(tmp_path / "people")
+    assert reopened.person_ids() == [kept, broken]
+    assert reopened.face_templates(broken, "sface") == []
+    assert reopened.height(broken) is None
+    assert len(reopened.face_templates(kept, "sface")) == 1
+
+
+def test_a_directory_the_index_does_not_name_is_swept_on_load(store: PeopleStore, tmp_path):
+    """Enrolment writes the person's files before the index that names them, so
+    a crash in between (this node is designed around native-library crashes)
+    leaves embeddings and thumbnails no roster, expiry or forget can reach."""
+    kept, forgotten = enrol(store, NOW), enrol(store, NOW + 1)
+    store.forget(forgotten, now=NOW + 2)
+    tombstoned = tmp_path / "people" / forgotten
+    tombstoned.mkdir()
+    (tombstoned / "thumb_0.jpg").write_bytes(b"jpeg")
+    orphan = tmp_path / "people" / "person_deadbeef"
+    orphan.mkdir()
+    (orphan / "templates.npz").write_bytes(b"embeddings nothing names")
+
+    reopened = PeopleStore(tmp_path / "people")
+    assert not orphan.exists() and not tombstoned.exists()
+    assert (tmp_path / "people" / kept).is_dir()
+    assert reopened.person_ids() == [kept]
+    actions = [json.loads(line)["action"] for line in reopened.audit_path.read_text().splitlines()]
+    assert actions.count("swept") == 2
+
+
+def test_a_forget_that_cannot_delete_the_files_is_not_reported_as_done(store: PeopleStore, tmp_path, monkeypatch):
+    """``ignore_errors=True`` answered "forgotten" with the face templates still
+    on the card; the node's write boundary turns the OSError into a failure the
+    Settings page can show."""
+    person_id = enrol(store)
+
+    def _read_only(_path: object) -> None:
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(store_module.shutil, "rmtree", _read_only)
+    with pytest.raises(OSError):
+        store.forget(person_id, now=NOW + 1)
+
+    assert store.person_ids() == [person_id]
+    assert (tmp_path / "people" / person_id / "templates.npz").is_file()
 
 
 def test_an_unreadable_index_starts_an_empty_roster(store: PeopleStore, tmp_path):

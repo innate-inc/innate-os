@@ -20,6 +20,7 @@ from brain_client.people.resolve import (
     Calibration,
     Resolver,
     ResolverConfig,
+    body_thresholds_for,
     face_thresholds_for,
     outfit_age_weight,
 )
@@ -35,6 +36,7 @@ from brain_client.people.types import (
 
 MODEL = "sface-2021dec-128"
 BODY_MODEL = "osnet-x0_25-msmt17-512"
+GENERIC_BODY_MODEL = "some-reid-256"  # anything but OSNet falls back to the default thresholds
 HOUR = 3600.0
 A_VECTOR = np.array([1.0, 0.0, 0.0], dtype=np.float32)
 B_VECTOR = np.array([0.0, 1.0, 0.0], dtype=np.float32)
@@ -356,7 +358,7 @@ def test_a_day_old_outfit_needs_more_frames_to_say_the_same_thing():
         resolver = Resolver(fresh_outfit_roster(age_sec=age_sec))
         for step in range(12):
             stamp = 1000.0 + step
-            resolver.observe_body("P1", body(stamp, probe(0.60)), stamp)
+            resolver.observe_body("P1", body(stamp, probe(0.80)), stamp)
             resolver.resolve([FakeTrack(last_seen=stamp)], stamp)
             if resolver.identity("P1").state is IdentityState.POSSIBLE:
                 return step + 1
@@ -394,6 +396,45 @@ def test_two_people_in_similar_clothes_agree_with_nobody():
 def test_the_body_calibration_runs_through_its_own_reject_and_accept():
     thresholds = BodyThresholds()
     assert thresholds.calibration.llr(thresholds.reject) < 0 < thresholds.calibration.llr(thresholds.accept)
+
+
+def test_osnet_cosines_are_judged_on_osnet_thresholds():
+    """OSNet sits far higher than a generic ReID space for the same error rate:
+    0.65 is a match for one and a stranger for the other, and the only body
+    embedder the robot actually runs is OSNet."""
+    assert body_thresholds_for(BODY_MODEL).accept == 0.78
+    assert body_thresholds_for(GENERIC_BODY_MODEL).accept == 0.60
+
+    def state_after(model: str) -> IdentityState:
+        resolver = Resolver(fresh_outfit_roster(model=model))
+        for step in range(6):
+            stamp = 1000.0 + step
+            resolver.observe_body("P1", body(stamp, probe(0.65), model=model), stamp)
+            resolver.resolve([FakeTrack(last_seen=stamp)], stamp)
+        return resolver.identity("P1").state
+
+    assert state_after(BODY_MODEL) is IdentityState.UNKNOWN
+    assert state_after(GENERIC_BODY_MODEL) is IdentityState.POSSIBLE
+
+
+def test_a_change_of_jacket_never_unseats_a_face_confirmed_name():
+    """RFC 5.3.6: outfit is a weak cue — it cannot reach ``known`` on its own, so
+    it must not be able to veto one either. Disagreement used to accumulate
+    unbounded and either switch the track away or tear it apart."""
+    resolver = Resolver(fresh_outfit_roster())
+    for step in range(3):
+        resolver.observe_face("P1", face(1000.0 + 0.6 * step, probe(0.50)))
+    resolver.resolve([FakeTrack(last_seen=1001.2)], 1001.2)
+    assert resolver.identity("P1").state is IdentityState.KNOWN
+
+    split = False
+    for step in range(60):
+        stamp = 1002.0 + step
+        resolver.observe_body("P1", body(stamp, B_VECTOR), stamp)
+        split = split or resolver.resolve([FakeTrack(last_seen=stamp)], stamp)["P1"].split_requested
+    assert not split
+    assert resolver.identity("P1").person_id == "person_a"
+    assert resolver.identity("P1").state is IdentityState.KNOWN
 
 
 def test_outfits_of_a_different_model_are_never_compared():
@@ -599,6 +640,21 @@ def test_two_live_tracks_cannot_both_be_the_same_person():
     assert resolutions["P2"].conflict_with == "P1"
 
 
+def test_a_split_survives_losing_a_conflict_on_the_same_tick():
+    """The two rules fire on one tick: P1's frames say the tracker swapped
+    somebody in, and P2 claims the person first. Rebuilding P1's resolution for
+    the conflict must not drop the split, or the crossed track never gets fixed."""
+    resolver = Resolver(roster_with())
+    end = commit_theo(resolver)
+    for step in range(3):  # P2 walks in and claims the same person
+        resolver.observe_face("P2", face(end + 0.6 * step, probe(0.50)))
+    resolver.observe_face("P1", face(end + 1.5, probe(0.10, 0.55)))
+    stamp = end + 1.5
+    resolutions = resolver.resolve([FakeTrack("P1", 90.0, stamp), FakeTrack("P2", 80.0, stamp)], stamp)
+    assert resolutions["P1"].conflict_with == "P2"
+    assert resolutions["P1"].split_requested
+
+
 def test_the_older_track_keeps_the_name_in_a_conflict():
     resolver = Resolver(roster_with())
     for tag in ("P1", "P2"):
@@ -661,6 +717,32 @@ def test_frames_arriving_faster_than_the_span_still_enrol():
         resolver.resolve([FakeTrack(first_seen=99.0, last_seen=stamp)], stamp)
     assert len(roster.created) == 1
     assert 5 < len(roster.created[0]) <= 10  # RFC 5.4: up to ten, not only the five that decided
+
+
+def test_frames_at_the_five_hertz_face_cadence_enrol_once_they_span_two_seconds():
+    """The engine's ceiling is five face frames a second, so a ten-frame buffer
+    spans 1.8 s and the two-second enrol window is never reachable on hardware."""
+    roster = FakeRoster()
+    resolver = Resolver(roster)
+    for index in range(15):
+        stamp = 100.0 + 0.2 * index
+        resolver.observe_face("P1", face(stamp, probe(0.98), box=_moved(index % 5)))
+        resolver.resolve([FakeTrack(first_seen=97.0, last_seen=stamp)], stamp)
+    assert len(roster.created) == 1
+
+
+def test_one_stray_frame_above_reject_does_not_stop_a_later_enrolment():
+    """RFC 5.4 asks the enrolling frames to match nobody, and the per-frame gate
+    on ``enrol_faces`` is what enforces it. A lifetime maximum over hundreds of
+    impostor comparisons a second crosses reject on any track sooner or later,
+    and would then block that person for the rest of their visit."""
+    roster = FakeRoster({"person_a": FakePerson("Theo", [FaceTemplate(A_VECTOR, MODEL, 0.0, "frontal", 1.0)])})
+    resolver = Resolver(roster)
+    resolver.observe_face("P1", face(99.0, probe(0.35)))  # above reject, below accept
+    for index in range(5):
+        resolver.observe_face("P1", face(100.0 + 0.6 * index, probe(0.05), box=_moved(index)))
+    resolver.resolve([FakeTrack(first_seen=95.0, last_seen=102.4)], 102.4)
+    assert len(roster.created) == 1
 
 
 def test_a_passer_by_seen_for_under_two_seconds_never_enrols():
@@ -780,12 +862,38 @@ def test_height_samples_are_written_while_a_track_is_committed():
     assert roster.heights and roster.heights[0][0] == "person_a"
 
 
+def test_a_height_is_written_once_per_measurement_not_once_per_second():
+    """The store keeps the last 64 samples, so a long encounter re-writing its
+    own running mean every second evicts every other encounter's."""
+    roster = roster_with()
+    resolver = Resolver(roster)
+    resolver.observe_height("P1", 1.72, 0.01)
+    end = commit_theo(resolver)
+    for step in range(1, 120):
+        resolver.resolve([FakeTrack(last_seen=end + step)], end + step)
+    assert len(roster.heights) == 1
+
+
 def test_nothing_is_learned_while_collection_is_off():
     roster = roster_with()
     roster._collection = False
     resolver = Resolver(roster)
+    resolver.observe_height("P1", 1.72, 0.01)
     commit_theo(resolver)
-    assert roster.templates == [] and roster.sightings == []
+    assert roster.templates == []
+    assert roster.written_outfits == []
+    assert roster.heights == []
+
+
+def test_recognising_someone_with_collection_off_still_records_the_sighting():
+    """RFC section 10: collection off is a collection control, not a deletion.
+    Freezing last_seen while the robot recognises the person daily hands them to
+    the store's fourteen-day expiry."""
+    roster = roster_with()
+    roster._collection = False
+    resolver = Resolver(roster)
+    commit_theo(resolver)
+    assert [pid for pid, _ in roster.sightings] == ["person_a"]
 
 
 def test_nothing_is_learned_on_the_track_that_lost_a_conflict():
