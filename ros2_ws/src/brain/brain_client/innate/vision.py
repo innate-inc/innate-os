@@ -280,7 +280,11 @@ def seg_track(
     crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 1)
     rot, window = cv2.CamShift(bp, window, crit)
     x, y, w, h = window
-    if w < 4 or h < 4 or w * h > 0.4 * IMG_W * IMG_H:
+    # A flooded model (matching the floor) fills the frame; a real object
+    # merely fills most of it — an AirPods case is ~40% of the real wrist
+    # camera's view at the 5 cm stop, and rejecting it there ends every
+    # descent with "lost track".
+    if w < 4 or h < 4 or w * h > 0.9 * IMG_W * IMG_H:
         return None, window, 0.0, None
     score = _track_score(bp, rot, window)
     if score < min_score:
