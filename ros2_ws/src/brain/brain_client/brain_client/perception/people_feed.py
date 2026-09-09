@@ -40,11 +40,12 @@ class PeopleFeed:
         node.create_subscription(String, SNAPSHOT_TOPIC, self._on_snapshot, _QOS)
 
     def fresh(self, max_age_sec: float) -> dict | None:
-        """The newest snapshot if its own stamp is within ``max_age_sec``. Epoch
-        seconds, not monotonic: the stamp is the people node's, and the two
-        processes share a clock."""
+        """The newest snapshot if the people in it were seen within
+        ``max_age_sec`` — its ``observed`` stamp, not the heartbeat's, so a
+        camera outage ages the room out instead of restamping it. Epoch
+        seconds: the two processes share a clock."""
         snapshot = self._snapshot
-        if snapshot is None or time.time() - float(snapshot["stamp"]) > max_age_sec:
+        if snapshot is None or time.time() - float(snapshot["observed"]) > max_age_sec:
             return None
         return snapshot
 
@@ -57,7 +58,9 @@ class PeopleFeed:
         except (json.JSONDecodeError, TypeError):
             self._warn("[People] Ignoring malformed JSON on /brain/people")
             return
-        if not isinstance(parsed, dict) or not isinstance(parsed.get("stamp"), (int, float)):
+        if not isinstance(parsed, dict) or not all(
+            isinstance(parsed.get(key), (int, float)) for key in ("stamp", "observed")
+        ):
             return
         if parsed.get("schema") != SNAPSHOT_SCHEMA:
             self._warn(f"[People] Ignoring schema {parsed.get('schema')}; this brain reads {SNAPSHOT_SCHEMA}")

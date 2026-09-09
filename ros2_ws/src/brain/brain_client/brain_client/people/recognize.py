@@ -11,8 +11,9 @@ beats the runner-up by a margin, because the failure that matters is calling
 Ana "Theo" out loud, not failing to recognize her.
 
 Someone the roster has never seen is enrolled once three agreeing looks at
-their face have arrived, which is what keeps a passer-by from becoming three
-new people.
+their face have arrived, and only while they are the one stranger in view —
+which is what keeps a passer-by from becoming three new people, and two
+strangers from becoming one.
 
 PURE module: cv2, numpy and a roster to ask, no ROS.
 """
@@ -61,16 +62,26 @@ class Recognizer:
         self._pending: list[tuple[float, np.ndarray]] = []
 
     def look(self, frame_bgr: np.ndarray, now: float) -> list[Sighting]:
-        return [self._identify(frame_bgr, box, now) for box in self._models.detector.detect(frame_bgr)]
+        boxes = self._models.detector.detect(frame_bgr)
+        faces = [self._face_vector(frame_bgr, box) for box in boxes]
+        gallery = self._roster.faces()
+        matched = [None if face is None else _best(gallery, face, FACE_ACCEPT, FACE_MARGIN) for face in faces]
+        strangers = [i for i, face in enumerate(faces) if face is not None and matched[i] is None]
+        if len(strangers) == 1:
+            matched[strangers[0]] = self._enrol(faces[strangers[0]], now)
+        return [
+            self._identify(frame_bgr, box, face, person_id, now)
+            for box, face, person_id in zip(boxes, faces, matched, strict=True)
+        ]
 
-    def _identify(self, frame_bgr: np.ndarray, box: Box, now: float) -> Sighting:
-        face = self._face_vector(frame_bgr, box)
+    def _identify(
+        self, frame_bgr: np.ndarray, box: Box, face: np.ndarray | None, person_id: str | None, now: float
+    ) -> Sighting:
         if face is not None:
-            person_id = _best(self._roster.faces(), face, FACE_ACCEPT, FACE_MARGIN) or self._enrol(face, now)
-            if person_id is not None:
-                self._confirm(frame_bgr, box, person_id, face, now)
-                return Sighting(box, "known", person_id, self._roster.name_of(person_id))
-            return Sighting(box, "unknown")
+            if person_id is None:
+                return Sighting(box, "unknown")
+            self._confirm(frame_bgr, box, person_id, face, now)
+            return Sighting(box, "known", person_id, self._roster.name_of(person_id))
         outfit = self._outfit_vector(frame_bgr, box)
         person_id = None if outfit is None else _best(self._roster.outfits(now), outfit, OUTFIT_ACCEPT, OUTFIT_MARGIN)
         if person_id is None:
@@ -88,14 +99,15 @@ class Recognizer:
 
     def _enrol(self, face: np.ndarray, now: float) -> str | None:
         """A new person, once ENROL_LOOKS recent looks agree with this one.
-        They must agree with each other and not merely fail to match the
-        roster, or two strangers passing would enrol as one."""
+        Fed only while exactly one stranger is in view, and the looks must agree
+        with each other rather than merely fail to match the roster: two people
+        passing through must not become one person, or three."""
         self._pending = [(stamp, vector) for stamp, vector in self._pending if now - stamp < ENROL_WINDOW_SEC]
         self._pending.append((now, face))
         agreeing = [vector for _, vector in self._pending if float(vector @ face) >= FACE_AGREES]
         if len(agreeing) < ENROL_LOOKS:
             return None
-        self._pending.clear()
+        self._pending = [(stamp, vector) for stamp, vector in self._pending if float(vector @ face) < FACE_AGREES]
         return self._roster.create(agreeing, now)
 
     def _face_vector(self, frame_bgr: np.ndarray, box: Box) -> np.ndarray | None:

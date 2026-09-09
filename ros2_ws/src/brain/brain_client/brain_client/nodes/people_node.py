@@ -67,6 +67,7 @@ class PeopleNode(Node):
         self._lock = threading.Lock()
         self._frame: bytes | None = None
         self._sightings: list[Sighting] = []
+        self._observed = 0.0
 
         self._snapshot_pub = self.create_publisher(String, SNAPSHOT_TOPIC, _LATCHED_QOS)
         self.create_subscription(CompressedImage, IMAGE_TOPIC, self._on_image, _SENSOR_QOS)
@@ -94,13 +95,18 @@ class PeopleNode(Node):
         frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
         if frame is None:
             return
-        self._sightings = self._recognizer.look(frame, time.time())
+        self._observed = time.time()
+        self._sightings = self._recognizer.look(frame, self._observed)
         self._publish()
 
     def _publish(self) -> None:
+        # Two clocks: `stamp` says the node is alive, `observed` says when these
+        # people were last actually seen — a heartbeat must not make a room the
+        # camera stopped describing look current.
         payload = {
             "schema": SNAPSHOT_SCHEMA,
             "stamp": time.time(),
+            "observed": self._observed,
             "health": self._health,
             "people": [
                 {
@@ -123,7 +129,7 @@ class PeopleNode(Node):
         if not name:
             response.success, response.message = False, "I need a name to give them."
             return response
-        response.success = self._roster.rename(person_id, name)
+        response.success = self._roster.rename(person_id, name, time.time())
         response.person_id = person_id
         response.message = f"Noted, that is {name}." if response.success else "I lost that person on the way."
         return response
@@ -134,7 +140,7 @@ class PeopleNode(Node):
             response.success, response.message = False, message
             return response
         response.success = self._roster.forget(person_id)
-        response.message = "Done, I have forgotten them." if response.success else "I lost that person on the way."
+        response.message = "Done, I have forgotten them." if response.success else "I could not erase their record."
         return response
 
     def _target(self, who: str) -> tuple[str | None, str]:

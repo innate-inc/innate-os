@@ -34,7 +34,10 @@ OUTFIT_TTL_SEC = 12 * 3600.0
 """How long an outfit stands for its person. Clothes change overnight; a stale
 outfit would carry a name onto whoever wore something similar the next day."""
 
-_LAST_SEEN_DEBOUNCE_SEC = 30.0
+_SAVE_EVERY_SEC = 30.0
+"""While a person is in view their stamps reach disk this often, so a restart
+costs at most this much of their recency — not a whole day of outfit life."""
+
 _REDUNDANT = 0.9
 """A vector this close to one already on file says nothing new. The gallery
 wants different looks at a person, not twelve copies of the frame they happened
@@ -51,6 +54,7 @@ class Person:
     faces: list[np.ndarray] = field(default_factory=list)
     outfit: np.ndarray | None = None
     outfit_stamp: float = 0.0
+    saved_at: float = 0.0  # in memory only
 
 
 class Roster:
@@ -90,54 +94,60 @@ class Roster:
     def create(self, faces: list[np.ndarray], now: float) -> str:
         person = Person(id=f"person_{uuid.uuid4().hex[:8]}", created=now, last_seen=now, faces=list(faces[-MAX_FACES:]))
         self._people[person.id] = person
-        self._save(person)
+        self._save(person, now)
         return person.id
 
     def add_face(self, person_id: str, face: np.ndarray, now: float) -> None:
         person = self._people.get(person_id)
         if person is None:
             return
-        person.last_seen = now
-        if any(float(face @ stored) >= _REDUNDANT for stored in person.faces):
-            return
-        person.faces = [*person.faces, face][-MAX_FACES:]
-        self._save(person)
+        new = not any(float(face @ stored) >= _REDUNDANT for stored in person.faces)
+        if new:
+            person.faces = [*person.faces, face][-MAX_FACES:]
+        self._touch(person, now, changed=new)
 
     def set_outfit(self, person_id: str, outfit: np.ndarray, now: float) -> None:
         person = self._people.get(person_id)
         if person is None:
             return
-        same = person.outfit is not None and float(person.outfit @ outfit) >= _REDUNDANT
-        person.outfit, person.outfit_stamp, person.last_seen = outfit, now, now
-        if not same:
-            self._save(person)
+        changed = person.outfit is None or float(person.outfit @ outfit) < _REDUNDANT
+        person.outfit, person.outfit_stamp = outfit, now
+        self._touch(person, now, changed=changed)
 
     def seen(self, person_id: str, now: float) -> None:
-        """Note that a person is in view. Persisted at most every 30 s: the
-        recognizer ticks several times a second and the stamp is not worth a
-        file write each time."""
         person = self._people.get(person_id)
-        if person is None:
-            return
-        stale = now - person.last_seen > _LAST_SEEN_DEBOUNCE_SEC
-        person.last_seen = now
-        if stale:
-            self._save(person)
+        if person is not None:
+            self._touch(person, now, changed=False)
 
-    def rename(self, person_id: str, name: str) -> bool:
+    def rename(self, person_id: str, name: str, now: float) -> bool:
         person = self._people.get(person_id)
         if person is None:
             return False
         person.name = name.strip() or None
-        self._save(person)
+        self._save(person, now)
         return True
 
     def forget(self, person_id: str) -> bool:
-        person = self._people.pop(person_id, None)
-        if person is None:
+        """False when their files could not be removed — and then they stay on
+        the roster too: a person whose gallery is still on disk has not been
+        forgotten, whatever the reply says."""
+        if person_id not in self._people:
             return False
-        shutil.rmtree(self._dir / person_id, ignore_errors=True)
+        directory = self._dir / person_id
+        try:
+            if directory.exists():
+                shutil.rmtree(directory)
+        except OSError:
+            return False
+        del self._people[person_id]
         return True
+
+    def _touch(self, person: Person, now: float, *, changed: bool) -> None:
+        """A sighting: the stamps move now, the file follows when something
+        changed or when it has not been written for _SAVE_EVERY_SEC."""
+        person.last_seen = now
+        if changed or now - person.saved_at >= _SAVE_EVERY_SEC:
+            self._save(person, now)
 
     def _load(self) -> None:
         for directory in sorted(self._dir.glob("person_*")):
@@ -145,7 +155,8 @@ class Roster:
             if person is not None:
                 self._people[person.id] = person
 
-    def _save(self, person: Person) -> None:
+    def _save(self, person: Person, now: float) -> None:
+        person.saved_at = now
         directory = self._dir / person.id
         directory.mkdir(parents=True, exist_ok=True)
         vectors: dict[str, np.ndarray] = {"faces": np.stack(person.faces)} if person.faces else {}

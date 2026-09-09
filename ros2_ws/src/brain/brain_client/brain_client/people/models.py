@@ -4,8 +4,8 @@
 
 OpenCV's HOG pedestrian detector needs no file at all, so a checkout with no
 weights still finds people and simply never names them. YuNet and SFace are
-fetched once into ``data/models/people/``; OSNet is the ONNX export already in
-the tree. Every heavyweight import (onnxruntime) happens inside the model that
+fetched once into ``data/models/people/``, pinned to a revision and a digest;
+OSNet is the ONNX export in the tree under ``workspace/innate_skills/models``. Every heavyweight import (onnxruntime) happens inside the model that
 needs it, so a missing library costs one embedder rather than the node.
 
 PURE module: cv2 and numpy, no ROS.
@@ -13,6 +13,7 @@ PURE module: cv2 and numpy, no ROS.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import urllib.error
 import urllib.request
@@ -26,11 +27,31 @@ import numpy as np
 
 from brain_client.common.script_paths import get_innate_os_root
 
-_ZOO = "https://github.com/opencv/opencv_zoo/raw/main/models"
+_ZOO = "https://github.com/opencv/opencv_zoo/raw/47534e27c9851bb1128ccc0102f1145e27f23f98/models"
 _DOWNLOAD_TIMEOUT_SEC = 30.0
-_YUNET = ("face_detection_yunet_2023mar.onnx", f"{_ZOO}/face_detection_yunet/face_detection_yunet_2023mar.onnx")
-_SFACE = ("face_recognition_sface_2021dec.onnx", f"{_ZOO}/face_recognition_sface/face_recognition_sface_2021dec.onnx")
 _OSNET_RELATIVE = Path("workspace/innate_skills/models/osnet_x0_25_msmt17.onnx")
+
+
+@dataclass(frozen=True)
+class ModelFile:
+    """One downloadable weight file, pinned to a revision and a digest so the
+    cache can never hold something other than what was reviewed."""
+
+    filename: str
+    url: str
+    sha256: str
+
+
+_YUNET = ModelFile(
+    "face_detection_yunet_2023mar.onnx",
+    f"{_ZOO}/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+    "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+)
+_SFACE = ModelFile(
+    "face_recognition_sface_2021dec.onnx",
+    f"{_ZOO}/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+    "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+)
 
 Box = tuple[float, float, float, float]
 """``(ymin, xmin, ymax, xmax)`` of the frame, normalized — resolution-free."""
@@ -198,23 +219,30 @@ def load_models(*, allow_download: bool = True) -> Models:
     )
 
 
-def _fetch(asset: tuple[str, str], directory: Path, *, allow_download: bool) -> Path | None:
-    filename, url = asset
-    path = directory / filename
-    if path.exists():
+def _fetch(model: ModelFile, directory: Path, *, allow_download: bool) -> Path | None:
+    """The file on disk with the digest it was pinned at, fetched once if it
+    is missing or corrupt. None when it cannot be had — the caller degrades."""
+    path = directory / model.filename
+    if path.exists() and _digest(path.read_bytes()) == model.sha256:
         return path
     if not allow_download:
         return None
     try:
         directory.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT_SEC) as response:
+        with urllib.request.urlopen(model.url, timeout=_DOWNLOAD_TIMEOUT_SEC) as response:
             payload = response.read()
+        if _digest(payload) != model.sha256:
+            return None
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_bytes(payload)
         os.replace(tmp, path)
     except (urllib.error.URLError, OSError, ValueError):
         return None
     return path
+
+
+def _digest(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
 
 
 def crop(frame_bgr: np.ndarray, box: Box) -> np.ndarray:
