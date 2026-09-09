@@ -656,12 +656,14 @@ class PickAnyObject(Skill):
     def _turn_at_height(
         self, x: float, y: float, z_from: float, roll: float, pitch: float, yaw: float
     ) -> list[Waypoint]:
-        """Rise straight (still in the servo's unrolled pose) to roll_z, then
-        turn in place; the descent below is straight and already aligned."""
+        """Go straight (still in the servo's unrolled pose) to roll_z — the
+        one turn height _grasp_orientation reach-checked, whether the servo
+        stopped below it or bailed above — then turn in place; the descent
+        below is straight and already aligned."""
         p = self._p
-        z = max(z_from, p["roll_z"])
+        z = p["roll_z"]
         wps: list[Waypoint] = []
-        if z > z_from + 1e-6:
+        if abs(z - z_from) > 1e-6:
             wps.append(Waypoint(x, y, z, pitch=p["wrist_pitch"], duration=p["orient_s"]))
         wps.append(Waypoint(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=p["orient_s"]))
         return wps
