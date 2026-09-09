@@ -169,7 +169,8 @@ void MarsArmNode::loadSelfCollisionConfig() {
     this->declare_parameter("self_collision.enabled", true);
     this->declare_parameter("self_collision.margin", 0.015);
     this->declare_parameter("self_collision.slow_margin", 0.070);
-    this->declare_parameter("self_collision.bisect_steps", 8);
+    this->declare_parameter("self_collision.step_rad", 0.04);
+    this->declare_parameter("self_collision.max_steps", 32);
     // Flat [min_x,min_y,min_z, max_x,max_y,max_z] sextets in base_link — ROS
     // parameters have no nested arrays.
     this->declare_parameter("self_collision.boxes", std::vector<double>{});
@@ -178,7 +179,8 @@ void MarsArmNode::loadSelfCollisionConfig() {
     self_collision_.enabled = this->get_parameter("self_collision.enabled").as_bool();
     self_collision_.margin = this->get_parameter("self_collision.margin").as_double();
     self_collision_.slow_margin = this->get_parameter("self_collision.slow_margin").as_double();
-    self_collision_.bisect_steps = static_cast<int>(this->get_parameter("self_collision.bisect_steps").as_int());
+    self_collision_.step_rad = this->get_parameter("self_collision.step_rad").as_double();
+    self_collision_.max_steps = static_cast<int>(this->get_parameter("self_collision.max_steps").as_int());
 
     const auto flat = this->get_parameter("self_collision.boxes").as_double_array();
     if (flat.size() % 6 != 0) {
@@ -208,10 +210,10 @@ void MarsArmNode::loadSelfCollisionConfig() {
     for (const auto& b : self_collision_.boxes)
         RCLCPP_INFO(this->get_logger(), "  keepout box x[%.3f %.3f] z[%.3f %.3f] pad %.0f mm", b.min_x, b.max_x,
                     b.min_z, b.max_z, b.pad * 1000.0);
-    RCLCPP_INFO(this->get_logger(), "Body keepout: %s, %zu boxes, stop %.0f mm, ease from %.0f mm, %d bisection steps",
+    RCLCPP_INFO(this->get_logger(), "Body keepout: %s, %zu boxes, stop %.0f mm, ease from %.0f mm, %.0f mrad steps (max %d)",
                 self_collision_.enabled ? "on" : "OFF", self_collision_.boxes.size(),
                 self_collision_.margin * 1000.0, self_collision_.slow_margin * 1000.0,
-                self_collision_.bisect_steps);
+                self_collision_.step_rad * 1000.0, self_collision_.max_steps);
 }
 
 rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(

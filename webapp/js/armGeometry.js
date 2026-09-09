@@ -24,6 +24,10 @@ const L3_X = 0.1375, L3_Z = 0.0045; // joint3 -> joint4
 const L45_X = 0.110838; // joint4 -> tool
 const WRIST_FROM_ELBOW = 0.063; // joint4 -> joint6
 
+// Path checks sample every this many radians of the widest-moving joint.
+const PATH_STEP_RAD = 0.04;
+const MAX_PATH_STEPS = 32;
+
 // The joint_2 axis in base_link: joint1's origin plus joint2's.
 const SHOULDER_X = 0.086, SHOULDER_Y = -0.05285, SHOULDER_Z = 0.0845;
 
@@ -125,6 +129,28 @@ export function poseHitsBody(rads, margin) {
     for (const box of BODY_BOXES) {
       if (segmentHitsBox(pts[i], pts[i + 1], box, Math.max(margin, box.pad))) return true;
     }
+  }
+  return false;
+}
+
+/**
+ * Whether MOVING from one pose to another passes through the body, rather than
+ * merely ending inside it. Two poses can both be clear with the sweep between
+ * them crossing a corner; at 60 Hz a fast joint covers real angle per round, so
+ * checking only where it landed lets the arm step straight through.
+ * Sampled every PATH_STEP_RAD along the widest-moving joint, so a long sweep is
+ * checked as finely as a short one — a fixed step count leaves a fast move too
+ * coarse to see a corner it passed through.
+ * @param {number[]} a @param {number[]} b @param {number} margin
+ * @returns {boolean}
+ */
+export function pathHitsBody(a, b, margin) {
+  let widest = 0;
+  for (let j = 0; j < 4; j++) widest = Math.max(widest, Math.abs(b[j] - a[j]));
+  const steps = Math.min(MAX_PATH_STEPS, Math.max(1, Math.ceil(widest / PATH_STEP_RAD)));
+  for (let k = 0; k <= steps; k++) {
+    const t = k / steps;
+    if (poseHitsBody(a.map((v, i) => v + t * (b[i] - v)), margin)) return true;
   }
   return false;
 }

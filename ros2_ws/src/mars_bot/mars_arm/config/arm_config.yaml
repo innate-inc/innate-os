@@ -65,7 +65,12 @@
       enabled: true
       margin: 0.015        # floor under every box's own pad
       slow_margin: 0.070   # inside this the arm eases off, decelerating into the stop
-      bisect_steps: 8      # resolution of the walk back to a clear pose
+      # A path is sampled every step_rad along its widest joint, so a long sweep
+      # is checked as finely as a short one. A fixed step count divided whatever
+      # interval it was given, which left a fast move too coarse to see a corner
+      # it passed through.
+      step_rad: 0.04
+      max_steps: 32
       boxes: [
         # chassis: origin (-0.0587, 0, 0.0838), size 0.1878 x 0.182 x 0.1676
         -0.1526, -0.0910,  0.0000,   0.0352,  0.0910,  0.1676,

@@ -32,7 +32,7 @@ import {
   LEADER_CURRENT_CEILING_MA,
   PARAMETER_DOUBLE_ARRAY,
 } from "./constants.js";
-import { bodyClearance, poseHitsBody, ticksToRads } from "./armGeometry.js";
+import { bodyClearance, pathHitsBody, poseHitsBody, ticksToRads } from "./armGeometry.js";
 import { OPERATING_MODE_CURRENT_POSITION } from "./dynamixel.js";
 import { readBudget, onBudgetChange } from "./leaderBudget.js";
 import {
@@ -398,7 +398,10 @@ export class LeaderGuard {
     const rads = ticksToRads(positions);
     const clearance = bodyClearance(rads);
     const margin = this.#demandedMargin(clearance, performance.now());
-    const hit = poseHitsBody(rads, margin);
+    // The sweep since the last clear pose, not just where the arm is now: a fast
+    // move covers real angle between rounds and can straddle a corner.
+    const from = this.#lastClear ? ticksToRads(this.#lastClear) : null;
+    const hit = from ? pathHitsBody(from, rads, margin) : poseHitsBody(rads, margin);
     if (!hit) {
       this.#lastClear = positions.slice();
       return { hit: false, target: null, clearance, blamed: null };

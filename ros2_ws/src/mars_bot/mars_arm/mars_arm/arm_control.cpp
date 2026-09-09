@@ -398,18 +398,27 @@ std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>
     // and take the furthest point that is still clear. The arm slides up to the
     // surface rather than freezing or snapping.
     if (command_data.size() >= 4 && self_collision_.enabled && self_collision_.valid()) {
-        const bool hits = poseHitsBody(command_data[0], command_data[1], command_data[2], command_data[3],
-                                       self_collision_);
+        const std::array<double, 4> asked = {command_data[0], command_data[1], command_data[2], command_data[3]};
+        // The SWEEP from the last accepted pose, not just where it ends up.
+        const bool hits = have_safe_pose_
+                              ? pathHitsBody(last_safe_pose_.data(), asked.data(), self_collision_)
+                              : poseHitsBody(asked[0], asked[1], asked[2], asked[3], self_collision_);
         if (hits && have_safe_pose_) {
             std::array<double, 4> safe = last_safe_pose_;
             std::array<double, 4> want = {command_data[0], command_data[1], command_data[2], command_data[3]};
-            double lo = 0.0, hi = 1.0;  // lo is known clear, hi known blocked
-            for (int step = 0; step < self_collision_.bisect_steps; ++step) {
-                const double mid = 0.5 * (lo + hi);
+            // Walk forward and stop at the FIRST blocked step, rather than
+            // bisecting. The infeasible set is not convex — rounding a corner,
+            // the midpoint can be clear while a point before it is not — and a
+            // bisection would happily settle past a collision it never probed,
+            // which is how the arm clipped the top corner on its way up.
+            double lo = 0.0;
+            const int steps = pathSteps(safe.data(), want.data(), self_collision_);
+            for (int step = 1; step <= steps; ++step) {
+                const double t = static_cast<double>(step) / steps;
                 std::array<double, 4> probe;
-                for (int j = 0; j < 4; ++j) probe[j] = safe[j] + mid * (want[j] - safe[j]);
-                if (poseHitsBody(probe[0], probe[1], probe[2], probe[3], self_collision_)) hi = mid;
-                else lo = mid;
+                for (int j = 0; j < 4; ++j) probe[j] = safe[j] + t * (want[j] - safe[j]);
+                if (poseHitsBody(probe[0], probe[1], probe[2], probe[3], self_collision_)) break;
+                lo = t;
             }
             for (int j = 0; j < 4; ++j) command_data[j] = safe[j] + lo * (want[j] - safe[j]);
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,

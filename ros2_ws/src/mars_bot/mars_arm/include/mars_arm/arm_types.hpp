@@ -90,7 +90,11 @@ struct SelfCollisionConfig {
     std::vector<BodyBox> boxes;
     double margin = 0.015;       // floor under every box's own pad
     double slow_margin = 0.070;  // soft zone: motion is scaled back inside this
-    int bisect_steps = 8;        // resolution of the walk back toward a safe pose
+    // Path checks step by ANGLE, so a long sweep is sampled as finely as a short
+    // one. A fixed step count divides whatever interval it is given, which left
+    // a fast move sampled too coarsely to see a corner it passed through.
+    double step_rad = 0.04;
+    int max_steps = 32;
     bool enabled = true;
     bool valid() const { return !boxes.empty(); }
 };
@@ -176,6 +180,29 @@ inline bool poseHitsBody(double q1, double q2, double q3, double q4, const SelfC
     for (int i = 0; i + 1 < ArmPlanarPoints::kCount; ++i)
         for (const auto& b : c.boxes)
             if (segmentHitsBox(pts[i], pts[i + 1], b, std::max(c.margin, b.pad))) return true;
+    return false;
+}
+
+// Whether MOVING from one pose to another passes through the body, as opposed
+// to merely ending inside it. Two poses can both be clear with the sweep between
+// them crossing a corner — at 200 Hz a fast joint covers real distance per tick,
+// and checking only endpoints lets the arm step straight through.
+// Steps needed to sample a->b at the configured angular resolution.
+inline int pathSteps(const double a[4], const double b[4], const SelfCollisionConfig& c) {
+    double widest = 0.0;
+    for (int j = 0; j < 4; ++j) widest = std::max(widest, std::fabs(b[j] - a[j]));
+    if (c.step_rad <= 0.0) return 1;
+    return std::clamp(static_cast<int>(std::ceil(widest / c.step_rad)), 1, c.max_steps);
+}
+
+inline bool pathHitsBody(const double a[4], const double b[4], const SelfCollisionConfig& c) {
+    const int steps = pathSteps(a, b, c);
+    for (int k = 0; k <= steps; ++k) {
+        const double t = static_cast<double>(k) / steps;
+        const double q1 = a[0] + t * (b[0] - a[0]), q2 = a[1] + t * (b[1] - a[1]);
+        const double q3 = a[2] + t * (b[2] - a[2]), q4 = a[3] + t * (b[3] - a[3]);
+        if (poseHitsBody(q1, q2, q3, q4, c)) return true;
+    }
     return false;
 }
 
