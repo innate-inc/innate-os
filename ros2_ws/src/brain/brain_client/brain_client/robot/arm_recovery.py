@@ -28,9 +28,13 @@ from __future__ import annotations
 import json
 import threading
 import time
+from typing import TYPE_CHECKING
 
 from mars_msgs.msg import ArmStatus
 from std_srvs.srv import Trigger
+
+if TYPE_CHECKING:
+    from rclpy.client import Client
 
 ARM_STATUS_TOPIC = "/mars/arm/status"
 FIX_ERROR_SERVICE = "/mars/arm/fix_error"
@@ -43,7 +47,7 @@ _HARDWARE_ERROR_MARKER = "hardware error"
 _MAX_ATTEMPTS_PER_EPISODE = 3
 _RETRY_GAP_SEC = 10.0  # between attempts while the error persists
 _FIX_TIMEOUT_SEC = 25.0  # reboot walks the servos and "takes a few seconds"
-_REST_TIMEOUT_SEC = 12.0  # lift + fold is ~5 s
+_REST_TIMEOUT_SEC = 15.0  # a fold from the floor is up to ~9 s
 
 
 class ArmRecovery:
@@ -151,9 +155,9 @@ class ArmRecovery:
         response, failure = self._call(self._rest_client, REST_SERVICE, _REST_TIMEOUT_SEC)
         if response is None:
             return False, failure
-        return response.success, response.message
+        return response.success, response.message or ("arm at rest" if response.success else "rest fold failed")
 
-    def _call(self, client, service: str, timeout_sec: float):
+    def _call(self, client: Client, service: str, timeout_sec: float) -> tuple[Trigger.Response | None, str]:
         """Call a Trigger service and wait (the main spin loop resolves the
         future); the response, or None with the reason."""
         if not client.service_is_ready():

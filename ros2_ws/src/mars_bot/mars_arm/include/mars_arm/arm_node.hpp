@@ -51,11 +51,14 @@ class MarsArmNode : public rclcpp::Node {
     void reapplyGoalCurrentLocked(int servo_id);
     void configureServosLocked(bool enable_torque = true);
     void syncTargetToMotorPositions();
+    void holdRebootedJointsLocked(const std::vector<int>& servo_ids);
 
     // ── Control loop (arm_control.cpp) ──────────────────────────────────
     void controlTimerCallback();
     void recordLoopTiming(std::array<std::chrono::steady_clock::time_point, 9>& ts);
     std::vector<int> applyLimitsAndConvertToEncoder(std::vector<double>& command_data);
+    double shoulderMinLimit(double yaw) const;
+    double clampToJointRange(size_t joint, double rad) const;
 
     // ── Service & topic callbacks (arm_services.cpp) ────────────────────
     void armCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
@@ -95,6 +98,8 @@ class MarsArmNode : public rclcpp::Node {
     // obstacle; runs after boot and whenever arm torque comes back on.
     RestOutcome foldToRest(const char* trigger);
     RestOutcome runRestFold(const char* trigger);
+    bool liftOffTheFloor(const std::vector<double>& measured, double grip, std::string& stopped);
+    bool foldStage(const std::vector<double>& target, double duration, std::string& stopped);
     void armRestCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                          std::shared_ptr<std_srvs::srv::Trigger::Response> response);
     bool planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,

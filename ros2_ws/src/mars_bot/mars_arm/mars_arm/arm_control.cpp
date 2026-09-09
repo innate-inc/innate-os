@@ -210,18 +210,9 @@ void MarsArmNode::controlTimerCallback() {
                 }
 
                 // SCHEDULED: interpolate near/far by arm extension for joints 1-4
-                constexpr double L2_x = 0.02825, L2_z = 0.12125;
-                constexpr double L3_x = 0.1375, L3_z = 0.0045;
-                constexpr double L45_x = 0.110838;
                 constexpr double kMaxReach = 0.37291;
 
-                double q2 = positions_rad[1], q3 = positions_rad[2], q4 = positions_rad[3];
-                double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
-
-                double ee_x = L2_x * std::cos(a2) + L2_z * std::sin(a2) + L3_x * std::cos(a23) + L3_z * std::sin(a23) +
-                              L45_x * std::cos(a234);
-
-                double horiz_reach = std::abs(ee_x);
+                double horiz_reach = std::abs(gripperTip(positions_rad[1], positions_rad[2], positions_rad[3]).x);
                 double extension_linear = std::clamp((horiz_reach / kMaxReach - 0.1) / 0.9, 0.0, 1.0);
                 double extension = extension_linear * extension_linear;
 
@@ -362,43 +353,41 @@ void MarsArmNode::recordLoopTiming(std::array<std::chrono::steady_clock::time_po
                           robot_->last_write_txrx_us);
 }
 
+// The shoulder's back limit as a function of base yaw: fully clear at the
+// sides, held at the body-clearance angle through the middle, ramping in
+// between.
+double MarsArmNode::shoulderMinLimit(double yaw) const {
+    const double clear_limit = -joint_configs_[1].max_pos_rad;
+    if (yaw < kYawRestrictedMin || yaw >= kYawRestrictedMax) {
+        return clear_limit;
+    }
+    if (yaw < -1.0) {
+        return kShoulderClearanceRad +
+               (-1.0 - yaw) / (-1.0 - kYawRestrictedMin) * (clear_limit - kShoulderClearanceRad);
+    }
+    if (yaw < 1.0) {
+        return kShoulderClearanceRad;
+    }
+    return kShoulderClearanceRad + (yaw - 1.0) / (kYawRestrictedMax - 1.0) * (clear_limit - kShoulderClearanceRad);
+}
+
+double MarsArmNode::clampToJointRange(size_t joint, double rad) const {
+    const auto& c = joint_configs_[joint];
+    if (flippedJoint(joint)) {
+        return std::clamp(rad, -c.max_pos_rad, -c.min_pos_rad);
+    }
+    return std::clamp(rad, c.min_pos_rad, c.max_pos_rad);
+}
+
 std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>& command_data) {
-    // ===== INTELLIGENT JOINT LIMITS =====
     if (command_data.size() >= 2) {
-        double joint1_pos = command_data[0];
-        double joint2_pos = command_data[1];
-
-        const auto& joint2_config = joint_configs_[1];
-        double config_min = joint2_config.min_pos_rad;
-        double config_max = joint2_config.max_pos_rad;
-
-        double joint2_min_limit = -config_max;
-        double joint2_max_limit = -config_min;
-
-        const double original_min_limit = -config_max;
-        const double restricted_limit = -0.5;
-
-        if (joint1_pos < -1.35) {
-            // Negative side clear — no restriction
-        } else if (joint1_pos < -1.0) {
-            double t = -(joint1_pos - (-1.0)) / (-1.0 - (-1.35));
-            double interpolated_limit = restricted_limit + t * (original_min_limit - restricted_limit);
-            joint2_min_limit = std::max(joint2_min_limit, interpolated_limit);
-        } else if (joint1_pos < 1.0) {
-            joint2_min_limit = std::max(joint2_min_limit, restricted_limit);
-        } else if (joint1_pos < 1.25) {
-            double t = (joint1_pos - 1.0) / (1.25 - 1.0);
-            double interpolated_limit = restricted_limit + t * (original_min_limit - restricted_limit);
-            joint2_min_limit = std::max(joint2_min_limit, interpolated_limit);
-        }
-
-        if (joint2_pos < joint2_min_limit) {
+        const double min_limit = shoulderMinLimit(command_data[0]);
+        if (command_data[1] < min_limit) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                 "Joint2 limited due to joint1=%.3f: requested %.3f, clamped to %.3f", joint1_pos,
-                                 joint2_pos, joint2_min_limit);
+                                 "Joint2 limited due to joint1=%.3f: requested %.3f, clamped to %.3f", command_data[0],
+                                 command_data[1], min_limit);
         }
-
-        command_data[1] = std::clamp(joint2_pos, joint2_min_limit, joint2_max_limit);
+        command_data[1] = std::clamp(command_data[1], min_limit, -joint_configs_[1].min_pos_rad);
     }
 
     // Direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)

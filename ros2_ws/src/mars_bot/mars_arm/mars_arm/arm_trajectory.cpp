@@ -198,33 +198,30 @@ bool MarsArmNode::guardTripped(TrajectoryGuard& guard) {
         measured = latest_joint_positions_;
     }
     const double waited_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - guard.started).count();
-    int worst_joint = -1;
-    double worst_error = 0.0;
+    int blocked_joint = -1;
+    double blocked_error = 0.0;
     for (size_t j = 0; j < kArmJoints && j < measured.size(); ++j) {
         const double error = std::abs(measured[j] - written[j]);
         if (error <= guard.max_error_rad) {
             guard.locked_on[j] = true;
+            guard.strikes[j] = 0;
             continue;
         }
         if (!guard.locked_on[j] && waited_s < kContactLockOnTimeoutS) {
             continue;
         }
-        if (error > worst_error) {
-            worst_error = error;
-            worst_joint = static_cast<int>(j);
+        if (++guard.strikes[j] >= kContactStrikes && error > blocked_error) {
+            blocked_error = error;
+            blocked_joint = static_cast<int>(j);
         }
     }
-    if (worst_joint < 0) {
-        guard.strikes = 0;
+    if (blocked_joint < 0) {
         return false;
     }
-    if (++guard.strikes < kContactStrikes) {
-        return false;
-    }
-    guard.blocked_joint = worst_joint;
+    guard.blocked_joint = blocked_joint;
     std::ostringstream reason;
-    reason << "joint " << worst_joint + 1 << " met resistance (" << std::fixed << std::setprecision(2) << worst_error
-           << " rad behind its command); holding the arm where it is";
+    reason << "joint " << blocked_joint + 1 << " met resistance (" << std::fixed << std::setprecision(2)
+           << blocked_error << " rad behind its command); holding the arm where it is";
     guard.stop_reason = reason.str();
     return true;
 }
@@ -286,23 +283,58 @@ RestOutcome MarsArmNode::runRestFold(const char* trigger) {
         return {true, "arm already at rest"};
     }
     RCLCPP_INFO(this->get_logger(), "Folding the arm to rest (%s)", trigger);
-    if (measured[3] - rest[3] > kHangingWristRad) {
-        std::vector<double> lift = measured;
-        lift[1] = kLiftShoulderRad;
-        lift[2] = kLiftElbowRad;
-        lift[5] = grip;
-        RCLCPP_INFO(this->get_logger(), "Lifting the hanging gripper clear of the ground first");
-        TrajectoryGuard guard{kRestContactErrorRad};
-        if (!planAndExecuteTrajectory(lift, kRestLiftDurationS, GainMode::SCHEDULED, &guard)) {
-            return {false, "rest lift stopped: " + guard.stop_reason};
-        }
+    std::string stopped;
+    if (gripperTip(measured[1], measured[2], measured[3]).z <= kGripperTipLowM &&
+        !liftOffTheFloor(measured, grip, stopped)) {
+        return {false, "rest lift stopped: " + stopped};
     }
     rest[5] = grip;
-    TrajectoryGuard guard{kRestContactErrorRad};
-    if (planAndExecuteTrajectory(rest, kRestFoldDurationS, GainMode::SCHEDULED, &guard)) {
+    const bool shoulder_blocked = shoulderMinLimit(measured[0]) > rest[1];
+    if (shoulder_blocked) {
+        std::vector<double> clear = rest;
+        clear[1] = kShoulderClearanceRad;
+        if (!foldStage(clear, kRestFoldDurationS, stopped)) {
+            return {false, "rest fold stopped: " + stopped};
+        }
+    }
+    if (foldStage(rest, shoulder_blocked ? kRestShoulderDurationS : kRestFoldDurationS, stopped)) {
         return {true, "arm folded to rest"};
     }
-    return {false, "rest fold stopped: " + guard.stop_reason};
+    return {false, "rest fold stopped: " + stopped};
+}
+
+// See kGripperTipLowM: the tip goes up before anything slides along the floor.
+bool MarsArmNode::liftOffTheFloor(const std::vector<double>& measured, double grip, std::string& stopped) {
+    std::vector<double> lift = measured;
+    lift[5] = grip;
+    const double shoulder = std::max(kLiftShoulderRad, shoulderMinLimit(measured[0]));
+    const double pitch = measured[1] + measured[2] + measured[3];  // gripper angle below horizontal
+    if (pitch < kFlatGripperRad && measured[1] > shoulder + kAtRestRad) {
+        lift[1] = shoulder;
+        RCLCPP_INFO(this->get_logger(), "Pivoting the flat gripper up off the ground first");
+        if (!foldStage(lift, kRestShoulderDurationS, stopped)) {
+            return false;
+        }
+    } else if (pitch >= kFlatGripperRad && pitch < kWristLevelMaxPitchRad) {
+        lift[3] = clampToJointRange(3, measured[3] - pitch);
+        RCLCPP_INFO(this->get_logger(), "Levelling the gripper to lift its tip off the ground first");
+        if (!foldStage(lift, kRestLevelDurationS, stopped)) {
+            return false;
+        }
+    }
+    lift[1] = shoulder;
+    lift[2] = kLiftElbowRad;
+    RCLCPP_INFO(this->get_logger(), "Lifting the gripper clear of the ground");
+    return foldStage(lift, kRestLiftDurationS, stopped);
+}
+
+bool MarsArmNode::foldStage(const std::vector<double>& target, double duration, std::string& stopped) {
+    TrajectoryGuard guard{kRestContactErrorRad};
+    if (planAndExecuteTrajectory(target, duration, GainMode::SCHEDULED, &guard)) {
+        return true;
+    }
+    stopped = guard.stop_reason;
+    return false;
 }
 
 void MarsArmNode::armRestCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,

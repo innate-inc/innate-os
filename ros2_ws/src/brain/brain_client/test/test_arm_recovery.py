@@ -108,7 +108,7 @@ def test_recover_final_failure_tells_model_to_stand_down():
     assert any("giving up" in c for c in log["chat"])
 
 
-def test_call_fix_error_paths():
+def test_call_service_paths():
     r, _ = make_recovery()
     assert r._call_fix_error() == (False, "/mars/arm/fix_error unavailable")
 
@@ -125,5 +125,9 @@ def test_call_fix_error_paths():
     assert r._call_fix_error() == (False, "dynamixel port wedged")
 
     assert r._call_rest() == (False, "/mars/arm/rest unavailable")
+    r._rest_client = client("arm folded to rest")
+    assert r._call_rest() == (True, "arm folded to rest")
+    r._rest_client = client("")  # the sim's no-op reply
+    assert r._call_rest() == (True, "arm at rest")
     r._rest_client = client("rest fold stopped: joint 2 met resistance", success=False)
     assert r._call_rest() == (False, "rest fold stopped: joint 2 met resistance")

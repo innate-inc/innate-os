@@ -42,8 +42,9 @@ HOLDING_J6 = (0.05, 0.80)
 VERIFY_BACKUP_M = 0.15
 
 # Every arm move made while holding passes tolerance_xy/z=None: the verified
-# path answers a missed pose with Manipulation.recover, which reboots the
-# servos torque-off — the fingers open and the object drops.
+# path answers a missed pose with Manipulation.recover, which reboots any
+# tripped servo — a tripped claw has already let go, and a rebooted one comes
+# back with no grip preload — so a miss is judged by the skill instead.
 
 # A detection touching the frame top has its rim cropped: any height read off
 # it is meaningless.

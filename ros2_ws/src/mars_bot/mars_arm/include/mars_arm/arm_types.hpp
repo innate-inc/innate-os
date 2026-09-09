@@ -30,7 +30,8 @@ static constexpr int kDecayMaxLoad = 100;
 // Rest fold. The guard trips when an arm joint sits this far behind the
 // command the control loop wrote for it (position, not load: lifting the arm
 // off the floor loads the shoulder like a light obstacle would, but a servo
-// that can lift never lags) for this many consecutive 10 ms waypoints.
+// that can lift never lags) for this many consecutive waypoints (10 ms each
+// at the configured 100 Hz).
 // Unobstructed folds from the floor peak just under 0.10 rad on hardware. A
 // joint is guarded once it has tracked within the limit, or after the lock-on
 // timeout: a limp shoulder falls ~0.5 rad past its software limit and needs a
@@ -40,18 +41,58 @@ static constexpr double kRestContactErrorRad = 0.20;
 static constexpr int kContactStrikes = 5;
 static constexpr double kContactLockOnTimeoutS = 1.0;
 static constexpr double kAtRestRad = 0.05;
-// A gripper hanging this far below its rest pitch is usually carrying the
-// collapsed arm's weight on its tip, and the wrist servo stalls at its
-// current limit (joint 4 at 1.75 A on hardware) trying to pitch it up. So
-// the shoulder and elbow lift the wrist clear first (forearm level, wrist
-// ~10 cm above the shoulder, gripper still hanging).
-static constexpr double kHangingWristRad = 0.5;
+// A gripper tip at or below shoulder height is on the floor, and loop carpet
+// hooks the fingertips the moment they slide, so the tip goes up before
+// anything moves along the floor. A gripper lying nearly flat pivots up with
+// the whole arm about the shoulder: its wrist is on the floor and cannot
+// lift it (the wrist servo pulled 1.3 A trying). One pointing down
+// moderately levels about the wrist, which then carries only the gripper. A
+// steep one lifts as is. Then the shoulder and elbow raise the wrist (forearm
+// level, ~10 cm above the shoulder), slower than the fold: raising an
+// extended arm is the heaviest move here, and at 1.5 s the shoulder fell
+// 0.22 rad behind at a quarter of its torque.
+static constexpr double kGripperTipLowM = 0.0;
+static constexpr double kFlatGripperRad = 0.3;
+static constexpr double kWristLevelMaxPitchRad = 0.785;
+static constexpr double kRestLevelDurationS = 1.0;
 static constexpr double kLiftShoulderRad = -0.9;
 static constexpr double kLiftElbowRad = 0.9;
-static constexpr double kRestLiftDurationS = 1.5;
+static constexpr double kRestLiftDurationS = 2.5;
+// The shoulder may only swing back past this while the base yaw is outside
+// (kYawRestrictedMin, kYawRestrictedMax); nearer the centre the arm hits the
+// body. shoulderMinLimit enforces it on every command, and a fold that starts
+// inside the zone holds the shoulder here until the base has yawed clear —
+// letting the clamp release it mid-sweep steps the shoulder faster than it
+// can follow, which the guard reads as contact.
+static constexpr double kShoulderClearanceRad = -0.5;
+static constexpr double kYawRestrictedMin = -1.35;
+static constexpr double kYawRestrictedMax = 1.25;
+static constexpr double kRestShoulderDurationS = 1.5;
 // j1-j5. The gripper (j6) is never guarded or retargeted: a gripping claw's
 // standing position error IS the grip force.
 static constexpr size_t kArmJoints = 5;
+
+// Joints whose /mars/arm/state sign is the servo's negated (0-based index).
+inline bool flippedJoint(size_t joint) {
+    return joint == 1 || joint == 2 || joint == 3 || joint == 5;
+}
+
+// Gripper tip in the arm's plane, metres from the shoulder joint (x forward,
+// z up), from the upper arm, forearm and wrist-to-tip link lengths.
+struct PlanarPoint {
+    double x;
+    double z;
+};
+inline PlanarPoint gripperTip(double q2, double q3, double q4) {
+    constexpr double L2_x = 0.02825, L2_z = 0.12125;
+    constexpr double L3_x = 0.1375, L3_z = 0.0045;
+    constexpr double L45_x = 0.110838;
+    const double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
+    return {L2_x * std::cos(a2) + L2_z * std::sin(a2) + L3_x * std::cos(a23) + L3_z * std::sin(a23) +
+                L45_x * std::cos(a234),
+            -L2_x * std::sin(a2) + L2_z * std::cos(a2) - L3_x * std::sin(a23) + L3_z * std::cos(a23) -
+                L45_x * std::sin(a234)};
+}
 
 inline bool isX330(const std::string& motor_type) {
     return motor_type.find("330") != std::string::npos;
@@ -103,7 +144,7 @@ struct TrajectoryGuard {
     double max_error_rad;
     std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
     std::array<bool, kArmJoints> locked_on{};
-    int strikes = 0;
+    std::array<int, kArmJoints> strikes{};
     int blocked_joint = -1;  // 0-based; set when a joint met resistance
     std::string stop_reason;
 };

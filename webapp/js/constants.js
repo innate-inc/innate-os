@@ -209,14 +209,15 @@ export const ARM_REBOOT_TIMEOUT_MS = 20_000;
 
 // One confirm for every reboot entry point (arm panel, protection alert).
 export const ARM_REBOOT_CONFIRM =
-  "Reboot the arm servos? Any running task stops, the head recenters to level, and torque re-enables automatically once the servos come back.";
+  "Reboot the arm servos? Any running task stops, the head recenters to level, and torque re-enables automatically once the servos come back, after which the arm folds to its rest pose.";
 
 // Enable/disable torque on the 6 arm servos (std_srvs/Trigger). torque_on syncs
 // the target to the current pose (no snap), then folds the arm to its rest
-// pose — ~3 s, stopping early if a joint meets an obstacle — before replying.
-// A reboot leaves the arm torque-off.
+// pose — up to ~9 s from the floor, stopping early if a joint meets an
+// obstacle — before replying. A reboot leaves the arm torque-off.
 export const ARM_TORQUE_ON_SERVICE = "/mars/arm/torque_on";
 export const ARM_TORQUE_OFF_SERVICE = "/mars/arm/torque_off";
+export const ARM_TORQUE_ON_TIMEOUT_MS = 15_000;
 
 // Arm health/torque state (mars_msgs/ArmStatus → {is_ok, error,
 // is_torque_enabled}), published ~0.2 Hz. Drives the live torque toggle.

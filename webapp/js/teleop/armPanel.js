@@ -18,6 +18,7 @@ import {
   LEADER_POSITIONS_TOPIC,
   ARM_REBOOT_CONFIRM,
   ARM_TORQUE_ON_SERVICE,
+  ARM_TORQUE_ON_TIMEOUT_MS,
   ARM_TORQUE_OFF_SERVICE,
   ARM_STATUS_TOPIC,
 } from "../constants.js";
@@ -423,7 +424,7 @@ function buildArmServices(rosClient) {
     const prev = torqueOn;
     // Optimistic: show the new state right away, then confirm/revert on the
     // service result. torque_on walks 6 servos and then folds the arm to rest
-    // (~5 s) before it replies, so waiting for the reply would feel dead.
+    // (up to ~9 s) before it replies, so waiting for the reply would feel dead.
     torqueOn = turnOn;
     toggling = true;
     render();
@@ -431,14 +432,16 @@ function buildArmServices(rosClient) {
       const res = await rosClient.callService(
         turnOn ? ARM_TORQUE_ON_SERVICE : ARM_TORQUE_OFF_SERVICE,
         {},
+        turnOn ? ARM_TORQUE_ON_TIMEOUT_MS : undefined,
       );
       if (res && res.success === false) {
         torqueOn = prev; // revert — the robot rejected it
         flash(res.message || "Torque toggle failed", true);
       } else {
         torqueOn = turnOn; // re-assert in case a stale status arrived mid-call
-        // The reply says whether the rest fold completed or stopped short.
-        if (turnOn && res && res.message) flash(res.message, false);
+        // The reply says whether the rest fold completed or stopped short
+        // ("... stopped: joint 2 met resistance ..."), which deserves the warn style.
+        if (turnOn && res && res.message) flash(res.message, res.message.includes("stopped"));
       }
     } catch (err) {
       torqueOn = prev; // revert on timeout / disconnect

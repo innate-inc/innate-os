@@ -25,6 +25,7 @@ drops a held object. Motions therefore carry the last *commanded* j6 (the
 standing grip target) by default — grip once, then move freely.
 """
 
+import json
 import math
 import threading
 import time
@@ -37,6 +38,7 @@ import rclpy.executors
 from geometry_msgs.msg import PoseStamped, Twist
 from mars_msgs.msg import ArmStatus
 from mars_msgs.srv import GotoJS, GotoJSTrajectory
+from rclpy.client import Client
 from rclpy.node import Node
 from rclpy.subscription import Subscription
 from sensor_msgs.msg import JointState
@@ -675,9 +677,10 @@ class Manipulation:
     # --- servo power / recovery ---
 
     def torque_on(self) -> bool:
-        """Enable arm torque. Off→on also folds the arm to rest (~3 s, stops
-        at an obstacle) before the driver replies; already-on is a no-op."""
-        success = self._call_trigger(self._torque_on_client, "Torque on", "Torque enabled on arm", timeout_sec=10.0)
+        """Enable arm torque. Off→on also folds the arm to rest (up to ~9 s
+        from the floor, stopping at an obstacle) before the driver replies;
+        already-on is a no-op."""
+        success = self._call_trigger(self._torque_on_client, "Torque on", "Torque enabled on arm", timeout_sec=15.0)
         if success:
             self._torque_enabled = True
             self._torque_stamp = time.monotonic()
@@ -707,15 +710,28 @@ class Manipulation:
             self._grip_target = None
         return success
 
-    def recover(self) -> None:
+    def recover(self) -> bool:
         """Reboot, reconfigure and re-torque the servos that latched a
         hardware error (an overload trip leaves the servo limp); the rest of
         the arm keeps holding, so a mid-pick retry resumes where it stopped.
-        A full reboot + torque_on would fold the arm to rest instead."""
+        A full reboot + torque_on would fold the arm to rest instead. True
+        when a servo was rebooted; False when nothing was latched (the retry
+        then runs as is) or the call failed."""
         self.stream_stop()  # never stream across a servo power-cycle
         self.logger.warning("[arm] recovering (rebooting tripped servos)")
-        self._call_trigger(self._fix_error_client, "Fix error", "Tripped servos rebooted", timeout_sec=10.0)
+        response = self._trigger(self._fix_error_client, "Fix error", timeout_sec=10.0)
         time.sleep(0.5)  # committed: servo re-init settle
+        if response is None or not response.success:
+            return False
+        try:
+            rebooted = json.loads(response.message).get("error_ids", [])
+        except (json.JSONDecodeError, AttributeError):
+            rebooted = []
+        if not rebooted:
+            self.logger.info("[arm] no servo had a latched error; retrying as is")
+            return False
+        self.logger.info(f"[arm] rebooted servo(s) {', '.join(str(i) for i in rebooted)}")
+        return True
 
     # --- internals ---
 
@@ -919,20 +935,24 @@ class Manipulation:
             return False
         return True
 
-    def _call_trigger(self, client, action_name: str, success_msg: str, timeout_sec: float = 2.0) -> bool:
+    def _call_trigger(self, client: Client, action_name: str, success_msg: str, timeout_sec: float = 2.0) -> bool:
+        result = self._trigger(client, action_name, timeout_sec)
+        if result is None:
+            return False
+        if not result.success:
+            self.logger.error(f"{action_name} failed: {result.message}")
+            return False
+        self.logger.info(result.message or success_msg)
+        return True
+
+    def _trigger(self, client: Client, action_name: str, timeout_sec: float) -> Trigger.Response | None:
+        """The service's response, or None when it is unavailable, times out
+        or the call raises (logged)."""
         if not client.service_is_ready():
             self.logger.error(f"[Manipulation] {action_name} service not ready")
-            return False
-
+            return None
         try:
-            result = self._await_result(client.call_async(Trigger.Request()), action_name, timeout_sec)
-            if result is None:
-                return False
-            if not result.success:
-                self.logger.error(f"{action_name} failed: {result.message}")
-                return False
-            self.logger.info(result.message or success_msg)
-            return True
-        except Exception as e:
+            return self._await_result(client.call_async(Trigger.Request()), action_name, timeout_sec)
+        except Exception as e:  # noqa: BLE001 — a wedged rclpy client must not take the skill down
             self.logger.error(f"Exception calling {action_name}: {e}")
-            return False
+            return None

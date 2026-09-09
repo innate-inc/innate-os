@@ -548,7 +548,7 @@ export function mount(stage) {
   el("open50").addEventListener("click", () => cmd("gripper_open", { percent: 50 }));
   el("closeBtn").addEventListener("click", () => cmd("gripper_close", { strength: +input("grip").value }));
   el("rebootBtn").addEventListener("click", () => {
-    if (!window.confirm("Reboot the arm servos? Any running motion stops; torque re-enables automatically.")) return;
+    if (!window.confirm("Reboot any tripped arm servo? A servo with a latched hardware error is power-cycled and re-torqued; the rest of the arm keeps holding.")) return;
     cmd("recover"); // SDK recover() = reboot the tripped servos, settle
   });
   el("copyJoints").addEventListener("click", () => {

@@ -7,6 +7,15 @@ using json = nlohmann::json;
 
 namespace mars_arm {
 
+namespace {
+
+double jointRad(int encoder, int joint_index) {
+    const double rad = ((encoder - 2048) * 2 * M_PI) / 4096.0;
+    return flippedJoint(static_cast<size_t>(joint_index)) ? -rad : rad;
+}
+
+}  // namespace
+
 // ========== SERVO INITIALIZATION ==========
 
 void MarsArmNode::initializeServos() {
@@ -180,13 +189,28 @@ void MarsArmNode::syncTargetToMotorPositions() {
     {
         std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
         for (int i = 0; i < 6 && i < static_cast<int>(positions.size()); ++i) {
-            double rad = ((positions[i] - 2048) * 2 * M_PI) / 4096.0;
-            if (i == 1 || i == 2 || i == 3 || i == 5)
-                rad = -rad;
-            latest_target_[i] = rad;
+            latest_target_[i] = jointRad(positions[i], i);
         }
         has_target_ = false;
         latest_arm_command_ = std::vector<int>(positions.begin(), positions.begin() + 6);
+    }
+}
+
+// A rebooted servo comes back holding where it is, but the pass-through still
+// carries the goal it tripped on and would send it back there at profile
+// speed on the next tick. Only the rebooted joints: the others keep their
+// targets (j6's is the grip preload).
+void MarsArmNode::holdRebootedJointsLocked(const std::vector<int>& servo_ids) {
+    auto [positions, velocities, loads] = robot_->readState();
+    (void)velocities;
+    (void)loads;
+    std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
+    for (int id : servo_ids) {
+        const int i = id - 1;
+        if (i < 0 || i >= 6 || i >= static_cast<int>(positions.size())) {
+            continue;
+        }
+        latest_target_[i] = jointRad(positions[i], i);
     }
 }
 
@@ -318,9 +342,10 @@ void MarsArmNode::armCommandCallback(const std_msgs::msg::Float64MultiArray::Sha
 void MarsArmNode::armTorqueOnCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
                                       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/torque_on");
-    const bool was_off = !arm_torque_enabled_.load();
+    bool was_off = false;
     try {
         std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+        was_off = !arm_torque_enabled_.load();
 
         for (int id = 1; id <= 6; ++id) {
             RCLCPP_INFO(this->get_logger(), "  Enabling torque on servo %d", id);
@@ -344,9 +369,9 @@ void MarsArmNode::armTorqueOnCallback(const std::shared_ptr<std_srvs::srv::Trigg
     response->success = true;
     response->message = "Enabled torque for all arm servos";
     RCLCPP_INFO(this->get_logger(), "Successfully enabled torque for all arm servos");
-    // Only on the off→on edge: a skill re-asserting torque mid-task must not
-    // have the arm folded out from under it. Success stays true either way —
-    // torque IS on; a stopped fold is reported in the message.
+    // Only on the off→on edge: skills call torque_on as a precondition while
+    // it is already on, and must not have the arm folded away for it. Success
+    // stays true either way — torque IS on; a stopped fold is in the message.
     if (was_off && this->get_parameter("auto_rest").as_bool()) {
         response->message += "; " + foldToRest("torque on").detail;
     }
@@ -458,6 +483,12 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
         for (int servo_id : error_servo_ids) {
             RCLCPP_INFO(this->get_logger(), "Reconfiguring servo %d...", servo_id);
             configureServoByIdLocked(servo_id, true);
+        }
+        try {
+            holdRebootedJointsLocked(error_servo_ids);
+        } catch (const std::exception& e) {
+            RCLCPP_WARN(this->get_logger(), "Could not read the rebooted servos; their next command may snap: %s",
+                        e.what());
         }
 
         // Build JSON response with error IDs and status

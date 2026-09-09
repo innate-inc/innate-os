@@ -89,9 +89,6 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     int baud_rate = this->get_parameter("baud_rate").as_int();
     control_frequency_ = this->get_parameter("control_frequency").as_double();
     auto joint_names_param = this->get_parameter("joints").as_string_array();
-    if (this->get_parameter("rest_pose").as_double_array().size() != 6) {
-        throw std::runtime_error("rest_pose must list 6 joint positions (set it in arm_config.yaml)");
-    }
 
     // Load joint configurations from sub-parameters (nav2 style)
     loadJointConfigs(joint_names_param);
