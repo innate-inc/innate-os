@@ -60,6 +60,13 @@ def get_custom_skills_dir() -> Path:
     return _workspace() / "custom_skills"
 
 
+LEARNED_GROUP = "learned"  # the roster group of skills the robot wrote for itself
+
+
+def get_learned_skills_dir() -> Path:
+    return get_custom_skills_dir() / LEARNED_GROUP
+
+
 # workspace/ directories that are never skill packages: agent/input/lib
 # machinery and per-skill storage. skill_lib/ and the pre-workspace agents//
 # skills/ names stay listed so a stale checkout directory is never scanned.

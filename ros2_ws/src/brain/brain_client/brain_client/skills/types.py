@@ -984,9 +984,10 @@ class Skill(ABC):
             self._storage = SkillStorage(_storage_dir() / f"{self.name}.json")
         return self._storage
 
-    def say(self, text: str, wait: bool = False) -> None:
+    def say(self, text: str, wait: bool = False, *, speed: float | None = None, volume: float | None = None) -> None:
         """Speak through the robot's voice; ``wait=True`` blocks until
-        playback ends (best effort). No-op if speech isn't available."""
+        playback ends (best effort). ``speed`` (0.6-1.5) and ``volume``
+        (0.5-2.0) style the read. No-op if speech isn't available."""
         if not text or self.node is None:
             return
         if self._say_publisher is None:
@@ -1001,7 +1002,10 @@ class Skill(ABC):
                 time.sleep(0.02)
         if wait and self._tts_status_sub is None:
             self._tts_status_sub = self.node.create_subscription(String, TTS_STATUS_TOPIC, self._on_tts_status, 10)
-        self._say_publisher.publish(String(data=text))
+        styled = speed is not None or volume is not None
+        self._say_publisher.publish(
+            String(data=json.dumps({"text": text, "speed": speed, "volume": volume}) if styled else text)
+        )
         if wait:
             self._wait_for_speech_end(text)
 

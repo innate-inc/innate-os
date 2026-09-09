@@ -8,6 +8,7 @@ Generates speech audio and plays it through the robot's audio system.
 
 import base64
 import io
+import json
 import queue
 import struct
 import subprocess
@@ -25,6 +26,31 @@ from innate_proxy.adapters.cartesia import ProxyCartesiaClient
 
 
 @dataclass(frozen=True)
+class Delivery:
+    """How a clip is read, in Cartesia generation_config terms (sonic-3 and
+    newer): speed 0.6-1.5, volume 0.5-2.0. None keeps the platform default."""
+
+    speed: float | None = None
+    volume: float | None = None
+
+    def generation_config(self) -> dict[str, float]:
+        return {key: value for key, value in (("speed", self.speed), ("volume", self.volume)) if value is not None}
+
+
+def parse_tts_request(data: str) -> tuple[str, Delivery | None]:
+    """A /brain/tts payload: plain text, or JSON ``{"text", "speed", "volume"}`` for a styled read."""
+    if not data.startswith("{"):
+        return data, None
+    try:
+        payload = json.loads(data)
+        speed, volume = payload.get("speed"), payload.get("volume")
+        delivery = Delivery(None if speed is None else float(speed), None if volume is None else float(volume))
+        return str(payload["text"]), delivery
+    except (json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError):
+        return data, None
+
+
+@dataclass(frozen=True)
 class _Utterance:
     """One queued clip, with the metadata the flush policy needs."""
 
@@ -34,6 +60,7 @@ class _Utterance:
     on_done: Callable[[bool], None] | None
     reply_id: str | None  # sentences of one streamed reply share an id
     protected: bool  # never flushed (environment speech: not our backlog)
+    delivery: Delivery | None = None
 
 
 def _survives_flush(item: _Utterance, playing_reply_id: str | None) -> bool:
@@ -160,6 +187,7 @@ class TTSHandler:
         text: str,
         voice_config: dict[str, Any] | None = None,
         on_start: Callable[[], None] | None = None,
+        delivery: Delivery | None = None,
     ) -> bool:
         """
         Convert text to speech and play it.
@@ -168,6 +196,7 @@ class TTSHandler:
             text: Text to speak
             voice_config: Optional voice configuration override
             on_start: Called once the first audio reaches the speaker
+            delivery: Optional speed/volume override for this clip
 
         Returns:
             True if speech was successfully generated and played, False otherwise
@@ -201,9 +230,9 @@ class TTSHandler:
             }
 
             if self._simulator_mode and self.tts_audio_pub is not None:
-                success = self._synthesize_to_topic(text, voice, t_start, on_start)
+                success = self._synthesize_to_topic(text, voice, t_start, on_start, delivery)
             else:
-                success = self._synthesize_to_aplay(text, voice, t_start, on_start)
+                success = self._synthesize_to_aplay(text, voice, t_start, on_start, delivery)
         except Exception as e:
             self.logger.error(f"❌ TTS generation failed: {e}")
             success = False
@@ -220,7 +249,7 @@ class TTSHandler:
     SPEAKER_SAMPLE_RATE = 16000
     SPEAKER_SPEED = 1.5
 
-    def _stream_tts_bytes(self, text: str, voice: dict[str, Any], for_speaker: bool):
+    def _stream_tts_bytes(self, text: str, voice: dict[str, Any], for_speaker: bool, delivery: Delivery | None):
         """Yield audio bytes from Cartesia as they stream in.
 
         The speaker path gets raw PCM; the sim path keeps WAV — browser decoders
@@ -230,16 +259,18 @@ class TTSHandler:
             raise RuntimeError("Cartesia client unavailable (is_available() gates all callers)")
         if for_speaker:
             output_format = {"container": "raw", "encoding": "pcm_s16le", "sample_rate": self.SPEAKER_SAMPLE_RATE}
-            generation_config = {"speed": self.SPEAKER_SPEED}
+            generation_config: dict[str, float] = {"speed": self.SPEAKER_SPEED}
         else:
             output_format = {"container": "wav", "encoding": "pcm_s16le", "sample_rate": 44100}
-            generation_config = None
+            generation_config = {}
+        if delivery is not None:
+            generation_config.update(delivery.generation_config())
         return self._cartesia_client.tts.bytes_stream(
             model_id="sonic-3.5",
             transcript=text,
             voice=voice,
             output_format=output_format,
-            generation_config=generation_config,
+            generation_config=generation_config or None,
         )
 
     def _synthesize_to_aplay(
@@ -248,6 +279,7 @@ class TTSHandler:
         voice: dict[str, Any],
         t_start: float,
         on_start: Callable[[], None] | None = None,
+        delivery: Delivery | None = None,
     ) -> bool:
         """Stream speech straight into aplay (real robot's speaker)."""
         text_len = len(text)
@@ -288,7 +320,7 @@ class TTSHandler:
             t_first_chunk = None
 
             t_api = time.perf_counter()
-            for chunk in self._stream_tts_bytes(text, voice, for_speaker=True):
+            for chunk in self._stream_tts_bytes(text, voice, for_speaker=True, delivery=delivery):
                 if not chunk:
                     continue
                 chunk_count += 1
@@ -348,6 +380,7 @@ class TTSHandler:
         voice: dict[str, Any],
         t_start: float,
         on_start: Callable[[], None] | None = None,
+        delivery: Delivery | None = None,
     ) -> bool:
         """Synthesize the full clip and publish it (base64 WAV) on /tts/audio.
 
@@ -357,7 +390,7 @@ class TTSHandler:
         t_api = time.perf_counter()
         buf = bytearray()
         t_first_chunk = None
-        for chunk in self._stream_tts_bytes(text, voice, for_speaker=False):
+        for chunk in self._stream_tts_bytes(text, voice, for_speaker=False, delivery=delivery):
             if not chunk:
                 continue
             if t_first_chunk is None:
@@ -404,6 +437,7 @@ class TTSHandler:
         on_done: Callable[[bool], None] | None = None,
         reply_id: str | None = None,
         protected: bool = False,
+        delivery: Delivery | None = None,
     ) -> bool:
         """
         Queue text to be spoken. Utterances play in order, one at a time;
@@ -421,6 +455,7 @@ class TTSHandler:
                 retry on failure) has finished.
             reply_id: Groups the sentences of one streamed reply.
             protected: Exempt from replace_pending flushes.
+            delivery: Optional speed/volume override for this clip.
         """
         if not self.is_available():
             self.logger.debug("🔇 TTS not available, skipping async speech")
@@ -440,7 +475,9 @@ class TTSHandler:
                 self._speech_queue.extend(kept)
             queued = len(self._speech_queue) < self._speech_queue_maxlen
             if queued:
-                self._speech_queue.append(_Utterance(text, voice_config, on_start, on_done, reply_id, protected))
+                self._speech_queue.append(
+                    _Utterance(text, voice_config, on_start, on_done, reply_id, protected, delivery)
+                )
                 self._speech_cv.notify()
         if not queued:
             self.logger.warning(f"🔇 Speech queue full, dropping: '{text[:60]}'")
@@ -516,12 +553,12 @@ class TTSHandler:
             # reply's flush spares siblings of speech nobody has heard, and they
             # play ahead of the newer answer.
             take_floor = self._floor_taken_on_start(item.reply_id, self._once(item.on_start))
-            success = self.speak_text(item.text, item.voice_config, take_floor)
+            success = self.speak_text(item.text, item.voice_config, take_floor, item.delivery)
             if not success:
                 self._set_playing_reply(None)
                 self.logger.info("🔄 Retrying TTS after 1 second...")
                 time.sleep(1)
-                success = self.speak_text(item.text, item.voice_config, take_floor)
+                success = self.speak_text(item.text, item.voice_config, take_floor, item.delivery)
             if not success:
                 self._set_playing_reply(None)
                 self._drop_queued_reply(item.reply_id)

@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Innate Inc
 from innate_skills.close_gripper import CloseGripper
 from innate_skills.head_emotion import HeadEmotion
+from innate_skills.learn_skill.learn_skill import LearnSkill
 from innate_skills.navigate_to_position import NavigateToPosition
 from innate_skills.open_gripper import OpenGripper
 from innate_skills.pick_any_object import PickAnyObject
@@ -28,7 +29,16 @@ class IntroAgent(Agent):
     def get_skills(self) -> list[SkillRef]:
         """Navigation code skills plus the recorded wave — Wave is the typed
         ref generated inside the recording folder (see skills/physical_refs.py)."""
-        return [NavigateToPosition, Wave, PickAnyObject, OpenGripper, CloseGripper, SearchMemory, HeadEmotion]
+        return [
+            NavigateToPosition,
+            Wave,
+            PickAnyObject,
+            OpenGripper,
+            CloseGripper,
+            SearchMemory,
+            HeadEmotion,
+            LearnSkill,
+        ]
 
     def get_inputs(self) -> list[InputRef]:
         """Enable microphone input to hear user"""

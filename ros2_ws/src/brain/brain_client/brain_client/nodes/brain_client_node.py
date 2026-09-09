@@ -51,7 +51,7 @@ from brain_client.skills.roster import SkillRoster
 from brain_client.skills.runner import PrimitiveRunner
 from brain_client.skills.workspace_import import format_load_error, unique_key
 from brain_client.transport.chat import ChatManager, Sender
-from brain_client.transport.tts import TTSHandler
+from brain_client.transport.tts import TTSHandler, parse_tts_request
 
 LATCHED_QOS = QoSProfile(
     depth=1,
@@ -406,10 +406,10 @@ class BrainClientNode(Node):
     def _on_tts(self, msg: String) -> None:
         """Speak a line a skill sent, and show it — emit, not speak: anything the
         robot says aloud belongs in the transcript, or Skill.say goes unrecorded."""
-        text = msg.data
-        if text and text.strip():
+        text, delivery = parse_tts_request(msg.data)
+        if text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
-            self.chat.emit(Sender.ROBOT, text)
+            self.chat.emit(Sender.ROBOT, text, delivery=delivery)
 
     def _on_environment_speech(self, payload: dict) -> None:
         """Speak a simulated character: the line reaches the chat as the voice

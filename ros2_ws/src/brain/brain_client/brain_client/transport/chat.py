@@ -14,9 +14,13 @@ import json
 import re
 import threading
 import time
+from typing import TYPE_CHECKING
 
 from brain_client.brain.context import split_tool_narration
 from brain_client.common.enums import StrEnum
+
+if TYPE_CHECKING:
+    from brain_client.transport.tts import Delivery
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _REPLY_IDS = itertools.count(1)
@@ -44,7 +48,7 @@ class ChatManager:
     def entry(sender: Sender, text: str) -> dict:
         return {"sender": sender, "text": text, "timestamp": time.time()}
 
-    def emit(self, sender: Sender, text: str, speak: bool | None = None) -> None:
+    def emit(self, sender: Sender, text: str, speak: bool | None = None, delivery: Delivery | None = None) -> None:
         """Append a chat entry, publish it, and (for robot speech) speak it.
 
         ``speak`` defaults to True only for the ROBOT sender, matching the old
@@ -60,7 +64,7 @@ class ChatManager:
         if speak is None:
             speak = sender == Sender.ROBOT
         if speak and text and text.strip():
-            self.speak(text)
+            self.speak(text, delivery=delivery)
 
     def emit_system(self, text: str) -> None:
         """Publish a system message (never spoken)."""
@@ -101,9 +105,17 @@ class ChatManager:
     def clear(self) -> None:
         self.history = []
 
-    def speak(self, text: str, replace_pending: bool = False, reply_id: str | None = None) -> None:
+    def speak(
+        self,
+        text: str,
+        replace_pending: bool = False,
+        reply_id: str | None = None,
+        delivery: Delivery | None = None,
+    ) -> None:
         if self._tts_handler is not None:
-            self._tts_handler.speak_text_async(text, replace_pending=replace_pending, reply_id=reply_id)
+            self._tts_handler.speak_text_async(
+                text, replace_pending=replace_pending, reply_id=reply_id, delivery=delivery
+            )
 
     def stream_speech(self) -> SpeechStreamer:
         return SpeechStreamer(self)
