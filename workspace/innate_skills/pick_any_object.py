@@ -119,8 +119,8 @@ WRIST_CAM_ABOVE_EE = 0.07
 AXIS_HALF_PX = 45
 # Wrist roll to the blob's minor axis (the gripper's 81 mm jaw is narrower
 # than most objects' long side). Blobs rounder than MIN_ELONGATION have no
-# axis worth chasing. The axis is locked from the first centred view at or
-# above AXIS_MIN_Z: lower, the blob fills the frame and the fingers clip its
+# axis worth chasing. The axis follows every centred view down to AXIS_MIN_Z
+# and freezes there: lower, the blob fills the frame and the fingers clip its
 # ends, and the minor axis of a clipped blob swings freely.
 MIN_ELONGATION = 1.3
 ROLL_MAX = 1.5
@@ -435,9 +435,9 @@ class PickAnyObject(Skill):
         ui.readout(f"{'descending' if inside else 'centring'} · {round(z * 100)} cm up", progress=progress)
 
     @staticmethod
-    def _axis_lock(z: float, blob: vision.Axis | None) -> vision.Axis | None:
+    def _trusted_axis(z: float, blob: vision.Axis | None) -> vision.Axis | None:
         """The blob axis if this centred view is high and elongated enough
-        to trust for the whole descent, else None to keep looking."""
+        to trust for the grasp, else None to keep what was read before."""
         if z < AXIS_MIN_Z or blob is None or blob[1] < MIN_ELONGATION:
             return None
         return blob
@@ -498,7 +498,7 @@ class PickAnyObject(Skill):
 
         deadline = time.monotonic() + WRIST_ALIGN_TIMEOUT_S
         top = z
-        axis = None  # locked from the first centred view high enough to trust
+        axis = None  # last centred view high enough to trust
         streak = 0  # verified matches since the arm last moved
         centered = 0  # consecutive matches INSIDE the box
         stalled = 0  # consecutive steps eaten by the reach clamp
@@ -536,8 +536,8 @@ class PickAnyObject(Skill):
             err_v = px[1] - p["wrist_box_v"]
             inside = inside_box(px, p["wrist_box_u"], p["wrist_box_v"], p["wrist_half_px"])
             centered = centered + 1 if inside else 0
-            if axis is None and centered >= 2:
-                axis = self._axis_lock(z, tracker.axis)
+            if centered >= 2:
+                axis = self._trusted_axis(z, tracker.axis) or axis
             self._draw_wrist(px, inside, z, top, axis if axis is not None else tracker.axis, tracker.pending)
             if streak < 2:
                 continue  # watch one more frame before trusting it
