@@ -85,6 +85,7 @@ PARAMS = {
     # ee_link target, not fingertip height. 0.01 dug into carpet and aborted.
     "floor_z": 0.03,
     "descend_s": 1.2,
+    "orient_s": 1.0,
     "descend_abort_z": 0.12,
     "arm_pitch": 1.30,
     # close_strength is close depth, not force (servo 6 runs current-based
@@ -606,6 +607,11 @@ class PickAnyObject(Skill):
             # grip=GRIPPER_OPEN re-asserts an open claw even if it drifted
             # shut during the wrist descent (never re-seed from measured).
             waypoints = [Waypoint(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=p["descend_s"]) for z in rungs]
+            if roll != 0.0:
+                # The wrist stage stops at wrist_stop_z, so the rungs below it are
+                # millimetres: blended in, the fingers finish turning onto the object
+                # rather than above it. Turn at height first, then descend straight.
+                waypoints.insert(0, Waypoint(x, y, z_from, roll=roll, pitch=pitch, yaw=yaw, duration=p["orient_s"]))
             try:
                 self.manipulation.follow(waypoints, grip=self.manipulation.GRIPPER_OPEN)
             except ArmFailed as e:
