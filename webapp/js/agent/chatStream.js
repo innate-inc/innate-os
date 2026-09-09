@@ -8,7 +8,6 @@
 // an entry — so it lives in one module rather than being threaded between
 // several. Nothing here talks to ROS: the panel feeds it messages.
 
-import { isPromptSuggestionSkill } from "./promptSuggestions.js";
 import { CHAT_OUT_TOPIC, SKILL_STATUS_UPDATE_TOPIC } from "../constants.js";
 import {
   formatSkillArgs,
@@ -488,7 +487,7 @@ export function createChatStream() {
     if (sender === "task_activated") {
       const name = String(e?.text ?? e?.skill_name ?? e?.skillId ?? "");
       const status = String(e?.taskStatus ?? "");
-      if (!name || !status || isPromptSuggestionSkill(name)) return;
+      if (!name || !status) return;
       const key = String(e?.primitiveId ?? e?.skillId ?? name);
       addSkillRun(key, name, status, ts, typeof e?.failureReason === "string" ? e.failureReason : "", e?.args);
       return;

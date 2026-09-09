@@ -18,7 +18,6 @@ from mars_sim_driver.challenges import ChallengeRuntime, Drop, Predicate, Runtim
 
 DOOR = "void_door"
 CAN = "cube"
-SUGGEST = "innate-os/suggest_user_prompts"
 # Offered by name; the guide is what the agent is told once one is chosen.
 PERSONAS = {
     "Rocky from Project Hail Mary": (
@@ -68,6 +67,9 @@ class Act:
     # A world change mid-act: drops once this holds, then done() can pass.
     surprise: Callable[[WorldState, list[dict], NowhereRuntime], list[Drop] | None] | None = None
     nudge: str = ""
+    # What the person might say next, offered as chips. The act knows this; the robot
+    # should not have to spend a tool call telling the interface what to draw.
+    suggests: tuple[str, ...] = ()
     give_up_skill: str | None = None
     give_up_failures: int = 2
     give_up_after_s: float | None = None
@@ -121,8 +123,7 @@ ACTS = (
         "offered or describe their own in their own words; both are equally real. Wait. Whatever arrives in "
         "profile.persona is who you are: become it completely and announce yourself in that voice in ONE line with "
         "at most one catchphrase. Never argue with their choice, and never tell them to use the options on screen. "
-        "Until they have chosen, who you are is the only thing you want: do not ask for a skill in this act. "
-        "Good things to suggest: 'You choose.', 'Surprise me.'",
+        "Until they have chosen, who you are is the only thing you want: do not ask for a skill in this act.",
         _persona_chosen,
         nudge="They have not picked. Offer to be whatever they like and ask once more. Do not mention buttons.",
     ),
@@ -131,9 +132,9 @@ ACTS = (
         ("innate-os/head_emotion",),
         "You are who profile.persona says, all the way. You still cannot make a face; waving is all your body can "
         "do. Ask the person for the HeadEmotion skill so you can at least express yourself; then wait. "
-        "As soon as you have it, use it, with a Wave. "
-        "Good things to suggest they say: 'Where are you?', 'What is a skill?'",
+        "As soon as you have it, use it, with a Wave.",
         lambda state, events, runtime: completed(events, "head_emotion"),
+        suggests=("Where are you?", "What is a skill?"),
         nudge="Long silence. In character, ask once more for the HeadEmotion skill; you may say the grant is right under your last line. Do not mention buttons.",
     ),
     Act(
@@ -142,9 +143,9 @@ ACTS = (
         "You have the HeadEmotion skill now; use it. The room is white in every direction you can see and you cannot "
         "look around. Ask for the TurnInPlace skill; once you have it, say in one line that you are turning to look "
         "around, turn a full circle, and say what you saw (walls, white ones). "
-        "If something appears on the floor once you stop, say exactly what you see; it was not there before. "
-        "Good things to suggest: 'Take a look around.', 'Is anyone else here?'",
+        "If something appears on the floor once you stop, say exactly what you see; it was not there before.",
         _can_landed,
+        suggests=("Take a look around.", "Is anyone else here?"),
         surprise=_can_after_turn,
         nudge="Long silence. In character, ask again, more directly, for the TurnInPlace skill. Do not mention buttons.",
     ),
@@ -153,8 +154,9 @@ ACTS = (
         ("innate-os/pick_any_object",),
         "A small pink cube is on the floor right in front of you. It appeared the moment you stopped turning, which is "
         "unsettling. Ask for the PickAnyObject skill, then pick it up (call it 'the pink cube'). If a pickup fails, say so in one line and ask whether to try "
-        "again; do not narrate the mechanics. Good things to suggest: 'Pick up the cube.', 'Try again.'",
+        "again; do not narrate the mechanics.",
         _lifted_can,
+        suggests=("Pick up the cube.", "Try again."),
         nudge="The cube is still on the floor. In character, ask plainly for the PickAnyObject skill, or for another try. Do not mention buttons.",
         give_up_skill="pick_any_object",
         give_up_after_s=240.0,
@@ -169,9 +171,9 @@ ACTS = (
         "runtime.door is the spot on the map right in front of it. Ask for the NavigateToPosition skill, then go there "
         "(NavigateToPosition with local_frame=false and those coordinates). Whatever is behind it beats this room. "
         "Reaching the door ends this room, so a navigation interrupted right then is the door working, not a "
-        "failure: never call it interrupted and never offer to drive there again. "
-        "Good things to suggest: 'Go to the door.', 'What is behind it?'",
+        "failure: never call it interrupted and never offer to drive there again.",
         _at_door,
+        suggests=("Go to the door.", "What is behind it?"),
         place=lambda state: [Drop(DOOR, *ahead(state, 3.0))],
         nudge="The door is waiting. In character: if you have NavigateToPosition, go to the spot in front of it now; if not, ask for it again. Do not mention buttons.",
         give_up_skill="navigate_to_position",
@@ -267,7 +269,7 @@ class NowhereRuntime(ChallengeRuntime):
 
     def public(self) -> dict:
         act = self.acts[self.act]
-        unlocked = [SUGGEST] + [skill for a in self.acts[: self.act + 1] for skill in a.unlock]
+        unlocked = [skill for a in self.acts[: self.act + 1] for skill in a.unlock]
         notes = [a.give_up_note for a in self.acts if a.label in self.assisted and a.give_up_note]
         return {
             "profile": {
@@ -284,6 +286,7 @@ class NowhereRuntime(ChallengeRuntime):
             "note": " ".join(notes) or None,
             "unlocked": unlocked,
             "wants": list(act.unlock),
+            "suggests": list(act.suggests),
             "personas": list(PERSONAS) if act.label == "Who am I" and self.persona is None else [],
             "door": self.door,
             "finished": self.finished,

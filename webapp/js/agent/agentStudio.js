@@ -20,7 +20,6 @@ const DRAG_HINT_KEY = "innate.nowhere.draghint.v1";
 const ARMED_KEY = "innate.nowhere.armed";
 // Set by the rail's "Play the intro" for an Agent page that is still mounting.
 export const PLAY_INTRO_KEY = "innate.nowhere.play";
-const INTERNAL_SKILLS = new Set(["innate-os/suggest_user_prompts"]);
 const UNMENTIONED_SKILLS = new Set(["innate-os/open_gripper"]); // never part of the story's arc
 const WAVE = "innate-os/wave";
 const MEMORY = "innate-os/search_memory";
@@ -367,7 +366,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     arrivalAttempt = o.attempt_id;
     actSpoke = spoken();
     actAt = Date.now();
-    panel.clearSuggestedPrompts();
     setTimeout(() => void panel.narrate("Somewhere else. Yellow, this time.", { local: true }), 2500);
   }
 
@@ -420,7 +418,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     graduatedAttempt = o.attempt_id;
     graduationReady = false;
     staying = false;
-    panel.clearSuggestedPrompts();
     void opts.cancelSkill().catch(() => {});
     setTimeout(() => void panel.narrate("You're out. You made it.", { local: true }), 600);
     const before = spoken();
@@ -447,7 +444,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const next = new Set(agentState.get().activeSkills);
     next.add(skill);
     agentState.setActiveSkills([...next], STORY_AGENT);
-    panel.clearSuggestedPrompts();
     if (announce) void panel.submitText(GRANT_LINES[skill] ?? `Granted: the ${skillLabel(skill)} skill.`);
   }
 
@@ -530,19 +526,28 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       };
     }
     const wants = (r.wants ?? []).filter(
-      (/** @type {string} */ skill) => !agentState.get().activeSkills.has(skill) && !INTERNAL_SKILLS.has(skill) && skill !== WAVE,
+      (/** @type {string} */ skill) => !agentState.get().activeSkills.has(skill) && skill !== WAVE,
     );
+    // What the act says the person might say next: the story's own words, not a tool call.
+    const replies = (r.suggests ?? []).map((/** @type {string} */ text) => ({
+      text,
+      kind: "reply",
+      onSelect: (/** @type {string} */ said) => void panel.submitText(said),
+    }));
     if (!wants.length || !asked(wants)) {
       chipReason = wants.length ? "waiting-for-line" : "granted";
-      return { chips: [], exclusive: false };
+      return { chips: replies, exclusive: false };
     }
     chipReason = `grants:${wants.join(",")}`;
     return {
-      chips: wants.map((/** @type {string} */ skill) => ({
-        text: `Grant the ${skillLabel(skill)} skill`,
-        kind: "grant",
-        onSelect: () => grant(skill),
-      })),
+      chips: [
+        ...wants.map((/** @type {string} */ skill) => ({
+          text: `Grant the ${skillLabel(skill)} skill`,
+          kind: "grant",
+          onSelect: () => grant(skill),
+        })),
+        ...replies,
+      ],
       exclusive: false,
     };
   }
@@ -800,7 +805,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     // Act bookkeeping: the chip gate, the grasp camera, the world's opening line.
     const actChanged = !!r && r.act !== seenAct;
     if (actChanged) {
-      if (seenAct >= 0) panel.clearSuggestedPrompts();
       tab = r.act === 0 ? "identity" : "skills"; // who it is, then what it can do
       // A resumed page must not wait for a line the robot said before the reload.
       actSpoke = seenAct >= 0 || (Number(story()?.elapsed_s) || 0) < 8 ? spoken() : -1;
@@ -820,7 +824,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const doorPassed = (r?.finished || (switching() && env === "void")) && armedAttempt && doorAttempt !== armedAttempt;
     if (doorPassed) {
       doorAttempt = armedAttempt;
-      panel.clearSuggestedPrompts();
       void opts.cancelSkill().catch(() => {});
       setTimeout(() => void panel.narrate("Through the door.", { local: true }), 400);
     }
@@ -978,7 +981,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const wanted = new Set(r?.wants ?? (inStory ? [MEMORY] : []));
     skills.replaceChildren();
     for (const id of listed) {
-      if (INTERNAL_SKILLS.has(id)) continue;
       if (r && !unlocked.has(id)) continue;
       if (inStory && !r && UNMENTIONED_SKILLS.has(id) && !s.activeSkills.has(id)) continue;
       const granted = s.activeSkills.has(id);
@@ -1020,7 +1022,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const q = chooserSearch.value.trim().toLowerCase();
     const has = new Set(have);
     const rows = roster
-      .filter((sk) => !has.has(sk.id) && !sk.load_error && !INTERNAL_SKILLS.has(sk.id))
+      .filter((sk) => !has.has(sk.id) && !sk.load_error)
       .filter((sk) => !q || `${skillLabel(sk.id)} ${sk.id} ${sk.group}`.toLowerCase().includes(q))
       .sort((a, b) => a.group.localeCompare(b.group) || skillLabel(a.id).localeCompare(skillLabel(b.id)));
     chooserList.replaceChildren();

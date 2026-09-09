@@ -13,7 +13,6 @@
 // The thought-grouping + skill-run rendering here is the canonical chat stream
 // (it originated in the old teleop chat pane, since removed).
 
-import { createPromptSuggestions, isPromptSuggestionSkill } from "./promptSuggestions.js";
 import { createMicStream } from "./micStream.js";
 import {
   AGENT_STATUS_TOPIC,
@@ -51,7 +50,6 @@ const THINKING_STALE_MS = 10_000;
  *   setCompact: (on: boolean) => void,
  *   addNotice: (text: string) => void,
  *   beginOnboarding: (fresh: boolean, startedAt: number) => void,
- *   clearSuggestedPrompts: () => void,
  *   setOffers: (offers: Array<{text: string, kind: string, onSelect: (text: string) => void}>) => void,
  *   submitText: (text: string) => Promise<boolean>,
  *   narrate: (text: string, how?: { quiet?: boolean, local?: boolean }) => Promise<boolean>,
@@ -214,23 +212,15 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     mic?.stop();
   }
 
-  // Two chip sources share the row under the latest message: the model's
-  // suggested replies, and offers the interface makes (grant a skill, pick a
-  // persona). Offers come first and survive the model's clears.
-  /** @type {string[]} */
-  let modelPrompts = [];
-  /** @type {Array<{text: string, kind: string, onSelect: (text: string) => void}>} */
+  /** The chip row under the latest message: what the interface offers, and nothing else.
+   * @type {Array<{text: string, kind: string, onSelect: (text: string) => void}>} */
   let offers = [];
   let offersExclusive = false;
   /** @param {typeof offers} list @param {boolean} exclusive */
   const offersKey = (list, exclusive) => `${exclusive}|${list.map((o) => `${o.kind}:${o.text}`).join("\n")}`;
   function renderChips() {
-    chat.setSuggestion([...offers, ...(offersExclusive ? [] : modelPrompts)], (selected) => void submitText(selected));
+    chat.setSuggestion(offers, (selected) => void submitText(selected));
   }
-  const suggestions = createPromptSuggestions((prompts) => {
-    modelPrompts = prompts ?? [];
-    renderChips();
-  });
   let sending = false;
   /** When this page sent each text: the brain echoes user lines on chat_out, and one bubble is enough.
    * @type {Map<string, number>} */
@@ -258,7 +248,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
         sent = rosClient.publish(CHAT_IN_TOPIC, frame);
       }
       if (!sent) throw new Error("The robot connection was lost before the message could be sent.");
-      suggestions.clear();
       return true;
     } catch (error) {
       const detail = error instanceof Error ? error.message : "The message could not be sent.";
@@ -351,7 +340,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     if (String(payload?.sender ?? "") !== "user") return;
     const text = String(payload?.text ?? "");
     if (!text) return;
-    suggestions.clear();
     chat.addMessage("user", text, Number(payload?.timestamp) || Date.now() / 1000);
   }, undefined, "std_msgs/msg/String");
 
@@ -368,7 +356,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     if (!sender || !text) return;
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
     if (sender === "user") {
-      suggestions.clear();
       const sentAt = sentTexts.get(text.trim());
       if (sentAt !== undefined && Date.now() - sentAt < 60_000) return; // already on screen
     }
@@ -391,8 +378,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     }
     const name = String(payload?.primitive_name ?? payload?.skill_name ?? payload?.skill_id ?? "");
     const status = String(payload?.status ?? "");
-    if (suggestions.consume(payload)) return;
-    if (!name || !status || isPromptSuggestionSkill(name)) return;
+    if (!name || !status) return;
     const key = String(payload?.primitive_id ?? payload?.skill_id ?? name);
     const reason = typeof payload?.reason === "string" ? payload.reason : "";
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
@@ -440,12 +426,10 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     beginOnboarding(fresh, startedAt) {
       historyFloor = startedAt / 1000;
       lastSnapshot = "";
-      suggestions.clear();
       chat.clear();
       sheet.open();
       if (!fresh) void loadHistory();
     },
-    clearSuggestedPrompts: () => suggestions.clear(),
     /** @param {Array<{text: string, kind: string, onSelect: (text: string) => void}>} next */
     setOffers(next, exclusive = false) {
       // Called on every world frame; only a changed set may touch the DOM.
