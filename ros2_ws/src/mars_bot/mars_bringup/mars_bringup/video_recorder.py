@@ -17,11 +17,13 @@ import json
 import os
 import queue
 import shutil
+import signal
 import socket
 import subprocess
 import threading
 import time
 from datetime import datetime
+from typing import TextIO
 
 import cv2
 import numpy as np
@@ -29,6 +31,7 @@ import rclpy
 import rosbag2_py
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image, JointState, LaserScan
@@ -71,6 +74,8 @@ RECORD_FPS = {"main": 15.0}  # main camera fps in stereo_depth_estimator.yaml
 # 1080p records via the NVJPG hardware encoder (browsers can't play MJPEG-in-MP4,
 # but VLC/QuickTime/editors can); everything else via x264, which plays anywhere.
 STREAM_CODEC = {"main": "mjpeg"}
+MAX_RECORDING_S = 4 * 3600
+METADATA_INTERVAL_TICKS = int(FPS * 5)
 
 
 def image_to_bgr(msg: Image) -> np.ndarray | None:
@@ -113,8 +118,13 @@ class GstMp4Writer:
         # element — measured 36 fps capacity at 3840x1080 vs 18 for the BGR
         # chain. h264 streams are small; they keep the plain BGR feed.
         self._i420 = codec == "mjpeg"
+        # Robust muxing: the index lives at the head of the file and is
+        # rewritten every second, so a SIGTERM (innate restart), an OOM kill or
+        # a power cut mid-recording loses the last second, not the whole file
+        # (a plain MP4 only gets its index at EOS). Caps one recording at 4 h.
+        robust = [f"reserved-max-duration={MAX_RECORDING_S * 1_000_000_000}", "reserved-moov-update-period=1000000000"]
         if codec == "mjpeg":
-            encode = ["nvjpegenc", "quality=85", "!", "qtmux"]
+            encode = ["nvjpegenc", "quality=85", "!", "qtmux", *robust]
         else:
             kbps = max(1500, int(width * height * fps * 0.25 / 1000))  # ~0.25 bit/px
             encode = [
@@ -126,6 +136,7 @@ class GstMp4Writer:
                 "h264parse",
                 "!",
                 "mp4mux",
+                *robust,
             ]
         fmt = "i420" if self._i420 else "bgr"
         convert = [] if self._i420 else ["videoconvert", "n-threads=4", "!", "video/x-raw,format=I420", "!"]
@@ -138,7 +149,9 @@ class GstMp4Writer:
             + encode
             + ["!", "filesink", f"location={path}"]
         )
-        self._proc = subprocess.Popen(args, stdin=subprocess.PIPE)
+        # Own session: a Ctrl-C / SIGHUP aimed at the recorder's process group
+        # must not kill the encoder before stdin closes and it can finalize.
+        self._proc = subprocess.Popen(args, stdin=subprocess.PIPE, start_new_session=True)
 
     def write(self, frame: np.ndarray) -> None:
         # Contiguous frames go straight from the numpy buffer; 12 MB stereo
@@ -184,7 +197,7 @@ class VideoRecorder(Node):
         self.robot_description: str | None = None
         self.bag_writer: rosbag2_py.SequentialWriter | None = None
         self.bag_counts: dict[str, int] = {}
-        self.frame_stamps: dict[str, list] = {}
+        self.frame_logs: dict[str, TextIO] = {}
 
         self.create_service(Trigger, "/video_recorder/start", self.handle_start)
         self.create_service(Trigger, "/video_recorder/stop", self.handle_stop)
@@ -203,7 +216,8 @@ class VideoRecorder(Node):
         self.create_timer(1.0, self.publish_status)
 
     def publish_status(self) -> None:
-        self.status_pub.publish(Bool(data=self.output_dir is not None))
+        if rclpy.ok():
+            self.status_pub.publish(Bool(data=self.output_dir is not None))
 
     def on_robot_description(self, msg: String) -> None:
         self.robot_description = msg.data
@@ -216,16 +230,20 @@ class VideoRecorder(Node):
 
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_dir = os.path.join(self.recordings_root, f"video_{stamp}")
-        # Claim output_dir (the "recording" flag) only once the directory
-        # exists: a failure here (disk full, permissions) must leave the
+        # Claim output_dir (the "recording" flag) only once everything that can
+        # fail has succeeded: a disk-full / permission error must leave the
         # node idle and startable, not wedged in a half-started state.
         try:
             os.makedirs(output_dir, exist_ok=True)
-        except OSError as exc:
+            bag_writer = self.open_bag(os.path.join(output_dir, "sensors"))
+        except (OSError, RuntimeError) as exc:
+            shutil.rmtree(output_dir, ignore_errors=True)
             response.success = False
-            response.message = f"Cannot create {output_dir}: {exc}"
+            response.message = f"Cannot start recording in {output_dir}: {exc}"
             return response
         self.output_dir = output_dir
+        self.bag_writer = bag_writer
+        self.bag_counts = dict.fromkeys(BAG_TOPICS, 0)
         self.started_at = datetime.now().astimezone().isoformat(timespec="seconds")
         self.start_monotonic = time.monotonic()
         self.tick = 0
@@ -248,16 +266,7 @@ class VideoRecorder(Node):
                     qos_profile_sensor_data,
                 )
             )
-        self.bag_writer = rosbag2_py.SequentialWriter()
-        self.bag_writer.open(
-            rosbag2_py.StorageOptions(uri=os.path.join(self.output_dir, "sensors"), storage_id="sqlite3"),
-            rosbag2_py.ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr"),
-        )
-        for topic, (type_name, msg_cls) in BAG_TOPICS.items():
-            self.bag_writer.create_topic(
-                rosbag2_py.TopicMetadata(name=topic, type=type_name, serialization_format="cdr")
-            )
-            self.bag_counts[topic] = 0
+        for topic, (_, msg_cls) in BAG_TOPICS.items():
             # tf_static is latched; a volatile sub would miss the transforms
             # published before recording started.
             qos = (
@@ -293,23 +302,63 @@ class VideoRecorder(Node):
             response.success = False
             response.message = "Not recording"
             return response
+        response.success, response.message = self.stop_recording()
+        return response
 
+    def stop_recording(self) -> tuple[bool, str]:
         output_dir = self.output_dir
         duration = time.monotonic() - self.start_monotonic
-        self.output_dir = None
         self.destroy_timer(self.timer)
         self.timer = None
         for sub in self.subs:
             self.destroy_subscription(sub)
         self.subs.clear()
-        self.bag_writer = None  # destructor flushes and closes the bag
+        self.bag_writer.close()
+        self.bag_writer = None
         for q in self.write_qs.values():
             q.put(None)
         for name, t in self.writer_threads.items():
             t.join(timeout=15)
             if t.is_alive():
                 self.get_logger().error(f"{name} writer thread did not exit in time; file may be truncated")
-        saved = sorted(self.writers)
+        # A stream whose encoder died mid-run is gone from self.writers but its
+        # frames are on disk (robust muxing), so "saved" is what got written,
+        # and only a run with no frames at all is discarded.
+        saved = sorted(name for name, count in self.frame_counts.items() if count)
+        if saved:
+            self.write_metadata(output_dir, duration)
+        for writer in self.writers.values():
+            writer.release()
+        for log in self.frame_logs.values():
+            log.close()
+        self.output_dir = None
+        self.writers.clear()
+        self.frame_logs.clear()
+        self.latest.clear()
+        self.frame_counts.clear()
+        self.camera_infos.clear()
+        self.bag_counts = {}
+        self.publish_status()
+
+        if not saved:
+            shutil.rmtree(output_dir, ignore_errors=True)
+            message = "No camera frames received; nothing saved"
+        else:
+            message = f"Saved {', '.join(f'{name}.mp4' for name in saved)} in {output_dir}"
+        self.get_logger().info(message)
+        return bool(saved), message
+
+    def open_bag(self, uri: str) -> rosbag2_py.SequentialWriter:
+        writer = rosbag2_py.SequentialWriter()
+        writer.open(
+            rosbag2_py.StorageOptions(uri=uri, storage_id="sqlite3"),
+            rosbag2_py.ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr"),
+        )
+        for topic, (type_name, _) in BAG_TOPICS.items():
+            writer.create_topic(rosbag2_py.TopicMetadata(name=topic, type=type_name, serialization_format="cdr"))
+        return writer
+
+    def write_metadata(self, output_dir: str, duration: float) -> None:
         streams = {
             name: {
                 "file": f"{name}.mp4",
@@ -318,32 +367,11 @@ class VideoRecorder(Node):
                 "height": self.latest[name][0].shape[0],
                 "fps": RECORD_FPS.get(name, FPS),
                 "codec": STREAM_CODEC.get(name, "h264"),
-                "frames": self.frame_counts.get(name, 0),
+                "frames": count,
             }
-            for name in saved
+            for name, count in sorted(self.frame_counts.items())
+            if count
         }
-        for writer in self.writers.values():
-            writer.release()
-        self.writers.clear()
-        self.latest.clear()
-        self.frame_counts.clear()
-        self.publish_status()
-
-        if not saved:
-            shutil.rmtree(output_dir, ignore_errors=True)
-            response.success = False
-            response.message = "No camera frames received; nothing saved"
-        else:
-            self.write_metadata(output_dir, duration, streams)
-            response.success = True
-            response.message = f"Saved {', '.join(f'{name}.mp4' for name in saved)} in {output_dir}"
-        self.camera_infos.clear()
-        self.bag_counts = {}
-        self.frame_stamps = {}
-        self.get_logger().info(response.message)
-        return response
-
-    def write_metadata(self, output_dir: str, duration: float, streams: dict) -> None:
         metadata = {
             "hostname": socket.gethostname(),
             "innate_os_git": self.git_sha,
@@ -362,10 +390,6 @@ class VideoRecorder(Node):
         }
         with open(os.path.join(output_dir, "recording_metadata.json"), "w") as f:
             json.dump(metadata, f, indent=2)
-        for name, stamps in self.frame_stamps.items():
-            with open(os.path.join(output_dir, f"{name}_frames.csv"), "w") as f:
-                f.write("frame,stamp_ns\n")
-                f.writelines(f"{i},{ns}\n" for i, ns in enumerate(stamps))
         if self.robot_description:
             with open(os.path.join(output_dir, "robot.urdf"), "w") as f:
                 f.write(self.robot_description)
@@ -385,6 +409,11 @@ class VideoRecorder(Node):
     def write_tick(self) -> None:
         self.tick += 1
         output_dir = self.output_dir
+        # Metadata is refreshed while recording (and the frame CSVs are written
+        # per frame) so a run that ends in a kill or a power cut still describes
+        # itself; only the bag's metadata.yaml then needs `ros2 bag reindex`.
+        if self.tick % METADATA_INTERVAL_TICKS == 0:
+            self.write_metadata(output_dir, time.monotonic() - self.start_monotonic)
         for name, (frame, stamp_ns) in list(self.latest.items()):
             step = max(1, round(FPS / RECORD_FPS.get(name, FPS)))
             if self.tick % step:
@@ -419,10 +448,13 @@ class VideoRecorder(Node):
                     failed = True
                     continue
                 self.writers[name] = writer
+                self.frame_logs[name] = open(os.path.join(output_dir, f"{name}_frames.csv"), "w", buffering=1)
+                self.frame_logs[name].write("frame,stamp_ns\n")
             try:
                 writer.write(frame)
-                self.frame_counts[name] = self.frame_counts.get(name, 0) + 1
-                self.frame_stamps.setdefault(name, []).append(stamp_ns)
+                index = self.frame_counts.get(name, 0)
+                self.frame_logs[name].write(f"{index},{stamp_ns}\n")
+                self.frame_counts[name] = index + 1
             except OSError:
                 self.get_logger().error(f"{name} encoder pipeline died; dropping stream")
                 self.writers.pop(name).release()
@@ -431,14 +463,17 @@ class VideoRecorder(Node):
 
 def main() -> None:
     rclpy.init()
+    signal.signal(signal.SIGHUP, signal.default_int_handler)
     node = VideoRecorder()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        if node.output_dir is not None:
+            node.stop_recording()
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":
