@@ -42,8 +42,13 @@ export function limitsToBand(positionLimits, flipped = false) {
  * Joint 2's floor given where joint 1 is, in radians. Full travel with the arm
  * swung clear behind the ramp, tightened to `restrictedMin` across the front arc
  * where lowering joint 2 folds the arm into the body, and linearly interpolated
- * between. Mirrors arm_control.cpp so the operator feels the same boundary the
- * follower enforces instead of silently diverging from it.
+ * between. Mirrors arm_control.cpp's joint limits so the operator sees the same
+ * boundary the follower enforces.
+ *
+ * The robot also runs a body keepout that this cannot express — it tests where
+ * the arm actually is, so reaching down in front stays free while folding back
+ * over the chassis does not. Divergence, not this band, is what tells the leader
+ * about that one.
  * @param {number} joint1Rad
  * @param {number} baseMinRad Joint 2's unrestricted floor.
  * @param {{ restrictedMin: number, arcLo: number, arcHi: number, rampLo: number, rampHi: number }} shape

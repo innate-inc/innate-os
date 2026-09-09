@@ -31,6 +31,100 @@ inline bool isX330(const std::string& motor_type) {
     return motor_type.find("330") != std::string::npos;
 }
 
+// ---- Arm reach and self-collision -----------------------------------------
+// Link offsets are the joint origins in mars_sim/urdf/mars.urdf. Kept here as
+// the single copy: both gain scheduling and the self-collision floor need reach,
+// and two transcriptions of the same measurements would drift.
+static constexpr double kL2_x = 0.02825, kL2_z = 0.12125;  // joint2 -> joint3
+static constexpr double kL3_x = 0.1375, kL3_z = 0.0045;    // joint3 -> joint4
+static constexpr double kL45_x = 0.110838;                 // joint4 -> tool
+static constexpr double kMaxReach = 0.37291;
+
+// Horizontal distance from the shoulder to the tool. Planar — joint_1 only
+// rotates this plane, so it does not appear.
+inline double horizReach(double q2, double q3, double q4) {
+    const double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
+    return std::abs(kL2_x * std::cos(a2) + kL2_z * std::sin(a2) + kL3_x * std::cos(a23) +
+                    kL3_z * std::sin(a23) + kL45_x * std::cos(a234));
+}
+
+// ---- Body keepout ----------------------------------------------------------
+// The arm must not intersect the robot's own body, but it MUST be free to reach
+// down — over a table edge, say — so the constraint is where the arm is in
+// space, not how far a joint has travelled. A floor on joint_2 cannot express
+// that: reaching down in front and folding back over the chassis look identical
+// to any measure that ignores direction.
+//
+// So: place the arm's elbow, wrist and tool in the base frame and test them
+// against boxes covering the body. Cheap (a handful of AABB tests), and it
+// captures the asymmetry — the chassis is rectangular and the shoulder is
+// mounted 53 mm off its centreline, which is what makes a corner reachable at
+// some joint_1 bearings and not others.
+//
+// Sampled at three points, so a link can still pass close to a corner between
+// samples; the margin covers that. The urdf/FCL check is the version that does
+// not sample.
+
+// Shoulder (the joint_2 axis) in base_link, from mars.urdf: joint1 origin
+// (0.086, -0.05285, 0.04025) plus joint2's (0, 0, 0.04425).
+static constexpr double kShoulderX = 0.086, kShoulderY = -0.05285, kShoulderZ = 0.0845;
+// joint4 -> joint6 along the forearm (joint5's 0.019 + joint6's 0.044).
+static constexpr double kWristFromElbow = 0.063;
+
+struct BodyBox {
+    double min_x, min_y, min_z, max_x, max_y, max_z;
+    bool contains(double x, double y, double z, double m) const {
+        return x >= min_x - m && x <= max_x + m && y >= min_y - m && y <= max_y + m && z >= min_z - m &&
+               z <= max_z + m;
+    }
+};
+
+struct SelfCollisionConfig {
+    std::vector<BodyBox> boxes;
+    double margin = 0.015;      // metres of clearance demanded around each box
+    int bisect_steps = 8;       // resolution of the walk back toward a safe pose
+    bool enabled = true;
+    bool valid() const { return !boxes.empty(); }
+};
+
+// The arm's elbow, wrist and tool in the shoulder's sagittal plane: `px` along
+// the arm's bearing, `pz` vertical. Rotation matches horizReach's convention.
+struct ArmPlanarPoints {
+    double elbow_x, elbow_z, wrist_x, wrist_z, tool_x, tool_z;
+};
+
+inline ArmPlanarPoints armPlanarPoints(double q2, double q3, double q4) {
+    const double a23 = q2 + q3, a234 = a23 + q4;
+    const double ex = kL2_x * std::cos(q2) + kL2_z * std::sin(q2) + kL3_x * std::cos(a23) + kL3_z * std::sin(a23);
+    const double ez = -kL2_x * std::sin(q2) + kL2_z * std::cos(q2) - kL3_x * std::sin(a23) + kL3_z * std::cos(a23);
+    const double c = std::cos(a234), s = std::sin(a234);
+    return {ex,
+            ez,
+            ex + kWristFromElbow * c,
+            ez - kWristFromElbow * s,
+            ex + kL45_x * c,
+            ez - kL45_x * s};
+}
+
+// True if any sampled point of the arm sits inside a body box. joint_1 rotates
+// the sagittal plane about the shoulder, so a planar (px, pz) lifts to
+// (shoulder + px·cos q1, shoulder + px·sin q1, shoulder + pz).
+inline bool poseHitsBody(double q1, double q2, double q3, double q4, const SelfCollisionConfig& c) {
+    if (!c.enabled || !c.valid()) return false;
+    const ArmPlanarPoints p = armPlanarPoints(q2, q3, q4);
+    const double cq = std::cos(q1), sq = std::sin(q1);
+    const double px[3] = {p.elbow_x, p.wrist_x, p.tool_x};
+    const double pz[3] = {p.elbow_z, p.wrist_z, p.tool_z};
+    for (int i = 0; i < 3; ++i) {
+        const double x = kShoulderX + px[i] * cq;
+        const double y = kShoulderY + px[i] * sq;
+        const double z = kShoulderZ + pz[i];
+        for (const auto& b : c.boxes)
+            if (b.contains(x, y, z, c.margin)) return true;
+    }
+    return false;
+}
+
 struct JointConfig {
     int servo_id;
     std::string motor_type;  // e.g. "XC330-M288", "XL430-W250" — "330" = has current hw

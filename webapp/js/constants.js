@@ -236,12 +236,13 @@ export const JOINT_GUARD_ENABLED = [true, false, false, false, false, false];
 // this was missing.
 export const JOINT_DIRECTION_FLIPPED = [false, true, true, true, false, true];
 
-// The real anti-self-collision rule, and the reason per-joint limits alone let
-// the arm reach the frame: joint_2's floor tightens to J2_RESTRICTED_MIN_RAD
-// while joint_1 is in the front arc, ramping back to its full range as joint_1
-// swings clear. Mirrors arm_control.cpp's "intelligent joint limits" — these
-// numbers live in that file, not in arm_config.yaml, so the two copies must be
-// changed together.
+// joint_2's floor tightens while joint_1 is in the front arc, ramping back as it
+// swings clear. Mirrors the joint limits in arm_control.cpp so the shaded zone
+// and the offline fallback show the boundary the follower enforces.
+//
+// This is only part of the robot's rule. mars_arm also runs a body keepout that
+// tests where the arm actually is, which no per-joint band can express — the
+// leader learns about that from the follower diverging, not from a mirror.
 export const J2_RESTRICTED_MIN_RAD = -0.5;
 export const J1_FRONT_ARC_LO = -1.0;
 export const J1_FRONT_ARC_HI = 1.0;
