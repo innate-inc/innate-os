@@ -45,9 +45,18 @@ CAMERAS = {
     "wrist": ("robot_arm_camera_link", (1, 0, 0), (0, 0, 1)),
 }
 JPEG_QUALITY = 80  # matches main_camera_driver.cpp
-# Post-render ACES tone map approximating sim/viewer's Three.js output
-# (ACESFilmicToneMapping); exposure calibrated visually against it.
-TONEMAP_EXPOSURE = 2.5
+TONEMAP_EXPOSURE = 1.5  # sim/viewer's renderer.toneMappingExposure
+# Shadow box half-size (m) around the robot and the props in play. Keep its texels
+# small: without ARB_clip_control (macOS) MuJoCo's caster pass offsets depth by
+# ~16 texels, which erases an object's base and leaves a detached shadow.
+SHADOW_BOX_MIN_M = 1.5
+SHADOW_BOX_MAX_M = 3.0
+SHADOW_BOX_MARGIN_M = 0.5
+# Shadows cost ~2x per frame on native GL and ~3x on software GL, where the
+# frame time already starves the stack; VIRTUAL_MARS_SHADOWS=0/1 overrides.
+SHADOWS = (
+    os.environ.get("VIRTUAL_MARS_SHADOWS", "0" if os.environ.get("MUJOCO_GL", "").lower() == "osmesa" else "1") == "1"
+)
 
 # Arm/head PD servo -- apartmentWorker.ts's tuned defaults (reactive feel),
 # torque-clamped; the URDF's per-joint damping=5 caps speed at LIMIT/5 rad/s.
@@ -93,19 +102,34 @@ def encode_jpeg(rgb: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
-def _build_tonemap_lut() -> np.ndarray:
-    linear = (np.arange(256, dtype=np.float32) / 255.0) ** 2.2 * TONEMAP_EXPOSURE
-    mapped = np.clip(linear * (2.51 * linear + 0.03) / (linear * (2.43 * linear + 0.59) + 0.14), 0, 1)
-    return (mapped ** (1 / 2.2) * 255).astype(np.uint8)
+# three.js ACESFilmicToneMapping (Hill fit, colour matrices included): a baked
+# texture comes out of both renderers identical. Per-channel shortcuts shift hues.
+_ACES_INPUT = np.array(
+    [[0.59719, 0.35458, 0.04823], [0.07600, 0.90834, 0.01566], [0.02840, 0.13383, 0.83777]], dtype=np.float32
+)
+_ACES_OUTPUT = np.array(
+    [[1.60475, -0.53108, -0.07367], [-0.10208, 1.10813, -0.00605], [-0.00327, -0.07276, 1.07602]], dtype=np.float32
+)
+_SRGB_STEPS = 4096
 
 
-# The map is per-channel uint8 -> uint8, so a 256-entry LUT replaces two pow()
-# passes over every pixel of every frame.
-_TONEMAP_LUT = _build_tonemap_lut()
+def _srgb_to_linear(x: np.ndarray) -> np.ndarray:
+    return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
+
+
+def _linear_to_srgb(x: np.ndarray) -> np.ndarray:
+    return np.where(x <= 0.0031308, x * 12.92, 1.055 * x ** (1 / 2.4) - 0.055)
+
+
+_LINEAR_LUT = (_srgb_to_linear(np.arange(256, dtype=np.float32) / 255.0) * (TONEMAP_EXPOSURE / 0.6)).astype(np.float32)
+_SRGB_LUT = (_linear_to_srgb(np.arange(_SRGB_STEPS + 1, dtype=np.float32) / _SRGB_STEPS) * 255 + 0.5).astype(np.uint8)
 
 
 def _tonemap(rgb: np.ndarray) -> np.ndarray:
-    return _TONEMAP_LUT[rgb]
+    v = _LINEAR_LUT[rgb] @ _ACES_INPUT.T
+    v = (v * (v + 0.0245786) - 0.000090537) / (v * (0.983729 * v + 0.4329510) + 0.238081)
+    v = np.clip(v @ _ACES_OUTPUT.T, 0.0, 1.0)
+    return _SRGB_LUT[(v * _SRGB_STEPS).astype(np.int32)]
 
 
 def _navigation_grid(base_grid: np.ndarray, seen_free: np.ndarray, seen_occ: np.ndarray) -> np.ndarray:
@@ -228,6 +252,7 @@ class VirtualMars:
             spawn_pose=self._spawn,
             traffic_bodies=self.traffic.bodies_xml(),
             traffic_assets=self.traffic.assets_xml(),
+            atmosphere=self.environment.viewer.get("atmosphere"),
         )
         # Lidar rays hit only the textured visual meshes (true surfaces, like
         # a real lidar) when available -- without them, fall back to all
@@ -303,10 +328,6 @@ class VirtualMars:
         # camera near plane) so the cameras clip their own housing shells
         # instead of rendering them.
         self.model.vis.map.znear = 0.03 / self.model.stat.extent
-        # The textured rooms carry baked lighting; brighten toward the
-        # Three.js render (ambient 1.2 + ACES exposure 1.5 there).
-        self.model.vis.headlight.ambient[:] = 0.5
-        self.model.vis.headlight.diffuse[:] = 0.5
         self.data = mujoco.MjData(self.model)
 
         self._base_id = self.model.body("robot_base_link").id
@@ -336,6 +357,10 @@ class VirtualMars:
         self.props.bind(self.model)
 
         self._renderer: mujoco.Renderer | None = None
+        self._foggy = self.environment.viewer.get("atmosphere") == "void"
+        environment = self.model.body("apartment").id
+        self._environment_geoms = {g for g in range(self.model.ngeom) if self.model.geom_bodyid[g] in (environment, 0)}
+        self._encode_display_colours()
         self._depth_renderer: mujoco.Renderer | None = None
         self._cmd_vx = 0.0
         self._cmd_wz = 0.0
@@ -492,10 +517,42 @@ class VirtualMars:
         physics lock). The GL render itself (read_rgb) can then run outside."""
         if self._renderer is None:
             self._renderer = mujoco.Renderer(self.model, height=self._render_h, width=self._render_w)
+        if SHADOWS:
+            cx, cy, half = self._shadow_box()
+            key = (cx + world.KEY_LIGHT_OFFSET[0], cy + world.KEY_LIGHT_OFFSET[1], world.KEY_LIGHT_OFFSET[2])
+            self.model.light_pos[0] = key
+            self.data.light_xpos[0] = key  # what the scene reads; kinematics refresh it from light_pos
+            self._renderer._mjr_context.shadowClip = half  # mjr keeps the box size in its context, not the model
+        scene = self._renderer.scene
         self._renderer.update_scene(self.data, camera=camera)
-        # Shadows/reflections cost ~3x on software GL (242 -> 71 ms/frame).
-        self._renderer.scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = 0
-        self._renderer.scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 0
+        scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = int(SHADOWS)
+        scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 0
+        scene.flags[mujoco.mjtRndFlag.mjRND_FOG] = int(self._foggy)
+        if SHADOWS:
+            self._exempt_environment_from_casting(scene)
+
+    def _encode_display_colours(self) -> None:
+        """Prop rgba is linear light to the viewer's three.js and a display value to
+        MuJoCo; encoded once, the cameras show the colours the viewer shows."""
+        prop_bodies = {self.model.body(name).id for name in self.props.props}
+        geoms = [g for g in range(self.model.ngeom) if self.model.geom_bodyid[g] in prop_bodies]
+        self.model.geom_rgba[geoms, :3] = _linear_to_srgb(self.model.geom_rgba[geoms, :3])
+
+    def _shadow_box(self) -> tuple[float, float, float]:
+        """(centre x, centre y, half-size) of the square around the robot and every prop in play."""
+        x, y, _yaw = self.pose()
+        centers = [c for name in self.props.out if (c := self.props.center_xy(self.data, name)) is not None]
+        xs, ys = [x, *(c[0] for c in centers)], [y, *(c[1] for c in centers)]
+        half = max(max(xs) - min(xs), max(ys) - min(ys)) / 2 + SHADOW_BOX_MARGIN_M
+        return (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, min(max(half, SHADOW_BOX_MIN_M), SHADOW_BOX_MAX_M)
+
+    def _exempt_environment_from_casting(self, scene: mujoco.MjvScene) -> None:
+        """Baked geometry receives shadows but casts none (the viewer's castShadow=false),
+        or ceilings shadow whole rooms; the caster pass skips decor-category geoms."""
+        for i in range(scene.ngeom):
+            geom = scene.geoms[i]
+            if geom.objtype == mujoco.mjtObj.mjOBJ_GEOM and geom.objid in self._environment_geoms:
+                geom.category = mujoco.mjtCatBit.mjCAT_DECOR
 
     def read_rgb(self) -> np.ndarray:
         """Tone-mapped uint8 RGB of the last update_camera snapshot. Slow
