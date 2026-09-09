@@ -27,12 +27,6 @@ import {
 // Runs of the same skill collapse into one group at this many in a row.
 const SKILL_GROUP_MIN = 3;
 
-/** The bridge between the agent and this UI is implementation detail, not an
- * action the user asked the robot to perform. @param {string} name */
-export function isInternalOnboardingSkill(name) {
-  return isPromptSuggestionSkill(name);
-}
-
 /**
  * @returns {{
  *   head: HTMLElement,
@@ -107,7 +101,8 @@ export function createChatStream() {
   }
 
   /** Keep a few optional next requests directly under the latest message.
-   * @param {string | string[] | null} text @param {(text: string) => void} [onSelect] */
+   * @param {string | Array<string | {text: string, kind?: string, onSelect: (text: string) => void}> | null} text
+   * @param {(text: string) => void} [onSelect] */
   function setSuggestion(text, onSelect) {
     const wasAtBottom = atBottom();
     suggestion?.remove();
@@ -492,24 +487,15 @@ export function createChatStream() {
     if (sender === "task_activated") {
       const name = String(e?.text ?? e?.skill_name ?? e?.skillId ?? "");
       const status = String(e?.taskStatus ?? "");
-      if (!name || !status || isInternalOnboardingSkill(name)) return;
+      if (!name || !status || isPromptSuggestionSkill(name)) return;
       const key = String(e?.primitiveId ?? e?.skillId ?? name);
       addSkillRun(key, name, status, ts, typeof e?.failureReason === "string" ? e.failureReason : "", e?.args);
       return;
     }
     const text = String(e?.text ?? "");
     if (!text) return;
-    // The brain records a line once per source; the same words twice in a row are one line.
-    const signature = `${sender}\n${text.trim()}`;
-    if (signature === lastReplayed) return;
-    lastReplayed = signature;
-    if (e?.narrator) {
-      addMessage("system", text, ts, "narrator");
-      return;
-    }
     routeChatOut(sender, text, ts);
   }
-  let lastReplayed = "";
 
   /** Replace the transcript with a history snapshot. The snapshot already
    *  includes anything the live stream just showed, so reset and replay it
@@ -525,7 +511,6 @@ export function createChatStream() {
     skillRuns.clear();
     skillStreak = null;
     lastTs = 0;
-    lastReplayed = "";
     replayingHistory = true;
     stream.classList.add("replaying");
     try {

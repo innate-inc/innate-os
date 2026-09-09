@@ -13,7 +13,7 @@
 // The thought-grouping + skill-run rendering here is the canonical chat stream
 // (it originated in the old teleop chat pane, since removed).
 
-import { createPromptSuggestions } from "./promptSuggestions.js";
+import { createPromptSuggestions, isPromptSuggestionSkill } from "./promptSuggestions.js";
 import { createMicStream } from "./micStream.js";
 import {
   AGENT_STATUS_TOPIC,
@@ -22,7 +22,7 @@ import {
   GET_CHAT_HISTORY_SERVICE,
   SKILL_STATUS_UPDATE_TOPIC,
 } from "../constants.js";
-import { createChatStream, isInternalOnboardingSkill } from "./chatStream.js";
+import { createChatStream } from "./chatStream.js";
 import { createDirectiveControls } from "./directiveControls.js";
 import { createAgentSheet } from "./agentSheet.js";
 
@@ -38,8 +38,6 @@ const THINKING_STALE_MS = 10_000;
  * @param {{
  *   enableMic?: boolean,
  *   onMicState?: (state: {on: boolean, busy: boolean, level: number, waveform: number[], error: string | null}) => void,
- *   ensureRunning?: (fallback: () => Promise<void>) => Promise<void>,
- *   onUserMessage?: (text: string, timestamp: number) => void,
  *   onRobotMessage?: (text: string, timestamp: number) => void,
  *   onSkillStatus?: (event: {skill: string, runId: string, status: string, timestamp: number}) => void,
  * }} opts
@@ -81,8 +79,11 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   let displayNameOverride = null;
   let directiveName = "—";
   const applyName = () => sheet?.setName(displayNameOverride ?? directiveName);
+  /** @type {(() => void) | null} */
+  let onCreateAgent = null;
   const directives = createDirectiveControls(agentState, {
     listId: `agent-directive-list-${selfOrigin}`,
+    onCreate: () => onCreateAgent?.(),
     onAgentName(name) {
       directiveName = name;
       applyName();
@@ -191,7 +192,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   function focusComposerOnEnter(e) {
     if (
       e.defaultPrevented ||
-      root.classList.contains("first-mission-choosing") ||
       e.key !== "Enter" ||
       e.repeat ||
       e.altKey ||
@@ -206,7 +206,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
 
   // ---- composer -----------------------------------------------------------
   async function startMic() {
-    await (opts.ensureRunning?.(directives.ensureRunning) ?? directives.ensureRunning());
+    await directives.ensureRunning();
     await mic?.start();
   }
 
@@ -222,6 +222,8 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   /** @type {Array<{text: string, kind: string, onSelect: (text: string) => void}>} */
   let offers = [];
   let offersExclusive = false;
+  /** @param {typeof offers} list @param {boolean} exclusive */
+  const offersKey = (list, exclusive) => `${exclusive}|${list.map((o) => `${o.kind}:${o.text}`).join("\n")}`;
   function renderChips() {
     chat.setSuggestion([...offers, ...(offersExclusive ? [] : modelPrompts)], (selected) => void submitText(selected));
   }
@@ -230,8 +232,8 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     renderChips();
   });
   let sending = false;
-  /** @param {string} text */
-  /** Texts this page sent lately: the brain echoes user lines on chat_out, and one bubble is enough. */
+  /** When this page sent each text: the brain echoes user lines on chat_out, and one bubble is enough.
+   * @type {Map<string, number>} */
   const sentTexts = new Map();
   /** @param {string} text @param {{ narrator?: boolean, quiet?: boolean, local?: boolean }} [how] narrator styles the line as the world speaking rather than the visitor; quiet keeps a failed send off the screen; local shows the line without telling the brain */
   async function submitText(text, how = {}) {
@@ -247,7 +249,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       return true; // a stage direction for the visitor only; the brain is busy and must not be nudged
     }
     try {
-      await (opts.ensureRunning?.(directives.ensureRunning) ?? directives.ensureRunning());
+      await directives.ensureRunning();
       const frame = { data: JSON.stringify({ text, sender: "user", timestamp, origin: selfOrigin }) };
       let sent = rosClient.publish(CHAT_IN_TOPIC, frame);
       if (!sent) {
@@ -257,7 +259,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       }
       if (!sent) throw new Error("The robot connection was lost before the message could be sent.");
       suggestions.clear();
-      opts.onUserMessage?.(text, timestamp);
       return true;
     } catch (error) {
       const detail = error instanceof Error ? error.message : "The message could not be sent.";
@@ -301,9 +302,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   let lastSnapshot = "";
   let historyFloor = 0;
 
-  /** @param {boolean} [duringOnboarding] */
-  async function loadHistory(duringOnboarding = false) {
-    if (!duringOnboarding && root.classList.contains("agent-conversation-onboarding")) return;
+  async function loadHistory() {
     if (loadingHistory) return;
     loadingHistory = true;
     try {
@@ -393,7 +392,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     const name = String(payload?.primitive_name ?? payload?.skill_name ?? payload?.skill_id ?? "");
     const status = String(payload?.status ?? "");
     if (suggestions.consume(payload)) return;
-    if (!name || !status || isInternalOnboardingSkill(name)) return;
+    if (!name || !status || isPromptSuggestionSkill(name)) return;
     const key = String(payload?.primitive_id ?? payload?.skill_id ?? name);
     const reason = typeof payload?.reason === "string" ? payload.reason : "";
     const ts = Number(payload?.timestamp) || Date.now() / 1000;
@@ -405,6 +404,11 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
 
   return {
     armedAgentId: () => directives.armedId(),
+    armAgent: directives.arm,
+    /** The picker's "Create agent" row calls this. @param {() => void} cb */
+    setCreateAgentHandler(cb) {
+      onCreateAgent = cb;
+    },
     // The agent picker and its Start/Stop, for whoever shows the agent's detail.
     directivesEl: directives.el,
     startMic,
@@ -428,14 +432,13 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       suggestions.clear();
       chat.clear();
       sheet.open();
-      if (!fresh) void loadHistory(true);
+      if (!fresh) void loadHistory();
     },
     clearSuggestedPrompts: () => suggestions.clear(),
     /** @param {Array<{text: string, kind: string, onSelect: (text: string) => void}>} next */
     setOffers(next, exclusive = false) {
       // Called on every world frame; only a changed set may touch the DOM.
-      const key = `${exclusive}|${next.map((o) => `${o.kind}:${o.text}`).join("\n")}`;
-      if (key === `${offersExclusive}|${offers.map((o) => `${o.kind}:${o.text}`).join("\n")}`) return;
+      if (offersKey(next, exclusive) === offersKey(offers, offersExclusive)) return;
       offers = next;
       offersExclusive = exclusive;
       renderChips();

@@ -110,8 +110,7 @@ class BrainLifecycle:
             return
         directive = self._state.directives[name]
         self._state.current_directive = directive
-        initial = directive.initial_skill_ids()
-        self._state.active_skill_ids = list(directive.skill_ids() if initial is None else initial)
+        self._state.active_skill_ids = list(directive.initial_skill_ids())
         self._logger.info(f"Activated directive: {name}")
         self._chat.clear()
         self._brain.reset()

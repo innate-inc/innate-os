@@ -383,7 +383,6 @@ class VirtualMars:
         self.data.qpos[mq] = mult * ARM_HOME[source]
         self.props.mark_all_parked()  # mj_resetData already re-parked every prop
         self.traffic.reset(self.data)
-        self._traffic_contact = False
         self._cmd_vx = self._cmd_wz = 0.0
         self._cmd_sim_time = -math.inf
         self._hold = None
@@ -432,8 +431,6 @@ class VirtualMars:
             if self.traffic.enabled:
                 self.traffic.step(self.data, dt, self.pose()[:2])
             mujoco.mj_step(self.model, self.data)
-            if self.traffic.enabled and not self._traffic_contact:
-                self._traffic_contact = self._has_traffic_contact()
             if not np.all(np.isfinite(self.data.qpos)):
                 self.reset()
                 return
@@ -570,24 +567,6 @@ class VirtualMars:
     def render_rgb(self, camera: str) -> np.ndarray:
         self.update_camera(camera)
         return self.read_rgb()
-
-    def traffic_contact(self) -> bool:
-        """Consume contacts since the previous judge snapshot. A brief collision
-        between observer frames must still invalidate a crossing."""
-        contact = self._traffic_contact
-        self._traffic_contact = False
-        return contact
-
-    def _has_traffic_contact(self) -> bool:
-        for contact in self.data.contact:
-            if contact.dist > 0:
-                continue
-            names = [self.model.body(int(self.model.geom_bodyid[g])).name or "" for g in contact.geom]
-            if any(name.startswith("traffic_car_") for name in names) and any(
-                name.startswith("robot_") for name in names
-            ):
-                return True
-        return False
 
     def render_jpeg(self, camera: str) -> bytes:
         return encode_jpeg(self.render_rgb(camera))

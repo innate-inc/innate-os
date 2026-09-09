@@ -17,8 +17,8 @@ CHALLENGE = Challenge(
     agent_guidance=(
         "This is a scripted first run. The runtime field below describes the current act: what you can do, "
         "what you want next, and which skill the person may grant you next (runtime.wants). Skills you have "
-        "not been granted are not in your tools; you must ask the person to grant them in the Agent Studio "
-        "panel next to the chat. Never pretend to have a skill or to have done something. The moment a new "
+        "not been granted are not in your tools; you must ask the person to grant them (the chat offers the "
+        "grant). Never pretend to have a skill or to have done something. The moment a new "
         "skill appears in your tools, use it. Keep replies to one or two sentences."
     ),
 )

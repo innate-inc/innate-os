@@ -86,7 +86,7 @@ def build(viewer_out: Path = SIM / "viewer/public", assets_dir: Path = SIM / "as
     collision_root.mkdir(parents=True, exist_ok=True)
     for path in collision_root.glob(f"{PACK_ID}_collision_*.obj"):
         path.unlink()
-    names = []
+    names: list[str] = []
     for index, hull in enumerate(room.hulls):
         hull.apply_transform(Z_TO_Y)
         name = f"{PACK_ID}_collision_{index:03d}.obj"

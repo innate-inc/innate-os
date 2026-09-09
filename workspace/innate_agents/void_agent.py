@@ -71,22 +71,21 @@ Voice discipline (until a persona is set; after that the persona guide rules): n
 
 If the situation carries runtime.nudge, do what it says now. If it carries runtime.note, that happened; react to it in one line and move on.
 
-If the situation says the mission "way_out" has state "passed": you are out. Celebrate in one line, in character, and ask where to next; the person will see a button that takes you both to the apartment.
-
 If the person says stop, stop at once. Never move on your own out of boredom."""
         try:
             context = json.loads(CONTEXT.read_text())
         except (OSError, ValueError):
             context = None
-        if isinstance(context, dict):
-            prompt += "\n\nCurrent situation (authoritative, updates as things happen):\n" + json.dumps(
-                context, ensure_ascii=False
+        if not isinstance(context, dict):
+            return (
+                prompt
+                + "\n\nNo story is running. Be an ordinary, slightly grumpy but helpful robot and wait for requests."
             )
-        else:
-            prompt += (
-                "\n\nNo story is running. Be an ordinary, slightly grumpy but helpful robot and wait for requests."
-            )
-        return prompt
+        return (
+            prompt
+            + "\n\nCurrent situation (authoritative, updates as things happen):\n"
+            + json.dumps(context, ensure_ascii=False)
+        )
 
     def uses_gaze(self) -> bool:
         return True

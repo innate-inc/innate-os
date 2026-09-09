@@ -88,7 +88,6 @@ class WorldState:
     # body). Props still parked off-map are absent, not reported.
     centers: dict[str, tuple[float, float]]
     objects: dict[str, list[float]] = field(default_factory=dict)
-    traffic_contact: bool = False
 
     def pos(self, name: str) -> tuple[float, float] | None:
         """xy of "robot" or a prop; None while that prop isn't dropped."""
@@ -365,8 +364,8 @@ class Challenge:
     # Environment pack ids this scenario is authored for (its drops and goals
     # are coordinates in that world); None means any pack can host it.
     environments: tuple[str, ...] | None = field(default=None, kw_only=True)
-    # Public scenario instructions, never private judging state. Intro Agent
-    # reads these alongside the current goal list on every conversational turn.
+    # Public scenario instructions, never private judging state; the agent reads
+    # them with the current goal list (challenge_context.json) on every turn.
     agent_guidance: str = field(default="", kw_only=True)
     # Optional authored first pose (x, y, yaw degrees), applied only on start.
     spawn: tuple[float, float, float] | None = field(default=None, kw_only=True)
@@ -533,7 +532,7 @@ class ChallengeEngine:
 
     # -- commands (observer connection threads) --
 
-    def start(self, challenge_id: str, request_id: str | None = None) -> bool:
+    def start(self, challenge_id: str) -> bool:
         challenge = self.challenges.get(challenge_id)
         if challenge is None:
             print(f"[challenges] start ignored: unknown id {challenge_id!r}", flush=True)
@@ -557,14 +556,6 @@ class ChallengeEngine:
         # can never fire. Serialized, the later start simply wins: it aborts
         # the earlier run and builds its scene on top.
         with self._run_lock:
-            if request_id is not None:
-                try:
-                    request_id = str(uuid.UUID(request_id))
-                except (ValueError, TypeError, AttributeError):
-                    return False
-                with self._mutex:
-                    if self.active is not None and self.active.id == challenge_id and self.attempt_id == request_id:
-                        return True  # reconnect/reload acknowledges this exact attempt without rebuilding it
             self._deactivate()
             with self.sim_lock:
                 # First, so any snapshot gathered before this build carries the
@@ -572,10 +563,7 @@ class ChallengeEngine:
                 # gap, waiting to be ticked.
                 self.world_epoch += 1
                 if challenge.reset_world:
-                    if challenge.spawn is None:
-                        self.sim.reset()
-                    else:
-                        self.sim.reset(spawn=challenge.spawn)
+                    self.sim.reset(spawn=challenge.spawn)
                 for drop in challenge.setup:
                     if not self.sim.drop_prop_at(drop.name, drop.x, drop.y, math.radians(drop.yaw_deg)):
                         print(f"[challenges] {challenge.id}: no prop named {drop.name!r} in this world", flush=True)
@@ -603,7 +591,7 @@ class ChallengeEngine:
                 entry = self.progress.setdefault(challenge_id, {"attempts": 0, "passed": False, "best_time_s": None})
                 entry["attempts"] += 1
                 self.active = challenge  # last: judging starts here
-                self.attempt_id = request_id or str(uuid.uuid4())
+                self.attempt_id = str(uuid.uuid4())
                 self.runtime_public = None
                 if challenge.runtime is not None:
                     self.story_profile = {}  # a story starting over starts from nobody
@@ -614,13 +602,11 @@ class ChallengeEngine:
                     self._record(challenge.id, "failed", None)
         return True
 
-    def abort(self, request_id: str | None = None) -> None:
+    def abort(self) -> None:
         # Same lock as start(): aborting mid-build would otherwise clear an
         # `active` the starting thread is about to overwrite anyway, leaving
         # its scene on the floor with nothing judging it.
         with self._run_lock:
-            if request_id is not None and request_id != self.attempt_id:
-                return
             self._deactivate()
 
     def _deactivate(self) -> None:
@@ -709,7 +695,6 @@ class ChallengeEngine:
         epoch: int,
         *,
         objects: dict[str, list[float]] | None = None,
-        traffic_contact: bool = False,
     ) -> dict:
         """Advance the active challenge and return the state-stream block.
 
@@ -739,9 +724,7 @@ class ChallengeEngine:
                 # Drained only when judged: a skipped tick must leave this
                 # run's skill completions for the next current one.
                 events, self._events = self._events, []
-                state = WorldState(
-                    t=t, robot=pose, centers=centers, objects=objects or {}, traffic_contact=traffic_contact
-                )
+                state = WorldState(t=t, robot=pose, centers=centers, objects=objects or {})
                 self.elapsed_s = max(0.0, t - self.started_t)
                 try:
                     if challenge.runtime is not None:
@@ -847,9 +830,7 @@ class ChallengeEngine:
                 "brief": challenge.brief,
                 "state": self.state,
                 "guidance": challenge.agent_guidance,
-                "goals": [
-                    {"label": g.label, "done": done} for g, done in zip(challenge.goals, self.goal_done, strict=True)
-                ],
+                "goals": self._goals(challenge),
                 "runtime": self.runtime_public,
                 "profile": self.story_profile,
             }
@@ -865,6 +846,9 @@ class ChallengeEngine:
             self._context_json = encoded
         except OSError as error:
             print(f"[challenges] could not write agent context: {error}", flush=True)
+
+    def _goals(self, challenge: Challenge) -> list[dict]:
+        return [{"label": g.label, "done": done} for g, done in zip(challenge.goals, self.goal_done, strict=True)]
 
     def _environment_id(self) -> str | None:
         environment = getattr(self.sim, "environment", None)
@@ -905,9 +889,7 @@ class ChallengeEngine:
                 "reason": self.reason,
                 "elapsed_s": round(self.elapsed_s, 1),
                 "time_limit_s": challenge.time_limit_s,
-                "goals": [
-                    {"label": g.label, "done": done} for g, done in zip(challenge.goals, self.goal_done, strict=True)
-                ],
+                "goals": self._goals(challenge),
                 "runtime": self.runtime_public,
             }
         return block

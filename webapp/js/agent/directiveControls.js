@@ -19,8 +19,9 @@ import {
  *   listId: string,
  *   onAgentName: (name: string) => void,
  *   onBrainActive: (active: boolean, justStarted: boolean) => void,
+ *   onCreate?: () => void,
  * }} opts
- * @returns {{ el: HTMLElement, toggleEl: HTMLButtonElement, ensureRunning: () => Promise<void>, destroy: () => void }}
+ * @returns {{ el: HTMLElement, toggleEl: HTMLButtonElement, armedId: () => string, arm: (id: string) => void, ensureRunning: () => Promise<void>, destroy: () => void }}
  */
 export function createDirectiveControls(agentState, opts) {
   const controls = document.createElement("div");
@@ -205,6 +206,23 @@ export function createDirectiveControls(agentState, opts) {
       empty.textContent = "No agents available";
       directiveList.append(empty);
     }
+    if (opts.onCreate) {
+      const create = document.createElement("button");
+      create.type = "button";
+      create.className = "agent-directive-option create";
+      create.setAttribute("role", "option");
+      create.setAttribute("aria-selected", "false");
+      create.innerHTML = '<span class="agent-directive-check" aria-hidden="true">+</span>';
+      const name = document.createElement("span");
+      name.className = "agent-directive-option-name";
+      name.textContent = "Create agent";
+      create.append(name);
+      create.addEventListener("click", () => {
+        setDirectiveOpen(false);
+        opts.onCreate?.();
+      });
+      directiveList.append(create);
+    }
     const selectedAgent = agents.find((agent) => agent.id === armed);
     selectedDirective = selectedAgent?.id ?? "";
     directiveValue.textContent = selectedAgent?.name ?? "No agents available";
@@ -281,6 +299,8 @@ export function createDirectiveControls(agentState, opts) {
     // The agent the picker shows, running or not: a chosen agent is selected
     // even before Start (the studio names it).
     armedId: () => selectedDirective,
+    /** Pick an agent the way the dropdown would (a just-created one). @param {string} id */
+    arm: (id) => chooseDirective(id, undefined),
     // The compact sheet parks this in its header; moved, not duplicated.
     toggleEl: toggleBtn,
     ensureRunning,

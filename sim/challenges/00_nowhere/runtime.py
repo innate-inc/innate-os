@@ -2,7 +2,7 @@
 
 Each act names the skills the person may grant next, what the robot wants meanwhile,
 and how the world tells the act is over. The runtime publishes that as the
-challenge's public state, which both the Agent Studio panel and the agent's
+challenge's public state, which both the agent detail panel and the agent's
 prompt read; the goal checklist mirrors the acts. Every act changes the world,
 and no act can strand the visitor: a stuck act nudges, and the two that depend
 on a physical skill give up gracefully after repeated failure.
@@ -16,7 +16,6 @@ from dataclasses import dataclass
 
 from mars_sim_driver.challenges import ChallengeRuntime, Drop, Predicate, RuntimeResult, WorldState
 
-STORY = "nowhere"
 DOOR = "void_door"
 CAN = "cube"
 SUGGEST = "innate-os/suggest_user_prompts"
@@ -40,19 +39,18 @@ PERSONAS = {
         "white room"
     ),
 }
-PROFILE_KEYS = ("persona", "name")
 NUDGE_AFTER_S = 90.0
 
 
-def status_of(events: list[dict], skill: str, status: str) -> bool:
-    return any(
-        ev.get("status") == status and skill in (str(ev.get("skill_id", "")).rsplit("/", 1)[-1], ev.get("skill_name"))
-        for ev in events
+def matches(ev: dict, skill: str, status: str) -> bool:
+    return ev.get("status") == status and skill in (
+        str(ev.get("skill_id", "")).rsplit("/", 1)[-1],
+        ev.get("skill_name"),
     )
 
 
 def completed(events: list[dict], skill: str) -> bool:
-    return status_of(events, skill, "completed")
+    return any(matches(ev, skill, "completed") for ev in events)
 
 
 def ahead(state: WorldState, distance: float) -> tuple[float, float, float]:
@@ -70,7 +68,6 @@ class Act:
     # A world change mid-act: drops once this holds, then done() can pass.
     surprise: Callable[[WorldState, list[dict], NowhereRuntime], list[Drop] | None] | None = None
     nudge: str = ""
-    # The act ends anyway after this many failures of this skill, or this much sim time.
     give_up_skill: str | None = None
     give_up_failures: int = 2
     give_up_after_s: float | None = None
@@ -120,7 +117,7 @@ ACTS = (
         "You just came online in a featureless white room. You cannot move anything, not even your face; you can "
         "only talk, and you do not even know who you are. Introduce yourself by name in your first sentence, say ONE "
         "line about the room, then ask the person to decide who you are: they built you, so they choose your "
-        "personality (they will see choices). Wait. The moment runtime.persona is set, become it completely and "
+        "personality (they will see choices). Wait. The moment profile.persona is set, become it completely and "
         "announce yourself in that voice in ONE line with at most one catchphrase. "
         "Good things to suggest: 'You choose.', 'Surprise me.'",
         _persona_chosen,
@@ -157,7 +154,6 @@ ACTS = (
         _lifted_can,
         nudge="The cube is still on the floor. In character, ask plainly for the PickAnyObject skill, or for another try. Do not mention buttons.",
         give_up_skill="pick_any_object",
-        give_up_failures=2,
         give_up_after_s=240.0,
         give_up_note="You could not pick up the cube and the world has given up on it: the cube is beside the point "
         "now. Be briefly indignant that this place moves the goalposts, then move on.",
@@ -174,7 +170,6 @@ ACTS = (
         place=lambda state: [Drop(DOOR, *ahead(state, 3.0))],
         nudge="The door is waiting. In character: if you have NavigateToPosition, go to the spot in front of it now; if not, ask for it again. Do not mention buttons.",
         give_up_skill="navigate_to_position",
-        give_up_failures=2,
         give_up_after_s=240.0,
         give_up_note="You never quite reached the door; it came to you instead. Do not explain it.",
     ),
@@ -184,27 +179,30 @@ NEXT = ("backrooms", "way_out")
 
 
 class NowhereRuntime(ChallengeRuntime):
-    def __init__(self, acts: tuple[Act, ...] = ACTS):
+    def __init__(self, acts: tuple[Act, ...]):
         self.acts = acts
         self.reset()
 
     def reset(self) -> None:
         self.act = 0
         self.done_count = 0
-        self.entered = False
-        self.surprised = False
         self.finished = False
-        self.act_origin: tuple[float, float] = (0.0, 0.0)
-        self.act_entered_t = 0.0
-        self.turned_t: float | None = None
-        self.failures = 0
-        self.nudging = False
         self.assisted: list[str] = []
         self.door: list[float] | None = None
         self.persona: str | None = None
         self.name: str | None = None
         self._last: tuple[float, float, float] | None = None
         self._still_since: float | None = None
+        self._enter_act(None)
+
+    def _enter_act(self, state: WorldState | None) -> None:
+        """Fresh per-act bookkeeping; None until the first tick brings the act its clock."""
+        self.entered = state is not None
+        self.act_entered_t = state.t if state is not None else 0.0
+        self.surprised = False
+        self.turned_t: float | None = None
+        self.failures = 0
+        self.nudging = False
 
     def still_for(self, state: WorldState, seconds: float) -> bool:
         """Whether the base has not moved for `seconds` of sim time."""
@@ -221,7 +219,7 @@ class NowhereRuntime(ChallengeRuntime):
     def _gave_up(self, state: WorldState, events: list[dict], act: Act) -> bool:
         if act.give_up_skill is None:
             return False
-        self.failures += sum(1 for _ in events if status_of([_], act.give_up_skill, "failed"))
+        self.failures += sum(matches(ev, act.give_up_skill, "failed") for ev in events)
         timed_out = act.give_up_after_s is not None and state.t - self.act_entered_t > act.give_up_after_s
         return self.failures >= act.give_up_failures or timed_out
 
@@ -232,13 +230,7 @@ class NowhereRuntime(ChallengeRuntime):
             return result
         act = self.acts[self.act]
         if not self.entered:
-            self.entered = True
-            self.surprised = False
-            self.turned_t = None
-            self.failures = 0
-            self.nudging = False
-            self.act_origin = state.robot[:2]
-            self.act_entered_t = state.t
+            self._enter_act(state)
             if act.place is not None:
                 result.drops = act.place(state)
                 if any(drop.name == DOOR for drop in result.drops):
@@ -274,7 +266,7 @@ class NowhereRuntime(ChallengeRuntime):
         notes = [a.give_up_note for a in self.acts if a.label in self.assisted and a.give_up_note]
         return {
             "profile": {"persona": self.persona, "persona_guide": PERSONAS.get(self.persona or ""), "name": self.name},
-            "story": STORY,
+            "story": "nowhere",
             "act": self.act,
             "acts": len(self.acts),
             "label": act.label,
@@ -284,8 +276,6 @@ class NowhereRuntime(ChallengeRuntime):
             "unlocked": unlocked,
             "wants": list(act.unlock),
             "personas": list(PERSONAS) if act.label == "Who am I" and self.persona is None else [],
-            "persona": self.persona,
-            "name": self.name,
             "door": self.door,
             "finished": self.finished,
         }

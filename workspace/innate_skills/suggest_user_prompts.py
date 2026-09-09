@@ -13,13 +13,10 @@ class SuggestUserPrompts(Skill):
     suggestions, never commands to execute or requirements for progression.
     Do not interrupt an action or split an already-authorized sequence to offer
     suggestions. Do not suggest success before the scene confirms it. Pass []
-    to clear obsolete suggestions. This skill does not reveal camera controls;
-    the interface reveals Main, Arm, and third-person views when the first task starts.
+    to clear obsolete suggestions.
     """
 
     def execute(self, prompts: list[str]) -> None:
-        # The interface consumes the validated inputs on the completed status
-        # event. No extra transport or spoken/internal output is needed.
         if not isinstance(prompts, list) or len(prompts) > 3:
             self.fail("Provide a list of zero to three short suggested requests.")
         if any(not isinstance(p, str) or not p.strip() or len(p) > 160 for p in prompts):

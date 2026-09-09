@@ -30,7 +30,7 @@ import { sharedAgentState } from "../teleop/agentState.js";
 import { createAgentPanel } from "./agentPanel.js";
 import { createChallengePanel } from "./challengePanel.js";
 import { createAgentStudio } from "./agentStudio.js";
-import { CANCEL_SKILL_SERVICE, SKILL_OVERLAY_TOPIC } from "../constants.js";
+import { AVAILABLE_SKILLS_TOPIC, CANCEL_SKILL_SERVICE, SKILL_OVERLAY_TOPIC } from "../constants.js";
 import { createAgentMicControl } from "./agentMicControl.js";
 
 // Runtime feature flags (config.json, served static), same as teleop. simControls
@@ -161,26 +161,13 @@ function buildAgentView(root) {
 
   /** @type {ReturnType<typeof createAgentMicControl> | null} */
   let micControl = null;
-  /** @type {string[]} */
-  const robotLines = [];
-  let robotLineCount = 0; // keeps counting after the window above starts dropping old lines
-  // The story's camera stays on the page's front framing until the robot first drives.
-  let motionSeen = false;
-  let lastMotionAt = 0;
+  // What the story reads off the chat: the robot's latest line, and when the skills
+  // it choreographs around last ran.
+  let lastRobotLine = "";
+  let robotLineCount = 0;
+  let motionAt = 0;
   let recalledAt = 0;
   let turnedAt = 0;
-  /** @type {Set<(event: any) => void>} */
-  const overlayListeners = new Set();
-  const unsubOverlay = ros.subscribe(SKILL_OVERLAY_TOPIC, (m) => {
-    if (typeof m?.data !== "string") return;
-    let event;
-    try {
-      event = JSON.parse(m.data);
-    } catch {
-      return;
-    }
-    for (const cb of overlayListeners) cb(event);
-  }, undefined, "std_msgs/msg/String");
   const panel = createAgentPanel(root, ros, agentState, {
     enableMic: Boolean(config.simControls),
     onMicState: (state) => {
@@ -191,15 +178,11 @@ function buildAgentView(root) {
       });
     },
     onRobotMessage: (text) => {
-      robotLines.push(text);
+      lastRobotLine = text;
       robotLineCount += 1;
-      if (robotLines.length > 40) robotLines.shift();
     },
     onSkillStatus: ({ skill, status }) => {
-      if (status === "running" && /(^|\/)(move_straight|navigate_to_position)$/.test(skill)) {
-        motionSeen = true;
-        lastMotionAt = Date.now();
-      }
+      if (status === "running" && /(^|\/)(move_straight|navigate_to_position)$/.test(skill)) motionAt = Date.now();
       if (status === "running" && /(^|\/)turn_in_place$/.test(skill)) turnedAt = Date.now();
       if (status === "completed" && /(^|\/)search_memory$/.test(skill)) recalledAt = Date.now();
     },
@@ -210,17 +193,35 @@ function buildAgentView(root) {
   const studio = createAgentStudio(root, agentState, challengePanel ? simSession : null, panel, {
     showView: (/** @type {string} */ id) => cameraSwitch.promote(id),
     armedAgent: () => panel.armedAgentId(),
+    armAgent: panel.armAgent,
+    onCreateAgent: panel.setCreateAgentHandler,
     directivesEl: panel.directivesEl,
-    transcript: () => robotLines,
+    // Every skill the brain can run, for the detail's "Add skill" chooser.
+    skillRoster: (/** @type {(rows: any[]) => void} */ cb) =>
+      ros.subscribe(
+        AVAILABLE_SKILLS_TOPIC,
+        (msg) => cb(Array.isArray(msg?.skills) ? msg.skills : []),
+        undefined,
+        "brain_messages/msg/AvailableSkills",
+      ),
+    lastLine: () => lastRobotLine,
     spokenCount: () => robotLineCount,
     cancelSkill: () => ros.callService(CANCEL_SKILL_SERVICE, {}),
-    motion: { seen: () => motionSeen, lastAt: () => lastMotionAt, reset: () => { motionSeen = false; lastMotionAt = 0; } },
+    motionAt: () => motionAt,
+    resetMotion: () => { motionAt = 0; },
     recalledAt: () => recalledAt,
     turnedAt: () => turnedAt,
-    overlay: (/** @type {(event: any) => void} */ cb) => {
-      overlayListeners.add(cb);
-      return () => overlayListeners.delete(cb);
-    },
+    overlay: (/** @type {(event: any) => void} */ cb) =>
+      ros.subscribe(SKILL_OVERLAY_TOPIC, (m) => {
+        if (typeof m?.data !== "string") return;
+        let event;
+        try {
+          event = JSON.parse(m.data);
+        } catch {
+          return;
+        }
+        cb(event);
+      }, undefined, "std_msgs/msg/String"),
   });
   const isSceneSurface = (/** @type {EventTarget | null} */ target) =>
     target instanceof Element &&
@@ -323,7 +324,6 @@ function buildAgentView(root) {
 
   return {
     destroy() {
-      unsubOverlay();
       for (const part of parts) part.destroy();
       releaseSession(session);
       root.innerHTML = "";
