@@ -174,18 +174,20 @@ class _BlobTracker:
         self.guess, self.observed, self.pending, self.hits = px, False, None, 0
 
     def update(self, hsv):
-        """Followed blob center, or None on miss (keeps last window for
-        retry). A hop past WRIST_JUMP_PX returns the old center and keeps the
-        old window, so the next frame re-tests it from where the blob was;
-        the hop is followed only once it has repeated WRIST_JUMP_CONFIRM
-        frames running."""
+        """Followed blob center, or None when this frame gives no
+        observation: a miss (counted in `misses`, last window kept for retry)
+        or a held hop. A hop past WRIST_JUMP_PX is held — the old window
+        stays, so the next frame re-tests it from where the blob was — and
+        followed once it has repeated WRIST_JUMP_CONFIRM frames running; a
+        miss or a frame back home breaks the run."""
         pt, window, _score, axis = vision.seg_track(hsv, self.model, self.window, min_score=WRIST_SEG_MIN_SCORE)
         if pt is None or _dist(pt, self.guess) > WRIST_MAX_JUMP_PX:
             self.misses += 1
+            self.pending, self.hits = None, 0
             return None
         self.misses = 0
         if self.observed and _dist(pt, self.guess) > WRIST_JUMP_PX and not self._hop_confirmed(pt):
-            return self.guess
+            return None
         self.window, self.guess, self.axis, self.observed = window, pt, axis, True
         self.pending, self.hits = None, 0
         return pt
@@ -409,7 +411,13 @@ class PickAnyObject(Skill):
         self.overlay.readout(f"wrist align: {reason}")
         return x, y, z, roll
 
-    def _draw_wrist(self, px, inside, z, top, blob, pending):
+    def _draw_hop(self, pending):
+        if pending is None:
+            self.overlay.clear("hop")
+        else:
+            self.overlay.point("hop", pending, label="hop?", view="arm")
+
+    def _draw_wrist(self, px, inside, z, top, blob):
         """The servo box, the tracked blob with its long axis, and the descent."""
         p = self._p
         ui = self.overlay
@@ -417,10 +425,6 @@ class PickAnyObject(Skill):
         ui.clear("wrist-target")
         ui.box("wrist-box", (u - half, v - half, u + half, v + half), label="wrist box", view="arm", locked=inside)
         ui.point("blob", px, label="blob", view="arm", locked=inside)
-        if pending is None:
-            ui.clear("hop")
-        else:
-            ui.point("hop", pending, label="hop?", view="arm")
         if inside:
             ui.clear("wrist-steer")
         else:
@@ -517,10 +521,11 @@ class PickAnyObject(Skill):
                 break
 
             px = tracker.update(hsv)
+            self._draw_hop(tracker.pending)
             if px is None:
                 streak = centered = 0
                 if tracker.misses < 3:
-                    continue  # transient (blur / mid-move frame) — wait
+                    continue  # transient (blur / mid-move / held hop) — wait
                 if looks <= 0:
                     reason = "lost track"
                     break
@@ -538,7 +543,7 @@ class PickAnyObject(Skill):
             centered = centered + 1 if inside else 0
             if centered >= 2:
                 axis = self._trusted_axis(z, tracker.axis) or axis
-            self._draw_wrist(px, inside, z, top, axis if axis is not None else tracker.axis, tracker.pending)
+            self._draw_wrist(px, inside, z, top, axis if axis is not None else tracker.axis)
             if streak < 2:
                 continue  # watch one more frame before trusting it
             if inside and centered < 2:
