@@ -27,6 +27,22 @@ const GRADUATION_MAX_WAIT_MS = 25_000;
 // The robot asks for its next skill in its own time, and sometimes takes a while. The grant
 // waits for it that long, then offers itself anyway: nobody should be stuck watching.
 const GRANT_GRACE_MS = 15_000;
+// How long a grant waits for the brain to confirm the new toolset before announcing it.
+const GRANT_WAIT_MS = 4_000;
+
+/** Resolve once `ready()` holds, or when the wait runs out — whichever comes first.
+ * @param {() => boolean} ready @param {number} timeoutMs */
+function held(ready, timeoutMs) {
+  if (ready()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const poll = setInterval(() => {
+      if (!ready() && Date.now() < deadline) return;
+      clearInterval(poll);
+      resolve(undefined);
+    }, 200);
+  });
+}
 
 // A grant is a turn for the brain, not only a toolset change: the chip says it out loud.
 const GRANT_LINES = /** @type {Record<string, string>} */ ({
@@ -440,11 +456,16 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   }
 
   /** @param {string} skill @param {boolean} [announce] */
-  function grant(skill, announce = true) {
+  async function grant(skill, announce = true) {
     const next = new Set(agentState.get().activeSkills);
     next.add(skill);
     agentState.setActiveSkills([...next], STORY_AGENT);
-    if (announce) void panel.submitText(GRANT_LINES[skill] ?? `Granted: the ${skillLabel(skill)} skill.`);
+    if (!announce) return;
+    // The skill and the line telling it to use the skill travel separately, and the brain
+    // can take its turn on the line before the toolset has caught up -- which reads to the
+    // robot as the skill failing. Say it once the tool is actually there.
+    await held(() => agentState.get().activeSkills.has(skill), GRANT_WAIT_MS);
+    void panel.submitText(GRANT_LINES[skill] ?? `Granted: the ${skillLabel(skill)} skill.`);
   }
 
   /** @param {{persona?: string, name?: string}} choice */
@@ -501,7 +522,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       }
       const ready = asked([MEMORY]);
       chipReason = ready ? "grants:memory" : "waiting-for-line";
-      const chip = { text: `Grant the ${skillLabel(MEMORY)} skill`, kind: "grant", onSelect: () => grant(MEMORY) };
+      const chip = { text: `Grant the ${skillLabel(MEMORY)} skill`, kind: "grant", onSelect: () => void grant(MEMORY) };
       return { chips: ready ? [chip] : [], exclusive: false };
     }
     if (!r) {
@@ -544,7 +565,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
         ...wants.map((/** @type {string} */ skill) => ({
           text: `Grant the ${skillLabel(skill)} skill`,
           kind: "grant",
-          onSelect: () => grant(skill),
+          onSelect: () => void grant(skill),
         })),
         ...replies,
       ],
