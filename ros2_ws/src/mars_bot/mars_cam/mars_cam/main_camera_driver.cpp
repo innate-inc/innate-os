@@ -615,7 +615,10 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
     // Publish with std::move() for zero-copy intra-process communication
     // Inter-process subscribers (via DDS) still receive serialized copies automatically
     // -------------------------
-    if (publish_stereo_) {
+    // Gated on demand: at full capture resolution the stereo frame is large
+    // (12 MB at 3840x1080), so only serialize it out when someone (the video
+    // recorder) is actually subscribed.
+    if (publish_stereo_ && stereo_pub_->get_subscription_count() > 0) {
         stereo_pub_->publish(std::move(stereo_msg));
     }
     left_pub_->publish(std::move(left_msg));
