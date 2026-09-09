@@ -98,6 +98,9 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
     hardware recorded rather than done."""
 
     def build(feed) -> tuple[gaze.ROSPersonTracker, list[str]]:
+        # Where ROS is installed these two build real nodes and fail before rclpy.init
+        monkeypatch.setattr(gaze, "Head", MagicMock())
+        monkeypatch.setattr(gaze, "Mobility", MagicMock())
         made = gaze.ROSPersonTracker(MagicMock(), people=feed)
         calls: list[str] = []
         monkeypatch.setattr(made, "_ensure_detector", lambda: calls.append("detector"))

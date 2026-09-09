@@ -79,7 +79,7 @@ class _StubFinder(importlib.abc.MetaPathFinder):
 
 # workspace/ is an import root on the robot (skills.workspace_import.ensure_import_roots
 # puts it there); a bare pytest run has to say so itself.
-_WORKSPACE = str(Path(__file__).resolve().parents[5] / "workspace")
+_WORKSPACE = str(next(root for root in Path(__file__).resolve().parents if (root / "workspace").is_dir()) / "workspace")
 if _WORKSPACE not in sys.path:
     sys.path.insert(0, _WORKSPACE)
 
