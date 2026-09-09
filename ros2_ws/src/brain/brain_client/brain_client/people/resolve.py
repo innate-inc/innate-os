@@ -1,29 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Who a track is: log-odds accumulation and the consistency rules of RFC 5.2-5.4.
-
-Nothing is decided from one frame. Each gated face, outfit and height
-measurement becomes a calibrated log-likelihood ratio, weighted by the frame's
-quality, and is added to a running score per candidate person plus a "new
-person" hypothesis. A name commits when the accumulated score crosses the
-accept line with a margin over the runner-up *and* at least three independent
-face frames spanning a second have agreed — and it then stays committed for the
-life of the track. Blur, a turned head and a missed detection only slow the
-decision; they never flip it.
-
-The rules that keep it honest, each implemented literally here: body evidence is
-capped below the accept line, so an outfit says "probably" and never a name;
-switching a track from A to B needs B ahead by the margin for two seconds; a
-face frame that accepts B on a track committed to A splits the track instead of
-renaming it; two live tracks are never the same person; a person seen for under
-two seconds never enters the roster.
-
-Cosine similarity is not a probability and never leaves this module —
-:attr:`Identity.confidence` is the accumulated posterior.
-
-PURE module: numpy for the embedding cosine, no ROS, no cv2, no I/O; every
-persistent write goes through the injected :class:`RosterView`.
-"""
+"""Who a track is: each gated face, outfit and height measurement becomes a
+calibrated log-likelihood ratio added to a running score per candidate person
+(plus a "new person" hypothesis), and the consistency rules of RFC 5.2-5.4
+(docs/rfc/people-memory.md in innate-jetson) decide when a score becomes an
+identity and when it may change. :attr:`Identity.confidence` is that
+accumulated posterior; no raw cosine leaves this module. PURE: numpy for the
+cosine, no ROS, no cv2, no I/O — every persistent write goes through the
+injected :class:`RosterView`."""
 
 from __future__ import annotations
 
@@ -34,6 +18,7 @@ from typing import TYPE_CHECKING, Protocol
 from brain_client.people import quality
 from brain_client.people.track import cosine
 from brain_client.people.types import (
+    SETTLED_STATES,
     Evidence,
     FaceTemplate,
     Identity,
@@ -56,8 +41,6 @@ if TYPE_CHECKING:
 
 NEW_PERSON = "__new__"
 """The open-world hypothesis: this face belongs to nobody on the roster."""
-
-_COMMITTED_STATES = (IdentityState.KNOWN, IdentityState.FAMILIAR)
 
 
 # ------------------------------------------------------------- calibration
@@ -419,6 +402,19 @@ class Resolver:
         self._beliefs.pop(tag, None)
         self._suppressed.add(tag)
 
+    def rebind(self, old_id: str, new_id: str) -> None:
+        """RFC section 8: ``merge_people`` tombstones ``old_id``, so every live
+        belief in it moves across rather than being dropped — it was one person
+        all along, and the track in front of the robot is still theirs."""
+        for belief in self._beliefs.values():
+            stale = belief.candidates.pop(old_id, None)
+            belief.pressure_since.pop(old_id, None)
+            if stale is not None:
+                _absorb(belief.candidate(new_id), stale)
+            if belief.committed == old_id:
+                belief.committed = new_id
+                belief.state = self._committed_state(new_id)
+
     def apply_split(self, tag: str, new_tag: str) -> None:
         """RFC 5.3.4: both tags resolve afresh, and everything learned since the
         last confirmation is dropped rather than written onto the wrong person."""
@@ -464,6 +460,7 @@ class Resolver:
 
         if belief.split_pending:
             belief.split_pending = False
+            belief.pending_faces.clear()  # they were collected while the track meant someone else
             return Resolution(tag=track.tag, identity=self._identity_of(belief), split_requested=True)
 
         if belief.committed is None:
@@ -598,7 +595,7 @@ class Resolver:
         the tracker swapped two people. Renaming the track would carry A's
         history onto B, so the track is split instead."""
         committed = belief.committed
-        if committed is None or belief.state not in _COMMITTED_STATES:
+        if committed is None or belief.state not in SETTLED_STATES:
             return
         if best_id is None or best_id == committed or best_similarity < thresholds.accept:
             return
@@ -613,7 +610,7 @@ class Resolver:
         for track in sorted(live, key=lambda t: (t.first_seen, t.tag)):
             resolution = resolutions[track.tag]
             person_id = resolution.identity.person_id
-            if person_id is None or resolution.identity.state not in _COMMITTED_STATES:
+            if person_id is None or resolution.identity.state not in SETTLED_STATES:
                 continue
             first = holder.get(person_id)
             if first is None:
@@ -668,6 +665,8 @@ class Resolver:
             return None
         thumbnail = next((face.thumbnail for face in reversed(faces) if face.thumbnail), None)
         person_id = self._roster.create_unnamed(templates, thumbnail, now)
+        if not person_id:
+            return None  # the roster filled up between can_enrol and the write; try again next tick
         belief.enrol_faces.clear()
         belief.pending_faces.clear()
         belief.last_template_write = now
@@ -690,10 +689,12 @@ class Resolver:
     ) -> None:
         belief = self._belief(tag)
         person_id = belief.committed
-        if person_id is None or belief.state not in _COMMITTED_STATES:
+        if person_id is None or belief.state not in SETTLED_STATES:
             return
-        if resolution.conflict_with is not None or not self._roster.collection_enabled():
-            return  # learning is frozen while the evidence disagrees
+        if resolution.split_requested or resolution.conflict_with is not None:
+            return  # the evidence disagrees: nothing this track saw is safe to write
+        if not self._roster.collection_enabled():
+            return
         if now - belief.last_sighting_write >= self._config.sighting_interval_sec:
             belief.last_sighting_write = now
             self._roster.record_sighting(person_id, now, map_name, pose)
@@ -803,6 +804,32 @@ class Resolver:
         if candidate.height:
             found.append(Evidence.HEIGHT)
         return tuple(found)
+
+
+def _absorb(candidate: _Candidate, stale: _Candidate) -> None:
+    """Fold one merged person's accumulation into the other's. The stronger of
+    the two, never the sum: every frame scored both candidates, so adding them
+    would count the same evidence twice."""
+    candidate.face = max(candidate.face, stale.face)
+    candidate.body = max(candidate.body, stale.body)
+    candidate.height = max(candidate.height, stale.height)
+    candidate.continuity = max(candidate.continuity, stale.continuity)
+    candidate.face_frames = max(candidate.face_frames, stale.face_frames)
+    candidate.body_frames = max(candidate.body_frames, stale.body_frames)
+    candidate.first_face = _first(candidate.first_face, stale.first_face)
+    candidate.last_face = _last(candidate.last_face, stale.last_face)
+    candidate.body_agree_since = _first(candidate.body_agree_since, stale.body_agree_since)
+    candidate.last_accept_stamp = _last(candidate.last_accept_stamp, stale.last_accept_stamp)
+
+
+def _first(*stamps: float | None) -> float | None:
+    known = [stamp for stamp in stamps if stamp is not None]
+    return min(known) if known else None
+
+
+def _last(*stamps: float | None) -> float | None:
+    known = [stamp for stamp in stamps if stamp is not None]
+    return max(known) if known else None
 
 
 def _best(similarities: dict[str, float]) -> tuple[str | None, float]:

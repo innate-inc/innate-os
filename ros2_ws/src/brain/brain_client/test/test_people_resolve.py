@@ -521,6 +521,22 @@ def test_an_ambiguous_frame_does_not_split_a_committed_track():
     assert not resolutions["P1"].split_requested
 
 
+def test_the_face_that_split_a_track_is_never_written_onto_the_person_it_left():
+    """RFC 5.3.4: the frame that accepts B on a track committed to A is B's.
+    Learning from it would put B's embedding in A's gallery, which is exactly
+    the crossing the split exists to repair."""
+    roster = roster_with()
+    resolver = Resolver(roster)
+    end = commit_theo(resolver)
+    roster.templates.clear()
+
+    resolver.observe_face("P1", face(end + 6.0, probe(0.10, 0.55)))
+    resolutions = resolver.resolve([FakeTrack(last_seen=end + 6.0)], end + 6.0)
+
+    assert resolutions["P1"].split_requested
+    assert roster.templates == []
+
+
 def test_applying_a_split_drops_everything_learned_on_both_tags():
     resolver = Resolver(roster_with())
     commit_theo(resolver)
@@ -624,6 +640,25 @@ def test_a_full_roster_stops_enrolling():
     enrol_frames(resolver)
     resolver.resolve([FakeTrack(first_seen=99.0, last_seen=102.4)], 102.4)
     assert roster.created == []
+
+
+class RacedRoster(FakeRoster):
+    """``can_enrol`` said yes and the write lost the race — the empty id
+    :meth:`RosterView.create_unnamed` documents."""
+
+    def create_unnamed(self, faces: list[FaceTemplate], thumbnail: bytes | None, now: float) -> str:
+        del faces, thumbnail, now
+        return ""
+
+
+def test_an_enrolment_that_lost_the_capacity_race_commits_to_nobody():
+    roster = RacedRoster()
+    resolver = Resolver(roster)
+    enrol_frames(resolver)
+    resolutions = resolver.resolve([FakeTrack(first_seen=99.0, last_seen=102.4)], 102.4)
+    assert resolutions["P1"].enrolled_id is None
+    assert resolver.identity("P1").person_id is None
+    assert resolver.identity("P1").state is IdentityState.UNKNOWN
 
 
 def test_collection_turned_off_stops_enrolling():
@@ -804,6 +839,28 @@ def test_a_forgotten_track_is_suppressed_and_never_re_enrols():
     resolver.resolve([FakeTrack(first_seen=99.0, last_seen=112.4)], 112.4)
     assert len(roster.created) == 1
     assert resolver.identity("P1").person_id is None
+
+
+def test_a_merge_moves_a_live_track_onto_the_id_that_survived():
+    """RFC section 8: merge_people tombstones the source id, so a track still
+    committed to it would publish an id the store no longer has and learn onto
+    nothing."""
+    roster = roster_with(a_name=None)
+    resolver = Resolver(roster)
+    end = commit_theo(resolver)
+    assert resolver.identity("P1").person_id == "person_a"
+
+    roster.people["person_b"].faces.extend(roster.people.pop("person_a").faces)  # what store.merge does
+    resolver.rebind("person_a", "person_b")
+
+    identity = resolver.identity("P1")
+    assert identity.person_id == "person_b"
+    assert identity.name == "Ana"
+    assert identity.state is IdentityState.KNOWN
+
+    resolver.observe_face("P1", face(end + 6.0, probe(0.50)))
+    resolver.resolve([FakeTrack(last_seen=end + 6.0)], end + 6.0)
+    assert roster.templates[-1][0] == "person_b"
 
 
 def test_the_suppression_dies_with_the_track_it_was_set_on():

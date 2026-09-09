@@ -1,31 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""The people store: the roster (how the robot recognizes someone) and the
-person memory (what it knows about them), under one directory and one lock.
-
-Layout under ``data/people/`` (``data/people_sim/`` in the simulator, so sim
-evidence never mixes with hardware evidence)::
-
-    index.json              the roster summary, rewritten on change
-    <person_id>/person.json profile, facts, episodes, open loops, consent
-    <person_id>/templates.npz  face + outfit embeddings, height samples
-    <person_id>/thumb_<k>.jpg  up to 3 face thumbnails
-    audit.log               one JSON line per mutation
-
-The JSON + npz pattern of :mod:`brain_client.memory.store`, for the same
-reasons: one writer process, ten people, inspectable and backup-friendly.
-Every write is tmp-file + ``os.replace``; readers on other threads take the
-same lock and get plain tuples of frozen records back, so nothing they hold
-can change under them.
-
-Person ids are ``person_<8 hex>`` and are NEVER reused: a forgotten or expired
-id is tombstoned, so a stale skill reference fails loudly instead of naming a
-stranger. Templates carry their model id and are never compared across spaces.
-Track tags are not the store's business — only the counter that keeps them
-unique across restarts is persisted here.
-
-PURE module: no rclpy. Stamps are epoch seconds.
-"""
+"""The people store: the roster (face and outfit templates, heights,
+thumbnails) and the person memory (profile, facts, episodes, open loops) under
+one directory and one lock — ``data/people/`` on hardware, ``data/people_sim/``
+in the simulator so the two never mix — laid out as ``index.json`` plus
+``<person_id>/{person.json,templates.npz,thumb_<k>.jpg}`` and an ``audit.log``
+(RFC 6.1). Same JSON + npz, tmp-file + ``os.replace`` pattern as
+:mod:`brain_client.memory.store`; readers on other threads get frozen records
+under the same lock. Ids are ``person_<8 hex>`` and never reused (forgotten and
+expired ids are tombstoned), templates carry their model id and are never
+compared across spaces, and track tags are not the store's business beyond the
+persisted counter that keeps them unique across restarts. PURE: no rclpy;
+stamps are epoch seconds."""
 
 from __future__ import annotations
 

@@ -253,6 +253,20 @@ def test_a_known_person_is_never_the_target_and_a_lost_one_is_ignored():
     assert choose_attention([track("P4", state=IdentityState.UNKNOWN, lost=True)], NOW) is None
 
 
+def test_a_face_confirmed_person_is_settled_even_without_a_name():
+    """FAMILIAR is the engine's own "decided, just unnamed". Chasing it would
+    park the gaze on a settled person and say "still deciding" about a face the
+    engine already confirmed."""
+    familiar = track("P4", state=IdentityState.FAMILIAR, range_m=0.5)
+    unresolved = track("P5", state=IdentityState.UNKNOWN, range_m=3.0)
+    assert choose_attention([familiar], NOW) is None
+    assert choose_attention([familiar, unresolved], NOW) == choose_attention([unresolved], NOW)
+
+    speaking = track("P4", state=IdentityState.FAMILIAR, range_m=0.5, speaking=True)
+    attention = choose_attention([speaking, unresolved], NOW)
+    assert attention is not None and attention["tag"] == "P5"
+
+
 def test_a_conflicted_track_is_worth_a_face():
     attention = choose_attention([track("P4", state=IdentityState.CONFLICT)], NOW)
     assert attention is not None and attention["tag"] == "P4"

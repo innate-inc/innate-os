@@ -9,6 +9,7 @@ a mean-colour embedder — so these tests exercise the pipeline and the duty
 cycle, never a model's accuracy.
 """
 
+import urllib.request
 from pathlib import Path
 
 import cv2
@@ -31,9 +32,10 @@ from brain_client.people.backends import (
     mean_color_embedding,
 )
 from brain_client.people.engine import EngineConfig, PeopleEngine
-from brain_client.people.geometry import CameraModel
+from brain_client.people.geometry import CameraModel, head_region
 from brain_client.people.quality import FACE_MIN_MATCH_REAL_PX, EgoMotion
 from brain_client.people.resolve import Resolution, Resolver
+from brain_client.people.surfacing import FACE_STALE_SEC
 from brain_client.people.types import (
     Detection,
     FaceObservation,
@@ -129,6 +131,19 @@ class RecordingLocator(CenterFaceLocator):
     def locate(self, crop_bgr: np.ndarray):
         self.crop_heights.append(crop_bgr.shape[0])
         return super().locate(crop_bgr)
+
+
+class OnceLocator(CenterFaceLocator):
+    """A face on the first crop it is handed and never again — the head turned
+    away, which is what the HOG detector alone reports for ever after."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def locate(self, crop_bgr: np.ndarray):
+        self.calls += 1
+        return super().locate(crop_bgr) if self.calls == 1 else []
 
 
 class RecordingResolver(Resolver):
@@ -369,6 +384,19 @@ def test_a_head_box_is_reported_once_a_face_is_located():
     state = engine.tick(scene(), None, 100.0, still(100.0))[0]
     assert state.head_box is not None
     assert state.head_box[0] >= PERSON[0] - 0.2  # inside the top of the person box
+
+
+def test_a_head_box_older_than_the_face_it_came_from_follows_the_body_again():
+    """Detections carry no head box, so the one a face hit left behind would go
+    on aiming the gaze and the overlay at where the head was minutes ago."""
+    engine, _detector, _roster = build(locator=OnceLocator())
+    fresh = engine.tick(scene(), None, 100.0, still(100.0))[0]
+    assert fresh.head_box is not None
+    assert fresh.head_box != pytest.approx(head_region(fresh.box))
+
+    stale = 100.0 + FACE_STALE_SEC + 0.5
+    later = engine.tick(scene(), None, stale, still(stale))[0]
+    assert later.head_box == pytest.approx(head_region(later.box))
 
 
 # ------------------------------------------------------------ native frames
@@ -676,6 +704,32 @@ def test_a_model_is_never_fetched_when_downloads_are_off(tmp_path):
 def test_an_already_present_model_is_used_without_a_fetch(tmp_path):
     (tmp_path / YUNET.filename).write_bytes(b"not really an onnx")
     assert ensure_model(YUNET, tmp_path, allow_download=False) == tmp_path / YUNET.filename
+
+
+class _Fetched:
+    """The two lines of ``urlopen``'s response that ``ensure_model`` uses."""
+
+    def __enter__(self) -> "_Fetched":
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return b"pretend onnx"
+
+
+def test_a_model_that_cannot_be_written_degrades_instead_of_raising(tmp_path, monkeypatch):
+    """load_backends is documented never to raise. A models directory the robot
+    cannot write is a health flag, not a node that refuses to start."""
+
+    def _no_space(*_args: object, **_kwargs: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: _Fetched())
+    monkeypatch.setattr(Path, "write_bytes", _no_space)
+
+    assert ensure_model(YUNET, tmp_path / "models") is None
 
 
 def test_the_hog_detector_finds_nothing_in_an_empty_room():

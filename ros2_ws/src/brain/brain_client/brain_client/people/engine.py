@@ -1,23 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""The people engine: one tick turns a camera frame into who is in the room.
-
-Detect on the published frame, un-squashed so the detector sees true
-proportions; track; then, only for the tracks that still need evidence and only
-in the instants the robot is holding still, crop the head and the body out of
-the camera's own 1280x720 pixels, gate them, and hand them to the resolver.
-
-The duty cycle of RFC 4.6 is the point of this file as much as the pipeline is:
-0.5 Hz with nobody around, 5 Hz once anyone is tracked or the motion gate
-fires, 2 Hz association-only while a skill drives the base; a native frame is
-decoded only when a track needs evidence and the ego-motion gate is open; face
-embeddings run every passing crop while a track is unsettled and once per five
-seconds after that; body embeddings run at 1 Hz per track. The node can call
-:meth:`tick` as fast as frames arrive — the engine throttles itself.
-
-No ROS: the node owns the subscriptions and hands in frames, ego-motion and the
-map pose. cv2 and numpy only.
-"""
+"""The people engine: one tick turns a camera frame into who is in the room —
+detect on the un-squashed published frame, track, then only for tracks that
+still need evidence and only while the robot holds still, crop head and body
+out of the camera's native 1280x720 pixels, gate them and hand them to the
+resolver — at the duty cycle of RFC 4.6 (docs/rfc/people-memory.md in
+innate-jetson), which the engine enforces itself so the node may call
+:meth:`tick` as fast as frames arrive. No ROS: the node hands in frames,
+ego-motion and the map pose; cv2 and numpy only."""
 
 from __future__ import annotations
 
@@ -30,13 +20,14 @@ import numpy as np
 from brain_client.people import native_frames, quality
 from brain_client.people.geometry import CameraModel, head_region, pose_from_landmarks
 from brain_client.people.resolve import Resolver
+from brain_client.people.surfacing import FACE_STALE_SEC
 from brain_client.people.track import Tracker
 from brain_client.people.types import (
+    SETTLED_STATES,
     BodyObservation,
     FaceObservation,
     HealthDict,
     HealthState,
-    IdentityState,
     TrackState,
 )
 
@@ -48,7 +39,6 @@ if TYPE_CHECKING:
     from brain_client.people.track import Track
     from brain_client.people.types import Box, FaceHit, Identity, Pose, RosterView
 
-_SETTLED = (IdentityState.KNOWN, IdentityState.FAMILIAR)
 _THUMBNAIL_PX = 160
 _THUMBNAIL_QUALITY = 80
 
@@ -211,7 +201,7 @@ class PeopleEngine:
 
         self._resolutions = self._resolver.resolve(self._tracker.all_tracks(), now, map_name=map_name, pose=pose)
         self._apply_splits()
-        self._states = self._build_states(speaking)
+        self._states = self._build_states(speaking, now)
         return self._states
 
     # ----------------------------------------------------------- duty cycle
@@ -224,12 +214,12 @@ class PeopleEngine:
         return 1.0 / self._config.idle_detect_hz
 
     def _native_period(self) -> float:
-        unsettled = any(state.identity.state not in _SETTLED for state in self._states)
+        unsettled = any(state.identity.state not in SETTLED_STATES for state in self._states)
         return 1.0 / (self._config.native_unsettled_hz if unsettled else self._config.native_settled_hz)
 
     def _wants_face(self, tag: str, identity: Identity, now: float) -> bool:
         runtime = self._runtime_of(tag)
-        if identity.state not in _SETTLED:
+        if identity.state not in SETTLED_STATES:
             return True  # unsettled: every passing crop counts
         return now - runtime.last_face_embed >= self._config.face_refresh_sec
 
@@ -402,7 +392,7 @@ class PeopleEngine:
             self._runtime.pop(tag, None)
             self._independence.forget(tag)
 
-    def _build_states(self, speaking: Collection[str]) -> list[TrackState]:
+    def _build_states(self, speaking: Collection[str], now: float) -> list[TrackState]:
         states: list[TrackState] = []
         alive = {t.tag for t in self._tracker.all_tracks()}
         for tag in [t for t in self._runtime if t not in alive]:
@@ -416,7 +406,7 @@ class PeopleEngine:
                 TrackState(
                     tag=track.tag,
                     box=track.box,
-                    head_box=runtime.head_box,
+                    head_box=self._head_box(track, runtime, now),
                     identity=identity,
                     first_seen=track.first_seen,
                     last_seen=track.last_seen,
@@ -432,6 +422,16 @@ class PeopleEngine:
         return states
 
     # ---------------------------------------------------------------- pieces
+
+    @staticmethod
+    def _head_box(track: Track, runtime: _Runtime, now: float) -> Box:
+        """A face hit pins the head; detections carry none, so once the hit has
+        gone stale the head follows the body again rather than staying where
+        the person used to be standing."""
+        stamp = runtime.last_face_stamp
+        if runtime.head_box is not None and stamp is not None and now - stamp <= FACE_STALE_SEC:
+            return runtime.head_box
+        return head_region(track.box)
 
     def _runtime_of(self, tag: str) -> _Runtime:
         runtime = self._runtime.get(tag)

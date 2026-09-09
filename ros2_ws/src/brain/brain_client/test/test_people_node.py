@@ -819,6 +819,33 @@ def test_the_collection_switch_is_stored_and_shows_in_the_snapshot(store, tmp_pa
     assert answer["capacity_full"] is False  # switched off is not full
 
 
+def _full_disk(*_args, **_kwargs):
+    raise OSError(28, "No space left on device")
+
+
+def test_a_full_disk_answers_the_collection_service_instead_of_killing_the_node(store, tmp_path, monkeypatch):
+    """Every other store write on a service callback is answered; an OSError out
+    of this one takes the executor thread and the whole node with it."""
+    adapters = _adapters(store, tmp_path)
+    monkeypatch.setattr(store, "set_collection", _full_disk)
+
+    answer = _served(adapters, "_svc_set_collection", enabled=False)
+
+    assert not answer.success and answer.message
+
+
+def test_a_full_disk_clearing_name_candidates_still_reports_the_rename(store, tmp_path, monkeypatch):
+    """The name is on disk by then, so the rename succeeded; the tidy-up behind
+    it must not raise out of the callback either."""
+    ana = enrol(store)
+    adapters = _adapters(store, tmp_path)
+    monkeypatch.setattr(store, "clear_name_candidates", _full_disk)
+
+    answer = _served(adapters, "_svc_rename", who=ana, name="Ana", source="app")
+
+    assert answer.success and store.name_of(ana) == "Ana"
+
+
 def test_a_learned_name_is_shown_once_and_then_cleared(store, tmp_path):
     cv2 = pytest.importorskip("cv2")
     adapters = _adapters(store, tmp_path)
@@ -909,15 +936,20 @@ def test_a_deep_recall_crosses_to_the_engine_thread_as_data(store, tmp_path):
 
 
 class _RecordingResolver(Resolver):
-    """The engine's resolver, with a note of who asked it to forget a tag."""
+    """The engine's resolver, with a note of every belief a service moved."""
 
     def __init__(self, roster) -> None:
         super().__init__(roster)
         self.forgotten: list[str] = []
+        self.rebound: list[tuple[str, str]] = []
 
     def forget(self, tag: str) -> None:
         self.forgotten.append(tag)
         super().forget(tag)
+
+    def rebind(self, old_id: str, new_id: str) -> None:
+        self.rebound.append((old_id, new_id))
+        super().rebind(old_id, new_id)
 
 
 def test_forgetting_someone_suppresses_their_track_on_the_engine_thread(store, tmp_path):
@@ -942,6 +974,31 @@ def test_forgetting_someone_suppresses_their_track_on_the_engine_thread(store, t
     adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), _jpeg())
     adapters._tick(now + 1.0)
     assert resolver.forgotten == ["P1"]
+
+
+def test_merging_two_people_rebinds_the_live_track_on_the_engine_thread(store, tmp_path):
+    """store.merge tombstones the source id. A track committed to it would go
+    on publishing an id nobody has, with no name and nothing learned onto it,
+    so the merge crosses to the engine thread the way a forget does."""
+    pytest.importorskip("cv2")
+    ana = enrol(store, "Ana")
+    theo = enrol(store, "Theo")
+    resolver = _RecordingResolver(store)
+    adapters = _adapters(store, tmp_path, resolver=resolver)
+    adapters._sensors.brain_active = True
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    now = time.time()
+    adapters._tick(now)
+    tracked = adapters.tracks()[0]
+    with adapters._lock:
+        adapters._tracks = (replace(tracked, identity=Identity(state=IdentityState.KNOWN, person_id=ana, name="Ana")),)
+
+    assert _served(adapters, "_svc_merge", source_id=ana, target_id=theo).success
+    assert resolver.rebound == []
+
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), _jpeg())
+    adapters._tick(now + 1.0)
+    assert resolver.rebound == [(ana, theo)]
 
 
 # ------------------------------------------------- idempotency and staleness

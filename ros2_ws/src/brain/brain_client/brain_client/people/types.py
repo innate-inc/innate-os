@@ -40,6 +40,11 @@ class IdentityState(StrEnum):
     CONFLICT = "conflict"
 
 
+SETTLED_STATES = (IdentityState.KNOWN, IdentityState.FAMILIAR)
+"""Face-confirmed and committed: the resolver learns onto these, the engine
+stops spending face crops on them, and attention moves on to somebody else."""
+
+
 class Evidence(StrEnum):
     FACE = "face"
     OUTFIT = "outfit"

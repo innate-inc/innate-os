@@ -234,6 +234,24 @@ def test_open_loops_survive_a_person_whose_facts_do_not_fit():
     assert "word00" not in text
 
 
+def test_open_loops_too_wordy_to_all_fit_still_leave_a_line_the_caller_keeps():
+    """An over-budget line is dropped whole one level up, so a person carrying
+    wordy open loops would surface neither their loops nor their facts."""
+    loops = [{"id": f"o_{i}", "text": " ".join(f"loopword{i}{j}" for j in range(40)), "due": None} for i in range(3)]
+    text = render(snapshot([person(digest=digest(facts=[fact("likes pasta")], open_loops=loops))]))
+    facts_line = next(line for line in text.splitlines() if line.startswith("  Facts:"))
+    assert "(open)" in facts_line
+    assert len(facts_line.split()) * 1.3 <= 120
+
+
+def test_a_single_open_loop_longer_than_the_budget_is_shortened_not_dropped():
+    loop = {"id": "o_1", "text": " ".join(f"word{j}" for j in range(200)), "due": None}
+    text = render(snapshot([person(digest=digest(open_loops=[loop]))]))
+    facts_line = next(line for line in text.splitlines() if line.startswith("  Facts:"))
+    assert facts_line.startswith("  Facts: word0 word1 ")
+    assert len(facts_line.split()) * 1.3 <= 120
+
+
 # ---------- budgets ----------
 
 

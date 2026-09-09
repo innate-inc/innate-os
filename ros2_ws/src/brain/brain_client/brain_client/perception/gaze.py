@@ -4,9 +4,9 @@
 Gaze System - Person tracking for MARS robot.
 
 Features:
-- Follows the person the people node is attending to (its head box rides
-  /brain/people), and falls back to InspireFace detection when that node is
-  absent or has nothing fresh to say
+- Follows whoever the people node is watching (its boxes ride /brain/people),
+  and falls back to InspireFace detection only while that feed is absent or
+  stale — a fresh feed never loads a second face model
 - Wheel-based panning (robot turns to face people)
 
 Hardware: MARS robot
@@ -26,15 +26,19 @@ import numpy as np
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
+from brain_client.perception import gaze_targets
 from brain_client.robot.head import Head
 from brain_client.robot.mobility import Mobility
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from rclpy.node import Node
+
+    from brain_client.people.types import PeopleSnapshotDict
     from brain_client.perception.people_feed import PeopleFeed
 
-_ATTENTION_FRESH_SEC = 1.0  # older than this and the head box is aiming at where someone was
+_SNAPSHOT_FRESH_SEC = 1.0  # older than this and the boxes are aiming at where someone was
 
 
 class FaceDetector:
@@ -185,10 +189,10 @@ class ROSPersonTracker:
 
     def __init__(
         self,
-        node,
+        node: Node,
         camera_topic: str = "/mars/main_camera/left/image_raw",
         people: PeopleFeed | None = None,
-    ):
+    ) -> None:
         self._node = node
         self._people = people
         self._frame = None
@@ -220,7 +224,7 @@ class ROSPersonTracker:
         )
         self._sub = node.create_subscription(Image, camera_topic, self._on_image, qos)
 
-    def _on_image(self, msg):
+    def _on_image(self, msg: Image) -> None:
         """Store latest camera frame."""
         try:
             frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, -1)
@@ -231,7 +235,7 @@ class ROSPersonTracker:
         except Exception:
             pass
 
-    def start(self):
+    def start(self) -> None:
         """Start person tracking."""
         if self._running:
             return
@@ -240,7 +244,7 @@ class ROSPersonTracker:
         self._thread = threading.Thread(target=self._track_loop, daemon=True)
         self._thread.start()
 
-    def _ensure_detector(self):
+    def _ensure_detector(self) -> None:
         """Load InspireFace once, in the background, and only when the people
         node is not already telling us where to look."""
         if self._detector_requested:
@@ -248,7 +252,7 @@ class ROSPersonTracker:
         self._detector_requested = True
         threading.Thread(target=self._init_detector, daemon=True).start()
 
-    def _init_detector(self):
+    def _init_detector(self) -> None:
         try:
             self._detector = FaceDetector(min_confidence=0.3)
             self._node.get_logger().info("👁️ Face detector initialized")
@@ -256,7 +260,7 @@ class ROSPersonTracker:
             # Left un-retried: a missing SDK would otherwise reload every tick.
             self._node.get_logger().error(f"Failed to init face detector: {e}")
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop person tracking."""
         self._running = False
         if self._thread:
@@ -268,7 +272,7 @@ class ROSPersonTracker:
     def is_running(self) -> bool:
         return self._running
 
-    def _track_loop(self):
+    def _track_loop(self) -> None:
         """Perception loop at ~5Hz."""
         dt = 1.0 / 5.0
 
@@ -279,56 +283,49 @@ class ROSPersonTracker:
             if elapsed < dt:
                 time.sleep(dt - elapsed)
 
-    def _track_once(self):
-        attended = self._attention_target()
-        if attended is not None:
-            face, shape = attended
-            self._gaze.track_face(face, shape)
-            self._last_face_time = time.time()
-            return
-        self._detect_and_track()
-
-    def _attention_target(self):
-        """The head the people node is trying to see, as (face, frame shape).
-
-        Its engine already detected and chose this person on the same stream;
-        running a second face model to reach the same answer would cost the
-        Jetson a model for nothing.
-        """
-        if self._people is None:
-            return None
-        snapshot = self._people.fresh(_ATTENTION_FRESH_SEC)
+    def _track_once(self) -> None:
+        snapshot = self._people.fresh(_SNAPSHOT_FRESH_SEC) if self._people is not None else None
         if snapshot is None:
-            return None
-        box = (snapshot.get("attention") or {}).get("head_bbox")
-        if not box or len(box) != 4:
-            return None
-        ymin, xmin, ymax, xmax = (value / 1000.0 for value in box)
-        width, height = snapshot.get("image_size") or (640, 480)
-        face = {
-            "center_x": (xmin + xmax) / 2.0,
-            "center_y": (ymin + ymax) / 2.0,
-            "width": xmax - xmin,
-            "height": ymax - ymin,
-        }
-        return face, (height, width)
+            self._detect_and_track()
+            return
+        self._follow_snapshot(snapshot)
 
-    def _detect_and_track(self):
+    def _follow_snapshot(self, snapshot: PeopleSnapshotDict) -> None:
+        """The people node's engine detected and chose everyone in view on this
+        same stream, so a fresh snapshot is the whole answer: running a second
+        face model to reach it would cost the Jetson a model for nothing.
+        """
+        box = gaze_targets.gaze_box(snapshot)
+        if box is None:
+            self._recenter_when_idle()
+            return
+        self._gaze.track_face(gaze_targets.as_face(box), gaze_targets.frame_shape(snapshot))
+        self._last_face_time = time.time()
+
+    def _detect_and_track(self) -> None:
         if self._detector is None:
             self._ensure_detector()
+            self._recenter_when_idle()
             return
 
         with self._frame_lock:
             frame = self._frame
         if frame is None:
+            self._recenter_when_idle()
             return
 
         faces = self._detector.detect(frame)
-        if faces:
-            # Track largest face
-            best = max(faces, key=lambda f: f["width"] * f["height"])
-            self._gaze.track_face(best, (frame.shape[0], frame.shape[1]))
-            self._last_face_time = time.time()
-        elif time.time() - self._last_face_time > self._face_timeout:
+        if not faces:
+            self._recenter_when_idle()
+            return
+        best = max(faces, key=lambda f: f["width"] * f["height"])
+        self._gaze.track_face(best, (frame.shape[0], frame.shape[1]))
+        self._last_face_time = time.time()
+
+    def _recenter_when_idle(self) -> None:
+        """Nothing to look at. The recenter has to happen even with no detector
+        and no frame, or a tilt taken for someone who walked off holds the head
+        up for as long as the robot sees nobody."""
+        if time.time() - self._last_face_time > self._face_timeout:
             self._gaze.recenter()
             self._last_face_time = time.time()

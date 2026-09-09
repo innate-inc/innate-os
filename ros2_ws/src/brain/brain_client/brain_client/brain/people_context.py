@@ -210,8 +210,11 @@ def _box_text(person: PersonInViewDict) -> str:
 
 
 def _facts_line(person: PersonInViewDict, now: float, context: set[str], allowance: int) -> str | None:
-    """Ranked facts plus every open loop, trimmed from the tail to fit, nested
-    under "If this is X" while the identity is only probable (RFC 5.3 rule 6)."""
+    """Ranked facts plus every open loop, nested under "If this is X" while the
+    identity is only probable (RFC 5.3 rule 6). Trimmed to ``allowance`` — the
+    lowest-ranked facts first, then the wordiest loops down to one — because the
+    caller drops an over-budget line whole and this person would lose all of it.
+    """
     digest: PersonDigestDict = person.get("digest") or {}
     loops = [_loop_text(loop) for loop in (digest.get("open_loops") or []) if _clean(loop.get("text"))]
     facts = [text for text in (_clean(fact.get("text")) for fact in _rank_facts(digest, now, context)) if text]
@@ -219,8 +222,20 @@ def _facts_line(person: PersonInViewDict, now: float, context: set[str], allowan
         return None
     name = _clean(person.get("name"))
     prefix = f"  If this is {name}: " if name and person.get("state") == IdentityState.POSSIBLE else "  Facts: "
-    while facts and _tokens(prefix + "; ".join([*facts, *loops]) + ".") > allowance:
+    while facts and _tokens(_joined(prefix, facts, loops)) > allowance:
         facts.pop()
+    while len(loops) > 1 and _tokens(_joined(prefix, facts, loops)) > allowance:
+        loops.remove(max(loops, key=_tokens))
+    line = _joined(prefix, facts, loops)
+    if _tokens(line) <= allowance:
+        return line
+    # A single open loop can outrun a whole person's allowance, and the caller
+    # drops an over-budget line whole; its tail is what gives way instead.
+    room = max(1, int(allowance / _TOKENS_PER_WORD) - _tokens(prefix))
+    return prefix + " ".join(line[len(prefix) :].split()[:room]) + " …"
+
+
+def _joined(prefix: str, facts: list[str], loops: list[str]) -> str:
     return prefix + "; ".join([*facts, *loops]) + "."
 
 

@@ -1,24 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""The scribe: the agent watching the conversation unfold and writing down what
-is worth keeping (docs/rfc/people-memory.md section 6.3 in innate-jetson).
-
-It buffers ``/brain/chat_in`` and ``/brain/chat_out`` into windows — closed 8 s
-after the last message or at 12 messages — remembers which tags were in view
-for every message, and spends one Gemini call per window. What comes back is a
-proposal, never a decision: :func:`apply` is the rule set that decides what is
-written, and it is the reason there is no ``remember_person`` tool. In
-particular a name only commits when the quote is an introduction, exactly one
-tracked person can be the referent, that track is confirmed or enrolling, and
-no other name is on file; anything less is stored as a candidate and surfaced
-as a hint for the agent to resolve in conversation.
-
-PURE module: no rclpy, no network of its own. The transport is injected as
-``(path, body, timeout) -> dict``, which is what
-:class:`brain_client.brain.transport.GeminiRest`'s ``post`` already is, so the
-node hands it the same proxy the brain talks through and the tests hand it a
-fake. Stamps are epoch seconds.
-"""
+"""The scribe: the agent watching the conversation and writing down what is
+worth keeping (RFC 6.3, docs/rfc/people-memory.md in innate-jetson). It buffers
+``/brain/chat_in`` and ``/brain/chat_out`` into windows with the tags in view
+per message, spends one Gemini call per window, and treats the answer as a
+proposal: :func:`apply` is the rule set that decides what is written, which is
+why there is no ``remember_person`` tool. PURE: no rclpy, no network of its
+own — the transport is injected as ``(path, body, timeout) -> dict`` (what
+:class:`brain_client.brain.transport.GeminiRest`'s ``post`` is); stamps are
+epoch seconds."""
 
 from __future__ import annotations
 

@@ -87,8 +87,11 @@ def ensure_model(asset: ModelAsset, directory: Path, *, allow_download: bool = T
     if not _matches_bytes(payload, asset.sha256):
         return None
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_bytes(payload)
-    os.replace(tmp, path)
+    try:
+        tmp.write_bytes(payload)
+        os.replace(tmp, path)
+    except OSError:
+        return None
     return path
 
 

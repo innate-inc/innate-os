@@ -1,29 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 """ROS glue for the people node: the sensors the engine reads, the two
-publishers, the five services, and the two worker threads.
-
-The engine, the store, the scribe and surfacing decide everything; this file
-only moves bytes across thread boundaries and onto topics. Three rules shape
-it (docs/rfc/people-memory.md sections 3-6 in innate-jetson):
-
-* **Callbacks stash, threads work.** A subscription callback copies its
-  message into a slot under one lock and returns. The engine ticks on its own
-  thread and is the only publisher; the scribe spends its Gemini calls on a
-  second thread and hands what it learned back through a queue.
-* **Subscriptions live and die on the executor thread.** Destroying a
-  subscription under a spinning executor is an InvalidHandle race, so the
-  worker threads only raise flags and a 1 Hz timer on the spin thread creates
-  and destroys the camera subscriptions.
-* **The tick is sampled, not chased.** The compressed left topic runs at
-  7.5 Hz and the engine's duty cycle is 0.5-5 Hz, so the node decodes on the
-  engine's own cadence and reports the decoded frame's header stamp as
-  ``frame_stamp_ns`` — the identity the brain pairs its overlay by, and the
-  reason this ticks on the compressed topic rather than the 15 Hz raw one.
-
-Everything above the "ROS adapters" banner is pure and unit-tested in
-test/test_people_node.py; only the classes below it touch rclpy.
-"""
+publishers, the five services and the two worker threads; every decision is
+the engine's, the store's, the scribe's or surfacing's (RFC sections 3-6,
+docs/rfc/people-memory.md in innate-jetson). Callbacks stash a message under
+one lock and return; the engine ticks on its own thread and is the only
+publisher; the scribe works on a second thread and hands results back through
+queues. Subscriptions are created and destroyed only on the executor thread
+(destroying one under a spinning executor is an InvalidHandle race), so worker
+threads raise flags for a 1 Hz timer. The tick is sampled from the 7.5 Hz
+compressed left topic — not chased, and not the 15 Hz raw one — because the
+decoded frame's header stamp is the ``frame_stamp_ns`` the brain pairs its
+overlay by. Everything above the "ROS adapters" banner is pure and tested in
+test/test_people_node.py."""
 
 from __future__ import annotations
 
@@ -847,6 +836,7 @@ class PeopleAdapters:
         self._chat: queue.Queue[Utterance] = queue.Queue(maxsize=64)
         self._forgets: queue.Queue[str] = queue.Queue(maxsize=8)
         self._suppressions: queue.Queue[str] = queue.Queue(maxsize=8)
+        self._rebinds: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=8)
         self._recalls: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=8)
         self._descriptions: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=8)
 
@@ -943,9 +933,9 @@ class PeopleAdapters:
     def _svc_set_collection(
         self, request: SetPeopleCollection.Request, response: SetPeopleCollection.Response
     ) -> SetPeopleCollection.Response:
-        self._store.set_collection(request.enabled)
-        response.success = True
-        response.message = ""
+        response.success, response.message = self._write(
+            lambda: self._store.set_collection(request.enabled), "could not change the collection setting"
+        )
         return response
 
     def _rename(self, request: RenamePerson.Request) -> MutationResult:
@@ -960,7 +950,11 @@ class PeopleAdapters:
             lambda: self._store.rename(person_id, name, request.source or "app"), f"could not rename {person_id}"
         )
         if success:
-            self._store.clear_name_candidates(person_id)
+            # The name is committed by now, so a failure behind it is logged
+            # rather than reported: the rename did happen.
+            self._write(
+                lambda: self._store.clear_name_candidates(person_id), f"could not clear {person_id}'s candidates"
+            )
         return MutationResult(success, message, person_id)
 
     def _merge(self, request: MergePeople.Request) -> MutationResult:
@@ -972,6 +966,9 @@ class PeopleAdapters:
         if source is None or target is None:
             return MutationResult(False, source_message or target_message)
         success, message = self._write(lambda: self._store.merge(source, target), "those two cannot be merged")
+        if success:
+            # The resolver is the engine thread's, like the forget suppressions.
+            _offer(self._rebinds, (source, target))
         return MutationResult(success, message)
 
     def _forget(self, request: ForgetPerson.Request) -> MutationResult:
@@ -1003,11 +1000,12 @@ class PeopleAdapters:
             return MutationResult(False, STALE_DECISION_MESSAGE)
         return None
 
-    def _write(self, mutate: Callable[[], bool], failure: str) -> tuple[bool, str]:
+    def _write(self, mutate: Callable[[], bool | None], failure: str) -> tuple[bool, str]:
         """A store write, answered either way: a full disk must reach the
-        Settings page as a message, not as a call that never comes back."""
+        Settings page as a message, not as a call that never comes back. A
+        write with nothing to report answers None and counts as done."""
         try:
-            return (True, "") if mutate() else (False, failure)
+            return (False, failure) if mutate() is False else (True, "")
         except OSError as error:
             self._logger.error(f"[People] {failure}: {error!r}")
             return False, failure
@@ -1091,6 +1089,7 @@ class PeopleAdapters:
 
     def _tick(self, now: float) -> None:
         self._apply_suppressions()
+        self._apply_rebinds()
         active = engine_active(
             enabled=self._config.enabled, always_on=self._config.always_on, brain_active=self._sensors.brain_active
         )
@@ -1158,6 +1157,16 @@ class PeopleAdapters:
             except queue.Empty:
                 return
             self._engine.resolver.forget(tag)
+
+    def _apply_rebinds(self) -> None:
+        """The merges the services queued: the track keeps its person under the
+        id that survived, instead of the tombstone it was committed to."""
+        while True:
+            try:
+                source, target = self._rebinds.get_nowait()
+            except queue.Empty:
+                return
+            self._engine.resolver.rebind(source, target)
 
     def _after_tick(
         self, image: np.ndarray, tracks: Sequence[TrackState], resolutions: Mapping[str, Resolution], now: float

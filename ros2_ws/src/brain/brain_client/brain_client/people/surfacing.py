@@ -21,7 +21,7 @@ import base64
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from brain_client.people.types import SNAPSHOT_SCHEMA, EventKind, IdentityState
+from brain_client.people.types import SETTLED_STATES, SNAPSHOT_SCHEMA, EventKind, IdentityState
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -137,9 +137,10 @@ def start_of_day(now: float) -> float:
 
 def choose_attention(tracks: Sequence[TrackState], now: float) -> AttentionDict | None:
     """Whose face the engine should chase, per RFC 5.5: someone talking to the
-    robot it cannot name, then anyone unresolved within 2 m, then anyone
-    unresolved at all. None when everybody in view is settled."""
-    live = [track for track in tracks if not track.lost and track.identity.state is not IdentityState.KNOWN]
+    robot it has not settled, then anyone unresolved within 2 m, then anyone
+    unresolved at all. None when everybody in view is settled — a face the
+    engine already confirmed is not worth a second look, named or not."""
+    live = [track for track in tracks if not track.lost and track.identity.state not in SETTLED_STATES]
     if not live:
         return None
     speaking = [track for track in live if track.speaking]
