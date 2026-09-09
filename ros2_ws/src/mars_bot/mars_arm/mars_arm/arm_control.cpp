@@ -400,9 +400,8 @@ std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>
     if (command_data.size() >= 4 && self_collision_.enabled && self_collision_.valid()) {
         const std::array<double, 4> asked = {command_data[0], command_data[1], command_data[2], command_data[3]};
         // The SWEEP from the last accepted pose, not just where it ends up.
-        const bool hits = have_safe_pose_
-                              ? pathHitsBody(last_safe_pose_.data(), asked.data(), self_collision_)
-                              : poseHitsBody(asked[0], asked[1], asked[2], asked[3], self_collision_);
+        const bool hits = have_safe_pose_ ? pathHitsBody(last_safe_pose_.data(), asked.data(), self_collision_)
+                                          : poseHitsBody(asked[0], asked[1], asked[2], asked[3], self_collision_);
         if (hits && have_safe_pose_) {
             std::array<double, 4> safe = last_safe_pose_;
             std::array<double, 4> want = {command_data[0], command_data[1], command_data[2], command_data[3]};
@@ -416,11 +415,14 @@ std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>
             for (int step = 1; step <= steps; ++step) {
                 const double t = static_cast<double>(step) / steps;
                 std::array<double, 4> probe;
-                for (int j = 0; j < 4; ++j) probe[j] = safe[j] + t * (want[j] - safe[j]);
-                if (poseHitsBody(probe[0], probe[1], probe[2], probe[3], self_collision_)) break;
+                for (int j = 0; j < 4; ++j)
+                    probe[j] = safe[j] + t * (want[j] - safe[j]);
+                if (poseHitsBody(probe[0], probe[1], probe[2], probe[3], self_collision_))
+                    break;
                 lo = t;
             }
-            for (int j = 0; j < 4; ++j) command_data[j] = safe[j] + lo * (want[j] - safe[j]);
+            for (int j = 0; j < 4; ++j)
+                command_data[j] = safe[j] + lo * (want[j] - safe[j]);
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                  "Body keepout: pose would strike the chassis, held at %.0f%% of the way there",
                                  lo * 100.0);
@@ -431,12 +433,11 @@ std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>
             // decelerates into the surface. The rejected part is what the
             // operator feels — it shows up as /mars/arm/command_state diverging
             // from the leader's request, and the leader pushes back by that gap.
-            const double clearance = bodyClearance(command_data[0], command_data[1], command_data[2],
-                                                   command_data[3], self_collision_);
+            const double clearance =
+                bodyClearance(command_data[0], command_data[1], command_data[2], command_data[3], self_collision_);
             const double scale = approachScale(clearance, self_collision_);
             if (scale < 1.0 && have_safe_pose_) {
-                const std::array<double, 4> want = {command_data[0], command_data[1], command_data[2],
-                                                    command_data[3]};
+                const std::array<double, 4> want = {command_data[0], command_data[1], command_data[2], command_data[3]};
                 for (int j = 0; j < 4; ++j)
                     command_data[j] = last_safe_pose_[j] + scale * (want[j] - last_safe_pose_[j]);
                 RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,

@@ -210,10 +210,10 @@ void MarsArmNode::loadSelfCollisionConfig() {
     for (const auto& b : self_collision_.boxes)
         RCLCPP_INFO(this->get_logger(), "  keepout box x[%.3f %.3f] z[%.3f %.3f] pad %.0f mm", b.min_x, b.max_x,
                     b.min_z, b.max_z, b.pad * 1000.0);
-    RCLCPP_INFO(this->get_logger(), "Body keepout: %s, %zu boxes, stop %.0f mm, ease from %.0f mm, %.0f mrad steps (max %d)",
-                self_collision_.enabled ? "on" : "OFF", self_collision_.boxes.size(),
-                self_collision_.margin * 1000.0, self_collision_.slow_margin * 1000.0,
-                self_collision_.step_rad * 1000.0, self_collision_.max_steps);
+    RCLCPP_INFO(this->get_logger(),
+                "Body keepout: %s, %zu boxes, stop %.0f mm, ease from %.0f mm, %.0f mrad steps (max %d)",
+                self_collision_.enabled ? "on" : "OFF", self_collision_.boxes.size(), self_collision_.margin * 1000.0,
+                self_collision_.slow_margin * 1000.0, self_collision_.step_rad * 1000.0, self_collision_.max_steps);
 }
 
 rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(

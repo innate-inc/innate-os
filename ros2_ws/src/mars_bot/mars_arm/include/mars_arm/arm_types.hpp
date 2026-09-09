@@ -45,8 +45,8 @@ static constexpr double kMaxReach = 0.37291;
 // rotates this plane, so it does not appear.
 inline double horizReach(double q2, double q3, double q4) {
     const double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
-    return std::abs(kL2_x * std::cos(a2) + kL2_z * std::sin(a2) + kL3_x * std::cos(a23) +
-                    kL3_z * std::sin(a23) + kL45_x * std::cos(a234));
+    return std::abs(kL2_x * std::cos(a2) + kL2_z * std::sin(a2) + kL3_x * std::cos(a23) + kL3_z * std::sin(a23) +
+                    kL45_x * std::cos(a234));
 }
 
 // ---- Body keepout ----------------------------------------------------------
@@ -81,8 +81,7 @@ struct BodyBox {
     // actually swings into — the turret and neck above it — get a large one.
     double pad = 0.015;
     bool contains(double x, double y, double z, double m) const {
-        return x >= min_x - m && x <= max_x + m && y >= min_y - m && y <= max_y + m && z >= min_z - m &&
-               z <= max_z + m;
+        return x >= min_x - m && x <= max_x + m && y >= min_y - m && y <= max_y + m && z >= min_z - m && z <= max_z + m;
     }
 };
 
@@ -96,7 +95,9 @@ struct SelfCollisionConfig {
     double step_rad = 0.04;
     int max_steps = 32;
     bool enabled = true;
-    bool valid() const { return !boxes.empty(); }
+    bool valid() const {
+        return !boxes.empty();
+    }
 };
 
 // Distance from a point to a box, zero inside it.
@@ -148,14 +149,17 @@ inline bool segmentHitsBox(const double a[3], const double b[3], const BodyBox& 
     for (int i = 0; i < 3; ++i) {
         const double d = b[i] - a[i];
         if (std::fabs(d) < 1e-12) {
-            if (a[i] < lo[i] || a[i] > hi[i]) return false;  // parallel to the slab, outside it
+            if (a[i] < lo[i] || a[i] > hi[i])
+                return false;  // parallel to the slab, outside it
             continue;
         }
         double tn = (lo[i] - a[i]) / d, tf = (hi[i] - a[i]) / d;
-        if (tn > tf) std::swap(tn, tf);
+        if (tn > tf)
+            std::swap(tn, tf);
         t0 = std::max(t0, tn);
         t1 = std::min(t1, tf);
-        if (t0 > t1) return false;
+        if (t0 > t1)
+            return false;
     }
     return true;
 }
@@ -168,7 +172,8 @@ inline bool segmentHitsBox(const double a[3], const double b[3], const BodyBox& 
 // testing only those left the first 0.21 m of arm uncovered and let 56% of real
 // collisions through.
 inline bool poseHitsBody(double q1, double q2, double q3, double q4, const SelfCollisionConfig& c) {
-    if (!c.enabled || !c.valid()) return false;
+    if (!c.enabled || !c.valid())
+        return false;
     const ArmPlanarPoints p = armPlanarPoints(q2, q3, q4);
     const double cq = std::cos(q1), sq = std::sin(q1);
     double pts[ArmPlanarPoints::kCount][3];
@@ -179,7 +184,8 @@ inline bool poseHitsBody(double q1, double q2, double q3, double q4, const SelfC
     }
     for (int i = 0; i + 1 < ArmPlanarPoints::kCount; ++i)
         for (const auto& b : c.boxes)
-            if (segmentHitsBox(pts[i], pts[i + 1], b, std::max(c.margin, b.pad))) return true;
+            if (segmentHitsBox(pts[i], pts[i + 1], b, std::max(c.margin, b.pad)))
+                return true;
     return false;
 }
 
@@ -190,8 +196,10 @@ inline bool poseHitsBody(double q1, double q2, double q3, double q4, const SelfC
 // Steps needed to sample a->b at the configured angular resolution.
 inline int pathSteps(const double a[4], const double b[4], const SelfCollisionConfig& c) {
     double widest = 0.0;
-    for (int j = 0; j < 4; ++j) widest = std::max(widest, std::fabs(b[j] - a[j]));
-    if (c.step_rad <= 0.0) return 1;
+    for (int j = 0; j < 4; ++j)
+        widest = std::max(widest, std::fabs(b[j] - a[j]));
+    if (c.step_rad <= 0.0)
+        return 1;
     return std::clamp(static_cast<int>(std::ceil(widest / c.step_rad)), 1, c.max_steps);
 }
 
@@ -201,7 +209,8 @@ inline bool pathHitsBody(const double a[4], const double b[4], const SelfCollisi
         const double t = static_cast<double>(k) / steps;
         const double q1 = a[0] + t * (b[0] - a[0]), q2 = a[1] + t * (b[1] - a[1]);
         const double q3 = a[2] + t * (b[2] - a[2]), q4 = a[3] + t * (b[3] - a[3]);
-        if (poseHitsBody(q1, q2, q3, q4, c)) return true;
+        if (poseHitsBody(q1, q2, q3, q4, c))
+            return true;
     }
     return false;
 }
@@ -213,7 +222,8 @@ inline bool pathHitsBody(const double a[4], const double b[4], const SelfCollisi
 // hard stop stays on poseHitsBody's exact slab test, so nothing safety-critical
 // rests on the sampling.
 inline double bodyClearance(double q1, double q2, double q3, double q4, const SelfCollisionConfig& c) {
-    if (!c.enabled || !c.valid()) return std::numeric_limits<double>::infinity();
+    if (!c.enabled || !c.valid())
+        return std::numeric_limits<double>::infinity();
     const ArmPlanarPoints p = armPlanarPoints(q2, q3, q4);
     const double cq = std::cos(q1), sq = std::sin(q1);
     double pts[ArmPlanarPoints::kCount][3];
@@ -225,8 +235,7 @@ inline double bodyClearance(double q1, double q2, double q3, double q4, const Se
     constexpr int kSamplesPerLink = 8;
     double best = std::numeric_limits<double>::infinity();
     for (int i = 0; i + 1 < ArmPlanarPoints::kCount; ++i) {
-        const double dx = pts[i + 1][0] - pts[i][0], dy = pts[i + 1][1] - pts[i][1],
-                     dz = pts[i + 1][2] - pts[i][2];
+        const double dx = pts[i + 1][0] - pts[i][0], dy = pts[i + 1][1] - pts[i][1], dz = pts[i + 1][2] - pts[i][2];
         double near = std::numeric_limits<double>::infinity();
         for (int k = 0; k <= kSamplesPerLink; ++k) {
             const double t = static_cast<double>(k) / kSamplesPerLink;
@@ -253,9 +262,11 @@ inline double bodyClearance(double q1, double q2, double q3, double q4, const Se
 // what the leader feels: a scaled-back command diverges from what was asked,
 // and that gap is the force the operator gets back.
 inline double approachScale(double clearance, const SelfCollisionConfig& c) {
-    if (clearance >= c.slow_margin) return 1.0;
+    if (clearance >= c.slow_margin)
+        return 1.0;
     const double span = c.slow_margin - c.margin;
-    if (span <= 0.0) return clearance > c.margin ? 1.0 : 0.0;
+    if (span <= 0.0)
+        return clearance > c.margin ? 1.0 : 0.0;
     return std::clamp((clearance - c.margin) / span, 0.0, 1.0);
 }
 
