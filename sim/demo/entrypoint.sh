@@ -9,6 +9,9 @@ source /root/innate-os/ros2_ws/install/setup.bash
 set -u
 
 : "${INNATE_DEMO_LEASE_SECONDS:=600}"
+# A demo visitor has never seen MARS, so a session opens on the first-run story. The world
+# arms it and the first browser to connect starts it, so its clock begins with the viewer.
+: "${INNATE_DEMO_INTRO:=1}"
 : "${INNATE_SIM_RENDER_SCALE:=2}"
 : "${MUJOCO_GL:=osmesa}"
 export MUJOCO_GL INNATE_SIM_RENDER_SCALE
@@ -33,10 +36,16 @@ shutdown() {
 }
 trap shutdown EXIT
 
-echo "[demo] starting world server (MUJOCO_GL=$MUJOCO_GL, render-scale=$INNATE_SIM_RENDER_SCALE)"
-ros2 run mars_sim_driver world_server \
-    --bind 127.0.0.1 --port 8799 --state-port 8800 \
-    --render-scale "$INNATE_SIM_RENDER_SCALE" >"$WORLD_LOG" 2>&1 &
+# Positional args, not an array: `set -u` makes an empty array expansion an error on bash
+# before 4.4, and "$@" is safe on every version.
+set -- --bind 127.0.0.1 --port 8799 --state-port 8800 --render-scale "$INNATE_SIM_RENDER_SCALE"
+if [ "$INNATE_DEMO_INTRO" = "1" ]; then
+    set -- "$@" --environment void --intro
+fi
+
+echo "[demo] starting world server (MUJOCO_GL=$MUJOCO_GL, render-scale=$INNATE_SIM_RENDER_SCALE," \
+     "intro=$INNATE_DEMO_INTRO)"
+ros2 run mars_sim_driver world_server "$@" >"$WORLD_LOG" 2>&1 &
 WORLD_PID=$!
 
 # sim_driver dies on its first RPC if the world is not up yet.
