@@ -224,9 +224,12 @@ export const ARM_GET_PARAMETERS_SERVICE = `${ARM_PARAMS_NODE}/get_parameters`;
 export const PARAMETER_DOUBLE_ARRAY = 8;
 export const ARM_POSITION_LIMITS_PARAMS = [1, 2, 3, 4, 5, 6].map((n) => `joint_${n}.position_limits`);
 
-// Which joints the guard actually holds. The machinery below is generic over
-// all six; only joint_1's body collision is enforced today, the rest await
-// bench time to confirm the wall feels right before they are switched on.
+// Which joints get a band hold — held at the edge of their own position_limits.
+// All six: the limits are read from the robot rather than guessed here, so a
+// joint with no usable limits simply gets no band and is left alone.
+//
+// This gates the BAND hold only. The body keepout is geometric and applies to
+// whatever joints the geometry blames, whatever this array says.
 export const JOINT_GUARD_ENABLED = [true, true, true, true, true, true];
 
 // mars_arm drives joints 2, 3, 4 and 6 in the opposite sense to the command it
