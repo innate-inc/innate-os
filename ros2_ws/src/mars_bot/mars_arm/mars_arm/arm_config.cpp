@@ -168,6 +168,7 @@ void MarsArmNode::loadJointConfigs(const std::vector<std::string>& joint_names) 
 void MarsArmNode::loadSelfCollisionConfig() {
     this->declare_parameter("self_collision.enabled", true);
     this->declare_parameter("self_collision.margin", 0.015);
+    this->declare_parameter("self_collision.slow_margin", 0.070);
     this->declare_parameter("self_collision.bisect_steps", 8);
     // Flat [min_x,min_y,min_z, max_x,max_y,max_z] sextets in base_link — ROS
     // parameters have no nested arrays.
@@ -175,6 +176,7 @@ void MarsArmNode::loadSelfCollisionConfig() {
 
     self_collision_.enabled = this->get_parameter("self_collision.enabled").as_bool();
     self_collision_.margin = this->get_parameter("self_collision.margin").as_double();
+    self_collision_.slow_margin = this->get_parameter("self_collision.slow_margin").as_double();
     self_collision_.bisect_steps = static_cast<int>(this->get_parameter("self_collision.bisect_steps").as_int());
 
     const auto flat = this->get_parameter("self_collision.boxes").as_double_array();
@@ -194,9 +196,13 @@ void MarsArmNode::loadSelfCollisionConfig() {
         // that does not exist, so say so rather than run unguarded.
         throw std::runtime_error("self_collision.enabled is true but no boxes were configured");
     }
-    RCLCPP_INFO(this->get_logger(), "Body keepout: %s, %zu boxes, margin %.0f mm, %d bisection steps",
+    if (self_collision_.slow_margin < self_collision_.margin) {
+        throw std::runtime_error("self_collision.slow_margin must be >= margin");
+    }
+    RCLCPP_INFO(this->get_logger(), "Body keepout: %s, %zu boxes, stop %.0f mm, ease from %.0f mm, %d bisection steps",
                 self_collision_.enabled ? "on" : "OFF", self_collision_.boxes.size(),
-                self_collision_.margin * 1000.0, self_collision_.bisect_steps);
+                self_collision_.margin * 1000.0, self_collision_.slow_margin * 1000.0,
+                self_collision_.bisect_steps);
 }
 
 rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(

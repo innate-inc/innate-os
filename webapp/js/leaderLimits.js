@@ -119,3 +119,17 @@ export function allocateCurrent(activeCount, budgetMa) {
 export function totalCurrent(currents) {
   return currents.reduce((sum, mA) => sum + Math.abs(mA), 0);
 }
+
+/**
+ * Hold current for a joint the follower could not follow. A step at the
+ * deadband, then a ramp: force has to be felt the moment the arm stops
+ * tracking, and a curve starting from zero reads as no wall at all.
+ * @param {number} errorTicks Signed divergence, leader minus accepted.
+ * @param {{ deadband: number, maPerTick: number, floorMa: number, maxMa: number }} shape
+ * @returns {number} mA, 0 inside the deadband.
+ */
+export function divergenceCurrent(errorTicks, shape) {
+  const over = Math.abs(errorTicks) - shape.deadband;
+  if (over <= 0) return 0;
+  return Math.min(shape.maxMa, shape.floorMa + over * shape.maPerTick);
+}

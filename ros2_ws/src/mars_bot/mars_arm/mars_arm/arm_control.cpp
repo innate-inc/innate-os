@@ -415,6 +415,22 @@ std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>
                                  "Body keepout: pose would strike the chassis, held at %.0f%% of the way there",
                                  lo * 100.0);
         } else if (!hits) {
+            // Soft zone: ease off as the body gets close rather than running at
+            // full speed into the hard stop. Only a fraction of the requested
+            // move is accepted, shrinking to nothing at the margin, so the arm
+            // decelerates into the surface. The rejected part is what the
+            // operator feels — it shows up as /mars/arm/command_state diverging
+            // from the leader's request, and the leader pushes back by that gap.
+            const double clearance = bodyClearance(command_data[0], command_data[1], command_data[2],
+                                                   command_data[3], self_collision_);
+            const double scale = approachScale(clearance, self_collision_);
+            if (scale < 1.0 && have_safe_pose_) {
+                for (int j = 0; j < 4; ++j)
+                    command_data[j] = last_safe_pose_[j] + scale * (command_data[j] - last_safe_pose_[j]);
+                RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                      "Body keepout: %.0f mm clear, accepting %.0f%% of the requested move",
+                                      clearance * 1000.0, scale * 100.0);
+            }
             last_safe_pose_ = {command_data[0], command_data[1], command_data[2], command_data[3]};
             have_safe_pose_ = true;
         }

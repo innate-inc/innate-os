@@ -14,8 +14,13 @@
 // disagrees with the allocation.
 
 import {
+  ARM_COMMAND_STATE_TOPIC,
   ARM_GET_PARAMETERS_SERVICE,
   ARM_POSITION_LIMITS_PARAMS,
+  DIVERGENCE_DEADBAND_TICKS,
+  DIVERGENCE_FLOOR_MA,
+  DIVERGENCE_MA_PER_TICK,
+  DIVERGENCE_STALE_MS,
   J1_FRONT_ARC_HI,
   J1_FRONT_ARC_LO,
   J1_RAMP_HI,
@@ -31,6 +36,7 @@ import { readBudget, onBudgetChange } from "./leaderBudget.js";
 import {
   allocateCurrent,
   clampTick,
+  divergenceCurrent,
   isOutside,
   joint2FloorRad,
   limitsToBand,
@@ -57,6 +63,13 @@ const BACKOFF = 0.8;
 // Below this a hold is too weak to be felt; release instead of pretending.
 const MIN_USEFUL_MA = 40;
 
+const DIVERGENCE_SHAPE = {
+  deadband: DIVERGENCE_DEADBAND_TICKS,
+  maPerTick: DIVERGENCE_MA_PER_TICK,
+  floorMa: DIVERGENCE_FLOOR_MA,
+  maxMa: LEADER_CURRENT_CEILING_MA,
+};
+
 /**
  * @typedef {Object} GuardDeps
  * @property {import("./dynamixel.js").DynamixelLeader} leader
@@ -76,6 +89,8 @@ export class LeaderGuard {
     holding: [],
     drawMa: 0,
     allocatedMa: 0,
+    divergedJoint: 0,
+    divergedTicks: 0,
     error: null,
   };
   #enabled = true;
@@ -86,6 +101,10 @@ export class LeaderGuard {
   #tripped = false;
   #budgetMa = readBudget();
   /** @type {(() => void) | null} */ #unsubBudget = null;
+  /** @type {(() => void) | null} */ #unsubAccepted = null;
+  // The pose mars_arm last accepted, in leader ticks. Null until it reports.
+  /** @type {number[] | null} */ #accepted = null;
+  #acceptedAt = 0;
 
   /** @param {GuardDeps} deps @param {number[]} ids */
   constructor({ leader, rosClient }, ids) {
@@ -177,6 +196,7 @@ export class LeaderGuard {
       const band = limitsToBand(value.double_array_value ?? [], JOINT_DIRECTION_FLIPPED[i]);
       if (band) this.#bands.set(id, band);
     });
+    this.#subscribeAccepted();
     if (!this.#bands.size) return;
     this.#prepareMode();
     this.#patch({ armed: true, error: null });
@@ -189,10 +209,49 @@ export class LeaderGuard {
    */
   #prepareMode() {
     if (this.#modeReady) return;
-    const ids = [...this.#bands.keys()];
-    this.#leader.writeTorque(ids, false);
-    this.#leader.writeOperatingMode(ids, OPERATING_MODE_CURRENT_POSITION);
+    // Every joint, not just the banded ones: divergence can need to push a joint
+    // that has no band at all — joint_2 being clamped by the body keepout is
+    // exactly that case, and it is the one the operator most needs to feel.
+    this.#leader.writeTorque(this.#ids, false);
+    this.#leader.writeOperatingMode(this.#ids, OPERATING_MODE_CURRENT_POSITION);
     this.#modeReady = true;
+  }
+
+  /**
+   * Track what mars_arm actually accepted. Its message is in radians and already
+   * un-flipped, so it converts straight to leader ticks.
+   */
+  #subscribeAccepted() {
+    if (this.#unsubAccepted) return;
+    this.#unsubAccepted = this.#rosClient.subscribe(
+      ARM_COMMAND_STATE_TOPIC,
+      (msg) => {
+        const pos = msg && Array.isArray(msg.position) ? msg.position : null;
+        if (!pos || pos.length < this.#ids.length) return;
+        this.#accepted = pos.slice(0, this.#ids.length).map((/** @type {number} */ rad) => radToTick(rad));
+        this.#acceptedAt = performance.now();
+      },
+      undefined,
+      "sensor_msgs/msg/JointState",
+    );
+  }
+
+  /**
+   * Signed divergence per joint in ticks, leader minus what the robot accepted,
+   * or null while that report is missing or stale. Stale must read as absent:
+   * pushing toward a pose the arm may already have left is worse than going limp.
+   * @param {number[]} positions
+   * @returns {(number | null)[]}
+   */
+  #divergence(positions) {
+    const accepted = this.#accepted;
+    const fresh = accepted && performance.now() - this.#acceptedAt < DIVERGENCE_STALE_MS;
+    if (!fresh) return this.#ids.map(() => null);
+    return this.#ids.map((_, i) => {
+      const tick = positions[i];
+      const want = accepted[i];
+      return tick === undefined || want === undefined ? null : tick - want;
+    });
   }
 
   /** @param {boolean} on Turning the guard off releases anything held. */
@@ -239,13 +298,39 @@ export class LeaderGuard {
     if (this.#trip(drawMa)) return;
 
     const before = this.#holding.size;
+    const diverged = this.#divergence(state.positions);
+    /** @type {Map<number, number>} */
+    const goals = new Map();
+    /** @type {Map<number, number>} */
+    const wants = new Map();
+    let worstJoint = 0;
+    let worstTicks = 0;
+
     this.#ids.forEach((id, i) => {
-      const band = this.band(id);
       const tick = state.positions?.[i];
-      if (!band || tick === undefined) return;
-      const outside = isOutside(tick, band, HYSTERESIS_TICKS, this.#holding.has(id));
-      if (outside) this.#holding.add(id);
-      else if (this.#holding.has(id)) {
+      if (tick === undefined) return;
+
+      // Two reasons to push back, and divergence wins where both apply: it is
+      // what the robot actually did, while the band is only our model of it.
+      const error = diverged[i];
+      const beyond = error !== null && Math.abs(error) > DIVERGENCE_DEADBAND_TICKS;
+      const band = this.band(id);
+      const outside = !!band && isOutside(tick, band, HYSTERESIS_TICKS, this.#holding.has(id));
+
+      if (beyond) {
+        this.#holding.add(id);
+        // Drive to the pose the robot accepted — the operator is pushed toward a
+        // reachable state, not merely stopped at a boundary.
+        goals.set(id, tick - /** @type {number} */ (error));
+        wants.set(id, divergenceCurrent(/** @type {number} */ (error), DIVERGENCE_SHAPE));
+        if (Math.abs(/** @type {number} */ (error)) > Math.abs(worstTicks)) {
+          worstTicks = /** @type {number} */ (error);
+          worstJoint = i + 1;
+        }
+      } else if (outside && band) {
+        this.#holding.add(id);
+        goals.set(id, clampTick(tick, band));
+      } else if (this.#holding.has(id)) {
         this.#holding.delete(id);
         this.#leader.writeTorque([id], false);
       }
@@ -256,9 +341,14 @@ export class LeaderGuard {
     // torquing it without writing its goal current first would energize it at
     // the servo's 1750 mA default.
     const untorqued = [...this.#holding].some((id) => !this.#leader.torqued.has(id));
-    if (this.#holding.size !== before || untorqued) this.#applyCurrents();
-    this.#driveHolds(state.positions);
-    this.#patch({ holding: [...this.#holding], drawMa });
+    if (this.#holding.size !== before || untorqued || wants.size) this.#applyCurrents(wants);
+    this.#driveHolds(goals);
+    this.#patch({
+      holding: [...this.#holding],
+      drawMa,
+      divergedJoint: worstJoint,
+      divergedTicks: Math.round(worstTicks),
+    });
   }
 
   /**
@@ -307,40 +397,45 @@ export class LeaderGuard {
     });
   }
 
-  /** Split the budget across whatever is holding right now. */
-  #applyCurrents() {
-    this.#writeCurrents(allocateCurrent(this.#holding.size, this.#budgetMa));
+  /**
+   * Split the budget across whatever is holding. A joint with a divergence force
+   * asks for a specific current; the rest share what is left equally. Every
+   * request is capped so the total can never exceed the budget however hard the
+   * operator pushes.
+   * @param {Map<number, number>} [wants] Per-joint mA requested by divergence.
+   */
+  #applyCurrents(wants) {
+    this.#writeCurrents(allocateCurrent(this.#holding.size, this.#budgetMa), wants);
   }
 
-  /** @param {number} perServoMa */
-  #writeCurrents(perServoMa) {
+  /** @param {number} perServoMa @param {Map<number, number>} [wants] */
+  #writeCurrents(perServoMa, wants) {
     if (!this.#holding.size) {
       this.#patch({ allocatedMa: 0 });
       return;
     }
-    this.#leader.writeGoalCurrent(new Map([...this.#holding].map((id) => [id, perServoMa])));
-    this.#patch({ allocatedMa: perServoMa });
+    const share = allocateCurrent(this.#holding.size, this.#budgetMa);
+    /** @type {Map<number, number>} */
+    const byId = new Map();
+    for (const id of this.#holding) {
+      const asked = wants?.get(id);
+      byId.set(id, Math.min(share, asked === undefined ? perServoMa : asked));
+    }
+    this.#leader.writeGoalCurrent(byId);
+    this.#patch({ allocatedMa: Math.max(...byId.values()) });
   }
 
   /**
-   * Point every held servo at its boundary tick. Goal current is already set, so
-   * the servo walks back to the edge of the reachable band under a capped push
-   * rather than snapping to it.
-   * @param {number[]} positions
+   * Point every held servo at its target — the pose the robot accepted where the
+   * follower diverged, the band edge otherwise. Goal current is already set, so
+   * the servo walks there under a capped push rather than snapping.
+   * @param {Map<number, number>} goals Target tick per servo id.
    */
-  #driveHolds(positions) {
-    if (!this.#holding.size) return;
-    /** @type {Map<number, number>} */
-    const goals = new Map();
+  #driveHolds(goals) {
+    if (!goals.size) return;
     /** @type {number[]} */
     const fresh = [];
-    this.#ids.forEach((id, i) => {
-      const band = this.band(id);
-      const tick = positions[i];
-      if (!band || tick === undefined || !this.#holding.has(id)) return;
-      goals.set(id, clampTick(tick, band));
-      if (!this.#leader.torqued.has(id)) fresh.push(id);
-    });
+    for (const id of goals.keys()) if (!this.#leader.torqued.has(id)) fresh.push(id);
     // Torque after the goal current is queued, never before: a servo torqued at
     // its 1750 mA default, even for one round, is exactly the spike the budget
     // exists to prevent.
@@ -351,6 +446,8 @@ export class LeaderGuard {
   destroy() {
     this.#unsubBudget?.();
     this.#unsubBudget = null;
+    this.#unsubAccepted?.();
+    this.#unsubAccepted = null;
     this.releaseAll();
     this.#listeners.clear();
   }
@@ -362,6 +459,8 @@ export class LeaderGuard {
       next.armed === this.#state.armed &&
       next.drawMa === this.#state.drawMa &&
       next.allocatedMa === this.#state.allocatedMa &&
+      next.divergedJoint === this.#state.divergedJoint &&
+      next.divergedTicks === this.#state.divergedTicks &&
       next.error === this.#state.error &&
       next.holding.join() === this.#state.holding.join()
     ) {

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 namespace mars_arm {
 
@@ -81,11 +82,24 @@ struct BodyBox {
 
 struct SelfCollisionConfig {
     std::vector<BodyBox> boxes;
-    double margin = 0.015;      // metres of clearance demanded around each box
-    int bisect_steps = 8;       // resolution of the walk back toward a safe pose
+    double margin = 0.015;       // hard stop: clearance demanded around each box
+    double slow_margin = 0.070;  // soft zone: motion is scaled back inside this
+    int bisect_steps = 8;        // resolution of the walk back toward a safe pose
     bool enabled = true;
     bool valid() const { return !boxes.empty(); }
 };
+
+// Distance from a point to a box, zero inside it.
+inline double pointBoxDistance(const double p[3], const BodyBox& b) {
+    const double lo[3] = {b.min_x, b.min_y, b.min_z};
+    const double hi[3] = {b.max_x, b.max_y, b.max_z};
+    double sum = 0.0;
+    for (int i = 0; i < 3; ++i) {
+        const double d = std::max({lo[i] - p[i], 0.0, p[i] - hi[i]});
+        sum += d * d;
+    }
+    return std::sqrt(sum);
+}
 
 // The arm's joints in the shoulder's sagittal plane: `x` along the arm's
 // bearing, `z` vertical. Rotation matches horizReach's convention. Five points,
@@ -157,6 +171,56 @@ inline bool poseHitsBody(double q1, double q2, double q3, double q4, const SelfC
         for (const auto& b : c.boxes)
             if (segmentHitsBox(pts[i], pts[i + 1], b, c.margin)) return true;
     return false;
+}
+
+// How much room the arm has left, in metres, before it touches the body.
+//
+// Sampled along each link rather than solved exactly: this drives the soft zone,
+// where being a millimetre out changes only how early the arm eases off. The
+// hard stop stays on poseHitsBody's exact slab test, so nothing safety-critical
+// rests on the sampling.
+inline double bodyClearance(double q1, double q2, double q3, double q4, const SelfCollisionConfig& c) {
+    if (!c.enabled || !c.valid()) return std::numeric_limits<double>::infinity();
+    const ArmPlanarPoints p = armPlanarPoints(q2, q3, q4);
+    const double cq = std::cos(q1), sq = std::sin(q1);
+    double pts[ArmPlanarPoints::kCount][3];
+    for (int i = 0; i < ArmPlanarPoints::kCount; ++i) {
+        pts[i][0] = kShoulderX + p.x[i] * cq;
+        pts[i][1] = kShoulderY + p.x[i] * sq;
+        pts[i][2] = kShoulderZ + p.z[i];
+    }
+    constexpr int kSamplesPerLink = 8;
+    double best = std::numeric_limits<double>::infinity();
+    for (int i = 0; i + 1 < ArmPlanarPoints::kCount; ++i) {
+        const double dx = pts[i + 1][0] - pts[i][0], dy = pts[i + 1][1] - pts[i][1],
+                     dz = pts[i + 1][2] - pts[i][2];
+        double near = std::numeric_limits<double>::infinity();
+        for (int k = 0; k <= kSamplesPerLink; ++k) {
+            const double t = static_cast<double>(k) / kSamplesPerLink;
+            const double q[3] = {pts[i][0] + t * dx, pts[i][1] + t * dy, pts[i][2] + t * dz};
+            for (const auto& b : c.boxes) near = std::min(near, pointBoxDistance(q, b));
+        }
+        // The true closest point can sit midway between two samples, so a raw
+        // sampled minimum over-reads by up to half the spacing — enough, on these
+        // link lengths, to be worth as much as the whole margin. Subtracting it
+        // makes the estimate conservative by construction, which is what the
+        // taper needs: reading low only eases the arm off early.
+        const double half_spacing = 0.5 * std::sqrt(dx * dx + dy * dy + dz * dz) / kSamplesPerLink;
+        best = std::min(best, std::max(0.0, near - half_spacing));
+    }
+    return best;
+}
+
+// The fraction of a requested move to accept, given how close the arm is.
+// 1 well clear, falling to 0 at the hard margin, so the arm eases off as it
+// approaches instead of running at full speed into a wall. The taper is also
+// what the leader feels: a scaled-back command diverges from what was asked,
+// and that gap is the force the operator gets back.
+inline double approachScale(double clearance, const SelfCollisionConfig& c) {
+    if (clearance >= c.slow_margin) return 1.0;
+    const double span = c.slow_margin - c.margin;
+    if (span <= 0.0) return clearance > c.margin ? 1.0 : 0.0;
+    return std::clamp((clearance - c.margin) / span, 0.0, 1.0);
 }
 
 struct JointConfig {

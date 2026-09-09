@@ -63,7 +63,8 @@
     # =============================================================
     self_collision:
       enabled: true
-      margin: 0.015        # m of clearance demanded around each box
+      margin: 0.015        # hard stop: m of clearance demanded around each box
+      slow_margin: 0.070   # inside this the arm eases off, decelerating into the stop
       bisect_steps: 8      # resolution of the walk back to a clear pose
       boxes: [
         # chassis: origin (-0.0587, 0, 0.0838), size 0.1878 x 0.182 x 0.1676
