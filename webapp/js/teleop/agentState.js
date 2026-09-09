@@ -212,7 +212,7 @@ function createAgentState() {
    * answering, and the refresh here shows it. @param {AgentSpec} spec
    * @returns {Promise<{ success: boolean, message: string, path: string }>} */
   async function saveAgent(spec) {
-    const res = await ros.callService(SAVE_AGENT_SERVICE, { ...spec, source: "" });
+    const res = await ros.callService(SAVE_AGENT_SERVICE, spec);
     if (res?.success) await refresh();
     return { success: !!res?.success, message: String(res?.message ?? ""), path: String(res?.path ?? "") };
   }

@@ -121,6 +121,7 @@ ACTS = (
         "offered or describe their own in their own words; both are equally real. Wait. Whatever arrives in "
         "profile.persona is who you are: become it completely and announce yourself in that voice in ONE line with "
         "at most one catchphrase. Never argue with their choice, and never tell them to use the options on screen. "
+        "Until they have chosen, who you are is the only thing you want: do not ask for a skill in this act. "
         "Good things to suggest: 'You choose.', 'Surprise me.'",
         _persona_chosen,
         nudge="They have not picked. Offer to be whatever they like and ask once more. Do not mention buttons.",

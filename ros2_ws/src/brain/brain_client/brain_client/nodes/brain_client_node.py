@@ -732,7 +732,7 @@ class BrainClientNode(Node):
             gaze=request.gaze,
         )
         try:
-            path, content = save_agent(self.state, spec, request.source)
+            path, content = save_agent(self.state, spec)
         except (StudioError, OSError) as e:
             response.success = False
             response.message = str(e)

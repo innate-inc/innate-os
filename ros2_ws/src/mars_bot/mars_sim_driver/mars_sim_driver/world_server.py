@@ -95,8 +95,10 @@ class WorldServer:
         # Advertised in ping replies so the launcher can tell a current
         # server from a stale pre-stream one (which it must restart).
         self.state_port: int | None = None
-        # `up --intro`: the challenge waiting for the first observer, then None.
+        # `up --intro`: the challenge waiting for the first observer, then None. Each
+        # observer arrives on its own thread, so the claim has to be one step.
         self.opening_challenge: str | None = None
+        self._opening_lock = threading.Lock()
         # Advertised in ping replies so the launcher can restart a reused
         # server whose listeners don't match the current bind policy (a
         # leftover INNATE_SIM_WORLD_BIND=0.0.0.0 server must not outlive the
@@ -305,9 +307,10 @@ class WorldServer:
         """`up --intro` opens a world with a challenge already chosen, but nothing
         runs until someone is watching: the first observer starts it, and its clock
         starts with them rather than with the server."""
-        if self.opening_challenge is None:
+        with self._opening_lock:
+            challenge_id, self.opening_challenge = self.opening_challenge, None
+        if challenge_id is None:
             return
-        challenge_id, self.opening_challenge = self.opening_challenge, None
         if not self.challenges.start(challenge_id):
             print(f"[world-server] --intro: {challenge_id!r} did not start here", flush=True)
         self.publish_state()
@@ -474,7 +477,8 @@ class WorldServer:
             self.switch_environment(str(req["id"]))
             return {"ok": True}, None
         if op == "intro":  # the launcher's `up --intro`, on a fresh server or a running one
-            self.opening_challenge = INTRO_CHALLENGE_ID
+            with self._opening_lock:
+                self.opening_challenge = INTRO_CHALLENGE_ID
             return {"ok": True}, None
         if op == "state":
             with self.lock:

@@ -898,7 +898,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     // The story's own inputs.
     nameRow.hidden = !(r && r.label === "Who am I");
     promptRow.hidden = !inStory;
-    if (who && promptInput.dataset.shown !== who && document.activeElement !== promptInput) {
+    // Including back to empty: a restarted story is nobody yet, and last run's words are not its prompt.
+    if (promptInput.dataset.shown !== who && document.activeElement !== promptInput) {
       promptInput.value = who;
       promptInput.dataset.shown = who;
     }

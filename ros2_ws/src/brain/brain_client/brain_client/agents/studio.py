@@ -260,19 +260,17 @@ def _read(path: Path | None) -> str | None:
         return None
 
 
-def save_agent(state: BrainState, spec: AgentSpec, source: str) -> tuple[Path, str]:
-    """Write ``spec`` as its agent file (or ``source`` verbatim) and return the
-    path and content. Refuses innate agents, taken ids, and rewriting a file
-    edited in code from the form."""
-    if _ID_RE.fullmatch(spec.id) is None:
-        raise StudioError(f"'{spec.id}' is not a valid id: lowercase letters, digits and underscores")
+def save_agent(state: BrainState, spec: AgentSpec) -> tuple[Path, str]:
+    """Write ``spec`` as its agent file and return the path and content. Refuses
+    innate agents, taken ids, and rewriting a file edited in code from the form."""
+    _valid_id(spec.id)
     existing = state.directives.get(spec.id)
     if existing is not None and existing.source == "shipped":
         raise StudioError(f"'{spec.id}' is an innate agent; create your own agent or edit it in code")
     path = agent_file(existing) if existing is not None else custom_agent_path(spec.id)
     if path is None:
         raise StudioError(f"cannot locate the file of '{spec.id}'")
-    content = source or _render_over(state, spec, path, existing is None)
+    content = _render_over(state, spec, path, existing is None)
     # custom_agents is gitignored, so a fresh checkout (and the demo image built from one) has no such directory.
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
@@ -293,7 +291,15 @@ def _render_over(state: BrainState, spec: AgentSpec, path: Path, new: bool) -> s
     return render_agent(spec, imports, ast.get_docstring(cls) if cls is not None else None)
 
 
+def _valid_id(agent_id: str) -> None:
+    """The id is half a file path, so anything but a bare snake_case name is refused
+    before it can reach outside custom_agents."""
+    if _ID_RE.fullmatch(agent_id) is None:
+        raise StudioError(f"'{agent_id}' is not a valid id: lowercase letters, digits and underscores")
+
+
 def delete_agent(state: BrainState, agent_id: str) -> Path:
+    _valid_id(agent_id)
     existing = state.directives.get(agent_id)
     if existing is None:
         path = custom_agent_path(agent_id)
