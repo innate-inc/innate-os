@@ -114,7 +114,6 @@ function write(store, key, value) {
  * }} opts
  */
 export function createAgentStudio(root, agentState, session, panel, opts) {
-  // ---- DOM ----------------------------------------------------------------
   const dock = document.createElement("div");
   dock.className = "agent-studio-dock open";
 
@@ -270,7 +269,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   whiteout.setAttribute("aria-hidden", "true");
   root.append(whiteout);
 
-  // ---- state --------------------------------------------------------------
   /** @type {any} */ let challenge = null;
   /** @type {any} */ let environment = null;
   let dockOpen = false; // the stage comes first; the story and "Create agent" open it
@@ -301,7 +299,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   let tab = "identity";
   /** @type {SkillRow[]} */ let roster = [];
 
-  // ---- what the world says -------------------------------------------------
   const active = () => challenge?.active ?? null;
   const story = () => (active()?.runtime?.story ? active() : null);
   const runtime = () => story()?.runtime ?? null;
@@ -333,7 +330,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const mentions = (text, skill) =>
     (text ?? "").toLowerCase().replace(/[^a-z]/g, "").includes(skillLabel(skill).toLowerCase());
 
-  // ---- running the story ---------------------------------------------------
   // A visit that lands in Nowhere with nothing running is a first run: begin it.
   function autoStart() {
     if (autoStarted || !session || skipped() || envId() !== "void" || !challenge || challenge.active) return;
@@ -418,13 +414,12 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     session?.switchEnvironment?.(environmentId);
   }
 
-  // The diploma waits for the ending: no skill running and the robot's line delivered.
+  // The offers wait for the robot's closing line, so the ending is not talked over.
   /** @param {any} o */
   function armGraduation(o) {
     graduatedAttempt = o.attempt_id;
     graduationReady = false;
     staying = false;
-    // Out means out: whatever the robot was doing stops, and it hears it before it speaks again.
     panel.clearSuggestedPrompts();
     void opts.cancelSkill().catch(() => {});
     setTimeout(() => void panel.narrate("You're out. You made it.", { local: true }), 600);
@@ -471,7 +466,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     } else if (choice.name) void panel.submitText(`Your name is ${choice.name}.`);
   }
 
-  // ---- what the chat offers ------------------------------------------------
   /** Why the chip row shows what it shows; readable in DevTools as data-chips on the panel. */
   let chipReason = "";
   /** The robot asks first: a grant offered before the request spoils the turn-taking.
@@ -505,7 +499,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       };
     }
     if (o) {
-      // Out of the void, one skill left to earn.
       if (agentState.get().activeSkills.has(MEMORY)) {
         chipReason = "memory-granted";
         return { chips: [], exclusive: false };
@@ -554,7 +547,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     };
   }
 
-  // ---- the camera ----------------------------------------------------------
   let camera = { mode: /** @type {"free" | "chase"} */ ("free"), side: 0, back: /** @type {number | null} */ (null), height: /** @type {number | null} */ (null) };
   /** @param {{mode: "free" | "chase", side: number, back: number | null, height?: number | null}} want back < 0 faces the robot from the front */
   function setCamera(want) {
@@ -633,7 +625,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     });
   }
 
-  // ---- the form ------------------------------------------------------------
   /** @param {AgentEntry} agent */
   const draftOf = (agent) => ({
     id: agent.id,
@@ -762,7 +753,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     render(true);
   }
 
-  // ---- render --------------------------------------------------------------
   /** @param {boolean} open */
   function applyDockOpen(open) {
     dockOpen = open;
@@ -826,7 +816,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       if (actChanged || !same) setCamera(want);
     }
 
-    // The door: the running skill stops, the world speaks, and it goes white until the Backrooms are in.
+    // A navigation still running would drive to void coordinates in the next world.
     const doorPassed = (r?.finished || (switching() && env === "void")) && armedAttempt && doorAttempt !== armedAttempt;
     if (doorPassed) {
       doorAttempt = armedAttempt;
@@ -1062,7 +1052,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     }
   }
 
-  // ---- wiring --------------------------------------------------------------
   toggle.addEventListener("click", () => setDockOpen(!dockOpen));
   applyDockOpen(false);
   // Narrow screens keep the bottom sheet they had: the picker goes back to the chat

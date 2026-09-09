@@ -64,9 +64,6 @@ def agent_file(agent: Agent) -> Path | None:
         return None
 
 
-# ---------------------------------------------------------------- the standard
-
-
 def form_class(source: str) -> ast.ClassDef | None:
     """The one Agent subclass of a file that holds nothing the form cannot
     express, else None."""
@@ -140,9 +137,6 @@ def _is_micro_ref(value: ast.expr) -> bool:
     if isinstance(value, ast.Name):
         return value.id == _MICRO_CLASS
     return isinstance(value, ast.Constant) and value.value == MICRO_NAME
-
-
-# ---------------------------------------------------------------- rendering
 
 
 def render_agent(spec: AgentSpec, imports: Mapping[str, SkillImport], docstring: str | None = None) -> str:
@@ -225,9 +219,6 @@ def _prompt_literal(prompt: str) -> str:
 def _docstring_block(text: str) -> str:
     body = "\n".join(f"    {line}".rstrip() for line in _escape_triple(text.strip()).splitlines())
     return f'    """\n{body}\n    """'
-
-
-# ---------------------------------------------------------------- files
 
 
 def studio_fields(agent: Agent) -> dict[str, str | bool]:
