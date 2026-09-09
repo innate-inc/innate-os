@@ -207,6 +207,16 @@ def _dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+def _fills_the_view(window) -> bool:
+    """The blob runs off two frame borders: its visible centroid is biased
+    toward the frame centre by an unknown amount, so the servo can only
+    steer it further out. The xy centred while it was whole is the best
+    estimate there is."""
+    x, y, w, h = window
+    edges = (x <= 1) + (y <= 1) + (x + w >= IMG_W - 1) + (y + h >= IMG_H - 1)
+    return edges >= 2
+
+
 class PickAnyObject(Skill):
     """Pick up an object lying on the floor, described in natural language
     (e.g. prompt='the white sock', 'a red cup'). The robot localizes the
@@ -535,6 +545,9 @@ class PickAnyObject(Skill):
                     reason = fail
                     break
                 px = tracker.guess
+            if _fills_the_view(tracker.window):
+                reason = "fills the view"
+                break
             streak += 1
 
             err_u = px[0] - p["wrist_box_u"]
