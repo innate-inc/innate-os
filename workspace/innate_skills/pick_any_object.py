@@ -60,6 +60,10 @@ PARAMS = {
     # range, so a flat gate would reject the very object it is protecting.
     "mem_gate_m": 0.35,
     "mem_gate_frac": 0.4,
+    # Parking 3 cm short of the shared 0.285 puts the grasp at x=0.265 instead
+    # of 0.235, which sits 1.5 cm off REACH_X's near wall — close enough that a
+    # backward wrist nudge is eaten by the clamp and the servo stalls out.
+    "sweet_x": 0.315,
     # WRIST ALIGN (0 wrist_steps = blind grasp)
     "wrist_steps": 2.0,
     "wrist_stop_z": 0.05,
