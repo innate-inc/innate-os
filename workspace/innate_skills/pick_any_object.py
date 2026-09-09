@@ -85,6 +85,11 @@ PARAMS = {
     # ee_link target, not fingertip height. 0.01 dug into carpet and aborted.
     "floor_z": 0.03,
     "descend_s": 1.2,
+    # A rolled grasp turns onto the object here, not at wrist_stop_z: the roll
+    # is about the tool axis, tilted for the camera, so mid-turn one open
+    # fingertip swings ~3 cm below the other — into an object it still
+    # clears from 10 cm. Higher and the vertical tool leaves the reach.
+    "roll_z": 0.10,
     "orient_s": 1.0,
     "descend_abort_z": 0.12,
     "arm_pitch": 1.30,
@@ -590,9 +595,12 @@ class PickAnyObject(Skill):
         if roll == 0.0:
             return 0.0, p["arm_pitch"], 0.0
         yaw = math.atan2(y, x)
-        if not self.manipulation.reachable(x, y, p["floor_z"], roll=roll, pitch=ROLLED_PITCH, yaw=yaw):
-            self.logger.warning(f"[PickAnyObject] rolled grasp unreachable at ({x:.2f}, {y:.2f}); grasping unrolled")
-            return 0.0, p["arm_pitch"], 0.0
+        for z in (p["roll_z"], p["floor_z"]):
+            if not self.manipulation.reachable(x, y, z, roll=roll, pitch=ROLLED_PITCH, yaw=yaw):
+                self.logger.warning(
+                    f"[PickAnyObject] rolled grasp unreachable at ({x:.2f}, {y:.2f}, {z:.2f}); grasping unrolled"
+                )
+                return 0.0, p["arm_pitch"], 0.0
         return roll, ROLLED_PITCH, yaw
 
     def _push_to_floor(self, x: float, y: float, z_from: float, roll: float, pitch: float, yaw: float) -> None:
@@ -602,16 +610,13 @@ class PickAnyObject(Skill):
         p = self._p
         self.check_cancelled()
         self.overlay.readout("reaching to the floor")
-        rungs = [z for z in (p["descend_z1"], p["descend_z2"], p["descend_z3"], p["floor_z"]) if z < z_from - 1e-6]
-        if rungs:
-            # grip=GRIPPER_OPEN re-asserts an open claw even if it drifted
-            # shut during the wrist descent (never re-seed from measured).
-            waypoints = [Waypoint(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=p["descend_s"]) for z in rungs]
-            if roll != 0.0:
-                # The wrist stage stops at wrist_stop_z, so the rungs below it are
-                # millimetres: blended in, the fingers finish turning onto the object
-                # rather than above it. Turn at height first, then descend straight.
-                waypoints.insert(0, Waypoint(x, y, z_from, roll=roll, pitch=pitch, yaw=yaw, duration=p["orient_s"]))
+        waypoints = self._turn_at_height(x, y, z_from, roll, pitch, yaw) if roll != 0.0 else []
+        z_top = waypoints[-1].z if waypoints else z_from
+        rungs = [z for z in (p["descend_z1"], p["descend_z2"], p["descend_z3"], p["floor_z"]) if z < z_top - 1e-6]
+        # grip=GRIPPER_OPEN re-asserts an open claw even if it drifted
+        # shut during the wrist descent (never re-seed from measured).
+        waypoints += [Waypoint(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=p["descend_s"]) for z in rungs]
+        if waypoints:
             try:
                 self.manipulation.follow(waypoints, grip=self.manipulation.GRIPPER_OPEN)
             except ArmFailed as e:
@@ -629,6 +634,19 @@ class PickAnyObject(Skill):
         if ee_z is not None and ee_z > p["descend_abort_z"]:
             self.manipulation.recover()
             raise ArmUnhealthy("arm would not descend")
+
+    def _turn_at_height(
+        self, x: float, y: float, z_from: float, roll: float, pitch: float, yaw: float
+    ) -> list[Waypoint]:
+        """Rise straight (still in the servo's unrolled pose) to roll_z, then
+        turn in place; the descent below is straight and already aligned."""
+        p = self._p
+        z = max(z_from, p["roll_z"])
+        wps: list[Waypoint] = []
+        if z > z_from + 1e-6:
+            wps.append(Waypoint(x, y, z, pitch=p["wrist_pitch"], duration=p["orient_s"]))
+        wps.append(Waypoint(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=p["orient_s"]))
+        return wps
 
     def _arm_joints(self):
         """The 6 current joint positions; raises LookupError when joint
