@@ -98,9 +98,11 @@ ARM_HOME = {
 
 # sim/viewer's key light (scene.ts KEY_LIGHT_OFFSET); the renderer moves it with the robot.
 KEY_LIGHT_OFFSET = (2.0, -1.5, 3.0)
-# sim/viewer's background per atmosphere.
+# sim/viewer's background and FogExp2 density per atmosphere (scene.ts).
 SKY_RGB = {"daylight": (0.80, 0.86, 0.89), "void": (1.0, 1.0, 1.0)}
 SKY_RGB_DEFAULT = (0.08, 0.086, 0.10)
+FOG_DENSITY = {"daylight": 0.004, "void": 0.16}
+FOG_DENSITY_DEFAULT = 0.035
 
 # Visual conventions matching sim/viewer's Three.js render.
 ORANGE_LINKS = {"link1", "link3", "link5"}
@@ -286,6 +288,10 @@ def build_world_xml(
 
     lx, ly, lz, azimuth, elevation, extent = spawn_camera_view(*spawn_pose)
     sky = " ".join(f"{c:g}" for c in SKY_RGB.get(atmosphere or "", SKY_RGB_DEFAULT))
+    # MuJoCo fog is a linear ramp in units of extent; 0.3/d..1.5/d brackets the
+    # viewer's exp2 curve between ~9% and ~89%.
+    fog_density = FOG_DENSITY.get(atmosphere or "", FOG_DENSITY_DEFAULT)
+    fog_start, fog_end = 0.3 / fog_density / extent, 1.5 / fog_density / extent
     key_pos = " ".join(f"{spawn_pose[i] + KEY_LIGHT_OFFSET[i]:g}" for i in range(2)) + f" {KEY_LIGHT_OFFSET[2]:g}"
 
     return f"""
@@ -303,10 +309,9 @@ def build_world_xml(
          from every surface orientation. The headlight's diffuse/specular are
          view-dependent and washed lit faces white: ambient only. -->
     <headlight ambient="0.55 0.55 0.55" diffuse="0 0 0" specular="0 0 0"/>
-    <!-- Shadow box: core.py resizes it per frame. Fog: the void's haze, per atmosphere. -->
-    <map shadowclip="1.2" fogstart="2" fogend="10"/>
+    <map shadowclip="1.2" fogstart="{fog_start:g}" fogend="{fog_end:g}"/>
     <quality shadowsize="8192"/>
-    <rgba fog="1 1 1 1"/>
+    <rgba fog="{sky} 1"/>
   </visual>
   <statistic center="{lx} {ly} {lz}" extent="{extent}"/>
   <asset>

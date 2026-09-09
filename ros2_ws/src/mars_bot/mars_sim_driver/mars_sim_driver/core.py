@@ -357,7 +357,6 @@ class VirtualMars:
         self.props.bind(self.model)
 
         self._renderer: mujoco.Renderer | None = None
-        self._foggy = self.environment.viewer.get("atmosphere") == "void"
         environment = self.model.body("apartment").id
         self._environment_geoms = {g for g in range(self.model.ngeom) if self.model.geom_bodyid[g] in (environment, 0)}
         self._encode_display_colours()
@@ -527,7 +526,7 @@ class VirtualMars:
         self._renderer.update_scene(self.data, camera=camera)
         scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = int(SHADOWS)
         scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 0
-        scene.flags[mujoco.mjtRndFlag.mjRND_FOG] = int(self._foggy)
+        scene.flags[mujoco.mjtRndFlag.mjRND_FOG] = 1
         if SHADOWS:
             self._exempt_environment_from_casting(scene)
 
@@ -539,9 +538,15 @@ class VirtualMars:
         self.model.geom_rgba[geoms, :3] = _linear_to_srgb(self.model.geom_rgba[geoms, :3])
 
     def _shadow_box(self) -> tuple[float, float, float]:
-        """(centre x, centre y, half-size) of the square around the robot and every prop in play."""
+        """(centre x, centre y, half-size) of the square around the robot and the props in
+        play near it; a prop the capped box cannot hold together with the robot is left out."""
         x, y, _yaw = self.pose()
-        centers = [c for name in self.props.out if (c := self.props.center_xy(self.data, name)) is not None]
+        reach = 2 * (SHADOW_BOX_MAX_M - SHADOW_BOX_MARGIN_M)
+        centers = [
+            c
+            for name in self.props.out
+            if (c := self.props.center_xy(self.data, name)) is not None and math.dist(c, (x, y)) <= reach
+        ]
         xs, ys = [x, *(c[0] for c in centers)], [y, *(c[1] for c in centers)]
         half = max(max(xs) - min(xs), max(ys) - min(ys)) / 2 + SHADOW_BOX_MARGIN_M
         return (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, min(max(half, SHADOW_BOX_MIN_M), SHADOW_BOX_MAX_M)
