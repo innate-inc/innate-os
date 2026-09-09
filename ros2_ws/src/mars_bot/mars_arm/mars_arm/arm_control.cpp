@@ -32,22 +32,11 @@ void MarsArmNode::controlTimerCallback() {
 
         // ========== PUBLISH ARM STATE ==========
         std::vector<double> positions_rad;
-        for (int pos : positions) {
-            positions_rad.push_back(((pos - 2048) * 2 * M_PI) / 4096.0);
-        }
-
         std::vector<double> velocities_rad;
-        for (int vel : velocities) {
-            velocities_rad.push_back((vel * 2 * M_PI) / 4096.0);
-        }
-
-        // Flip directions for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
-        std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
-        for (size_t idx : flip_indices) {
-            if (idx < positions_rad.size()) {
-                positions_rad[idx] = -positions_rad[idx];
-                velocities_rad[idx] = -velocities_rad[idx];
-            }
+        for (size_t j = 0; j < positions.size(); ++j) {
+            positions_rad.push_back(jointRad(positions[j], j));
+            const double vel = (velocities[j] * 2 * M_PI) / 4096.0;
+            velocities_rad.push_back(flippedJoint(j) ? -vel : vel);
         }
 
         // Publish arm joint state (only first 6 servos) to /mars/arm/state
@@ -286,11 +275,8 @@ void MarsArmNode::controlTimerCallback() {
                 cmd_msg.header.stamp = this->now();
                 cmd_msg.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
                 cmd_msg.position.resize(6);
-                for (int i = 0; i < 6; ++i) {
-                    double rad = ((full_command[i] - 2048) * 2 * M_PI) / 4096.0;
-                    if (i == 1 || i == 2 || i == 3 || i == 5)
-                        rad = -rad;
-                    cmd_msg.position[i] = rad;
+                for (size_t i = 0; i < 6; ++i) {
+                    cmd_msg.position[i] = jointRad(full_command[i], i);
                 }
                 {
                     std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
@@ -390,18 +376,9 @@ std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>
         command_data[1] = std::clamp(command_data[1], min_limit, -joint_configs_[1].min_pos_rad);
     }
 
-    // Direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
-    std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
-    for (size_t idx : flip_indices) {
-        if (idx < command_data.size()) {
-            command_data[idx] = -command_data[idx];
-        }
-    }
-
-    // Convert to encoder counts
     std::vector<int> command_encoder;
-    for (double pos : command_data) {
-        command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
+    for (size_t j = 0; j < command_data.size(); ++j) {
+        command_encoder.push_back(jointEncoder(command_data[j], j));
     }
     return command_encoder;
 }

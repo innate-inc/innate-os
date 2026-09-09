@@ -27,53 +27,45 @@ static constexpr double kScheduledHoldTimeoutS = 5.0;
 // that jolt shook a carried object out of the gripper. At the folded rest
 // pose — the long-idle case the decay exists for — these loads are ~0.
 static constexpr int kDecayMaxLoad = 100;
-// Rest fold. The guard trips when an arm joint sits this far behind the
-// command the control loop wrote for it (position, not load: lifting the arm
-// off the floor loads the shoulder like a light obstacle would, but a servo
-// that can lift never lags) for this many consecutive waypoints (10 ms each
-// at the configured 100 Hz).
-// Unobstructed folds from the floor peak just under 0.10 rad on hardware. A
-// joint is guarded once it has tracked within the limit, or after the lock-on
-// timeout: a limp shoulder falls ~0.5 rad past its software limit and needs a
-// moment at profile speed to close that gap.
-// An arm left lying on the floor this long with no command of any kind
-// (streamed target, trajectory, service) folds itself. Longer than any gap
-// between the commands a skill sends while its gripper is at the floor, and
-// a service resets it, so a skill recovering a tripped servo keeps the arm.
-static constexpr double kRestWhenIdleS = 5.0;
-static constexpr double kRestFoldDurationS = 3.0;
+// Rest fold. The guard trips when an arm joint sits this far behind what the
+// control loop wrote for it for this many consecutive waypoints (10 ms each
+// at 100 Hz); unobstructed folds from the floor peak just under 0.10 rad.
 static constexpr double kRestContactErrorRad = 0.20;
 static constexpr int kContactStrikes = 5;
+// A joint is guarded once it has tracked within the limit, or after this: a
+// limp shoulder falls ~0.5 rad past its software limit and needs a moment at
+// profile speed to close that gap.
 static constexpr double kContactLockOnTimeoutS = 1.0;
 // A guarded trajectory is done when the arm has arrived, not when its last
 // command was sent: an obstacle at the target is met on the last waypoints.
 static constexpr double kSettleTimeoutS = 1.0;
+// How long an arm left lying on the floor after boot or a torque cycle waits
+// for a command before folding itself; a skill recovering a tripped servo
+// commands the arm well within this.
+static constexpr double kRestWhenIdleS = 5.0;
+static constexpr double kRestFoldDurationS = 3.0;
 static constexpr double kAtRestRad = 0.05;
-// The floor is ~5.5 cm below the shoulder joint on MARS (a collapsed tip
-// measures -5 to -6 cm) and the rest pose keeps wrist and tip ~2 cm above
-// it, so a wrist or tip below this is lying on the floor. Loop carpet hooks
-// the fingertips the moment they slide, so the tip goes up before anything
-// moves along the floor. A gripper lying nearly flat pivots up with
-// the whole arm about the shoulder: its wrist is on the floor and cannot
-// lift it (the wrist servo pulled 1.3 A trying). One pointing down
-// moderately levels about the wrist, which then carries only the gripper. A
-// steep one lifts as is. Then the shoulder and elbow raise the wrist (forearm
-// level, ~10 cm above the shoulder), slower than the fold: raising an
-// extended arm is the heaviest move here, and at 1.5 s the shoulder fell
-// 0.22 rad behind at a quarter of its torque.
+// Metres below the shoulder joint. The floor is ~5.5 cm down; the rest pose
+// keeps wrist and tip ~2 cm above this line and a collapsed tip is at -5 cm.
 static constexpr double kOnFloorM = -0.02;
+// Carpet hooks the fingertips the moment they slide, so the tip goes up before
+// anything moves along the floor: a gripper lying flatter than kFlatGripperRad
+// pivots up about the shoulder (its wrist is on the floor and cannot lift it),
+// one pitched below kWristLevelMaxPitchRad levels about the wrist, a steeper
+// one lifts as is.
 static constexpr double kFlatGripperRad = 0.3;
 static constexpr double kWristLevelMaxPitchRad = 0.785;
 static constexpr double kRestLevelDurationS = 1.0;
+// Then shoulder and elbow raise the wrist (forearm level, ~10 cm above the
+// shoulder), slower than the fold: at 1.5 s the shoulder fell 0.22 rad behind.
 static constexpr double kLiftShoulderRad = -0.9;
 static constexpr double kLiftElbowRad = 0.9;
 static constexpr double kRestLiftDurationS = 2.5;
 // The shoulder may only swing back past this while the base yaw is outside
 // (kYawRestrictedMin, kYawRestrictedMax); nearer the centre the arm hits the
-// body. shoulderMinLimit enforces it on every command, and a fold that starts
-// inside the zone holds the shoulder here until the base has yawed clear —
-// letting the clamp release it mid-sweep steps the shoulder faster than it
-// can follow, which the guard reads as contact.
+// body. A fold that starts inside the zone holds the shoulder here until the
+// base has yawed clear: releasing the clamp mid-sweep steps the shoulder
+// faster than it can follow, which the guard reads as contact.
 static constexpr double kShoulderClearanceRad = -0.5;
 static constexpr double kYawRestrictedMin = -1.35;
 static constexpr double kYawRestrictedMax = 1.25;
@@ -85,6 +77,16 @@ static constexpr size_t kArmJoints = 5;
 // Joints whose /mars/arm/state sign is the servo's negated (0-based index).
 inline bool flippedJoint(size_t joint) {
     return joint == 1 || joint == 2 || joint == 3 || joint == 5;
+}
+inline double jointRad(int encoder, size_t joint) {
+    const double rad = ((encoder - 2048) * 2 * M_PI) / 4096.0;
+    return flippedJoint(joint) ? -rad : rad;
+}
+inline int jointEncoder(double rad, size_t joint) {
+    if (flippedJoint(joint)) {
+        rad = -rad;
+    }
+    return static_cast<int>((rad / (2 * M_PI)) * 4096 + 2048);
 }
 
 // Wrist and gripper tip in the arm's plane, metres from the shoulder joint
