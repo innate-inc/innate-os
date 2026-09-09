@@ -207,15 +207,15 @@ def _dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
-def _fills_the_view(window) -> bool:
-    """The blob runs off two frame borders: its visible centroid is biased
-    toward the frame centre by an unknown amount, so the servo can only
-    steer it further out. Once the object has been centred whole, that xy
-    is the best estimate there is; before that, steering on the biased
-    centroid still beats a blind grasp."""
+def _clipped_axes(window) -> tuple[bool, bool]:
+    """Which of (u, v) the blob runs off the frame on. A centroid measured
+    across a border is pulled toward the frame centre by the part the camera
+    cannot see, so that axis carries no position: correcting it would only
+    trade the arm's last whole-object centring for the bias. The other axis
+    is unbiased and still worth steering; both clipped is the end of the
+    information there is."""
     x, y, w, h = window
-    edges = (x <= 1) + (y <= 1) + (x + w >= IMG_W - 1) + (y + h >= IMG_H - 1)
-    return edges >= 2
+    return (x <= 1 or x + w >= IMG_W - 1), (y <= 1 or y + h >= IMG_H - 1)
 
 
 class PickAnyObject(Skill):
@@ -428,11 +428,11 @@ class PickAnyObject(Skill):
         else:
             self.overlay.point("hop", pending, label="hop?", view="arm")
 
-    def _draw_wrist(self, px, inside, z, top, blob):
+    def _draw_wrist(self, px, aim, inside, z, top, blob):
         """The servo box, the tracked blob with its long axis, and the descent."""
         p = self._p
         ui = self.overlay
-        u, v, half = p["wrist_box_u"], p["wrist_box_v"], p["wrist_half_px"]
+        u, v, half = aim[0], aim[1], p["wrist_half_px"]
         ui.clear("wrist-target")
         ui.box("wrist-box", (u - half, v - half, u + half, v + half), label="wrist box", view="arm", locked=inside)
         ui.point("blob", px, label="blob", view="arm", locked=inside)
@@ -547,18 +547,23 @@ class PickAnyObject(Skill):
                     reason = fail
                     break
                 px = tracker.guess
-            if descended and _fills_the_view(tracker.window):
+            # Until the first z-step nothing has been centred, so a biased
+            # centroid still beats a blind grasp.
+            clip_u, clip_v = _clipped_axes(tracker.window)
+            hold_u, hold_v = descended and clip_u, descended and clip_v
+            if hold_u and hold_v:
                 reason = "fills the view"
                 break
             streak += 1
 
-            err_u = px[0] - p["wrist_box_u"]
-            err_v = px[1] - p["wrist_box_v"]
-            inside = inside_box(px, p["wrist_box_u"], p["wrist_box_v"], p["wrist_half_px"])
+            aim = (px[0] if hold_u else p["wrist_box_u"], px[1] if hold_v else p["wrist_box_v"])
+            err_u = px[0] - aim[0]
+            err_v = px[1] - aim[1]
+            inside = inside_box(px, aim[0], aim[1], p["wrist_half_px"])
             centered = centered + 1 if inside else 0
             if centered >= 2:
                 axis = self._trusted_axis(z, tracker.axis) or axis
-            self._draw_wrist(px, inside, z, top, axis if axis is not None else tracker.axis)
+            self._draw_wrist(px, aim, inside, z, top, axis if axis is not None else tracker.axis)
             if streak < 2:
                 continue  # watch one more frame before trusting it
             if inside and centered < 2:
@@ -590,7 +595,7 @@ class PickAnyObject(Skill):
                     continue
                 stalled = 0
                 x, y = nx, ny
-                tracker.expect((p["wrist_box_u"], p["wrist_box_v"]))
+                tracker.expect(aim)
             self.manipulation.move_to(x, y, z, pitch=p["wrist_pitch"], duration=p["wrist_move_s"])
             if stepped_down:
                 # A pure z-hop barely shifts the view: one fresh confirming
