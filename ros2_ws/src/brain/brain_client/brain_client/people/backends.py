@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Innate Inc
 """The interchangeable models behind the engine's four protocols.
 
-Every heavyweight import (inspireface, onnxruntime) happens inside the backend
+Every heavyweight import (onnxruntime) happens inside the backend
 that needs it, on first use, never at module import — a missing library
 degrades to a health flag and a working engine rather than a node that will not
 start. The zero-download path (OpenCV's own HOG person detector, no face model)
@@ -43,7 +43,6 @@ class Backend(StrEnum):
     """Which face stack to prefer; wire-visible (a node parameter)."""
 
     OPENCV = "opencv"
-    INSPIREFACE = "inspireface"
     NONE = "none"
 
 
@@ -230,81 +229,6 @@ class SFaceEmbedder:
         return self._recognizer
 
 
-class InspireFaceBackend:
-    """The prototype backend: InspireFace detects and recognizes in one session.
-
-    Prototype only — its models are research-only under InsightFace's terms, so
-    nothing that ships may depend on it (RFC 12). ``inspireface`` is imported on
-    first use; without it the backend reports itself unavailable.
-    """
-
-    name = "inspireface"
-    model = "inspireface-1"
-
-    def __init__(self, *, min_confidence: float = 0.5, max_faces: int = 4) -> None:
-        self._min_confidence = min_confidence
-        self._max_faces = max_faces
-        self._session: Any = None
-        self._failed = False
-
-    @property
-    def available(self) -> bool:
-        return self._ensure() is not None
-
-    def locate(self, crop_bgr: np.ndarray) -> list[FaceHit]:
-        session = self._ensure()
-        if session is None or crop_bgr.size == 0:
-            return []
-        hits: list[FaceHit] = []
-        for face in session.face_detection(crop_bgr):
-            x1, y1, x2, y2 = face.location
-            hits.append(
-                FaceHit(
-                    x=float(x1),
-                    y=float(y1),
-                    w=float(x2 - x1),
-                    h=float(y2 - y1),
-                    landmarks=(),
-                    score=float(getattr(face, "detection_confidence", 1.0)),
-                )
-            )
-        return hits
-
-    def embed(self, crop_bgr: np.ndarray, hit: FaceHit) -> np.ndarray:
-        session = self._ensure()
-        if session is None:
-            return np.zeros(0, dtype=np.float32)
-        faces = session.face_detection(crop_bgr)
-        if not faces:
-            return np.zeros(0, dtype=np.float32)
-        del hit  # InspireFace re-detects and aligns inside its own session
-        feature = session.face_feature_extract(crop_bgr, faces[0])
-        return _l2(np.asarray(feature, dtype=np.float32).reshape(-1))
-
-    def _ensure(self) -> Any:
-        if self._session is not None or self._failed:
-            return self._session
-        try:
-            # Deferred and by name: a research-only native library that most
-            # checkouts do not have, and must not be an import edge of the node.
-            isf = import_module("inspireface")
-        except ImportError:
-            self._failed = True
-            return None
-        try:
-            session = isf.InspireFaceSession(
-                param=isf.SessionCustomParameter(),
-                detect_mode=isf.HF_DETECT_MODE_ALWAYS_DETECT,
-                max_detect_num=self._max_faces,
-            )
-            session.set_detection_confidence_threshold(self._min_confidence)
-        except (RuntimeError, OSError, AttributeError):
-            self._failed = True
-            return None
-        self._session = session
-        return session
-
-
 class OsnetBodyEmbedder:
     """OSNet x0.25 MSMT17 (MIT), 512-d, through onnxruntime on a 256x128 crop.
 
@@ -412,10 +336,6 @@ def _load_face(
 ) -> tuple[FaceLocator | None, FaceEmbedder | None, HealthState]:
     if prefer == Backend.NONE:
         return (None, None, HealthState.NONE)
-    if prefer == Backend.INSPIREFACE:
-        backend = InspireFaceBackend()
-        if backend.available:
-            return (backend, backend, HealthState.OK)
     detector_path = ensure_model(YUNET, directory, allow_download=allow_download)
     embedder_path = ensure_model(SFACE, directory, allow_download=allow_download)
     if detector_path is None or embedder_path is None:

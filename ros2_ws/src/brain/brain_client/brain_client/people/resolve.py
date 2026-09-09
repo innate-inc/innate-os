@@ -80,11 +80,6 @@ class FaceThresholds:
 SFACE_THRESHOLDS = FaceThresholds(
     accept=0.42, reject=0.30, margin=0.05, self_similar=0.38, calibration=Calibration.between(0.30, 0.42)
 )
-# The tree's prototype ran InspireFace, whose cosines sit higher for the same
-# error rates; kept so a prototype recording resolves with its own numbers.
-INSPIREFACE_THRESHOLDS = FaceThresholds(
-    accept=0.50, reject=0.38, margin=0.06, self_similar=0.46, calibration=Calibration.between(0.38, 0.50)
-)
 
 
 @dataclass(frozen=True)
@@ -111,7 +106,8 @@ OSNET_BODY_THRESHOLDS = BodyThresholds(
 
 def face_thresholds_for(model: str) -> FaceThresholds:
     """Thresholds for an embedding-space id such as ``"sface-2021-128"``."""
-    return INSPIREFACE_THRESHOLDS if model.startswith("inspireface") else SFACE_THRESHOLDS
+    del model  # one face stack ships; the argument is the seam for the next one
+    return SFACE_THRESHOLDS
 
 
 def body_thresholds_for(model: str) -> BodyThresholds:

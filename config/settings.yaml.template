@@ -231,7 +231,7 @@
 #     always_on: false              # keep recognizing while the brain is deactivated
 #     seek_faces: false             # let the block suggest walking closer for a face
 #     scribe: true                  # write down what people say about themselves (one Gemini call per window)
-#     prefer_backend: "opencv"      # face stack: "opencv" | "inspireface" | "none"
+#     prefer_backend: "opencv"      # face stack: "opencv" | "none"
 #     tick_source: "compressed"     # left-eye topic the engine samples: "compressed" | "raw"
 #     allow_model_download: true    # fetch a missing face model once; provisioning normally ships them
 #     retention_unnamed_days: 14.0  # days an unnamed person survives unseen

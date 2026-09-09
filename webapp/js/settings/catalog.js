@@ -120,11 +120,8 @@ const VAD_ENGINE_OPTIONS = [
   { value: "energy", label: "Energy threshold" },
 ];
 
-// InspireFace is a prototype the appliance may not depend on: its models are
-// research-only under InsightFace's terms, so provisioning does not ship them.
 const FACE_BACKEND_OPTIONS = [
   { value: "opencv", label: "OpenCV (YuNet + SFace)" },
-  { value: "inspireface", label: "InspireFace (prototype)" },
   { value: "none", label: "None — detect people, recognize nobody" },
 ];
 

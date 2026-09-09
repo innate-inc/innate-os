@@ -487,35 +487,6 @@ class PeopleStore:
             self._commit_person_locked(person_id, now)
             return loop.id
 
-    def open_episode(
-        self,
-        person_id: str,
-        now: float,
-        *,
-        map_name: str | None = None,
-        pose: Pose | None = None,
-        present: tuple[str, ...] = (),
-    ) -> str | None:
-        with self._lock:
-            profile = self._people.get(person_id)
-            if profile is None:
-                return None
-            episode = replace(self._episode_at(profile.episodes, now, map_name, pose), present=present)
-            self._people[person_id] = replace(
-                profile, episodes=_capped_episodes(open_episode(profile.episodes, episode))
-            )
-            self._commit_person_locked(person_id, now)
-            return episode.id
-
-    def close_episode(self, person_id: str, now: float, summary: str = "") -> bool:
-        with self._lock:
-            profile = self._people.get(person_id)
-            if profile is None or latest_open(profile.episodes) is None:
-                return False
-            self._people[person_id] = replace(profile, episodes=close_episode(profile.episodes, now, summary))
-            self._commit_person_locked(person_id, now)
-            return True
-
     def note_episode(self, person_id: str, summary: str, now: float | None = None) -> bool:
         """The scribe's episode note lands on the open episode; without one it
         is dropped rather than invented against an older encounter. One
@@ -1103,9 +1074,9 @@ def _with_outfit(outfits: list[OutfitTemplate], outfit: OutfitTemplate) -> list[
 
 
 def _grouped(embeddings: list[tuple[str, np.ndarray]], prefix: str) -> dict[str, np.ndarray]:
-    """One array per embedding space: a 128-d SFace vector and a 512-d
-    InspireFace one cannot share a rectangular array, and the merge that put them
-    on one person must not cost the whole file."""
+    """One array per embedding space: vectors of two widths cannot share a
+    rectangular array, and the merge that put them on one person must not cost
+    the whole file."""
     rows: dict[str, list[np.ndarray]] = {}
     for model, embedding in embeddings:
         rows.setdefault(model, []).append(np.asarray(embedding, dtype=np.float32).ravel())
