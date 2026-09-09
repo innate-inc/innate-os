@@ -17,38 +17,35 @@ import pytest
 
 from brain_client.people import description
 from brain_client.people.memory import Attribution, FactKind
-from brain_client.people.scribe import (
-    DRAIN_PER_CYCLE,
-    QUEUE_HORIZON_SEC,
-    WINDOW_IDLE_SEC,
-    WINDOW_MAX_MESSAGES,
-    Change,
-    ChangeKind,
+from brain_client.people.recall import is_memory_question, parse_recall, recall_request
+from brain_client.people.scribe import DRAIN_PER_CYCLE, Scribe
+from brain_client.people.scribe_output import (
     Introduction,
-    Scribe,
     ScribeFact,
     ScribeLoop,
     ScribeName,
     ScribeNote,
     ScribeOutput,
+    parse_output,
+)
+from brain_client.people.scribe_prompt import build_request, window_text
+from brain_client.people.scribe_queue import (
+    QUEUE_HORIZON_SEC,
+    WindowQueue,
+    window_from_dict,
+    window_to_dict,
+)
+from brain_client.people.scribe_rules import Change, ChangeKind, apply, asks_to_remember
+from brain_client.people.store import PeopleStore
+from brain_client.people.transcript import (
+    WINDOW_IDLE_SEC,
+    WINDOW_MAX_MESSAGES,
     Speaker,
     TagView,
     Utterance,
     Window,
     WindowBuffer,
-    WindowQueue,
-    apply,
-    asks_to_remember,
-    build_request,
-    is_memory_question,
-    parse_output,
-    parse_recall,
-    recall_request,
-    window_from_dict,
-    window_text,
-    window_to_dict,
 )
-from brain_client.people.store import PeopleStore
 from brain_client.people.types import FaceTemplate, IdentityState
 
 NOW = 1_788_818_400.0

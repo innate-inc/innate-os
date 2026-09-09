@@ -13,6 +13,7 @@ monotonic: they are compared with ROS header stamps and persisted.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, TypedDict
 
@@ -20,6 +21,10 @@ from brain_client.common.enums import StrEnum
 
 if TYPE_CHECKING:
     import numpy as np
+
+TAG_RE = re.compile(r"^P\d+$", re.IGNORECASE)
+"""A whole track tag as a caller writes it: ``P`` and the number the tracker
+minted, never a person id or a name."""
 
 Box = tuple[float, float, float, float]
 """Normalized (ymin, xmin, ymax, xmax) in the published frame."""

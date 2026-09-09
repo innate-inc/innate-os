@@ -26,7 +26,8 @@ from brain_client.brain.transport import pick_rest
 from brain_client.people.backends import load_backends
 from brain_client.people.engine import EngineConfig, PeopleEngine
 from brain_client.people.geometry import CameraModel
-from brain_client.people.node_adapters import PARAM_DEFAULTS, PeopleAdapters, config_from_params
+from brain_client.people.node_adapters import PeopleAdapters
+from brain_client.people.node_config import PARAM_DEFAULTS, config_from_params
 from brain_client.people.scribe import Scribe
 from brain_client.people.store import PeopleStore
 from brain_client.people.track import Tracker

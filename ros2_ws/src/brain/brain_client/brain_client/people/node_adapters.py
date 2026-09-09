@@ -11,22 +11,19 @@ queues. Subscriptions are created and destroyed only on the executor thread
 threads raise flags for a 1 Hz timer. The tick is sampled from the 7.5 Hz
 compressed left topic — not chased, and not the 15 Hz raw one — because the
 decoded frame's header stamp is the ``frame_stamp_ns`` the brain pairs its
-overlay by. Everything above the "ROS adapters" banner is pure and tested in
-test/test_people_node.py."""
+overlay by. Nothing here decides anything: the decisions are pure and live in
+``node_config``, ``camera_feed``, ``publishing``, ``mutations``, ``transcript``
+and ``recall``."""
 
 from __future__ import annotations
 
 import json
 import queue
-import re
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
 
-import cv2
-import numpy as np
 from brain_messages.srv import ForgetPerson, GetPeople, MergePeople, RenamePerson, SetPeopleCollection
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import Odometry
@@ -34,50 +31,73 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReli
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 from std_msgs.msg import String
 
-from brain_client.common.enums import StrEnum
 from brain_client.common.geometry import quaternion_to_yaw
-from brain_client.common.script_paths import get_innate_os_root
 from brain_client.people import description, native_frames
-from brain_client.people.geometry import CameraModel
-from brain_client.people.quality import EgoMotionTracker
-from brain_client.people.scribe import (
-    ChangeKind,
-    Speaker,
-    TagView,
-    Utterance,
-    is_memory_question,
-    mentions_memory,
+from brain_client.people.camera_feed import (
+    CameraFrame,
+    decode_frame,
+    decode_period,
+    engine_active,
+    motion_jpeg,
+    native_deadline,
+    pair_native,
+    stamp_ns,
+    stamp_text,
+    wants_native,
 )
+from brain_client.people.geometry import CameraModel
+from brain_client.people.mutations import (
+    STALE_DECISION_MESSAGE,
+    MutationLog,
+    MutationResult,
+    resolve_who,
+    tag_newer_than_decision,
+)
+from brain_client.people.node_config import COMPRESSED_IMAGE_TOPIC, TickSource
+from brain_client.people.publishing import (
+    apply_conflicts,
+    empty_snapshot,
+    fresh_tracks,
+    publishable_tracks,
+    roster_answer,
+    seek_hint,
+    should_publish,
+)
+from brain_client.people.quality import EgoMotionTracker
+from brain_client.people.recall import Recall, alone_in_view, is_memory_question, mentions_memory, recall_person
+from brain_client.people.scribe_rules import ChangeKind
 from brain_client.people.surfacing import PeopleEvents, build_snapshot, choose_attention
-from brain_client.people.types import SNAPSHOT_SCHEMA, HealthDict, HealthState, IdentityState, TrackState
-from brain_client.perception.motion_gate import MOTION_SAMPLE_SEC, MotionGate
-from brain_client.transport.chat import Sender
+from brain_client.people.transcript import (
+    SPEAKING_HOLD_SEC,
+    chat_in_utterance,
+    chat_out_utterance,
+    held_speaking,
+    speaking_tag,
+    tag_views,
+)
+from brain_client.people.types import HealthDict, HealthState
+from brain_client.perception.motion_gate import MotionGate
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Mapping, Sequence
-    from pathlib import Path
+    from collections.abc import Callable, Mapping, Sequence
 
+    import numpy as np
     from rclpy.node import Node
     from rclpy.publisher import Publisher
     from rclpy.subscription import Subscription
 
     from brain_client.people.engine import EngineConfig, PeopleEngine
+    from brain_client.people.node_config import PeopleNodeConfig
     from brain_client.people.quality import EgoMotion
     from brain_client.people.resolve import Resolution
-    from brain_client.people.scribe import Change, Scribe, Transport
+    from brain_client.people.scribe import Scribe, Transport
+    from brain_client.people.scribe_rules import Change
     from brain_client.people.store import PeopleStore
-    from brain_client.people.types import (
-        AttentionDict,
-        PeopleRosterDict,
-        PeopleSnapshotDict,
-        Pose,
-        RosterEntryDict,
-    )
+    from brain_client.people.transcript import TagView, Utterance
+    from brain_client.people.types import PeopleSnapshotDict, Pose, TrackState
 
 SNAPSHOT_TOPIC = "/brain/people"
 EVENTS_TOPIC = "/brain/people_events"
-COMPRESSED_IMAGE_TOPIC = "/mars/main_camera/left/image_raw/compressed"
-RAW_IMAGE_TOPIC = "/mars/main_camera/left/image_raw"
 CAMERA_INFO_TOPIC = "/mars/main_camera/left/camera_info"
 NATIVE_TOPIC = "/mars/main_camera/native/compressed"
 HEAD_TOPIC = "/mars/head/current_position"
@@ -95,43 +115,17 @@ MERGE_SERVICE = "/brain/people/merge"
 FORGET_SERVICE = "/brain/people/forget"
 SET_COLLECTION_SERVICE = "/brain/people/set_collection"
 
-SNAPSHOT_HEARTBEAT_SEC = 5.0
-"""The brain reads a snapshot older than 10 s as a claim about nobody; half
-that is the heartbeat that keeps an idle node's health readable."""
-
-LOST_GRACE_SEC = 60.0  # a lost track rides the snapshot this long, as "just left view"
-NATIVE_SKEW_NS = 130_000_000
-"""How far a native buffer's stamp may sit from the published frame's and still be
-the same capture: two frames at 15 fps. The driver's own kMaxNativeSkewNs is a
-wider PTS-reset guard, not this — a buffer further out than this is a different
-moment, and cropping a face out of it would move the face."""
-NATIVE_HOLD_SEC = 30.0  # how long the native subscription is held once anything wanted it
-MOTION_JPEG_QUALITY = 50  # the gate diffs an eighth-scale gray image; anything finer is thrown away
-TALKING_RANGE_M = 3.0
-SPEAKING_HOLD_SEC = 3.0  # how long one chat_in message keeps a track marked as the speaker
 HINT_TTL_SEC = 120.0  # a disambiguation question ages out with the exchange it came from
 LEARNED_TTL_SEC = 120.0  # and so does a "P5 = Zoe" line whose track left before it could be shown
 ENROLLING_SEC = 60.0  # how long after enrolment a track still counts as "enrolling" to the scribe
-SEEK_MIN_RANGE_M = 1.5  # closer than this, walking over gains nothing the head tilt cannot
 IDLE_POLL_SEC = 0.5
 TICK_POLL_SEC = 0.05
 SCRIBE_TICK_SEC = 2.0
 STORE_TICK_SEC = 60.0
 EXPIRE_EVERY_SEC = 3600.0
 
-IDEMPOTENCY_KEYS = 64
-"""How many mutation keys the node answers a retry from. A key is spent within
-seconds of being minted, so this is a few minutes of the busiest Settings page."""
-DECISION_SKEW_SEC = 1.0
-"""How far a track may have started past the frame stamp it was measured on and
-still belong to that snapshot: the stamp is the capture, and the tracker's clock
-starts when the tick that decoded the frame ran, a camera latency later."""
-STALE_DECISION_MESSAGE = "that tag was issued after the snapshot you decided on; look again"
-
 ScribeLines = tuple[dict[str, str], dict[str, str]]
 """The scribe's per-tag ``learned`` and ``hint`` lines, read once per tick."""
-
-_TAG_RE = re.compile(r"^P\d+$", re.IGNORECASE)
 
 SNAPSHOT_QOS = QoSProfile(
     depth=1,
@@ -155,508 +149,6 @@ class PeopleHealthDict(HealthDict, total=False):
     "unavailable" without a Gemini transport, "stale" while windows queue."""
 
     scribe: str
-
-
-class TickSource(StrEnum):
-    """Which left-eye topic the engine ticks on; wire-visible (a parameter)."""
-
-    COMPRESSED = "compressed"
-    RAW = "raw"
-
-
-# =========================================================== pure: parameters
-
-
-@dataclass(frozen=True)
-class PeopleNodeConfig:
-    """The node's ROS parameters as plain data. Whether to run at all is not
-    one of them: the launch file reads that from settings.yaml before starting
-    the process, because a node that exits is a node ``respawn`` restarts every
-    two seconds."""
-
-    always_on: bool = False
-    seek_faces: bool = False
-    scribe: bool = True
-    prefer_backend: str = "opencv"
-    tick_source: str = TickSource.COMPRESSED
-    allow_model_download: bool = True
-    retention_unnamed_days: float = 14.0
-    retention_named_days: float = 548.0
-    simulator_mode: bool = False
-    camera_height_m: float = 0.26
-    gemini_model: str = "gemini-3.6-flash"
-
-    @property
-    def data_dir(self) -> Path:
-        """Sim evidence never mixes with hardware evidence (RFC 6.1)."""
-        return get_innate_os_root() / "data" / ("people_sim" if self.simulator_mode else "people")
-
-    @property
-    def models_dir(self) -> Path:
-        return get_innate_os_root() / "data" / "models" / "people"
-
-    @property
-    def image_topic(self) -> str:
-        return RAW_IMAGE_TOPIC if self.tick_source == TickSource.RAW else COMPRESSED_IMAGE_TOPIC
-
-
-PARAM_DEFAULTS: dict[str, bool | str | float] = {
-    "always_on": False,
-    "seek_faces": False,
-    "scribe": True,
-    "prefer_backend": "opencv",
-    "tick_source": str(TickSource.COMPRESSED),
-    # True so a robot provisioned without the model files still recognizes a
-    # face after one fetch; provisioning is meant to ship them under
-    # data/models/people, and an appliance that cannot reach the internet
-    # degrades to detection either way.
-    "allow_model_download": True,
-    "retention_unnamed_days": 14.0,
-    "retention_named_days": 548.0,
-    "simulator_mode": False,
-    "camera_height_m": 0.26,
-    "gemini_model": "gemini-3.6-flash",
-}
-
-
-def config_from_params(values: Mapping[str, Any]) -> PeopleNodeConfig:
-    """The declared parameter values as a config. A value of the wrong type
-    keeps the default: a mistyped setting must not stop the node from seeing."""
-    fields: dict[str, Any] = {}
-    for name, default in PARAM_DEFAULTS.items():
-        value = values.get(name, default)
-        if isinstance(default, bool):
-            fields[name] = bool(value)
-        elif isinstance(default, float):
-            numeric = isinstance(value, (int, float)) and not isinstance(value, bool)
-            fields[name] = float(value) if numeric else default
-        else:
-            fields[name] = value if isinstance(value, str) and value else default
-    if fields["tick_source"] not in (TickSource.COMPRESSED, TickSource.RAW):
-        fields["tick_source"] = str(TickSource.COMPRESSED)
-    return PeopleNodeConfig(**fields)
-
-
-# =============================================================== pure: frames
-
-
-@dataclass(frozen=True)
-class CameraFrame:
-    """One left-eye frame as it arrived, decoded only once the engine wants it."""
-
-    stamp_ns: int
-    data: bytes
-    encoding: str = "jpeg"  # "jpeg" | "bgr8" | "rgb8"
-    width: int = 0
-    height: int = 0
-
-
-def stamp_ns(sec: int, nanosec: int) -> int:
-    """A ROS header stamp as the integer nanoseconds every consumer names a
-    frame by (the brain pairs its overlay on an exact match)."""
-    return sec * 10**9 + nanosec
-
-
-def stamp_text(value: int | None) -> str | None:
-    """``frame_stamp_ns`` rides the snapshot as a decimal string: a JSON number
-    loses the last digits of a nanosecond stamp in a JavaScript consumer."""
-    return None if value is None else str(value)
-
-
-def decode_frame(frame: CameraFrame) -> np.ndarray | None:
-    """The frame as BGR pixels, or None when it is unreadable."""
-    if frame.encoding == "jpeg":
-        return native_frames.decode(frame.data)
-    if frame.encoding not in ("bgr8", "rgb8"):
-        return None
-    pixels = frame.width * frame.height * 3
-    if pixels <= 0 or len(frame.data) < pixels:
-        return None
-    image = np.frombuffer(frame.data, dtype=np.uint8, count=pixels).reshape(frame.height, frame.width, 3)
-    # frombuffer is read-only and an rgb8 flip is a negative-stride view; cv2
-    # refuses both, so the copy is the price of not owning the message memory.
-    return np.array(image if frame.encoding == "bgr8" else image[:, :, ::-1], dtype=np.uint8, order="C")
-
-
-def motion_jpeg(frame: CameraFrame, sampled_at: float, *, now: float | None = None) -> bytes | None:
-    """The frame as the JPEG :class:`MotionGate` reads, or None when the gate
-    would throw it away anyway. A raw frame has to be re-encoded to reach a gate
-    written against the compressed topic, so it is only encoded at the gate's
-    own sample interval — the quality is spent on an eighth-scale gray diff."""
-    if frame.encoding == "jpeg":
-        return frame.data
-    if (now if now is not None else time.monotonic()) - sampled_at < MOTION_SAMPLE_SEC:
-        return None
-    image = decode_frame(frame)
-    if image is None:
-        return None
-    ok, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), MOTION_JPEG_QUALITY])
-    return bytes(buffer) if ok else None
-
-
-def pair_native(
-    frame_stamp: int, buffers: Sequence[tuple[int, bytes]], *, max_skew_ns: int = NATIVE_SKEW_NS
-) -> bytes | None:
-    """The native MJPG buffer captured with this published frame. The driver
-    stamps the buffer with the published frame's stamp plus the PTS delta, so
-    the nearest stamp inside the driver's own skew cap is the right one."""
-    best: tuple[int, bytes] | None = None
-    for stamp, data in buffers:
-        skew = abs(stamp - frame_stamp)
-        if skew > max_skew_ns:
-            continue
-        if best is None or skew < abs(best[0] - frame_stamp):
-            best = (stamp, data)
-    return best[1] if best is not None else None
-
-
-# =========================================================== pure: duty cycle
-
-
-def engine_active(*, always_on: bool, brain_active: bool) -> bool:
-    """Whether the engine should be looking at all (RFC 3.1): the brain's
-    lifecycle drives it unless the owner asked for "always on"."""
-    return always_on or brain_active
-
-
-def decode_period(config: EngineConfig, *, tracked: bool, driving: bool, motion: bool) -> float:
-    """How often the node decodes a frame for the engine — the engine's own
-    detect cadence (RFC 4.6). Decoding faster only throws JPEGs away."""
-    if driving:
-        return 1.0 / config.driving_detect_hz
-    if tracked or motion:
-        return 1.0 / config.active_detect_hz
-    return 1.0 / config.idle_detect_hz
-
-
-def wants_native(tracks: Sequence[TrackState], now: float, *, refresh_sec: float = 5.0) -> bool:
-    """Whether any live track still needs the sensor's own pixels: everyone
-    unsettled, and a settled track whose last face is older than the refresh
-    interval. False unsubscribes the lazy native topic, which is what makes it
-    free in the driver."""
-    for track in tracks:
-        if track.lost:
-            continue
-        if track.identity.state not in (IdentityState.KNOWN, IdentityState.FAMILIAR):
-            return True
-        if track.last_face_stamp is None or now - track.last_face_stamp >= refresh_sec:
-            return True
-    return False
-
-
-def native_deadline(wanted: bool, now: float, deadline: float, *, hold_sec: float = NATIVE_HOLD_SEC) -> float:
-    """Until when the native subscription is held. One settled person makes
-    :func:`wants_native` alternate at the face-refresh interval, and following
-    that literally would create and destroy a subscription every few seconds
-    for as long as they stand there."""
-    return max(deadline, now + hold_sec) if wanted else deadline
-
-
-# ============================================================ pure: snapshots
-
-
-def publishable_tracks(
-    tracks: Sequence[TrackState], now: float, *, grace_sec: float = LOST_GRACE_SEC
-) -> list[TrackState]:
-    """Live tracks, plus the ones lost recently enough to still be worth saying
-    "just left view" about; the tracker remembers lost tracks for five minutes,
-    far longer than the brain wants to hear about them."""
-    return [track for track in tracks if not track.lost or now - track.last_seen <= grace_sec]
-
-
-def fresh_tracks(
-    tracks: Sequence[TrackState], *, now: float, last_frame_at: float, stale_sec: float
-) -> tuple[TrackState, ...]:
-    """The tracks a silent camera is still allowed to claim: none. The tracker
-    ages a track out on the tick that misses it, so without frames the scene
-    would freeze with everybody still in it (RFC section 9)."""
-    if now - last_frame_at > stale_sec:
-        return ()
-    return tuple(tracks)
-
-
-def apply_conflicts(tracks: Sequence[TrackState], resolutions: Mapping[str, Resolution]) -> list[TrackState]:
-    """One person cannot be two live tracks (RFC 5.3.4). The resolver reports
-    the clash and keeps the loser's belief; the snapshot has to *say* it, so
-    the track reads ``conflict``, person and name kept — the rival identity is
-    this person's own other track, never a second candidate."""
-    resolved: list[TrackState] = []
-    for track in tracks:
-        resolution = resolutions.get(track.tag)
-        if resolution is None or resolution.conflict_with is None:
-            resolved.append(track)
-            continue
-        resolved.append(replace(track, identity=replace(track.identity, state=IdentityState.CONFLICT)))
-    return resolved
-
-
-def seek_hint(
-    attention: AttentionDict | None, tracks: Sequence[TrackState], *, seek_faces: bool
-) -> AttentionDict | None:
-    """With ``seek_faces`` on, the attention line names the skill that would get
-    the face (RFC 5.5: approach is opt-in, and it stays a nudge in the block —
-    the node never calls a tool)."""
-    if attention is None or not seek_faces:
-        return attention
-    tag = attention.get("tag") or ""
-    target = next((track for track in tracks if track.tag == tag), None)
-    if target is None or target.frames_with_face > 0:
-        return attention
-    if target.range_m is not None and target.range_m <= SEEK_MIN_RANGE_M:
-        return attention
-    return {**attention, "text": f"{attention.get('text', '')}; approach_person({tag}) would get a look"}
-
-
-def snapshot_changed(current: PeopleSnapshotDict, previous: PeopleSnapshotDict | None) -> bool:
-    """Whether anything but the clock moved: an idle scene must not republish a
-    kilobyte of identical JSON five times a second."""
-    if previous is None:
-        return True
-    volatile = ("stamp", "frame_stamp_ns")
-    return {key: value for key, value in current.items() if key not in volatile} != {
-        key: value for key, value in previous.items() if key not in volatile
-    }
-
-
-def should_publish(
-    current: PeopleSnapshotDict,
-    previous: PeopleSnapshotDict | None,
-    *,
-    now: float,
-    last_publish: float,
-    active: bool,
-    heartbeat_sec: float = SNAPSHOT_HEARTBEAT_SEC,
-) -> bool:
-    """Every tick while anyone is in view, on any change otherwise, and at least
-    every ``heartbeat_sec`` so health stays readable."""
-    return active or now - last_publish >= heartbeat_sec or snapshot_changed(current, previous)
-
-
-def held_speaking(pending: tuple[str, float] | None, now: float) -> tuple[str, ...]:
-    """The tag a recent chat_in message was attributed to, while it lasts."""
-    if pending is None or now >= pending[1]:
-        return ()
-    return (pending[0],)
-
-
-def speaking_tag(tracks: Sequence[TrackState], *, max_range_m: float = TALKING_RANGE_M) -> str | None:
-    """Who just spoke, when the answer is not a guess: the one live track in
-    talking range. Two candidates or none attribute to nobody — the scribe's
-    name rules refuse to commit on a guess, and so does this."""
-    candidates = [
-        track for track in tracks if not track.lost and (track.range_m is None or track.range_m <= max_range_m)
-    ]
-    return candidates[0].tag if len(candidates) == 1 else None
-
-
-# =============================================================== pure: scribe
-
-
-def tag_views(tracks: Sequence[TrackState], enrolling: Iterable[str] = ()) -> tuple[TagView, ...]:
-    """The live tracks as the scribe sees them when a message arrives."""
-    fresh = set(enrolling)
-    return tuple(
-        TagView(
-            tag=track.tag,
-            state=track.identity.state,
-            person_id=track.identity.person_id,
-            name=track.identity.name,
-            enrolling=track.tag in fresh,
-        )
-        for track in tracks
-        if not track.lost
-    )
-
-
-def chat_in_utterance(
-    payload: Mapping[str, Any], *, uid: str, now: float, in_view: Sequence[TagView]
-) -> Utterance | None:
-    """A ``/brain/chat_in`` entry as one transcript line, or None when it is not
-    a person talking to the robot. Simulated environment speech is dropped: it
-    comes out of the robot's own speaker on behalf of a scripted resident, so it
-    is neither the user in view nor the robot's own words, and a transcript
-    claiming either would teach the scribe a lie."""
-    if payload.get("sender") == "environment_speech":
-        return None
-    text = str(payload.get("text") or "").strip()
-    if not text:
-        return None
-    return Utterance(id=uid, stamp=now, speaker=Speaker.USER, text=text, in_view=tuple(in_view))
-
-
-def chat_out_utterance(
-    payload: Mapping[str, Any], *, uid: str, now: float, in_view: Sequence[TagView]
-) -> Utterance | None:
-    """A ``/brain/chat_out`` entry as one transcript line. Only what the robot
-    said out loud and what a skill reported count; thoughts and system notes
-    were never spoken, and would read to the scribe as speech."""
-    if payload.get("sender") not in (Sender.ROBOT, Sender.SKILL_OUTPUT):
-        return None
-    text = str(payload.get("text") or "").strip()
-    if not text:
-        return None
-    return Utterance(id=uid, stamp=now, speaker=Speaker.ROBOT, text=text, in_view=tuple(in_view))
-
-
-@dataclass(frozen=True)
-class Recall:
-    """What a deep recall came back with, on its way from the scribe thread to
-    the engine thread. It crosses as data because :class:`PeopleEvents` reads
-    then writes its cooldown dicts, and only the engine thread may touch it."""
-
-    person_id: str
-    name: str | None
-    text: str
-    stamp: float
-
-
-def recall_person(subject: str, tracks: Sequence[TrackState], roster: Sequence[RosterEntryDict]) -> str | None:
-    """Who a memory question is about (RFC 6.4). ``is_memory_question`` hands
-    back a name, a ``P<n>`` tag or a bare pronoun; a pronoun resolves against
-    who is in view, and only when exactly one person is."""
-    if _TAG_RE.match(subject):
-        track = next((t for t in tracks if t.tag.upper() == subject.upper() and not t.lost), None)
-        return track.identity.person_id if track is not None else None
-    wanted = subject.strip().casefold()
-    for entry in roster:
-        if (entry.get("name") or "").strip().casefold() == wanted and wanted:
-            return entry.get("person_id")
-    in_view = {track.identity.person_id for track in tracks if not track.lost and track.identity.person_id}
-    return in_view.pop() if len(in_view) == 1 else None
-
-
-def alone_in_view(person_id: str, tracks: Sequence[TrackState]) -> bool:
-    """Whether the subject of a recall is the only person the robot can see.
-    The scribe keeps sensitive facts out of an answer that anyone else is
-    standing there to hear (RFC 6.3), the same one-plausible-referent rule that
-    gates writing one."""
-    live = [track for track in tracks if not track.lost]
-    return len(live) == 1 and live[0].identity.person_id == person_id
-
-
-# ============================================================= pure: services
-
-
-@dataclass(frozen=True)
-class MutationResult:
-    """What a mutation answered, kept so a retry can be answered the same way.
-    ``person_id`` is empty for the services whose response has no such field."""
-
-    success: bool
-    message: str
-    person_id: str = ""
-
-
-class MutationLog:
-    """The answers the last :data:`IDEMPOTENCY_KEYS` idempotency keys got.
-
-    A call carrying a key this node has already answered is a retry — a reply
-    the caller never received, a second tap on the Settings page — and RFC
-    section 8 answers it from here rather than merging two people twice. An
-    empty key is no key: those calls are always fresh mutations.
-    """
-
-    def __init__(self, limit: int = IDEMPOTENCY_KEYS) -> None:
-        self._limit = limit
-        self._answers: dict[str, MutationResult] = {}
-
-    def answered(self, key: str) -> MutationResult | None:
-        return self._answers.get(key.strip()) if key.strip() else None
-
-    def remember(self, key: str, result: MutationResult) -> None:
-        key = key.strip()
-        if not key:
-            return
-        self._answers.pop(key, None)  # re-inserted last, so a live key is not the one evicted
-        self._answers[key] = result
-        while len(self._answers) > self._limit:
-            del self._answers[next(iter(self._answers))]
-
-
-def tag_newer_than_decision(who: str, tracks: Sequence[TrackState], decided_on_stamp_ns: str) -> bool:
-    """Whether ``who`` names a live tag whose track started after the snapshot
-    the caller decided on (RFC section 8). A caller acting on a tag its snapshot
-    never carried is answering about somebody it has not seen, so the mutation
-    is refused instead of landing on whoever holds that tag now."""
-    decided_on = _stamp_seconds(decided_on_stamp_ns)
-    query = who.strip()
-    if decided_on is None or not _TAG_RE.match(query):
-        return False
-    track = next((t for t in tracks if t.tag.upper() == query.upper()), None)
-    return track is not None and track.first_seen > decided_on + DECISION_SKEW_SEC
-
-
-def _stamp_seconds(stamp_ns: str) -> float | None:
-    """``frame_stamp_ns`` as epoch seconds; None when there is no stamp to check."""
-    try:
-        return int(stamp_ns) / 1e9
-    except (TypeError, ValueError):
-        return None
-
-
-def resolve_who(
-    who: str,
-    tracks: Sequence[TrackState],
-    roster: Sequence[RosterEntryDict],
-    *,
-    forgotten: Callable[[str], bool] = lambda _person_id: False,
-) -> tuple[str | None, str]:
-    """``who`` — a live tag, a person id, or a name — as a person id, or None
-    with a message the caller can say out loud. A tag that has expired, or a
-    name two people answer to, is an error: never the nearest live track."""
-    query = who.strip()
-    if not query:
-        return None, "no person given: pass a live tag like P3, or a person id"
-    if _TAG_RE.match(query):
-        track = next((t for t in tracks if t.tag.upper() == query.upper()), None)
-        if track is None:
-            return None, f"{query} is not a track I have any more — try again while they are in view"
-        if track.identity.person_id is None:
-            return None, f"{query} is not somebody I have on file yet"
-        return track.identity.person_id, ""
-    if any(entry.get("person_id") == query for entry in roster):
-        return query, ""
-    if query.startswith("person_"):
-        return None, f"I have nobody with the id {query}" + (" — that one was forgotten" if forgotten(query) else "")
-    matches = [entry for entry in roster if (entry.get("name") or "").strip().casefold() == query.casefold()]
-    if len(matches) == 1:
-        return matches[0].get("person_id"), ""
-    if matches:
-        return None, f"I know {len(matches)} people called {query} — say which one by their id"
-    return None, f"I do not know anybody called {query}"
-
-
-def roster_answer(
-    snapshot: PeopleSnapshotDict, *, roster: Sequence[RosterEntryDict] | None, capacity_full: bool
-) -> PeopleRosterDict:
-    """``GetPeople``'s payload: the live snapshot, plus the roster when it was
-    asked for. A missing ``roster`` key reads as "this node is too old" in the
-    Settings page, so it is present exactly when it was requested."""
-    answer = cast("PeopleRosterDict", dict(snapshot))
-    if roster is None:
-        return answer
-    answer["roster"] = list(roster)
-    answer["capacity_full"] = capacity_full
-    return answer
-
-
-def empty_snapshot(health: HealthDict, now: float, *, collection_enabled: bool) -> PeopleSnapshotDict:
-    """What the node latches before its first tick, and while it is idle — an
-    honest "nobody, and here is the state of the sensors" rather than silence."""
-    return {
-        "schema": SNAPSHOT_SCHEMA,
-        "stamp": round(now, 3),
-        "frame_stamp_ns": None,
-        "image_size": [640, 480],
-        "health": health,
-        "collection_enabled": collection_enabled,
-        "attention": None,
-        "people": [],
-        "recent": [],
-    }
-
-
-# ============================================================== ROS adapters
 
 
 class PeopleSensors:

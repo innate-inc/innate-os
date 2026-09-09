@@ -27,21 +27,17 @@ import numpy as np
 import pytest
 
 from brain_client.brain import overlay, people_context
+from brain_client.people import camera_feed as cf
+from brain_client.people import mutations as mu
+from brain_client.people import publishing as pub
 from brain_client.people.memory import Attribution, FactKind, FactSource
 from brain_client.people.resolve import Resolver
-from brain_client.people.scribe import (
-    Introduction,
-    ScribeName,
-    ScribeOutput,
-    Speaker,
-    TagView,
-    Utterance,
-    Window,
-)
-from brain_client.people.scribe import apply as apply_window
+from brain_client.people.scribe_output import Introduction, ScribeName, ScribeOutput
+from brain_client.people.scribe_rules import apply as apply_window
 from brain_client.people.sdk_parse import parse_snapshot
 from brain_client.people.store import PeopleStore
 from brain_client.people.surfacing import build_snapshot, choose_attention
+from brain_client.people.transcript import Speaker, TagView, Utterance, Window
 from brain_client.people.types import (
     Evidence,
     FaceObservation,
@@ -83,8 +79,7 @@ class _StubFinder(importlib.abc.MetaPathFinder):
 _STUB_FINDER = _StubFinder()
 sys.meta_path.append(_STUB_FINDER)
 
-from brain_client.people import node_adapters as na  # noqa: E402 — needs the stubs above
-from brain_client.perception import camera as cam  # noqa: E402 — same
+from brain_client.perception import camera as cam  # noqa: E402 — needs the stubs above
 
 sys.meta_path.remove(_STUB_FINDER)
 for _stubbed in [name for name, module in sys.modules.items() if isinstance(module, _StubModule)]:
@@ -279,7 +274,7 @@ def test_the_settings_card_reads_what_get_people_answers(store: PeopleStore, sce
     snapshot, theo = scene
     answer = json.loads(
         json.dumps(
-            na.roster_answer(
+            pub.roster_answer(
                 snapshot, roster=store.roster(include_thumbnails=True), capacity_full=store.capacity_full()
             )
         )
@@ -291,7 +286,7 @@ def test_the_settings_card_reads_what_get_people_answers(store: PeopleStore, sce
     assert isinstance(row["thumbnail"], str)  # base64 JPEG, only because it was asked for
     assert answer["capacity_full"] is False and answer["collection_enabled"] is True
 
-    plain = json.loads(json.dumps(na.roster_answer(snapshot, roster=store.roster(), capacity_full=False)))
+    plain = json.loads(json.dumps(pub.roster_answer(snapshot, roster=store.roster(), capacity_full=False)))
     assert plain["roster"][0]["thumbnail"] is None
 
 
@@ -318,7 +313,7 @@ class _Ring:
             SimpleNamespace(data=jpeg, header=SimpleNamespace(stamp=SimpleNamespace(sec=sec, nanosec=nanosec)))
         )
         self.monotonic[0] += 1.0 / 7.5  # the compressed topic's own rate
-        return na.stamp_ns(sec, nanosec)
+        return cf.stamp_ns(sec, nanosec)
 
 
 def test_the_engines_stamp_and_the_brains_ring_name_the_same_frame(monkeypatch):
@@ -328,7 +323,7 @@ def test_the_engines_stamp_and_the_brains_ring_name_the_same_frame(monkeypatch):
     ring = _Ring(monkeypatch)
     stamp = ring.arrive(1_788_818_400, 123_456_789, b"the-frame", pitch=-7.5)
 
-    published = na.stamp_text(stamp)
+    published = cf.stamp_text(stamp)
     assert published == "1788818400123456789"
     assert people_context.frame_stamp_ns({"frame_stamp_ns": published}) == stamp
 
@@ -356,7 +351,7 @@ def test_the_ring_holds_a_tick_and_a_half_of_frames_and_no_more(monkeypatch):
 def test_a_stamp_the_ring_never_held_pairs_with_nothing(monkeypatch):
     ring = _Ring(monkeypatch)
     ring.arrive(1000, 0)
-    assert ring.capture.frame_for_stamp(na.stamp_ns(999, 0), 3.0) is None
+    assert ring.capture.frame_for_stamp(cf.stamp_ns(999, 0), 3.0) is None
 
 
 def test_a_camera_stamp_reset_pairs_on_the_new_epoch_not_the_old_one(monkeypatch):
@@ -384,9 +379,9 @@ def test_two_people_with_the_same_name_are_two_records_and_an_actionable_error(s
     first, second = enrol(store, "Alex"), enrol(store, "Alex", now=NOW + 1)
     assert first != second
 
-    person_id, message = na.resolve_who("Alex", (), store.roster())
+    person_id, message = mu.resolve_who("Alex", (), store.roster())
     assert person_id is None and "2 people called Alex" in message
-    assert na.resolve_who(first, (), store.roster())[0] == first
+    assert mu.resolve_who(first, (), store.roster())[0] == first
 
     tracks = (track("P3", person_id=first, name="Alex"), track("P4", person_id=second, name="Alex", range_m=3.0))
     snapshot = build_snapshot(tracks, store, HEALTH, NOW)
@@ -404,7 +399,7 @@ def test_a_retried_mutation_is_answered_the_same_way_twice(store: PeopleStore):
 
     assert store.forget(ana, now=NOW) is True
     assert store.forget(ana, now=NOW) is False
-    person_id, message = na.resolve_who(ana, (), store.roster(), forgotten=store.is_tombstoned)
+    person_id, message = mu.resolve_who(ana, (), store.roster(), forgotten=store.is_tombstoned)
     assert person_id is None and "forgotten" in message  # never silently the nearest live track
 
 

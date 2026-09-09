@@ -973,7 +973,7 @@ def test_reopening_a_store_tightens_a_directory_somebody_loosened(tmp_path):
 def test_the_scribes_queue_lands_inside_that_directory_with_the_same_mode(tmp_path):
     """The queue holds transcripts and person ids waiting on a connection; it is
     the same data under the same lock-and-key as the roster beside it."""
-    from brain_client.people.scribe import WindowQueue
+    from brain_client.people.scribe_queue import WindowQueue
 
     root = tmp_path / "people"
     path = root / "scribe_queue.jsonl"

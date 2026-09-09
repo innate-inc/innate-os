@@ -26,8 +26,15 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+from brain_client.people import camera_feed as cf
+from brain_client.people import mutations as mu
+from brain_client.people import node_config as nc
+from brain_client.people import publishing as pub
+from brain_client.people import recall as rc
+from brain_client.people import transcript as tr
 from brain_client.people.resolve import Resolution, Resolver
-from brain_client.people.scribe import Change, ChangeKind, Scribe
+from brain_client.people.scribe import Scribe
+from brain_client.people.scribe_rules import Change, ChangeKind
 from brain_client.people.store import MAX_NAMED, MAX_UNNAMED, PeopleStore
 from brain_client.people.surfacing import PeopleEvents, build_snapshot
 from brain_client.people.types import (
@@ -38,6 +45,7 @@ from brain_client.people.types import (
     IdentityState,
     TrackState,
 )
+from brain_client.perception.motion_gate import MOTION_SAMPLE_SEC
 
 _ROS_ROOTS = frozenset({"brain_messages", "geometry_msgs", "nav_msgs", "rclpy", "sensor_msgs", "std_msgs"})
 
@@ -146,13 +154,13 @@ def enrol(store: PeopleStore, name: str | None = None, *, now: float = NOW) -> s
 
 
 def test_header_stamp_is_nanoseconds_as_a_decimal_string():
-    assert na.stamp_ns(1_788_818_400, 123_456_789) == 1_788_818_400_123_456_789
-    assert na.stamp_text(na.stamp_ns(1_788_818_400, 123_456_789)) == "1788818400123456789"
-    assert na.stamp_text(None) is None
+    assert cf.stamp_ns(1_788_818_400, 123_456_789) == 1_788_818_400_123_456_789
+    assert cf.stamp_text(cf.stamp_ns(1_788_818_400, 123_456_789)) == "1788818400123456789"
+    assert cf.stamp_text(None) is None
 
 
 def test_stamp_string_keeps_every_digit_a_json_number_would_lose():
-    text = na.stamp_text(na.stamp_ns(1_788_818_400, 123_456_789))
+    text = cf.stamp_text(cf.stamp_ns(1_788_818_400, 123_456_789))
     assert text is not None
     assert int(text) == 1_788_818_400_123_456_789  # the brain pairs its overlay on an exact match
 
@@ -166,15 +174,15 @@ def test_a_jpeg_frame_decodes_to_bgr_pixels():
     image[:, :, 2] = 255
     ok, buffer = cv2.imencode(".jpg", image)
     assert ok
-    decoded = na.decode_frame(na.CameraFrame(1, bytes(buffer)))
+    decoded = cf.decode_frame(cf.CameraFrame(1, bytes(buffer)))
     assert decoded is not None
     assert decoded.shape == (8, 12, 3)
 
 
 def test_a_raw_frame_decodes_by_encoding_and_owns_its_memory():
     pixels = np.arange(2 * 3 * 3, dtype=np.uint8).reshape(2, 3, 3)
-    bgr = na.decode_frame(na.CameraFrame(1, pixels.tobytes(), encoding="bgr8", width=3, height=2))
-    rgb = na.decode_frame(na.CameraFrame(1, pixels.tobytes(), encoding="rgb8", width=3, height=2))
+    bgr = cf.decode_frame(cf.CameraFrame(1, pixels.tobytes(), encoding="bgr8", width=3, height=2))
+    rgb = cf.decode_frame(cf.CameraFrame(1, pixels.tobytes(), encoding="rgb8", width=3, height=2))
     assert bgr is not None and rgb is not None
     assert np.array_equal(bgr, pixels)
     assert np.array_equal(rgb, pixels[:, :, ::-1])
@@ -182,36 +190,36 @@ def test_a_raw_frame_decodes_by_encoding_and_owns_its_memory():
 
 
 def test_a_truncated_or_unknown_raw_frame_decodes_to_nothing():
-    assert na.decode_frame(na.CameraFrame(1, b"\x00\x01", encoding="bgr8", width=640, height=480)) is None
-    assert na.decode_frame(na.CameraFrame(1, b"\x00" * 12, encoding="mono8", width=2, height=2)) is None
-    assert na.decode_frame(na.CameraFrame(1, b"not a jpeg")) is None
+    assert cf.decode_frame(cf.CameraFrame(1, b"\x00\x01", encoding="bgr8", width=640, height=480)) is None
+    assert cf.decode_frame(cf.CameraFrame(1, b"\x00" * 12, encoding="mono8", width=2, height=2)) is None
+    assert cf.decode_frame(cf.CameraFrame(1, b"not a jpeg")) is None
 
 
 def test_the_native_buffer_pairs_by_nearest_stamp_inside_the_drivers_skew_cap():
     base = 1_788_818_400_000_000_000
     buffers = [(base - 120_000_000, b"early"), (base + 20_000_000, b"paired"), (base + 400_000_000, b"late")]
-    assert na.pair_native(base, buffers) == b"paired"
-    assert na.pair_native(base + 900_000_000, buffers) is None  # nothing inside 130 ms
-    assert na.pair_native(base, []) is None
+    assert cf.pair_native(base, buffers) == b"paired"
+    assert cf.pair_native(base + 900_000_000, buffers) is None  # nothing inside 130 ms
+    assert cf.pair_native(base, []) is None
 
 
 # --------------------------------------------------------------- duty cycle
 
 
 def test_the_engine_runs_while_the_brain_is_active_or_always_on():
-    assert na.engine_active(always_on=False, brain_active=True)
-    assert na.engine_active(always_on=True, brain_active=False)
-    assert not na.engine_active(always_on=False, brain_active=False)
+    assert cf.engine_active(always_on=False, brain_active=True)
+    assert cf.engine_active(always_on=True, brain_active=False)
+    assert not cf.engine_active(always_on=False, brain_active=False)
 
 
 def test_the_tick_is_sampled_at_the_engines_own_detect_cadence():
     from brain_client.people.engine import EngineConfig
 
     config = EngineConfig()
-    idle = na.decode_period(config, tracked=False, driving=False, motion=False)
-    tracked = na.decode_period(config, tracked=True, driving=False, motion=False)
-    motion = na.decode_period(config, tracked=False, driving=False, motion=True)
-    driving = na.decode_period(config, tracked=True, driving=True, motion=False)
+    idle = cf.decode_period(config, tracked=False, driving=False, motion=False)
+    tracked = cf.decode_period(config, tracked=True, driving=False, motion=False)
+    motion = cf.decode_period(config, tracked=False, driving=False, motion=True)
+    driving = cf.decode_period(config, tracked=True, driving=True, motion=False)
     assert idle == pytest.approx(2.0)  # 0.5 Hz with nobody around
     assert tracked == pytest.approx(0.2) and motion == pytest.approx(0.2)
     assert driving == pytest.approx(0.5)  # association only while a skill drives the base
@@ -219,22 +227,22 @@ def test_the_tick_is_sampled_at_the_engines_own_detect_cadence():
 
 def test_the_lazy_native_topic_is_wanted_only_while_a_track_needs_a_face():
     settled = track(state=IdentityState.KNOWN, person_id="person_a", last_face_stamp=NOW)
-    assert not na.wants_native([settled], NOW, refresh_sec=5.0)
-    assert na.wants_native([settled], NOW + 6.0, refresh_sec=5.0)  # the outfit refresh comes due
-    assert na.wants_native([track(state=IdentityState.UNKNOWN)], NOW)
-    assert not na.wants_native([track(state=IdentityState.UNKNOWN, lost=True)], NOW)
-    assert not na.wants_native([], NOW)
+    assert not cf.wants_native([settled], NOW, refresh_sec=5.0)
+    assert cf.wants_native([settled], NOW + 6.0, refresh_sec=5.0)  # the outfit refresh comes due
+    assert cf.wants_native([track(state=IdentityState.UNKNOWN)], NOW)
+    assert not cf.wants_native([track(state=IdentityState.UNKNOWN, lost=True)], NOW)
+    assert not cf.wants_native([], NOW)
 
 
 def test_the_native_subscription_is_held_instead_of_toggling_at_every_face_refresh():
     """One settled person makes wants_native alternate at the refresh interval;
     following it literally created and destroyed a subscription every few
     seconds for as long as they stood there."""
-    held = na.native_deadline(True, NOW, 0.0, hold_sec=30.0)
+    held = cf.native_deadline(True, NOW, 0.0, hold_sec=30.0)
     assert held == NOW + 30.0
-    assert na.native_deadline(False, NOW + 6.0, held, hold_sec=30.0) == held  # refresh not due: still held
+    assert cf.native_deadline(False, NOW + 6.0, held, hold_sec=30.0) == held  # refresh not due: still held
     assert NOW + 6.0 < held
-    assert na.native_deadline(False, NOW + 31.0, held, hold_sec=30.0) == held  # and then it lapses
+    assert cf.native_deadline(False, NOW + 31.0, held, hold_sec=30.0) == held  # and then it lapses
     assert NOW + 31.0 > held
 
 
@@ -251,7 +259,7 @@ def test_one_settled_person_never_makes_the_node_resubscribe(store, tmp_path, mo
     now = time.time()
     wanted: list[bool] = []
     for step in range(5):
-        adapters._sensors._frame = na.CameraFrame(na.stamp_ns(step + 1, 0), _jpeg())
+        adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(step + 1, 0), _jpeg())
         adapters._tick(now + step * 3.0)
         wanted.append(adapters._want_native)
     assert wanted == [True] * 5  # twelve seconds of alternation, one subscription
@@ -264,12 +272,12 @@ def test_the_native_subscription_is_dropped_once_the_room_is_empty(store, tmp_pa
     answers = iter([True])
     monkeypatch.setattr(na, "wants_native", lambda tracks, now, refresh_sec=5.0: next(answers, False))
     now = time.time()
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), _jpeg())
     adapters._tick(now)
     assert adapters._want_native
 
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), _jpeg())
-    adapters._tick(now + na.NATIVE_HOLD_SEC + 1.0)
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(2, 0), _jpeg())
+    adapters._tick(now + cf.NATIVE_HOLD_SEC + 1.0)
     assert not adapters._want_native
 
 
@@ -279,21 +287,21 @@ def test_the_native_subscription_is_dropped_once_the_room_is_empty(store, tmp_pa
 def test_a_lost_track_rides_the_snapshot_for_a_minute_and_then_stops():
     lost = track(lost=True, last_seen=NOW - 30.0)
     stale = track(tag="P4", lost=True, last_seen=NOW - 90.0)
-    assert [t.tag for t in na.publishable_tracks([lost, stale], NOW)] == ["P3"]
-    assert [t.tag for t in na.publishable_tracks([track()], NOW)] == ["P3"]
+    assert [t.tag for t in pub.publishable_tracks([lost, stale], NOW)] == ["P3"]
+    assert [t.tag for t in pub.publishable_tracks([track()], NOW)] == ["P3"]
 
 
 def test_a_camera_that_went_quiet_claims_nobody_rather_than_freezing_the_scene():
     tracks = [track()]
-    assert na.fresh_tracks(tracks, now=NOW, last_frame_at=NOW - 1.0, stale_sec=3.0) == (tracks[0],)
-    assert na.fresh_tracks(tracks, now=NOW, last_frame_at=NOW - 9.0, stale_sec=3.0) == ()
-    assert na.fresh_tracks(tracks, now=NOW, last_frame_at=0.0, stale_sec=3.0) == ()  # no frame has ever arrived
+    assert pub.fresh_tracks(tracks, now=NOW, last_frame_at=NOW - 1.0, stale_sec=3.0) == (tracks[0],)
+    assert pub.fresh_tracks(tracks, now=NOW, last_frame_at=NOW - 9.0, stale_sec=3.0) == ()
+    assert pub.fresh_tracks(tracks, now=NOW, last_frame_at=0.0, stale_sec=3.0) == ()  # no frame has ever arrived
 
 
 def test_a_one_person_two_tracks_clash_reads_as_conflict_without_losing_the_name():
     tracks = [track(person_id="person_a", name="Theo")]
     resolutions = {"P3": Resolution(tag="P3", identity=tracks[0].identity, conflict_with="P1")}
-    resolved = na.apply_conflicts(tracks, resolutions)
+    resolved = pub.apply_conflicts(tracks, resolutions)
     assert resolved[0].identity.state is IdentityState.CONFLICT
     assert resolved[0].identity.person_id == "person_a"
     assert resolved[0].identity.name == "Theo"
@@ -302,15 +310,15 @@ def test_a_one_person_two_tracks_clash_reads_as_conflict_without_losing_the_name
 def test_a_track_without_a_clash_is_handed_through_untouched():
     tracks = [track(person_id="person_a", name="Theo")]
     resolutions = {"P3": Resolution(tag="P3", identity=tracks[0].identity, enrolled_id="person_a")}
-    assert na.apply_conflicts(tracks, resolutions) == tracks
-    assert na.apply_conflicts(tracks, {}) == tracks
+    assert pub.apply_conflicts(tracks, resolutions) == tracks
+    assert pub.apply_conflicts(tracks, {}) == tracks
 
 
 def test_the_conflict_override_reaches_the_snapshot_and_raises_one_event(store):
     person_id = enrol(store, "Theo")
     tracks = [track(state=IdentityState.KNOWN, person_id=person_id, name="Theo")]
     resolutions = {"P3": Resolution(tag="P3", identity=tracks[0].identity, conflict_with="P1")}
-    resolved = na.apply_conflicts(tracks, resolutions)
+    resolved = pub.apply_conflicts(tracks, resolutions)
 
     snapshot = build_snapshot(resolved, store, HEALTH, NOW)
     person = snapshot["people"][0]
@@ -325,18 +333,18 @@ def test_the_conflict_override_reaches_the_snapshot_and_raises_one_event(store):
 def test_seek_faces_names_the_skill_that_would_get_the_face():
     tracks = [track(state=IdentityState.UNKNOWN, frames_with_face=0, last_face_stamp=None, range_m=3.0)]
     attention = {"tag": "P3", "text": "trying to see P3's face (3.0 m away, face not seen yet)", "head_bbox": None}
-    assert na.seek_hint(attention, tracks, seek_faces=False) == attention
-    hinted = na.seek_hint(attention, tracks, seek_faces=True)
+    assert pub.seek_hint(attention, tracks, seek_faces=False) == attention
+    hinted = pub.seek_hint(attention, tracks, seek_faces=True)
     assert hinted is not None and hinted["text"].endswith("; approach_person(P3) would get a look")
-    assert na.seek_hint(None, tracks, seek_faces=True) is None
+    assert pub.seek_hint(None, tracks, seek_faces=True) is None
 
 
 def test_seek_faces_stays_quiet_when_walking_over_would_add_nothing():
     close = [track(state=IdentityState.UNKNOWN, frames_with_face=0, last_face_stamp=None, range_m=1.0)]
     seen = [track(state=IdentityState.UNKNOWN, frames_with_face=4, range_m=3.0)]
     attention = {"tag": "P3", "text": "trying to see P3's face", "head_bbox": None}
-    assert na.seek_hint(attention, close, seek_faces=True) == attention
-    assert na.seek_hint(attention, seen, seek_faces=True) == attention
+    assert pub.seek_hint(attention, close, seek_faces=True) == attention
+    assert pub.seek_hint(attention, seen, seek_faces=True) == attention
 
 
 # --------------------------------------------------------- publish cadence
@@ -348,57 +356,57 @@ def _snapshot(store: PeopleStore, tracks: list[TrackState], now: float = NOW):
 
 def test_anyone_in_view_publishes_every_tick(store):
     snapshot = _snapshot(store, [track()])
-    assert na.should_publish(snapshot, snapshot, now=NOW, last_publish=NOW, active=True)
+    assert pub.should_publish(snapshot, snapshot, now=NOW, last_publish=NOW, active=True)
 
 
 def test_an_empty_unchanged_scene_publishes_only_on_the_heartbeat(store):
     first = _snapshot(store, [])
     again = _snapshot(store, [], now=NOW + 1.0)
-    assert not na.should_publish(again, first, now=NOW + 1.0, last_publish=NOW, active=False)
-    assert na.should_publish(again, first, now=NOW + 5.0, last_publish=NOW, active=False)
+    assert not pub.should_publish(again, first, now=NOW + 1.0, last_publish=NOW, active=False)
+    assert pub.should_publish(again, first, now=NOW + 5.0, last_publish=NOW, active=False)
 
 
 def test_a_change_publishes_even_with_nobody_in_view(store):
     first = _snapshot(store, [])
     store.set_collection(False)
     changed = _snapshot(store, [], now=NOW + 1.0)
-    assert na.should_publish(changed, first, now=NOW + 1.0, last_publish=NOW, active=False)
+    assert pub.should_publish(changed, first, now=NOW + 1.0, last_publish=NOW, active=False)
 
 
 def test_only_the_clock_moving_is_not_a_change(store):
     first = _snapshot(store, [])
     later = _snapshot(store, [], now=NOW + 1.0)
-    assert not na.snapshot_changed(later, first)
-    assert na.snapshot_changed(first, None)
+    assert not pub.snapshot_changed(later, first)
+    assert pub.snapshot_changed(first, None)
 
 
 # --------------------------------------------------- speaking attribution
 
 
 def test_speech_attributes_to_the_one_person_in_talking_range():
-    assert na.speaking_tag([track(tag="P3", range_m=1.2)]) == "P3"
-    assert na.speaking_tag([track(tag="P3", range_m=None)]) == "P3"  # tracked, range not measured yet
+    assert tr.speaking_tag([track(tag="P3", range_m=1.2)]) == "P3"
+    assert tr.speaking_tag([track(tag="P3", range_m=None)]) == "P3"  # tracked, range not measured yet
 
 
 def test_speech_attributes_to_nobody_when_the_answer_would_be_a_guess():
-    assert na.speaking_tag([track(tag="P3", range_m=1.2), track(tag="P4", range_m=2.0)]) is None
-    assert na.speaking_tag([]) is None
-    assert na.speaking_tag([track(tag="P3", range_m=6.0)]) is None  # across the room, not talking to it
-    assert na.speaking_tag([track(tag="P3", range_m=1.2, lost=True)]) is None
+    assert tr.speaking_tag([track(tag="P3", range_m=1.2), track(tag="P4", range_m=2.0)]) is None
+    assert tr.speaking_tag([]) is None
+    assert tr.speaking_tag([track(tag="P3", range_m=6.0)]) is None  # across the room, not talking to it
+    assert tr.speaking_tag([track(tag="P3", range_m=1.2, lost=True)]) is None
 
 
 def test_the_speaking_mark_expires_with_the_message():
-    assert na.held_speaking(("P3", NOW + 3.0), NOW) == ("P3",)
-    assert na.held_speaking(("P3", NOW + 3.0), NOW + 4.0) == ()
-    assert na.held_speaking(None, NOW) == ()
+    assert tr.held_speaking(("P3", NOW + 3.0), NOW) == ("P3",)
+    assert tr.held_speaking(("P3", NOW + 3.0), NOW + 4.0) == ()
+    assert tr.held_speaking(None, NOW) == ()
 
 
 # --------------------------------------------------------- the scribe feed
 
 
 def test_a_chat_in_message_is_the_user_talking_with_the_tags_that_were_in_view():
-    views = na.tag_views([track(tag="P3", person_id="person_a", name="Theo"), track(tag="P4", lost=True)])
-    utterance = na.chat_in_utterance({"text": "Hi, I'm Ana"}, uid="u_1", now=NOW, in_view=views)
+    views = tr.tag_views([track(tag="P3", person_id="person_a", name="Theo"), track(tag="P4", lost=True)])
+    utterance = tr.chat_in_utterance({"text": "Hi, I'm Ana"}, uid="u_1", now=NOW, in_view=views)
     assert utterance is not None
     assert utterance.speaker == "user" and utterance.text == "Hi, I'm Ana" and utterance.id == "u_1"
     assert [view.tag for view in utterance.in_view] == ["P3"]  # a lost track was not in view
@@ -406,23 +414,23 @@ def test_a_chat_in_message_is_the_user_talking_with_the_tags_that_were_in_view()
 
 def test_simulated_environment_speech_never_enters_the_transcript():
     payload = {"text": "I am the resident", "sender": "environment_speech", "voice_id": "x"}
-    assert na.chat_in_utterance(payload, uid="u_1", now=NOW, in_view=()) is None
-    assert na.chat_in_utterance({"text": "   "}, uid="u_1", now=NOW, in_view=()) is None
+    assert tr.chat_in_utterance(payload, uid="u_1", now=NOW, in_view=()) is None
+    assert tr.chat_in_utterance({"text": "   "}, uid="u_1", now=NOW, in_view=()) is None
 
 
 def test_chat_out_carries_speech_and_skill_results_but_not_thoughts():
     for sender in ("robot", "skill_output"):
-        utterance = na.chat_out_utterance({"sender": sender, "text": "hello"}, uid="u_2", now=NOW, in_view=())
+        utterance = tr.chat_out_utterance({"sender": sender, "text": "hello"}, uid="u_2", now=NOW, in_view=())
         assert utterance is not None and utterance.speaker == "robot"
     for sender in ("robot_thoughts", "system", "user"):
-        assert na.chat_out_utterance({"sender": sender, "text": "x"}, uid="u_2", now=NOW, in_view=()) is None
+        assert tr.chat_out_utterance({"sender": sender, "text": "x"}, uid="u_2", now=NOW, in_view=()) is None
 
 
 def test_a_freshly_enrolled_track_is_nameable_to_the_scribe():
     tracks = [track(tag="P5", state=IdentityState.FAMILIAR, person_id="person_a")]
-    assert na.tag_views(tracks)[0].enrolling is False
-    assert na.tag_views(tracks, ["P5"])[0].enrolling is True
-    assert na.tag_views(tracks, ["P5"])[0].nameable is True
+    assert tr.tag_views(tracks)[0].enrolling is False
+    assert tr.tag_views(tracks, ["P5"])[0].enrolling is True
+    assert tr.tag_views(tracks, ["P5"])[0].nameable is True
 
 
 # ---------------------------------------------------------------- recall
@@ -432,18 +440,18 @@ def test_a_memory_question_resolves_a_tag_a_name_and_a_pronoun(store):
     ana = enrol(store, "Ana")
     tracks = [track(tag="P3", person_id=ana, name="Ana")]
     roster = store.roster()
-    assert na.recall_person("P3", tracks, roster) == ana
-    assert na.recall_person("ana", tracks, roster) == ana
-    assert na.recall_person("they", tracks, roster) == ana  # the only person in view
+    assert rc.recall_person("P3", tracks, roster) == ana
+    assert rc.recall_person("ana", tracks, roster) == ana
+    assert rc.recall_person("they", tracks, roster) == ana  # the only person in view
 
 
 def test_a_pronoun_with_nobody_or_everybody_in_view_recalls_nothing(store):
     ana = enrol(store, "Ana")
     theo = enrol(store, "Theo")
     two = [track(tag="P3", person_id=ana), track(tag="P4", person_id=theo)]
-    assert na.recall_person("they", two, store.roster()) is None
-    assert na.recall_person("they", [], store.roster()) is None
-    assert na.recall_person("P9", two, store.roster()) is None  # a tag nobody is tracking
+    assert rc.recall_person("they", two, store.roster()) is None
+    assert rc.recall_person("they", [], store.roster()) is None
+    assert rc.recall_person("P9", two, store.roster()) is None  # a tag nobody is tracking
 
 
 # -------------------------------------------------------------- services
@@ -452,58 +460,58 @@ def test_a_pronoun_with_nobody_or_everybody_in_view_recalls_nothing(store):
 def test_a_live_tag_resolves_to_the_person_it_is_tracking(store):
     ana = enrol(store, "Ana")
     tracks = [track(tag="P3", person_id=ana, name="Ana")]
-    assert na.resolve_who("P3", tracks, store.roster()) == (ana, "")
-    assert na.resolve_who("p3", tracks, store.roster()) == (ana, "")
+    assert mu.resolve_who("P3", tracks, store.roster()) == (ana, "")
+    assert mu.resolve_who("p3", tracks, store.roster()) == (ana, "")
 
 
 def test_an_expired_tag_is_an_error_and_never_the_nearest_live_track(store):
     ana = enrol(store, "Ana")
     tracks = [track(tag="P3", person_id=ana, name="Ana")]
-    person_id, message = na.resolve_who("P9", tracks, store.roster())
+    person_id, message = mu.resolve_who("P9", tracks, store.roster())
     assert person_id is None
     assert "P9" in message and "in view" in message
 
 
 def test_a_tag_the_robot_has_not_enrolled_yet_is_an_error(store):
     tracks = [track(tag="P3", state=IdentityState.UNKNOWN, person_id=None)]
-    person_id, message = na.resolve_who("P3", tracks, store.roster())
+    person_id, message = mu.resolve_who("P3", tracks, store.roster())
     assert person_id is None and "on file" in message
 
 
 def test_a_person_id_resolves_and_a_forgotten_one_says_so(store):
     ana = enrol(store, "Ana")
-    assert na.resolve_who(ana, [], store.roster()) == (ana, "")
+    assert mu.resolve_who(ana, [], store.roster()) == (ana, "")
     store.forget(ana)
-    person_id, message = na.resolve_who(ana, [], store.roster(), forgotten=store.is_tombstoned)
+    person_id, message = mu.resolve_who(ana, [], store.roster(), forgotten=store.is_tombstoned)
     assert person_id is None and "forgotten" in message
 
 
 def test_a_name_resolves_when_it_is_unambiguous_and_asks_otherwise(store):
     ana = enrol(store, "Ana")
-    assert na.resolve_who("ana", [], store.roster()) == (ana, "")
+    assert mu.resolve_who("ana", [], store.roster()) == (ana, "")
     enrol(store, "Ana")
-    person_id, message = na.resolve_who("Ana", [], store.roster())
+    person_id, message = mu.resolve_who("Ana", [], store.roster())
     assert person_id is None and "2 people called Ana" in message
-    unknown_id, unknown_message = na.resolve_who("Zoe", [], store.roster())
+    unknown_id, unknown_message = mu.resolve_who("Zoe", [], store.roster())
     assert unknown_id is None and "Zoe" in unknown_message
 
 
 def test_an_empty_who_is_an_actionable_error(store):
-    person_id, message = na.resolve_who("   ", [], store.roster())
+    person_id, message = mu.resolve_who("   ", [], store.roster())
     assert person_id is None and "P3" in message
 
 
 def test_get_people_answers_the_snapshot_alone_unless_the_roster_was_asked_for(store):
     enrol(store, "Ana")
     snapshot = _snapshot(store, [track()])
-    assert "roster" not in na.roster_answer(snapshot, roster=None, capacity_full=False)
+    assert "roster" not in pub.roster_answer(snapshot, roster=None, capacity_full=False)
 
 
 def test_get_people_with_the_roster_answers_what_the_settings_card_reads(store):
     ana = enrol(store, "Ana")
     store.record_sighting(ana, NOW, "home", (3.1, 1.4, 0.0))
     unnamed = enrol(store)
-    answer = na.roster_answer(
+    answer = pub.roster_answer(
         _snapshot(store, [track()]),
         roster=store.roster(include_thumbnails=True),
         capacity_full=store.capacity_full(),
@@ -520,7 +528,7 @@ def test_get_people_with_the_roster_answers_what_the_settings_card_reads(store):
 
 def test_the_roster_answer_omits_thumbnails_unless_asked(store):
     enrol(store, "Ana")
-    answer = na.roster_answer(_snapshot(store, []), roster=store.roster(), capacity_full=False)
+    answer = pub.roster_answer(_snapshot(store, []), roster=store.roster(), capacity_full=False)
     assert answer["roster"][0]["thumbnail"] is None
 
 
@@ -545,7 +553,7 @@ def test_a_collection_switch_is_not_a_full_roster(store):
 
 
 def test_the_parameters_map_onto_the_config_the_node_builds():
-    config = na.config_from_params(
+    config = nc.config_from_params(
         {
             "always_on": True,
             "seek_faces": True,
@@ -565,34 +573,34 @@ def test_the_parameters_map_onto_the_config_the_node_builds():
     assert config.allow_model_download is False
     assert config.retention_unnamed_days == 7.0 and config.retention_named_days == 100.0
     assert config.camera_height_m == 0.2
-    assert config.image_topic == na.RAW_IMAGE_TOPIC
+    assert config.image_topic == nc.RAW_IMAGE_TOPIC
     assert config.data_dir.name == "people_sim"  # sim evidence never mixes with the hardware's
 
 
 def test_the_defaults_are_the_documented_ones():
-    config = na.config_from_params({})
-    assert config == na.PeopleNodeConfig()
+    config = nc.config_from_params({})
+    assert config == nc.PeopleNodeConfig()
     assert config.scribe and config.allow_model_download
     assert not config.always_on and not config.seek_faces and not config.simulator_mode
     assert config.prefer_backend == "opencv"
     assert config.camera_height_m == 0.26
-    assert config.image_topic == na.COMPRESSED_IMAGE_TOPIC
+    assert config.image_topic == nc.COMPRESSED_IMAGE_TOPIC
     assert config.data_dir.name == "people"
     assert config.models_dir.parts[-3:] == ("data", "models", "people")
 
 
 def test_a_mistyped_setting_keeps_the_default_rather_than_stopping_the_node():
-    config = na.config_from_params(
+    config = nc.config_from_params(
         {"retention_named_days": "soon", "prefer_backend": "", "tick_source": "sideways", "camera_height_m": True}
     )
     assert config.retention_named_days == 548.0
     assert config.prefer_backend == "opencv"
-    assert config.tick_source == na.TickSource.COMPRESSED
+    assert config.tick_source == nc.TickSource.COMPRESSED
     assert config.camera_height_m == 0.26  # bool is an int; a height of True is not a height
 
 
 def test_every_declared_parameter_reaches_a_config_field():
-    assert set(na.PARAM_DEFAULTS) == {field for field in na.PeopleNodeConfig().__dataclass_fields__}
+    assert set(nc.PARAM_DEFAULTS) == {field for field in nc.PeopleNodeConfig().__dataclass_fields__}
 
 
 # ------------------------------------------------------- one tick, end to end
@@ -619,7 +627,7 @@ def _adapters(store: PeopleStore, tmp_path, *, frames=None, scribe=None, resolve
     engine = PeopleEngine(backends, store, config=engine_config, resolver=resolver)
     return na.PeopleAdapters(
         MagicMock(),
-        na.PeopleNodeConfig(scribe=False, simulator_mode=True),
+        nc.PeopleNodeConfig(scribe=False, simulator_mode=True),
         store=store,
         engine=engine,
         engine_config=engine_config,
@@ -633,9 +641,9 @@ def test_one_tick_turns_a_frame_into_the_published_snapshot(store, tmp_path):
     adapters = _adapters(store, tmp_path)
     ok, buffer = cv2.imencode(".jpg", np.full((480, 640, 3), 120, dtype=np.uint8))
     assert ok
-    stamp = na.stamp_ns(1_788_818_400, 123_456_789)
+    stamp = cf.stamp_ns(1_788_818_400, 123_456_789)
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(stamp, bytes(buffer))
+    adapters._sensors._frame = cf.CameraFrame(stamp, bytes(buffer))
 
     # The adapters run on the wall clock: the tracks a service reads are only
     # the ones a frame vouched for a moment ago.
@@ -681,7 +689,7 @@ def _left(store, tmp_path):
     jpeg = _jpeg()
     start = time.time()
     for step, moment in enumerate((start, start + 3.0)):
-        adapters._sensors._frame = na.CameraFrame(na.stamp_ns(step + 1, 0), jpeg)
+        adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(step + 1, 0), jpeg)
         adapters._tick(moment)
     return adapters, jpeg, start + 3.0
 
@@ -693,7 +701,7 @@ def test_a_track_that_only_lingers_lost_lets_the_node_back_onto_the_idle_clock(s
     adapters, jpeg, last = _left(store, tmp_path)
     assert [track.lost for track in adapters._engine.tracks()] == [True]
 
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(3, 0), jpeg)
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(3, 0), jpeg)
     adapters._tick(last + 0.3)
     assert adapters._sensors._frame is not None  # idle: 0.5 Hz, so the frame was never taken
 
@@ -732,7 +740,7 @@ def test_the_motion_gate_lifts_an_empty_room_off_the_idle_clock(store, tmp_path,
     assert adapters._sensors.motion(now) is True
 
     adapters._tick(now)
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(9, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(9, 0), _jpeg())
     adapters._tick(now + 0.3)  # idle would have skipped this; the burst does not
     assert adapters._sensors._frame is None  # the tick ran and took the frame
 
@@ -758,12 +766,12 @@ def test_a_raw_frame_is_re_encoded_only_at_the_gates_own_sample_interval():
     """One encode per gate sample is the price of feeding it; one per frame at
     15 Hz would not be."""
     pytest.importorskip("cv2")
-    raw = na.CameraFrame(1, np.full((8, 12, 3), 120, np.uint8).tobytes(), encoding="bgr8", width=12, height=8)
-    assert na.motion_jpeg(raw, sampled_at=0.0, now=na.MOTION_SAMPLE_SEC) is not None
-    assert na.motion_jpeg(raw, sampled_at=0.0, now=na.MOTION_SAMPLE_SEC / 2) is None
+    raw = cf.CameraFrame(1, np.full((8, 12, 3), 120, np.uint8).tobytes(), encoding="bgr8", width=12, height=8)
+    assert cf.motion_jpeg(raw, sampled_at=0.0, now=MOTION_SAMPLE_SEC) is not None
+    assert cf.motion_jpeg(raw, sampled_at=0.0, now=MOTION_SAMPLE_SEC / 2) is None
     # A compressed frame is already what the gate reads, and is never throttled.
-    jpeg = na.CameraFrame(1, _jpeg())
-    assert na.motion_jpeg(jpeg, sampled_at=0.0, now=0.0) == jpeg.data
+    jpeg = cf.CameraFrame(1, _jpeg())
+    assert cf.motion_jpeg(jpeg, sampled_at=0.0, now=0.0) == jpeg.data
 
 
 def test_a_still_room_never_opens_the_motion_burst(store, tmp_path, monkeypatch):
@@ -786,7 +794,7 @@ def test_a_slow_tick_is_not_due_again_the_instant_it_returns(store, tmp_path, mo
     pytest.importorskip("cv2")
     adapters = _adapters(store, tmp_path)
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), _jpeg())
     elapsed = iter([0.0, 0.9])  # monotonic before and after the engine's work
     monkeypatch.setattr(na.time, "monotonic", lambda: next(elapsed, 0.9))
     now = time.time()
@@ -802,13 +810,13 @@ def test_a_tick_the_engine_skipped_never_restamps_the_boxes_with_a_newer_frame(s
     two clocks; only the engine knows which frame it actually looked at."""
     adapters, jpeg, last = _left(store, tmp_path)
 
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(9, 0), jpeg)
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(9, 0), jpeg)
     adapters._tick(last + 2.05)  # due for the node, and the engine skips nothing
     measured = json.loads(na.String.call_args.kwargs["data"])["frame_stamp_ns"]
     assert measured == "9000000000"
 
     adapters._engine._last_detect = last + 100.0  # the engine will skip the next frame
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(10, 0), jpeg)
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(10, 0), jpeg)
     adapters._tick(last + 4.1)
     assert json.loads(na.String.call_args.kwargs["data"])["frame_stamp_ns"] == "9000000000"
 
@@ -854,7 +862,7 @@ def test_the_tick_that_mints_a_tag_persists_it_before_anyone_reads_it(store, tmp
     pytest.importorskip("cv2")
     adapters = _adapters(store, tmp_path)
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), _jpeg())
 
     adapters._tick(time.time())
 
@@ -883,7 +891,7 @@ def test_the_rename_service_binds_a_name_to_a_live_tag(store, tmp_path):
     assert ok
     person_id = enrol(store)
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), bytes(buffer))
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), bytes(buffer))
     adapters._tick(time.time())
     # The engine's own resolution is not the point here: bind the tracked tag
     # to a real record the way the resolver would have.
@@ -917,7 +925,8 @@ def test_forgetting_someone_reaches_the_work_the_scribe_still_has_in_flight(stor
     """RFC section 10: deletion removes the caches too. A window queued by an
     outage still carries their transcript, and would be spent on Gemini the
     moment the connection came back."""
-    from brain_client.people.scribe import Scribe, Speaker, TagView, Utterance, Window
+    from brain_client.people.scribe import Scribe
+    from brain_client.people.transcript import Speaker, TagView, Utterance, Window
 
     ana = enrol(store, "Ana")
     scribe = Scribe(store, None, model="m", queue_path=tmp_path / "queue.jsonl")
@@ -948,7 +957,7 @@ def test_get_people_answers_the_switch_the_settings_page_just_flipped(store, tmp
     pytest.importorskip("cv2")
     adapters = _adapters(store, tmp_path)
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), _jpeg())
     adapters._tick(time.time())
 
     assert _served(adapters, "_svc_set_collection", enabled=False).success
@@ -1033,7 +1042,7 @@ def test_a_mutation_answered_done_is_never_dropped_on_its_way_to_the_engine(stor
     ana, theo = enrol(store, "Ana"), enrol(store, "Theo")
     adapters = _adapters(store, tmp_path)
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), _jpeg())
     adapters._tick(time.time())
     tracked = adapters.tracks()[0]
     with adapters._lock:
@@ -1124,16 +1133,16 @@ def test_a_learned_name_is_shown_once_and_then_cleared(store, tmp_path):
     ok, buffer = cv2.imencode(".jpg", np.full((480, 640, 3), 120, dtype=np.uint8))
     assert ok
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), bytes(buffer))
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), bytes(buffer))
     now = time.time()
     adapters._tick(now)
     adapters._apply_changes([Change(ChangeKind.NAME, "P1", None, 'P1 said "I\'m Ana" — P1 = Ana from here on')])
 
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), bytes(buffer))
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(2, 0), bytes(buffer))
     adapters._tick(now + 1.0)
     assert json.loads(na.String.call_args.kwargs["data"])["people"][0]["learned"].endswith("from here on")
 
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(3, 0), bytes(buffer))
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(3, 0), bytes(buffer))
     adapters._tick(now + 2.0)
     assert json.loads(na.String.call_args.kwargs["data"])["people"][0]["learned"] is None
 
@@ -1146,7 +1155,7 @@ def test_a_tick_with_no_frame_leaves_the_learned_line_for_the_tick_that_wakes_th
     adapters = _adapters(store, tmp_path)
     jpeg = _jpeg()
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), jpeg)
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), jpeg)
     now = time.time()
     adapters._tick(now)
     line = 'P1 said "I\'m Ana" — P1 = Ana from here on'
@@ -1156,7 +1165,7 @@ def test_a_tick_with_no_frame_leaves_the_learned_line_for_the_tick_that_wakes_th
     assert {tag: text for tag, (text, _) in adapters._learned.items()} == {"P1": line}
 
     na.String.reset_mock()
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), jpeg)
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(2, 0), jpeg)
     adapters._tick(now + 2.0)
     published = [json.loads(call.kwargs["data"]) for call in na.String.call_args_list]
     assert any(payload.get("kind") == "name_learned" for payload in published)
@@ -1178,7 +1187,7 @@ def test_a_name_committed_mid_tick_waits_for_the_tick_that_can_announce_it(store
 
     adapters._events.emit = emit_then_scribe
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), _jpeg())
     now = time.time()
     adapters._tick(now)
 
@@ -1188,7 +1197,7 @@ def test_a_name_committed_mid_tick_waits_for_the_tick_that_can_announce_it(store
 
     del adapters._events.emit
     na.String.reset_mock()
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(2, 0), _jpeg())
     adapters._tick(now + 1.0)
     published = [json.loads(call.kwargs["data"]) for call in na.String.call_args_list]
     assert any(payload.get("kind") == "name_learned" for payload in published)
@@ -1259,9 +1268,9 @@ def test_a_recall_says_whether_the_subject_was_alone_when_they_asked(store, tmp_
     alone = [track(tag="P1", person_id=ana, name="Ana")]
     company = [*alone, track(tag="P2", person_id=theo, name="Theo")]
 
-    assert na.alone_in_view(ana, alone)
-    assert not na.alone_in_view(ana, company)
-    assert not na.alone_in_view(ana, [replace(alone[0], lost=True)])
+    assert rc.alone_in_view(ana, alone)
+    assert not rc.alone_in_view(ana, company)
+    assert not rc.alone_in_view(ana, [replace(alone[0], lost=True)])
 
     adapters._maybe_recall("do you remember what Ana said?", company)
     assert adapters._recalls.get_nowait()[2] is False
@@ -1322,7 +1331,7 @@ def test_a_deep_recall_crosses_to_the_engine_thread_as_data(store, tmp_path):
     assert [recall.text for recall in adapters._pending_recalls] == ["Ana asked for the blue socks."]
 
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), _jpeg())
     na.String.reset_mock()
     adapters._tick(time.time())
 
@@ -1338,12 +1347,12 @@ def test_a_forget_between_the_recall_and_the_tick_keeps_it_off_the_wire(store, t
     pytest.importorskip("cv2")
     ana = enrol(store, "Ana")
     adapters = _adapters(store, tmp_path)
-    adapters._pending_recalls.append(na.Recall(ana, "Ana", "Ana asked for the blue socks.", NOW))
+    adapters._pending_recalls.append(rc.Recall(ana, "Ana", "Ana asked for the blue socks.", NOW))
 
     assert _served(adapters, "_svc_forget", who=ana).success
 
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), _jpeg())
     na.String.reset_mock()
     adapters._tick(time.time())
 
@@ -1377,7 +1386,7 @@ def test_forgetting_someone_suppresses_their_track_on_the_engine_thread(store, t
     resolver = _RecordingResolver(store)
     adapters = _adapters(store, tmp_path, resolver=resolver)
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), _jpeg())
     now = time.time()
     adapters._tick(now)
     tracked = adapters.tracks()[0]
@@ -1387,7 +1396,7 @@ def test_forgetting_someone_suppresses_their_track_on_the_engine_thread(store, t
     assert _served(adapters, "_svc_forget", who=ana).success
     assert resolver.forgotten == []
 
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(2, 0), _jpeg())
     adapters._tick(now + 1.0)
     assert resolver.forgotten == ["P1"]
 
@@ -1402,7 +1411,7 @@ def test_merging_two_people_rebinds_the_live_track_on_the_engine_thread(store, t
     resolver = _RecordingResolver(store)
     adapters = _adapters(store, tmp_path, resolver=resolver)
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), _jpeg())
     now = time.time()
     adapters._tick(now)
     tracked = adapters.tracks()[0]
@@ -1412,7 +1421,7 @@ def test_merging_two_people_rebinds_the_live_track_on_the_engine_thread(store, t
     assert _served(adapters, "_svc_merge", source_id=ana, target_id=theo).success
     assert resolver.rebound == []
 
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(2, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(2, 0), _jpeg())
     adapters._tick(now + 1.0)
     assert resolver.rebound == [(ana, theo)]
 
@@ -1446,16 +1455,16 @@ def test_a_mutation_without_a_key_is_always_a_fresh_mutation(store, tmp_path):
 
 
 def test_the_node_remembers_the_last_keys_and_forgets_the_ones_before_them():
-    log = na.MutationLog(limit=2)
-    log.remember("k1", na.MutationResult(True, "", "person_a"))
-    assert log.answered("k1") == na.MutationResult(True, "", "person_a")
+    log = mu.MutationLog(limit=2)
+    log.remember("k1", mu.MutationResult(True, "", "person_a"))
+    assert log.answered("k1") == mu.MutationResult(True, "", "person_a")
     assert log.answered("k2") is None
 
-    log.remember("", na.MutationResult(True, "", ""))
+    log.remember("", mu.MutationResult(True, "", ""))
     assert log.answered("") is None  # no key, nothing to answer from
 
-    log.remember("k2", na.MutationResult(True, "", ""))
-    log.remember("k3", na.MutationResult(True, "", ""))
+    log.remember("k2", mu.MutationResult(True, "", ""))
+    log.remember("k3", mu.MutationResult(True, "", ""))
     assert log.answered("k1") is None and log.answered("k3") is not None
 
 
@@ -1463,19 +1472,19 @@ def test_a_tag_issued_after_the_snapshot_the_caller_decided_on_is_a_different_qu
     tracks = [track(tag="P3")]  # first seen 40 s ago
     decided_before = str(int((NOW - 60.0) * 1e9))
     decided_after = str(int((NOW - 10.0) * 1e9))
-    assert na.tag_newer_than_decision("P3", tracks, decided_before)
-    assert not na.tag_newer_than_decision("P3", tracks, decided_after)
-    assert not na.tag_newer_than_decision("P3", tracks, "")  # no stamp, no check
-    assert not na.tag_newer_than_decision("P3", tracks, "not a stamp")
-    assert not na.tag_newer_than_decision("person_7f92a1b3", tracks, decided_before)  # an id is not a tag
-    assert not na.tag_newer_than_decision("P9", tracks, decided_before)
+    assert mu.tag_newer_than_decision("P3", tracks, decided_before)
+    assert not mu.tag_newer_than_decision("P3", tracks, decided_after)
+    assert not mu.tag_newer_than_decision("P3", tracks, "")  # no stamp, no check
+    assert not mu.tag_newer_than_decision("P3", tracks, "not a stamp")
+    assert not mu.tag_newer_than_decision("person_7f92a1b3", tracks, decided_before)  # an id is not a tag
+    assert not mu.tag_newer_than_decision("P9", tracks, decided_before)
 
 
 def test_a_track_born_on_the_frame_the_caller_decided_on_is_still_that_track():
     """The header stamp is the capture; the tracker's clock starts when the tick
     that decoded that frame ran, a camera latency later."""
     tracks = [track(tag="P3")]
-    assert not na.tag_newer_than_decision("P3", tracks, str(int((NOW - 40.05) * 1e9)))
+    assert not mu.tag_newer_than_decision("P3", tracks, str(int((NOW - 40.05) * 1e9)))
 
 
 def test_forgetting_a_tag_from_a_snapshot_that_predates_it_says_to_look_again(store, tmp_path):
@@ -1483,7 +1492,7 @@ def test_forgetting_a_tag_from_a_snapshot_that_predates_it_says_to_look_again(st
     ana = enrol(store, "Ana")
     adapters = _adapters(store, tmp_path)
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), _jpeg())
     now = time.time()
     adapters._tick(now)
     tracked = adapters.tracks()[0]
@@ -1504,7 +1513,7 @@ def test_merging_checks_both_tags_against_the_snapshot_they_were_chosen_on(store
     ana, theo = enrol(store, "Ana"), enrol(store, "Theo")
     adapters = _adapters(store, tmp_path)
     adapters._sensors.brain_active = True
-    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._sensors._frame = cf.CameraFrame(cf.stamp_ns(1, 0), _jpeg())
     adapters._tick(time.time())
     tracked = adapters.tracks()[0]
     with adapters._lock:
