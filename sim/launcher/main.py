@@ -122,8 +122,10 @@ def cmd_up(
         # behind -- and one of them holds the ports this stack needs.
         remove_superseded_containers()
         if runtime_already_running(config):
-            # A code update can leave a stale world server running (frozen
-            # 3D view); ensure_world_server restarts it.
+            # ensure_world_server restarts a world left stale by a code update:
+            # it stops the old server and can spend minutes on the new one, so
+            # from here an `up` that does not finish must tear down, not strand it.
+            started = True
             ensure_world_server(config)
             log("Innate sim runtime is already running. Opening dashboard...")
             show_runtime_dashboard(config, watch=watch)
@@ -149,10 +151,10 @@ def cmd_up(
             ensure_viewer_public_assets(config)
         with live_step("bundle", "Fetching the 3D viewer bundle", "3D viewer bundle"):
             ensure_sim_viewer_bundle(config, offline=offline)
+        started = True
         with live_step("world", "Starting the physics world", "physics world"):
             config["world_endpoint"] = ensure_world_server(config)
 
-        started = True
         try:
             with live_step("os", "Starting the Innate OS container", "Innate OS container"):
                 ensure_os_container(config, os_env_file, offline=offline)
