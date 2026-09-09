@@ -38,6 +38,20 @@ logger = logging.getLogger("BLE_Server")
 SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
 CHARACTERISTIC_UUID = "abcdef01-1234-5678-1234-56789abcdef0"
 
+# BlueZ truncates each notification to ATT_MTU-3 bytes, so any response larger
+# than the negotiated MTU must be split across notifications. Chunks carry raw
+# JSON fragments and every message ends with a "\n" terminator (JSON.dumps
+# never emits a raw newline): the app buffers notifications until it sees the
+# newline, parses the line, and on parse failure drops it and resyncs at the
+# next newline — so one truncated or garbled message can't poison the buffer
+# for every response after it. JSON.parse tolerates the trailing newline, so
+# clients that treat a single notification as a whole response still work.
+# 182 is exactly ATT_MTU-3 for the 185 iOS negotiates by default. Android
+# clients must request an MTU >= 185 or chunks get truncated on the air (as
+# all large payloads already were) — truncation now surfaces as a dropped
+# message instead of a wedged session.
+NOTIFY_CHUNK_SIZE = 182
+
 # Path to the helper script for restarting services (adjust if moved)
 RESTART_SCRIPT_PATH = "/usr/local/bin/restart_robot_networking.sh"
 
@@ -105,14 +119,22 @@ class BleProvisionerServer:
 
     # --- Thread-safe BLE helpers ---
 
+    def _notify_chunked(self, characteristic, response):
+        """Send *response* (dict) as newline-terminated <=NOTIFY_CHUNK_SIZE notifications."""
+        payload = bytes(json.dumps(response), "utf-8") + b"\n"
+        chunks = [payload[i : i + NOTIFY_CHUNK_SIZE] for i in range(0, len(payload), NOTIFY_CHUNK_SIZE)]
+        for chunk in chunks:
+            characteristic.set_value(list(chunk))
+        if len(chunks) > 1:
+            logger.info(f"Notification sent in {len(chunks)} chunks ({len(payload)} bytes)")
+
     def _send_notification_threadsafe(self, response):
         """Schedule a BLE notification on the GLib main loop (safe from any thread)."""
 
         def _do_send():
             if self._ble_characteristic and self._ble_characteristic.is_notifying:
                 try:
-                    response_bytes = bytes(json.dumps(response), "utf-8")
-                    self._ble_characteristic.set_value(list(response_bytes))
+                    self._notify_chunked(self._ble_characteristic, response)
                     logger.info(f"Async notification sent: {response}")
                 except Exception as e:
                     logger.error(f"Error sending async notification: {e}")
@@ -139,9 +161,9 @@ class BleProvisionerServer:
                 if success:
                     if enable_autoconnect_on_success:
                         nmcli_set_autoconnect(ssid, True)
-                    logger.info(f"Background connect to '{ssid}' succeeded, waiting for stabilisation…")
-                    time.sleep(5)
-                    self._trigger_service_restart()
+                    # Notify the phone before the IP-stabilisation wait and the
+                    # service restarts: those take 15-45 s and the app only
+                    # needs to know the WiFi connection succeeded.
                     self._send_notification_threadsafe(
                         {
                             "command": command,
@@ -149,6 +171,9 @@ class BleProvisionerServer:
                             "message": f"Connected to {ssid}",
                         }
                     )
+                    logger.info(f"Background connect to '{ssid}' succeeded, waiting for stabilisation…")
+                    time.sleep(5)
+                    self._trigger_service_restart()
                 else:
                     logger.error(f"Background connect to '{ssid}' failed: {msg_or_err}")
                     self._send_notification_threadsafe(
@@ -266,7 +291,13 @@ class BleProvisionerServer:
         command = data.get("command")
         logger.info(f"Handling {command} command")
 
-        success, ssids, error_msg = nmcli_scan_for_visible_ssids()
+        # Force a fresh sweep: this is the one path where the user explicitly
+        # asked for scan results, and a hotspot enabled seconds ago won't be in
+        # NM's cache — --rescan auto would return the same stale list on every
+        # retap for ~30 s. The internal pre-connect scans keep the softer auto
+        # mode; here the app shows a scanning state, so the ~13 s sweep is the
+        # freshness the user asked for.
+        success, ssids, error_msg = nmcli_scan_for_visible_ssids(force_rescan=True)
 
         if success:
             return {"command": command, "status": "success", "visible_ssids": ssids}
@@ -340,8 +371,7 @@ class BleProvisionerServer:
         if response and self._ble_characteristic and self._ble_characteristic.is_notifying:
             logger.info(f"Sending notification response: {response}")
             try:
-                response_bytes = bytes(json.dumps(response), "utf-8")
-                self._ble_characteristic.set_value(list(response_bytes))
+                self._notify_chunked(self._ble_characteristic, response)
             except Exception as e:
                 logger.error(f"Error sending notification: {e}")
 

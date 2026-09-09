@@ -359,7 +359,7 @@ def nmcli_connect(ssid, ifname=DEFAULT_WIFI_INTERFACE):
     for attempt in range(2):
         if attempt > 0:
             nm_logger.warning(f"'{ssid}' not found in NM scan cache; rescanning and retrying activation")
-            nmcli_scan_for_visible_ssids()
+            nmcli_scan_for_visible_ssids(force_rescan=True)
 
         # Use sudo for privileged operations
         success, stdout, stderr = _run_nmcli(
@@ -413,12 +413,26 @@ def nmcli_get_active_wifi_ssid():
         return None  # Indicate error
 
 
-def nmcli_scan_for_visible_ssids(timeout=15):
-    """Performs a Wi-Fi scan and returns a list of visible SSIDs."""
-    nm_logger.info("Triggering Wi-Fi rescan...")
+def nmcli_scan_for_visible_ssids(timeout=30, force_rescan=False):
+    """Performs a Wi-Fi scan and returns a list of visible SSIDs.
+
+    By default uses ``--rescan auto`` so NetworkManager reuses a scan cache
+    younger than ~30 s instead of forcing a full sweep every call: WiFi and
+    BLE share the RTL8822CE radio, and a forced sweep takes ~13 s during
+    which the BLE provisioning link starves and can drop. Once the cache is
+    older than that, auto sweeps again, so newly appeared networks show up
+    with at most ~30 s of lag. The timeout leaves headroom over the
+    worst-case sweep.
+
+    force_rescan: request a fresh sweep regardless of cache age — for
+    user-initiated scan_wifi (fresh results are the whole point) and the
+    activation retry path, where a stale cache is the suspected cause of
+    the failure and re-reading it would make the retry pointless.
+    """
     nm_logger.info("Scanning and listing visible Wi-Fi networks...")
+    rescan_mode = "yes" if force_rescan else "auto"
     success_list, stdout_list, stderr_list = _run_nmcli(
-        ["nmcli", "-t", "-f", "SSID", "device", "wifi", "list", "--rescan", "yes"], timeout=timeout, use_sudo=True
+        ["nmcli", "-t", "-f", "SSID", "device", "wifi", "list", "--rescan", rescan_mode], timeout=timeout, use_sudo=True
     )
     nm_logger.info(f"nmcli wifi list stdout: {stdout_list.strip() if stdout_list else 'N/A'}")
     if not success_list:
