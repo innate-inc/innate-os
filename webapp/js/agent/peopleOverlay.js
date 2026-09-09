@@ -4,16 +4,11 @@
 // Draws the people the robot recognizes over the live camera: one box per
 // tracked person, tagged `P3 · Theo`, teal when the identity is settled, amber
 // while it is tentative, red on a contradiction (docs/rfc/people-memory.md §7).
-//
 // The boxes come off /brain/people in Gemini's per-mille convention
-// [ymin, xmin, ymax, xmax] of the published camera frame — the same rectangle
-// the agent reasons about — so the only work here is mapping that frame onto
-// the letterboxed rectangle `object-fit: contain` leaves the video in
-// (trajectoryOverlay.js does the same for the planned route).
-//
-// The overlay never asserts more than it knows: a snapshot describes one frame,
-// so once one stops arriving the boxes go away rather than following whatever
-// the camera moved on to.
+// [ymin, xmin, ymax, xmax] of the published camera frame, so the only work here
+// is mapping that frame onto the letterboxed rectangle `object-fit: contain`
+// leaves the video in. A snapshot describes one frame: once one stops arriving
+// the boxes go away rather than following whatever the camera moved on to.
 
 import {
   PEOPLE_SNAPSHOT_FRESH_MS,
@@ -28,7 +23,7 @@ const PER_MILLE = 1000;
 /** Teal once the identity is settled; amber for everything tentative; red for a
  * contradiction the engine could not resolve. Unknown states read as tentative,
  * which is the safe direction: a box the operator over-trusts is the bad one. */
-export const STATE_COLORS = {
+const STATE_COLORS = {
   known: "#3fd8c0",
   familiar: "#e8a33d",
   possible: "#e8a33d",
@@ -61,7 +56,7 @@ const BOX_SHADOW = "rgb(0 0 0 / 45%)";
  * @param {any} payload std_msgs/String carrying a PeopleSnapshotDict
  * @returns {PeopleSnapshot | null}
  */
-export function parseSnapshot(payload) {
+function parseSnapshot(payload) {
   /** @type {any} */
   let data;
   try {
@@ -114,7 +109,7 @@ function validBox(bbox) {
  * @param {string} state
  * @returns {string}
  */
-export function stateColor(state) {
+function stateColor(state) {
   return /** @type {Record<string, string>} */ (STATE_COLORS)[state] ?? TENTATIVE_COLOR;
 }
 
@@ -127,7 +122,7 @@ export function stateColor(state) {
  * @param {number} cw @param {number} ch stage size in CSS pixels
  * @returns {Rect}
  */
-export function containRect(vw, vh, cw, ch) {
+function containRect(vw, vh, cw, ch) {
   if (!vw || !vh) return { x: 0, y: 0, w: cw, h: ch };
   const fit = Math.min(cw / vw, ch / vh);
   const w = vw * fit;
@@ -140,7 +135,7 @@ export function containRect(vw, vh, cw, ch) {
  * @param {number[]} bbox @param {Rect} rect
  * @returns {Rect}
  */
-export function boxRect(bbox, rect) {
+function boxRect(bbox, rect) {
   const [ymin, xmin, ymax, xmax] = bbox;
   return {
     x: rect.x + (xmin / PER_MILLE) * rect.w,
@@ -155,7 +150,7 @@ export function boxRect(bbox, rect) {
  * @param {{ tag: string, name: string | null }} person
  * @returns {string}
  */
-export function tagLabel(person) {
+function tagLabel(person) {
   if (!person.tag) return person.name ?? "";
   return person.name ? `${person.tag} · ${person.name}` : person.tag;
 }
@@ -169,7 +164,7 @@ export function tagLabel(person) {
  * @param {number} now performance.now()
  * @returns {boolean}
  */
-export function isFresh(receivedAt, now) {
+function isFresh(receivedAt, now) {
   return now - receivedAt < PEOPLE_SNAPSHOT_FRESH_MS;
 }
 
@@ -185,7 +180,7 @@ export function isFresh(receivedAt, now) {
  * @param {boolean} replay whether this is the first message since subscribing
  * @returns {boolean}
  */
-export function acceptsSnapshot(stamp, nowS, replay) {
+function acceptsSnapshot(stamp, nowS, replay) {
   if (!replay || !stamp) return true;
   return nowS - stamp < PEOPLE_SNAPSHOT_FRESH_MS / 1000;
 }
@@ -194,7 +189,7 @@ export function acceptsSnapshot(stamp, nowS, replay) {
  * an {index, name} pair — both call the head camera "main". (A copy of
  * teleop/trajectoryOverlay.js's private helper, which guards the same stage.)
  * @param {any} session @returns {string | undefined} */
-export function primaryCameraName(session) {
+function primaryCameraName(session) {
   const cam = session.primaryCamera;
   return typeof cam === "string" ? cam : cam?.name;
 }

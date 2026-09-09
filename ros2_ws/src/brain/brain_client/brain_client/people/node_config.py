@@ -66,10 +66,8 @@ PARAM_DEFAULTS: dict[str, bool | str | float] = {
     "scribe": True,
     "prefer_backend": "opencv",
     "tick_source": str(TickSource.COMPRESSED),
-    # True so a robot provisioned without the model files still recognizes a
-    # face after one fetch; provisioning is meant to ship them under
-    # data/models/people, and an appliance that cannot reach the internet
-    # degrades to detection either way.
+    # True so a robot provisioned without the model files under
+    # data/models/people still recognizes a face after one fetch.
     "allow_model_download": True,
     "retention_unnamed_days": 14.0,
     "retention_named_days": 548.0,

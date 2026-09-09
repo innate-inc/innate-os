@@ -82,8 +82,8 @@ class _Runtime:
 class PeopleEngine:
     """Detection, tracking, evidence and identity for one camera.
 
-    Backends and the roster are injected: the node builds them, the tests fake
-    them, and nothing in here knows whether a model is real.
+    Backends and the roster are injected by the node; nothing in here knows
+    whether a model is real.
     """
 
     def __init__(
@@ -111,8 +111,6 @@ class PeopleEngine:
         self._last_frame_stamp = 0.0
         self._last_native_stamp = 0.0
         self._motion_until = 0.0
-
-    # ------------------------------------------------------------- accessors
 
     @property
     def tracker(self) -> Tracker:
@@ -164,8 +162,6 @@ class PeopleEngine:
             return HealthState.UNAVAILABLE
         return HealthState.OK if now - last <= stale_after else HealthState.STALE
 
-    # ------------------------------------------------------------------ tick
-
     def tick(
         self,
         frame_bgr: np.ndarray | None,
@@ -210,8 +206,6 @@ class PeopleEngine:
         self._states = self._build_states(speaking, now)
         return self._states
 
-    # ----------------------------------------------------------- duty cycle
-
     def _detect_period(self, now: float, ego: quality.EgoMotion) -> float:
         if ego.recently_driven:
             return 1.0 / self._config.driving_detect_hz
@@ -228,8 +222,6 @@ class PeopleEngine:
         if identity.state not in SETTLED_STATES:
             return True  # unsettled: every passing crop counts
         return now - runtime.last_face_embed >= self._config.face_refresh_sec
-
-    # ------------------------------------------------------------- evidence
 
     def _gather_evidence(self, tracks: list[Track], frame: np.ndarray, native_jpeg: bytes | None, now: float) -> None:
         wanted = {t.tag for t in tracks if self._wants_face(t.tag, self._resolver.identity(t.tag), now)}
@@ -386,8 +378,6 @@ class PeopleEngine:
             runtime.last_height = now
             self._resolver.observe_height(track.tag, height_m, (self._config.range_relative_sigma * range_m) ** 2)
 
-    # --------------------------------------------------------------- outputs
-
     def _apply_splits(self) -> None:
         for tag, resolution in list(self._resolutions.items()):
             if not resolution.split_requested:
@@ -427,8 +417,6 @@ class PeopleEngine:
                 )
             )
         return states
-
-    # ---------------------------------------------------------------- pieces
 
     @staticmethod
     def _head_box(track: Track, runtime: _Runtime, now: float) -> Box:

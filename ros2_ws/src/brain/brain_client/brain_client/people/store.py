@@ -141,7 +141,6 @@ class PeopleStore:
     def audit_path(self) -> Path:
         return self._root / "audit.log"
 
-    # ------------------------------------------------------------- RosterView
     def person_ids(self) -> list[str]:
         with self._lock:
             return list(self._people)
@@ -313,7 +312,6 @@ class PeopleStore:
             y=pose[1] if pose is not None else None,
         )
 
-    # --------------------------------------------------------- owner controls
     def rename(self, who: str, name: str, source: str, now: float | None = None) -> bool:
         """Bind or replace a person's name. Names are not unique and renaming
         never merges two records; the previous name is kept as an alias so a
@@ -421,7 +419,6 @@ class PeopleStore:
         named, unnamed = self.counts()
         return unnamed >= MAX_UNNAMED or named + unnamed >= MAX_NAMED + MAX_UNNAMED
 
-    # -------------------------------------------------------------- the memory
     def profile(self, person_id: str) -> Profile | None:
         with self._lock:
             return self._people.get(person_id)
@@ -489,21 +486,6 @@ class PeopleStore:
             self._people[person_id] = replace(profile, open_loops=_capped_loops((*profile.open_loops, loop)))
             self._commit_person_locked(person_id, now)
             return loop.id
-
-    def complete_open_loop(self, person_id: str, loop_id: str, now: float | None = None) -> bool:
-        stamp = _now(now)
-        with self._lock:
-            profile = self._people.get(person_id)
-            if profile is None or all(loop.id != loop_id for loop in profile.open_loops):
-                return False
-            self._people[person_id] = replace(
-                profile,
-                open_loops=tuple(
-                    replace(loop, done=True) if loop.id == loop_id else loop for loop in profile.open_loops
-                ),
-            )
-            self._commit_person_locked(person_id, stamp)
-            return True
 
     def open_episode(
         self,
@@ -594,23 +576,11 @@ class PeopleStore:
             profile = self._people.get(person_id)
             return profile.description.text if profile is not None and profile.description is not None else None
 
-    # ------------------------------------------------------------- thumbnails
-    def add_thumbnail(self, person_id: str, jpeg: bytes) -> str | None:
-        with self._lock:
-            if person_id not in self._people or not jpeg:
-                return None
-            return self._add_thumbnail_locked(person_id, jpeg)
-
-    def thumbnail_ids(self, person_id: str) -> list[str]:
-        with self._lock:
-            return list(self._thumbs.get(person_id, ()))
-
     def thumbnails(self, person_id: str) -> list[bytes]:
         with self._lock:
             jpegs = [self._read_thumbnail_locked(person_id, thumb) for thumb in self._thumbs.get(person_id, ())]
             return [jpeg for jpeg in jpegs if jpeg]
 
-    # ---------------------------------------------------------------- reading
     def digest(self, person_id: str, now: float) -> PersonDigestDict | None:
         """What the snapshot carries for a person in view: ranked facts, every
         open loop, the last episode summaries, last seen and the encounter
@@ -689,7 +659,6 @@ class PeopleStore:
             "thumbnail": base64.b64encode(jpeg).decode() if jpeg else None,
         }
 
-    # ------------------------------------------------------------- retention
     def expire(self, now: float) -> list[str]:
         """Drop outfits past 48 h and people past their retention window;
         returns the ids removed. Their ids stay tombstoned."""
@@ -721,7 +690,6 @@ class PeopleStore:
     def _last_activity(profile: Profile) -> float:
         return profile.last_seen.stamp if profile.last_seen is not None else profile.created
 
-    # -------------------------------------------------------- locked internals
     def _build_fact_locked(
         self,
         profile: Profile,
@@ -874,7 +842,6 @@ class PeopleStore:
             handle.write(line + "\n")
         os.chmod(self.audit_path, FILE_MODE)
 
-    # -------------------------------------------------------------- loading
     def _load(self) -> None:
         _secure_dir(self._root)
         path = self._root / "index.json"

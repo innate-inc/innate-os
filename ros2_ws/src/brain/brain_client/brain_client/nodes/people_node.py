@@ -127,9 +127,7 @@ def main(args: list[str] | None = None) -> None:
     node = PeopleNode()
     try:
         # Manual spin so a transient middleware error is logged and skipped
-        # instead of killing the node, exactly as brain_client_node does: a
-        # corrupted CompressedImage on either camera topic (RCLError), and an
-        # entity torn down between two spins (InvalidHandle).
+        # instead of killing the node, exactly as brain_client_node does.
         while rclpy.ok():
             try:
                 rclpy.spin_once(node, timeout_sec=0.5)

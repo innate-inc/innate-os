@@ -108,7 +108,7 @@ js/
 | Speech     | `/brain/tts`                  | `{data: text}`                            |
 | Battery    | `/battery_state`              | `sensor_msgs/BatteryState` (0.2 Hz)       |
 | Robot info | `/robot/info`                 | JSON-in-String `{robot_name, version, …}` |
-| People     | `/brain/people`               | JSON-in-String snapshot of who is in view: per-mille boxes, tags, names, health. Latched, ≤ 5 Hz. The roster behind it is read and edited over the `/brain/people/{get,rename,merge,forget,set_collection}` services (Settings › Brain client › People). |
+| People     | `/brain/people`               | JSON-in-String snapshot of who is in view: per-mille boxes, tags, names, health. Latched, ≤ 5 Hz. The roster behind it rides the `/brain/people/{get,rename,merge,forget,set_collection}` services. |
 | Arm follow | `/leader_positions`           | `Int32MultiArray` of 6 raw Dynamixel ticks (2048 = center); robot converts to `/mars/arm/commands` |
 | Video/mic  | `/webrtc/start` → offer on `/webrtc/offer`, answer on `/webrtc/answer`, ICE via `/webrtc/ice_in` / `/webrtc/ice_out` | start payload `{data: '{"source":"live","audio":bool}'}`; the robot rebuilds its pipeline on every start, so toggling audio re-handshakes (debounced, freeze-frame kept) |
 

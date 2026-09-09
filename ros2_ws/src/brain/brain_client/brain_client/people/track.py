@@ -108,8 +108,6 @@ class Tracker:
         self._next_tag = max(1, first_tag)
         self._recovered: list[str] = []
 
-    # ------------------------------------------------------------- accessors
-
     @property
     def config(self) -> TrackerConfig:
         return self._config
@@ -141,8 +139,6 @@ class Tracker:
         them at ``possible`` rather than trusting the old confirmation."""
         recovered, self._recovered = self._recovered, []
         return recovered
-
-    # ---------------------------------------------------------------- update
 
     def update(self, detections: Sequence[Detection], now: float, ego: EgoMotion | None = None) -> list[Track]:
         ego = ego or EgoMotion.still_at(now)
@@ -248,8 +244,6 @@ class Tracker:
                 track.lost_since = now
             if track.lost_since is not None and now - track.lost_since > self._config.track_memory_sec:
                 del self._tracks[track.tag]
-
-    # ------------------------------------------------------ bodies and splits
 
     def note_body(self, tag: str, embedding: np.ndarray, model: str) -> None:
         track = self._tracks.get(tag)

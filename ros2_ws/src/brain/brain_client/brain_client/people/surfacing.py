@@ -131,9 +131,6 @@ def _person(
     }
 
 
-# ------------------------------------------------------------------ attention
-
-
 def choose_attention(tracks: Sequence[TrackState], now: float) -> AttentionDict | None:
     """Whose face the engine should chase, per RFC 5.5: someone talking to the
     robot it has not settled, then anyone unresolved within 2 m, then anyone
@@ -170,9 +167,6 @@ def _attention_text(track: TrackState, now: float) -> str:
     else:
         why = "still deciding"
     return f"trying to see {track.tag}'s face ({where}, {why})"
-
-
-# --------------------------------------------------------------------- events
 
 
 class PeopleEvents:

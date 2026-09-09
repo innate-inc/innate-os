@@ -222,12 +222,9 @@
 # The people node tracks who is in view, recognizes them from face and outfit,
 # and keeps what they told the robot under data/people/ (data/people_sim/ in the
 # simulator). Everything stays on the robot; Settings › People is the owner's
-# switch for collection, names and forgetting. `enabled` stops or starts the
-# node — the launch file reads it here before starting the process (the node
-# itself has no such parameter: one that exited would be respawned every two
-# seconds), so it takes a reboot, not a restart; it is EXPERIMENTAL and ships
-# off, so `enabled: true` here is what turns it on. The native MJPG topic it
-# reads is the camera driver's `native_fps`.
+# switch for collection, names and forgetting. EXPERIMENTAL and shipped off:
+# `enabled` is read by the launch file before the process starts, so turning it
+# on takes a reboot, not a restart.
 # people_node:
 #   ros__parameters:
 #     enabled: true                 # run the people node at all; read at launch (default: false)

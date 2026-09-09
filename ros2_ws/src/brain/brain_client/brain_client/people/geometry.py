@@ -53,14 +53,6 @@ FEET_CUTOFF = 0.98
 HEAD_REGION_FRACTION = 0.4
 
 
-def published_to_native(x: float, y: float) -> tuple[float, float]:
-    return (x * NATIVE_SCALE_X, y * NATIVE_SCALE_Y)
-
-
-def native_to_published(x: float, y: float) -> tuple[float, float]:
-    return (x / NATIVE_SCALE_X, y / NATIVE_SCALE_Y)
-
-
 def box_center(box: Box) -> tuple[float, float]:
     ymin, xmin, ymax, xmax = box
     return ((xmin + xmax) / 2.0, (ymin + ymax) / 2.0)
@@ -198,28 +190,3 @@ class CameraModel:
         if ground < 1e-6:
             return None
         return self.camera_height_m + range_m * dz / ground
-
-    def range_from_height(self, box: Box, height_m: float, head_pitch_deg: float = 0.0) -> float | None:
-        """Ground range implied by a known standing height — the fallback when
-        the feet are out of frame."""
-        cx_norm, _ = box_center(box)
-        u, v = self.pixel_of(cx_norm, box[0])
-        dx, dy, dz = self.ray(u, v, head_pitch_deg)
-        ground = math.hypot(dx, dy)
-        rise = height_m - self.camera_height_m
-        if ground < 1e-6 or dz <= 1e-6 or rise <= 0.0:
-            return None
-        return min(rise * ground / dz, MAX_FLOOR_RANGE_M)
-
-    def box_pixels(self, box: Box) -> tuple[int, int, int, int]:
-        """``(x0, y0, x1, y1)`` of a normalized box in this model's pixels."""
-        ymin, xmin, ymax, xmax = box
-        return (
-            round(xmin * self.width),
-            round(ymin * self.height),
-            round(xmax * self.width),
-            round(ymax * self.height),
-        )
-
-    def box_height_px(self, box: Box) -> float:
-        return box_size(box)[1] * self.height

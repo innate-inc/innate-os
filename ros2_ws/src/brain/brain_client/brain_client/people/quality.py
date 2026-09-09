@@ -29,8 +29,6 @@ from brain_client.common.enums import StrEnum
 from brain_client.people.geometry import box_center, box_size
 from brain_client.people.types import Box
 
-# ---------------------------------------------------------------- thresholds
-
 FACE_MIN_DETECT_PX = 24.0  # enough to say "a face, roughly there" (~3.5 m)
 FACE_MIN_MATCH_PX = 40.0  # ~2.5 m, the 10 px interpupillary floor for ArcFace-class models
 FACE_MIN_ENROL_PX = 48.0
@@ -53,9 +51,8 @@ BODY_MIN_OUTFIT_PX = 128.0  # a 256x128 ReID input, which holds to ~5.3 m
 LUMINANCE_MIN, LUMINANCE_MAX = 40.0, 220.0
 
 # Variance of the Laplacian, measured at _ANALYSIS_PX so the crop's own
-# resolution cannot move the threshold. A small face upscaled to the analysis
-# size carries less high-frequency detail even when perfectly sharp, so the
-# floor scales down with it.
+# resolution cannot move the threshold; a small face upscaled to it carries
+# less high-frequency detail even when sharp, so the floor scales down too.
 _ANALYSIS_PX = 112  # SFace's own input size
 FACE_SHARPNESS_FLOOR = 12.0
 BODY_SHARPNESS_FLOOR = 8.0
@@ -85,9 +82,6 @@ class Purpose(StrEnum):
     ENROL = "enrol"
 
 
-# ------------------------------------------------------------- pixel measures
-
-
 def _analysis_gray(crop_bgr: np.ndarray) -> np.ndarray | None:
     if crop_bgr.size == 0:
         return None
@@ -114,9 +108,6 @@ def crop_luminance(crop_bgr: np.ndarray) -> float:
     if gray is None:
         return 0.0
     return float(gray.mean())
-
-
-# -------------------------------------------------------------------- gates
 
 
 def face_detectable(size_px: float) -> bool:
@@ -223,9 +214,6 @@ class IndependenceGate:
         self._last.pop(key, None)
 
 
-# ------------------------------------------------------------ quality score
-
-
 def _span(value: float, low: float, high: float) -> float:
     if high <= low:
         return 1.0
@@ -258,9 +246,6 @@ def body_quality_score(*, height_px: float, score: float, sharpness: float) -> f
     size = _span(height_px, BODY_MIN_MATCH_PX, 2 * BODY_MIN_OUTFIT_PX)
     focus = _span(sharpness, BODY_SHARPNESS_FLOOR, 4.0 * BODY_SHARPNESS_FLOOR)
     return min(1.0, max(0.0, min(1.0, score) * (0.4 + 0.6 * size) * (0.4 + 0.6 * focus)))
-
-
-# -------------------------------------------------------------- ego-motion
 
 
 @dataclass(frozen=True)

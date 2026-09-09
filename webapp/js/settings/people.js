@@ -12,9 +12,6 @@
 // memory, so a call that has not come back in PEOPLE_SERVICE_TIMEOUT_MS means
 // nothing is listening — an old robot, or the node down — and the card says so
 // instead of showing an empty roster, which would read as "nobody is known".
-//
-// The parsing, request bodies, and row copy are pure and node-testable
-// (tests/people.test.js); the DOM below is the only part that needs a browser.
 
 import { ageText } from "../map/memories.js";
 import {
@@ -28,25 +25,23 @@ import {
 } from "../constants.js";
 import { confirmDialog, dismissAllConfirms } from "../nav/confirm.js";
 
-export const PEOPLE_CARD_LABEL = "Recognize and remember people";
-export const PEOPLE_CARD_DOC =
+const PEOPLE_CARD_LABEL = "Recognize and remember people";
+const PEOPLE_CARD_DOC =
   "Faces, names, and what people told the robot, kept on the robot. Turning this off stops recognition and enrolment; it does not delete anyone.";
 
 /** Shown while nobody is enrolled — true to how enrolment actually happens. */
-export const PEOPLE_EMPTY_TEXT =
+const PEOPLE_EMPTY_TEXT =
   "Nobody yet. The robot remembers someone after a few clear looks at their face, and learns a name when they say it or when you set one here.";
 /** Shown when the people node does not answer. */
-export const PEOPLE_UNAVAILABLE_TEXT =
+const PEOPLE_UNAVAILABLE_TEXT =
   "People memory isn't answering — the people node isn't running on this robot.";
 /** Shown when the store is at capacity: enrolment stops, names stay (RFC §9). */
-export const PEOPLE_FULL_TEXT =
+const PEOPLE_FULL_TEXT =
   "The roster is full, so no new people are being enrolled. Forget someone to make room.";
 
 /** @typedef {{ id: string, name: string | null, unnamed: boolean, lastSeen: number, encounters: number, thumbnail: string | null, description: string | null }} RosterPerson */
 /** @typedef {{ stamp: number, collectionEnabled: boolean, capacityFull: boolean, people: RosterPerson[] }} Roster */
 /** @typedef {{ id: string, name: string, label: string, unnamed: boolean, meta: string, initial: string, thumbnailSrc: string | null, description: string | null, mergeOptions: { value: string, label: string }[] }} PersonRow */
-
-// ---- request bodies (exactly the .srv request fields) ----------------------
 
 /**
  * GetPeople: the snapshot plus the roster the card lists. A thumbnail costs the
@@ -55,43 +50,40 @@ export const PEOPLE_FULL_TEXT =
  * them.
  * @param {boolean} includeThumbnails
  */
-export function getPeopleRequest(includeThumbnails) {
+function getPeopleRequest(includeThumbnails) {
   return { include_roster: true, include_thumbnails: includeThumbnails };
 }
 
-// Every mutation below carries the two optional .srv fields empty. The card acts
-// on the person ids the roster listed, never on a live tag, so there is no
-// snapshot to have decided on; and a mutation only leaves here on a click that
-// is followed by a fresh GetPeople, so a retry key would never be spent.
+// Every mutation below carries the two optional .srv fields empty: the card acts
+// on the person ids the roster listed, never on a live tag, and every click is
+// followed by a fresh GetPeople, so a retry key would never be spent.
 
 /**
  * RenamePerson. `who` is a person id here (the card never renames a live tag),
  * and `source` records the consent path stored with the profile.
  * @param {string} who @param {string} name
  */
-export function renamePersonRequest(who, name) {
+function renamePersonRequest(who, name) {
   return { who, name, source: PEOPLE_RENAME_SOURCE_APP, idempotency_key: "", decided_on_stamp_ns: "" };
 }
 
 /** MergePeople: fold `sourceId` into `targetId`, keeping the target's identity.
  * @param {string} sourceId @param {string} targetId */
-export function mergePeopleRequest(sourceId, targetId) {
+function mergePeopleRequest(sourceId, targetId) {
   return { source_id: sourceId, target_id: targetId, idempotency_key: "", decided_on_stamp_ns: "" };
 }
 
 /** ForgetPerson: delete everything about them and tombstone the id.
  * @param {string} who */
-export function forgetPersonRequest(who) {
+function forgetPersonRequest(who) {
   return { who, idempotency_key: "", decided_on_stamp_ns: "" };
 }
 
 /** SetPeopleCollection: the "never collect" preference.
  * @param {boolean} enabled */
-export function setCollectionRequest(enabled) {
+function setCollectionRequest(enabled) {
   return { enabled };
 }
-
-// ---- parsing and row copy --------------------------------------------------
 
 /**
  * Parse GetPeople's `json` (the snapshot, plus `roster` when asked for it).
@@ -100,7 +92,7 @@ export function setCollectionRequest(enabled) {
  * @param {string} json
  * @returns {Roster | null}
  */
-export function parseRoster(json) {
+function parseRoster(json) {
   /** @type {any} */
   let data;
   try {
@@ -145,19 +137,19 @@ function lastSeenStamp(value) {
 
 /** The 8 hex characters that distinguish one `person_7f92a1b3` from another.
  * @param {string} id */
-export function shortId(id) {
+function shortId(id) {
   return id.startsWith("person_") ? id.slice("person_".length) : id;
 }
 
 /** @param {RosterPerson} person */
-export function displayName(person) {
+function displayName(person) {
   return person.name ?? "unnamed";
 }
 
 /** Merge targets have to be told apart before they are picked, so an unnamed
  * record carries its id fragment.
  * @param {RosterPerson} person */
-export function optionLabel(person) {
+function optionLabel(person) {
   return person.name ?? `unnamed ${shortId(person.id)}`;
 }
 
@@ -166,7 +158,7 @@ export function optionLabel(person) {
  * the robot has met them.
  * @param {RosterPerson} person @param {number} now epoch seconds
  */
-export function personMeta(person, now) {
+function personMeta(person, now) {
   const seen = person.lastSeen > 0 ? `Last seen ${ageText(person.lastSeen, now)}` : "Not seen yet";
   const count = person.encounters === 1 ? "1 encounter" : `${person.encounters} encounters`;
   return `${seen} · ${count}`;
@@ -175,7 +167,7 @@ export function personMeta(person, now) {
 /** A thumbnail as an <img> src: base64 JPEG off the service, or a data URL if
  * the robot already framed it as one. Null when there is no thumbnail.
  * @param {RosterPerson} person @returns {string | null} */
-export function thumbnailSrc(person) {
+function thumbnailSrc(person) {
   if (!person.thumbnail) return null;
   return person.thumbnail.startsWith("data:") ? person.thumbnail : `data:image/jpeg;base64,${person.thumbnail}`;
 }
@@ -187,7 +179,7 @@ export function thumbnailSrc(person) {
  * @param {number} [now] epoch seconds; defaults to the robot's own stamp
  * @returns {PersonRow[]}
  */
-export function rosterRows(roster, now = roster.stamp || Date.now() / 1000) {
+function rosterRows(roster, now = roster.stamp || Date.now() / 1000) {
   const ordered = [...roster.people].sort((a, b) => b.lastSeen - a.lastSeen);
   return ordered.map((person) => ({
     id: person.id,
@@ -205,8 +197,6 @@ export function rosterRows(roster, now = roster.stamp || Date.now() / 1000) {
       .map((other) => ({ value: other.id, label: optionLabel(other) })),
   }));
 }
-
-// ---- the card --------------------------------------------------------------
 
 /** @param {string} tag @param {string} className @param {string} [text] */
 function el(tag, className, text) {

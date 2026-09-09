@@ -192,9 +192,6 @@ class Profile:
         return self.names.preferred
 
 
-# ------------------------------------------------------------------- ranking
-
-
 def words(text: str) -> set[str]:
     """Content words of a phrase, for lexical context matching."""
     return {word for word in _WORD.findall(text.lower()) if word not in _STOPWORDS and len(word) > 1}
@@ -229,9 +226,6 @@ def rank_facts(facts: Sequence[Fact], now: float, context_words: Iterable[str] =
     context = set(context_words)
     live = [fact for fact in facts if surfaceable(fact)]
     return sorted(live, key=lambda fact: (-fact_score(fact, now, context), -fact.last_confirmed, fact.id))
-
-
-# ------------------------------------------------------------- record edits
 
 
 def next_sequence_id(prefix: str, existing: Iterable[str]) -> str:
@@ -272,9 +266,6 @@ def close_episode(episodes: Sequence[Episode], end: float, summary: str = "") ->
 
 def latest_open(episodes: Sequence[Episode]) -> Episode | None:
     return next((episode for episode in reversed(episodes) if episode.end is None), None)
-
-
-# ------------------------------------------------------------ serialization
 
 
 def profile_to_dict(profile: Profile) -> dict:

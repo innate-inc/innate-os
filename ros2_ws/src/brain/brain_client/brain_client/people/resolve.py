@@ -43,9 +43,6 @@ NEW_PERSON = "__new__"
 """The open-world hypothesis: this face belongs to nobody on the roster."""
 
 
-# ------------------------------------------------------------- calibration
-
-
 @dataclass(frozen=True)
 class Calibration:
     """Platt map from a cosine similarity to a log-likelihood ratio:
@@ -194,9 +191,6 @@ class Resolution:
     switched_from: str | None = None
 
 
-# --------------------------------------------------------------- internals
-
-
 @dataclass
 class _Candidate:
     person_id: str
@@ -303,8 +297,6 @@ class Resolver:
     @property
     def config(self) -> ResolverConfig:
         return self._config
-
-    # -------------------------------------------------------------- evidence
 
     def observe_face(self, tag: str, observation: FaceObservation) -> None:
         """Fold one gated face frame into every candidate's score."""
@@ -413,8 +405,6 @@ class Resolver:
                 continue
             belief.candidate(person_id).height = self._height_llr(mean, stored, variance)
 
-    # ------------------------------------------------------------- lifecycle
-
     def identity(self, tag: str) -> Identity:
         belief = self._beliefs.get(tag)
         return self._identity_of(belief) if belief is not None else Identity()
@@ -467,8 +457,6 @@ class Resolver:
         for candidate in belief.candidates.values():
             candidate.body_agree_since = None
             candidate.body_frames = 0
-
-    # --------------------------------------------------------------- resolve
 
     def resolve(
         self,
@@ -539,8 +527,6 @@ class Resolver:
             if self._qualifies(belief, committed, mine, other):
                 belief.state = self._committed_state(committed)
         return Resolution(tag=belief.tag, identity=self._identity_of(belief), switched_from=switched_from)
-
-    # ------------------------------------------------------------- decisions
 
     def _ranked(self, belief: _Belief) -> list[tuple[str, float]]:
         min_frames = self._body_thresholds(belief.body_model).min_frames
@@ -677,8 +663,6 @@ class Resolver:
             belief.state = IdentityState.POSSIBLE
             resolutions[track.tag] = replace(resolution, identity=self._identity_of(belief), conflict_with=first)
 
-    # -------------------------------------------------------------- learning
-
     def _collect_for_learning(
         self,
         belief: _Belief,
@@ -795,8 +779,6 @@ class Resolver:
         belief.last_height_write = now
         belief.height_written_count = belief.height_count
         self._roster.add_height_sample(person_id, mean, belief.height_variance)
-
-    # ---------------------------------------------------------------- pieces
 
     def _belief(self, tag: str) -> _Belief:
         belief = self._beliefs.get(tag)

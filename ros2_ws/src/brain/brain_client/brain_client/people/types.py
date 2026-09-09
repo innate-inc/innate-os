@@ -76,9 +76,6 @@ class EventKind(StrEnum):
     RECALLED = "recalled"
 
 
-# ---------------------------------------------------------------- perception
-
-
 @dataclass(frozen=True)
 class Detection:
     """One person (or lone face) found in a frame."""
@@ -132,9 +129,6 @@ class BodyObservation:
     embedding: np.ndarray | None = None
 
 
-# ------------------------------------------------------------------ identity
-
-
 @dataclass(frozen=True)
 class Identity:
     state: IdentityState = IdentityState.UNKNOWN
@@ -166,9 +160,6 @@ class TrackState:
     last_face_stamp: float | None = None
 
 
-# --------------------------------------------------------------------- roster
-
-
 @dataclass(frozen=True)
 class FaceTemplate:
     embedding: np.ndarray
@@ -195,8 +186,8 @@ class HeightEstimate:
 
 
 class RosterView(Protocol):
-    """What the resolver needs from the store. The store implements it; tests
-    use a fake. Every method is safe to call from the engine thread."""
+    """What the resolver needs from the store, all of it safe to call from
+    the engine thread."""
 
     def person_ids(self) -> list[str]: ...
     def name_of(self, person_id: str) -> str | None: ...
@@ -210,9 +201,6 @@ class RosterView(Protocol):
     def add_outfit(self, person_id: str, outfit: OutfitTemplate) -> None: ...
     def add_height_sample(self, person_id: str, height_m: float, variance: float) -> None: ...
     def record_sighting(self, person_id: str, now: float, map_name: str | None, pose: Pose | None) -> None: ...
-
-
-# ------------------------------------------------------------------- backends
 
 
 class PersonDetector(Protocol):
@@ -243,7 +231,6 @@ class BodyEmbedder(Protocol):
     def embed(self, crop_bgr: np.ndarray) -> np.ndarray: ...
 
 
-# ----------------------------------------------------------------- wire format
 # The JSON on /brain/people and /brain/people_events. Boxes here are Gemini's
 # per-mille ints [ymin, xmin, ymax, xmax]; stamps are epoch seconds; the source
 # frame's ROS header stamp rides as a decimal nanosecond STRING (JS consumers).

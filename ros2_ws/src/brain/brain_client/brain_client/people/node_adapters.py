@@ -191,8 +191,6 @@ class PeopleSensors:
         node.create_subscription(String, CURRENT_MAP_TOPIC, self._on_current_map, 10)
         node.create_subscription(String, AGENT_STATUS_TOPIC, self._on_agent_status, LATCHED_QOS)
 
-    # --- lifecycle (executor thread only) ---
-
     def set_camera_enabled(self, wanted: bool) -> None:
         if wanted == (self._image_sub is not None):
             return
@@ -229,8 +227,6 @@ class PeopleSensors:
             return
         self._native_sub = self._node.create_subscription(CompressedImage, NATIVE_TOPIC, self._on_native, SENSOR_QOS)
 
-    # --- reads (engine thread) ---
-
     def take_frame(self) -> CameraFrame | None:
         with self._lock:
             frame, self._frame = self._frame, None
@@ -252,8 +248,6 @@ class PeopleSensors:
         """Whether the scene changed recently enough to be worth looking at
         properly — the burst of RFC 4.6, off the same gate the brain wakes on."""
         return now < self._motion_until
-
-    # --- callbacks ---
 
     def _on_compressed_image(self, msg: CompressedImage) -> None:
         if not msg.data:
@@ -389,9 +383,7 @@ class PeopleAdapters:
 
         self._chat: queue.Queue[Utterance] = queue.Queue(maxsize=64)
         # Unbounded, all three: a mutation the services already answered "done"
-        # is not one the engine thread may drop. A dropped suppression keeps
-        # publishing a forgotten person's name, a dropped rebind leaves the
-        # track on a tombstoned id (RFC section 10).
+        # is not one the engine thread may drop (RFC section 10).
         self._forgets: queue.Queue[str] = queue.Queue()
         self._suppressions: queue.Queue[str] = queue.Queue()
         self._rebinds: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -438,8 +430,6 @@ class PeopleAdapters:
             last_frame_at=self._last_frame_at,
             stale_sec=self._engine_config.camera_stale_sec,
         )
-
-    # ------------------------------------------------------ executor thread
 
     def _activation_tick(self) -> None:
         active = engine_active(always_on=self._config.always_on, brain_active=self._sensors.brain_active)
@@ -551,8 +541,6 @@ class PeopleAdapters:
             if self._scribe is not None:
                 # The queue and the open window are the scribe thread's; handing
                 # it the id keeps this off the executor and off its file (RFC 10).
-                # Without a scribe nothing drains this queue, and the tombstone
-                # is what revokes the work either way.
                 self._forgets.put(person_id)
         return MutationResult(success, message)
 
@@ -658,8 +646,6 @@ class PeopleAdapters:
         with self._lock:
             enrolling = [tag for tag, at in self._enrolling.items() if now - at <= ENROLLING_SEC]
         return tag_views(tracks, enrolling)
-
-    # -------------------------------------------------------- engine thread
 
     def _engine_loop(self) -> None:
         while not self._stop.is_set():
@@ -895,8 +881,6 @@ class PeopleAdapters:
         if self._scribe is None:
             return HealthState.UNAVAILABLE
         return HealthState.STALE if self._scribe.queued else HealthState.OK
-
-    # -------------------------------------------------------- scribe thread
 
     def _scribe_loop(self) -> None:
         last_tick = 0.0

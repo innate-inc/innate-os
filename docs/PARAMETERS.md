@@ -53,7 +53,7 @@ To tune something, **uncomment a whole stanza** (the `node:`, `ros__parameters:`
 | `manipulation_server` | `inference_hz`, `speed`, `n_action_steps` (0=auto), `temporal_ensemble_coeff` | `25.0`, `1.5`, `0`, `0.0` |
 | `navigation_grid_localizer` | `max_score_threshold`, `max_range`, `auto_localize_timeout` | `0.3`, `12.0`, `30.0` |
 | `brain_client_node` | `cartesia_voice_id` (TTS voice), `vertical_fov`, `pose_image_interval`, `scan_stale_after_sec`, `send_depth`, `send_arm_camera_image`, `log_everything`, STT/transcribe models | see template |
-| `people_node` (recognition + person memory; **experimental**, `enabled: true` turns it on — read by the launch file before the process starts, so it takes a reboot) | `enabled` (launch-time only), `always_on`, `seek_faces`, `scribe`, `prefer_backend`, `tick_source`, `allow_model_download`, `retention_unnamed_days` / `retention_named_days`, `camera_height_m`, `gemini_model` | `false`, `false`, `false`, `true`, `"opencv"`, `"compressed"`, `true`, `14.0` / `548.0`, `0.26`, see template |
+| `people_node` (recognition + person memory; **experimental**, `enabled: true` turns it on at the next reboot) | `enabled` (launch-time only), `always_on`, `seek_faces`, `scribe`, `prefer_backend`, `tick_source`, `allow_model_download`, `retention_unnamed_days` / `retention_named_days`, `camera_height_m`, `gemini_model` | `false`, `false`, `false`, `true`, `"opencv"`, `"compressed"`, `true`, `14.0` / `548.0`, `0.26`, see template |
 | `uninavid_node` (VLN) | `forward_speed`, `turn_speed`, `cmd_duration_sec`, `image_send_hz`, `consecutive_stops_to_complete`, `cmd_publish_hz`, `poll_period_sec` | `0.3` / `0.8`, rest see template |
 
 > **Driving caps vs the safety clamp.** `motion_control` is the *driving feel* cap: the

@@ -108,9 +108,6 @@ def _matches_bytes(payload: bytes, sha256: str | None) -> bool:
     return sha256 is None or hashlib.sha256(payload).hexdigest() == sha256
 
 
-# ------------------------------------------------------------------ people
-
-
 class HogPersonDetector:
     """OpenCV's own HOG + linear SVM pedestrian detector: no model file, no
     download, no GPU. The simulator default and the fallback whenever the
@@ -159,9 +156,6 @@ def _hog_score(weight: float) -> float:
     """HOG returns an SVM margin, not a probability. This maps the useful band
     (0 to ~1.5) onto the 0-1 confidence the rest of the engine expects."""
     return max(0.0, min(1.0, 0.35 + 0.3 * weight))
-
-
-# ------------------------------------------------------------------- faces
 
 
 class YuNetFaceLocator:
@@ -311,9 +305,6 @@ class InspireFaceBackend:
         return session
 
 
-# ------------------------------------------------------------------ bodies
-
-
 class OsnetBodyEmbedder:
     """OSNet x0.25 MSMT17 (MIT), 512-d, through onnxruntime on a 256x128 crop.
 
@@ -373,9 +364,6 @@ class NullBodyEmbedder:
     def embed(self, crop_bgr: np.ndarray) -> np.ndarray:
         del crop_bgr
         return np.zeros(0, dtype=np.float32)
-
-
-# ---------------------------------------------------------------- assembly
 
 
 @dataclass
@@ -440,9 +428,6 @@ def _load_body() -> tuple[BodyEmbedder, HealthState]:
     if not path.exists():
         return (NullBodyEmbedder(), HealthState.UNAVAILABLE)
     return (OsnetBodyEmbedder(path), HealthState.OK)
-
-
-# ------------------------------------------------------------------ helpers
 
 
 def _l2(vector: np.ndarray) -> np.ndarray:
