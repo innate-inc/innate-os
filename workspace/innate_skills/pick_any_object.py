@@ -29,7 +29,7 @@ from innate import (
 )
 from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
-from innate.geometry import IMG_H, IMG_W, floor_to_pixel, pixel_to_floor
+from innate.geometry import IMG_H, IMG_W, arm_bearing, floor_to_pixel, pixel_to_floor
 
 GRIPPER_EMPTY_J6 = -0.085
 VERIFY_BACKUP_M = 0.15
@@ -145,15 +145,6 @@ ROLLED_PITCH = math.pi / 2
 # "could not centre".
 MEM_COAST_LIMIT = 2
 WRIST_SEARCH_ARM = [0.1473, -0.0706, -0.4449, 1.3376, -0.0491]
-# joint1's axis in base_link (URDF). The whole arm lies in the vertical plane
-# through it, so a target's yaw IS its bearing from here — from the base_link
-# origin it is ~18 deg off at grasp range, and with the tool vertical the IK
-# can only put that error into the wrist roll, past its +-1.57 rad stop.
-ARM_BASE_X, ARM_BASE_Y = 0.086, -0.05285
-
-
-def _bearing(x: float, y: float) -> float:
-    return math.atan2(y - ARM_BASE_Y, x - ARM_BASE_X)
 
 
 class _BlobTracker:
@@ -633,7 +624,7 @@ class PickAnyObject(Skill):
         p = self._p
         if roll == 0.0:
             return 0.0, p["arm_pitch"], 0.0
-        yaw = _bearing(x, y)
+        yaw = arm_bearing(x, y)
         for z in (p["roll_z"], p["floor_z"]):
             if not self.manipulation.reachable(x, y, z, roll=roll, pitch=ROLLED_PITCH, yaw=yaw):
                 self.logger.warning(
@@ -795,7 +786,7 @@ class PickAnyObject(Skill):
         if p["wrist_steps"] >= 1:
             self.overlay.stage("align")
             self.overlay.readout("aligning the wrist camera")
-            self._goto_search_pose(_bearing(x, y))
+            self._goto_search_pose(arm_bearing(x, y))
             x, y, z, roll = self._wrist_descend(prompt, x, y)
             self.overlay.clear(view="arm")  # the arm moves on, the view with it
             self._aim(x, y)
