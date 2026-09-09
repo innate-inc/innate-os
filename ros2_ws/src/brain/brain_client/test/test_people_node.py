@@ -27,7 +27,7 @@ import numpy as np
 import pytest
 
 from brain_client.people.resolve import Resolution, Resolver
-from brain_client.people.scribe import Change, ChangeKind
+from brain_client.people.scribe import Change, ChangeKind, Scribe
 from brain_client.people.store import MAX_NAMED, MAX_UNNAMED, PeopleStore
 from brain_client.people.surfacing import PeopleEvents, build_snapshot
 from brain_client.people.types import (
@@ -80,6 +80,15 @@ from brain_client.people import node_adapters as na  # noqa: E402 — needs the 
 sys.meta_path.remove(_STUB_FINDER)
 for _stubbed in [name for name, module in sys.modules.items() if isinstance(module, _StubModule)]:
     del sys.modules[_stubbed]
+
+
+@pytest.fixture(autouse=True)
+def _published_wire(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What the node published is read back off ``na.String``'s calls, so it is
+    a mock in every environment — with ROS installed the import above bound the
+    real message class, whose constructor records nothing."""
+    monkeypatch.setattr(na, "String", MagicMock())
+
 
 NOW = 1_788_818_400.0
 HEALTH: HealthDict = {
@@ -552,7 +561,7 @@ def test_every_declared_parameter_reaches_a_config_field():
 # ------------------------------------------------------- one tick, end to end
 
 
-def _adapters(store: PeopleStore, tmp_path, *, frames=None, scribe=None, resolver=None):
+def _adapters(store: PeopleStore, tmp_path, *, frames=None, scribe=None, resolver=None, transport=None):
     """The real adapters around a real engine with scripted backends; the node
     itself is a mock, so every ROS call is recorded rather than made."""
     from brain_client.people.backends import Backends, FixedDetector
@@ -576,7 +585,7 @@ def _adapters(store: PeopleStore, tmp_path, *, frames=None, scribe=None, resolve
         engine=engine,
         engine_config=engine_config,
         scribe=scribe,
-        transport=None,
+        transport=transport,
     )
 
 
@@ -740,6 +749,21 @@ def test_the_tag_counter_is_persisted_so_a_respawn_does_not_reissue_p1(store, tm
     assert PeopleStore(tmp_path / "people").next_tag() == 2
 
 
+def test_the_tick_that_mints_a_tag_persists_it_before_anyone_reads_it(store, tmp_path):
+    """The 60 s store tick is not soon enough: a native-library crash between
+    the mint and the flush respawns the node with the counter it started with,
+    and P1 becomes a second person while a skill still holds the first."""
+    pytest.importorskip("cv2")
+    adapters = _adapters(store, tmp_path)
+    adapters._sensors.brain_active = True
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+
+    adapters._tick(time.time())
+
+    assert adapters._engine.tracker.next_tag == 2
+    assert PeopleStore(tmp_path / "people").next_tag() == 2
+
+
 def test_the_get_service_answers_the_snapshot_and_the_roster(store, tmp_path):
     ana = enrol(store, "Ana")
     adapters = _adapters(store, tmp_path)
@@ -817,6 +841,106 @@ def test_the_collection_switch_is_stored_and_shows_in_the_snapshot(store, tmp_pa
     answer = json.loads(_served(adapters, "_svc_get", include_roster=True, include_thumbnails=False).json)
     assert answer["collection_enabled"] is False
     assert answer["capacity_full"] is False  # switched off is not full
+
+
+def test_get_people_answers_the_switch_the_settings_page_just_flipped(store, tmp_path):
+    """The snapshot in hand is as old as the last tick, and the Settings page
+    reads this service the instant it flips the switch: a cached "true" tells it
+    the write did not take."""
+    pytest.importorskip("cv2")
+    adapters = _adapters(store, tmp_path)
+    adapters._sensors.brain_active = True
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    adapters._tick(time.time())
+
+    assert _served(adapters, "_svc_set_collection", enabled=False).success
+
+    answer = json.loads(_served(adapters, "_svc_get", include_roster=False, include_thumbnails=False).json)
+    assert answer["collection_enabled"] is False
+
+
+def _fake_scribe(store, tmp_path) -> Scribe:
+    return Scribe(store, None, model="m", queue_path=tmp_path / "queue.jsonl")
+
+
+def test_collection_off_keeps_the_conversation_out_of_the_scribe(store, tmp_path):
+    """RFC section 10: "never collect" is a collection control. Buffering the
+    conversation is collecting it — while answering a memory question out of
+    what is already on file is not, so recall goes on working."""
+    ana = enrol(store, "Ana")
+    adapters = _adapters(store, tmp_path, scribe=_fake_scribe(store, tmp_path))
+    adapters._on_chat_in(SimpleNamespace(data=json.dumps({"text": "hello"})))
+    assert adapters._chat.qsize() == 1
+
+    assert _served(adapters, "_svc_set_collection", enabled=False).success
+    adapters._on_chat_in(SimpleNamespace(data=json.dumps({"text": "do you remember what Ana asked for?"})))
+    adapters._on_chat_out(SimpleNamespace(data=json.dumps({"sender": "robot", "text": "she asked for socks"})))
+
+    assert adapters._chat.qsize() == 1  # nothing new was buffered
+    assert adapters._recalls.get_nowait() == (ana, "do you remember what Ana asked for?")
+
+
+def test_collection_off_never_sends_a_crop_for_a_description(store, tmp_path):
+    pytest.importorskip("cv2")
+    ana = enrol(store)
+    calls: list[str] = []
+
+    def transport(path: str, body: dict, timeout: float | None) -> dict:
+        calls.append(path)
+        return {"candidates": [{"content": {"parts": [{"text": json.dumps({"description": "red jacket"})}]}}]}
+
+    adapters = _adapters(store, tmp_path, scribe=_fake_scribe(store, tmp_path), transport=transport)
+    image = np.full((480, 640, 3), 120, dtype=np.uint8)
+    tracks = [track(tag="P1", person_id=ana)]
+    adapters._queue_description(ana, image, tracks, "P1")
+    assert adapters._descriptions.qsize() == 1
+
+    assert _served(adapters, "_svc_set_collection", enabled=False).success
+    adapters._queue_description(ana, image, tracks, "P1")
+    assert adapters._descriptions.qsize() == 1  # nothing new was queued
+    adapters._run_descriptions()  # and the crop already queued never leaves
+
+    assert calls == [] and store.description(ana) is None
+
+
+def test_forgetting_someone_takes_back_the_description_and_the_recall_in_flight(store, tmp_path):
+    """RFC section 10 reaches the work already queued: a crop on its way to
+    Gemini, and a recall about to be announced as "Recalled about Ana"."""
+    ana = enrol(store, "Ana")
+    calls: list[str] = []
+
+    def transport(path: str, body: dict, timeout: float | None) -> dict:
+        calls.append(path)
+        return {"candidates": [{"content": {"parts": [{"text": json.dumps({"description": "red jacket"})}]}}]}
+
+    scribe = SimpleNamespace(recall=lambda person_id, question: "Ana asked for the blue socks.")
+    adapters = _adapters(store, tmp_path, scribe=scribe, transport=transport)
+    adapters._descriptions.put((ana, b"jpeg"))
+    adapters._recalls.put((ana, "what did Ana ask for?"))
+
+    assert _served(adapters, "_svc_forget", who=ana).success
+    adapters._run_descriptions()
+    adapters._run_recalls(scribe)
+
+    assert calls == []
+    assert list(adapters._pending_recalls) == []
+
+
+def test_a_forget_is_never_dropped_behind_a_full_handoff(store, tmp_path):
+    """The handoff to the scribe was a bounded queue with a silent drop, so a
+    forget arriving behind eight others revoked nothing at all."""
+    ana = enrol(store, "Ana")
+    adapters = _adapters(store, tmp_path)
+    for index in range(16):
+        na._offer(adapters._forgets, f"person_older_{index}")
+
+    assert _served(adapters, "_svc_forget", who=ana).success
+
+    handed = []
+    while not adapters._forgets.empty():
+        handed.append(adapters._forgets.get_nowait())
+    assert ana in handed
+    assert adapters._revoked(ana)
 
 
 def _full_disk(*_args, **_kwargs):
@@ -933,6 +1057,25 @@ def test_a_deep_recall_crosses_to_the_engine_thread_as_data(store, tmp_path):
     recalled = [payload for payload in published if payload.get("kind") == "recalled"]
     assert len(recalled) == 1 and recalled[0]["text"].startswith("Recalled about Ana")
     assert set(adapters._events.threads) == {threading.current_thread().name}
+
+
+def test_a_forget_between_the_recall_and_the_tick_keeps_it_off_the_wire(store, tmp_path):
+    """The recall crosses threads as data, so a forget can land in between: the
+    tick that would announce "Recalled about Ana" is the last place to stop it."""
+    pytest.importorskip("cv2")
+    ana = enrol(store, "Ana")
+    adapters = _adapters(store, tmp_path)
+    adapters._pending_recalls.append(na.Recall(ana, "Ana", "Ana asked for the blue socks.", NOW))
+
+    assert _served(adapters, "_svc_forget", who=ana).success
+
+    adapters._sensors.brain_active = True
+    adapters._sensors._frame = na.CameraFrame(na.stamp_ns(1, 0), _jpeg())
+    na.String.reset_mock()
+    adapters._tick(time.time())
+
+    published = [json.loads(call.kwargs["data"]) for call in na.String.call_args_list]
+    assert [payload for payload in published if payload.get("kind") == "recalled"] == []
 
 
 class _RecordingResolver(Resolver):

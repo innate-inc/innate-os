@@ -74,8 +74,8 @@ def render(
     ``conversation`` is the last few (speaker, text) exchanges and
     ``events_text`` this turn's stimuli; together they are the context facts
     are ranked against. ``boxes_drawn`` False means the head frame carries no
-    overlay this turn, so the block must not let the model believe a tag is
-    marked on the picture.
+    overlay this turn, so the block must neither let the model believe a tag is
+    marked on the picture nor point at coordinates measured on another one.
     """
     people = _in_view(snapshot, now)
     context = _context_words(conversation, events_text)
@@ -112,7 +112,7 @@ def _people_lines(people: list[PersonInViewDict], now: float, context: set[str],
     if not people:
         return []
     header = "People in view:" if boxes_drawn else "People in view (positions not drawn this turn):"
-    entries = [_person_lines(person, now, context) for person in people]
+    entries = [_person_lines(person, now, context, boxes_drawn) for person in people]
     kept = [[entry[0]] for entry in entries]
     spent = _tokens(header) + sum(_tokens(entry[0]) for entry in entries)
     for entry, block in zip(entries, kept, strict=True):
@@ -129,8 +129,8 @@ def _people_lines(people: list[PersonInViewDict], now: float, context: set[str],
     return [header] + [line for block in kept for line in block]
 
 
-def _person_lines(person: PersonInViewDict, now: float, context: set[str]) -> list[str]:
-    header = _header_line(person)
+def _person_lines(person: PersonInViewDict, now: float, context: set[str], boxes_drawn: bool) -> list[str]:
+    header = _header_line(person, boxes_drawn)
     lines = [header]
     facts = _facts_line(person, now, context, _PERSON_BUDGET_TOKENS - _tokens(header))
     if facts is not None:
@@ -150,7 +150,7 @@ def _person_lines(person: PersonInViewDict, now: float, context: set[str]) -> li
     return lines
 
 
-def _header_line(person: PersonInViewDict) -> str:
+def _header_line(person: PersonInViewDict, boxes_drawn: bool) -> str:
     phrase = _identity_phrase(person)
     if person.get("lost"):
         phrase += ", just left view"
@@ -158,7 +158,7 @@ def _header_line(person: PersonInViewDict) -> str:
     description = _clean(person.get("description"))
     if description:
         line += f" {_sentence(description)}"
-    box = _box_text(person)
+    box = _box_text(person) if boxes_drawn else ""
     if box:
         line += f" box {box}"
     return line
@@ -202,7 +202,8 @@ def _evidence_text(person: PersonInViewDict) -> str:
 
 def _box_text(person: PersonInViewDict) -> str:
     """The box in Gemini's per-mille [ymin, xmin, ymax, xmax], so a tag can be
-    pointed at with go_to_point_in_view even when nothing is drawn."""
+    pointed at with go_to_point_in_view — only ever printed beside the very
+    frame it was measured on."""
     box = person.get("bbox") or person.get("head_bbox")
     if not box or len(box) != 4:
         return ""

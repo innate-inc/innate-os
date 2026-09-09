@@ -15,9 +15,10 @@ import numpy as np
 import pytest
 
 from brain_client.people import store as store_module
-from brain_client.people.memory import Attribution, FactKind, FactSource
+from brain_client.people.memory import EPISODE_IDLE_SEC, Attribution, FactKind, FactSource, latest_open
 from brain_client.people.store import (
     MAX_FACE_TEMPLATES,
+    MAX_OUTFITS,
     MAX_THUMBNAILS,
     MAX_UNNAMED,
     OUTFIT_TTL_SEC,
@@ -35,8 +36,27 @@ def store(tmp_path) -> PeopleStore:
     return PeopleStore(tmp_path / "people")
 
 
-def face(stamp: float = NOW, model: str = "sface", bucket: str = "frontal", quality: float = 0.9) -> FaceTemplate:
-    return FaceTemplate(embedding=EMB, model=model, stamp=stamp, pose_bucket=bucket, quality=quality)
+def face(
+    stamp: float = NOW,
+    model: str = "sface",
+    bucket: str = "frontal",
+    quality: float = 0.9,
+    embedding: np.ndarray | None = None,
+) -> FaceTemplate:
+    return FaceTemplate(
+        embedding=EMB if embedding is None else embedding,
+        model=model,
+        stamp=stamp,
+        pose_bucket=bucket,
+        quality=quality,
+    )
+
+
+def unit(index: int, size: int = 32) -> np.ndarray:
+    """A unit vector orthogonal to every other one this returns."""
+    vector = np.zeros(size, dtype=np.float32)
+    vector[index] = 1.0
+    return vector
 
 
 def enrol(store: PeopleStore, now: float = NOW, thumbnail: bytes | None = b"jpeg") -> str:
@@ -108,6 +128,63 @@ def test_the_face_gallery_stays_at_ten_and_keeps_the_rare_pose(store: PeopleStor
     assert any(template.pose_bucket == "left" for template in templates)
 
 
+def test_the_gallery_prunes_templates_that_carry_their_own_embeddings(store: PeopleStore):
+    """Every template is a different vector in the field: comparing two of them
+    with ``==`` compares their embeddings elementwise, which is not a boolean."""
+    person_id = store.create_unnamed([], None, NOW)
+    for index in range(MAX_FACE_TEMPLATES + 4):
+        bucket = "left" if index == 0 else "frontal"
+        store.add_face_template(person_id, face(stamp=NOW + index, bucket=bucket, embedding=unit(index)), None)
+    templates = store.face_templates(person_id, "sface")
+    assert len(templates) == MAX_FACE_TEMPLATES
+    assert any(template.pose_bucket == "left" for template in templates)
+
+
+def test_templates_of_two_embedding_spaces_live_side_by_side_on_disk(store: PeopleStore, tmp_path):
+    """128-d SFace and 512-d InspireFace vectors cannot share one rectangular
+    array, and one unwritable file would cost the person their whole gallery."""
+    person_id = store.create_unnamed(
+        [face(model="sface", embedding=np.ones(128, dtype=np.float32) / 128**0.5)], None, NOW
+    )
+    store.add_face_template(
+        person_id, face(model="inspireface", embedding=np.ones(512, dtype=np.float32) / 512**0.5), None
+    )
+    store.add_outfit(person_id, OutfitTemplate(embedding=unit(0, 256), model="osnet", stamp=NOW))
+
+    reopened = PeopleStore(tmp_path / "people")
+    assert [t.embedding.shape for t in reopened.face_templates(person_id, "sface")] == [(128,)]
+    assert [t.embedding.shape for t in reopened.face_templates(person_id, "inspireface")] == [(512,)]
+    assert [o.embedding.shape for o in reopened.outfits(person_id, "osnet", NOW)] == [(256,)]
+
+
+def test_merging_two_people_of_different_embedding_spaces_keeps_both_galleries(store: PeopleStore):
+    source = store.create_unnamed([face(model="sface", embedding=np.ones(128, dtype=np.float32) / 128**0.5)], None, NOW)
+    target = store.create_unnamed(
+        [face(model="inspireface", embedding=np.ones(512, dtype=np.float32) / 512**0.5)], None, NOW + 1
+    )
+    assert store.merge(source, target, now=NOW + 2) is True
+    assert len(store.face_templates(target, "sface")) == 1
+    assert len(store.face_templates(target, "inspireface")) == 1
+
+
+def test_the_same_outfit_seen_again_refreshes_the_one_on_file(store: PeopleStore):
+    """A face confirmation every five seconds is ~17k vectors a day, all of them
+    scanned per body frame and rewritten on every height sample."""
+    person_id = enrol(store)
+    for index in range(100):
+        store.add_outfit(person_id, OutfitTemplate(embedding=EMB, model="osnet", stamp=NOW + index))
+    outfits = store.outfits(person_id, "osnet", NOW + 100)
+    assert [outfit.stamp for outfit in outfits] == [NOW + 99]
+
+
+def test_the_outfit_gallery_keeps_the_most_recent_distinct_looks(store: PeopleStore):
+    person_id = enrol(store)
+    for index in range(20):
+        store.add_outfit(person_id, OutfitTemplate(embedding=unit(index), model="osnet", stamp=NOW + index))
+    outfits = store.outfits(person_id, "osnet", NOW + 20)
+    assert [outfit.stamp for outfit in outfits] == [NOW + index for index in range(20 - MAX_OUTFITS, 20)]
+
+
 def test_height_is_a_robust_mean_of_the_samples(store: PeopleStore):
     person_id = enrol(store)
     for value in (1.70, 1.72, 1.68, 2.90):
@@ -147,6 +224,48 @@ def test_a_sighting_reaches_disk_on_flush_not_on_every_tick(store: PeopleStore, 
 def test_a_sighting_of_an_unknown_person_is_ignored(store: PeopleStore):
     store.record_sighting("person_deadbeef", NOW, "home", None)
     assert store.person_ids() == []
+
+
+def test_a_sighting_opens_the_episode_the_scribe_writes_its_note_onto(store: PeopleStore):
+    """Nothing else opens one, so without this every episode note is dropped."""
+    person_id = enrol(store)
+    store.record_sighting(person_id, NOW + 10, "kitchen", (3.1, 1.4, 0.0))
+    profile = store.profile(person_id)
+    assert profile is not None
+    episode = latest_open(profile.episodes)
+    assert episode is not None
+    assert (episode.start, episode.map, episode.x) == (NOW + 10, "kitchen", 3.1)
+    assert store.note_episode(person_id, "Asked about the socks.", now=NOW + 20) is True
+
+
+def test_an_episode_closes_once_the_person_has_been_gone_five_minutes(store: PeopleStore):
+    person_id = enrol(store)
+    store.record_sighting(person_id, NOW + 10, "kitchen", None)
+    store.note_episode(person_id, "Asked about the socks.", now=NOW + 20)
+
+    store.flush(now=NOW + 10 + EPISODE_IDLE_SEC - 1)
+    profile = store.profile(person_id)
+    assert profile is not None and latest_open(profile.episodes) is not None
+
+    store.flush(now=NOW + 10 + EPISODE_IDLE_SEC + 60)
+    profile = store.profile(person_id)
+    assert profile is not None
+    assert latest_open(profile.episodes) is None
+    assert profile.episodes[-1].end == NOW + 10  # they left when they were last seen
+    assert profile.episodes[-1].summary == "Asked about the socks."
+
+
+def test_coming_back_after_the_gap_closes_the_old_episode_and_opens_a_new_one(store: PeopleStore):
+    person_id = enrol(store)
+    store.record_sighting(person_id, NOW + 10, "kitchen", None)
+    store.record_sighting(person_id, NOW + 4000, "hallway", None)
+    profile = store.profile(person_id)
+    assert profile is not None
+    assert [(episode.start, episode.end) for episode in profile.episodes] == [
+        (NOW + 10, NOW + 10),
+        (NOW + 4000, None),
+    ]
+    assert profile.encounters == len(profile.episodes)
 
 
 # ---------------------------------------------------------------- capacity
@@ -290,6 +409,24 @@ def test_merge_writes_one_audit_line_naming_both_ids(store: PeopleStore):
     store.merge(source, target, now=NOW + 5)
     line = json.loads(store.audit_path.read_text().splitlines()[-1])
     assert line == {"stamp": NOW + 5, "action": "merged", "person_id": target, "source_id": source}
+
+
+def test_a_merge_that_cannot_write_the_target_leaves_the_source_whole(store: PeopleStore, tmp_path, monkeypatch):
+    """The source's directory is the only copy of what it knows until the target
+    has been written and the index has stopped naming it."""
+    source, target = enrol(store, NOW), enrol(store, NOW + 1)
+
+    def _no_space(_person_id: str) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(store, "_commit_templates_locked", _no_space)
+    with pytest.raises(OSError):
+        store.merge(source, target, now=NOW + 2)
+
+    assert (tmp_path / "people" / source).is_dir()
+    reopened = PeopleStore(tmp_path / "people")
+    assert reopened.profile(source) is not None
+    assert len(reopened.face_templates(source, "sface")) == 1
 
 
 def test_merge_refuses_an_unknown_or_self_target(store: PeopleStore):
@@ -568,6 +705,31 @@ def test_the_store_is_private_to_the_robot(tmp_path):
     store = PeopleStore(root)
     person_id = enrol(store)
 
+    assert stat.S_IMODE(root.stat().st_mode) == store_module.DIR_MODE
+    assert stat.S_IMODE((root / person_id).stat().st_mode) == store_module.DIR_MODE
+
+
+def test_a_directory_that_was_already_there_is_tightened_rather_than_left_open(tmp_path):
+    """``mkdir(mode=...)`` sets the mode only on a directory it creates, so a
+    people directory restored from a backup would stay world-readable."""
+    root = tmp_path / "people"
+    root.mkdir(mode=0o755)
+    store = PeopleStore(root)
+    person_id = enrol(store)
+
+    assert stat.S_IMODE(root.stat().st_mode) == store_module.DIR_MODE
+    assert stat.S_IMODE((root / person_id).stat().st_mode) == store_module.DIR_MODE
+    for path in ("index.json", "audit.log", f"{person_id}/person.json", f"{person_id}/templates.npz"):
+        assert stat.S_IMODE((root / path).stat().st_mode) == store_module.FILE_MODE, path
+
+
+def test_reopening_a_store_tightens_a_directory_somebody_loosened(tmp_path):
+    root = tmp_path / "people"
+    person_id = enrol(PeopleStore(root))
+    root.chmod(0o755)
+    (root / person_id).chmod(0o755)
+
+    PeopleStore(root)
     assert stat.S_IMODE(root.stat().st_mode) == store_module.DIR_MODE
     assert stat.S_IMODE((root / person_id).stat().st_mode) == store_module.DIR_MODE
 

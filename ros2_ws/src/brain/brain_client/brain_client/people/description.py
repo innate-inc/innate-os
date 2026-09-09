@@ -4,9 +4,9 @@
 
 Written once from a 384 px crop (258 image tokens) and refreshed only when the
 appearance changes markedly. The prompt asks for clothing, hair, glasses and an
-age band and for nothing else: emotion, ethnicity, health and mood are outside
-what this robot is allowed to infer (RFC section 10, EU AI Act Art. 5), and the
-model is told so rather than trusted to know.
+age band and for nothing else: emotion, ethnicity, gender, health and mood are
+outside what this robot is allowed to infer (RFC section 10, EU AI Act Art. 5),
+and the model is told so rather than trusted to know.
 
 The description is context for the agent and the owner. It is never an
 identifier: recognition happens on templates the model never sees.
@@ -39,9 +39,9 @@ SYSTEM_TEXT = (
     "tell them apart from the other people in the house. Describe ONLY: clothing, hair, whether "
     "they wear glasses, and a broad age band (child, teenager, 20s, 30s, 40s, 50s, 60s, older). "
     "Never mention or infer emotion, mood, expression, ethnicity, skin colour, nationality, "
-    "health, disability, attractiveness, or gender beyond what clothing plainly shows. At most 12 "
-    "words, one line, no full sentences needed: 'Man, 30s, glasses, blue jumper.' If the crop is "
-    "too blurred or too small to describe, return an empty description."
+    "health, disability, attractiveness, or gender. At most 12 words, one line, no full sentences "
+    "needed: '30s, glasses, blue jumper, short dark hair.' If the crop is too blurred or too small "
+    "to describe, return an empty description."
 )
 
 _RESPONSE_SCHEMA = {

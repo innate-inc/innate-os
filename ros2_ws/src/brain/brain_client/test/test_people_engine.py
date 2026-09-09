@@ -53,22 +53,24 @@ FAR_PERSON = (0.30, 0.44, 0.452, 0.478)  # far enough that the face is 42 native
 
 
 class FakeRoster:
-    """Empty, permissive and recording — the resolver's own suite owns the rules."""
+    """Permissive and recording, and it does hand back the people it enrolled —
+    a roster that forgets them reads every later frame as another stranger. The
+    resolver's own suite owns the rules."""
 
     def __init__(self, *, collection: bool = True) -> None:
         self.collection = collection
         self.created: list[list[FaceTemplate]] = []
+        self.people: dict[str, list[FaceTemplate]] = {}
 
     def person_ids(self) -> list[str]:
-        return []
+        return list(self.people)
 
     def name_of(self, person_id: str) -> str | None:
         del person_id
         return None
 
     def face_templates(self, person_id: str, model: str) -> list[FaceTemplate]:
-        del person_id, model
-        return []
+        return [template for template in self.people.get(person_id, ()) if template.model == model]
 
     def outfits(self, person_id: str, model: str, now: float) -> list:
         del person_id, model, now
@@ -87,10 +89,13 @@ class FakeRoster:
     def create_unnamed(self, faces: list[FaceTemplate], thumbnail: bytes | None, now: float) -> str:
         del thumbnail, now
         self.created.append(list(faces))
-        return f"person_new{len(self.created)}"
+        person_id = f"person_new{len(self.created)}"
+        self.people[person_id] = list(faces)
+        return person_id
 
     def add_face_template(self, person_id: str, template: FaceTemplate, thumbnail: bytes | None) -> None:
-        del person_id, template, thumbnail
+        del thumbnail
+        self.people.setdefault(person_id, []).append(template)
 
     def add_outfit(self, person_id: str, outfit) -> None:
         del person_id, outfit
@@ -384,6 +389,24 @@ def test_a_head_box_is_reported_once_a_face_is_located():
     state = engine.tick(scene(), None, 100.0, still(100.0))[0]
     assert state.head_box is not None
     assert state.head_box[0] >= PERSON[0] - 0.2  # inside the top of the person box
+
+
+def test_a_head_box_from_an_earlier_frame_travels_with_the_body_it_belongs_to():
+    """A settled track refreshes its face every five seconds and the last hit is
+    republished until then. Held at the pixels it was found in, the gaze and the
+    overlay aim at where the head was rather than where the person now is."""
+    engine, detector, _roster = build(locator=OnceLocator())
+    fresh = engine.tick(scene(), None, 100.0, still(100.0))[0]
+    assert fresh.head_box is not None
+
+    moved = shifted(PERSON, 0.05)
+    detector.boxes = [[moved]]
+    later = engine.tick(scene(moved), None, 100.5, still(100.5))[0]
+
+    assert later.box == pytest.approx(moved)
+    assert later.head_box is not None
+    assert later.head_box[1] == pytest.approx(fresh.head_box[1] + 0.05, abs=0.005)
+    assert later.head_box != pytest.approx(head_region(later.box))  # still the hit, not the fallback
 
 
 def test_a_head_box_older_than_the_face_it_came_from_follows_the_body_again():

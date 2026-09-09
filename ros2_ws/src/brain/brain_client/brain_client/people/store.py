@@ -54,6 +54,7 @@ from brain_client.people.memory import (
     rank_facts,
     supersede,
 )
+from brain_client.people.track import cosine
 from brain_client.people.types import (
     EpisodeDict,
     FaceTemplate,
@@ -80,7 +81,10 @@ OUTFIT_TTL_SEC = 48 * 3600.0
 RETENTION_UNNAMED_DAYS = 14.0
 RETENTION_NAMED_DAYS = 548.0  # 18 months unseen, the Amazon Astro Visual ID rule
 _SIGHTING_COMMIT_SEC = 30.0  # the engine records a sighting per tick; disk sees one per half minute
+MAX_OUTFITS = 8
 DIR_MODE = 0o700  # templates and thumbnails are special-category data (RFC section 10)
+FILE_MODE = 0o600
+OUTFIT_SAME_COSINE = 0.9  # above this it is the same clothes again, not another outfit
 
 
 class AuditAction(StrEnum):
@@ -191,7 +195,7 @@ class PeopleStore:
             self._outfits[person_id] = []
             self._heights[person_id] = []
             self._thumbs[person_id] = []
-            self._person_dir(person_id).mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
+            _secure_dir(self._person_dir(person_id))
             if thumbnail:
                 self._add_thumbnail_locked(person_id, thumbnail)
             self._commit_person_locked(person_id, now)
@@ -219,7 +223,7 @@ class PeopleStore:
                 for existing in self._outfits.get(person_id, ())
                 if outfit.stamp - existing.stamp <= OUTFIT_TTL_SEC
             ]
-            self._outfits[person_id] = [*kept, outfit]
+            self._outfits[person_id] = _with_outfit(kept, outfit)
             self._commit_templates_locked(person_id)
 
     def add_height_sample(self, person_id: str, height_m: float, variance: float) -> None:
@@ -231,14 +235,20 @@ class PeopleStore:
             self._commit_templates_locked(person_id)
 
     def record_sighting(self, person_id: str, now: float, map_name: str | None, pose: Pose | None) -> None:
-        """Called every tick a person is resolved: the encounter counter moves
-        only across a gap, and disk sees one write per half minute."""
+        """Called every tick a person is resolved: one encounter is one episode,
+        both moving only across a gap, and disk sees one write per half minute."""
         with self._lock:
             profile = self._people.get(person_id)
             if profile is None:
                 return
-            gap = now - profile.last_seen.stamp if profile.last_seen is not None else None
+            last_seen = profile.last_seen
+            gap = now - last_seen.stamp if last_seen is not None else None
             new_encounter = gap is None or gap > EPISODE_IDLE_SEC
+            episodes = profile.episodes
+            if new_encounter and last_seen is not None:
+                episodes = close_episode(episodes, last_seen.stamp)
+            if latest_open(episodes) is None:
+                episodes = open_episode(episodes, self._episode_at(episodes, now, map_name, pose))
             self._people[person_id] = replace(
                 profile,
                 last_seen=LastSeen(
@@ -248,19 +258,44 @@ class PeopleStore:
                     y=pose[1] if pose is not None else None,
                 ),
                 encounters=profile.encounters + (1 if new_encounter else 0),
+                episodes=episodes,
             )
             self._pending.add(person_id)
             if new_encounter or now - self._committed.get(person_id, 0.0) >= _SIGHTING_COMMIT_SEC:
                 self._commit_person_locked(person_id, now)
                 self._commit_index_locked()
 
-    def flush(self) -> None:
-        """Write out sightings deferred by the commit interval (shutdown, or a
-        node timer)."""
+    def flush(self, now: float | None = None) -> None:
+        """Write out sightings deferred by the commit interval, and close the
+        episodes of people who have left (shutdown, or a node timer)."""
+        stamp = _now(now)
         with self._lock:
+            for person_id in list(self._people):
+                self._close_idle_episode_locked(person_id, stamp)
             for person_id in list(self._pending):
-                self._commit_person_locked(person_id, time.time())
+                self._commit_person_locked(person_id, stamp)
             self._commit_index_locked()
+
+    def _close_idle_episode_locked(self, person_id: str, now: float) -> None:
+        profile = self._people[person_id]
+        episode = latest_open(profile.episodes)
+        if episode is None:
+            return
+        last_seen = profile.last_seen.stamp if profile.last_seen is not None else episode.start
+        if now - last_seen <= EPISODE_IDLE_SEC:
+            return
+        self._people[person_id] = replace(profile, episodes=close_episode(profile.episodes, last_seen))
+        self._pending.add(person_id)
+
+    @staticmethod
+    def _episode_at(episodes: tuple[Episode, ...], now: float, map_name: str | None, pose: Pose | None) -> Episode:
+        return Episode(
+            id=next_sequence_id("e", (existing.id for existing in episodes)),
+            start=now,
+            map=map_name,
+            x=pose[0] if pose is not None else None,
+            y=pose[1] if pose is not None else None,
+        )
 
     # --------------------------------------------------------- owner controls
     def rename(self, who: str, name: str, source: str, now: float | None = None) -> bool:
@@ -305,10 +340,14 @@ class PeopleStore:
                 jpeg = self._read_thumbnail_locked(source_id, thumb_id)
                 if jpeg:
                     self._add_thumbnail_locked(target_id, jpeg)
-            self._drop_locked(source_id)
-            self._commit_person_locked(target_id, stamp)
+            # The target and then the index that stops naming the source are
+            # committed before the source's files go: a crash in between costs an
+            # orphan directory _load ignores, never the only copy of the source.
             self._commit_templates_locked(target_id)
+            self._commit_person_locked(target_id, stamp)
+            self._forget_locked(source_id)
             self._commit_index_locked()
+            shutil.rmtree(self._person_dir(source_id), ignore_errors=True)
             self._audit_locked(AuditAction.MERGED, target_id, stamp, source_id=source_id)
             return True
 
@@ -463,14 +502,7 @@ class PeopleStore:
             profile = self._people.get(person_id)
             if profile is None:
                 return None
-            episode = Episode(
-                id=next_sequence_id("e", (existing.id for existing in profile.episodes)),
-                start=now,
-                map=map_name,
-                x=pose[0] if pose is not None else None,
-                y=pose[1] if pose is not None else None,
-                present=present,
-            )
+            episode = replace(self._episode_at(profile.episodes, now, map_name, pose), present=present)
             self._people[person_id] = replace(profile, episodes=open_episode(profile.episodes, episode))
             self._commit_person_locked(person_id, now)
             return episode.id
@@ -701,6 +733,10 @@ class PeopleStore:
                 return person_id
 
     def _drop_locked(self, person_id: str) -> None:
+        self._forget_locked(person_id)
+        shutil.rmtree(self._person_dir(person_id), ignore_errors=True)
+
+    def _forget_locked(self, person_id: str) -> None:
         self._people.pop(person_id, None)
         self._faces.pop(person_id, None)
         self._outfits.pop(person_id, None)
@@ -710,16 +746,16 @@ class PeopleStore:
         self._pending.discard(person_id)
         if person_id not in self._tombstones:
             self._tombstones.append(person_id)
-        shutil.rmtree(self._person_dir(person_id), ignore_errors=True)
 
     def _add_thumbnail_locked(self, person_id: str, jpeg: bytes) -> str:
         thumbs = self._thumbs.setdefault(person_id, [])
         used = [_thumb_number(thumb) for thumb in thumbs]
         thumb_id = f"thumb_{max(used, default=-1) + 1}"
         directory = self._person_dir(person_id)
-        directory.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
+        _secure_dir(directory)
         tmp = directory / f"{thumb_id}.jpg.tmp"
         tmp.write_bytes(jpeg)
+        os.chmod(tmp, FILE_MODE)
         os.replace(tmp, directory / f"{thumb_id}.jpg")
         thumbs.append(thumb_id)
         while len(thumbs) > MAX_THUMBNAILS:
@@ -740,14 +776,14 @@ class PeopleStore:
         if profile is None:
             return
         directory = self._person_dir(person_id)
-        directory.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
+        _secure_dir(directory)
         _write_json(directory / "person.json", profile_to_dict(profile))
         self._committed[person_id] = now
         self._pending.discard(person_id)
 
     def _commit_templates_locked(self, person_id: str) -> None:
         directory = self._person_dir(person_id)
-        directory.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
+        _secure_dir(directory)
         faces = self._faces.get(person_id, [])
         outfits = self._outfits.get(person_id, [])
         heights = self._heights.get(person_id, [])
@@ -755,7 +791,7 @@ class PeopleStore:
         with tmp.open("wb") as handle:
             np.savez(
                 handle,
-                face_embeddings=_stack([template.embedding for template in faces]),
+                **_grouped([(template.model, template.embedding) for template in faces], "face_embeddings"),
                 face_meta=json.dumps(
                     [
                         {
@@ -768,7 +804,7 @@ class PeopleStore:
                         for template in faces
                     ]
                 ),
-                outfit_embeddings=_stack([outfit.embedding for outfit in outfits]),
+                **_grouped([(outfit.model, outfit.embedding) for outfit in outfits], "outfit_embeddings"),
                 outfit_meta=json.dumps(
                     [
                         {"model": outfit.model, "stamp": outfit.stamp, "thumbnail_id": outfit.thumbnail_id}
@@ -777,10 +813,11 @@ class PeopleStore:
                 ),
                 height_samples=np.array(heights, dtype=np.float32).reshape(-1, 2),
             )
+        os.chmod(tmp, FILE_MODE)
         os.replace(tmp, directory / "templates.npz")
 
     def _commit_index_locked(self) -> None:
-        self._root.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
+        _secure_dir(self._root)
         _write_json(
             self._root / "index.json",
             {
@@ -803,16 +840,17 @@ class PeopleStore:
         )
 
     def _audit_locked(self, action: AuditAction, person_id: str, stamp: float, **detail: object) -> None:
-        self._root.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
+        _secure_dir(self._root)
         line = json.dumps({"stamp": stamp, "action": str(action), "person_id": person_id, **detail})
         with self.audit_path.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
+        os.chmod(self.audit_path, FILE_MODE)
 
     # -------------------------------------------------------------- loading
     def _load(self) -> None:
+        _secure_dir(self._root)
         index = _read_json(self._root / "index.json")
         if index is None:
-            self._root.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
             return
         if index.get("version") != INDEX_VERSION:
             return  # a future/older index is not ours to interpret; the roster starts empty
@@ -827,6 +865,7 @@ class PeopleStore:
             if profile is None:
                 continue
             self._people[person_id] = profile
+            _secure_dir(self._person_dir(person_id))
             self._load_templates(person_id)
             self._thumbs[person_id] = _thumbnail_ids(self._person_dir(person_id))
 
@@ -843,34 +882,33 @@ class PeopleStore:
         path = self._person_dir(person_id) / "templates.npz"
         try:
             with np.load(path, allow_pickle=False) as data:
-                faces = np.asarray(data["face_embeddings"], dtype=np.float32)
                 face_meta = json.loads(str(data["face_meta"]))
-                outfits = np.asarray(data["outfit_embeddings"], dtype=np.float32)
                 outfit_meta = json.loads(str(data["outfit_meta"]))
                 heights = np.asarray(data["height_samples"], dtype=np.float32)
+                groups = {key: np.asarray(data[key], dtype=np.float32) for key in data.files if "embeddings" in key}
         except (OSError, KeyError, ValueError, json.JSONDecodeError):
             return  # unreadable templates cost recognition, never the memory
         self._faces[person_id] = [
             FaceTemplate(
-                embedding=faces[row],
+                embedding=embedding,
                 model=str(meta.get("model", "")),
                 stamp=float(meta.get("stamp", 0.0)),
                 pose_bucket=str(meta.get("pose_bucket", "frontal")),
                 quality=float(meta.get("quality", 0.0)),
                 thumbnail_id=meta.get("thumbnail_id"),
             )
-            for row, meta in enumerate(face_meta)
-            if row < len(faces)
+            for meta, embedding in zip(face_meta, _ungrouped(groups, face_meta, "face_embeddings"), strict=True)
+            if embedding is not None
         ]
         self._outfits[person_id] = [
             OutfitTemplate(
-                embedding=outfits[row],
+                embedding=embedding,
                 model=str(meta.get("model", "")),
                 stamp=float(meta.get("stamp", 0.0)),
                 thumbnail_id=meta.get("thumbnail_id"),
             )
-            for row, meta in enumerate(outfit_meta)
-            if row < len(outfits)
+            for meta, embedding in zip(outfit_meta, _ungrouped(groups, outfit_meta, "outfit_embeddings"), strict=True)
+            if embedding is not None
         ]
         self._heights[person_id] = [(float(value), float(variance)) for value, variance in heights.reshape(-1, 2)]
 
@@ -925,19 +963,48 @@ def _prune_faces(templates: list[FaceTemplate]) -> list[FaceTemplate]:
     best-represented pose bucket goes, never the only one of its pose."""
     kept = list(templates)
     while len(kept) > MAX_FACE_TEMPLATES:
-        buckets: dict[str, list[FaceTemplate]] = {}
-        for template in kept:
-            buckets.setdefault(template.pose_bucket, []).append(template)
+        buckets: dict[str, list[int]] = {}
+        for index, template in enumerate(kept):
+            buckets.setdefault(template.pose_bucket, []).append(index)
         crowded = max(buckets.values(), key=len)
-        weakest = min(crowded, key=lambda template: (template.quality, template.stamp))
-        kept.remove(weakest)
+        # By index: `==` on two templates compares their embeddings elementwise.
+        del kept[min(crowded, key=lambda index: (kept[index].quality, kept[index].stamp))]
     return kept
 
 
-def _stack(embeddings: list[np.ndarray]) -> np.ndarray:
-    if not embeddings:
-        return np.zeros((0, 0), dtype=np.float32)
-    return np.stack([np.asarray(embedding, dtype=np.float32).ravel() for embedding in embeddings])
+def _with_outfit(outfits: list[OutfitTemplate], outfit: OutfitTemplate) -> list[OutfitTemplate]:
+    """A face confirmation every five seconds would file the same clothes all day
+    long: an outfit that is already on record is refreshed rather than appended,
+    and the gallery keeps the most recent few looks."""
+    for index, existing in enumerate(outfits):
+        if existing.model == outfit.model and cosine(existing.embedding, outfit.embedding) >= OUTFIT_SAME_COSINE:
+            refreshed = list(outfits)
+            refreshed[index] = replace(existing, stamp=outfit.stamp, thumbnail_id=outfit.thumbnail_id)
+            return refreshed
+    return sorted([*outfits, outfit], key=lambda entry: entry.stamp)[-MAX_OUTFITS:]
+
+
+def _grouped(embeddings: list[tuple[str, np.ndarray]], prefix: str) -> dict[str, np.ndarray]:
+    """One array per embedding space: a 128-d SFace vector and a 512-d
+    InspireFace one cannot share a rectangular array, and the merge that put them
+    on one person must not cost the whole file."""
+    rows: dict[str, list[np.ndarray]] = {}
+    for model, embedding in embeddings:
+        rows.setdefault(model, []).append(np.asarray(embedding, dtype=np.float32).ravel())
+    return {f"{prefix}__{model}": np.stack(group) for model, group in rows.items()}
+
+
+def _ungrouped(groups: dict[str, np.ndarray], meta: list, prefix: str) -> list[np.ndarray | None]:
+    """Each meta entry's embedding, read back from its own model's array."""
+    taken: dict[str, int] = {}
+    found: list[np.ndarray | None] = []
+    for entry in meta:
+        model = str(entry.get("model", "")) if isinstance(entry, dict) else ""
+        row = taken.get(model, 0)
+        taken[model] = row + 1
+        group = groups.get(f"{prefix}__{model}")
+        found.append(group[row] if group is not None and row < len(group) else None)
+    return found
 
 
 def _thumbnail_ids(directory: Path) -> list[str]:
@@ -953,9 +1020,17 @@ def _thumb_number(thumb_id: str) -> int:
     return int(tail) if tail.isdigit() else 0
 
 
+def _secure_dir(path: Path) -> None:
+    """0700 even when the directory was already there: mkdir's mode applies only
+    to a directory it creates, and these files are special-category data."""
+    path.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
+    os.chmod(path, DIR_MODE)
+
+
 def _write_json(path: Path, payload: dict) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
+    os.chmod(tmp, FILE_MODE)
     os.replace(tmp, path)
 
 

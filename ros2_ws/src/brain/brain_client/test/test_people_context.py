@@ -152,6 +152,13 @@ def test_the_box_rides_the_text_so_a_tag_can_be_pointed_at():
     assert "box [100, 300, 930, 560]" in text
 
 
+def test_the_box_stays_behind_when_the_model_is_looking_at_another_frame():
+    # Pointing go_to_point_in_view at coordinates measured on a frame the model
+    # was never shown aims it at whatever now stands in that part of the picture.
+    text = render(snapshot([person()]), boxes_drawn=False)
+    assert "box [" not in text
+
+
 # ---------- what the block never says ----------
 
 

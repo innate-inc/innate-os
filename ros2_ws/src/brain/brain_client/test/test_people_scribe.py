@@ -18,6 +18,7 @@ import pytest
 from brain_client.people import description
 from brain_client.people.memory import Attribution, FactKind
 from brain_client.people.scribe import (
+    QUEUE_HORIZON_SEC,
     WINDOW_IDLE_SEC,
     WINDOW_MAX_MESSAGES,
     Change,
@@ -36,6 +37,7 @@ from brain_client.people.scribe import (
     WindowBuffer,
     WindowQueue,
     apply,
+    asks_to_remember,
     build_request,
     is_memory_question,
     parse_output,
@@ -277,8 +279,13 @@ def test_a_fact_is_written_when_the_person_was_in_view_while_it_was_said(store: 
     assert digest is not None and [item["text"] for item in digest["facts"]] == ["likes pasta"]
 
 
-def test_a_fact_quoted_from_a_line_the_person_was_not_in_view_for_is_only_uncertain(store: PeopleStore):
+def test_a_fact_quoted_from_a_line_the_person_was_not_in_view_for_is_refused(store: PeopleStore):
+    """RFC 6.3: a fact is written only if ``who`` was in view during the line it
+    was quoted from. Writing it as merely uncertain puts the room's words on one
+    person's record — and lets them supersede a fact that really was theirs."""
     person_id = enrol(store)
+    old = store.add_fact(person_id, "drinks tea", FactKind.PREFERENCE, now=NOW, attribution=Attribution.SELF)
+    assert old is not None
     window = Window(
         (
             said("Ana loves pasta", id_="u_1", in_view=(view("P3", "person_other"),)),
@@ -294,16 +301,16 @@ def test_a_fact_quoted_from_a_line_the_person_was_not_in_view_for_is_only_uncert
                 attribution=Attribution.THIRD_PARTY,
                 quote="Ana loves pasta",
                 utterance="u_1",
+                supersedes=old,
             ),
         )
     )
     changes = apply(output, window, store, NOW)
-    assert changes[0].kind is ChangeKind.FACT
+    assert changes[0].kind is ChangeKind.REJECTED
     assert changes[0].reason == "not in view during the quoted line"
     profile = store.profile(person_id)
-    assert profile is not None and profile.facts[0].attribution is Attribution.UNCERTAIN
-    digest = store.digest(person_id, NOW)
-    assert digest is not None and digest["facts"] == []
+    assert profile is not None and [fact.text for fact in profile.facts] == ["drinks tea"]
+    assert profile.facts[0].superseded_by is None
 
 
 def test_a_fact_about_a_tag_with_no_tracked_person_is_refused(store: PeopleStore):
@@ -314,7 +321,7 @@ def test_a_fact_about_a_tag_with_no_tracked_person_is_refused(store: PeopleStore
     assert changes[0].reason == "no tracked person for that tag"
 
 
-def test_a_fact_whose_quote_is_nowhere_in_the_window_falls_back_to_uncertain(store: PeopleStore):
+def test_a_fact_whose_quote_is_nowhere_in_the_window_is_refused(store: PeopleStore):
     person_id = enrol(store)
     window = Window((said("hello there", in_view=(view("P2", person_id),)),))
     output = ScribeOutput(
@@ -328,9 +335,31 @@ def test_a_fact_whose_quote_is_nowhere_in_the_window_falls_back_to_uncertain(sto
             ),
         )
     )
-    apply(output, window, store, NOW)
+    changes = apply(output, window, store, NOW)
+    assert changes[0].kind is ChangeKind.REJECTED
+    assert changes[0].reason == "the quote is not in this window"
     profile = store.profile(person_id)
-    assert profile is not None and profile.facts[0].attribution is Attribution.UNCERTAIN
+    assert profile is not None and profile.facts == ()
+
+
+def test_a_quote_the_line_it_cites_does_not_contain_is_not_a_quote(store: PeopleStore):
+    """The utterance id is the model's claim about where the words came from;
+    the words themselves are the only check on it, and every gate below — the
+    in-view rule, the consent rule, the naming rules — rests on that check."""
+    person_id = enrol(store)
+    window = Window((said("I love jazz", in_view=(view("P2", person_id),)),))
+    invented = ScribeOutput(
+        facts=(
+            ScribeFact(who="P2", text="is called Ana", attribution=Attribution.SELF, quote="I'm Ana", utterance="u_1"),
+        )
+    )
+    assert apply(invented, window, store, NOW)[0].kind is ChangeKind.REJECTED
+    unquoted = ScribeOutput(facts=(ScribeFact(who="P2", text="likes jazz", quote="", utterance="u_1"),))
+    assert apply(unquoted, window, store, NOW)[0].kind is ChangeKind.REJECTED
+
+    changes = apply(name_output(quote="I'm Ana"), window, store, NOW)
+    assert changes[0].kind is ChangeKind.NAME_CANDIDATE
+    assert store.name_of(person_id) is None
 
 
 def test_the_scribe_supersedes_the_fact_it_names(store: PeopleStore):
@@ -452,6 +481,76 @@ def test_a_sensitive_fact_asked_for_is_stored_but_never_surfaced(store: PeopleSt
     assert digest is not None and digest["facts"] == []
 
 
+def diagnosis(utterance: str = "u_1", quote: str = "I have diabetes") -> ScribeOutput:
+    return ScribeOutput(
+        sensitive=(
+            ScribeFact(
+                who="P2",
+                text="has diabetes",
+                kind=FactKind.SENSITIVE,
+                attribution=Attribution.SELF,
+                quote=quote,
+                utterance=utterance,
+            ),
+        )
+    )
+
+
+def test_a_request_to_remember_on_the_next_line_consents_to_the_sensitive_fact(store: PeopleStore):
+    person_id = enrol(store)
+    seen = (view("P2", person_id),)
+    window = Window(
+        (
+            said("I have diabetes", id_="u_1", in_view=seen),
+            said("please remember that", id_="u_2", stamp=NOW + 1, in_view=seen),
+        )
+    )
+    assert apply(diagnosis(), window, store, NOW)[0].kind is ChangeKind.FACT
+
+
+def test_a_refusal_or_a_question_about_memory_is_not_consent(store: PeopleStore):
+    """The old gate took any "remember" from a visible user, so "do not remember
+    my diagnosis" and "do you remember my name?" both wrote the fact down."""
+    person_id = enrol(store)
+    seen = (view("P2", person_id),)
+    for answer in ("please do not remember that", "do you remember my diagnosis"):
+        window = Window(
+            (
+                said("I have diabetes", id_="u_1", in_view=seen),
+                said(answer, id_="u_2", stamp=NOW + 1, in_view=seen),
+            )
+        )
+        assert apply(diagnosis(), window, store, NOW)[0].kind is ChangeKind.REJECTED
+    profile = store.profile(person_id)
+    assert profile is not None and profile.facts == ()
+
+
+def test_a_remember_elsewhere_in_the_window_does_not_authorize_a_sensitive_fact(store: PeopleStore):
+    """One unrelated "remember this" used to consent to every sensitive fact in
+    the window, however far from it."""
+    person_id = enrol(store)
+    seen = (view("P2", person_id),)
+    window = Window(
+        (
+            said("remember to buy milk", id_="u_1", in_view=seen),
+            said("the weather is nice", id_="u_2", stamp=NOW + 1, in_view=seen),
+            said("I have diabetes", id_="u_3", stamp=NOW + 2, in_view=seen),
+        )
+    )
+    assert apply(diagnosis(utterance="u_3"), window, store, NOW)[0].kind is ChangeKind.REJECTED
+
+
+def test_only_an_affirmative_request_to_remember_reads_as_consent():
+    assert asks_to_remember("remember that I see a cardiologist on Thursdays")
+    assert asks_to_remember("don't forget I have diabetes")
+    assert asks_to_remember("keep in mind that I have diabetes")
+    assert not asks_to_remember("do not remember my diagnosis")
+    assert not asks_to_remember("I'd rather you didn't remember that")
+    assert not asks_to_remember("do you remember my name?")
+    assert not asks_to_remember("remember when we talked about it")
+    assert not asks_to_remember("I have diabetes")
+
+
 def test_a_remember_request_from_someone_else_does_not_unlock_a_sensitive_fact(store: PeopleStore):
     person_id = enrol(store)
     window = Window(
@@ -533,6 +632,53 @@ def test_a_transcript_that_says_which_person_resolves_the_ambiguity(store: Peopl
     assert changes[0].kind is ChangeKind.NAME
     assert store.name_of(second) == "Zoe"
     assert store.name_of(first) is None
+
+
+def test_a_name_never_commits_onto_somebody_who_arrived_after_it_was_said(store: PeopleStore):
+    """RFC 6.3: the candidates are whoever was in view while the name was said.
+    Looking the model's referent up window-wide names whoever walked in later."""
+    first, second = enrol(store, NOW), enrol(store, NOW + 1)
+    window = Window(
+        (
+            said("Hi, I'm Ana", id_="u_1", in_view=(view("P2", first),)),
+            said("hello there", id_="u_2", stamp=NOW + 2, in_view=(view("P2", first), view("P3", second))),
+        )
+    )
+    changes = apply(name_output(referent="P3"), window, store, NOW)
+    assert changes[0].kind is ChangeKind.NAME
+    assert store.name_of(first) == "Ana" and store.name_of(second) is None
+
+
+def test_a_referent_who_was_not_there_does_not_collapse_a_two_person_introduction(store: PeopleStore):
+    """Two people were in front of the robot when the name was said, so the
+    transcript did not resolve it — and the model's guess is not the transcript."""
+    first, second, third = enrol(store, NOW), enrol(store, NOW + 1), enrol(store, NOW + 2)
+    window = Window(
+        (
+            said("I'm Ana", id_="u_1", in_view=(view("P2", first), view("P3", second))),
+            said("hi", id_="u_2", stamp=NOW + 2, in_view=(view("P4", third),)),
+        )
+    )
+    changes = apply(name_output(quote="I'm Ana", referent="P4"), window, store, NOW)
+    assert changes[0].kind is ChangeKind.NAME_CANDIDATE
+    assert changes[0].reason == "more than one person could be the referent"
+    assert [store.name_of(person_id) for person_id in (first, second, third)] == [None, None, None]
+    for person_id in (first, second):
+        profile = store.profile(person_id)
+        assert profile is not None and profile.name_candidates[0].name == "Ana"
+
+
+def test_a_referent_that_cannot_hold_a_name_leaves_it_with_everyone_in_view(store: PeopleStore):
+    """A referent only narrows the field, and only to a track that could be
+    named: pointing at an unsettled one must not drop the person who could."""
+    first, second = enrol(store, NOW), enrol(store, NOW + 1)
+    unsettled = view("P3", second, state=IdentityState.UNKNOWN)
+    window = Window((said("I'm Ana", in_view=(view("P2", first), unsettled)),))
+    changes = apply(name_output(quote="I'm Ana", referent="P3"), window, store, NOW)
+    assert changes[0].kind is ChangeKind.NAME_CANDIDATE
+    assert store.name_of(first) is None and store.name_of(second) is None
+    profile = store.profile(first)
+    assert profile is not None and profile.name_candidates[0].name == "Ana"
 
 
 def test_a_third_party_introduction_without_a_referent_stays_a_candidate(store: PeopleStore):
@@ -667,6 +813,24 @@ def test_an_open_loop_is_stored_with_its_due_date(store: PeopleStore):
     assert digest is not None and digest["open_loops"][0]["due"] == "2026-09-09"
 
 
+def test_an_open_loop_cited_from_a_line_its_person_missed_is_refused(store: PeopleStore):
+    """A loop the model backs with a quote answers to the same rule as a fact:
+    the promise is only this person's if they were there when it was made."""
+    person_id = enrol(store)
+    window = Window(
+        (
+            said("find Ana's socks", id_="u_1", in_view=(view("P3", "person_other"),)),
+            said("hello", id_="u_2", stamp=NOW + 1, in_view=(view("P2", person_id),)),
+        )
+    )
+    output = ScribeOutput(
+        open_loops=(ScribeLoop(who="P2", text="find the socks", quote="find Ana's socks", utterance="u_1"),)
+    )
+    assert apply(output, window, store, NOW)[0].kind is ChangeKind.REJECTED
+    digest = store.digest(person_id, NOW)
+    assert digest is not None and digest["open_loops"] == []
+
+
 def test_an_open_loop_for_an_untracked_tag_is_refused(store: PeopleStore):
     window = Window((said("find the socks", in_view=(view("P2", None),)),))
     output = ScribeOutput(open_loops=(ScribeLoop(who="P2", text="find the socks"),))
@@ -722,6 +886,19 @@ def test_the_queue_drops_windows_older_than_an_hour(tmp_path):
     assert len(queue.pending(NOW + 3601)) == 1
 
 
+def test_an_expired_window_leaves_the_disk_as_well(tmp_path):
+    """The hour is a promise about the file, not about one process's memory: a
+    queue nothing pushes to again would keep the transcript for good."""
+    path = tmp_path / "queue.jsonl"
+    queue = WindowQueue(path)
+    queue.push(Window((said("old", stamp=NOW),)), NOW)
+    queue.push(Window((said("new", id_="u_2", stamp=NOW + 3600),)), NOW + 3600)
+
+    assert len(queue.pending(NOW + 3601)) == 1
+
+    assert [json.loads(line)["messages"][0]["text"] for line in path.read_text().splitlines()] == ["new"]
+
+
 def test_the_queue_is_bounded_by_count_as_well(tmp_path):
     queue = WindowQueue(tmp_path / "queue.jsonl", limit=3)
     for index in range(6):
@@ -770,6 +947,70 @@ def test_the_scribe_forgets_a_person_in_both_places(store: PeopleStore, tmp_path
     scribe.forget("person_1")
     assert scribe.queued == 0
     assert scribe.tick(NOW + WINDOW_IDLE_SEC) == []
+
+
+def test_a_line_that_was_in_flight_when_the_forget_landed_goes_without_them(store: PeopleStore, tmp_path):
+    """RFC section 10: a forget has to reach the work already in the air. The
+    utterance was built while they were still on file and is only consumed now,
+    so their view comes out of it — and a line only they were in view for goes."""
+    ana, theo = enrol(store, NOW), enrol(store, NOW + 1)
+    bodies: list[dict] = []
+
+    def transport(path: str, body: dict, timeout: float | None) -> dict:
+        bodies.append(body)
+        return response(EMPTY)
+
+    scribe = Scribe(store, transport, model="gemini-flash", queue_path=tmp_path / "queue.jsonl")
+    store.forget(ana)
+    scribe.forget(ana)
+    scribe.observe(said("hello", in_view=(view("P2", ana), view("P3", theo))), NOW)
+    scribe.observe(said("just them", id_="u_2", stamp=NOW + 1, in_view=(view("P2", ana),)), NOW + 1)
+
+    assert scribe.tick(NOW + WINDOW_IDLE_SEC + 1) == []
+    sent = bodies[0]["contents"][0]["parts"][0]["text"]
+    assert "P3" in sent and "P2" not in sent
+    assert "just them" not in sent
+
+
+def test_collection_off_buffers_nothing_and_spends_nothing(store: PeopleStore, tmp_path):
+    """RFC section 10: "never collect" is a collection control. Buffering the
+    conversation, spending a Gemini call on it and writing what came back are
+    all collection — including for the window that was already open."""
+    person_id = enrol(store)
+    bodies: list[dict] = []
+
+    def transport(path: str, body: dict, timeout: float | None) -> dict:
+        bodies.append(body)
+        return response(EMPTY | {"appearance_notes": [{"who": "P2", "text": "red jacket"}]})
+
+    scribe = Scribe(store, transport, model="gemini-flash", queue_path=tmp_path / "queue.jsonl")
+    scribe.observe(said("I love pasta", in_view=(view("P2", person_id),)), NOW)
+    store.set_collection(False)
+
+    assert scribe.observe(said("and jazz", id_="u_2", stamp=NOW + 1, in_view=(view("P2", person_id),)), NOW + 1) == []
+    assert scribe.tick(NOW + WINDOW_IDLE_SEC + 1) == []
+    assert bodies == []
+    profile = store.profile(person_id)
+    assert profile is not None and profile.facts == ()
+
+
+def test_collection_off_leaves_the_queue_unspent_and_still_expires_it(store: PeopleStore, tmp_path):
+    path = tmp_path / "queue.jsonl"
+    WindowQueue(path).push(Window((said("hello", stamp=NOW),)), NOW)
+    bodies: list[dict] = []
+
+    def transport(path_: str, body: dict, timeout: float | None) -> dict:
+        bodies.append(body)
+        return response(EMPTY)
+
+    store.set_collection(False)
+    scribe = Scribe(store, transport, model="gemini-flash", queue_path=path)
+
+    assert scribe.tick(NOW + 60) == []
+    assert bodies == [] and scribe.queued == 1
+
+    assert scribe.tick(NOW + QUEUE_HORIZON_SEC + 1) == []
+    assert scribe.queued == 0 and path.read_text() == ""
 
 
 def test_a_window_survives_serialization_with_its_views():
@@ -953,8 +1194,9 @@ def test_the_description_request_carries_the_crop_and_the_constraints():
     body = description.build_request(b"jpegbytes")
     system = body["systemInstruction"]["parts"][0]["text"].lower()
     assert "clothing" in system and "glasses" in system and "age band" in system
-    for forbidden in ("emotion", "ethnicity", "health"):
+    for forbidden in ("emotion", "ethnicity", "health", "gender"):
         assert "never mention or infer" in system and forbidden in system
+    assert "gender beyond" not in system and "man," not in system  # RFC 10 lists no gender; only the age band stays
     inline = body["contents"][0]["parts"][0]["inlineData"]
     assert inline["mimeType"] == "image/jpeg"
     assert base64.b64decode(inline["data"]) == b"jpegbytes"

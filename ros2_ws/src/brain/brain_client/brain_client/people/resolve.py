@@ -216,6 +216,15 @@ class _Candidate:
         return self.last_face - self.first_face
 
 
+@dataclass(frozen=True)
+class _PendingFace:
+    """A frame kept for learning, with what it said about every person: it may
+    only ever be written into the gallery it confirms."""
+
+    observation: FaceObservation
+    similarities: dict[str, float]
+
+
 @dataclass
 class _Belief:
     tag: str
@@ -225,7 +234,7 @@ class _Belief:
     committed_at: float = 0.0
     pressure_since: dict[str, float] = field(default_factory=dict)
     enrol_faces: list[FaceObservation] = field(default_factory=list)
-    pending_faces: list[FaceObservation] = field(default_factory=list)
+    pending_faces: list[_PendingFace] = field(default_factory=list)
     best_roster_cosine: float = 0.0
     last_body: BodyObservation | None = None
     height_sum: float = 0.0
@@ -315,7 +324,7 @@ class Resolver:
         belief.candidate(NEW_PERSON).face += _clamp(-against_new * weight, self._config.max_frame_llr)
 
         self._note_split_pressure(belief, thresholds, similarities, best_id, best_similarity)
-        self._collect_for_learning(belief, observation, thresholds, best_similarity)
+        self._collect_for_learning(belief, observation, thresholds, similarities, best_similarity)
 
     def observe_body(self, tag: str, observation: BodyObservation, now: float) -> None:
         """Fold one gated outfit frame in. Body evidence never names anybody: it
@@ -431,6 +440,12 @@ class Resolver:
         belief.resumed_at = now
         belief.state = IdentityState.POSSIBLE
         belief.pending_faces.clear()
+        # The run of agreeing outfit frames restarts with the track: reconfirmation
+        # wants agreement since the resume, and a stamp taken before the gap is
+        # never replaced while the frames keep agreeing.
+        for candidate in belief.candidates.values():
+            candidate.body_agree_since = None
+            candidate.body_frames = 0
 
     # --------------------------------------------------------------- resolve
 
@@ -538,14 +553,17 @@ class Resolver:
 
     def _maybe_switch(self, belief: _Belief, now: float) -> str | None:
         """Hysteresis (RFC 5.3.3): B must lead A by the margin for two seconds
-        of evidence. Until then the track shows A and the pressure is logged."""
+        of evidence. Until then the track shows A and the pressure is logged.
+        The open-world hypothesis is a rival like any other, but it is nobody to
+        commit to: when it wins, the tracker walked the box onto a stranger and
+        the track splits instead (RFC 5.3.4)."""
         current = belief.committed
         if current is None:
             return None
         ranked = self._ranked(belief)
         mine, _ = self._score_of(ranked, current)
         for person_id, score in ranked:
-            if person_id in (current, NEW_PERSON):
+            if person_id == current:
                 continue
             if score - mine < self._config.margin_log_odds:
                 belief.pressure_since.pop(person_id, None)
@@ -554,6 +572,9 @@ class Resolver:
             if now - since < self._config.switch_margin_sec:
                 continue
             belief.pressure_since.clear()
+            if person_id == NEW_PERSON:
+                belief.split_pending = True
+                return None
             belief.pending_faces.clear()  # they were collected while the track meant someone else
             belief.candidate(current).continuity = 0.0
             self._commit(belief, person_id, now)
@@ -633,13 +654,14 @@ class Resolver:
         belief: _Belief,
         observation: FaceObservation,
         thresholds: FaceThresholds,
+        similarities: dict[str, float],
         best_similarity: float,
     ) -> None:
         if not quality.face_size_ok(observation.size_px, quality.Purpose.ENROL, real_px=observation.real_px):
             return
         if not quality.face_pose_ok(observation.yaw_deg, observation.pitch_deg, quality.Purpose.ENROL):
             return
-        belief.pending_faces.append(observation)
+        belief.pending_faces.append(_PendingFace(observation=observation, similarities=dict(similarities)))
         del belief.pending_faces[:-10]
         if best_similarity <= thresholds.reject:
             belief.enrol_faces.append(observation)
@@ -654,7 +676,10 @@ class Resolver:
             return None
         if not self._roster.collection_enabled() or not self._roster.can_enrol():
             return None
-        faces = belief.enrol_faces[-config.enrol_face_frames :]
+        # The whole buffer, not its last five: frames arriving faster than one
+        # per 0.4 s would otherwise never span the two seconds, and a person who
+        # keeps looking at the robot would never enrol.
+        faces = list(belief.enrol_faces)
         if len(faces) < config.enrol_face_frames or faces[-1].stamp - faces[0].stamp < config.enrol_span_sec:
             return None
         thresholds = self._thresholds(belief.face_model)
@@ -704,12 +729,20 @@ class Resolver:
     def _write_face(self, belief: _Belief, person_id: str, now: float) -> None:
         if not belief.pending_faces or now - belief.last_template_write < self._config.template_interval_sec:
             return
-        best = max(belief.pending_faces, key=lambda face: face.quality)
+        # Only a frame that accepts this person is theirs: a track the tracker
+        # walked onto a stranger stays committed until the split, and the
+        # stranger's face must not end up in the gallery it was standing in.
+        accept = self._thresholds(belief.face_model).accept
+        confirming = [pending for pending in belief.pending_faces if pending.similarities.get(person_id, 0.0) >= accept]
         belief.pending_faces.clear()
-        belief.last_template_write = now
-        if best.embedding is None:
+        best = max(confirming, key=lambda pending: pending.observation.quality, default=None)
+        if best is None:
             return
-        self._roster.add_face_template(person_id, _template(best, best.embedding), best.thumbnail)
+        face = best.observation
+        if face.embedding is None:
+            return
+        belief.last_template_write = now
+        self._roster.add_face_template(person_id, _template(face, face.embedding), face.thumbnail)
         body = belief.last_body
         if body is not None and body.embedding is not None and body.model:
             # Today's outfit is snapshotted on a face confirmation and only then:

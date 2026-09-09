@@ -537,6 +537,48 @@ def test_the_face_that_split_a_track_is_never_written_onto_the_person_it_left():
     assert roster.templates == []
 
 
+def test_a_stranger_the_tracker_walked_in_is_never_written_into_the_gallery():
+    """RFC 5.3.4 the other way round: the crossing is with somebody the roster
+    has never seen, so no entry claims the face and the track stays committed to
+    the person it was following. Learning from it would put a stranger's face —
+    and their clothes — in that person's gallery."""
+    roster = roster_with()
+    resolver = Resolver(roster)
+    end = commit_theo(resolver)
+    resolver.observe_body("P1", body(end + 0.5, probe(0.0)), end + 0.5)
+    roster.templates.clear()
+    roster.written_outfits.clear()
+
+    for step in range(6):
+        stamp = end + 6.0 + 0.4 * step
+        resolver.observe_face("P1", face(stamp, probe(0.0), box=_moved(step)))
+        resolver.resolve([FakeTrack(last_seen=stamp)], stamp)
+
+    assert resolver.identity("P1").person_id == "person_a"  # nothing has named the stranger
+    assert roster.templates == []
+    assert roster.written_outfits == []
+
+
+def test_sustained_frames_that_belong_to_nobody_split_a_committed_track():
+    resolver = Resolver(roster_with())
+    end = commit_theo(resolver)
+    requested = False
+    for step in range(20):
+        stamp = end + 1.0 + 0.4 * step
+        resolver.observe_face("P1", face(stamp, probe(0.0), box=_moved(step)))
+        requested = requested or resolver.resolve([FakeTrack(last_seen=stamp)], stamp)["P1"].split_requested
+    assert requested
+
+
+def test_one_bad_angle_on_the_person_themselves_never_splits_the_track():
+    resolver = Resolver(roster_with())
+    end = commit_theo(resolver)
+    resolver.observe_face("P1", face(end + 0.5, probe(0.15)))
+    for step in range(10):
+        stamp = end + 1.0 + 0.5 * step
+        assert not resolver.resolve([FakeTrack(last_seen=stamp)], stamp)["P1"].split_requested
+
+
 def test_applying_a_split_drops_everything_learned_on_both_tags():
     resolver = Resolver(roster_with())
     commit_theo(resolver)
@@ -605,6 +647,20 @@ def test_five_frames_inside_two_seconds_are_not_enough_to_enrol():
     enrol_frames(resolver, span=1.5)
     resolver.resolve([FakeTrack(first_seen=99.0, last_seen=101.5)], 101.5)
     assert roster.created == []
+
+
+def test_frames_arriving_faster_than_the_span_still_enrol():
+    """The window is the buffer, not its last five frames: at four frames a
+    second the last five span one, and a person standing in front of the robot
+    would never enrol however long they looked at it."""
+    roster = FakeRoster()
+    resolver = Resolver(roster)
+    for index in range(24):
+        stamp = 100.0 + 0.25 * index
+        resolver.observe_face("P1", face(stamp, probe(0.98), box=_moved(index % 5)))
+        resolver.resolve([FakeTrack(first_seen=99.0, last_seen=stamp)], stamp)
+    assert len(roster.created) == 1
+    assert 5 < len(roster.created[0]) <= 10  # RFC 5.4: up to ten, not only the five that decided
 
 
 def test_a_passer_by_seen_for_under_two_seconds_never_enrols():
@@ -801,6 +857,29 @@ def test_agreeing_outfit_for_three_seconds_brings_a_resumed_track_back():
     resolver.on_reassociated("P1", 1002.0)
     for step in range(5):
         stamp = 1003.0 + step
+        resolver.observe_body("P1", body(stamp, probe(0.95)), stamp)
+        resolver.resolve([FakeTrack(last_seen=stamp)], stamp)
+    assert resolver.identity("P1").state is IdentityState.KNOWN
+
+
+def test_an_outfit_that_agreed_before_the_gap_does_not_stand_in_for_one_after_it():
+    """Reconfirmation wants three seconds of agreement since the track came back.
+    A stamp left over from before the gap is never replaced while the frames keep
+    agreeing, so the track would sit at ``possible`` for ever."""
+    roster = fresh_outfit_roster()
+    resolver = Resolver(roster)
+    for step in range(3):
+        resolver.observe_face("P1", face(1000.0 + 0.6 * step, probe(0.50)))
+    resolver.resolve([FakeTrack(last_seen=1001.2)], 1001.2)
+    for step in range(2):
+        stamp = 1002.0 + step
+        resolver.observe_body("P1", body(stamp, probe(0.95)), stamp)
+        resolver.resolve([FakeTrack(last_seen=stamp)], stamp)
+    assert resolver.identity("P1").state is IdentityState.KNOWN
+
+    resolver.on_reassociated("P1", 1100.0)
+    for step in range(5):
+        stamp = 1101.0 + step
         resolver.observe_body("P1", body(stamp, probe(0.95)), stamp)
         resolver.resolve([FakeTrack(last_seen=stamp)], stamp)
     assert resolver.identity("P1").state is IdentityState.KNOWN

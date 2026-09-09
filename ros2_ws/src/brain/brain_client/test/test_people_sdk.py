@@ -462,10 +462,19 @@ def test_lost_message_says_which_kind_of_lost():
 # ---------- forget_person ----------
 
 
-def test_forget_person_addresses_the_record_and_returns_the_confirmation():
+def test_forget_person_addresses_the_record_a_tag_stands_for():
     people = FakePeople([person(1.5)])
-    assert build(ForgetPerson, people).execute(who="Theo") == "Done, I've forgotten Theo."
-    assert people.forgotten == ["person_7f92a1b3"]
+    assert build(ForgetPerson, people).execute(who="P3") == "Done, I've forgotten Theo."
+    assert people.forgotten == ["person_7f92a1b3"]  # the tag dies with the track; the id does not
+
+
+def test_forget_person_leaves_a_name_for_the_node_to_rule_on():
+    # Resolving it here would pick the nearest of two Anas and delete her: the
+    # node is the only one that can see there are two and refuse to guess.
+    people = FakePeople([person(1.5, name="Ana")], forget=(False, "I know 2 people called Ana — say which one by id"))
+    with pytest.raises(SkillFailed, match="2 people called Ana"):
+        build(ForgetPerson, people).execute(who="Ana")
+    assert people.forgotten == ["Ana"] and people.asked == []
 
 
 def test_forget_person_falls_back_to_the_tag_for_someone_with_no_record_yet():

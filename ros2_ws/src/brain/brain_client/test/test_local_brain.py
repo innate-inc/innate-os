@@ -450,7 +450,7 @@ import threading  # noqa: E402
 import time  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
-from brain_client.brain.agent import BrainAgent  # noqa: E402
+from brain_client.brain.agent import _PEOPLE_FRESH_SEC, BrainAgent  # noqa: E402
 from brain_client.brain.utils import Event, EventKind, FrameLabel  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
 from brain_client.transport.chat import SpeechStreamer  # noqa: E402
@@ -484,6 +484,7 @@ def agent_factory(monkeypatch):
             fresh_arm_jpeg=lambda max_age: None,
             current_head_pitch=-10.0,
             motion_peak=lambda: 0.0,
+            recently_driven=False,
         )
         pose = SimpleNamespace(current_pose_xyt=lambda: None, is_mapfree=False)
         spoken = []
@@ -1181,6 +1182,32 @@ def test_look_falls_back_to_the_freshest_frame_when_the_pairing_fails(agent_fact
     assert frames[0] == (FrameLabel.HEAD, JPEG)
     assert agent._pitch_at_capture == -10.0
     assert "People in view (positions not drawn this turn):" in text
+
+
+def test_a_robot_that_just_drove_gets_the_freshest_frame_and_no_boxes(agent_factory, monkeypatch):
+    # The turn's pose is read now; a paired frame is up to a snapshot older than
+    # that, and a floor point grounded across a drive lands somewhere else.
+    agent = with_people(agent_factory, people_snapshot(), monkeypatch)
+    agent._camera.recently_driven = True
+    text, frames = agent._look([])
+
+    assert frames[0] == (FrameLabel.HEAD, JPEG)
+    assert agent._pitch_at_capture == -10.0
+    assert "People in view (positions not drawn this turn):" in text
+
+
+def test_the_drawn_frame_may_be_no_older_than_the_boxes_on_it(agent_factory, monkeypatch):
+    agent = with_people(agent_factory, people_snapshot(), monkeypatch)
+    asked: list[float] = []
+
+    def frame_for_stamp(stamp_ns, max_age):
+        asked.append(max_age)
+        return (PAIRED_JPEG, -3.0)
+
+    agent._camera.frame_for_stamp = frame_for_stamp
+    agent._look([])
+
+    assert asked == [_PEOPLE_FRESH_SEC]
 
 
 def test_a_stale_snapshot_never_puts_names_on_a_current_frame(agent_factory, monkeypatch):

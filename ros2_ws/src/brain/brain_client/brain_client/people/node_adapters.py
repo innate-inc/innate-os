@@ -827,6 +827,7 @@ class PeopleAdapters:
         self._hints: dict[str, tuple[str, float]] = {}
         self._enrolling: dict[str, float] = {}
         self._speaking: tuple[str, float] | None = None
+        self._forgotten: set[str] = set()
         self._pending_recalls: deque[Recall] = deque(maxlen=32)
         self._want_native = False
         self._uid = 0
@@ -834,7 +835,7 @@ class PeopleAdapters:
         self._last_frame_at = 0.0
 
         self._chat: queue.Queue[Utterance] = queue.Queue(maxsize=64)
-        self._forgets: queue.Queue[str] = queue.Queue(maxsize=8)
+        self._forgets: queue.Queue[str] = queue.Queue()  # unbounded: a dropped forget is one that never happened
         self._suppressions: queue.Queue[str] = queue.Queue(maxsize=8)
         self._rebinds: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=8)
         self._recalls: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=8)
@@ -910,9 +911,13 @@ class PeopleAdapters:
         if snapshot is None:
             snapshot = empty_snapshot(self._health(now), now, collection_enabled=self._store.collection_enabled())
         roster = self._store.roster(include_thumbnails=request.include_thumbnails) if request.include_roster else None
+        answer = roster_answer(snapshot, roster=roster, capacity_full=self._store.capacity_full())
+        # The snapshot is as old as the last tick, and Settings reads this the
+        # instant it flips the switch.
+        answer["collection_enabled"] = self._store.collection_enabled()
         response.success = True
         response.message = ""
-        response.json = json.dumps(roster_answer(snapshot, roster=roster, capacity_full=self._store.capacity_full()))
+        response.json = json.dumps(answer)
         return response
 
     def _svc_rename(self, request: RenamePerson.Request, response: RenamePerson.Response) -> RenamePerson.Response:
@@ -980,10 +985,12 @@ class PeopleAdapters:
             return MutationResult(False, message)
         success, message = self._write(lambda: self._store.forget(person_id), f"could not forget {person_id}")
         if success:
+            with self._lock:
+                self._forgotten.add(person_id)
             self._suppress(person_id)
             # The queue and the open window are the scribe thread's; handing it
             # the id keeps this off the executor and off its file (RFC 10).
-            _offer(self._forgets, person_id)
+            self._forgets.put(person_id)
         return MutationResult(success, message)
 
     def _mutate(self, idempotency_key: str, write: Callable[[], MutationResult]) -> MutationResult:
@@ -1013,6 +1020,16 @@ class PeopleAdapters:
     def _resolve(self, who: str) -> tuple[str | None, str]:
         return resolve_who(who, self.tracks(), self._store.roster(), forgotten=self._store.is_tombstoned)
 
+    def _revoked(self, person_id: str) -> bool:
+        """Whether a forget has taken back the work still in flight for this
+        person (RFC section 10). The store's tombstone is the durable answer;
+        the set is this node's own copy, read without the store lock every tick
+        contends on."""
+        with self._lock:
+            if person_id in self._forgotten:
+                return True
+        return self._store.is_tombstoned(person_id)
+
     def _suppress(self, person_id: str) -> None:
         """A forgotten person must stop being that person on the live track, or
         the next tick names an id that no longer exists. The resolver is the
@@ -1034,7 +1051,9 @@ class PeopleAdapters:
         if tag is not None:
             with self._lock:
                 self._speaking = (tag, now + SPEAKING_HOLD_SEC)
-        _offer(self._chat, utterance)
+        self._feed_scribe(utterance)
+        # Recall reads the record rather than adding to it, so it outlives the
+        # collection switch.
         self._maybe_recall(utterance.text, tracks)
 
     def _on_chat_out(self, msg: String) -> None:
@@ -1043,8 +1062,12 @@ class PeopleAdapters:
             return
         now = time.time()
         views = self._views(self.tracks(), now)
-        utterance = chat_out_utterance(payload, uid=self._next_uid(), now=now, in_view=views)
-        if utterance is not None:
+        self._feed_scribe(chat_out_utterance(payload, uid=self._next_uid(), now=now, in_view=views))
+
+    def _feed_scribe(self, utterance: Utterance | None) -> None:
+        """One transcript line for the scribe, unless the owner switched
+        collection off: buffering a conversation is collecting it (RFC 10)."""
+        if utterance is not None and self._store.collection_enabled():
             _offer(self._chat, utterance)
 
     def _maybe_recall(self, text: str, tracks: Sequence[TrackState]) -> None:
@@ -1136,6 +1159,10 @@ class PeopleAdapters:
             speaking=speaking,
             frame_stamp_ns=stamp_text(frame.stamp_ns),
         )
+        # Before the tags reach anyone: a native-library crash and a respawn two
+        # seconds later must not hand P<n> to a second person (a no-op unless
+        # this tick minted one).
+        self._store.set_next_tag(self._engine.tracker.next_tag)
         self._want_native = wants_native(tracks, now, refresh_sec=self._engine_config.face_refresh_sec)
         resolutions = self._engine.resolutions()
         resolved = apply_conflicts(tracks, resolutions)
@@ -1187,7 +1214,7 @@ class PeopleAdapters:
         self._publish_events(tracks, now, enrolled)
 
     def _queue_description(self, person_id: str, image: np.ndarray, tracks: Sequence[TrackState], tag: str) -> None:
-        if self._scribe is None or self._store.description(person_id):
+        if self._scribe is None or not self._store.collection_enabled() or self._store.description(person_id):
             return
         track = next((t for t in tracks if t.tag == tag), None)
         if track is None:
@@ -1243,6 +1270,8 @@ class PeopleAdapters:
             recalls = list(self._pending_recalls)
             self._pending_recalls.clear()
         for recall in recalls:
+            if self._revoked(recall.person_id):
+                continue  # the last gate before a forgotten person's memories go on the wire
             event = self._events.recalled(recall.person_id, recall.name, recall.text, recall.stamp)
             if event is not None:
                 events.append(event)
@@ -1321,7 +1350,13 @@ class PeopleAdapters:
                 person_id, question = self._recalls.get_nowait()
             except queue.Empty:
                 return
+            # Nothing about a forgotten person: not the Gemini call, and not the
+            # event either when the forget lands while the call is in flight.
+            if self._revoked(person_id):
+                continue
             answer = scribe.recall(person_id, question)
+            if self._revoked(person_id):
+                continue
             recall = Recall(person_id, self._store.name_of(person_id), answer, time.time())
             with self._lock:
                 self._pending_recalls.append(recall)
@@ -1334,6 +1369,10 @@ class PeopleAdapters:
                 person_id, crop = self._descriptions.get_nowait()
             except queue.Empty:
                 return
+            # Both may have changed since the crop was queued, and this is the
+            # last point before it leaves the robot.
+            if not self._store.collection_enabled() or self._revoked(person_id):
+                continue
             text = description.describe(self._transport, crop, model=self._config.gemini_model)
             if text:
                 self._store.set_description(person_id, text, now=time.time())

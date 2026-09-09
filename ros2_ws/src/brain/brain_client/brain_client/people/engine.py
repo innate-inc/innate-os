@@ -75,7 +75,7 @@ class _Runtime:
     range_m: float | None = None
     height_m: float | None = None
     bearing_deg: float | None = None
-    head_box: Box | None = None
+    head_offset: Box | None = None  # the last hit's head box as fractions of the body box
     reid_tried: bool = False
 
 
@@ -277,7 +277,7 @@ class PeopleEngine:
         runtime = self._runtime_of(track.tag)
         runtime.frames_with_face += 1
         runtime.last_face_stamp = now
-        runtime.head_box = box
+        runtime.head_offset = _offset_in(box, track.box)
         track.head_box = box
 
         yaw, pitch = pose_from_landmarks(hit.landmarks)
@@ -425,13 +425,14 @@ class PeopleEngine:
 
     @staticmethod
     def _head_box(track: Track, runtime: _Runtime, now: float) -> Box:
-        """A face hit pins the head; detections carry none, so once the hit has
-        gone stale the head follows the body again rather than staying where
-        the person used to be standing."""
+        """A face hit pins the head inside the body box, and is re-read on the
+        box's latest position: a settled track refreshes its face every five
+        seconds, and the person keeps walking in between. Once the hit has gone
+        stale the head follows the body's own upper slice again."""
         stamp = runtime.last_face_stamp
-        if runtime.head_box is not None and stamp is not None and now - stamp <= FACE_STALE_SEC:
-            return runtime.head_box
-        return head_region(track.box)
+        if runtime.head_offset is None or stamp is None or now - stamp > FACE_STALE_SEC:
+            return head_region(track.box)
+        return _projected(runtime.head_offset, track.box)
 
     def _runtime_of(self, tag: str) -> _Runtime:
         runtime = self._runtime.get(tag)
@@ -456,6 +457,26 @@ class PeopleEngine:
             image = cv2.resize(crop_bgr, size, interpolation=cv2.INTER_AREA)
         ok, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), _THUMBNAIL_QUALITY])
         return bytes(buffer) if ok else None
+
+
+def _offset_in(head: Box, body: Box) -> Box | None:
+    """Where the head sits inside the body box, as fractions of it."""
+    ymin, xmin, ymax, xmax = body
+    height, width = ymax - ymin, xmax - xmin
+    if height <= 0.0 or width <= 0.0:
+        return None
+    return (
+        (head[0] - ymin) / height,
+        (head[1] - xmin) / width,
+        (head[2] - ymin) / height,
+        (head[3] - xmin) / width,
+    )
+
+
+def _projected(offset: Box, body: Box) -> Box:
+    ymin, xmin, ymax, xmax = body
+    height, width = ymax - ymin, xmax - xmin
+    return (ymin + offset[0] * height, xmin + offset[1] * width, ymin + offset[2] * height, xmin + offset[3] * width)
 
 
 def _hit_box(hit: FaceHit, origin: tuple[int, int], scale: float, width: int, height: int) -> Box:

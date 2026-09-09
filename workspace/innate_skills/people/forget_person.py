@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
+import re
+
 from innate import People, Skill, SkillReturn
+
+_TAG = re.compile(r"^P\d+$", re.IGNORECASE)
 
 
 class ForgetPerson(Skill):
@@ -14,11 +18,16 @@ class ForgetPerson(Skill):
     people: People
 
     def execute(self, who: str) -> SkillReturn:
-        person = self.people.find(who)
-        # Address the record, not the word: a name is not unique and a tag dies
-        # with the track, so the id wins whenever the person is in view.
-        target = (person.person_id or person.tag) if person is not None else who
-        done, message = self.people.forget(target)
+        done, message = self.people.forget(self._target(who))
         if not done:
             self.fail(message or f"I don't know anyone called {who}.")
         return message or f"Done — I've forgotten {who}."
+
+    def _target(self, who: str) -> str:
+        """A tag stands for one track, so address the record behind it -- the tag
+        dies with the track, the id does not. Anything else goes through
+        untouched: only the node can see that two people answer to one name."""
+        if not _TAG.match(who.strip()):
+            return who
+        person = self.people.find(who)
+        return (person.person_id or who) if person is not None else who

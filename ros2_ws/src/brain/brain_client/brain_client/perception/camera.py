@@ -59,6 +59,8 @@ class CameraCapture:
         self._arm_sub = None
         self._head_sub = None
         self._cmd_vel_sub = None
+        # Filled on the executor thread and read on the agent thread: a reader
+        # copies it with tuple() — one C call, nothing can interleave — not a lock.
         self._ring: deque[_Frame] = deque(maxlen=_RING_FRAMES)
         self._arm: tuple[float, bytes] | None = None
         self._last_drive = 0.0  # monotonic time of the last nonzero cmd_vel
@@ -154,7 +156,7 @@ class CameraCapture:
         neighbouring frame would put a name on the wrong person.
         """
         now = time.monotonic()
-        for frame in reversed(self._ring):
+        for frame in reversed(tuple(self._ring)):
             if frame.stamp_ns != stamp_ns:
                 continue
             return (frame.jpeg, frame.pitch) if now - frame.arrival <= max_age_sec else None
@@ -164,9 +166,10 @@ class CameraCapture:
         return _fresh(self._arm, max_age_sec)
 
     def _fresh_frame(self, max_age_sec: float) -> _Frame | None:
-        if not self._ring:
+        ring = tuple(self._ring)
+        if not ring:
             return None
-        frame = self._ring[-1]
+        frame = ring[-1]
         return frame if time.monotonic() - frame.arrival <= max_age_sec else None
 
 

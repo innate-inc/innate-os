@@ -471,8 +471,8 @@ class BrainAgent:
 
         Pairing is exact or absent: the tags may only be drawn on the very
         frame the people engine measured them on, so a snapshot naming a frame
-        the ring no longer holds falls back to the freshest frame with nothing
-        drawn (and the block says so).
+        the ring no longer holds — or one the robot has since driven away from —
+        falls back to the freshest frame with nothing drawn (and the block says so).
         """
         drawn = self._drawn_frame(snapshot)
         if drawn is not None:
@@ -484,10 +484,15 @@ class BrainAgent:
             return None
         if time.time() - float(snapshot.get("stamp") or 0.0) > _PEOPLE_FRESH_SEC:
             return None
+        # The pose is read now while the paired frame may be _PEOPLE_FRESH_SEC
+        # old: after a drive, grounding its floor points in this pose aims the
+        # robot at where the thing used to be.
+        if self._camera.recently_driven:
+            return None
         stamp_ns = people_context.frame_stamp_ns(snapshot)
         if stamp_ns is None:
             return None
-        frame = self._camera.frame_for_stamp(stamp_ns, _FRESH_FRAME_SEC)
+        frame = self._camera.frame_for_stamp(stamp_ns, _PEOPLE_FRESH_SEC)
         if frame is None:
             return None
         drawn = overlay.draw_people(frame[0], snapshot)

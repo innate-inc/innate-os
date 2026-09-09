@@ -16,7 +16,7 @@ import json
 import os
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, TypeVar
 
 from brain_client.brain.transport import GENERATE_PATH
@@ -43,6 +43,9 @@ _E = TypeVar("_E", bound=StrEnum)
 
 Transport = Callable[[str, dict, float | None], dict]
 """(api path, request body, timeout) -> parsed response; GeminiRest.post's shape."""
+
+Revoked = Callable[[str | None], bool]
+"""Whether a person id has been forgotten; ``None`` (an untracked view) never is."""
 
 WINDOW_IDLE_SEC = 8.0
 WINDOW_MAX_MESSAGES = 12
@@ -155,6 +158,22 @@ class Change:
 # ------------------------------------------------------------ window buffer
 
 
+def line_without_revoked(message: Utterance, revoked: Revoked) -> Utterance | None:
+    """One transcript line with a forgotten person's view taken out, or None
+    when the line was only about them (RFC section 10)."""
+    kept = tuple(view for view in message.in_view if not revoked(view.person_id))
+    if len(kept) == len(message.in_view):
+        return message
+    return replace(message, in_view=kept) if kept else None
+
+
+def without_revoked(window: Window, revoked: Revoked) -> Window:
+    """The window as it stands after a forget: deletion has to reach the work
+    already in flight, or it lands a moment later anyway."""
+    lines = (line_without_revoked(message, revoked) for message in window.messages)
+    return Window(tuple(line for line in lines if line is not None))
+
+
 class WindowBuffer:
     """Accumulates messages into a window; closes it 8 s after the last message
     or at 12 messages, whichever comes first."""
@@ -180,12 +199,15 @@ class WindowBuffer:
     def pending(self) -> int:
         return len(self._messages)
 
+    def clear(self) -> None:
+        """Throw the buffer away: collection went off, and these lines were
+        never meant to be kept."""
+        self._messages = []
+
     def forget(self, person_id: str) -> None:
-        """Drop the buffered lines a forgotten person was in view for, before
-        they can be sent anywhere (RFC section 10)."""
-        self._messages = [
-            message for message in self._messages if all(view.person_id != person_id for view in message.in_view)
-        ]
+        """Take a forgotten person out of the buffered lines before they can be
+        sent anywhere (RFC section 10)."""
+        self._messages = list(without_revoked(Window(tuple(self._messages)), lambda who: who == person_id).messages)
 
     def _close(self) -> Window:
         window = Window(tuple(self._messages))
@@ -408,8 +430,16 @@ def parse_output(response: dict) -> ScribeOutput | None:
 # --------------------------------------------------------------- the rules
 
 _REMEMBER = re.compile(
-    r"\b(remember (this|that|it)?|don'?t forget|do not forget|make a note|note that|keep in mind|"
+    r"\b(remember|memorise|memorize|don'?t forget|do not forget|make a note|note that|keep in mind|"
     r"write (this|that) down)\b"
+)
+_NOT_REMEMBER = re.compile(
+    r"\b((do|did|does|would|will|can|could)\s?(not|n'?t)|never|stop|no need to|rather not)"
+    r"\s+(?:\w+\s+){0,3}?(remember|note|keep|memoris|memoriz)"
+)
+_RECALLING = re.compile(
+    r"\bremember when\b|\b(do|did|does|can|could|would|will|have)\s+(you|we|i|they|he|she)\s+"
+    r"(?:\w+\s+){0,2}?(remember|recall)\b"
 )
 _COUNTS = {2: "two", 3: "three", 4: "four", 5: "five"}
 
@@ -426,7 +456,7 @@ def apply(output: ScribeOutput, window: Window, store: PeopleStore, now: float) 
     for fact in (*output.facts, *output.sensitive):
         changes.append(_apply_fact(fact, window, views, store, now))
     for loop in output.open_loops:
-        changes.append(_apply_loop(loop, views, store, now))
+        changes.append(_apply_loop(loop, window, views, store, now))
     for note in output.appearance_notes:
         changes.append(_apply_appearance(note, views, store, now))
     changes.extend(_apply_episode_note(output.episode_note, views, store, now))
@@ -441,11 +471,14 @@ def _apply_fact(
         return Change(ChangeKind.REJECTED, fact.who, None, fact.text, reason="no tracked person for that tag")
     person_id = view.person_id
     quoted = _quoted_message(window, fact.utterance, fact.quote)
-    # A fact is only the person's own if they were in view while it was said;
-    # otherwise it belongs to the encounter, not to them (RFC 6.3).
-    attributed = quoted is not None and quoted.view(fact.who) is not None
-    attribution = fact.attribution if attributed else Attribution.UNCERTAIN
-    if fact.kind is FactKind.SENSITIVE and not _asked_to_remember(window, fact.who):
+    if quoted is None:
+        return Change(ChangeKind.REJECTED, fact.who, person_id, fact.text, reason="the quote is not in this window")
+    # RFC 6.3: a fact is written only if its subject was in view during the line
+    # it was quoted from. Writing it anyway puts the room's words on one
+    # person's record, and lets them supersede a fact that was really theirs.
+    if quoted.view(fact.who) is None:
+        return Change(ChangeKind.REJECTED, fact.who, person_id, fact.text, reason="not in view during the quoted line")
+    if fact.kind is FactKind.SENSITIVE and not _consented(window, fact.who, quoted):
         return Change(
             ChangeKind.REJECTED,
             fact.who,
@@ -453,12 +486,7 @@ def _apply_fact(
             fact.text,
             reason="sensitive and nobody asked the robot to remember it",
         )
-    source = FactSource(
-        utterance_id=fact.utterance,
-        stamp=quoted.stamp if quoted is not None else now,
-        quote=fact.quote,
-        speaker_tag=fact.who,
-    )
+    source = FactSource(utterance_id=fact.utterance, stamp=quoted.stamp, quote=fact.quote, speaker_tag=fact.who)
     importance = _importance(fact.kind, fact.confidence)
     existing = _fact_ids(store, person_id)
     if fact.supersedes and fact.supersedes in existing:
@@ -468,7 +496,7 @@ def _apply_fact(
             fact.text,
             fact.kind,
             now=now,
-            attribution=attribution,
+            attribution=fact.attribution,
             source=source,
             confidence=fact.confidence,
             importance=importance,
@@ -480,7 +508,7 @@ def _apply_fact(
             fact.text,
             fact.kind,
             now=now,
-            attribution=attribution,
+            attribution=fact.attribution,
             source=source,
             confidence=fact.confidence,
             importance=importance,
@@ -488,21 +516,14 @@ def _apply_fact(
         kind = ChangeKind.FACT
     if record is None:
         return Change(ChangeKind.REJECTED, fact.who, person_id, fact.text, reason="the store refused the fact")
-    return Change(
-        kind,
-        fact.who,
-        person_id,
-        fact.text,
-        reason="" if attributed else "not in view during the quoted line",
-        record_id=record,
-    )
+    return Change(kind, fact.who, person_id, fact.text, record_id=record)
 
 
 def _apply_name(
     name: ScribeName, window: Window, views: Mapping[str, TagView], store: PeopleStore, now: float
 ) -> Change:
     quoted = _quoted_message(window, name.utterance, name.quote)
-    referents = _referents(name, window, views, quoted)
+    referents = _referents(name, views, quoted)
     if not referents:
         return Change(ChangeKind.REJECTED, name.who, None, name.name, reason="no tracked person for that tag")
     if name.introduction is Introduction.OTHER:
@@ -586,11 +607,19 @@ def disambiguation_hint(quote: str, referents: int) -> str:
     return f"heard '{quote}' but could not tell who it belongs to; if it matters, ask"
 
 
-def _apply_loop(loop: ScribeLoop, views: Mapping[str, TagView], store: PeopleStore, now: float) -> Change:
+def _apply_loop(
+    loop: ScribeLoop, window: Window, views: Mapping[str, TagView], store: PeopleStore, now: float
+) -> Change:
     view = views.get(loop.who)
     if view is None or view.person_id is None:
         return Change(ChangeKind.REJECTED, loop.who, None, loop.text, reason="no tracked person for that tag")
     person_id = view.person_id
+    cited = bool(loop.utterance or loop.quote)
+    quoted = _quoted_message(window, loop.utterance, loop.quote)
+    if cited and (quoted is None or quoted.view(loop.who) is None):
+        # Same rule as a fact: a promise the model cites is only this person's
+        # if they were in view while it was made (RFC 6.3).
+        return Change(ChangeKind.REJECTED, loop.who, person_id, loop.text, reason="not in view during the quoted line")
     record = store.add_open_loop(person_id, loop.text, now=now, due=loop.due or None, source="scribe")
     if record is None:
         return Change(ChangeKind.REJECTED, loop.who, person_id, loop.text, reason="the store refused the loop")
@@ -629,39 +658,55 @@ def _apply_episode_note(note: str, views: Mapping[str, TagView], store: PeopleSt
     return changes
 
 
-def _referents(
-    name: ScribeName, window: Window, views: Mapping[str, TagView], quoted: Utterance | None
-) -> list[TagView]:
-    """Everyone the name could plausibly belong to: the tag the transcript
-    itself names, else everyone in view while it was said, else everyone in the
-    window."""
-    named = views.get(name.referent) if name.referent else None
-    if named is not None:
-        return [named]
-    if quoted is not None and quoted.in_view:
-        return list(quoted.in_view)
-    view = views.get(name.who)
-    return [view] if view is not None else list(views.values())
+def _referents(name: ScribeName, views: Mapping[str, TagView], quoted: Utterance | None) -> list[TagView]:
+    """Everyone the name could belong to: whoever was in view while it was
+    said, narrowed to the tag the transcript itself names when that tag was one
+    of them and can hold a name. Without the line it came from there is no view
+    to check against, so the candidates are the window's — and ``_apply_name``
+    commits none of them."""
+    if quoted is None:
+        view = views.get(name.referent) or views.get(name.who)
+        return [view] if view is not None else list(views.values())
+    in_view = list(quoted.in_view)
+    named = next((view for view in in_view if view.tag == name.referent), None) if name.referent else None
+    return [named] if named is not None and named.nameable else in_view
 
 
 def _quoted_message(window: Window, utterance_id: str, quote: str) -> Utterance | None:
-    """The line a quote came from — by id, else by matching the words."""
-    if utterance_id:
-        exact = next((message for message in window.messages if message.id == utterance_id), None)
-        if exact is not None:
-            return exact
+    """The line a quote came from: the line the id names when it really carries
+    those words, else the line that does. A quote the transcript does not
+    contain came from nowhere, and every gate below rests on it."""
     needle = _normalize(quote)
     if not needle:
         return None
+    if utterance_id:
+        cited = next((message for message in window.messages if message.id == utterance_id), None)
+        if cited is not None:
+            return cited if needle in _normalize(cited.text) else None
     return next((message for message in window.messages if needle in _normalize(message.text)), None)
 
 
-def _asked_to_remember(window: Window, tag: str) -> bool:
-    """Whether somebody visible asked the robot to remember, in this window.
-    Sensitive facts are written on no weaker basis than that (RFC 6.3)."""
+def asks_to_remember(text: str) -> bool:
+    """Whether a line asks the robot, in so many words, to keep something: the
+    only consent a sensitive fact is written on (RFC 6.3). A refusal ("don't
+    remember my diagnosis") and a question about the robot's memory ("do you
+    remember my name?") are the opposite of consent, not weak forms of it."""
+    lowered = text.lower().replace("’", "'").strip()
+    if not lowered or lowered.endswith("?") or _NOT_REMEMBER.search(lowered) or _RECALLING.search(lowered):
+        return False
+    return _REMEMBER.search(lowered) is not None
+
+
+def _consented(window: Window, tag: str, quoted: Utterance) -> bool:
+    """Whether the person the sensitive fact is about asked for it to be kept,
+    in the line it was quoted from or the one beside it. Anyone else's "remember
+    this", and one anywhere else in the window, are not their consent."""
+    index = next((at for at, message in enumerate(window.messages) if message is quoted), -1)
+    if index < 0:
+        return False
     return any(
-        message.speaker is Speaker.USER and message.view(tag) is not None and _REMEMBER.search(message.text.lower())
-        for message in window.messages
+        message.speaker is Speaker.USER and message.view(tag) is not None and asks_to_remember(message.text)
+        for message in window.messages[max(index - 1, 0) : index + 2]
     )
 
 
@@ -711,8 +756,14 @@ class WindowQueue:
         self._prune(now)
         self._commit()
 
+    def expire(self, now: float) -> None:
+        """Drop the windows past the horizon from disk as well: the hour they
+        are promised has to pass whether or not anything is spending them."""
+        if self._prune(now):
+            self._commit()
+
     def pending(self, now: float) -> list[Window]:
-        self._prune(now)
+        self.expire(now)
         return list(self._windows)
 
     def pop(self, window: Window) -> None:
@@ -738,9 +789,14 @@ class WindowQueue:
     def __len__(self) -> int:
         return len(self._windows)
 
-    def _prune(self, now: float) -> None:
-        fresh = [window for window in self._windows if now - window.closed <= self._horizon_sec]
-        self._windows = fresh[-self._limit :]
+    def _prune(self, now: float) -> bool:
+        """Whether anything was dropped — pruning only ever removes, so the
+        count is the whole answer, and it tells the caller to rewrite the file."""
+        kept = [window for window in self._windows if now - window.closed <= self._horizon_sec][-self._limit :]
+        if len(kept) == len(self._windows):
+            return False
+        self._windows = kept
+        return True
 
     def _commit(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
@@ -915,6 +971,7 @@ class Scribe:
         self._timeout = timeout
         self._buffer = WindowBuffer()
         self._queue = WindowQueue(queue_path)
+        self._forgotten: set[str] = set()
         self.last_error = ""
 
     @property
@@ -922,12 +979,24 @@ class Scribe:
         return len(self._queue)
 
     def observe(self, message: Utterance, now: float) -> list[Change]:
-        """Buffer one chat message; a window that fills up is spent at once."""
-        window = self._buffer.add(message)
+        """Buffer one chat message; a window that fills up is spent at once.
+        Nothing is buffered while collection is off — that switch is what it
+        means (RFC section 10) — and the flag is read here rather than where the
+        message was queued, because it may have flipped in between."""
+        if not self._store.collection_enabled():
+            return []
+        live = line_without_revoked(message, self._revoked)
+        if live is None:
+            return []
+        window = self._buffer.add(live)
         return [] if window is None else self.process(window, now)
 
     def tick(self, now: float) -> list[Change]:
         """Close an idle window and drain whatever an outage left queued."""
+        if not self._store.collection_enabled():
+            self._buffer.clear()
+            self._queue.expire(now)  # the hour on disk runs whether or not it is being spent
+            return []
         changes = self.drain(now)
         window = self._buffer.due(now)
         if window is not None:
@@ -937,7 +1006,8 @@ class Scribe:
     def process(self, window: Window, now: float) -> list[Change]:
         """One window, end to end. A window Gemini could not take queues on
         disk; recognition never depends on any of this."""
-        if not window.messages:
+        window = self._live(window)
+        if not window.messages or not self._store.collection_enabled():
             return []
         try:
             output = self._call(window)
@@ -945,33 +1015,41 @@ class Scribe:
             self.last_error = repr(error)
             self._queue.push(window, now)
             return []
-        return [] if output is None else apply(output, window, self._store, now)
+        return [] if output is None else self._commit(output, window, now)
 
     def drain(self, now: float) -> list[Change]:
         """Spend the queued windows, oldest first, stopping at the first
         failure — the connection is still down and the rest can wait."""
+        if not self._store.collection_enabled():
+            return []
         changes: list[Change] = []
-        for window in self._queue.pending(now):
+        for queued in self._queue.pending(now):
+            window = self._live(queued)
+            if not window.messages:
+                self._queue.pop(queued)
+                continue
             try:
                 output = self._call(window)
             except Exception as error:  # noqa: BLE001 — the rest of the queue waits for the connection
                 self.last_error = repr(error)
                 break
-            self._queue.pop(window)
+            self._queue.pop(queued)
             if output is not None:
-                changes.extend(apply(output, window, self._store, now))
+                changes.extend(self._commit(output, window, now))
         return changes
 
     def forget(self, person_id: str) -> None:
         """Everything about a forgotten person that has not been written yet:
-        the open window and the queue an outage filled (RFC section 10)."""
+        the open window, the queue an outage filled, and every call and write
+        this thread has not made yet (RFC section 10)."""
+        self._forgotten.add(person_id)
         self._buffer.forget(person_id)
         self._queue.forget(person_id)
 
     def recall(self, person_id: str, question: str) -> str:
         """Deep recall over one person's memory; empty when it adds nothing."""
         profile = self._store.profile(person_id)
-        if profile is None or self._transport is None:
+        if profile is None or self._transport is None or self._revoked(person_id):
             return ""
         try:
             response = self._transport(
@@ -983,6 +1061,24 @@ class Scribe:
             self.last_error = repr(error)
             return ""
         return parse_recall(response)
+
+    def _commit(self, output: ScribeOutput, window: Window, now: float) -> list[Change]:
+        """The proposal turned into writes, gated a second time: a forget that
+        landed during the Gemini call takes back what that call was about to
+        write."""
+        window = self._live(window)
+        return apply(output, window, self._store, now) if window.messages else []
+
+    def _live(self, window: Window) -> Window:
+        return without_revoked(window, self._revoked)
+
+    def _revoked(self, person_id: str | None) -> bool:
+        """Whether a forget has taken this person back (RFC section 10). Both
+        answers count: the store's tombstone is the durable one, and the set
+        holds the forgets this scribe was handed directly."""
+        if person_id is None:
+            return False
+        return person_id in self._forgotten or self._store.is_tombstoned(person_id)
 
     def _call(self, window: Window) -> ScribeOutput | None:
         if self._transport is None:
