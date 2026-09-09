@@ -26,12 +26,12 @@ from innate import (
 )
 from innate import gemini as gemlib
 from innate.exceptions import ArmFailed, ArmUnhealthy, SkillFailed
-from innate.geometry import IMG_H, IMG_W, floor_to_pixel, pixel_to_floor, pixel_to_height
+from innate.geometry import ARM_ORIGIN, IMG_H, IMG_W, floor_to_pixel, pixel_to_floor, pixel_to_height
 
-# Arm reach as a sphere about the shoulder (URDF: joint2 at (0.086, 0.0845),
-# 0.326 m of link past it). It predicts a 0.407 m floor-height limit — where
-# Manipulation.REACH_X's 0.40 comes from.
-SHOULDER_X, SHOULDER_Z = 0.086, 0.0845
+# Arm reach as a sphere about the shoulder (joint2, one 0.04425 link above
+# joint1, with 0.326 m of link past it). It predicts a 0.407 m floor-height
+# limit — where Manipulation.REACH_X's 0.40 comes from.
+SHOULDER_X, SHOULDER_Z = ARM_ORIGIN[0], ARM_ORIGIN[2] + 0.04425
 ARM_REACH = 0.326
 
 # j6 band that PROVES a hold on its own, valid only after a fresh close.

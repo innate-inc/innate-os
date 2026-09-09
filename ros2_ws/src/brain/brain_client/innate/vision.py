@@ -187,11 +187,25 @@ def track_point(prev_gray, gray, grid):
 # Color seg for growing/deforming objects (LK slides off fabric during descent).
 _SEG_BINS = [16, 8, 8]
 _SEG_RANGES = [0, 180, 0, 256, 0, 256]
+# Hue is sensor noise below the first saturation bin. A white AirPods case is
+# S < 32 almost everywhere, and that noise scatters it over six hue bins, so
+# normalising the ratio to its peak left one shard — 16% of the case — above
+# _BLOB_MIN_LIKELIHOOD and the tracked centroid wandered over whichever shard
+# won. Folding every grey pixel into one hue bin puts 83% of the case there.
+# Saturated pixels keep their hue: the S index already separates them.
+_SEG_GREY_S = 256 // _SEG_BINS[1]
+
+
+def _fold_grey_hue(hsv: np.ndarray) -> np.ndarray:
+    folded = hsv.copy()
+    folded[:, :, 0][hsv[:, :, 1] < _SEG_GREY_S] = 0
+    return folded
 
 
 def seg_model(hsv, box):
     """Object/floor hist-ratio LUT for back-projection, or None."""
     x, y, w, h = box
+    hsv = _fold_grey_hue(hsv)
     obj = hsv[y : y + h, x : x + w]
     rx0, ry0 = max(0, x - w // 2), max(0, y - h // 2)
     ring = hsv[ry0 : y + h + h // 2, rx0 : x + w + w // 2]
@@ -210,23 +224,44 @@ Axis = tuple[float, float]
 Window = tuple[int, int, int, int]
 
 
-def _blob_axis(bp: np.ndarray, window: Window) -> Axis | None:
-    """Minimum-area rectangle of the thresholded blob under the window
-    centre. CamShift's own ellipse is not usable: its window hugs only part
-    of a blob that outgrows it, and the ellipse then follows the window."""
-    x, y, w, h = window
-    x0, y0 = max(0, x - w), max(0, y - h)
-    roi = bp[y0 : y + 2 * h, x0 : x + 2 * w]
-    _thr, mask = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+# Back-projection level that counts as object: floor bins score 0, a colour
+# leaking from the floor into the seed box scores a few, and an object shade
+# at least an eighth as common as its dominant one scores 32 or more.
+_BLOB_MIN_LIKELIHOOD = 32
+
+
+def _overlaps(c: np.ndarray, window: Window) -> bool:
+    x, y, w, h = cv2.boundingRect(c)
+    wx, wy, ww, wh = window
+    return x < wx + ww and wx < x + w and y < wy + wh and wy < y + h
+
+
+def _blob_under(bp: np.ndarray, window: Window) -> tuple[tuple[float, float], Window, Axis] | None:
+    """The whole thresholded blob under the CamShift window's centre (else
+    the largest one overlapping the window; never one elsewhere in the frame,
+    which would hand the track to a same-coloured twin): its centroid,
+    bounding box and minimum-area-rectangle axis. CamShift's own window and
+    ellipse are not usable for any of these: the colour model scores an
+    object's dominant shade highest, so mean shift climbs onto the lit face
+    of a glossy object and the window hugs that patch, reporting a point that
+    drifts from the centre to an edge as the object grows."""
+    _thr, mask = cv2.threshold(bp, _BLOB_MIN_LIKELIHOOD - 1, 255, cv2.THRESH_BINARY)
     contours, _hier = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
-    centre = (float(x + w // 2 - x0), float(y + h // 2 - y0))
+    x, y, w, h = window
+    centre = (x + w / 2.0, y + h / 2.0)
     under = [c for c in contours if cv2.pointPolygonTest(c, centre, False) >= 0]
-    blob = max(under or contours, key=cv2.contourArea)
+    near = under or [c for c in contours if _overlaps(c, window)]
+    if not near:
+        return None
+    blob = max(near, key=cv2.contourArea)
+    m = cv2.moments(blob)
+    if m["m00"] <= 0:
+        return None
+    centroid = (m["m10"] / m["m00"], m["m01"] / m["m00"])
     _center, (rw, rh), angle_deg = cv2.minAreaRect(blob)
     major, minor, theta_deg = (rw, rh, angle_deg) if rw >= rh else (rh, rw, angle_deg + 90.0)
-    return math.radians(theta_deg) % math.pi, major / max(minor, 1.0)
+    axis = (math.radians(theta_deg) % math.pi, major / max(minor, 1.0))
+    return centroid, cv2.boundingRect(blob), axis
 
 
 def _backproject(hsv: np.ndarray, model: np.ndarray) -> np.ndarray:
@@ -238,17 +273,38 @@ def _backproject(hsv: np.ndarray, model: np.ndarray) -> np.ndarray:
     return model[np.clip(ih, 0, _SEG_BINS[0] - 1), i_s, iv]
 
 
+def _track_score(bp: np.ndarray, rot: Any, window: Window) -> float:
+    """Mean likelihood inside CamShift's rotated rectangle. Its axis-aligned
+    window is mostly floor around a thin diagonal object (a pen), and a mean
+    over that fails a track that is sitting on the object."""
+    x, y, w, h = window
+    roi = bp[y : y + h, x : x + w]
+    mask = np.zeros(roi.shape, np.uint8)
+    corners = np.round(cv2.boxPoints(rot) - (x, y)).astype(np.int32)
+    cv2.fillPoly(mask, [corners], 255)
+    inside = roi[mask > 0]
+    return float(inside.mean()) if inside.size else float(roi.mean())
+
+
 def seg_track(
     hsv: np.ndarray, model: np.ndarray, window: Window, min_score: float = 25.0
 ) -> tuple[tuple[float, float] | None, Window, float, Axis | None]:
     """Back-project + CamShift -> (center|None, window, score, axis|None)."""
-    bp = _backproject(hsv, model)
+    bp = _backproject(_fold_grey_hue(hsv), model)
     crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 1)
-    _rot, window = cv2.CamShift(bp, window, crit)
+    rot, window = cv2.CamShift(bp, window, crit)
     x, y, w, h = window
-    if w < 4 or h < 4 or w * h > 0.4 * IMG_W * IMG_H:
+    # A flooded model (matching the floor) fills the frame; a real object
+    # merely fills most of it — an AirPods case is ~40% of the real wrist
+    # camera's view at the 5 cm stop, and rejecting it there ends every
+    # descent with "lost track".
+    if w < 4 or h < 4 or w * h > 0.9 * IMG_W * IMG_H:
         return None, window, 0.0, None
-    score = float(bp[y : y + h, x : x + w].mean())
+    score = _track_score(bp, rot, window)
     if score < min_score:
         return None, window, score, None
-    return (x + w / 2.0, y + h / 2.0), window, score, _blob_axis(bp, window)
+    blob = _blob_under(bp, window)
+    if blob is None:
+        return (x + w / 2.0, y + h / 2.0), window, score, None
+    centroid, bbox, axis = blob
+    return centroid, bbox, score, axis
