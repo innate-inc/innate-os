@@ -634,6 +634,10 @@ class PickAnyObject(Skill):
         if ee_z is not None and ee_z > p["descend_abort_z"]:
             self.manipulation.recover()
             raise ArmUnhealthy("arm would not descend")
+        settled = f"z={ee_z:.3f}" if ee_z is not None else "z=?"
+        self.logger.info(
+            f"[PickAnyObject] descent settled at {settled} (target {p['floor_z']:.3f}, roll={math.degrees(roll):+.0f} deg)"
+        )
 
     def _turn_at_height(
         self, x: float, y: float, z_from: float, roll: float, pitch: float, yaw: float
