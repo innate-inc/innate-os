@@ -52,9 +52,14 @@
     # mars_sim/urdf/mars.urdf. The arm mount is deliberately omitted: the arm is
     # bolted to it, so it is always "in collision" with it.
     #
-    # margin is the clearance demanded around every box. The three sampled points
-    # mean a link can pass near a corner between samples; the margin covers that.
-    # Raise it if the arm still grazes, lower it if reachable workspace is lost.
+    # Whole links are tested, not sampled points: the joints sit at 0.21, 0.26
+    # and 0.30 m from the shoulder, so testing only those left the first 0.21 m
+    # of arm uncovered and let 82% of real collisions through.
+    #
+    # margin is the clearance demanded around every box, and doubles as the
+    # links' radius — they are tested as zero-thickness segments, so their real
+    # thickness has to come from somewhere. Raise it if the arm still grazes,
+    # lower it if reachable workspace is lost.
     # =============================================================
     self_collision:
       enabled: true

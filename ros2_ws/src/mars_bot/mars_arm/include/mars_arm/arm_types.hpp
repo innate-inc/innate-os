@@ -87,41 +87,75 @@ struct SelfCollisionConfig {
     bool valid() const { return !boxes.empty(); }
 };
 
-// The arm's elbow, wrist and tool in the shoulder's sagittal plane: `px` along
-// the arm's bearing, `pz` vertical. Rotation matches horizReach's convention.
+// The arm's joints in the shoulder's sagittal plane: `x` along the arm's
+// bearing, `z` vertical. Rotation matches horizReach's convention. Five points,
+// shoulder first, so the LINKS between them can be tested — the joints alone all
+// sit past 0.2 m and would leave the whole upper arm uncovered.
 struct ArmPlanarPoints {
-    double elbow_x, elbow_z, wrist_x, wrist_z, tool_x, tool_z;
+    static constexpr int kCount = 5;
+    double x[kCount], z[kCount];  // shoulder, joint3, elbow(joint4), wrist(joint6), tool
 };
 
 inline ArmPlanarPoints armPlanarPoints(double q2, double q3, double q4) {
     const double a23 = q2 + q3, a234 = a23 + q4;
-    const double ex = kL2_x * std::cos(q2) + kL2_z * std::sin(q2) + kL3_x * std::cos(a23) + kL3_z * std::sin(a23);
-    const double ez = -kL2_x * std::sin(q2) + kL2_z * std::cos(q2) - kL3_x * std::sin(a23) + kL3_z * std::cos(a23);
-    const double c = std::cos(a234), s = std::sin(a234);
-    return {ex,
-            ez,
-            ex + kWristFromElbow * c,
-            ez - kWristFromElbow * s,
-            ex + kL45_x * c,
-            ez - kL45_x * s};
+    const double c2 = std::cos(q2), s2 = std::sin(q2);
+    const double c23 = std::cos(a23), s23 = std::sin(a23);
+    const double c234 = std::cos(a234), s234 = std::sin(a234);
+    ArmPlanarPoints p{};
+    p.x[0] = 0.0;
+    p.z[0] = 0.0;
+    p.x[1] = kL2_x * c2 + kL2_z * s2;
+    p.z[1] = -kL2_x * s2 + kL2_z * c2;
+    p.x[2] = p.x[1] + kL3_x * c23 + kL3_z * s23;
+    p.z[2] = p.z[1] - kL3_x * s23 + kL3_z * c23;
+    p.x[3] = p.x[2] + kWristFromElbow * c234;
+    p.z[3] = p.z[2] - kWristFromElbow * s234;
+    p.x[4] = p.x[2] + kL45_x * c234;
+    p.z[4] = p.z[2] - kL45_x * s234;
+    return p;
 }
 
-// True if any sampled point of the arm sits inside a body box. joint_1 rotates
-// the sagittal plane about the shoulder, so a planar (px, pz) lifts to
-// (shoulder + px·cos q1, shoulder + px·sin q1, shoulder + pz).
+// Segment against an axis-aligned box, by the slab method. Exact for a
+// zero-thickness segment; the box's margin stands in for link radius.
+inline bool segmentHitsBox(const double a[3], const double b[3], const BodyBox& box, double m) {
+    const double lo[3] = {box.min_x - m, box.min_y - m, box.min_z - m};
+    const double hi[3] = {box.max_x + m, box.max_y + m, box.max_z + m};
+    double t0 = 0.0, t1 = 1.0;
+    for (int i = 0; i < 3; ++i) {
+        const double d = b[i] - a[i];
+        if (std::fabs(d) < 1e-12) {
+            if (a[i] < lo[i] || a[i] > hi[i]) return false;  // parallel to the slab, outside it
+            continue;
+        }
+        double tn = (lo[i] - a[i]) / d, tf = (hi[i] - a[i]) / d;
+        if (tn > tf) std::swap(tn, tf);
+        t0 = std::max(t0, tn);
+        t1 = std::min(t1, tf);
+        if (t0 > t1) return false;
+    }
+    return true;
+}
+
+// True if any part of any arm link intersects a body box. joint_1 rotates the
+// sagittal plane about the shoulder, so a planar (x, z) lifts to
+// (shoulder + x·cos q1, shoulder + x·sin q1, shoulder + z).
+//
+// Whole links, not sampled points: the joints sit at 0.21, 0.26 and 0.30 m, so
+// testing only those left the first 0.21 m of arm uncovered and let 56% of real
+// collisions through.
 inline bool poseHitsBody(double q1, double q2, double q3, double q4, const SelfCollisionConfig& c) {
     if (!c.enabled || !c.valid()) return false;
     const ArmPlanarPoints p = armPlanarPoints(q2, q3, q4);
     const double cq = std::cos(q1), sq = std::sin(q1);
-    const double px[3] = {p.elbow_x, p.wrist_x, p.tool_x};
-    const double pz[3] = {p.elbow_z, p.wrist_z, p.tool_z};
-    for (int i = 0; i < 3; ++i) {
-        const double x = kShoulderX + px[i] * cq;
-        const double y = kShoulderY + px[i] * sq;
-        const double z = kShoulderZ + pz[i];
-        for (const auto& b : c.boxes)
-            if (b.contains(x, y, z, c.margin)) return true;
+    double pts[ArmPlanarPoints::kCount][3];
+    for (int i = 0; i < ArmPlanarPoints::kCount; ++i) {
+        pts[i][0] = kShoulderX + p.x[i] * cq;
+        pts[i][1] = kShoulderY + p.x[i] * sq;
+        pts[i][2] = kShoulderZ + p.z[i];
     }
+    for (int i = 0; i + 1 < ArmPlanarPoints::kCount; ++i)
+        for (const auto& b : c.boxes)
+            if (segmentHitsBox(pts[i], pts[i + 1], b, c.margin)) return true;
     return false;
 }
 

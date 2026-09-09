@@ -227,7 +227,7 @@ export const ARM_POSITION_LIMITS_PARAMS = [1, 2, 3, 4, 5, 6].map((n) => `joint_$
 // Which joints the guard actually holds. The machinery below is generic over
 // all six; only joint_1's body collision is enforced today, the rest await
 // bench time to confirm the wall feels right before they are switched on.
-export const JOINT_GUARD_ENABLED = [true, false, false, false, false, false];
+export const JOINT_GUARD_ENABLED = [true, true, true, true, true, true];
 
 // mars_arm drives joints 2, 3, 4 and 6 in the opposite sense to the command it
 // receives (arm_control.cpp applyLimitsAndConvertToEncoder, flip_indices
