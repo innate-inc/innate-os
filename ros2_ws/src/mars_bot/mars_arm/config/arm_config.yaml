@@ -11,7 +11,8 @@
     # keeps only the on-demand /mars/arm/rest). Radians in
     # the /mars/arm/state convention; j6 is replaced by the standing grip
     # target. Keep j1-j5 in step with Manipulation.REST.
-    rest_pose: [1.5708, -1.2195, 1.5723, -0.3, 0.0, 0.0]
+    #           yaw     shoulder elbow   wrist  roll  grip
+    rest_pose: [1.5708, -1.2195, 1.5723, -0.3,  0.0,  0.0]
     auto_rest: true
 
     # =============================================================

@@ -51,19 +51,37 @@ constexpr double kHold = std::numeric_limits<double>::quiet_NaN();
 inline const RestWaypoint kRestLift{{kHold, -0.9,     0.9,   kHold, kHold, kHold}, 2.5};
 // clang-format on
 static constexpr double kRestPoseDurationS = 3.0;
-// The shoulder may only swing back past this while the base yaw is outside
-// (kYawRestrictedMin, kYawRestrictedMax); nearer the centre the arm hits the
-// body.
+// Swung back past kShoulderClearanceRad the arm hits the body, unless the base
+// yaw is out to the side. The limit ramps from the joint's own limit at the
+// outer yaws to the clearance angle at the inner ones (see shoulderMinLimit).
 static constexpr double kShoulderClearanceRad = -0.5;
-static constexpr double kYawRestrictedMin = -1.35;
-static constexpr double kYawRestrictedMax = 1.25;
+static constexpr std::array<double, 4> kShoulderClearanceYaws{-1.35, -1.0, 1.0, 1.25};
+
+// Linear between knots, flat beyond the ends; xs ascending.
+template <size_t N>
+double piecewiseLinear(const std::array<double, N>& xs, const std::array<double, N>& ys, double x) {
+    if (x <= xs.front()) {
+        return ys.front();
+    }
+    for (size_t i = 1; i < N; ++i) {
+        if (x < xs[i]) {
+            const double t = (x - xs[i - 1]) / (xs[i] - xs[i - 1]);
+            return ys[i - 1] + t * (ys[i] - ys[i - 1]);
+        }
+    }
+    return ys.back();
+}
 // j1-j5. The gripper (j6) is never retargeted: a gripping claw's standing
 // position error IS the grip force.
 static constexpr size_t kArmJoints = 5;
 
-// Joints whose /mars/arm/state sign is the servo's negated (0-based index).
+// Per joint, whether the /mars/arm/state sign is the servo's negated.
+// clang-format off
+//                                              yaw    shoulder elbow  wrist  roll   grip
+static constexpr std::array<bool, 6> kJointFlipped{false, true,    true,  true,  false, true};
+// clang-format on
 inline bool flippedJoint(size_t joint) {
-    return joint == 1 || joint == 2 || joint == 3 || joint == 5;
+    return joint < kJointFlipped.size() && kJointFlipped[joint];
 }
 inline double jointRad(int encoder, size_t joint) {
     const double rad = ((encoder - 2048) * 2 * M_PI) / 4096.0;
@@ -76,15 +94,24 @@ inline int jointEncoder(double rad, size_t joint) {
     return static_cast<int>((rad / (2 * M_PI)) * 4096 + 2048);
 }
 
-// How far the gripper tip reaches forward of the shoulder joint, metres, from
-// the upper arm, forearm and wrist-to-tip links.
-inline double gripperTipX(double q2, double q3, double q4) {
-    constexpr double L2_x = 0.02825, L2_z = 0.12125;
-    constexpr double L3_x = 0.1375, L3_z = 0.0045;
-    constexpr double L45_x = 0.110838;
-    const double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
-    return L2_x * std::cos(a2) + L2_z * std::sin(a2) + L3_x * std::cos(a23) + L3_z * std::sin(a23) +
-           L45_x * std::cos(a234);
+// The pitch chain's links as (forward, up) offsets in their parent joint's
+// frame at zero angle, metres: upper arm, forearm, wrist to gripper tip.
+struct Link {
+    double forward;
+    double up;
+};
+static constexpr std::array<Link, 3> kPitchLinks{{{0.02825, 0.12125}, {0.1375, 0.0045}, {0.110838, 0.0}}};
+
+// How far the gripper tip reaches forward of the shoulder joint, metres.
+inline double gripperTipX(double shoulder, double elbow, double wrist) {
+    const std::array<double, 3> pitches{shoulder, elbow, wrist};
+    double angle = 0.0;
+    double x = 0.0;
+    for (size_t i = 0; i < kPitchLinks.size(); ++i) {
+        angle += pitches[i];
+        x += kPitchLinks[i].forward * std::cos(angle) + kPitchLinks[i].up * std::sin(angle);
+    }
+    return x;
 }
 
 inline bool isX330(const std::string& motor_type) {

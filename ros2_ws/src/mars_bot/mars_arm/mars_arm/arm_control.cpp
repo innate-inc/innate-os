@@ -334,22 +334,12 @@ void MarsArmNode::recordLoopTiming(std::array<std::chrono::steady_clock::time_po
                           robot_->last_write_txrx_us);
 }
 
-// The shoulder's back limit as a function of base yaw: fully clear at the
-// sides, held at the body-clearance angle through the middle, ramping in
-// between.
+// The shoulder's back limit as a function of base yaw: the joint's own limit
+// out at the sides, the body-clearance angle through the middle.
 double MarsArmNode::shoulderMinLimit(double yaw) const {
-    const double clear_limit = -joint_configs_[1].max_pos_rad;
-    if (yaw < kYawRestrictedMin || yaw >= kYawRestrictedMax) {
-        return clear_limit;
-    }
-    if (yaw < -1.0) {
-        return kShoulderClearanceRad +
-               (-1.0 - yaw) / (-1.0 - kYawRestrictedMin) * (clear_limit - kShoulderClearanceRad);
-    }
-    if (yaw < 1.0) {
-        return kShoulderClearanceRad;
-    }
-    return kShoulderClearanceRad + (yaw - 1.0) / (kYawRestrictedMax - 1.0) * (clear_limit - kShoulderClearanceRad);
+    const double clear = -joint_configs_[1].max_pos_rad;
+    const std::array<double, 4> limits{clear, kShoulderClearanceRad, kShoulderClearanceRad, clear};
+    return piecewiseLinear(kShoulderClearanceYaws, limits, yaw);
 }
 
 double MarsArmNode::clampToJointRange(size_t joint, double rad) const {
