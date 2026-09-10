@@ -32,6 +32,7 @@ from .constants import (
 from .drive_limits import clamp_cmd_vel
 from .environments import DEFAULT_ENVIRONMENT_ID, Environment
 from .props import PropRegistry
+from .statics import RoomRegistry
 from .traffic import TrafficController
 from .world import ARM_HOME
 
@@ -213,6 +214,17 @@ def release_freed_heap() -> None:
         ctypes.CDLL("libc.so.6").malloc_trim(0)
 
 
+def _roots(assets_subdir: Path, pack_subdir: Path | None) -> list[Path]:
+    """Sidecar roots in override order: the tracked source dir, the asset
+    bundle's, then the environment pack's. Later roots win by name. The pack's
+    is dropped when it IS the asset bundle's (VIRTUAL_MARS_ASSETS pointed at
+    the same directory), so nothing loads twice."""
+    roots = [world.repo_root() / "sim" / assets_subdir.name, assets_subdir]
+    if pack_subdir is not None and pack_subdir.resolve() not in {r.resolve() for r in roots}:
+        roots.append(pack_subdir)
+    return roots
+
+
 class VirtualMars:
     def __init__(
         self,
@@ -231,17 +243,29 @@ class VirtualMars:
         self.environment = environment or Environment.load(DEFAULT_ENVIRONMENT_ID, ASSETS_DIR)
         collision_dir = split_dir or self.environment.collision_dir
         rooms = world.find_decomposed_rooms(collision_dir)
-        if not rooms:
+        # Rooms authored as primitives (see statics.py). A world can be built
+        # from these ALONE -- a benchmark map has no scanned geometry to
+        # decompose -- so the missing-geometry error only fires when there is
+        # nothing of either kind. A bundle pack carries its rooms itself, so
+        # the world it builds through `--environment` is the one the benchmark
+        # builds through VIRTUAL_MARS_ASSETS.
+        self.statics = RoomRegistry.load(_roots(ASSETS_DIR / "rooms", self.environment.rooms_dir))
+        if not rooms and not self.statics:
             raise RuntimeError(
-                f"no decomposed rooms under {collision_dir} -- run decompose_rooms.py or set VIRTUAL_MARS_ASSETS"
+                f"no room geometry under {collision_dir} -- run decompose_rooms.py, "
+                "add a sim/rooms sidecar, or set VIRTUAL_MARS_ASSETS"
             )
         visual_dir = self.environment.visual_dir
-        self._spawn = self.environment.spawn
+        # A bundle room's own spawn wins where one names it; the environment
+        # pack's otherwise. Decided BEFORE the world XML is emitted, which
+        # takes spawn_pose -- deciding it after left the compiled world built
+        # around one pose and the robot reset to another.
+        self._spawn = self.statics.spawn() or self.environment.spawn
         visual_rooms = world.find_visual_rooms(visual_dir) if visual_dir.is_dir() else {}
 
         # Droppable props: sidecars from the tracked source dir plus any the
         # asset bundle shipped, each parked off-map until something places it.
-        self.props = PropRegistry.load([world.repo_root() / "sim" / "props", ASSETS_DIR / "props"])
+        self.props = PropRegistry.load(_roots(ASSETS_DIR / "props", self.environment.props_dir))
         self.traffic = TrafficController(self.environment.traffic)
         xml = world.build_world_xml(
             rooms,
@@ -249,11 +273,15 @@ class VirtualMars:
             visual_rooms=visual_rooms,
             texture_max=_texture_cap(self._render_w),
             props=self.props,
+            statics=self.statics,
             spawn_pose=self._spawn,
             traffic_bodies=self.traffic.bodies_xml(),
             traffic_assets=self.traffic.assets_xml(),
             atmosphere=self.environment.viewer.get("atmosphere"),
         )
+        # A primitive room can put the robot somewhere the apartment's spawn
+        # would be inside a wall (the default sits 0.16 m off the Gallery's
+        # west wall, closer than the base's own half-width).
         # Lidar rays hit only the textured visual meshes (true surfaces, like
         # a real lidar) when available -- without them, fall back to all
         # groups (the collision hulls, ~1cm inflated).
@@ -272,6 +300,10 @@ class VirtualMars:
             Path(world.__file__),
             Path(__file__),
             Path(__file__).with_name("constants.py"),
+            # statics.py shapes the XML it emits; the sidecars themselves need
+            # no entry because every number they carry is inlined into that XML,
+            # which the cache already keys on.
+            Path(__file__).with_name("statics.py"),
             Path(__file__).with_name("traffic.py"),
             Path(__file__).with_name("crossroads.py"),
             *(f for pieces in rooms.values() for f in pieces),
@@ -629,19 +661,31 @@ class VirtualMars:
         robot-height slab and projected (height-exact: a probe-ray scheme
         loses any wall taller than the probe start). Free vs unknown =
         downward floor rays, with the robot parked out of bounds."""
-        if self._lidar_groups is None:
-            # The decomposed collision rooms deliberately omit floor faces;
-            # without the authored visual rooms there is no trustworthy way
-            # to distinguish apartment floor from the infinite ground plane.
-            # Refuse an unsafe map instead of silently making exterior ground
-            # navigable (or returning an unusable all-unknown grid).
-            raise RuntimeError("navigation-map export requires the authored apartment_visual room meshes")
-
         wall_min, wall_top = 0.10, 1.4  # above rugs/thresholds; below ceilings
 
-        # Apartment bounds from its geoms' bounding spheres.
-        apt = self.model.body("apartment").id
-        geom_ids = [i for i in range(self.model.ngeom) if self.model.geom_bodyid[i] == apt]
+        # World bounds from the static geometry's bounding spheres. Both the
+        # apartment body AND any primitive rooms (statics.py names them
+        # room_<name>): a bundle that ships only authored rooms leaves the
+        # apartment body empty, and bounding an empty set raises rather than
+        # returning a grid, so the nav map was unavailable for every generated
+        # map. _rasterize_static_slab already covers all static geometry; only
+        # the extent was apartment-specific.
+        static_bodies = {self.model.body("apartment").id}
+        for i in range(self.model.nbody):
+            if (self.model.body(i).name or "").startswith("room_"):
+                static_bodies.add(i)
+        if self._lidar_groups is None and len(static_bodies) == 1:
+            # The decomposed apartment collision rooms deliberately omit floor
+            # faces; without the authored visual rooms there is no trustworthy
+            # way to distinguish apartment floor from the infinite ground plane,
+            # so refuse an unsafe map rather than silently making exterior
+            # ground navigable. Authored primitive rooms (statics.py's room_*
+            # bodies) DO carry their own floor geoms, so a world that has them
+            # is rasterized from those floors below.
+            raise RuntimeError("navigation-map export requires the authored apartment_visual room meshes")
+        geom_ids = [i for i in range(self.model.ngeom) if self.model.geom_bodyid[i] in static_bodies]
+        if not geom_ids:
+            raise RuntimeError("occupancy_grid: no static world geometry to bound")
         mujoco.mj_forward(self.model, self.data)
         centers = self.data.geom_xpos[geom_ids]
         radii = self.model.geom_rbound[geom_ids]
@@ -649,32 +693,40 @@ class VirtualMars:
         xmax, ymax = (centers[:, :2] + radii[:, None]).max(axis=0) + 0.3
 
         # Park the robot outside the map so the floor rays don't see it.
+        # try/finally because the restore is not optional: a ray or rasterise
+        # failure here would otherwise leave the robot 50 m off the map for
+        # every later user of this sim, and the next episode would score a
+        # robot that is not where the judge thinks it is.
         saved = self.data.qpos.copy()
         self.data.qpos[self._base["x"][0]] = xmax + 50.0
         mujoco.mj_forward(self.model, self.data)
+        try:
+            width = int(np.ceil((xmax - xmin) / resolution))
+            height = int(np.ceil((ymax - ymin) / resolution))
+            xs = xmin + (np.arange(width) + 0.5) * resolution
+            ys = ymin + (np.arange(height) + 0.5) * resolution
+            gx, gy = np.meshgrid(xs, ys)  # row-major: y rows, x cols
+            n = width * height
 
-        width = int(np.ceil((xmax - xmin) / resolution))
-        height = int(np.ceil((ymax - ymin) / resolution))
-        xs = xmin + (np.arange(width) + 0.5) * resolution
-        ys = ymin + (np.arange(height) + 0.5) * resolution
-        gx, gy = np.meshgrid(xs, ys)  # row-major: y rows, x cols
-        n = width * height
-
-        grid = np.full(n, -1, dtype=np.int8)
-        origins = np.column_stack([gx.ravel(), gy.ravel(), np.full(n, wall_top)])
-        # mj_multiRay shares one origin, so cast per cell (one-time, ~40k rays, ~1s).
-        geomid_out = np.zeros(1, dtype=np.int32)
-        down = np.array([0.0, 0.0, -1.0])
-        for i in range(n):
-            d = mujoco.mj_ray(self.model, self.data, origins[i], down, self._lidar_groups, 1, -1, geomid_out)
-            hit = int(geomid_out[0])
-            if hit != -1 and d >= 0 and self.model.geom_bodyid[hit] == apt:
-                grid[i] = 0  # an authored apartment surface below: interior floor
-        grid = grid.reshape(height, width)
-        grid[self._rasterize_static_slab(wall_min, wall_top, xmin, ymin, width, height, resolution)] = 100
-
-        self.data.qpos[:] = saved
-        mujoco.mj_forward(self.model, self.data)
+            grid = np.full(n, -1, dtype=np.int8)
+            origins = np.column_stack([gx.ravel(), gy.ravel(), np.full(n, wall_top)])
+            # mj_multiRay shares one origin, so cast per cell (one-time, ~40k rays, ~1s).
+            geomid_out = np.zeros(1, dtype=np.int32)
+            down = np.array([0.0, 0.0, -1.0])
+            for i in range(n):
+                d = mujoco.mj_ray(self.model, self.data, origins[i], down, self._lidar_groups, 1, -1, geomid_out)
+                hit = int(geomid_out[0])
+                if hit != -1 and d >= 0 and self.model.geom_bodyid[hit] in static_bodies:
+                    # An authored surface below -- the apartment (visual group only,
+                    # when the meshes exist) or a primitive room's own floor -- is
+                    # interior floor. The ground plane belongs to the world body
+                    # and never counts, so exterior cells stay unknown.
+                    grid[i] = 0
+            grid = grid.reshape(height, width)
+            grid[self._rasterize_static_slab(wall_min, wall_top, xmin, ymin, width, height, resolution)] = 100
+        finally:
+            self.data.qpos[:] = saved
+            mujoco.mj_forward(self.model, self.data)
         return grid, float(xmin), float(ymin)
 
     def lidar_occupancy_grid(
@@ -882,6 +934,13 @@ class VirtualMars:
     def prop_manifest(self) -> list[dict]:
         """What every prop is and how to draw it (props.py), for the viewer."""
         return self.props.manifest()
+
+    def room_manifest(self) -> list[dict]:
+        """Primitive-authored world geometry (statics.py), for the viewer.
+
+        Empty for a mesh world like the apartment, which the viewer loads from
+        the asset bundle instead."""
+        return self.statics.manifest()
 
     def traffic_manifest(self) -> list[dict[str, str]]:
         """Car IDs and colours for observer viewers."""

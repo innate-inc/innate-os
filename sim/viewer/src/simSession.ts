@@ -17,6 +17,7 @@ import type {
 import type { PropInfo } from "./props";
 import type { SimulationClock } from "./slowdown";
 import { interpolateTraffic } from "./trafficState";
+import type { RoomInfo } from "./roomManifest";
 import type { TrafficManifest, TrafficState } from "./trafficState";
 
 /** One roster row as a renderer wants it: what the challenge is, plus how it
@@ -133,6 +134,10 @@ export class SimSession {
   // Clear/objectsPresent/challenges must never remove or count these cars.
   #trafficManifest: TrafficManifest = [];
 
+  // A primitive-authored world's geometry (statics.py), in the same roster
+  // frame; empty for a mesh world. Drawn by the scene, never by the stage.
+  #rooms: RoomInfo[] = [];
+
   #stateUrls: string[];
   #rosUrl: string;
 
@@ -208,6 +213,10 @@ export class SimSession {
     };
     this.#controller.onTrafficManifest = (manifest) => {
       this.#trafficManifest = manifest;
+      this.#propsDirty = true;
+    };
+    this.#controller.onRooms = (rooms) => {
+      this.#rooms = rooms;
       this.#propsDirty = true;
     };
     this.#controller.onChallenges = (challenges) => {
@@ -465,6 +474,7 @@ export class SimSession {
       this.#propsDirty = false;
       scene.setPropManifest(this.#props);
       scene.setTrafficManifest(this.#trafficManifest);
+      scene.setRoomManifest(this.#rooms);
     }
     if (this.#overlaysDirty) {
       this.#overlaysDirty = false;

@@ -1,0 +1,21 @@
+{
+  "display_name": "Workshop",
+  "bundle": "bundles/workshop",
+  "navigation": {
+    "map_yaml": "map/workshop.yaml"
+  },
+  "viewer": {
+    "type": "primitives"
+  },
+  "spawn": {
+    "x": 0.0,
+    "y": 0.6,
+    "yaw_degrees": 90.0
+  },
+  "attribution": {
+    "name": "Workshop",
+    "author": "innate benchmark (authored in Roblox Studio, exported as MuJoCo primitives)",
+    "license": "Apache-2.0",
+    "source": "sim/bundles/workshop"
+  }
+}

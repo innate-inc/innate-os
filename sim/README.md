@@ -194,10 +194,22 @@ Its manifest opts into the shared four-way traffic preset with `"traffic": true`
 they must follow the layout in `mars_sim_driver/crossroads.py` and include the six
 `Signal_NS/EW_Red/Yellow/Green` materials. This flag is not an arbitrary route planner.
 
+The benchmark's eight authored worlds are packs too -- `counter`, `pantry`,
+`workshop`, `gallery`, `rounds`, `household`, `bridge` and `blaze`. Each is a
+`sim/bundles/<name>` directory of MuJoCo primitives with its props and
+challenges beside it, named by `"bundle"` in the manifest instead of
+`"physics"`: there is no mesh to decompose or download (the 3D view draws the
+rooms from the world server's roster), the Nav2 map ships beside the manifest
+(`sim/environments/<name>/map/`, staged into `sim/assets/map` by `up`), and
+the challenge roster in Scene setup is that world's own -- what
+`sim/bench/run_eval.sh` scores, playable by hand. See
+[`sim/bench/README.md`](bench/README.md).
+
 Pick one at launch, or set `[simulation] environment` in `sim/config.toml`:
 
 ```bash
 ./innate-sim up --environment backrooms
+./innate-sim up --environment counter     # a benchmark world
 ```
 
 A running simulator switches in place: **Scene setup → Environment** in the

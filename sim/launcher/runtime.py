@@ -906,6 +906,32 @@ def retitle_step(message: str) -> None:
         step.retitle(message)
 
 
+def _stage_pack_maps(sim_repo: Path) -> list[Path]:
+    """Copy the Nav2 map a pack carries itself (map/*.yaml + .pgm beside its
+    manifest) into sim/assets/map, which is where the container's launch
+    script collects Nav2's maps from (scripts/launch_sim_in_tmux.zsh).
+
+    The mesh packs' maps arrive baked into the asset image; a primitive pack
+    (the benchmark worlds, environments.py `bundle`) has no image to ride in,
+    so it tracks its map in the repository instead. Every pack's map is
+    staged, not only the selected one, because a running simulator switches
+    packs from the 3D view and Nav2 has to find the map right then.
+    Returns what was written."""
+    published = sim_repo / "assets" / "map"
+    written: list[Path] = []
+    for root in ("environments", "environments.local"):
+        for source in sorted((sim_repo / root).glob("*/map/*")):
+            if source.suffix not in (".yaml", ".pgm") or not source.is_file():
+                continue
+            target = published / source.name
+            if target.is_file() and target.read_bytes() == source.read_bytes():
+                continue
+            published.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            written.append(target)
+    return written
+
+
 def _seed_nav_map(config: dict[str, object]) -> None:
     """Point Nav2's saved-map file at the selected pack before the ROS session
     starts, so the mode manager boots on it. With several maps installed it
@@ -914,6 +940,7 @@ def _seed_nav_map(config: dict[str, object]) -> None:
     up, which the mode manager does not survive well."""
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    _stage_pack_maps(sim_repo)
     environment_id = str(config["environment_id"])
     manifests = [sim_repo / root / environment_id / "manifest.json" for root in ("environments", "environments.local")]
     manifest = next((path for path in manifests if path.is_file()), None)
@@ -2425,8 +2452,60 @@ def _world_server_bind_addresses() -> str:
     )
     parts = gateway.split(".")
     if len(parts) == 4 and all(p.isdigit() and int(p) <= 255 for p in parts):
-        return f"127.0.0.1,{gateway}"
+        # ...but only if this machine can actually assign it. Under Docker
+        # Desktop's WSL2 integration the engine and every container live in the
+        # `docker-desktop` distro while the launcher runs in another one, so
+        # `docker network inspect` truthfully reports a gateway that belongs to
+        # a different network namespace. Binding it fails EADDRNOTAVAIL, and
+        # because the bind happens after the GL self-test in the same
+        # subprocess, the backend ladder blames rendering and tells you to
+        # install libraries you already have.
+        if _assignable_here(gateway):
+            return f"127.0.0.1,{gateway}"
+        # Guessing here is only safe if the address is genuinely host-only,
+        # and nothing checks that: on remote Docker or unusual networking the
+        # primary interface can be LAN-routable, which would publish an
+        # unauthenticated simulator port. Default to failing into the
+        # explicit INNATE_SIM_WORLD_BIND path below, which already exists and
+        # already tells the operator what to set. Opt in only if you know the
+        # interface is host-only.
+        local = _own_interface_address() if os.environ.get("INNATE_SIM_ALLOW_HOST_BIND") == "1" else ""
+        if local:
+            # The address containers can actually reach this distro on. Under
+            # Docker Desktop that is a host-only virtual switch (172.x, not
+            # LAN-routable) -- the same safety property the gateway bind
+            # relied on, so nothing is exposed beyond the host.
+            return f"127.0.0.1,{local}"
     return ""
+
+
+def _assignable_here(addr: str) -> bool:
+    """Whether this machine can bind `addr` at all. Asks the kernel rather than
+    inferring from platform or interface names."""
+    import socket as _socket
+
+    try:
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+            s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+            s.bind((addr, 0))
+        return True
+    except OSError:
+        return False
+
+
+def _own_interface_address() -> str:
+    """This host's primary non-loopback IPv4, or "". No traffic is sent: a
+    connected UDP socket only asks the routing table which source address
+    would be used."""
+    import socket as _socket
+
+    try:
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))  # TEST-NET-1: reserved, never routed
+            addr = s.getsockname()[0]
+        return addr if addr and not addr.startswith("127.") else ""
+    except OSError:
+        return ""
 
 
 def world_server_running() -> bool:
@@ -2638,7 +2717,12 @@ def _start_world_server(uv: str, sim_repo: Path, *, environment_id: str, bind: s
         "from mars_sim_driver.world_server import main; main()"
     )
     env = os.environ.copy()
-    env["VIRTUAL_MARS_ASSETS"] = str(sim_repo / "assets")
+    # An explicit VIRTUAL_MARS_ASSETS wins. The default is the apartment
+    # bundle, and hard-coding it made the world server ignore an asset bundle
+    # chosen by the caller -- which is how you point the live stack at a
+    # different world (sim/bundles/<map>) without editing the launcher. The
+    # benchmark needs exactly that: same stack, same brain, a different room.
+    env["VIRTUAL_MARS_ASSETS"] = os.environ.get("VIRTUAL_MARS_ASSETS", "").strip() or str(sim_repo / "assets")
     if mujoco_gl:
         env["MUJOCO_GL"] = mujoco_gl
     with WORLD_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:

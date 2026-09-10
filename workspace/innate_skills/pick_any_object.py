@@ -234,7 +234,15 @@ class PickAnyObject(Skill):
 
     @resource
     def _proxy(self):
-        return gemlib.make_client()
+        client = gemlib.make_client()
+        try:
+            yield client
+        finally:
+            # A generator factory is what gets a teardown; a plain return
+            # declares none, and the client holds an httpx connection pool.
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
 
     _grip_strength: float | None = None
     _holding = False  # fingers committed on an object this run

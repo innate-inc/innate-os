@@ -40,6 +40,8 @@ import hashlib
 import importlib.util
 import json
 import math
+import os
+import re
 import socket
 import sys
 import threading
@@ -50,6 +52,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import world
+from .environments import Environment
 
 # How far sim time may run backwards before tick() reads it as the world
 # having been rebuilt under the run. Two publish_state callers (the physics
@@ -79,13 +82,24 @@ _ENVIRONMENT_EVENT_SOURCE = object()
 class WorldState:
     """Ground truth at one tick. Predicates read positions via pos()."""
 
-    t: float  # sim time (the challenge timeline)
+    t: float
     robot: tuple[float, float, float]  # x, y, yaw
     # Prop name -> xy of its visual CENTRE (PropRegistry.center_xy, which
     # applies the sidecar's center_offset: the human scan stands feet-at-
     # origin, and a Near() against it must not measure to the feet of a 1.7m
     # body). Props still parked off-map are absent, not reported.
     centers: dict[str, tuple[float, float]]
+    # Seconds since THIS RUN started, not absolute sim time. A challenge
+    # author cannot use absolute time for anything: the world server has been
+    # up for an hour and the run began ninety seconds ago. Defaulted so every
+    # existing construction site keeps working.
+    elapsed: float = 0.0
+
+    # {prop: z} for props on the floor, filled by the engine from the sim it
+    # already holds. Defaulted so every existing construction site keeps
+    # working and so an in-process caller that does not supply it simply gets
+    # goals that cannot assert height.
+    heights: dict[str, float] = field(default_factory=dict)
 
     def pos(self, name: str) -> tuple[float, float] | None:
         """xy of "robot" or a prop; None while that prop isn't dropped."""
@@ -93,11 +107,29 @@ class WorldState:
             return self.robot[0], self.robot[1]
         return self.centers.get(name)
 
+    def height(self, name: str) -> float | None:
+        """z of a prop, or None when unknown -- which must never be read as
+        "too low": a goal asserting min_z passes on None so a missing height
+        cannot silently fail a challenge that used to pass."""
+        if name == "robot":
+            return None
+        return self.heights.get(name)
+
 
 # --- predicates (each: update(state, events) -> bool, reset() for reuse) ---
 
 
 class Predicate:
+    def observe(self, state: "WorldState", events: list[dict]) -> None:
+        """Offered every event batch, judged or not. Default: ignore.
+
+        Goals are ordered, so a predicate is only UPDATED on its turn. A goal
+        that asserts something about the whole run ("and never claimed it
+        couldn't") has to see the events that happened while earlier goals
+        were still open, or it is judging an empty list.
+        """
+        return None
+
     def update(self, state: WorldState, events: list[dict]) -> bool:
         raise NotImplementedError
 
@@ -128,10 +160,23 @@ class InCircle(Predicate):
     x: float
     y: float
     radius_m: float
+    # Optional floor for the object's height. "On the pass" is a different
+    # claim from "within 45 cm of the middle of the pass", and without this the
+    # second was standing in for the first -- see sim/bench/FINDINGS.md
+    # (patch_goal_height).
+    min_z: float | None = None
 
     def update(self, state: WorldState, events: list[dict]) -> bool:
         p = state.pos(self.target)
-        return p is not None and math.hypot(p[0] - self.x, p[1] - self.y) <= self.radius_m
+        if p is None or math.hypot(p[0] - self.x, p[1] - self.y) > self.radius_m:
+            return False
+        if self.min_z is None:
+            return True
+        z = state.height(self.target)
+        # Unknown height FAILS. min_z is what separates "on the counter" from
+        # "in the counter's footprint, on the floor"; awarding it when the
+        # height cannot be read credits a goal the robot may not have reached.
+        return z is not None and z >= self.min_z
 
 
 @dataclass
@@ -143,14 +188,25 @@ class InRect(Predicate):
     y0: float
     x1: float
     y1: float
+    # Same contract as InCircle.min_z (see sim/bench/FINDINGS.md,
+    # patch_goal_height): "on the counter" is a different claim from "within
+    # the counter's footprint", and unknown height PASSES so a missing z can
+    # never fail a goal.
+    min_z: float | None = None
 
     def update(self, state: WorldState, events: list[dict]) -> bool:
         p = state.pos(self.target)
         if p is None:
             return False
-        return min(self.x0, self.x1) <= p[0] <= max(self.x0, self.x1) and min(self.y0, self.y1) <= p[1] <= max(
-            self.y0, self.y1
-        )
+        if not (
+            min(self.x0, self.x1) <= p[0] <= max(self.x0, self.x1)
+            and min(self.y0, self.y1) <= p[1] <= max(self.y0, self.y1)
+        ):
+            return False
+        if self.min_z is None:
+            return True
+        z = state.height(self.target)
+        return z is not None and z >= self.min_z  # unknown height fails; see InCircle
 
 
 @dataclass
@@ -168,6 +224,9 @@ class Hold(Predicate):
         if self._since is None:
             self._since = state.t
         return state.t - self._since >= self.seconds
+
+    def observe(self, state: WorldState, events: list[dict]) -> None:
+        self.inner.observe(state, events)
 
     def reset(self) -> None:
         self._since = None
@@ -196,6 +255,151 @@ class SkillDone(Predicate):
     def reset(self) -> None:
         if self.guard is not None:
             self.guard.reset()
+
+
+@dataclass
+class Answered(Predicate):
+    """The robot reported an ANSWER, and it was right.
+
+    Every other predicate here judges where things are. A whole class of task
+    -- "turn around and count the items", "which room is the mug in?" -- has no
+    position that settles it: the robot can be in exactly the right place and
+    still be wrong. Without this the observation-and-conversation category
+    cannot be scored at all, only approximated by driving somewhere.
+
+    Matches events of the shape {"type": "answer", "value": ...} posted through
+    ChallengeEngine.post_event, alongside the skill_status_update events
+    SkillDone reads. Values compare as strings, case- and space-insensitively,
+    so "4", 4 and " Four" are not gratuitously different answers; `accept`
+    carries every spelling that counts as correct.
+    """
+
+    accept: list[str]
+    key: str = "value"
+
+    @staticmethod
+    def _norm(v) -> str:
+        return str(v).strip().lower()
+
+    # Phrases that make a token a non-answer. "not 3" and "I don't know,
+    # maybe 3?" both used to score as the answer 3: whole-word matching stops
+    # "3" matching "30" but says nothing about the clause around it.
+    # Hedges that disown the answer when they FOLLOW it.
+    _TRAILING_HEDGES = (
+        "i think",
+        "i guess",
+        "not sure",
+        "unsure",
+        "maybe",
+        "perhaps",
+        "possibly",
+        "don't know",
+        "do not know",
+    )
+
+    _NEGATORS = (
+        "not ",
+        "n't ",
+        "no ",
+        "isn't",
+        "aren't",
+        "wasn't",
+        "cannot",
+        "can't",
+        "don't know",
+        "do not know",
+        "unsure",
+        "not sure",
+        "maybe",
+        "might be",
+        "i think",
+        "possibly",
+        "perhaps",
+        "guess",
+        "could be",
+        "or ",
+    )
+
+    #: distinct wrong answers on the structured channel before the robot is
+    #: judged to be enumerating rather than answering. The widest challenge in
+    #: this suite asks two questions, so an honest run yields at most one.
+    _GUESS_LIMIT: int = 3
+    #: distinct wrong answers seen this episode. A field, not a reset-only
+    #: attribute, so update() is safe on a predicate nobody reset.
+    _wrong: set = field(default_factory=set)
+
+    def reset(self) -> None:
+        self._wrong = set()
+
+    def _says_it(self, text: str) -> bool:
+        """An accepted spelling appears in free speech as a whole word, and is
+        not negated or hedged.
+
+        Whole-word, so "3" does not match "30" and "four" does not match
+        "fourteen". Then the clause leading up to the token is checked: an
+        answer the robot disowned in the same breath is not an answer.
+        """
+        low = f" {text.strip().lower()} "
+        for a in self.accept:
+            token = str(a).strip().lower()
+            if not token:
+                continue
+            m = re.search(rf"(?<![\w]){re.escape(token)}(?![\w])", low)
+            if not m:
+                continue
+            # The run-up: "3, not 4" answers 3; "not 3" does not.
+            lead = low[: m.start()]
+            clause = lead.rsplit(",", 1)[-1].rsplit(";", 1)[-1]
+            if any(neg in clause for neg in self._NEGATORS):
+                continue
+            # What follows: an alternative ("3 or 4") or a trailing hedge
+            # ("3, I think") is not an answer either. A trailing bare negation
+            # is fine -- it negates the OTHER value, as in "3, not 4".
+            tail = low[m.end() :]
+            if re.match(r"\s*(or|/)\s*\w", tail) or any(h in tail for h in self._TRAILING_HEDGES):
+                continue
+            return True
+        return False
+
+    def update(self, state: WorldState, events: list[dict]) -> bool:
+        wanted = {self._norm(a) for a in self.accept}
+        for ev in events:
+            kind = ev.get("type")
+            if kind == "answer":
+                # A WRONG answer on the structured channel disqualifies a later
+                # right one. `answer` means "answer a question you were asked",
+                # so using it is a claim -- and a robot that claims 1, then 2,
+                # then 3 has enumerated, not answered. Measured: without this,
+                # a baseline that blurts guesses and never looks passes 4 of the
+                # 7 counter speech challenges. Free speech is deliberately not
+                # counted as an attempt: a robot may say many things while
+                # working, and only this channel is a commitment.
+                value = self._norm(ev.get(self.key))
+                if value and value not in wanted and not self._says_it(str(ev.get(self.key, ""))):
+                    # Not disqualifying on its own: a challenge that asks two
+                    # questions gets the OTHER question's answer on this same
+                    # channel, and that is not a guess. Enumeration is what
+                    # produces many distinct wrong values.
+                    self._wrong.add(value)
+                if len(self._wrong) >= self._GUESS_LIMIT:
+                    continue
+                # The structured channel: the whole value must be the answer.
+                if value in wanted:
+                    return True
+                # An agent that put a sentence in the answer channel still
+                # answered. Fall through to the same text rule as speech.
+                if self._says_it(str(ev.get(self.key, ""))):
+                    return True
+            elif kind == "say":
+                # Speech. From the robot's side this IS answering, and which
+                # envelope a stack uses is its own business -- but a robot that
+                # has already guessed wrong on the answer channel does not get
+                # to win on this one.
+                if len(self._wrong) >= self._GUESS_LIMIT:
+                    continue
+                if self._says_it(str(ev.get("text", ""))):
+                    return True
+        return False
 
 
 @dataclass
@@ -240,7 +444,112 @@ class EventSeen(Predicate):
 
 
 @dataclass
-class AllOf(Predicate):
+class Said(Predicate):
+    """The robot said something matching one of these patterns.
+
+    Answered() is for questions with an answer key -- a count, a colour, a
+    room. A whole category of conversational behaviour has no answer key:
+    admitting a limit ("I can't reach the top shelf"), asking which of two
+    things was meant, acknowledging a correction. Scoring those against a
+    fixed accept-list would score the phrasing rather than the behaviour, so
+    this matches case-insensitive regexes against whatever the robot uttered.
+
+    Reads BOTH channels -- {"type": "say"} and the {"type": "answer"} that
+    Answered watches -- because from the robot's side they are one act. Which
+    envelope a given stack happens to use is an implementation detail of that
+    stack, and a benchmark that only listened to one would score the wiring.
+
+    Patterns are deliberately regexes and not substrings: "can'?t|cannot|
+    unable" is one alternation, whereas the substring version needs three
+    entries and still misses "can not".
+    """
+
+    patterns: list[str]
+    negate: bool = False  # True: the goal is that the robot did NOT say this
+    _violated: bool = field(default=False, repr=False)
+    # One utterance that satisfies `patterns`, for the oracle to speak. A regex
+    # cannot be run backwards into a sentence, so without this the validity
+    # gate could never show that a speech goal is satisfiable AT ALL -- and an
+    # ungateable goal is exactly the kind of number this suite refuses to
+    # report. Authoring it also forces the author to check their own regex.
+    oracle_line: str = ""
+
+    def _hit(self, events: list[dict]) -> bool:
+        for ev in events:
+            if ev.get("type") not in ("say", "answer"):
+                continue
+            text = str(ev.get("text", ev.get("value", "")))
+            if any(re.search(p, text, re.IGNORECASE) for p in self.patterns):
+                return True
+        return False
+
+    def observe(self, state: WorldState, events: list[dict]) -> None:
+        # Only the negative form needs a memory. The positive form is "say this
+        # once you get here", and hearing it early -- before the goal that puts
+        # the robot in front of the thing it is talking about -- should not
+        # count, so it deliberately does not accumulate.
+        if self.negate and self._hit(events):
+            self._violated = True
+
+    def update(self, state: WorldState, events: list[dict]) -> bool:
+        if self.negate:
+            # Latches true the first time it is judged, UNLESS a violating
+            # utterance was heard at any point in the run so far. Ordered goals
+            # mean this is judged only after everything before it is done, so
+            # "and never said it along the way" covers the whole way.
+            return not self._violated
+        return self._hit(events)
+
+    def reset(self) -> None:
+        self._violated = False
+
+
+@dataclass
+class After(Predicate):
+    """inner, but only once the run is at least  old.
+
+    The building block for a world that changes on its own. Put one in
+    fail_if and a region becomes lethal at a known moment -- a room the fire
+    has reached, a door that locks -- and the agent's problem stops being
+    "can I get there" and becomes "what do I give up".
+
+    Deliberately NOT the inverse of Hold. Hold asks that something stay true
+    for a duration; this asks that the clock have passed a mark. An author who
+    wants "in the kitchen after 90 seconds" wants this; expressing it with
+    Hold would mean "in the kitchen FOR 90 seconds", which a robot passing
+    through never satisfies.
+    """
+
+    seconds: float
+    inner: Predicate
+
+    def update(self, state: WorldState, events: list[dict]) -> bool:
+        if state.elapsed < self.seconds:
+            # The inner predicate is still offered every tick via observe(),
+            # so anything with a memory keeps it. Only the verdict is gated.
+            return False
+        return self.inner.update(state, events)
+
+    def observe(self, state: WorldState, events: list[dict]) -> None:
+        self.inner.observe(state, events)
+
+    def reset(self) -> None:
+        self.inner.reset()
+
+
+class _Composite(Predicate):
+    """Shared observe/reset for the combinators, so a Said nested inside an
+    AllOf still sees the run. Forgetting to forward observe() would make a
+    negated goal silently unfalsifiable, which is the exact failure this
+    mechanism exists to remove."""
+
+    def observe(self, state: "WorldState", events: list[dict]) -> None:
+        for child in self.preds:
+            child.observe(state, events)
+
+
+@dataclass
+class AllOf(_Composite):
     preds: list[Predicate]
 
     def update(self, state: WorldState, events: list[dict]) -> bool:
@@ -252,7 +561,7 @@ class AllOf(Predicate):
 
 
 @dataclass
-class AnyOf(Predicate):
+class AnyOf(_Composite):
     preds: list[Predicate]
 
     def update(self, state: WorldState, events: list[dict]) -> bool:
@@ -276,6 +585,40 @@ class Drop:
     x: float
     y: float
     yaw_deg: float = 0.0
+
+
+@dataclass
+class Cue:
+    """One line the narrator speaks during a run.
+
+    A brief is one string delivered at t=0, which can only ever express
+    "here is the whole task, stated perfectly, up front". Real instructions
+    arrive late, get corrected, collide with each other, and share the air
+    with conversation that is not addressed to the robot at all. A Cue is the
+    smallest thing that lets a challenge express any of that.
+
+    WHEN IT FIRES: once, on the first tick where BOTH conditions hold --
+    goal `after_goal` has latched (-1 means "from the start") and the run is
+    at least `after_s` seconds old. Gating on goal progress rather than on the
+    clock alone is what makes a correction land at a repeatable moment: "as it
+    reaches for the red cup" is a place in the task, and a wall-clock time is
+    only that place for an agent that happens to move at the reference speed.
+
+    kind:
+      "say"     addressed to the robot; acting on it is correct
+      "ambient" overheard; acting on it is a FAILURE, and challenges that use
+                it pair the cue with a goal asserting the robot stayed put
+    """
+
+    text: str
+    after_goal: int = -1
+    after_s: float = 0.0
+    kind: str = "say"
+    # For an ambient cue: the prop the line tempts the robot towards. The
+    # engine then records how close the robot ever got to it afterwards, which
+    # is the only way to tell "carried on with its own job" apart from "went
+    # and did the thing it overheard" -- both of which are just movement.
+    tempt: str = ""
 
 
 @dataclass
@@ -348,6 +691,23 @@ class Challenge:
     runtime: ChallengeRuntime | None = field(default=None, kw_only=True, repr=False)
     time_limit_s: float | None = None
     reset_world: bool = True  # robot back to spawn + props re-parked on start
+    # Ends the run the moment it holds. See sim/bench/FINDINGS.md (patch_failif)
+    # for why a challenge needs a failure that is not the clock.
+    fail_if: "Predicate | None" = None
+    fail_reason: str = "eliminated"
+    # Narrator lines, delivered during the run. Empty for challenges whose
+    # whole instruction fits in the brief.
+    script: list[Cue] = field(default_factory=list)
+    # Which of the three things this scores. 0 means unclassified, which the
+    # summary reports separately rather than silently folding into a total --
+    # an uncategorised challenge is a challenge nobody decided the purpose of.
+    #   1 easy observation and conversation
+    #   2 simple instruction following
+    #   3 long-horizon instruction following
+    # See sim/bench/FINDINGS.md (patch_category) for the rule and its boundary
+    # cases.
+    category: int = 0
+
     # Environment pack ids this scenario is authored for (its drops and goals
     # are coordinates in that world); None means any pack can host it.
     environments: tuple[str, ...] | None = field(default=None, kw_only=True)
@@ -409,6 +769,19 @@ def load_challenges(roots: list[Path]) -> dict[str, Challenge]:
 # --- engine ---
 
 
+def _rosbridge_default() -> str:
+    """The sim stack's rosbridge, honouring INNATE_SIM_PORT_BASE the way
+    sim/launcher/config.py does. Hardcoding 9090 attaches to whatever is on
+    that port, which on a shifted base is another simulation."""
+    for raw, shift in (
+        (os.environ.get("SIM_ROSBRIDGE_PORT", "").strip(), 0),
+        (os.environ.get("INNATE_SIM_PORT_BASE", "").strip(), 2),
+    ):
+        if raw.isdigit() and 1 <= int(raw) + shift <= 65535:
+            return f"ws://127.0.0.1:{int(raw) + shift}"
+    return "ws://127.0.0.1:9090"
+
+
 class ChallengeEngine:
     """Judges one active challenge at a time against the observer state feed.
 
@@ -426,15 +799,52 @@ class ChallengeEngine:
     """
 
     def __init__(
-        self, sim, sim_lock: threading.Lock, roots: list[Path] | None = None, progress_path: Path | None = None
+        self,
+        sim,
+        sim_lock: threading.Lock,
+        roots: list[Path] | None = None,
+        progress_path: Path | None = None,
+        packs: list[Environment] | None = None,
     ):
         self.sim = sim
         self.sim_lock = sim_lock
+        self._height_warned = False
+        self._reset_failed = False
         # Tracked source dir plus anything the asset bundle shipped, like the
         # props (core.VirtualMars): a pack can carry its scenarios with it.
+        #
+        # EXCEPT when the bundle brings its own WORLD. A challenge is only
+        # meaningful in the world it was written against -- its Drop
+        # coordinates are absolute -- so offering the apartment's scenarios
+        # while a 9m authored room is loaded puts props inside walls or off the
+        # map entirely, and the goals can never fire. Nothing else enforces
+        # that pairing, so a bundle carrying rooms/ owns the roster outright.
         if roots is None:  # an explicitly empty list means "load nothing"
-            roots = [world.repo_root() / "sim" / "challenges", world.default_assets_dir() / "challenges"]
+            assets = world.default_assets_dir()
+            if (assets / "rooms").is_dir():
+                roots = [assets / "challenges"]
+                # ... and no environment pack's either: the benchmark runs one
+                # bundle per process this way, its challenges untagged, and
+                # a pack's tagged copy of the same ids would replace them
+                # with ones the loaded environment (the default manifest)
+                # never offers.
+                packs = None
+            else:
+                roots = [world.repo_root() / "sim" / "challenges", assets / "challenges"]
         self.challenges = load_challenges(roots)
+        # Environment packs that carry their own challenges (environments.py
+        # `bundle`): loaded now, since the world server switches packs without
+        # rebuilding this engine, and tagged to their pack -- a challenge
+        # authored in a world is coordinates in that world.
+        for pack in packs or []:
+            if pack.challenges_dir is None:
+                continue
+            for cid, challenge in load_challenges([pack.challenges_dir]).items():
+                if challenge.environments is None:
+                    challenge.environments = (pack.id,)
+                if cid in self.challenges:
+                    print(f"[challenges] {pack.id}: {cid!r} replaces a challenge of the same id", flush=True)
+                self.challenges[cid] = challenge
         self.progress_path = progress_path or world.repo_root() / "workspace" / "challenges.json"
         self.progress = self._load_progress()
         self._mutex = threading.Lock()  # engine state (active challenge, events)
@@ -467,6 +877,24 @@ class ChallengeEngine:
         self.started_t = 0.0
         self._last_judged_t = 0.0  # newest sim time judged; see CLOCK_REWIND_S
         self.elapsed_s = 0.0
+        # -- narrator --
+        self._cues_fired: set[int] = set()
+        self.transcript: list[dict] = []  # every cue spoken, in order, with its sim time
+        self._cue_sink = None  # set by the runner that has somewhere to deliver speech
+        # Per run: with no sink, deliver cues through the chat outbox (the web
+        # app's runs ask for this; the runners deliver cues themselves).
+        self._chat_cues = False
+        # -- metrics, accumulated from ground truth the tick already holds --
+        # Deliberately only what the ENGINE can see. Turn counts and token
+        # spend belong to the agent and are reported by the runner; mixing the
+        # two here would let an agent's self-report into the ground truth.
+        self.path_len_m = 0.0
+        self.goal_times: list[float] = []
+        self.utterances = 0
+        self.first_utterance_s: float | None = None
+        self.tempt_name = ""  # prop an ambient cue pointed at, if any
+        self.tempt_min_m: float | None = None  # closest approach to it since
+        self._last_xy: tuple[float, float] | None = None
         if self.challenges:
             print(f"[challenges] loaded: {', '.join(self.challenges)}", flush=True)
 
@@ -505,14 +933,19 @@ class ChallengeEngine:
 
     # -- commands (observer connection threads) --
 
-    def start(self, challenge_id: str) -> bool:
+    def start(self, challenge_id: str, chat_cues: bool = False) -> bool:
+        """Begin a run. `chat_cues`: with no cue sink installed, speak the
+        narrator's lines to the robot through the chat outbox (see
+        _deliver_cue). The world server passes True for a run the web app
+        starts; the bench and live runners deliver cues themselves."""
         challenge = self.challenges.get(challenge_id)
         if challenge is None:
             print(f"[challenges] start ignored: unknown id {challenge_id!r}", flush=True)
             return False
-        if not challenge.available_in(self._environment_id()):
+        if not self._offered(challenge):
             print(f"[challenges] start ignored: {challenge_id!r} is not authored for this environment", flush=True)
             return False
+        self._chat_cues = chat_cues
         # Nothing is judged while the scene is being built. The world reset and
         # the drops take the sim lock, which the physics thread keeps grabbing
         # between ticks, so a tick lands in the middle of this -- and it must
@@ -546,8 +979,34 @@ class ChallengeEngine:
                 for goal in challenge.goals:
                     try:
                         goal.predicate.reset()
-                    except Exception:  # noqa: BLE001,S110 -- challenge bug; judged as-is
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        # A predicate that cannot reset may still hold the last
+                        # episode's state, so anything scored after this is
+                        # measuring the previous run. Say so loudly rather than
+                        # carry it silently into a number.
+                        print(
+                            f"[challenges] reset failed for {challenge.id} goal {goal.label!r}: {exc!r}",
+                            flush=True,
+                        )
+                        self._reset_failed = True
+                if challenge.fail_if is not None:
+                    try:
+                        challenge.fail_if.reset()
+                    except Exception as exc:  # noqa: BLE001
+                        print(
+                            f"[challenges] fail_if reset failed for {challenge.id}: {exc!r}",
+                            flush=True,
+                        )
+                        self._reset_failed = True
+                if self._reset_failed:
+                    # Something could not clear its state, so this episode would
+                    # be scoring the previous one. Refuse to start rather than
+                    # produce a number from an instrument that is still dirty.
+                    self._reset_failed = False
+                    self.state = "failed"
+                    self.reason = "judge error: a predicate could not be reset"
+                    self._record(challenge.id, "failed", None)
+                    return
                 self.state = "running"
                 self.reason = ""
                 self.goal_done = [False] * len(challenge.goals)
@@ -555,6 +1014,15 @@ class ChallengeEngine:
                 self._last_judged_t = started_t
                 self._run_epoch = epoch
                 self.elapsed_s = 0.0
+                self._cues_fired.clear()
+                self.transcript = []
+                self.path_len_m = 0.0
+                self.goal_times = []
+                self.utterances = 0
+                self.first_utterance_s = None
+                self.tempt_name = ""
+                self.tempt_min_m = None
+                self._last_xy = None
                 self._events.clear()  # anything that happened during setup is not this run's
                 if challenge.runtime is not None:
                     try:
@@ -680,97 +1148,274 @@ class ChallengeEngine:
                 # Drained only when judged: a skipped tick must leave this
                 # run's skill completions for the next current one.
                 events, self._events = self._events, []
-                state = WorldState(t=t, robot=pose, centers=centers)
                 self.elapsed_s = max(0.0, t - self.started_t)
+                # Heights come straight from the sim the engine already holds;
+                # object_poses() has carried z all along and nothing read it.
                 try:
-                    if challenge.runtime is not None:
-                        runtime_result = challenge.runtime.update(state, events)
-                        for event in runtime_result.events:
-                            if not isinstance(event, dict):
-                                raise TypeError("challenge runtime events must be dictionaries")
-                            events.append({**event, "_source": _ENVIRONMENT_EVENT_SOURCE})
-                        for reply in runtime_result.replies:
-                            if isinstance(reply, EnvironmentReply):
-                                payload = {
-                                    "sender": ENVIRONMENT_SPEECH_SENDER,
-                                    "speaker": reply.speaker,
-                                    "text": reply.text,
-                                    "voice_id": reply.voice_id,
-                                }
-                            elif isinstance(reply, str):
-                                payload = {"sender": "user", "text": reply, "timestamp": time.time()}
-                            else:
-                                raise TypeError("challenge runtime replies must be strings or EnvironmentReply values")
-                            self._queue_chat_input(payload)
-                        if runtime_result.replies:
-                            self._chat_ready.notify_all()
-                    # next(), not index(): a ValueError escaping this block must
-                    # mean a scenario bug and fail the run, not read as "all done".
-                    first = next((i for i, done in enumerate(self.goal_done) if not done), None)
-                    progressed = False
-                    while True:
-                        try:
-                            idx = self.goal_done.index(False)
-                        except ValueError:
-                            break
-                        goal = challenge.goals[idx]
-                        if goal.parallel_group is None:
-                            if not goal.predicate.update(state, events):
-                                break
-                            self.goal_done[idx] = True
-                            progressed = True
-                            continue
-
-                        # Every open sibling in the phase sees the same events.
-                        group = goal.parallel_group
-                        start = idx
-                        while start > 0 and challenge.goals[start - 1].parallel_group == group:
-                            start -= 1
-                        end = idx + 1
-                        while end < len(challenge.goals) and challenge.goals[end].parallel_group == group:
-                            end += 1
-                        for sibling in range(start, end):
-                            if not self.goal_done[sibling] and challenge.goals[sibling].predicate.update(state, events):
-                                self.goal_done[sibling] = True
-                                progressed = True
-                        if not all(self.goal_done[start:end]):
-                            break
-
-                    if first is not None and not progressed and any(ev.get("status") == "completed" for ev in events):
-                        # Nothing took them, and ordered goals do not defer:
-                        # these completions are gone. Say so, or a challenge
-                        # author watches a run die on the clock with both tasks
-                        # apparently done and no explanation anywhere.
-                        skills = sorted({str(ev.get("skill_id") or ev.get("skill_name") or "?") for ev in events})
-                        print(
-                            f"[challenges] {challenge.id}: dropped completion(s) {', '.join(skills)} -- "
-                            f"goals are ordered and {challenge.goals[first].label!r} is still open",
-                            flush=True,
-                        )
-                except Exception as exc:  # noqa: BLE001 -- challenge bug fails the run, not the sim
-                    self.state, self.reason = "failed", f"challenge error: {exc!r}"
-                    self._record(challenge.id, "failed", None)
+                    heights = {name: float(p[2]) for name, p in self.sim.object_poses().items()}
+                except Exception as exc:  # noqa: BLE001 -- judging must not depend on this
+                    # Every min_z goal now fails while heights are missing, so
+                    # this must not pass silently: a run that hits it is
+                    # producing scores the height rules cannot back.
+                    if not self._height_warned:
+                        self._height_warned = True
+                        print(f"[challenges] heights unavailable ({type(exc).__name__}: {exc})", flush=True)
+                    heights = {}
+                state = WorldState(t=t, robot=pose, centers=centers, elapsed=self.elapsed_s, heights=heights)
+                self._measure(pose, events, centers)
+                # Before judging: every goal sees every batch. A goal asserting
+                # something about the whole run cannot be judged from the
+                # events that happen to arrive on its turn.
+                for goal in challenge.goals:
+                    try:
+                        goal.predicate.observe(state, events)
+                    except Exception as exc:  # noqa: BLE001
+                        # A goal that cannot be evaluated has not failed, and
+                        # scoring the rest of the run pretends otherwise. Fail
+                        # the episode and name the judge as the cause.
+                        print(f"[challenges] observe failed on {goal.label!r}: {exc!r}", flush=True)
+                        self.state = "failed"
+                        self.reason = f"judge error observing {goal.label!r}: {exc!r}"
+                        self._record(challenge.id, "failed", None)
+                if challenge.fail_if is not None:
+                    try:
+                        # Before the goals: a tick that both eliminates the
+                        # robot and would have completed a goal is an
+                        # elimination, not a goal followed by one.
+                        challenge.fail_if.observe(state, events)
+                        if challenge.fail_if.update(state, events):
+                            self.state = "failed"
+                            self.reason = challenge.fail_reason
+                            self._record(challenge.id, "failed", None)
+                    except Exception as exc:  # noqa: BLE001
+                        # A broken elimination predicate cannot be stepped over:
+                        # doing so lets an eliminated robot go on to pass. Fail
+                        # the run and say it was the judge, not the robot.
+                        print(f"[challenges] fail_if error on {challenge.id}: {exc!r}", flush=True)
+                        self.state = "failed"
+                        self.reason = f"judge error in fail_if: {exc!r}"
+                        self._record(challenge.id, "failed", None)
+                # A guard, not a raised ValueError: upstream removed the
+                # raise/catch so a real ValueError from a scenario fails the
+                # run instead of reading as "all goals done". An eliminated
+                # robot simply judges no goals this tick.
                 if self.state == "running":
-                    if all(self.goal_done):
-                        self.state = "passed"
-                        self._record(challenge.id, "passed", self.elapsed_s)
-                    elif challenge.time_limit_s is not None and self.elapsed_s > challenge.time_limit_s:
+                    try:
+                        if challenge.runtime is not None:
+                            runtime_result = challenge.runtime.update(state, events)
+                            for event in runtime_result.events:
+                                if not isinstance(event, dict):
+                                    raise TypeError("challenge runtime events must be dictionaries")
+                                events.append({**event, "_source": _ENVIRONMENT_EVENT_SOURCE})
+                            for reply in runtime_result.replies:
+                                if isinstance(reply, EnvironmentReply):
+                                    payload = {
+                                        "sender": ENVIRONMENT_SPEECH_SENDER,
+                                        "speaker": reply.speaker,
+                                        "text": reply.text,
+                                        "voice_id": reply.voice_id,
+                                    }
+                                elif isinstance(reply, str):
+                                    payload = {"sender": "user", "text": reply, "timestamp": time.time()}
+                                else:
+                                    raise TypeError(
+                                        "challenge runtime replies must be strings or EnvironmentReply values"
+                                    )
+                                self._queue_chat_input(payload)
+                            if runtime_result.replies:
+                                self._chat_ready.notify_all()
+                        # next(), not index(): a ValueError escaping this block must
+                        # mean a scenario bug and fail the run, not read as "all done".
+                        first = next((i for i, done in enumerate(self.goal_done) if not done), None)
+                        progressed = False
+                        while True:
+                            try:
+                                idx = self.goal_done.index(False)
+                            except ValueError:
+                                break
+                            goal = challenge.goals[idx]
+                            if goal.parallel_group is None:
+                                if not goal.predicate.update(state, events):
+                                    break
+                                self.goal_done[idx] = True
+                                progressed = True
+                                continue
+
+                            # Every open sibling in the phase sees the same events.
+                            group = goal.parallel_group
+                            start = idx
+                            while start > 0 and challenge.goals[start - 1].parallel_group == group:
+                                start -= 1
+                            end = idx + 1
+                            while end < len(challenge.goals) and challenge.goals[end].parallel_group == group:
+                                end += 1
+                            for sibling in range(start, end):
+                                if not self.goal_done[sibling] and challenge.goals[sibling].predicate.update(
+                                    state, events
+                                ):
+                                    self.goal_done[sibling] = True
+                                    progressed = True
+                            if not all(self.goal_done[start:end]):
+                                break
+
+                        if (
+                            first is not None
+                            and not progressed
+                            and any(ev.get("status") == "completed" for ev in events)
+                        ):
+                            # Nothing took them, and ordered goals do not defer:
+                            # these completions are gone. Say so, or a challenge
+                            # author watches a run die on the clock with both tasks
+                            # apparently done and no explanation anywhere.
+                            skills = sorted({str(ev.get("skill_id") or ev.get("skill_name") or "?") for ev in events})
+                            print(
+                                f"[challenges] {challenge.id}: dropped completion(s) {', '.join(skills)} -- "
+                                f"goals are ordered and {challenge.goals[first].label!r} is still open",
+                                flush=True,
+                            )
+                        while len(self.goal_times) < sum(self.goal_done):
+                            self.goal_times.append(round(self.elapsed_s, 2))
+                    except Exception as exc:  # noqa: BLE001 -- challenge bug fails the run, not the sim
+                        self.state, self.reason = "failed", f"challenge error: {exc!r}"
+                        self._record(challenge.id, "failed", None)
+                if self.state == "running":
+                    # The DEADLINE IS READ FIRST. Evaluating goals first meant
+                    # a final goal becoming true at limit + epsilon scored a
+                    # pass, on a suite where the clock is often the difficulty.
+                    # Reaching here with every goal done AND the clock past the
+                    # limit can only mean the last goal landed late: an earlier
+                    # tick would already have passed the run. The boundary is
+                    # inclusive -- alive AT the limit, dead past it -- matching
+                    # the fire schedules.
+                    if challenge.time_limit_s is not None and self.elapsed_s > challenge.time_limit_s:
                         self.state, self.reason = "failed", "time limit"
                         self._record(challenge.id, "failed", None)
+                    elif all(self.goal_done):
+                        self.state = "passed"
+                        self._record(challenge.id, "passed", self.elapsed_s)
             return self._block(challenge)
+
+    # -- narrator + metrics (called from tick(), already under _mutex) --
+
+    def _measure(self, pose, events: list[dict], state_centers: dict) -> None:
+        """Accumulate the cheap ground-truth metrics, then fire due cues.
+
+        Path length is integrated per tick rather than taken as start-to-end
+        displacement, because the number worth having is how far the robot
+        actually drove: an agent that visits three wrong rooms and comes back
+        has the same displacement as one that never moved.
+        """
+        xy = (pose[0], pose[1])
+        if self._last_xy is not None:
+            step = math.hypot(xy[0] - self._last_xy[0], xy[1] - self._last_xy[1])
+            # A physics hiccup or a reset shows up as a metre-scale jump in one
+            # tick; counting it would silently inflate every path length.
+            if step < 0.5:
+                self.path_len_m += step
+        self._last_xy = xy
+
+        for ev in events:
+            if ev.get("type") in ("say", "answer"):
+                self.utterances += 1
+                if self.first_utterance_s is None:
+                    self.first_utterance_s = round(self.elapsed_s, 2)
+
+        if self.tempt_name:
+            p = state_centers.get(self.tempt_name)
+            if p is not None:
+                d = math.hypot(xy[0] - p[0], xy[1] - p[1])
+                if self.tempt_min_m is None or d < self.tempt_min_m:
+                    self.tempt_min_m = round(d, 3)
+
+        self._fire_cues()
+
+    def _fire_cues(self) -> None:
+        challenge = self.active
+        if challenge is None or not challenge.script:
+            return
+        done = sum(self.goal_done)
+        for i, cue in enumerate(challenge.script):
+            if i in self._cues_fired:
+                continue
+            # after_goal is an INDEX, so -1 means "no goal need be done" and 0
+            # means "after the first goal latched".
+            if done < cue.after_goal + 1 or self.elapsed_s < cue.after_s:
+                continue
+            self._cues_fired.add(i)
+            line = {"t": round(self.elapsed_s, 2), "kind": cue.kind, "text": cue.text}
+            self.transcript.append(line)
+            if cue.kind == "ambient" and cue.tempt:
+                # Reset rather than accumulate: what matters is the closest
+                # approach AFTER the temptation, not before it.
+                self.tempt_name = cue.tempt
+                self.tempt_min_m = None
+            print(f"[narrator] {challenge.id} +{line['t']:.1f}s ({cue.kind}): {cue.text}", flush=True)
+            self._deliver_cue(line)
+
+    def _deliver_cue(self, line: dict) -> None:
+        """Where a narrator line goes beyond the transcript. Callers hold _mutex.
+
+        A runner that installed a sink gets it: the bench runner hands the line
+        to its agent, the live runner polls the transcript and speaks it
+        itself, counting an undelivered line as a harness fault. With no sink
+        and a run that asked for it -- the web app's, where nothing else can
+        -- the line goes through the chat outbox, which ChallengeChatBridge
+        publishes to /brain/chat_in exactly like an NPC reply, so the robot
+        hears the question it is about to be judged on; before this, a
+        scripted challenge started from the web app waited for an answer to a
+        question neither the robot nor the operator was given. A run with
+        neither (the oracle's) still has the transcript.
+        """
+        sink = self._cue_sink
+        if sink is not None:
+            try:
+                sink(line)
+            except Exception as exc:  # noqa: BLE001 -- delivery is best effort
+                print(f"[narrator] sink failed: {exc!r}", flush=True)
+        elif self._chat_cues:
+            self._queue_chat_input({"sender": "user", "text": str(line.get("text", "")), "timestamp": time.time()})
+            self._chat_ready.notify_all()
+
+    def set_cue_sink(self, sink) -> None:
+        """Where spoken lines go. The bench runner hands them to its agent; the
+        live runner posts them to /brain/chat_in. Without a sink the narrator
+        still records a transcript and still fires -- which is what keeps a
+        scripted challenge gradeable by an oracle that cannot hear."""
+        with self._mutex:
+            self._cue_sink = sink
+
+    def metrics(self) -> dict:
+        """Everything the engine measured, for the runner's episode record."""
+        with self._mutex:
+            return {
+                "path_len_m": round(self.path_len_m, 2),
+                "goal_times_s": list(self.goal_times),
+                "utterances": self.utterances,
+                "first_utterance_s": self.first_utterance_s,
+                "tempt_name": self.tempt_name,
+                "tempt_min_m": self.tempt_min_m,
+                "transcript": list(self.transcript),
+            }
 
     def _environment_id(self) -> str | None:
         environment = getattr(self.sim, "environment", None)
         return environment.id if environment is not None else None
 
+    def _offered(self, challenge: Challenge) -> bool:
+        """Whether the loaded world hosts this challenge.
+
+        A pack that carries its own challenges owns its roster outright: an
+        untagged scenario is one nobody pinned to a world, and offering the
+        apartment's in a 9 m authored room puts its props inside walls or off
+        the map, with goals that can never fire."""
+        environment = getattr(self.sim, "environment", None)
+        if getattr(environment, "bundle", None) is not None and challenge.environments is None:
+            return False
+        return challenge.available_in(self._environment_id())
+
     def roster(self) -> list[dict]:
         """Challenge briefs for this environment; sent on connection and world changes."""
-        environment_id = self._environment_id()
-        return [
-            {"id": c.id, "title": c.title, "brief": c.brief}
-            for c in self.challenges.values()
-            if c.available_in(environment_id)
-        ]
+        return [{"id": c.id, "title": c.title, "brief": c.brief} for c in self.challenges.values() if self._offered(c)]
 
     def _block(self, challenge: Challenge | None) -> dict:
         # Only what can change rides the state stream. Progress is a few
@@ -799,6 +1444,10 @@ class ChallengeEngine:
                 "goals": [
                     {"label": g.label, "done": done} for g, done in zip(challenge.goals, self.goal_done, strict=True)
                 ],
+                # The transcript rides the state stream so any frontend renders
+                # the conversation without a second channel to subscribe to.
+                "transcript": list(self.transcript),
+                "path_len_m": round(self.path_len_m, 2),
             }
         return block
 
@@ -846,7 +1495,7 @@ class ChallengeChatBridge:
             finished.set()
             watchdog.join()
 
-    def __init__(self, engine: ChallengeEngine, url: str = "ws://127.0.0.1:9090"):
+    def __init__(self, engine: ChallengeEngine, url: str = _rosbridge_default()):
         self.engine = engine
         self.url = url
         self._subscribed = threading.Event()
@@ -974,17 +1623,55 @@ class ChallengeChatBridge:
 
 
 class SkillEventBridge:
-    """Feeds robot skill lifecycle events into the engine: subscribes to
-    /brain/skill_status_update over the sim stack's rosbridge websocket
-    (127.0.0.1:9090, JSON protocol). Reconnects forever; entirely
-    best-effort -- the sim never depends on it."""
+    """Feeds what the robot DOES and what it SAYS into the engine.
+
+    Subscribes over the sim stack's rosbridge websocket (127.0.0.1:9090, JSON
+    protocol) to two topics: /brain/skill_status_update for skill lifecycle
+    events, and /brain/chat_out so spoken answers can be judged. Without the
+    second, every goal about speech is unpassable on the live stack while the
+    in-process path judges it fine -- two judges wearing one name. Reconnects
+    forever; entirely best-effort -- the sim never depends on it.
+    """
 
     TOPIC = "/brain/skill_status_update"
+    CHAT_TOPIC = "/brain/chat_out"
 
-    def __init__(self, engine: ChallengeEngine, url: str = "ws://127.0.0.1:9090"):
+    def __init__(self, engine: ChallengeEngine, url: str = _rosbridge_default()):
         self.engine = engine
         self.url = url
         threading.Thread(target=self._run, daemon=True).start()
+
+    @classmethod
+    def event_for(cls, message: str) -> dict | None:
+        """The engine event one rosbridge frame carries, or None.
+
+        A skill lifecycle update is posted as it is. The robot's speech becomes
+        a `say` event, NOT `answer`: `answer` is the structured channel where a
+        wrong value is a guess and three guesses disqualify the episode
+        (Answered), and the live robot has no such channel -- it only talks.
+        Turning its talk into claims meant three progress remarks ("on my
+        way", "checking the counter", "one moment") before the right count
+        disqualified the correct answer that followed, while the in-process
+        agent's identical speech, arriving as `say`, passed. Both are judged
+        by the same whole-word rule now.
+
+        Only the ROBOT's own speech, and `sender == "robot"` is the whole
+        test. chat_out carries robot | robot_thoughts | system | skill_output:
+        an exclusion list let the inner monologue and every tool result answer
+        the question for it, so a thought containing the right number scored
+        as the robot saying it.
+        """
+        frame = json.loads(message)
+        topic = frame.get("topic")
+        if topic == cls.TOPIC:
+            return json.loads(frame["msg"]["data"])
+        if topic == cls.CHAT_TOPIC:
+            said = json.loads(frame["msg"]["data"])
+            if said.get("sender") == "robot":
+                text = str(said.get("text", ""))
+                if text.strip():
+                    return {"type": "say", "text": text}
+        return None
 
     def _run(self) -> None:
         try:
@@ -997,6 +1684,7 @@ class SkillEventBridge:
             try:
                 with connect(self.url, open_timeout=5) as ws:
                     ws.send(json.dumps({"op": "subscribe", "topic": self.TOPIC, "type": "std_msgs/String"}))
+                    ws.send(json.dumps({"op": "subscribe", "topic": self.CHAT_TOPIC, "type": "std_msgs/String"}))
                     if not announced:
                         print(f"[challenges] skill events connected ({self.url})", flush=True)
                         announced = True
@@ -1006,9 +1694,9 @@ class SkillEventBridge:
                         # the connection -- a teardown here sleeps 5s, and
                         # rosbridge does not replay what was published meanwhile.
                         try:
-                            frame = json.loads(message)
-                            if frame.get("topic") == self.TOPIC:
-                                self.engine.post_event(json.loads(frame["msg"]["data"]))
+                            event = self.event_for(message)
+                            if event is not None:
+                                self.engine.post_event(event)
                         except Exception as exc:  # noqa: BLE001 -- junk on the bus; keep listening
                             print(f"[challenges] ignoring skill event: {exc!r}", flush=True)
             except Exception:  # noqa: BLE001,S110 -- rosbridge down/restarting; retry
