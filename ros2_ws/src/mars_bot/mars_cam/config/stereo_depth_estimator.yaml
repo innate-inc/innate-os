@@ -191,6 +191,18 @@ arm_camera_driver:
     # 1m and 24cm at 2m. A far point should not carry a near point's authority.
     evidence.confidence_full_trust_m: 0.8
     evidence.confidence_no_trust_m: 2.0
+    # How far from base_link a REMEMBERED voxel may still be asserted.
+    #
+    # Confirmed voxels are republished every frame until their score decays, so
+    # an obstacle survives a maneuver that carries it out of the corridor. The
+    # cost is that memory is asserted where the camera is not looking, where
+    # odom drift moves it and nothing can correct it. Bounding by the corridor
+    # would delete the maneuver memory, so this bounds by range instead.
+    #
+    # 1.2m holds an obstacle the robot is steering around, and sits under STVL's
+    # obstacle_range of 1.5m — beyond that the point is discarded downstream
+    # anyway, so publishing it only invites drift.
+    evidence.publish_radius_m: 1.20
 
     # ── Online floor estimation ───────────────────────────────────────────
     #
