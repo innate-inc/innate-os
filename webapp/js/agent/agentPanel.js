@@ -53,12 +53,8 @@ const CHAT_EXAMPLES = [
  *   startMic: () => Promise<void>,
  *   stopMic: () => void,
  *   micMount: HTMLElement,
- *   listenMount: HTMLElement,
  *   setCompact: (on: boolean) => void
  * }}
- *   listenMount, at the composer's left edge, is where the page parks the
- *   robot-mic toggle (hear the robot through the browser); it stays put while
- *   the user types, unlike micMount, which yields to the send button.
  *   setCompact swaps the right-edge dock for the bottom sheet (agentSheet.js).
  */
 export function createAgentPanel(root, rosClient, agentState, opts) {
@@ -177,8 +173,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   placeholder.textContent = CHAT_EXAMPLES[0];
   const micMount = document.createElement("div");
   micMount.className = "agent-compose-mic";
-  const listenMount = document.createElement("div");
-  listenMount.className = "agent-compose-listen";
   const focusHint = document.createElement("button");
   focusHint.type = "button";
   focusHint.className = "tts-key tts-focus-key agent-compose-focus-key";
@@ -191,7 +185,7 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   send.innerHTML = '<span class="agent-compose-send-icon" aria-hidden="true"></span>';
   send.setAttribute("aria-label", "Send message");
   send.title = "Send message";
-  form.append(listenMount, input, placeholder, focusHint);
+  form.append(input, placeholder, focusHint);
   if (opts.enableMic) form.append(micMount);
   form.append(send);
   function syncComposerAction() {
@@ -385,7 +379,6 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     startMic,
     stopMic,
     micMount,
-    listenMount,
     setCompact(on) {
       // Compact drops the control panel's header for the sheet's.
       if (on) sheet.actionSlot.append(directives.toggleEl);

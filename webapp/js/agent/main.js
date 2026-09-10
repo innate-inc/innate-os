@@ -77,6 +77,10 @@ function buildAgentView(root) {
   const cornerStack = document.createElement("div");
   cornerStack.className = "overlay-stack-top-left";
   root.append(cornerStack);
+  // The row under the camera tiles: the route toggle under the arm tile at the
+  // left, the robot-mic toggle under the map tile at the right.
+  const cornerToggles = document.createElement("div");
+  cornerToggles.className = "overlay-stack-row";
   const agentState = sharedAgentState();
 
   const cameraSwitch = createCameraSwitch(root, session, ros, {
@@ -257,16 +261,16 @@ function buildAgentView(root) {
   const ribbonStage = realVideo?.el ?? feedFrame.querySelector(".video-stage");
   if (ribbonStage instanceof HTMLElement) {
     parts.push(
-      createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, cornerStack, ros, session),
+      createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, cornerToggles, ros, session),
       createTargetingOverlay(ribbonStage, realVideo?.videoEl ?? null, session),
     );
   }
   // Teleop's robot-mic toggle: hear the robot, its speaker included, through its
-  // own microphone. It sits in the chat composer, with the conversation it belongs
-  // to. The sim streams no mic, so it gets no toggle (config.simControls).
+  // own microphone. The sim streams no mic, so it gets no toggle (config.simControls).
   if (!config.simControls && realVideo) {
-    parts.push(createAudioToggle(panel.listenMount, session, realVideo.audioEl));
+    parts.push(createAudioToggle(cornerToggles, session, realVideo.audioEl));
   }
+  cornerStack.append(cornerToggles);
 
   session.start();
 
