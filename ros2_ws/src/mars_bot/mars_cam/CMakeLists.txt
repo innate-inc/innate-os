@@ -294,6 +294,12 @@ install(PROGRAMS
   RENAME stereo_calibrator
 )
 
+install(PROGRAMS
+  mars_cam/ground_plane_check.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME ground_plane_check
+)
+
 # Install launch files
 install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch
@@ -316,6 +322,9 @@ if(BUILD_TESTING)
   # Unit tests for the pure (ROS-free) checkerboard calibration helpers.
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_checkerboard_calibration test/test_checkerboard_calibration.py
+    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  ament_add_pytest_test(test_ground_plane test/test_ground_plane.py
     APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
   )
 
