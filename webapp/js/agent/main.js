@@ -167,6 +167,7 @@ function buildAgentView(root) {
   let lastRobotLine = "";
   let robotLineCount = 0;
   let motionAt = 0;
+  let navigating = false;
   let recalledAt = 0;
   let turnedAt = 0;
   const panel = createAgentPanel(root, ros, agentState, {
@@ -183,7 +184,10 @@ function buildAgentView(root) {
       robotLineCount += 1;
     },
     onSkillStatus: ({ skill, status }) => {
-      if (status === "running" && /(^|\/)navigate_to_position$/.test(skill)) motionAt = Date.now();
+      if (/(^|\/)navigate_to_position$/.test(skill)) {
+        navigating = status === "running";
+        if (navigating) motionAt = Date.now();
+      }
       if (status === "running" && /(^|\/)turn_in_place$/.test(skill)) turnedAt = Date.now();
       if (status === "completed" && /(^|\/)search_memory$/.test(skill)) recalledAt = Date.now();
     },
@@ -213,6 +217,7 @@ function buildAgentView(root) {
     cancelSkill: () => ros.callService(CANCEL_SKILL_SERVICE, {}),
     motionAt: () => motionAt,
     resetMotion: () => { motionAt = 0; },
+    navigating: () => navigating,
     recalledAt: () => recalledAt,
     turnedAt: () => turnedAt,
     overlay: (/** @type {(event: any) => void} */ cb) =>

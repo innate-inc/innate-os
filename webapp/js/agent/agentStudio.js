@@ -127,7 +127,7 @@ function write(store, key, value) {
  * @param {any} panel the chat panel: offers, narration, onboarding
  * @param {{
  *   lastLine: () => string, spokenCount: () => number, cancelSkill: () => Promise<unknown>,
- *   motionAt: () => number, resetMotion: () => void,
+ *   motionAt: () => number, resetMotion: () => void, navigating?: () => boolean,
  *   recalledAt: () => number, turnedAt: () => number, armedAgent?: () => string,
  *   armAgent?: (id: string) => void, onCreateAgent?: (cb: () => void) => void,
  *   dockDirectives?: (host: HTMLElement | null) => void,
@@ -456,11 +456,29 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     render(true);
   }
 
+  // Finding the way out is done on the lidar: while the robot drives the Backrooms, the walls
+  // show as it senses them. The scene setup's own Lidar chip is what gets pressed, so the
+  // interface agrees with the stage and the person sees where the switch lives.
+  let lidarShown = false;
+  let lidarExplained = false;
+  /** @param {boolean} on */
+  function showLidar(on) {
+    if (on === lidarShown) return;
+    const chip = [...root.querySelectorAll(".sim-scene-setup .sim-scene-button")].find((b) => b.textContent?.trim() === "Lidar");
+    if (!(chip instanceof HTMLElement)) return;
+    lidarShown = on;
+    if ((chip.getAttribute("aria-pressed") === "true") !== on) chip.click();
+    if (!on || lidarExplained) return;
+    lidarExplained = true;
+    void panel.narrate("The dots are its lidar: the walls as MARS senses them.", { local: true });
+  }
+
   /** Whatever the last run left mid-air: a running skill, a cued tile, and a camera the
    * story switched to for a grasp. None of it belongs to the next thing the person does. */
   function leaveStage() {
     void opts.cancelSkill().catch(() => {});
     uncue();
+    showLidar(false);
     hideDragHint();
     opts.showView?.("orbit");
   }
@@ -857,7 +875,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const key = JSON.stringify([
       s.currentDirective, [...s.activeSkills].sort(), agent, r && { ...r, brief: undefined },
       o && { id: o.id, state: o.state, attempt_id: o.attempt_id }, who, name, env, switching(), dockOpen,
-      graduationReady, sceneTaught, sceneSetupOpen(), spoken(), Date.now() < whiteUntil, opts.motionAt() > 0,
+      graduationReady, sceneTaught, sceneSetupOpen(), spoken(), Date.now() < whiteUntil, opts.motionAt() > 0, opts.navigating?.(),
       opts.recalledAt(), opts.turnedAt(),
       draft, saving, saveStatus, chooserOpen, tab, roster.length,
     ]);
@@ -912,6 +930,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       }, 1500);
     }
     if (o?.state === "passed" && graduatedAttempt !== o.attempt_id) armGraduation(o);
+    showLidar(!!o && o.state !== "passed" && env === "backrooms" && !switching() && !!opts.navigating?.());
     inviteSceneSetup(!!o && o.state === "passed" && graduationReady && env === "backrooms" && !switching() && !sceneTaught);
 
     // Story mode: the world is running the story, and only then.
