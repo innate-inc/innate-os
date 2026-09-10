@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
+#
+# Portions of this file are derived from LeRobot
+# (lerobot.common.policies.act.modeling_act), Copyright 2024 Tony Z. Zhao and
+# The HuggingFace Inc. team, licensed under the Apache License, Version 2.0.
+# The algorithm is described in https://arxiv.org/abs/2304.13705.
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field

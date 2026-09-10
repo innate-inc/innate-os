@@ -9,7 +9,7 @@
     so the full innate-os stack runs against it unchanged.
   </description>
   <maintainer email="david@innate.bot">Innate</maintainer>
-  <license>Proprietary</license>
+  <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>std_msgs</depend>

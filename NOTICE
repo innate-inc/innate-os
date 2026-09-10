@@ -1,0 +1,63 @@
+Innate OS
+Copyright 2026 Innate Inc.
+
+This product includes software developed at Innate Inc., licensed under the
+Apache License, Version 2.0. See LICENSE.
+
+It also includes third-party material, listed below.
+
+--------------------------------------------------------------------------------
+LeRobot -- Apache License, Version 2.0
+--------------------------------------------------------------------------------
+
+ros2_ws/src/brain/manipulation/manipulation/ACT.py is derived from LeRobot
+(https://github.com/huggingface/lerobot), specifically
+lerobot.common.policies.act.modeling_act, Copyright 2024 Tony Z. Zhao and The
+HuggingFace Inc. team.
+
+The Action Chunking Transformer it implements is described in "Learning
+Fine-Grained Bimanual Manipulation with Low-Cost Hardware"
+(https://arxiv.org/abs/2304.13705).
+
+--------------------------------------------------------------------------------
+NVIDIA CORPORATION & AFFILIATES -- Apache License, Version 2.0
+--------------------------------------------------------------------------------
+
+scripts/debug/disparity_visualizer.py is Copyright (c) 2022-2024 NVIDIA
+CORPORATION & AFFILIATES. The full notice is retained in the file header.
+
+--------------------------------------------------------------------------------
+three.js -- MIT License
+--------------------------------------------------------------------------------
+
+Copyright 2010-2023 Three.js Authors (https://threejs.org).
+
+    webapp/public/vendor/three.module.min.r160.js
+    webapp/public/vendor/OrbitControls.r160.js
+    webapp/public/vendor/STLLoader.r160.js
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+--------------------------------------------------------------------------------
+Simulator assets
+--------------------------------------------------------------------------------
+
+Simulator environments and props are fetched at build time rather than stored in
+this repository, and several are third-party works under Creative Commons
+Attribution 4.0. Per-asset credits are in sim/ATTRIBUTION.md, which is also
+shipped inside the published asset and viewer images.

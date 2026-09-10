@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 """
-KDL-based IK node loading URDF directly from mars_sim and using the package-local URDF→KDL parser (urdf.py).
+KDL-based IK node loading URDF directly from mars_sim.
 """
 
 import math
@@ -13,11 +13,10 @@ import PyKDL as kdl
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped, Twist
+from kdl_parser_py.urdf import treeFromUrdfModel
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from urdf_parser_py.urdf import URDF
-
-from mars_arm.urdf import treeFromUrdfModel  # local parser in urdf.py
 
 
 class KDLIKNode(Node):

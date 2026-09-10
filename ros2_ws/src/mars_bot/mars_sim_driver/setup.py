@@ -16,7 +16,7 @@ setup(
     install_requires=["setuptools"],
     zip_safe=True,
     description="Virtual MARS: headless MuJoCo sim impersonating the hardware drivers",
-    license="Proprietary",
+    license="Apache-2.0",
     entry_points={
         "console_scripts": [
             "sim_driver = mars_sim_driver.node:main",

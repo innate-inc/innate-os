@@ -18,6 +18,15 @@ concurrency:
 
 jobs:
   integration-test:
+    # A fork PR gets neither the repo vars nor an OIDC token, so the auth step
+    # would fail on every outside contribution. github.repository is the *base*
+    # repo on pull_request, so it cannot tell a fork PR apart on its own — the
+    # head repo can.
+    if: >-
+      github.repository == 'innate-inc/innate-os' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+
     # Runs on a GitHub-hosted runner, but the heavy build+test executes on
     # Google Cloud Build (ci/cloudbuild.integration-test.yaml). This runner only
     # authenticates and submits the build — no Docker work happens here, so it no
