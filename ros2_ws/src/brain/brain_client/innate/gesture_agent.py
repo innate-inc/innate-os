@@ -118,6 +118,7 @@ class DemonstrationAgentPolicy(GesturePolicy):
     def _request(self, content):
         body = {
             "model": "gpt-6-astra",
+            "service_tier": "priority",
             "store": False,
             "reasoning": {"effort": "low"},
             "instructions": INSTRUCTIONS,
