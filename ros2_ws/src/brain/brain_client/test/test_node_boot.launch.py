@@ -105,7 +105,7 @@ class TestNodesBoot(unittest.TestCase):
         self.assertIn("current_directive", status)
 
         health = json.loads(self._wait_for_message("/brain/websocket_status", String, timeout_sec=30.0).data)
-        # No Gemini credentials in CI: the local brain must say so truthfully
+        # No model credentials in CI: the local brain must say so truthfully
         # rather than crash or claim readiness.
-        self.assertIn(health.get("backend"), ("unconfigured", "innate-proxy", "gemini-direct"))
+        self.assertIn(health.get("backend"), ("unconfigured", "innate-proxy", "gemini-direct", "openai-direct"))
         self.assertIn("connected", health)

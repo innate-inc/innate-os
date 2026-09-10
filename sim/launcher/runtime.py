@@ -2998,7 +2998,7 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
     elif config["brain_backend"] == INNATE_BACKEND:
         llm_level, llm_label = "healthy", "innate proxy"
     else:
-        llm_level, llm_label = "healthy", "gemini key"
+        llm_level, llm_label = "healthy", f"{config['brain_backend']} key"
 
     if all(level == "healthy" for level in (world_level, sim_level, transport_level, brain_level, llm_level)):
         stack_mood = ("healthy", "LIVE")

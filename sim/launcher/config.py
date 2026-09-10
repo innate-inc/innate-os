@@ -86,12 +86,15 @@ PUBLISHED_PORT_ENV = {
     "SIM_UDP_PORT": str(SIM_UDP_PORT),
     "SIM_FOXGLOVE_PORT": str(SIM_FOXGLOVE_PORT),
 }
-# How brain_client reaches Gemini: through the Innate proxy with a service key,
-# straight at Google with a Gemini key, or not at all.
+# How brain_client reaches its model: through the Innate proxy with a service
+# key, straight at a vendor with that vendor's own key, or not at all.
 INNATE_BACKEND = "innate"
 GEMINI_BACKEND = "gemini"
+OPENAI_BACKEND = "openai"
 NO_BACKEND = "none"
 GEMINI_API_KEY = "GEMINI_API_KEY"
+OPENAI_API_KEY = "OPENAI_API_KEY"
+BRAIN_BACKEND = "BRAIN_BACKEND"  # which provider the robot's brain thinks with
 INNATE_SERVICE_KEY = "INNATE_SERVICE_KEY"
 AUTO_OS_IMAGE = "auto"
 LOCAL_OS_IMAGE = "local"
@@ -238,7 +241,7 @@ LEGACY_SHARED_CONTAINER = "innate-dev"
 LEGACY_SHARED_PROJECT = "innate-os"
 LEGACY_CLOUD_AGENT_CONTAINER = "innate-cloud-agent"
 OS_CONTAINER_TMUX_CMD = "./scripts/launch_sim_in_tmux.zsh --detach"
-SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY)
+SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY, OPENAI_API_KEY)
 LOG_TARGETS = {
     "bootstrap": BOOTSTRAP_LOG_PATH,
     "compose": COMPOSE_LOG_PATH,
@@ -461,17 +464,23 @@ def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
 
 
 def resolve_brain_backend(env: dict[str, str]) -> str:
-    """Which key the in-process brain (brain_client) will use to reach Gemini.
+    """Which key the in-process brain (brain_client) will use to reach its model.
 
-    The service key wins: it also buys voice, which a Gemini key does not.
-    brain_client's `Backend` (brain/transport.py) makes the real choice and owns
-    this precedence; the launcher runs on the host and cannot import it, so this
-    restates the rule. Change one and change the other.
+    The service key wins: it also buys voice, and it covers every provider,
+    which a vendor key does not. Below it, the vendor key that matches
+    BRAIN_BACKEND is the one the brain will actually use — a key for the other
+    vendor leaves it unconfigured, which is what this reports.
+
+    brain_client's `pick_conversation` (brain/llm/__init__.py) makes the real
+    choice and owns this precedence; the launcher runs on the host and cannot
+    import it, so this restates the rule. Change one and change the other.
     """
     if is_configured_secret_value(INNATE_SERVICE_KEY, env.get(INNATE_SERVICE_KEY, "")):
         return INNATE_BACKEND
-    if is_configured_secret_value(GEMINI_API_KEY, env.get(GEMINI_API_KEY, "")):
-        return GEMINI_BACKEND
+    provider = (env.get(BRAIN_BACKEND, "") or GEMINI_BACKEND).strip().lower()
+    vendor_key = OPENAI_API_KEY if provider == OPENAI_BACKEND else GEMINI_API_KEY
+    if is_configured_secret_value(vendor_key, env.get(vendor_key, "")):
+        return OPENAI_BACKEND if provider == OPENAI_BACKEND else GEMINI_BACKEND
     return NO_BACKEND
 
 

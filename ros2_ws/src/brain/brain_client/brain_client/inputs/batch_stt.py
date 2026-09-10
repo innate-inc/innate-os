@@ -28,11 +28,11 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
-from brain_client.brain.transport import GENERATE_PATH
+from brain_client.brain.llm.gemini.transport import GENERATE_PATH
 from brain_client.inputs.vad import MIC_SAMPLE_RATE, pcm16_to_f32, resample_24k_to_16k
 
 if TYPE_CHECKING:
-    from brain_client.brain.transport import GeminiRest
+    from brain_client.brain.llm.gemini.transport import GeminiRest
     from brain_client.common.logging import UniversalLogger
     from innate_proxy import ProxyClient
 

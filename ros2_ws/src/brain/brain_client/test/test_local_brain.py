@@ -2,28 +2,32 @@
 # Copyright (c) 2026 Innate Inc
 """Unit tests for the local brain's pure core (no ROS, no network).
 
-Covers the Gemini layer the agent loop depends on: skill metadata -> tool
-declarations, response -> Decision (speech / thoughts / calls), and the history
-pruning that keeps requests small (the "image cache"). GeminiContext only
-touches the network in generate(), so everything else is exercised directly
-with a None or capturing transport.
+Covers the model layer the agent loop depends on: skill metadata -> tool specs
+(and their Gemini rendering), response -> Decision (speech / thoughts / calls),
+and the history pruning that keeps requests small (the "image cache"). A
+conversation only touches the network in generate(), so everything else is
+exercised directly with a None or capturing transport.
 """
 
 import json
 
 import pytest
 
-from brain_client.brain.context import GeminiContext, _decision_from
-from brain_client.brain.prompt import build_system_prompt
-from brain_client.brain.tools import (
+from brain_client.brain.llm.gemini import wire
+from brain_client.brain.llm.gemini.context import GeminiConversation, _decision_from
+from brain_client.brain.llm.tools import (
     STOP_SKILL,
     WAIT,
     assign_tool_names,
     build_tools,
     tool_name,
 )
+from brain_client.brain.prompt import build_system_prompt
+from brain_client.brain.utils import FrameLabel
 
 JPEG = b"\xff\xd8\xff\xe0fakejpegbytes"
+HEAD = [(FrameLabel.HEAD, JPEG)]
+HEAD_AND_WRIST = [(FrameLabel.HEAD, JPEG), (FrameLabel.WRIST, JPEG)]
 
 NAV_SKILL = {
     "id": "innate-os/navigate_to_position",
@@ -39,8 +43,8 @@ NAV_SKILL = {
 WAVE_SKILL = {"id": "local/wave", "name": "wave", "guidelines": "Wave the arm.", "inputs": {}}
 
 
-def make_context(transport=None, max_history=60, max_image_turns=2) -> GeminiContext:
-    return GeminiContext(
+def make_context(transport=None, max_history=60, max_image_turns=2) -> GeminiConversation:
+    return GeminiConversation(
         transport, model="test-model", thinking_level="", max_history=max_history, max_image_turns=max_image_turns
     )
 
@@ -66,7 +70,7 @@ def test_tool_name_sanitizes_invalid_characters():
 
 
 def test_tool_name_never_starts_with_a_digit():
-    # Gemini requires function names to start with a letter or underscore; a
+    # Providers require function names to start with a letter or underscore; a
     # digit-leading skill would 400 every request while it is active.
     assert tool_name("3d_scan") == "_3d_scan"
     assert tool_name("-dash") == "_-dash"
@@ -88,54 +92,62 @@ def test_assign_tool_names_disambiguates_collisions_and_builtins():
     assert names[2] == "wait_2"
     assert len(names) == len(set(names)) and WAIT not in names
     assert all(len(name) <= 64 for name in names)
-    # The declarations use the same disambiguated names.
-    declared = [d["name"] for d in build_tools(named, None)[0]["functionDeclarations"]]
-    assert declared[:5] == names
+    # The specs use the same disambiguated names.
+    assert [spec.name for spec in build_tools(named, None)][:5] == names
 
 
 def test_build_tools_declares_one_function_per_skill_plus_wait():
-    tools = build_tools(assign_tool_names([NAV_SKILL, WAVE_SKILL]), None)
-    declarations = tools[0]["functionDeclarations"]
-    assert [d["name"] for d in declarations] == ["navigate_to_position", "wave", "wait"]
+    specs = build_tools(assign_tool_names([NAV_SKILL, WAVE_SKILL]), None)
+    assert [spec.name for spec in specs] == ["navigate_to_position", "wave", "wait"]
 
-    nav = declarations[0]
-    assert nav["description"] == NAV_SKILL["guidelines"]
-    params = nav["parameters"]
+    nav = specs[0]
+    assert nav.description == NAV_SKILL["guidelines"]
+    assert nav.parameters["type"] == "object"
+    assert set(nav.parameters["properties"]) == {"x", "y", "local_frame", "mode"}
+    assert nav.parameters["required"] == ["x", "y"]
+    assert nav.parameters["properties"]["x"]["type"] == "number"
+    assert nav.parameters["properties"]["local_frame"]["type"] == "boolean"
+    assert nav.parameters["properties"]["mode"]["enum"] == ["fast", "safe"]
+    # No-input skills must not carry an empty object schema.
+    assert specs[1].parameters is None
+
+
+def test_gemini_wire_uppercases_the_schema_types():
+    # Gemini's dialect is JSON Schema with the type names uppercased; sending
+    # them lowercase 400s the request.
+    declarations = wire.tools_block(build_tools(assign_tool_names([NAV_SKILL, WAVE_SKILL]), None))[0][
+        "functionDeclarations"
+    ]
+    params = declarations[0]["parameters"]
     assert params["type"] == "OBJECT"
-    assert set(params["properties"]) == {"x", "y", "local_frame", "mode"}
-    assert params["required"] == ["x", "y"]
     assert params["properties"]["x"]["type"] == "NUMBER"
     assert params["properties"]["local_frame"]["type"] == "BOOLEAN"
     assert params["properties"]["mode"]["enum"] == ["fast", "safe"]
-    # No-input skills must not carry an empty object schema.
     assert "parameters" not in declarations[1]
 
 
 def test_build_tools_while_running_offers_only_stop_and_wait():
-    declarations = build_tools([], "navigate_to_position")[0]["functionDeclarations"]
-    assert [d["name"] for d in declarations] == [STOP_SKILL, "wait"]
-    assert "navigate_to_position" in declarations[0]["description"]
+    specs = build_tools([], "navigate_to_position")
+    assert [spec.name for spec in specs] == [STOP_SKILL, "wait"]
+    assert "navigate_to_position" in specs[0].description
 
 
 def test_build_tools_while_running_with_user_speech_offers_stop_alone():
     # Offered any no-op tool the model calls it and goes silent, so a turn
     # carrying a user message gets stop alone — text becomes the reply channel.
-    declarations = build_tools([], "wave", user_spoke=True)[0]["functionDeclarations"]
-    assert [d["name"] for d in declarations] == [STOP_SKILL]
-    assert "NOT reasons to stop" in declarations[0]["description"]
+    specs = build_tools([], "wave", user_spoke=True)
+    assert [spec.name for spec in specs] == [STOP_SKILL]
+    assert "NOT reasons to stop" in specs[0].description
 
 
 def test_build_tools_with_no_skills_still_offers_wait():
-    declarations = build_tools([], None)[0]["functionDeclarations"]
-    assert [d["name"] for d in declarations] == ["wait"]
+    assert [spec.name for spec in build_tools([], None)] == ["wait"]
 
 
 def test_unknown_param_type_falls_back_to_annotated_string():
     skill = {"id": "s", "name": "s", "guidelines": "g", "inputs": {"blob": {"type": "list[str]", "required": True}}}
-    schema = build_tools(assign_tool_names([skill]), None)[0]["functionDeclarations"][0]["parameters"]["properties"][
-        "blob"
-    ]
-    assert schema["type"] == "STRING"
+    schema = build_tools(assign_tool_names([skill]), None)[0].parameters["properties"]["blob"]
+    assert schema["type"] == "string"
     assert "list[str]" in schema["description"]
 
 
@@ -164,8 +176,8 @@ def test_decision_tolerates_empty_or_malformed_response():
 # ---------- history / image pruning ----------
 
 
-def user_turn(text: str, with_image: bool) -> dict:
-    return GeminiContext.user_message(text, [JPEG] if with_image else [])
+def user_turn(context: GeminiConversation, text: str, with_image: bool) -> dict:
+    return context.open_turn(text, HEAD if with_image else [])
 
 
 def images_in(content: dict) -> int:
@@ -175,7 +187,7 @@ def images_in(content: dict) -> int:
 def test_prune_keeps_images_only_in_newest_turns():
     context = make_context(max_image_turns=2)
     for i in range(5):
-        context.absorb(user_turn(f"turn {i}", with_image=True), model_response({"text": "ok"}))
+        context.commit(user_turn(context, f"turn {i}", with_image=True), model_response({"text": "ok"}))
 
     user_turns = [c for c in context._history if c["role"] == "user"]
     assert [images_in(c) for c in user_turns] == [0, 0, 0, 1, 1]
@@ -184,13 +196,12 @@ def test_prune_keeps_images_only_in_newest_turns():
     assert any("removed" in p.get("text", "") for p in user_turns[0]["parts"])
 
 
-def test_absorb_keeps_only_the_newest_wrist_frame():
+def test_commit_keeps_only_the_newest_wrist_frame():
     # Head frames follow the image-turn window; wrist frames are latest-only —
     # a stale gripper close-up reads as current grasp state.
     context = make_context(max_image_turns=3)
     for i in range(3):
-        message = GeminiContext.user_message(f"turn {i}", [JPEG, JPEG])  # head + wrist
-        context.absorb(message, model_response({"text": "ok"}), latest_only_images=[1])
+        context.commit(context.open_turn(f"turn {i}", HEAD_AND_WRIST), model_response({"text": "ok"}))
 
     user_turns = [c for c in context._history if c["role"] == "user"]
     assert [images_in(c) for c in user_turns] == [1, 1, 2]
@@ -200,18 +211,14 @@ def test_absorb_keeps_only_the_newest_wrist_frame():
 def test_wrist_frame_survives_turns_without_one():
     # The arm camera going stale must not orphan-prune the one wrist frame left.
     context = make_context(max_image_turns=3)
-    context.absorb(
-        GeminiContext.user_message("with wrist", [JPEG, JPEG]),
-        model_response({"text": "ok"}),
-        latest_only_images=[1],
-    )
-    context.absorb(GeminiContext.user_message("head only", [JPEG]), model_response({"text": "ok"}))
+    context.commit(context.open_turn("with wrist", HEAD_AND_WRIST), model_response({"text": "ok"}))
+    context.commit(context.open_turn("head only", HEAD), model_response({"text": "ok"}))
     user_turns = [c for c in context._history if c["role"] == "user"]
     assert [images_in(c) for c in user_turns] == [2, 1]
 
 
 def test_generate_ships_exactly_one_wrist_frame():
-    # Absorb's prune runs only after the response, so without send-time masking
+    # Commit's prune runs only after the response, so without send-time masking
     # every request would carry the previous turn's wrist frame plus the new one.
     captured = {}
 
@@ -220,18 +227,14 @@ def test_generate_ships_exactly_one_wrist_frame():
         return [model_response({"text": "ok"})]
 
     context = make_context(transport, max_image_turns=3)
-    context.absorb(
-        GeminiContext.user_message("turn 1", [JPEG, JPEG]),
-        model_response({"text": "ok"}),
-        latest_only_images=[1],
-    )
-    context.generate(GeminiContext.user_message("turn 2", [JPEG, JPEG]), [], "S", latest_only_images=[1])
+    context.commit(context.open_turn("turn 1", HEAD_AND_WRIST), model_response({"text": "ok"}))
+    context.generate(context.open_turn("turn 2", HEAD_AND_WRIST), [], "S")
 
     contents = captured["contents"]
     assert images_in(contents[0]) == 1  # previous turn on the wire: head frame only
     assert any("wrist camera frame removed" in p.get("text", "") for p in contents[0]["parts"])
     assert images_in(contents[-1]) == 2  # the new message: head + wrist
-    # Stored history is untouched until absorb commits the exchange.
+    # Stored history is untouched until commit stores the exchange.
     assert images_in(context._history[0]) == 2
 
 
@@ -243,12 +246,8 @@ def test_generate_keeps_the_old_wrist_frame_when_this_turn_has_none():
         return [model_response({"text": "ok"})]
 
     context = make_context(transport, max_image_turns=3)
-    context.absorb(
-        GeminiContext.user_message("turn 1", [JPEG, JPEG]),
-        model_response({"text": "ok"}),
-        latest_only_images=[1],
-    )
-    context.generate(GeminiContext.user_message("turn 2", [JPEG]), [], "S", latest_only_images=[])
+    context.commit(context.open_turn("turn 1", HEAD_AND_WRIST), model_response({"text": "ok"}))
+    context.generate(context.open_turn("turn 2", HEAD), [], "S")
     assert images_in(captured["contents"][0]) == 2  # arm camera stale: last wrist frame still shown
 
 
@@ -258,8 +257,8 @@ def test_generate_taps_the_exact_request_body():
     context = make_context(lambda model, body: [model_response({"text": "ok"})])
     seen = []
     context.on_request = seen.append
-    context.absorb(user_turn("earlier", True), model_response({"text": "old"}))
-    context.generate(user_turn("now", True), tools=[{"functionDeclarations": []}], system="sys")
+    context.commit(user_turn(context, "earlier", True), model_response({"text": "old"}))
+    context.generate(user_turn(context, "now", True), tools=[], system="sys")
     (body,) = seen
     assert body["systemInstruction"]["parts"][0]["text"] == "sys"
     assert [c["role"] for c in body["contents"]] == ["user", "model", "user"]
@@ -269,7 +268,7 @@ def test_generate_taps_the_exact_request_body():
 def test_prune_with_zero_image_turns_strips_every_frame():
     context = make_context(max_image_turns=0)
     for i in range(3):
-        context.absorb(user_turn(f"turn {i}", with_image=True), model_response({"text": "ok"}))
+        context.commit(user_turn(context, f"turn {i}", with_image=True), model_response({"text": "ok"}))
     user_turns = [c for c in context._history if c["role"] == "user"]
     assert all(images_in(c) == 0 for c in user_turns)
 
@@ -277,7 +276,9 @@ def test_prune_with_zero_image_turns_strips_every_frame():
 def test_prune_caps_history_and_never_starts_on_orphaned_function_response():
     context = make_context(max_history=4)
     for i in range(6):
-        decision = context.absorb(user_turn(f"turn {i}", False), model_response(call_part("wave", {}, f"c{i}")))
+        decision = context.commit(
+            user_turn(context, f"turn {i}", False), model_response(call_part("wave", {}, f"c{i}"))
+        )
         context.add_tool_outcomes([(decision.calls[0], "started")])
 
     history = context._history
@@ -286,10 +287,10 @@ def test_prune_caps_history_and_never_starts_on_orphaned_function_response():
     assert not any("functionResponse" in p for p in history[0]["parts"])
 
 
-def test_absorb_drops_thought_parts_from_stored_history():
+def test_commit_drops_thought_parts_from_stored_history():
     context = make_context()
-    context.absorb(
-        user_turn("hi", False),
+    context.commit(
+        user_turn(context, "hi", False),
         model_response({"text": "planning...", "thought": True}, {"text": "Hello!"}),
     )
     model_turn = context._history[-1]
@@ -299,15 +300,15 @@ def test_absorb_drops_thought_parts_from_stored_history():
 
 def test_clear_empties_history():
     context = make_context()
-    context.absorb(user_turn("hi", False), model_response({"text": "hello"}))
+    context.commit(user_turn(context, "hi", False), model_response({"text": "hello"}))
     context.clear()
     assert context._history == []
 
 
 def test_tool_outcomes_are_recorded_as_function_responses():
     context = make_context()
-    decision = context.absorb(
-        user_turn("go", False), model_response(call_part("navigate_to_position", {"x": 1}, "abc"))
+    decision = context.commit(
+        user_turn(context, "go", False), model_response(call_part("navigate_to_position", {"x": 1}, "abc"))
     )
     context.add_tool_outcomes([(decision.calls[0], "started")])
     part = context._history[-1]["parts"][0]["functionResponse"]
@@ -326,10 +327,10 @@ def test_generate_builds_a_complete_native_request():
 
     context = make_context(transport=transport)
     tools = build_tools(assign_tool_names([WAVE_SKILL]), None)
-    context.generate(user_turn("hello", True), tools, "SYSTEM")
+    context.generate(user_turn(context, "hello", True), tools, "SYSTEM")
     assert captured["model"] == "test-model"
     assert captured["systemInstruction"] == {"parts": [{"text": "SYSTEM"}]}
-    assert captured["tools"] == tools
+    assert captured["tools"] == wire.tools_block(tools)
     assert captured["generationConfig"]["thinkingConfig"] == {"includeThoughts": True}
     assert images_in(captured["contents"][-1]) == 1
 
@@ -341,8 +342,8 @@ def test_generate_sets_thinking_level_when_configured():
         captured.update(body)
         return [model_response({"text": "ok"})]
 
-    context = GeminiContext(transport, model="m", thinking_level="high", max_history=10, max_image_turns=2)
-    context.generate(user_turn("hi", False), [], "S")
+    context = GeminiConversation(transport, model="m", thinking_level="high", max_history=10, max_image_turns=2)
+    context.generate(user_turn(context, "hi", False), [], "S")
     assert captured["generationConfig"]["thinkingConfig"] == {"includeThoughts": True, "thinkingLevel": "high"}
 
 
@@ -355,7 +356,7 @@ def test_generate_streams_speech_deltas_and_assembles_the_response():
     ]
     heard = []
     context = make_context(transport=lambda model, body: iter(chunks))
-    response = context.generate(user_turn("hi", False), [], "S", on_speech=heard.append)
+    response = context.generate(user_turn(context, "hi", False), [], "S", on_speech=heard.append)
 
     assert heard == ["One. ", "Two"]  # thoughts never reach the speech stream
     parts = response["candidates"][0]["content"]["parts"]
@@ -373,16 +374,16 @@ def test_generate_raises_on_an_empty_stream_instead_of_committing_silence():
     blocked = {"promptFeedback": {"blockReason": "SAFETY"}}
     context = make_context(transport=lambda model, body: iter([blocked]))
     with pytest.raises(RuntimeError, match="SAFETY"):
-        context.generate(user_turn("hi", False), [], "S")
+        context.generate(user_turn(context, "hi", False), [], "S")
 
     empty_candidate = {"candidates": [{"finishReason": "MALFORMED_FUNCTION_CALL"}]}
     context = make_context(transport=lambda model, body: iter([empty_candidate]))
     with pytest.raises(RuntimeError, match="MALFORMED_FUNCTION_CALL"):
-        context.generate(user_turn("hi", False), [], "S")
+        context.generate(user_turn(context, "hi", False), [], "S")
 
     context = make_context(transport=lambda model, body: iter([]))
     with pytest.raises(RuntimeError, match="empty stream"):
-        context.generate(user_turn("hi", False), [], "S")
+        context.generate(user_turn(context, "hi", False), [], "S")
 
 
 # ---------- visual grounding (pixel -> floor target) ----------
@@ -466,8 +467,9 @@ def agent_factory(monkeypatch):
         logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
         node = SimpleNamespace(get_logger=lambda: logger)
         config = SimpleNamespace(
-            gemini_model="m",
-            gemini_thinking_level="",
+            brain_backend="gemini",
+            brain_model="m",
+            brain_thinking_level="",
             history_max_entries=60,
             history_max_image_turns=2,
             idle_turn_interval=3.0,
@@ -681,7 +683,7 @@ def test_go_to_point_rejects_out_of_range_coordinates(agent_factory):
 
 
 def test_chat_failure_after_commit_still_answers_the_models_calls(agent_factory, monkeypatch):
-    # emit_thoughts raising after absorb() must not leave the functionCall
+    # emit_thoughts raising after commit() must not leave the function call
     # unanswered in history — that would poison every later request.
     agent, state = agent_factory()
     no_pause(agent, monkeypatch)

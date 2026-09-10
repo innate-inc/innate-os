@@ -9,7 +9,7 @@ import json
 import httpx
 import pytest
 
-from brain_client.brain.transport import GeminiRest, proxy_rest
+from brain_client.brain.llm.gemini.transport import GeminiRest, proxy_rest
 from brain_client.inputs.batch_stt import (
     ELEVENLABS_PROXY_ENDPOINT,
     NO_SPEECH,

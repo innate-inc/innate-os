@@ -21,8 +21,8 @@ import numpy as np
 import pytest
 
 from brain_client.brain import memory_search as memory_search_module
+from brain_client.brain.llm.gemini.transport import CACHED_CONTENTS_PATH, GeminiHttpError, GeminiRest
 from brain_client.brain.memory_search import MemorySearch, verdict_text
-from brain_client.brain.transport import CACHED_CONTENTS_PATH, GeminiHttpError, GeminiRest
 from brain_client.memory import recorder as recorder_module
 from brain_client.memory import selection as selection_module
 from brain_client.memory.coverage import Coverage, wedge_mask

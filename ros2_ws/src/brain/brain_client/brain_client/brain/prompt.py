@@ -4,31 +4,26 @@
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from brain_client.perception.identity import RobotIdentity
 
-# 384px on the long side on purpose: one Gemini tile (258 tokens) per request.
+# 384px on the long side on purpose: one image tile (~258 tokens) per request.
 _PORTRAIT = Path(__file__).parent.parent / "assets" / "self_portrait.jpg"
-_PORTRAIT_CAPTION = (
+PORTRAIT_CAPTION = (
     "For reference, this is how a black MARS looks. You are this model of robot; your own color may differ."
 )
 
 
-def self_reference_turns() -> list[dict]:
-    """A pinned exchange showing the model its own body. Gemini's
-    systemInstruction is text-only, so the portrait rides at the front of
-    every request's contents instead (GeminiContext's ``reference``)."""
-    if not _PORTRAIT.is_file():
-        return []
-    image = {"inlineData": {"mimeType": "image/jpeg", "data": base64.b64encode(_PORTRAIT.read_bytes()).decode()}}
-    return [
-        {"role": "user", "parts": [{"text": _PORTRAIT_CAPTION}, image]},
-        {"role": "model", "parts": [{"text": "Understood — that is what my model of robot looks like."}]},
-    ]
+def self_portrait() -> bytes | None:
+    """The JPEG the brain is shown of its own body, or None if it is missing.
+
+    Every provider's system instruction is text-only, so each wire module pins
+    this at the front of the request as a reference exchange instead.
+    """
+    return _PORTRAIT.read_bytes() if _PORTRAIT.is_file() else None
 
 
 _SYSTEM_PROMPT = """\

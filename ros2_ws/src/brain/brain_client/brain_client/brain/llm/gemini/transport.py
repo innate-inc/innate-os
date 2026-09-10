@@ -7,6 +7,11 @@ stream and the memory search's blocking generate / context-cache management —
 through untouched (the robot authenticates with its service key); the direct
 path talks to ``generativelanguage.googleapis.com``. Both speak the same wire
 format — a transport only moves payloads and never interprets them.
+
+The blocking half (:class:`GeminiRest`) has no OpenAI counterpart and is not
+meant to grow one: spatial memory search and the frame-file tier are built on
+Gemini's context caching and Files API, so they stay on Gemini whichever
+provider the agent itself thinks with.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import httpx
 
-from brain_client.common.enums import StrEnum
+from brain_client.brain.llm.types import Backend
 
 if TYPE_CHECKING:
     from innate_proxy import ProxyClient
@@ -65,14 +70,6 @@ class GeminiRest:
     upload: Callable[[str, bytes, str], dict]  # (api path, raw bytes, mime type) -> parsed response
 
 
-class Backend(StrEnum):
-    """Which way the brain reaches Gemini (surfaced in health and telemetry)."""
-
-    PROXY = "innate-proxy"
-    DIRECT = "gemini-direct"
-    UNCONFIGURED = "unconfigured"
-
-
 def pick_transport(proxy: ProxyClient | None) -> tuple[Transport | None, Backend]:
     """The way to reach Gemini: the Innate proxy (managed) or GEMINI_API_KEY (dev).
 
@@ -84,7 +81,7 @@ def pick_transport(proxy: ProxyClient | None) -> tuple[Transport | None, Backend
         return proxy_transport(proxy), Backend.PROXY
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if api_key:
-        return direct_transport(api_key), Backend.DIRECT
+        return direct_transport(api_key), Backend.GEMINI_DIRECT
     return None, Backend.UNCONFIGURED
 
 

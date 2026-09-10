@@ -5,49 +5,32 @@
 The native API — unlike the OpenAI-compatible layer — returns *thought
 summaries* (parts flagged ``thought: true``), which the agent surfaces in the
 app chat as robot thoughts. A response is distilled into a plain
-:class:`Decision` the agent loop acts on, and the bounded content history is
-compacted in chunks — old camera frames masked, oldest turns evicted — so
-requests stay small while consecutive requests keep the shared byte prefix
-Gemini's implicit prompt cache needs (see :meth:`GeminiContext._prune`).
+:class:`~brain_client.brain.llm.types.Decision` the agent loop acts on, and the
+bounded content history is compacted in chunks — old camera frames masked,
+oldest turns evicted — so requests stay small while consecutive requests keep
+the shared byte prefix Gemini's implicit prompt cache needs (see
+:meth:`GeminiConversation._prune`).
 
-Threading contract: :meth:`GeminiContext.generate` is the only blocking network
-call and only *reads* the history, so the agent awaits it on a worker thread
-(``asyncio.to_thread``). All history mutation (:meth:`absorb`,
-:meth:`add_tool_outcomes`) happens in the agent's coroutine, strictly between
-generate calls, and :meth:`clear` only runs while the loop task is stopped —
-there is no concurrent access to a context by construction, not by lock.
+Threading contract: see :class:`~brain_client.brain.llm.types.Conversation`.
 """
 
 from __future__ import annotations
 
-import base64
-import re
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from brain_client.brain.transport import Transport
+from brain_client.brain.llm.gemini import wire
+from brain_client.brain.llm.types import Decision, ToolCall, Usage, clean_speech
+from brain_client.brain.utils import FrameLabel
 
-_FRAME_REMOVED = {"text": "[older camera frame removed]"}
-_WRIST_FRAME_REMOVED = {"text": "[older wrist camera frame removed]"}
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
-
-@dataclass
-class ToolCall:
-    name: str
-    args: dict
-    id: str = ""
+    from brain_client.brain.llm.gemini.transport import Transport
+    from brain_client.brain.llm.types import ToolSpec
+    from brain_client.brain.utils import Frame
 
 
-@dataclass
-class Decision:
-    """What the model wants the robot to do this turn."""
-
-    speech: str | None = None
-    thoughts: str | None = None
-    calls: list[ToolCall] = field(default_factory=list)
-
-
-class GeminiContext:
+class GeminiConversation:
     """Bounded model context for Gemini: one generate() per agent turn."""
 
     def __init__(
@@ -72,71 +55,54 @@ class GeminiContext:
         # The one history turn still carrying latest-only frames (wrist camera),
         # as (content, part indexes) — absorbing a newer set prunes these.
         self._latest_only_turn: tuple[dict, list[int]] | None = None
-        # Observability tap: called with the exact request body just before it
-        # goes on the wire (from generate's thread). The body must be treated
-        # as read-only — it shares structure with the live history.
+        # Image positions in the turn open_turn built last, read by generate and
+        # commit. Only the loop thread writes it, and generate reads it while
+        # serializing its body — the same window in which an abandoned turn's
+        # orphaned request is already immune to later history mutation.
+        self._pending_wrist: list[int] = []
+        self._last_usage: Usage = {}
         self.on_request: Callable[[dict], None] | None = None
-        # usageMetadata of the newest response — prompt/cached/output token
-        # counts, surfaced on the trace snapshot (cache-hit observability).
-        self.last_usage: dict[str, int] = {}
 
     def clear(self) -> None:
         self._history = []
         self._latest_only_turn = None
-        self.last_usage = {}
+        self._pending_wrist = []
+        self._last_usage = {}
 
     @property
     def history_len(self) -> int:
         return len(self._history)
 
     @property
-    def image_turn_count(self) -> int:
-        """History turns still carrying camera frames (pruning keeps the newest few)."""
-        return sum(
-            1 for c in self._history if c.get("role") == "user" and any("inlineData" in p for p in c.get("parts") or [])
-        )
+    def last_usage(self) -> Usage:
+        return self._last_usage
 
-    @staticmethod
-    def user_message(text: str, images: list[bytes]) -> dict:
-        parts: list[dict] = [{"text": text}]
-        for jpeg in images:
-            parts.append({"inlineData": {"mimeType": "image/jpeg", "data": base64.b64encode(jpeg).decode()}})
-        return {"role": "user", "parts": parts}
+    @property
+    def image_turn_count(self) -> int:
+        return sum(1 for c in self._history if c.get("role") == "user" and any(wire.is_image(p) for p in _parts(c)))
+
+    def open_turn(self, text: str, frames: list[Frame]) -> dict:
+        self._pending_wrist = [i for i, (label, _) in enumerate(frames) if label == FrameLabel.WRIST]
+        return wire.user_content(text, [jpeg for _, jpeg in frames])
 
     def generate(
         self,
-        user_message: dict,
-        tools: list[dict],
+        turn: dict,
+        tools: list[ToolSpec],
         system: str,
         on_speech: Callable[[str], None] | None = None,
-        *,
-        latest_only_images: list[int] | None = None,
     ) -> dict:
         """Blocking network call — safe on a worker thread (history is only read).
 
-        The reply streams in; every plain-text delta is handed to ``on_speech``
-        as it arrives, which is what lets the robot start talking at the first
-        sentence boundary. Returns the fully assembled response.
-
-        ``latest_only_images`` mirrors :meth:`absorb`'s: when this message
-        carries wrist frames, the previous turn's copies are masked out of the
-        request here — absorb's durable prune runs only after the response, so
-        without this every request would ship two wrist frames. The masking
-        HERE never mutates history — shallow copies only. Durable mutation
-        (absorb, _prune) runs on the loop thread strictly between generate
-        calls, by which point an abandoned turn's orphaned request has already
-        serialized its body.
+        When this turn carries wrist frames, the previous turn's copies are
+        masked out of the request here — commit's durable prune runs only after
+        the response, so without this every request would ship two wrist frames.
+        The masking HERE never mutates history: shallow copies only.
         """
-        contents = [*self._reference, *self._history, user_message]
-        if latest_only_images and self._latest_only_turn is not None:
+        contents = [*self._reference, *self._history, turn]
+        if self._pending_wrist and self._latest_only_turn is not None:
             stale, indexes = self._latest_only_turn
-            masked = {
-                **stale,
-                "parts": [
-                    dict(_WRIST_FRAME_REMOVED) if i in indexes and "inlineData" in p else p
-                    for i, p in enumerate(stale["parts"])
-                ],
-            }
+            masked = {**stale, "parts": _masked_parts(_parts(stale), indexes, wire.WRIST_FRAME_REMOVED)}
             contents = [masked if content is stale else content for content in contents]
         thinking: dict = {"includeThoughts": True}
         if self._thinking_level:
@@ -146,8 +112,9 @@ class GeminiContext:
             "contents": contents,
             "generationConfig": {"thinkingConfig": thinking},
         }
-        if tools:
-            body["tools"] = tools
+        tools_block = wire.tools_block(tools)
+        if tools_block:
+            body["tools"] = tools_block
         if self.on_request is not None:
             self.on_request(body)
         parts: list[dict] = []
@@ -168,47 +135,38 @@ class GeminiContext:
             # a silent, answerless exchange — raise instead, so the turn's
             # retry path keeps the events queued and the failure is visible.
             raise RuntimeError(f"gemini returned no content: {_empty_stream_reason(last_chunk)}")
-        # Usage rides the response and is committed by absorb, on the loop
-        # thread: writing self.last_usage here would let an abandoned turn's
+        # Usage rides the response and is committed by commit(), on the loop
+        # thread: writing self._last_usage here would let an abandoned turn's
         # orphaned request overwrite the committed turn's counts.
         return {
             "candidates": [{"content": {"role": "model", "parts": _merged(parts)}}],
             "usageMetadata": usage,
         }
 
-    def absorb(self, user_message: dict, response: dict, *, latest_only_images: list[int] | None = None) -> Decision:
-        """Commit the exchange to history and distill the model's Decision.
+    def commit(self, turn: dict, response: dict) -> Decision:
+        """Commit the exchange to history and distil the model's Decision.
 
         Thought-summary parts are dropped from the stored model turn (they are
         display-only); everything else — including any thoughtSignature the
         model attached to its parts — is kept verbatim for the next request.
 
-        ``latest_only_images`` names positions in this message's image list
-        (order given to :meth:`user_message`) that must only ever appear in the
-        newest turn — the wrist camera: a stale gripper close-up reads as
-        current grasp state and misleads the model, so absorbing a new one
-        prunes the previous turn's copy on the spot.
+        A stale wrist frame reads as current grasp state and misleads the model,
+        so committing a new one prunes the previous turn's copy on the spot.
         """
         decision = _decision_from(response)
         usage = response.get("usageMetadata") or {}
-        self.last_usage = {
+        self._last_usage = {
             "prompt": usage.get("promptTokenCount", 0),
             "cached": usage.get("cachedContentTokenCount", 0),
             "output": usage.get("candidatesTokenCount", 0),
         }
-        self._history.append(user_message)
-        if latest_only_images:
+        self._history.append(turn)
+        if self._pending_wrist:
             if self._latest_only_turn is not None:
                 content, indexes = self._latest_only_turn
-                content["parts"] = [
-                    dict(_WRIST_FRAME_REMOVED) if i in indexes and "inlineData" in p else p
-                    for i, p in enumerate(content["parts"])
-                ]
-            image_parts = [i for i, p in enumerate(user_message["parts"]) if "inlineData" in p]
-            self._latest_only_turn = (
-                user_message,
-                [image_parts[i] for i in latest_only_images if i < len(image_parts)],
-            )
+                content["parts"] = _masked_parts(_parts(content), indexes, wire.WRIST_FRAME_REMOVED)
+            image_parts = [i for i, p in enumerate(_parts(turn)) if wire.is_image(p)]
+            self._latest_only_turn = (turn, [image_parts[i] for i in self._pending_wrist if i < len(image_parts)])
         model_content = _model_content(response)
         if model_content is not None:
             kept = [p for p in model_content.get("parts") or [] if not p.get("thought")]
@@ -245,10 +203,10 @@ class GeminiContext:
             # The history must start with a plain user turn: a leading model turn or
             # an orphaned function response (whose call was just evicted) is rejected.
             while history and (
-                history[0].get("role") != "user" or any("functionResponse" in p for p in history[0].get("parts") or [])
+                history[0].get("role") != "user" or any("functionResponse" in p for p in _parts(history[0]))
             ):
                 history.pop(0)
-            # An evicted turn must not stay pinned as the latest-only holder: absorb
+            # An evicted turn must not stay pinned as the latest-only holder: commit
             # would "prune" an orphan dict nothing reads, and the reference would
             # keep its base64 wrist frame alive for as long as the arm feed is stale.
             if self._latest_only_turn is not None and not any(c is self._latest_only_turn[0] for c in history):
@@ -258,11 +216,17 @@ class GeminiContext:
         # Mask down to the newest few frame turns (none at all if the keep-count
         # is zero or nonsensical). Until a compaction, older frames ride the
         # cached prefix at a tenth of the input price — cheap to carry.
-        image_turns = [
-            c for c in history if c.get("role") == "user" and any("inlineData" in p for p in c.get("parts") or [])
-        ]
+        image_turns = [c for c in history if c.get("role") == "user" and any(wire.is_image(p) for p in _parts(c))]
         for content in image_turns[:-keep] if keep else image_turns:
-            content["parts"] = [dict(_FRAME_REMOVED) if "inlineData" in p else p for p in content["parts"]]
+            content["parts"] = [dict(wire.FRAME_REMOVED) if wire.is_image(p) else p for p in _parts(content)]
+
+
+def _parts(content: dict) -> list[dict]:
+    return content.get("parts") or []
+
+
+def _masked_parts(parts: list[dict], indexes: list[int], placeholder: dict) -> list[dict]:
+    return [dict(placeholder) if i in indexes and wire.is_image(p) else p for i, p in enumerate(parts)]
 
 
 def _merged(parts: list[dict]) -> list[dict]:
@@ -311,30 +275,5 @@ def _decision_from(response: dict) -> Decision:
                 decision.thoughts = f"{decision.thoughts or ''}{part['text']}".strip()
             else:
                 decision.speech = f"{decision.speech or ''}{part['text']}".strip()
-    decision.speech = _clean_speech(decision.speech)
+    decision.speech = clean_speech(decision.speech)
     return decision
-
-
-_TOOL_NARRATION = re.compile(r"Calling tool\b")
-
-
-def split_tool_narration(text: str) -> tuple[str, bool]:
-    """Cut leaked tool-call narration ("Calling tool ..." to end of text).
-
-    gemini-3 preview sometimes appends it to its reply, without a sentence
-    boundary. Returns ``(clean text, whether narration was found)`` — the one
-    scrub both the chat transcript (:func:`_clean_speech`) and the audio path
-    (``SpeechStreamer._say``) apply, so the two can never diverge.
-    """
-    match = _TOOL_NARRATION.search(text)
-    if match is None:
-        return text, False
-    return text[: match.start()].rstrip(), True
-
-
-def _clean_speech(speech: str | None) -> str | None:
-    """Drop unspeakable output: placeholders and leaked tool-call narration."""
-    if not speech:
-        return None
-    speech, _ = split_tool_narration(speech)
-    return speech if re.search(r"[a-zA-Z0-9]", speech) else None
