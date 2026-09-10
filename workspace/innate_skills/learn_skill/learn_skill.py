@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from httpx import HTTPError
 from innate_skills.learn_skill.forge import Forge, extract_code, system_prompt
 from innate_skills.learn_skill.gate import Draft, DraftRejected, check
 from innate_skills.learn_skill.performance import LearningMode
@@ -52,6 +53,8 @@ class LearnSkill(Skill):
                         problem = self._install(draft, written) or self._trial(draft)
                     except DraftRejected as rejected:
                         problem = str(rejected)
+                    except (HTTPError, OSError) as unreachable:  # the coding model, not the draft: try again
+                        problem = f"the coding model was unreachable ({unreachable})"
                     if problem is None and draft is not None:
                         written.clear()
                         show.celebrate(draft.display_name)

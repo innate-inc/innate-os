@@ -80,7 +80,7 @@ def _check_node(node: ast.AST) -> None:
         _check_import(node)
     elif isinstance(node, ast.Name) and (node.id in BANNED_NAMES or node.id.startswith("__")):
         raise DraftRejected(f"'{node.id}' is not allowed in a skill")
-    elif isinstance(node, ast.Attribute) and (node.attr.startswith("_") or node.attr in BANNED_ATTRS):
+    elif isinstance(node, ast.Attribute) and _escapes(node):
         raise DraftRejected(f"'.{node.attr}' is not allowed in a skill")
     elif isinstance(node, ast.Call) and _dotted(node.func) == "time.sleep":
         raise DraftRejected("time.sleep() is not allowed: use self.sleep(seconds), time.sleep ignores Stop")
@@ -98,6 +98,12 @@ def _check_import(node: ast.Import | ast.ImportFrom) -> None:
             raise DraftRejected("import aliases ('as') are not allowed")
         if alias.name in BANNED_NAMES or alias.name in BANNED_ATTRS:
             raise DraftRejected(f"'{alias.name}' may not be imported")
+
+
+def _escapes(node: ast.Attribute) -> bool:
+    """Dunders anywhere, privates on anything but self, and the module doors."""
+    own_helper = isinstance(node.value, ast.Name) and node.value.id == "self" and not node.attr.startswith("__")
+    return (node.attr.startswith("_") and not own_helper) or node.attr in BANNED_ATTRS
 
 
 def _dotted(expr: ast.expr) -> str:
