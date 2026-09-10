@@ -21,7 +21,7 @@ import { ros } from "../rosClient.js";
 import { mountPage } from "../pageMount.js";
 import { getConfig } from "../config.js";
 import { robotSessionFactory } from "../robotSession.js";
-import { createVideoStage } from "../teleop/videoStage.js";
+import { createVideoStage, createAudioToggle } from "../teleop/videoStage.js";
 import { createTrajectoryOverlay } from "../teleop/trajectoryOverlay.js";
 import { createTargetingOverlay } from "../teleop/targetingOverlay.js";
 import { createTelemetry } from "../teleop/telemetry.js";
@@ -260,6 +260,11 @@ function buildAgentView(root) {
       createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, cornerStack, ros, session),
       createTargetingOverlay(ribbonStage, realVideo?.videoEl ?? null, session),
     );
+  }
+  // Teleop's robot-mic toggle: hear the robot, its speaker included, through its
+  // own microphone. The sim streams no mic, so it gets no toggle (config.simControls).
+  if (!config.simControls && realVideo) {
+    parts.push(createAudioToggle(cornerStack, session, realVideo.audioEl));
   }
 
   session.start();
