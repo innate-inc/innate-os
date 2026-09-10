@@ -9670,6 +9670,24 @@ select.skill-input {
   margin-bottom: 4px;
 }
 
+/* The robot-mic toggle at the composer's left edge: a circle like the send
+   button, centred on the single-line row (52px input, 36px toggle). */
+.agent-compose-listen {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex: 0 0 auto;
+  margin: 0 0 8px 4px;
+}
+
+.agent-compose-listen:empty {
+  display: none;
+}
+
+.agent-compose-listen .icon-toggle {
+  border-radius: 50%;
+}
+
 .agent-compose-send {
   position: relative;
   flex: 0 0 42px;
@@ -10022,7 +10040,7 @@ select.skill-input {
 
   /* The buttons set the row's height here, so the nudge that lifts them off
      the taller desktop row would leave them high. */
-  .agent-compact :is(.agent-compose-mic, .agent-compose-send) {
+  .agent-compact :is(.agent-compose-mic, .agent-compose-listen, .agent-compose-send) {
     align-self: center;
     margin-bottom: 0;
   }

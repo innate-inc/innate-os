@@ -262,9 +262,10 @@ function buildAgentView(root) {
     );
   }
   // Teleop's robot-mic toggle: hear the robot, its speaker included, through its
-  // own microphone. The sim streams no mic, so it gets no toggle (config.simControls).
+  // own microphone. It sits in the chat composer, with the conversation it belongs
+  // to. The sim streams no mic, so it gets no toggle (config.simControls).
   if (!config.simControls && realVideo) {
-    parts.push(createAudioToggle(cornerStack, session, realVideo.audioEl));
+    parts.push(createAudioToggle(panel.listenMount, session, realVideo.audioEl));
   }
 
   session.start();
