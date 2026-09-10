@@ -64,10 +64,14 @@ class LearnSkill(Skill):
                     except (DraftRejected, ForgeUnreachable) as failure:
                         problem = str(failure)
                     if problem is None and draft is not None:
-                        self._acquire(draft)
-                        written.discard(_learned_path(draft))
+                        written.discard(_learned_path(draft))  # it passed its trial: this file stays
+                        advertised = self._acquire(draft)
                         show.celebrate(draft.display_name)
-                        return f"Learned {draft.skill_id}: it is now one of your tools."
+                        if advertised:
+                            return f"Learned {draft.skill_id}: it is now one of your tools."
+                        return (
+                            f"Learned {draft.skill_id}; it joins your tools once the skill catalog finishes reloading."
+                        )
                     self.feedback(f"round {round_number} failed: {problem}")
                     prompt = f"That failed: {problem}\nFix it and reply with the complete file again."
         finally:
@@ -97,9 +101,10 @@ class LearnSkill(Skill):
         loaded = self._publish(path, DRAFT_MARKER + draft.source, lambda: _roster_has(draft, on_trial=True))
         return None if loaded else "the skill catalog did not pick the file up in time"
 
-    def _acquire(self, draft: Draft) -> None:
-        """Drop the trial marker so the roster advertises the skill; a slow rebuild only delays its appearance."""
-        self._publish(_learned_path(draft), draft.source, lambda: _roster_has(draft, on_trial=False))
+    def _acquire(self, draft: Draft) -> bool:
+        """Drop the trial marker so the roster advertises the skill. False when the rebuild is still
+        running at the deadline: the file is final and will be listed, but it is not a tool yet."""
+        return bool(self._publish(_learned_path(draft), draft.source, lambda: _roster_has(draft, on_trial=False)))
 
     def _publish(self, path: Path, source: str, listed: Callable[[], bool | None]) -> bool | None:
         staging = path.with_name(f"{path.name}.{os.getpid()}.tmp")
