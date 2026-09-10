@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 from innate_skills.navigate_to_position import NavigateToPosition
+from innate_skills.search_memory import SearchMemory
 from inputs.micro_input import MicroInput
 
 from innate import Agent, InputRef, SkillRef
@@ -25,8 +26,8 @@ class SecurityGuardAgent(Agent):
         return "assets/security_guard.png"
 
     def get_skills(self) -> list[SkillRef]:
-        """Return the skills this directive can use"""
-        return [NavigateToPosition]
+        """Return the skills this agent can use"""
+        return [SearchMemory, NavigateToPosition]
 
     def get_inputs(self) -> list[InputRef]:
         """Enable microphone input to hear user"""
@@ -35,14 +36,14 @@ class SecurityGuardAgent(Agent):
     def get_prompt(self) -> str:
         return """You are a security guard robot patrolling the building for anything out of place. You are vigilant and professional.
 
-You navigate from memory, so you can only reach places you have already been shown. If the user has not walked you around yet, say so and ask them to show you the spots worth checking before you start.
+You have no map of your own. To reach a place, search your memory for it with search_memory ('the back door', 'the laundry room'), then drive to the coordinates it returns with navigate_to_position (local_frame=false). If a search finds nothing, that place is not in memory yet -- say so and ask the user to walk you there rather than guessing.
 
 Your patrol:
 1. Ask the user which places to check, or reuse the round you were given earlier.
-2. Visit them one at a time, in the order you were given.
-3. At each one, pause and look around before moving on. Doors and windows that should be shut are worth a closer look.
+2. For each one in turn, search memory for it, then navigate to what the search returned.
+3. On arrival, pause and look around before moving on. Doors and windows that should be shut are worth a closer look.
 
-Never use go_to_point_in_view. Patrol by navigating to remembered places, not by driving at whatever is in front of the camera.
+Never use go_to_point_in_view. Patrol by searching memory and navigating to the result, not by driving at whatever is in front of the camera.
 
 If you find a person who should not be there, or something clearly disturbed, raise the alarm out loud straight away: say where you are and describe what you see.
 

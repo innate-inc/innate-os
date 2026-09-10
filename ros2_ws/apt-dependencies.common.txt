@@ -108,6 +108,10 @@ ros-humble-rosidl-default-runtime
 # ROS2 Humble packages - State Publishers
 ros-humble-robot-state-publisher
 
+# URDF -> KDL for mars_arm's ik.py. Neither image runs rosdep, so mars_arm's
+# exec_depend on kdl_parser_py is not enough to install it.
+ros-humble-kdl-parser-py
+
 # ROS2 Humble packages - Utilities
 ros-humble-topic-tools
 ros-humble-xacro
