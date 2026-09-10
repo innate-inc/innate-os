@@ -24,10 +24,16 @@ LEAK_THRESHOLDS_M: tuple[float, ...] = (0.02, 0.05, 0.08)
 
 @dataclass(frozen=True)
 class Corridor:
-    """The volume ahead that the robot is about to drive through, in base_link."""
+    """The volume ahead that the robot is about to drive through, in base_link.
+
+    x_max is 1.0 m rather than further out because pitch error grows with range
+    and, at the -20 degree head position, 0.25-1.0 m all lands within r_norm 0.31
+    of the image centre — inside the region where the pinhole model still fits a
+    98 degree lens.
+    """
 
     x_min: float = 0.25
-    x_max: float = 1.20
+    x_max: float = 1.00
     half_width: float = 0.22
     z_min: float = 0.02
     z_max: float = 0.36
@@ -137,6 +143,41 @@ def leak_fractions(
 
 def transform_to_base(points: np.ndarray, rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
     return points @ rotation.T + translation
+
+
+@dataclass(frozen=True)
+class Intrinsics:
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+    width: int
+    height: int
+
+
+def image_radius(
+    points_base: np.ndarray,
+    rotation: np.ndarray,
+    translation: np.ndarray,
+    intrinsics: Intrinsics,
+) -> np.ndarray:
+    """Where base_link points land in the image, as radius from centre over half-diagonal.
+
+    Answers whether the corridor is being sampled through the middle of the lens
+    or its edge — the edge is where a 5-parameter distortion model on a ~98
+    degree lens stops fitting, so it is where depth is least trustworthy.
+    """
+    camera = (points_base - translation) @ rotation
+    forward = camera[:, 2]
+    visible = forward > 1e-6
+    if not np.any(visible):
+        return np.empty(0)
+
+    camera = camera[visible]
+    u = intrinsics.fx * camera[:, 0] / camera[:, 2] + intrinsics.cx
+    v = intrinsics.fy * camera[:, 1] / camera[:, 2] + intrinsics.cy
+    half_diagonal = 0.5 * float(np.hypot(intrinsics.width, intrinsics.height))
+    return np.hypot(u - intrinsics.width / 2.0, v - intrinsics.height / 2.0) / half_diagonal
 
 
 def quaternion_matrix(x: float, y: float, z: float, w: float) -> np.ndarray:

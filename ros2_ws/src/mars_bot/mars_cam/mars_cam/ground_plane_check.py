@@ -22,15 +22,18 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import CameraInfo, JointState, PointCloud2
 from sensor_msgs_py import point_cloud2
 from tf2_ros import Buffer, TransformListener
 
+from mars_cam.calibration_validation import ErrorStats
 from mars_cam.ground_plane import (
     LEAK_THRESHOLDS_M,
     Corridor,
+    Intrinsics,
     fit_floor,
     height_error_by_range,
+    image_radius,
     leak_fractions,
     quaternion_matrix,
     transform_to_base,
@@ -46,6 +49,7 @@ class GroundPlaneCheck(Node):
         super().__init__("ground_plane_check")
 
         self.declare_parameter("cloud_topic", "/mars/main_camera/points")
+        self.declare_parameter("camera_info_topic", "/mars/main_camera/left/camera_info")
         self.declare_parameter("num_clouds", 10)
         self.declare_parameter("roi_x_min", 0.25)
         self.declare_parameter("roi_x_max", 1.20)
@@ -68,8 +72,18 @@ class GroundPlaneCheck(Node):
         self._collected: list[np.ndarray] = []
         self._source_frame = ""
         self._done = False
+        self._head_deg: float | None = None
+        self._intrinsics: Intrinsics | None = None
+        self._last_transform: tuple[np.ndarray, np.ndarray] | None = None
 
         self.create_subscription(PointCloud2, self.cloud_topic, self._cloud_callback, qos_profile_sensor_data)
+        self.create_subscription(JointState, "/joint_states", self._joint_callback, 10)
+        self.create_subscription(
+            CameraInfo,
+            str(self.get_parameter("camera_info_topic").value),
+            self._camera_info_callback,
+            qos_profile_sensor_data,
+        )
         self.get_logger().info(f"Collecting {self.num_clouds} clouds from {self.cloud_topic} — keep the robot still")
 
     def _cloud_callback(self, msg: PointCloud2) -> None:
@@ -86,6 +100,7 @@ class GroundPlaneCheck(Node):
             return
 
         rotation, translation = transform
+        self._last_transform = transform
         self._source_frame = msg.header.frame_id
         self._collected.append(transform_to_base(points, rotation, translation))
         self.get_logger().info(f"  [{len(self._collected)}/{self.num_clouds}] {len(points)} points")
@@ -94,6 +109,16 @@ class GroundPlaneCheck(Node):
             self._done = True
             self._report()
             rclpy.shutdown()
+
+    def _joint_callback(self, msg: JointState) -> None:
+        if "joint_head" in msg.name:
+            self._head_deg = float(np.degrees(msg.position[msg.name.index("joint_head")]))
+
+    def _camera_info_callback(self, msg: CameraInfo) -> None:
+        # p[] is the rectified projection, which is what the cloud was built from.
+        self._intrinsics = Intrinsics(
+            fx=msg.p[0], fy=msg.p[5], cx=msg.p[2], cy=msg.p[6], width=msg.width, height=msg.height
+        )
 
     def _lookup(self, source_frame: str) -> tuple[np.ndarray, np.ndarray] | None:
         try:
@@ -113,6 +138,8 @@ class GroundPlaneCheck(Node):
         out("=" * 68)
         out(f"GROUND PLANE CHECK — {len(points)} points from {len(self._collected)} clouds")
         out(f"  cloud frame {self._source_frame!r} -> {BASE_FRAME}")
+        head = f"{self._head_deg:+.2f} deg" if self._head_deg is not None else "UNKNOWN (is mars_arm up?)"
+        out(f"  joint_head {head}")
         out("=" * 68)
 
         if fit is None:
@@ -169,6 +196,24 @@ class GroundPlaneCheck(Node):
             )
 
         out(f"  points inside the full corridor box: {int(np.sum(c.mask(points)))}")
+        self._report_image_position(column)
+
+    def _report_image_position(self, column: np.ndarray) -> None:
+        """Where the corridor lands on the sensor — centre is where the lens model fits."""
+        if self._intrinsics is None or self._last_transform is None:
+            return
+        rotation, translation = self._last_transform
+        radii = image_radius(column, rotation, translation, self._intrinsics)
+        if radii.size == 0:
+            return
+        stats = ErrorStats.of(radii)
+        out = self.get_logger().info
+        out("")
+        out("Where the corridor lands in the image (0 = centre, 1 = corner)")
+        out(f"  r_norm mean {stats.mean:.3f}, median {stats.median:.3f}, p95 {stats.p95:.3f}, max {stats.maximum:.3f}")
+        for label, low, high in (("center", 0.0, 1 / 3), ("middle", 1 / 3, 2 / 3), ("outer", 2 / 3, 9.9)):
+            share = float(np.mean((radii >= low) & (radii < high)))
+            out(f"  {label:<7} {share * 100:5.1f}%")
 
 
 def _read_xyz(msg: PointCloud2) -> np.ndarray:
