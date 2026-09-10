@@ -14,7 +14,7 @@
 
 import { cue } from "./cue.js";
 import { createOfferDeck } from "./offerDeck.js";
-import { ICONS, personaCard, skillCard } from "./storyCards.js";
+import { personaCard, skillCard } from "./storyCards.js";
 
 const STORY_AGENT = "void_agent";
 const SKIPPED_AGENT = "demo_agent"; // who the robot is once the story is skipped
@@ -322,7 +322,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   let graduatedAttempt = "";
   let doorAttempt = "";
   let graduationReady = false;
-  let staying = false; // "Keep chatting": the ending's offers step aside
   /** @type {ReturnType<typeof setInterval> | null} */ let graduationPoll = null;
   let seenAct = -1;
   let actSpoke = 0; // robot lines when the current act began; chips wait for one more
@@ -422,7 +421,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     armedAttempt = "";
     autoStarted = false;
     graduationReady = false;
-    staying = false;
+    sceneTaught = false;
     panel.setOffers([]);
     leaveStage();
     session?.abortChallenge?.();
@@ -452,18 +451,31 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     opts.showView?.("orbit");
   }
 
-  /** @param {string} environmentId where the story's agent goes next, with the skills it earned */
-  function graduate(environmentId) {
-    agentState.setActiveSkills(earnedSkills(), STORY_AGENT);
-    session?.switchEnvironment?.(environmentId);
+  // The ending points at the scene setup, bottom left, where the next world is chosen: the
+  // toggle until it opens, then the environment picker until it is used. Learned once, it
+  // stays learned.
+  /** @type {(() => void) | null} */ let sceneCue = null;
+  /** @type {HTMLElement | null} */ let sceneCueTarget = null;
+  let sceneTaught = false;
+  const sceneSetup = () => root.querySelector(".sim-scene-setup");
+  const sceneSetupOpen = () => !!sceneSetup()?.classList.contains("open");
+  /** @param {boolean} on */
+  function inviteSceneSetup(on) {
+    const setup = sceneSetup();
+    const target = !on || !setup ? null : setup.querySelector(sceneSetupOpen() ? ".sim-environment-section:not([hidden])" : ".sim-scene-toggle");
+    if (target === sceneCueTarget) return;
+    sceneCue?.();
+    sceneCue = null;
+    sceneCueTarget = target instanceof HTMLElement ? target : null;
+    if (sceneCueTarget) sceneCue = cue(sceneCueTarget, sceneSetupOpen() ? "Pick a world" : "Change the world");
   }
 
-  // The offers wait for the robot's closing line, so the ending is not talked over.
+  // The narration waits for the robot's closing line, so the ending is not talked over.
   /** @param {any} o */
   function armGraduation(o) {
     graduatedAttempt = o.attempt_id;
     graduationReady = false;
-    staying = false;
+    sceneTaught = false;
     void opts.cancelSkill().catch(() => {});
     setTimeout(() => void panel.narrate("You're out. You made it.", { local: true }), 600);
     const before = spoken();
@@ -478,7 +490,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       const { name } = profile();
       panel.addNotice(`You built this agent${name ? `: ${name}` : ""}. Its skills are all yours now.`);
       void panel.narrate(
-        "The rest of the interface is yours too: scene setup and the challenges sit at the bottom of the stage, and the left rail has Teleop, the map and the settings.",
+        "The rest of the interface is yours too. Scene setup, bottom left, is where you pick the next world: the apartment, or the crossroads. The challenges sit beside it, and the left rail has Teleop, the map and the settings.",
         { local: true },
       );
       render(true);
@@ -546,19 +558,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       return { chips: [] }; // nothing lands while the world changes
     }
     if (o?.state === "passed") {
-      if (!graduationReady || staying) {
-        chipReason = graduationReady ? "chatting" : "graduating";
-        return { chips: [] };
-      }
-      chipReason = "graduated";
-      return {
-        title: "Where to?",
-        chips: [
-          { text: "Go to the apartment", kind: "place", icon: ICONS.home, detail: "Rooms, furniture, things to fetch", onSelect: () => graduate("apartment") },
-          { text: "Go to the crossroads", kind: "place", icon: ICONS.signpost, detail: "Streets, traffic, the open air", onSelect: () => graduate("intersection") },
-          { text: "Keep chatting", kind: "reply", onSelect: () => { staying = true; render(true); } },
-        ],
-      };
+      chipReason = graduationReady ? "graduated" : "graduating"; // the next world is chosen in the scene setup
+      return { chips: [] };
     }
     if (o) {
       if (agentState.get().activeSkills.has(MEMORY)) {
@@ -841,7 +842,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const key = JSON.stringify([
       s.currentDirective, [...s.activeSkills].sort(), agent, r && { ...r, brief: undefined },
       o && { id: o.id, state: o.state, attempt_id: o.attempt_id }, who, name, env, switching(), dockOpen,
-      graduationReady, staying, spoken(), Date.now() < whiteUntil, opts.motionAt() > 0,
+      graduationReady, sceneTaught, sceneSetupOpen(), spoken(), Date.now() < whiteUntil, opts.motionAt() > 0,
       opts.recalledAt(), opts.turnedAt(),
       draft, saving, saveStatus, chooserOpen, tab, roster.length,
     ]);
@@ -896,6 +897,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       }, 1500);
     }
     if (o?.state === "passed" && graduatedAttempt !== o.attempt_id) armGraduation(o);
+    inviteSceneSetup(!!o && o.state === "passed" && graduationReady && env === "backrooms" && !switching() && !sceneTaught);
 
     // Story mode: the world is running the story, and only then.
     const inStory = storyRunning();
@@ -1196,6 +1198,13 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     }
   };
   document.addEventListener("pointerdown", onOutsideClick, true);
+  // Using the environment picker is the lesson; the world changing under it is the proof.
+  const onSceneChange = (/** @type {Event} */ event) => {
+    if (!(event.target instanceof Element) || !event.target.closest(".sim-environment-section")) return;
+    sceneTaught = true;
+    render(true);
+  };
+  root.addEventListener("change", onSceneChange, true);
   saveBtn.addEventListener("click", () => void save());
   discardBtn.addEventListener("click", discard);
   opts.onCreateAgent?.(createAgent);
@@ -1271,6 +1280,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       document.removeEventListener("innate:camera-reset", onCameraReset);
       document.removeEventListener("innate:play-intro", onPlayIntro);
       document.removeEventListener("pointerdown", onOutsideClick, true);
+      root.removeEventListener("change", onSceneChange, true);
+      sceneCue?.();
       opts.onCreateAgent?.(() => {});
       uncue();
       hideDragHint();

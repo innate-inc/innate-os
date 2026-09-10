@@ -8,11 +8,11 @@
 import { cue } from "./cue.js";
 import { ICONS } from "./storyCards.js";
 
-/** persona, grant and place are cards; the rest are chips. @typedef {"persona" | "grant" | "place" | "reply" | "random" | "custom"} OfferKind */
+/** persona and grant are cards; the rest are chips. @typedef {"persona" | "grant" | "reply" | "random" | "custom"} OfferKind */
 /** `text` is what selecting it means (and sends); `label` is what the card says instead, when shorter.
  * @typedef {{ text: string, kind: OfferKind, label?: string, detail?: string, icon?: string, hue?: string, onSelect: (text: string) => void }} Offer */
 
-const CARD_KINDS = new Set(["persona", "grant", "place"]);
+const CARD_KINDS = new Set(["persona", "grant"]);
 const CHIP_ICONS = /** @type {Partial<Record<OfferKind, string>>} */ ({ random: ICONS.dice, custom: ICONS.pen });
 
 /** @returns {{ el: HTMLElement, set: (offers: Offer[], title?: string) => void }} */
