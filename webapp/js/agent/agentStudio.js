@@ -16,6 +16,12 @@ import { closeIn, cue } from "./cue.js";
 import { createOfferDeck } from "./offerDeck.js";
 import { personaCard, skillCard } from "./storyCards.js";
 
+// The left side of the stage holds one open panel at a time: the scene setup and the
+// challenges already trade places through this event (simStage.ts, challengePanel.js), and
+// the agent detail joins them so nothing stacks over anything.
+const PANEL_OPEN_EVENT = "innate:panel-open";
+const PANEL_ID = "agent-studio";
+
 const STORY_AGENT = "void_agent";
 const SKIPPED_AGENT = "demo_agent"; // who the robot is once the story is skipped
 const SKIP_KEY = "innate.nowhere.skip.v1";
@@ -499,7 +505,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     sceneCue?.();
     sceneCue = null;
     sceneCueTarget = target instanceof HTMLElement ? target : null;
-    if (sceneCueTarget) sceneCue = cue(sceneCueTarget, sceneSetupOpen() ? "Pick a world" : "Change the world");
+    if (sceneCueTarget) sceneCue = cue(sceneCueTarget, sceneSetupOpen() ? "Pick a world" : "New world");
   }
 
   // The narration waits for the robot's closing line, so the ending is not talked over.
@@ -854,7 +860,14 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     dock.classList.toggle("open", open);
     toggle.setAttribute("aria-expanded", String(open));
     toggle.setAttribute("aria-label", open ? "Close agent detail" : "Open agent detail");
+    if (open) document.dispatchEvent(new CustomEvent(PANEL_OPEN_EVENT, { detail: { panel: PANEL_ID } }));
   }
+  const onPanelOpen = (/** @type {Event} */ event) => {
+    const opened = /** @type {CustomEvent<{ panel?: string }>} */ (event).detail?.panel;
+    if (opened === PANEL_ID || !dockOpen) return;
+    setDockOpen(false);
+  };
+  document.addEventListener(PANEL_OPEN_EVENT, onPanelOpen);
 
   /** @param {boolean} open */
   function setDockOpen(open) {
@@ -1314,6 +1327,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       if (graduationPoll) clearInterval(graduationPoll);
       document.removeEventListener("innate:camera-reset", onCameraReset);
       document.removeEventListener("innate:play-intro", onPlayIntro);
+      document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
       document.removeEventListener("pointerdown", onOutsideClick, true);
       root.removeEventListener("change", onSceneChange, true);
       sceneCue?.();
