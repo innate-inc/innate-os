@@ -374,6 +374,7 @@ class ThermometerInput(InputDevice):
 An agent can then request the input by class:
 
 ```python
+from innate import InputRef
 from inputs.thermometer_input import ThermometerInput
 
 
