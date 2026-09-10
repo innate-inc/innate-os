@@ -16,6 +16,8 @@
 
 #include "mars_cam/stereo_depth_estimator.hpp"
 
+#include <algorithm>
+
 using namespace std::chrono_literals;
 
 namespace mars_cam {
@@ -43,6 +45,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     this->declare_parameter<double>("depth_overlay_near_m", 0.25);
     this->declare_parameter<double>("depth_overlay_far_m", 2.0);
     this->declare_parameter<double>("depth_overlay_alpha", 0.45);
+    this->declare_parameter<int>("overlay_value_smooth_kernel", 3);
+    this->declare_parameter<double>("overlay_edge_feather_px", 3.0);
     this->declare_parameter<double>("height_overlay_min_m", 0.0);
     this->declare_parameter<double>("height_overlay_max_m", 0.30);
     this->declare_parameter<double>("height_overlay_alpha", 0.60);
@@ -135,6 +139,11 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     depth_overlay_near_m_ = this->get_parameter("depth_overlay_near_m").as_double();
     depth_overlay_far_m_ = this->get_parameter("depth_overlay_far_m").as_double();
     depth_overlay_alpha_ = this->get_parameter("depth_overlay_alpha").as_double();
+    overlay_value_smooth_kernel_ =
+        std::max(1, static_cast<int>(this->get_parameter("overlay_value_smooth_kernel").as_int()));
+    if (overlay_value_smooth_kernel_ % 2 == 0)
+        overlay_value_smooth_kernel_ += 1;
+    overlay_edge_feather_px_ = std::max(0.0, this->get_parameter("overlay_edge_feather_px").as_double());
     height_overlay_min_m_ = this->get_parameter("height_overlay_min_m").as_double();
     height_overlay_max_m_ = this->get_parameter("height_overlay_max_m").as_double();
     height_overlay_alpha_ = this->get_parameter("height_overlay_alpha").as_double();
@@ -292,6 +301,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
                  pointcloud_decimation_);
     RCLCPP_DEBUG(this->get_logger(), "  Depth overlay: %s", depth_overlay_topic_.c_str());
     RCLCPP_DEBUG(this->get_logger(), "  Height overlay: %s", height_overlay_topic_.c_str());
+    RCLCPP_DEBUG(this->get_logger(), "  Overlay value smoothing kernel: %d", overlay_value_smooth_kernel_);
+    RCLCPP_DEBUG(this->get_logger(), "  Overlay edge feather: %.1f px", overlay_edge_feather_px_);
     RCLCPP_DEBUG(this->get_logger(), "  Point cloud color: %s", pointcloud_color_topic_.c_str());
     RCLCPP_DEBUG(this->get_logger(), "  Point cloud nav stats: %s", pointcloud_nav_stats_topic_.c_str());
     RCLCPP_DEBUG(this->get_logger(), "  Footprint overlay: %s (from %s)", footprint_overlay_topic_.c_str(),

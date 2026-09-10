@@ -14,6 +14,67 @@
 
 namespace mars_cam {
 
+namespace {
+
+void smoothOverlayValues(cv::Mat& normalized, const cv::Mat& valid_mask, int kernel_size) {
+    if (kernel_size <= 1 || normalized.empty() || valid_mask.empty())
+        return;
+    cv::Mat blurred;
+    cv::GaussianBlur(normalized, blurred, cv::Size(kernel_size, kernel_size), 0.0, 0.0, cv::BORDER_REPLICATE);
+    blurred.copyTo(normalized, valid_mask);
+}
+
+cv::Mat buildEdgeFeather(const cv::Mat& valid_mask, float base_alpha, float feather_px) {
+    cv::Mat alpha(valid_mask.size(), CV_32FC1, cv::Scalar(0.0f));
+    if (valid_mask.empty() || base_alpha <= 0.0f)
+        return alpha;
+
+    if (feather_px <= 0.0f) {
+        alpha.setTo(base_alpha, valid_mask);
+        return alpha;
+    }
+
+    cv::Mat inside_dist;
+    cv::distanceTransform(valid_mask, inside_dist, cv::DIST_L2, 3);
+
+    cv::Mat inv_mask;
+    cv::bitwise_not(valid_mask, inv_mask);
+    cv::Mat outside_dist;
+    cv::distanceTransform(inv_mask, outside_dist, cv::DIST_L2, 3);
+
+    cv::Mat signed_dist = inside_dist - outside_dist;
+    alpha = (signed_dist + feather_px) / (2.0f * feather_px);
+    cv::threshold(alpha, alpha, 1.0, 1.0, cv::THRESH_TRUNC);
+    cv::threshold(alpha, alpha, 0.0, 0.0, cv::THRESH_TOZERO);
+    alpha *= base_alpha;
+    return alpha;
+}
+
+cv::Mat blendWithAlpha(const cv::Mat& base_bgr, const cv::Mat& overlay_bgr, const cv::Mat& alpha) {
+    cv::Mat out = base_bgr.clone();
+    for (int y = 0; y < base_bgr.rows; ++y) {
+        const cv::Vec3b* b = base_bgr.ptr<cv::Vec3b>(y);
+        const cv::Vec3b* o = overlay_bgr.ptr<cv::Vec3b>(y);
+        const float* a = alpha.ptr<float>(y);
+        cv::Vec3b* d = out.ptr<cv::Vec3b>(y);
+        for (int x = 0; x < base_bgr.cols; ++x) {
+            const float w = a[x];
+            if (w <= 0.0f)
+                continue;
+            if (w >= 1.0f) {
+                d[x] = o[x];
+                continue;
+            }
+            d[x][0] = static_cast<uint8_t>((1.0f - w) * b[x][0] + w * o[x][0]);
+            d[x][1] = static_cast<uint8_t>((1.0f - w) * b[x][1] + w * o[x][1]);
+            d[x][2] = static_cast<uint8_t>((1.0f - w) * b[x][2] + w * o[x][2]);
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
 // =============================================================================
 // Publish mono-rectified left/right images (upscaled to input resolution)
 // =============================================================================
@@ -212,26 +273,24 @@ void StereoDepthEstimator::publishDepthOverlay(const cv::Mat& disparity_float, c
 
     const float near_m = std::max(0.01f, static_cast<float>(depth_overlay_near_m_));
     const float far_m = std::max(near_m + 0.01f, static_cast<float>(depth_overlay_far_m_));
-    const double alpha = std::clamp(depth_overlay_alpha_, 0.0, 1.0);
+    const float alpha = static_cast<float>(std::clamp(depth_overlay_alpha_, 0.0, 1.0));
 
     cv::Mat depth_m;
     depth_calib.convertTo(depth_m, CV_32FC1, 1.0 / 1000.0);
     cv::Mat norm = (depth_m - near_m) / (far_m - near_m);
     cv::threshold(norm, norm, 1.0, 1.0, cv::THRESH_TRUNC);
     cv::threshold(norm, norm, 0.0, 0.0, cv::THRESH_TOZERO);
-    cv::Mat inv = 1.0 - norm;
-    cv::Mat inv_u8;
-    inv.convertTo(inv_u8, CV_8UC1, 255.0);
+    cv::Mat visual_norm = 1.0 - norm;
+    const cv::Mat valid_mask = depth_calib > 0;
+    smoothOverlayValues(visual_norm, valid_mask, overlay_value_smooth_kernel_);
+    cv::Mat visual_u8;
+    visual_norm.convertTo(visual_u8, CV_8UC1, 255.0);
 
     cv::Mat depth_color;
-    cv::applyColorMap(inv_u8, depth_color, cv::COLORMAP_JET);
+    cv::applyColorMap(visual_u8, depth_color, cv::COLORMAP_JET);
 
-    cv::Mat blended;
-    cv::addWeighted(depth_color, alpha, base_calib, 1.0 - alpha, 0.0, blended);
-
-    cv::Mat overlay = base_calib.clone();
-    const cv::Mat valid_mask = depth_calib > 0;
-    blended.copyTo(overlay, valid_mask);
+    const cv::Mat alpha_map = buildEdgeFeather(valid_mask, alpha, static_cast<float>(overlay_edge_feather_px_));
+    const cv::Mat overlay = blendWithAlpha(base_calib, depth_color, alpha_map);
 
     cv::Mat overlay_full;
     cv::resize(overlay, overlay_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);
@@ -294,6 +353,7 @@ void StereoDepthEstimator::publishHeightAboveFloorOverlay(const cv::Mat& dispari
     const float min_h = static_cast<float>(height_overlay_min_m_);
     const float max_h = std::max(min_h + 0.01f, static_cast<float>(height_overlay_max_m_));
     const float span = max_h - min_h;
+    const float alpha = static_cast<float>(std::clamp(height_overlay_alpha_, 0.0, 1.0));
 
     cv::Mat base_calib;
     if (has_color_input && !color_rect.empty()) {
@@ -331,15 +391,15 @@ void StereoDepthEstimator::publishHeightAboveFloorOverlay(const cv::Mat& dispari
         }
     }
 
+    cv::Mat visual_norm;
+    norm_u8.convertTo(visual_norm, CV_32FC1, 1.0 / 255.0);
+    smoothOverlayValues(visual_norm, valid_mask, overlay_value_smooth_kernel_);
+    visual_norm.convertTo(norm_u8, CV_8UC1, 255.0);
     cv::Mat height_color;
     cv::applyColorMap(norm_u8, height_color, cv::COLORMAP_JET);
 
-    cv::Mat blended;
-    cv::addWeighted(height_color, std::clamp(height_overlay_alpha_, 0.0, 1.0), base_calib,
-                    1.0 - std::clamp(height_overlay_alpha_, 0.0, 1.0), 0.0, blended);
-
-    cv::Mat overlay = base_calib.clone();
-    blended.copyTo(overlay, valid_mask);
+    const cv::Mat alpha_map = buildEdgeFeather(valid_mask, alpha, static_cast<float>(overlay_edge_feather_px_));
+    const cv::Mat overlay = blendWithAlpha(base_calib, height_color, alpha_map);
 
     cv::Mat overlay_full;
     cv::resize(overlay, overlay_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);

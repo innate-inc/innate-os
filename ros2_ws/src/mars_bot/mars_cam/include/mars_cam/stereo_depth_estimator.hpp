@@ -192,6 +192,8 @@ class StereoDepthEstimator : public rclcpp::Node {
     double depth_overlay_near_m_{0.25};
     double depth_overlay_far_m_{2.0};
     double depth_overlay_alpha_{0.45};
+    int overlay_value_smooth_kernel_{3};
+    double overlay_edge_feather_px_{3.0};
     double height_overlay_min_m_{0.0};
     double height_overlay_max_m_{0.30};
     double height_overlay_alpha_{0.60};
