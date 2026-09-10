@@ -7,8 +7,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from httpx import HTTPError
-from innate_skills.learn_skill.forge import Forge, extract_code, system_prompt
+from innate_skills.learn_skill.forge import Forge, ForgeUnreachable, extract_code, system_prompt
 from innate_skills.learn_skill.gate import Draft, DraftRejected, check
 from innate_skills.learn_skill.performance import LearningMode
 
@@ -53,20 +52,16 @@ class LearnSkill(Skill):
                     try:
                         draft = check(self._draft(forge, show, prompt))
                         problem = self._install(draft, written) or self._trial(draft)
-                    except DraftRejected as rejected:
-                        problem = str(rejected)
-                    except (HTTPError, OSError) as unreachable:  # the coding model, not the draft: try again
-                        problem = f"the coding model was unreachable ({unreachable})"
+                    except (DraftRejected, ForgeUnreachable) as failure:
+                        problem = str(failure)
                     if problem is None and draft is not None:
-                        written.clear()
+                        written.discard(_learned_path(draft))
                         show.celebrate(draft.display_name)
                         return f"Learned {draft.skill_id}: it is now one of your tools."
                     self.feedback(f"round {round_number} failed: {problem}")
-                    prompt = (
-                        f"That failed: {problem}\nKeep the class name, fix it, and reply with the complete file again."
-                    )
+                    prompt = f"That failed: {problem}\nFix it and reply with the complete file again."
         finally:
-            for path in written:
+            for path in written:  # every draft of this run that did not pass its trial
                 path.unlink(missing_ok=True)
         self.fail(f"Could not learn it after {ROUNDS} rounds: {problem}")
 
@@ -83,14 +78,17 @@ class LearnSkill(Skill):
 
     def _install(self, draft: Draft, written: set[Path]) -> str | None:
         """Write the draft where the catalog looks and wait for the roster to rebuild."""
-        path = get_learned_skills_dir() / f"{draft.module}.py"
+        path = _learned_path(draft)
         if path.exists() and path not in written:
             raise DraftRejected(f"a learned skill named {draft.class_name} already exists; choose another class name")
         path.parent.mkdir(parents=True, exist_ok=True)
         staging = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         roster_before = _roster_stamp()
-        staging.write_text(draft.source)
-        staging.replace(path)  # atomic: the watcher never imports a half-written file
+        try:
+            staging.write_text(draft.source)
+            staging.replace(path)  # atomic: the watcher never imports a half-written file
+        finally:
+            staging.unlink(missing_ok=True)
         written.add(path)
         rebuilt = self.wait_for(lambda: True if _roster_stamp() != roster_before else None, timeout=ROSTER_TIMEOUT_S)
         return None if rebuilt else "the skill catalog did not pick the file up in time"
@@ -101,6 +99,10 @@ class LearnSkill(Skill):
         self.feedback(f"trying {draft.skill_id}")
         outcome = self.skills.run(draft.skill_id, timeout=TRIAL_TIMEOUT_S)
         return None if outcome.ok else outcome.message
+
+
+def _learned_path(draft: Draft) -> Path:
+    return get_learned_skills_dir() / f"{draft.module}.py"
 
 
 def _roster_stamp() -> int:

@@ -66,9 +66,10 @@ def check(source: str) -> Draft:
         tree = ast.parse(source)
     except SyntaxError as error:
         raise DraftRejected(f"syntax error on line {error.lineno}: {error.msg}") from None
+    own_privates = _declared_privates(tree)
     for node in ast.walk(tree):
         try:
-            _check_node(node)
+            _check_node(node, own_privates)
         except DraftRejected as rejected:
             where = f"line {getattr(node, 'lineno', '?')}: {(ast.get_source_segment(source, node) or '').strip()}"
             raise DraftRejected(f"{rejected} ({where})") from None
@@ -79,12 +80,12 @@ def check(source: str) -> Draft:
     return Draft(skills[0].name, source)
 
 
-def _check_node(node: ast.AST) -> None:
+def _check_node(node: ast.AST, own_privates: frozenset[str]) -> None:
     if isinstance(node, ast.Import | ast.ImportFrom):
         _check_import(node)
     elif isinstance(node, ast.Name) and (node.id in BANNED_NAMES or node.id.startswith("__")):
         raise DraftRejected(f"'{node.id}' is not allowed in a skill")
-    elif isinstance(node, ast.Attribute) and _escapes(node):
+    elif isinstance(node, ast.Attribute) and _escapes(node, own_privates):
         raise DraftRejected(f"'.{node.attr}' is not allowed in a skill")
     elif isinstance(node, ast.Call) and _dotted(node.func) == "time.sleep":
         raise DraftRejected("time.sleep() is not allowed: use self.sleep(seconds), time.sleep ignores Stop")
@@ -104,10 +105,25 @@ def _check_import(node: ast.Import | ast.ImportFrom) -> None:
             raise DraftRejected(f"'{alias.name}' may not be imported")
 
 
-def _escapes(node: ast.Attribute) -> bool:
-    """Dunders anywhere, privates on anything but self, and the module doors."""
-    own_helper = isinstance(node.value, ast.Name) and node.value.id == "self" and not node.attr.startswith("__")
-    return (node.attr.startswith("_") and not own_helper) or node.attr in BANNED_ATTRS
+def _declared_privates(tree: ast.Module) -> frozenset[str]:
+    """Private names the draft itself defines: its own methods and the attributes it assigns on self."""
+    methods = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    fields = {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store) and _is_self(node.value)
+    }
+    return frozenset(name for name in methods | fields if name.startswith("_") and not name.startswith("__"))
+
+
+def _escapes(node: ast.Attribute, own_privates: frozenset[str]) -> bool:
+    """Dunders anywhere, privates other than the draft's own on self, and the module doors."""
+    own = _is_self(node.value) and node.attr in own_privates
+    return (node.attr.startswith("_") and not own) or node.attr in BANNED_ATTRS
+
+
+def _is_self(expr: ast.expr) -> bool:
+    return isinstance(expr, ast.Name) and expr.id == "self"
 
 
 def _dotted(expr: ast.expr) -> str:

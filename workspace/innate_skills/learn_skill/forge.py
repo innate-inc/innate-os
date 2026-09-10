@@ -9,6 +9,8 @@ import re
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
+from httpx import HTTPError
+
 import innate
 from brain_client.common.script_paths import get_innate_skills_dir
 
@@ -50,6 +52,10 @@ def system_prompt() -> str:
     return f"{RULES}\n# The `innate` API\n{innate.__doc__}\n\n# Example skills\n{exemplars}"
 
 
+class ForgeUnreachable(Exception):
+    """The coding model could not be reached; the round is worth retrying."""
+
+
 class Forge:
     def __init__(self, client: ProxyClient, system: str):
         self._client = client
@@ -66,15 +72,18 @@ class Forge:
 
     def _stream(self) -> Iterator[str]:
         body = {"model": MODEL, "temperature": 0.2, "stream": True, "messages": self._messages}
-        with self._client.request_stream(SERVICE, ENDPOINT, json=body, timeout=180.0) as response:
-            response.raise_for_status()
-            for line in response.iter_lines():
-                if not line.startswith("data: ") or line == "data: [DONE]":
-                    continue
-                choices = json.loads(line[len("data: ") :]).get("choices") or []
-                delta = choices[0].get("delta", {}).get("content") if choices else None
-                if delta:
-                    yield delta
+        try:
+            with self._client.request_stream(SERVICE, ENDPOINT, json=body, timeout=180.0) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line.startswith("data: ") or line == "data: [DONE]":
+                        continue
+                    choices = json.loads(line[len("data: ") :]).get("choices") or []
+                    delta = choices[0].get("delta", {}).get("content") if choices else None
+                    if delta:
+                        yield delta
+        except (HTTPError, OSError) as error:
+            raise ForgeUnreachable(f"the coding model was unreachable ({error})") from error
 
 
 def extract_code(reply: str) -> str:
