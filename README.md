@@ -10,7 +10,7 @@
 **The lightweight agentic operating system for general-purpose robots**
 
 [Documentation](https://docs.innate.bot) ·
-[Try MARS](https://sim-demo.innate.bot) ·
+[Try MARS](https://sim.innate.bot) ·
 [Discord](https://discord.gg/innate) ·
 [Innate](https://innate.bot)
 
@@ -23,10 +23,10 @@
 ## Try it without a robot
 
 <p align="center">
-  <a href="https://sim-demo.innate.bot"><img src="docs/assets/readme/sim.png" alt="Driving the simulated MARS robot in the browser" width="85%"></a>
+  <a href="https://sim.innate.bot"><img src="docs/assets/readme/sim.png" alt="Driving the simulated MARS robot in the browser" width="85%"></a>
 </p>
 
-**[Try the live simulator →](https://sim-demo.innate.bot)** — no install, no robot.
+**[Try the live simulator →](https://sim.innate.bot)** — no install, no robot.
 
 Or run the same stack locally. One command on macOS, Linux, and WSL2:
 
