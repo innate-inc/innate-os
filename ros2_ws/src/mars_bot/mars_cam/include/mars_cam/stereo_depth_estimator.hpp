@@ -99,6 +99,7 @@ class StereoDepthEstimator : public rclcpp::Node {
     void rightCameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg);
     bool initCalibrationFromCameraInfo();
     void updateCloudRotation(const cv::Mat& R1);
+    void loadMountCorrection();
 
     // ── Disparity Filter Chain (filters/*.cpp) ──────────────────────────
     struct FilterTimings {
@@ -206,6 +207,7 @@ class StereoDepthEstimator : public rclcpp::Node {
     // only — it is a translation, meaningless in the optical frame the other
     // clouds are stamped with.
     double mount_height_correction_m_{0.0};
+    std::string data_directory_;
 
     // Beyond this age the arm-footprint mask is dropped rather than reused.
     double footprint_max_age_sec_{0.5};

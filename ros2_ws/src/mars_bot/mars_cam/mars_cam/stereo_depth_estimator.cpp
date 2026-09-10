@@ -54,6 +54,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     this->declare_parameter<double>("mount_pitch_correction_deg", 0.0);
     this->declare_parameter<double>("mount_roll_correction_deg", 0.0);
     this->declare_parameter<double>("mount_height_correction_m", 0.0);
+    this->declare_parameter<std::string>("data_directory", "/home/jetson1/innate-os/data");
 
     // How long an arm-footprint cloud stays usable. dynamic_footprint publishes
     // at 15Hz against this node's 8Hz, so anything much older means it stopped.
@@ -65,7 +66,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     this->declare_parameter<double>("nav_roi.x_min", 0.25);
     this->declare_parameter<double>("nav_roi.x_max", 1.00);
     this->declare_parameter<double>("nav_roi.half_width", 0.22);
-    this->declare_parameter<double>("nav_roi.z_min", 0.02);
+    this->declare_parameter<double>("nav_roi.z_min", 0.010);
     this->declare_parameter<double>("nav_roi.z_max", 0.36);
 
     // Temporal evidence filter — see include/mars_cam/evidence_grid.hpp.
@@ -126,6 +127,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     mount_pitch_correction_deg_ = this->get_parameter("mount_pitch_correction_deg").as_double();
     mount_roll_correction_deg_ = this->get_parameter("mount_roll_correction_deg").as_double();
     mount_height_correction_m_ = this->get_parameter("mount_height_correction_m").as_double();
+    data_directory_ = this->get_parameter("data_directory").as_string();
+    loadMountCorrection();
     footprint_max_age_sec_ = this->get_parameter("footprint_max_age_sec").as_double();
     pointcloud_nav_topic_ = this->get_parameter("pointcloud_nav_topic").as_string();
     nav_frame_ = this->get_parameter("nav_frame").as_string();

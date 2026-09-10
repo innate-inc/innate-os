@@ -89,7 +89,7 @@ unblocks on-robot testing.
 ## Why a corridor rather than the full field of view
 
 The layer consumes `/mars/main_camera/points_nav` — base_link, already
-height-filtered, x 0.25–1.0 m, |y| ≤ 0.22 m, z 0.02–0.36 m.
+height-filtered, x 0.25–1.0 m, |y| ≤ 0.22 m, z 0.010–0.36 m.
 
 1. **Residual pitch error scales with range.** Capping at 1.0 m rather than
    2.5 m shrinks any leftover tilt's effect proportionally.
@@ -106,7 +106,7 @@ Range budget: at `vx_max` 0.45 m/s with `ax_min` −0.3 m/s², stopping distance
 accumulates a trail as the robot advances, so obstacles are remembered once they
 fall below the corridor's near edge.
 
-`z_min` 0.02 m sits just above the ~10 mm that can simply be rolled over.
+`z_min` **is** the benchmark: 10 mm and under can be rolled over at low cost, anything above it must be flagged. The floor-fit inlier window is capped at 6 mm so a 12 mm object can never be absorbed into the floor and measured under its own threshold.
 
 ## One height threshold, in one place
 

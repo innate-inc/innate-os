@@ -85,26 +85,37 @@ TEST(GroundPlaneEstimator, ALargeBoxDoesNotTiltTheFloor) {
     EXPECT_NEAR(est.plane().height_above(0.7, 0.0, 0.22), 0.22, 0.008);
 }
 
-TEST(GroundPlaneEstimator, ASmallObjectIsNotAbsorbedIntoTheFloor) {
-    // The regression that matters: with too wide a trim window a 25mm object
-    // joined the floor fit and measured 18.9mm, under a 20mm threshold.
+TEST(GroundPlaneEstimator, HonoursTheTenMillimetreBenchmark) {
+    // The benchmark: 10mm and under can be rolled over, anything above must be
+    // flagged. The floor fit must therefore never absorb a 12mm object — with
+    // too wide an inlier window it does, and the object measures under its own
+    // threshold.
     GroundPlaneEstimator est;
-    settle(est, concat(floor_points(), obstacle(0.6, 0.025, 250)));
+    settle(est, concat(floor_points(), obstacle(0.6, 0.012, 250)));
 
     ASSERT_TRUE(est.plane().valid);
-    EXPECT_GT(est.plane().height_above(0.6, 0.0, 0.025), 0.020);
+    EXPECT_GT(est.plane().height_above(0.6, 0.0, 0.012), 0.010) << "12mm must clear the 10mm line";
 }
 
-TEST(GroundPlaneEstimator, SmallObjectStaysMeasurableOnATiltedFloor) {
-    // The point of the whole exercise: a bad mount must not hide a low object.
+TEST(GroundPlaneEstimator, LeavesRollableClutterBelowTheLine) {
+    GroundPlaneEstimator est;
+    settle(est, concat(floor_points(), obstacle(0.6, 0.008, 250)));
+
+    ASSERT_TRUE(est.plane().valid);
+    EXPECT_LT(est.plane().height_above(0.6, 0.0, 0.008), 0.010) << "8mm is rollable, must not be flagged";
+}
+
+TEST(GroundPlaneEstimator, TwelveMillimetreObjectSurvivesABadMount) {
+    // The whole point: a 3 degree mount error and 14mm height offset must not
+    // hide an object that is only 2mm over the line.
     const double pitch = 3.0, offset = 0.014;
     const double slope = std::tan(pitch * M_PI / 180.0);
     GroundPlaneEstimator est;
-    settle(est, concat(floor_points(pitch, offset), obstacle(0.6, 0.030, 250, pitch, offset)));
+    settle(est, concat(floor_points(pitch, offset), obstacle(0.6, 0.012, 250, pitch, offset)));
 
     ASSERT_TRUE(est.plane().valid);
-    const double z = slope * 0.6 + offset + 0.030;
-    EXPECT_GT(est.plane().height_above(0.6, 0.0, z), 0.025);
+    const double z = slope * 0.6 + offset + 0.012;
+    EXPECT_GT(est.plane().height_above(0.6, 0.0, z), 0.010);
 }
 
 TEST(GroundPlaneEstimator, FindsTheFloorEvenWhenObstaclesOutnumberIt) {
