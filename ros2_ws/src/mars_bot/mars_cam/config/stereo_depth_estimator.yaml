@@ -131,13 +131,14 @@ arm_camera_driver:
     #
     # x_max 1.0m against a ~0.52m stopping distance at vx_max leaves ~0.5m of
     # margin; STVL's 2s voxel_decay accumulates a short trail as the robot moves.
-    # z_min sits just above the ~10mm that can simply be rolled over.
+    # z_min IS the benchmark: 10mm and under can be rolled over at low cost,
+    # anything above it must be flagged.
     pointcloud_nav_topic: "/mars/main_camera/points_nav"
     nav_frame: "base_link"
     nav_roi.x_min: 0.25        # front edge of the footprint
     nav_roi.x_max: 1.00
     nav_roi.half_width: 0.22   # footprint half-width 0.165 + margin
-    nav_roi.z_min: 0.02
+    nav_roi.z_min: 0.010
     nav_roi.z_max: 0.36        # matches STVL max_obstacle_height
 
     # ── Temporal evidence filter ──────────────────────────────────────────

@@ -42,11 +42,12 @@ struct GroundPlaneParams {
     // enough that even the median residual moves with it.
     int range_bins{8};
     double seed_fraction{0.30};
-    // Inlier window around the seed plane. It MUST stay below nav_roi.z_min,
-    // or a low object is absorbed into the floor and lifts it — measured at
-    // 18.9mm instead of 25mm with a 30mm window.
-    double trim_min_m{0.004};
-    double trim_max_m{0.015};
+    // Inlier window around the seed plane. It MUST stay well below the flag
+    // threshold (nav_roi.z_min, 10mm) or a low object is absorbed into the
+    // floor and lifts it. Measured floor residual is 1.4mm RMS, so 6mm is 4
+    // sigma of headroom while leaving a 4mm margin under the threshold.
+    double trim_min_m{0.003};
+    double trim_max_m{0.006};
     // The mount moves slowly; measured frame-to-frame jitter is 0.04-0.18 deg,
     // so heavy smoothing costs nothing and keeps obstacle heights steady.
     double smoothing{0.15};

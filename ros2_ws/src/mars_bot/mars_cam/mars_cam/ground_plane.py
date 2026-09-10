@@ -19,7 +19,7 @@ from mars_cam.calibration_validation import ErrorStats
 FLOOR_BAND_M = 0.15
 
 RANGE_BINS_M: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0, 2.5)
-LEAK_THRESHOLDS_M: tuple[float, ...] = (0.02, 0.05, 0.08)
+LEAK_THRESHOLDS_M: tuple[float, ...] = (0.010, 0.020, 0.050)
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,7 @@ class Corridor:
     x_min: float = 0.25
     x_max: float = 1.00
     half_width: float = 0.22
-    z_min: float = 0.02
+    z_min: float = 0.010
     z_max: float = 0.36
 
     def mask(self, points: np.ndarray) -> np.ndarray:
