@@ -89,8 +89,10 @@ arm_camera_driver:
     #
     # Optical-frame axes (x right, y down, z forward): pitch rotates about x,
     # roll about z. Per-robot values — do not assume they transfer.
-    mount_pitch_correction_deg: 0.0
-    mount_roll_correction_deg: 0.0
+    # PER-ROBOT. Measured on R7-27 at the -20 deg nav head position; assembly
+    # variation means another unit will need its own. See docs/depth_obstacle_notes.md.
+    mount_pitch_correction_deg: -3.126
+    mount_roll_correction_deg: 0.398
 
     # ── Arm self-masking ──────────────────────────────────────────────────
     #
@@ -108,6 +110,26 @@ arm_camera_driver:
     # NOT covered: anything the gripper is holding. Payloads are not in the
     # URDF, so a carried object is marked as an obstacle.
     footprint_max_age_sec: 0.5
+
+    # ── Forward traversability corridor (/mars/main_camera/points_nav) ────
+    #
+    # The costmap consumes ONLY this cloud, published in base_link and already
+    # height-filtered, so the STVL layer needs no threshold of its own.
+    # Deliberately narrow — see docs/depth_obstacle_notes.md for why:
+    #   * floor error from residual pitch scales with range
+    #   * the image periphery is where a 98 deg lens on plumb_bob fits worst
+    #   * every point outside it can only ever mark a phantom obstacle
+    #
+    # x_max 1.0m against a ~0.52m stopping distance at vx_max leaves ~0.5m of
+    # margin; STVL's 2s voxel_decay accumulates a short trail as the robot moves.
+    # z_min sits just above the ~10mm that can simply be rolled over.
+    pointcloud_nav_topic: "/mars/main_camera/points_nav"
+    nav_frame: "base_link"
+    nav_roi.x_min: 0.25        # front edge of the footprint
+    nav_roi.x_max: 1.00
+    nav_roi.half_width: 0.22   # footprint half-width 0.165 + margin
+    nav_roi.z_min: 0.02
+    nav_roi.z_max: 0.36        # matches STVL max_obstacle_height
 
     # ── VPI SGM — Creation parameters (changing these rebuilds the CUDA payload) ──
     #

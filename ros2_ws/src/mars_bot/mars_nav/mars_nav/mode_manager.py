@@ -29,7 +29,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2
-from std_msgs.msg import String
+from std_msgs.msg import Int32, String
 from std_srvs.srv import Trigger
 
 from mars_nav.service_utils import call_service, get_node_state, transition_node
@@ -39,6 +39,17 @@ map_server_node = "navigation_map_server"
 bt_node = "bt_navigator"
 
 NAV_CANCEL_SERVICE = "/internal_navigate_to_pose/_action/cancel_goal"
+
+# The costmap's camera obstacle layer consumes only this forward corridor, not
+# the full point cloud. See docs/depth_obstacle_notes.md.
+CAMERA_OBSTACLE_TOPIC = "/mars/main_camera/points_nav"
+
+# Head tilt the depth obstacle corridor is calibrated for. The mount correction
+# in stereo_depth_estimator.yaml is measured at this angle, and the floor tilt
+# drifts ~0.027 deg per degree of head movement, so straying costs accuracy as
+# well as coverage.
+NAV_HEAD_POSITION_DEG = -20
+NAV_HEAD_REASSERT_SEC = 10.0
 
 # Nodes that should only be configured (not activated) in specific modes
 configure_only_nodes = {
@@ -261,13 +272,22 @@ class ModeManager(Node):
         )
 
         # One-shot check: the costmaps' camera voxel layer is silently inert
-        # when /mars/main_camera/points never publishes (e.g. missing stereo
+        # when /mars/main_camera/points_nav never publishes (e.g. missing stereo
         # calibration). Warn once so lidar-only operation is visible.
         self._camera_points_seen = False
         self._camera_points_sub = self.create_subscription(
-            PointCloud2, "/mars/main_camera/points", self._camera_points_cb, qos_profile_sensor_data
+            PointCloud2, CAMERA_OBSTACLE_TOPIC, self._camera_points_cb, qos_profile_sensor_data
         )
         self._camera_check_timer = self.create_timer(30.0, self._check_camera_obstacle_source)
+
+        # The depth obstacle corridor is only usable with the head tilted down:
+        # level, the camera cannot see closer than ~0.30m while the footprint's
+        # front edge is at 0.25m, and the corridor lands on the lens periphery
+        # where the pinhole model fits worst. Held here rather than commanded
+        # once, because anything else driving the head would otherwise silently
+        # blind the obstacle layer.
+        self._head_pub = self.create_publisher(Int32, "/mars/head/set_position", 1)
+        self._head_timer = self.create_timer(NAV_HEAD_REASSERT_SEC, self._hold_nav_head_position)
 
         # --- TF2: Mapping pose publisher ---
         self.tf_buffer = tf2_ros.Buffer()
@@ -1032,11 +1052,15 @@ class ModeManager(Node):
             self.destroy_subscription(self._camera_points_sub)
             self._camera_points_sub = None
 
+    def _hold_nav_head_position(self):
+        """Re-assert the navigation head tilt (see the constructor for why)."""
+        self._head_pub.publish(Int32(data=NAV_HEAD_POSITION_DEG))
+
     def _check_camera_obstacle_source(self):
         self._camera_check_timer.cancel()
         if not self._camera_points_seen:
             self.get_logger().warning(
-                "No camera pointcloud on /mars/main_camera/points 30s after start: the costmaps' camera "
+                f"No camera pointcloud on {CAMERA_OBSTACLE_TOPIC} 30s after start: the costmaps' camera "
                 "obstacle layer is inert (missing stereo calibration?) — navigating with lidar obstacles only"
             )
 

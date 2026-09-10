@@ -62,12 +62,15 @@ local_costmap:
       footprint: "[[0.25, 0.165], [0.25, -0.165], [-0.20, -0.165], [-0.20, 0.165]]"
       track_unknown_space: false        # unknown space is treated as FREE in the rolling local costmap
       unknown_cost_value: 255          # unused while track_unknown_space is false
-      # Depth obstacle layer (voxel_layer/STVL) intentionally NOT loaded: with a
-      # calibrated camera it marks phantom obstacles from floor leakage
-      # (measured 2x cross-track degradation + swerve spikes, R7-27 2026-07).
-      # Re-add "voxel_layer" here only after the depth pipeline passes QA.
+      # Depth obstacle layer re-enabled 2026-09. The floor leakage that forced it
+      # out (2x cross-track degradation + swerve spikes, R7-27 2026-07) was a
+      # 3.2 deg camera tilt: the cloud was back-projected in the rectified frame
+      # but stamped camera_optical_frame, on top of a mechanical head-mount
+      # error. Measured, corrected, and the layer now consumes a narrow forward
+      # corridor instead of the full FOV. See docs/depth_obstacle_notes.md.
       plugins: [
         "obstacle_layer",
+        "voxel_layer",
         "inflation_layer",
         ]
       filters: ["keepout_filter", "keepout_inflation"]
@@ -122,12 +125,16 @@ local_costmap:
         observation_sources:   rgbd1_clear rgbd1_mark
         rgbd1_mark:
           data_type: PointCloud2
-          topic: /mars/main_camera/points
+          # Forward traversability corridor, already in base_link and already
+          # height-filtered by the depth node (nav_roi.*). Height bounds here are
+          # left wide on purpose so there is ONE height threshold in ONE place —
+          # two inconsistent cuts is how this gets hard to reason about.
+          topic: /mars/main_camera/points_nav
           marking: true
           clearing: false
-          obstacle_range: 2.5
-          min_obstacle_height: 0.05     #default 0, meters
-          max_obstacle_height: 0.36     #defaule 3, meters
+          obstacle_range: 1.5
+          min_obstacle_height: 0.0      #owned by nav_roi.z_min in the depth node
+          max_obstacle_height: 0.50     #owned by nav_roi.z_max in the depth node
           expected_update_rate: 0.0    #default 0, if not updating at this rate at least, remove from buffer
           observation_persistence: 0.0 #default 0, use all measurements taken during now-value, 0=latest 
           inf_is_valid: false          #default false, for laser scans
@@ -137,7 +144,7 @@ local_costmap:
         rgbd1_clear:
           enabled: false                #default true, can be toggled on/off with associated service call
           data_type: PointCloud2
-          topic: /mars/main_camera/points
+          topic: /mars/main_camera/points_nav
           marking: false
           clearing: true
           min_z: 0.0                   #default 0, meters
