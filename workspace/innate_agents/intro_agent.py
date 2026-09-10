@@ -9,7 +9,7 @@ from innate_skills.search_memory import SearchMemory
 from innate_skills.wave import Wave
 from inputs.micro_input import MicroInput
 
-from brain_client.agents.types import Agent, InputRef, SkillRef
+from innate import Agent, InputRef, SkillRef
 
 
 class IntroAgent(Agent):

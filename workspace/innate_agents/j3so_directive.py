@@ -4,7 +4,7 @@ from innate_skills.head_emotion import HeadEmotion
 from innate_skills.navigate_to_position import NavigateToPosition
 from inputs.micro_input import MicroInput
 
-from brain_client.agents.types import Agent, InputRef, SkillRef
+from innate import Agent, InputRef, SkillRef
 
 
 class J3SOAgent(Agent):
