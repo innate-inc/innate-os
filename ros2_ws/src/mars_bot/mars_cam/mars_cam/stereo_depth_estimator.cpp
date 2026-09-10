@@ -239,11 +239,16 @@ StereoDepthEstimator::~StereoDepthEstimator() {
 // =============================================================================
 // Lazy gate — true if any of the node's outputs currently has a subscriber
 // =============================================================================
+// EVERY output publisher must appear here. A missing one makes the whole
+// pipeline stay idle whenever that output is the only thing subscribed, and it
+// fails silently — the topic simply never publishes, which looks like a broken
+// sensor rather than a gate that was never opened.
 bool StereoDepthEstimator::anyOutputSubscribed() const {
     return left_rectified_pub_->get_subscription_count() > 0 || right_rectified_pub_->get_subscription_count() > 0 ||
            left_rectified_color_pub_->get_subscription_count() > 0 ||
            left_rectified_compressed_pub_->get_subscription_count() > 0 ||
            pointcloud_pub_->get_subscription_count() > 0 || pointcloud_color_pub_->get_subscription_count() > 0 ||
+           pointcloud_nav_pub_->get_subscription_count() > 0 ||
            disparity_unfiltered_pub_->get_subscription_count() > 0 || disparity_pub_->get_subscription_count() > 0 ||
            depth_pub_->get_subscription_count() > 0 || footprint_overlay_pub_->get_subscription_count() > 0 ||
            footprint_mask_pub_->get_subscription_count() > 0 || footprint_cutout_pub_->get_subscription_count() > 0;
