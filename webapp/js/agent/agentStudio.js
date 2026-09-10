@@ -184,12 +184,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     '<textarea rows="5" aria-label="Agent prompt" placeholder="You are MARS, a friendly robot assistant…"></textarea>';
   const promptText = /** @type {HTMLTextAreaElement} */ (promptField.querySelector("textarea"));
 
-  const nameRow = document.createElement("form");
-  nameRow.className = "agent-studio-name";
-  nameRow.innerHTML =
-    '<input type="text" maxlength="40" aria-label="Robot name" placeholder="Give it a name"><button type="submit">Name it</button>';
-  const nameInput = /** @type {HTMLInputElement} */ (nameRow.querySelector("input"));
-
   const tabsRow = document.createElement("div");
   tabsRow.className = "agent-studio-tabs";
   tabsRow.setAttribute("role", "tablist");
@@ -263,7 +257,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const actions = document.createElement("div");
   actions.className = "agent-studio-actions";
 
-  panes.identity.append(nameRow, promptRow, nameField, promptField);
+  panes.identity.append(promptRow, nameField, promptField);
   panes.skills.append(skills, addRow);
   panes.advanced.append(checks, caption, deleteBtn);
   panelEl.append(persona, note, tabsRow, panes.identity, panes.skills, panes.advanced, saveBar, actions);
@@ -485,19 +479,14 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     void panel.submitText(GRANT_LINES[skill] ?? `Granted: the ${skillLabel(skill)} skill.`);
   }
 
-  /** @param {{persona?: string, name?: string}} choice */
-  function choose(choice) {
-    const text = choice.persona ?? choice.name ?? "";
-    if (text === lastChoice.text && Date.now() - lastChoice.at < 5000) return;
-    lastChoice = { text, at: Date.now() };
-    session?.sendChallengeEvent?.({ type: "persona", ...choice });
+  /** @param {string} persona */
+  function choose(persona) {
+    if (persona === lastChoice.text && Date.now() - lastChoice.at < 5000) return;
+    lastChoice = { text: persona, at: Date.now() };
+    session?.sendChallengeEvent?.({ type: "persona", persona });
     // An offered character is someone the robot becomes; typed words are a prompt it is handed.
-    if (choice.persona) {
-      const offered = (runtime()?.personas ?? []).includes(choice.persona);
-      void panel.submitText(
-        offered ? `From now on, you are ${choice.persona}.` : `From now on, your prompt is: ${choice.persona}`,
-      );
-    } else if (choice.name) void panel.submitText(`Your name is ${choice.name}.`);
+    const offered = (runtime()?.personas ?? []).includes(persona);
+    void panel.submitText(offered ? `From now on, you are ${persona}.` : `From now on, your prompt is: ${persona}`);
   }
 
   /** Why the chip row shows what it shows; readable in DevTools as data-chips on the panel. */
@@ -554,11 +543,11 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
         return { chips: [], exclusive: true };
       }
       chipReason = `personas:${personas.length}`;
-      const pick = (/** @type {string} */ p) => ({ text: p, kind: "persona", onSelect: () => choose({ persona: p }) });
+      const pick = (/** @type {string} */ p) => ({ text: p, kind: "persona", onSelect: () => choose(p) });
       return {
         chips: [
           ...personas.map(pick),
-          { text: "Surprise me", kind: "persona", onSelect: () => choose({ persona: personas[Math.floor(Math.random() * personas.length)] }) },
+          { text: "Surprise me", kind: "persona", onSelect: () => choose(personas[Math.floor(Math.random() * personas.length)]) },
         ],
         exclusive: true,
       };
@@ -917,10 +906,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       ? `innate-os/workspace/custom_agents/${slug(draft?.name ?? "") || "…"}.py`
       : shortPath(agent?.path ?? "");
     caption.hidden = !caption.textContent;
-    if (opts.directivesEl) opts.directivesEl.hidden = isNew && !compact;
+    // Which agent runs, and resetting its brain, are not part of the story: it arms its own.
+    if (opts.directivesEl) opts.directivesEl.hidden = inStory || (isNew && !compact);
 
     // The story's own inputs.
-    nameRow.hidden = !(r && r.label === "Who am I");
     promptRow.hidden = !inStory;
     // Including back to empty: a restarted story is nobody yet, and last run's words are not its prompt.
     if (promptInput.dataset.shown !== who && document.activeElement !== promptInput) {
@@ -1118,14 +1107,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   promptRow.addEventListener("submit", (event) => {
     event.preventDefault();
     const text = promptInput.value.trim();
-    if (text) choose({ persona: text });
-  });
-  nameRow.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const name = nameInput.value.trim();
-    if (!name) return;
-    choose({ name });
-    nameInput.value = "";
+    if (text) choose(text);
   });
   newNameInput.addEventListener("input", () => {
     const d = edit();

@@ -11480,9 +11480,6 @@ select.skill-input {
 
 /* Agent detail: story reveal and offers */
 .agent-studio-persona { display: block; margin-top: 2px; color: #c9c3ff; font-size: 12px; }
-.agent-studio-name { display: flex; gap: 6px; margin: 12px 0 0; }
-.agent-studio-name input { flex: 1; min-width: 0; }
-.agent-studio-name button,
 .agent-studio-prompt button {
   padding: 8px 12px; border: 1px solid #55545e; border-radius: 8px;
   background: #33333d; color: #f2f2f7; font: inherit; font-size: 12px; cursor: pointer;
