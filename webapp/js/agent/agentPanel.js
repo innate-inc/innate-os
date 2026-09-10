@@ -24,6 +24,7 @@ import {
 import { createChatStream } from "./chatStream.js";
 import { createDirectiveControls } from "./directiveControls.js";
 import { createAgentSheet } from "./agentSheet.js";
+import { createOfferDeck } from "./offerDeck.js";
 
 const HISTORY_RECONCILE_MS = 30_000;
 // agent_status heartbeats every 3s; don't leave a stale thinking notice up
@@ -48,10 +49,11 @@ const THINKING_STALE_MS = 10_000;
  *   stopMic: () => void,
  *   micMount: HTMLElement,
  *   setCompact: (on: boolean) => void,
- *   setComposerLocked: (note: string | null) => void,
+ *   setComposerAsk: (ask: { placeholder: string, submit?: (text: string) => void } | null) => void,
+ *   focusComposer: () => void,
  *   addNotice: (text: string) => void,
  *   beginOnboarding: (fresh: boolean, startedAt: number) => void,
- *   setOffers: (offers: Array<{text: string, kind: string, onSelect: (text: string) => void}>) => void,
+ *   setOffers: (offers: import("./offerDeck.js").Offer[], title?: string) => void,
  *   submitText: (text: string) => Promise<boolean>,
  *   narrate: (text: string, how?: { quiet?: boolean, local?: boolean }) => Promise<boolean>,
  *   setDisplayName: (name: string | null) => void,
@@ -157,24 +159,27 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   form.append(input, placeholder, focusHint);
   if (opts.enableMic) form.append(micMount);
   form.append(send);
-  /** Non-null while the interface is asking for an answer the composer cannot give;
-   * its text is what the placeholder says instead. @type {string | null} */
-  let composerLock = null;
+  /** Non-null while the interface wants the answer, not the robot: the placeholder says where
+   * it goes. With `submit` the composer takes the answer itself; without, it is closed.
+   * @type {{ placeholder: string, submit?: (text: string) => void } | null} */
+  let ask = null;
   function syncComposerAction() {
     const empty = input.value.trim().length === 0;
-    const locked = composerLock !== null;
+    const locked = !!ask && !ask.submit;
     input.disabled = locked;
-    form.classList.toggle("locked", locked);
-    placeholder.textContent = composerLock ?? "Message MARS";
+    form.classList.toggle("asked", ask !== null);
+    placeholder.textContent = ask?.placeholder ?? "Message MARS";
     send.disabled = empty || locked;
     send.hidden = empty || locked;
-    micMount.hidden = !opts.enableMic || !empty || locked;
+    micMount.hidden = !opts.enableMic || !empty || ask !== null;
     focusHint.hidden = !empty || locked;
-    placeholder.classList.toggle("hidden", !empty && !locked);
+    placeholder.classList.toggle("hidden", !empty);
   }
   syncComposerAction();
 
-  composeArea.append(thinkingNotice, form);
+  // What the interface asks for sits above the composer, never scrolled away from.
+  const deck = createOfferDeck();
+  composeArea.append(deck.el, thinkingNotice, form);
   thoughtsPanel.append(directives.el, chat.head, chat.wrap, composeArea);
   panel.append(thoughtsPanel);
   root.append(panel);
@@ -220,15 +225,10 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
     mic?.stop();
   }
 
-  /** The chip row under the latest message: what the interface offers, and nothing else.
-   * @type {Array<{text: string, kind: string, onSelect: (text: string) => void}>} */
-  let offers = [];
-  let offersExclusive = false;
-  /** @param {typeof offers} list @param {boolean} exclusive */
-  const offersKey = (list, exclusive) => `${exclusive}|${list.map((o) => `${o.kind}:${o.text}`).join("\n")}`;
-  function renderChips() {
-    chat.setSuggestion(offers, (selected) => void submitText(selected));
-  }
+  /** What the deck shows; the world calls on every frame, so only a change touches the DOM. */
+  let offersKey = "";
+  /** @param {import("./offerDeck.js").Offer[]} list @param {string} title */
+  const keyOf = (list, title) => `${title}|${list.map((o) => `${o.kind}:${o.text}`).join("\n")}`;
   let sending = false;
   /** When this page sent each text: the brain echoes user lines on chat_out, and one bubble is enough.
    * @type {Map<string, number>} */
@@ -269,6 +269,13 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   async function submit() {
     const text = input.value.trim();
     if (!text) return;
+    if (ask?.submit) {
+      ask.submit(text);
+      input.value = "";
+      input.style.height = "auto";
+      syncComposerAction();
+      return;
+    }
     if (await submitText(text)) {
       if (input.value.trim() === text) input.value = "";
       input.style.height = "auto";
@@ -427,12 +434,12 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       if (on) chat.setMode("compact");
       sheet.setEnabled(on);
     },
-    /** Close the composer while the answer belongs somewhere else, saying where.
-     * @param {string | null} note */
-    setComposerLocked(note) {
-      composerLock = note;
+    /** The interface, not the robot, wants the next answer; say where it goes. */
+    setComposerAsk(next) {
+      ask = next;
       syncComposerAction();
     },
+    focusComposer,
     /** @param {string} text */
     addNotice(text) {
       chat.addMessage("system", text, Date.now() / 1000);
@@ -444,13 +451,11 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       sheet.open();
       if (!fresh) void loadHistory();
     },
-    /** @param {Array<{text: string, kind: string, onSelect: (text: string) => void}>} next */
-    setOffers(next, exclusive = false) {
-      // Called on every world frame; only a changed set may touch the DOM.
-      if (offersKey(next, exclusive) === offersKey(offers, offersExclusive)) return;
-      offers = next;
-      offersExclusive = exclusive;
-      renderChips();
+    setOffers(next, title = "") {
+      const key = keyOf(next, title);
+      if (key === offersKey) return;
+      offersKey = key;
+      deck.set(next, title);
     },
     submitText,
     /** @param {string} text */

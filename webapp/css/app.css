@@ -11328,6 +11328,10 @@ select.skill-input {
   -webkit-backdrop-filter: blur(8px);
   color: var(--text);
 }
+/* Room for the story's cards beside the prompt: two characters to a row. */
+.agent-studio.story { width: min(380px, calc(100vw - 120px)); }
+.agent-studio-pane > .agent-offers { margin-top: 16px; } /* room for its badge */
+.agent-studio-pane > .agent-offers + .agent-studio-skills { margin-top: 10px; }
 .agent-studio-title { font-size: 15px; font-weight: 550; letter-spacing: -0.01em; }
 .agent-studio-note { margin: 8px 0 10px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .agent-studio-note.warn { color: #e0c27a; }
@@ -11364,18 +11368,17 @@ select.skill-input {
 .agent-studio .agent-studio-check input { width: auto; flex: none; accent-color: #7965e7; }
 .agent-studio-pane .agent-studio-action { align-self: flex-start; margin: 14px 0 0; padding: 8px 12px; width: auto; font-size: 12px; }
 .agent-studio-skill {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 6px 8px;
   border-radius: 8px;
   background: rgb(255 255 255 / 4%);
 }
-.agent-studio-skill.wanted { background: rgb(132 112 255 / 18%); animation: agent-studio-pulse 1.4s ease-in-out infinite; }
-.agent-studio-skill-name { font-size: 13px; font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-studio-skill-icon { display: grid; place-items: center; width: 18px; height: 18px; color: #c9c3ff; }
+.agent-studio-skill-icon svg { width: 16px; height: 16px; }
+.agent-studio-skill-name { flex: 1; min-width: 0; font-size: 13px; font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-studio-skill-state { color: var(--muted); font-size: 9px; }
-.agent-studio-skill.wanted .agent-studio-skill-state { color: #c9c3ff; }
 .agent-studio-skill-remove {
   width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px;
   background: transparent; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer;
@@ -11414,74 +11417,10 @@ select.skill-input {
 .agent-studio-status:empty { display: none; }
 .agent-studio-action.danger { border-color: #6a3a3a; color: #e8a0a0; }
 .agent-studio-action.danger:hover { border-color: #a05050; }
-@keyframes agent-studio-pulse {
-  0%, 100% { box-shadow: inset 0 0 0 1px #8470ff; }
-  50% { box-shadow: inset 0 0 0 1px rgb(132 112 255 / 25%); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .agent-studio-skill.wanted { animation: none; }
-}
 /* Narrow screens keep the bottom sheet: the picker goes back to it (agentStudio's
    setCompact) and the whole dock, editor included, stands down. */
 .agent-studio-dock[hidden] { display: none; }
 .agent-thoughts-panel > .agent-controls { margin-bottom: 10px; }
-
-/* ---- suggestion chips under the latest message --------------------------- */
-.agent-guided-prompt {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 7px;
-  margin: 2px 0 8px 2px;
-}
-
-.agent-guided-prompt-label {
-  color: rgb(255 255 255 / 48%);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-.agent-guided-prompt-button {
-  position: relative;
-  max-width: min(100%, 430px);
-  padding: 10px 38px 10px 13px;
-  color: #fff;
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.35;
-  text-align: left;
-  background: #34343a;
-  border: 1px solid #34343a;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: border-color 140ms ease, transform 140ms ease;
-}
-
-.agent-guided-prompt-button::after {
-  position: absolute;
-  top: 50%;
-  right: 13px;
-  content: "→";
-  color: rgb(255 255 255 / 62%);
-  transform: translateY(-50%);
-}
-
-.agent-guided-prompt-button:active {
-  transform: scale(0.985);
-}
-
-.agent-guided-prompt-button:focus-visible {
-  outline: 2px solid var(--agent-purple);
-  outline-offset: 2px;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .agent-guided-prompt-button:hover {
-    border-color: rgb(255 255 255 / 32%);
-  }
-}
 
 /* Agent detail: story reveal and offers */
 .agent-studio-persona { display: block; margin-top: 2px; color: #c9c3ff; font-size: 12px; }
@@ -11497,9 +11436,6 @@ select.skill-input {
 .agent-studio-action.quiet { background: transparent; border-color: #4a4a54; color: #d8d8de; }
 .agent-studio-action.quiet:hover { border-color: #8a8a96; }
 .agent-studio-link { display: inline-block; text-decoration: none; text-align: center; }
-.agent-guided-prompt-button.grant { background: #5941ca; border-color: #7965e7; }
-.agent-guided-prompt-button.grant::after { content: "＋"; }
-.agent-guided-prompt-button.persona { background: #2a2a31; border-color: #55545e; }
 
 /* The door out of Nowhere: everything goes white until the next world is in. */
 .agent-whiteout {
@@ -11511,8 +11447,13 @@ select.skill-input {
 .agent-drag-hint {
   position: absolute; left: 50%; bottom: 120px; z-index: 30;
   padding: 8px 14px; border-radius: 999px;
-  background: rgb(16 16 20 / 85%); color: #fff; font-size: 13px; letter-spacing: 0.01em;
-  pointer-events: none; animation: cam-tile-cue 1.2s ease-in-out infinite;
+  background: var(--accent); color: #1a1207; font-size: 13px; font-weight: 600; letter-spacing: 0.01em;
+  pointer-events: none;
+  animation: ui-cue-drop 560ms cubic-bezier(0.34, 1.56, 0.64, 1), agent-drag-hint-pulse 1.8s ease-in-out 560ms infinite;
+}
+@keyframes agent-drag-hint-pulse {
+  0%, 100% { transform: translate(-50%, 0); box-shadow: 0 0 10px rgb(232 163 61 / 30%); }
+  50% { transform: translate(-50%, -3px); box-shadow: 0 0 28px 4px rgb(232 163 61 / 70%); }
 }
 .agent-drag-hint::before { content: "\2194\00a0"; }
 
@@ -11525,34 +11466,172 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
 .agent-cockpit.story-active > :is(.agent-stage-view-toggle, .sim-debug-stack, .agent-challenge-dock) { display: none; }
 .agent-cockpit.story-active .agent-stream > .chat-msg:is(.skill-output, .system):not(.narrator) { display: none; }
 .agent-cockpit.story-active .agent-stream.compact > .chat-thoughts { display: none; }
-/* Offers are rebuilt only when they change, but never let an enter animation leave them dim. */
-.agent-stream.compact > .agent-guided-prompt.compact-entering { animation: none; opacity: 1; }
 /* In the story a failure is a setback, not an alarm. */
 .agent-cockpit.story-active .agent-stream .chat-skill.failed { border-left-color: #d9a441; }
 .agent-cockpit.story-active .agent-stream .chat-skill.failed .chat-skill-status { color: #d9a441; }
 /* The world speaking: centred, quiet, never a bubble the visitor did not type. */
 .agent-stream > .chat-msg.system.narrator { display: flex; justify-content: center; }
-/* Closed while the answer belongs to the chips or the panel: readable, not greyed out. */
-.agent-compose.locked { opacity: 0.72; cursor: default; }
-.agent-compose.locked .agent-compose-input { cursor: default; }
+/* Typed words are for the world (a character to become), not the robot: the composer says so. */
+.agent-compose.asked { border-color: var(--agent-purple-edge); box-shadow: 0 0 0 2px rgb(64 31 251 / 10%); }
+.agent-compose.asked .agent-compose-placeholder { color: #c9c3ff; }
 .chat-link { color: #a99cff; text-underline-offset: 2px; }
 .chat-link:hover { color: #c9c3ff; }
 .chat-msg.system.narrator .chat-sender { display: none; }
 .chat-msg.system.narrator .chat-bubble,
 .chat-msg.system.narrator > :not(.chat-sender) { background: transparent; border: 0; color: #9d9dab; font-style: italic; font-size: 12px; text-align: center; }
-/* The recalled memory is a place on the map: draw the eye there for a moment. */
-.cam-tile.cam-tile-pulse { outline: 2px solid #9482ff; outline-offset: 4px; animation: cam-tile-pulse 1.2s ease-in-out infinite; }
-@keyframes cam-tile-pulse { 0%, 100% { outline-color: #9482ff; } 50% { outline-color: rgb(148 130 255 / 20%); } }
-/* A camera cue names itself: a badge inside the pulsing tile says where to click. */
-.cam-tile .cam-tile-cue {
-  position: absolute; left: 50%; top: 8px; transform: translateX(-50%); z-index: 2;
-  padding: 4px 9px; border-radius: 999px; background: #9482ff; color: #fff;
-  font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; pointer-events: none;
-  animation: cam-tile-cue 1.2s ease-in-out infinite;
+/* "Look here" (cue.js), staged like a game's lock-on: the element pops, corner brackets snap
+   onto it with overshoot and breathe, two rings ping outward, a sheen sweeps across, and the
+   badge drops in and bobs. Signal amber, like every live/active state in the app. */
+.ui-cue { animation: ui-cue-pop 420ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+@keyframes ui-cue-pop { 0% { transform: scale(0.94); } 55% { transform: scale(1.03); } 100% { transform: scale(1); } }
+.ui-cue-frame { position: absolute; inset: 0; z-index: 1; border-radius: inherit; pointer-events: none; }
+.ui-cue-glow {
+  position: absolute; inset: -1px; border-radius: inherit;
+  box-shadow: 0 0 26px 5px rgb(232 163 61 / 42%), inset 0 0 22px rgb(232 163 61 / 12%);
+  animation: ui-cue-glow 1.8s ease-in-out infinite;
 }
-@keyframes cam-tile-cue { 0%, 100% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(1.08); } }
+@keyframes ui-cue-glow { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+.ui-cue-ring {
+  position: absolute; inset: -3px; border: 2px solid var(--accent); border-radius: inherit; opacity: 0;
+  animation: ui-cue-ping 2.1s cubic-bezier(0.2, 0.6, 0.4, 1) 300ms infinite;
+}
+.ui-cue-ring:nth-child(2) { animation-delay: 1s; }
+@keyframes ui-cue-ping { 0% { opacity: 0.85; transform: scale(1); } 60%, 100% { opacity: 0; transform: scale(1.09); } }
+.ui-cue-corners {
+  --c: var(--accent);
+  position: absolute; inset: -9px;
+  background:
+    linear-gradient(var(--c), var(--c)) top left / 16px 3px no-repeat,
+    linear-gradient(var(--c), var(--c)) top left / 3px 16px no-repeat,
+    linear-gradient(var(--c), var(--c)) top right / 16px 3px no-repeat,
+    linear-gradient(var(--c), var(--c)) top right / 3px 16px no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom left / 16px 3px no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom left / 3px 16px no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom right / 16px 3px no-repeat,
+    linear-gradient(var(--c), var(--c)) bottom right / 3px 16px no-repeat;
+  filter: drop-shadow(0 0 6px rgb(232 163 61 / 55%));
+  animation: ui-cue-lock 560ms cubic-bezier(0.34, 1.56, 0.64, 1), ui-cue-breathe 1.8s ease-in-out 560ms infinite;
+}
+@keyframes ui-cue-lock { 0% { inset: -34px; opacity: 0; } 100% { inset: -9px; opacity: 1; } }
+@keyframes ui-cue-breathe { 0%, 100% { inset: -9px; } 50% { inset: -12px; } }
+.ui-cue-sheen { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; }
+.ui-cue-sheen > i {
+  position: absolute; top: -30%; bottom: -30%; left: 0; width: 40%;
+  background: linear-gradient(105deg, transparent 15%, rgb(255 255 255 / 22%) 50%, transparent 85%);
+  transform: translateX(-160%) skewX(-18deg);
+  animation: ui-cue-sheen 2.8s cubic-bezier(0.4, 0, 0.2, 1) 700ms infinite;
+}
+@keyframes ui-cue-sheen { 0% { transform: translateX(-160%) skewX(-18deg); } 40%, 100% { transform: translateX(360%) skewX(-18deg); } }
+.ui-cue-badge {
+  position: absolute; left: 50%; top: -11px; transform: translateX(-50%); z-index: 2;
+  padding: 4px 9px; border-radius: 999px; background: var(--accent); color: #1a1207;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; pointer-events: none;
+  box-shadow: 0 2px 10px rgb(232 163 61 / 45%);
+  animation: ui-cue-drop 560ms cubic-bezier(0.34, 1.56, 0.64, 1), ui-cue-bob 1.8s ease-in-out 560ms infinite;
+}
+@keyframes ui-cue-drop { 0% { opacity: 0; transform: translate(-50%, -18px) scale(0.5); } 100% { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+@keyframes ui-cue-bob { 0%, 100% { transform: translate(-50%, 0); } 50% { transform: translate(-50%, -3px); } }
+/* The tile clips its edges: the badge sits inside, and an outline plus a breathing halo
+   stand in for the brackets and rings. */
+.cam-tile .ui-cue-badge { top: 8px; }
+.cam-tile.ui-cue {
+  outline: 2px solid var(--accent); outline-offset: 3px;
+  animation: ui-cue-pop 420ms cubic-bezier(0.34, 1.56, 0.64, 1), ui-cue-halo 1.8s ease-in-out 420ms infinite;
+}
+@keyframes ui-cue-halo {
+  0%, 100% { box-shadow: inset 0 1px 0 rgb(255 255 255 / 16%), 0 10px 28px rgb(0 0 0 / 22%), 0 0 12px rgb(232 163 61 / 25%); }
+  50% { box-shadow: inset 0 1px 0 rgb(255 255 255 / 16%), 0 10px 28px rgb(0 0 0 / 22%), 0 0 30px 4px rgb(232 163 61 / 65%); }
+}
+/* A skill that just arrived, in the agent's own list. */
+.agent-studio-skill.landed { animation: agent-studio-landed 2s ease-out; }
+.agent-studio-skill.landed .agent-studio-skill-state { color: #fff; }
+@keyframes agent-studio-landed {
+  0% { background: rgb(232 163 61 / 45%); box-shadow: 0 0 0 3px rgb(232 163 61 / 40%), 0 0 20px rgb(232 163 61 / 55%); }
+  100% { background: rgb(255 255 255 / 4%); box-shadow: none; }
+}
+
+/* ---- the offer deck: what the interface asks for, docked above the composer ---------- */
+.agent-offers {
+  position: relative; /* its cue badge */
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 10px 9px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 5%), rgb(255 255 255 / 2%));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%);
+  animation: agent-offers-in 220ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.agent-offers[hidden], .agent-offers-title[hidden], .agent-offers-grid[hidden], .agent-offers-row[hidden] { display: none; }
+@keyframes agent-offers-in { from { opacity: 0; transform: translateY(6px); } }
+.agent-offers.ui-cue { border-color: var(--accent-dim); }
+.agent-compose-area > .agent-offers { margin-top: 6px; }
+.agent-offers-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 2px; }
+.agent-offers-kicker { color: rgb(255 255 255 / 48%); }
+.agent-offers-kicker[hidden] { display: none; }
+.agent-offers-title { color: rgb(255 255 255 / 90%); font-size: 13px; font-weight: 550; letter-spacing: -0.01em; }
+.agent-offers-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.agent-offer-card {
+  --offer-hue: #9482ff;
+  display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: center; gap: 10px;
+  min-height: 58px; padding: 8px 10px 8px 8px;
+  color: #fff; font: inherit; text-align: left; cursor: pointer;
+  background: rgb(8 8 10 / 46%);
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 13px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%);
+  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+.agent-offer-card:hover {
+  background: rgb(20 20 26 / 66%);
+  border-color: color-mix(in srgb, var(--offer-hue) 60%, transparent);
+  transform: translateY(-1px);
+}
+.agent-offer-card:active { transform: scale(0.985); }
+.agent-offer-card:focus-visible { outline: 2px solid var(--agent-purple); outline-offset: 2px; }
+.agent-offer-icon {
+  display: grid; place-items: center; width: 36px; height: 36px; border-radius: 11px;
+  color: var(--offer-hue);
+  background: color-mix(in srgb, var(--offer-hue) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--offer-hue) 32%, transparent);
+}
+.agent-offer-icon svg { width: 20px; height: 20px; }
+.agent-offer-copy { display: grid; gap: 2px; min-width: 0; }
+.agent-offer-name { font-size: 13px; font-weight: 600; line-height: 1.2; }
+.agent-offer-detail { font-size: 11px; line-height: 1.3; color: rgb(255 255 255 / 60%); }
+.agent-offer-detail:empty { display: none; }
+/* The grant: one skill across the deck, in the purple the agent's own chrome wears. */
+.agent-offer-card.grant {
+  --offer-hue: #c9c3ff;
+  grid-column: 1 / -1; grid-template-columns: 36px minmax(0, 1fr) auto;
+  background: linear-gradient(135deg, rgb(89 65 202 / 84%), rgb(64 31 251 / 46%));
+  border-color: #7965e7;
+}
+.agent-offer-card.grant:hover { background: linear-gradient(135deg, rgb(105 80 224 / 90%), rgb(80 48 255 / 54%)); border-color: #9482ff; }
+.agent-offer-card.grant .agent-offer-icon { color: #fff; background: rgb(255 255 255 / 14%); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 22%); }
+.agent-offer-card.grant .agent-offer-name { font-family: var(--font-mono); }
+.agent-offer-card.grant .agent-offer-detail { color: rgb(255 255 255 / 76%); }
+.agent-offer-go {
+  display: inline-flex; align-items: center; gap: 3px; padding: 6px 10px 6px 7px; border-radius: 999px;
+  background: #fff; color: #3d2aa8; font-size: 12px; font-weight: 650;
+}
+.agent-offer-go svg { width: 14px; height: 14px; stroke-width: 2.4; }
+.agent-offers-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.agent-offer-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 11px; border-radius: 999px;
+  color: rgb(255 255 255 / 88%); font: inherit; font-size: 12px; line-height: 1.2; cursor: pointer;
+  background: rgb(255 255 255 / 6%); border: 1px solid rgb(255 255 255 / 14%);
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+.agent-offer-chip svg { width: 14px; height: 14px; color: rgb(255 255 255 / 70%); }
+.agent-offer-chip.reply::after { content: "→"; color: rgb(255 255 255 / 50%); }
+.agent-offer-chip:hover { background: rgb(255 255 255 / 11%); border-color: rgb(255 255 255 / 30%); }
+.agent-offer-chip:focus-visible { outline: 2px solid var(--agent-purple); outline-offset: 2px; }
+@media (max-width: 360px) { .agent-offers-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) {
   .agent-drag-hint { animation: none; transform: translateX(-50%); }
   .agent-whiteout { transition: none; }
-  :is(.cam-tile.cam-tile-pulse, .cam-tile .cam-tile-cue) { animation: none; }
+  :is(.ui-cue, .ui-cue-badge, .ui-cue-glow, .ui-cue-ring, .ui-cue-corners, .ui-cue-sheen > i, .agent-offers, .agent-studio-skill.landed) { animation: none; }
+  .ui-cue-ring { display: none; }
+  .ui-cue-corners { opacity: 1; }
 }

@@ -135,7 +135,7 @@ ACTS = (
         "As soon as you have it, use it, with a Wave.",
         lambda state, events, runtime: completed(events, "head_emotion"),
         suggests=("Where are you?", "What is a skill?"),
-        nudge="Long silence. In character, ask once more for the HeadEmotion skill; you may say the grant is right under your last line. Do not mention buttons.",
+        nudge="Long silence. In character, ask once more for the HeadEmotion skill; you may say the grant is waiting in the Agent panel. Do not mention buttons.",
     ),
     Act(
         "Look around",

@@ -61,7 +61,6 @@ function setLinkedText(el, text) {
  *   routeChatOut: (sender: string, text: string, ts: number) => void,
  *   replay: (entries: any[]) => void,
  *   clear: () => void,
- *   setSuggestion: (text: string | Array<string | {text: string, kind?: string, onSelect: (text: string) => void}> | null, onSelect?: (text: string) => void) => void,
  *   setMode: (mode: "compact" | "detailed") => void,
  *   destroy: () => void,
  * }}
@@ -114,53 +113,6 @@ export function createChatStream() {
   });
   const streamResize = new ResizeObserver(() => settleStreamAfterMutation(pinnedToBottom));
   streamResize.observe(stream);
-
-  /** @type {HTMLElement | null} */
-  let suggestion = null;
-
-  /** @param {HTMLElement} el */
-  function appendStreamItem(el) {
-    if (suggestion?.isConnected) suggestion.before(el);
-    else stream.append(el);
-  }
-
-  /** Keep a few optional next requests directly under the latest message.
-   * @param {string | Array<string | {text: string, kind?: string, onSelect: (text: string) => void}> | null} text
-   * @param {(text: string) => void} [onSelect] */
-  function setSuggestion(text, onSelect) {
-    const wasAtBottom = atBottom();
-    suggestion?.remove();
-    suggestion = null;
-    const raw = Array.isArray(text) ? text : text ? [text] : [];
-    // Strings are model replies the person may send; objects are interface
-    // offers (grant a skill, pick a persona) with their own click handler.
-    const chips = raw
-      .map((item) => (typeof item === "string" ? { text: item, kind: "reply", onSelect } : item))
-      .filter((item) => item && typeof item.text === "string" && item.text.trim() && typeof item.onSelect === "function")
-      .slice(0, 6);
-    if (!chips.length) {
-      settleStreamAfterMutation(wasAtBottom);
-      return;
-    }
-    const wrap = document.createElement("div");
-    wrap.className = "agent-guided-prompt";
-    const label = document.createElement("span");
-    label.className = "agent-guided-prompt-label mono";
-    label.textContent = chips.some((chip) => chip.kind !== "reply") ? "Your move" : "Try asking";
-    wrap.append(label);
-    for (const chip of chips) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = `agent-guided-prompt-button ${chip.kind ?? "reply"}`;
-      button.textContent = chip.text;
-      button.addEventListener("click", () => chip.onSelect(chip.text));
-      wrap.append(button);
-    }
-    suggestion = wrap;
-    stream.append(wrap);
-    animateCompactEnter(wrap);
-    settleStreamAfterMutation(wasAtBottom);
-  }
 
   /** @type {{ wrap: HTMLElement, status: HTMLElement, list: HTMLElement, lastByKind: Record<string, string>, startTs: number, latestTs: number } | null} */
   let thoughts = null;
@@ -261,7 +213,7 @@ export function createChatStream() {
         settleStreamAfterMutation(wasAtBottom);
       });
       wrap.append(toggle, list);
-      appendStreamItem(wrap);
+      stream.append(wrap);
       thoughts = { wrap, status, list, lastByKind: {}, startTs: ts, latestTs: ts };
     }
     thoughts.latestTs = ts;
@@ -296,7 +248,7 @@ export function createChatStream() {
     bubble.className = "chat-bubble";
     setLinkedText(bubble, kind === "user" ? text : roundNums(text));
     el.appendChild(bubble);
-    appendStreamItem(el);
+    stream.append(el);
     if (label !== "skill_output") animateCompactEnter(el);
     lastTs = ts;
     if (kind === "user") {
@@ -458,7 +410,7 @@ export function createChatStream() {
       });
       skillRuns.set(key, createdRun);
       if (!attachSkillToStreak(name, wrap)) {
-        appendStreamItem(wrap);
+        stream.append(wrap);
         animateCompactEnter(wrap);
       }
     }
@@ -547,7 +499,6 @@ export function createChatStream() {
       stream.classList.remove("replaying");
     }
     for (const line of narrated) restoreNarrated(line);
-    if (suggestion) stream.append(suggestion);
     // A reconcile can land while the reader is up in the scrollback.
     stream.scrollTop = wasAtBottom ? stream.scrollHeight : priorTop;
   }
@@ -575,7 +526,6 @@ export function createChatStream() {
     routeChatOut,
     replay,
     clear,
-    setSuggestion,
     setMode: setStreamMode,
     destroy() {
       streamResize.disconnect();

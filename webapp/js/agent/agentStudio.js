@@ -12,6 +12,10 @@
 // Selecting the story's agent by hand is not the story: the person keeps the rail,
 // the scene setup and the challenges, and nothing hides behind a mode they cannot leave.
 
+import { cue } from "./cue.js";
+import { createOfferDeck } from "./offerDeck.js";
+import { ICONS, personaCard, skillCard } from "./storyCards.js";
+
 const STORY_AGENT = "void_agent";
 const SKIPPED_AGENT = "demo_agent"; // who the robot is once the story is skipped
 const SKIP_KEY = "innate.nowhere.skip.v1";
@@ -32,6 +36,8 @@ const GRANT_WAIT_MS = 4_000;
 // How long a persona choice has to come back as the act advancing before it is worth saying
 // the world never took it.
 const PERSONA_ECHO_MS = 8_000;
+// A skill that just landed flashes in the panel this long: the person sees where it went.
+const LANDED_MS = 2_000;
 
 /** Resolve once `ready()` holds, or when the wait runs out — whichever comes first.
  * @param {() => boolean} ready @param {number} timeoutMs */
@@ -260,7 +266,13 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const actions = document.createElement("div");
   actions.className = "agent-studio-actions";
 
-  panes.identity.append(promptRow, nameField, promptField);
+  // The story's asks live here, where the agent's identity and skills live for every agent:
+  // characters beside the prompt, a skill to grant above the skills it has. Below 820px
+  // the dock stands down and the chat's own deck takes them.
+  const deck = createOfferDeck();
+  let deckKey = "";
+
+  panes.identity.append(deck.el, promptRow, nameField, promptField);
   panes.skills.append(skills, addRow);
   panes.advanced.append(checks, caption, deleteBtn);
   panelEl.append(persona, note, tabsRow, panes.identity, panes.skills, panes.advanced, saveBar, actions);
@@ -324,9 +336,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   let saveStatus = "";
   let chooserOpen = false;
   let tab = "identity";
-  /** Whether any skill beyond the one it woke up with has landed; the panel follows it. */
-  let anyGrant = /** @type {boolean | null} */ (null);
+  /** The ask the tab last followed, so a person who switches tabs is not pulled back each frame. */
+  let followedAsk = "";
   /** @type {SkillRow[]} */ let roster = [];
+  /** @type {{ skill: string, at: number } | null} */ let landed = null;
 
   const active = () => challenge?.active ?? null;
   const story = () => (active()?.runtime?.story ? active() : null);
@@ -479,8 +492,19 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     // can take its turn on the line before the toolset has caught up -- which reads to the
     // robot as the skill failing. Say it once the tool is actually there.
     await held(() => agentState.get().activeSkills.has(skill), GRANT_WAIT_MS);
+    landed = { skill, at: Date.now() };
+    render(true);
+    setTimeout(() => render(true), LANDED_MS);
     void panel.submitText(GRANT_LINES[skill] ?? `Granted: the ${skillLabel(skill)} skill.`);
   }
+
+  /** @param {string} skill */
+  const grantOffer = (skill) => ({
+    text: skillLabel(skill),
+    kind: /** @type {const} */ ("grant"),
+    ...skillCard(skill),
+    onSelect: () => void grant(skill),
+  });
 
   /** @param {string} persona */
   function choose(persona) {
@@ -509,57 +533,65 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     Date.now() - actAt > GRANT_GRACE_MS ||
     wants.some((skill) => mentions(opts.lastLine(), skill));
 
+  /** @returns {{ chips: import("./offerDeck.js").Offer[], title?: string }} */
   function offers() {
     const r = runtime();
     const o = out();
+    const name = profile().name || "MARS";
     if (switching()) {
       chipReason = "frozen";
-      return { chips: [], exclusive: true }; // nothing lands while the world changes
+      return { chips: [] }; // nothing lands while the world changes
     }
     if (o?.state === "passed") {
       if (!graduationReady || staying) {
         chipReason = graduationReady ? "chatting" : "graduating";
-        return { chips: [], exclusive: false };
+        return { chips: [] };
       }
       chipReason = "graduated";
       return {
+        title: "Where to?",
         chips: [
-          { text: "Keep chatting", kind: "persona", onSelect: () => { staying = true; render(true); } },
-          { text: "Go to the apartment", kind: "grant", onSelect: () => graduate("apartment") },
-          { text: "Go to the crossroads", kind: "grant", onSelect: () => graduate("intersection") },
+          { text: "Go to the apartment", kind: "place", icon: ICONS.home, detail: "Rooms, furniture, things to fetch", onSelect: () => graduate("apartment") },
+          { text: "Go to the crossroads", kind: "place", icon: ICONS.signpost, detail: "Streets, traffic, the open air", onSelect: () => graduate("intersection") },
+          { text: "Keep chatting", kind: "reply", onSelect: () => { staying = true; render(true); } },
         ],
-        exclusive: true,
       };
     }
     if (o) {
       if (agentState.get().activeSkills.has(MEMORY)) {
         chipReason = "memory-granted";
-        return { chips: [], exclusive: false };
+        return { chips: [] };
       }
       const ready = asked([MEMORY]);
       chipReason = ready ? "grants:memory" : "waiting-for-line";
-      const chip = { text: `Grant the ${skillLabel(MEMORY)} skill`, kind: "grant", onSelect: () => void grant(MEMORY) };
-      return { chips: ready ? [chip] : [], exclusive: false };
+      return { title: `${name} asks for a skill`, chips: ready ? [grantOffer(MEMORY)] : [] };
     }
     if (!r) {
       chipReason = "no-story";
-      return { chips: [], exclusive: false };
+      return { chips: [] };
     }
     const personas = r.personas ?? [];
     if (personas.length) {
-      // The persona choice owns the row: nothing else competes with it.
+      // The persona choice owns the deck: nothing else competes with it.
       if (!asked([])) {
         chipReason = "waiting-for-line";
-        return { chips: [], exclusive: true };
+        return { chips: [] };
       }
       chipReason = `personas:${personas.length}`;
-      const pick = (/** @type {string} */ p) => ({ text: p, kind: "persona", onSelect: () => choose(p) });
+      const pick = (/** @type {string} */ p) => ({
+        text: p,
+        kind: /** @type {const} */ ("persona"),
+        ...personaCard(p),
+        onSelect: () => choose(p),
+      });
       return {
+        title: `Who is ${name}?`,
         chips: [
           ...personas.map(pick),
-          { text: "Surprise me", kind: "persona", onSelect: () => choose(personas[Math.floor(Math.random() * personas.length)]) },
+          { text: "Surprise me", kind: "random", onSelect: () => choose(personas[Math.floor(Math.random() * personas.length)]) },
+          // The panel has the prompt right there; only the chat's deck needs a way to the composer.
+          ...(compact ? [{ text: "Write your own", kind: /** @type {const} */ ("custom"), onSelect: () => panel.focusComposer() }] : []),
         ],
-        exclusive: true,
       };
     }
     const wants = (r.wants ?? []).filter(
@@ -568,25 +600,15 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     // What the act says the person might say next: the story's own words, not a tool call.
     const replies = (r.suggests ?? []).map((/** @type {string} */ text) => ({
       text,
-      kind: "reply",
+      kind: /** @type {const} */ ("reply"),
       onSelect: (/** @type {string} */ said) => void panel.submitText(said),
     }));
     if (!wants.length || !asked(wants)) {
       chipReason = wants.length ? "waiting-for-line" : "granted";
-      return { chips: replies, exclusive: false };
+      return { chips: replies };
     }
     chipReason = `grants:${wants.join(",")}`;
-    return {
-      chips: [
-        ...wants.map((/** @type {string} */ skill) => ({
-          text: `Grant the ${skillLabel(skill)} skill`,
-          kind: "grant",
-          onSelect: () => void grant(skill),
-        })),
-        ...replies,
-      ],
-      exclusive: false,
-    };
+    return { title: `${name} asks for a skill`, chips: [...wants.map(grantOffer), ...replies] };
   }
 
   let camera = { mode: /** @type {"free" | "chase"} */ ("free"), side: 0, back: /** @type {number | null} */ (null), height: /** @type {number | null} */ (null) };
@@ -622,11 +644,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
 
   // The pickup is one uninterruptible action, so MARS cannot narrate it; the interface
   // points at the camera that shows each phase and says so.
-  /** @type {HTMLElement | null} */ let cuedTile = null;
+  /** @type {(() => void) | null} */ let uncueTile = null;
   function uncue() {
-    cuedTile?.classList.remove("cam-tile-pulse");
-    cuedTile?.querySelector(".cam-tile-cue")?.remove();
-    cuedTile = null;
+    uncueTile?.();
+    uncueTile = null;
   }
   /** @param {string} view @param {string} line */
   function cueCamera(view, line) {
@@ -636,12 +657,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       (t) => t.querySelector(".cam-tile-label")?.textContent?.trim().toLowerCase() === view,
     );
     if (!(tile instanceof HTMLElement)) return; // already the big view, or not offered
-    cuedTile = tile;
-    tile.classList.add("cam-tile-pulse");
-    const badge = document.createElement("span");
-    badge.className = "cam-tile-cue";
-    badge.textContent = "click here";
-    tile.append(badge);
+    uncueTile = cue(tile, "click here");
     void panel.narrate(line, { local: true });
   }
 
@@ -927,17 +943,24 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       promptInput.dataset.shown = who;
     }
 
-    // The panel shows whichever half of the agent is being built: who it is, until the
-    // first skill it asked for actually arrives.
-    if (inStory) {
-      const granted = [...s.activeSkills].some((id) => id !== WAVE);
-      if (granted !== anyGrant) {
-        anyGrant = granted;
-        tab = granted ? "skills" : "identity";
-      }
-    } else {
-      anyGrant = null;
+    // What the story asks for goes to the panel: characters beside the prompt, a grant above
+    // the skills. The chat keeps the replies, and everything when there is no panel.
+    const { chips, title: ask } = offers();
+    panelEl.dataset.chips = chipReason;
+    const toPanel = compact ? [] : chips.filter((c) => c.kind === "persona" || c.kind === "grant" || c.kind === "random");
+    const askKey = toPanel.filter((c) => c.kind !== "random").map((c) => `${c.kind}:${c.text}`).join("|");
+    if (askKey !== deckKey) {
+      deckKey = askKey;
+      deck.set(toPanel, ask);
+      const host = toPanel[0]?.kind === "grant" ? panes.skills : panes.identity;
+      if (deck.el.parentElement !== host) host.prepend(deck.el);
     }
+    // The panel shows the half of the agent being asked about, once per ask.
+    if (askKey && askKey !== followedAsk) {
+      followedAsk = askKey;
+      tab = toPanel[0].kind === "grant" ? "skills" : "identity";
+    }
+    panel.setOffers(chips.filter((c) => !toPanel.includes(c)), toPanel.length ? "" : ask);
     // One tab at a time, in the story too.
     tabsRow.hidden = !inStory && !f;
     tabs.advanced.hidden = inStory;
@@ -989,14 +1012,13 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     leaveBtn.textContent = r ? "Skip intro" : "Leave the story";
     leaveBtn.title = "Out of the story and back to the rest of the interface";
 
-    const { chips, exclusive } = offers();
-    panelEl.dataset.chips = chipReason;
-    panel.setOffers(chips, exclusive);
-    // Who the robot is, is decided in the chips or the panel: a typed answer would reach
-    // the robot and not the story, leaving the two disagreeing about who it became.
+    // Who the robot is, is decided by the world, not in chat with the robot: the answer is
+    // made in the panel, or typed here where there is no panel and sent there as a persona.
     const choosing = inStory && (r?.personas ?? []).length > 0;
-    panel.setComposerLocked(
-      choosing ? (compact ? "Pick a personality above" : "Pick a personality above, or write one in the panel") : null,
+    panel.setComposerAsk(
+      !choosing ? null
+        : compact ? { placeholder: "Or describe your own character…", submit: choose }
+        : { placeholder: `Pick who ${name || "MARS"} is, top left` },
     );
   }
 
@@ -1030,10 +1052,18 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       if (r && !unlocked.has(id)) continue;
       if (inStory && !r && UNMENTIONED_SKILLS.has(id) && !s.activeSkills.has(id)) continue;
       const granted = s.activeSkills.has(id);
+      if (inStory && wanted.has(id) && !granted) continue; // the grant card above is that skill
       const row = document.createElement("li");
       row.className = "agent-studio-skill";
-      row.classList.toggle("wanted", inStory && wanted.has(id) && !granted);
       row.classList.toggle("granted", inStory && granted);
+      const fresh = landed?.skill === id && Date.now() - landed.at < LANDED_MS;
+      row.classList.toggle("landed", fresh);
+      if (inStory) {
+        const glyph = document.createElement("span");
+        glyph.className = "agent-studio-skill-icon";
+        glyph.innerHTML = skillCard(id).icon;
+        row.append(glyph);
+      }
       const label = document.createElement("span");
       label.className = "agent-studio-skill-name";
       label.textContent = skillLabel(id);
@@ -1042,7 +1072,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       if (inStory) {
         const state = document.createElement("span");
         state.className = "agent-studio-skill-state microlabel";
-        state.textContent = granted ? "granted" : "wanted";
+        state.textContent = fresh ? "new" : "granted";
         row.append(state);
       } else if (canEdit) {
         const del = document.createElement("button");
@@ -1242,6 +1272,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       uncue();
       hideDragHint();
       panel.setOffers([]);
+      panel.setComposerAsk(null);
       panel.setDisplayName(null);
       document.body.classList.remove("story-active");
       if (opts.directivesEl) opts.directivesEl.hidden = false;
