@@ -11,8 +11,10 @@ import pytest
 
 from mars_cam.ground_plane import (
     Corridor,
+    Intrinsics,
     fit_floor,
     height_error_by_range,
+    image_radius,
     leak_fractions,
     quaternion_matrix,
     transform_to_base,
@@ -193,3 +195,55 @@ def test_camera_pitch_shows_up_as_floor_pitch_after_transform():
 
     assert fit is not None
     assert abs(fit.pitch_deg) == pytest.approx(1.0, abs=0.02)
+
+
+# ------------------------------------------------------------ image position
+
+
+def _forward_camera(height: float = 0.248, pitch_deg: float = -20.0):
+    """Camera->base rotation/translation for a head pitched down by `pitch_deg`.
+
+    Optical convention (x right, y down, z forward) mapped into base_link
+    (x forward, y left, z up), then pitched about the base y axis.
+    """
+    optical_to_base = np.array([[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]])
+    # Negated: a negative head angle is nose-down, which is a positive rotation
+    # about base +y.
+    t = np.radians(-pitch_deg)
+    pitch = np.array([[np.cos(t), 0.0, np.sin(t)], [0.0, 1.0, 0.0], [-np.sin(t), 0.0, np.cos(t)]])
+    return pitch @ optical_to_base, np.array([0.0, 0.0, height])
+
+
+INTRINSICS = Intrinsics(fx=275.84, fy=275.84, cx=320.0, cy=240.0, width=640, height=480)
+
+
+def test_ground_ahead_projects_below_the_horizon():
+    rotation, translation = _forward_camera(pitch_deg=0.0)
+    radii = image_radius(np.array([[1.0, 0.0, 0.0]]), rotation, translation, INTRINSICS)
+
+    assert radii.size == 1
+    assert 0.0 < radii[0] < 0.5
+
+
+def test_tilting_down_brings_the_one_metre_spot_toward_centre():
+    """The reason for the -20 degree head position, pinned as a number."""
+    spot = np.array([[1.0, 0.0, 0.0]])
+    level = image_radius(spot, *_forward_camera(pitch_deg=0.0), INTRINSICS)[0]
+    tilted = image_radius(spot, *_forward_camera(pitch_deg=-14.0), INTRINSICS)[0]
+
+    assert tilted < level
+    assert tilted < 0.02  # -14 deg centres it
+
+
+def test_whole_corridor_stays_off_the_lens_edge_at_the_ai_head_position():
+    corridor = Corridor()
+    x = np.linspace(corridor.x_min, corridor.x_max, 40)
+    ground = np.column_stack([x, np.zeros_like(x), np.zeros_like(x)])
+    radii = image_radius(ground, *_forward_camera(pitch_deg=-20.0), INTRINSICS)
+
+    assert radii.max() < 0.4, "corridor must not reach the outer ring where plumb_bob stops fitting"
+
+
+def test_points_behind_the_camera_are_dropped():
+    rotation, translation = _forward_camera(pitch_deg=0.0)
+    assert image_radius(np.array([[-1.0, 0.0, 0.0]]), rotation, translation, INTRINSICS).size == 0
