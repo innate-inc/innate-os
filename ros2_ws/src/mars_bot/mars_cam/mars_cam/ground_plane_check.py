@@ -17,15 +17,18 @@ Usage:
 """
 
 import sys
+from pathlib import Path
 
 import numpy as np
 import rclpy
+from rcl_interfaces.srv import GetParameters
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, JointState, PointCloud2
 from sensor_msgs_py import point_cloud2
 from tf2_ros import Buffer, TransformListener
 
+from mars_cam import camera_mount
 from mars_cam.calibration_validation import ErrorStats
 from mars_cam.ground_plane import (
     LEAK_THRESHOLDS_M,
@@ -52,6 +55,11 @@ class GroundPlaneCheck(Node):
         self.declare_parameter("cloud_topic", "/mars/main_camera/points")
         self.declare_parameter("camera_info_topic", "/mars/main_camera/left/camera_info")
         self.declare_parameter("num_clouds", 10)
+        self.declare_parameter("depth_node", "/stereo_depth_estimator")
+        self.declare_parameter("data_directory", "/home/jetson1/innate-os/data")
+        # Persist the measured correction to the per-robot calibration directory
+        # instead of only printing it.
+        self.declare_parameter("write", False)
         # Defaults come from Corridor so the two cannot drift apart.
         defaults = Corridor()
         self.declare_parameter("roi_x_min", defaults.x_min)
@@ -76,6 +84,10 @@ class GroundPlaneCheck(Node):
         self._source_frame = ""
         self._done = False
         self._head_deg: float | None = None
+        # What the depth node is ALREADY applying. Pitch and roll are baked into
+        # the cloud we receive; height is not, so we apply it below — otherwise
+        # the two accumulate differently and the recommendation is inconsistent.
+        self._current = self._read_current_correction()
         self._intrinsics: Intrinsics | None = None
         self._last_transform: tuple[np.ndarray, np.ndarray] | None = None
 
@@ -105,13 +117,35 @@ class GroundPlaneCheck(Node):
         rotation, translation = transform
         self._last_transform = transform
         self._source_frame = msg.header.frame_id
-        self._collected.append(transform_to_base(points, rotation, translation))
+        in_base = transform_to_base(points, rotation, translation)
+        in_base[:, 2] += self._current.height_m
+        self._collected.append(in_base)
         self.get_logger().info(f"  [{len(self._collected)}/{self.num_clouds}] {len(points)} points")
 
         if len(self._collected) >= self.num_clouds:
             self._done = True
             self._report()
             rclpy.shutdown()
+
+    def _read_current_correction(self) -> camera_mount.MountCorrection:
+        """Query the depth node for the corrections already in effect."""
+        node_name = str(self.get_parameter("depth_node").value)
+        client = self.create_client(GetParameters, f"{node_name}/get_parameters")
+        names = ["mount_pitch_correction_deg", "mount_roll_correction_deg", "mount_height_correction_m"]
+        if not client.wait_for_service(timeout_sec=3.0):
+            self.get_logger().warn(f"{node_name} not reachable — assuming zero correction is applied")
+            return camera_mount.MountCorrection()
+        future = client.call_async(GetParameters.Request(names=names))
+        rclpy.spin_until_future_complete(self, future, timeout_sec=3.0)
+        result = future.result()
+        if result is None or len(result.values) != len(names):
+            self.get_logger().warn("Could not read current mount correction — assuming zero")
+            return camera_mount.MountCorrection()
+        return camera_mount.MountCorrection(
+            pitch_deg=result.values[0].double_value,
+            roll_deg=result.values[1].double_value,
+            height_m=result.values[2].double_value,
+        )
 
     def _joint_callback(self, msg: JointState) -> None:
         if "joint_head" in msg.name:
@@ -234,20 +268,66 @@ class GroundPlaneCheck(Node):
         self._report_image_position(column)
 
     def _recommend(self, fit) -> None:
-        """Corrections to add to the current ones, from the CORRIDOR fit.
+        """Absolute corrections that flatten the floor, from the CORRIDOR fit.
 
         Deliberately not the global fit: beyond the corridor the floor is far
-        enough away that depth noise dominates, and those outliers drag a
+        enough that depth noise dominates, and those outliers drag a
         least-squares plane badly enough to recommend an over-correction.
+
+        The values printed are ABSOLUTE, not deltas — the measurement already
+        has the active correction folded in (pitch and roll via the cloud,
+        height applied on read), so what is measured here is the residual.
         """
-        pitch_fix, roll_fix = mount_correction_for(fit)
+        pitch_delta, roll_delta = mount_correction_for(fit)
+        height_delta = -fit.offset_m
+        updated = self._current.plus(pitch_delta, roll_delta, height_delta)
+
         out = self.get_logger().info
         out("")
-        out("  ADD these to the current values in config/stereo_depth_estimator.yaml:")
-        out(f"    mount_pitch_correction_deg  += {pitch_fix:+.3f}")
-        out(f"    mount_roll_correction_deg   += {roll_fix:+.3f}")
-        out(f"    mount_height_correction_m   += {-fit.offset_m:+.4f}")
-        out("  then re-run. Values are cumulative and per-robot.")
+        out(
+            f"  currently applied: pitch {self._current.pitch_deg:+.3f}  roll {self._current.roll_deg:+.3f}  "
+            f"height {self._current.height_m * 1000:+.1f}mm"
+        )
+        out(
+            f"  residual measured: pitch {fit.pitch_deg:+.3f}  roll {fit.roll_deg:+.3f}  "
+            f"height {fit.offset_m * 1000:+.1f}mm"
+        )
+        out("")
+        out("  SET THESE (absolute, per-robot):")
+        out(f"    mount_pitch_correction_deg: {updated.pitch_deg:.3f}")
+        out(f"    mount_roll_correction_deg:  {updated.roll_deg:.3f}")
+        out(f"    mount_height_correction_m:  {updated.height_m:.4f}")
+
+        if bool(self.get_parameter("write").value):
+            self._persist(updated, fit)
+        else:
+            out("  (re-run with -p write:=true to save these to the robot's calibration directory)")
+
+    def _persist(self, updated, fit) -> None:
+        out = self.get_logger().info
+        data_dir = Path(str(self.get_parameter("data_directory").value))
+        calib_dir = camera_mount.find_calibration_dir(data_dir)
+        if calib_dir is None:
+            self.get_logger().error(
+                f"No *calibration_config directory under {data_dir} — cannot save. Calibrate the stereo pair first."
+            )
+            return
+
+        record = camera_mount.MountCorrection(
+            pitch_deg=updated.pitch_deg,
+            roll_deg=updated.roll_deg,
+            height_m=updated.height_m,
+            head_angle_deg=self._head_deg if self._head_deg is not None else 0.0,
+            residual_rms_mm=fit.residual.rms,
+        )
+        try:
+            path = camera_mount.save(camera_mount.mount_path(calib_dir), record)
+        except Exception as e:  # noqa: BLE001 — a diagnostic must not traceback at the operator
+            self.get_logger().error(f"Failed to save mount correction: {e}")
+            return
+        out(f"  saved to {path}")
+        out(f"  measured at joint_head {record.head_angle_deg:+.2f} deg — the floor tilt drifts with")
+        out("  head angle, so this is exact only near that position")
 
     def _report_image_position(self, column: np.ndarray) -> None:
         """Where the corridor lands on the sensor — centre is where the lens model fits."""

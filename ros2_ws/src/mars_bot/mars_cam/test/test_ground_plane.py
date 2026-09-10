@@ -6,6 +6,8 @@ Synthetic floors with a known tilt, so a sign flip or a broken fit shows up as a
 number rather than as phantom obstacles on the robot. No ROS here.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -327,3 +329,70 @@ def test_a_steady_tilt_shows_no_frame_to_frame_spread():
 
     assert per_frame.mean() == pytest.approx(3.168, abs=0.01)
     assert per_frame.std() < 1e-6
+
+
+# ------------------------------------------------------- mount persistence
+
+
+def test_mount_correction_round_trips_through_the_file():
+    import tempfile
+
+    from mars_cam import camera_mount
+
+    with tempfile.TemporaryDirectory() as d:
+        path = camera_mount.mount_path(Path(d))
+        original = camera_mount.MountCorrection(
+            pitch_deg=-3.420, roll_deg=0.398, height_m=-0.0143, head_angle_deg=-20.04, residual_rms_mm=1.5
+        )
+        camera_mount.save(path, original)
+        loaded = camera_mount.load(path)
+
+    assert loaded is not None
+    assert loaded.pitch_deg == pytest.approx(-3.420)
+    assert loaded.roll_deg == pytest.approx(0.398)
+    assert loaded.height_m == pytest.approx(-0.0143)
+    assert loaded.head_angle_deg == pytest.approx(-20.04)
+    assert loaded.measured_at != "", "a saved correction must record when it was measured"
+
+
+def test_missing_mount_file_is_not_an_error():
+    from mars_cam import camera_mount
+
+    assert camera_mount.load(Path("/nonexistent/camera_mount.yaml")) is None
+
+
+def test_corrections_accumulate_as_absolute_values():
+    """The diagnostic measures a residual; the file stores the absolute total."""
+    from mars_cam import camera_mount
+
+    current = camera_mount.MountCorrection(pitch_deg=-3.126, roll_deg=0.398, height_m=0.0)
+    # A later run measures +0.294 deg of residual tilt and +14.3mm of height.
+    updated = current.plus(-0.294, 0.0, -0.0143)
+
+    assert updated.pitch_deg == pytest.approx(-3.420)
+    assert updated.roll_deg == pytest.approx(0.398)
+    assert updated.height_m == pytest.approx(-0.0143)
+
+
+def test_calibration_dir_discovery_matches_the_cpp_rule():
+    import tempfile
+
+    from mars_cam import camera_mount
+
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        (root / "maps").mkdir()
+        (root / "mars_v2_calibration_config").mkdir()
+        found = camera_mount.find_calibration_dir(root)
+
+    assert found is not None
+    assert "calibration_config" in found.name
+
+
+def test_no_calibration_dir_returns_none():
+    import tempfile
+
+    from mars_cam import camera_mount
+
+    with tempfile.TemporaryDirectory() as d:
+        assert camera_mount.find_calibration_dir(Path(d)) is None
