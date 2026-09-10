@@ -8,6 +8,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 namespace mars_arm {
 
@@ -31,16 +32,25 @@ static constexpr int kDecayMaxLoad = 100;
 // commands the arm well within this. Only rest_pose is a parameter, because
 // brain_client's Manipulation.REST must mirror it; the rest is the driver's.
 static constexpr double kRestWhenIdleS = 5.0;
-static constexpr double kRestFoldDurationS = 3.0;
 static constexpr double kAtRestRad = 0.05;
-// The fold's first waypoint: a collapsed arm rests its weight on the gripper
-// tip, and pitching the wrist up under that load stalled it at its 1.75 A
-// limit. Shoulder and elbow raise the wrist (forearm level, ~10 cm above the
-// shoulder) first, slower than the fold: at 1.5 s the shoulder fell 0.22 rad
-// behind.
-static constexpr double kLiftShoulderRad = -0.9;
-static constexpr double kLiftElbowRad = 0.9;
-static constexpr double kRestLiftDurationS = 2.5;
+
+// One leg of the rest fold: joints in /mars/arm/state radians, kHold keeps a
+// joint where it is, then how long the spline takes.
+struct RestWaypoint {
+    std::vector<double> joints;
+    double duration_s;
+};
+constexpr double kHold = std::numeric_limits<double>::quiet_NaN();
+// The path before rest_pose itself. A collapsed arm rests its weight on the
+// gripper tip, and pitching the wrist up under that load stalled it at its
+// 1.75 A limit, so shoulder and elbow raise the wrist first (forearm level,
+// ~10 cm above the shoulder), slower than the fold: at 1.5 s the shoulder
+// fell 0.22 rad behind.
+// clang-format off
+//                                   yaw    shoulder  elbow  wrist  roll   grip    seconds
+inline const RestWaypoint kRestLift{{kHold, -0.9,     0.9,   kHold, kHold, kHold}, 2.5};
+// clang-format on
+static constexpr double kRestPoseDurationS = 3.0;
 // The shoulder may only swing back past this while the base yaw is outside
 // (kYawRestrictedMin, kYawRestrictedMax); nearer the centre the arm hits the
 // body.

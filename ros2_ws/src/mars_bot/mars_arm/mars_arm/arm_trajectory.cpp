@@ -216,23 +216,26 @@ RestOutcome MarsArmNode::runRestFold(const char* trigger) {
     if (away < kAtRestRad) {
         return {true, "arm already at rest"};
     }
+    std::vector<double> target = measured;
     {
         std::lock_guard<std::mutex> lock(arm_command_mutex_);
         // j6 is current-based position control: re-commanding it above the
         // standing grip target zeroes the preload and drops a held object.
-        rest[5] = clampToJointRange(5, has_target_ ? latest_target_[5] : measured[5]);
+        target[5] = clampToJointRange(5, has_target_ ? latest_target_[5] : measured[5]);
     }
-    // See kLiftShoulderRad: shoulder and elbow lift the tip off the floor
-    // before the wrist pitches or the yaw sweeps; everything else holds.
-    std::vector<double> lift = measured;
-    lift[1] = kLiftShoulderRad;
-    lift[2] = kLiftElbowRad;
-    lift[5] = rest[5];
+    rest[5] = target[5];
     RCLCPP_INFO(this->get_logger(), "Folding the arm to rest (%s)", trigger);
-    if (planAndExecuteTrajectory(lift, kRestLiftDurationS) && planAndExecuteTrajectory(rest, kRestFoldDurationS)) {
-        return {true, "arm folded to rest"};
+    for (const RestWaypoint& waypoint : {kRestLift, RestWaypoint{rest, kRestPoseDurationS}}) {
+        for (size_t j = 0; j < target.size(); ++j) {
+            if (!std::isnan(waypoint.joints[j])) {
+                target[j] = waypoint.joints[j];
+            }
+        }
+        if (!planAndExecuteTrajectory(target, waypoint.duration_s)) {
+            return {false, "rest fold could not start (see the log)"};
+        }
     }
-    return {false, "rest fold could not start (see the log)"};
+    return {true, "arm folded to rest"};
 }
 
 void MarsArmNode::armRestCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
