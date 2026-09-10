@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>First life · Victory preview</title>
+  <link rel="stylesheet" href="/css/app.css" />
+  <link rel="stylesheet" href="/css/plantReward.css" />
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      display: block;
+      margin: 0;
+      background: #081b1a;
+      color: #e9f0db;
+      font: 14px system-ui;
+    }
+    main {
+      min-height: 100dvh;
+      display: grid;
+      place-content: center;
+      gap: 18px;
+      text-align: center;
+      padding: 28px;
+    }
+    h1 {
+      font: 48px Georgia;
+      margin: 0;
+    }
+    p {
+      color: #b1c8ba;
+    }
+    button {
+      font: inherit;
+      cursor: pointer;
+    }
+    main button {
+      padding: 14px 24px;
+      background: #eef0ce;
+      border: 0;
+      border-radius: 24px;
+      color: #193c2d;
+    }
+    nav {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .checks {
+      text-align: left;
+      max-width: 640px;
+      font-size: 12px;
+      line-height: 1.8;
+    }
+    .checks li {
+      color: #bfdbaa;
+    }
+  </style>
+  <main>
+    <p>INNATE · BACKROOMS</p>
+    <h1>First life.</h1>
+    <p>The end of the adventure. The beginning of everything else.</p>
+    <nav>
+      <button id="play">Play victory</button><button id="repeat">Same attempt</button
+      ><button id="cancel">Test interruption</button><button id="test">Run lifecycle checks</button
+      ><button id="integration">Test story integration</button><button id="renderer">Test 3D cleanup</button>
+    </nav>
+    <p id="result" role="status">Ready to find something worth bringing home.</p>
+    <ol class="checks" id="checks"></ol>
+  </main>
+  <script type="module">
+    import { testStoryReward, testRewardRenderer } from "/tests/plantReward.browser.js";
+    import { createPlantReward } from "/js/agent/plantReward.js";
+    const reward = createPlantReward(document.body);
+    let attempt = `preview-${Date.now()}`;
+    let completions = 0;
+    const result = document.querySelector("#result");
+    const done = () => {
+      completions++;
+      result.textContent = `First life collected. Keep exploring. (${completions} completed)`;
+    };
+    document.querySelector("#play").onclick = () => {
+      attempt = `preview-${Date.now()}`;
+      reward.play(attempt, done);
+    };
+    document.querySelector("#repeat").onclick = () => reward.play(attempt, done);
+    document.querySelector("#cancel").onclick = () => {
+      reward.play(`cancel-${Date.now()}`, done);
+      setTimeout(() => {
+        reward.cancel();
+        result.textContent = "Interrupted cleanly. No reward completion.";
+      }, 1200);
+    };
+    document.querySelector("#integration").onclick = async () => {
+      reward.cancel();
+      const checks = document.querySelector("#checks");
+      checks.replaceChildren();
+      try {
+        await testStoryReward((name, pass) => {
+          const row = document.createElement("li");
+          row.textContent = `${pass ? "PASS" : "FAIL"}: ${name}`;
+          checks.append(row);
+          if (!pass) throw new Error(name);
+        });
+        result.textContent = "All story integration checks passed.";
+      } catch (error) {
+        result.textContent = `Integration failed: ${error.message}`;
+        console.error(error);
+      }
+    };
+    document.querySelector("#renderer").onclick = async () => {
+      reward.cancel();
+      const checks = document.querySelector("#checks");
+      checks.replaceChildren();
+      try {
+        await testRewardRenderer((name, pass) => {
+          const row = document.createElement("li");
+          row.textContent = `${pass ? "PASS" : "FAIL"}: ${name}`;
+          checks.append(row);
+          if (!pass) throw new Error(name);
+        });
+        result.textContent = "All 3D renderer checks passed.";
+      } catch (error) {
+        result.textContent = `3D test failed: ${error.message}`;
+        console.error(error);
+      }
+    };
+    document.querySelector("#test").onclick = async () => {
+      const checks = document.querySelector("#checks");
+      checks.replaceChildren();
+      const check = (name, pass) => {
+        const row = document.createElement("li");
+        row.textContent = `${pass ? "PASS" : "FAIL"}: ${name}`;
+        checks.append(row);
+        if (!pass) throw new Error(name);
+      };
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      reward.cancel();
+      let calls = 0;
+      const test = createPlantReward(document.body);
+      test.play("lifecycle-" + Date.now(), () => calls++);
+      test.cancel();
+      await wait(50);
+      check(
+        "Cancel during 3D loading removes dialog and never completes",
+        !document.querySelector("dialog[open]") && calls === 0,
+      );
+      const id = "collected-" + Date.now();
+      test.play(id, () => calls++);
+      await wait(100);
+      document.querySelector(".plant-reward-take").click();
+      document.querySelector(".plant-reward-take").click();
+      await wait(950);
+      check(
+        "Collect is exactly once, even on double click",
+        calls === 1 && !document.querySelector("dialog[open]"),
+      );
+      test.play(id, () => calls++);
+      check(
+        "A collected attempt resumes without replaying the modal",
+        calls === 2 && !document.querySelector("dialog[open]"),
+      );
+      test.play("destroy-" + Date.now(), () => calls++);
+      test.destroy();
+      await wait(100);
+      check(
+        "Destroy cancels pending animation and completion",
+        calls === 2 && !document.querySelector("dialog[open]"),
+      );
+      check(
+        "The original collection keepsake survives",
+        document.querySelectorAll(".plant-keepsake").length === 1,
+      );
+      result.textContent = "All lifecycle checks passed.";
+    };
+  </script>
+</html>
