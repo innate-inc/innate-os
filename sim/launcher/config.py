@@ -629,12 +629,13 @@ def available_environment_ids(repo_root: Path) -> list[str]:
 def _viewer_paths(viewer: dict[str, str]) -> tuple[str, ...]:
     """The browser assets whose absence means this pack is not installed.
 
-    Not every path the manifest names: the apartment names a monolith glb that
-    sim/Dockerfile.assets deliberately does not ship, because scene.ts streams
-    per-room files from `manifest` and falls back to the monolith only when
-    that is absent. Requiring it would refuse a healthy install.
+    Every path the manifest names except the one the image does not ship: the
+    apartment's monolith glb is scene.ts's fallback for a missing room
+    manifest, and sim/Dockerfile.assets deliberately leaves it out, so
+    requiring it would refuse a healthy install. Where the rooms are streamed,
+    the manifest and the directory it streams from are what must be there.
     """
-    keys = ("collision_dir",) if "manifest" in viewer else ("collision_dir", "model")
+    keys = ("manifest", "base_dir", "collision_dir") if "manifest" in viewer else ("model", "collision_dir")
     return tuple(str(viewer[key]) for key in keys if key in viewer)
 
 

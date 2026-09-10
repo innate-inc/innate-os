@@ -2056,6 +2056,7 @@ def ensure_viewer_public_assets(config: dict[str, object], *, offline: bool = Fa
             preserve_subtrees=("local-environments",),
             required=required.viewer if required else (),
             fallbacks=assets_fallback_refs(),
+            offline=offline,
         )
     except oci.OciError as exc:
         # This step is not inside `up`'s offline guard: a warm store needs no
@@ -2083,6 +2084,7 @@ def install_layer_subtree(
     preserve_subtrees: tuple[str, ...] = (),
     required: tuple[str, ...] = (),
     fallbacks: tuple[str, ...] = (),
+    offline: bool = False,
 ) -> None:
     """Put one subtree of one image layer on disk, idempotently.
 
@@ -2126,6 +2128,11 @@ def install_layer_subtree(
     # neither, must fall through to its local build rather than serve a stale
     # copy (ensure_sim_viewer_bundle catches this).
     reusable = populated and (bool(required) or parts[2:3] == [geometry_hash])
+    # A store installed from a fallback records that ref, so the match above
+    # misses and a probe would follow -- offline, that is a connect timeout
+    # before reaching the same answer.
+    if offline and reusable:
+        return
     try:
         manifest = oci.manifest_for_image(image)
     except oci.OciError:
