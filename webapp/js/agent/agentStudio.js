@@ -271,12 +271,13 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   dock.append(head, panelEl);
   root.append(dock);
 
-  // Bottom left, where the scene setup sits once the story is over.
+  // Bottom left of the stage, where the scene setup sits once the story is over. On the
+  // stage and not the cockpit: the cockpit runs past the viewer's rounded edge.
   const leaveBtn = document.createElement("button");
   leaveBtn.type = "button";
   leaveBtn.className = "agent-skip-ahead";
   leaveBtn.hidden = true;
-  root.append(leaveBtn);
+  (root.querySelector(".video-stage") ?? root).append(leaveBtn);
 
   // The door: the room goes white while the next world compiles behind it.
   const whiteout = document.createElement("div");
@@ -809,16 +810,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     render(true);
   }
 
-  /** @param {string} text @param {() => void} onClick */
-  function actionButton(text, onClick) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "agent-studio-action quiet";
-    b.textContent = text;
-    b.addEventListener("click", onClick);
-    return b;
-  }
-
   let renderedKey = "";
   /** @param {boolean} [force] */
   function render(force = false) {
@@ -898,6 +889,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       applyDockOpen(owned);
     }
     document.body.classList.toggle("story-active", inStory);
+    // Nowhere has no map worth reading, and a robot that cannot move has nothing to plot on
+    // one: the map tile and the path it draws arrive with the Backrooms, where the recalled
+    // exit is a place on that map.
+    root.classList.toggle("story-mapless", inStory && env === "void");
     root.classList.toggle("story-active", inStory);
     panelEl.classList.toggle("story", inStory);
 
@@ -981,7 +976,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
 
     actions.replaceChildren();
     if (session && !switching()) {
-      if (inStory) actions.append(actionButton("Restart intro", restartIntro));
       if (graduated) {
         const repo = document.createElement("a");
         repo.className = "agent-studio-action quiet agent-studio-link";
@@ -1009,7 +1003,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
 
   /** @param {any} r @param {any} o @param {boolean} graduated @param {AgentEntry | null} agent @param {boolean} isNew */
   function noteFor(r, o, graduated, agent, isNew) {
-    if (r) return r.finished ? "Through the door." : `Act ${r.act + 1} of ${r.acts}: ${r.label}`;
+    if (r) return r.finished ? "Through the door." : "";
     if (graduated) {
       // Said in the chat too, but a history sync drops display-only lines; this stays.
       return "It found the way out. This is the agent you built. Scene setup and the challenges are at the bottom of the stage, and the rail on the left has Teleop, the map and the settings.";

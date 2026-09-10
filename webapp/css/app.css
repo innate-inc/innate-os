@@ -11307,8 +11307,8 @@ select.skill-input {
 /* Bottom-left, where the scene setup sits once the story is over. */
 .agent-skip-ahead {
   position: absolute; z-index: 30;
-  left: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
-  bottom: calc(var(--agent-dock-gutter) + var(--agent-overlay-inset));
+  left: var(--agent-overlay-inset);
+  bottom: var(--agent-overlay-inset);
   padding: 9px 14px; border-radius: 12px; font-size: 13px;
 }
 .agent-skip-ahead:hover { color: #fff; border-color: rgb(255 255 255 / 32%); }
@@ -11518,6 +11518,7 @@ select.skill-input {
    scene setup and challenges wait for the end (the story is the tutorial for them), and
    the stream keeps only what the visitor and the robot said. */
 body.story-active :is(.rail, .rail-ribbon, .rail-scrim, .sim-scene-setup, .agent-challenge-dock) { display: none; }
+.agent-cockpit.story-mapless :is(.cam-tile-map, .traj-toggle) { display: none; }
 body.story-active { grid-template-columns: minmax(0, 1fr); }
 .agent-cockpit.story-active > :is(.agent-stage-view-toggle, .sim-debug-stack, .agent-challenge-dock) { display: none; }
 .agent-cockpit.story-active .agent-stream > .chat-msg:is(.skill-output, .system):not(.narrator) { display: none; }
