@@ -78,7 +78,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     this->declare_parameter<int>("evidence.min_points_per_voxel", 4);
     this->declare_parameter<double>("evidence.near_field_range", 0.6);
     this->declare_parameter<double>("evidence.near_field_weight", 0.75);
-    this->declare_parameter<double>("evidence.max_score", 6.0);
+    this->declare_parameter<double>("evidence.max_score", 15.0);
     this->declare_parameter<double>("evidence.confidence_full_trust_m", 0.8);
     this->declare_parameter<double>("evidence.confidence_no_trust_m", 2.0);
 

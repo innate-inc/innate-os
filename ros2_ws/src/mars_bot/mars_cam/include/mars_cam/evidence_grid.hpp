@@ -35,9 +35,11 @@ struct EvidenceParams {
     // Collision safety: close and confident skips the temporal wait entirely.
     double near_field_range{0.6};
     double near_field_weight{0.75};
-    // Bounds how much history one long observation can bank, so a stale
-    // obstacle still decays in reasonable time after it leaves.
-    double max_score{6.0};
+    // How long an obstacle is remembered once it stops being observed:
+    // (max_score - clear_threshold) / decay_per_second. Long enough to cover a
+    // maneuver during which the obstacle leaves the corridor, and to cover the
+    // permanent near-field blind spot where nothing can be seen at all.
+    double max_score{15.0};
 };
 
 struct Observation {
