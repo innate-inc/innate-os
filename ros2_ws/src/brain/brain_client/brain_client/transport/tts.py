@@ -7,8 +7,10 @@ Generates speech audio and plays it through the robot's audio system.
 """
 
 import base64
+import hashlib
 import io
 import json
+import os
 import queue
 import struct
 import subprocess
@@ -16,8 +18,9 @@ import threading
 import time
 import wave
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from brain_client.common.logging import UniversalLogger
@@ -28,19 +31,24 @@ from innate_proxy.adapters.cartesia import ProxyCartesiaClient
 @dataclass(frozen=True)
 class Delivery:
     """How a clip is read, in Cartesia generation_config terms (sonic-3 and
-    newer): speed 0.6-1.5, volume 0.5-2.0. None keeps the platform default."""
+    newer): speed 0.6-1.5, volume 0.5-2.0. None keeps the platform default.
+    ``sound_effect``: the text describes a sound to generate, not words to read."""
 
     speed: float | None = None
     volume: float | None = None
+    sound_effect: bool = False
 
     def generation_config(self) -> dict[str, float]:
         return {key: value for key, value in (("speed", self.speed), ("volume", self.volume)) if value is not None}
 
 
 def parse_styled_tts(data: str) -> tuple[str, Delivery] | None:
-    """A /brain/tts/styled payload: JSON ``{"text", "speed", "volume"}``. None when malformed."""
+    """A /brain/tts/styled payload: JSON ``{"text", "speed", "volume"}``, or
+    ``{"sound": "a small dog barking twice"}`` for a sound effect. None when malformed."""
     try:
         payload = json.loads(data)
+        if "sound" in payload:
+            return str(payload["sound"]), Delivery(sound_effect=True)
         speed, volume = payload.get("speed"), payload.get("volume")
         delivery = Delivery(None if speed is None else float(speed), None if volume is None else float(volume))
         return str(payload["text"]), delivery
@@ -255,6 +263,8 @@ class TTSHandler:
         """
         if self._cartesia_client is None:
             raise RuntimeError("Cartesia client unavailable (is_available() gates all callers)")
+        if delivery is not None and delivery.sound_effect:
+            return self._sound_effect_bytes(text)
         if for_speaker:
             output_format = {"container": "raw", "encoding": "pcm_s16le", "sample_rate": self.SPEAKER_SAMPLE_RATE}
             generation_config: dict[str, float] = {"speed": self.SPEAKER_SPEED}
@@ -270,6 +280,30 @@ class TTSHandler:
             output_format=output_format,
             generation_config=generation_config or None,
         )
+
+    # Sound effects come from ElevenLabs sound generation as the speaker's raw PCM
+    # (the sim path gives it a WAV header in _finalize_wav). Generated once per
+    # description and kept on disk: a dance that barks four times must not wait on
+    # four generations, and the same words must give the same sound.
+    SOUND_CACHE = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "innate" / "sounds"
+
+    def _sound_effect_bytes(self, text: str) -> Iterator[bytes]:
+        cached = self.SOUND_CACHE / f"{hashlib.sha1(text.encode()).hexdigest()}.pcm"
+        if not cached.exists():
+            with self._proxy.request_stream(
+                "elevenlabs",
+                "/v1/sound-generation",
+                json={"text": text},
+                params={"output_format": f"pcm_{self.SPEAKER_SAMPLE_RATE}"},
+                timeout=60.0,
+            ) as response:
+                response.raise_for_status()
+                pcm = response.read()
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            staging = cached.with_suffix(".tmp")
+            staging.write_bytes(pcm)
+            staging.replace(cached)  # a crash mid-write must not leave a clipped sound to replay forever
+        yield cached.read_bytes()
 
     def _synthesize_to_aplay(
         self,
@@ -583,13 +617,22 @@ class TTSHandler:
 
 
 def _finalize_wav(data: bytes) -> bytes:
-    """Patch the RIFF/data chunk sizes of a fully-collected WAV.
+    """Patch the RIFF/data chunk sizes of a fully-collected WAV, or give a
+    headerless clip (a sound effect's raw PCM) the header browsers need.
 
     Cartesia streams WAV with placeholder length fields (the size isn't known
     until the stream ends). aplay tolerates that, but browser decoders are
     stricter, so once we have the whole clip we write the real lengths in.
     """
-    if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+    if data[:4] != b"RIFF":
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as clip:
+            clip.setnchannels(1)
+            clip.setsampwidth(2)
+            clip.setframerate(TTSHandler.SPEAKER_SAMPLE_RATE)
+            clip.writeframes(data)
+        return buffer.getvalue()
+    if len(data) < 44 or data[8:12] != b"WAVE":
         return data
     out = bytearray(data)
     data_idx = out.find(b"data", 12)

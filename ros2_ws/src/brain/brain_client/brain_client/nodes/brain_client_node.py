@@ -420,6 +420,10 @@ class BrainClientNode(Node):
         robot says aloud belongs in the transcript, or Skill.say goes unrecorded."""
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
+            if delivery is not None and delivery.sound_effect:
+                self.chat.emit(Sender.ROBOT, f"🔊 {text}", speak=False)  # in the transcript as a sound, not words
+                self.chat.speak(text, delivery=delivery)
+                return
             self.chat.emit(Sender.ROBOT, text, delivery=delivery)
 
     def _on_environment_speech(self, payload: dict) -> None:

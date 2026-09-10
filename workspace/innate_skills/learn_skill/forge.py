@@ -48,8 +48,11 @@ typing, dataclasses, enum, collections; `time` for measuring only).
 does and when to use it, in two sentences.
 - Every execute() parameter has a default that gives a good demonstration; the trial calls \
 execute() with no inputs.
-- Pause with self.sleep(seconds), never time.sleep. Speak with self.say(text). End a failed run \
-with self.fail(message); otherwise return a short result message.
+- Pause with self.sleep(seconds), never time.sleep. End a failed run with self.fail(message); \
+otherwise return a short result message.
+- Speak with self.say(text). Play a sound effect with self.play(description), the sound described \
+in words: self.play("a small dog barking twice"). Both take wait=True to block until the audio \
+has played.
 - Keep motion small and deliberate: turns under 180 degrees, drives under 0.5 m, head angles \
 between -30 and 30 degrees, arm poses inside the joint ranges below, ending at rest.
 - No comments and no prints.

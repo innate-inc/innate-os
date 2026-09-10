@@ -10,7 +10,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from brain_client.transport.tts import TTSHandler, _survives_flush, _Utterance, _wav_duration_s
+from brain_client.transport.tts import (
+    Delivery,
+    TTSHandler,
+    _finalize_wav,
+    _survives_flush,
+    _Utterance,
+    _wav_duration_s,
+    parse_styled_tts,
+)
 
 
 def _utterance(reply_id=None, protected=False):
@@ -37,6 +45,18 @@ def test_wav_duration_matches_pcm_frames():
         wav.writeframes(b"\x00\x00" * 8_000)
 
     assert _wav_duration_s(buf.getvalue()) == pytest.approx(0.5)
+
+
+def test_headerless_pcm_gets_a_wav_header_for_the_browser():
+    # A sound effect arrives as the speaker's raw PCM; the sim path must still publish a WAV.
+    assert _wav_duration_s(_finalize_wav(b"\x00\x00" * 8_000)) == pytest.approx(0.5)
+
+
+def test_styled_payload_can_be_a_sound_effect():
+    assert parse_styled_tts('{"sound": "a small dog barking twice"}') == (
+        "a small dog barking twice",
+        Delivery(sound_effect=True),
+    )
 
 
 def test_failed_reply_no_longer_holds_the_floor(monkeypatch):

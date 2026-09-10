@@ -993,10 +993,23 @@ class Skill(ABC):
         if not text or self.node is None:
             return
         styled = speed is not None or volume is not None
-        publisher = self._tts_publisher(self.node, TTS_STYLED_TOPIC if styled else TTS_TOPIC)
+        payload = json.dumps({"text": text, "speed": speed, "volume": volume}) if styled else text
+        self._utter(self.node, TTS_STYLED_TOPIC if styled else TTS_TOPIC, payload, text, wait)
+
+    def play(self, sound: str, wait: bool = False) -> None:
+        """Play a sound effect described in words ("a small dog barking twice",
+        "a short victory fanfare") through the robot's speaker; ``wait=True``
+        blocks until it has played. Generated on first use and kept, so the same
+        words give the same sound. No-op if speech isn't available."""
+        if not sound or self.node is None:
+            return
+        self._utter(self.node, TTS_STYLED_TOPIC, json.dumps({"sound": sound}), sound, wait)
+
+    def _utter(self, node: Node, topic: str, payload: str, text: str, wait: bool) -> None:
+        publisher = self._tts_publisher(node, topic)
         if wait and self._tts_status_sub is None:
-            self._tts_status_sub = self.node.create_subscription(String, TTS_STATUS_TOPIC, self._on_tts_status, 10)
-        publisher.publish(String(data=json.dumps({"text": text, "speed": speed, "volume": volume}) if styled else text))
+            self._tts_status_sub = node.create_subscription(String, TTS_STATUS_TOPIC, self._on_tts_status, 10)
+        publisher.publish(String(data=payload))
         if wait:
             self._wait_for_speech_end(text)
 
