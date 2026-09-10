@@ -256,12 +256,14 @@ class StereoCalibrator(Node):
         self.capture_diagnostics: list[cb.CaptureDiagnostics] = []
         self.validation_indices: set[int] = set()
         self.recorder: ExperimentRecorder | None = None
-        if self.target_type == TARGET_CHECKERBOARD:
+        # A held-out split with nowhere to report it would silently shrink the
+        # training set and produce no metrics, so the recorder follows the split.
+        if self.target_type == TARGET_CHECKERBOARD or self.validate_charuco:
             configured_root = str(self.get_parameter("experiment_directory").value).strip()
             root = Path(configured_root) if configured_root else self.data_directory / "calibration_experiments"
             self.recorder = ExperimentRecorder(root, self.target_type)
             self.tmp_image_dir = self.recorder.image_dir
-            self.get_logger().info(f"Checkerboard experiment output: {self.recorder.run_dir}")
+            self.get_logger().info(f"{self.target_type} experiment output: {self.recorder.run_dir}")
 
         # Enter-event topic: keyboard thread publishes, callback triggers capture
         self._enter_pub = self.create_publisher(Bool, "/mars/main_camera/calib/enter_events", 10)
@@ -837,7 +839,7 @@ class StereoCalibrator(Node):
         """Detect the configured target in a stereo pair and store it if valid."""
         if self.target_type == TARGET_CHECKERBOARD:
             return self._process_checkerboard_pair(left_img, right_img, label, save_images, stamps)
-        return self._process_charuco_pair(left_img, right_img, label, save_images)
+        return self._process_charuco_pair(left_img, right_img, label, save_images, stamps)
 
     def _next_split(self) -> str:
         """Deterministic train/validation assignment for the next accepted pair.
@@ -935,7 +937,14 @@ class StereoCalibrator(Node):
         )
         return result
 
-    def _process_charuco_pair(self, left_img, right_img, label="capture", save_images=False) -> DetectionResult:
+    def _process_charuco_pair(
+        self,
+        left_img,
+        right_img,
+        label: str = "capture",
+        save_images: bool = False,
+        stamps: tuple[float, float] = (0.0, 0.0),
+    ) -> DetectionResult:
         """Detect ChArUco corners in a stereo image pair and store if valid.
 
         This is the shared detection/filtering/storage pipeline used by both
@@ -981,6 +990,25 @@ class StereoCalibrator(Node):
         right_markers = len(marker_ids_right) if marker_ids_right is not None else 0
         left_corners = len(charuco_ids_left) if charuco_ids_left is not None else 0
         right_corners = len(charuco_ids_right) if charuco_ids_right is not None else 0
+
+        view_left = cb.measure(left_gray, charuco_corners_left, stamps[0])
+        view_right = cb.measure(right_gray, charuco_corners_right, stamps[1])
+
+        def record(accepted: bool, reason: str, split: str = "") -> None:
+            self.capture_diagnostics.append(
+                cb.CaptureDiagnostics(
+                    index=self.images_captured if accepted else -1,
+                    attempt=self.capture_attempts,
+                    accepted=accepted,
+                    reason=reason,
+                    split=split,
+                    stamp_skew_sec=stamps[0] - stamps[1],
+                    left=view_left,
+                    right=view_right,
+                    corners_left=charuco_corners_left,
+                    corners_right=charuco_corners_right,
+                )
+            )
 
         self.get_logger().info(
             f"Detection results - Left: {left_markers} markers, {left_corners} corners | "
@@ -1041,11 +1069,13 @@ class StereoCalibrator(Node):
                 self.get_logger().info(f"  Saved diagnostic images to: {debug_dir}")
             except Exception as e:
                 self.get_logger().debug(f"Could not save diagnostic images: {e}")
+            record(False, f"too few corners (L{left_corners}/R{right_corners}, need {self.min_corners})")
             return result
 
         # Find common corner IDs between left and right
         if charuco_ids_left is None or charuco_ids_right is None:
             self.get_logger().warn(f"{label}: ChArUco board not detected in one or both images.")
+            record(False, "board not detected in one or both images")
             return result
 
         left_ids_set = set(charuco_ids_left.flatten())
@@ -1056,6 +1086,7 @@ class StereoCalibrator(Node):
             self.get_logger().warn(
                 f"{label}: Not enough common corners! Common: {len(common_ids)} (need {self.min_corners}+)."
             )
+            record(False, f"too few common corners ({len(common_ids)}, need {self.min_corners})")
             return result
 
         # Filter to keep only common corners, sorted by ID
@@ -1086,15 +1117,19 @@ class StereoCalibrator(Node):
         self.common_corners_right.append(corners_right_filtered)
         self.common_obj_points.append(obj_pts_common.reshape(-1, 1, 3))
 
-        if self._next_split() == "validation":
-            self.validation_indices.add(self.images_captured)
+        index = self.images_captured
+        split = self._next_split()
+        if split == "validation":
+            self.validation_indices.add(index)
+        record(True, "ok", split)
         self.images_captured += 1
 
-        # Optionally save images to disk
+        # Optionally save images to disk. Indexed before the increment so the
+        # filename matches the capture index that validation_indices stores.
         if save_images:
             try:
-                cv2.imwrite(str(self.tmp_image_dir / f"left_{self.images_captured:03d}.png"), left_img)
-                cv2.imwrite(str(self.tmp_image_dir / f"right_{self.images_captured:03d}.png"), right_img)
+                cv2.imwrite(str(self.tmp_image_dir / f"left_{index:03d}.png"), left_img)
+                cv2.imwrite(str(self.tmp_image_dir / f"right_{index:03d}.png"), right_img)
             except Exception as e:
                 self.get_logger().warn(f"Failed to save images: {e}")
 
@@ -1359,7 +1394,11 @@ class StereoCalibrator(Node):
         recorder.write_summary(
             {
                 "target_type": self.target_type,
-                "pattern": list(self.checkerboard.pattern),
+                "pattern": (
+                    list(self.checkerboard.pattern)
+                    if self.target_type == TARGET_CHECKERBOARD
+                    else [self.squares_x, self.squares_y]
+                ),
                 "square_size_m": square_size,
                 "image_size": list(image_size),
                 "pairs_accepted": self.images_captured,
@@ -1389,7 +1428,7 @@ class StereoCalibrator(Node):
                 f"p95 {skew['p95_ms']:.2f}ms, max {skew['max_ms']:.2f}ms (sync slop is 100ms, unchanged)"
             )
         self.get_logger().info("=" * 60)
-        return f"Checkerboard experiment complete: {recorder.run_dir}"
+        return f"{self.target_type} experiment complete: {recorder.run_dir}"
 
     def _save_rectified_samples(self, recorder, calib, image_size, pairs) -> None:
         """Re-read a few saved captures and render them rectified with guide lines."""

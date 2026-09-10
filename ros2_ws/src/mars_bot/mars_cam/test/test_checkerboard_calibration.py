@@ -405,3 +405,44 @@ def test_markdown_report_renders_all_sections(solved_rig):
     assert "Error versus image location" in text
     assert "Per validation image" in text
     assert "|dy|" not in text  # unescaped pipes would break the tables
+
+
+def test_validation_metrics_work_without_a_full_grid():
+    """The ChArUco arm holds out pairs too, but its captures carry corner subsets.
+
+    Regression guard: a held-out split with no report is worse than no split at
+    all, because it silently shrinks the training set and measures nothing.
+    """
+    rig = solved_rig.__wrapped__() if hasattr(solved_rig, "__wrapped__") else None
+    assert rig is not None
+
+    K1, D1, K2, D2, R, T = rig["matrices"]
+    R1, R2, P1, P2, _, _, _ = cv2.stereoRectify(
+        K1, D1, K2, D2, IMAGE_SIZE, R, T, alpha=0, flags=cv2.CALIB_ZERO_DISPARITY
+    )
+    # Keep an arbitrary subset of corners, the way ChArUco interpolation does.
+    subset = np.array([0, 3, 7, 11, 15, 19, 24, 30, 33, 41, 47, 52])
+    pairs = [
+        ValidationPair(
+            index=i,
+            object_points=rig["object_grid"][subset],
+            corners_left=rig["detections"][i][0][subset],
+            corners_right=rig["detections"][i][1][subset],
+            grid_shape=None,
+        )
+        for i in rig["validation"]
+    ]
+    report = evaluate(
+        StereoCalibrationMatrices(K1=K1, D1=D1, K2=K2, D2=D2, R1=R1, R2=R2, P1=P1, P2=P2),
+        pairs,
+        IMAGE_SIZE,
+        SQUARE,
+    )
+
+    # Spacing needs the grid structure and is correctly skipped; everything else stands.
+    assert report.spacing_error_mm.count == 0
+    assert report.left_reprojection.count == len(subset) * len(pairs)
+    assert report.epipolar_dy.count == len(subset) * len(pairs)
+    assert report.planarity_rms_mm.count == len(pairs)
+    assert report.q_yields_positive_z
+    assert sum(b.epipolar_dy.count for b in report.radial_bins) == report.epipolar_dy.count
