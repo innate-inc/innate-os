@@ -25,6 +25,7 @@ from urllib.request import Request, urlopen
 
 import oci
 from config import (
+    ASSETS_FALLBACK_TAG,
     ASSETS_IMAGE_LAYERS,
     BOOTSTRAP_LOG_PATH,
     CLI_SIM,
@@ -51,7 +52,6 @@ from config import (
     REPO_ROOT,
     ROS_INSTALL_STATE_PATH,
     SIM_ASSET_UNITS,
-    SIM_ASSET_UNITS_AUTHORED,
     SIM_ASSET_UNITS_DERIVED,
     SIM_DIR,
     SIM_FOXGLOVE_PORT,
@@ -70,13 +70,16 @@ from config import (
     WORLD_STATE_PORT,
     DockerUnresponsiveError,
     StackError,
+    available_environment_ids,
     compute_geometry_inputs_hash,
     compute_ros_install_validation_hash,
     ensure_state_dir,
     log,
+    read_environment_assets,
     resolve_assets_image,
     resolve_auto_os_image,
     resolve_deps_image,
+    resolve_fallback_assets_image,
     resolve_local_os_image,
     resolve_local_viewer_image,
     resolve_viewer_image,
@@ -1799,8 +1802,83 @@ def health_score(level: str) -> float:
 # (sim/docker-compose.dev.yml).
 
 
+def missing_geometry(repo_root: Path, assets_dir: Path, environment_id: str) -> tuple[str, ...]:
+    """What one world needs under sim/assets and does not have.
+
+    The manifest IS the contract, so a store that answers it can launch
+    whatever inputs hash the image it came from was named after. A manifest
+    with no readable geometry section asks nothing, so fall back to demanding
+    every derived unit -- mars_sim_driver.environments reports a broken pack
+    against the world it was asked to load, better than a gate here can.
+    """
+    required = read_environment_assets(repo_root, environment_id)
+    wanted = required.assets if required else SIM_ASSET_UNITS_DERIVED
+    return tuple(path for path in wanted if not (assets_dir / path).exists())
+
+
+def assets_fallback_refs() -> tuple[str, ...]:
+    """The published geometry to accept when nothing built this checkout's tag.
+
+    Empty under INNATE_SIM_ASSETS_IMAGE: naming an image means that image, and
+    quietly installing a different one would hide the typo.
+    """
+    if os.environ.get("INNATE_SIM_ASSETS_IMAGE", "").strip():
+        return ()
+    return (resolve_fallback_assets_image(),)
+
+
+def _serving_assets_manifest(image: str, fallbacks: tuple[str, ...]) -> tuple[str, dict]:
+    """(ref, manifest) for the first asset image the registry serves.
+
+    Falling back is a real degradation, since published geometry cannot know
+    about a local pipeline edit. It happens anyway because "push the branch so
+    CI publishes it" is not advice a fork can take, and every input that
+    renames this image can leave the launched world's geometry untouched.
+    """
+    try:
+        return image, oci.manifest_for_image(image)
+    except oci.OciError:
+        for fallback in fallbacks:
+            try:
+                manifest = oci.manifest_for_image(fallback)
+            except oci.OciError:
+                continue
+            warn(
+                f"No published asset image for this checkout ({shorten_docker_image_ref(image)}); "
+                f"installing the published {ASSETS_FALLBACK_TAG} geometry instead.\n"
+                f"  Your changes under {', '.join(GEOMETRY_INPUT_PATHSPECS)} are NOT in it."
+            )
+            return fallback, manifest
+        raise
+
+
+def _incomplete_store(image: str, environment_id: str, missing: tuple[str, ...]) -> StackError:
+    return StackError(
+        f"The sim geometry from {shorten_docker_image_ref(image)} has nothing for {environment_id!r}: "
+        f"{', '.join(missing)}.\n"
+        f"Bake it from the pipeline in sim/tools (see sim/sandbox/README.md), or point "
+        f"INNATE_SIM_ASSETS_IMAGE at an image that carries it. If you deleted it by hand, "
+        f"delete sim/assets/.assets-tag to re-fetch."
+    )
+
+
+def warn_unloadable_environments(config: dict[str, object]) -> None:
+    """Which other worlds the store cannot serve, since the webapp can switch
+    to any of them at runtime (mars_sim_driver.world_server.switch_environment)
+    and only the launched one is gated."""
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    unloadable = [
+        environment_id
+        for environment_id in available_environment_ids(os_repo)
+        if missing_geometry(os_repo, sim_repo / "assets", environment_id)
+    ]
+    if unloadable:
+        warn(f"No installed geometry for {', '.join(unloadable)}; switching to those in the webapp will fail.")
+
+
 def assets_image_ref(config: dict[str, object]) -> str:
-    """The asset image compose mounts the viewer subtree from.
+    """The asset image this checkout implies.
 
     COMPUTED, not looked up: the tag is content-addressed over the tracked
     inputs, so it names exactly the image this checkout implies -- the same way
@@ -1814,7 +1892,13 @@ def assets_image_ref(config: dict[str, object]) -> str:
     fails at the manifest probe.
     """
     override = os.environ.get("INNATE_SIM_ASSETS_IMAGE", "").strip()
-    return override or resolve_assets_image(config["os_repo"])  # type: ignore[arg-type]
+    if override:
+        return override
+    # Whatever the geometry step actually installed from, so the viewer's layer
+    # cannot come from a different image than the geometry it describes: only
+    # that step learns which ref the registry served (assets_fallback_refs).
+    recorded = config.get("assets_image")
+    return str(recorded) if recorded else resolve_assets_image(config["os_repo"])  # type: ignore[arg-type]
 
 
 def ensure_sim_assets(config: dict[str, object]) -> None:
@@ -1832,62 +1916,67 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
     Extracted in place under sim/assets/, idempotent via the .assets-tag marker.
     """
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     marker = sim_repo / "assets" / ".assets-tag"
     image = assets_image_ref(config)
+    override = os.environ.get("INNATE_SIM_ASSETS_IMAGE", "").strip()
+    fallbacks = assets_fallback_refs()
+    environment_id = str(config["environment_id"])
 
     # The marker holds "<digest> <image ref> <geometry inputs hash>". Keyed on
     # the geometry layer's
     # digest, not the tag: the tag moves whenever any tracked input changes,
     # so re-extracting 168 MB for a viewer-source edit would be waste.
     #
-    # Checked against what is on disk too, since the digest only records what
-    # this host MEANT to install: a hand-deleted subtree reinstalls instead of
-    # being asserted complete forever.
-    #
-    # DERIVED only. The authored units are the ones a pinned layer may
-    # legitimately predate (see the warn below), so demanding them here would
-    # leave `installed` false forever and re-fetch the layer on every `up`.
-    # Recovering a hand-deleted authored unit means deleting .assets-tag.
+    # The narrow hash decides nothing here; it records which inputs produced
+    # the store, for a local bake to tell stale output from its own.
     parts = marker.read_text().split() if marker.exists() else []
-    installed = all((sim_repo / "assets" / unit).is_dir() for unit in SIM_ASSET_UNITS_DERIVED)
+    installed_ref = parts[1] if len(parts) > 1 else ""
 
     # Ref match => digest match, so the warm path stays off the network: the
     # ref is content-addressed and ci/build_assets_image.sh never rebuilds an
-    # existing tag. NOT valid for an INNATE_SIM_ASSETS_IMAGE override, which
-    # may name a mutable tag -- those probe the manifest every time.
-    geometry_hash = compute_geometry_inputs_hash(config["os_repo"])  # type: ignore[arg-type]
-    if not os.environ.get("INNATE_SIM_ASSETS_IMAGE", "").strip() and parts[1:2] == [image] and installed:
+    # existing tag. Only the exact tag skips the probe -- a store installed
+    # from a fallback re-probes so it upgrades itself once CI publishes -- and
+    # never for an INNATE_SIM_ASSETS_IMAGE override, which may name a mutable
+    # tag whose content moved under the same ref.
+    geometry_hash = compute_geometry_inputs_hash(os_repo)
+    missing = missing_geometry(os_repo, sim_repo / "assets", environment_id)
+    if not override and installed_ref == image and not missing:
+        config["assets_image"] = installed_ref
         return
 
     try:
-        manifest = oci.manifest_for_image(image)
+        image, manifest = _serving_assets_manifest(image, fallbacks)
     except oci.OciError as exc:
-        # Two different mistakes: the checkout implies a tag nobody built, or
-        # the override names something the registry will not serve. Saying
-        # "set INNATE_SIM_ASSETS_IMAGE" to someone who just did is no help.
-        if os.environ.get("INNATE_SIM_ASSETS_IMAGE", "").strip():
+        # The override names something the registry will not serve. Saying "set
+        # INNATE_SIM_ASSETS_IMAGE" to someone who just did is no help.
+        if override:
             raise StackError(
                 f"The registry did not serve INNATE_SIM_ASSETS_IMAGE ({shorten_docker_image_ref(image)}): {exc}\n"
                 f"The geometry is fetched over the registry API, so an override has to name a pushed "
                 f"image -- one that exists only in the local Docker store cannot be read here."
             ) from exc
-        # The name also moves for inputs that cannot change geometry, and
-        # "push the branch" is not advice a fork can take.
-        if parts[2:3] == [geometry_hash] and installed:
-            log("Reusing the installed geometry (geometry inputs unchanged).")
+        if not missing:
+            log(f"Reusing the installed geometry (it has everything {environment_id} needs).")
+            config["assets_image"] = installed_ref
             return
         raise StackError(
-            f"No published sim asset image for this checkout ({shorten_docker_image_ref(image)}): {exc}\n"
-            f"The geometry inputs themselves changed ({', '.join(GEOMETRY_INPUT_PATHSPECS)}), so what is "
-            f"installed no longer describes this checkout. Push the branch so CI publishes it, or set "
-            f"INNATE_SIM_ASSETS_IMAGE to one that exists."
+            f"The installed sim geometry has nothing for {environment_id!r} ({', '.join(missing)}), and no "
+            f"published asset image serves this checkout: {exc}\n"
+            f"Bake it from the pipeline in sim/tools (see sim/sandbox/README.md), or point "
+            f"INNATE_SIM_ASSETS_IMAGE at an image that carries it."
         ) from exc
+    config["assets_image"] = image
     digest = manifest["layers"][ASSETS_IMAGE_LAYERS.index("work")]["digest"]
 
-    if parts[:1] == [digest] and installed:
+    if parts[:1] == [digest]:
         # Same geometry under a new ref (or an old digest-only marker):
-        # remember the ref so the next run skips the probe above.
+        # remember the ref so the next run skips the probe above. Never
+        # re-fetch this digest: what it carries is already here, so a world it
+        # cannot serve would download 85 MB to fail identically every `up`.
         marker.write_text(f"{digest} {image} {geometry_hash}\n")
+        if missing:
+            raise _incomplete_store(image, environment_id, missing)
         return
 
     log(f"Downloading sim assets {digest[7:19]} (~85 MB, one-time)...")
@@ -1902,20 +1991,13 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
             oci.fetch_layer(repo, digest, out, oci.anon_token(repo), label="sim assets")
         oci.safe_extract(blob, staging)
         work = staging / "work"
-        # Fatal before anything is installed, rather than writing a marker that
-        # claims success: a store without apartment_split_v2 has no collision
-        # hulls at all, and would silently short-circuit every later `up`.
-        missing = [unit for unit in SIM_ASSET_UNITS_DERIVED if not (work / unit).is_dir()]
-        if missing:
-            raise StackError(
-                f"The pinned geometry layer {digest[7:19]} is missing {missing}.\n"
-                "Refusing to install a partial store -- the world server cannot run without it."
-            )
-        # Authored props are additive: a checkout can legitimately expect ones
-        # the pinned layer predates, and a world without them still runs.
-        absent = [unit for unit in SIM_ASSET_UNITS_AUTHORED if not (work / unit).is_dir()]
+        # Every unit is additive, props and packs alike: a served layer may
+        # legitimately predate one (the published `main` geometry does), and a
+        # world that does not load it runs regardless. Whether the world being
+        # launched can load is judged against the manifest once installed.
+        absent = [unit for unit in SIM_ASSET_UNITS if not (work / unit).is_dir()]
         if absent:
-            warn(f"The pinned geometry predates {absent}; the world will load without them.")
+            warn(f"The geometry from {shorten_docker_image_ref(image)} predates {absent}.")
 
         # Stamp one install time so every file reads as arriving now (buildx
         # does not normalise layer mtimes without SOURCE_DATE_EPOCH). NOTE this
@@ -1947,24 +2029,46 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
         blob.unlink(missing_ok=True)
         shutil.rmtree(staging, ignore_errors=True)
 
+    still_missing = missing_geometry(os_repo, sim_repo / "assets", environment_id)
+    if still_missing:
+        raise _incomplete_store(image, environment_id, still_missing)
 
-def ensure_viewer_public_assets(config: dict[str, object]) -> None:
+
+def ensure_viewer_public_assets(config: dict[str, object], *, offline: bool = False) -> None:
     """Install the models and physics the webapp serves at /models and /physics.
 
     The same image as the geometry, a different layer -- and on disk rather
     than mounted from the image, for the reasons in install_layer_subtree.
     """
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
-    install_layer_subtree(
-        assets_image_ref(config),
-        ASSETS_IMAGE_LAYERS.index("viewer"),
-        "viewer",
-        sim_repo / "viewer" / "public",
-        sim_repo / "viewer" / "public" / ".installed-tag",
-        label="viewer assets",
-        geometry_hash=compute_geometry_inputs_hash(config["os_repo"]),  # type: ignore[arg-type]
-        preserve_subtrees=("local-environments",),
-    )
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    image = assets_image_ref(config)
+    required = read_environment_assets(os_repo, str(config["environment_id"]))
+    try:
+        install_layer_subtree(
+            image,
+            ASSETS_IMAGE_LAYERS.index("viewer"),
+            "viewer",
+            sim_repo / "viewer" / "public",
+            sim_repo / "viewer" / "public" / ".installed-tag",
+            label="viewer assets",
+            geometry_hash=compute_geometry_inputs_hash(os_repo),
+            preserve_subtrees=("local-environments",),
+            required=required.viewer if required else (),
+            fallbacks=assets_fallback_refs(),
+        )
+    except oci.OciError as exc:
+        # This step is not inside `up`'s offline guard: a warm store needs no
+        # network, so it runs either way and only the cold path can fail here.
+        remedy = (
+            f"Re-run `{CLI_SIM} up` online once first."
+            if offline
+            else "Bake the geometry from sim/tools (see sim/sandbox/README.md), or point "
+            "INNATE_SIM_ASSETS_IMAGE at an image that carries it."
+        )
+        raise StackError(
+            f"No 3D view assets for this checkout ({shorten_docker_image_ref(image)}): {exc}\n{remedy}"
+        ) from exc
 
 
 def install_layer_subtree(
@@ -1977,6 +2081,8 @@ def install_layer_subtree(
     label: str,
     geometry_hash: str | None = None,
     preserve_subtrees: tuple[str, ...] = (),
+    required: tuple[str, ...] = (),
+    fallbacks: tuple[str, ...] = (),
 ) -> None:
     """Put one subtree of one image layer on disk, idempotently.
 
@@ -2000,17 +2106,31 @@ def install_layer_subtree(
     than the published layer. They are copied into the staged tree before the
     atomic replacement so refreshing viewer assets cannot delete licensed,
     gitignored environment packs.
+
+    `required` names the paths this destination has to hold, so "installed" can
+    mean "serves the world being launched" rather than "was built from these
+    bytes"; with none given, any non-empty directory counts. `fallbacks` are
+    refs to accept when the registry does not serve `image`.
     """
     parts = marker.read_text().split() if marker.exists() else []
-    populated = destination.is_dir() and any(destination.iterdir())
-    if parts[1:2] == [image] and populated:
+    installed_ref = parts[1] if len(parts) > 1 else ""
+    populated = destination.is_dir() and (
+        all((destination / path).exists() for path in required) if required else any(destination.iterdir())
+    )
+    if installed_ref == image and populated:
         return
 
+    # A `required` contract is the caller saying what "good enough" means, so
+    # meeting it beats any hash. Without one, only the narrow hash can tell an
+    # unpublished tag from a real change -- and the bundle, which passes
+    # neither, must fall through to its local build rather than serve a stale
+    # copy (ensure_sim_viewer_bundle catches this).
+    reusable = populated and (bool(required) or parts[2:3] == [geometry_hash])
     try:
-        manifest = oci.manifest_for_image(image)
+        image, manifest = _serving_assets_manifest(image, fallbacks)
     except oci.OciError:
-        if geometry_hash is not None and parts[2:3] == [geometry_hash] and populated:
-            log(f"Reusing the installed {label} (geometry inputs unchanged).")
+        if reusable:
+            log(f"Reusing the installed {label} (nothing published serves this checkout).")
             return
         raise
     digest = manifest["layers"][layer_index]["digest"]

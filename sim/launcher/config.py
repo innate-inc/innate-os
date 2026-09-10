@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import functools
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -221,6 +223,14 @@ SIM_ASSET_UNITS_AUTHORED = (
     "objects",
 )
 SIM_ASSET_UNITS = SIM_ASSET_UNITS_DERIVED + SIM_ASSET_UNITS_AUTHORED
+# The published geometry to install when nothing built this checkout's tag. A
+# fork cannot push a branch for our CI to build, so the alternative is refusing
+# to start over inputs that may not touch geometry at all.
+ASSETS_FALLBACK_TAG = "main"
+# The two roots mars_sim_driver.environments reads, `environments.local`
+# gitignored for licensed packs. Manifests are loaded LIVE from the checkout,
+# so a spawn pose or a display name is not something `up` can be missing.
+ENVIRONMENT_MANIFEST_ROOTS = ("environments", "environments.local")
 # This file is deliberately NOT in ASSETS_IMAGE_INPUT_FILES -- that would retag
 # the asset image on every unrelated launcher edit. Safe only because
 # tests/test_assets_image_inputs.py holds the dockerignore (which IS hashed)
@@ -583,6 +593,71 @@ def compute_assets_image_inputs_hash(repo_root: Path) -> str:
 
 def resolve_assets_image(repo_root: Path) -> str:
     return f"{DEFAULT_SIM_ASSETS_IMAGE}:inputs-{compute_assets_image_inputs_hash(repo_root)}"
+
+
+def resolve_fallback_assets_image() -> str:
+    return f"{DEFAULT_SIM_ASSETS_IMAGE}:{ASSETS_FALLBACK_TAG}"
+
+
+@dataclasses.dataclass(frozen=True)
+class EnvironmentAssets:
+    """What one environment needs on disk, per install root.
+
+    The contract `up` gates on. A content hash over sim/environments and
+    sim/tools answers a different question -- was this store built from these
+    bytes -- and answers it wrongly for the common cases: a manifest the driver
+    reads live, or an edit to a pipeline whose output the launched world never
+    loads.
+    """
+
+    assets: tuple[str, ...]  # under sim/assets
+    viewer: tuple[str, ...]  # under sim/viewer/public
+
+
+def environment_manifest_path(repo_root: Path, environment_id: str) -> Path:
+    candidates = [repo_root / "sim" / root / environment_id / "manifest.json" for root in ENVIRONMENT_MANIFEST_ROOTS]
+    return next((path for path in candidates if path.is_file()), candidates[0])
+
+
+def available_environment_ids(repo_root: Path) -> list[str]:
+    sim = repo_root / "sim"
+    return sorted(
+        {path.parent.name for root in ENVIRONMENT_MANIFEST_ROOTS for path in (sim / root).glob("*/manifest.json")}
+    )
+
+
+def _viewer_paths(viewer: dict[str, str]) -> tuple[str, ...]:
+    """The browser assets whose absence means this pack is not installed.
+
+    Not every path the manifest names: the apartment names a monolith glb that
+    sim/Dockerfile.assets deliberately does not ship, because scene.ts streams
+    per-room files from `manifest` and falls back to the monolith only when
+    that is absent. Requiring it would refuse a healthy install.
+    """
+    keys = ("collision_dir",) if "manifest" in viewer else ("collision_dir", "model")
+    return tuple(str(viewer[key]) for key in keys if key in viewer)
+
+
+def read_environment_assets(repo_root: Path, environment_id: str) -> EnvironmentAssets | None:
+    """None when no manifest describes `environment_id`, or it does not parse.
+
+    Not an error here: the driver reports a broken pack against the world it
+    was asked to load, with the available ids -- far better than a launcher
+    gate can, and refusing to start is the behaviour being removed.
+    """
+    try:
+        manifest = json.loads(environment_manifest_path(repo_root, environment_id).read_text(encoding="utf-8"))
+        physics, viewer = manifest["physics"], manifest["viewer"]
+        return EnvironmentAssets(
+            assets=(
+                str(physics["collision_dir"]),
+                str(physics["visual_dir"]),
+                str(manifest["navigation"]["map_yaml"]),
+            ),
+            viewer=_viewer_paths(viewer),
+        )
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return None
 
 
 @functools.lru_cache

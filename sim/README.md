@@ -616,6 +616,18 @@ tag moves, CI builds it once, and every later publish of the same tag is
 skipped outright. To change the geometry, edit the pipeline in `sim/tools/`
 (see [`sandbox/README.md`](sandbox/README.md)) and push; CI rebuilds it.
 
+**A moved tag does not stop `up`.** It cannot: our CI does not build for forks,
+so "push the branch" is not a remedy everyone has. What gates the launch is the
+environment's manifest — `physics`, `navigation` and the browser assets it names
+— against `sim/assets` and `sim/viewer/public`. A store that answers the manifest
+launches, whatever tag it came from, which is why a spawn-pose edit costs nothing
+(the driver reads manifests live) and a driver edit that renames the image reuses
+the geometry it did not change. With nothing installed and nothing published for
+the checkout, the launcher installs the published `main` geometry and says which
+of your changes are not in it. Only a world the store genuinely cannot load
+refuses, naming the paths it wanted. Regenerating those locally is
+[`sandbox/README.md`](sandbox/README.md).
+
 ### Credits
 
 The apartment environment is derived from ["Appartement"](https://sketchfab.com/3d-models/appartement-6a7a5fe208344b2e8123a88923dbd5b3) by [SrMonteiro](https://sketchfab.com/crispimrafael), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Changes were made: split per room, convex-decomposed for collision, re-exported for rendering (GLB/MuJoCo meshes), and rasterized into a navigation map.

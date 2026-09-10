@@ -62,6 +62,7 @@ from runtime import (
     tail_file,
     wait_for_os_runtime_ready,
     wait_for_virtual_mars,
+    warn_unloadable_environments,
     world_server_running,
 )
 from setup_wizard import (
@@ -148,9 +149,10 @@ def cmd_up(
                     f"`{CLI_SIM} up --offline` to start with whatever is already downloaded."
                 ) from exc
         with live_step("viewer", "Downloading the 3D view assets", "3D view assets"):
-            ensure_viewer_public_assets(config)
+            ensure_viewer_public_assets(config, offline=offline)
         with live_step("bundle", "Fetching the 3D viewer bundle", "3D viewer bundle"):
             ensure_sim_viewer_bundle(config, offline=offline)
+        warn_unloadable_environments(config)
         started = True
         with live_step("world", "Starting the physics world", "physics world"):
             config["world_endpoint"] = ensure_world_server(config)
