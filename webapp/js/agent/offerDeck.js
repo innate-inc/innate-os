@@ -8,12 +8,12 @@
 import { cue } from "./cue.js";
 import { ICONS } from "./storyCards.js";
 
-/** persona and grant are cards; the rest are chips. @typedef {"persona" | "grant" | "reply" | "random" | "custom"} OfferKind */
+/** persona, custom and grant are cards; the rest are chips. @typedef {"persona" | "grant" | "reply" | "random" | "custom"} OfferKind */
 /** `text` is what selecting it means (and sends); `label` is what the card says instead, when shorter.
  * @typedef {{ text: string, kind: OfferKind, label?: string, detail?: string, icon?: string, hue?: string, onSelect: (text: string) => void }} Offer */
 
-const CARD_KINDS = new Set(["persona", "grant"]);
-const CHIP_ICONS = /** @type {Partial<Record<OfferKind, string>>} */ ({ random: ICONS.dice, custom: ICONS.pen });
+const CARD_KINDS = new Set(["persona", "custom", "grant"]);
+const CHIP_ICONS = /** @type {Partial<Record<OfferKind, string>>} */ ({ random: ICONS.dice });
 
 /** @returns {{ el: HTMLElement, set: (offers: Offer[], title?: string) => void }} */
 export function createOfferDeck() {
@@ -44,7 +44,8 @@ export function createOfferDeck() {
     button.innerHTML =
       `<span class="agent-offer-icon">${offer.icon ?? ICONS.sparkle}</span>` +
       '<span class="agent-offer-copy"><span class="agent-offer-name"></span><span class="agent-offer-detail"></span></span>' +
-      (offer.kind === "grant" ? `<span class="agent-offer-go">${ICONS.plus}<span>Grant</span></span>` : "");
+      (offer.kind === "grant" ? `<span class="agent-offer-go">${ICONS.plus}<span>Grant</span></span>` : "") +
+      (offer.kind === "custom" ? `<span class="agent-offer-go">${ICONS.pen}<span>Type</span></span>` : "");
     /** @type {HTMLElement} */ (button.querySelector(".agent-offer-name")).textContent = offer.label ?? offer.text;
     /** @type {HTMLElement} */ (button.querySelector(".agent-offer-detail")).textContent = offer.detail ?? "";
     button.addEventListener("click", () => offer.onSelect(offer.text));

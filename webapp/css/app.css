@@ -11639,6 +11639,16 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
   background: #fff; color: #3d2aa8; font-size: 12px; font-weight: 650;
 }
 .agent-offer-go svg { width: 14px; height: 14px; stroke-width: 2.4; }
+/* Write your own: across the deck under the characters, in the story's amber, so the typed
+   path reads as an option and not as a fallback. */
+.agent-offer-card.custom {
+  --offer-hue: var(--accent);
+  grid-column: 1 / -1; grid-template-columns: 36px minmax(0, 1fr) auto;
+  background: linear-gradient(135deg, rgb(232 163 61 / 22%), rgb(232 163 61 / 8%));
+  border: 1px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.agent-offer-card.custom:hover { background: linear-gradient(135deg, rgb(232 163 61 / 32%), rgb(232 163 61 / 14%)); border-color: var(--accent); }
+.agent-offer-card.custom .agent-offer-go { background: var(--accent); color: #1a1206; }
 .agent-offers-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .agent-offer-chip {
   display: inline-flex; align-items: center; gap: 6px;

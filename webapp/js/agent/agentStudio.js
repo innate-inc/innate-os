@@ -14,7 +14,7 @@
 
 import { closeIn, cue } from "./cue.js";
 import { createOfferDeck } from "./offerDeck.js";
-import { personaCard, skillCard } from "./storyCards.js";
+import { ICONS, personaCard, skillCard } from "./storyCards.js";
 
 // The left side of the stage holds one open panel at a time: the scene setup and the
 // challenges already trade places through this event (simStage.ts, challengePanel.js), and
@@ -559,6 +559,19 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     onSelect: () => void grant(skill),
   });
 
+  /** The custom character is typed where the persona lives: the panel's prompt, or the
+   *  composer where there is no panel. */
+  function focusPrompt() {
+    if (compact) {
+      panel.focusComposer();
+      return;
+    }
+    tab = "identity";
+    render(true);
+    promptInput.focus();
+    promptInput.scrollIntoView({ block: "nearest" });
+  }
+
   /** @param {string} persona */
   function choose(persona) {
     if (persona === lastChoice.text && Date.now() - lastChoice.at < 5000) return;
@@ -630,9 +643,14 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
         title: `Who is ${name}?`,
         chips: [
           ...personas.map(pick),
+          {
+            text: "Write your own",
+            kind: /** @type {const} */ ("custom"),
+            icon: ICONS.pen,
+            detail: "Describe the character in your words",
+            onSelect: focusPrompt,
+          },
           { text: "Surprise me", kind: "random", onSelect: () => choose(personas[Math.floor(Math.random() * personas.length)]) },
-          // The panel has the prompt right there; only the chat's deck needs a way to the composer.
-          ...(compact ? [{ text: "Write your own", kind: /** @type {const} */ ("custom"), onSelect: () => panel.focusComposer() }] : []),
         ],
       };
     }
@@ -999,7 +1017,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     // the skills. The chat keeps the replies, and everything when there is no panel.
     const { chips, title: ask } = offers();
     panelEl.dataset.chips = chipReason;
-    const toPanel = compact ? [] : chips.filter((c) => c.kind === "persona" || c.kind === "grant" || c.kind === "random");
+    const toPanel = compact ? [] : chips.filter((c) => c.kind !== "reply");
     const askKey = toPanel.filter((c) => c.kind !== "random").map((c) => `${c.kind}:${c.text}`).join("|");
     if (askKey !== deckKey) {
       deckKey = askKey;
