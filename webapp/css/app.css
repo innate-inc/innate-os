@@ -11492,9 +11492,9 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
 .chat-msg.system.narrator .chat-sender { display: none; }
 .chat-msg.system.narrator .chat-bubble,
 .chat-msg.system.narrator > :not(.chat-sender) { background: transparent; border: 0; color: #9d9dab; font-style: italic; font-size: 12px; text-align: center; }
-/* "Look here" (cue.js), staged like a game's lock-on: the element pops, corner brackets snap
-   onto it with overshoot and breathe, two rings ping outward, a sheen sweeps across, and the
-   badge drops in and bobs. Signal amber, like every live/active state in the app. */
+/* "Look here" (cue.js), staged like a game's lock-on: the element pops, a halo breathes around
+   it, two rings ping outward, a sheen sweeps across, and the badge drops in and bobs. Signal
+   amber, like every live/active state in the app. */
 .ui-cue { animation: ui-cue-pop 420ms cubic-bezier(0.34, 1.56, 0.64, 1); }
 @keyframes ui-cue-pop { 0% { transform: scale(0.94); } 55% { transform: scale(1.03); } 100% { transform: scale(1); } }
 .ui-cue-frame { position: absolute; inset: 0; z-index: 1; border-radius: inherit; pointer-events: none; }
@@ -11510,23 +11510,6 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
 }
 .ui-cue-ring:nth-child(2) { animation-delay: 1s; }
 @keyframes ui-cue-ping { 0% { opacity: 0.85; transform: scale(1); } 60%, 100% { opacity: 0; transform: scale(1.09); } }
-.ui-cue-corners {
-  --c: var(--accent);
-  position: absolute; inset: -9px;
-  background:
-    linear-gradient(var(--c), var(--c)) top left / 16px 3px no-repeat,
-    linear-gradient(var(--c), var(--c)) top left / 3px 16px no-repeat,
-    linear-gradient(var(--c), var(--c)) top right / 16px 3px no-repeat,
-    linear-gradient(var(--c), var(--c)) top right / 3px 16px no-repeat,
-    linear-gradient(var(--c), var(--c)) bottom left / 16px 3px no-repeat,
-    linear-gradient(var(--c), var(--c)) bottom left / 3px 16px no-repeat,
-    linear-gradient(var(--c), var(--c)) bottom right / 16px 3px no-repeat,
-    linear-gradient(var(--c), var(--c)) bottom right / 3px 16px no-repeat;
-  filter: drop-shadow(0 0 6px rgb(232 163 61 / 55%));
-  animation: ui-cue-lock 560ms cubic-bezier(0.34, 1.56, 0.64, 1), ui-cue-breathe 1.8s ease-in-out 560ms infinite;
-}
-@keyframes ui-cue-lock { 0% { inset: -34px; opacity: 0; } 100% { inset: -9px; opacity: 1; } }
-@keyframes ui-cue-breathe { 0%, 100% { inset: -9px; } 50% { inset: -12px; } }
 .ui-cue-sheen { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; }
 .ui-cue-sheen > i {
   position: absolute; top: -30%; bottom: -30%; left: 0; width: 40%;
@@ -11545,7 +11528,7 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
 @keyframes ui-cue-drop { 0% { opacity: 0; transform: translate(-50%, -18px) scale(0.5); } 100% { opacity: 1; transform: translate(-50%, 0) scale(1); } }
 @keyframes ui-cue-bob { 0%, 100% { transform: translate(-50%, 0); } 50% { transform: translate(-50%, -3px); } }
 /* The tile clips its edges: the badge sits inside, and an outline plus a breathing halo
-   stand in for the brackets and rings. */
+   stand in for the rings. */
 .cam-tile .ui-cue-badge { top: 8px; }
 .cam-tile.ui-cue {
   outline: 2px solid var(--accent); outline-offset: 3px;
@@ -11576,7 +11559,7 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
 }
 .agent-offers[hidden], .agent-offers-title[hidden], .agent-offers-grid[hidden], .agent-offers-row[hidden] { display: none; }
 @keyframes agent-offers-in { from { opacity: 0; transform: translateY(6px); } }
-.agent-offers.ui-cue { border-color: var(--accent-dim); }
+.agent-offers.ui-cue { border-color: var(--accent); }
 .agent-compose-area > .agent-offers { margin-top: 6px; }
 .agent-offers-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 2px; }
 .agent-offers-kicker { color: rgb(255 255 255 / 48%); }
@@ -11644,7 +11627,6 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
 @media (prefers-reduced-motion: reduce) {
   .agent-drag-hint { animation: none; transform: translateX(-50%); }
   .agent-whiteout { transition: none; }
-  :is(.ui-cue, .ui-cue-badge, .ui-cue-glow, .ui-cue-ring, .ui-cue-corners, .ui-cue-sheen > i, .agent-offers, .agent-studio-skill.landed) { animation: none; }
+  :is(.ui-cue, .ui-cue-badge, .ui-cue-glow, .ui-cue-ring, .ui-cue-sheen > i, .agent-offers, .agent-studio-skill.landed) { animation: none; }
   .ui-cue-ring { display: none; }
-  .ui-cue-corners { opacity: 1; }
 }
