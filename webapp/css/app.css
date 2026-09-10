@@ -1927,12 +1927,6 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
     display: grid;
   }
 
-  /* A driving aid for a stage you can see the floor in. Doubled up to
-     outrank .icon-toggle's own display, set further down. */
-  .icon-toggle.traj-toggle {
-    display: none;
-  }
-
   .cam-strip.collapsed {
     display: none;
   }
