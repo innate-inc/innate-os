@@ -18,6 +18,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(stereo_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(tf2 REQUIRED)
 
 # Find OpenCV
 find_package(OpenCV REQUIRED)
@@ -150,6 +151,9 @@ if(VPI_FOUND)
     sensor_msgs
     stereo_msgs
     message_filters
+    tf2
+    tf2_ros
+    geometry_msgs
   )
   rclcpp_components_register_nodes(stereo_depth_estimator_component "mars_cam::StereoDepthEstimator")
 endif()
@@ -243,6 +247,9 @@ if(VPI_FOUND)
     sensor_msgs
     stereo_msgs
     message_filters
+    tf2
+    tf2_ros
+    geometry_msgs
   )
 endif()
 

@@ -24,6 +24,9 @@
 
 #include <opencv2/opencv.hpp>
 
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+
 // VPI headers
 #include <vpi/VPI.h>
 #include <vpi/OpenCVInterop.hpp>
@@ -75,6 +78,7 @@ class StereoDepthEstimator : public rclcpp::Node {
     // ── Point Cloud (depth_estimator/pointcloud.cpp) ───────────────────────
     void publishPointCloudXYZ(const cv::Mat& disparity_lowres, const rclcpp::Time& ts);
     void publishPointCloudColor(const cv::Mat& disparity_lowres, const cv::Mat& color_rect, const rclcpp::Time& ts);
+    void publishPointCloudNav(const cv::Mat& disparity_lowres, const rclcpp::Time& ts);
     // ── Footprint Overlay, Mask & Cutout (depth_estimator/publishing.cpp) ──
     void computeFootprintMaskCalib();
     void publishFootprintOverlay(const cv::Mat& color_rect, const rclcpp::Time& ts);
@@ -147,6 +151,7 @@ class StereoDepthEstimator : public rclcpp::Node {
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr left_rectified_compressed_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_color_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_nav_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_overlay_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_mask_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_cutout_pub_;
@@ -197,6 +202,17 @@ class StereoDepthEstimator : public rclcpp::Node {
 
     // Beyond this age the arm-footprint mask is dropped rather than reused.
     double footprint_max_age_sec_{0.5};
+
+    // Forward traversability corridor, in base_link metres. Only this volume is
+    // published for the costmap: pitch error grows with range, and at the -20
+    // degree head position 0.25-1.0m stays inside the lens region where the
+    // pinhole model still fits.
+    std::string nav_frame_;
+    std::string pointcloud_nav_topic_;
+    double nav_roi_x_min_, nav_roi_x_max_, nav_roi_half_width_, nav_roi_z_min_, nav_roi_z_max_;
+
+    std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     // Rectification maps (calibration resolution)
     cv::Mat map1_left_, map2_left_;

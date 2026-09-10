@@ -58,6 +58,15 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     // at 15Hz against this node's 8Hz, so anything much older means it stopped.
     this->declare_parameter<double>("footprint_max_age_sec", 0.5);
 
+    // Forward traversability corridor published for the costmap (base_link metres).
+    this->declare_parameter<std::string>("pointcloud_nav_topic", "/mars/main_camera/points_nav");
+    this->declare_parameter<std::string>("nav_frame", "base_link");
+    this->declare_parameter<double>("nav_roi.x_min", 0.25);
+    this->declare_parameter<double>("nav_roi.x_max", 1.00);
+    this->declare_parameter<double>("nav_roi.half_width", 0.22);
+    this->declare_parameter<double>("nav_roi.z_min", 0.02);
+    this->declare_parameter<double>("nav_roi.z_max", 0.36);
+
     // VPI creation parameters
     this->declare_parameter<int>("max_disparity", 64);
     this->declare_parameter<int>("include_diagonals", 1);
@@ -102,6 +111,13 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     mount_pitch_correction_deg_ = this->get_parameter("mount_pitch_correction_deg").as_double();
     mount_roll_correction_deg_ = this->get_parameter("mount_roll_correction_deg").as_double();
     footprint_max_age_sec_ = this->get_parameter("footprint_max_age_sec").as_double();
+    pointcloud_nav_topic_ = this->get_parameter("pointcloud_nav_topic").as_string();
+    nav_frame_ = this->get_parameter("nav_frame").as_string();
+    nav_roi_x_min_ = this->get_parameter("nav_roi.x_min").as_double();
+    nav_roi_x_max_ = this->get_parameter("nav_roi.x_max").as_double();
+    nav_roi_half_width_ = this->get_parameter("nav_roi.half_width").as_double();
+    nav_roi_z_min_ = this->get_parameter("nav_roi.z_min").as_double();
+    nav_roi_z_max_ = this->get_parameter("nav_roi.z_max").as_double();
 
     max_disparity_ = this->get_parameter("max_disparity").as_int();
     include_diagonals_ = this->get_parameter("include_diagonals").as_int();
@@ -174,6 +190,9 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     left_rectified_compressed_pub_ =
         this->create_publisher<sensor_msgs::msg::CompressedImage>(left_rectified_compressed_topic_, sensor_qos);
     pointcloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_topic_, sensor_qos);
+    pointcloud_nav_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_nav_topic_, sensor_qos);
+    tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     pointcloud_color_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_color_topic_, sensor_qos);
     footprint_overlay_pub_ = this->create_publisher<sensor_msgs::msg::Image>(footprint_overlay_topic_, sensor_qos);
     footprint_mask_pub_ = this->create_publisher<sensor_msgs::msg::Image>(footprint_mask_topic_, sensor_qos);
@@ -362,6 +381,7 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     const bool pub_left_color = left_rectified_color_pub_->get_subscription_count() > 0;
     const bool pub_left_compressed = left_rectified_compressed_pub_->get_subscription_count() > 0;
     const bool pub_pointcloud = pointcloud_pub_->get_subscription_count() > 0;
+    const bool pub_pointcloud_nav = pointcloud_nav_pub_->get_subscription_count() > 0;
     const bool pub_pointcloud_color = pointcloud_color_pub_->get_subscription_count() > 0;
     const bool pub_unfiltered = disparity_unfiltered_pub_->get_subscription_count() > 0;
     const bool pub_disparity = disparity_pub_->get_subscription_count() > 0;
@@ -377,7 +397,8 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     // Which compute stages the subscribed outputs actually need. SGM (and the
     // filter chain downstream) only for disparity/depth/pointcloud consumers;
     // mono rectification also feeds SGM and the color publishers' mono fallback.
-    const bool need_sgm = pub_pointcloud || pub_pointcloud_color || pub_unfiltered || pub_disparity || pub_depth;
+    const bool need_sgm =
+        pub_pointcloud || pub_pointcloud_nav || pub_pointcloud_color || pub_unfiltered || pub_disparity || pub_depth;
     const bool need_mono_rect = need_sgm || pub_left_rect || pub_right_rect || pub_left_color || pub_left_compressed;
     const bool need_mask = need_sgm || pub_footprint_overlay || pub_footprint_mask || pub_footprint_cutout;
 
@@ -470,6 +491,8 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     // ── Point clouds ───────────────────────────────────────────────────────
     if (pub_pointcloud)
         publishPointCloudXYZ(disparity_lowres, timestamp);
+    if (pub_pointcloud_nav)
+        publishPointCloudNav(disparity_lowres, timestamp);
     if (pub_pointcloud_color)
         publishPointCloudColor(disparity_lowres, left_color_rect, timestamp);
     const auto t_pc = clock::now();

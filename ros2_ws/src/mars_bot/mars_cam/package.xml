@@ -19,6 +19,7 @@
   <depend>std_srvs</depend>
   <depend>image_transport</depend>
   <depend>cv_bridge</depend>
+  <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>geometry_msgs</depend>
   <depend>depth_image_proc</depend>
