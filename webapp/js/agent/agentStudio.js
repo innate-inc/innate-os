@@ -14,7 +14,7 @@
 
 import { closeIn, cue } from "./cue.js";
 import { createOfferDeck } from "./offerDeck.js";
-import { personaCard, skillCard } from "./storyCards.js";
+import { ICONS, personaCard, skillCard } from "./storyCards.js";
 
 // The left side of the stage holds one open panel at a time: the scene setup and the
 // challenges already trade places through this event (simStage.ts, challengePanel.js), and
@@ -188,7 +188,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   promptRow.innerHTML =
     '<span class="microlabel">Prompt</span>' +
     '<textarea rows="2" maxlength="240" aria-label="Robot personality prompt" placeholder="Who is this robot? e.g. a butler who has seen better days"></textarea>' +
-    '<button type="submit">Make it so</button>';
+    '<button type="submit">Set character</button>';
   const promptInput = /** @type {HTMLTextAreaElement} */ (promptRow.querySelector("textarea"));
 
   // The agent's prompt as its file holds it; editable when the file is the form's own.
@@ -559,6 +559,23 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     onSelect: () => void grant(skill),
   });
 
+  /** The custom character is typed where the persona lives: the panel's prompt, or the
+   *  composer where there is no panel. */
+  function focusPrompt() {
+    // press-activate fires this on pointerdown, and the press then focuses the card itself:
+    // move the cursor a frame later, once that has happened.
+    requestAnimationFrame(() => {
+      if (compact) {
+        panel.focusComposer();
+        return;
+      }
+      tab = "identity";
+      render(true);
+      promptInput.focus();
+      promptInput.scrollIntoView({ block: "nearest" });
+    });
+  }
+
   /** @param {string} persona */
   function choose(persona) {
     if (persona === lastChoice.text && Date.now() - lastChoice.at < 5000) return;
@@ -630,9 +647,14 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
         title: `Who is ${name}?`,
         chips: [
           ...personas.map(pick),
+          {
+            text: "Write your own",
+            kind: /** @type {const} */ ("custom"),
+            icon: ICONS.pen,
+            detail: "In your own words.",
+            onSelect: focusPrompt,
+          },
           { text: "Surprise me", kind: "random", onSelect: () => choose(personas[Math.floor(Math.random() * personas.length)]) },
-          // The panel has the prompt right there; only the chat's deck needs a way to the composer.
-          ...(compact ? [{ text: "Write your own", kind: /** @type {const} */ ("custom"), onSelect: () => panel.focusComposer() }] : []),
         ],
       };
     }
@@ -999,7 +1021,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     // the skills. The chat keeps the replies, and everything when there is no panel.
     const { chips, title: ask } = offers();
     panelEl.dataset.chips = chipReason;
-    const toPanel = compact ? [] : chips.filter((c) => c.kind === "persona" || c.kind === "grant" || c.kind === "random");
+    const toPanel = compact ? [] : chips.filter((c) => c.kind !== "reply");
     const askKey = toPanel.filter((c) => c.kind !== "random").map((c) => `${c.kind}:${c.text}`).join("|");
     if (askKey !== deckKey) {
       deckKey = askKey;
