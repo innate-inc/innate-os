@@ -169,16 +169,6 @@ rcl_interfaces::msg::SetParametersResult MarsArmNode::onParameterChange(
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = true;
 
-    // Reject before the loop below applies anything: a refused batch must
-    // leave the gains as they were. rest_pose itself is read by each fold.
-    for (const auto& param : parameters) {
-        if (param.get_name() == "rest_pose" && param.as_double_array().size() != 6) {
-            result.successful = false;
-            result.reason = "rest_pose must list 6 joint positions";
-            return result;
-        }
-    }
-
     // Collect which joints had PID or profile changes
     std::set<int> pid_changed_joints;
     std::set<int> profile_changed_joints;

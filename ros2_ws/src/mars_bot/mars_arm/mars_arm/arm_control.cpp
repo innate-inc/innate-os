@@ -201,7 +201,7 @@ void MarsArmNode::controlTimerCallback() {
                 // SCHEDULED: interpolate near/far by arm extension for joints 1-4
                 constexpr double kMaxReach = 0.37291;
 
-                double horiz_reach = std::abs(gripperTip(positions_rad[1], positions_rad[2], positions_rad[3]).x);
+                double horiz_reach = std::abs(gripperTipX(positions_rad[1], positions_rad[2], positions_rad[3]));
                 double extension_linear = std::clamp((horiz_reach / kMaxReach - 0.1) / 0.9, 0.0, 1.0);
                 double extension = extension_linear * extension_linear;
 

@@ -8,7 +8,6 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
-#include <chrono>
 
 namespace mars_arm {
 
@@ -66,24 +65,15 @@ inline int jointEncoder(double rad, size_t joint) {
     return static_cast<int>((rad / (2 * M_PI)) * 4096 + 2048);
 }
 
-// Gripper tip in the arm's plane, metres from the shoulder joint (x forward,
-// z up), from the upper arm, forearm and wrist-to-tip links.
-struct PlanarPoint {
-    double x;
-    double z;
-};
-inline PlanarPoint wristPoint(double q2, double q3) {
+// How far the gripper tip reaches forward of the shoulder joint, metres, from
+// the upper arm, forearm and wrist-to-tip links.
+inline double gripperTipX(double q2, double q3, double q4) {
     constexpr double L2_x = 0.02825, L2_z = 0.12125;
     constexpr double L3_x = 0.1375, L3_z = 0.0045;
-    const double a2 = q2, a23 = q2 + q3;
-    return {L2_x * std::cos(a2) + L2_z * std::sin(a2) + L3_x * std::cos(a23) + L3_z * std::sin(a23),
-            -L2_x * std::sin(a2) + L2_z * std::cos(a2) - L3_x * std::sin(a23) + L3_z * std::cos(a23)};
-}
-inline PlanarPoint gripperTip(double q2, double q3, double q4) {
     constexpr double L45_x = 0.110838;
-    const PlanarPoint wrist = wristPoint(q2, q3);
-    const double a234 = q2 + q3 + q4;
-    return {wrist.x + L45_x * std::cos(a234), wrist.z - L45_x * std::sin(a234)};
+    const double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
+    return L2_x * std::cos(a2) + L2_z * std::sin(a2) + L3_x * std::cos(a23) + L3_z * std::sin(a23) +
+           L45_x * std::cos(a234);
 }
 
 inline bool isX330(const std::string& motor_type) {
