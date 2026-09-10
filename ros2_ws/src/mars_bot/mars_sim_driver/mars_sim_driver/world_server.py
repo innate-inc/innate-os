@@ -23,6 +23,7 @@ reads take the physics lock directly.
 import argparse
 import contextlib
 import json
+import math
 import os
 import queue
 import socket
@@ -43,6 +44,10 @@ except ImportError:  # view-only feature; the sim must not die without it
 from .challenges import ChallengeChatBridge, ChallengeEngine, SkillEventBridge
 from .core import CAMERA_HEIGHT, CAMERA_WIDTH, VirtualMars, encode_jpeg, release_freed_heap
 from .environments import DEFAULT_ENVIRONMENT_ID, Environment, NavMapBridge
+
+# `--intro`: the first-run story and the world it is authored for.
+INTRO_CHALLENGE_ID = "nowhere"
+INTRO_ENVIRONMENT_ID = "void"
 
 # Depth renders at the pointcloud grid: identical published cloud, 16x less fill.
 DEPTH_WH = (CAMERA_WIDTH // 4, CAMERA_HEIGHT // 4)
@@ -90,6 +95,10 @@ class WorldServer:
         # Advertised in ping replies so the launcher can tell a current
         # server from a stale pre-stream one (which it must restart).
         self.state_port: int | None = None
+        # `up --intro`: the challenge waiting for the first observer, then None. Each
+        # observer arrives on its own thread, so the claim has to be one step.
+        self.opening_challenge: str | None = None
+        self._opening_lock = threading.Lock()
         # Advertised in ping replies so the launcher can restart a reused
         # server whose listeners don't match the current bind policy (a
         # leftover INNATE_SIM_WORLD_BIND=0.0.0.0 server must not outlive the
@@ -170,12 +179,13 @@ class WorldServer:
         # for a frame instead -- which is the module's own contract, that a
         # broken challenge degrades that challenge and never the sim.
         try:
-            challenge = self.challenges.tick(sim_time, (x, y, yaw), centers, epoch)
+            challenge = self.challenges.tick(sim_time, (x, y, yaw), centers, epoch, objects=objects)
         except Exception as exc:  # noqa: BLE001 -- degrade the challenge, never the sim
             challenge = None
             if time.time() - self._challenge_error_at > 5.0:  # 75Hz: do not flood the log
                 self._challenge_error_at = time.time()
                 print(f"[world-server] challenge tick failed: {exc!r}", flush=True)
+        self._apply_world_actions()
         # t = sim clock (playback timeline); wall = shared clock for lag HUDs.
         payload = json.dumps(
             {
@@ -193,6 +203,25 @@ class WorldServer:
             self.state_payload = payload
             self.state_seq += 1
             self.state_cond.notify_all()
+
+    def _apply_world_actions(self) -> None:
+        """Perform what the active challenge runtime asked of the world this tick."""
+        drops, transition = self.challenges.take_world_actions()
+        if drops:
+            with self.lock:
+                for drop in drops:
+                    if not self.sim.drop_prop_at(drop.name, drop.x, drop.y, math.radians(drop.yaw_deg)):
+                        print(f"[world-server] runtime drop ignored: no prop {drop.name!r}", flush=True)
+        if transition is not None and self._build_sim is not None:
+            threading.Thread(target=self._transition, args=transition, daemon=True).start()
+
+    def _transition(self, environment_id: str, challenge_id: str) -> None:
+        try:
+            self.switch_environment(environment_id)
+            self.challenges.start(challenge_id)
+            self.publish_state()
+        except Exception as exc:  # noqa: BLE001 -- a failed story transition must not take the server down
+            print(f"[world-server] transition to {environment_id}/{challenge_id} failed: {exc!r}", flush=True)
 
     def _serve_scenario_commands(self, ws) -> None:
         """Read the observer socket for stage commands. This is the sim's own
@@ -241,6 +270,11 @@ class WorldServer:
         elif op == "switch_environment":  # rebuilds the world; progress rides the roster frame
             self.switch_environment(str(cmd.get("id", "")))
             return
+        elif op == "challenge_event":  # the interface telling the active runtime something (a chosen persona)
+            event = cmd.get("event")
+            if isinstance(event, dict) and isinstance(event.get("type"), str):
+                self.challenges.post_event({**event, "_source": "interface"})
+            return
         else:
             return
         if not ok:
@@ -251,6 +285,7 @@ class WorldServer:
         """One observer connection: push each new state, latest-wins (a slow
         client skips states instead of queueing lag), and accept the stage
         commands above on the way back."""
+        self._start_opening_challenge()
         threading.Thread(target=self._serve_scenario_commands, args=(ws,), daemon=True).start()
         # Send roster metadata on connection and changes, not every physics tick.
         last_seq = last_roster = -1
@@ -267,6 +302,18 @@ class WorldServer:
                 ws.send(payload)
         except Exception:  # noqa: BLE001,S110 -- client gone; the stream just ends
             pass
+
+    def _start_opening_challenge(self) -> None:
+        """`up --intro` opens a world with a challenge already chosen, but nothing
+        runs until someone is watching: the first observer starts it, and its clock
+        starts with them rather than with the server."""
+        with self._opening_lock:
+            challenge_id, self.opening_challenge = self.opening_challenge, None
+        if challenge_id is None:
+            return
+        if not self.challenges.start(challenge_id):
+            print(f"[world-server] --intro: {challenge_id!r} did not start here", flush=True)
+        self.publish_state()
 
     # --- environment packs (environments.py) ---
 
@@ -429,6 +476,10 @@ class WorldServer:
         if op == "switch_environment":  # the launcher's `up --environment` on a running server
             self.switch_environment(str(req["id"]))
             return {"ok": True}, None
+        if op == "intro":  # the launcher's `up --intro`, on a fresh server or a running one
+            with self._opening_lock:
+                self.opening_challenge = INTRO_CHALLENGE_ID
+            return {"ok": True}, None
         if op == "state":
             with self.lock:
                 x, y, yaw = self.sim.pose()
@@ -524,6 +575,11 @@ def main() -> None:
         help="Environment pack to load: sim/environments/NAME/manifest.json",
     )
     parser.add_argument(
+        "--intro",
+        action="store_true",
+        help="Start the first-run story for the first observer that connects",
+    )
+    parser.add_argument(
         "--rosbridge-url",
         default="ws://127.0.0.1:9090",
         help="The stack's rosbridge, for the best-effort challenge and Nav2-map bridges",
@@ -538,6 +594,7 @@ def main() -> None:
     environment = Environment.load(args.environment)
     print(f"[world-server] loading VirtualMars ({environment.id}, render scale {args.render_scale})...", flush=True)
     server = WorldServer(build_sim(environment), build_sim=build_sim)
+    server.opening_challenge = INTRO_CHALLENGE_ID if args.intro else None
     server.sim.step(0.5)  # settle from the spawn drop before clients look
 
     # Boot self-test: prove GL works before accepting clients, and report
@@ -547,13 +604,15 @@ def main() -> None:
     server.sim.render_rgb("main")
     first_ms = (time.perf_counter() - t0) * 1000
     t1 = time.perf_counter()
-    frame = server.sim.render_rgb("main")
+    server.sim.render_rgb("main")
     steady_ms = (time.perf_counter() - t1) * 1000
     # A context can be created "successfully" yet render nothing (seen on a
     # Raspberry Pi: EGL came up with GL_OUT_OF_MEMORY warnings and produced
-    # blank frames). A real render of the spawn view always has texture;
-    # refuse to serve garbage so the launcher's ladder falls to the next
-    # backend instead.
+    # blank frames). The wrist camera always has the arm in view, so its frame
+    # has texture in every world -- the spawn view does not: Nowhere renders
+    # one flat white under software GL. Refuse to serve garbage so the
+    # launcher's ladder falls to the next backend instead.
+    frame = server.sim.render_rgb("wrist")
     if float(frame.std()) < 1.0:
         print(
             "[world-server] GL self-test produced a blank image -- the GL context is not actually "

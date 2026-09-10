@@ -86,7 +86,7 @@ def test_base_cancel_latches_without_invoker():
 
 
 class NoSuperInitSkill(Skill):
-    """Some fleet skills (navigate_to_position, send_email, …) define __init__
+    """Some fleet skills (navigate_to_position, …) define __init__
     without calling super().__init__() — the latch must self-create."""
 
     def __init__(self):

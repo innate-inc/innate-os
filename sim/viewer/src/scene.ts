@@ -117,12 +117,13 @@ const KEY_LIGHT_OFFSET: [number, number, number] = [2.0, -1.5, 3.0];
 // shadows look sharp or blocky. 0.7m is the floor (a robot 0.35m across with
 // a 0.36m reach, props dropped within 0.35m): 0.68mm per texel at 2048. Past
 // SHADOW_BOX_MAX_M it stops growing and distant props lose their shadow
-// rather than blurring the robot's, which is the part being looked at.
+// rather than blurring the robot's, which is the part being looked at; the cap
+// is set so nothing in the story ever falls out of it.
 const SHADOW_BOX_MIN_M = 0.7;
-const SHADOW_BOX_MAX_M = 3.0;
+const SHADOW_BOX_MAX_M = 5.0; // fits the whole story: the void door 3 m out, the Backrooms exit 8.3 m away
 const SHADOW_BOX_STEP_M = 0.25; // quantised, so the box does not resize every frame
 const SHADOW_MARGIN_M = 0.5; // the robot's own extent plus the throw of its shadow
-const SHADOW_MAP_PX = 2048;
+const SHADOW_MAP_PX = 4096; // at the 5 m cap this is still 2.4mm per texel, sharper than 2048 ever was at 3 m
 
 // Initial orbit framing used when a pose is snapped in (see spawnAt below).
 const INITIAL_ORBIT_POSITION = { forward: 0.61, left: 0.02, height: 0.25 };
@@ -207,6 +208,14 @@ export class SimScene {
   // pack must drop its result rather than attach it to the next one.
   private environmentGeneration = 0;
   private hullsGroup?: THREE.Group;
+  private ground!: THREE.GridHelper;
+  private chase = { back: CHASE_BACK_M, height: CHASE_HEIGHT_M, target: CHASE_TARGET_HEIGHT_M };
+  /** Lateral offset of the chase perch (robot frame, +left); the story steps aside for the grasp. */
+  chaseSide = 0;
+  /** Distance behind the robot, when the caller overrides the atmosphere's default; negative puts the camera in front, facing it. */
+  chaseBack: number | null = null;
+  /** Perch height, when the caller overrides the atmosphere's default; higher looks down over the robot at what lies ahead. */
+  chaseHeight: number | null = null;
   private hullsPromise?: Promise<void>;
   private hullsVisible = false;
   // Shared fat-line material for placeholder boxes (LineBasicMaterial's
@@ -423,6 +432,7 @@ export class SimScene {
     grid.rotation.x = Math.PI / 2;
     grid.position.z = -0.02;
     this.scene.add(grid);
+    this.ground = grid;
   }
 
   /** Update the lidar overlay with world-frame hit points from /scan. */
@@ -515,10 +525,16 @@ export class SimScene {
     // Exterior packs need a longer, daylight view. Always restore defaults
     // on the next pack so an outdoor visit cannot change indoor rendering.
     const daylight = viewer.atmosphere === "daylight";
-    const background = daylight ? 0xcddbe2 : 0x14161a;
+    const void_ = viewer.atmosphere === "void";
+    const background = void_ ? 0xffffff : daylight ? 0xcddbe2 : 0x14161a;
     this.scene.background = new THREE.Color(background);
-    this.scene.fog = new THREE.FogExp2(background, daylight ? 0.004 : 0.035);
+    // Nowhere: the floor dissolves into white within a few metres; no horizon.
+    this.scene.fog = new THREE.FogExp2(background, void_ ? 0.16 : daylight ? 0.004 : 0.035);
     this.controls.maxDistance = daylight ? 65 : 30;
+    this.ground.visible = !void_;
+    // Nowhere frames the robot in the lower third with the floor ahead in view,
+    // so what the story drops in front of it lands on screen.
+    this.chase = void_ ? { back: 1.6, height: 0.9, target: 0.3 } : { back: CHASE_BACK_M, height: CHASE_HEIGHT_M, target: CHASE_TARGET_HEIGHT_M };
     // One parent group holds every room and carries the Y-up -> Z-up rotation,
     // so it's applied once; placeholder boxes and rooms attach underneath.
     const group = new THREE.Group();
@@ -995,12 +1011,13 @@ export class SimScene {
   private updateChase(dt: number): void {
     const [x, y] = this.robotXY;
     const yaw = this.robotRoot.rotation.z;
+    const back = this.chaseBack ?? this.chase.back;
     const desired = new THREE.Vector3(
-      x - Math.cos(yaw) * CHASE_BACK_M,
-      y - Math.sin(yaw) * CHASE_BACK_M,
-      CHASE_HEIGHT_M,
+      x - Math.cos(yaw) * back - Math.sin(yaw) * this.chaseSide,
+      y - Math.sin(yaw) * back + Math.cos(yaw) * this.chaseSide,
+      this.chaseHeight ?? this.chase.height,
     );
-    const target = new THREE.Vector3(x, y, CHASE_TARGET_HEIGHT_M);
+    const target = new THREE.Vector3(x, y, this.chase.target);
     const alpha = 1 - Math.exp(-CHASE_LAG_HZ * dt);
     this.camera.position.lerp(desired, alpha);
     this.controls.target.lerp(target, alpha);

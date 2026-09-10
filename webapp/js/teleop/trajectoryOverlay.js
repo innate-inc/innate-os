@@ -75,7 +75,6 @@ const ANCHOR_NEAR_M = 0.4;
 // Nearer than this the ground point is level with or behind the lens and has no
 // image position at all — the one case that genuinely breaks the route.
 const NEAR_PLANE_M = 0.1;
-const STORE_KEY = "innate.trajOverlay";
 
 /** @param {number} pitchDeg @returns {number} height above the floor in metres */
 export function cameraHeight(pitchDeg) {
@@ -288,27 +287,15 @@ export function primaryCameraName(session) {
  * @param {HTMLVideoElement | null} video the stage's video element (frame size
  *   + fit) on hardware; null in sim, where a Three.js canvas renders the same
  *   head camera at the stage's own size
- * @param {HTMLElement} rail right-edge overlay that hosts the toggle
  * @param {import("../rosClient.js").RosClient} ros
  * @param {import("../webrtcSession.js").WebRtcSession} session
  * @returns {{ destroy: () => void }}
  */
-export function createTrajectoryOverlay(stage, video, rail, ros, session) {
+export function createTrajectoryOverlay(stage, video, ros, session) {
   const canvas = document.createElement("canvas");
   canvas.className = "traj-canvas";
   stage.appendChild(canvas);
   const ctx = canvas.getContext("2d");
-
-  const button = document.createElement("button");
-  button.className = "icon-toggle traj-toggle";
-  button.type = "button";
-  button.innerHTML =
-    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<circle cx="6" cy="19" r="2.5"/>' +
-    '<path d="M8.5 19h8a3.5 3.5 0 0 0 0-7h-9a3.5 3.5 0 0 1 0-7H15"/>' +
-    '<circle cx="18" cy="5" r="2.5"/>' +
-    "</svg>";
-  rail.appendChild(button);
 
   /** @type {Array<{ x: number, y: number }> | null} plan points in their own frame */
   let plan = null;
@@ -489,46 +476,12 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
   video?.addEventListener("resize", schedule);
   const unsubSession = session.onChange(schedule);
 
-  /** @type {Array<() => void>} */
-  let unsubs = [];
-  let enabled = true;
-  try {
-    enabled = localStorage.getItem(STORE_KEY) !== "0";
-  } catch {
-    // Default on when storage is unavailable.
-  }
-
-  function apply() {
-    button.classList.toggle("active", enabled);
-    button.title = enabled
-      ? `Trajectory overlay on — planned route on the camera (${PLAN_TOPICS.join(" · ")})`
-      : "Trajectory overlay off — click to project the planned route onto the camera";
-    button.setAttribute("aria-pressed", String(enabled));
-    button.setAttribute("aria-label", "Trajectory overlay");
-    if (enabled && !unsubs.length) {
-      unsubs = [
-        ...PLAN_TOPICS.map((t) => ros.subscribe(t, (msg) => onPlan(t, msg), 250, "nav_msgs/msg/Path")),
-        ros.subscribe(ODOM_TOPIC, onOdom, 100, "nav_msgs/msg/Odometry"),
-        ros.subscribe(AMCL_POSE_TOPIC, onAmcl, 0, "geometry_msgs/msg/PoseWithCovarianceStamped"),
-        ros.subscribe(HEAD_CURRENT_POSITION_TOPIC, onHead, undefined, "std_msgs/msg/String"),
-      ];
-    } else if (!enabled) {
-      for (const unsub of unsubs) unsub();
-      unsubs = [];
-      clearPlan();
-    }
-  }
-  apply();
-
-  button.addEventListener("click", () => {
-    enabled = !enabled;
-    try {
-      localStorage.setItem(STORE_KEY, enabled ? "1" : "0");
-    } catch {
-      // The toggle still applies when storage is unavailable.
-    }
-    apply();
-  });
+  const unsubs = [
+    ...PLAN_TOPICS.map((t) => ros.subscribe(t, (msg) => onPlan(t, msg), 250, "nav_msgs/msg/Path")),
+    ros.subscribe(ODOM_TOPIC, onOdom, 100, "nav_msgs/msg/Odometry"),
+    ros.subscribe(AMCL_POSE_TOPIC, onAmcl, 0, "geometry_msgs/msg/PoseWithCovarianceStamped"),
+    ros.subscribe(HEAD_CURRENT_POSITION_TOPIC, onHead, undefined, "std_msgs/msg/String"),
+  ];
 
   return {
     destroy() {
@@ -539,7 +492,6 @@ export function createTrajectoryOverlay(stage, video, rail, ros, session) {
       clearTimeout(staleTimer);
       cancelAnimationFrame(raf);
       canvas.remove();
-      button.remove();
     },
   };
 }

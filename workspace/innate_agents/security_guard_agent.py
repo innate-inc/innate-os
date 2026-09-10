@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-from innate_skills.email.send_email import SendEmail
 from innate_skills.navigate_to_position import NavigateToPosition
 from inputs.micro_input import MicroInput
 
@@ -10,7 +9,7 @@ from brain_client.agents.types import Agent, InputRef, SkillRef
 class SecurityGuardAgent(Agent):
     """
     Security guard directive for the robot.
-    Provides a security guard personality that looks for intruders and sends an email if they find one.
+    Provides a security guard personality that looks for intruders and raises the alarm out loud if they find one.
     """
 
     @property
@@ -27,7 +26,7 @@ class SecurityGuardAgent(Agent):
 
     def get_skills(self) -> list[SkillRef]:
         """Return the skills this directive can use"""
-        return [NavigateToPosition, SendEmail]
+        return [NavigateToPosition]
 
     def get_inputs(self) -> list[InputRef]:
         """Enable microphone input to hear user"""
@@ -48,6 +47,6 @@ During your patrol:
 - Look carefully for any people who should not be there (potential intruders)
 
 If you detect an intruder at any point during your patrol:
-- Immediately send an email to axel@innate.bot using the send_email primitive
+- Immediately raise the alarm out loud: say where you are and describe who you see
 
 Stay alert and maintain your professional demeanor throughout the patrol."""

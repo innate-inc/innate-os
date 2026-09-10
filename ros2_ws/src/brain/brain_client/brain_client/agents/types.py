@@ -94,6 +94,11 @@ class Agent(ABC):
         """
         pass
 
+    def initial_skill_ids(self) -> list[str]:
+        """The subset of skill_ids() active the moment this agent is armed; an
+        agent whose skills are granted over time returns []."""
+        return self.skill_ids()
+
     def skill_ids(self) -> list[str]:
         """get_skills() normalized to id strings — the only form the rest of
         the system (registration, cloud agent, webapp) ever consumes. A class
@@ -179,6 +184,12 @@ class Agent(ABC):
                     f"or device-name strings, got {ref!r}"
                 )
         return names
+
+    def listed(self) -> bool:
+        """Whether people may pick this agent themselves. A fixture the interface arms on
+        its own — the first-run story's robot, which starts with no skills — says False and
+        stays out of the roster, where it would only look broken."""
+        return True
 
     def uses_gaze(self) -> bool:
         """

@@ -27,6 +27,8 @@ export interface ChallengeEntry extends ChallengeInfo, ChallengeProgress {}
 export interface ChallengeView {
   list: ChallengeEntry[];
   active: ChallengeActive | null;
+  /** Persona and name the story gave the robot; survives the switch to the next scene. */
+  profile?: Record<string, string>;
 }
 
 const NO_PROGRESS: ChallengeProgress = { passed: false, best_time_s: null, attempts: 0 };
@@ -399,6 +401,7 @@ export class SimSession {
     this.#challenge = {
       list: this.#challengeInfo.map((info) => ({ ...info, ...(block.progress[info.id] ?? NO_PROGRESS) })),
       active: block.active,
+      profile: block.profile ?? {},
     };
     for (const cb of this.#challengeListeners) cb(this.#challenge);
   }
@@ -411,6 +414,11 @@ export class SimSession {
   /** Abort the active challenge (or dismiss a finished one). */
   abortChallenge(): void {
     this.#controller?.send({ op: "abort_challenge" });
+  }
+
+  /** Tell the active challenge runtime something only the interface knows. */
+  sendChallengeEvent(event: { type: string } & Record<string, unknown>): void {
+    this.#controller?.send({ op: "challenge_event", event });
   }
 
   // WebRTC-specific surface: harmless no-ops in sim.
