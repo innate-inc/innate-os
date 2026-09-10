@@ -33,6 +33,14 @@ static constexpr int kDecayMaxLoad = 100;
 static constexpr double kRestWhenIdleS = 5.0;
 static constexpr double kRestFoldDurationS = 3.0;
 static constexpr double kAtRestRad = 0.05;
+// The fold's first waypoint: a collapsed arm rests its weight on the gripper
+// tip, and pitching the wrist up under that load stalled it at its 1.75 A
+// limit. Shoulder and elbow raise the wrist (forearm level, ~10 cm above the
+// shoulder) first, slower than the fold: at 1.5 s the shoulder fell 0.22 rad
+// behind.
+static constexpr double kLiftShoulderRad = -0.9;
+static constexpr double kLiftElbowRad = 0.9;
+static constexpr double kRestLiftDurationS = 2.5;
 // The shoulder may only swing back past this while the base yaw is outside
 // (kYawRestrictedMin, kYawRestrictedMax); nearer the centre the arm hits the
 // body.

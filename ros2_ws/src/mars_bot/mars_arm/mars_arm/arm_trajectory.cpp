@@ -223,8 +223,14 @@ RestOutcome MarsArmNode::runRestFold(const char* trigger) {
         // standing grip target zeroes the preload and drops a held object.
         rest[5] = clampToJointRange(5, has_target_ ? latest_target_[5] : measured[5]);
     }
+    // See kLiftShoulderRad: shoulder and elbow lift the tip off the floor
+    // before the wrist pitches or the yaw sweeps; everything else holds.
+    std::vector<double> lift = measured;
+    lift[1] = kLiftShoulderRad;
+    lift[2] = kLiftElbowRad;
+    lift[5] = rest[5];
     RCLCPP_INFO(this->get_logger(), "Folding the arm to rest (%s)", trigger);
-    if (planAndExecuteTrajectory(rest, kRestFoldDurationS, GainMode::SCHEDULED)) {
+    if (planAndExecuteTrajectory(lift, kRestLiftDurationS) && planAndExecuteTrajectory(rest, kRestFoldDurationS)) {
         return {true, "arm folded to rest"};
     }
     return {false, "rest fold could not start (see the log)"};
