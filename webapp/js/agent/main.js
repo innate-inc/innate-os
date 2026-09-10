@@ -19,6 +19,7 @@
 
 import { ros } from "../rosClient.js";
 import { mountPage } from "../pageMount.js";
+import { holdBootSplash } from "../bootSplash.js";
 import { getConfig } from "../config.js";
 import { robotSessionFactory } from "../robotSession.js";
 import { createVideoStage } from "../teleop/videoStage.js";
@@ -226,6 +227,8 @@ function buildAgentView(root) {
         cb(event);
       }, undefined, "std_msgs/msg/String"),
   });
+  holdBootSplash(studio.settled);
+
   const isSceneSurface = (/** @type {EventTarget | null} */ target) =>
     target instanceof Element &&
     (target.matches(".video-stage > canvas, .video-stage > video") || target.classList.contains("video-stage"));

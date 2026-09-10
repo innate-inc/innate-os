@@ -284,6 +284,15 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   whiteout.setAttribute("aria-hidden", "true");
   root.append(whiteout);
 
+  /** Resolves on the first world frame, which is when the story is known either way. */
+  /** @type {(() => void) | null} */ let settled = null;
+  const knownFromTheWorld = new Promise((resolve) => {
+    settled = () => {
+      settled = null;
+      resolve(undefined);
+    };
+  });
+
   /** @type {any} */ let challenge = null;
   /** @type {any} */ let environment = null;
   let dockOpen = false; // the stage comes first; the story and "Create agent" open it
@@ -1192,6 +1201,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const unsubAgent = agentState.subscribe(() => render());
   const unsubChallenge = session?.onChallenge?.((/** @type {any} */ block) => {
     challenge = block;
+    settled?.();
     autoStart();
     autoArm();
     arriveInBackrooms();
@@ -1223,6 +1233,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
 
   return {
     setCompact,
+    /** Resolves once the world has said whether a story is running, so the boot splash can
+     * cover the moment rather than the interface appearing and half of it leaving. */
+    settled: () => (session ? knownFromTheWorld : Promise.resolve()),
     destroy() {
       unsubOverlay();
       unsubAgent();
