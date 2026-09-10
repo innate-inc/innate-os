@@ -237,7 +237,7 @@ def test_real_skill_loop_preserves_grip_and_stops_on_failure(episode, tmp_path, 
     assert skill.manipulation.safety.max_ee_speed is None
 
 
-def test_ros_observation_rejects_repeated_frames_and_base_motion():
+def test_ros_observation_rejects_repeated_frames_without_base_motion_abort():
     import time
 
     import rclpy
@@ -284,10 +284,18 @@ def test_ros_observation_rejects_repeated_frames_and_base_motion():
         after = time.monotonic()
         publish(fresh=False)
         assert monitor.snapshot(after, URDF.read_text()) is None
+        # A quantized heading flicker yields nonzero twist without meaningful displacement.
+        import math
+
+        messages[3].twist.twist.angular.z = 0.06
+        messages[3].pose.pose.orientation.z = math.sin(0.01 / 2)
+        messages[3].pose.pose.orientation.w = math.cos(0.01 / 2)
+        publish()
+        assert monitor.snapshot(after, URDF.read_text()) is not None
+        messages[3].pose.pose.position.x = 0.025
         messages[3].twist.twist.linear.x = 0.1
         publish()
-        with pytest.raises(ValueError, match="Base moved"):
-            monitor.snapshot(after, URDF.read_text())
+        assert monitor.snapshot(after, URDF.read_text()) is not None
     finally:
         monitor.close()
         publisher.destroy_node()

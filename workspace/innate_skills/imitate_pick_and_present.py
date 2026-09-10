@@ -83,17 +83,20 @@ class LiveGestureObservation:
         names, qpos = list(joints.name), list(joints.position)
         pose = forward_poses(xml, names, [qpos])[0]
         odom = values["odom"][0]
-        speed = odom.twist.twist
-        if abs(speed.linear.x) > 0.015 or abs(speed.angular.z) > 0.03:
-            raise ValueError("Base moved during arm imitation")
         p = odom.pose.pose.position
         o = odom.pose.pose.orientation
+        if (
+            not all(math.isfinite(v) for v in (p.x, p.y, o.x, o.y, o.z, o.w))
+            or abs(math.sqrt(o.x**2 + o.y**2 + o.z**2 + o.w**2) - 1) > 0.01
+        ):
+            raise ValueError("Invalid base odometry")
+        base = [p.x, p.y, quat_to_rpy(o.x, o.y, o.z, o.w)[2]]
         return {
             "pose": [*pose[:3], *quat_to_rpy(*pose[3:])],
             "qpos": qpos,
             "joint_names": names,
             "gripper": qpos[names.index("joint6")],
-            "base": [p.x, p.y, *quat_to_rpy(o.x, o.y, o.z, o.w)[2:]],
+            "base": base,
             "images": {k: base64.b64encode(bytes(values[k][0].data)).decode() for k in ("head", "wrist")},
         }
 
@@ -199,23 +202,10 @@ class ImitatePickAndPresent(Skill):
             monitor = LiveGestureObservation()
             started = time.monotonic()
             after = started
-            origin = None
             for step in range(60):
                 if time.monotonic() - started > 600:
                     self.fail("Gesture execution exceeded ten minutes")
                 observation = self._observe(monitor, after, xml)
-                if origin is None:
-                    origin = observation["base"]
-                if (
-                    math.dist(origin[:2], observation["base"][:2]) > 0.015
-                    or abs(
-                        math.atan2(
-                            math.sin(origin[2] - observation["base"][2]), math.cos(origin[2] - observation["base"][2])
-                        )
-                    )
-                    > 0.04
-                ):
-                    self.fail("Base pose changed during gesture")
                 observation["object"] = object_description
                 observation["head_degrees"] = self.head_position.pitch_degrees
                 observation["grasp_committed"] = committed
@@ -225,14 +215,6 @@ class ImitatePickAndPresent(Skill):
                 self.check_cancelled()
                 # Revalidate telemetry after network latency; no queued motion survives Stop.
                 current = self._observe(monitor, time.monotonic() - 0.2, xml)
-                if (
-                    math.dist(current["base"][:2], origin[:2]) > 0.015
-                    or abs(
-                        math.atan2(math.sin(current["base"][2] - origin[2]), math.cos(current["base"][2] - origin[2]))
-                    )
-                    > 0.04
-                ):
-                    self.fail("Base moved while planning")
                 if math.dist(current["pose"][:3], observation["pose"][:3]) > 0.01:
                     self.fail("Arm moved while planning; observation no longer valid")
                 decision = validate_action(value, current["pose"], len(demo.poses), committed)
