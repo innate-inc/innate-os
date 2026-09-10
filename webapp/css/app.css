@@ -11543,7 +11543,10 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
 }
 @keyframes ui-cue-drop { 0% { opacity: 0; transform: translate(var(--badge-shift), -18px) scale(0.5); } 100% { opacity: 1; transform: translate(var(--badge-shift), 0) scale(1); } }
 @keyframes ui-cue-bob { 0%, 100% { transform: translate(var(--badge-shift), 0); } 50% { transform: translate(var(--badge-shift), -3px); } }
+/* The scene setup's button sits at the stage's edge, with the challenge flag (z 13) beside it:
+   the badge anchors to its left edge and the whole stack rises over the flag while cued. */
 .sim-scene-toggle .ui-cue-badge { --badge-x: 0; --badge-shift: 0; }
+.agent-cockpit .sim-debug-stack:has(.ui-cue) { z-index: 14; }
 /* The square that closes in on a camera tile once, when the story says to look at it. */
 .ui-cue-square {
   position: fixed; z-index: 100; box-sizing: border-box; pointer-events: none;
