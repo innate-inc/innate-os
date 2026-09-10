@@ -8,8 +8,12 @@ is `workspace/custom_skills/pick-and-hand-battery/raw_data/episode_0.h5` under
 This is a new pickup attempt: start with a healthy arm, an open empty gripper,
 a stationary base and a clear supervised workspace. Do not launch it to resume
 an already-held battery. Grip strength is 0.5. The skill holds forward without
-releasing or controlling the receiving robot. Blue's recurring servo 2 overload
-must be resolved before another physical trial; this skill never reboots a servo.
+releasing or controlling the receiving robot. On a driver-reported servo hardware fault, the skill calls `/mars/arm/fix_error`,
+which reboots and reconfigures only faulted servos. It requires a new healthy
+status and fresh images/pose before replanning, preserving the grip latch and
+discarding the interrupted action. At most two recoveries are allowed per run;
+a failed or uncertain recovery stops the run. Rebooting clears a latched fault,
+but does not fix the mechanical cause of a recurring overload.
 
 Astra receives a visual overview with synchronized telemetry. It must call
 `inspect_demo` for detailed source frames and then `record_phases` before `act`.
@@ -28,7 +32,7 @@ fresh, synchronized cameras. The original fixed-frame skill's strict row pairing
 is unchanged.
 
 Physical actions use the existing guarded execution loop: 4 cm/0.2 rad steps,
-3 cm/s speed cap, fresh health/base/state checks after model latency, reachability
+3 cm/s speed cap, fresh health/state checks after model latency, reachability
 and measured tracking checks, cancellation, and retained grip on failure. These
 are not a geometric collision planner. An already-issued goto cannot be preempted.
 See `gesture-imitation.md` for the execution limits.
@@ -38,13 +42,9 @@ frames, and action/observation `trace.jsonl` under
 `workspace/custom_skills/.gesture_runs/<run-id>/`. Images and demonstration
 context are sent through the configured Innate OpenAI proxy to gpt-6-astra.
 
-Validation on Blue: 18 tests passed, including arbitrary real-episode inspection,
-phase gating, inspection budget, rejection of an existing grasp, and the real
-execution loop with fake actuators for success, cancellation and failure cases.
-Nine existing recorder-fixture tests were skipped in the staging environment.
-A real read-only Astra preview requested frames around closure/lift, inferred five
-phases, then proposed one action. No actuator was connected to that preview.
-Physical execution of this new autonomous skill has not been tested.
+The preceding physical run grasped and started lifting the battery, then stopped
+with servo 2 overload. Automatic recovery has been tested with fake actuators
+and service responses; a physical recovery during this skill is not yet verified.
 
 ## Motion feedback and priority
 
@@ -57,9 +57,12 @@ include the requested EE pose, actual measured pose/joints and positional error
 in the next agent turn, also saved to `execution.jsonl`. The agent must use that
 feedback and fresh images to choose another approach. Exact failed targets are
 blocked, and three failed proposals without a successful move stop the run.
-Arm-health faults, missing telemetry, cancellation and uncertain motion outcomes
-remain hard stops. The tracking threshold and driver joint limits are unchanged.
+Missing telemetry, cancellation and uncertain motion outcomes remain hard stops.
+Driver-reported hardware faults use the targeted recovery described above.
+The tracking threshold and driver joint limits are unchanged. Base displacement
+and twist no longer abort this skill. An arm shift during model latency discards
+the stale action and returns the measured state to the agent instead of aborting.
 
-After this update: 22 applicable tests pass; nine recorder-fixture tests remain
-skipped. Tests include feedback reaching the next agent turn and fake-actuator
-tracking misses. No physical retry was run as part of this update.
+Validation: 33 applicable tests pass; nine recorder-fixture tests are skipped.
+Coverage includes recovery after closing, retained grip, replanning feedback,
+recovery budget, fresh post-reboot health, service failure/timeout and cancellation.

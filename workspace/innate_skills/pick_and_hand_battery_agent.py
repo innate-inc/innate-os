@@ -14,11 +14,12 @@ class PickAndHandBatteryAgent(ImitatePickAndPresent):
     toward the other robot, keeping the gripper closed. Start with an OPEN EMPTY
     gripper, stationary base, healthy arm and clear supervised workspace. This
     is a new attempt, not a resume of an already-held battery. Does not operate
-    the receiving robot or release the battery. Stops on arm faults; no auto reboot.
+    the receiving robot or release the battery. Reloads faulted servos and replans, at most twice per attempt.
     """
 
     decision_timeout = 175
     grip_strength = 0.5
+    max_servo_recoveries = 2
 
     def make_demo(self, demonstration, legacy_urdf):
         return Gesture(demonstration, image_time_reference=True)

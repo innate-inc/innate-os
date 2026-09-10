@@ -254,3 +254,184 @@ def test_rejected_target_reaches_next_agent_turn(tmp_path, monkeypatch):
     assert observed[0]["status"] == "unreachable"
     assert observed[0]["requested_pose"][0] == 0.32
     assert observed[0]["measured_pose"][0] == 0.3
+
+
+def test_hardware_fault_is_distinct_from_torque_off():
+    from innate_skills.imitate_pick_and_present import LiveGestureObservation, ServoHardwareFault
+
+    with pytest.raises(ServoHardwareFault):
+        LiveGestureObservation.check_health(
+            SimpleNamespace(is_ok=False, is_torque_enabled=True, error="Servo 2 hardware error: overload")
+        )
+    with pytest.raises(ValueError) as error:
+        LiveGestureObservation.check_health(SimpleNamespace(is_ok=True, is_torque_enabled=False, error=""))
+    assert not isinstance(error.value, ServoHardwareFault)
+
+
+@pytest.mark.parametrize("success,status", [(True, "fixed"), (True, "no_errors"), (False, "error")])
+def test_targeted_reload_service(success, status):
+    import json
+    from innate_skills.imitate_pick_and_present import LiveGestureObservation
+
+    calls = []
+    monitor = LiveGestureObservation.__new__(LiveGestureObservation)
+    monitor.fix_error = SimpleNamespace(
+        service_is_ready=lambda: True,
+        call_async=lambda request: (
+            calls.append(request)
+            or SimpleNamespace(
+                done=lambda: True,
+                result=lambda: SimpleNamespace(
+                    success=success, message=json.dumps({"status": status, "error_ids": [2]})
+                ),
+            )
+        ),
+    )
+
+    def fail(message):
+        raise RuntimeError(message)
+
+    skill = SimpleNamespace(check_cancelled=lambda: None, fail=fail)
+    if success:
+        assert monitor.reload_failed_servos(skill)["error_ids"] == [2]
+    else:
+        with pytest.raises(RuntimeError, match="recovery failed"):
+            monitor.reload_failed_servos(skill)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("mode", ["recovered", "budget", "cancel"])
+def test_fault_during_close_keeps_grasp_and_replans(monkeypatch, tmp_path, mode):
+    import copy
+    import hashlib
+    import ament_index_python.packages
+    from innate.exceptions import SkillCancelled
+    from innate_skills import imitate_pick_and_present as runtime
+
+    monkeypatch.setattr(
+        ament_index_python.packages,
+        "get_package_share_directory",
+        lambda _: str(ROOT / "ros2_ws/src/mars_bot/mars_sim"),
+    )
+    monkeypatch.setenv("INNATE_OS_ROOT", str(tmp_path))
+    demo = SimpleNamespace(
+        path="episode.h5",
+        poses=[None] * 100,
+        model_hash=hashlib.sha256((ROOT / "ros2_ws/src/mars_bot/mars_sim/urdf/mars.urdf").read_bytes()).hexdigest(),
+    )
+    skill = runtime.ImitatePickAndPresent(None)
+    skill.max_servo_recoveries = 2
+    skill.make_demo = lambda *a: demo
+    skill.make_policy = lambda *a: object()
+    monkeypatch.setattr(runtime, "LiveGestureObservation", lambda: SimpleNamespace(close=lambda: None))
+    current = {"pose": [0.3, 0, 0.2, 0, 0, 0], "base": [0, 0, 0], "images": {}, "gripper": 1.0}
+    skill._observe = lambda *a: copy.deepcopy(current)
+    skill.head_position = SimpleNamespace(pitch_degrees=0)
+    skill.mobility = SimpleNamespace(stop=lambda: None)
+    closed = []
+    skill.manipulation = SimpleNamespace(
+        safety=SimpleNamespace(max_ee_speed=None), halt=lambda: None, gripper_close=lambda **kw: closed.append(kw)
+    )
+    skill.sleep = lambda _: None
+    skill.feedback = lambda _: None
+
+    def fault(*args):
+        raise runtime.ServoHardwareFault("Servo 2 hardware error: overload")
+
+    skill._wait_motion = fault
+    recoveries = []
+
+    def recover(*args):
+        if mode == "cancel":
+            raise SkillCancelled()
+        recoveries.append(True)
+        current["pose"][2] = 0.18
+        return {"status": "servo_recovered", "servo_ids": [2], "measured_pose": current["pose"]}
+
+    skill._recover_servo = recover
+
+    def decide(policy, observation, history):
+        if history:
+            assert observation["grasp_committed"] is True
+            assert history[-1]["execution"]["servo_ids"] == [2]
+            assert observation["pose"][2] == 0.18
+            if mode == "budget":
+                fault()
+            raise SkillCancelled()
+        value = proposal()["decision"]
+        value["action"] = "close"
+        return value
+
+    skill._decide = decide
+    if mode == "budget":
+        with pytest.raises(Exception, match="recovery budget exhausted"):
+            skill.execute("episode.h5")
+        assert len(recoveries) == 2
+    else:
+        with pytest.raises(SkillCancelled):
+            skill.execute("episode.h5")
+        assert len(recoveries) == (0 if mode == "cancel" else 1)
+    assert len(closed) == 1  # no reopened grip or replayed close
+
+
+@pytest.mark.parametrize("mode", ["healthy", "unhealthy", "cancel"])
+def test_recovery_requires_new_healthy_status(monkeypatch, mode):
+    import threading
+    from innate.exceptions import SkillCancelled
+    from innate_skills import imitate_pick_and_present as runtime
+
+    ticks = [10.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: ticks[0])
+    skill = runtime.ImitatePickAndPresent(None)
+    calls = []
+    skill.feedback = lambda _: None
+    skill.manipulation = SimpleNamespace(
+        moving=False, halt=lambda: calls.append("halt"), wait=lambda **kw: calls.append("wait")
+    )
+    monitor = SimpleNamespace(
+        lock=threading.Lock(), values={"health": (SimpleNamespace(is_ok=True, is_torque_enabled=True), 9.0, None)}
+    )
+    monitor.reload_failed_servos = lambda _: calls.append("fix_error") or {"error_ids": [2]}
+
+    def sleep(_):
+        if mode == "cancel":
+            raise SkillCancelled()
+        ticks[0] += 1
+        if mode == "healthy":
+            monitor.values["health"] = (SimpleNamespace(is_ok=True, is_torque_enabled=True), ticks[0], None)
+
+    skill.sleep = sleep
+    skill._observe = lambda *a: {"pose": [0.3, 0, 0.18, 0, 0, 0], "qpos": [1] * 6}
+    if mode == "healthy":
+        result = skill._recover_servo(monitor, "xml", "overload")
+        assert result["servo_ids"] == [2]
+        assert result["measured_pose"][2] == 0.18
+        assert calls == ["halt", "fix_error", "wait"]
+    else:
+        with pytest.raises(SkillCancelled if mode == "cancel" else Exception):
+            skill._recover_servo(monitor, "xml", "overload")
+        assert calls == ["halt", "fix_error"]
+
+
+def test_reload_timeout_does_not_retry(monkeypatch):
+    from innate_skills import imitate_pick_and_present as runtime
+
+    ticks = [0.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: ticks[0])
+    calls = []
+    monitor = runtime.LiveGestureObservation.__new__(runtime.LiveGestureObservation)
+    monitor.fix_error = SimpleNamespace(
+        service_is_ready=lambda: True,
+        call_async=lambda request: calls.append(request) or SimpleNamespace(done=lambda: False),
+    )
+
+    def sleep(_):
+        ticks[0] += 1
+
+    def fail(message):
+        raise RuntimeError(message)
+
+    skill = SimpleNamespace(check_cancelled=lambda: None, sleep=sleep, fail=fail)
+    with pytest.raises(RuntimeError, match="outcome unknown"):
+        monitor.reload_failed_servos(skill)
+    assert len(calls) == 1
