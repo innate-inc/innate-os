@@ -91,13 +91,10 @@ class MarsArmNode : public rclcpp::Node {
                                                                   double dt);
     bool planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
                                   GainMode trajectory_gain_mode = GainMode::SCHEDULED);
-    // Fold to rest_pose keeping the standing grip. The idle watchdog runs it
-    // once torque is back and nothing has commanded the arm for a while.
+    // Fold to rest_pose keeping the standing grip, once torque is back and
+    // nothing has owned the arm for a while.
     void idleRestCallback();
-    RestOutcome foldToRest(const char* trigger);
-    RestOutcome runRestFold(const char* trigger);
-    void armRestCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-                         std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+    void foldToRest();
     bool planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,
                                                const std::vector<double>& segment_durations);
     void armGotoJSCallback(const std::shared_ptr<mars_msgs::srv::GotoJS::Request> request,
@@ -121,7 +118,6 @@ class MarsArmNode : public rclcpp::Node {
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_off_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_reboot_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_fix_error_service_;
-    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_rest_service_;
     rclcpp::Service<mars_msgs::srv::GotoJS>::SharedPtr arm_goto_js_service_;
     rclcpp::Service<mars_msgs::srv::GotoJS>::SharedPtr arm_goto_js_v2_service_;
     rclcpp::Service<mars_msgs::srv::GotoJSTrajectory>::SharedPtr arm_goto_js_traj_service_;
@@ -134,11 +130,11 @@ class MarsArmNode : public rclcpp::Node {
     // Direct pass-through (guarded by arm_command_mutex_)
     std::array<double, 6> latest_target_{};
     bool has_target_{false};
-    // Who owns the arm, for the idle watchdog: the moment it went limp (boot,
-    // torque_off, reboot, a tripped servo) or torque last came back to it while
-    // still limp; zero once anything drives it. A skill that parked the arm at
-    // the floor owns it, so the watchdog leaves it alone.
-    std::atomic<std::chrono::steady_clock::time_point> unowned_since_{std::chrono::steady_clock::now()};
+    // Who owns the arm, for the idle watchdog: the moment it went limp (end of
+    // boot, torque_off, reboot, a tripped servo) or torque last came back to it
+    // while still limp; zero once anything drives it. A skill that parked the
+    // arm at the floor owns it, so the watchdog leaves it alone.
+    std::atomic<std::chrono::steady_clock::time_point> unowned_since_{};
     bool armUnowned() const {
         return unowned_since_.load() != std::chrono::steady_clock::time_point{};
     }

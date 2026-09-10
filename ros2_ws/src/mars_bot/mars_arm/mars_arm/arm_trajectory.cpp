@@ -179,26 +179,14 @@ void MarsArmNode::idleRestCallback() {
         return;
     }
     markArmOwned();  // one attempt per limp: a fold that stops is not pushed again
-    foldToRest("idle");
+    foldToRest();
 }
 
-RestOutcome MarsArmNode::foldToRest(const char* trigger) {
-    const RestOutcome outcome = runRestFold(trigger);
-    if (outcome.at_rest) {
-        RCLCPP_INFO(this->get_logger(), "Rest fold (%s): %s", trigger, outcome.detail.c_str());
-    } else {
-        RCLCPP_WARN(this->get_logger(), "Rest fold (%s): %s", trigger, outcome.detail.c_str());
-    }
-    return outcome;
-}
-
-RestOutcome MarsArmNode::runRestFold(const char* trigger) {
-    if (!arm_torque_enabled_) {
-        return {false, "rest fold skipped: arm torque is off"};
-    }
+void MarsArmNode::foldToRest() {
     std::vector<double> rest = this->get_parameter("rest_pose").as_double_array();
     if (rest.size() != 6) {
-        return {false, "rest fold skipped: rest_pose must list 6 joint positions"};
+        RCLCPP_WARN(this->get_logger(), "Rest fold skipped: rest_pose must list 6 joint positions");
+        return;
     }
     std::vector<double> measured;
     {
@@ -206,7 +194,8 @@ RestOutcome MarsArmNode::runRestFold(const char* trigger) {
         measured = latest_joint_positions_;
     }
     if (measured.size() != 6) {
-        return {false, "rest fold skipped: no joint state yet"};
+        RCLCPP_WARN(this->get_logger(), "Rest fold skipped: no joint state yet");
+        return;
     }
     double away = 0.0;
     for (size_t j = 0; j < kArmJoints; ++j) {
@@ -214,7 +203,8 @@ RestOutcome MarsArmNode::runRestFold(const char* trigger) {
         away = std::max(away, std::abs(measured[j] - rest[j]));
     }
     if (away < kAtRestRad) {
-        return {true, "arm already at rest"};
+        RCLCPP_INFO(this->get_logger(), "Rest fold: arm already at rest");
+        return;
     }
     std::vector<double> target = measured;
     {
@@ -224,7 +214,7 @@ RestOutcome MarsArmNode::runRestFold(const char* trigger) {
         target[5] = clampToJointRange(5, has_target_ ? latest_target_[5] : measured[5]);
     }
     rest[5] = target[5];
-    RCLCPP_INFO(this->get_logger(), "Folding the arm to rest (%s)", trigger);
+    RCLCPP_INFO(this->get_logger(), "Folding the arm to rest");
     for (const RestWaypoint& waypoint : {kRestLift, RestWaypoint{rest, kRestPoseDurationS}}) {
         for (size_t j = 0; j < target.size(); ++j) {
             if (!std::isnan(waypoint.joints[j])) {
@@ -232,18 +222,11 @@ RestOutcome MarsArmNode::runRestFold(const char* trigger) {
             }
         }
         if (!planAndExecuteTrajectory(target, waypoint.duration_s)) {
-            return {false, "rest fold could not start (see the log)"};
+            RCLCPP_WARN(this->get_logger(), "Rest fold stopped: the trajectory could not start (see the log)");
+            return;
         }
     }
-    return {true, "arm folded to rest"};
-}
-
-void MarsArmNode::armRestCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
-                                  std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
-    RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/rest");
-    const RestOutcome outcome = foldToRest("service");
-    response->success = outcome.at_rest;
-    response->message = outcome.detail;
+    RCLCPP_INFO(this->get_logger(), "Arm folded to rest");
 }
 
 bool MarsArmNode::planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,

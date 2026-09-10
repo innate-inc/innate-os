@@ -157,11 +157,6 @@ struct GainProfile {
 // Gain mode: SCHEDULED = interpolate near/far by extension, TELEOP = flat teleop gains
 enum class GainMode { SCHEDULED, TELEOP };
 
-struct RestOutcome {
-    bool at_rest;
-    std::string detail;
-};
-
 inline GainProfile parseGainsArray(const std::vector<int64_t>& arr) {
     constexpr int kMaxGain = 16383;
     GainProfile g;

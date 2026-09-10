@@ -144,10 +144,6 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
         std::bind(&MarsArmNode::armFixErrorCallback, this, std::placeholders::_1, std::placeholders::_2),
         rmw_qos_profile_services_default, service_callback_group_);
 
-    arm_rest_service_ = this->create_service<std_srvs::srv::Trigger>(
-        "/mars/arm/rest", std::bind(&MarsArmNode::armRestCallback, this, std::placeholders::_1, std::placeholders::_2),
-        rmw_qos_profile_services_default, service_callback_group_);
-
     arm_goto_js_service_ = this->create_service<mars_msgs::srv::GotoJS>(
         "/mars/arm/goto_js",
         std::bind(&MarsArmNode::armGotoJSCallback, this, std::placeholders::_1, std::placeholders::_2),
@@ -211,6 +207,7 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     // at the same time, and a client's goto queues behind a fold in flight.
     idle_rest_timer_ = this->create_wall_timer(std::chrono::seconds(1), std::bind(&MarsArmNode::idleRestCallback, this),
                                                service_callback_group_);
+    markArmUnowned();  // the boot grace counts from here: servo init above took seconds
 
     RCLCPP_INFO(this->get_logger(), "Mars Arm Node ready!");
 }
