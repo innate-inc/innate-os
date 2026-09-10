@@ -17,7 +17,9 @@ from innate import Skill, SkillReturn
 from innate_proxy import ProxyClient
 
 ROUNDS = 3
-ROSTER_TIMEOUT_S = 20.0  # the watcher's 1 s debounce plus a full workspace re-import
+ROSTER_TIMEOUT_S = (
+    90.0  # the watcher's 1 s debounce plus a full workspace re-import (over a minute on a starved machine)
+)
 TRIAL_TIMEOUT_S = 60.0
 # The skills server rewrites its contracts cache on every roster rebuild: the "your file is loaded" signal.
 CONTRACTS = Path(os.environ.get("INNATE_SKILL_CACHE", "/tmp/innate_skill_contracts.json"))

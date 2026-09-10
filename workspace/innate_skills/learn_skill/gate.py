@@ -67,7 +67,11 @@ def check(source: str) -> Draft:
     except SyntaxError as error:
         raise DraftRejected(f"syntax error on line {error.lineno}: {error.msg}") from None
     for node in ast.walk(tree):
-        _check_node(node)
+        try:
+            _check_node(node)
+        except DraftRejected as rejected:
+            where = f"line {getattr(node, 'lineno', '?')}: {(ast.get_source_segment(source, node) or '').strip()}"
+            raise DraftRejected(f"{rejected} ({where})") from None
     skills = [node for node in tree.body if isinstance(node, ast.ClassDef) and _subclasses_skill(node)]
     if len(skills) != 1:
         raise DraftRejected("the file must define exactly one class that subclasses Skill")
