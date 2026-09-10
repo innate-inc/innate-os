@@ -596,5 +596,3 @@ export function createSimSession(
 }
 
 export { createSimStage } from "./simStage";
-
-export { createPlantRewardScene } from "./plantRewardScene";

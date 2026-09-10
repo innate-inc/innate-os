@@ -12,7 +12,6 @@
 // Selecting the story's agent by hand is not the story: the person keeps the rail,
 // the scene setup and the challenges, and nothing hides behind a mode they cannot leave.
 
-import { createPlantReward } from "./plantReward.js";
 import { closeIn, cue } from "./cue.js";
 import { createOfferDeck } from "./offerDeck.js";
 import { personaCard, skillCard } from "./storyCards.js";
@@ -328,8 +327,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   let arrivalAttempt = "";
   let graduatedAttempt = "";
   let doorAttempt = "";
-  const plantReward = session ? createPlantReward(root) : null;
-  let rewardCollected = false;
   let graduationReady = false;
   /** @type {ReturnType<typeof setInterval> | null} */ let graduationPoll = null;
   let seenAct = -1;
@@ -358,8 +355,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const out = () => (active()?.id === "way_out" ? active() : null);
   const passed = () => out()?.state === "passed";
   /** The story owns the interface exactly while the world is running it. Passing the last
-   * challenge and collecting its keepsake hands back the rail, scene setup and challenges. */
-  const storyRunning = () => !!story() || (!!out() && (!passed() || !rewardCollected));
+   * challenge ends that: the rail, the scene setup and the challenges are the reward. */
+  const storyRunning = () => !!story() || (!!out() && !passed());
   const switching = () => environment?.switch?.state === "loading";
   // A switch the world refused: say so, once, or Play the intro looks like it did nothing.
   let failedSwitch = "";
@@ -438,11 +435,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   }
 
   function restartIntro() {
-    plantReward?.cancel();
-    if (graduationPoll) clearInterval(graduationPoll);
-    graduationPoll = null;
-    // Keep the old attempt latched until the abort is echoed by the world.
-    rewardCollected = false;
     write(localStorage, SKIP_KEY, "");
     write(localStorage, DRAG_HINT_KEY, ""); // asking for the story again means asking for all of it
     write(sessionStorage, ARMED_KEY, "");
@@ -522,21 +514,18 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     graduatedAttempt = o.attempt_id;
     graduationReady = false;
     sceneTaught = false;
-    rewardCollected = false;
-    plantReward?.play(o.attempt_id, () => { rewardCollected = true; render(true); });
     void opts.cancelSkill().catch(() => {});
+    setTimeout(() => void panel.narrate("You're out. You made it.", { local: true }), 600);
     const before = spoken();
     const deadline = Date.now() + GRADUATION_MAX_WAIT_MS;
     if (graduationPoll) clearInterval(graduationPoll);
     graduationPoll = setInterval(() => {
-      if (!rewardCollected) return;
       if (!((spoken() > before && !panel.isBusy()) || Date.now() > deadline)) return;
       if (graduationPoll) clearInterval(graduationPoll);
       graduationPoll = null;
       graduationReady = true;
       agentState.setActiveSkills(earnedSkills(), STORY_AGENT);
       const { name } = profile();
-      panel.addNotice("First life collected: a small plant in an old boot. A little hope to take with you.");
       panel.addNotice(`You built this agent${name ? `: ${name}` : ""}. Its skills are all yours now.`);
       void panel.narrate(
         "The rest of the interface is yours too. Scene setup, bottom left, is where you pick the next world: the apartment, or the crossroads. The challenges sit beside it, and the left rail has Teleop, the map and the settings.",
@@ -1200,7 +1189,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const setCompact = (/** @type {boolean} */ on) => {
     compact = on;
     dock.hidden = on;
-    plantReward?.mountKeepsake(on ? root : dock);
     opts.dockDirectives?.(on ? null : panelEl);
     // Compact leaves Start/Stop to the sheet's own header, which has already claimed it.
     if (!on) opts.dockStartStop?.(headAction);
@@ -1292,14 +1280,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   });
   const unsubAgent = agentState.subscribe(() => render());
   const unsubChallenge = session?.onChallenge?.((/** @type {any} */ block) => {
-    if (graduatedAttempt && (block.active?.id !== "way_out" || block.active?.attempt_id !== graduatedAttempt || block.active?.state !== "passed")) {
-      plantReward?.cancel();
-      if (graduationPoll) clearInterval(graduationPoll);
-      graduationPoll = null;
-      graduatedAttempt = "";
-      graduationReady = false;
-      rewardCollected = false;
-    }
     challenge = block;
     settled?.();
     autoStart();
@@ -1338,7 +1318,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
      * cover the moment rather than the interface appearing and half of it leaving. */
     settled: () => (session ? Promise.all([knownFromTheWorld, stageReady]) : Promise.resolve()),
     destroy() {
-      plantReward?.destroy();
       unsubOverlay();
       unsubAgent();
       unsubRoster?.();
