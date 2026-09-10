@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Innate Inc
+"""On-demand check of where the depth cloud puts the floor.
+
+Run on known-flat ground with a clear few metres ahead. Reports the
+reconstructed floor's pitch, roll and height error against the TF-predicted
+ground plane, and the fraction of floor points that would be marked as
+obstacles at each candidate threshold.
+
+This is a diagnostic, not a node in the fleet — it is never launched with the
+stack, it collects a handful of clouds and exits.
+
+Usage:
+    ros2 run mars_cam ground_plane_check
+    ros2 run mars_cam ground_plane_check --ros-args -p num_clouds:=20 -p roi_x_max:=1.0
+"""
+
+import sys
+
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
+from tf2_ros import Buffer, TransformListener
+
+from mars_cam.ground_plane import (
+    LEAK_THRESHOLDS_M,
+    Corridor,
+    fit_floor,
+    height_error_by_range,
+    leak_fractions,
+    quaternion_matrix,
+    transform_to_base,
+)
+
+BASE_FRAME = "base_link"
+
+
+class GroundPlaneCheck(Node):
+    """Collects a few depth clouds, transforms them to base_link, reports the floor."""
+
+    def __init__(self) -> None:
+        super().__init__("ground_plane_check")
+
+        self.declare_parameter("cloud_topic", "/mars/main_camera/points")
+        self.declare_parameter("num_clouds", 10)
+        self.declare_parameter("roi_x_min", 0.25)
+        self.declare_parameter("roi_x_max", 1.20)
+        self.declare_parameter("roi_half_width", 0.22)
+        self.declare_parameter("roi_z_min", 0.02)
+        self.declare_parameter("roi_z_max", 0.36)
+
+        self.cloud_topic = str(self.get_parameter("cloud_topic").value)
+        self.num_clouds = int(self.get_parameter("num_clouds").value)
+        self.corridor = Corridor(
+            x_min=float(self.get_parameter("roi_x_min").value),
+            x_max=float(self.get_parameter("roi_x_max").value),
+            half_width=float(self.get_parameter("roi_half_width").value),
+            z_min=float(self.get_parameter("roi_z_min").value),
+            z_max=float(self.get_parameter("roi_z_max").value),
+        )
+
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
+        self._collected: list[np.ndarray] = []
+        self._source_frame = ""
+        self._done = False
+
+        self.create_subscription(PointCloud2, self.cloud_topic, self._cloud_callback, qos_profile_sensor_data)
+        self.get_logger().info(f"Collecting {self.num_clouds} clouds from {self.cloud_topic} — keep the robot still")
+
+    def _cloud_callback(self, msg: PointCloud2) -> None:
+        if self._done:
+            return
+
+        points = _read_xyz(msg)
+        if points.size == 0:
+            self.get_logger().warn("Empty cloud — is the camera calibrated and publishing depth?")
+            return
+
+        transform = self._lookup(msg.header.frame_id)
+        if transform is None:
+            return
+
+        rotation, translation = transform
+        self._source_frame = msg.header.frame_id
+        self._collected.append(transform_to_base(points, rotation, translation))
+        self.get_logger().info(f"  [{len(self._collected)}/{self.num_clouds}] {len(points)} points")
+
+        if len(self._collected) >= self.num_clouds:
+            self._done = True
+            self._report()
+            rclpy.shutdown()
+
+    def _lookup(self, source_frame: str) -> tuple[np.ndarray, np.ndarray] | None:
+        try:
+            tf = self._tf_buffer.lookup_transform(BASE_FRAME, source_frame, rclpy.time.Time())
+        except Exception as e:  # noqa: BLE001 — tf2 raises several unrelated types
+            self.get_logger().warn(f"No transform {BASE_FRAME} <- {source_frame} yet: {e}")
+            return None
+        q = tf.transform.rotation
+        t = tf.transform.translation
+        return quaternion_matrix(q.x, q.y, q.z, q.w), np.array([t.x, t.y, t.z])
+
+    def _report(self) -> None:
+        points = np.vstack(self._collected)
+        fit = fit_floor(points)
+
+        out = self.get_logger().info
+        out("=" * 68)
+        out(f"GROUND PLANE CHECK — {len(points)} points from {len(self._collected)} clouds")
+        out(f"  cloud frame {self._source_frame!r} -> {BASE_FRAME}")
+        out("=" * 68)
+
+        if fit is None:
+            self.get_logger().error("Not enough near-floor points to fit a plane. Is the floor in view?")
+            return
+
+        out("")
+        out(f"Floor plane fit ({fit.num_points} points within the floor band)")
+        out(f"  pitch          {fit.pitch_deg:+.3f} deg   (positive = floor rises with distance)")
+        out(f"  roll           {fit.roll_deg:+.3f} deg")
+        out(f"  height at base {fit.offset_m * 1000:+.1f} mm   (0 = correct)")
+        out(f"  residual RMS   {fit.residual.rms:.1f} mm, p95 {fit.residual.p95:.1f} mm")
+        out(f"  implied floor height at 1.2m: {fit.height_at(1.2) * 1000:+.1f} mm")
+
+        out("")
+        out("Floor height by range (mm)")
+        out(f"  {'range (m)':<14}{'n':>8}{'mean':>9}{'median':>9}{'p95':>9}{'max':>9}")
+        for low, high, stats in height_error_by_range(points):
+            if stats.count == 0:
+                continue
+            out(
+                f"  {f'{low:.1f}-{high:.1f}':<14}{stats.count:>8}{stats.mean:>9.1f}"
+                f"{stats.median:>9.1f}{stats.p95:>9.1f}{stats.maximum:>9.1f}"
+            )
+
+        out("")
+        out("Floor points that would be MARKED as obstacles")
+        for threshold, fraction in leak_fractions(points).items():
+            out(f"  above {threshold * 1000:>3.0f} mm : {fraction * 100:6.2f}%")
+
+        self._report_corridor(points)
+        out("=" * 68)
+
+    def _report_corridor(self, points: np.ndarray) -> None:
+        out = self.get_logger().info
+        c = self.corridor
+        column = points[c.footprint_mask(points)]
+
+        out("")
+        out(f"Corridor x {c.x_min}-{c.x_max}m, |y| <= {c.half_width}m — the volume that actually matters")
+        if len(column) == 0:
+            self.get_logger().warn("  no points in the corridor — is anything in front of the robot?")
+            return
+
+        fit = fit_floor(column)
+        if fit is not None:
+            out(f"  floor pitch    {fit.pitch_deg:+.3f} deg, height at base {fit.offset_m * 1000:+.1f} mm")
+            out(f"  residual RMS   {fit.residual.rms:.1f} mm")
+
+        for threshold, fraction in leak_fractions(column, LEAK_THRESHOLDS_M).items():
+            marked = int(np.sum(column[:, 2] > threshold))
+            out(
+                f"  z_min {threshold * 1000:>3.0f} mm would mark {marked:>6} / {len(column)} points ({fraction * 100:5.2f}%)"
+            )
+
+        out(f"  points inside the full corridor box: {int(np.sum(c.mask(points)))}")
+
+
+def _read_xyz(msg: PointCloud2) -> np.ndarray:
+    raw = point_cloud2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
+    if raw is None or len(raw) == 0:
+        return np.empty((0, 3))
+    return np.column_stack([raw["x"], raw["y"], raw["z"]]).astype(np.float64)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = GroundPlaneCheck()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        if node._collected:
+            node._report()
+    except Exception as e:  # noqa: BLE001 — a diagnostic must not traceback at the operator
+        if "context is not valid" not in str(e):
+            print(f"[ground_plane_check] {e}", file=sys.stderr)
+    finally:
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
