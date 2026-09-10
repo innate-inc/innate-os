@@ -20,6 +20,16 @@ Fine-Grained Bimanual Manipulation with Low-Cost Hardware"
 (https://arxiv.org/abs/2304.13705).
 
 --------------------------------------------------------------------------------
+kdl_parser_py -- BSD 3-Clause License
+--------------------------------------------------------------------------------
+
+ros2_ws/src/mars_bot/mars_arm/mars_arm/urdf.py is vendored from kdl_parser_py
+(https://github.com/ros/kdl_parser), Copyright (c) 2008 Willow Garage, Inc.,
+authors Jonathan Bohren and Jackie Kay. It is carried in-tree because
+kdl_parser_py was never released for ROS 2: Humble ships only the C++
+kdl_parser, so there is no package to depend on.
+
+--------------------------------------------------------------------------------
 NVIDIA CORPORATION & AFFILIATES -- Apache License, Version 2.0
 --------------------------------------------------------------------------------
 

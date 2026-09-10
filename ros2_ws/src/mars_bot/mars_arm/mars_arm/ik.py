@@ -13,10 +13,11 @@ import PyKDL as kdl
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped, Twist
-from kdl_parser_py.urdf import treeFromUrdfModel
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from urdf_parser_py.urdf import URDF
+
+from mars_arm.urdf import treeFromUrdfModel
 
 
 class KDLIKNode(Node):
