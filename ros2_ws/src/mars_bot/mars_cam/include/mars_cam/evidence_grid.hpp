@@ -59,16 +59,31 @@ class EvidenceGrid {
 
     void set_params(const EvidenceParams& params) { params_ = params; }
 
-    /// Decay existing evidence, then fold in one frame of observations.
-    void integrate(const std::vector<Observation>& observations, double dt_sec) {
-        decay(dt_sec);
+    struct IntegrateStats {
+        size_t observations{0};
+        size_t voxels_seen{0};
+        size_t voxels_supported{0};
+        size_t confirmed{0};
+        size_t tracked{0};
+        double mean_weight{0.0};
+    };
 
+    /// Fold in one frame of observations, decaying only what went unsupported.
+    ///
+    /// Decay means "forgetting without support", so a cell observed this frame
+    /// must not lose ground. Decaying everything and then re-adding makes a
+    /// continuously-seen obstacle net out at (weight - decay*dt) per frame,
+    /// which bleeds it away whenever the weight is small — the object sits
+    /// there in plain view while its mark quietly walks to zero.
+    IntegrateStats integrate(const std::vector<Observation>& observations, double dt_sec) {
         struct Bucket {
             double weight_sum{0.0};
             int count{0};
             float min_range{1e9f};
         };
         std::unordered_map<int64_t, Bucket> frame;
+        double weight_total = 0.0;
+        size_t weight_count = 0;
         for (const auto& o : observations) {
             if (!(o.weight > 0.0f) || !std::isfinite(o.x) || !std::isfinite(o.y) || !std::isfinite(o.z))
                 continue;
@@ -76,20 +91,26 @@ class EvidenceGrid {
             b.weight_sum += o.weight;
             b.count += 1;
             b.min_range = std::min(b.min_range, o.range);
+            weight_total += o.weight;
+            ++weight_count;
         }
 
+        // Supported = seen AND backed by enough points. A voxel with two stray
+        // points was looked at but not corroborated, so it still decays.
+        std::unordered_map<int64_t, const Bucket*> supported;
         for (const auto& [k, b] : frame) {
-            // Spatial support: a voxel backed by few points is unstructured
-            // noise, and rejecting it here is cheaper than out-voting it later.
-            if (b.count < params_.min_points_per_voxel)
-                continue;
-            const double mean_weight = b.weight_sum / b.count;
+            if (b.count >= params_.min_points_per_voxel)
+                supported.emplace(k, &b);
+        }
 
+        decay_unsupported(supported, dt_sec);
+
+        for (const auto& [k, b] : supported) {
             auto& cell = cells_[k];
-            cell.score = std::min(cell.score + mean_weight, params_.max_score);
+            cell.score = std::min(cell.score + b->weight_sum / b->count, params_.max_score);
 
-            const bool near_and_certain =
-                b.min_range <= params_.near_field_range && mean_weight >= params_.near_field_weight;
+            const bool near_and_certain = b->min_range <= params_.near_field_range &&
+                                          b->weight_sum / b->count >= params_.near_field_weight;
             if (near_and_certain) {
                 cell.score = std::max(cell.score, params_.mark_threshold);
                 cell.confirmed = true;
@@ -97,6 +118,16 @@ class EvidenceGrid {
                 cell.confirmed = true;
             }
         }
+
+        IntegrateStats stats;
+        stats.observations = observations.size();
+        stats.voxels_seen = frame.size();
+        stats.voxels_supported = supported.size();
+        stats.tracked = cells_.size();
+        stats.mean_weight = weight_count ? weight_total / static_cast<double>(weight_count) : 0.0;
+        for (const auto& [k, cell] : cells_)
+            stats.confirmed += cell.confirmed ? 1 : 0;
+        return stats;
     }
 
     /// Centres of every voxel currently believed to hold an obstacle.
@@ -131,15 +162,20 @@ class EvidenceGrid {
         bool confirmed{false};
     };
 
-    void decay(double dt_sec) {
+    template <typename Supported>
+    void decay_unsupported(const Supported& supported, double dt_sec) {
         if (dt_sec <= 0.0)
             return;
         const double drop = params_.decay_per_second * dt_sec;
         for (auto it = cells_.begin(); it != cells_.end();) {
+            if (supported.count(it->first)) {
+                ++it;
+                continue;
+            }
             it->second.score -= drop;
             if (it->second.confirmed && it->second.score < params_.clear_threshold)
                 it->second.confirmed = false;
-            // Only untracked once it can no longer influence anything, so the
+            // Untracked only once it can no longer influence anything, so the
             // map stays bounded as the robot drives.
             if (it->second.score <= 0.0)
                 it = cells_.erase(it);

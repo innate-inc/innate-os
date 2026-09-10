@@ -278,8 +278,15 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
                               ? 0.0
                               : std::clamp((ts - last_evidence_stamp_).seconds(), 0.0, 1.0);
         last_evidence_stamp_ = ts;
-        evidence_.integrate(observations, dt);
+        const auto stats = evidence_.integrate(observations, dt);
         marks = evidence_.confirmed();
+        // Five stages that all fail by silently dropping points; without this
+        // the only symptom is an empty topic and no clue which stage ate them.
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "nav cloud: %zu in corridor -> %zu voxels -> %zu supported -> %zu confirmed "
+                             "(mean weight %.3f, %zu tracked)",
+                             stats.observations, stats.voxels_seen, stats.voxels_supported, stats.confirmed,
+                             stats.mean_weight, stats.tracked);
     } else {
         marks.reserve(observations.size());
         for (const auto& o : observations)
