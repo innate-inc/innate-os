@@ -353,30 +353,3 @@ SSH logins into `~/innate-os`. To opt out of the `cd`:
 ```bash
 echo 'INNATE_SSH_CD=0' >> ~/.zshenv
 ```
-
----
-
-## For Developers
-
-### Release Workflow
-
-When you push a tag to `innate-os`, GitHub Actions automatically pushes to `innate-os-release`:
-
-```bash
-# Create and push a new release
-git tag 0.1.99
-git push origin 0.1.99
-```
-
-The workflow (`.github/workflows/release-to-deploy-repo.yml`):
-1. Checks out the tagged commit
-2. Removes `.github/workflows` (deploy keys can't push workflows)
-3. Commits as "Release X.Y.Z"
-4. Pushes to `innate-os-release` with the tag
-
-### Repository Structure
-
-| Repository | Purpose | Access |
-|------------|---------|--------|
-| `innate-os` | Development repo | Developers only |
-| `innate-os-release` | Customer-facing releases | Deploy keys (read-only) |

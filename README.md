@@ -154,7 +154,7 @@ This README is an introduction. The rest lives in the docs:
 - [Training](https://docs.innate.bot/training/overview)
 - [Web app](https://docs.innate.bot/robots/web-app) and [controller app](https://docs.innate.bot/robots/innate-controller-app)
 - [CLI](https://docs.innate.bot/software/innate-cli)
-- [ROS 2](https://docs.innate.bot/software/ros2-core) and [system overview](docs/SYSTEM_OVERVIEW.md)
+- [ROS 2 core and system overview](https://docs.innate.bot/software/ros2-core)
 
 Most builders should start with skills, agents, inputs, and the simulator. Changing the ROS core is possible; it is not the usual path.
 

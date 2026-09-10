@@ -1,6 +1,6 @@
 # Common system dependencies for the innate-os ROS2 workspace.
 # Required by BOTH simulation and hardware modes. Layered with the
-# mode-specific overlays (see DEPENDENCIES_GUIDE.md):
+# mode-specific overlays:
 #   apt-dependencies.sim.txt       - simulation-only extras
 #   apt-dependencies.hardware.txt  - physical-robot / Jetson-only extras
 # Install with: xargs -a apt-dependencies.common.txt sudo apt-get install -y

@@ -14,8 +14,6 @@ All dependencies are managed through config files in `ros2_ws/`:
 | `pip-requirements.txt` | Python packages | `pip3 install -r pip-requirements.txt` |
 | `src/dependencies.repos` | External ROS2 repositories | `vcs import src < src/dependencies.repos` |
 
-See [ros2_ws/DEPENDENCIES_GUIDE.md](../ros2_ws/DEPENDENCIES_GUIDE.md) for the mode-specific layering.
-
 ### Adding Dependencies
 
 - **APT packages**: Add to `ros2_ws/apt-dependencies.{common,sim,hardware}.txt` — `common` if both sim and robot need it, otherwise the mode-specific overlay
@@ -44,16 +42,3 @@ the whole repo:
 ```bash
 pre-commit run --all-files -c .config/pre-commit-config.yaml
 ```
-
-## Releases
-
-Releases are automatically built via GitHub Actions when a version tag is pushed:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-Each release includes:
-- `innate-os-{version}.tar.gz` - Full release with pre-built artifacts
-- `innate-os-{version}-source.tar.gz` - Source code only
