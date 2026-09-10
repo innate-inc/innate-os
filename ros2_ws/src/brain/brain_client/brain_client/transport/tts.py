@@ -37,18 +37,22 @@ class Delivery:
     speed: float | None = None
     volume: float | None = None
     sound_effect: bool = False
+    pcm: bytes | None = None  # a ready clip: 16-bit mono PCM at SPEAKER_SAMPLE_RATE, played as-is
 
     def generation_config(self) -> dict[str, float]:
         return {key: value for key, value in (("speed", self.speed), ("volume", self.volume)) if value is not None}
 
 
 def parse_styled_tts(data: str) -> tuple[str, Delivery] | None:
-    """A /brain/tts/styled payload: JSON ``{"text", "speed", "volume"}``, or
-    ``{"sound": "a small dog barking twice"}`` for a sound effect. None when malformed."""
+    """A /brain/tts/styled payload: JSON ``{"text", "speed", "volume"}``,
+    ``{"sound": "a small dog barking twice"}`` for a generated sound effect, or
+    ``{"pcm": <base64>, "label"}`` for a ready clip. None when malformed."""
     try:
         payload = json.loads(data)
         if "sound" in payload:
             return str(payload["sound"]), Delivery(sound_effect=True)
+        if "pcm" in payload:
+            return str(payload.get("label", "")), Delivery(sound_effect=True, pcm=base64.b64decode(payload["pcm"]))
         speed, volume = payload.get("speed"), payload.get("volume")
         delivery = Delivery(None if speed is None else float(speed), None if volume is None else float(volume))
         return str(payload["text"]), delivery
@@ -263,6 +267,8 @@ class TTSHandler:
         """
         if self._cartesia_client is None:
             raise RuntimeError("Cartesia client unavailable (is_available() gates all callers)")
+        if delivery is not None and delivery.pcm is not None:
+            return iter([delivery.pcm])
         if delivery is not None and delivery.sound_effect:
             return self._sound_effect_bytes(text)
         if for_speaker:

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
+import base64
 import inspect
 import json
 import os
@@ -1004,6 +1005,15 @@ class Skill(ABC):
         if not sound or self.node is None:
             return
         self._utter(self.node, TTS_STYLED_TOPIC, json.dumps({"sound": sound}), sound, wait)
+
+    def play_clip(self, pcm: bytes, label: str = "", wait: bool = False) -> None:
+        """Play a ready clip (16-bit mono PCM at 16 kHz) through the robot's speaker,
+        queued with its speech; a ``label`` shows it in the transcript. No-op if
+        speech isn't available."""
+        if not pcm or self.node is None:
+            return
+        payload = json.dumps({"pcm": base64.b64encode(pcm).decode("ascii"), "label": label})
+        self._utter(self.node, TTS_STYLED_TOPIC, payload, label or "clip", wait)
 
     def _utter(self, node: Node, topic: str, payload: str, text: str, wait: bool) -> None:
         publisher = self._tts_publisher(node, topic)

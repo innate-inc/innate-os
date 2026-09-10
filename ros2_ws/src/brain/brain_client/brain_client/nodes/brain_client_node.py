@@ -418,6 +418,11 @@ class BrainClientNode(Node):
     def _speak_line(self, text: str, delivery: Delivery | None = None) -> None:
         """Speak a line a skill sent, and show it — emit, not speak: anything the
         robot says aloud belongs in the transcript, or Skill.say goes unrecorded."""
+        if delivery is not None and delivery.pcm is not None:
+            if text.strip():
+                self.chat.emit(Sender.ROBOT, f"🔊 {text}", speak=False)  # a labelled clip shows as a sound
+            self.chat.speak(text.strip() or "clip", delivery=delivery)
+            return
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
             if delivery is not None and delivery.sound_effect:

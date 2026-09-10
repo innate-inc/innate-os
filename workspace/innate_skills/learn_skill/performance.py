@@ -5,22 +5,15 @@ between the lines, and the acquired jingle."""
 
 from __future__ import annotations
 
-import base64
-import io
 import math
 import random
 import re
-import subprocess
 import threading
 import time
-import wave
 from array import array
 from collections import deque
 from collections.abc import Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING
-
-from std_msgs.msg import String
 
 if TYPE_CHECKING:
     from innate import Skill
@@ -60,8 +53,6 @@ JINGLE = (
     ("C6", 0.5),
     ("C6 E6 G6", 3.0),
 )
-# The sim container has no audio device: the browser plays /tts/audio (same check as the innate CLI).
-IN_SIM = Path("/.dockerenv").exists()
 _WORD = re.compile(r"[A-Za-z]+|\d+(?:\.\d+)?")
 
 
@@ -74,11 +65,8 @@ class LearningMode:
         self._lines: deque[str] = deque(maxlen=12)  # the model outruns speech: mutter the freshest lines
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="learning-mode", daemon=True)
-        self._audio_pub = None
 
     def __enter__(self) -> LearningMode:
-        if IN_SIM and self._skill.node is not None:
-            self._audio_pub = self._skill.node.create_publisher(String, "/tts/audio", 10)
         self._skill.say("Activating learning mode. Give me a moment.", wait=True)
         self._thread.start()
         return self
@@ -92,8 +80,9 @@ class LearningMode:
             self._lines.append(" ".join(words).lower())
 
     def celebrate(self, display_name: str) -> None:
+        """The fanfare and the line, in that order, from the robot's own speaker."""
         self._quiet()
-        self._play(_synth(JINGLE))
+        self._skill.play_clip(_synth(JINGLE), "level-up fanfare")
         self._skill.say(f"New skill: {display_name}. Acquired.", wait=True)
 
     def _quiet(self) -> None:
@@ -105,25 +94,14 @@ class LearningMode:
         next_beep = time.monotonic() + random.uniform(*BEEP_GAP_S)
         while not self._stop.is_set():
             if time.monotonic() >= next_beep:
-                self._play(_synth([(note, 0.65) for note in random.sample(BEEP_NOTES, random.randint(2, 3))]))
+                self._skill.play_clip(
+                    _synth([(note, 0.65) for note in random.sample(BEEP_NOTES, random.randint(2, 3))])
+                )
                 next_beep = time.monotonic() + random.uniform(*BEEP_GAP_S)
             if self._lines:
                 self._skill.say(self._lines.popleft(), wait=True, speed=MUTTER_SPEED, volume=MUTTER_VOLUME)
             else:
                 self._stop.wait(0.2)
-
-    def _play(self, pcm: bytes) -> None:
-        if self._audio_pub is not None:
-            self._audio_pub.publish(String(data=base64.b64encode(_wav(pcm)).decode("ascii")))
-            return
-        subprocess.run(
-            ["aplay", "-q", "-t", "raw", "-f", "S16_LE", "-r", str(SAMPLE_RATE), "-c", "1"],
-            input=pcm,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-            check=False,
-        )
 
 
 def _synth(score: Sequence[tuple[str, float]]) -> bytes:
@@ -138,13 +116,3 @@ def _synth(score: Sequence[tuple[str, float]]) -> bytes:
             square = sum(1 if i % period < period / 2 else -1 for period in voices) / len(voices)
             samples.append(int(AMPLITUDE * envelope * square))
     return samples.tobytes()
-
-
-def _wav(pcm: bytes) -> bytes:
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as clip:
-        clip.setnchannels(1)
-        clip.setsampwidth(2)
-        clip.setframerate(SAMPLE_RATE)
-        clip.writeframes(pcm)
-    return buffer.getvalue()
