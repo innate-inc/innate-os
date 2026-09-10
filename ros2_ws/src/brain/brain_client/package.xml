@@ -30,6 +30,8 @@
   <depend>brain_messages</depend>
   <depend>mars_bringup</depend>
   <depend>mars_msgs</depend>
+  <exec_depend>mars_arm</exec_depend>
+  <exec_depend>mars_sim</exec_depend>
 
   <!-- Cloud client packages (colcon-built) -->
   <exec_depend>cloud_clients</exec_depend>
