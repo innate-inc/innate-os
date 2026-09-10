@@ -1451,10 +1451,13 @@ class StereoCalibrator(Node):
             f"  Epipolar |dy|     mean {report.epipolar_dy.mean:.4f}px  p95 {report.epipolar_dy.p95:.4f}px  "
             f"max {report.epipolar_dy.maximum:.4f}px"
         )
-        self.get_logger().info(
-            f"  Neighbour spacing mean {report.mean_spacing_mm:.3f}mm vs nominal "
-            f"{report.nominal_spacing_mm:.3f}mm (mean abs error {report.spacing_error_mm.mean:.3f}mm)"
-        )
+        if report.spacing_error_mm.count:
+            self.get_logger().info(
+                f"  Neighbour spacing mean {report.mean_spacing_mm:.3f}mm vs nominal "
+                f"{report.nominal_spacing_mm:.3f}mm (mean abs error {report.spacing_error_mm.mean:.3f}mm)"
+            )
+        else:
+            self.get_logger().info("  Neighbour spacing n/a (needs a complete grid; ChArUco returns corner subsets)")
         self.get_logger().info(f"  Planarity RMS     {report.planarity_rms_mm.mean:.3f}mm")
         if not report.q_yields_positive_z:
             self.get_logger().warn(
