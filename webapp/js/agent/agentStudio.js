@@ -12,7 +12,7 @@
 // Selecting the story's agent by hand is not the story: the person keeps the rail,
 // the scene setup and the challenges, and nothing hides behind a mode they cannot leave.
 
-import { cue } from "./cue.js";
+import { closeIn, cue } from "./cue.js";
 import { createOfferDeck } from "./offerDeck.js";
 import { personaCard, skillCard } from "./storyCards.js";
 
@@ -676,6 +676,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     );
     if (!(tile instanceof HTMLElement)) return; // already the big view, or not offered
     uncueTile = cue(tile, "click here");
+    requestAnimationFrame(() => closeIn(tile)); // after the strip has opened and the tile has its place
     void panel.narrate(line, { local: true });
   }
 

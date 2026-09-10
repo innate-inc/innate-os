@@ -11530,6 +11530,20 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
 @keyframes ui-cue-drop { 0% { opacity: 0; transform: translate(var(--badge-shift), -18px) scale(0.5); } 100% { opacity: 1; transform: translate(var(--badge-shift), 0) scale(1); } }
 @keyframes ui-cue-bob { 0%, 100% { transform: translate(var(--badge-shift), 0); } 50% { transform: translate(var(--badge-shift), -3px); } }
 .sim-scene-toggle .ui-cue-badge { --badge-x: 0; --badge-shift: 0; }
+/* The square that closes in on a camera tile once, when the story says to look at it. */
+.ui-cue-square {
+  position: fixed; z-index: 100; box-sizing: border-box; pointer-events: none;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 18px rgb(232 163 61 / 55%), inset 0 0 18px rgb(232 163 61 / 25%);
+  opacity: 0;
+  animation: ui-cue-square 1.1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+@keyframes ui-cue-square {
+  0% { opacity: 0; transform: scale(2.2); }
+  20% { opacity: 1; }
+  55% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1); }
+}
 /* The tile clips its edges: the badge sits inside, and an outline plus a breathing halo
    stand in for the rings. */
 .cam-tile .ui-cue-badge { top: 8px; }
@@ -11631,5 +11645,5 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
   .agent-drag-hint { animation: none; transform: translateX(-50%); }
   .agent-whiteout { transition: none; }
   :is(.ui-cue, .ui-cue-badge, .ui-cue-glow, .ui-cue-ring, .ui-cue-sheen > i, .agent-offers, .agent-studio-skill.landed) { animation: none; }
-  .ui-cue-ring { display: none; }
+  :is(.ui-cue-ring, .ui-cue-square) { display: none; }
 }
