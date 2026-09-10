@@ -16,6 +16,7 @@ from pathlib import Path
 from brain_client.common.geometry import quat_to_rpy
 from innate import HeadState, MainImage, Manipulation, Mobility, Skill, SkillOutput, WristImage
 from innate.gesture import Gesture, GesturePolicy, forward_poses, validate_action
+from innate.icl_trace import ICL_TRACE_TOPIC, IclTrace
 
 
 class ServoHardwareFault(ValueError):
@@ -161,6 +162,19 @@ class ImitatePickAndPresent(Skill):
     def make_policy(self, demo):
         return GesturePolicy(demo)
 
+    def make_trace(self, run):
+        """This run's live mirror for the In Context Learning page. Silent when
+        the skill runs without a ROS node, so tests need no publisher."""
+        from std_msgs.msg import String
+
+        publisher = None if self.node is None else self.node.create_publisher(String, ICL_TRACE_TOPIC, 10)
+
+        def publish(payload):
+            if publisher is not None:
+                publisher.publish(String(data=payload))
+
+        return IclTrace(self.name, run.name, publish, self.logger)
+
     decision_timeout = 50
     grip_strength = 0.3
     max_servo_recoveries = 0
@@ -223,6 +237,17 @@ class ImitatePickAndPresent(Skill):
                 }
             )
         )
+        icl = self.make_trace(run)
+        icl.begin(
+            "gpt-6-astra",
+            str(demo.path),
+            len(demo.poses),
+            object=object_description,
+            overview=[frame["index"] for frame in demo.frames],
+        )
+        policy.trace = icl
+        succeeded = False
+        ending = "Run ended without a result"
         monitor = None
         committed = False
         seen_holding = False
@@ -249,7 +274,9 @@ class ImitatePickAndPresent(Skill):
                     observation["grasp_committed"] = committed
                     for name, image in observation["images"].items():
                         (run / f"{step:03d}_{name}.jpg").write_bytes(base64.b64decode(image))
+                    asked = time.monotonic()
                     value = self._decide(policy, observation, history)
+                    latency = time.monotonic() - asked
                     self.check_cancelled()
                     # Revalidate telemetry after network latency; no queued motion survives Stop.
                     current = self._observe(monitor, time.monotonic() - 0.2, xml)
@@ -266,6 +293,7 @@ class ImitatePickAndPresent(Skill):
                             }
                         )
                         self.feedback("Arm shifted; refreshing the observation before replanning")
+                        icl.note("Arm shifted while planning; the action was discarded")
                         after = time.monotonic()
                         continue
                     decision = validate_action(value, current["pose"], len(demo.poses), committed)
@@ -281,6 +309,14 @@ class ImitatePickAndPresent(Skill):
                         with (run / "inspection.jsonl").open("a") as inspection:
                             inspection.write(json.dumps(policy.last_trace) + "\n")
                     self.feedback(decision["reason"])
+                    icl.step(
+                        step,
+                        decision,
+                        entry["observation"],
+                        observation["images"],
+                        latency,
+                        getattr(policy, "phase", 0),
+                    )
                     if committed and seen_holding and not decision["holding"]:
                         self.fail("Object no longer visually retained")
                     seen_holding = seen_holding or (committed and decision["holding"])
@@ -297,6 +333,7 @@ class ImitatePickAndPresent(Skill):
                         else:
                             outcome = self._try_move(decision["pose"], current, monitor, xml)
                         entry["execution"] = outcome
+                        icl.execution(step, outcome)
                         with (run / "execution.jsonl").open("a") as execution:
                             execution.write(json.dumps({"step": step, **outcome}) + "\n")
                         if outcome["status"] != "reached":
@@ -333,6 +370,8 @@ class ImitatePickAndPresent(Skill):
                             self.fail("Pickup/presentation not verified")
                         verified += 1
                         if verified >= 2:
+                            succeeded = True
+                            ending = "Object visually verified held forward"
                             return SkillOutput(
                                 "Object visually verified held forward; gripper remains closed.",
                                 {"demonstration": str(demo.path), "trace": str(run), "released": False},
@@ -348,6 +387,7 @@ class ImitatePickAndPresent(Skill):
                     recoveries += 1
                     recovered = self._recover_servo(monitor, xml, str(fault))
                     history.append({"step": step, "execution": recovered})
+                    icl.execution(step, recovered)
                     with (run / "execution.jsonl").open("a") as execution:
                         execution.write(json.dumps({"step": step, **recovered}) + "\n")
                     verified = 0
@@ -356,6 +396,7 @@ class ImitatePickAndPresent(Skill):
                     after = time.monotonic()
             self.fail("Gesture action budget exhausted")
         finally:
+            icl.end(succeeded, self.cancelled, ending)
             # Never rest, release, reseed the gripper from measured joints, or torque off.
             # Current goto services cannot preempt: at most one bounded move may finish.
             self.manipulation.halt()
@@ -409,14 +450,17 @@ class ImitatePickAndPresent(Skill):
             "position_error_m": math.dist(measured["pose"][:3], target[:3]),
         }
 
-    def _try_move(self, target, current, monitor, xml):
+    def _try_move(self, target, current, monitor, xml, grip=None):
         x, y, z, roll, pitch, yaw = target
         if not self.manipulation.reachable(x, y, z, roll=roll, pitch=pitch, yaw=yaw):
             return self._motion_outcome(
                 "unreachable", "IK rejected the requested EE pose; no movement issued", current, target
             )
         self.check_cancelled()
-        self.manipulation.move_to(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=1.5, block=False)
+        # move_to carries j6 too. Left to itself it uses the standing grip target,
+        # which is stale when the run began already holding something it never
+        # closed on — and a Cartesian move then opens the hand mid-carry.
+        self.manipulation.move_to(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=1.5, block=False, grip=grip)
         # Health failures, cancellation, and uncertain/time-out outcomes still propagate.
         self._wait_motion(monitor, xml)
         measured = self._observe(monitor, time.monotonic() - 0.2, xml)

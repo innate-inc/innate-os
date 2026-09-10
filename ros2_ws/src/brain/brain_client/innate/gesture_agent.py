@@ -5,6 +5,7 @@ Physical execution stays in ImitatePickAndPresent, after fresh telemetry checks.
 """
 
 import json
+import time
 
 from innate.gesture import ACTION_SCHEMA, PROMPT, Gesture, GesturePolicy
 
@@ -28,7 +29,7 @@ PHASE_SCHEMA = object_schema(
 )
 PLAN_SCHEMA = object_schema({"phases": {"type": "array", "items": PHASE_SCHEMA, "minItems": 2, "maxItems": 6}})
 INSPECT_SCHEMA = object_schema(
-    {"frames": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 8}}
+    {"frames": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "maxItems": 12}}
 )
 STEP_SCHEMA = object_schema(
     {
@@ -93,10 +94,12 @@ Call exactly one tool per response. No arbitrary code, no other tools. Be concis
 class DemonstrationAgentPolicy(GesturePolicy):
     """Small persistent phase state; images are bounded and loaded on demand."""
 
+    # Tool calls one decide() may spend. Planning (inspect, record, act) rides in
+    # the first one, so this is also how much of the episode a plan can look at.
+    max_tool_calls = 4
+
     def __init__(self, demo):
         super().__init__(demo)
-        # Request uncompressed JSON: this proxy path can strip upstream encoding headers.
-        self.client.get_sync_client().headers["Accept-Encoding"] = "identity"
         self.demo = demo
         self.frames = {f["index"]: f for f in demo.frames}
         self.overview = set(self.frames)
@@ -192,7 +195,8 @@ class DemonstrationAgentPolicy(GesturePolicy):
     def decide(self, observation, history):
         self.last_trace = []
         selected = set(self.overview) if not self.phase_map else {p["reference_frame"] for p in self.phase_map}
-        for _ in range(4):
+        for _ in range(self.max_tool_calls):
+            started = time.monotonic()
             content = self._context(selected)
             content.append(
                 {
@@ -219,6 +223,8 @@ class DemonstrationAgentPolicy(GesturePolicy):
                 )
             name, args = self._request(content)
             self.last_trace.append({"tool": name, "arguments": args})
+            if self.trace:
+                self.trace.tool(name, args, time.monotonic() - started)
             if name == "inspect_demo":
                 if set(args) != {"frames"} or not isinstance(args["frames"], list):
                     raise ValueError("inspect_demo requires source frame indices")
@@ -233,6 +239,8 @@ class DemonstrationAgentPolicy(GesturePolicy):
             elif name == "record_phases":
                 self._record_phases(args)
                 selected = {p["reference_frame"] for p in self.phase_map}
+                if self.trace:
+                    self.trace.phases(self.phase_map)
             elif name == "act":
                 return self._action(args, history)
             else:

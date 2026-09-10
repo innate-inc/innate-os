@@ -220,13 +220,14 @@ def test_rejected_target_reaches_next_agent_turn(tmp_path, monkeypatch):
     demo = SimpleNamespace(
         path="episode.h5",
         poses=[None] * 100,
+        frames=[frame(i) for i in (0, 99)],
         model_hash=__import__("hashlib")
         .sha256((ROOT / "ros2_ws/src/mars_bot/mars_sim/urdf/mars.urdf").read_bytes())
         .hexdigest(),
     )
     skill = runtime.ImitatePickAndPresent(None)
     skill.make_demo = lambda *a: demo
-    skill.make_policy = lambda *a: object()
+    skill.make_policy = lambda *a: SimpleNamespace()
     monkeypatch.setattr(runtime, "LiveGestureObservation", lambda: SimpleNamespace(close=lambda: None))
     current = {"pose": [0.3, 0, 0.2, 0, 0, 0], "base": [0, 0, 0], "images": {}, "gripper": 1.0}
     skill._observe = lambda *a: copy.deepcopy(current)
@@ -317,12 +318,13 @@ def test_fault_during_close_keeps_grasp_and_replans(monkeypatch, tmp_path, mode)
     demo = SimpleNamespace(
         path="episode.h5",
         poses=[None] * 100,
+        frames=[frame(i) for i in (0, 99)],
         model_hash=hashlib.sha256((ROOT / "ros2_ws/src/mars_bot/mars_sim/urdf/mars.urdf").read_bytes()).hexdigest(),
     )
     skill = runtime.ImitatePickAndPresent(None)
     skill.max_servo_recoveries = 2
     skill.make_demo = lambda *a: demo
-    skill.make_policy = lambda *a: object()
+    skill.make_policy = lambda *a: SimpleNamespace()
     monkeypatch.setattr(runtime, "LiveGestureObservation", lambda: SimpleNamespace(close=lambda: None))
     current = {"pose": [0.3, 0, 0.2, 0, 0, 0], "base": [0, 0, 0], "images": {}, "gripper": 1.0}
     skill._observe = lambda *a: copy.deepcopy(current)

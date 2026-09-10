@@ -9,11 +9,13 @@ reproduction of Wenli Xiao's unpublished Codex demonstration session.
 
 ## Record a demonstration
 
-Use the existing gesture recording UI. Keep the base stationary, pick up the
-object, lift it at least 4 cm and end holding it forward (EE x >= 20 cm). Stop
-recording while still presenting it; do not include a return-to-rest or release
-at the end. Use the normal main-left and wrist cameras and keep the workspace
-clear for the first supervised trials.
+Use the existing gesture recording UI. Pick up the object, lift it at least 4 cm
+and end holding it forward (EE x >= 20 cm). Stop recording while still presenting
+it; do not include a return-to-rest or release at the end. Use the normal
+main-left and wrist cameras and keep the workspace clear for the first supervised
+trials. Driving the base while recording is allowed, but the run itself is
+arm-only, so prefer a reach the robot can repeat without moving: see
+**Moving-base demonstrations**.
 
 New recordings retain `/action`, `/observations/qpos`, `/observations/qvel`,
 images and their existing timestamps. They also store `/observations/ee_pose`
@@ -24,8 +26,25 @@ the full URDF, joint order, camera topics and pose conventions. The timestamp
 is `/timestamps/arm`; the EE dataset participates in streaming rollback.
 
 The current robot model must match the recorded model. The loader rejects
-unknown frame/camera conventions, moving-base demonstrations, malformed state,
-and selected camera frames more than 250 ms from their arm sample.
+unknown frame/camera conventions, malformed state, and selected camera frames
+more than 250 ms from their arm sample.
+
+## Moving-base demonstrations
+
+A recording whose base moved is accepted. Recorded `ee_pose` is in `base_link`,
+so where the base drove, the object's apparent motion is partly the base and not
+the arm — copying that reach as arm travel is the failure this section exists to
+prevent. Frames from such an episode therefore carry two extra fields, and the
+prompt tells the model to adapt the approach rather than reproduce the reach:
+
+- `base_command` — `[linear m/s, angular rad/s]`, the `/cmd_vel` row as recorded.
+- `base_dead_reckoned` — `[x, y, yaw]` integrated from those commands.
+
+`base_dead_reckoned` is **not measured odometry**: the recorder stores no base
+pose, so this is forward-integrated command, and wheel slip and driver ramping
+make it an estimate of where the base went. Stationary recordings carry neither
+field and are byte-identical to before. The skills remain arm-only — nothing here
+lets a run drive the base; `slash_cactus` has its own separate `base_step`.
 
 ## Existing recordings
 

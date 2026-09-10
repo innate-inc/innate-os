@@ -56,12 +56,12 @@ def end_run() -> None:
     _run_drew = False
 
 
-def _jsonable(value: Any) -> Any:
+def jsonable(value: Any) -> Any:
     """Floats rounded to 3 dp, numpy scalars (bool_ included) unboxed, tuples listed."""
     if isinstance(value, dict):
-        return {k: _jsonable(v) for k, v in value.items()}
+        return {k: jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
+        return [jsonable(v) for v in value]
     if hasattr(value, "item"):
         value = value.item()
     return round(value, 3) if isinstance(value, float) else value
@@ -154,7 +154,7 @@ class Overlay:
         self._last_readout = None
 
     def _mark(self, id: str, kind: str, view: View, label: str, locked: bool, **geometry: Any) -> None:
-        fields = _jsonable({"kind": kind, "view": view, "label": label, "locked": locked, **geometry})
+        fields = jsonable({"kind": kind, "view": view, "label": label, "locked": locked, **geometry})
         now = time.monotonic()
         last = self._last_mark.get(id)
         if last is not None:
@@ -170,7 +170,7 @@ class Overlay:
         global _run_drew
         payload = {"skill": self._skill, "run": _run_id, "ev": event, "t": time.time(), **self._header, **fields}
         try:
-            self._publish(json.dumps(_jsonable(payload)))
+            self._publish(json.dumps(jsonable(payload)))
         except Exception as e:  # noqa: BLE001 — a side channel must never become the run's failure
             self._logger.warning(f"[{self._skill}] overlay '{event}' dropped: {e}")
             return
