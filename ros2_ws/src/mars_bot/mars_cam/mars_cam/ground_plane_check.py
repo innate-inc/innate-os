@@ -52,11 +52,13 @@ class GroundPlaneCheck(Node):
         self.declare_parameter("cloud_topic", "/mars/main_camera/points")
         self.declare_parameter("camera_info_topic", "/mars/main_camera/left/camera_info")
         self.declare_parameter("num_clouds", 10)
-        self.declare_parameter("roi_x_min", 0.25)
-        self.declare_parameter("roi_x_max", 1.20)
-        self.declare_parameter("roi_half_width", 0.22)
-        self.declare_parameter("roi_z_min", 0.02)
-        self.declare_parameter("roi_z_max", 0.36)
+        # Defaults come from Corridor so the two cannot drift apart.
+        defaults = Corridor()
+        self.declare_parameter("roi_x_min", defaults.x_min)
+        self.declare_parameter("roi_x_max", defaults.x_max)
+        self.declare_parameter("roi_half_width", defaults.half_width)
+        self.declare_parameter("roi_z_min", defaults.z_min)
+        self.declare_parameter("roi_z_max", defaults.z_max)
 
         self.cloud_topic = str(self.get_parameter("cloud_topic").value)
         self.num_clouds = int(self.get_parameter("num_clouds").value)
