@@ -312,6 +312,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   let saveStatus = "";
   let chooserOpen = false;
   let tab = "identity";
+  /** Whether any skill beyond the one it woke up with has landed; the panel follows it. */
+  let anyGrant = /** @type {boolean | null} */ (null);
   /** @type {SkillRow[]} */ let roster = [];
 
   const active = () => challenge?.active ?? null;
@@ -826,7 +828,6 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     // Act bookkeeping: the chip gate, the grasp camera, the world's opening line.
     const actChanged = !!r && r.act !== seenAct;
     if (actChanged) {
-      tab = r.act === 0 ? "identity" : "skills"; // who it is, then what it can do
       // A resumed page must not wait for a line the robot said before the reload.
       actSpoke = seenAct >= 0 || (Number(story()?.elapsed_s) || 0) < 8 ? spoken() : -1;
       actAt = Date.now();
@@ -918,7 +919,18 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       promptInput.dataset.shown = who;
     }
 
-    // One tab at a time, in the story too; each act picks its own (see above).
+    // The panel shows whichever half of the agent is being built: who it is, until the
+    // first skill it asked for actually arrives.
+    if (inStory) {
+      const granted = [...s.activeSkills].some((id) => id !== WAVE);
+      if (granted !== anyGrant) {
+        anyGrant = granted;
+        tab = granted ? "skills" : "identity";
+      }
+    } else {
+      anyGrant = null;
+    }
+    // One tab at a time, in the story too.
     tabsRow.hidden = !inStory && !f;
     tabs.advanced.hidden = inStory;
     for (const [id, pane] of Object.entries(panes)) {
@@ -973,6 +985,12 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const { chips, exclusive } = offers();
     panelEl.dataset.chips = chipReason;
     panel.setOffers(chips, exclusive);
+    // Who the robot is, is decided in the chips or the panel: a typed answer would reach
+    // the robot and not the story, leaving the two disagreeing about who it became.
+    const choosing = inStory && (r?.personas ?? []).length > 0;
+    panel.setComposerLocked(
+      choosing ? (compact ? "Pick a personality above" : "Pick a personality above, or write one in the panel") : null,
+    );
   }
 
   /** @param {any} r @param {any} o @param {boolean} graduated @param {AgentEntry | null} agent @param {boolean} isNew */

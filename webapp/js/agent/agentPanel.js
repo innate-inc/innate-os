@@ -48,6 +48,7 @@ const THINKING_STALE_MS = 10_000;
  *   stopMic: () => void,
  *   micMount: HTMLElement,
  *   setCompact: (on: boolean) => void,
+ *   setComposerLocked: (note: string | null) => void,
  *   addNotice: (text: string) => void,
  *   beginOnboarding: (fresh: boolean, startedAt: number) => void,
  *   setOffers: (offers: Array<{text: string, kind: string, onSelect: (text: string) => void}>) => void,
@@ -156,13 +157,20 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   form.append(input, placeholder, focusHint);
   if (opts.enableMic) form.append(micMount);
   form.append(send);
+  /** Non-null while the interface is asking for an answer the composer cannot give;
+   * its text is what the placeholder says instead. @type {string | null} */
+  let composerLock = null;
   function syncComposerAction() {
     const empty = input.value.trim().length === 0;
-    send.disabled = empty;
-    send.hidden = empty;
-    micMount.hidden = !opts.enableMic || !empty;
-    focusHint.hidden = !empty;
-    placeholder.classList.toggle("hidden", !empty);
+    const locked = composerLock !== null;
+    input.disabled = locked;
+    form.classList.toggle("locked", locked);
+    placeholder.textContent = composerLock ?? "Message MARS";
+    send.disabled = empty || locked;
+    send.hidden = empty || locked;
+    micMount.hidden = !opts.enableMic || !empty || locked;
+    focusHint.hidden = !empty || locked;
+    placeholder.classList.toggle("hidden", !empty && !locked);
   }
   syncComposerAction();
 
@@ -418,6 +426,12 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
       // Its switch is hidden here, so a wider visit's choice must not stick.
       if (on) chat.setMode("compact");
       sheet.setEnabled(on);
+    },
+    /** Close the composer while the answer belongs somewhere else, saying where.
+     * @param {string | null} note */
+    setComposerLocked(note) {
+      composerLock = note;
+      syncComposerAction();
     },
     /** @param {string} text */
     addNotice(text) {

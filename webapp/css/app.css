@@ -11529,6 +11529,9 @@ body.story-active { grid-template-columns: minmax(0, 1fr); }
 .agent-cockpit.story-active .agent-stream .chat-skill.failed .chat-skill-status { color: #d9a441; }
 /* The world speaking: centred, quiet, never a bubble the visitor did not type. */
 .agent-stream > .chat-msg.system.narrator { display: flex; justify-content: center; }
+/* Closed while the answer belongs to the chips or the panel: readable, not greyed out. */
+.agent-compose.locked { opacity: 0.72; cursor: default; }
+.agent-compose.locked .agent-compose-input { cursor: default; }
 .chat-link { color: #a99cff; text-underline-offset: 2px; }
 .chat-link:hover { color: #c9c3ff; }
 .chat-msg.system.narrator .chat-sender { display: none; }
