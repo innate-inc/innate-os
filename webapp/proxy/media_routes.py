@@ -8,6 +8,7 @@ plain-HTTP media listener. Every file access is fenced to the skill roots below
 import asyncio
 import fnmatch
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -293,6 +294,81 @@ def profile_response(request: web.Request) -> web.Response:
         return _plain(500, "Internal Server Error", f"failed to read profile: {err}")
     return web.Response(
         status=200, body=data, headers={"Content-Type": "application/x-ndjson", "Cache-Control": "no-cache"}
+    )
+
+
+@threaded
+def icl_demonstrations_response(request: web.Request) -> web.Response:
+    """GET /icl/demonstrations → every recorded episode the demonstration-conditioned
+    skills can be pointed at: the raw_data/ HDF5s, which are the only ones that still
+    carry camera frames (data/ is image-stripped)."""
+    found = []
+    for root in SKILLS_ROOTS:
+        for h5 in sorted(root.glob("*/raw_data/episode_*.h5")):
+            if not _under_skills_root(h5) or not h5.is_file():
+                continue
+            stat = h5.stat()
+            found.append(
+                {
+                    "path": str(h5),
+                    "skill": h5.parent.parent.name,
+                    "episode": h5.stem,
+                    "size_bytes": stat.st_size,
+                    "modified": stat.st_mtime,
+                }
+            )
+    payload = json.dumps({"demonstrations": found}).encode()
+    return web.Response(
+        status=200, body=payload, headers={"Content-Type": "application/json", "Cache-Control": "no-cache"}
+    )
+
+
+@threaded
+def icl_demonstration_response(request: web.Request) -> web.Response:
+    """GET /icl/demonstration?path=<h5>[&frames=a,b,c] → the keyframes a run would
+    put in the model's context, straight from innate.gesture.Gesture — the same
+    loader the skill uses, so the page cannot show a different context than the
+    model receives. Without ``frames`` this is the overview the skill sends on turn
+    one: even samples plus every significant gripper transition."""
+    qs = parse_qs(request.query_string)
+    h5 = _resolve_under_root((qs.get("path") or [""])[0])
+    if h5 is None or h5.suffix != ".h5" or not h5.is_file():
+        return _plain(404, "Not Found", "no such demonstration")
+    raw = (qs.get("frames") or [""])[0]
+    try:
+        indices = [int(v) for v in raw.split(",") if v.strip()] or None
+        count = int((qs.get("max") or ["12"])[0])
+    except ValueError:
+        return _plain(400, "Bad Request", "frames must be integers and max a number")
+    if not 6 <= count <= 48:
+        return _plain(400, "Bad Request", "max must be between 6 and 48")
+    uniform = (qs.get("selection") or [""])[0] == "uniform"
+    try:
+        from innate.gesture import Gesture
+
+        demo = Gesture(str(h5), frame_indices=indices, image_time_reference=True, max_frames=count, uniform=uniform)
+        end = demo.base_path[-1]
+        payload = json.dumps(
+            {
+                "path": str(h5),
+                "skill": h5.parent.parent.name,
+                "episode_frames": len(demo.poses),
+                "duration_s": demo.frames[-1]["time_s"] if demo.frames else 0,
+                "model_sha256": demo.model_hash,
+                "final_pose": demo.final_pose,
+                "base_moved": demo.base_moved,
+                "grip_events": demo.grip_events,
+                "base_drive_m": float(math.hypot(end[0], end[1])),
+                "base_turn_rad": float(end[2]),
+                "frames": demo.frames,
+            }
+        ).encode()
+    except (OSError, ValueError, KeyError) as err:
+        return _plain(422, "Unprocessable Entity", f"cannot read demonstration: {err}")
+    except ImportError as err:
+        return _plain(503, "Service Unavailable", f"gesture loader unavailable: {err}")
+    return web.Response(
+        status=200, body=payload, headers={"Content-Type": "application/json", "Cache-Control": "no-cache"}
     )
 
 

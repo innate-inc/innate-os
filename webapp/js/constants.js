@@ -174,6 +174,27 @@ export const SKILL_STATUS_UPDATE_TOPIC = "/brain/skill_status_update";
 // repeat once a second, so a page that missed the start still recovers them.
 export const SKILL_OVERLAY_TOPIC = "/brain/skill_overlay";
 
+// What a demonstration-conditioned (in-context-learning) run is thinking, for the
+// ICL page (std_msgs/String JSON from innate/icl_trace.py). {ev:"run",
+// state:"start"|"end"} brackets the run; between them {ev:"tool", tool, arguments,
+// latency_s} is one model tool call as it returns, {ev:"phases"} carries the phase
+// map the model inferred, {ev:"step", step, decision, observation, images, phase}
+// is a validated decision published BEFORE the arm acts on it, {ev:"execution",
+// step, execution} is what the arm actually did, and {ev:"note", text} is a turn
+// that produced no decision. Every event repeats the run header (model,
+// demonstration, episode_frames, phases), so a page opened mid-run recovers.
+export const ICL_TRACE_TOPIC = "/brain/icl_trace";
+
+// Skills whose runs publish ICL_TRACE_TOPIC — the demonstration-conditioned family
+// the ICL page drives. Matched against the roster id's last path segment.
+export const ICL_SKILL_NAMES = [
+  "slash_and_pick_cactus_no_prompt",
+  "slash_and_pick_cactus_with_prompt",
+  "slash_cactus",
+  "pick_and_hand_battery_agent",
+  "imitate_pick_and_present",
+];
+
 // Per-step ACT inference timing breakdown (std_msgs/String carrying JSON), published
 // by the manipulation server while a learned behavior runs. Drives the Profiling page.
 export const INFERENCE_PROFILE_TOPIC = "/brain/manipulation/inference_profile";

@@ -1025,11 +1025,15 @@ export function createSkillsMenu(parent, rosClient) {
     const status = String(payload?.status ?? "");
     if (!name || !status) return;
     const prevActive = topicActiveName;
+    // A run started outside this tab supersedes this skill's old terminal message.
+    const staleRun = status === "running" && run?.done &&
+      prettify(run.skillId.split("/").pop()) === prettify(name.split("/").pop());
+    if (staleRun) run = null;
     topicActiveName = status === "running" ? prettify(name) : "";
     if (topicActiveName === "") externCanceling = false;
     syncActive();
     // The extern-run banner tracks this topic; repaint it while the popup is up.
-    if (open && topicActiveName !== prevActive) render();
+    if (open && (staleRun || topicActiveName !== prevActive)) render();
   }, undefined, "std_msgs/msg/String");
 
   const unsubState = rosClient.onStateChange(() => {
