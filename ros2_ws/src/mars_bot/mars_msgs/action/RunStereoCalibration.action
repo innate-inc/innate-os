@@ -3,6 +3,11 @@ uint8 MODE_MANUAL=0
 uint8 MODE_AUTONOMOUS=1
 uint8 mode  # only MODE_MANUAL implemented currently
 
+uint8 BOARD_DEFAULT=0      # whatever the node is configured for
+uint8 BOARD_CHARUCO=1
+uint8 BOARD_CHECKERBOARD=2
+uint8 board  # overrides the node's target_type for this run only
+
 int32 num_images
 int32 min_corners
 bool save_calibration
@@ -16,6 +21,7 @@ float32 left_rms
 float32 right_rms
 float32 stereo_rms
 string quality  # EXCELLENT | GOOD | ACCEPTABLE | POOR - consider recalibrating (empty if not computed)
+string board  # which target the run actually used
 ---
 # Feedback
 string phase  # READY (goal accepted, watchdog armed) | CAPTURE | PROCESSING
@@ -26,3 +32,12 @@ string[] image_names
 sensor_msgs/CompressedImage[] images
 string message
 float32 capture_timeout_sec  # live watchdog timeout; client re-anchors its countdown to this on every tick
+
+# Live capture guidance. All relative to the frame, never metres: these are
+# produced DURING calibration, so there are no intrinsics yet to convert with.
+string board  # which target this run is detecting
+string distance_hint  # TOO_CLOSE | IN_RANGE | TOO_FAR (empty when nothing detected)
+float32 board_extent  # board diagonal over frame diagonal
+float32 board_tilt  # ~0.0143 per degree off square, range-independent
+float32 coverage_percent  # 0-100 across position, scale, tilt and count
+string[] coverage_missing  # what is still short, most useful first

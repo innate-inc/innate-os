@@ -51,6 +51,7 @@ from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 
+from mars_cam import capture_guidance as guidance
 from mars_cam import checkerboard as cb
 from mars_cam.calibration_debug_vis import generate_coverage_images, generate_debug_mosaic, generate_visualizations
 from mars_cam.calibration_experiment import ExperimentRecorder, skew_summary
@@ -72,6 +73,13 @@ DEFAULT_DELETE_SERVICE_NAME = "/mars/main_camera/delete_stereo_calibration"
 
 TARGET_CHARUCO = "charuco"
 TARGET_CHECKERBOARD = "checkerboard"
+
+# Goal.board -> target_type. BOARD_DEFAULT leaves the node's configured target
+# alone, so a CLI run and an app run with no explicit choice behave the same.
+BOARD_BY_GOAL = {
+    RunStereoCalibration.Goal.BOARD_CHARUCO: TARGET_CHARUCO,
+    RunStereoCalibration.Goal.BOARD_CHECKERBOARD: TARGET_CHECKERBOARD,
+}
 
 
 def _stamp_sec(msg: Image) -> float:
@@ -234,6 +242,10 @@ class StereoCalibrator(Node):
         self.latest_right_frame = None
         self.latest_stamps: tuple[float, float] = (0.0, 0.0)
         self.frame_lock = threading.Lock()
+        # Live capture guidance. Built here as well as per-run, because CLI mode
+        # detects without ever opening an action goal.
+        self._coverage = guidance.CoverageTracker(self.num_images_required)
+        self._last_view: guidance.BoardView | None = None
         self.images_captured = 0
         self.capture_attempts = 0
         self.calibration_done = False
@@ -366,6 +378,42 @@ class StereoCalibrator(Node):
             self.get_logger().info(f"Stop service available on '{self.stop_service_name}'")
             self.get_logger().info(f"Delete service available on '{self.delete_service_name}'")
 
+    def _note_view(self, image_points, board_points) -> None:
+        """Measure what the operator is holding, for the live distance hint.
+
+        Measured from the LEFT image only. The two eyes see the board at almost
+        the same size and tilt, and a hint that flickered between them would
+        read as noise rather than as advice. Called on rejected attempts too —
+        "too far" is most useful precisely when detection just failed.
+        """
+        if image_points is None or board_points is None:
+            self._last_view = None
+            return
+        shape = self.latest_left_frame.shape if self.latest_left_frame is not None else None
+        frame_size = (shape[1], shape[0]) if shape else (self.image_width, self.image_height)
+        self._last_view = guidance.measure(image_points, board_points, frame_size)
+
+    def _count_toward_coverage(self) -> None:
+        """Fold the last measured view into coverage, once a capture is kept."""
+        if self._last_view is not None:
+            self._coverage.add(self._last_view)
+
+    def _rejection_advice(self) -> str:
+        """Why a capture was dropped, in terms the operator can act on.
+
+        A board that was seen but sits outside the usable size range gets the
+        specific reason; "no board detected" is only the honest answer when
+        nothing was found at all.
+        """
+        view = self._last_view
+        if view is None:
+            return "No board detected — is the whole board in both cameras?"
+        if view.hint == guidance.TOO_FAR:
+            return "Board too far away — move it closer to the cameras"
+        if view.hint == guidance.TOO_CLOSE:
+            return "Board too close — back it off so the whole board stays in frame"
+        return "Board partly visible — every corner must be in both cameras"
+
     def _reset_calibration_session(self):
         """Reset all capture/calibration buffers for a new run."""
         self.indiv_corners_left = []
@@ -383,6 +431,8 @@ class StereoCalibrator(Node):
         self.calibration_data = None
         self._last_rms = {"left": 0.0, "right": 0.0, "stereo": 0.0}
         self._last_quality = ""
+        self._coverage = guidance.CoverageTracker(self.num_images_required)
+        self._last_view = None
         with self.frame_lock:
             self.latest_left_frame = None
             self.latest_right_frame = None
@@ -436,6 +486,17 @@ class StereoCalibrator(Node):
         # Live value (not the cached attribute) so a mid-run `ros2 param set`
         # is reflected immediately, same as the watchdog itself.
         feedback.capture_timeout_sec = float(self.get_parameter("capture_timeout_sec").value)
+
+        feedback.board = self.target_type
+        view = self._last_view
+        if view is not None:
+            feedback.distance_hint = view.hint
+            feedback.board_extent = float(view.extent)
+            feedback.board_tilt = float(view.tilt)
+        progress = self._coverage.progress()
+        feedback.coverage_percent = float(progress.percent)
+        feedback.coverage_missing = list(progress.missing)
+
         for name, img in (images or {}).items():
             ok, buf = cv2.imencode(".jpg", img)
             if not ok:
@@ -541,6 +602,7 @@ class StereoCalibrator(Node):
             result.right_rms = float(self._last_rms["right"])
             result.stereo_rms = float(self._last_rms["stereo"])
             result.quality = self._last_quality
+            result.board = self.target_type
             return result
 
         try:
@@ -559,6 +621,11 @@ class StereoCalibrator(Node):
                 self.num_images_required = int(goal.num_images)
             if goal.min_corners > 0:
                 self.min_corners = int(goal.min_corners)
+            if goal.board in BOARD_BY_GOAL:
+                self.target_type = BOARD_BY_GOAL[goal.board]
+                self.get_logger().info(f"Goal selected the {self.target_type} target")
+            # After the overrides: the tracker's capture target is one of them.
+            self._coverage = guidance.CoverageTracker(self.num_images_required)
 
             setup_head(self)
 
@@ -725,7 +792,7 @@ class StereoCalibrator(Node):
             feedback_message = (
                 f"Captured {self.images_captured}/{self.num_images_required}"
                 if result.success
-                else "No board detected in this capture"
+                else self._rejection_advice()
             )
             self._publish_action_feedback(
                 goal_handle,
@@ -830,8 +897,12 @@ class StereoCalibrator(Node):
         while rclpy.ok() and not self.calibration_done:
             try:
                 # Wait for Enter key
+                progress = self._coverage.progress()
+                advice = self._coverage.advice()
                 input(
-                    f"[{self.images_captured} captured] Move the board and press Enter (Ctrl+C to finish and calibrate)"
+                    f"[{self.images_captured} captured, {progress.percent:.0f}% covered] "
+                    f"{advice or 'Coverage complete'} — move the board and press Enter "
+                    f"(Ctrl+C to finish and calibrate)\n"
                 )
                 if not self.calibration_done:
                     self._enter_pub.publish(Bool(data=True))
@@ -895,6 +966,9 @@ class StereoCalibrator(Node):
 
         split = self._next_split() if accepted else ""
         index = self.images_captured if accepted else -1
+        self._note_view(corners_left, self.checkerboard.object_grid())
+        if accepted:
+            self._count_toward_coverage()
 
         self.capture_diagnostics.append(
             cb.CaptureDiagnostics(
@@ -1003,6 +1077,13 @@ class StereoCalibrator(Node):
 
         view_left = cb.measure(left_gray, charuco_corners_left, stamps[0])
         view_right = cb.measure(right_gray, charuco_corners_right, stamps[1])
+
+        # ChArUco detects a subset of the grid, so the board-space points come
+        # from the corner ids rather than from a full pattern.
+        if charuco_ids_left is not None and left_corners >= 4:
+            self._note_view(charuco_corners_left, self.charuco_board.getChessboardCorners()[charuco_ids_left.flatten()])
+        else:
+            self._note_view(None, None)
 
         def record(accepted: bool, reason: str, split: str = "") -> None:
             self.capture_diagnostics.append(
@@ -1132,6 +1213,7 @@ class StereoCalibrator(Node):
         if split == "validation":
             self.validation_indices.add(index)
         record(True, "ok", split)
+        self._count_toward_coverage()
         self.images_captured += 1
 
         # Optionally save images to disk. Indexed before the increment so the
