@@ -73,6 +73,11 @@ class _Utterance:
     delivery: Delivery | None = None
 
 
+def _ready_clip(delivery: Delivery | None) -> bool:
+    """A clip that arrives as PCM plays without Cartesia: the speaker is all it needs."""
+    return delivery is not None and delivery.pcm is not None
+
+
 def _survives_flush(item: _Utterance, playing_reply_id: str | None) -> bool:
     """A reply the user is hearing holds the floor: its remaining sentences
     survive a newer reply's flush. Everything else queued is stale backlog."""
@@ -211,7 +216,7 @@ class TTSHandler:
         Returns:
             True if speech was successfully generated and played, False otherwise
         """
-        if not self.is_available():
+        if not self.is_available() and not _ready_clip(delivery):
             self.logger.debug("🔇 TTS not available, skipping speech")
             return False
 
@@ -265,10 +270,10 @@ class TTSHandler:
         The speaker path gets raw PCM; the sim path keeps WAV — browser decoders
         need the container.
         """
+        if delivery is not None and delivery.pcm is not None:
+            return iter([delivery.pcm])  # a ready clip needs no synthesis, only the speaker
         if self._cartesia_client is None:
             raise RuntimeError("Cartesia client unavailable (is_available() gates all callers)")
-        if delivery is not None and delivery.pcm is not None:
-            return iter([delivery.pcm])
         if delivery is not None and delivery.sound_effect:
             return self._sound_effect_bytes(text)
         if for_speaker:
@@ -495,7 +500,7 @@ class TTSHandler:
             protected: Exempt from replace_pending flushes.
             delivery: Optional speed/volume override for this clip.
         """
-        if not self.is_available():
+        if not self.is_available() and not _ready_clip(delivery):
             self.logger.debug("🔇 TTS not available, skipping async speech")
             return False
         dropped_callbacks = []
