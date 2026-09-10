@@ -201,7 +201,11 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
     for (int r = 0; r < 3; ++r)
         for (int c = 0; c < 3; ++c)
             optical_to_nav(r, c) = static_cast<float>(basis[r][c]);
-    const cv::Vec3f origin(static_cast<float>(t.x), static_cast<float>(t.y), static_cast<float>(t.z));
+    // The height correction rides on the camera origin: TF places the camera
+    // from nominal CAD, and the real mount differs by a measurable offset that
+    // otherwise lifts the whole floor toward the marking threshold.
+    const cv::Vec3f origin(static_cast<float>(t.x), static_cast<float>(t.y),
+                           static_cast<float>(t.z + mount_height_correction_m_));
 
     // One matrix from rectified pixels straight to base_link.
     const cv::Matx33f to_nav = optical_to_nav * cloud_rotation_;

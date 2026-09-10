@@ -89,10 +89,19 @@ arm_camera_driver:
     #
     # Optical-frame axes (x right, y down, z forward): pitch rotates about x,
     # roll about z. Per-robot values — do not assume they transfer.
+    # mount_height_correction_m corrects the camera's HEIGHT, which turned out
+    # to dominate once the tilt was removed: a ~14mm offset against a 20mm
+    # marking threshold leaves almost no margin. It applies to the nav cloud
+    # only, since a translation is meaningless in the optical frame the other
+    # clouds are stamped with.
+    #
     # PER-ROBOT. Measured on R7-27 at the -20 deg nav head position; assembly
-    # variation means another unit will need its own. See docs/depth_obstacle_notes.md.
-    mount_pitch_correction_deg: -3.126
+    # variation means another unit will need its own. Values are cumulative —
+    # ground_plane_check prints what to ADD, from the corridor fit.
+    # See docs/depth_obstacle_notes.md.
+    mount_pitch_correction_deg: -3.420
     mount_roll_correction_deg: 0.398
+    mount_height_correction_m: -0.0143
 
     # ── Arm self-masking ──────────────────────────────────────────────────
     #

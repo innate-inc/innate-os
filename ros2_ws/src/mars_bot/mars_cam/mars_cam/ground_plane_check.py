@@ -157,13 +157,6 @@ class GroundPlaneCheck(Node):
         out(f"  residual RMS   {fit.residual.rms:.1f} mm, p95 {fit.residual.p95:.1f} mm")
         out(f"  implied floor height at 1.0m: {fit.height_at(1.0) * 1000:+.1f} mm")
 
-        pitch_fix, roll_fix = mount_correction_for(fit)
-        out("")
-        out("To flatten it, set in config/stereo_depth_estimator.yaml:")
-        out(f"    mount_pitch_correction_deg: {pitch_fix:.3f}")
-        out(f"    mount_roll_correction_deg:  {roll_fix:.3f}")
-        out("  (measure again afterwards; R1 is already removed, so this is mechanical)")
-
         out("")
         out("Floor height by range (mm)")
         out(f"  {'range (m)':<14}{'n':>8}{'mean':>9}{'median':>9}{'p95':>9}{'max':>9}")
@@ -227,8 +220,9 @@ class GroundPlaneCheck(Node):
 
         fit = fit_floor(column)
         if fit is not None:
-            out(f"  floor pitch    {fit.pitch_deg:+.3f} deg, height at base {fit.offset_m * 1000:+.1f} mm")
-            out(f"  residual RMS   {fit.residual.rms:.1f} mm")
+            out(f"  floor pitch    {fit.pitch_deg:+.3f} deg, roll {fit.roll_deg:+.3f} deg")
+            out(f"  height at base {fit.offset_m * 1000:+.1f} mm, residual RMS {fit.residual.rms:.1f} mm")
+            self._recommend(fit)
 
         for threshold, fraction in leak_fractions(column, LEAK_THRESHOLDS_M).items():
             marked = int(np.sum(column[:, 2] > threshold))
@@ -238,6 +232,22 @@ class GroundPlaneCheck(Node):
 
         out(f"  points inside the full corridor box: {int(np.sum(c.mask(points)))}")
         self._report_image_position(column)
+
+    def _recommend(self, fit) -> None:
+        """Corrections to add to the current ones, from the CORRIDOR fit.
+
+        Deliberately not the global fit: beyond the corridor the floor is far
+        enough away that depth noise dominates, and those outliers drag a
+        least-squares plane badly enough to recommend an over-correction.
+        """
+        pitch_fix, roll_fix = mount_correction_for(fit)
+        out = self.get_logger().info
+        out("")
+        out("  ADD these to the current values in config/stereo_depth_estimator.yaml:")
+        out(f"    mount_pitch_correction_deg  += {pitch_fix:+.3f}")
+        out(f"    mount_roll_correction_deg   += {roll_fix:+.3f}")
+        out(f"    mount_height_correction_m   += {-fit.offset_m:+.4f}")
+        out("  then re-run. Values are cumulative and per-robot.")
 
     def _report_image_position(self, column: np.ndarray) -> None:
         """Where the corridor lands on the sensor — centre is where the lens model fits."""
