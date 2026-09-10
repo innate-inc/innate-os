@@ -95,30 +95,35 @@ Agents let the robot act on its own. One combines a set of skills, a prompt, inp
 </p>
 
 ```python
-from brain_client.agents.types import Agent
+from innate_skills.navigate_to_position import NavigateToPosition
+from inputs.micro_input import MicroInput
+
+from innate import Agent, InputRef, SkillRef
 
 
 class NavigateAgent(Agent):
     @property
-    def id(self):
+    def id(self) -> str:
         return "navigate_agent"
 
     @property
-    def display_name(self):
+    def display_name(self) -> str:
         return "Navigate"
 
-    def get_skills(self):
-        return ["innate-os/navigate_to_position"]
+    def get_skills(self) -> list[SkillRef]:
+        return [NavigateToPosition]
 
-    def get_inputs(self):
-        return ["micro"]
+    def get_inputs(self) -> list[InputRef]:
+        return [MicroInput]
 
-    def get_prompt(self):
+    def get_prompt(self) -> str:
         return (
             "You are a helpful robot. When asked, navigate "
             "to the requested location."
         )
 ```
+
+List skills and inputs as the classes themselves. Physical skills have no class, so those stay id strings (`"local/pick_socks"`).
 
 Save it in `workspace/custom_agents/`. Because the robot lives in the physical world, agents observe continuously and can interrupt a running skill when the world changes.
 
@@ -126,11 +131,16 @@ Save it in `workspace/custom_agents/`. Because the robot lives in the physical w
 
 ## Inputs
 
-Stream new data into a running agent — a custom sensor, a webhook, an API. Devices live in `workspace/inputs/` and are requested by name:
+Stream new data into a running agent — a custom sensor, a webhook, an API. Devices live in `workspace/inputs/` and are requested by class:
 
 ```python
-def get_inputs(self):
-    return ["thermometer"]
+from inputs.thermometer_input import ThermometerInput
+
+from innate import InputRef
+
+
+def get_inputs(self) -> list[InputRef]:
+    return [ThermometerInput]
 ```
 
 **[Input devices →](https://docs.innate.bot/software/inputs)**
