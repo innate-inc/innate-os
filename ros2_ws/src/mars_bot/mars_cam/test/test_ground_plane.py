@@ -16,6 +16,8 @@ from mars_cam.ground_plane import (
     height_error_by_range,
     image_radius,
     leak_fractions,
+    mount_correction_for,
+    optical_mount_rotation,
     quaternion_matrix,
     transform_to_base,
 )
@@ -247,3 +249,50 @@ def test_whole_corridor_stays_off_the_lens_edge_at_the_ai_head_position():
 def test_points_behind_the_camera_are_dropped():
     rotation, translation = _forward_camera(pitch_deg=0.0)
     assert image_radius(np.array([[-1.0, 0.0, 0.0]]), rotation, translation, INTRINSICS).size == 0
+
+
+# ------------------------------------------------------- mount correction
+
+
+def _tilted_cloud(error_deg: float, head_deg: float = -20.0):
+    """A truly flat floor, mis-rotated in the optical frame by `error_deg`."""
+    rotation, translation = _forward_camera(pitch_deg=head_deg)
+    x = np.linspace(0.25, 1.0, 200)
+    flat_base = np.column_stack([x, np.zeros_like(x), np.zeros_like(x)])
+    optical = (flat_base - translation) @ rotation
+    corrupted = optical @ optical_mount_rotation(error_deg, 0.0).T
+    return corrupted, rotation, translation
+
+
+def test_an_optical_tilt_reads_as_an_equal_floor_slope():
+    """The mechanism: mount error in the optical frame == floor pitch in base."""
+    for error in (-3.0, -1.5, 1.5, 3.168):
+        corrupted, rotation, translation = _tilted_cloud(error)
+        fit = fit_floor(transform_to_base(corrupted, rotation, translation), band_m=0.5)
+        assert fit is not None
+        assert fit.pitch_deg == pytest.approx(error, abs=1e-3)
+
+
+def test_the_recommended_correction_flattens_the_floor():
+    """Pins the sign the diagnostic prints — a flip here would double the error."""
+    for error in (-3.0, 1.5, 3.168):
+        corrupted, rotation, translation = _tilted_cloud(error)
+        fit = fit_floor(transform_to_base(corrupted, rotation, translation), band_m=0.5)
+        assert fit is not None
+
+        pitch_fix, roll_fix = mount_correction_for(fit)
+        fixed = corrupted @ optical_mount_rotation(pitch_fix, roll_fix).T
+        after = fit_floor(transform_to_base(fixed, rotation, translation), band_m=0.5)
+
+        assert after is not None
+        assert after.pitch_deg == pytest.approx(0.0, abs=1e-3)
+
+
+def test_mount_rotation_is_orthonormal():
+    matrix = optical_mount_rotation(-3.168, 0.5)
+    assert np.allclose(matrix @ matrix.T, np.eye(3), atol=1e-12)
+    assert np.linalg.det(matrix) == pytest.approx(1.0)
+
+
+def test_zero_correction_is_identity():
+    assert np.allclose(optical_mount_rotation(0.0, 0.0), np.eye(3))

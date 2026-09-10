@@ -49,6 +49,11 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     this->declare_parameter<std::string>("footprint_mask_topic", "/mars/main_camera/left/footprint_mask");
     this->declare_parameter<std::string>("footprint_cutout_topic", "/mars/main_camera/left/image_rect_cutout");
 
+    // Mechanical camera-mount error the URDF cannot know about. Measure with
+    // `ros2 run mars_cam ground_plane_check` and negate the reported floor tilt.
+    this->declare_parameter<double>("mount_pitch_correction_deg", 0.0);
+    this->declare_parameter<double>("mount_roll_correction_deg", 0.0);
+
     // VPI creation parameters
     this->declare_parameter<int>("max_disparity", 64);
     this->declare_parameter<int>("include_diagonals", 1);
@@ -90,6 +95,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     footprint_overlay_topic_ = this->get_parameter("footprint_overlay_topic").as_string();
     footprint_mask_topic_ = this->get_parameter("footprint_mask_topic").as_string();
     footprint_cutout_topic_ = this->get_parameter("footprint_cutout_topic").as_string();
+    mount_pitch_correction_deg_ = this->get_parameter("mount_pitch_correction_deg").as_double();
+    mount_roll_correction_deg_ = this->get_parameter("mount_roll_correction_deg").as_double();
 
     max_disparity_ = this->get_parameter("max_disparity").as_int();
     include_diagonals_ = this->get_parameter("include_diagonals").as_int();

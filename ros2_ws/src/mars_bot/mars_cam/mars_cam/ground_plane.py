@@ -145,6 +145,28 @@ def transform_to_base(points: np.ndarray, rotation: np.ndarray, translation: np.
     return points @ rotation.T + translation
 
 
+def optical_mount_rotation(pitch_deg: float, roll_deg: float) -> np.ndarray:
+    """Mirror of ``updateCloudRotation``'s mount fix, in the optical frame.
+
+    Optical axes are x right, y down, z forward, so pitch is a rotation about x
+    and roll about z. Kept in step with the C++ so the sign convention has one
+    executable definition rather than two prose descriptions.
+    """
+    p, r = np.radians(pitch_deg), np.radians(roll_deg)
+    pitch = np.array([[1.0, 0.0, 0.0], [0.0, np.cos(p), -np.sin(p)], [0.0, np.sin(p), np.cos(p)]])
+    roll = np.array([[np.cos(r), -np.sin(r), 0.0], [np.sin(r), np.cos(r), 0.0], [0.0, 0.0, 1.0]])
+    return roll @ pitch
+
+
+def mount_correction_for(fit: PlaneFit) -> tuple[float, float]:
+    """The mount_pitch/roll_correction_deg that flattens a measured floor.
+
+    An optical-frame tilt of e degrees shows up as a base_link floor slope of
+    exactly e, so the correction is its negation.
+    """
+    return -fit.pitch_deg, -fit.roll_deg
+
+
 @dataclass(frozen=True)
 class Intrinsics:
     fx: float

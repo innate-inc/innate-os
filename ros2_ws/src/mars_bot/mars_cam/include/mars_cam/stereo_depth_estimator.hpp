@@ -91,6 +91,7 @@ class StereoDepthEstimator : public rclcpp::Node {
     void leftCameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg);
     void rightCameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg);
     bool initCalibrationFromCameraInfo();
+    void updateCloudRotation(const cv::Mat& R1);
 
     // ── Disparity Filter Chain (filters/*.cpp) ──────────────────────────
     struct FilterTimings {
@@ -185,6 +186,14 @@ class StereoDepthEstimator : public rclcpp::Node {
     cv::Mat P1_;  // left projection matrix (3×4), for point cloud intrinsics
     double baseline_, focal_length_;
     int jpeg_quality_{80};
+
+    // Rotation taking a back-projected point from the rectified left frame into
+    // camera_optical_frame, which is the UNRECTIFIED left camera in the URDF.
+    // R1 alone leaves the cloud rotated relative to the frame it is stamped
+    // with; the mount corrections absorb the residual mechanical error on top.
+    cv::Matx33f cloud_rotation_{cv::Matx33f::eye()};
+    double mount_pitch_correction_deg_{0.0};
+    double mount_roll_correction_deg_{0.0};
 
     // Rectification maps (calibration resolution)
     cv::Mat map1_left_, map2_left_;
