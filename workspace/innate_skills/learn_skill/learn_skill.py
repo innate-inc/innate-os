@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 
-from innate_skills.learn_skill.forge import Forge, ForgeUnreachable, extract_code, system_prompt
+from innate_skills.learn_skill.forge import Coder, Forge, ForgeUnreachable, extract_code, system_prompt
 from innate_skills.learn_skill.gate import Draft, DraftRejected, check
 from innate_skills.learn_skill.performance import LearningMode
 
@@ -41,7 +41,11 @@ class LearnSkill(Skill):
         client = ProxyClient()
         if not client.is_available():
             self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
-        forge = Forge(client, system_prompt())
+        try:
+            coder = Coder.from_env()
+        except ValueError as misconfigured:
+            self.fail(str(misconfigured))
+        forge = Forge(client, coder, system_prompt())
         prompt = f"Write a skill: {description}"
         written: set[Path] = set()  # this run's drafts; whatever never passes its trial is deleted
         draft: Draft | None = None

@@ -1,12 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""The coding model behind learn_skill: a streamed chat through the Innate proxy that keeps its rounds."""
+"""The coding model behind learn_skill: a streamed chat through the Innate proxy that keeps its rounds.
+
+Which model writes the skill is one setting, ``INNATE_LEARN_CODER="<proxy service>/<model>"``
+(in the environment or the repo-root .env): ``openai/gpt-6-astra`` by default,
+``gemini/gemini-3.6-flash`` for the cheaper fallback. Both speak OpenAI-style chat completions
+through the proxy."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from httpx import HTTPError
@@ -17,9 +24,10 @@ from brain_client.common.script_paths import get_innate_skills_dir
 if TYPE_CHECKING:
     from innate_proxy import ProxyClient
 
-SERVICE = "gemini"
+CODER_ENV = "INNATE_LEARN_CODER"
+DEFAULT_CODER = "openai/gpt-6-astra"
+REASONING_EFFORT = "low"  # keeps a draft under a minute; GPT-6 Astra does not take `none` (or temperature)
 ENDPOINT = "/v1/chat/completions"
-MODEL = "gemini-3.6-flash"
 EXEMPLARS = ("head_emotion.py", "turn_in_place.py")
 _FENCE = re.compile(r"```(?:python)?\n(.*?)```", re.DOTALL)
 
@@ -56,9 +64,34 @@ class ForgeUnreachable(Exception):
     """The coding model could not be reached; the round is worth retrying."""
 
 
+@dataclass(frozen=True)
+class Coder:
+    """A proxy service and a model id, from ``INNATE_LEARN_CODER``."""
+
+    service: str
+    model: str
+
+    @classmethod
+    def from_env(cls) -> Coder:
+        spec = os.environ.get(CODER_ENV, DEFAULT_CODER)
+        service, _, model = spec.partition("/")
+        if not service or not model:
+            raise ValueError(f"{CODER_ENV} must be '<proxy service>/<model>', got {spec!r}")
+        return cls(service, model)
+
+    def request(self, messages: list[dict[str, str]]) -> dict[str, object]:
+        body: dict[str, object] = {"model": self.model, "messages": messages, "stream": True}
+        if self.service == "openai":
+            body["reasoning_effort"] = REASONING_EFFORT
+        else:
+            body["temperature"] = 0.2
+        return body
+
+
 class Forge:
-    def __init__(self, client: ProxyClient, system: str):
+    def __init__(self, client: ProxyClient, coder: Coder, system: str):
         self._client = client
+        self._coder = coder
         self._messages: list[dict[str, str]] = [{"role": "system", "content": system}]
 
     def ask(self, prompt: str) -> Iterator[str]:
@@ -71,9 +104,9 @@ class Forge:
         self._messages.append({"role": "assistant", "content": "".join(reply)})
 
     def _stream(self) -> Iterator[str]:
-        body = {"model": MODEL, "temperature": 0.2, "stream": True, "messages": self._messages}
+        body = self._coder.request(self._messages)
         try:
-            with self._client.request_stream(SERVICE, ENDPOINT, json=body, timeout=180.0) as response:
+            with self._client.request_stream(self._coder.service, ENDPOINT, json=body, timeout=180.0) as response:
                 response.raise_for_status()
                 for line in response.iter_lines():
                     if not line.startswith("data: ") or line == "data: [DONE]":
