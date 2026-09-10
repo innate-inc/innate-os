@@ -41,7 +41,7 @@ function setLinkedText(el, text) {
     if (start > at) el.append(text.slice(at, start));
     const link = document.createElement("a");
     link.className = "chat-link";
-    link.href = href.startsWith("http") ? href : `https://${href}`;
+    link.href = /^https?:\/\//i.test(href) ? href : `https://${href}`;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
     link.textContent = href;
