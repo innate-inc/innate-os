@@ -7816,10 +7816,24 @@ select.skill-input {
   gap: 6px;
 }
 
-.sim-environment-section select {
-  width: 100%;
-  min-width: 0;
+/* One tile per world, in the prop tiles' shape: a line icon over its name, the current one lit. */
+.sim-environment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+  gap: 7px;
 }
+.sim-environment-tile {
+  display: grid;
+  min-width: 0;
+  min-height: 56px;
+  padding: 6px 3px 5px;
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+}
+.sim-environment-tile svg { width: 20px; height: 20px; }
+.sim-environment-tile span { max-width: 100%; line-height: 1.15; text-align: center; overflow-wrap: anywhere; }
+.sim-environment-tile:disabled { opacity: 0.5; cursor: wait; }
 
 .sim-scene-section-header {
   display: flex;

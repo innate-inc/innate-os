@@ -1245,13 +1245,13 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     }
   };
   document.addEventListener("pointerdown", onOutsideClick, true);
-  // Using the environment picker is the lesson; the world changing under it is the proof.
+  // Using the environment tiles is the lesson; the world changing under them is the proof.
   const onSceneChange = (/** @type {Event} */ event) => {
-    if (!(event.target instanceof Element) || !event.target.closest(".sim-environment-section")) return;
+    if (!(event.target instanceof Element) || !event.target.closest(".sim-environment-section button")) return;
     sceneTaught = true;
     render(true);
   };
-  root.addEventListener("change", onSceneChange, true);
+  root.addEventListener("click", onSceneChange, true);
   saveBtn.addEventListener("click", () => void save());
   discardBtn.addEventListener("click", discard);
   opts.onCreateAgent?.(createAgent);
@@ -1329,7 +1329,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       document.removeEventListener("innate:play-intro", onPlayIntro);
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
       document.removeEventListener("pointerdown", onOutsideClick, true);
-      root.removeEventListener("change", onSceneChange, true);
+      root.removeEventListener("click", onSceneChange, true);
       sceneCue?.();
       opts.onCreateAgent?.(() => {});
       uncue();

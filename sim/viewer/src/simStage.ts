@@ -42,6 +42,26 @@ const PANEL_ID = "sim-scene-setup";
 
 const VIEW_FOR: Record<string, CameraView> = { main: "main", arm: "arm", orbit: "orbit" };
 
+// The scene setup's world tiles: one line icon per environment pack, keyed by its id, in
+// the rail's icon style. A pack this map does not know gets the globe.
+const icon = (paths: string): string =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const ENVIRONMENT_ICONS: Record<string, string> = {
+  apartment: icon('<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/>'),
+  backrooms: icon(
+    '<path d="M13 4h3a2 2 0 0 1 2 2v14"/><path d="M2 20h3"/><path d="M13 20h9"/><path d="M10 12v.01"/><path d="M13 4.562v16.157a1 1 0 0 1-1.242.97L5 20V5.562a2 2 0 0 1 1.515-1.94l4-1A2 2 0 0 1 13 4.561Z"/>',
+  ),
+  intersection: icon(
+    '<path d="M12 13v8"/><path d="M12 3v3"/><path d="M18 6a2 2 0 0 1 1.387.56l2.307 2.22a1 1 0 0 1 0 1.44l-2.307 2.22A2 2 0 0 1 18 13H6a2 2 0 0 1-1.387-.56l-2.306-2.22a1 1 0 0 1 0-1.44l2.306-2.22A2 2 0 0 1 6 6z"/>',
+  ),
+  void: icon(
+    '<path d="M10.1 2.18a9.93 9.93 0 0 1 3.8 0"/><path d="M17.6 3.71a9.95 9.95 0 0 1 2.69 2.7"/><path d="M21.82 10.1a9.93 9.93 0 0 1 0 3.8"/><path d="M20.29 17.6a9.95 9.95 0 0 1-2.7 2.69"/><path d="M13.9 21.82a9.94 9.94 0 0 1-3.8 0"/><path d="M6.4 20.29a9.95 9.95 0 0 1-2.69-2.7"/><path d="M2.18 13.9a9.93 9.93 0 0 1 0-3.8"/><path d="M3.71 6.4a9.95 9.95 0 0 1 2.7-2.69"/>',
+  ),
+};
+const ENVIRONMENT_ICON_FALLBACK = icon(
+  '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+);
+
 // Storage access throws in restricted contexts (blocked cookies, opaque
 // origins); a lost preference must not take the stage down.
 type StorageScope = "local" | "session";
@@ -197,12 +217,24 @@ export function createSimStage(
   environmentSection.hidden = true;
   const environmentLabel = document.createElement("h3");
   environmentLabel.textContent = "Environment";
-  const environmentSelect = document.createElement("select");
-  environmentSelect.className = "skill-input";
-  environmentSelect.setAttribute("aria-label", "Environment");
-  environmentSelect.onchange = () => session.switchEnvironment(environmentSelect.value);
-  environmentSection.append(environmentLabel, environmentSelect);
+  const environmentGrid = document.createElement("div");
+  environmentGrid.className = "sim-environment-grid";
+  environmentGrid.setAttribute("role", "group");
+  environmentGrid.setAttribute("aria-label", "Environment");
+  environmentSection.append(environmentLabel, environmentGrid);
   setupBody.appendChild(environmentSection);
+  const environmentTiles = new Map<string, HTMLButtonElement>();
+  const makeEnvironmentTile = (id: string, name: string) => {
+    const tile = makeChip("", `Switch the world to ${name}`);
+    tile.classList.add("sim-environment-tile");
+    tile.innerHTML = ENVIRONMENT_ICONS[id] ?? ENVIRONMENT_ICON_FALLBACK;
+    const label = document.createElement("span");
+    label.textContent = name;
+    tile.append(label);
+    tile.onclick = () => session.switchEnvironment(id);
+    environmentTiles.set(id, tile);
+    return tile;
+  };
 
   const objectsSection = document.createElement("section");
   objectsSection.className = "sim-scene-section";
@@ -758,10 +790,13 @@ export function createSimStage(
     const optionsKey = environments.map(({ id, display_name }) => `${id}\0${display_name}`).join("\n");
     if (optionsKey !== environmentOptionsKey) {
       environmentOptionsKey = optionsKey;
-      environmentSelect.replaceChildren(...environments.map(({ id, display_name }) => new Option(display_name, id)));
+      environmentTiles.clear();
+      environmentGrid.replaceChildren(...environments.map(({ id, display_name }) => makeEnvironmentTile(id, display_name)));
     }
-    environmentSelect.value = environment?.id ?? "";
-    environmentSelect.disabled = pending?.state === "loading";
+    for (const [id, tile] of environmentTiles) {
+      setChipOn(tile, id === environment?.id);
+      tile.disabled = pending?.state === "loading";
+    }
     if (pending?.state === "loading") {
       setWaiting(`loading robot and ${pending.display_name.toLowerCase()}...`);
     } else if (pending?.state === "failed") {
