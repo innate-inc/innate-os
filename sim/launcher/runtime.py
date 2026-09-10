@@ -2584,8 +2584,8 @@ def _world_model_sources_digest(config: dict[str, object]) -> str:
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
     mars_bot = os_repo / "ros2_ws" / "src" / "mars_bot"
     driver = mars_bot / "mars_sim_driver" / "mars_sim_driver"
-    candidates = sorted((mars_bot / "mars_sim" / "urdf").glob("*"))
-    candidates += sorted((mars_bot / "mars_sim" / "meshes").glob("*"))
+    candidates = sorted((mars_bot / "mars_description" / "urdf").glob("*"))
+    candidates += sorted((mars_bot / "mars_description" / "meshes").glob("*"))
     candidates += [driver / name for name in ("world.py", "core.py", "constants.py", "environments.py", "traffic.py")]
     candidates += [sim_repo / "assets" / ".assets-tag"]
     candidates += sorted((sim_repo / "environments").rglob("manifest.json"))

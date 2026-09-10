@@ -12,7 +12,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     # Get the package share directories
     pkg_dir = get_package_share_directory("mars_bringup")
-    sim_pkg_dir = get_package_share_directory("mars_sim")
+    sim_pkg_dir = get_package_share_directory("mars_description")
 
     # Read URDF file for robot_state_publisher
     urdf_file = os.path.join(sim_pkg_dir, "urdf", "mars.urdf")

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 """
-KDL-based IK node loading URDF directly from mars_sim.
+KDL-based IK node loading URDF directly from mars_description.
 """
 
 import math
@@ -30,8 +30,8 @@ class KDLIKNode(Node):
         timeout = self.get_parameter("timeout").value
         maxiter = max(1, int(timeout / eps))
 
-        # 2) Load URDF file directly from mars_sim package
-        pkg_dir = get_package_share_directory("mars_sim")
+        # 2) Load URDF file directly from mars_description package
+        pkg_dir = get_package_share_directory("mars_description")
         urdf_path = os.path.join(pkg_dir, "urdf", "mars.urdf")
         if not os.path.exists(urdf_path):
             self.get_logger().fatal(f"URDF file not found: {urdf_path}")

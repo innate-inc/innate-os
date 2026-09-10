@@ -38,9 +38,9 @@ off `onChallenge` existing to stay sim-only — nothing here judges anything.
 The render assets (`public/models` glb, `public/physics` hulls for the
 overlay) are not in git: `./innate-sim up` mounts them straight out of the
 asset image. `/robot` is different -- it is served directly from
-`ros2_ws/src/mars_bot/mars_sim`, the tracked source, so a `mars.urdf` edit
+`ros2_ws/src/mars_bot/mars_description`, the tracked source, so a `mars.urdf` edit
 reaches the browser with no copy step and no republish. That is also why
-`loader.packages = { mars_sim: "/robot" }` in scene.ts is literally true:
+`loader.packages = { mars_description: "/robot" }` in scene.ts is literally true:
 `/robot` IS the package.
 
 ## Build

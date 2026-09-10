@@ -31,7 +31,7 @@ export const APARTMENT_VIEWER: EnvironmentViewer = {
   collision_dir: "physics/apartment_collisions_v2",
 };
 const publicUrl = (path: string): string => `/${path.replace(/^\/+/, "")}`;
-// /robot is the mars_sim ROS package itself (served straight from ros2_ws, see
+// /robot is the mars_description ROS package itself (served straight from ros2_ws, see
 // webapp/proxy/https_server.py), so the URDF sits at its real path inside it.
 const ROBOT_URDF_URL = "/robot/urdf/mars.urdf";
 
@@ -732,7 +732,7 @@ export class SimScene {
    */
   async loadRobot(queue: LoadQueue): Promise<{ done: Promise<URDFRobot> }> {
     const loader = new URDFLoader();
-    loader.packages = { mars_sim: "/robot" };
+    loader.packages = { mars_description: "/robot" };
 
     // Route each STL through the shared queue (bounded concurrency + byte
     // progress) instead of URDFLoader's default all-at-once loading.

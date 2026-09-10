@@ -18,7 +18,7 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>mars_bringup</exec_depend>
-  <exec_depend>mars_sim</exec_depend>
+  <exec_depend>mars_description</exec_depend>
 
   <depend>rclcpp</depend>
   

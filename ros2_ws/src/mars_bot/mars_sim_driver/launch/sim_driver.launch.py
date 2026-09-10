@@ -25,7 +25,7 @@ def generate_launch_description():
             "`mars_sim_driver world_server` yourself and point VIRTUAL_MARS_REMOTE at it (host:port)."
         )
 
-    urdf = Path(get_package_share_directory("mars_sim")) / "urdf" / "mars.urdf"
+    urdf = Path(get_package_share_directory("mars_description")) / "urdf" / "mars.urdf"
 
     return LaunchDescription(
         [

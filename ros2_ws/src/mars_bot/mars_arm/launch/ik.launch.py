@@ -6,7 +6,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    # KDL-based IK node; loads the URDF directly from mars_sim (see ik.py).
+    # KDL-based IK node; loads the URDF directly from mars_description (see ik.py).
     return LaunchDescription(
         [
             Node(
