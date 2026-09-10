@@ -124,9 +124,9 @@ class StereoCalibrator(Node):
         # Target selection: "charuco" (production) or "checkerboard" (A/B experiment)
         self.declare_parameter("target_type", TARGET_CHARUCO)
 
-        # ChArUco board parameters
-        self.declare_parameter("squares_x", 17)  # 8 squares wide
-        self.declare_parameter("squares_y", 9)  # 11 squares tall
+        # ChArUco board parameters (calib.io 17x9 squares -> 16x8 = 128 interpolated corners)
+        self.declare_parameter("squares_x", 17)  # squares across, 272mm at 16mm pitch
+        self.declare_parameter("squares_y", 9)  # squares down, 144mm at 16mm pitch
         self.declare_parameter("square_size", 0.016)  # 16mm in meters
         self.declare_parameter("marker_size", 0.012)  # 12mm in meters
         self.declare_parameter("dictionary_id", cv2.aruco.DICT_4X4_250)
