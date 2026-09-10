@@ -90,19 +90,12 @@ class MarsArmNode : public rclcpp::Node {
                                                                   const std::vector<double>& goal, double duration,
                                                                   double dt);
     bool planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
-                                  GainMode trajectory_gain_mode = GainMode::SCHEDULED,
-                                  TrajectoryGuard* guard = nullptr);
-    bool guardTripped(TrajectoryGuard& guard);
-    bool guardStops(TrajectoryGuard& guard);
-    void holdArmWhereItIs();
-    // Fold to rest_pose keeping the standing grip, stopping at the first
-    // obstacle. The idle watchdog runs it whenever the arm has been left
-    // lying on the floor with nothing commanding it.
+                                  GainMode trajectory_gain_mode = GainMode::SCHEDULED);
+    // Fold to rest_pose keeping the standing grip. The idle watchdog runs it
+    // once torque is back and nothing has commanded the arm for a while.
     void idleRestCallback();
     RestOutcome foldToRest(const char* trigger);
     RestOutcome runRestFold(const char* trigger);
-    bool liftOffTheFloor(const std::vector<double>& measured, double grip, std::string& stopped);
-    bool foldStage(const std::vector<double>& target, double duration, std::string& stopped);
     void armRestCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                          std::shared_ptr<std_srvs::srv::Trigger::Response> response);
     bool planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,
@@ -141,15 +134,10 @@ class MarsArmNode : public rclcpp::Node {
     // Direct pass-through (guarded by arm_command_mutex_)
     std::array<double, 6> latest_target_{};
     bool has_target_{false};
-    // What the pass-through last wrote (after joint-limit clamping) and when:
-    // the guard measures tracking error against what the servos were actually
-    // told, not the raw waypoint. Also under arm_command_mutex_.
-    std::array<double, 6> written_target_{};
-    std::chrono::steady_clock::time_point written_at_{};
-    // Last /mars/arm/commands arrival; a guarded fold yields to it.
+    // Last /mars/arm/commands arrival and last arm service call; with
+    // last_trajectory_end_ they are what the idle watchdog means by "nothing
+    // is commanding the arm".
     std::atomic<std::chrono::steady_clock::time_point> stream_command_at_{std::chrono::steady_clock::time_point{}};
-    // Last arm service call; with stream_command_at_ and last_trajectory_end_
-    // it is what the idle watchdog means by "nothing is commanding the arm".
     std::atomic<std::chrono::steady_clock::time_point> last_service_at_{std::chrono::steady_clock::time_point{}};
     rclcpp::TimerBase::SharedPtr idle_rest_timer_;
     // Set where the arm goes limp (boot, torque_off, reboot, a tripped servo);

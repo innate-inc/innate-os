@@ -135,7 +135,7 @@
 # mars_arm:
 #   ros__parameters:
 #     max_jerk: 150.0               # rad/s^3 trajectory jerk limit (0 disables)
-#     auto_rest: true               # fold the arm to rest when it is left lying on the floor
+#     auto_rest: true               # fold the arm to rest when nothing commands it after boot or a torque cycle
 
 # ── Camera: main (stereo; hardware only) ──────────────────────────────
 # Resolution is staged: the sensor captures the full side-by-side stereo frame at

@@ -6,9 +6,9 @@
     trajectory_rate_hz: 100.0
     max_jerk: 150.0  # rad/s³ jerk limit for trajectories (0 = disabled)
 
-    # Where the arm folds to on its own when boot, torque_on or fix_error leaves
-    # it lying on the floor with nothing commanding it for a few seconds
-    # (auto_rest: false keeps only the on-demand /mars/arm/rest). Radians in
+    # Where the arm folds to on its own when boot, a torque cycle or fix_error
+    # leaves it with nothing commanding it for a few seconds (auto_rest: false
+    # keeps only the on-demand /mars/arm/rest). Radians in
     # the /mars/arm/state convention; j6 is replaced by the standing grip
     # target. Keep j1-j5 in step with Manipulation.REST.
     rest_pose: [1.5708, -1.2195, 1.5723, -0.3, 0.0, 0.0]

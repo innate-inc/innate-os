@@ -46,7 +46,7 @@ To tune something, **uncomment a whole stanza** (the `node:`, `ros__parameters:`
 | `joystick_controller` `joystick` | `slow_mode_factor` | `0.25` |
 | `bringup` `battery` | `warning_percentage` / `critical_percentage` | `20` / `10` |
 | `bringup` `safety` (hard `/cmd_vel` clamp) | `max_speed` / `max_angular_speed` | `0.4` / `2.5` |
-| `mars_arm` | `max_jerk`, `auto_rest` (fold to rest when left on the floor) | `150.0`, `true` |
+| `mars_arm` | `max_jerk`, `auto_rest` (fold to rest when left uncommanded after boot or a torque cycle) | `150.0`, `true` |
 | `main_camera_driver` (hardware) | `width/height` (capture), `publish_stereo_width/height`, `publish_left_width/height` (published size; downstream follows it automatically), `fps`, `jpeg_quality`, `auto_exposure_mode`, `exposure`, `gain`, `default_gain`, `target_brightness`, `ae_kp` | see template |
 | `arm_camera_driver` (hardware) | `width/height` (capture), `fps` | see template |
 | `webrtc_streamer` (teleop stream) | `main_width/main_height`, `arm_width/arm_height` (encode size per camera) | see template |

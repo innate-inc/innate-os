@@ -27,51 +27,20 @@ static constexpr double kScheduledHoldTimeoutS = 5.0;
 // that jolt shook a carried object out of the gripper. At the folded rest
 // pose — the long-idle case the decay exists for — these loads are ~0.
 static constexpr int kDecayMaxLoad = 100;
-// Rest fold. The guard trips when an arm joint sits this far behind what the
-// control loop wrote for it for this many consecutive waypoints (10 ms each
-// at 100 Hz); unobstructed folds from the floor peak just under 0.10 rad.
-static constexpr double kRestContactErrorRad = 0.20;
-static constexpr int kContactStrikes = 5;
-// A joint is guarded once it has tracked within the limit, or after this: a
-// limp shoulder falls ~0.5 rad past its software limit and needs a moment at
-// profile speed to close that gap.
-static constexpr double kContactLockOnTimeoutS = 1.0;
-// A guarded trajectory is done when the arm has arrived, not when its last
-// command was sent: an obstacle at the target is met on the last waypoints.
-static constexpr double kSettleTimeoutS = 1.0;
-// How long an arm left lying on the floor after boot or a torque cycle waits
-// for a command before folding itself; a skill recovering a tripped servo
-// commands the arm well within this.
+// Rest fold: how long an arm waits for a command after boot or a torque cycle
+// before folding itself; a skill recovering a tripped servo commands the arm
+// well within this.
 static constexpr double kRestWhenIdleS = 5.0;
 static constexpr double kRestFoldDurationS = 3.0;
 static constexpr double kAtRestRad = 0.05;
-// Metres below the shoulder joint. The floor is ~5.5 cm down; the rest pose
-// keeps wrist and tip ~2 cm above this line and a collapsed tip is at -5 cm.
-static constexpr double kOnFloorM = -0.02;
-// Carpet hooks the fingertips the moment they slide, so the tip goes up before
-// anything moves along the floor: a gripper lying flatter than kFlatGripperRad
-// pivots up about the shoulder (its wrist is on the floor and cannot lift it),
-// one pitched below kWristLevelMaxPitchRad levels about the wrist, a steeper
-// one lifts as is.
-static constexpr double kFlatGripperRad = 0.3;
-static constexpr double kWristLevelMaxPitchRad = 0.785;
-static constexpr double kRestLevelDurationS = 1.0;
-// Then shoulder and elbow raise the wrist (forearm level, ~10 cm above the
-// shoulder), slower than the fold: at 1.5 s the shoulder fell 0.22 rad behind.
-static constexpr double kLiftShoulderRad = -0.9;
-static constexpr double kLiftElbowRad = 0.9;
-static constexpr double kRestLiftDurationS = 2.5;
 // The shoulder may only swing back past this while the base yaw is outside
 // (kYawRestrictedMin, kYawRestrictedMax); nearer the centre the arm hits the
-// body. A fold that starts inside the zone holds the shoulder here until the
-// base has yawed clear: releasing the clamp mid-sweep steps the shoulder
-// faster than it can follow, which the guard reads as contact.
+// body.
 static constexpr double kShoulderClearanceRad = -0.5;
 static constexpr double kYawRestrictedMin = -1.35;
 static constexpr double kYawRestrictedMax = 1.25;
-static constexpr double kRestShoulderDurationS = 1.5;
-// j1-j5. The gripper (j6) is never guarded or retargeted: a gripping claw's
-// standing position error IS the grip force.
+// j1-j5. The gripper (j6) is never retargeted: a gripping claw's standing
+// position error IS the grip force.
 static constexpr size_t kArmJoints = 5;
 
 // Joints whose /mars/arm/state sign is the servo's negated (0-based index).
@@ -89,8 +58,8 @@ inline int jointEncoder(double rad, size_t joint) {
     return static_cast<int>((rad / (2 * M_PI)) * 4096 + 2048);
 }
 
-// Wrist and gripper tip in the arm's plane, metres from the shoulder joint
-// (x forward, z up), from the upper arm, forearm and wrist-to-tip links.
+// Gripper tip in the arm's plane, metres from the shoulder joint (x forward,
+// z up), from the upper arm, forearm and wrist-to-tip links.
 struct PlanarPoint {
     double x;
     double z;
@@ -107,9 +76,6 @@ inline PlanarPoint gripperTip(double q2, double q3, double q4) {
     const PlanarPoint wrist = wristPoint(q2, q3);
     const double a234 = q2 + q3 + q4;
     return {wrist.x + L45_x * std::cos(a234), wrist.z - L45_x * std::sin(a234)};
-}
-inline bool onFloor(double q2, double q3, double q4) {
-    return std::min(wristPoint(q2, q3).z, gripperTip(q2, q3, q4).z) <= kOnFloorM;
 }
 
 inline bool isX330(const std::string& motor_type) {
@@ -154,19 +120,6 @@ struct GainProfile {
 
 // Gain mode: SCHEDULED = interpolate near/far by extension, TELEOP = flat teleop gains
 enum class GainMode { SCHEDULED, TELEOP };
-
-// Stops a guarded trajectory at the first joint that meets resistance, when
-// torque goes off, or when a streaming command takes the arm over; says why.
-struct TrajectoryGuard {
-    explicit TrajectoryGuard(double max_error) : max_error_rad(max_error) {}
-    double max_error_rad;
-    std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
-    std::array<bool, kArmJoints> locked_on{};
-    std::array<int, kArmJoints> strikes{};
-    bool tracking = false;   // every guarded joint was within max_error_rad at the last check
-    int blocked_joint = -1;  // 0-based; set when a joint met resistance
-    std::string stop_reason;
-};
 
 struct RestOutcome {
     bool at_rest;
