@@ -9,8 +9,12 @@
 #include <limits>
 #include <algorithm>
 #include <array>
+#include <iomanip>
+#include <sstream>
 #include <vector>
 
+#include <diagnostic_msgs/msg/diagnostic_status.hpp>
+#include <diagnostic_msgs/msg/key_value.hpp>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -249,6 +253,12 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
     std::vector<ColumnPoint> in_column;
     ground_candidates.reserve(static_cast<size_t>((dw / step) * (dh / step)) / 4);
     in_column.reserve(ground_candidates.capacity());
+    size_t weighted_points = 0;
+    double match_confidence_sum = 0.0;
+    double range_confidence_sum = 0.0;
+    double weight_sum = 0.0;
+    float match_confidence_min = 1.0f;
+    float match_confidence_max = 0.0f;
 
     for (int py = 0; py < dh; py += step) {
         for (int px = 0; px < dw; px += step) {
@@ -309,10 +319,18 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
                 const int cyi = std::min(static_cast<int>(cp.py * conf_scale), confidence.rows - 1);
                 match_confidence = confidence.at<float>(cyi, cxi);
             }
-            const float weight = match_confidence * range_confidence(z, static_cast<float>(confidence_full_trust_m_),
-                                                                     static_cast<float>(confidence_no_trust_m_));
+            const float range_weight =
+                range_confidence(z, static_cast<float>(confidence_full_trust_m_), static_cast<float>(confidence_no_trust_m_));
+            const float weight = match_confidence * range_weight;
             if (weight <= 0.0f)
                 continue;
+
+            ++weighted_points;
+            match_confidence_sum += match_confidence;
+            range_confidence_sum += range_weight;
+            weight_sum += weight;
+            match_confidence_min = std::min(match_confidence_min, match_confidence);
+            match_confidence_max = std::max(match_confidence_max, match_confidence);
 
             const cv::Vec3f in_odom = R_odom * in_base + t_odom;
             observations.push_back({in_odom[0], in_odom[1], in_odom[2], weight, z});
@@ -320,24 +338,59 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
     }
 
     std::vector<std::array<float, 3>> marks;
+    EvidenceGrid::IntegrateStats evidence_stats;
+    double dt = 0.0;
     if (evidence_enabled_) {
-        const double dt = last_evidence_stamp_.nanoseconds() == 0
-                              ? 0.0
-                              : std::clamp((ts - last_evidence_stamp_).seconds(), 0.0, 1.0);
+        dt = last_evidence_stamp_.nanoseconds() == 0 ? 0.0 : std::clamp((ts - last_evidence_stamp_).seconds(), 0.0, 1.0);
         last_evidence_stamp_ = ts;
-        const auto stats = evidence_.integrate(observations, dt);
+        evidence_stats = evidence_.integrate(observations, dt);
         marks = evidence_.confirmed();
-        // Five stages that all fail by silently dropping points; without this
-        // the only symptom is an empty topic and no clue which stage ate them.
-        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                             "nav cloud: %zu in corridor -> %zu voxels -> %zu supported -> %zu confirmed "
-                             "(mean weight %.3f, %zu tracked)",
-                             stats.observations, stats.voxels_seen, stats.voxels_supported, stats.confirmed,
-                             stats.mean_weight, stats.tracked);
     } else {
         marks.reserve(observations.size());
         for (const auto& o : observations)
             marks.push_back({o.x, o.y, o.z});
+    }
+
+    if (pointcloud_nav_stats_pub_->get_subscription_count() > 0) {
+        diagnostic_msgs::msg::DiagnosticStatus status;
+        status.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+        status.name = "mars_cam/points_nav_evidence";
+        status.hardware_id = this->get_fully_qualified_name();
+        status.message = evidence_enabled_ ? "evidence_enabled" : "evidence_disabled_passthrough";
+        auto append = [&status](const std::string& key, const std::string& value) {
+            diagnostic_msgs::msg::KeyValue kv;
+            kv.key = key;
+            kv.value = value;
+            status.values.push_back(std::move(kv));
+        };
+        auto append_size = [&append](const std::string& key, size_t value) { append(key, std::to_string(value)); };
+        auto append_float = [&append](const std::string& key, double value) {
+            std::ostringstream os;
+            os << std::fixed << std::setprecision(4) << value;
+            append(key, os.str());
+        };
+
+        append("evidence_enabled", evidence_enabled_ ? "true" : "false");
+        append("confidence_map_available", conf_scale > 0.0f ? "true" : "false");
+        append_float("confidence_threshold_norm", static_cast<double>(confidence_threshold_) / 65535.0);
+        append_size("observations", evidence_enabled_ ? evidence_stats.observations : observations.size());
+        append_size("voxels_seen", evidence_enabled_ ? evidence_stats.voxels_seen : 0);
+        append_size("voxels_supported", evidence_enabled_ ? evidence_stats.voxels_supported : 0);
+        append_size("confirmed", evidence_enabled_ ? evidence_stats.confirmed : 0);
+        append_size("tracked", evidence_enabled_ ? evidence_stats.tracked : 0);
+        append_size("published_points", marks.size());
+        append_float("mean_weight", weighted_points ? weight_sum / static_cast<double>(weighted_points) : 0.0);
+        append_float("mean_match_confidence", weighted_points ? match_confidence_sum / static_cast<double>(weighted_points) : 0.0);
+        append_float("min_match_confidence", weighted_points ? match_confidence_min : 0.0);
+        append_float("max_match_confidence", weighted_points ? match_confidence_max : 0.0);
+        append_float("mean_range_confidence", weighted_points ? range_confidence_sum / static_cast<double>(weighted_points) : 0.0);
+        append_float("dt_sec", evidence_enabled_ ? dt : 0.0);
+        append_size("weight_samples", weighted_points);
+
+        diagnostic_msgs::msg::DiagnosticArray diag;
+        diag.header.stamp = ts;
+        diag.status.push_back(std::move(status));
+        pointcloud_nav_stats_pub_->publish(std::move(diag));
     }
 
     // Published in nav_frame_, NOT the evidence frame. STVL derives an

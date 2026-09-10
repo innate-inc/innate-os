@@ -233,7 +233,7 @@ TEST(EvidenceGrid, RemembersAnObstacleThatLeavesTheCorridor) {
     // the obstacle slides out of the narrow corridor, evidence evaporates, and
     // the robot runs it over on the final approach it cannot see.
     EvidenceParams p = defaults();
-    p.max_score = 15.0;
+    p.max_score = 10.0;
     p.decay_per_second = 1.0;
     p.clear_threshold = 0.5;
     EvidenceGrid grid(p);
@@ -243,20 +243,20 @@ TEST(EvidenceGrid, RemembersAnObstacleThatLeavesTheCorridor) {
         grid.integrate(blob(1.025f, 0.025f, 0.125f, 0.95f, 40), 0.125);
     ASSERT_TRUE(grid.confirmed_at(1.025f, 0.025f, 0.125f));
 
-    // Now it is out of view for ten seconds while the robot maneuvers.
-    for (int i = 0; i < 80; ++i)
+    // It must survive a normal maneuver out of view.
+    for (int i = 0; i < 64; ++i)
         grid.integrate({}, 0.125);
     EXPECT_TRUE(grid.confirmed_at(1.025f, 0.025f, 0.125f)) << "must survive the maneuver";
 
-    // (max_score - clear_threshold)/decay = 14.5s, so it does eventually go.
-    for (int i = 0; i < 60; ++i)
+    // (max_score - clear_threshold)/decay = 9.5s, so it does eventually go.
+    for (int i = 0; i < 24; ++i)
         grid.integrate({}, 0.125);
     EXPECT_FALSE(grid.confirmed_at(1.025f, 0.025f, 0.125f)) << "must not be remembered forever";
 }
 
 TEST(EvidenceGrid, MemoryScalesWithHowWellEstablishedTheObstacleWas) {
     EvidenceParams p = defaults();
-    p.max_score = 15.0;
+    p.max_score = 10.0;
     auto survives_after = [&p](int observed_frames, int blind_frames) {
         EvidenceGrid grid(p);
         for (int i = 0; i < observed_frames; ++i)

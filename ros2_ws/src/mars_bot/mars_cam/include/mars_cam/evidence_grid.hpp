@@ -39,7 +39,7 @@ struct EvidenceParams {
     // (max_score - clear_threshold) / decay_per_second. Long enough to cover a
     // maneuver during which the obstacle leaves the corridor, and to cover the
     // permanent near-field blind spot where nothing can be seen at all.
-    double max_score{15.0};
+    double max_score{10.0};
 };
 
 struct Observation {

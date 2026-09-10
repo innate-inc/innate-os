@@ -17,6 +17,7 @@ find_package(tf2_ros REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(stereo_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(tf2 REQUIRED)
 
@@ -148,6 +149,7 @@ if(VPI_FOUND)
   ament_target_dependencies(stereo_depth_estimator_component 
     rclcpp 
     rclcpp_components
+    diagnostic_msgs
     sensor_msgs
     stereo_msgs
     message_filters
@@ -244,6 +246,7 @@ if(VPI_FOUND)
   ament_target_dependencies(stereo_depth_estimator
     rclcpp
     rclcpp_components
+    diagnostic_msgs
     sensor_msgs
     stereo_msgs
     message_filters

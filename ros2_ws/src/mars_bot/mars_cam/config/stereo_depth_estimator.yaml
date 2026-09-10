@@ -134,6 +134,7 @@ arm_camera_driver:
     # z_min IS the benchmark: 15mm and under can be rolled over at low cost,
     # anything above it must be flagged.
     pointcloud_nav_topic: "/mars/main_camera/points_nav"
+    pointcloud_nav_stats_topic: "/mars/main_camera/points_nav/stats"
     nav_frame: "base_link"
     nav_roi.x_min: 0.25        # front edge of the footprint
     nav_roi.x_max: 1.00
@@ -169,12 +170,9 @@ arm_camera_driver:
     evidence.near_field_range: 0.6
     evidence.near_field_weight: 0.75
     # max_score sets how long a depth obstacle is REMEMBERED once it stops being
-    # observed: (max_score - clear_threshold) / decay_per_second, so 15.0 gives
-    # ~14.5s. That covers a maneuver during which the obstacle slides out of the
-    # corridor — the robot steers around it, loses sight of it, and must not run
-    # it over. It is also the last line of defence for the permanent blind spot:
-    # at the -20 deg head the camera sees nothing closer than ~0.13m, so the
-    # final approach is driven entirely from memory.
+    # observed: (max_score - clear_threshold) / decay_per_second. 10.0 gives
+    # ~9.5s, which covers a normal maneuver while limiting how long a false
+    # positive can remain lethal.
     #
     # Raise THIS rather than lowering decay_per_second: decay also sets the net
     # accumulation rate, so lowering it would speed up marking and weaken the
@@ -182,13 +180,12 @@ arm_camera_driver:
     # confirmation at ~4 frames.
     #
     # Side effect worth knowing: memory scales with how well-established the
-    # obstacle was. 2.3s of observation banks the full 14.5s; a 1s glimpse banks
-    # ~6s. A confirmed false positive also persists this long, which is the
-    # trade being made — running something over is the worse failure.
+    # obstacle was. 2.3s of observation banks the full ~9.5s; a 1s glimpse banks
+    # less.
     #
     # Depth-only: the evidence grid never sees lidar, so the costmap's
     # obstacle_layer is unaffected.
-    evidence.max_score: 15.0
+    evidence.max_score: 10.0
     # Confidence falls linearly from 1.0 to 0.0 across this range, because
     # disparity shrinks as 1/Z: the same 1px matching error is worth 6mm at
     # 1m and 24cm at 2m. A far point should not carry a near point's authority.
