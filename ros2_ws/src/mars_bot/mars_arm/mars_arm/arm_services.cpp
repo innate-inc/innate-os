@@ -346,7 +346,6 @@ void MarsArmNode::armTorqueOnCallback(const std::shared_ptr<std_srvs::srv::Trigg
             RCLCPP_WARN(this->get_logger(), "Failed to sync on torque on: %s", e.what());
         }
         arm_torque_enabled_ = true;  // under the bus lock, so a racing torque_off's `false` lands after
-        rest_pending_ = true;
     } catch (const std::exception& e) {
         response->success = false;
         response->message = std::string("Failed: ") + e.what();
@@ -372,6 +371,7 @@ void MarsArmNode::armTorqueOffCallback(const std::shared_ptr<std_srvs::srv::Trig
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         arm_torque_enabled_ = false;
+        rest_pending_ = true;
         response->success = true;
         response->message = "Disabled torque for all arm servos";
         RCLCPP_INFO(this->get_logger(), "Successfully disabled torque for all arm servos");
@@ -410,6 +410,7 @@ void MarsArmNode::armRebootServosCallback(const std::shared_ptr<std_srvs::srv::T
         dynamixel_->enableTorque(7);
 
         arm_torque_enabled_ = false;
+        rest_pending_ = true;
         response->success = true;
         response->message = "Rebooted and reinitialized all servos (arm torque off, head torque on)";
         RCLCPP_INFO(this->get_logger(), "Successfully rebooted and reinitialized all servos");
@@ -518,9 +519,13 @@ void MarsArmNode::moveHeadToAngle(double logical_angle_deg) {
     moveHeadToAngleLocked(logical_angle_deg);
 }
 
+// Also records the command: the pass-through re-sends latest_head_command_
+// with every arm command and would otherwise drag the head back.
 void MarsArmNode::moveHeadToAngleLocked(double logical_angle_deg) {
     int encoder_value = logicalAngleToEncoder(logical_angle_deg);
     dynamixel_->setGoalPosition(7, encoder_value);
+    std::lock_guard<std::mutex> head_lock(head_command_mutex_);
+    latest_head_command_ = encoder_value;
 }
 
 void MarsArmNode::publishHeadPosition(int encoder_value) {

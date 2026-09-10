@@ -190,9 +190,6 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     } catch (const std::exception& e) {
         RCLCPP_ERROR(this->get_logger(), "Could not read the servos at start-up: %s", e.what());
     }
-    // initializeServos levelled the head; the pass-through re-sends this with
-    // every arm command, and the power-on reading would drag it back.
-    latest_head_command_ = logicalAngleToEncoder(0.0);
 
     // ── Timers ──
     RCLCPP_DEBUG(this->get_logger(), "Creating control timer at %.1f Hz", control_frequency_);

@@ -152,9 +152,9 @@ class MarsArmNode : public rclcpp::Node {
     // it is what the idle watchdog means by "nothing is commanding the arm".
     std::atomic<std::chrono::steady_clock::time_point> last_service_at_{std::chrono::steady_clock::time_point{}};
     rclcpp::TimerBase::SharedPtr idle_rest_timer_;
-    // Set where the arm is left with nothing owning it (boot, torque_on,
-    // fix_error); cleared by the next command or fold. Without it the watchdog
-    // would fold an arm a skill parked at the floor while it waits on a model.
+    // Set where the arm goes limp (boot, torque_off, reboot, a tripped servo);
+    // cleared by the next command or fold. Without it the watchdog would fold
+    // an arm a skill parked at the floor while it waits on a model.
     std::atomic<bool> rest_pending_{true};
 
     // Joint state tracking for planning
