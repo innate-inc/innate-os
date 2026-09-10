@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""The robot side of a demonstration-conditioned run: fresh telemetry, bounded
-motion, and the guards that stand between a model's proposal and the arm.
+"""The robot side of a run: fresh telemetry, bounded motion, and the guards
+that stand between a model's proposal and the arm.
 
-Every physical action goes through here. The policy only ever proposes; nothing
-it returns reaches a servo until the state it reasoned about has been re-read
-and still holds, because a decision costs seconds and the scene moves.
+Every physical action goes through ArmRuntime. It is composed into a skill
+rather than inherited from, so the skill stays a plain Skill and this stays
+testable against a stub. The policy only ever proposes; nothing it returns
+reaches a servo until the state it reasoned about has been re-read and still
+holds, because a decision costs seconds and the scene moves.
 """
 
 import base64
@@ -15,11 +17,11 @@ import queue
 import threading
 import time
 import uuid
+from typing import Any, NoReturn, Protocol
 
 from brain_client.common.geometry import quat_to_rpy
-from innate import HeadState, MainImage, Manipulation, Mobility, Skill, WristImage
+from innate import HeadState, Manipulation, Mobility
 from innate.demonstration import forward_poses
-from innate.icl_trace import ICL_TRACE_TOPIC, IclTrace
 from innate.imitation_actions import (
     BASE_LATERAL_FLOOR,
     BASE_LATERAL_PER_M,
@@ -154,41 +156,65 @@ class LiveObservation:
         self.node.destroy_node()
 
 
-class _ImitationSkill(Skill):
-    """Shared execution for demonstration-conditioned skills. Underscore-prefixed
-    so the registry treats it as a helper base rather than a runnable skill."""
+class SkillHost(Protocol):
+    """What ArmRuntime needs from the skill it acts through. Stating it as a
+    protocol keeps the dependency one-way and documents the contract: the
+    framework injects these onto the skill, and every guard below needs its
+    cancellation and failure semantics."""
 
-    head_position: HeadState
-    main_image: MainImage
-    wrist_image: WristImage
     manipulation: Manipulation
     mobility: Mobility
+    head_position: HeadState
+    node: Any
+    logger: Any
+    decision_timeout: float
 
-    decision_timeout = 175
-    grip_strength = 0.4
+    @property
+    def name(self) -> str: ...
+    def check_cancelled(self) -> None: ...
+    def sleep(self, seconds: float) -> None: ...
+    def fail(self, message: str) -> NoReturn: ...
+    def feedback(self, message: str, image_b64: str | None = None) -> None: ...
 
-    def _read(self, monitor, after, xml):
+
+class ArmRuntime:
+    """Guarded execution for one run, acting through the skill that owns it.
+
+    The skill holds the robot interfaces the framework injected and the
+    cancellation and failure semantics every guard needs, so this takes it as a
+    collaborator. The live monitor and the robot model are fixed for a run and
+    live here rather than being threaded through every call.
+    """
+
+    def __init__(self, skill: SkillHost, monitor: LiveObservation, xml: str):
+        self.skill = skill
+        self.monitor = monitor
+        self.xml = xml
+        self._base_origin = None
+        self._base_step_active = False
+
+    def read(self, after):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            self.check_cancelled()
-            observation = monitor.snapshot(after, xml)
+            self.skill.check_cancelled()
+            observation = self.monitor.snapshot(after, self.xml)
             if observation is not None:
                 return observation
-            self.sleep(0.05)
-        self.fail("Fresh synchronized cameras, arm state and odometry unavailable")
+            self.skill.sleep(0.05)
+        self.skill.fail("Fresh synchronized cameras, arm state and odometry unavailable")
 
-    def _observe(self, monitor, after, xml):
-        observation = self._read(monitor, after, xml)
+    def observe(self, after):
+        observation = self.read(after)
         base = observation["base"]
         if self._base_origin is None:
             self._base_origin = base[:]
         origin = self._base_origin
         angle = abs(math.atan2(math.sin(base[2] - origin[2]), math.cos(base[2] - origin[2])))
         if not getattr(self, "_base_step_active", False) and (math.dist(base[:2], origin[:2]) > 0.02 or angle > 0.05):
-            self.fail("Base moved while the arm was working")
+            self.skill.fail("Base moved while the arm was working")
         return observation
 
-    def _decide(self, policy, observation, history):
+    def decide(self, policy, observation, history):
         result = queue.Queue(maxsize=1)
 
         def request():
@@ -199,33 +225,20 @@ class _ImitationSkill(Skill):
                 result.put((None, type(exc).__name__))
 
         threading.Thread(target=request, daemon=True).start()
-        deadline = time.monotonic() + self.decision_timeout
+        deadline = time.monotonic() + self.skill.decision_timeout
         while time.monotonic() < deadline:
-            self.check_cancelled()
+            self.skill.check_cancelled()
             try:
                 value, error = result.get_nowait()
                 if error:
-                    self.fail("Demonstration model request failed (" + error + ")")
+                    self.skill.fail("Demonstration model request failed (" + error + ")")
                 return value
             except queue.Empty:
-                self.sleep(0.05)
-        self.fail("Demonstration model request timed out")
-
-    def make_trace(self, run):
-        """This run's live mirror for the In Context Learning page. Silent when
-        the skill runs without a ROS node, so tests need no publisher."""
-        from std_msgs.msg import String
-
-        publisher = None if self.node is None else self.node.create_publisher(String, ICL_TRACE_TOPIC, 10)
-
-        def publish(payload):
-            if publisher is not None:
-                publisher.publish(String(data=payload))
-
-        return IclTrace(self.name, run.name, publish, self.logger)
+                self.skill.sleep(0.05)
+        self.skill.fail("Demonstration model request timed out")
 
     @staticmethod
-    def _motion_outcome(status, reason, measured, target):
+    def motion_outcome(status, reason, measured, target):
         return {
             "status": status,
             "reason": reason,
@@ -239,45 +252,45 @@ class _ImitationSkill(Skill):
             ),
         }
 
-    def _try_move(self, target, current, monitor, xml):
+    def try_move(self, target, current):
         x, y, z, roll, pitch, yaw = target
-        joints = self.manipulation.ik(x, y, z, roll=roll, pitch=pitch, yaw=yaw)
+        joints = self.skill.manipulation.ik(x, y, z, roll=roll, pitch=pitch, yaw=yaw)
         if joints is None:
-            return self._motion_outcome(
+            return self.motion_outcome(
                 "unreachable", "IK rejected the requested EE pose; no movement issued", current, target
             )
         # The driver clamps a backward shoulder silently, so the move would run and
         # land short instead of failing. Judge the solution and refuse it here.
-        floor = self.manipulation.joint2_floor(joints[0])
+        floor = self.skill.manipulation.joint2_floor(joints[0])
         if joints[1] < floor:
-            return self._motion_outcome(
+            return self.motion_outcome(
                 "unreachable",
                 f"This pose needs the shoulder folded back to joint2={joints[1]:.2f}, past the {floor:.2f} the body "
                 "allows here; no movement issued. Raise the target, bring it forward, or move the base.",
                 current,
                 target,
             )
-        self.check_cancelled()
-        self.manipulation.move_to(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=1.5, block=False)
+        self.skill.check_cancelled()
+        self.skill.manipulation.move_to(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=1.5, block=False)
         # Health failures, cancellation, and uncertain/time-out outcomes still propagate.
-        self._wait_motion(monitor, xml)
-        measured = self._observe(monitor, time.monotonic() - 0.2, xml)
+        self.wait_motion()
+        measured = self.observe(time.monotonic() - 0.2)
         if math.dist(measured["pose"][:3], target[:3]) > 0.015:
-            return self._motion_outcome(
+            return self.motion_outcome(
                 "not_reached",
                 "Move completed but missed the EE target by more than 1.5 cm; driver joint limits or tracking may prevent this pose",
                 measured,
                 target,
             )
-        return self._motion_outcome("reached", "Measured EE position is within 1.5 cm of target", measured, target)
+        return self.motion_outcome("reached", "Measured EE position is within 1.5 cm of target", measured, target)
 
-    def _try_joint_step(self, decision, current, monitor, xml):
+    def try_joint_step(self, decision, current):
         target = joint_target(decision, current)
         joint = decision.get("joint_step", decision["pose"])
         index = int(joint[0]) - 1
         # A shoulder already sagging a hair past the floor must not veto a step on
         # another joint, so only a joint2 step is held to the floor exactly.
-        floor = self.manipulation.joint2_floor(target[0])
+        floor = self.skill.manipulation.joint2_floor(target[0])
         if target[1] < floor - (0.0 if index == 1 else 0.01):
             return dict(
                 status="rejected",
@@ -291,10 +304,10 @@ class _ImitationSkill(Skill):
         measured = current
         try:
             while True:
-                self.check_cancelled()
-                self.manipulation.stream_joints(target[:5], max_speed=0.25)
-                self.sleep(0.04)
-                measured = self._observe(monitor, time.monotonic() - 0.2, xml)
+                self.skill.check_cancelled()
+                self.skill.manipulation.stream_joints(target[:5], max_speed=0.25)
+                self.skill.sleep(0.04)
+                measured = self.observe(time.monotonic() - 0.2)
                 error = abs(measured["qpos"][index] - target[index])
                 if error <= min(0.02, abs(joint[1]) / 3):
                     status = "reached"
@@ -303,7 +316,7 @@ class _ImitationSkill(Skill):
                     status = "not_reached"
                     break
         finally:
-            self.manipulation.stream_stop()
+            self.skill.manipulation.stream_stop()
         # The other four joints are commanded to hold. Streaming runs the driver's soft
         # teleop gains, so a loaded elbow settles a couple of degrees under its hold —
         # real, and not this step failing, so it is reported apart from the error.
@@ -331,7 +344,7 @@ class _ImitationSkill(Skill):
             reason=reason,
         )
 
-    def _try_base_step(self, distance, current, monitor, xml):
+    def try_base_step(self, distance, current):
         start = current["base"][:]
         measured = current
         started = time.monotonic()
@@ -342,7 +355,7 @@ class _ImitationSkill(Skill):
         self._base_step_active = True
         try:
             while True:
-                self.check_cancelled()
+                self.skill.check_cancelled()
                 dx, dy = measured["base"][0] - start[0], measured["base"][1] - start[1]
                 forward = dx * math.cos(start[2]) + dy * math.sin(start[2])
                 lateral = -dx * math.sin(start[2]) + dy * math.cos(start[2])
@@ -367,11 +380,11 @@ class _ImitationSkill(Skill):
                 if time.monotonic() - started > 5.0:
                     status = "not_reached"
                     break
-                self.mobility.send_cmd_vel(linear_x=math.copysign(0.04, distance), duration=0.15)
-                self.sleep(0.05)
-                measured = self._observe(monitor, time.monotonic() - 0.2, xml)
+                self.skill.mobility.send_cmd_vel(linear_x=math.copysign(0.04, distance), duration=0.15)
+                self.skill.sleep(0.05)
+                measured = self.observe(time.monotonic() - 0.2)
         finally:
-            self.mobility.stop()
+            self.skill.mobility.stop()
             self._base_origin = measured["base"][:]
             self._base_step_active = False
         return dict(
@@ -385,12 +398,12 @@ class _ImitationSkill(Skill):
             else f"Base adjustment stopped{wandered}; reassess measured distance and choose another approach",
         )
 
-    def _wait_motion(self, monitor, xml):
+    def wait_motion(self):
         deadline = time.monotonic() + 8
-        while self.manipulation.moving:
-            self.check_cancelled()
+        while self.skill.manipulation.moving:
+            self.skill.check_cancelled()
             if time.monotonic() > deadline:
-                self.fail("Arm motion timed out")
-            self._observe(monitor, time.monotonic() - 1, xml)
-            self.sleep(0.05)
-        self.manipulation.wait(timeout=1)
+                self.skill.fail("Arm motion timed out")
+            self.observe(time.monotonic() - 1)
+            self.skill.sleep(0.05)
+        self.skill.manipulation.wait(timeout=1)

@@ -20,6 +20,7 @@ import numpy as np
 
 from innate.demonstration import Demonstration
 from innate.imitation_actions import ACTIONS, check_decision
+from innate.openai_responses import responses_api
 
 if TYPE_CHECKING:
     from innate.icl_trace import IclTrace
@@ -55,14 +56,9 @@ class ImitationPolicy:
     trace: "IclTrace | None" = None
 
     def __init__(self, demo, chunk_size=1):
-        from innate_proxy import ProxyClient
-
-        self.client = ProxyClient()
-        if not self.client.is_available():
-            raise ValueError("OpenAI access through the Innate proxy is required")
-        # Request uncompressed JSON: this proxy path can strip the upstream
-        # encoding header, and reading a still-gzipped body fails in json.loads.
-        self.client.get_sync_client().headers["Accept-Encoding"] = "identity"
+        # Either the owner's own OPENAI_API_KEY or the Innate proxy; the route is
+        # recorded on the run so which account paid is never a guess.
+        self.call, self.route = responses_api()
         self.demo = demo
         self.chunk_size = chunk_size
         self.frames = {f["index"]: f for f in demo.frames}
@@ -201,9 +197,7 @@ class ImitationPolicy:
             "max_output_tokens": 2500,
             "input": [{"role": "user", "content": content}],
         }
-        with self.client.request_stream("openai", "/v1/responses", method="POST", json=body, timeout=40) as response:
-            response.raise_for_status()
-            value = json.loads(response.read())
+        value = self.call(body, timeout=40)
         calls = [item for item in value.get("output", []) if item.get("type") == "function_call"]
         if value.get("status") != "completed" or len(calls) != 1:
             raise ValueError("Expected one completed demonstration tool call")

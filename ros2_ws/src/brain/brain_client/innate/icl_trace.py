@@ -108,3 +108,17 @@ class IclTrace:
             self._publish(json.dumps(jsonable(payload), allow_nan=False))
         except Exception as e:  # noqa: BLE001 — a debug channel must never become the run's failure
             self._logger.warning(f"[{self._skill}] icl trace '{event}' dropped: {e}")
+
+
+def run_trace(skill, run_id: str) -> IclTrace:
+    """This run's live mirror, published from the skill's own node. Silent when
+    the skill runs without one, so a test needs no publisher."""
+    from std_msgs.msg import String
+
+    publisher = None if skill.node is None else skill.node.create_publisher(String, ICL_TRACE_TOPIC, 10)
+
+    def publish(payload: str) -> None:
+        if publisher is not None:
+            publisher.publish(String(data=payload))
+
+    return IclTrace(skill.name, run_id, publish, skill.logger)
