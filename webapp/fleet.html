@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Node Fleet · Innate OS</title>
+<link rel="icon" href="/public/innate-logo.avif">
+<style>
+:root {
+  --bg: #0a0a0c;
+  --panel: #111114;
+  --panel-2: #17171b;
+  --hairline: rgb(255 255 255 / 8%);
+  --hairline-strong: rgb(255 255 255 / 16%);
+  --text: #e7e7ea;
+  --muted: #8a8a93;
+  --faint: #5c5c66;
+  --accent: #e8a33d;
+  --accent-faint: rgb(232 163 61 / 12%);
+  --ok: #56c28c;
+  --danger: #d96a5a;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+  --w0: #e8a33d; --w1: #5fb8a3; --w2: #6b93d6; --w3: #a389d4; --w4: #56c28c;
+  --w5: #d96a5a; --w6: #b58ce6; --w7: #7fc4e0; --w8: #d4b45a; --w9: #8f9bb3;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 1500px; margin: 0 auto; padding: 0 20px 80px; }
+
+/* ---------- header ---------- */
+header {
+  position: sticky; top: 0; z-index: 20;
+  background: linear-gradient(var(--bg) 72%, rgb(10 10 12 / 0%));
+  padding: 22px 0 14px;
+}
+.titlebar { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+h1 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.host {
+  font-family: var(--font-mono); font-size: 11px; color: var(--muted);
+  border: 1px solid var(--hairline); border-radius: 3px; padding: 2px 7px;
+}
+.stamp { font-family: var(--font-mono); font-size: 11px; color: var(--faint); margin-left: auto; }
+
+.stats { display: flex; gap: 1px; background: var(--hairline); border: 1px solid var(--hairline); border-radius: 5px; overflow: hidden; flex-wrap: wrap; }
+.stat { background: var(--panel); padding: 10px 16px; flex: 1 1 118px; }
+.stat .k { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+.stat .v { font-size: 21px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; margin-top: 3px; }
+.stat .v s { text-decoration: none; font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 3px; }
+
+/* ---------- allocation strip ---------- */
+.striplab { display: flex; justify-content: space-between; align-items: baseline; margin: 26px 0 8px; }
+.striplab h2 { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 0; }
+.striplab .hint { font-size: 11.5px; color: var(--faint); }
+.strip { display: flex; height: 46px; border-radius: 4px; overflow: hidden; border: 1px solid var(--hairline); background: var(--panel); }
+.seg { position: relative; min-width: 2px; cursor: pointer; border: none; padding: 0; transition: filter .12s; }
+.seg:hover, .seg:focus-visible { filter: brightness(1.55); outline: none; z-index: 2; }
+.seg.dim { opacity: 0.22; }
+
+/* ---------- controls ---------- */
+.controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 26px 0 16px; }
+.segmented { display: flex; border: 1px solid var(--hairline); border-radius: 5px; overflow: hidden; }
+.segmented button {
+  background: var(--panel); color: var(--muted); border: none; border-right: 1px solid var(--hairline);
+  font: inherit; font-size: 12.5px; padding: 7px 14px; cursor: pointer;
+}
+.segmented button:last-child { border-right: none; }
+.segmented button[aria-pressed="true"] { background: var(--accent-faint); color: var(--accent); }
+.segmented button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+input[type="search"] {
+  background: var(--panel); border: 1px solid var(--hairline); border-radius: 5px;
+  color: var(--text); font: inherit; font-size: 12.5px; padding: 7px 11px; min-width: 190px;
+}
+input[type="search"]:focus-visible { outline: none; border-color: var(--accent); }
+
+.toggle { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); cursor: pointer; user-select: none; }
+.toggle input { accent-color: var(--accent); }
+.spacer { margin-left: auto; }
+
+button.act {
+  background: var(--panel); border: 1px solid var(--hairline); border-radius: 5px;
+  color: var(--text); font: inherit; font-size: 12.5px; padding: 7px 14px; cursor: pointer;
+}
+button.act:hover { border-color: var(--hairline-strong); }
+button.act:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.act[disabled] { opacity: .5; cursor: default; }
+
+/* ---------- groups ---------- */
+.group { margin-bottom: 26px; }
+.ghead { display: flex; align-items: center; gap: 10px; padding: 0 0 9px; border-bottom: 1px solid var(--hairline); margin-bottom: 12px; }
+.swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.gname { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; }
+.gmeta { font-family: var(--font-mono); font-size: 11px; color: var(--faint); margin-left: auto; font-variant-numeric: tabular-nums; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 9px; }
+
+.card {
+  background: var(--panel); border: 1px solid var(--hairline); border-left: 2px solid var(--edge, var(--hairline));
+  border-radius: 4px; padding: 10px 12px; cursor: pointer; text-align: left;
+  font: inherit; color: inherit; display: block; width: 100%;
+  transition: background .12s, border-color .12s;
+}
+.card:hover { background: var(--panel-2); border-color: var(--hairline-strong); border-left-color: var(--edge); }
+.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.card.sel { background: var(--panel-2); }
+.card.hide { display: none; }
+
+.crow { display: flex; align-items: baseline; gap: 8px; }
+.clabel { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmem { margin-left: auto; font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text); flex: none; }
+.cmem s { text-decoration: none; color: var(--faint); font-size: 10px; }
+
+.bar { height: 3px; background: rgb(255 255 255 / 6%); border-radius: 2px; margin: 7px 0; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--edge, var(--muted)); border-radius: 2px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.chip {
+  font-family: var(--font-mono); font-size: 10px; padding: 2px 6px; border-radius: 3px;
+  background: rgb(255 255 255 / 5%); color: var(--muted); border: 1px solid transparent;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chip.host { background: var(--accent-faint); color: var(--accent); }
+.chip.helper { color: var(--faint); font-style: italic; }
+.kind {
+  font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; font-family: var(--font-mono);
+  color: var(--faint); border: 1px solid var(--hairline); border-radius: 3px; padding: 1px 5px; flex: none;
+}
+.kind.launch { color: var(--danger); border-color: rgb(217 106 90 / 30%); }
+.kind.container { color: var(--ok); border-color: rgb(86 194 140 / 30%); }
+
+.empty { color: var(--faint); font-size: 12.5px; padding: 26px 0; text-align: center; }
+
+/* ---------- detail ---------- */
+.detail {
+  position: fixed; right: 0; top: 0; bottom: 0; width: min(460px, 92vw); z-index: 40;
+  background: var(--panel); border-left: 1px solid var(--hairline-strong);
+  padding: 20px; overflow-y: auto; transform: translateX(100%); transition: transform .18s ease;
+  box-shadow: -18px 0 46px rgb(0 0 0 / 45%);
+}
+.detail.open { transform: none; }
+.detail h3 { font-family: var(--font-mono); font-size: 14px; margin: 0 0 3px; word-break: break-all; }
+.detail .close { position: absolute; top: 14px; right: 14px; }
+.dgrid { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; margin: 16px 0; font-size: 12.5px; }
+.dgrid dt { color: var(--faint); font-family: var(--font-mono); font-size: 11px; }
+.dgrid dd { margin: 0; font-variant-numeric: tabular-nums; }
+.detail pre {
+  background: var(--bg); border: 1px solid var(--hairline); border-radius: 4px; padding: 10px;
+  font-family: var(--font-mono); font-size: 10.5px; line-height: 1.6; color: var(--muted);
+  white-space: pre-wrap; word-break: break-all; margin: 0;
+}
+.detail h4 { font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin: 18px 0 7px; font-family: var(--font-mono); font-weight: 500; }
+
+footer { margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--hairline); font-size: 11.5px; color: var(--faint); line-height: 1.8; }
+footer code { font-family: var(--font-mono); color: var(--muted); }
+details summary { cursor: pointer; color: var(--muted); }
+details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.helperlist { font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); margin-top: 7px; line-height: 1.9; }
+
+.tip {
+  position: fixed; z-index: 60; pointer-events: none; background: var(--panel-2);
+  border: 1px solid var(--hairline-strong); border-radius: 4px; padding: 6px 9px;
+  font-family: var(--font-mono); font-size: 11px; white-space: nowrap; opacity: 0; transition: opacity .1s;
+}
+.tip.on { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="titlebar">
+      <h1>Node fleet</h1>
+      <span class="host" id="host">—</span>
+      <span class="stamp" id="stamp"></span>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">Processes</div><div class="v" id="s-proc">—</div></div>
+      <div class="stat"><div class="k">ROS nodes</div><div class="v" id="s-nodes">—</div></div>
+      <div class="stat"><div class="k">Fleet PSS</div><div class="v" id="s-pss">—</div></div>
+      <div class="stat"><div class="k">Nodes per process</div><div class="v" id="s-ratio">—</div></div>
+      <div class="stat"><div class="k">System memory</div><div class="v" id="s-mem">—</div></div>
+    </div>
+  </header>
+
+  <div class="striplab">
+    <h2>Where the memory goes</h2>
+    <span class="hint">every process, width &prop; PSS, coloured by tmux window</span>
+  </div>
+  <div class="strip" id="strip"></div>
+
+  <div class="controls">
+    <div class="segmented" role="group" aria-label="Group by">
+      <button data-mode="window" aria-pressed="true">By tmux window</button>
+      <button data-mode="memory" aria-pressed="false">By memory</button>
+      <button data-mode="density" aria-pressed="false">By nodes per process</button>
+    </div>
+    <input type="search" id="q" placeholder="Filter nodes or processes…" aria-label="Filter">
+    <label class="toggle"><input type="checkbox" id="auto"> Auto-refresh <span style="color:var(--faint)">10s</span></label>
+    <span class="spacer"></span>
+    <button class="act" id="refresh">Refresh</button>
+  </div>
+
+  <div id="groups"></div>
+
+  <footer>
+    <p>
+      <strong style="color:var(--ok)">Green edge</strong> = a process hosting more than one ROS node.
+      Those are nearly free: a second node in an existing process costs about 0.6&nbsp;MB, while a
+      second <em>process</em> costs roughly 50&nbsp;MB of rclpy&nbsp;+&nbsp;Zenoh floor before it does
+      any work. <strong style="color:var(--danger)">LAUNCH</strong> processes are
+      <code>ros2 launch</code>/<code>ros2 run</code> supervisors — idle after boot, but still resident.
+    </p>
+    <p>
+      PSS (proportional set size) divides each shared page by the number of processes mapping it, so
+      these numbers sum honestly across the fleet. RSS would count libc, rclcpp and Zenoh in full
+      against every one of them.
+    </p>
+    <details id="unatt"></details>
+  </footer>
+</div>
+
+<aside class="detail" id="detail" aria-hidden="true">
+  <button class="act close" id="close">Close</button>
+  <h3 id="d-title">—</h3>
+  <div id="d-kind" style="font-size:11.5px;color:var(--muted)"></div>
+  <dl class="dgrid" id="d-grid"></dl>
+  <h4>Nodes in this process</h4>
+  <div class="chips" id="d-nodes"></div>
+  <h4>Command line</h4>
+  <pre id="d-cmd"></pre>
+</aside>
+
+<div class="tip" id="tip"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const WIN_COLORS = 10;
+let DATA = null, MODE = "window", QUERY = "", SELECTED = null, timer = null;
+
+const colorFor = (i) => `var(--w${i % WIN_COLORS})`;
+const mb = (n) => n >= 1024 ? (n / 1024).toFixed(2) + " GB" : Math.round(n) + " MB";
+
+/** Flatten the window→pane→process tree into rows that carry their origin. */
+function rows() {
+  const out = [];
+  DATA.windows.forEach((w, wi) => {
+    w.panes.forEach((p) => {
+      p.processes.forEach((proc) => {
+        out.push({ ...proc, window: w.name, windowIndex: wi, pane: p.index });
+      });
+    });
+  });
+  return out;
+}
+
+function matches(r) {
+  if (!QUERY) return true;
+  const q = QUERY.toLowerCase();
+  return r.label.toLowerCase().includes(q)
+      || r.window.toLowerCase().includes(q)
+      || (r.nodes || []).some((n) => n.toLowerCase().includes(q));
+}
+
+function renderStats() {
+  const t = DATA.totals, m = DATA.mem || {};
+  $("host").textContent = DATA.host;
+  $("stamp").textContent = "sampled " + DATA.generated;
+  $("s-proc").textContent = t.processes;
+  const extra = (DATA.unattributed || []).length;
+  $("s-nodes").innerHTML = t.nodes + (extra ? `<s>+${extra} helper</s>` : "");
+  $("s-pss").textContent = mb(t.pss_mb);
+  const withNodes = rows().filter((r) => (r.nodes || []).length);
+  const ratio = withNodes.length ? (t.nodes / withNodes.length) : 0;
+  $("s-ratio").innerHTML = ratio.toFixed(2) + `<s>${withNodes.length} node procs</s>`;
+  $("s-mem").innerHTML = m.total_mb
+    ? `${Math.round(100 * m.used_mb / m.total_mb)}%<s>${mb(m.used_mb)} of ${mb(m.total_mb)}</s>` : "—";
+}
+
+function renderStrip() {
+  const strip = $("strip");
+  strip.textContent = "";
+  const all = rows().sort((a, b) => a.windowIndex - b.windowIndex || b.pss_mb - a.pss_mb);
+  const total = all.reduce((s, r) => s + r.pss_mb, 0) || 1;
+  all.forEach((r) => {
+    const seg = document.createElement("button");
+    seg.className = "seg" + (matches(r) ? "" : " dim");
+    seg.style.flex = `${r.pss_mb} 0 0`;
+    seg.style.background = colorFor(r.windowIndex);
+    seg.style.opacity = matches(r) ? (0.45 + 0.55 * Math.min(1, r.pss_mb / 160)) : 0.18;
+    seg.setAttribute("aria-label", `${r.label}, ${mb(r.pss_mb)}, window ${r.window}`);
+    seg.addEventListener("mouseenter", (e) => showTip(e, r, total));
+    seg.addEventListener("mousemove", (e) => showTip(e, r, total));
+    seg.addEventListener("mouseleave", hideTip);
+    seg.addEventListener("focus", (e) => showTip(e, r, total));
+    seg.addEventListener("blur", hideTip);
+    seg.addEventListener("click", () => openDetail(r));
+    strip.appendChild(seg);
+  });
+}
+
+function showTip(e, r, total) {
+  const tip = $("tip");
+  const pct = (100 * r.pss_mb / total).toFixed(1);
+  tip.textContent = `${r.label} · ${mb(r.pss_mb)} (${pct}%) · ${r.window}`;
+  tip.classList.add("on");
+  const rect = e.target.getBoundingClientRect();
+  const x = e.clientX || rect.left + rect.width / 2;
+  tip.style.left = Math.min(window.innerWidth - tip.offsetWidth - 10, Math.max(10, x - tip.offsetWidth / 2)) + "px";
+  tip.style.top = (rect.bottom + 8) + "px";
+}
+const hideTip = () => $("tip").classList.remove("on");
+
+function card(r, peak) {
+  const el = document.createElement("button");
+  const n = (r.nodes || []).length;
+  el.className = "card" + (n > 1 ? " multi" : "") + (matches(r) ? "" : " hide");
+  el.style.setProperty("--edge", n > 1 ? "var(--ok)" : colorFor(r.windowIndex));
+
+  const row = document.createElement("div");
+  row.className = "crow";
+  const label = document.createElement("span");
+  label.className = "clabel";
+  label.textContent = r.label;
+  label.title = r.label;
+  const mem = document.createElement("span");
+  mem.className = "cmem";
+  mem.innerHTML = `${r.pss_mb.toFixed(1)}<s> MB</s>`;
+  row.append(label, mem);
+
+  const bar = document.createElement("div");
+  bar.className = "bar";
+  const fill = document.createElement("i");
+  fill.style.width = Math.max(1.5, 100 * r.pss_mb / peak) + "%";
+  bar.appendChild(fill);
+
+  el.append(row, bar);
+
+  const chips = document.createElement("div");
+  chips.className = "chips";
+  if (r.kind === "launch" || r.kind === "container" || r.kind === "webapp" || r.kind === "router") {
+    const k = document.createElement("span");
+    k.className = "kind " + r.kind;
+    k.textContent = r.kind;
+    chips.appendChild(k);
+  }
+  const helpers = new Set(r.helpers || []);
+  const counts = new Map();
+  (r.nodes || []).forEach((name) => counts.set(name, (counts.get(name) || 0) + 1));
+  [...counts].slice(0, 6).forEach(([name, c]) => {
+    const chip = document.createElement("span");
+    chip.className = "chip" + (helpers.has(name) ? " helper" : (name === r.label ? " host" : ""));
+    chip.textContent = c > 1 ? `${name} ×${c}` : name;
+    chip.title = name;
+    chips.appendChild(chip);
+  });
+  if (counts.size > 6) {
+    const more = document.createElement("span");
+    more.className = "chip";
+    more.textContent = `+${counts.size - 6} more`;
+    chips.appendChild(more);
+  }
+  if (chips.children.length) el.appendChild(chips);
+
+  el.addEventListener("click", () => openDetail(r, el));
+  return el;
+}
+
+function renderGroups() {
+  const host = $("groups");
+  host.textContent = "";
+  const all = rows();
+  const peak = Math.max(...all.map((r) => r.pss_mb), 1);
+  let buckets;
+
+  if (MODE === "window") {
+    buckets = DATA.windows.map((w, wi) => ({
+      name: w.name,
+      color: colorFor(wi),
+      rows: all.filter((r) => r.windowIndex === wi).sort((a, b) => b.pss_mb - a.pss_mb),
+    }));
+  } else if (MODE === "memory") {
+    buckets = [{ name: "All processes, heaviest first", color: "var(--muted)",
+                 rows: [...all].sort((a, b) => b.pss_mb - a.pss_mb) }];
+  } else {
+    const multi = all.filter((r) => (r.nodes || []).length > 1).sort((a, b) => b.nodes.length - a.nodes.length);
+    const single = all.filter((r) => (r.nodes || []).length === 1).sort((a, b) => b.pss_mb - a.pss_mb);
+    const none = all.filter((r) => !(r.nodes || []).length).sort((a, b) => b.pss_mb - a.pss_mb);
+    buckets = [
+      { name: "Hosting several nodes — already consolidated", color: "var(--ok)", rows: multi },
+      { name: "One node, one process", color: "var(--accent)", rows: single },
+      { name: "No ROS node — supervisors and support processes", color: "var(--danger)", rows: none },
+    ];
+  }
+
+  let shown = 0;
+  buckets.forEach((b) => {
+    const visible = b.rows.filter(matches);
+    if (!visible.length) return;
+    shown += visible.length;
+    const sum = b.rows.reduce((s, r) => s + r.pss_mb, 0);
+    const nodes = b.rows.reduce((s, r) => s + (r.nodes || []).length, 0);
+
+    const group = document.createElement("section");
+    group.className = "group";
+    const head = document.createElement("div");
+    head.className = "ghead";
+    const sw = document.createElement("span");
+    sw.className = "swatch";
+    sw.style.background = b.color;
+    const nm = document.createElement("span");
+    nm.className = "gname";
+    nm.textContent = b.name;
+    const meta = document.createElement("span");
+    meta.className = "gmeta";
+    meta.textContent = `${b.rows.length} proc · ${nodes} nodes · ${mb(sum)}`;
+    head.append(sw, nm, meta);
+
+    const cards = document.createElement("div");
+    cards.className = "cards";
+    b.rows.forEach((r) => cards.appendChild(card(r, peak)));
+
+    group.append(head, cards);
+    host.appendChild(group);
+  });
+
+  if (!shown) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "Nothing matches that filter.";
+    host.appendChild(empty);
+  }
+}
+
+function renderUnattributed() {
+  const box = $("unatt");
+  box.textContent = "";
+  const list = DATA.unattributed || [];
+  if (!list.length) return;
+  const sum = document.createElement("summary");
+  sum.textContent = `${list.length} helper nodes not pinned to a process`;
+  const p = document.createElement("p");
+  p.style.margin = "8px 0 0";
+  p.textContent = "These are in-process helpers — TF listeners, nav2 costmaps, internal action clients — "
+    + "created by processes already listed above. ROS reports their names but nothing maps them back to a PID, "
+    + "so they are counted separately rather than guessed at.";
+  const ul = document.createElement("div");
+  ul.className = "helperlist";
+  ul.textContent = list.join("  ·  ");
+  box.append(sum, p, ul);
+}
+
+function openDetail(r, el) {
+  SELECTED = r;
+  document.querySelectorAll(".card.sel").forEach((c) => c.classList.remove("sel"));
+  if (el) el.classList.add("sel");
+  $("d-title").textContent = r.label;
+  $("d-kind").textContent = `${r.kind} · pid ${r.pid} · window ${r.window}, pane ${r.pane}`;
+
+  const grid = $("d-grid");
+  grid.textContent = "";
+  const fields = [
+    ["PSS", mb(r.pss_mb)],
+    ["RSS", mb(r.rss_mb)],
+    ["Threads", r.threads],
+    ["Nodes", (r.nodes || []).length || "—"],
+  ];
+  if (r.inferred_name) fields.push(["Name", "inferred from executable"]);
+  fields.forEach(([k, v]) => {
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = v;
+    grid.append(dt, dd);
+  });
+
+  const nodes = $("d-nodes");
+  nodes.textContent = "";
+  const counts = new Map();
+  (r.nodes || []).forEach((n) => counts.set(n, (counts.get(n) || 0) + 1));
+  if (!counts.size) {
+    const none = document.createElement("span");
+    none.className = "chip";
+    none.textContent = "no ROS node in this process";
+    nodes.appendChild(none);
+  }
+  const helpers = new Set(r.helpers || []);
+  [...counts].forEach(([name, c]) => {
+    const chip = document.createElement("span");
+    chip.className = "chip" + (helpers.has(name) ? " helper" : (name === r.label ? " host" : ""));
+    chip.textContent = c > 1 ? `${name} ×${c}` : name;
+    nodes.appendChild(chip);
+  });
+
+  $("d-cmd").textContent = r.cmd || "—";
+  const d = $("detail");
+  d.classList.add("open");
+  d.setAttribute("aria-hidden", "false");
+  $("close").focus();
+}
+
+function closeDetail() {
+  $("detail").classList.remove("open");
+  $("detail").setAttribute("aria-hidden", "true");
+  document.querySelectorAll(".card.sel").forEach((c) => c.classList.remove("sel"));
+}
+
+function renderAll() {
+  renderStats();
+  renderStrip();
+  renderGroups();
+  renderUnattributed();
+}
+
+async function load() {
+  const btn = $("refresh");
+  btn.disabled = true;
+  btn.textContent = "Sampling…";
+  try {
+    // No ?nocache: the endpoint's short TTL is what stops a mashed Refresh
+    // button (or several open tabs) from queueing a ros2 CLI scan each.
+    const res = await fetch("/fleet.json", { cache: "no-store" });
+    if (!res.ok) throw new Error(`server returned ${res.status}`);
+    DATA = await res.json();
+    renderAll();
+  } catch (err) {
+    $("groups").innerHTML = "";
+    const p = document.createElement("div");
+    p.className = "empty";
+    p.textContent = `Could not read the fleet: ${err.message}. The webapp serves /fleet.json — is it running?`;
+    $("groups").appendChild(p);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Refresh";
+  }
+}
+
+document.querySelectorAll(".segmented button").forEach((b) => {
+  b.addEventListener("click", () => {
+    MODE = b.dataset.mode;
+    document.querySelectorAll(".segmented button").forEach((o) =>
+      o.setAttribute("aria-pressed", String(o === b)));
+    if (DATA) renderGroups();
+  });
+});
+$("q").addEventListener("input", (e) => {
+  QUERY = e.target.value.trim();
+  if (DATA) { renderStrip(); renderGroups(); }
+});
+$("refresh").addEventListener("click", load);
+$("close").addEventListener("click", closeDetail);
+$("auto").addEventListener("change", (e) => {
+  clearInterval(timer);
+  timer = e.target.checked ? setInterval(load, 10000) : null;
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDetail(); });
+
+load();
+</script>
+</body>
+</html>
