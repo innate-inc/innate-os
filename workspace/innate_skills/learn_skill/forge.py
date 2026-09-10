@@ -9,6 +9,7 @@ through the proxy."""
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -20,6 +21,7 @@ from httpx import HTTPError
 
 import innate
 from brain_client.common.script_paths import get_innate_skills_dir
+from innate import Manipulation
 
 if TYPE_CHECKING:
     from innate_proxy import ProxyClient
@@ -28,8 +30,11 @@ CODER_ENV = "INNATE_LEARN_CODER"
 DEFAULT_CODER = "openai/gpt-6-astra"
 REASONING_EFFORT = "low"  # keeps a draft under a minute; GPT-6 Astra does not take `none` (or temperature)
 ENDPOINT = "/v1/chat/completions"
-EXEMPLARS = ("head_emotion.py", "turn_in_place.py")
+EXEMPLARS = ("head_emotion.py", "turn_in_place.py", "arm_rest_position.py")
+ARM_CONSTANTS = ("JOINT_NAMES", "ZERO", "REST", "REACH_X", "REACH_Y", "GRIPPER_CLOSED", "GRIPPER_OPEN")
+ARM_METHODS = ("move_joints", "rest", "move_to", "move_by", "reachable", "gripper_open", "gripper_close", "wait")
 _FENCE = re.compile(r"```(?:python)?\n(.*?)```", re.DOTALL)
+_MODULE_PREFIX = re.compile(r"\b(?:[a-z_]+\.)+(?=[A-Z])")
 
 RULES = """\
 You write skills for MARS, a small home robot with a wheeled base, a tilting head with a camera, \
@@ -46,10 +51,25 @@ execute() with no inputs.
 - Pause with self.sleep(seconds), never time.sleep. Speak with self.say(text). End a failed run \
 with self.fail(message); otherwise return a short result message.
 - Keep motion small and deliberate: turns under 180 degrees, drives under 0.5 m, head angles \
-between -30 and 30 degrees, arm moves through Manipulation within its documented reach.
+between -30 and 30 degrees, arm poses inside the joint ranges below, ending at rest.
 - No comments and no prints.
 
 Reply with the complete file in one ```python block and nothing else.
+"""
+
+# Joint conventions are the URDF's: limits from mars.urdf, the joint2 floor from the arm driver's
+# joint1-dependent clamp, and "j4 negative pitches UP" from Manipulation.REST's tuning notes.
+ARM = """\
+Declare `manipulation: Manipulation` on the class to move the arm. Joint targets are radians in \
+JOINT_NAMES order: joint1 base yaw (+ turns left; -1.57..1.57), joint2 shoulder pitch (+ leans \
+forward; -1.57..1.22, and the driver holds it above -0.5 while joint1 is within -1.0..1.0), joint3 \
+elbow pitch (+ folds the forearm down, - raises it; -1.57..1.75), joint4 wrist pitch (+ down, - up; \
+-1.92..1.75), joint5 wrist roll (-1.57..1.57), joint6 claw (0 closed .. 0.85 open). At ZERO the \
+upper arm stands vertical and the forearm points straight ahead, level; REST is the arm folded \
+against the body, where every skill starts and must end (self.manipulation.rest()). Five joint \
+values keep the current grip. Cartesian poses are base_link metres: x forward, y left, z up; the \
+graspable box is REACH_X by REACH_Y just above the floor. Moves block until the arm arrives and \
+raise ArmFailed or ArmUnhealthy (both importable from innate) when it cannot.
 """
 
 
@@ -57,7 +77,24 @@ def system_prompt() -> str:
     exemplars = "\n\n".join(
         f"## {name}\n```python\n{(get_innate_skills_dir() / name).read_text()}```" for name in EXEMPLARS
     )
-    return f"{RULES}\n# The `innate` API\n{innate.__doc__}\n\n# Example skills\n{exemplars}"
+    return (
+        f"{RULES}\n# The `innate` API\n{innate.__doc__}\n\n# The arm\n{arm_reference()}\n\n"
+        f"# Example skills\n{exemplars}"
+    )
+
+
+def arm_reference() -> str:
+    """Manipulation's skill-facing surface, read off the class so the prompt cannot drift from it."""
+    constants = "\n".join(f"Manipulation.{name} = {getattr(Manipulation, name)!r}" for name in ARM_CONSTANTS)
+    methods = "\n\n".join(_method_stub(name) for name in ARM_METHODS)
+    return f"{ARM}```python\n{constants}\n\n{methods}\n```"
+
+
+def _method_stub(name: str) -> str:
+    method = getattr(Manipulation, name)
+    signature = _MODULE_PREFIX.sub("", str(inspect.signature(method)))
+    doc = (inspect.getdoc(method) or "").replace("\n", "\n    ")
+    return f'def {name}{signature}:\n    """{doc}"""'
 
 
 class ForgeUnreachable(Exception):
