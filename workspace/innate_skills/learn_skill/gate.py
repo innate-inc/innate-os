@@ -14,8 +14,22 @@ from dataclasses import dataclass
 from brain_client.common.dynamic_loader import class_name_to_snake_case
 
 ALLOWED_IMPORTS = frozenset(
-    {"innate", "innate_skills", "collections", "dataclasses", "enum", "json", "math", "random", "time", "typing"}
+    {
+        "innate",
+        "innate_skills",
+        "collections",
+        "dataclasses",
+        "enum",
+        "json",
+        "math",
+        "pydantic",
+        "random",
+        "time",
+        "typing",
+    }
 )
+# What may run at import time: the skills server imports the file synchronously during its reload.
+INERT_STATEMENTS = (ast.Import, ast.ImportFrom, ast.ClassDef, ast.FunctionDef, ast.Assign, ast.AnnAssign, ast.Pass)
 BANNED_NAMES = frozenset(
     {
         "open",
@@ -66,6 +80,7 @@ def check(source: str) -> Draft:
         tree = ast.parse(source)
     except SyntaxError as error:
         raise DraftRejected(f"syntax error on line {error.lineno}: {error.msg}") from None
+    _check_import_time(tree.body)
     own_privates = _declared_privates(tree)
     for node in ast.walk(tree):
         try:
@@ -89,6 +104,32 @@ def _check_node(node: ast.AST, own_privates: frozenset[str]) -> None:
         raise DraftRejected(f"'.{node.attr}' is not allowed in a skill")
     elif isinstance(node, ast.Call) and _dotted(node.func) == "time.sleep":
         raise DraftRejected("time.sleep() is not allowed: use self.sleep(seconds), time.sleep ignores Stop")
+
+
+def _check_import_time(body: list[ast.stmt]) -> None:
+    """Module and class bodies execute inside the skills server's reload: declarations only, no calls."""
+    for statement in body:
+        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant):
+            continue  # a docstring
+        if not isinstance(statement, INERT_STATEMENTS):
+            raise DraftRejected(
+                f"only imports, assignments, and definitions may run at import time (line {statement.lineno})"
+            )
+        if isinstance(statement, ast.ClassDef):
+            _check_import_time(statement.body)
+            evaluated = [
+                *statement.bases,
+                *(keyword.value for keyword in statement.keywords),
+                *statement.decorator_list,
+            ]
+        elif isinstance(statement, ast.FunctionDef):
+            defaults = [default for default in statement.args.kw_defaults if default is not None]
+            evaluated = [*statement.decorator_list, *statement.args.defaults, *defaults]
+        else:
+            value = getattr(statement, "value", None)
+            evaluated = [value] if value is not None else []
+        if any(isinstance(node, ast.Call) for expression in evaluated for node in ast.walk(expression)):
+            raise DraftRejected(f"no calls at import time (line {statement.lineno}); move it into a method")
 
 
 def _check_import(node: ast.Import | ast.ImportFrom) -> None:

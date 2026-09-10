@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from innate_skills.learn_skill.forge import Forge, ForgeUnreachable, extract_cod
 from innate_skills.learn_skill.gate import Draft, DraftRejected, check
 from innate_skills.learn_skill.performance import LearningMode
 
-from brain_client.common.script_paths import get_learned_skills_dir
+from brain_client.common.script_paths import LEARNED_GROUP, get_learned_skills_dir
 from innate import Skill, SkillReturn
 from innate_proxy import ProxyClient
 
@@ -90,8 +91,10 @@ class LearnSkill(Skill):
         finally:
             staging.unlink(missing_ok=True)
         written.add(path)
-        rebuilt = self.wait_for(lambda: True if _roster_stamp() != roster_before else None, timeout=ROSTER_TIMEOUT_S)
-        return None if rebuilt else "the skill catalog did not pick the file up in time"
+        loaded = self.wait_for(
+            lambda: _roster_lists(draft) if _roster_stamp() != roster_before else None, timeout=ROSTER_TIMEOUT_S
+        )
+        return None if loaded else "the skill catalog did not pick the file up in time"
 
     def _trial(self, draft: Draft) -> str | None:
         if self.skills is None:
@@ -107,3 +110,12 @@ def _learned_path(draft: Draft) -> Path:
 
 def _roster_stamp() -> int:
     return CONTRACTS.stat().st_mtime_ns if CONTRACTS.exists() else 0
+
+
+def _roster_lists(draft: Draft) -> bool | None:
+    """True once the rebuilt roster carries the draft's skill, or its module's load error."""
+    try:
+        ids = {skill["id"] for skill in json.loads(CONTRACTS.read_text())["skills"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return True if draft.skill_id in ids or f"local/{LEARNED_GROUP}.{draft.module}" in ids else None
