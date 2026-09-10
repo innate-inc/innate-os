@@ -296,3 +296,34 @@ def test_mount_rotation_is_orthonormal():
 
 def test_zero_correction_is_identity():
     assert np.allclose(optical_mount_rotation(0.0, 0.0), np.eye(3))
+
+
+# ------------------------------------------------------------ vibration
+
+
+def test_per_frame_fits_expose_shake_the_pooled_fit_hides():
+    """Vibration is zero-mean, so pooling averages it away.
+
+    STVL latches a mark for voxel_decay seconds, so the worst single frame is
+    what reaches the costmap. Per-frame fits are the only way to see it.
+    """
+    rng = np.random.default_rng(11)
+    shake_deg = rng.normal(0.0, 0.5, 12)
+    frames = [floor_points(pitch_deg=float(s)) for s in shake_deg]
+
+    pooled = fit_floor(np.vstack(frames))
+    per_frame = np.array([fit_floor(f).pitch_deg for f in frames])
+
+    assert pooled is not None
+    assert abs(pooled.pitch_deg) < 0.2, "pooling hides the shake"
+    assert per_frame.std() == pytest.approx(0.5, abs=0.2), "per-frame fits recover the amplitude"
+    assert np.abs(per_frame).max() > 3 * abs(pooled.pitch_deg)
+
+
+def test_a_steady_tilt_shows_no_frame_to_frame_spread():
+    """A systematic mount error must not be mistaken for vibration."""
+    frames = [floor_points(pitch_deg=3.168) for _ in range(8)]
+    per_frame = np.array([fit_floor(f).pitch_deg for f in frames])
+
+    assert per_frame.mean() == pytest.approx(3.168, abs=0.01)
+    assert per_frame.std() < 1e-6

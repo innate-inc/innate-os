@@ -178,8 +178,39 @@ class GroundPlaneCheck(Node):
         for threshold, fraction in leak_fractions(points).items():
             out(f"  above {threshold * 1000:>3.0f} mm : {fraction * 100:6.2f}%")
 
+        self._report_stability()
         self._report_corridor(points)
         out("=" * 68)
+
+    def _report_stability(self) -> None:
+        """Per-cloud spread of the floor fit — the signature of camera shake.
+
+        The pooled fit averages vibration away, but STVL latches a mark for
+        voxel_decay seconds, so a single bad frame outlives the average. What
+        matters for phantom obstacles is the worst excursion, not the mean.
+        """
+        fits = [fit_floor(cloud) for cloud in self._collected]
+        pitches = np.array([f.pitch_deg for f in fits if f is not None])
+        offsets = np.array([f.offset_m * 1000.0 for f in fits if f is not None])
+        if pitches.size < 2:
+            return
+
+        out = self.get_logger().info
+        swing = float(pitches.max() - pitches.min())
+        out("")
+        out(f"Frame-to-frame stability across {pitches.size} clouds (vibration shows up here)")
+        out(f"  pitch  mean {pitches.mean():+.3f} deg, std {pitches.std():.3f}, peak-to-peak {swing:.3f}")
+        out(
+            f"  height mean {offsets.mean():+.1f} mm, std {offsets.std():.1f}, "
+            f"peak-to-peak {offsets.max() - offsets.min():.1f}"
+        )
+        # Worst-case frame is what the costmap keeps, so budget against it.
+        worst = float(np.abs(pitches - pitches.mean()).max())
+        out(
+            f"  worst single-frame excursion {worst:.3f} deg -> "
+            f"{np.tan(np.radians(worst)) * self.corridor.x_max * 1000:.1f} mm of floor error at "
+            f"{self.corridor.x_max:.2f}m"
+        )
 
     def _report_corridor(self, points: np.ndarray) -> None:
         out = self.get_logger().info
