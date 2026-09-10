@@ -9,22 +9,29 @@ const MUTE_KEY = "innate.nowhere.first-life.muted";
 
 /** Storage is optional (private browsing must still let the story finish). */
 function read(/** @type {Storage} */ storage, /** @type {string} */ key) {
-  try { return storage.getItem(key); } catch { return null; }
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
 }
 function write(/** @type {Storage} */ storage, /** @type {string} */ key, /** @type {string} */ value) {
-  try { storage.setItem(key, value); } catch { /* a keepsake still lasts for this page */ }
+  try {
+    storage.setItem(key, value);
+  } catch {
+    /* a keepsake still lasts for this page */
+  }
 }
 
 /** @param {HTMLElement} root */
 export function createPlantReward(root) {
   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
-  const art = new Image();
-  art.src = ART;
-  const decoded = art.decode().catch(() => {});
+
   let collected = read(localStorage, COLLECTION_KEY) === "1";
   let muted = read(localStorage, MUTE_KEY) === "1";
   let generation = 0;
-  let raf = 0;
+  /** @type {{ ready: Promise<void>, start: () => void, collect: () => void, dispose: () => void } | null} */ let scene =
+    null;
   /** @type {ReturnType<typeof setTimeout>[]} */ let timers = [];
   /** @type {AudioContext | null} */ let audio = null;
   /** @type {GainNode | null} */ let master = null;
@@ -46,7 +53,9 @@ export function createPlantReward(root) {
     try {
       audio ??= new AudioContext();
       void audio.resume().catch(() => {});
-    } catch { /* The visual sequence is complete without audio. */ }
+    } catch {
+      /* The visual sequence is complete without audio. */
+    }
   }
   document.addEventListener("pointerdown", unlock, { once: true });
   document.addEventListener("keydown", unlock, { once: true });
@@ -59,10 +68,19 @@ export function createPlantReward(root) {
     master.gain.value = 0.4;
     master.connect(audio.destination);
     const now = audio.currentTime;
-    function note(/** @type {number} */ midi, /** @type {number} */ when, /** @type {number} */ duration, /** @type {number} */ level) {
+    function note(
+      /** @type {number} */ midi,
+      /** @type {number} */ when,
+      /** @type {number} */ duration,
+      /** @type {number} */ level,
+    ) {
       if (!audio || !master) return;
       const hz = 440 * 2 ** ((midi - 69) / 12);
-      for (const [harmonic, amplitude] of [[1, 1], [2, 0.24], [3, 0.07]]) {
+      for (const [harmonic, amplitude] of [
+        [1, 1],
+        [2, 0.24],
+        [3, 0.07],
+      ]) {
         const oscillator = audio.createOscillator();
         const gain = audio.createGain();
         oscillator.frequency.value = hz * harmonic;
@@ -72,7 +90,10 @@ export function createPlantReward(root) {
         oscillator.connect(gain).connect(master);
         oscillator.start(now + when);
         oscillator.stop(now + when + duration + 0.02);
-        oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
+        oscillator.onended = () => {
+          oscillator.disconnect();
+          gain.disconnect();
+        };
       }
     }
     [60, 67, 72, 76, 79, 84].forEach((n, i) => note(n, 0.25 + i * 0.19, 1.6, 0.07));
@@ -99,7 +120,10 @@ export function createPlantReward(root) {
       oscillator.connect(gain).connect(master);
       oscillator.start(at);
       oscillator.stop(at + 0.56);
-      oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
+      oscillator.onended = () => {
+        oscillator.disconnect();
+        gain.disconnect();
+      };
     });
   }
 
@@ -107,41 +131,49 @@ export function createPlantReward(root) {
     generation++;
     timers.forEach(clearTimeout);
     timers = [];
-    cancelAnimationFrame(raf);
+    scene?.dispose();
+    scene = null;
     master?.disconnect();
     master = null;
-    if (dialog) { dialog.close(); dialog.remove(); dialog = null; }
+    if (dialog) {
+      dialog.close();
+      dialog.remove();
+      dialog = null;
+    }
     if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
     previousFocus = null;
     collect = null;
     keepsake.hidden = !collected;
   }
-  function later(/** @type {() => void} */ fn, /** @type {number} */ ms) { timers.push(setTimeout(fn, ms)); }
+  function later(/** @type {() => void} */ fn, /** @type {number} */ ms) {
+    const timer = setTimeout(fn, ms);
+    timers.push(timer);
+    return timer;
+  }
 
   /** @param {string} attempt @param {() => void} onCollect @param {boolean} [replay] */
   function play(attempt, onCollect, replay = false) {
     cancel();
-    if (!replay && attempt && lastAttempt === attempt) { onCollect(); return; }
+    if (!replay && attempt && lastAttempt === attempt) {
+      onCollect();
+      return;
+    }
     const ownGeneration = generation;
     previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     keepsake.hidden = true;
     const view = document.createElement("dialog");
     dialog = view;
     view.className = "plant-reward";
-    if (root.classList.contains("agent-cockpit")) view.style.setProperty("--plant-flight-x", "-38vw");
     view.setAttribute("aria-labelledby", "plant-reward-title");
     view.setAttribute("aria-describedby", "plant-reward-description");
     view.innerHTML = `
       <div class="plant-reward-sky" aria-hidden="true"></div>
-      <canvas class="plant-reward-dust" aria-hidden="true"></canvas>
       <button class="plant-reward-sound" type="button"></button>
       <div class="plant-reward-content">
         <p class="plant-reward-eyebrow">THE BACKROOMS · COMPLETE</p>
-        <div class="plant-reward-stage" role="img" aria-label="A tiny green plant growing in an old leather boot">
-          <div class="plant-reward-halo"></div><div class="plant-reward-ring"></div>
-          <div class="plant-reward-orbit"></div><div class="plant-reward-orbit second"></div>
-          <div class="plant-reward-lift"><img class="plant-reward-boot" src="${ART}" alt=""></div>
-          <span class="plant-reward-spark one">✦</span><span class="plant-reward-spark two">✦</span><span class="plant-reward-spark three">✧</span>
+        <div class="plant-reward-stage">
+          <p class="plant-reward-orbit-hint">Drag to look around · arrow keys to orbit</p>
+          <p class="plant-reward-loading" role="status">Bringing MARS into the spotlight…</p>
         </div>
         <div class="plant-reward-copy">
           <p class="plant-reward-label">A LITTLE HOPE, FOUND.</p>
@@ -165,8 +197,20 @@ export function createPlantReward(root) {
     sound.onclick = () => {
       muted = !muted && audio?.state === "running";
       write(localStorage, MUTE_KEY, muted ? "1" : "0");
-      if (muted) { master?.disconnect(); master = null; }
-      else { unlock(); void audio?.resume().then(() => { if (ownGeneration !== generation) return; soundLabel(); if (!view.classList.contains("collecting")) fanfare(); }).catch(() => {}); }
+      if (muted) {
+        master?.disconnect();
+        master = null;
+      } else {
+        unlock();
+        void audio
+          ?.resume()
+          .then(() => {
+            if (ownGeneration !== generation) return;
+            soundLabel();
+            if (!view.classList.contains("collecting")) fanfare();
+          })
+          .catch(() => {});
+      }
       soundLabel();
     };
     let taking = false;
@@ -174,68 +218,87 @@ export function createPlantReward(root) {
       if (taking) return;
       taking = true;
       collectionChime();
+      scene?.collect();
       collected = true;
-      if (attempt) { lastAttempt = attempt; write(sessionStorage, ATTEMPT_KEY, attempt); }
+      if (attempt) {
+        lastAttempt = attempt;
+        write(sessionStorage, ATTEMPT_KEY, attempt);
+      }
       write(localStorage, COLLECTION_KEY, "1");
       view.classList.add("collecting");
       take.textContent = "Yours. Let's go.";
       // Leave the final pose long enough for the collection to register.
-      later(() => { cancel(); onCollect(); }, reduced.matches ? 0 : 850);
+      later(
+        () => {
+          cancel();
+          onCollect();
+        },
+        reduced.matches ? 0 : 850,
+      );
     };
     take.onclick = () => collect?.();
-    view.addEventListener("cancel", (event) => { event.preventDefault(); collect?.(); });
+    view.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      collect?.();
+    });
     document.body.append(view);
     view.showModal();
     sound.focus({ preventScroll: true });
-    // A slow image never misses its own reveal. A failed image still offers a way onward.
-    void Promise.race([decoded, new Promise((resolve) => later(() => resolve(undefined), 1800))]).then(() => {
-      if (ownGeneration !== generation) return;
-      view.classList.add("playing");
-      if (!reduced.matches) particles(view);
-      fanfare();
-      soundLabel();
-      later(() => { view.classList.add("ready"); take.focus({ preventScroll: true }); }, reduced.matches ? 0 : 3600);
+    const stage = /** @type {HTMLElement} */ (view.querySelector(".plant-reward-stage"));
+    const loading = /** @type {HTMLElement} */ (view.querySelector(".plant-reward-loading"));
+    let expired = false;
+    const ready = (async () => {
+      // The existing sim bundle supplies both Three.js and the real MARS model loader.
+      // @ts-ignore -- runtime URL served by the robot's proxy, not a webapp module.
+      const mod = await import("/sim-viewer/sim-session.js");
+      if (ownGeneration !== generation || expired) return;
+      scene = mod.createPlantRewardScene(stage);
+      await scene?.ready;
+    })();
+    let loadTimer = 0;
+    const timeout = new Promise((_, reject) => {
+      loadTimer = later(() => {
+        expired = true;
+        reject(new Error("The 3D celebration took too long to load."));
+      }, 20_000);
     });
+    void Promise.race([ready, timeout])
+      .then(() => {
+        clearTimeout(loadTimer);
+        if (ownGeneration !== generation || expired || taking) return;
+        loading.remove();
+        scene?.start();
+        view.classList.add("playing");
+        fanfare();
+        soundLabel();
+        later(
+          () => {
+            view.classList.add("ready");
+            take.focus({ preventScroll: true });
+          },
+          reduced.matches ? 0 : 3600,
+        );
+      })
+      .catch((error) => {
+        clearTimeout(loadTimer);
+        if (ownGeneration !== generation) return;
+        scene?.dispose();
+        scene = null;
+        console.warn("[plant-reward] 3D scene unavailable:", error);
+        loading.textContent = "The 3D scene couldn't load. Your plant is still yours to keep.";
+        view.classList.add("playing", "ready");
+        take.focus({ preventScroll: true });
+      });
   }
 
-  /** One bounded canvas, no particle DOM, capped resolution; stops on close/unmount. */
-  function particles(/** @type {HTMLDialogElement} */ view) {
-    const canvas = /** @type {HTMLCanvasElement} */ (view.querySelector("canvas"));
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const start = performance.now();
-    const motes = Array.from({ length: 76 }, (_, i) => ({
-      angle: i * 2.39996, distance: 0.16 + (i % 13) / 18, size: 0.7 + (i % 4) * 0.55,
-    }));
-    function frame(/** @type {number} */ now) {
-      if (!ctx) return;
-      const w = view.clientWidth, h = view.clientHeight;
-      const dpr = Math.min(devicePixelRatio || 1, 1.5);
-      if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-        canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
-      }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-      const t = (now - start) / 1000;
-      const burst = Math.max(0, t - 1.65);
-      const expansion = 1 - Math.exp(-burst * 1.8);
-      for (const [i, p] of motes.entries()) {
-        const r = Math.min(w, h) * p.distance * expansion;
-        const x = w / 2 + Math.cos(p.angle + burst * 0.025) * r;
-        const y = h * 0.42 + Math.sin(p.angle + burst * 0.025) * r * 0.72 - burst * (2 + i % 3);
-        ctx.globalAlpha = Math.min(1, burst * 3) * (0.3 + 0.5 * Math.sin(t * 1.7 + i) ** 2);
-        ctx.fillStyle = i % 3 ? "#f5dda4" : "#b4f5c4";
-        ctx.beginPath(); ctx.arc(x, y, p.size, 0, Math.PI * 2); ctx.fill();
-      }
-      raf = requestAnimationFrame(frame);
-    }
-    raf = requestAnimationFrame(frame);
-  }
   return {
-    play, cancel,
+    play,
+    cancel,
     /** The studio docks the keepsake with the agent on desktop, on the stage on phones.
      * @param {HTMLElement} host */
-    mountKeepsake(host) { host.append(keepsake); },
+    mountKeepsake(host) {
+      host.append(keepsake);
+    },
     destroy() {
       cancel();
       keepsake.remove();

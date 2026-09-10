@@ -1,7 +1,15 @@
 # First life
 
-`first-life.png` is the plant-in-a-boot keepsake for the successful Backrooms
-ending (`way_out`). The original transparent PNG is used without image edits.
+The successful Backrooms ending (`way_out`) is a live Three.js diorama. MARS uses
+its actual shipped URDF and STL models, with a raised arm and upward gaze. The
+boot, soil, laces, and curved leaves are procedural geometry in
+`sim/viewer/src/plantRewardScene.ts`. The camera sweeps around them for the reveal;
+mouse/touch drag and arrow keys let the player orbit afterwards. Geometry,
+materials, textures, shadows, controls, and the WebGL context are released on close,
+and pending robot-model fetches are aborted.
+
+`first-life.png` is used only as the small inventory thumbnail. The original
+transparent PNG is used without image edits.
 Generated with the built-in imagegen tool on 2026-09-10; the user supplied a
 plant-in-a-boot reference and requested a WALL-E-inspired reward with the
 satisfying pacing of a Super Mario Galaxy star celebration. The musical phrase
@@ -14,11 +22,12 @@ Final generation prompt:
 Preview the actual production component without ROS or the robot:
 
 ```sh
-python3 -m http.server 8790 --directory webapp
+npm run build:lib --prefix sim/viewer
+python3 sim/tools/preview_reward.py
 # Open http://localhost:8790/debug/plant-reward.html
 ```
 
-The preview includes lifecycle and real `createAgentStudio` subscription tests
+The preview includes WebGL cleanup checks, lifecycle checks, and real `createAgentStudio` subscription tests
 with a fake world and brain. Check normal and reduced motion, phone and desktop,
 Escape, mute, collection, and replay. A browser-local keepsake lasts across
 scene changes and page visits; session storage prevents replaying an already
