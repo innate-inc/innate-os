@@ -562,14 +562,18 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   /** The custom character is typed where the persona lives: the panel's prompt, or the
    *  composer where there is no panel. */
   function focusPrompt() {
-    if (compact) {
-      panel.focusComposer();
-      return;
-    }
-    tab = "identity";
-    render(true);
-    promptInput.focus();
-    promptInput.scrollIntoView({ block: "nearest" });
+    // press-activate fires this on pointerdown, and the press then focuses the card itself:
+    // move the cursor a frame later, once that has happened.
+    requestAnimationFrame(() => {
+      if (compact) {
+        panel.focusComposer();
+        return;
+      }
+      tab = "identity";
+      render(true);
+      promptInput.focus();
+      promptInput.scrollIntoView({ block: "nearest" });
+    });
   }
 
   /** @param {string} persona */
@@ -647,7 +651,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
             text: "Write your own",
             kind: /** @type {const} */ ("custom"),
             icon: ICONS.pen,
-            detail: "Describe the character in your words",
+            detail: "In your own words.",
             onSelect: focusPrompt,
           },
           { text: "Surprise me", kind: "random", onSelect: () => choose(personas[Math.floor(Math.random() * personas.length)]) },
