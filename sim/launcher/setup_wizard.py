@@ -22,6 +22,7 @@ from config import (
     SECRET_ENV_KEYS,
     SETTINGS_PATH,
     is_configured_secret_value,
+    resolve_brain_backend,
     success,
     warn,
 )
@@ -450,22 +451,22 @@ def configure_brain_backend(config: dict[str, object]) -> None:
     robot will pick.
     """
     user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
-    has_gemini = is_configured_secret_value(GEMINI_API_KEY, user_env.get(GEMINI_API_KEY))
-    has_openai = is_configured_secret_value(OPENAI_API_KEY, user_env.get(OPENAI_API_KEY))
-    has_service_key = is_configured_secret(user_env.get(INNATE_SERVICE_KEY))
+    # Both vendor keys can be saved at once, so which one is live cannot be read
+    # off key presence. resolve_brain_backend owns that precedence; asking it is
+    # what keeps this report and the runtime dashboard from disagreeing.
+    backend = resolve_brain_backend(user_env)
 
     if not is_interactive_terminal():
-        if has_service_key:
+        if backend == INNATE_BACKEND:
             success("Innate proxy selected (INNATE_SERVICE_KEY detected).")
-        elif has_gemini:
-            success("Direct Gemini access selected (GEMINI_API_KEY detected).")
-        elif has_openai:
-            success("Direct OpenAI access selected (OPENAI_API_KEY detected).")
-        else:
+        elif backend == NO_BACKEND:
             warn(
-                f"No brain key configured. Add GEMINI_API_KEY or OPENAI_API_KEY (your own vendor "
-                f"key) or INNATE_SERVICE_KEY (Innate proxy) to {ENV_PATH}."
+                f"No brain key configured for {BRAIN_BACKEND}={user_env.get(BRAIN_BACKEND) or GEMINI_BACKEND}. "
+                f"Add GEMINI_API_KEY or OPENAI_API_KEY (your own vendor key) or INNATE_SERVICE_KEY "
+                f"(Innate proxy) to {ENV_PATH}."
             )
+        else:
+            success(f"Direct {backend} access selected ({_VENDOR_KEYS[backend]} detected).")
         report_configured_keys(config)
         return
 
@@ -481,7 +482,7 @@ def configure_brain_backend(config: dict[str, object]) -> None:
         f"  - None: drive, navigate, and trigger skills manually, with no agent.{NC}"
     )
     print()
-    default_choice = "3" if has_service_key else "1"
+    default_choice = {INNATE_BACKEND: "3", OPENAI_BACKEND: "2"}.get(backend, "1")
     choice = _prompt_choice(
         "How would you like to access the cloud LLM?",
         {
