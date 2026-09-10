@@ -188,7 +188,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   promptRow.innerHTML =
     '<span class="microlabel">Prompt</span>' +
     '<textarea rows="2" maxlength="240" aria-label="Robot personality prompt" placeholder="Who is this robot? e.g. a butler who has seen better days"></textarea>' +
-    '<button type="submit">Make it so</button>';
+    '<button type="submit">Become this</button>';
   const promptInput = /** @type {HTMLTextAreaElement} */ (promptRow.querySelector("textarea"));
 
   // The agent's prompt as its file holds it; editable when the file is the form's own.
