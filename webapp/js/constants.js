@@ -61,6 +61,9 @@ export const GET_CHAT_HISTORY_SERVICE = "/brain/get_chat_history";
 export const GET_AVAILABLE_DIRECTIVES_SERVICE = "/brain/get_available_directives";
 export const SET_DIRECTIVE_TOPIC = "/brain/set_directive";
 export const SET_BRAIN_ACTIVE_SERVICE = "/brain/set_brain_active";
+// Agent detail: write / remove a workspace/custom_agents file (the brain reloads before answering).
+export const SAVE_AGENT_SERVICE = "/brain/save_agent";
+export const DELETE_AGENT_SERVICE = "/brain/delete_agent";
 // Set which skills the current directive may use (std_msgs/String JSON:
 // {agent_id, skills:[id,...]} — the full active set, not a delta).
 export const SET_ACTIVE_SKILLS_TOPIC = "/brain/set_active_skills";

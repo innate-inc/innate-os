@@ -154,16 +154,19 @@ function skillArgValue(name, key, value) {
 /** @param {string} name @param {Record<string, any>} args @param {Array<{label: string, value: string}>} rows */
 function skillArgSummary(name, args, rows) {
   const skill = name.replace(/_/g, " ").toLowerCase();
+  if (skill.includes("pick") && typeof args.prompt === "string") return args.prompt;
   if (skill.includes("navigate to position")) {
     return `x ${roundNums(String(args.x))} m · y ${roundNums(String(args.y))} m · ${roundNums(String(args.theta_degrees ?? 0))}° · ${args.local_frame ? "Local" : "Map"}`;
   }
   if (skill.includes("move straight")) {
     const distance = Number(args.distance);
-    return `${roundNums(String(Math.abs(distance)))} m ${distance < 0 ? "backward" : "forward"} · ${roundNums(String(args.speed))} m/s`;
+    const speed = args.speed == null ? "" : ` · ${roundNums(String(args.speed))} m/s`;
+    return `${roundNums(String(Math.abs(distance)))} m ${distance < 0 ? "backward" : "forward"}${speed}`;
   }
   if (skill.includes("turn in place")) {
     const angle = Number(args.angle_degrees);
-    return `${roundNums(String(Math.abs(angle)))}° ${angle < 0 ? "right" : "left"} · ${roundNums(String(args.speed))} rad/s`;
+    const speed = args.speed == null ? "" : ` · ${roundNums(String(args.speed))} rad/s`;
+    return `${roundNums(String(Math.abs(angle)))}° ${angle < 0 ? "right" : "left"}${speed}`;
   }
   if (skill.includes("head emotion")) {
     return `${String(args.emotion).replace(/_/g, " ")}${Number(args.repeat) > 1 ? ` ×${args.repeat}` : ""}`;

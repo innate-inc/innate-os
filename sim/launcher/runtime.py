@@ -53,6 +53,7 @@ from config import (
     SIM_ASSET_UNITS,
     SIM_ASSET_UNITS_AUTHORED,
     SIM_ASSET_UNITS_DERIVED,
+    SIM_DIR,
     SIM_FOXGLOVE_PORT,
     SIM_HTTP_PORT,
     SIM_HTTPS_PORT,
@@ -1243,13 +1244,14 @@ def running_stack_from_another_checkout() -> tuple[str, str] | None:
     return None
 
 
-def _bind_refusal(port: int, *, udp: bool, reuse: bool = False) -> int | None:
+def _bind_refusal(port: int, *, udp: bool) -> int | None:
     """errno from claiming the port the way its consumer will, or None when the
-    bind succeeds. Docker publishes without SO_REUSEADDR; the host world server
-    sets it (socket.create_server), so its probe must too -- a just-stopped
-    server's TIME_WAIT remnants otherwise read as a live collision for ~30s."""
+    bind succeeds. Every TCP consumer binds with SO_REUSEADDR (Docker's Go
+    proxies and socket.create_server alike), so the probe must too: without it
+    the TIME_WAIT left by a Foxglove tab reconnecting through `down` reads as a
+    live collision for ~30s, while Docker itself would bind straight through."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM) as probe:
-        if reuse:
+        if not udp:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("0.0.0.0", port))
@@ -1264,17 +1266,17 @@ def _tcp_listener_answers(port: int) -> bool:
     return False
 
 
-def _host_port_free(port: int, *, udp: bool, reuse: bool = False) -> bool:
-    """Whether the port's consumer can still claim it (reuse: see
-    _bind_refusal). Only EADDRINUSE proves a collision: Linux refuses ports
-    below 1024 to a non-root binder while the daemon that publishes them runs
-    as root, so a free 443 refuses the probe."""
-    refusal = _bind_refusal(port, udp=udp, reuse=reuse)
-    if refusal is None:
-        return True
-    if refusal == errno.EACCES and not udp:
-        return not _tcp_listener_answers(port)
-    return refusal != errno.EADDRINUSE
+def _host_port_free(port: int, *, udp: bool) -> bool:
+    """Whether the port's consumer can still claim it. A TCP listener is asked
+    directly: macOS lets a SO_REUSEADDR bind on 0.0.0.0 coexist with a listener
+    on 127.0.0.1 -- every loopback publish and the world server -- so the bind
+    alone is blind to exactly the listeners that matter. The bind still counts,
+    for a listener on some other address; only EADDRINUSE proves a collision,
+    since Linux refuses ports below 1024 to a non-root binder while the daemon
+    that publishes them runs as root, so a free 443 refuses the probe."""
+    if not udp and _tcp_listener_answers(port):
+        return False
+    return _bind_refusal(port, udp=udp) != errno.EADDRINUSE
 
 
 def _container_published_ports(name: str) -> set[int]:
@@ -1305,7 +1307,7 @@ def _suggest_port_base() -> int | None:
     that just failed."""
     for base in range(8600, 9600, 10):
         if all(
-            _host_port_free(base + offset, udp=(spec or "").endswith("/udp"), reuse=spec is None)
+            _host_port_free(base + offset, udp=(spec or "").endswith("/udp"))
             for offset, (_, _, spec) in enumerate(_STACK_PORTS)
         ):
             return base
@@ -1330,7 +1332,7 @@ def refuse_if_ports_taken() -> None:
     taken = [
         (label, port)
         for label, port, spec in _STACK_PORTS
-        if port not in ours and not _host_port_free(port, udp=(spec or "").endswith("/udp"), reuse=spec is None)
+        if port not in ours and not _host_port_free(port, udp=(spec or "").endswith("/udp"))
     ]
     if not taken:
         return
@@ -2262,6 +2264,15 @@ def _world_server_ping(port: int, timeout: float = 2.0) -> bool:
     return _world_server_ping_reply(port, timeout) is not None
 
 
+def _arm_world_intro(config: dict[str, object]) -> None:
+    """`up --intro` against a world server that was already running: it opens the story
+    for the next browser, exactly as the flag does on a fresh one."""
+    if not config.get("intro"):
+        return
+    if _world_server_request(WORLD_SERVER_PORT, {"op": "intro"}, timeout=30.0) is None:
+        warn("The host world server did not take --intro; use Play the intro in the app instead.")
+
+
 def _ensure_world_environment(config: dict[str, object]) -> None:
     """Hot-switch a running server onto the configured environment pack."""
     wanted = str(config["environment_id"])
@@ -2501,6 +2512,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
                 running_digest = WORLD_SERVER_MODEL_DIGEST_PATH.read_text(encoding="utf-8").strip()
             if _world_model_sources_digest(config) == running_digest:
                 _ensure_world_environment(config)
+                _arm_world_intro(config)
                 log("Host world server already running.")
                 return endpoint
             log("Host world server compiled different robot/world sources -- restarting it...")
@@ -2523,6 +2535,10 @@ def ensure_world_server(config: dict[str, object]) -> str:
                 f"wants {bind} -- restarting it..."
             )
         _stop_stale_world_server()
+    else:
+        # Silence on this block's port says nothing about the last run: a
+        # checkout moved to another block still has its server on the old one.
+        stop_world_server()
 
     ensure_state_dir()
     attempts: list[tuple[str, str, str]] = []  # (backend label, backend, that attempt's log output)
@@ -2539,7 +2555,12 @@ def ensure_world_server(config: dict[str, object]) -> str:
         log(f"Starting host world server ({label} rendering)...")
         log_offset = WORLD_SERVER_LOG_PATH.stat().st_size if WORLD_SERVER_LOG_PATH.exists() else 0
         if _start_world_server(
-            uv, sim_repo, environment_id=str(config["environment_id"]), bind=bind, mujoco_gl=backend
+            uv,
+            sim_repo,
+            environment_id=str(config["environment_id"]),
+            bind=bind,
+            mujoco_gl=backend,
+            intro=bool(config.get("intro")),
         ):
             # Record what this server compiled, for the reuse check above.
             WORLD_SERVER_MODEL_DIGEST_PATH.write_text(_world_model_sources_digest(config) + "\n", encoding="utf-8")
@@ -2625,7 +2646,9 @@ def _render_scale_args() -> list[str]:
     return ["--render-scale", str(scale)]
 
 
-def _start_world_server(uv: str, sim_repo: Path, *, environment_id: str, bind: str, mujoco_gl: str | None) -> bool:
+def _start_world_server(
+    uv: str, sim_repo: Path, *, environment_id: str, bind: str, mujoco_gl: str | None, intro: bool = False
+) -> bool:
     """One world-server start attempt; True once it answers pings."""
     bootstrap = (
         "import sys; sys.path.insert(0, 'ros2_ws/src/mars_bot/mars_sim_driver'); "
@@ -2656,6 +2679,7 @@ def _start_world_server(uv: str, sim_repo: Path, *, environment_id: str, bind: s
                 "--rosbridge-url",
                 f"ws://127.0.0.1:{SIM_ROSBRIDGE_PORT}",
             ]
+            + (["--intro"] if intro else [])
             + _render_scale_args(),
             cwd=sim_repo.parent,
             env=env,
@@ -2794,13 +2818,75 @@ WORLD_PORTS_RECORD_GRACE_S = 5.0
 def _world_ports_free(ports: list[int], timeout_s: float) -> bool:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        if all(_host_port_free(port, udp=False, reuse=True) for port in ports):
+        if all(_host_port_free(port, udp=False) for port in ports):
             return True
         time.sleep(0.2)
     return False
 
 
+def _checkout_world_server_pids() -> set[int]:
+    """Every world server spawned for this checkout, whatever block it was given:
+    the uv parent by the --project it was handed, the python child by the venv
+    it runs from. Both are anchored on this checkout's own sim path, so another
+    clone's server cannot match, and both name the bootstrap module."""
+    parent_marker = f" --project {SIM_DIR} python "
+    child_prefix = f"{SIM_DIR}/.venv/bin/python"
+    listing = subprocess.run(["ps", "-ww", "-eo", "pid=,command="], capture_output=True, text=True, check=False)
+    pids: set[int] = set()
+    for line in listing.stdout.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if "mars_sim_driver.world_server" not in command:
+            continue
+        if parent_marker in command or command.startswith(child_prefix):
+            with contextlib.suppress(ValueError):
+                pids.add(int(pid))
+    pids.discard(os.getpid())
+    return pids
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _stop_checkout_world_servers() -> None:
+    """The ports record names one server; a checkout that changed block, or an
+    `up` killed mid-start, leaves another behind that no record points at."""
+    pids = _checkout_world_server_pids()
+    # A uv parent still exiting behind the child the recorded stop just ended
+    # is not a leftover.
+    settle = time.monotonic() + 2.0
+    while pids and time.monotonic() < settle:
+        time.sleep(0.2)
+        pids = {pid for pid in pids if _alive(pid)}
+    if not pids:
+        return
+    for pid in pids:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and any(_alive(pid) for pid in pids):
+        time.sleep(0.2)
+    for pid in pids:
+        if _alive(pid):
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
+    log(f"Stopped {len(pids)} leftover world server process(es) from an earlier run of this checkout.")
+
+
 def stop_world_server() -> None:
+    _stop_recorded_world_server()
+    _stop_checkout_world_servers()
+    with contextlib.suppress(OSError):  # read-only fs: the kill still counts
+        WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
+        WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)
+        WORLD_SERVER_MODEL_DIGEST_PATH.unlink(missing_ok=True)
+
+
+def _stop_recorded_world_server() -> None:
     # Only the ports this checkout recorded when it started a server. The
     # configured ports are no evidence of ownership -- a checkout that never
     # started one would take them as licence to kill whoever holds the
@@ -2835,10 +2921,6 @@ def stop_world_server() -> None:
                 log("Stopped host world server (forced).")
             else:
                 warn(f"Something else holds the world ports (lsof -nP -iTCP:{ports[-1]}); `{CLI_SIM} up` may refuse.")
-    with contextlib.suppress(OSError):  # read-only fs: the kill still counts
-        WORLD_SERVER_PID_PATH.unlink(missing_ok=True)
-        WORLD_SERVER_PORTS_PATH.unlink(missing_ok=True)
-        WORLD_SERVER_MODEL_DIGEST_PATH.unlink(missing_ok=True)
 
 
 def ensure_skill_assets(config: dict[str, object]) -> None:

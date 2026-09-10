@@ -26,6 +26,31 @@ import {
 // Runs of the same skill collapse into one group at this many in a row.
 const SKILL_GROUP_MIN = 3;
 
+// A full URL, or a bare host with a path (github.com/innate-inc/innate-os). The path is
+// required: without it every "e.g." and sentence-ending domain would become a link.
+const LINK_RE = /https?:\/\/[^\s<>]+|(?:[a-z0-9-]+\.)+[a-z]{2,}\/[^\s<>]*/gi;
+
+/** Write text into an element, with any link in it clickable. @param {HTMLElement} el @param {string} text */
+function setLinkedText(el, text) {
+  el.replaceChildren();
+  let at = 0;
+  for (const match of text.matchAll(LINK_RE)) {
+    const start = match.index ?? 0;
+    // Sentence punctuation after a link belongs to the sentence.
+    const href = match[0].replace(/[.,;:!?)\]]+$/, "");
+    if (start > at) el.append(text.slice(at, start));
+    const link = document.createElement("a");
+    link.className = "chat-link";
+    link.href = /^https?:\/\//i.test(href) ? href : `https://${href}`;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = href;
+    el.append(link);
+    at = start + href.length;
+  }
+  el.append(text.slice(at));
+}
+
 /**
  * @returns {{
  *   head: HTMLElement,
@@ -35,6 +60,7 @@ const SKILL_GROUP_MIN = 3;
  *   addSkillRun: (key: string, name: string, status: string, ts: number, reason: string, args: any) => void,
  *   routeChatOut: (sender: string, text: string, ts: number) => void,
  *   replay: (entries: any[]) => void,
+ *   clear: () => void,
  *   setMode: (mode: "compact" | "detailed") => void,
  *   destroy: () => void,
  * }}
@@ -87,11 +113,6 @@ export function createChatStream() {
   });
   const streamResize = new ResizeObserver(() => settleStreamAfterMutation(pinnedToBottom));
   streamResize.observe(stream);
-
-  /** @param {HTMLElement} el */
-  function appendStreamItem(el) {
-    stream.append(el);
-  }
 
   /** @type {{ wrap: HTMLElement, status: HTMLElement, list: HTMLElement, lastByKind: Record<string, string>, startTs: number, latestTs: number } | null} */
   let thoughts = null;
@@ -192,7 +213,7 @@ export function createChatStream() {
         settleStreamAfterMutation(wasAtBottom);
       });
       wrap.append(toggle, list);
-      appendStreamItem(wrap);
+      stream.append(wrap);
       thoughts = { wrap, status, list, lastByKind: {}, startTs: ts, latestTs: ts };
     }
     thoughts.latestTs = ts;
@@ -215,6 +236,8 @@ export function createChatStream() {
     const el = document.createElement("div");
     el.className = `chat-msg ${kind}`;
     el.classList.toggle("skill-output", label === "skill_output");
+    el.classList.toggle("narrator", label === "narrator");
+    el.dataset.ts = String(ts);
     if (kind === "system") {
       const tag = document.createElement("span");
       tag.className = "chat-sender mono";
@@ -223,9 +246,9 @@ export function createChatStream() {
     }
     const bubble = document.createElement("div");
     bubble.className = "chat-bubble";
-    bubble.textContent = kind === "user" ? text : roundNums(text);
+    setLinkedText(bubble, kind === "user" ? text : roundNums(text));
     el.appendChild(bubble);
-    appendStreamItem(el);
+    stream.append(el);
     if (label !== "skill_output") animateCompactEnter(el);
     lastTs = ts;
     if (kind === "user") {
@@ -387,7 +410,7 @@ export function createChatStream() {
       });
       skillRuns.set(key, createdRun);
       if (!attachSkillToStreak(name, wrap)) {
-        appendStreamItem(wrap);
+        stream.append(wrap);
         animateCompactEnter(wrap);
       }
     }
@@ -453,11 +476,13 @@ export function createChatStream() {
 
   /** Replace the transcript with a history snapshot. The snapshot already
    *  includes anything the live stream just showed, so reset and replay it
-   *  wholesale rather than trying to merge.
+   *  wholesale rather than trying to merge -- except the world's own lines,
+   *  which the brain never recorded and only this page can put back.
    *  @param {any[]} entries */
   function replay(entries) {
     const wasAtBottom = atBottom();
     const priorTop = stream.scrollTop;
+    const narrated = [...stream.querySelectorAll(":scope > .chat-msg.narrator")];
     stream.replaceChildren();
     for (const timer of compactEnterTimers) clearTimeout(timer);
     compactEnterTimers.clear();
@@ -473,8 +498,23 @@ export function createChatStream() {
       replayingHistory = false;
       stream.classList.remove("replaying");
     }
+    for (const line of narrated) restoreNarrated(line);
     // A reconcile can land while the reader is up in the scrollback.
     stream.scrollTop = wasAtBottom ? stream.scrollHeight : priorTop;
+  }
+
+  /** Put a world line back where its timestamp says it belongs. @param {HTMLElement} line */
+  function restoreNarrated(line) {
+    const at = Number(line.dataset.ts) || 0;
+    const later = [...stream.children].find(
+      (item) => item instanceof HTMLElement && Number(item.dataset.ts) > at,
+    );
+    stream.insertBefore(line, later ?? null);
+  }
+
+  function clear() {
+    for (const line of stream.querySelectorAll(":scope > .chat-msg.narrator")) line.remove();
+    replay([]);
   }
 
   return {
@@ -485,6 +525,7 @@ export function createChatStream() {
     addSkillRun,
     routeChatOut,
     replay,
+    clear,
     setMode: setStreamMode,
     destroy() {
       streamResize.disconnect();

@@ -33,6 +33,8 @@ class SkillMeta(_SkillMetaRequired, total=False):
     episode_count: int
     directory: str
     wheeled: bool
+    module: str  # import path of the class an agent file names for this skill; "" when none
+    class_name: str
 
 
 @dataclass

@@ -38,6 +38,8 @@ set(srv_files
   "srv/ForgetMemory.srv"
   "srv/RenamePerson.srv"
   "srv/ForgetPerson.srv"
+  "srv/SaveAgent.srv"
+  "srv/DeleteAgent.srv"
 )
 
 set(msg_files
