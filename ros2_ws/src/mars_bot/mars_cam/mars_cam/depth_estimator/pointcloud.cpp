@@ -235,8 +235,20 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
     // Confidence is at calibration resolution; disparity may be downsampled.
     const float conf_scale = confidence.empty() ? 0.0f : static_cast<float>(confidence.cols) / static_cast<float>(dw);
 
-    std::vector<Observation> observations;
-    observations.reserve(static_cast<size_t>((dw / step) * (dh / step)) / 4);
+    // Pass one: everything in the footprint column, at any height, so the floor
+    // fit sees the surface rather than only what already cleared the threshold.
+    // Slightly wider than the corridor — more floor constrains the plane better,
+    // and none of it is marked.
+    struct ColumnPoint {
+        cv::Vec3f base;
+        float range;
+        int px;
+        int py;
+    };
+    std::vector<std::array<double, 3>> ground_candidates;
+    std::vector<ColumnPoint> in_column;
+    ground_candidates.reserve(static_cast<size_t>((dw / step) * (dh / step)) / 4);
+    in_column.reserve(ground_candidates.capacity());
 
     for (int py = 0; py < dh; py += step) {
         for (int px = 0; px < dw; px += step) {
@@ -251,15 +263,50 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
                 t_base;
             if (in_base[0] < nav_roi_x_min_ || in_base[0] > nav_roi_x_max_)
                 continue;
+            if (std::abs(in_base[1]) > nav_roi_half_width_ + ground_search_extra_width_m_)
+                continue;
+            ground_candidates.push_back({in_base[0], in_base[1], in_base[2]});
             if (std::abs(in_base[1]) > nav_roi_half_width_)
                 continue;
-            if (in_base[2] < nav_roi_z_min_ || in_base[2] > nav_roi_z_max_)
+            in_column.push_back({in_base, z, px, py});
+        }
+    }
+
+    // Fit the floor, then measure every candidate against IT rather than
+    // against base_link z. A wrong camera mount, a head at an unexpected angle,
+    // and a robot pitching over a floor transition all stop mattering — the
+    // last of those otherwise makes a flat floor read 90mm high for ~1s and
+    // marks the whole corridor.
+    if (ground_estimation_enabled_) {
+        const auto fit = ground_.update(ground_candidates);
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "ground: %s pitch %+.2f roll %+.2f offset %+.1fmm (%zu/%zu inliers, rms %.1fmm)%s",
+                             fit.accepted ? "fit" : fit.rejection, ground_.plane().pitch_deg(),
+                             ground_.plane().roll_deg(), ground_.plane().offset_m * 1000.0, fit.inliers,
+                             fit.candidates, fit.residual_rms_m * 1000.0,
+                             ground_.plane().valid ? "" : " [FALLBACK: base_link z]");
+    }
+    const GroundPlane& ground = ground_.plane();
+
+    std::vector<Observation> observations;
+    observations.reserve(in_column.size());
+
+    {
+        for (const auto& cp : in_column) {
+            const cv::Vec3f& in_base = cp.base;
+            const float z = cp.range;
+            // With no valid fit this is exactly in_base[2], i.e. the previous
+            // behaviour, so a blind or cluttered start degrades rather than fails.
+            const double height = ground_estimation_enabled_
+                                      ? ground.height_above(in_base[0], in_base[1], in_base[2])
+                                      : in_base[2];
+            if (height < nav_roi_z_min_ || height > nav_roi_z_max_)
                 continue;
 
             float match_confidence = 1.0f;
             if (conf_scale > 0.0f) {
-                const int cxi = std::min(static_cast<int>(px * conf_scale), confidence.cols - 1);
-                const int cyi = std::min(static_cast<int>(py * conf_scale), confidence.rows - 1);
+                const int cxi = std::min(static_cast<int>(cp.px * conf_scale), confidence.cols - 1);
+                const int cyi = std::min(static_cast<int>(cp.py * conf_scale), confidence.rows - 1);
                 match_confidence = confidence.at<float>(cyi, cxi);
             }
             const float weight = match_confidence * range_confidence(z, static_cast<float>(confidence_full_trust_m_),

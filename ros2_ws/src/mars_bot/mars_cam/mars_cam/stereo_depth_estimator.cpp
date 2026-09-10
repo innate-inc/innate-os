@@ -66,8 +66,20 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     this->declare_parameter<double>("nav_roi.x_min", 0.25);
     this->declare_parameter<double>("nav_roi.x_max", 1.00);
     this->declare_parameter<double>("nav_roi.half_width", 0.22);
-    this->declare_parameter<double>("nav_roi.z_min", 0.010);
+    this->declare_parameter<double>("nav_roi.z_min", 0.015);
     this->declare_parameter<double>("nav_roi.z_max", 0.36);
+
+    // Online floor estimation — see include/mars_cam/ground_plane_estimator.hpp
+    this->declare_parameter<bool>("ground.enabled", true);
+    this->declare_parameter<double>("ground.search_extra_width_m", 0.30);
+    this->declare_parameter<double>("ground.search_band_m", 0.25);
+    this->declare_parameter<double>("ground.max_tilt_deg", 20.0);
+    this->declare_parameter<double>("ground.max_offset_m", 0.06);
+    this->declare_parameter<int>("ground.min_inliers", 150);
+    this->declare_parameter<double>("ground.max_residual_m", 0.02);
+    this->declare_parameter<double>("ground.trim_max_m", 0.008);
+    this->declare_parameter<double>("ground.max_gradient_step", 0.105);
+    this->declare_parameter<double>("ground.max_offset_step_m", 0.030);
 
     // Temporal evidence filter — see include/mars_cam/evidence_grid.hpp.
     this->declare_parameter<bool>("evidence.enabled", true);
@@ -137,6 +149,21 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     nav_roi_half_width_ = this->get_parameter("nav_roi.half_width").as_double();
     nav_roi_z_min_ = this->get_parameter("nav_roi.z_min").as_double();
     nav_roi_z_max_ = this->get_parameter("nav_roi.z_max").as_double();
+
+    ground_estimation_enabled_ = this->get_parameter("ground.enabled").as_bool();
+    ground_search_extra_width_m_ = this->get_parameter("ground.search_extra_width_m").as_double();
+    {
+        GroundPlaneParams gp;
+        gp.search_band_m = this->get_parameter("ground.search_band_m").as_double();
+        gp.max_tilt_deg = this->get_parameter("ground.max_tilt_deg").as_double();
+        gp.max_offset_m = this->get_parameter("ground.max_offset_m").as_double();
+        gp.min_inliers = static_cast<std::size_t>(this->get_parameter("ground.min_inliers").as_int());
+        gp.max_residual_m = this->get_parameter("ground.max_residual_m").as_double();
+        gp.trim_max_m = this->get_parameter("ground.trim_max_m").as_double();
+        gp.max_gradient_step = this->get_parameter("ground.max_gradient_step").as_double();
+        gp.max_offset_step_m = this->get_parameter("ground.max_offset_step_m").as_double();
+        ground_.set_params(gp);
+    }
 
     evidence_enabled_ = this->get_parameter("evidence.enabled").as_bool();
     evidence_frame_ = this->get_parameter("evidence.frame").as_string();
