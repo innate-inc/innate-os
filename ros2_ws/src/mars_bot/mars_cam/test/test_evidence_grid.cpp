@@ -270,3 +270,53 @@ TEST(EvidenceGrid, MemoryScalesWithHowWellEstablishedTheObstacleWas) {
     EXPECT_FALSE(survives_after(/*observed=*/5, /*blind=*/64));
     EXPECT_TRUE(survives_after(/*observed=*/20, /*blind=*/64));
 }
+
+
+// --------------------------------------------------- observed means supported
+
+TEST(EvidenceGrid, ContinuouslyObservedObstacleDoesNotBleedAway) {
+    // Observed on the robot: a roll of tape produced ~24 voxels, which then
+    // walked down to 0 while it sat in plain view. Cause was decaying every
+    // cell each frame and re-adding, so a continuously-seen voxel netted
+    // (weight - decay*dt) and drained whenever the weight was small.
+    EvidenceParams p = defaults();
+    p.decay_per_second = 1.0;
+    EvidenceGrid grid(p);
+
+    const float weak = 0.08f;  // well below decay*dt = 0.125
+    for (int i = 0; i < 80; ++i)
+        grid.integrate(blob(1.025f, 0.025f, 0.125f, weak, 40), 0.125);
+    ASSERT_TRUE(grid.confirmed_at(1.025f, 0.025f, 0.125f)) << "weak but persistent evidence must still accumulate";
+
+    for (int i = 0; i < 200; ++i)
+        grid.integrate(blob(1.025f, 0.025f, 0.125f, weak, 40), 0.125);
+    EXPECT_TRUE(grid.confirmed_at(1.025f, 0.025f, 0.125f)) << "must not bleed away while still in view";
+}
+
+TEST(EvidenceGrid, SeenButUnsupportedVoxelsStillDecay) {
+    // Looked at, but backed by too few points to corroborate — that is not
+    // support, so it must not protect the cell from decay.
+    EvidenceParams p = defaults();
+    p.min_points_per_voxel = 4;
+    EvidenceGrid grid(p);
+
+    for (int i = 0; i < 20; ++i)
+        grid.integrate(blob(1.025f, 0.025f, 0.125f, 0.95f, 40), 0.125);
+    ASSERT_TRUE(grid.confirmed_at(1.025f, 0.025f, 0.125f));
+
+    // Now only 2 points per frame land in that voxel.
+    for (int i = 0; i < 200; ++i)
+        grid.integrate(blob(1.025f, 0.025f, 0.125f, 0.95f, 2), 0.125);
+    EXPECT_FALSE(grid.confirmed_at(1.025f, 0.025f, 0.125f));
+}
+
+TEST(EvidenceGrid, StatsReportTheFunnel) {
+    EvidenceGrid grid(defaults());
+    auto s = grid.integrate(blob(1.025f, 0.025f, 0.125f, 0.5f, 40), 0.125);
+
+    EXPECT_EQ(s.observations, 40u);
+    EXPECT_EQ(s.voxels_seen, 1u);
+    EXPECT_EQ(s.voxels_supported, 1u);
+    EXPECT_EQ(s.confirmed, 0u);
+    EXPECT_NEAR(s.mean_weight, 0.5, 1e-6);
+}
