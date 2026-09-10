@@ -9,6 +9,7 @@ runs with the same privileges as any other workspace skill."""
 from __future__ import annotations
 
 import ast
+import importlib.util
 from dataclasses import dataclass
 
 from brain_client.common.dynamic_loader import class_name_to_snake_case
@@ -144,6 +145,18 @@ def _check_import(node: ast.Import | ast.ImportFrom) -> None:
             raise DraftRejected("import aliases ('as') are not allowed")
         if alias.name in BANNED_NAMES or alias.name in BANNED_ATTRS:
             raise DraftRejected(f"'{alias.name}' may not be imported")
+    package = node.module if isinstance(node, ast.ImportFrom) else None
+    modules = [f"{package}.{alias.name}" if package else alias.name for alias in names]
+    for module in (package, *modules):
+        if module and module.startswith("innate_skills.") and not _exists(module):
+            raise DraftRejected(f"there is no module {module}; only the skills and helpers listed in the prompt exist")
+
+
+def _exists(module: str) -> bool:
+    try:
+        return importlib.util.find_spec(module) is not None
+    except ModuleNotFoundError:  # a missing parent package
+        return False
 
 
 def _declared_privates(tree: ast.Module) -> frozenset[str]:

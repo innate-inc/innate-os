@@ -34,6 +34,7 @@ EXEMPLARS = ("head_emotion.py", "turn_in_place.py", "arm_rest_position.py")
 ARM_CONSTANTS = ("JOINT_NAMES", "ZERO", "REST", "REACH_X", "REACH_Y", "GRIPPER_CLOSED", "GRIPPER_OPEN")
 ARM_METHODS = ("move_joints", "rest", "move_to", "move_by", "reachable", "gripper_open", "gripper_close", "wait")
 _FENCE = re.compile(r"```(?:python)?\n(.*?)```", re.DOTALL)
+_REFUSAL = re.compile(r"^\s*CANNOT:\s*(.+?)\s*$", re.MULTILINE)
 _MODULE_PREFIX = re.compile(r"\b(?:[a-z_]+\.)+(?=[A-Z])")
 
 RULES = """\
@@ -57,7 +58,10 @@ has played.
 between -30 and 30 degrees, arm poses inside the joint ranges below, ending at rest.
 - No comments and no prints.
 
-Reply with the complete file in one ```python block and nothing else.
+Reply with the complete file in one ```python block and nothing else. If the interfaces above \
+cannot do what is asked at all (a capability the robot lacks, not one you find undocumented), \
+reply with the single line `CANNOT: <why, in one sentence>` and no file; never write a skill \
+that only fails.
 """
 
 # Joint conventions are the URDF's: limits from mars.urdf, the joint2 floor from the arm driver's
@@ -163,3 +167,9 @@ def extract_code(reply: str) -> str:
     """The fenced python block of a reply, or the whole reply when there is no fence."""
     match = _FENCE.search(reply)
     return match.group(1) if match else reply
+
+
+def refusal(reply: str) -> str | None:
+    """The coder's reason when it declares the request impossible instead of sending a file."""
+    match = None if _FENCE.search(reply) else _REFUSAL.search(reply)
+    return match.group(1) if match else None

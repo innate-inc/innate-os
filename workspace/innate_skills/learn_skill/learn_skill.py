@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 
-from innate_skills.learn_skill.forge import Coder, Forge, ForgeUnreachable, extract_code, system_prompt
+from innate_skills.learn_skill.forge import Coder, Forge, ForgeUnreachable, extract_code, refusal, system_prompt
 from innate_skills.learn_skill.gate import Draft, DraftRejected, check
 from innate_skills.learn_skill.performance import LearningMode
 
-from brain_client.common.script_paths import LEARNED_GROUP, get_learned_skills_dir
+from brain_client.common.script_paths import DRAFT_MARKER, LEARNED_GROUP, get_learned_skills_dir
 from innate import Skill, SkillReturn
 from innate_proxy import ProxyClient
 
@@ -55,11 +56,15 @@ class LearnSkill(Skill):
                 for round_number in range(1, ROUNDS + 1):
                     self.feedback(f"round {round_number}: drafting")
                     try:
-                        draft = check(self._draft(forge, show, prompt))
+                        reply = self._draft(forge, show, prompt)
+                        if (reason := refusal(reply)) is not None:
+                            self.fail(f"Not learnable with the robot's current interfaces: {reason}")
+                        draft = check(extract_code(reply))
                         problem = self._install(draft, written) or self._trial(draft)
                     except (DraftRejected, ForgeUnreachable) as failure:
                         problem = str(failure)
                     if problem is None and draft is not None:
+                        self._acquire(draft)
                         written.discard(_learned_path(draft))
                         show.celebrate(draft.display_name)
                         return f"Learned {draft.skill_id}: it is now one of your tools."
@@ -71,6 +76,7 @@ class LearnSkill(Skill):
         self.fail(f"Could not learn it after {ROUNDS} rounds: {problem}")
 
     def _draft(self, forge: Forge, show: LearningMode, prompt: str) -> str:
+        """The coder's whole reply, muttered line by line as it streams."""
         reply: list[str] = []
         pending = ""
         for delta in forge.ask(prompt):
@@ -79,26 +85,31 @@ class LearnSkill(Skill):
             *lines, pending = (pending + delta).split("\n")
             for line in lines:
                 show.mutter(line)
-        return extract_code("".join(reply))
+        return "".join(reply)
 
     def _install(self, draft: Draft, written: set[Path]) -> str | None:
-        """Write the draft where the catalog looks and wait for the roster to rebuild."""
+        """Write the draft, marked as on trial, where the catalog looks and wait for the roster to load it."""
         path = _learned_path(draft)
         if path.exists() and path not in written:
             raise DraftRejected(f"a learned skill named {draft.class_name} already exists; choose another class name")
         path.parent.mkdir(parents=True, exist_ok=True)
+        written.add(path)
+        loaded = self._publish(path, DRAFT_MARKER + draft.source, lambda: _roster_has(draft, on_trial=True))
+        return None if loaded else "the skill catalog did not pick the file up in time"
+
+    def _acquire(self, draft: Draft) -> None:
+        """Drop the trial marker so the roster advertises the skill; a slow rebuild only delays its appearance."""
+        self._publish(_learned_path(draft), draft.source, lambda: _roster_has(draft, on_trial=False))
+
+    def _publish(self, path: Path, source: str, listed: Callable[[], bool | None]) -> bool | None:
         staging = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         roster_before = _roster_stamp()
         try:
-            staging.write_text(draft.source)
+            staging.write_text(source)
             staging.replace(path)  # atomic: the watcher never imports a half-written file
         finally:
             staging.unlink(missing_ok=True)
-        written.add(path)
-        loaded = self.wait_for(
-            lambda: _roster_lists(draft) if _roster_stamp() != roster_before else None, timeout=ROSTER_TIMEOUT_S
-        )
-        return None if loaded else "the skill catalog did not pick the file up in time"
+        return self.wait_for(lambda: listed() if _roster_stamp() != roster_before else None, timeout=ROSTER_TIMEOUT_S)
 
     def _trial(self, draft: Draft) -> str | None:
         if self.skills is None:
@@ -116,10 +127,14 @@ def _roster_stamp() -> int:
     return CONTRACTS.stat().st_mtime_ns if CONTRACTS.exists() else 0
 
 
-def _roster_lists(draft: Draft) -> bool | None:
-    """True once the rebuilt roster carries the draft's skill, or its module's load error."""
+def _roster_has(draft: Draft, *, on_trial: bool) -> bool | None:
+    """True once the rebuilt roster carries the draft's skill in that state, or its module's load error."""
     try:
-        ids = {skill["id"] for skill in json.loads(CONTRACTS.read_text())["skills"]}
+        skills = json.loads(CONTRACTS.read_text())["skills"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return True if draft.skill_id in ids or f"local/{LEARNED_GROUP}.{draft.module}" in ids else None
+    broken = f"local/{LEARNED_GROUP}.{draft.module}"
+    for skill in skills:
+        if skill["id"] == broken or (skill["id"] == draft.skill_id and bool(skill.get("draft")) == on_trial):
+            return True
+    return None
