@@ -352,6 +352,20 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
    * challenge ends that: the rail, the scene setup and the challenges are the reward. */
   const storyRunning = () => !!story() || (!!out() && !passed());
   const switching = () => environment?.switch?.state === "loading";
+  // A switch the world refused: say so, once, or Play the intro looks like it did nothing.
+  let failedSwitch = "";
+  function reportFailedSwitch() {
+    const pending = environment?.switch;
+    const key = pending?.state === "failed" ? `${pending.id}:${pending.message}` : "";
+    if (key === failedSwitch) return;
+    failedSwitch = key;
+    if (!key) return;
+    void panel.narrate(
+      `The world could not switch to ${pending.display_name || pending.id}: ${pending.message}. ` +
+        "The simulator's navigation stack is usually stuck when this happens; restart it with ./innate-sim down && ./innate-sim up --intro.",
+      { local: true },
+    );
+  }
   const envId = () => environment?.environment?.id ?? "";
   const skipped = () => read(localStorage, SKIP_KEY) === "1";
   const spoken = () => opts.spokenCount();
@@ -1242,6 +1256,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   });
   const unsubEnvironment = session?.onEnvironment?.((/** @type {any} */ roster) => {
     environment = roster;
+    reportFailedSwitch();
     autoStart();
     arriveInBackrooms();
     render();
