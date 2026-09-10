@@ -187,8 +187,12 @@ def render_markdown(report: ValidationReport) -> str:
         _stats_row("Planarity RMS per image", report.planarity_rms_mm, "mm"),
         _stats_row("Planarity p95 per image", report.planarity_p95_mm, "mm"),
         "",
-        f"Mean reconstructed neighbour spacing: **{report.mean_spacing_mm:.3f} mm** "
-        f"(nominal {report.nominal_spacing_mm:.3f} mm)",
+        (
+            f"Mean reconstructed neighbour spacing: **{report.mean_spacing_mm:.3f} mm** "
+            f"(nominal {report.nominal_spacing_mm:.3f} mm)"
+            if report.spacing_error_mm.count
+            else "Neighbour spacing: **n/a** — needs a complete grid; ChArUco returns corner subsets."
+        ),
         "",
         f"Median triangulated depth: **{report.median_depth_m:+.4f} m** — "
         f"Q yields positive Z for points in front of the camera: **{report.q_yields_positive_z}**",
