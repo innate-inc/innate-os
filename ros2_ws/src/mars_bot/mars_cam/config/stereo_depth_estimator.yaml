@@ -71,6 +71,27 @@ arm_camera_driver:
     # Set to 2 for 160×120 = 19k pts, etc. Higher = faster publish, fewer points.
     pointcloud_decimation: 1
 
+    # ── Camera mount correction ───────────────────────────────────────────
+    #
+    # The point cloud is back-projected in the RECTIFIED left frame but stamped
+    # camera_optical_frame, the unrectified left camera in the URDF. R1 is
+    # un-applied automatically; these absorb what is left, which is mechanical:
+    # the head servo zero is a single hardcoded homing_offset shared across all
+    # robots, so per-unit assembly variation lands here.
+    #
+    # A tilt error puts the floor above min_obstacle_height at range, which the
+    # costmap marks as a phantom obstacle. To measure, park on flat ground and:
+    #
+    #   ros2 run mars_cam ground_plane_check
+    #
+    # then set mount_pitch_correction_deg to the NEGATIVE of the reported floor
+    # pitch and re-run to confirm it lands near zero.
+    #
+    # Optical-frame axes (x right, y down, z forward): pitch rotates about x,
+    # roll about z. Per-robot values — do not assume they transfer.
+    mount_pitch_correction_deg: 0.0
+    mount_roll_correction_deg: 0.0
+
     # ── VPI SGM — Creation parameters (changing these rebuilds the CUDA payload) ──
     #
     # max_disparity: search range in pixels. Objects closer than

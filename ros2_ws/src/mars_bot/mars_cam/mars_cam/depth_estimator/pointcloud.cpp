@@ -27,6 +27,9 @@ void StereoDepthEstimator::publishPointCloudXYZ(const cv::Mat& disparity_lowres,
     const float cy = static_cast<float>(P1_.at<double>(1, 2)) * s;
     const float f_depth = static_cast<float>(focal_length_);
     const float baseline = static_cast<float>(baseline_);
+    // Back-projection lands in the rectified frame; this rotates into the frame
+    // the cloud is actually stamped with. See updateCloudRotation().
+    const cv::Matx33f& R = cloud_rotation_;
 
     const int step = pointcloud_decimation_;
     const int pc_w = dw / step;
@@ -57,9 +60,11 @@ void StereoDepthEstimator::publishPointCloudXYZ(const cv::Mat& disparity_lowres,
             if (d > 0.0f && std::isfinite(d)) {
                 float z = f_depth * baseline / d;
                 if (z > 0.0f && z <= MAX_DEPTH_M) {
-                    *ix = (static_cast<float>(px) - cx) * z / fx;
-                    *iy = (static_cast<float>(py) - cy) * z / fy;
-                    *iz = z;
+                    const cv::Vec3f p = R * cv::Vec3f((static_cast<float>(px) - cx) * z / fx,
+                                                      (static_cast<float>(py) - cy) * z / fy, z);
+                    *ix = p[0];
+                    *iy = p[1];
+                    *iz = p[2];
                     continue;
                 }
             }
@@ -88,6 +93,9 @@ void StereoDepthEstimator::publishPointCloudColor(const cv::Mat& disparity_lowre
     const float cy = static_cast<float>(P1_.at<double>(1, 2)) * s;
     const float f_depth = static_cast<float>(focal_length_);
     const float baseline = static_cast<float>(baseline_);
+    // Back-projection lands in the rectified frame; this rotates into the frame
+    // the cloud is actually stamped with. See updateCloudRotation().
+    const cv::Matx33f& R = cloud_rotation_;
 
     // Downsample rectified colour image to match disparity resolution
     cv::Mat color_ds;
@@ -126,9 +134,11 @@ void StereoDepthEstimator::publishPointCloudColor(const cv::Mat& disparity_lowre
             if (d > 0.0f && std::isfinite(d)) {
                 float z = f_depth * baseline / d;
                 if (z > 0.0f && z <= MAX_DEPTH_M) {
-                    *ix = (static_cast<float>(px) - cx) * z / fx;
-                    *iy = (static_cast<float>(py) - cy) * z / fy;
-                    *iz = z;
+                    const cv::Vec3f p = R * cv::Vec3f((static_cast<float>(px) - cx) * z / fx,
+                                                      (static_cast<float>(py) - cy) * z / fy, z);
+                    *ix = p[0];
+                    *iy = p[1];
+                    *iz = p[2];
 
                     if (has_color) {
                         const cv::Vec3b& bgr = color_ds.at<cv::Vec3b>(py, px);

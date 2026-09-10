@@ -35,6 +35,7 @@ from mars_cam.ground_plane import (
     height_error_by_range,
     image_radius,
     leak_fractions,
+    mount_correction_for,
     quaternion_matrix,
     transform_to_base,
 )
@@ -152,7 +153,14 @@ class GroundPlaneCheck(Node):
         out(f"  roll           {fit.roll_deg:+.3f} deg")
         out(f"  height at base {fit.offset_m * 1000:+.1f} mm   (0 = correct)")
         out(f"  residual RMS   {fit.residual.rms:.1f} mm, p95 {fit.residual.p95:.1f} mm")
-        out(f"  implied floor height at 1.2m: {fit.height_at(1.2) * 1000:+.1f} mm")
+        out(f"  implied floor height at 1.0m: {fit.height_at(1.0) * 1000:+.1f} mm")
+
+        pitch_fix, roll_fix = mount_correction_for(fit)
+        out("")
+        out("To flatten it, set in config/stereo_depth_estimator.yaml:")
+        out(f"    mount_pitch_correction_deg: {pitch_fix:.3f}")
+        out(f"    mount_roll_correction_deg:  {roll_fix:.3f}")
+        out("  (measure again afterwards; R1 is already removed, so this is mechanical)")
 
         out("")
         out("Floor height by range (mm)")
