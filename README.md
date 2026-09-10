@@ -58,12 +58,7 @@ Skills are the unit of action on an Innate robot — a software call, a motion, 
   <img src="docs/assets/readme/skills-chess-door-opening.gif" alt="Two standalone skills: moving a chess piece, then opening a door" width="520">
 </p>
 
-```bash
-innate skill type innate-os/arm_zero_position
-innate skill run innate-os/arm_zero_position @duration=3
-```
-
-Write your own in `workspace/custom_skills/`:
+Run them from the [web app](https://docs.innate.bot/robots/web-app), the [phone app](https://docs.innate.bot/robots/innate-controller-app), or an agent. Write your own in `workspace/custom_skills/`:
 
 ```python
 from innate import Mobility, Skill, SkillReturn
@@ -82,7 +77,7 @@ class MoveForward(Skill):
         return f"Moved forward {distance_m} m"
 ```
 
-Run them from the CLI, the apps, or an agent. Built-in skills live in `workspace/innate_skills/`. You can also [record a motion and train a policy](https://docs.innate.bot/training/overview), then deploy it as a skill.
+Built-in skills live in `workspace/innate_skills/`. You can also [record a motion and train a policy](https://docs.innate.bot/training/overview), then deploy it as a skill.
 
 **[Skills documentation →](https://docs.innate.bot/software/skills)**
 
