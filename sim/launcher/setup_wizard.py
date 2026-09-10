@@ -20,6 +20,7 @@ from config import (
     OPENAI_API_KEY,
     OPENAI_BACKEND,
     SECRET_ENV_KEYS,
+    SETTINGS_PATH,
     is_configured_secret_value,
     success,
     warn,
@@ -404,7 +405,11 @@ def apply_brain_backend(config: dict[str, object], backend: str, key: str) -> No
     if backend in _VENDOR_KEYS:
         _save_vendor_key(config, _VENDOR_KEYS[backend], key)
         _select_provider(config, backend)
-        _disable_keys(config, [INNATE_SERVICE_KEY, *_other_vendor_keys(backend)])
+        # Only the service key is disabled. The other vendor's key is harmless
+        # now that brain_backend picks the provider, and leaving it is what
+        # keeps a brain_backend pinned in settings.yaml -- which is layered
+        # over BRAIN_BACKEND -- from landing on a provider with no key at all.
+        _disable_keys(config, [INNATE_SERVICE_KEY])
     elif backend == INNATE_BACKEND:
         # The proxy serves every provider, so the choice of provider is left
         # wherever it already stands.
@@ -419,18 +424,19 @@ def apply_brain_backend(config: dict[str, object], backend: str, key: str) -> No
 _VENDOR_KEYS = {GEMINI_BACKEND: GEMINI_API_KEY, OPENAI_BACKEND: OPENAI_API_KEY}
 
 
-def _other_vendor_keys(backend: str) -> list[str]:
-    return [key for name, key in _VENDOR_KEYS.items() if name != backend]
-
-
 def _select_provider(config: dict[str, object], backend: str) -> None:
     """Point the robot's brain at this vendor. A vendor key only works for its
-    own provider, so choosing the key has to choose the provider with it."""
+    own provider, so choosing the key has to choose the provider with it.
+
+    settings.yaml is layered over .env, so report what was written rather than
+    promising what the node will pick.
+    """
     write_env_value(ENV_PATH, BRAIN_BACKEND, backend)
     raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
     user_env: dict[str, str] = config["user_env"]  # type: ignore[assignment]
     raw_env[BRAIN_BACKEND] = backend
     user_env[BRAIN_BACKEND] = backend
+    success(f"Set {BRAIN_BACKEND}={backend} in {ENV_PATH.name} (a brain_backend in {SETTINGS_PATH.name} wins over it).")
 
 
 def configure_brain_backend(config: dict[str, object]) -> None:
@@ -490,7 +496,7 @@ def configure_brain_backend(config: dict[str, object]) -> None:
         backend = GEMINI_BACKEND if choice == "1" else OPENAI_BACKEND
         _configure_vendor_key(config, _VENDOR_KEYS[backend])
         _select_provider(config, backend)
-        _disable_keys(config, [INNATE_SERVICE_KEY, *_other_vendor_keys(backend)])
+        _disable_keys(config, [INNATE_SERVICE_KEY])
     elif choice == "3":
         _configure_service_key(config)
         _disable_keys(config, list(_VENDOR_KEYS.values()))

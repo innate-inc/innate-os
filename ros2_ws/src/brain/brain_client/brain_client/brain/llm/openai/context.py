@@ -181,8 +181,12 @@ class OpenAIConversation:
                 response = event.get("response")
                 if not isinstance(response, dict):
                     raise RuntimeError(f"openai sent {kind} without a response body")
-                if kind == "response.failed":
-                    raise RuntimeError(f"openai response failed: {_empty_reason(response)}")
+                if kind != "response.completed":
+                    # A truncated or filtered generation is a failed turn, not a
+                    # short one: committing it would consume the queued events
+                    # and could dispatch a call whose arguments were cut
+                    # mid-JSON (and so parse as no arguments at all).
+                    raise RuntimeError(f"openai response did not complete: {_empty_reason(response)}")
                 return response
         raise RuntimeError("openai stream ended without a terminal event")
 

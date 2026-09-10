@@ -40,7 +40,7 @@ import time
 
 import numpy as np
 
-from brain_client.brain.transport import pick_rest
+from brain_client.brain.llm.gemini.transport import pick_rest
 from brain_client.common.logging import UniversalLogger
 from brain_client.inputs.batch_stt import (
     DEFAULT_KEYTERMS,
