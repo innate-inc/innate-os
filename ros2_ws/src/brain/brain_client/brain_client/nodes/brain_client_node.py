@@ -12,12 +12,22 @@ service surface, and spins. The agent loop itself lives in
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections import deque
+from pathlib import Path
 
 import rclpy
-from brain_messages.srv import ForgetMemory, GetAvailableDirectives, GetChatHistory, ReloadSkillsAgents, ResetBrain
+from brain_messages.srv import (
+    DeleteAgent,
+    ForgetMemory,
+    GetAvailableDirectives,
+    GetChatHistory,
+    ReloadSkillsAgents,
+    ResetBrain,
+    SaveAgent,
+)
 from geometry_msgs.msg import Twist
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
@@ -27,6 +37,14 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
 from brain_client.agents.initializer import initialize_agents
+from brain_client.agents.studio import (
+    AgentSpec,
+    StudioError,
+    broken_agent_fields,
+    delete_agent,
+    save_agent,
+    studio_fields,
+)
 from brain_client.brain.agent import BrainAgent
 from brain_client.brain.memory_search import MemorySearch
 from brain_client.brain.search_server import MemorySearchServer
@@ -179,7 +197,11 @@ class BrainClientNode(Node):
         # Spatial memory: the recorder builds it whenever the robot drives well-
         # localized (brain active or not); skills recall over it through the
         # /brain/search_memory action — the agent itself knows nothing of it.
-        self.memory_store = MemoryStore(get_innate_os_root() / "data")
+        # The authored memory packs seed only the hosted sim's maps.
+        seed_dir = get_innate_os_root() / "workspace/innate_agents/intro_memories"
+        self.memory_store = MemoryStore(
+            get_innate_os_root() / "data", seed_dir=seed_dir if os.environ.get("VIRTUAL_MARS_REMOTE") else None
+        )
         rest = pick_rest(self._proxy)
         self.memory_search = (
             MemorySearch(self.memory_store, rest, model=cfg.gemini_model, logger=self.get_logger())
@@ -288,6 +310,8 @@ class BrainClientNode(Node):
         self.create_service(ForgetMemory, "/brain/forget_memory", self._svc_forget_memory)
         self.create_service(ReloadSkillsAgents, "/brain/reload_skills_agents", self._svc_reload_skills_agents)
         self.create_service(GetAvailableDirectives, "/brain/get_available_directives", self._svc_get_directives)
+        self.create_service(SaveAgent, "/brain/save_agent", self._svc_save_agent)
+        self.create_service(DeleteAgent, "/brain/delete_agent", self._svc_delete_agent)
 
     def _startup(self) -> None:
         # Monotonic: a boot-time NTP step would truncate a wall-clock wait.
@@ -669,6 +693,8 @@ class BrainClientNode(Node):
                         "prompt": directive.get_prompt(),
                         "skills": directive.skill_ids(),
                         "source": getattr(directive, "source", "user"),
+                        "listed": directive.listed(),
+                        **studio_fields(directive),
                     }
                 )
             except Exception as e:  # noqa: BLE001 — one bad agent must not take the roster down
@@ -687,13 +713,58 @@ class BrainClientNode(Node):
                     # In the meta dict (not the agent list) so clients that
                     # don't know the field never offer them for selection.
                     "broken_agents": [
-                        {"id": name, "display_name": name, "load_error": error}
+                        {"id": name, "display_name": name, "load_error": error, **broken_agent_fields(name)}
                         for name, error in sorted(broken.items())
                     ],
                 }
             ),
         ]
         response.current_directive = self.state.current_directive.id if self.state.current_directive else ""
+        return response
+
+    def _svc_save_agent(self, request, response):
+        spec = AgentSpec(
+            id=request.id,
+            display_name=request.display_name,
+            prompt=request.prompt,
+            skill_ids=tuple(request.skill_ids),
+            listen=request.listen,
+            gaze=request.gaze,
+        )
+        try:
+            path, content = save_agent(self.state, spec)
+        except (StudioError, OSError) as e:
+            response.success = False
+            response.message = str(e)
+            return response
+        response.success = True
+        response.path = str(path)
+        response.source = content
+        broken_before = set(self.state.broken_agents)
+        self.reload.reload_agents_now()
+        if spec.id not in self.state.directives:
+            response.message = self._load_error_for(spec.id, path, broken_before)
+        return response
+
+    def _load_error_for(self, agent_id: str, path: Path, broken_before: set[str]) -> str:
+        """The broken-roster error for the file just saved, whichever key the
+        initializer rostered it under: its id, its module, a class in it, or
+        simply a row that was not there before the save."""
+        module_prefix = f"custom_agents.{path.stem}"
+        for key, error in self.state.broken_agents.items():
+            if key in (agent_id, path.stem) or key.startswith(module_prefix) or key not in broken_before:
+                return error
+        return "the agent did not load"
+
+    def _svc_delete_agent(self, request, response):
+        try:
+            delete_agent(self.state, request.id)
+        except (StudioError, OSError) as e:
+            response.success = False
+            response.message = str(e)
+            return response
+        self.reload.reload_agents_now()
+        response.success = True
         return response
 
     # ================= teardown =================

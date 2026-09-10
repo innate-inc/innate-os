@@ -50,7 +50,7 @@ TONEMAP_EXPOSURE = 1.5  # sim/viewer's renderer.toneMappingExposure
 # small: without ARB_clip_control (macOS) MuJoCo's caster pass offsets depth by
 # ~16 texels, which erases an object's base and leaves a detached shadow.
 SHADOW_BOX_MIN_M = 1.5
-SHADOW_BOX_MAX_M = 3.0
+SHADOW_BOX_MAX_M = 5.0  # far enough for the Backrooms exit; matches sim/viewer's cap
 SHADOW_BOX_MARGIN_M = 0.5
 # Shadows cost ~2x per frame on native GL and ~3x on software GL, where the
 # frame time already starves the stack; VIRTUAL_MARS_SHADOWS=0/1 overrides.
@@ -370,10 +370,10 @@ class VirtualMars:
         self.reset()
         release_freed_heap()
 
-    def reset(self) -> None:
+    def reset(self, *, spawn: tuple[float, float, float] | None = None) -> None:
         self.world_epoch += 1
         mujoco.mj_resetData(self.model, self.data)
-        spawn_x, spawn_y, spawn_yaw_deg = self._spawn
+        spawn_x, spawn_y, spawn_yaw_deg = spawn if spawn is not None else self._spawn
         self.data.qpos[self._base["x"][0]] = spawn_x
         self.data.qpos[self._base["y"][0]] = spawn_y
         self.data.qpos[self._base["yaw"][0]] = math.radians(spawn_yaw_deg)

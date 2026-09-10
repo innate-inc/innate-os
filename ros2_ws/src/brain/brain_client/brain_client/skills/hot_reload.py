@@ -30,6 +30,9 @@ from brain_client.skills.roster import AVAILABLE_SKILLS_QOS, registry_from_skill
 # Collapse /brain/reload bursts: a full reload reloads all on-disk state, so one
 # that just ran already covers requests arriving within this window.
 _RELOAD_COALESCE_SEC = 2.0
+# The watcher reports this process's own agent-file writes after its 1 s
+# debounce; that echo must not reload (and deactivate the brain) a second time.
+_OWN_WRITE_QUIET_SEC = 3.0
 
 
 class ReloadCoordinator:
@@ -47,6 +50,7 @@ class ReloadCoordinator:
         self._watcher = None
         self._timer = None
         self._last_full_reload = 0.0  # monotonic time of the last perform_full
+        self._own_write_quiet_until = 0.0
 
     # --- watcher lifecycle ---
     def start_watcher(self) -> None:
@@ -59,7 +63,7 @@ class ReloadCoordinator:
             logger=self._logger,
             skills_directories=[],  # skill hot reload is handled by PEAS/SAS
             agents_directories=[],
-            on_reload=lambda _skills, _agents: self.queue([], ["agents"]),
+            on_reload=lambda _skills, _agents: self._queue_from_watcher(),
             debounce_seconds=1.0,
             workspace_roots=[str(p) for p in get_agent_directories()],
         )
@@ -70,6 +74,21 @@ class ReloadCoordinator:
         if self._watcher is not None:
             self._watcher.stop()
             self._watcher = None
+
+    def _queue_from_watcher(self) -> None:
+        if time.monotonic() < self._own_write_quiet_until:
+            return
+        self.queue([], ["agents"])
+
+    def reload_agents_now(self) -> None:
+        """Reload for an agent file this process just wrote, muting the
+        watcher's echo of that write. Failures are logged like the queue's:
+        the file is saved either way, and the roster says whether it loaded."""
+        self._own_write_quiet_until = time.monotonic() + _OWN_WRITE_QUIET_SEC
+        try:
+            self.perform_selective([], ["agents"])
+        except Exception as e:  # noqa: BLE001 — same boundary as process_queue
+            self._logger.error(f"Reload after agent save failed: {e}")
 
     # --- queue (watchdog thread -> executor thread) ---
     def queue(self, skill_names: list, agent_names: list) -> None:

@@ -1,0 +1,8 @@
+# Delete a user agent's file. Shipped agents and files defining more than one
+# agent are refused.
+# Request
+string id
+---
+# Response
+bool success
+string message
