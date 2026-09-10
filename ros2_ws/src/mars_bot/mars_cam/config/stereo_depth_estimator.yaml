@@ -269,8 +269,8 @@ arm_camera_driver:
     depth_overlay_alpha: 0.6
     # Overlay shaping (single-frame only): smooth color map values and feather
     # known/unknown transitions to avoid hard cut edges without temporal lag.
-    overlay_value_smooth_kernel: 3
-    overlay_edge_feather_px: 3.0
+    overlay_value_smooth_kernel: 1
+    overlay_edge_feather_px: 0.8
     # Height overlay visualization range (blue=near floor, red=high) for
     # /mars/main_camera/depth/height_above_floor_overlay.
     height_overlay_min_m: 0.0
@@ -377,9 +377,9 @@ arm_camera_driver:
     #   canny_low/high: Canny hysteresis thresholds on the normalised disparity.
     #     Lower = more sensitive (detects weaker edges). Typical: low 5–20, high 30–60.
     edge_invalidation.enabled: true
-    edge_invalidation.width: 3
-    edge_invalidation.canny_low: 15.0 
-    edge_invalidation.canny_high: 45.0
+    edge_invalidation.width: 1
+    edge_invalidation.canny_low: 20.0 
+    edge_invalidation.canny_high: 60.0
 
     # ── 6. Speckle Removal ────────────────────────────────────────────────
     # Flood-fills connected regions of similar disparity. Any region smaller
