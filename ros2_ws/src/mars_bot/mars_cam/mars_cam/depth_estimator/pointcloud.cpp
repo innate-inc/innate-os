@@ -286,9 +286,14 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
             marks.push_back({o.x, o.y, o.z});
     }
 
+    // Published in nav_frame_, NOT the evidence frame. STVL derives an
+    // observation's sensor origin from the cloud's frame, so an odom-stamped
+    // cloud would put that origin at the odom origin — and obstacle_range would
+    // then reject everything once the robot drove away from where odom started.
+    const cv::Matx33f odom_to_base = R_odom.t();
     auto cloud = std::make_unique<sensor_msgs::msg::PointCloud2>();
     cloud->header.stamp = ts;
-    cloud->header.frame_id = evidence_frame_;
+    cloud->header.frame_id = nav_frame_;
     cloud->height = 1;
     cloud->width = static_cast<uint32_t>(marks.size());
     cloud->is_dense = true;
@@ -302,9 +307,10 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
     sensor_msgs::PointCloud2Iterator<float> iy(*cloud, "y");
     sensor_msgs::PointCloud2Iterator<float> iz(*cloud, "z");
     for (const auto& m : marks) {
-        *ix = m[0];
-        *iy = m[1];
-        *iz = m[2];
+        const cv::Vec3f in_base = odom_to_base * (cv::Vec3f(m[0], m[1], m[2]) - t_odom);
+        *ix = in_base[0];
+        *iy = in_base[1];
+        *iz = in_base[2];
         ++ix;
         ++iy;
         ++iz;
