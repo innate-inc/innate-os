@@ -292,6 +292,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const whiteout = document.createElement("div");
   whiteout.className = "agent-whiteout";
   whiteout.setAttribute("aria-hidden", "true");
+  whiteout.innerHTML =
+    '<div class="agent-whiteout-load"><span class="agent-whiteout-mark">Through the door</span>' +
+    '<span class="agent-whiteout-bar"><span></span></span></div>';
   root.append(whiteout);
 
   /** Resolves on the first world frame, which is when the story is known either way. */

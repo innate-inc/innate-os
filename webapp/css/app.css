@@ -11444,6 +11444,19 @@ select.skill-input {
   transition: opacity 900ms ease;
 }
 .agent-whiteout.on { opacity: 1; }
+/* The next world takes a few seconds to build: say so, once the white has landed. */
+.agent-whiteout-load {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+  opacity: 0; transition: opacity 500ms ease 700ms;
+}
+.agent-whiteout.on .agent-whiteout-load { opacity: 1; }
+.agent-whiteout-mark { color: #6b6b73; font-size: 13px; letter-spacing: 0.28em; text-transform: uppercase; }
+.agent-whiteout-bar { display: block; width: 220px; height: 3px; border-radius: 999px; background: rgb(0 0 0 / 8%); overflow: hidden; }
+.agent-whiteout-bar > span {
+  display: block; width: 40%; height: 100%; border-radius: 999px; background: var(--accent);
+  animation: boot-sweep 1.1s ease-in-out infinite;
+}
 .agent-drag-hint {
   position: absolute; left: 50%; bottom: 120px; z-index: 30;
   padding: 8px 14px; border-radius: 999px;

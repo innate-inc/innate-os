@@ -18,6 +18,11 @@ from mars_sim_driver.challenges import ChallengeRuntime, Drop, Predicate, Runtim
 
 DOOR = "void_door"
 CAN = "cube"
+# The door drops this far ahead; the spot to stand on is just short of its face, outside the
+# costmap's inflation (0.35 m past the footprint) but close enough that going through is a step.
+DOOR_AHEAD_M = 3.0
+DOOR_STAND_M = 2.35
+AT_DOOR_M = 0.95
 # Offered by name; the guide is what the agent is told once one is chosen.
 PERSONAS = {
     "Rocky from Project Hail Mary": (
@@ -106,10 +111,12 @@ def _persona_chosen(state: WorldState, events: list[dict], runtime: NowhereRunti
 
 
 def _at_door(state: WorldState, events: list[dict], runtime: NowhereRuntime) -> bool:
-    # The stand spot sits in front of the door and Nav2 adds its own tolerance:
-    # judge generously, and take a finished navigation at its word.
+    # Nav2 stops within its own tolerance of the stand spot: judge a little generously, and
+    # take a finished navigation at its word.
     door = state.pos(DOOR)
-    return door is not None and (math.dist(door, state.robot[:2]) < 1.7 or completed(events, "navigate_to_position"))
+    return door is not None and (
+        math.dist(door, state.robot[:2]) < AT_DOOR_M or completed(events, "navigate_to_position")
+    )
 
 
 ACTS = (
@@ -174,7 +181,7 @@ ACTS = (
         "failure: never call it interrupted and never offer to drive there again.",
         _at_door,
         suggests=("Go to the door.", "What is behind it?"),
-        place=lambda state: [Drop(DOOR, *ahead(state, 3.0))],
+        place=lambda state: [Drop(DOOR, *ahead(state, DOOR_AHEAD_M))],
         nudge="The door is waiting. In character: if you have NavigateToPosition, go to the spot in front of it now; if not, ask for it again. Do not mention buttons.",
         give_up_skill="navigate_to_position",
         give_up_after_s=240.0,
@@ -241,8 +248,7 @@ class NowhereRuntime(ChallengeRuntime):
             if act.place is not None:
                 result.drops = act.place(state)
                 if any(drop.name == DOOR for drop in result.drops):
-                    # Published as the spot to stand on, outside the door's inflated costmap footprint.
-                    x, y, _ = ahead(state, 1.7)
+                    x, y, _ = ahead(state, DOOR_STAND_M)
                     self.door = [round(x, 2), round(y, 2)]
             result.public = self.public()
         if act.surprise is not None and not self.surprised:
