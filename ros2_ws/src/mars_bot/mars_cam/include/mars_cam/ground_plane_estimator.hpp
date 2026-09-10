@@ -32,8 +32,8 @@ struct GroundPlaneParams {
     // Gates. A fit that fails any of these is rejected rather than smoothed in
     // — the failure mode to avoid is fitting a mattress or a wall and then
     // measuring every real obstacle relative to it.
-    double max_tilt_deg{12.0};
-    double max_offset_m{0.10};
+    double max_tilt_deg{20.0};
+    double max_offset_m{0.06};
     std::size_t min_inliers{150};
     double max_residual_m{0.02};
     // The floor is the LOWEST surface, so the fit is seeded from the lowest
@@ -43,14 +43,24 @@ struct GroundPlaneParams {
     int range_bins{8};
     double seed_fraction{0.30};
     // Inlier window around the seed plane. It MUST stay well below the flag
-    // threshold (nav_roi.z_min, 10mm) or a low object is absorbed into the
-    // floor and lifts it. Measured floor residual is 1.4mm RMS, so 6mm is 4
-    // sigma of headroom while leaving a 4mm margin under the threshold.
+    // threshold (nav_roi.z_min, 15mm) or a low object is absorbed into the
+    // floor and lifts it, measuring under its own threshold. Floor residual is
+    // 1.4mm RMS, so 8mm is ~6 sigma of headroom with 7mm of margin to spare.
     double trim_min_m{0.003};
-    double trim_max_m{0.006};
-    // The mount moves slowly; measured frame-to-frame jitter is 0.04-0.18 deg,
-    // so heavy smoothing costs nothing and keeps obstacle heights steady.
-    double smoothing{0.15};
+    double trim_max_m{0.008};
+    // Per-frame slew limit rather than exponential smoothing.
+    //
+    // Smoothing was actively harmful: rolling over a floor transition pitches
+    // the robot several degrees in a few frames, and an EMA lagging that
+    // excursion made a flat floor read 93mm high at 1m for 11 frames — the
+    // whole corridor marked as obstacle, which is what "the threshold is
+    // completely blocked" looked like. It bought nothing either, because the
+    // per-frame fit already averages ~1200 points and is stable to +-0.2mm.
+    //
+    // A slew limit tracks a bump exactly (1.1mm worst case) while still
+    // blunting a single bad accepted fit that slipped past the gates.
+    double max_gradient_step{0.105};  // ~6 deg per frame, 48 deg/s at 8Hz
+    double max_offset_step_m{0.030};
     // After this many consecutive rejections the last good plane is abandoned
     // and the caller falls back to the prior. Facing a wall must not leave a
     // stale plane in force indefinitely.
@@ -153,10 +163,13 @@ class GroundPlaneEstimator {
         }
 
         rejects_ = 0;
-        const double a = current_.valid ? params_.smoothing : 1.0;
-        current_.gradient_x = a * fit.gradient_x + (1.0 - a) * current_.gradient_x;
-        current_.gradient_y = a * fit.gradient_y + (1.0 - a) * current_.gradient_y;
-        current_.offset_m = a * fit.offset_m + (1.0 - a) * current_.offset_m;
+        if (!current_.valid) {
+            current_ = fit;
+        } else {
+            current_.gradient_x = step(current_.gradient_x, fit.gradient_x, params_.max_gradient_step);
+            current_.gradient_y = step(current_.gradient_y, fit.gradient_y, params_.max_gradient_step);
+            current_.offset_m = step(current_.offset_m, fit.offset_m, params_.max_offset_step_m);
+        }
         current_.valid = true;
 
         result.accepted = true;
@@ -176,6 +189,10 @@ class GroundPlaneEstimator {
     }
 
    private:
+    static double step(double from, double to, double limit) {
+        return from + std::max(-limit, std::min(limit, to - from));
+    }
+
     GroundFitResult& reject(GroundFitResult& result) {
         if (++rejects_ >= params_.max_consecutive_rejects)
             current_ = GroundPlane{};

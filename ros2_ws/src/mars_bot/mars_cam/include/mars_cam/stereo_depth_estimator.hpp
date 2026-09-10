@@ -25,6 +25,7 @@
 #include <opencv2/opencv.hpp>
 
 #include "mars_cam/evidence_grid.hpp"
+#include "mars_cam/ground_plane_estimator.hpp"
 
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -223,6 +224,12 @@ class StereoDepthEstimator : public rclcpp::Node {
     // Temporal evidence filter: decides whether a detection is believable
     // before the costmap ever sees it. STVL then decides how long a believed
     // obstacle persists — a different question.
+    // Height is measured from the OBSERVED floor, not base_link z, so a wrong
+    // camera mount and a robot pitching over a bump both stop mattering.
+    GroundPlaneEstimator ground_;
+    bool ground_estimation_enabled_{true};
+    double ground_search_extra_width_m_{0.30};
+
     EvidenceGrid evidence_;
     std::string evidence_frame_;
     rclcpp::Time last_evidence_stamp_{0, 0, RCL_ROS_TIME};

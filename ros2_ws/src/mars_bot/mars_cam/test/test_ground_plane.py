@@ -118,11 +118,11 @@ def test_flat_floor_shows_no_range_trend():
 
 def test_leak_fraction_rises_as_the_threshold_falls():
     fractions = leak_fractions(floor_points(pitch_deg=1.5))
-    assert fractions[0.010] > fractions[0.020] > fractions[0.050]
+    assert fractions[0.015] > fractions[0.025] > fractions[0.050]
 
 
 def test_flat_floor_leaks_nothing():
-    assert leak_fractions(floor_points())[0.010] == pytest.approx(0.0)
+    assert leak_fractions(floor_points())[0.015] == pytest.approx(0.0)
 
 
 # ------------------------------------------------------------------ corridor
@@ -136,7 +136,7 @@ def test_corridor_keeps_only_what_is_ahead_and_in_width():
             [0.8, 0.50, 0.10],  # too far left
             [2.0, 0.0, 0.10],  # beyond the horizon
             [0.10, 0.0, 0.10],  # behind the front edge
-            [0.8, 0.0, 0.008],  # rollable at 8mm, below the 10mm line
+            [0.8, 0.0, 0.012],  # rollable at 12mm, below the 15mm line
             [0.8, 0.0, 0.50],  # above z_max
         ]
     )
@@ -145,7 +145,7 @@ def test_corridor_keeps_only_what_is_ahead_and_in_width():
 
 def test_footprint_mask_ignores_height():
     corridor = Corridor()
-    points = np.array([[0.8, 0.0, 0.008], [0.8, 0.0, 2.0], [3.0, 0.0, 0.1]])
+    points = np.array([[0.8, 0.0, 0.012], [0.8, 0.0, 2.0], [3.0, 0.0, 0.1]])
     assert corridor.footprint_mask(points).tolist() == [True, True, False]
 
 
