@@ -2264,6 +2264,15 @@ def _world_server_ping(port: int, timeout: float = 2.0) -> bool:
     return _world_server_ping_reply(port, timeout) is not None
 
 
+def _arm_world_intro(config: dict[str, object]) -> None:
+    """`up --intro` against a world server that was already running: it opens the story
+    for the next browser, exactly as the flag does on a fresh one."""
+    if not config.get("intro"):
+        return
+    if _world_server_request(WORLD_SERVER_PORT, {"op": "intro"}, timeout=30.0) is None:
+        warn("The host world server did not take --intro; use Play the intro in the app instead.")
+
+
 def _ensure_world_environment(config: dict[str, object]) -> None:
     """Hot-switch a running server onto the configured environment pack."""
     wanted = str(config["environment_id"])
@@ -2503,6 +2512,7 @@ def ensure_world_server(config: dict[str, object]) -> str:
                 running_digest = WORLD_SERVER_MODEL_DIGEST_PATH.read_text(encoding="utf-8").strip()
             if _world_model_sources_digest(config) == running_digest:
                 _ensure_world_environment(config)
+                _arm_world_intro(config)
                 log("Host world server already running.")
                 return endpoint
             log("Host world server compiled different robot/world sources -- restarting it...")
@@ -2545,7 +2555,12 @@ def ensure_world_server(config: dict[str, object]) -> str:
         log(f"Starting host world server ({label} rendering)...")
         log_offset = WORLD_SERVER_LOG_PATH.stat().st_size if WORLD_SERVER_LOG_PATH.exists() else 0
         if _start_world_server(
-            uv, sim_repo, environment_id=str(config["environment_id"]), bind=bind, mujoco_gl=backend
+            uv,
+            sim_repo,
+            environment_id=str(config["environment_id"]),
+            bind=bind,
+            mujoco_gl=backend,
+            intro=bool(config.get("intro")),
         ):
             # Record what this server compiled, for the reuse check above.
             WORLD_SERVER_MODEL_DIGEST_PATH.write_text(_world_model_sources_digest(config) + "\n", encoding="utf-8")
@@ -2631,7 +2646,9 @@ def _render_scale_args() -> list[str]:
     return ["--render-scale", str(scale)]
 
 
-def _start_world_server(uv: str, sim_repo: Path, *, environment_id: str, bind: str, mujoco_gl: str | None) -> bool:
+def _start_world_server(
+    uv: str, sim_repo: Path, *, environment_id: str, bind: str, mujoco_gl: str | None, intro: bool = False
+) -> bool:
     """One world-server start attempt; True once it answers pings."""
     bootstrap = (
         "import sys; sys.path.insert(0, 'ros2_ws/src/mars_bot/mars_sim_driver'); "
@@ -2662,6 +2679,7 @@ def _start_world_server(uv: str, sim_repo: Path, *, environment_id: str, bind: s
                 "--rosbridge-url",
                 f"ws://127.0.0.1:{SIM_ROSBRIDGE_PORT}",
             ]
+            + (["--intro"] if intro else [])
             + _render_scale_args(),
             cwd=sim_repo.parent,
             env=env,

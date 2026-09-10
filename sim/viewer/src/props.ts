@@ -30,6 +30,8 @@ const MODEL_GRACE_MS = 300;
 /** How the browser should place a prop's glb into its MuJoCo body frame. */
 export interface PropViewerDef {
   glb?: string;
+  /** Procedural browser-only visual layered over a simple physics collider. */
+  kind?: "door_frame";
   /** The model is already in metres, Z-up, and authored around its body origin. */
   preNormalized?: boolean;
   /** Standard glTF Y-up -> scene Z-up. False for a model already authored Z-up. */
@@ -127,6 +129,7 @@ interface PlacementPreview {
  * prop whose mesh is absent falls back on what its `size` implies. */
 function primitiveGeometry(info: PropInfo): THREE.BufferGeometry {
   const s = info.size;
+  if (info.viewer.kind === "door_frame" && s.length === 3) return doorFrameGeometry(s);
   let shape = info.collision;
   if (shape === "open_box") return openBoxGeometry(s, info.wall);
   if (shape !== "box" && shape !== "sphere" && shape !== "cylinder") {
@@ -160,6 +163,21 @@ function openBoxGeometry(s: number[], wall: number): THREE.BufferGeometry {
     slab(w, hy * 2, hz * 2, hx - w / 2, 0, 0),
     slab((hx - w) * 2, w, hz * 2, 0, -hy + w / 2, 0),
     slab((hx - w) * 2, w, hz * 2, 0, hy - w / 2, 0),
+  ]);
+}
+
+/** A doorway standing on its own: two posts and a lintel around a dark opening,
+ * in the same body frame as the slab that physics uses. */
+function doorFrameGeometry([hx, hy, hz]: number[]): THREE.BufferGeometry {
+  const post = Math.min(0.08, hy / 4);
+  const slab = (sx: number, sy: number, sz: number, x: number, y: number, z: number) =>
+    new THREE.BoxGeometry(sx, sy, sz).translate(x, y, z);
+  return mergeGeometries([
+    slab(hx * 2, post, hz * 2, 0, -hy + post / 2, 0),
+    slab(hx * 2, post, hz * 2, 0, hy - post / 2, 0),
+    slab(hx * 2, hy * 2, post, 0, 0, hz - post / 2),
+    // The opening: a thin dark leaf set back inside the frame.
+    slab(hx * 0.3, (hy - post) * 2, (hz - post / 2) * 2, 0, 0, -post / 4),
   ]);
 }
 
