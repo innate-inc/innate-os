@@ -26,9 +26,10 @@ static constexpr double kScheduledHoldTimeoutS = 5.0;
 // that jolt shook a carried object out of the gripper. At the folded rest
 // pose — the long-idle case the decay exists for — these loads are ~0.
 static constexpr int kDecayMaxLoad = 100;
-// Rest fold: how long an arm waits for a command after boot or a torque cycle
-// before folding itself; a skill recovering a tripped servo commands the arm
-// well within this.
+// Rest fold: how long an unowned arm waits, after going limp or after torque
+// comes back, before folding itself; a skill recovering a tripped servo
+// commands the arm well within this. Only rest_pose is a parameter, because
+// brain_client's Manipulation.REST must mirror it; the rest is the driver's.
 static constexpr double kRestWhenIdleS = 5.0;
 static constexpr double kRestFoldDurationS = 3.0;
 static constexpr double kAtRestRad = 0.05;

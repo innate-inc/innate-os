@@ -134,16 +134,21 @@ class MarsArmNode : public rclcpp::Node {
     // Direct pass-through (guarded by arm_command_mutex_)
     std::array<double, 6> latest_target_{};
     bool has_target_{false};
-    // Last /mars/arm/commands arrival and last arm service call; with
-    // last_trajectory_end_ they are what the idle watchdog means by "nothing
-    // is commanding the arm".
-    std::atomic<std::chrono::steady_clock::time_point> stream_command_at_{std::chrono::steady_clock::time_point{}};
-    std::atomic<std::chrono::steady_clock::time_point> last_service_at_{std::chrono::steady_clock::time_point{}};
+    // Who owns the arm, for the idle watchdog: the moment it went limp (boot,
+    // torque_off, reboot, a tripped servo) or torque last came back to it while
+    // still limp; zero once anything drives it. A skill that parked the arm at
+    // the floor owns it, so the watchdog leaves it alone.
+    std::atomic<std::chrono::steady_clock::time_point> unowned_since_{std::chrono::steady_clock::now()};
+    bool armUnowned() const {
+        return unowned_since_.load() != std::chrono::steady_clock::time_point{};
+    }
+    void markArmUnowned() {
+        unowned_since_ = std::chrono::steady_clock::now();
+    }
+    void markArmOwned() {
+        unowned_since_ = std::chrono::steady_clock::time_point{};
+    }
     rclcpp::TimerBase::SharedPtr idle_rest_timer_;
-    // Set where the arm goes limp (boot, torque_off, reboot, a tripped servo);
-    // cleared by the next command or fold. Without it the watchdog would fold
-    // an arm a skill parked at the floor while it waits on a model.
-    std::atomic<bool> rest_pending_{true};
 
     // Joint state tracking for planning
     std::vector<double> latest_joint_positions_;

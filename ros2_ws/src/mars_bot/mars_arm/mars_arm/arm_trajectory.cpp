@@ -58,7 +58,7 @@ std::vector<std::vector<double>> MarsArmNode::computeCubicSplineTrajectory(const
 
 bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
                                            GainMode trajectory_gain_mode) {
-    rest_pending_ = false;
+    markArmOwned();
     // Block the idle gain decay for the whole call; the guard stamps the
     // quiet period's start on every exit path.
     trajectory_executing_ = true;
@@ -171,15 +171,14 @@ bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_pos
 // ========== REST FOLD ==========
 
 void MarsArmNode::idleRestCallback() {
-    if (!rest_pending_ || !arm_torque_enabled_ || !this->get_parameter("auto_rest").as_bool()) {
+    if (!armUnowned() || !arm_torque_enabled_ || !this->get_parameter("auto_rest").as_bool()) {
         return;
     }
-    const auto last_command =
-        std::max({stream_command_at_.load(), last_trajectory_end_.load(), last_service_at_.load()});
-    if (std::chrono::duration<double>(std::chrono::steady_clock::now() - last_command).count() < kRestWhenIdleS) {
+    const auto unowned_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - unowned_since_.load());
+    if (unowned_s.count() < kRestWhenIdleS) {
         return;
     }
-    rest_pending_ = false;
+    markArmOwned();  // one attempt per limp: a fold that stops is not pushed again
     foldToRest("idle");
 }
 
@@ -239,7 +238,6 @@ RestOutcome MarsArmNode::runRestFold(const char* trigger) {
 void MarsArmNode::armRestCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
                                   std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/rest");
-    last_service_at_ = std::chrono::steady_clock::now();
     const RestOutcome outcome = foldToRest("service");
     response->success = outcome.at_rest;
     response->message = outcome.detail;
@@ -247,7 +245,7 @@ void MarsArmNode::armRestCallback(const std::shared_ptr<std_srvs::srv::Trigger::
 
 bool MarsArmNode::planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,
                                                         const std::vector<double>& segment_durations) {
-    rest_pending_ = false;
+    markArmOwned();
     // See planAndExecuteTrajectory: block the idle gain decay while executing.
     trajectory_executing_ = true;
     struct HoldGuard {
