@@ -585,6 +585,8 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
 
     // ── Footprint mask on disparity + filter chain (SGM consumers only) ──
     cv::Mat disparity_lowres;
+    cv::Mat overlay_disparity_lowres;
+    cv::Mat overlay_disparity;
     FilterTimings ft;
     if (need_sgm) {
         {
@@ -592,8 +594,14 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
             applyFootprintMask(disparity_float);
             ft.footprint_mask_ms = std::chrono::duration<double, std::milli>(clock::now() - t_fp0).count();
         }
-        applyFilterChain(disparity_float, disparity_lowres, ft, static_cast<float>(focal_length_),
-                         static_cast<float>(baseline_));
+        applyFilterChain(disparity_float, disparity_lowres, (pub_depth_overlay || pub_height_overlay) ? &overlay_disparity_lowres : nullptr,
+                         ft, static_cast<float>(focal_length_), static_cast<float>(baseline_));
+        if (pub_depth_overlay || pub_height_overlay) {
+            overlay_disparity = overlay_disparity_lowres;
+            if (!overlay_disparity.empty() && overlay_disparity.size() != disparity_float.size()) {
+                cv::resize(overlay_disparity, overlay_disparity, disparity_float.size(), 0, 0, cv::INTER_LINEAR);
+            }
+        }
     }
     const auto t_filter = clock::now();
 
@@ -605,9 +613,11 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     if (pub_depth)
         publishDepth(disparity_float, timestamp);
     if (pub_depth_overlay)
-        publishDepthOverlay(disparity_float, left_color_rect, left_rect, has_color, timestamp);
+        publishDepthOverlay(overlay_disparity.empty() ? disparity_float : overlay_disparity, left_color_rect, left_rect, has_color,
+                            timestamp);
     if (pub_height_overlay)
-        publishHeightAboveFloorOverlay(disparity_float, left_color_rect, left_rect, has_color, timestamp);
+        publishHeightAboveFloorOverlay(overlay_disparity.empty() ? disparity_float : overlay_disparity, left_color_rect,
+                                       left_rect, has_color, timestamp);
     const auto t_depth = clock::now();
 
     // ── Point clouds ───────────────────────────────────────────────────────

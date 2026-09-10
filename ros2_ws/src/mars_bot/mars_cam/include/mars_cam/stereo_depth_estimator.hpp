@@ -117,8 +117,8 @@ class StereoDepthEstimator : public rclcpp::Node {
     };
     void initFilterParams();       // filters/filter_chain.cpp
     void logFilterConfig() const;  // filters/filter_chain.cpp
-    void applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres, FilterTimings& timings, float focal_length,
-                          float baseline);
+    void applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres, cv::Mat* overlay_disparity_lowres,
+                          FilterTimings& timings, float focal_length, float baseline);
     // Individual filters (filters/simple_filters.cpp, filters/advanced_filters.cpp)
     void applyMedian(cv::Mat& img);
     void applyBilateral(cv::Mat& img);

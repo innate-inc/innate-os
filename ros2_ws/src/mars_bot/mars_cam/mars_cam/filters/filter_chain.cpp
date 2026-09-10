@@ -150,11 +150,12 @@ void StereoDepthEstimator::logFilterConfig() const {
 // =============================================================================
 // Filter chain orchestration
 // =============================================================================
-void StereoDepthEstimator::applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres, FilterTimings& timings,
-                                            float focal_length, float baseline) {
+void StereoDepthEstimator::applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres, cv::Mat* overlay_disparity_lowres,
+                                            FilterTimings& timings, float focal_length, float baseline) {
     using clock = std::chrono::steady_clock;
     const cv::Size orig_size = disparity.size();
     const int f = filter_downsample_factor_;
+    bool overlay_captured = false;
 
     // Downsample for faster filtering (INTER_AREA averages the pixel block → free noise reduction)
     auto t0 = clock::now();
@@ -184,6 +185,10 @@ void StereoDepthEstimator::applyFilterChain(cv::Mat& disparity, cv::Mat& dispari
             t1 = clock::now();
             timings.depth_clamp_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
         } else if (name == "edge_invalidation" && edge_inv_enabled_) {
+            if (overlay_disparity_lowres && !overlay_captured) {
+                *overlay_disparity_lowres = disparity.clone();
+                overlay_captured = true;
+            }
             invalidateEdges(disparity);
             t1 = clock::now();
             timings.edge_inv_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -204,6 +209,8 @@ void StereoDepthEstimator::applyFilterChain(cv::Mat& disparity, cv::Mat& dispari
 
     // Save low-res filtered result for point cloud before upsampling
     disparity_lowres = disparity.clone();
+    if (overlay_disparity_lowres && !overlay_captured)
+        *overlay_disparity_lowres = disparity_lowres;
 
     // Upsample back to original resolution for disparity publishing / depth map
     t0 = clock::now();
