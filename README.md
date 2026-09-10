@@ -118,7 +118,7 @@ class NavigateAgent(Agent):
         )
 ```
 
-List skills and inputs as the classes themselves. Physical skills have no class, so those stay id strings (`"local/pick_socks"`).
+List skills and inputs as the classes themselves.
 
 Save it in `workspace/custom_agents/`. Because the robot lives in the physical world, agents observe continuously and can interrupt a running skill when the world changes.
 
