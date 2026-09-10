@@ -117,6 +117,15 @@ class ImitatePickAndPresent(Skill):
     manipulation: Manipulation
     mobility: Mobility
 
+    def make_demo(self, demonstration, legacy_urdf):
+        return Gesture(demonstration, legacy_urdf=legacy_urdf or None)
+
+    def make_policy(self, demo):
+        return GesturePolicy(demo)
+
+    decision_timeout = 50
+    grip_strength = 0.3
+
     def _observe(self, monitor, after, xml):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -138,7 +147,7 @@ class ImitatePickAndPresent(Skill):
                 result.put((None, type(exc).__name__))
 
         threading.Thread(target=request, daemon=True).start()
-        deadline = time.monotonic() + 50
+        deadline = time.monotonic() + self.decision_timeout
         while time.monotonic() < deadline:
             self.check_cancelled()
             try:
@@ -156,12 +165,12 @@ class ImitatePickAndPresent(Skill):
         from ament_index_python.packages import get_package_share_directory
 
         # An explicit episode avoids silently selecting a different demonstration.
-        demo = Gesture(demonstration, legacy_urdf=legacy_urdf or None)
+        demo = self.make_demo(demonstration, legacy_urdf)
         model = Path(get_package_share_directory("mars_sim")) / "urdf/mars.urdf"
         xml = model.read_text()
         if hashlib.sha256(xml.encode()).hexdigest() != demo.model_hash:
             self.fail("Demonstration uses a different robot model; recalibrate or record a new gesture")
-        policy = GesturePolicy(demo)
+        policy = self.make_policy(demo)
         root = Path(os.environ.get("INNATE_OS_ROOT", Path(__file__).resolve().parents[2]))
         run = root / "workspace/custom_skills/.gesture_runs" / uuid.uuid4().hex
         run.mkdir(parents=True)
@@ -232,6 +241,10 @@ class ImitatePickAndPresent(Skill):
                 }
                 with (run / "trace.jsonl").open("a") as trace:
                     trace.write(json.dumps(entry, allow_nan=False) + "\n")
+                if hasattr(policy, "phase_map"):
+                    (run / "phase_map.json").write_text(json.dumps(policy.phase_map))
+                    with (run / "inspection.jsonl").open("a") as inspection:
+                        inspection.write(json.dumps(policy.last_trace) + "\n")
                 self.feedback(decision["reason"])
                 if committed and seen_holding and not decision["holding"]:
                     self.fail("Object no longer visually retained")
@@ -256,7 +269,7 @@ class ImitatePickAndPresent(Skill):
                         # Latch before submission: any partial failure must preserve grip.
                         committed = True
                         closed_at = current["pose"][:3]
-                        self.manipulation.gripper_close(strength=0.3, duration=0.8, block=False)
+                        self.manipulation.gripper_close(strength=self.grip_strength, duration=0.8, block=False)
                         self._wait_motion(monitor, xml)
                 elif action == "done":
                     p = current["pose"][:3]

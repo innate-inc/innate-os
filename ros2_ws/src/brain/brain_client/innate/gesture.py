@@ -65,7 +65,7 @@ def _text(value):
 class Gesture:
     """Load bounded keyframes, not a whole uncompressed video into RAM."""
 
-    def __init__(self, path, *, legacy_urdf=None, max_frames=12):
+    def __init__(self, path, *, legacy_urdf=None, max_frames=12, frame_indices=None, image_time_reference=False):
         import cv2
         import h5py
 
@@ -132,6 +132,12 @@ class Gesture:
                 if len(selected) >= max_frames:
                     break
                 selected.add(int(index))
+            if frame_indices is not None:
+                if not isinstance(frame_indices, list) or not 1 <= len(frame_indices) <= 8:
+                    raise ValueError("Inspect between one and eight source frames")
+                if any(type(i) is not int or not 0 <= i < len(q) for i in frame_indices):
+                    raise ValueError("Invalid source frame index")
+                selected = set(frame_indices)
             self.frames = []
             for index in sorted(selected):
                 record = {
@@ -150,7 +156,21 @@ class Gesture:
                     if len(images) != len(q) or len(stamps) != len(q):
                         raise ValueError("Camera/trajectory length mismatch")
                     stamp = float(stamps[index])
-                    if not math.isfinite(stamp) or stamp <= 0 or abs(stamp - t[index]) > 0.25:
+                    if not math.isfinite(stamp) or stamp <= 0:
+                        raise ValueError("Invalid camera timestamp")
+                    if image_time_reference:
+                        source = int(np.argmin(np.abs(t - stamp)))
+                        if abs(float(t[source]) - stamp) > 0.1:
+                            raise ValueError("Image has no nearby recorded arm sample")
+                        record.setdefault("camera_observations", {})[camera] = {
+                            "source_time_s": stamp - float(t[0]),
+                            "row_offset_s": stamp - float(t[index]),
+                            "source_arm_index": source,
+                            "ee_pose": poses[source].tolist(),
+                            "qpos": q[source].tolist(),
+                            "gripper_target_rad": float(action[source, 5]),
+                        }
+                    elif abs(stamp - t[index]) > 0.25:
                         raise ValueError("Demonstration cameras are not synchronized with the arm")
                     image = np.asarray(images[index])  # Recorder writes BGR, OpenCV expects BGR.
                     if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
