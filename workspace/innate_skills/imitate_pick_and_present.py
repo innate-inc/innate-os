@@ -448,19 +448,32 @@ class ImitatePickAndPresent(Skill):
             "measured_pose": measured["pose"],
             "measured_qpos": measured.get("qpos"),
             "position_error_m": math.dist(measured["pose"][:3], target[:3]),
+            "orientation_error_rad": max(
+                abs(math.atan2(math.sin(a - b), math.cos(a - b)))
+                for a, b in zip(measured["pose"][3:], target[3:], strict=True)
+            ),
         }
 
-    def _try_move(self, target, current, monitor, xml, grip=None):
+    def _try_move(self, target, current, monitor, xml):
         x, y, z, roll, pitch, yaw = target
-        if not self.manipulation.reachable(x, y, z, roll=roll, pitch=pitch, yaw=yaw):
+        joints = self.manipulation.ik(x, y, z, roll=roll, pitch=pitch, yaw=yaw)
+        if joints is None:
             return self._motion_outcome(
                 "unreachable", "IK rejected the requested EE pose; no movement issued", current, target
             )
+        # The driver clamps a backward shoulder silently, so the move would run and
+        # land short instead of failing. Judge the solution and refuse it here.
+        floor = self.manipulation.joint2_floor(joints[0])
+        if joints[1] < floor:
+            return self._motion_outcome(
+                "unreachable",
+                f"This pose needs the shoulder folded back to joint2={joints[1]:.2f}, past the {floor:.2f} the body "
+                "allows here; no movement issued. Raise the target, bring it forward, or move the base.",
+                current,
+                target,
+            )
         self.check_cancelled()
-        # move_to carries j6 too. Left to itself it uses the standing grip target,
-        # which is stale when the run began already holding something it never
-        # closed on — and a Cartesian move then opens the hand mid-carry.
-        self.manipulation.move_to(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=1.5, block=False, grip=grip)
+        self.manipulation.move_to(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=1.5, block=False)
         # Health failures, cancellation, and uncertain/time-out outcomes still propagate.
         self._wait_motion(monitor, xml)
         measured = self._observe(monitor, time.monotonic() - 0.2, xml)

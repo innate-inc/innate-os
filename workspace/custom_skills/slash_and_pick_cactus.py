@@ -31,7 +31,16 @@ from innate import SkillOutput
 from innate.gesture import Gesture
 from innate.gesture_agent import TOOLS, object_schema
 
-from .slash_cactus import CactusPolicy, SlashCactus, joint_target
+from .slash_cactus import (
+    MAX_BASE_STEP,
+    MAX_EE_ROTATION,
+    MAX_EE_STEP,
+    MAX_JOINT_STEP,
+    CactusPolicy,
+    SlashCactus,
+    joint_target,
+    with_limits,
+)
 
 # episode_3 is the take that contains the whole task: the base drives 1.3-12.5 s,
 # then the gripper opens at 9.1 s, closes at 15.4 s and opens again at 23.4 s.
@@ -58,13 +67,17 @@ ACTIONS = {
 MOTION_ACTIONS = ("joint_step", "ee_absolute", "ee_delta", "base_step")
 FIXED_ACTIONS = ("open_gripper", "close_gripper", "observe", "retry", "done", "stop")
 ACTION_HELP = {
-    "joint_step": """  joint_step    pose [joint index 1-5, delta radians], at most 0.15 rad. Joint1 sweeps sideways,
+    "joint_step": """  joint_step    pose [joint index 1-5, delta radians], at most {max_joint_step} rad. Joint1 sweeps sideways,
                 joints2-4 shape reach and height, joint5 rolls the wrist.""",
-    "ee_absolute": """  ee_absolute   pose [x,y,z,roll,pitch,yaw] ABSOLUTE, within 4 cm and 0.2 rad of the measured
-                pose. Full-pose IK rejects what the five-joint arm cannot reach; that is feedback.""",
-    "ee_delta": """  ee_delta      pose [dx,dy,dz,droll,dpitch,dyaw] RELATIVE to the measured pose, at most 4 cm of
-                translation and 0.2 rad per rotation. The same IK and the same rejections as move.""",
-    "base_step": """  base_step     pose [metres], at most 0.03, positive forward. Moves the whole arm; it does not
+    "ee_absolute": """  ee_absolute   pose [x,y,z,roll,pitch,yaw] ABSOLUTE, within {max_ee_step_cm} cm and {max_ee_rotation} rad of the measured
+                pose. Full-pose IK rejects what the five-joint arm cannot reach; that is feedback.
+                The last three components are the wrist angle: copy the measured ones to hold the
+                aim you have, change them to re-aim.""",
+    "ee_delta": """  ee_delta      pose [dx,dy,dz,droll,dpitch,dyaw] RELATIVE to the measured pose, at most {max_ee_step_cm} cm of
+                translation and {max_ee_rotation} rad per rotation. The same IK and the same rejections as move.
+                droll/dpitch/dyaw re-aim the wrist and are the only way to change its angle; zeros
+                there carry the angle you already have into the next pose.""",
+    "base_step": """  base_step     pose [metres], at most {max_base_step}, positive forward. Moves the whole arm; it does not
                 retract it. Keep whatever you hold clear of contact while repositioning. This is
                 how you close distance — see the paragraph on reach below.""",
     "open_gripper": "  open_gripper  pose []. Releases whatever you are holding. It falls where it is.",
@@ -84,6 +97,16 @@ straight arm means you are too far away. The same applies when you set something
 IK rejections, or moves that complete but miss their target, mean you are working at the edge of
 reach: close the distance rather than retrying the pose from where you stand."""
 
+WRIST_AIM = """The wrist angle is a target you choose, not one you inherit. A Cartesian target carries three
+rotation components as well as three positions, and zeros in the rotations mean keep the angle I
+already have, so a run that always sends zeros drags one fixed wrist angle through every phase.
+Before you ask where the fingers should be, look at the wrist view and ask where they point: pitch
+decides whether they come down onto an object or into it, roll decides which way they straddle it.
+Correct the aim in the same step as the approach rather than after it. Five joints cannot reach
+every orientation, so a rotation may be met only in part, and a small position miss alongside a
+requested rotation is ordinary rather than a failure — read measured_pose and the reported errors
+to see what you actually got, then carry on from there."""
+
 SHOULDER_LOAD = """Joint 2 is the shoulder. It carries the weight of the whole arm plus whatever you hold, and unlike
 the other joints it has no current limiter protecting it — it simply trips a hardware overload,
 goes limp, and the run is over. What trips it is time under load, not a brief reach: passing
@@ -92,7 +115,14 @@ real time, so whatever pose you leave the arm in is a pose the shoulder holds wh
 Therefore: cross the loaded part of a motion in a few decisive steps rather than many small ones,
 and never park extended. Before you observe, verify, or reason about what to do next, bring the arm
 back toward folded first — a look from a folded pose costs nothing, a look at full extension costs
-shoulder current for the whole turn. If a phase needs the arm out there, go in, act, and come back."""
+shoulder current for the whole turn. If a phase needs the arm out there, go in, act, and come back.
+
+The same joint cannot fold backwards indefinitely: past joint2_min_rad, which rides in every
+observation and tightens as joint1 nears centre, the arm would swing into the robot's own body.
+The driver clamps a command that asks for more without saying so, and the motion then lands short
+of what you asked, so a joint step or a Cartesian pose whose solution needs it is refused before
+anything moves. Keep the shoulder upright or forward: gain height with joints 3 and 4, or step the
+base, rather than folding it further back."""
 
 REACH_NO_BASE = """Reach costs load. The shoulder and elbow servos heat up holding an extended pose, and a sustained
 over-reach trips a hardware overload that stops the run. This run cannot drive the base, so you
@@ -151,7 +181,7 @@ height, roll the wrist so the fingers straddle its narrowest dimension, then des
 Coming in from the side shoves an unsecured object away before the fingers meet, and a low
 approach catches on whatever it is resting on. Lift straight up before carrying it anywhere.
 
-{reach}
+{aim}{reach}
 
 You begin with something already in the gripper. The latch enforces the ordering: you may only
 open while holding, and only close while empty. A release is deliberate and irreversible — the
@@ -219,7 +249,7 @@ def parse_actions(**toggles):
     return names + FIXED_ACTIONS
 
 
-def build_instructions(allowed, told):
+def build_instructions(allowed, told, chunk_size):
     """The prompt for one run. Only the actions this run permits are described:
     describing a tool the model cannot call is noise it has to resolve, and it
     would keep proposing the missing one and collecting rejections."""
@@ -230,15 +260,28 @@ def build_instructions(allowed, told):
         "extra call is seconds of latency the shoulder spends holding its pose, and the host still "
         "re-checks telemetry between every step and throws the rest away if anything drifts. Return "
         "a single step only when its outcome genuinely determines what you do next."
-        if "joint_step" in allowed
+        if "joint_step" in allowed and chunk_size > 1
         else "exactly one decision."
     )
+    aim = WRIST_AIM + "\n\n" if {"ee_absolute", "ee_delta"} & set(allowed) else ""
     text = (
         GENERAL.replace("{actions}", vocabulary)
         .replace("{batching}", batching)
+        .replace("{aim}", aim)
         .replace("{reach}", (REACH_WITH_BASE if "base_step" in allowed else REACH_NO_BASE) + "\n\n" + SHOULDER_LOAD)
     )
-    return text + (TASK if told else "")
+    return with_limits(text + (TASK if told else ""))
+
+
+def stuck_hint(failures):
+    """Said to the model once a run of proposals has failed in a row: the point is
+    that repeating the idea is what is failing, not that the run is nearly over."""
+    if failures < 3:
+        return ""
+    return (
+        f" — {failures} proposals in a row have failed; repeating this one will fail again. Change the"
+        " joint, the direction or the distance, close the gap with base_step, or take a fresh look."
+    )
 
 
 def check_decision(value, allowed):
@@ -258,21 +301,22 @@ def check_decision(value, allowed):
         or any(type(v) not in (int, float) or not math.isfinite(v) for v in pose)
     ):
         raise ValueError("Invalid pose for action")
-    if action == "joint_step" and (pose[0] not in (1, 2, 3, 4, 5) or not 0 < abs(pose[1]) <= 0.15):
-        raise ValueError("joint_step needs joint 1-5 and a nonzero delta within 0.15 rad")
-    if action == "base_step" and not 0 < abs(pose[0]) <= 0.03:
-        raise ValueError("base_step requires a nonzero distance within 0.03 m")
+    if action == "joint_step" and (pose[0] not in (1, 2, 3, 4, 5) or not 0 < abs(pose[1]) <= MAX_JOINT_STEP):
+        raise ValueError(f"joint_step needs joint 1-5 and a nonzero delta within {MAX_JOINT_STEP:g} rad")
+    if action == "base_step" and not 0 < abs(pose[0]) <= MAX_BASE_STEP:
+        raise ValueError(f"base_step requires a nonzero distance within {MAX_BASE_STEP:g} m")
     if action == "ee_delta":
-        if math.dist(pose[:3], (0, 0, 0)) > 0.04 + 1e-9:
-            raise ValueError("ee_delta translation exceeds 4 cm")
-        if any(abs(v) > 0.2 for v in pose[3:]):
-            raise ValueError("ee_delta rotation exceeds 0.2 radians per component")
+        if math.dist(pose[:3], (0, 0, 0)) > MAX_EE_STEP + 1e-9:
+            raise ValueError(f"ee_delta translation exceeds {MAX_EE_STEP:g} m")
+        if any(abs(v) > MAX_EE_ROTATION for v in pose[3:]):
+            raise ValueError(f"ee_delta rotation exceeds {MAX_EE_ROTATION:g} radians per component")
     return dict(value)
 
 
 def ee_target(decision, current):
-    """The absolute pose a move or ee_delta asks for. Small rotations compose by
-    addition here, which is why the per-component bound is only 0.2 rad."""
+    """The absolute pose a move or ee_delta asks for. Roll/pitch/yaw compose by
+    addition, which is exact for a delta about one axis and an approximation when
+    two are asked for at once."""
     if decision["action"] == "ee_absolute":
         return list(decision["pose"])
     base, delta = current["pose"], decision["pose"]
@@ -286,13 +330,13 @@ def check_reachable_move(pose, current):
     x, y, z = pose[:3]
     if not (-0.1 <= x <= 0.45 and abs(y) <= 0.35 and 0.025 <= z <= 0.5 and math.hypot(x, y) <= 0.45):
         raise ValueError("Target outside the manipulation workspace")
-    if math.dist(pose[:3], current["pose"][:3]) > 0.04 + 1e-9:
-        raise ValueError("Movement exceeds 4 cm per observation")
+    if math.dist(pose[:3], current["pose"][:3]) > MAX_EE_STEP + 1e-9:
+        raise ValueError(f"Movement exceeds {MAX_EE_STEP:g} m per observation")
     if any(
-        abs(math.atan2(math.sin(a - b), math.cos(a - b))) > 0.2
+        abs(math.atan2(math.sin(a - b), math.cos(a - b))) > MAX_EE_ROTATION
         for a, b in zip(pose[3:], current["pose"][3:], strict=True)
     ):
-        raise ValueError("Orientation change exceeds 0.2 radians")
+        raise ValueError(f"Orientation change exceeds {MAX_EE_ROTATION:g} radians")
 
 
 def next_holding(action, holding):
@@ -307,6 +351,8 @@ def next_holding(action, holding):
         if not holding:
             raise ValueError("Nothing is held; open_gripper would do nothing")
         return False
+    if action == "done" and holding:
+        raise ValueError("The task cannot be complete while the gripper still holds something")
     return holding
 
 
@@ -505,7 +551,7 @@ class _SlashAndPickCactus(SlashCactus):
     def make_policy(self, demo):
         policy = _SlashAndPickPolicy(demo, self.chunk_size)
         policy.allowed = self.allowed
-        policy.instructions = build_instructions(self.allowed, bool(self.object_description))
+        policy.instructions = build_instructions(self.allowed, bool(self.object_description), self.chunk_size)
         # record_phases refuses to run before a detailed look; the forced looks
         # the skill hands it ARE that look.
         policy.inspected_detail = True
@@ -598,10 +644,6 @@ class _SlashAndPickCactus(SlashCactus):
         succeeded = False
         ending = "Run ended without a result"
         holding = True  # every run of this pair starts with the prop in the gripper
-        # What a Cartesian move should command for j6. Seeded from the measured
-        # aperture so a move preserves a grasp this run never made; cleared once
-        # a gripper command sets the SDK's own standing target correctly.
-        self._grip_hold = None
         history, rejected, pending = [], set(), []
         expected_qpos = None
         verified = failures = 0
@@ -609,15 +651,18 @@ class _SlashAndPickCactus(SlashCactus):
         try:
             self.manipulation.safety.max_ee_speed = min(previous_speed or 0.03, 0.03)
             self.mobility.stop()
+            # The prop was put in the claw by hand, so the standing grip target is
+            # whatever the last run left — re-close on it, or every motion carries
+            # that stale j6 and the first one lets go of the prop.
+            self.manipulation.gripper_close(strength=self.grip_strength, duration=0.8)
             monitor = LiveGestureObservation()
             started = after = time.monotonic()
             for step in range(self.max_steps):
                 if time.monotonic() - started > self.time_budget_s:
                     self.fail("Slash-and-pick exceeded its time budget")
                 observation = self._observe(monitor, after, xml)
-                if self._grip_hold is None and not history:
-                    self._grip_hold = observation["gripper"]
                 observation.update(
+                    joint2_min_rad=self.manipulation.joint2_floor(observation["qpos"][0]),
                     head_degrees=self.head_position.pitch_degrees,
                     holding=holding,
                     finishing=verified > 0,
@@ -668,15 +713,13 @@ class _SlashAndPickCactus(SlashCactus):
                     self.fail(decision["reason"])
                 if verified and action not in ("done", "observe"):
                     self.fail("Completion verification cannot issue another motion")
+                becomes, refused = holding, None
                 try:
                     becomes = next_holding(action, holding)
                     if action in ("ee_absolute", "ee_delta"):
                         check_reachable_move(ee_target(decision, current), current)
                 except ValueError as exc:
-                    (run / "rejected_decision.json").write_text(
-                        json.dumps({"step": step, "reason": str(exc), "decision": decision})
-                    )
-                    self.fail(str(exc))
+                    refused = str(exc)
 
                 entry = {
                     "step": step,
@@ -698,15 +741,27 @@ class _SlashAndPickCactus(SlashCactus):
                     batch={"new": new_batch, "remaining": len(pending)},
                 )
 
-                if action in ("joint_step", "ee_absolute", "ee_delta", "base_step"):
+                if refused is not None:
+                    pending = []
+                    failures += 1
+                    self.feedback(refused)
+                    entry["execution"] = {
+                        "status": "rejected",
+                        "reason": refused + stuck_hint(failures),
+                        "measured_pose": current["pose"],
+                        "measured_qpos": current["qpos"],
+                    }
+                elif action in ("joint_step", "ee_absolute", "ee_delta", "base_step"):
                     if action == "joint_step":
                         target = joint_target(decision, current)
                     elif action in ("ee_absolute", "ee_delta"):
                         target = ee_target(decision, current)
                     else:
                         target = decision["pose"]
+                    # A base_step is a distance from wherever the base now stands, so it
+                    # is never the same target twice; only arm targets are remembered.
                     key = (action, *[round(v, 4) for v in target])
-                    if key in rejected:
+                    if action != "base_step" and key in rejected:
                         outcome = {
                             "status": "rejected",
                             "reason": "This target already failed; change the approach",
@@ -714,22 +769,24 @@ class _SlashAndPickCactus(SlashCactus):
                             "measured_qpos": current["qpos"],
                         }
                     elif action == "joint_step":
-                        outcome = self._try_joint_step(decision, current, monitor, xml, grip=self._grip_hold)
+                        outcome = self._try_joint_step(decision, current, monitor, xml)
                     elif action in ("ee_absolute", "ee_delta"):
-                        outcome = self._try_move(target, current, monitor, xml, grip=self._grip_hold)
+                        outcome = self._try_move(target, current, monitor, xml)
                     else:
                         outcome = self._try_base_step(decision["pose"][0], current, monitor, xml)
-                    expected_qpos = target if action == "joint_step" else None
+                    expected_qpos = outcome["measured_qpos"] if action == "joint_step" else None
                     entry["execution"] = outcome
-                    if outcome["status"] != "reached":
-                        pending = []
-                        rejected.add(key)
-                        failures += 1
-                        self.feedback(outcome["reason"] + "; replanning from measured state")
-                        if failures >= 4:
-                            self.fail("Four motion proposals failed without a successful move")
-                    else:
+                    if outcome["status"] == "reached":
                         failures = 0
+                        if action == "base_step":
+                            rejected.clear()  # the base carried every arm target with it
+                    else:
+                        pending = []
+                        failures += 1
+                        if action != "base_step":
+                            rejected.add(key)
+                        self.feedback(outcome["reason"] + "; replanning from measured state")
+                        outcome["reason"] += stuck_hint(failures)
                 elif action in ("open_gripper", "close_gripper"):
                     # The latch moves before the hardware: a failed open must not leave
                     # the run believing the item is gone. A failed close is recoverable —
@@ -739,8 +796,6 @@ class _SlashAndPickCactus(SlashCactus):
                         self._open(monitor, xml) if action == "open_gripper" else self._close(monitor, xml)
                     )
                     entry["execution"]["holding"] = holding
-                    # gripper_open/close set the SDK's standing target; defer to it.
-                    self._grip_hold = None
                     rejected.clear()
                     expected_qpos = None
                 elif action == "retry":
@@ -749,8 +804,6 @@ class _SlashAndPickCactus(SlashCactus):
                     rejected.clear()
                     verified = 0
                 elif action == "done":
-                    if holding:
-                        self.fail("The task cannot be complete while the gripper still holds something")
                     verified += 1
 
                 if action not in ("done", "observe"):
@@ -795,7 +848,7 @@ class SlashAndPickCactusNoPrompt(_SlashAndPickCactus):
     def execute(
         self,
         demonstration: str = DEMONSTRATION,
-        chunk_size: int = 5,
+        chunk_size: int = 1,
         overview_frames: int = 24,
         frame_selection: Literal["both", "keyframes", "uniform"] = "both",
         joint_step: bool = True,
@@ -821,7 +874,7 @@ class SlashAndPickCactusWithPrompt(_SlashAndPickCactus):
     def execute(
         self,
         demonstration: str = DEMONSTRATION,
-        chunk_size: int = 5,
+        chunk_size: int = 1,
         overview_frames: int = 24,
         frame_selection: Literal["both", "keyframes", "uniform"] = "both",
         joint_step: bool = True,

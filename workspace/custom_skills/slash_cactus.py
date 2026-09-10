@@ -10,10 +10,37 @@ import time
 import uuid
 from pathlib import Path
 
-from innate import SkillOutput
+from innate import Manipulation, SkillOutput
 from innate.gesture import Gesture, validate_action
 from innate.gesture_agent import DemonstrationAgentPolicy, TOOLS
 from innate_skills.imitate_pick_and_present import ImitatePickAndPresent, LiveGestureObservation
+
+# Every movement cap for both gesture skills, defined here and nowhere else.
+# The validators, the batch check and both prompts read these; a second copy is
+# exactly how a raised limit reached the model and was refused by the runner.
+MAX_JOINT_STEP = 0.3    # rad per joint_step
+MAX_BASE_STEP = 0.06    # m per base_step
+MAX_EE_STEP = 0.08      # m of translation per cartesian target
+MAX_EE_ROTATION = 0.4   # rad per rotation component
+MAX_BATCH_TRAVEL = 2 * MAX_EE_STEP
+
+# A straight base adjustment still curves: the wheels are never perfectly matched.
+# Straightness is therefore a rate, not a fixed box, or the same drive that passes
+# at one step size trips at twice the distance. Measured on hardware at roughly
+# 0.04 rad of yaw per 6 cm; the floors cover odometry noise on a tiny step.
+BASE_YAW_PER_M, BASE_YAW_FLOOR = 1.5, 0.02
+BASE_LATERAL_PER_M, BASE_LATERAL_FLOOR = 0.5, 0.005
+
+
+def with_limits(text):
+    """Fill a prompt's cap tokens. Prose names the token, never the number, so
+    the figure the model reads cannot drift from the one the runner enforces."""
+    return (text.replace('{max_joint_step}', f'{MAX_JOINT_STEP:g}')
+                .replace('{max_base_step}', f'{MAX_BASE_STEP:g}')
+                .replace('{max_ee_step_cm}', f'{MAX_EE_STEP * 100:g}')
+                .replace('{max_ee_rotation}', f'{MAX_EE_ROTATION:g}')
+                .replace('{joint2_floor}', f'{Manipulation.JOINT2_FLOOR:g}'))
+
 
 DEMONSTRATION = '/home/jetson1/innate-os/workspace/custom_skills/slashcatcus/raw_data/episode_0.h5'
 PROMPT = """Slash the prop cactus using the plastic prop already held in the robot's gripper,
@@ -43,7 +70,7 @@ apparent motion there is the base, not the arm. Those figures are integrated fro
 commands, not measured odometry. Read the sweep as arm shaping relative to the target and use
 your own base_step to fix reach, rather than reproducing the recorded travel. The plastic prop starts held and stays held; this task
 has no pickup or gripper-release phase. If reach/distance is the issue, use small base_step adjustments as well as joint shaping.
-base_step uses pose=[distance] in metres, positive forward / negative backward, at most 0.03m
+base_step uses pose=[distance] in metres, positive forward / negative backward, at most {max_base_step} m
 per action. It moves the entire arm relative to the target; it does not retract the arm.
 Keep the prop out of contact while repositioning the base, and observe the new relationship
 before swinging. Base actions are not batched.
@@ -59,12 +86,12 @@ The initial overview indexes the recording; inspect detailed sweep frames, recor
 then act. camera_observations associates each image with its actual timestamp and measured
 arm pose; interpret each image against that sample. Recorded ee_pose is xyz + quaternion.
 Use joint_step, the same direct streaming primitive as the lightsaber skill; do not use IK.
-For joint_step, pose is [joint index 1-5, delta radians], at most 0.15 rad per movement.
+For joint_step, pose is [joint index 1-5, delta radians], at most {max_joint_step} rad per movement.
 For observe, retry, done and stop, pose is []. Keep the gripper held.
 Use recorded qpos and current measured qpos as references, adapting with new images after
 execution. Joint1 sweeps sideways; joints2-4 shape the arm; joint5 rolls the prop.
-The recording keeps joint2 near -0.5 throughout most of the sweep. In the current central
-joint1 sector the driver clamps joint2 below -0.5. Do not try to lower joint2 beyond that;
+The recording keeps joint2 near {joint2_floor} throughout most of the sweep. In the current central
+joint1 sector the driver clamps joint2 below {joint2_floor}. Do not try to lower joint2 beyond that;
 change joint3/joint4 to align, and use joint1 for the demonstrated sweep. Match the recorded
 joint progression rather than inventing Cartesian poses. Measured qpos can differ slightly
 from commanded limits because of encoder resolution and tracking.
@@ -132,7 +159,7 @@ class CactusPolicy(DemonstrationAgentPolicy):
             tools = [t for t in tools if t['name'] == 'act']
             choice = {'type':'function', 'name':'act'}
         body = dict(model='gpt-6-astra', service_tier='priority', store=False,
-                    reasoning={'effort': 'low'}, instructions=PROMPT + f'\nFor this run chunk_size={getattr(self, "chunk_size", 5)}. Predict up to that many consecutive joint steps; actions contains at most chunk_size decisions. Prefer full chunks once the motion strategy is working.', tools=tools,
+                    reasoning={'effort': 'low'}, instructions=with_limits(PROMPT) + f'\nFor this run chunk_size={getattr(self, "chunk_size", 5)}. Predict up to that many consecutive joint steps; actions contains at most chunk_size decisions. Prefer full chunks once the motion strategy is working.', tools=tools,
                     tool_choice=choice, parallel_tool_calls=False, max_output_tokens=2500,
                     input=[{'role': 'user', 'content': content}])
         with self.client.request_stream('openai', '/v1/responses', method='POST', json=body, timeout=40) as response:
@@ -169,10 +196,10 @@ def check_compact_decision(value):
     if (not isinstance(pose, list) or len(pose) != lengths[action] or
             any(type(v) not in (int, float) or not math.isfinite(v) for v in pose)):
         raise ValueError('Invalid pose for action')
-    if action == 'joint_step' and (pose[0] not in (1,2,3,4,5) or not 0 < abs(pose[1]) <= 0.15):
-        raise ValueError('joint_step needs joint 1-5 and a nonzero delta within 0.15 rad')
-    if action == 'base_step' and not 0 < abs(pose[0]) <= 0.03:
-        raise ValueError('base_step requires a nonzero distance within 0.03m')
+    if action == 'joint_step' and (pose[0] not in (1,2,3,4,5) or not 0 < abs(pose[1]) <= MAX_JOINT_STEP):
+        raise ValueError(f'joint_step needs joint 1-5 and a nonzero delta within {MAX_JOINT_STEP:g} rad')
+    if action == 'base_step' and not 0 < abs(pose[0]) <= MAX_BASE_STEP:
+        raise ValueError(f'base_step requires a nonzero distance within {MAX_BASE_STEP:g} m')
 
 
 def checked_batch(values, current, count, finishing, chunk_size=5):
@@ -191,8 +218,8 @@ def checked_batch(values, current, count, finishing, chunk_size=5):
         elif d['action'] == 'joint_step':
             predicted = {**predicted, 'qpos':joint_target(d, predicted)}
         checked.append(d)
-    if total > 0.06 + 1e-9:
-        raise ValueError('Batch exceeds six centimetres')
+    if total > MAX_BATCH_TRAVEL + 1e-9:
+        raise ValueError(f'Batch travel exceeds {MAX_BATCH_TRAVEL:g} m')
     return checked
 
 
@@ -200,8 +227,8 @@ def joint_target(decision, current):
     step = decision.get('joint_step', decision.get('pose'))
     if (not isinstance(step, list) or len(step) != 2
         or any(type(v) not in (int,float) or not math.isfinite(v) for v in step)
-        or step[0] not in (1,2,3,4,5) or not 0 < abs(step[1]) <= 0.15):
-        raise ValueError('joint_step needs joint 1-5 and a nonzero delta within 0.15 rad')
+        or step[0] not in (1,2,3,4,5) or not 0 < abs(step[1]) <= MAX_JOINT_STEP):
+        raise ValueError(f'joint_step needs joint 1-5 and a nonzero delta within {MAX_JOINT_STEP:g} rad')
     if current.get('joint_names') != [f'joint{i}' for i in range(1,7)]:
         raise ValueError('Expected ordered measured arm joints')
     target = list(current['qpos'])
@@ -236,8 +263,9 @@ def checked_action(value, current, count, finishing):
     elif joint not in (None, [0,0]):
         raise ValueError('Non-joint action must not contain a joint movement')
     if driving:
-        if type(distance) not in (int,float) or not math.isfinite(distance) or not 0 < abs(distance) <= 0.03:
-            raise ValueError('base_step requires a nonzero distance within 0.03m')
+        if (type(distance) not in (int,float) or not math.isfinite(distance)
+                or not 0 < abs(distance) <= MAX_BASE_STEP):
+            raise ValueError(f'base_step requires a nonzero distance within {MAX_BASE_STEP:g} m')
         decision = {**decision, 'action':'base_step', 'base_distance':distance}
     elif distance != 0:
         raise ValueError('Non-base action must have base_distance=0')
@@ -264,47 +292,57 @@ class SlashCactus(ImitatePickAndPresent):
     def make_policy(self, demo):
         return CactusPolicy(demo, self.chunk_size)
 
-    def _try_joint_step(self, decision, current, monitor, xml, grip=None):
+    def _try_joint_step(self, decision, current, monitor, xml):
         target = joint_target(decision, current)
         joint = decision.get('joint_step', decision['pose'])
         index = int(joint[0]) - 1
-        # The recorded sweep stays in the driver's central shoulder sector.
-        # Predict the observed joint2 restriction before submitting a command.
-        if abs(target[0]) < 1.0 and target[1] < (-0.5 if index == 1 else -0.51):
-            return dict(status='rejected', reason='Joint2 would be clamped to -0.5 in this joint1 sector; change another joint or direction',
+        # A shoulder already sagging a hair past the floor must not veto a step on
+        # another joint, so only a joint2 step is held to the floor exactly.
+        floor = self.manipulation.joint2_floor(target[0])
+        if target[1] < floor - (0.0 if index == 1 else 0.01):
+            return dict(status='rejected',
+                        reason=f'Joint2 cannot fold back past {floor:.2f} rad at this joint1 — the body is in the way '
+                               'and the driver would clamp it; raise with joint3/joint4 or change direction',
                         requested_qpos=target, measured_qpos=current['qpos'], measured_pose=current['pose'])
         started = time.monotonic()
         measured = current
         try:
             while True:
                 self.check_cancelled()
-                # Five values let the driver append the standing grip target, which is
-                # stale when the run began already holding something it never closed on.
-                # Six pin j6 and make the standing target right for everything after.
-                self.manipulation.stream_joints(
-                    target[:5] if grip is None else target[:5] + [grip], max_speed=0.25
-                )
+                self.manipulation.stream_joints(target[:5], max_speed=0.25)
                 self.sleep(0.04)
                 measured = self._observe(monitor, time.monotonic()-0.2, xml)
-                error = max(abs(a-b) for a,b in zip(measured['qpos'][:5],target[:5]))
+                error = abs(measured['qpos'][index] - target[index])
                 if error <= min(0.02, abs(joint[1])/3):
                     status = 'reached'
                     break
-                if time.monotonic()-started > 2.5:
+                if time.monotonic()-started > 4.0:
                     status = 'not_reached'
                     break
         finally:
             self.manipulation.stream_stop()
+        # The other four joints are commanded to hold. Streaming runs the driver's soft
+        # teleop gains, so a loaded elbow settles a couple of degrees under its hold —
+        # real, and not this step failing, so it is reported apart from the error.
+        held_drift, held_joint = max((abs(m-t), i+1) for i, (m, t)
+                                     in enumerate(zip(measured['qpos'][:5], target[:5], strict=True)) if i != index)
+        reason = ('Joint stream completed' if status=='reached' else
+                  f'Joint{index+1} stopped {error:.3f} rad short of its target; use measured joints and images '
+                  'to choose a different direction or joint')
+        if held_drift > 0.02:
+            reason += f'; joint{held_joint} sagged {held_drift:.3f} rad under load while commanded to hold'
         return dict(status=status, requested_qpos=target, measured_qpos=measured['qpos'],
                     measured_pose=measured['pose'], joint_error_rad=error,
-                    reason='Joint stream completed' if status=='reached' else
-                    'Partial joint movement; use measured joints and images to choose a different direction or joint')
+                    held_drift_rad=held_drift, held_drift_joint=held_joint, reason=reason)
 
     def _try_base_step(self, distance, current, monitor, xml):
         start = current['base'][:]
         measured = current
         started = time.monotonic()
         progress = 0.0
+        lateral_allow = BASE_LATERAL_FLOOR + BASE_LATERAL_PER_M * abs(distance)
+        angle_allow = BASE_YAW_FLOOR + BASE_YAW_PER_M * abs(distance)
+        wandered = ''
         self._base_step_active = True
         try:
             while True:
@@ -314,12 +352,16 @@ class SlashCactus(ImitatePickAndPresent):
                 lateral = -dx*math.sin(start[2]) + dy*math.cos(start[2])
                 progress = math.copysign(1,distance)*forward
                 angle = abs(math.atan2(math.sin(measured['base'][2]-start[2]),math.cos(measured['base'][2]-start[2])))
-                if abs(lateral)>0.015 or angle>0.05 or progress>abs(distance)+0.02 or progress < -0.01:
-                    self.fail('Base deviated from the requested straight adjustment')
+                if abs(lateral)>lateral_allow or angle>angle_allow or progress>abs(distance)+0.02 or progress < -0.01:
+                    # Stopping where it is beats ending the run: the arm is unharmed and
+                    # the next decision plans from the base pose actually measured.
+                    wandered = f' after wandering {lateral:+.3f} m sideways and {angle:.3f} rad off heading'
+                    status='not_reached'
+                    break
                 if progress >= abs(distance)-0.005:
                     status='reached'
                     break
-                if time.monotonic()-started > 2.5:
+                if time.monotonic()-started > 5.0:
                     status='not_reached'
                     break
                 self.mobility.send_cmd_vel(linear_x=math.copysign(0.04,distance), duration=0.15)
@@ -333,7 +375,7 @@ class SlashCactus(ImitatePickAndPresent):
                     measured_base_distance_m=math.copysign(progress,distance),
                     measured_pose=measured['pose'], measured_qpos=measured['qpos'],
                     reason='Base adjustment completed; reassess target distance' if status=='reached' else
-                    'Base adjustment did not finish; reassess measured distance and choose another approach')
+                    f'Base adjustment stopped{wandered}; reassess measured distance and choose another approach')
 
     def _observe(self, monitor, after, xml):
         observation = super()._observe(monitor, after, xml)
@@ -381,6 +423,10 @@ class SlashCactus(ImitatePickAndPresent):
         try:
             self.manipulation.safety.max_ee_speed = min(previous_speed, 0.03) if previous_speed is not None else 0.03
             self.mobility.stop()
+            # The prop was put in the claw by hand, so the standing grip target is
+            # whatever the last run left — re-close on it, or every motion carries
+            # that stale j6 and the first one lets go of the prop.
+            self.manipulation.gripper_close(strength=self.grip_strength, duration=0.8)
             monitor = LiveGestureObservation()
             started = after = time.monotonic()
             for step in range(60):
@@ -462,7 +508,7 @@ class SlashCactus(ImitatePickAndPresent):
                     entry['execution'] = outcome
                     icl.execution(step, outcome)
                     expected_pose = decision['pose']
-                    expected_qpos = target if action=='joint_step' else None
+                    expected_qpos = outcome['measured_qpos'] if action=='joint_step' else None
                     travel += math.dist(current['pose'][:3], outcome['measured_pose'][:3])
                     if outcome['status'] != 'reached':
                         pending = []
