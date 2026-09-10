@@ -158,6 +158,12 @@ class StereoCalibrator(Node):
         # How long to wait for a capture_trigger before timing out a managed run
         # (guards against an orphaned goal if the requesting client disconnects).
         self.declare_parameter("capture_timeout_sec", 60.0)
+        # Stereo pair sync tolerance. The driver splits one side-by-side capture,
+        # so both eyes carry the same stamp and 146 measured captures showed a
+        # median and p95 skew of 0.0ms. This sits below the 33ms frame period so
+        # adjacent frames can never be paired; loosen it only for a driver that
+        # genuinely stamps the eyes separately.
+        self.declare_parameter("sync_slop_sec", 0.01)
 
         # Get parameters
         self.left_topic = self.get_parameter("left_topic").value
@@ -185,6 +191,7 @@ class StereoCalibrator(Node):
             ),
             square_size=float(self.get_parameter("checkerboard_square_size").value),
         )
+        self.sync_slop_sec = float(self.get_parameter("sync_slop_sec").value)
         self.validation_stride = int(self.get_parameter("validation_stride").value)
         self.validate_charuco = bool(self.get_parameter("validate_charuco").value)
 
@@ -342,7 +349,7 @@ class StereoCalibrator(Node):
         self.sync = message_filters.ApproximateTimeSynchronizer(
             [self.left_sub, self.right_sub],
             queue_size=10,
-            slop=0.1,  # 100ms tolerance
+            slop=self.sync_slop_sec,
         )
         self.sync.registerCallback(self.image_callback)
 
@@ -691,7 +698,10 @@ class StereoCalibrator(Node):
 
         with self.frame_lock:
             if self.latest_left_frame is None or self.latest_right_frame is None:
-                self.get_logger().warn("No frames available yet. Make sure the camera is running.")
+                self.get_logger().warn(
+                    f"No frames available yet. Check the camera is running, and that the left/right "
+                    f"stamps agree to within sync_slop_sec ({self.sync_slop_sec * 1000:.0f}ms)."
+                )
                 return
             left_img = self.latest_left_frame.copy()
             right_img = self.latest_right_frame.copy()
@@ -1411,7 +1421,7 @@ class StereoCalibrator(Node):
                 "baseline_m": float(np.linalg.norm(calib["T"])),
                 "stereo_calibrate_tx_raw_m": t_x_raw,
                 "tx_was_negated": t_x_raw < 0.0,
-                "sync_slop_sec": 0.1,
+                "sync_slop_sec": self.sync_slop_sec,
                 "timestamp_skew": skew,
                 "validation": report.to_dict() if report is not None else None,
             }
@@ -1425,7 +1435,8 @@ class StereoCalibrator(Node):
         if skew.get("count"):
             self.get_logger().info(
                 f"  Timestamp skew: mean {skew['mean_ms']:.2f}ms, median {skew['median_ms']:.2f}ms, "
-                f"p95 {skew['p95_ms']:.2f}ms, max {skew['max_ms']:.2f}ms (sync slop is 100ms, unchanged)"
+                f"p95 {skew['p95_ms']:.2f}ms, max {skew['max_ms']:.2f}ms "
+                f"(sync slop {self.sync_slop_sec * 1000:.0f}ms)"
             )
         self.get_logger().info("=" * 60)
         return f"{self.target_type} experiment complete: {recorder.run_dir}"
