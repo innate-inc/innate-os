@@ -73,7 +73,7 @@ class MarsArmNode : public rclcpp::Node {
     void healthMonitorCallback();
     std::string describeHardwareError(uint8_t status, int servo_id) const;
 
-    // Head control
+    // ── Head servo (arm_head.cpp) ───────────────────────────────────────
     int logicalAngleToEncoder(double logical_angle_deg);
     double encoderToLogicalAngle(int encoder_value);
     void moveHeadToAngle(double logical_angle_deg);
