@@ -213,6 +213,8 @@ def test_real_skill_loop_preserves_grip_and_stops_on_failure(episode, tmp_path, 
     skill._observe = lambda *args: copy.deepcopy(current)
 
     def decide(*args):
+        if mode == "unreachable":
+            return decision(z=0.23)
         if mode == "model_failure":
             raise SkillFailed("model failed")
         if mode == "cancel_after_close" and "close" in commands:

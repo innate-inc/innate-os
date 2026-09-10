@@ -68,6 +68,10 @@ an index into it, not a claim that those frames are the relevant ones. Review gr
 and lift in detail before recording a phase map. Use record_phases once, before any action.
 Infer 2-6 ordered phases, e.g. approach, align, grasp, test lift, present. For each, identify
 an interval, a reference frame you actually inspected, and a visually observable advance_when.
+History.execution is the physical result, not a prediction. If status is unreachable, not_reached,
+or rejected, the intended move was NOT achieved. Use measured_pose and fresh live views to
+choose a different reachable approach; do not repeat the failed target or advance a phase on
+assumed motion. Coupled driver joint limits can block a pose even when the IK solver accepts it.
 Match TASK PROGRESS, not just image similarity. Begin at phase zero; progress by at most one
 phase per action after observing evidence that the preceding condition is met. An observe action
 can advance a phase when no motion is needed. Never skip a grasp or claim an unobserved lift.

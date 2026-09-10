@@ -190,6 +190,8 @@ class ImitatePickAndPresent(Skill):
         closed_at = None
         verified = 0
         history = []
+        motion_failures = 0
+        rejected_targets = set()
         previous_speed = self.manipulation.safety.max_ee_speed
         try:
             self.manipulation.safety.max_ee_speed = 0.03
@@ -251,16 +253,28 @@ class ImitatePickAndPresent(Skill):
                 seen_holding = seen_holding or (committed and decision["holding"])
                 action = decision["action"]
                 if action == "move":
-                    x, y, z, roll, pitch, yaw = decision["pose"]
-                    # Reachability is not collision checking. Do not clamp to a different pose.
-                    if not self.manipulation.reachable(x, y, z, roll=roll, pitch=pitch, yaw=yaw):
-                        self.fail("Demonstration-adapted pose is unreachable")
-                    self.check_cancelled()
-                    self.manipulation.move_to(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=1.5, block=False)
-                    self._wait_motion(monitor, xml)
-                    settled = self._observe(monitor, time.monotonic() - 0.2, xml)
-                    if math.dist(settled["pose"][:3], decision["pose"][:3]) > 0.015:
-                        self.fail("Arm did not reach the adapted target within 1.5 cm")
+                    target_key = tuple(round(v, 4) for v in decision["pose"])
+                    if target_key in rejected_targets:
+                        outcome = self._motion_outcome(
+                            "rejected",
+                            "This exact target already failed; choose another approach",
+                            current,
+                            decision["pose"],
+                        )
+                    else:
+                        outcome = self._try_move(decision["pose"], current, monitor, xml)
+                    entry["execution"] = outcome
+                    with (run / "execution.jsonl").open("a") as execution:
+                        execution.write(json.dumps({"step": step, **outcome}) + "\n")
+                    if outcome["status"] != "reached":
+                        motion_failures += 1
+                        rejected_targets.add(target_key)
+                        self.feedback(outcome["reason"] + "; returning measured state to the agent")
+                        if motion_failures >= 3:
+                            self.fail("Three motion proposals failed without a successful move; stopping replanning")
+                    else:
+                        motion_failures = 0
+                        rejected_targets.clear()
                 elif action == "open":
                     self.manipulation.gripper_open(duration=0.8, block=False)
                     self._wait_motion(monitor, xml)
@@ -302,6 +316,37 @@ class ImitatePickAndPresent(Skill):
             self.manipulation.safety.max_ee_speed = previous_speed
             if monitor is not None:
                 monitor.close()
+
+    @staticmethod
+    def _motion_outcome(status, reason, measured, target):
+        return {
+            "status": status,
+            "reason": reason,
+            "requested_pose": target,
+            "measured_pose": measured["pose"],
+            "measured_qpos": measured.get("qpos"),
+            "position_error_m": math.dist(measured["pose"][:3], target[:3]),
+        }
+
+    def _try_move(self, target, current, monitor, xml):
+        x, y, z, roll, pitch, yaw = target
+        if not self.manipulation.reachable(x, y, z, roll=roll, pitch=pitch, yaw=yaw):
+            return self._motion_outcome(
+                "unreachable", "IK rejected the requested EE pose; no movement issued", current, target
+            )
+        self.check_cancelled()
+        self.manipulation.move_to(x, y, z, roll=roll, pitch=pitch, yaw=yaw, duration=1.5, block=False)
+        # Health failures, cancellation, and uncertain/time-out outcomes still propagate.
+        self._wait_motion(monitor, xml)
+        measured = self._observe(monitor, time.monotonic() - 0.2, xml)
+        if math.dist(measured["pose"][:3], target[:3]) > 0.015:
+            return self._motion_outcome(
+                "not_reached",
+                "Move completed but missed the EE target by more than 1.5 cm; driver joint limits or tracking may prevent this pose",
+                measured,
+                target,
+            )
+        return self._motion_outcome("reached", "Measured EE position is within 1.5 cm of target", measured, target)
 
     def _wait_motion(self, monitor, xml):
         deadline = time.monotonic() + 8

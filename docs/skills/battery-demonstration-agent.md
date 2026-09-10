@@ -45,3 +45,21 @@ Nine existing recorder-fixture tests were skipped in the staging environment.
 A real read-only Astra preview requested frames around closure/lift, inferred five
 phases, then proposed one action. No actuator was connected to that preview.
 Physical execution of this new autonomous skill has not been tested.
+
+## Motion feedback and priority
+
+Requests now use low reasoning and priority processing; a read-only proxy check
+confirmed the API returned the `fast` tier. This does not guarantee a fixed latency.
+
+IK rejection returns `execution.status=unreachable` without motion. A completed
+move missing the target by more than 1.5 cm returns `not_reached`. Both outcomes
+include the requested EE pose, actual measured pose/joints and positional error
+in the next agent turn, also saved to `execution.jsonl`. The agent must use that
+feedback and fresh images to choose another approach. Exact failed targets are
+blocked, and three failed proposals without a successful move stop the run.
+Arm-health faults, missing telemetry, cancellation and uncertain motion outcomes
+remain hard stops. The tracking threshold and driver joint limits are unchanged.
+
+After this update: 22 applicable tests pass; nine recorder-fixture tests remain
+skipped. Tests include feedback reaching the next agent turn and fake-actuator
+tracking misses. No physical retry was run as part of this update.

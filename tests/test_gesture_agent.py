@@ -183,3 +183,74 @@ def test_battery_skill_refuses_existing_grasp():
     skill.manipulation = SimpleNamespace(pose=SimpleNamespace(gripper=0.4))
     with pytest.raises(SkillFailed, match="open empty gripper"):
         skill.execute()
+
+
+@pytest.mark.parametrize("reachable,miss", [(False, False), (True, True), (True, False)])
+def test_motion_feedback_contains_actual_state(reachable, miss):
+    from innate_skills.imitate_pick_and_present import ImitatePickAndPresent
+
+    skill = ImitatePickAndPresent(None)
+    commands = []
+    skill.manipulation = SimpleNamespace(
+        reachable=lambda *a, **kw: reachable, move_to=lambda *a, **kw: commands.append(a)
+    )
+    measured = {"pose": [0.28 if miss else 0.30, 0, 0.2, 0, 0, 0], "qpos": [0] * 6}
+    skill._wait_motion = lambda *a: None
+    skill._observe = lambda *a: measured
+    value = skill._try_move([0.30, 0, 0.2, 0, 0, 0], measured, None, "")
+    assert value["status"] == ("unreachable" if not reachable else "not_reached" if miss else "reached")
+    assert value["measured_pose"] == measured["pose"]
+    assert len(commands) == int(reachable)
+
+
+def test_rejected_target_reaches_next_agent_turn(tmp_path, monkeypatch):
+    import copy
+
+    import ament_index_python.packages
+    from innate_skills import imitate_pick_and_present as runtime
+
+    from innate.exceptions import SkillCancelled
+
+    monkeypatch.setattr(
+        ament_index_python.packages,
+        "get_package_share_directory",
+        lambda _: str(ROOT / "ros2_ws/src/mars_bot/mars_sim"),
+    )
+    monkeypatch.setenv("INNATE_OS_ROOT", str(tmp_path))
+    demo = SimpleNamespace(
+        path="episode.h5",
+        poses=[None] * 100,
+        model_hash=__import__("hashlib")
+        .sha256((ROOT / "ros2_ws/src/mars_bot/mars_sim/urdf/mars.urdf").read_bytes())
+        .hexdigest(),
+    )
+    skill = runtime.ImitatePickAndPresent(None)
+    skill.make_demo = lambda *a: demo
+    skill.make_policy = lambda *a: object()
+    monkeypatch.setattr(runtime, "LiveGestureObservation", lambda: SimpleNamespace(close=lambda: None))
+    current = {"pose": [0.3, 0, 0.2, 0, 0, 0], "base": [0, 0, 0], "images": {}, "gripper": 1.0}
+    skill._observe = lambda *a: copy.deepcopy(current)
+    skill.head_position = SimpleNamespace(pitch_degrees=0)
+    skill.mobility = SimpleNamespace(stop=lambda: None)
+    skill.manipulation = SimpleNamespace(
+        safety=SimpleNamespace(max_ee_speed=None), reachable=lambda *a, **kw: False, halt=lambda: None
+    )
+    skill.sleep = lambda _: None
+    skill.feedback = lambda _: None
+    observed = []
+
+    def decide(policy, observation, history):
+        if history:
+            observed.append(copy.deepcopy(history[-1]["execution"]))
+            raise SkillCancelled()
+        value = proposal()["decision"]
+        value["action"] = "move"
+        value["pose"][0] = 0.32
+        return value
+
+    skill._decide = decide
+    with pytest.raises(SkillCancelled):
+        skill.execute("episode.h5")
+    assert observed[0]["status"] == "unreachable"
+    assert observed[0]["requested_pose"][0] == 0.32
+    assert observed[0]["measured_pose"][0] == 0.3
