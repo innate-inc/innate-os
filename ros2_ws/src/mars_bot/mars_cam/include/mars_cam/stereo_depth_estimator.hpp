@@ -199,6 +199,10 @@ class StereoDepthEstimator : public rclcpp::Node {
     cv::Matx33f cloud_rotation_{cv::Matx33f::eye()};
     double mount_pitch_correction_deg_{0.0};
     double mount_roll_correction_deg_{0.0};
+    // Camera height error the URDF cannot know about, applied to the nav cloud
+    // only — it is a translation, meaningless in the optical frame the other
+    // clouds are stamped with.
+    double mount_height_correction_m_{0.0};
 
     // Beyond this age the arm-footprint mask is dropped rather than reused.
     double footprint_max_age_sec_{0.5};

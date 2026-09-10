@@ -53,6 +53,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     // `ros2 run mars_cam ground_plane_check` and negate the reported floor tilt.
     this->declare_parameter<double>("mount_pitch_correction_deg", 0.0);
     this->declare_parameter<double>("mount_roll_correction_deg", 0.0);
+    this->declare_parameter<double>("mount_height_correction_m", 0.0);
 
     // How long an arm-footprint cloud stays usable. dynamic_footprint publishes
     // at 15Hz against this node's 8Hz, so anything much older means it stopped.
@@ -110,6 +111,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     footprint_cutout_topic_ = this->get_parameter("footprint_cutout_topic").as_string();
     mount_pitch_correction_deg_ = this->get_parameter("mount_pitch_correction_deg").as_double();
     mount_roll_correction_deg_ = this->get_parameter("mount_roll_correction_deg").as_double();
+    mount_height_correction_m_ = this->get_parameter("mount_height_correction_m").as_double();
     footprint_max_age_sec_ = this->get_parameter("footprint_max_age_sec").as_double();
     pointcloud_nav_topic_ = this->get_parameter("pointcloud_nav_topic").as_string();
     nav_frame_ = this->get_parameter("nav_frame").as_string();
