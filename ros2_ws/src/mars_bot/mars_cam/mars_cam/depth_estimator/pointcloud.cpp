@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <algorithm>
+#include <array>
 #include <vector>
 
 #include <tf2/LinearMath/Matrix3x3.h>
@@ -182,33 +184,43 @@ void StereoDepthEstimator::publishPointCloudColor(const cv::Mat& disparity_lowre
 // range, the image periphery is where this 98-degree lens fits worst, and every
 // point outside the corridor is a chance to mark something the robot would
 // never have driven into.
-void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres, const rclcpp::Time& ts) {
-    geometry_msgs::msg::TransformStamped tf;
+void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres, const cv::Mat& confidence,
+                                                const rclcpp::Time& ts) {
+    geometry_msgs::msg::TransformStamped tf_base, tf_odom;
     try {
         // TimePointZero: the head moves slowly relative to an 8Hz frame rate,
         // and a lookup at the exact frame stamp fails whenever TF lags.
-        tf = tf_buffer_->lookupTransform(nav_frame_, frame_id_, tf2::TimePointZero);
+        tf_base = tf_buffer_->lookupTransform(nav_frame_, frame_id_, tf2::TimePointZero);
+        // Evidence must accumulate in a frame that does not move with the robot,
+        // or driving forward would smear every voxel it has learned.
+        tf_odom = tf_buffer_->lookupTransform(evidence_frame_, nav_frame_, tf2::TimePointZero);
     } catch (const tf2::TransformException& e) {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "No transform %s <- %s: %s",
-                             nav_frame_.c_str(), frame_id_.c_str(), e.what());
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Nav cloud transform unavailable: %s",
+                             e.what());
         return;
     }
 
-    const auto& q = tf.transform.rotation;
-    const auto& t = tf.transform.translation;
-    const tf2::Matrix3x3 basis(tf2::Quaternion(q.x, q.y, q.z, q.w));
-    cv::Matx33f optical_to_nav;
-    for (int r = 0; r < 3; ++r)
-        for (int c = 0; c < 3; ++c)
-            optical_to_nav(r, c) = static_cast<float>(basis[r][c]);
+    const auto to_matrix = [](const geometry_msgs::msg::TransformStamped& tf, cv::Matx33f& R, cv::Vec3f& t) {
+        const auto& q = tf.transform.rotation;
+        const tf2::Matrix3x3 basis(tf2::Quaternion(q.x, q.y, q.z, q.w));
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c)
+                R(r, c) = static_cast<float>(basis[r][c]);
+        t = cv::Vec3f(static_cast<float>(tf.transform.translation.x), static_cast<float>(tf.transform.translation.y),
+                      static_cast<float>(tf.transform.translation.z));
+    };
+
+    cv::Matx33f R_base, R_odom;
+    cv::Vec3f t_base, t_odom;
+    to_matrix(tf_base, R_base, t_base);
+    to_matrix(tf_odom, R_odom, t_odom);
     // The height correction rides on the camera origin: TF places the camera
     // from nominal CAD, and the real mount differs by a measurable offset that
     // otherwise lifts the whole floor toward the marking threshold.
-    const cv::Vec3f origin(static_cast<float>(t.x), static_cast<float>(t.y),
-                           static_cast<float>(t.z + mount_height_correction_m_));
+    t_base[2] += static_cast<float>(mount_height_correction_m_);
 
     // One matrix from rectified pixels straight to base_link.
-    const cv::Matx33f to_nav = optical_to_nav * cloud_rotation_;
+    const cv::Matx33f to_nav = R_base * cloud_rotation_;
 
     const int dw = disparity_lowres.cols;
     const int dh = disparity_lowres.rows;
@@ -220,9 +232,11 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
     const float f_depth = static_cast<float>(focal_length_);
     const float baseline = static_cast<float>(baseline_);
     const int step = pointcloud_decimation_;
+    // Confidence is at calibration resolution; disparity may be downsampled.
+    const float conf_scale = confidence.empty() ? 0.0f : static_cast<float>(confidence.cols) / static_cast<float>(dw);
 
-    std::vector<cv::Vec3f> kept;
-    kept.reserve(static_cast<size_t>((dw / step) * (dh / step)) / 4);
+    std::vector<Observation> observations;
+    observations.reserve(static_cast<size_t>((dw / step) * (dh / step)) / 4);
 
     for (int py = 0; py < dh; py += step) {
         for (int px = 0; px < dw; px += step) {
@@ -232,38 +246,65 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
             const float z = f_depth * baseline / d;
             if (z <= 0.0f || z > nav_roi_x_max_ * 2.0f)
                 continue;
-            const cv::Vec3f p =
+            const cv::Vec3f in_base =
                 to_nav * cv::Vec3f((static_cast<float>(px) - cx) * z / fx, (static_cast<float>(py) - cy) * z / fy, z) +
-                origin;
-            if (p[0] < nav_roi_x_min_ || p[0] > nav_roi_x_max_)
+                t_base;
+            if (in_base[0] < nav_roi_x_min_ || in_base[0] > nav_roi_x_max_)
                 continue;
-            if (std::abs(p[1]) > nav_roi_half_width_)
+            if (std::abs(in_base[1]) > nav_roi_half_width_)
                 continue;
-            if (p[2] < nav_roi_z_min_ || p[2] > nav_roi_z_max_)
+            if (in_base[2] < nav_roi_z_min_ || in_base[2] > nav_roi_z_max_)
                 continue;
-            kept.push_back(p);
+
+            float match_confidence = 1.0f;
+            if (conf_scale > 0.0f) {
+                const int cxi = std::min(static_cast<int>(px * conf_scale), confidence.cols - 1);
+                const int cyi = std::min(static_cast<int>(py * conf_scale), confidence.rows - 1);
+                match_confidence = confidence.at<float>(cyi, cxi);
+            }
+            const float weight = match_confidence * range_confidence(z, static_cast<float>(confidence_full_trust_m_),
+                                                                     static_cast<float>(confidence_no_trust_m_));
+            if (weight <= 0.0f)
+                continue;
+
+            const cv::Vec3f in_odom = R_odom * in_base + t_odom;
+            observations.push_back({in_odom[0], in_odom[1], in_odom[2], weight, z});
         }
+    }
+
+    std::vector<std::array<float, 3>> marks;
+    if (evidence_enabled_) {
+        const double dt = last_evidence_stamp_.nanoseconds() == 0
+                              ? 0.0
+                              : std::clamp((ts - last_evidence_stamp_).seconds(), 0.0, 1.0);
+        last_evidence_stamp_ = ts;
+        evidence_.integrate(observations, dt);
+        marks = evidence_.confirmed();
+    } else {
+        marks.reserve(observations.size());
+        for (const auto& o : observations)
+            marks.push_back({o.x, o.y, o.z});
     }
 
     auto cloud = std::make_unique<sensor_msgs::msg::PointCloud2>();
     cloud->header.stamp = ts;
-    cloud->header.frame_id = nav_frame_;
+    cloud->header.frame_id = evidence_frame_;
     cloud->height = 1;
-    cloud->width = static_cast<uint32_t>(kept.size());
+    cloud->width = static_cast<uint32_t>(marks.size());
     cloud->is_dense = true;
     cloud->is_bigendian = false;
 
     sensor_msgs::PointCloud2Modifier mod(*cloud);
     mod.setPointCloud2FieldsByString(1, "xyz");
-    mod.resize(kept.size());
+    mod.resize(marks.size());
 
     sensor_msgs::PointCloud2Iterator<float> ix(*cloud, "x");
     sensor_msgs::PointCloud2Iterator<float> iy(*cloud, "y");
     sensor_msgs::PointCloud2Iterator<float> iz(*cloud, "z");
-    for (const auto& p : kept) {
-        *ix = p[0];
-        *iy = p[1];
-        *iz = p[2];
+    for (const auto& m : marks) {
+        *ix = m[0];
+        *iy = m[1];
+        *iz = m[2];
         ++ix;
         ++iy;
         ++iz;

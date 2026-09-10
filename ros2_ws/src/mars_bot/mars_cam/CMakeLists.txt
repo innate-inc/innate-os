@@ -335,6 +335,14 @@ if(BUILD_TESTING)
     APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
   )
 
+  # Unit tests for the temporal evidence filter. Header-only and free of ROS,
+  # OpenCV and VPI, so this runs on any machine — not just a Jetson.
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_evidence_grid test/test_evidence_grid.cpp)
+  if(TARGET test_evidence_grid)
+    target_include_directories(test_evidence_grid PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  endif()
+
   # Unit tests for the pure (GStreamer/ROS-free) streamer helpers in webrtc_internal.hpp.
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_webrtc_internal test/test_webrtc_internal.cpp)
