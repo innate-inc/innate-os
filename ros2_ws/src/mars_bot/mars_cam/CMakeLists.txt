@@ -343,6 +343,11 @@ if(BUILD_TESTING)
     target_include_directories(test_evidence_grid PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   endif()
 
+  ament_add_gtest(test_ground_plane_estimator test/test_ground_plane_estimator.cpp)
+  if(TARGET test_ground_plane_estimator)
+    target_include_directories(test_ground_plane_estimator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  endif()
+
   # Unit tests for the pure (GStreamer/ROS-free) streamer helpers in webrtc_internal.hpp.
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_webrtc_internal test/test_webrtc_internal.cpp)
