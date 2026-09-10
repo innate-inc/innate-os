@@ -40,22 +40,29 @@ class LearnSkill(Skill):
             self.fail("Innate proxy not configured (INNATE_SERVICE_KEY)")
         forge = Forge(client, system_prompt())
         prompt = f"Write a skill: {description}"
+        written: set[Path] = set()  # this run's drafts; whatever never passes its trial is deleted
         draft: Draft | None = None
         problem: str | None = None
-        with LearningMode(self) as show:
-            for round_number in range(1, ROUNDS + 1):
-                self.feedback(f"round {round_number}: drafting")
-                try:
-                    draft = check(self._draft(forge, show, prompt))
-                    problem = self._install(draft) or self._trial(draft)
-                except DraftRejected as rejected:
-                    problem = str(rejected)
-                if problem is None and draft is not None:
-                    show.celebrate(draft.display_name)
-                    return f"Learned {draft.skill_id}: it is now one of your tools."
-                self.feedback(f"round {round_number} failed: {problem}")
-                prompt = f"That failed: {problem}\nKeep the class name, fix it, and reply with the complete file again."
-        self._forget(draft)
+        try:
+            with LearningMode(self) as show:
+                for round_number in range(1, ROUNDS + 1):
+                    self.feedback(f"round {round_number}: drafting")
+                    try:
+                        draft = check(self._draft(forge, show, prompt))
+                        problem = self._install(draft, written) or self._trial(draft)
+                    except DraftRejected as rejected:
+                        problem = str(rejected)
+                    if problem is None and draft is not None:
+                        written.clear()
+                        show.celebrate(draft.display_name)
+                        return f"Learned {draft.skill_id}: it is now one of your tools."
+                    self.feedback(f"round {round_number} failed: {problem}")
+                    prompt = (
+                        f"That failed: {problem}\nKeep the class name, fix it, and reply with the complete file again."
+                    )
+        finally:
+            for path in written:
+                path.unlink(missing_ok=True)
         self.fail(f"Could not learn it after {ROUNDS} rounds: {problem}")
 
     def _draft(self, forge: Forge, show: LearningMode, prompt: str) -> str:
@@ -69,14 +76,17 @@ class LearnSkill(Skill):
                 show.mutter(line)
         return extract_code("".join(reply))
 
-    def _install(self, draft: Draft) -> str | None:
+    def _install(self, draft: Draft, written: set[Path]) -> str | None:
         """Write the draft where the catalog looks and wait for the roster to rebuild."""
         path = get_learned_skills_dir() / f"{draft.module}.py"
+        if path.exists() and path not in written:
+            raise DraftRejected(f"a learned skill named {draft.class_name} already exists; choose another class name")
         path.parent.mkdir(parents=True, exist_ok=True)
         staging = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         roster_before = _roster_stamp()
         staging.write_text(draft.source)
         staging.replace(path)  # atomic: the watcher never imports a half-written file
+        written.add(path)
         rebuilt = self.wait_for(lambda: True if _roster_stamp() != roster_before else None, timeout=ROSTER_TIMEOUT_S)
         return None if rebuilt else "the skill catalog did not pick the file up in time"
 
@@ -86,10 +96,6 @@ class LearnSkill(Skill):
         self.feedback(f"trying {draft.skill_id}")
         outcome = self.skills.run(draft.skill_id, timeout=TRIAL_TIMEOUT_S)
         return None if outcome.ok else outcome.message
-
-    def _forget(self, draft: Draft | None) -> None:
-        if draft is not None:
-            (get_learned_skills_dir() / f"{draft.module}.py").unlink(missing_ok=True)
 
 
 def _roster_stamp() -> int:

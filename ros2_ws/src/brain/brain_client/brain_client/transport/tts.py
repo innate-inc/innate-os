@@ -37,17 +37,15 @@ class Delivery:
         return {key: value for key, value in (("speed", self.speed), ("volume", self.volume)) if value is not None}
 
 
-def parse_tts_request(data: str) -> tuple[str, Delivery | None]:
-    """A /brain/tts payload: plain text, or JSON ``{"text", "speed", "volume"}`` for a styled read."""
-    if not data.startswith("{"):
-        return data, None
+def parse_styled_tts(data: str) -> tuple[str, Delivery] | None:
+    """A /brain/tts/styled payload: JSON ``{"text", "speed", "volume"}``. None when malformed."""
     try:
         payload = json.loads(data)
         speed, volume = payload.get("speed"), payload.get("volume")
         delivery = Delivery(None if speed is None else float(speed), None if volume is None else float(volume))
         return str(payload["text"]), delivery
     except (json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError):
-        return data, None
+        return None
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Static checks on a drafted skill file, before it touches the workspace."""
+"""Static checks on a drafted skill file, before it touches the workspace.
+
+A lint, not a sandbox: it catches the mistakes the coder is prone to and the obvious
+escape hatches (reflection, dunders, module hopping, import aliases). An accepted file
+runs with the same privileges as any other workspace skill."""
 
 from __future__ import annotations
 
@@ -12,13 +16,27 @@ from brain_client.common.dynamic_loader import class_name_to_snake_case
 ALLOWED_IMPORTS = frozenset(
     {"innate", "innate_skills", "collections", "dataclasses", "enum", "json", "math", "random", "time", "typing"}
 )
-BANNED_CALLS = {
-    "time.sleep": "use self.sleep(seconds); time.sleep ignores Stop",
-    "open": "skills never touch files; keep state in self.storage",
-    "exec": "no dynamic code",
-    "eval": "no dynamic code",
-    "__import__": "no dynamic imports",
-}
+BANNED_NAMES = frozenset(
+    {
+        "open",
+        "exec",
+        "eval",
+        "compile",
+        "getattr",
+        "setattr",
+        "delattr",
+        "globals",
+        "locals",
+        "vars",
+        "breakpoint",
+        "input",
+        "sleep",  # `from time import sleep`: time.sleep ignores Stop
+    }
+)
+# Attributes that turn an allowed module into a door (typing.sys, json.decoder, ...).
+BANNED_ATTRS = frozenset(
+    {"sys", "os", "subprocess", "builtins", "importlib", "socket", "shutil", "ctypes", "modules", "smtplib", "decoder"}
+)
 
 
 class DraftRejected(Exception):
@@ -59,23 +77,31 @@ def check(source: str) -> Draft:
 
 def _check_node(node: ast.AST) -> None:
     if isinstance(node, ast.Import | ast.ImportFrom):
-        for root in _import_roots(node):
-            if root not in ALLOWED_IMPORTS:
-                raise DraftRejected(f"'{root}' may not be imported; allowed: {', '.join(sorted(ALLOWED_IMPORTS))}")
-    if isinstance(node, ast.Call):
-        called = _dotted(node.func)
-        if called in BANNED_CALLS:
-            raise DraftRejected(f"{called}() is not allowed: {BANNED_CALLS[called]}")
+        _check_import(node)
+    elif isinstance(node, ast.Name) and (node.id in BANNED_NAMES or node.id.startswith("__")):
+        raise DraftRejected(f"'{node.id}' is not allowed in a skill")
+    elif isinstance(node, ast.Attribute) and (node.attr.startswith("_") or node.attr in BANNED_ATTRS):
+        raise DraftRejected(f"'.{node.attr}' is not allowed in a skill")
+    elif isinstance(node, ast.Call) and _dotted(node.func) == "time.sleep":
+        raise DraftRejected("time.sleep() is not allowed: use self.sleep(seconds), time.sleep ignores Stop")
 
 
-def _import_roots(node: ast.Import | ast.ImportFrom) -> list[str]:
-    if isinstance(node, ast.ImportFrom):
-        return [(node.module or "").split(".")[0]]
-    return [alias.name.split(".")[0] for alias in node.names]
+def _check_import(node: ast.Import | ast.ImportFrom) -> None:
+    names = node.names
+    roots = [(node.module or "").split(".")[0]] if isinstance(node, ast.ImportFrom) else []
+    roots += [alias.name.split(".")[0] for alias in names] if isinstance(node, ast.Import) else []
+    for root in roots:
+        if root not in ALLOWED_IMPORTS:
+            raise DraftRejected(f"'{root}' may not be imported; allowed: {', '.join(sorted(ALLOWED_IMPORTS))}")
+    for alias in names:
+        if alias.asname is not None:
+            raise DraftRejected("import aliases ('as') are not allowed")
+        if alias.name in BANNED_NAMES or alias.name in BANNED_ATTRS:
+            raise DraftRejected(f"'{alias.name}' may not be imported")
 
 
 def _dotted(expr: ast.expr) -> str:
-    """'time.sleep' for ``time.sleep(...)``, 'open' for ``open(...)``, '' for anything else."""
+    """'time.sleep' for ``time.sleep(...)``, '' for anything that is not a plain dotted name."""
     parts: list[str] = []
     while isinstance(expr, ast.Attribute):
         parts.append(expr.attr)

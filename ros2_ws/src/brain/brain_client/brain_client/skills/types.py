@@ -17,6 +17,7 @@ from types import GeneratorType, UnionType  # stdlib `types`, not this module
 from typing import TYPE_CHECKING, Any, Generic, NoReturn, TypeVar, Union, get_args, get_origin, overload
 
 from rclpy.node import Node
+from rclpy.publisher import Publisher
 from std_msgs.msg import String
 from typing_extensions import Self
 
@@ -38,6 +39,7 @@ _T_resource = TypeVar("_T_resource")
 SkillReturn = Union[None, str, "SkillOutput"]
 
 TTS_TOPIC = "/brain/tts"
+TTS_STYLED_TOPIC = "/brain/tts/styled"  # JSON {"text", "speed", "volume"}; /brain/tts stays plain text
 TTS_STATUS_TOPIC = "/tts/is_playing"
 
 
@@ -751,7 +753,7 @@ class Skill(ABC):
         self._cancel_latch()
         # injected by the server before each run (see invoker.py)
         self.skills: SkillInvoker | None = None
-        self._say_publisher = None
+        self._say_publishers: dict[str, Publisher] = {}
         self._overlay: Overlay | None = None
         self._overlay_publisher = None
         self._tts_status_sub = None
@@ -990,24 +992,26 @@ class Skill(ABC):
         (0.5-2.0) style the read. No-op if speech isn't available."""
         if not text or self.node is None:
             return
-        if self._say_publisher is None:
-            self._say_publisher = self.node.create_publisher(String, TTS_TOPIC, 10)
+        styled = speed is not None or volume is not None
+        publisher = self._tts_publisher(self.node, TTS_STYLED_TOPIC if styled else TTS_TOPIC)
+        if wait and self._tts_status_sub is None:
+            self._tts_status_sub = self.node.create_subscription(String, TTS_STATUS_TOPIC, self._on_tts_status, 10)
+        publisher.publish(String(data=json.dumps({"text": text, "speed": speed, "volume": volume}) if styled else text))
+        if wait:
+            self._wait_for_speech_end(text)
+
+    def _tts_publisher(self, node: Node, topic: str) -> Publisher:
+        publishers = vars(self).setdefault("_say_publishers", {})  # some skills skip super().__init__()
+        publisher = publishers.get(topic)
+        if publisher is None:
+            publisher = publishers[topic] = node.create_publisher(String, topic, 10)
             # fresh publisher every run — wait briefly for the TTS engine to
             # match, or the run's first utterance is dropped. A cancel skips
             # the wait: dropped speech beats a delayed Stop.
             deadline = time.time() + 1.0
-            while self._say_publisher.get_subscription_count() == 0 and time.time() < deadline:
-                if self.cancelled:
-                    break
+            while publisher.get_subscription_count() == 0 and time.time() < deadline and not self.cancelled:
                 time.sleep(0.02)
-        if wait and self._tts_status_sub is None:
-            self._tts_status_sub = self.node.create_subscription(String, TTS_STATUS_TOPIC, self._on_tts_status, 10)
-        styled = speed is not None or volume is not None
-        self._say_publisher.publish(
-            String(data=json.dumps({"text": text, "speed": speed, "volume": volume}) if styled else text)
-        )
-        if wait:
-            self._wait_for_speech_end(text)
+        return publisher
 
     @property
     def overlay(self) -> Overlay:
