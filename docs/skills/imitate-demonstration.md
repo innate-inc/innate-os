@@ -15,12 +15,18 @@ Any finalized `.h5` episode from the normal recorder works. It must carry
 `/observations/qpos`, `/action`, both camera streams and `/timestamps/arm`, and
 its joint order and camera mapping must match the robot running the skill.
 
-End-effector poses come from `/observations/ee_pose` when the recording has it —
+End-effector poses come from `/observations/ee_pose`. The recorder writes it as
 rows of `[x,y,z,qx,qy,qz,qw]` in metres, `ee_link` in `base_link`, each the
-forward kinematics of the *same measured joint sample* as `qpos`, with the URDF
-stored alongside. An older recording without it still loads: pass `legacy_urdf`
-and the poses are derived in memory from the model you name. Nothing is written
-back, so the original file is never modified.
+forward kinematics of the *same measured joint sample* as `qpos` — not a
+separately sampled pose message — with the URDF, joint order and camera topics
+stored as attributes, so an episode carries its own provenance.
+
+A recording made before that still loads: pass `legacy_urdf` naming the model
+that was in use, and the poses are derived in memory. Nothing is written back,
+so the original file is never modified. This trusts you to name the right model,
+which is the provenance a stored URDF gives you for free — prefer a fresh
+recording where you can. `python3 -m innate.demonstration <in> <out> --urdf <f>`
+writes a converted copy if you would rather do it once.
 
 The loader rejects a recording whose frame or camera convention it does not
 recognise, whose state is malformed, or whose selected camera frames sit more

@@ -143,7 +143,7 @@ class ImitateDemonstration(Skill):
             "measured_pose": measured["pose"],
         }
 
-    def _run(self, demonstration, task, chunk_size, overview_frames, frame_selection, motions):
+    def _run(self, demonstration, task, legacy_urdf, chunk_size, overview_frames, frame_selection, motions):
         from ament_index_python.packages import get_package_share_directory
 
         if type(chunk_size) is not int or not 1 <= chunk_size <= 10:
@@ -159,22 +159,26 @@ class ImitateDemonstration(Skill):
         except ValueError as exc:
             self.fail(str(exc))
         self.frame_selection = frame_selection
+        # A recording made before the recorder stored its own kinematics has no
+        # ee_pose; naming the model it was made with derives them in memory.
+        urdf_arg = {"legacy_urdf": legacy_urdf} if legacy_urdf else {}
         demo = Demonstration(
             demonstration,
             image_time_reference=True,
             max_frames=overview_frames,
             uniform=frame_selection == "uniform",
+            **urdf_arg,
         )
         # "both" is two looks: the evenly binned survey, then the gripper
         # transitions sampled closely. Loading twice costs about half a second.
         self.survey = None
         if frame_selection == "both":
             self.survey = Demonstration(
-                demonstration, image_time_reference=True, max_frames=overview_frames, uniform=True
+                demonstration, image_time_reference=True, max_frames=overview_frames, uniform=True, **urdf_arg
             )
             close = event_frames(self.survey.grip_events, len(self.survey.poses))
             if close:
-                demo = Demonstration(demonstration, image_time_reference=True, frame_indices=close)
+                demo = Demonstration(demonstration, image_time_reference=True, frame_indices=close, **urdf_arg)
         # The highest shoulder angle the recording ever needed, over every frame the
         # model is shown. The demonstration finishing below it is the proof that a
         # higher angle means reaching rather than a harder task.
@@ -426,6 +430,7 @@ class ImitateDemonstration(Skill):
         self,
         demonstration: str = DEMONSTRATION,
         task: str = "",
+        legacy_urdf: str = "",
         chunk_size: int = 1,
         overview_frames: int = 24,
         frame_selection: Literal["both", "keyframes", "uniform"] = "both",
@@ -435,4 +440,4 @@ class ImitateDemonstration(Skill):
         base_step: bool = True,
     ) -> SkillOutput:
         motions = {"joint_step": joint_step, "ee_absolute": ee_absolute, "ee_delta": ee_delta, "base_step": base_step}
-        return self._run(demonstration, task, chunk_size, overview_frames, frame_selection, motions)
+        return self._run(demonstration, task, legacy_urdf, chunk_size, overview_frames, frame_selection, motions)
