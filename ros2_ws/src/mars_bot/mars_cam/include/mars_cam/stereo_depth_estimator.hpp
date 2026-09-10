@@ -24,6 +24,8 @@
 
 #include <opencv2/opencv.hpp>
 
+#include "mars_cam/evidence_grid.hpp"
+
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
@@ -57,6 +59,7 @@ class StereoDepthEstimator : public rclcpp::Node {
     bool submitSGM(const cv::Mat& left_rect, const cv::Mat& right_rect);
     void syncSGM();
     cv::Mat extractDisparity();
+    cv::Mat extractConfidence();
     void cleanupSGMWraps();
 
     // ── Rectification (depth_estimator/rectification.cpp) ──────────────────
@@ -78,7 +81,7 @@ class StereoDepthEstimator : public rclcpp::Node {
     // ── Point Cloud (depth_estimator/pointcloud.cpp) ───────────────────────
     void publishPointCloudXYZ(const cv::Mat& disparity_lowres, const rclcpp::Time& ts);
     void publishPointCloudColor(const cv::Mat& disparity_lowres, const cv::Mat& color_rect, const rclcpp::Time& ts);
-    void publishPointCloudNav(const cv::Mat& disparity_lowres, const rclcpp::Time& ts);
+    void publishPointCloudNav(const cv::Mat& disparity_lowres, const cv::Mat& confidence, const rclcpp::Time& ts);
     // ── Footprint Overlay, Mask & Cutout (depth_estimator/publishing.cpp) ──
     void computeFootprintMaskCalib();
     void publishFootprintOverlay(const cv::Mat& color_rect, const rclcpp::Time& ts);
@@ -214,6 +217,16 @@ class StereoDepthEstimator : public rclcpp::Node {
     std::string nav_frame_;
     std::string pointcloud_nav_topic_;
     double nav_roi_x_min_, nav_roi_x_max_, nav_roi_half_width_, nav_roi_z_min_, nav_roi_z_max_;
+
+    // Temporal evidence filter: decides whether a detection is believable
+    // before the costmap ever sees it. STVL then decides how long a believed
+    // obstacle persists — a different question.
+    EvidenceGrid evidence_;
+    std::string evidence_frame_;
+    rclcpp::Time last_evidence_stamp_{0, 0, RCL_ROS_TIME};
+    bool evidence_enabled_{true};
+    double confidence_full_trust_m_{0.8};
+    double confidence_no_trust_m_{2.0};
 
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;

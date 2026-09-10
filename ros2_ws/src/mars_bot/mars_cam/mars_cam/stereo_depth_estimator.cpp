@@ -68,6 +68,20 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     this->declare_parameter<double>("nav_roi.z_min", 0.02);
     this->declare_parameter<double>("nav_roi.z_max", 0.36);
 
+    // Temporal evidence filter — see include/mars_cam/evidence_grid.hpp.
+    this->declare_parameter<bool>("evidence.enabled", true);
+    this->declare_parameter<std::string>("evidence.frame", "odom");
+    this->declare_parameter<double>("evidence.voxel_size", 0.05);
+    this->declare_parameter<double>("evidence.mark_threshold", 3.0);
+    this->declare_parameter<double>("evidence.clear_threshold", 0.5);
+    this->declare_parameter<double>("evidence.decay_per_second", 1.0);
+    this->declare_parameter<int>("evidence.min_points_per_voxel", 4);
+    this->declare_parameter<double>("evidence.near_field_range", 0.6);
+    this->declare_parameter<double>("evidence.near_field_weight", 0.75);
+    this->declare_parameter<double>("evidence.max_score", 6.0);
+    this->declare_parameter<double>("evidence.confidence_full_trust_m", 0.8);
+    this->declare_parameter<double>("evidence.confidence_no_trust_m", 2.0);
+
     // VPI creation parameters
     this->declare_parameter<int>("max_disparity", 64);
     this->declare_parameter<int>("include_diagonals", 1);
@@ -120,6 +134,23 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     nav_roi_half_width_ = this->get_parameter("nav_roi.half_width").as_double();
     nav_roi_z_min_ = this->get_parameter("nav_roi.z_min").as_double();
     nav_roi_z_max_ = this->get_parameter("nav_roi.z_max").as_double();
+
+    evidence_enabled_ = this->get_parameter("evidence.enabled").as_bool();
+    evidence_frame_ = this->get_parameter("evidence.frame").as_string();
+    confidence_full_trust_m_ = this->get_parameter("evidence.confidence_full_trust_m").as_double();
+    confidence_no_trust_m_ = this->get_parameter("evidence.confidence_no_trust_m").as_double();
+    {
+        EvidenceParams ep;
+        ep.voxel_size = this->get_parameter("evidence.voxel_size").as_double();
+        ep.mark_threshold = this->get_parameter("evidence.mark_threshold").as_double();
+        ep.clear_threshold = this->get_parameter("evidence.clear_threshold").as_double();
+        ep.decay_per_second = this->get_parameter("evidence.decay_per_second").as_double();
+        ep.min_points_per_voxel = static_cast<int>(this->get_parameter("evidence.min_points_per_voxel").as_int());
+        ep.near_field_range = this->get_parameter("evidence.near_field_range").as_double();
+        ep.near_field_weight = this->get_parameter("evidence.near_field_weight").as_double();
+        ep.max_score = this->get_parameter("evidence.max_score").as_double();
+        evidence_.set_params(ep);
+    }
 
     max_disparity_ = this->get_parameter("max_disparity").as_int();
     include_diagonals_ = this->get_parameter("include_diagonals").as_int();
@@ -458,8 +489,11 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
 
     // ── Extract disparity from VPI ─────────────────────────────────────────
     cv::Mat disparity_float;
+    cv::Mat confidence;
     if (need_sgm) {
         disparity_float = extractDisparity();
+        if (pub_pointcloud_nav && evidence_enabled_)
+            confidence = extractConfidence();
         if (disparity_float.empty()) {
             cleanupSGMWraps();
             return;
@@ -499,7 +533,7 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     if (pub_pointcloud)
         publishPointCloudXYZ(disparity_lowres, timestamp);
     if (pub_pointcloud_nav)
-        publishPointCloudNav(disparity_lowres, timestamp);
+        publishPointCloudNav(disparity_lowres, confidence, timestamp);
     if (pub_pointcloud_color)
         publishPointCloudColor(disparity_lowres, left_color_rect, timestamp);
     const auto t_pc = clock::now();

@@ -140,6 +140,40 @@ arm_camera_driver:
     nav_roi.z_min: 0.02
     nav_roi.z_max: 0.36        # matches STVL max_obstacle_height
 
+    # ── Temporal evidence filter ──────────────────────────────────────────
+    #
+    # Answers "should I believe this detection?" BEFORE the costmap sees it.
+    # Without it a single bad stereo frame becomes a lethal voxel, nav2
+    # correctly brakes, the next frame clears it, and the robot stutters.
+    # STVL's voxel_decay answers a different question — how long a *believed*
+    # obstacle persists without support — and is not a substitute for this.
+    #
+    # A voxel gains at most ~1.0 per frame (its mean point confidence), so
+    # mark_threshold 3.0 means roughly 3-4 consistent observations. At 8Hz
+    # that is about half a second before a normal-range obstacle is marked.
+    #
+    # clear_threshold is far below mark_threshold on purpose. Equal thresholds
+    # chatter occupied/free around noisy boundaries; once a chair is believed,
+    # disbelieving it should take much more than one missed frame.
+    #
+    # near_field_* is the collision-safety bypass: something close AND
+    # confidently matched is marked immediately, without the temporal wait.
+    evidence.enabled: true
+    evidence.frame: "odom"              # must not move with the robot
+    evidence.voxel_size: 0.05           # matches STVL voxel_size
+    evidence.mark_threshold: 3.0
+    evidence.clear_threshold: 0.5
+    evidence.decay_per_second: 1.0
+    evidence.min_points_per_voxel: 4    # fewer than this is a mismatch, not an object
+    evidence.near_field_range: 0.6
+    evidence.near_field_weight: 0.75
+    evidence.max_score: 6.0
+    # Confidence falls linearly from 1.0 to 0.0 across this range, because
+    # disparity shrinks as 1/Z: the same 1px matching error is worth 6mm at
+    # 1m and 24cm at 2m. A far point should not carry a near point's authority.
+    evidence.confidence_full_trust_m: 0.8
+    evidence.confidence_no_trust_m: 2.0
+
     # ── VPI SGM — Creation parameters (changing these rebuilds the CUDA payload) ──
     #
     # max_disparity: search range in pixels. Objects closer than
