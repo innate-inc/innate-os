@@ -25,10 +25,11 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from innate_skills.demonstration_skill import LiveGestureObservation, _DemonstrationSkill
+from innate_skills.imitation_runtime import LiveObservation, _ImitationSkill
 
 from innate import SkillOutput
-from innate.demo_actions import (
+from innate.demonstration import Demonstration
+from innate.imitation_actions import (
     ACTION_HELP,
     FIXED_ACTIONS,
     MOTION_ACTIONS,
@@ -41,11 +42,10 @@ from innate.demo_actions import (
     stuck_hint,
     with_limits,
 )
-from innate.demo_policy import DemonstrationPolicy
-from innate.gesture import Gesture
+from innate.imitation_policy import ImitationPolicy
 
 # A demonstration recorded on this robot. Any finalized episode works; see
-# docs/skills/gesture-imitation.md for what the loader requires.
+# docs/skills/imitate-demonstration.md for what the loader requires.
 DEMONSTRATION = ""
 
 REACH_WITH_BASE = """Reach costs load. The shoulder and elbow servos heat up holding an extended pose, and a sustained
@@ -228,15 +228,17 @@ not a claim of success. People in view are normal context, not an obstruction; s
 person actually in the path of the motion you are about to make.
 """
 
-TASK = """
-THE TASK, stated explicitly: you are holding a plastic toy lightsaber. Slash the prop cactus with
-it so the cactus is knocked off its box. Then release the lightsaber and set it aside. Then pick
-up the fallen cactus and place it back on top of the box it came from, and release it there.
-Four stages: slash, drop the saber, pick up the cactus, put the cactus back on the box.
+# Appended only when the operator describes the task. Everything above is
+# identical either way, so the description is the single variable between a run
+# that must infer the task and one that is told it.
+TASK_TEMPLATE = """
+THE TASK, stated explicitly: {task}
+The recording shows this same task. Use the description to resolve what the
+recording is ambiguous about, not to override what it shows you.
 """
 
 
-def build_instructions(allowed, told, chunk_size):
+def build_instructions(allowed, task, chunk_size):
     """The prompt for one run. Only the actions this run permits are described:
     describing a tool the model cannot call is noise it has to resolve, and it
     would keep proposing the missing one and collecting rejections."""
@@ -268,21 +270,21 @@ def build_instructions(allowed, told, chunk_size):
             ),
         )
     )
-    return with_limits(text + (TASK if told else ""))
+    return with_limits(text + (TASK_TEMPLATE.format(task=task) if task else ""))
 
 
-class _SlashAndPickPolicy(DemonstrationPolicy):
+class _RunPolicy(ImitationPolicy):
     """The run's planner with this skill's action vocabulary."""
 
 
-class _SlashAndPickCactus(_DemonstrationSkill):
+class _ImitationRun(_ImitationSkill):
     """Shared implementation for both variants. Underscore-prefixed so the skill
     registry treats it as a helper base rather than a third skill."""
 
-    instructions = GENERAL
-    # A task-shaped description of the scene. Empty for the untold variant: this
-    # field reaches the model in every observation, so it is the main leak path.
-    object_description = ""
+    # The task description for this run; empty means infer it from the recording.
+    # It reaches the model in the prompt and in every observation, so it is the
+    # one field that can give the answer away.
+    task = ""
     decision_timeout = 175
     grip_strength = 0.4
     overview_frames = 24
@@ -295,9 +297,9 @@ class _SlashAndPickCactus(_DemonstrationSkill):
     time_budget_s = 1200
 
     def make_policy(self, demo):
-        policy = _SlashAndPickPolicy(demo, self.chunk_size)
+        policy = _RunPolicy(demo, self.chunk_size)
         policy.allowed = self.allowed
-        policy.instructions = build_instructions(self.allowed, bool(self.object_description), self.chunk_size)
+        policy.instructions = build_instructions(self.allowed, self.task, self.chunk_size)
         # record_phases refuses to run before a detailed look; the forced looks
         # the skill hands it ARE that look.
         policy.inspected_detail = True
@@ -321,7 +323,7 @@ class _SlashAndPickCactus(_DemonstrationSkill):
             "measured_pose": measured["pose"],
         }
 
-    def _run(self, demonstration, chunk_size, overview_frames, frame_selection, motions):
+    def _run(self, demonstration, task, chunk_size, overview_frames, frame_selection, motions):
         from ament_index_python.packages import get_package_share_directory
 
         if type(chunk_size) is not int or not 1 <= chunk_size <= 10:
@@ -331,12 +333,13 @@ class _SlashAndPickCactus(_DemonstrationSkill):
             self.fail("overview_frames must be an integer from 6 to 48")
         if frame_selection not in ("both", "keyframes", "uniform"):
             self.fail("frame_selection must be both, keyframes or uniform")
+        self.task = task.strip()
         try:
             self.allowed = parse_actions(**motions)
         except ValueError as exc:
             self.fail(str(exc))
         self.frame_selection = frame_selection
-        demo = Gesture(
+        demo = Demonstration(
             demonstration,
             image_time_reference=True,
             max_frames=overview_frames,
@@ -346,10 +349,12 @@ class _SlashAndPickCactus(_DemonstrationSkill):
         # transitions sampled closely. Loading twice costs about half a second.
         self.survey = None
         if frame_selection == "both":
-            self.survey = Gesture(demonstration, image_time_reference=True, max_frames=overview_frames, uniform=True)
+            self.survey = Demonstration(
+                demonstration, image_time_reference=True, max_frames=overview_frames, uniform=True
+            )
             close = event_frames(self.survey.grip_events, len(self.survey.poses))
             if close:
-                demo = Gesture(demonstration, image_time_reference=True, frame_indices=close)
+                demo = Demonstration(demonstration, image_time_reference=True, frame_indices=close)
         # The highest shoulder angle the recording ever needed, over every frame the
         # model is shown. The demonstration finishing below it is the proof that a
         # higher angle means reaching rather than a harder task.
@@ -368,7 +373,7 @@ class _SlashAndPickCactus(_DemonstrationSkill):
             self.fail("Demonstration robot model differs from the running robot")
         policy = self.make_policy(demo)
         root = Path(os.environ.get("INNATE_OS_ROOT", Path(__file__).resolve().parents[2]))
-        run = root / "workspace/custom_skills/.gesture_runs" / ("slashpick-" + uuid.uuid4().hex)
+        run = root / "workspace/custom_skills/.imitation_runs" / ("slashpick-" + uuid.uuid4().hex)
         run.mkdir(parents=True)
         (run / "manifest.json").write_text(
             json.dumps(
@@ -378,7 +383,7 @@ class _SlashAndPickCactus(_DemonstrationSkill):
                     "model": "gpt-6-astra",
                     "model_sha256": demo.model_hash,
                     "chunk_size": chunk_size,
-                    "told_the_task": bool(self.object_description),
+                    "task": self.task,
                     "frame_selection": frame_selection,
                     "overview_frames": overview_frames,
                     "motion_actions": list(self.allowed),
@@ -391,7 +396,7 @@ class _SlashAndPickCactus(_DemonstrationSkill):
             str(demo.path),
             len(demo.poses),
             chunk_size=chunk_size,
-            told_the_task=bool(self.object_description),
+            task=self.task,
             frame_selection=frame_selection,
             motion_actions=list(self.allowed),
             overview=[f["index"] for f in demo.frames],
@@ -414,7 +419,7 @@ class _SlashAndPickCactus(_DemonstrationSkill):
             # whatever the last run left — re-close on it, or every motion carries
             # that stale j6 and the first one lets go of the prop.
             self.manipulation.gripper_close(strength=self.grip_strength, duration=0.8)
-            monitor = LiveGestureObservation()
+            monitor = LiveObservation()
             started = after = time.monotonic()
             for step in range(self.max_steps):
                 if time.monotonic() - started > self.time_budget_s:
@@ -431,9 +436,10 @@ class _SlashAndPickCactus(_DemonstrationSkill):
                     shoulder_limit_rad=shoulder_limit,
                     demo_joint_range=joint_envelope,
                 )
-                # Only the told variant names the scene; the untold one must not.
-                if self.object_description:
-                    observation["object"] = self.object_description
+                # A described run names the scene; an inferring run must not, or the
+                # description would leak the answer the ablation is measuring.
+                if self.task:
+                    observation["task"] = self.task
                 for name, image in observation["images"].items():
                     (run / f"{step:03d}_{name}.jpg").write_bytes(base64.b64decode(image))
 
@@ -596,20 +602,24 @@ class _SlashAndPickCactus(_DemonstrationSkill):
                     monitor.close()
 
 
-class SlashAndPickCactusNoPrompt(_SlashAndPickCactus):
-    """Infer the task from the recorded demonstration alone and carry it out.
-    The model is told how to read an in-context demonstration and nothing about
-    what the task is. Half of an ablation against slash_and_pick_cactus_with_prompt,
-    which is the same skill with the task spelled out. Supervised, arm-only apart
-    from small base adjustments; the run starts holding the prop and will release
-    it. Clear the workspace and keep a hand on Stop.
-    """
+class ImitateDemonstration(_ImitationRun):
+    """Watch a recorded episode and carry the same task out on the live scene.
 
-    object_description = ""
+    There is no trained policy and no replayed trajectory: the recording is the
+    model's context, and every move is a fresh decision from it plus the live
+    cameras. Leave `task` empty and the task must be inferred from the recording
+    alone; fill it in and the same run is told what it is looking at, which makes
+    the pair an ablation on how much the demonstration carries by itself.
+
+    Supervised and arm-only apart from small base adjustments. The run may open
+    the gripper, so anything held can be released deliberately. Start from a
+    healthy arm on a clear workspace with a hand on Stop.
+    """
 
     def execute(
         self,
         demonstration: str = DEMONSTRATION,
+        task: str = "",
         chunk_size: int = 1,
         overview_frames: int = 24,
         frame_selection: Literal["both", "keyframes", "uniform"] = "both",
@@ -619,30 +629,4 @@ class SlashAndPickCactusNoPrompt(_SlashAndPickCactus):
         base_step: bool = True,
     ) -> SkillOutput:
         motions = {"joint_step": joint_step, "ee_absolute": ee_absolute, "ee_delta": ee_delta, "base_step": base_step}
-        return self._run(demonstration, chunk_size, overview_frames, frame_selection, motions)
-
-
-class SlashAndPickCactusWithPrompt(_SlashAndPickCactus):
-    """Slash the prop cactus with the held toy lightsaber, drop the saber, then
-    pick the cactus up and put it back on its box. Same implementation as
-    slash_and_pick_cactus_no_prompt, with the task stated in the prompt as well as
-    shown in the demonstration. Supervised, arm-only apart from small base
-    adjustments; the run starts holding the prop and will release it. Clear the
-    workspace and keep a hand on Stop.
-    """
-
-    object_description = "prop cactus on a box, and a plastic toy lightsaber currently held"
-
-    def execute(
-        self,
-        demonstration: str = DEMONSTRATION,
-        chunk_size: int = 1,
-        overview_frames: int = 24,
-        frame_selection: Literal["both", "keyframes", "uniform"] = "both",
-        joint_step: bool = True,
-        ee_absolute: bool = True,
-        ee_delta: bool = False,
-        base_step: bool = True,
-    ) -> SkillOutput:
-        motions = {"joint_step": joint_step, "ee_absolute": ee_absolute, "ee_delta": ee_delta, "base_step": base_step}
-        return self._run(demonstration, chunk_size, overview_frames, frame_selection, motions)
+        return self._run(demonstration, task, chunk_size, overview_frames, frame_selection, motions)

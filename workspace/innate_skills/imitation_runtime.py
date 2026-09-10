@@ -18,22 +18,22 @@ import uuid
 
 from brain_client.common.geometry import quat_to_rpy
 from innate import HeadState, MainImage, Manipulation, Mobility, Skill, WristImage
-from innate.demo_actions import (
+from innate.demonstration import forward_poses
+from innate.icl_trace import ICL_TRACE_TOPIC, IclTrace
+from innate.imitation_actions import (
     BASE_LATERAL_FLOOR,
     BASE_LATERAL_PER_M,
     BASE_YAW_FLOOR,
     BASE_YAW_PER_M,
     joint_target,
 )
-from innate.gesture import forward_poses
-from innate.icl_trace import ICL_TRACE_TOPIC, IclTrace
 
 
 class ServoHardwareFault(ValueError):
     """A driver-reported servo hardware fault, distinct from missing telemetry."""
 
 
-class LiveGestureObservation:
+class LiveObservation:
     """Timestamped snapshots from dedicated subscriptions, with deterministic teardown."""
 
     def __init__(self):
@@ -44,7 +44,7 @@ class LiveGestureObservation:
         from rclpy.qos import qos_profile_sensor_data
         from sensor_msgs.msg import CompressedImage, JointState
 
-        self.node = rclpy.create_node("gesture_observation_" + uuid.uuid4().hex[:8])
+        self.node = rclpy.create_node("imitation_observation_" + uuid.uuid4().hex[:8])
         self.lock = threading.Lock()
         self.values = {}
         topics = [
@@ -154,7 +154,7 @@ class LiveGestureObservation:
         self.node.destroy_node()
 
 
-class _DemonstrationSkill(Skill):
+class _ImitationSkill(Skill):
     """Shared execution for demonstration-conditioned skills. Underscore-prefixed
     so the registry treats it as a helper base rather than a runnable skill."""
 
@@ -185,7 +185,7 @@ class _DemonstrationSkill(Skill):
         origin = self._base_origin
         angle = abs(math.atan2(math.sin(base[2] - origin[2]), math.cos(base[2] - origin[2])))
         if not getattr(self, "_base_step_active", False) and (math.dist(base[:2], origin[:2]) > 0.02 or angle > 0.05):
-            self.fail("Base moved during prop gesture")
+            self.fail("Base moved while the arm was working")
         return observation
 
     def _decide(self, policy, observation, history):
@@ -205,11 +205,11 @@ class _DemonstrationSkill(Skill):
             try:
                 value, error = result.get_nowait()
                 if error:
-                    self.fail("Gesture model request failed (" + error + ")")
+                    self.fail("Demonstration model request failed (" + error + ")")
                 return value
             except queue.Empty:
                 self.sleep(0.05)
-        self.fail("Gesture model request timed out")
+        self.fail("Demonstration model request timed out")
 
     def make_trace(self, run):
         """This run's live mirror for the In Context Learning page. Silent when

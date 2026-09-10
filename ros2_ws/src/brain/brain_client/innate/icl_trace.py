@@ -3,7 +3,7 @@
 """What a demonstration-conditioned run tells the In Context Learning page.
 
 Every event mirrors something the run already writes under its
-``.gesture_runs/<run>/`` directory, so the live page and the run directory
+``.imitation_runs/<run>/`` directory, so the live page and the run directory
 cannot disagree. No ROS here: the skill owns the publisher and passes a
 callable, the same shape as ``skills/overlay.py``.
 """

@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Recorded gesture context and bounded demonstration-conditioned actions.
+"""A recorded episode, read as context rather than replayed as a trajectory.
 
-No ROS or model calls here. Recordings stay joint-space compatible; EE poses
-are derived from the embedded URDF (or explicitly supplied model for old files).
+No ROS and no model calls: this only opens a finalized recording, checks it
+against the contract the skills rely on, and selects the frames worth sending.
+End-effector poses come from the URDF embedded at record time, or from one
+supplied explicitly for a recording made before that was stored.
 """
 
 import base64
@@ -25,7 +27,7 @@ def _chain(xml):
 
     ok, tree = treeFromString(xml)
     if not ok:
-        raise ValueError("Cannot parse gesture URDF")
+        raise ValueError("Cannot parse the recording's URDF")
     chain = tree.getChain("base_link", "ee_link")
     if not chain.getNrOfJoints():
         raise ValueError("Missing base_link -> ee_link chain")
@@ -53,7 +55,7 @@ def forward_poses(xml, names, qpos):
             q[i] = float(row[source])
         frame = kdl.Frame()
         if solver.JntToCart(q, frame) < 0:
-            raise ValueError("Gesture FK failed")
+            raise ValueError("Demonstration FK failed")
         poses.append([*frame.p, *frame.M.GetQuaternion()])
     return np.asarray(poses)
 
@@ -92,7 +94,7 @@ def _text(value):
     return value.decode() if isinstance(value, bytes) else str(value)
 
 
-class Gesture:
+class Demonstration:
     """Load bounded keyframes, not a whole uncompressed video into RAM."""
 
     def __init__(
@@ -119,7 +121,7 @@ class Gesture:
                 or (np.diff(t) < 0).any()
                 or t[-1] <= t[0]
             ):
-                raise ValueError("Gesture needs finite six-joint observations and ordered arm timestamps")
+                raise ValueError("Demonstration needs finite six-joint observations and ordered arm timestamps")
             if action.ndim != 2 or len(action) != len(q) or action.shape[1] < 8 or not np.isfinite(action).all():
                 raise ValueError("Invalid recorded actions")
             base_action = action[:, 6:8]

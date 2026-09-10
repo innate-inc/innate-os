@@ -50,6 +50,7 @@ const ROUTES = [
   { path: "/profiling", key: "profiling", load: () => import("./profiling/main.js") },
   { path: "/calibration", key: "calibration", load: () => import("./calibration/main.js") },
   { path: "/armsdk", key: "armsdk", load: () => import("./armsdk/main.js") },
+  { path: "/icl", key: "icl", load: () => import("./icl/main.js") },
   { path: "/settings", key: "settings", load: () => import("./settings/main.js") },
 ];
 

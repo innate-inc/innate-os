@@ -50,6 +50,17 @@ export const GROUPS = [
     label: null,
     sections: [
       {
+        key: "icl",
+        label: "In Context Learning",
+        // Filmstrip motif: a recorded episode read as the model's context.
+        icon: '<rect x="3" y="6" width="18" height="12" rx="2"/><line x1="9" y1="6" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="18"/><circle cx="6" cy="12" r="1" fill="currentColor" stroke="none"/>',
+      },
+    ],
+  },
+  {
+    label: null,
+    sections: [
+      {
         key: "nav",
         label: "Navigation",
         // Radar motif: sweep arcs and a contact dot, for the live sensor view.

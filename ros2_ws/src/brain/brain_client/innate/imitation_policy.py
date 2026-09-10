@@ -18,8 +18,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from innate.demo_actions import ACTIONS, check_decision
-from innate.gesture import Gesture
+from innate.demonstration import Demonstration
+from innate.imitation_actions import ACTIONS, check_decision
 
 if TYPE_CHECKING:
     from innate.icl_trace import IclTrace
@@ -45,7 +45,7 @@ PHASE_SCHEMA = object_schema(
 PLAN_SCHEMA = object_schema({"phases": {"type": "array", "items": PHASE_SCHEMA, "minItems": 2, "maxItems": 6}})
 
 
-class DemonstrationPolicy:
+class ImitationPolicy:
     """One run's planner. A subclass supplies `instructions` and `allowed`."""
 
     instructions = ""
@@ -89,7 +89,7 @@ class DemonstrationPolicy:
         costs a fraction of a second; the whole episode would not fit."""
         missing = sorted(set(indices) - set(self.frames))
         if missing:
-            extra = Gesture(self.demo.path, frame_indices=missing, image_time_reference=True)
+            extra = Demonstration(self.demo.path, frame_indices=missing, image_time_reference=True)
             self.frames.update({f["index"]: f for f in extra.frames})
 
     def _acting_context(self):
