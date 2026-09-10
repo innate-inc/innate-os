@@ -345,23 +345,51 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
         last_evidence_stamp_ = ts;
         evidence_stats = evidence_.integrate(observations, dt);
         marks = evidence_.confirmed();
-        // Five stages that all fail by silently dropping points, so without a
-        // line in the log the only symptom is an empty topic and no clue which
-        // stage ate them. The stats topic carries the same funnel in machine
-        // form, but only while something subscribes — this is what the operator
-        // standing next to the robot sees in `innate view`.
-        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                             "nav cloud: %zu in corridor -> %zu voxels -> %zu supported -> %zu confirmed "
-                             "(mean weight %.3f, %zu tracked)",
-                             evidence_stats.observations, evidence_stats.voxels_seen, evidence_stats.voxels_supported,
-                             evidence_stats.confirmed, evidence_stats.mean_weight, evidence_stats.tracked);
     } else {
         marks.reserve(observations.size());
         for (const auto& o : observations)
             marks.push_back({o.x, o.y, o.z});
+    }
+
+    // Confirmed cells live in the evidence frame and are republished every
+    // frame for as long as their score survives — that is what remembers an
+    // obstacle through a maneuver that carries it out of the corridor. The cost
+    // is that memory is asserted where the camera is not currently looking, so
+    // odom drift moves it and no observation can correct it.
+    //
+    // Bounding by the corridor would delete the maneuver memory outright, so
+    // the bound is a radius about base_link: far enough to hold an obstacle the
+    // robot is steering around, and no further than STVL's obstacle_range, past
+    // which the point is discarded downstream anyway. Range is taken in the
+    // ground plane, since a tall obstacle must not fall out of the bound for
+    // being tall.
+    const cv::Matx33f odom_to_base = R_odom.t();
+    const float radius_sq = static_cast<float>(evidence_publish_radius_m_ * evidence_publish_radius_m_);
+    std::vector<cv::Vec3f> published;
+    published.reserve(marks.size());
+    for (const auto& m : marks) {
+        const cv::Vec3f in_base = odom_to_base * (cv::Vec3f(m[0], m[1], m[2]) - t_odom);
+        if (in_base[0] * in_base[0] + in_base[1] * in_base[1] > radius_sq)
+            continue;
+        published.push_back(in_base);
+    }
+
+    // Six stages that all fail by silently dropping points, so without a line
+    // in the log the only symptom is an empty topic and no clue which stage ate
+    // them. The stats topic carries the same funnel in machine form, but only
+    // while something subscribes — this is what the operator standing next to
+    // the robot sees in `innate view`.
+    if (evidence_enabled_) {
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "nav cloud: %zu in corridor -> %zu voxels -> %zu supported -> %zu confirmed "
+                             "-> %zu published (mean weight %.3f, %zu tracked)",
+                             evidence_stats.observations, evidence_stats.voxels_seen, evidence_stats.voxels_supported,
+                             evidence_stats.confirmed, published.size(), evidence_stats.mean_weight,
+                             evidence_stats.tracked);
+    } else {
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                              "nav cloud: %zu in corridor -> %zu published (evidence filter OFF)", observations.size(),
-                             marks.size());
+                             published.size());
     }
 
     if (pointcloud_nav_stats_pub_->get_subscription_count() > 0) {
@@ -391,7 +419,9 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
         append_size("voxels_supported", evidence_enabled_ ? evidence_stats.voxels_supported : 0);
         append_size("confirmed", evidence_enabled_ ? evidence_stats.confirmed : 0);
         append_size("tracked", evidence_enabled_ ? evidence_stats.tracked : 0);
-        append_size("published_points", marks.size());
+        append_size("published_points", published.size());
+        append_size("dropped_beyond_radius", marks.size() - published.size());
+        append_float("publish_radius_m", evidence_publish_radius_m_);
         append_float("mean_weight", weighted_points ? weight_sum / static_cast<double>(weighted_points) : 0.0);
         append_float("mean_match_confidence", weighted_points ? match_confidence_sum / static_cast<double>(weighted_points) : 0.0);
         append_float("min_match_confidence", weighted_points ? match_confidence_min : 0.0);
@@ -410,27 +440,25 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
     // observation's sensor origin from the cloud's frame, so an odom-stamped
     // cloud would put that origin at the odom origin — and obstacle_range would
     // then reject everything once the robot drove away from where odom started.
-    const cv::Matx33f odom_to_base = R_odom.t();
     auto cloud = std::make_unique<sensor_msgs::msg::PointCloud2>();
     cloud->header.stamp = ts;
     cloud->header.frame_id = nav_frame_;
     cloud->height = 1;
-    cloud->width = static_cast<uint32_t>(marks.size());
+    cloud->width = static_cast<uint32_t>(published.size());
     cloud->is_dense = true;
     cloud->is_bigendian = false;
 
     sensor_msgs::PointCloud2Modifier mod(*cloud);
     mod.setPointCloud2FieldsByString(1, "xyz");
-    mod.resize(marks.size());
+    mod.resize(published.size());
 
     sensor_msgs::PointCloud2Iterator<float> ix(*cloud, "x");
     sensor_msgs::PointCloud2Iterator<float> iy(*cloud, "y");
     sensor_msgs::PointCloud2Iterator<float> iz(*cloud, "z");
-    for (const auto& m : marks) {
-        const cv::Vec3f in_base = odom_to_base * (cv::Vec3f(m[0], m[1], m[2]) - t_odom);
-        *ix = in_base[0];
-        *iy = in_base[1];
-        *iz = in_base[2];
+    for (const auto& p : published) {
+        *ix = p[0];
+        *iy = p[1];
+        *iz = p[2];
         ++ix;
         ++iy;
         ++iz;

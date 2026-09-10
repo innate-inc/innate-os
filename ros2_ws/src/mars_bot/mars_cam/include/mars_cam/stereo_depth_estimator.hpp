@@ -239,6 +239,7 @@ class StereoDepthEstimator : public rclcpp::Node {
     bool evidence_enabled_{true};
     double confidence_full_trust_m_{0.8};
     double confidence_no_trust_m_{2.0};
+    double evidence_publish_radius_m_{1.20};
 
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;

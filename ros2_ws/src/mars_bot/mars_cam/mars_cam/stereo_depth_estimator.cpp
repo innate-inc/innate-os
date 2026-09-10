@@ -95,6 +95,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     this->declare_parameter<double>("evidence.max_score", 10.0);
     this->declare_parameter<double>("evidence.confidence_full_trust_m", 0.8);
     this->declare_parameter<double>("evidence.confidence_no_trust_m", 2.0);
+    this->declare_parameter<double>("evidence.publish_radius_m", 1.20);
 
     // VPI creation parameters
     this->declare_parameter<int>("max_disparity", 64);
@@ -171,6 +172,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     evidence_frame_ = this->get_parameter("evidence.frame").as_string();
     confidence_full_trust_m_ = this->get_parameter("evidence.confidence_full_trust_m").as_double();
     confidence_no_trust_m_ = this->get_parameter("evidence.confidence_no_trust_m").as_double();
+    evidence_publish_radius_m_ = this->get_parameter("evidence.publish_radius_m").as_double();
     {
         EvidenceParams ep;
         ep.voxel_size = this->get_parameter("evidence.voxel_size").as_double();
