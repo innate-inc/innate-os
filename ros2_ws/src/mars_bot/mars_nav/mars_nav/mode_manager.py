@@ -24,6 +24,7 @@ from lifecycle_msgs.srv import ChangeState, GetState
 from nav2_msgs.srv import LoadMap, SetInitialPose
 from nav2_simple_commander.robot_navigator import BasicNavigator
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Twist
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -50,6 +51,9 @@ CAMERA_OBSTACLE_TOPIC = "/mars/main_camera/points_nav"
 # well as coverage.
 NAV_HEAD_POSITION_DEG = -20
 NAV_HEAD_REASSERT_SEC = 10.0
+NAV_HEAD_MOTION_FRESH_SEC = 0.6
+TELEOP_OVERRIDE_FRESH_SEC = 0.6
+CMD_VEL_EPS = 1e-3
 
 # Nodes that should only be configured (not activated) in specific modes
 configure_only_nodes = {
@@ -288,6 +292,14 @@ class ModeManager(Node):
         # blind the obstacle layer.
         self._head_pub = self.create_publisher(Int32, "/mars/head/set_position", 1)
         self._head_timer = self.create_timer(NAV_HEAD_REASSERT_SEC, self._hold_nav_head_position)
+        self._last_nav_motion_sec = 0.0
+        self._last_teleop_motion_sec = 0.0
+        self._cmd_nav_sub = self.create_subscription(
+            Twist, "/cmd_vel_nav", self._cmd_vel_nav_cb, qos_profile_sensor_data
+        )
+        self._cmd_teleop_sub = self.create_subscription(
+            Twist, "/cmd_vel_teleop", self._cmd_vel_teleop_cb, qos_profile_sensor_data
+        )
 
         # --- TF2: Mapping pose publisher ---
         self.tf_buffer = tf2_ros.Buffer()
@@ -1052,8 +1064,35 @@ class ModeManager(Node):
             self.destroy_subscription(self._camera_points_sub)
             self._camera_points_sub = None
 
+    def _is_motion_cmd(self, msg: Twist) -> bool:
+        return (
+            abs(msg.linear.x) > CMD_VEL_EPS
+            or abs(msg.linear.y) > CMD_VEL_EPS
+            or abs(msg.linear.z) > CMD_VEL_EPS
+            or abs(msg.angular.x) > CMD_VEL_EPS
+            or abs(msg.angular.y) > CMD_VEL_EPS
+            or abs(msg.angular.z) > CMD_VEL_EPS
+        )
+
+    def _cmd_vel_nav_cb(self, msg: Twist):
+        if self._is_motion_cmd(msg):
+            self._last_nav_motion_sec = time.monotonic()
+
+    def _cmd_vel_teleop_cb(self, msg: Twist):
+        if self._is_motion_cmd(msg):
+            self._last_teleop_motion_sec = time.monotonic()
+
     def _hold_nav_head_position(self):
         """Re-assert the navigation head tilt (see the constructor for why)."""
+        if self.current_mode not in ("navigation", "mapfree"):
+            return
+        if self._nav_active_goals == 0:
+            return
+        now = time.monotonic()
+        if now - self._last_nav_motion_sec > NAV_HEAD_MOTION_FRESH_SEC:
+            return
+        if now - self._last_teleop_motion_sec <= TELEOP_OVERRIDE_FRESH_SEC:
+            return
         self._head_pub.publish(Int32(data=NAV_HEAD_POSITION_DEG))
 
     def _check_camera_obstacle_source(self):
