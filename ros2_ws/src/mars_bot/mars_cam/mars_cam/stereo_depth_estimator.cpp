@@ -38,6 +38,14 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     this->declare_parameter<std::string>("left_rectified_color_topic", "/mars/main_camera/left/image_rect_color");
     this->declare_parameter<std::string>("left_rectified_compressed_topic",
                                          "/mars/main_camera/left/image_rect_color/compressed");
+    this->declare_parameter<std::string>("depth_overlay_topic", "/mars/main_camera/depth/overlay");
+    this->declare_parameter<std::string>("height_overlay_topic", "/mars/main_camera/depth/height_above_floor_overlay");
+    this->declare_parameter<double>("depth_overlay_near_m", 0.25);
+    this->declare_parameter<double>("depth_overlay_far_m", 2.0);
+    this->declare_parameter<double>("depth_overlay_alpha", 0.45);
+    this->declare_parameter<double>("height_overlay_min_m", 0.0);
+    this->declare_parameter<double>("height_overlay_max_m", 0.30);
+    this->declare_parameter<double>("height_overlay_alpha", 0.60);
     this->declare_parameter<std::string>("frame_id", "camera_optical_frame");
     this->declare_parameter<int>("jpeg_quality", 80);
     this->declare_parameter<double>("max_fps", 10.0);
@@ -122,6 +130,14 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     right_rectified_topic_ = this->get_parameter("right_rectified_topic").as_string();
     left_rectified_color_topic_ = this->get_parameter("left_rectified_color_topic").as_string();
     left_rectified_compressed_topic_ = this->get_parameter("left_rectified_compressed_topic").as_string();
+    depth_overlay_topic_ = this->get_parameter("depth_overlay_topic").as_string();
+    height_overlay_topic_ = this->get_parameter("height_overlay_topic").as_string();
+    depth_overlay_near_m_ = this->get_parameter("depth_overlay_near_m").as_double();
+    depth_overlay_far_m_ = this->get_parameter("depth_overlay_far_m").as_double();
+    depth_overlay_alpha_ = this->get_parameter("depth_overlay_alpha").as_double();
+    height_overlay_min_m_ = this->get_parameter("height_overlay_min_m").as_double();
+    height_overlay_max_m_ = this->get_parameter("height_overlay_max_m").as_double();
+    height_overlay_alpha_ = this->get_parameter("height_overlay_alpha").as_double();
     frame_id_ = this->get_parameter("frame_id").as_string();
     jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
     max_fps_ = this->get_parameter("max_fps").as_double();
@@ -258,6 +274,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
         this->create_publisher<sensor_msgs::msg::Image>(left_rectified_color_topic_, sensor_qos);
     left_rectified_compressed_pub_ =
         this->create_publisher<sensor_msgs::msg::CompressedImage>(left_rectified_compressed_topic_, sensor_qos);
+    depth_overlay_pub_ = this->create_publisher<sensor_msgs::msg::Image>(depth_overlay_topic_, sensor_qos);
+    height_overlay_pub_ = this->create_publisher<sensor_msgs::msg::Image>(height_overlay_topic_, sensor_qos);
     pointcloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_topic_, sensor_qos);
     pointcloud_nav_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_nav_topic_, sensor_qos);
     pointcloud_nav_stats_pub_ =
@@ -272,6 +290,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     RCLCPP_DEBUG(this->get_logger(), "Publishers created (lazy publishing - only publish when subscribed)");
     RCLCPP_DEBUG(this->get_logger(), "  Point cloud: %s (decimation: %d)", pointcloud_topic_.c_str(),
                  pointcloud_decimation_);
+    RCLCPP_DEBUG(this->get_logger(), "  Depth overlay: %s", depth_overlay_topic_.c_str());
+    RCLCPP_DEBUG(this->get_logger(), "  Height overlay: %s", height_overlay_topic_.c_str());
     RCLCPP_DEBUG(this->get_logger(), "  Point cloud color: %s", pointcloud_color_topic_.c_str());
     RCLCPP_DEBUG(this->get_logger(), "  Point cloud nav stats: %s", pointcloud_nav_stats_topic_.c_str());
     RCLCPP_DEBUG(this->get_logger(), "  Footprint overlay: %s (from %s)", footprint_overlay_topic_.c_str(),
@@ -317,6 +337,8 @@ bool StereoDepthEstimator::anyOutputSubscribed() const {
     return left_rectified_pub_->get_subscription_count() > 0 || right_rectified_pub_->get_subscription_count() > 0 ||
            left_rectified_color_pub_->get_subscription_count() > 0 ||
            left_rectified_compressed_pub_->get_subscription_count() > 0 ||
+           depth_overlay_pub_->get_subscription_count() > 0 ||
+           height_overlay_pub_->get_subscription_count() > 0 ||
            pointcloud_pub_->get_subscription_count() > 0 || pointcloud_color_pub_->get_subscription_count() > 0 ||
            pointcloud_nav_pub_->get_subscription_count() > 0 ||
            pointcloud_nav_stats_pub_->get_subscription_count() > 0 ||
@@ -458,6 +480,8 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     const bool pub_right_rect = right_rectified_pub_->get_subscription_count() > 0;
     const bool pub_left_color = left_rectified_color_pub_->get_subscription_count() > 0;
     const bool pub_left_compressed = left_rectified_compressed_pub_->get_subscription_count() > 0;
+    const bool pub_depth_overlay = depth_overlay_pub_->get_subscription_count() > 0;
+    const bool pub_height_overlay = height_overlay_pub_->get_subscription_count() > 0;
     const bool pub_pointcloud = pointcloud_pub_->get_subscription_count() > 0;
     const bool pub_pointcloud_nav = pointcloud_nav_pub_->get_subscription_count() > 0;
     const bool pub_pointcloud_nav_stats = pointcloud_nav_stats_pub_->get_subscription_count() > 0;
@@ -471,13 +495,14 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     const auto t_sub = clock::now();
 
     const bool has_color = left_input.channels() == 3;
-    const bool need_color_rect = has_color && (pub_left_color || pub_left_compressed || pub_pointcloud_color ||
-                                               pub_footprint_overlay || pub_footprint_cutout);
+    const bool need_color_rect = has_color && (pub_left_color || pub_left_compressed || pub_depth_overlay ||
+                                               pub_height_overlay || pub_pointcloud_color || pub_footprint_overlay ||
+                                               pub_footprint_cutout);
     // Which compute stages the subscribed outputs actually need. SGM (and the
     // filter chain downstream) only for disparity/depth/pointcloud consumers;
     // mono rectification also feeds SGM and the color publishers' mono fallback.
     const bool need_sgm = pub_pointcloud || pub_pointcloud_nav || pub_pointcloud_nav_stats || pub_pointcloud_color ||
-                          pub_unfiltered || pub_disparity || pub_depth;
+                          pub_unfiltered || pub_disparity || pub_depth || pub_depth_overlay || pub_height_overlay;
     const bool need_mono_rect = need_sgm || pub_left_rect || pub_right_rect || pub_left_color || pub_left_compressed;
     const bool need_mask = need_sgm || pub_footprint_overlay || pub_footprint_mask || pub_footprint_cutout;
 
@@ -568,6 +593,10 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     // ── Depth ──────────────────────────────────────────────────────────────
     if (pub_depth)
         publishDepth(disparity_float, timestamp);
+    if (pub_depth_overlay)
+        publishDepthOverlay(disparity_float, left_color_rect, left_rect, has_color, timestamp);
+    if (pub_height_overlay)
+        publishHeightAboveFloorOverlay(disparity_float, left_color_rect, left_rect, has_color, timestamp);
     const auto t_depth = clock::now();
 
     // ── Point clouds ───────────────────────────────────────────────────────
@@ -592,15 +621,16 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
                           "Pipeline %.1fms | sub %.1f | scale %.1f | rectify %.1f | sgm_submit %.1f | "
                           "color_remap %.1f | mono_pub %.1f | color_pub %.1f | footprint %.1f | sgm_sync %.1f | "
                           "extract %.1f | unfilt %.1f | filter %.1f | depth %.1f | pc %.1f | "
-                          "subs[L:%d R:%d C:%d J:%d PC:%d PCC:%d D:%d Di:%d Du:%d FP:%d FM:%d FC:%d col:%d]",
+                          "subs[L:%d R:%d C:%d J:%d Dov:%d Hov:%d PC:%d PCC:%d D:%d Di:%d Du:%d FP:%d FM:%d FC:%d col:%d]",
                           ms(t_end - t_start), ms(t_sub - t_start), ms(t_scale - t_sub), ms(t_rect - t_scale),
                           ms(t_submit - t_rect), ms(t_color_remap - t_submit), ms(t_mono_pub - t_color_remap),
                           ms(t_color_pub - t_mono_pub), ms(t_footprint - t_color_pub), ms(t_sgm - t_footprint),
                           ms(t_extract - t_sgm), ms(t_unfilt - t_extract), ms(t_filter - t_unfilt),
                           ms(t_depth - t_filter), ms(t_pc - t_depth), (int)pub_left_rect, (int)pub_right_rect,
-                          (int)pub_left_color, (int)pub_left_compressed, (int)pub_pointcloud, (int)pub_pointcloud_color,
-                          (int)pub_depth, (int)pub_disparity, (int)pub_unfiltered, (int)pub_footprint_overlay,
-                          (int)pub_footprint_mask, (int)pub_footprint_cutout, (int)has_color);
+                          (int)pub_left_color, (int)pub_left_compressed, (int)pub_depth_overlay,
+                          (int)pub_height_overlay, (int)pub_pointcloud,
+                          (int)pub_pointcloud_color, (int)pub_depth, (int)pub_disparity, (int)pub_unfiltered,
+                          (int)pub_footprint_overlay, (int)pub_footprint_mask, (int)pub_footprint_cutout, (int)has_color);
 
     RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
                           "Filter detail %.1fms | fp_mask %.1f | down %.1f | clamp %.1f | domain %.1f | speckle %.1f | "

@@ -79,6 +79,10 @@ class StereoDepthEstimator : public rclcpp::Node {
     void publishDisparityMsg(const cv::Mat& disparity_float, const rclcpp::Time& ts,
                              rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr& pub);
     void publishDepth(const cv::Mat& disparity_float, const rclcpp::Time& ts);
+    void publishDepthOverlay(const cv::Mat& disparity_float, const cv::Mat& color_rect, const cv::Mat& mono_rect,
+                             bool has_color_input, const rclcpp::Time& ts);
+    void publishHeightAboveFloorOverlay(const cv::Mat& disparity_float, const cv::Mat& color_rect,
+                                        const cv::Mat& mono_rect, bool has_color_input, const rclcpp::Time& ts);
 
     // ── Point Cloud (depth_estimator/pointcloud.cpp) ───────────────────────
     void publishPointCloudXYZ(const cv::Mat& disparity_lowres, const rclcpp::Time& ts);
@@ -155,6 +159,8 @@ class StereoDepthEstimator : public rclcpp::Node {
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr right_rectified_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_rectified_color_pub_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr left_rectified_compressed_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_overlay_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr height_overlay_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_color_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_nav_pub_;
@@ -170,6 +176,8 @@ class StereoDepthEstimator : public rclcpp::Node {
     std::string left_rectified_topic_, right_rectified_topic_;
     std::string left_rectified_color_topic_;
     std::string left_rectified_compressed_topic_;
+    std::string depth_overlay_topic_;
+    std::string height_overlay_topic_;
     std::string pointcloud_topic_;
     std::string pointcloud_color_topic_;
     std::string footprint_cloud_topic_;
@@ -181,6 +189,12 @@ class StereoDepthEstimator : public rclcpp::Node {
     double max_fps_{10.0};
     std::chrono::steady_clock::duration min_process_interval_{};
     int pointcloud_decimation_;
+    double depth_overlay_near_m_{0.25};
+    double depth_overlay_far_m_{2.0};
+    double depth_overlay_alpha_{0.45};
+    double height_overlay_min_m_{0.0};
+    double height_overlay_max_m_{0.30};
+    double height_overlay_alpha_{0.60};
 
     // VPI SGM parameters
     int include_diagonals_;

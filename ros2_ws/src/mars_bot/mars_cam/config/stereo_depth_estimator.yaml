@@ -60,6 +60,8 @@ arm_camera_driver:
     left_topic: "/mars/main_camera/left/image_raw"
     right_topic: "/mars/main_camera/right/image_raw"
     depth_topic: "/mars/main_camera/depth/image_rect_raw"     # 16UC1 mm
+    depth_overlay_topic: "/mars/main_camera/depth/overlay"    # bgr8, depth colormap over rectified left image
+    height_overlay_topic: "/mars/main_camera/depth/height_above_floor_overlay"  # bgr8, height above floor over rectified left image
     disparity_topic: "/mars/main_camera/disparity"             # filtered DisparityImage
     disparity_unfiltered_topic: "/mars/main_camera/disparity_unfiltered"  # raw VPI output
     left_rectified_topic: "/mars/main_camera/left/image_rect"  # mono8 rectified
@@ -99,9 +101,9 @@ arm_camera_driver:
     # variation means another unit will need its own. Values are cumulative —
     # ground_plane_check prints what to ADD, from the corridor fit.
     # See docs/depth_obstacle_notes.md.
-    mount_pitch_correction_deg: -3.420
-    mount_roll_correction_deg: 0.398
-    mount_height_correction_m: -0.0143
+    mount_pitch_correction_deg: 0.0
+    mount_roll_correction_deg: 0.0
+    mount_height_correction_m: 0.0
 
     # ── Arm self-masking ──────────────────────────────────────────────────
     #
@@ -260,6 +262,17 @@ arm_camera_driver:
     #   ~32000 is a good balance; 0 keeps everything.
     confidence_threshold: 20000
 
+    # Depth overlay visualization range (near=red, far=blue) for
+    # /mars/main_camera/depth/overlay. This does not affect depth math or nav.
+    depth_overlay_near_m: 0.25
+    depth_overlay_far_m: 1.2
+    depth_overlay_alpha: 0.6
+    # Height overlay visualization range (blue=near floor, red=high) for
+    # /mars/main_camera/depth/height_above_floor_overlay.
+    height_overlay_min_m: 0.0
+    height_overlay_max_m: 0.30
+    height_overlay_alpha: 0.6
+
     # min_disparity: ignore disparities below this (pixels). 0 = no lower limit.
     #   Increase to ignore very far objects.
     min_disparity: 0
@@ -298,8 +311,9 @@ arm_camera_driver:
       # - bilateral
       - domain_transform
       - speckle
-      # - temporal
       - edge_invalidation
+      - hole_filling
+      - temporal
       - speckle
 
     # ── 0. Downsample ─────────────────────────────────────────────────────
@@ -349,7 +363,7 @@ arm_camera_driver:
     # and near-camera noise. Run this early to save work for later filters.
     depth_clamp.enabled: true
     depth_clamp.min_depth_meters: 0.25  # closer than 1 cm → invalid
-    depth_clamp.max_depth_meters: 2.0   # farther than 2 m → invalid
+    depth_clamp.max_depth_meters: 5.0   # farther than 2 m → invalid
 
     # ── 5. Edge Invalidation ──────────────────────────────────────────────
     # Detects depth edges with Canny, dilates them, and zeroes out disparity
@@ -359,7 +373,7 @@ arm_camera_driver:
     #   canny_low/high: Canny hysteresis thresholds on the normalised disparity.
     #     Lower = more sensitive (detects weaker edges). Typical: low 5–20, high 30–60.
     edge_invalidation.enabled: true
-    edge_invalidation.width: 7
+    edge_invalidation.width: 3
     edge_invalidation.canny_low: 15.0 
     edge_invalidation.canny_high: 45.0
 
