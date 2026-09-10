@@ -1827,29 +1827,26 @@ def assets_fallback_refs() -> tuple[str, ...]:
     return (resolve_fallback_assets_image(),)
 
 
-def _serving_assets_manifest(image: str, fallbacks: tuple[str, ...]) -> tuple[str, dict]:
-    """(ref, manifest) for the first asset image the registry serves.
+def _fallback_assets_manifest(image: str, fallbacks: tuple[str, ...]) -> tuple[str, dict] | None:
+    """(ref, manifest) for the first fallback the registry serves, or None.
 
-    Falling back is a real degradation, since published geometry cannot know
-    about a local pipeline edit. It happens anyway because "push the branch so
-    CI publishes it" is not advice a fork can take, and every input that
-    renames this image can leave the launched world's geometry untouched.
+    LAST resort, after reusing what is installed: the fallback is older
+    geometry by construction, so reaching for it while the store can already
+    serve the world would trade a working install for a downgrade. It exists
+    because "push the branch so CI publishes it" is not advice a fork can take.
     """
-    try:
-        return image, oci.manifest_for_image(image)
-    except oci.OciError:
-        for fallback in fallbacks:
-            try:
-                manifest = oci.manifest_for_image(fallback)
-            except oci.OciError:
-                continue
-            warn(
-                f"No published asset image for this checkout ({shorten_docker_image_ref(image)}); "
-                f"installing the published {ASSETS_FALLBACK_TAG} geometry instead.\n"
-                f"  Your changes under {', '.join(GEOMETRY_INPUT_PATHSPECS)} are NOT in it."
-            )
-            return fallback, manifest
-        raise
+    for fallback in fallbacks:
+        try:
+            manifest = oci.manifest_for_image(fallback)
+        except oci.OciError:
+            continue
+        warn(
+            f"No published asset image for this checkout ({shorten_docker_image_ref(image)}); "
+            f"installing the published {ASSETS_FALLBACK_TAG} geometry instead.\n"
+            f"  Your changes under {', '.join(GEOMETRY_INPUT_PATHSPECS)} are NOT in it."
+        )
+        return fallback, manifest
+    return None
 
 
 def _incomplete_store(image: str, environment_id: str, missing: tuple[str, ...]) -> StackError:
@@ -1946,7 +1943,7 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
         return
 
     try:
-        image, manifest = _serving_assets_manifest(image, fallbacks)
+        manifest = oci.manifest_for_image(image)
     except oci.OciError as exc:
         # The override names something the registry will not serve. Saying "set
         # INNATE_SIM_ASSETS_IMAGE" to someone who just did is no help.
@@ -1960,12 +1957,15 @@ def ensure_sim_assets(config: dict[str, object]) -> None:
             log(f"Reusing the installed geometry (it has everything {environment_id} needs).")
             config["assets_image"] = installed_ref
             return
-        raise StackError(
-            f"The installed sim geometry has nothing for {environment_id!r} ({', '.join(missing)}), and no "
-            f"published asset image serves this checkout: {exc}\n"
-            f"Bake it from the pipeline in sim/tools (see sim/sandbox/README.md), or point "
-            f"INNATE_SIM_ASSETS_IMAGE at an image that carries it."
-        ) from exc
+        served = _fallback_assets_manifest(image, fallbacks)
+        if served is None:
+            raise StackError(
+                f"The installed sim geometry has nothing for {environment_id!r} ({', '.join(missing)}), and no "
+                f"published asset image serves this checkout: {exc}\n"
+                f"Bake it from the pipeline in sim/tools (see sim/sandbox/README.md), or point "
+                f"INNATE_SIM_ASSETS_IMAGE at an image that carries it."
+            ) from exc
+        image, manifest = served
     config["assets_image"] = image
     digest = manifest["layers"][ASSETS_IMAGE_LAYERS.index("work")]["digest"]
 
@@ -2127,12 +2127,15 @@ def install_layer_subtree(
     # copy (ensure_sim_viewer_bundle catches this).
     reusable = populated and (bool(required) or parts[2:3] == [geometry_hash])
     try:
-        image, manifest = _serving_assets_manifest(image, fallbacks)
+        manifest = oci.manifest_for_image(image)
     except oci.OciError:
         if reusable:
             log(f"Reusing the installed {label} (nothing published serves this checkout).")
             return
-        raise
+        served = _fallback_assets_manifest(image, fallbacks)
+        if served is None:
+            raise
+        image, manifest = served
     digest = manifest["layers"][layer_index]["digest"]
     if parts[:1] == [digest] and populated:
         marker.parent.mkdir(parents=True, exist_ok=True)
