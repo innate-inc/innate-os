@@ -29,6 +29,9 @@ const GRADUATION_MAX_WAIT_MS = 25_000;
 const GRANT_GRACE_MS = 15_000;
 // How long a grant waits for the brain to confirm the new toolset before announcing it.
 const GRANT_WAIT_MS = 4_000;
+// How long a persona choice has to come back as the act advancing before it is worth saying
+// the world never took it.
+const PERSONA_ECHO_MS = 8_000;
 
 /** Resolve once `ready()` holds, or when the wait runs out — whichever comes first.
  * @param {() => boolean} ready @param {number} timeoutMs */
@@ -484,6 +487,13 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     if (persona === lastChoice.text && Date.now() - lastChoice.at < 5000) return;
     lastChoice = { text: persona, at: Date.now() };
     session?.sendChallengeEvent?.({ type: "persona", persona });
+    // The choice travels to the world and comes back as the act advancing. When it does not,
+    // the story sits on a screen whose only control has already been used, with nothing said
+    // anywhere: leave the trail in the console, which is all a deployed session has.
+    void held(() => !!profile().persona || !storyRunning(), PERSONA_ECHO_MS).then(() => {
+      if (profile().persona || !storyRunning()) return;
+      console.warn("[story] the world never took the persona:", persona);
+    });
     // An offered character is someone the robot becomes; typed words are a prompt it is handed.
     const offered = (runtime()?.personas ?? []).includes(persona);
     void panel.submitText(offered ? `From now on, you are ${persona}.` : `From now on, your prompt is: ${persona}`);
