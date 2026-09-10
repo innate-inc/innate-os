@@ -11,6 +11,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
@@ -157,6 +158,7 @@ class StereoDepthEstimator : public rclcpp::Node {
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_color_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_nav_pub_;
+    rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pointcloud_nav_stats_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_overlay_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_mask_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_cutout_pub_;
@@ -219,6 +221,7 @@ class StereoDepthEstimator : public rclcpp::Node {
     // pinhole model still fits.
     std::string nav_frame_;
     std::string pointcloud_nav_topic_;
+    std::string pointcloud_nav_stats_topic_;
     double nav_roi_x_min_, nav_roi_x_max_, nav_roi_half_width_, nav_roi_z_min_, nav_roi_z_max_;
 
     // Temporal evidence filter: decides whether a detection is believable
