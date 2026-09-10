@@ -498,6 +498,11 @@ select.skill-input {
    animation: none drops boot-appear's backwards fill so the fade-out transition
    owns opacity even when the mount lands mid-appear (router's 400ms fallback
    removal covers the still-invisible case, where no transition fires). */
+/* Held by a page that may reshape the interface: cover the rail column too. */
+.boot-splash.is-full {
+  left: 0;
+}
+
 .boot-splash.is-leaving {
   animation: none;
   opacity: 0;

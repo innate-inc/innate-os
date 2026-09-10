@@ -15,7 +15,12 @@ let settling = null;
 
 /** @param {() => Promise<unknown>} until */
 export function holdBootSplash(until) {
-  if (document.getElementById("boot-splash")) settling = until;
+  const splash = document.getElementById("boot-splash");
+  if (!splash) return;
+  settling = until;
+  // The splash leaves the rail column uncovered, which is right for an ordinary load and
+  // wrong here: a page that may hide the rail would show the app through that strip.
+  splash.classList.add("is-full");
 }
 
 /** Fade then remove; a fallback timer covers a missed transitionend (a pre-paint start). */
