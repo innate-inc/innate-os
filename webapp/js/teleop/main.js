@@ -113,7 +113,7 @@ function buildCockpit(root) {
   const ribbonStage = realVideo?.el ?? root.querySelector(".video-stage");
   if (ribbonStage instanceof HTMLElement) {
     parts.push(
-      createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, rightRail, ros, session),
+      createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, ros, session),
       createTargetingOverlay(ribbonStage, realVideo?.videoEl ?? null, session),
     );
   }

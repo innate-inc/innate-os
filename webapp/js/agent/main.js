@@ -77,8 +77,7 @@ function buildAgentView(root) {
   const cornerStack = document.createElement("div");
   cornerStack.className = "overlay-stack-top-left";
   root.append(cornerStack);
-  // The row under the camera tiles: the route toggle under the arm tile at the
-  // left, the robot-mic toggle under the map tile at the right.
+  // The row under the camera tiles: the robot-mic toggle, under the map tile at the right.
   const cornerToggles = document.createElement("div");
   cornerToggles.className = "overlay-stack-row";
   const agentState = sharedAgentState();
@@ -255,13 +254,11 @@ function buildAgentView(root) {
       },
     },
   ];
-  // Watching the agent drive is where the projected route earns its keep. The
-  // agent panel owns the right edge here, so the toggle joins the top-left
-  // stack instead of a rail.
+  // Project the planned route onto the main camera while the agent drives.
   const ribbonStage = realVideo?.el ?? feedFrame.querySelector(".video-stage");
   if (ribbonStage instanceof HTMLElement) {
     parts.push(
-      createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, cornerToggles, ros, session),
+      createTrajectoryOverlay(ribbonStage, realVideo?.videoEl ?? null, ros, session),
       createTargetingOverlay(ribbonStage, realVideo?.videoEl ?? null, session),
     );
   }

@@ -25,7 +25,7 @@ body {
   --rail-mark-h: 52px;          /* wordmark block; on phones every page starts below it */
   --type-learned: #5fb8a3;      /* skill-type icon: trained ACT policy */
   --type-replay: #6b93d6;       /* skill-type icon: recorded trajectory */
-  --type-digital: #a389d4;      /* skill-type icon: code/SDK skill */
+  --type-code: #a389d4;         /* skill-type icon: code/SDK skill */
   --eval: #b58ce6;              /* evaluation identity — policy rollouts, never training data */
   --eval-dim: rgb(181 140 230 / 40%);
   --eval-faint: rgb(181 140 230 / 12%);
@@ -1261,7 +1261,7 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
 
 .overlay-stack-row {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 10px;
 }
 
@@ -1931,12 +1931,6 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
 @media (max-width: 780px) {
   .cam-strip-toggle:not([hidden]) {
     display: grid;
-  }
-
-  /* A driving aid for a stage you can see the floor in. Doubled up to
-     outrank .icon-toggle's own display, set further down. */
-  .icon-toggle.traj-toggle {
-    display: none;
   }
 
   .cam-strip.collapsed {
@@ -6560,8 +6554,8 @@ select.episodes-tool {
   color: var(--type-replay);
 }
 
-.skills-pop-type-icon.digital {
-  color: var(--type-digital);
+.skills-pop-type-icon.code {
+  color: var(--type-code);
 }
 
 .skills-pop-type-icon svg {
