@@ -54,6 +54,10 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     this->declare_parameter<double>("mount_pitch_correction_deg", 0.0);
     this->declare_parameter<double>("mount_roll_correction_deg", 0.0);
 
+    // How long an arm-footprint cloud stays usable. dynamic_footprint publishes
+    // at 15Hz against this node's 8Hz, so anything much older means it stopped.
+    this->declare_parameter<double>("footprint_max_age_sec", 0.5);
+
     // VPI creation parameters
     this->declare_parameter<int>("max_disparity", 64);
     this->declare_parameter<int>("include_diagonals", 1);
@@ -97,6 +101,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     footprint_cutout_topic_ = this->get_parameter("footprint_cutout_topic").as_string();
     mount_pitch_correction_deg_ = this->get_parameter("mount_pitch_correction_deg").as_double();
     mount_roll_correction_deg_ = this->get_parameter("mount_roll_correction_deg").as_double();
+    footprint_max_age_sec_ = this->get_parameter("footprint_max_age_sec").as_double();
 
     max_disparity_ = this->get_parameter("max_disparity").as_int();
     include_diagonals_ = this->get_parameter("include_diagonals").as_int();

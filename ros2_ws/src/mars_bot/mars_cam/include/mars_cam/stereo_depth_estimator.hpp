@@ -195,6 +195,9 @@ class StereoDepthEstimator : public rclcpp::Node {
     double mount_pitch_correction_deg_{0.0};
     double mount_roll_correction_deg_{0.0};
 
+    // Beyond this age the arm-footprint mask is dropped rather than reused.
+    double footprint_max_age_sec_{0.5};
+
     // Rectification maps (calibration resolution)
     cv::Mat map1_left_, map2_left_;
     cv::Mat map1_right_, map2_right_;

@@ -183,10 +183,29 @@ void StereoDepthEstimator::computeFootprintMaskCalib() {
     if (!cloud || cloud->width * cloud->height == 0)
         return;
 
+    // A stale mask is the dangerous failure: it keeps blanking wherever the arm
+    // used to be, which can hide a real obstacle there, while leaving the arm's
+    // new position unmasked anyway. Dropping it instead degrades to a phantom
+    // obstacle on the arm — annoying, but it stops the robot rather than
+    // driving it into something.
+    const double age_sec = (this->now() - rclcpp::Time(cloud->header.stamp)).seconds();
+    if (age_sec > footprint_max_age_sec_) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                             "Footprint cloud is %.2fs stale (limit %.2fs) — arm not masked. Is dynamic_footprint up?",
+                             age_sec, footprint_max_age_sec_);
+        return;
+    }
+
     const float fx = static_cast<float>(P1_.at<double>(0, 0));
     const float fy = static_cast<float>(P1_.at<double>(1, 1));
     const float cx = static_cast<float>(P1_.at<double>(0, 2));
     const float cy = static_cast<float>(P1_.at<double>(1, 2));
+
+    // The cloud arrives in camera_optical_frame but P1 projects from the
+    // RECTIFIED frame, so the arm corners need rotating the opposite way to the
+    // point cloud. Without this the mask sits several pixels off the arm and
+    // its edges leak through as obstacles.
+    const cv::Matx33f optical_to_rectified = cloud_rotation_.t();
 
     std::vector<cv::Point2f> projected_pts;
 
@@ -195,12 +214,12 @@ void StereoDepthEstimator::computeFootprintMaskCalib() {
     sensor_msgs::PointCloud2ConstIterator<float> iz(*cloud, "z");
 
     for (; ix != ix.end(); ++ix, ++iy, ++iz) {
-        const float X = *ix;
-        const float Y = *iy;
-        const float Z = *iz;
-        if (Z <= 0.0f || !std::isfinite(X) || !std::isfinite(Y) || !std::isfinite(Z))
+        if (!std::isfinite(*ix) || !std::isfinite(*iy) || !std::isfinite(*iz))
             continue;
-        projected_pts.emplace_back(fx * X / Z + cx, fy * Y / Z + cy);
+        const cv::Vec3f p = optical_to_rectified * cv::Vec3f(*ix, *iy, *iz);
+        if (p[2] <= 0.0f)
+            continue;
+        projected_pts.emplace_back(fx * p[0] / p[2] + cx, fy * p[1] / p[2] + cy);
     }
 
     if (projected_pts.size() >= 3) {
