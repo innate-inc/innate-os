@@ -32,9 +32,17 @@ struct EvidenceParams {
     double decay_per_second{1.0};
     // A handful of isolated points is a mismatch, not an object.
     int min_points_per_voxel{4};
-    // Collision safety: close and confident skips the temporal wait entirely.
+    // Collision safety: close and confident short-circuits the temporal wait.
     double near_field_range{0.6};
     double near_field_weight{0.75};
+    // ...but not from a single frame. At one frame this bypass was the widest
+    // path to a phantom: one bad frame anywhere inside near_field_range set the
+    // score straight to mark_threshold, and clearing from there takes
+    // (mark_threshold - clear_threshold) / decay_per_second = 2.5s of braking
+    // for a glitch that lasted 125ms. Two consecutive frames costs 125ms of
+    // reaction time and removes the single-frame path entirely. 1 restores the
+    // old behaviour.
+    int near_field_frames{2};
     // How long an obstacle is remembered once it stops being observed:
     // (max_score - clear_threshold) / decay_per_second. Long enough to cover a
     // maneuver during which the obstacle leaves the corridor, and to cover the
@@ -111,7 +119,12 @@ class EvidenceGrid {
 
             const bool near_and_certain = b->min_range <= params_.near_field_range &&
                                           b->weight_sum / b->count >= params_.near_field_weight;
-            if (near_and_certain) {
+            // Consecutive, so two glitches a second apart cannot add up to a
+            // bypass. Any frame that fails to corroborate resets the run, here
+            // and in decay_unsupported.
+            cell.near_hits = near_and_certain ? cell.near_hits + 1 : 0;
+
+            if (near_and_certain && cell.near_hits >= params_.near_field_frames) {
                 cell.score = std::max(cell.score, params_.mark_threshold);
                 cell.confirmed = true;
             } else if (cell.score >= params_.mark_threshold) {
@@ -160,6 +173,7 @@ class EvidenceGrid {
     struct Cell {
         double score{0.0};
         bool confirmed{false};
+        int near_hits{0};
     };
 
     template <typename Supported>
@@ -172,6 +186,7 @@ class EvidenceGrid {
                 ++it;
                 continue;
             }
+            it->second.near_hits = 0;
             it->second.score -= drop;
             if (it->second.confirmed && it->second.score < params_.clear_threshold)
                 it->second.confirmed = false;

@@ -92,6 +92,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
     this->declare_parameter<int>("evidence.min_points_per_voxel", 4);
     this->declare_parameter<double>("evidence.near_field_range", 0.6);
     this->declare_parameter<double>("evidence.near_field_weight", 0.75);
+    this->declare_parameter<int>("evidence.near_field_frames", 2);
     this->declare_parameter<double>("evidence.max_score", 10.0);
     this->declare_parameter<double>("evidence.confidence_full_trust_m", 0.8);
     this->declare_parameter<double>("evidence.confidence_no_trust_m", 2.0);
@@ -182,6 +183,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions& options)
         ep.min_points_per_voxel = static_cast<int>(this->get_parameter("evidence.min_points_per_voxel").as_int());
         ep.near_field_range = this->get_parameter("evidence.near_field_range").as_double();
         ep.near_field_weight = this->get_parameter("evidence.near_field_weight").as_double();
+        ep.near_field_frames = static_cast<int>(this->get_parameter("evidence.near_field_frames").as_int());
         ep.max_score = this->get_parameter("evidence.max_score").as_double();
         evidence_.set_params(ep);
     }

@@ -115,12 +115,34 @@ TEST(EvidenceGrid, SparseClustersAreRejectedNoMatterHowConfident) {
 
 // --------------------------------------------------------------- near field
 
-TEST(EvidenceGrid, CloseAndConfidentConfirmsImmediately) {
+TEST(EvidenceGrid, CloseAndConfidentConfirmsOnTheSecondFrame) {
     EvidenceGrid grid(defaults());
 
     grid.integrate(blob(0.325f, 0.025f, 0.125f, 0.9f, 40, /*range=*/0.35f), 0.125);
+    EXPECT_FALSE(grid.confirmed_at(0.325f, 0.025f, 0.125f)) << "one frame is a glitch, not a collision";
 
-    EXPECT_TRUE(grid.confirmed_at(0.325f, 0.025f, 0.125f)) << "collision safety cannot wait three frames";
+    grid.integrate(blob(0.325f, 0.025f, 0.125f, 0.9f, 40, /*range=*/0.35f), 0.125);
+    EXPECT_TRUE(grid.confirmed_at(0.325f, 0.025f, 0.125f)) << "collision safety cannot wait the full four frames";
+}
+
+TEST(EvidenceGrid, NearFieldBypassRequiresConsecutiveFrames) {
+    EvidenceGrid grid(defaults());
+
+    grid.integrate(blob(0.325f, 0.025f, 0.125f, 0.9f, 40, /*range=*/0.35f), 0.125);
+    grid.integrate({}, 0.125);
+    grid.integrate(blob(0.325f, 0.025f, 0.125f, 0.9f, 40, /*range=*/0.35f), 0.125);
+
+    EXPECT_FALSE(grid.confirmed_at(0.325f, 0.025f, 0.125f)) << "two glitches a frame apart are still two glitches";
+}
+
+TEST(EvidenceGrid, NearFieldFramesOfOneRestoresTheImmediateBypass) {
+    EvidenceParams p = defaults();
+    p.near_field_frames = 1;
+    EvidenceGrid grid(p);
+
+    grid.integrate(blob(0.325f, 0.025f, 0.125f, 0.9f, 40, /*range=*/0.35f), 0.125);
+
+    EXPECT_TRUE(grid.confirmed_at(0.325f, 0.025f, 0.125f));
 }
 
 TEST(EvidenceGrid, CloseButUncertainStillWaits) {

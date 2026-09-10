@@ -159,7 +159,12 @@ arm_camera_driver:
     # disbelieving it should take much more than one missed frame.
     #
     # near_field_* is the collision-safety bypass: something close AND
-    # confidently matched is marked immediately, without the temporal wait.
+    # confidently matched short-circuits the temporal wait — but not from a
+    # single frame. At one frame this was the widest path to a phantom: one bad
+    # frame inside near_field_range jumped the score straight to
+    # mark_threshold, and clearing from there is 2.5s of braking for a glitch
+    # that lasted 125ms. Two consecutive frames costs 125ms of reaction time
+    # and closes the single-frame path. Set to 1 for the old behaviour.
     evidence.enabled: true
     evidence.frame: "odom"              # must not move with the robot
     evidence.voxel_size: 0.05           # matches STVL voxel_size
@@ -169,6 +174,7 @@ arm_camera_driver:
     evidence.min_points_per_voxel: 4    # fewer than this is a mismatch, not an object
     evidence.near_field_range: 0.6
     evidence.near_field_weight: 0.75
+    evidence.near_field_frames: 2
     # max_score sets how long a depth obstacle is REMEMBERED once it stops being
     # observed: (max_score - clear_threshold) / decay_per_second. 10.0 gives
     # ~9.5s, which covers a normal maneuver while limiting how long a false
