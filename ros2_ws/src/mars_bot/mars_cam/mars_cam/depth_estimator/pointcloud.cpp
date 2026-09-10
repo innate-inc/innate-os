@@ -345,10 +345,23 @@ void StereoDepthEstimator::publishPointCloudNav(const cv::Mat& disparity_lowres,
         last_evidence_stamp_ = ts;
         evidence_stats = evidence_.integrate(observations, dt);
         marks = evidence_.confirmed();
+        // Five stages that all fail by silently dropping points, so without a
+        // line in the log the only symptom is an empty topic and no clue which
+        // stage ate them. The stats topic carries the same funnel in machine
+        // form, but only while something subscribes — this is what the operator
+        // standing next to the robot sees in `innate view`.
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "nav cloud: %zu in corridor -> %zu voxels -> %zu supported -> %zu confirmed "
+                             "(mean weight %.3f, %zu tracked)",
+                             evidence_stats.observations, evidence_stats.voxels_seen, evidence_stats.voxels_supported,
+                             evidence_stats.confirmed, evidence_stats.mean_weight, evidence_stats.tracked);
     } else {
         marks.reserve(observations.size());
         for (const auto& o : observations)
             marks.push_back({o.x, o.y, o.z});
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "nav cloud: %zu in corridor -> %zu published (evidence filter OFF)", observations.size(),
+                             marks.size());
     }
 
     if (pointcloud_nav_stats_pub_->get_subscription_count() > 0) {
