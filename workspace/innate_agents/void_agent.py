@@ -3,9 +3,9 @@
 import json
 from pathlib import Path
 
+from innate_skills.arm.open_gripper import OpenGripper
 from innate_skills.head_emotion import HeadEmotion
 from innate_skills.navigate_to_position import NavigateToPosition
-from innate_skills.open_gripper import OpenGripper
 from innate_skills.pick_any_object import PickAnyObject
 from innate_skills.search_memory import SearchMemory
 from innate_skills.turn_in_place import TurnInPlace

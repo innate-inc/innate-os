@@ -183,7 +183,7 @@ function buildAgentView(root) {
       robotLineCount += 1;
     },
     onSkillStatus: ({ skill, status }) => {
-      if (status === "running" && /(^|\/)(move_straight|navigate_to_position)$/.test(skill)) motionAt = Date.now();
+      if (status === "running" && /(^|\/)navigate_to_position$/.test(skill)) motionAt = Date.now();
       if (status === "running" && /(^|\/)turn_in_place$/.test(skill)) turnedAt = Date.now();
       if (status === "completed" && /(^|\/)search_memory$/.test(skill)) recalledAt = Date.now();
     },
