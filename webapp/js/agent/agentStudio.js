@@ -292,6 +292,11 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       resolve(undefined);
     };
   });
+  // The 3D view builds after that, behind a scrim of its own: coming out from under the
+  // splash into a page whose middle is still loading is the same flash, smaller.
+  const stageReady = new Promise((resolve) =>
+    document.addEventListener("innate:stage-ready", () => resolve(undefined), { once: true }),
+  );
 
   /** @type {any} */ let challenge = null;
   /** @type {any} */ let environment = null;
@@ -1235,7 +1240,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     setCompact,
     /** Resolves once the world has said whether a story is running, so the boot splash can
      * cover the moment rather than the interface appearing and half of it leaving. */
-    settled: () => (session ? knownFromTheWorld : Promise.resolve()),
+    settled: () => (session ? Promise.all([knownFromTheWorld, stageReady]) : Promise.resolve()),
     destroy() {
       unsubOverlay();
       unsubAgent();

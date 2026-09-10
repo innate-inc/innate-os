@@ -6,8 +6,9 @@
 // of the interface, not until that page knows whether it will: the alternative is
 // painting the whole app and taking half of it away a beat later.
 
-// A splash outliving its reason is worse than the flash it prevents.
-const SETTLE_MAX_MS = 6_000;
+// A splash outliving its reason is worse than the flash it prevents. Long enough for a
+// cold sim to build its world under software GL, not long enough to look hung.
+const SETTLE_MAX_MS = 12_000;
 
 /** @type {(() => Promise<unknown>) | null} */
 let settling = null;

@@ -422,6 +422,9 @@ export function createSimStage(
     loadingLabel.textContent = text;
   };
   const hideLoading = () => {
+    // The view is as ready as it will get: whoever covers the page while it builds
+    // (the boot splash) can come down now.
+    document.dispatchEvent(new CustomEvent("innate:stage-ready"));
     loading.style.opacity = "0";
     // transitionend may not fire with reduced motion or before paint.
     // Keep the overlay for subsequent switches.
