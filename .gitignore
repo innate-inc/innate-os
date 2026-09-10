@@ -97,6 +97,7 @@ workspace/.training_pending/
 
 # Per-machine challenge state, written at runtime.
 workspace/challenges.json
+workspace/challenge_context.json
 
 # Per-skill persistent key-value stores (Skill.storage, skills/types.py).
 workspace/skill_storage/

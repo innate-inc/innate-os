@@ -179,13 +179,13 @@ export class RosClient {
   }
 
   /**
-   * Fire-and-forget publish. Dropped (not queued) when the socket is down —
-   * callers that care observe onStateChange.
+   * Publish, or report that the socket could not take it: dropped, never queued.
    * @param {string} topic
    * @param {object} msg
+   * @returns {boolean} whether it went out
    */
   publish(topic, msg) {
-    this.#send({ op: "publish", topic, msg });
+    return this.#send({ op: "publish", topic, msg });
   }
 
   /**
@@ -568,10 +568,11 @@ export class RosClient {
   }
 
   /** @param {object} payload */
+  /** @returns {boolean} whether the socket was open to take it; a closed one drops it silently */
   #send(payload) {
-    if (this.#ws?.readyState === WebSocket.OPEN) {
-      this.#ws.send(JSON.stringify(payload));
-    }
+    if (this.#ws?.readyState !== WebSocket.OPEN) return false;
+    this.#ws.send(JSON.stringify(payload));
+    return true;
   }
 
   /** @param {Error} err */

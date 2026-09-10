@@ -1,0 +1,21 @@
+{
+  "display_name": "Nowhere",
+  "physics": {
+    "collision_dir": "void_split_v2",
+    "visual_dir": "void_visual"
+  },
+  "navigation": { "map_yaml": "map/void.yaml" },
+  "viewer": {
+    "type": "glb",
+    "atmosphere": "void",
+    "model": "models/void/void.glb",
+    "collision_dir": "physics/void_collisions"
+  },
+  "spawn": { "x": 0.0, "y": 0.0, "yaw_degrees": 0.0 },
+  "attribution": {
+    "name": "Nowhere",
+    "author": "Innate Inc",
+    "license": "Apache-2.0",
+    "source": "sim/tools/build_void.py"
+  }
+}
