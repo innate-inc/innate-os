@@ -107,7 +107,26 @@ ros2 run mars_cam stereo_depth_benchmark run \
   --config /home/jetson1/innate-os/recordings/stereo_depth_benchmark.yaml
 ```
 
-Outputs under `output_dir` (default `recordings/stereo_benchmark_runs`):
+The runner now always creates a **timestamped experiment folder** under `output_dir`.
+
+Folder naming is dynamic from the YAML models used:
+
+- model slug from enabled model names (in YAML order)
+- canonical bag timestamp
+- current run timestamp
+
+Format:
+
+`<model_slug>__bag_<canonical_bag_YYYYMMDD_HHMMSS>__run_<current_YYYYMMDD_HHMMSS>`
+
+If the joined model slug is very long, it is shortened automatically while keeping the
+same YAML-order prefix.
+
+Example:
+
+`classical_stereo_vs_fast_foundation_23_36_37_i8_vs_fast_foundation_20_30_48_i8__bag_20260911_005944__run_20260911_171416`
+
+Outputs live inside that run folder:
 
 - per-model run bags
 - `stereo_depth_benchmark_*.json`
@@ -168,108 +187,57 @@ Common depth topics:
 - classical: `/mars/main_camera/depth/image_rect_raw`
 - fast foundation: `/stereo/fast_foundation/depth`
 
-## 8) Generate quantitative charts from all valid points
+## 8) Generate all-model analytics + overlays (single run folder)
 
-The chart flow uses all valid projected points, not only labeled overlay points.
+This step uses the run summary JSON and processes **every model in the summary**
+(which comes from the enabled models in your YAML run).
 
-```bash
-ros2 run mars_cam stereo_depth_benchmark charts \
-  --summary-json /home/jetson1/innate-os/recordings/stereo_benchmark_runs/stereo_depth_benchmark_<stamp>.json \
-  --model classical_stereo \
-  --model fast_foundation_23_36_37_i8 \
-  --grid-rows 3 \
-  --grid-cols 4
-```
+It creates:
 
-Chart outputs:
+- one combined distance-error distribution chart for all models
+- one combined frame-region heatmap for all models
+- one performance overview chart (latency, FPS, dropped frames, CPU/GPU/RAM, power, temp)
+- lidar-vs-model overlays for each model
+- one `N`-panel video that includes lidar reference + every model
 
-- `<summary>_distance_error_distribution.png`
-- `<summary>_frame_region_error_heatmap.png`
-- matching CSVs with counts + percentiles
-
-## 9) Build a checkpoint-tagged comparison folder (existing bags)
-
-Use this when inference bags already exist and you want a clean final deliverable package.
+Run:
 
 ```bash
-source /opt/ros/humble/setup.zsh
-source /home/jetson1/innate-os/ros2_ws/install/setup.zsh
-
-SUMMARY=/home/jetson1/innate-os/recordings/stereo_benchmark_runs/stereo_depth_benchmark_20260911_015139.json
-FAST_MODEL=fast_foundation_23_36_37_i8
-FAST_TAG=fast_ckpt_23_36_37_i8
-OUT_DIR=/home/jetson1/innate-os/recordings/stereo_benchmark_runs/classical_vs_${FAST_TAG}_$(date +%Y%m%d_%H%M%S)
-export SUMMARY FAST_MODEL FAST_TAG OUT_DIR
-mkdir -p "$OUT_DIR"
+python3 /home/jetson1/innate-os/scripts/stereo_benchmark_postprocess.py \
+  --run-dir /home/jetson1/innate-os/recordings/stereo_benchmark_runs/<your_run_folder> \
+  --columns 2
 ```
 
-Create lidar reference + model overlays:
+Optional: regenerate only the performance overview chart/CSV:
 
 ```bash
-python3 - <<'PY'
-import json
-import os
-import subprocess
-from pathlib import Path
-
-summary = Path(os.environ["SUMMARY"])
-fast_model = os.environ["FAST_MODEL"]
-fast_tag = os.environ["FAST_TAG"]
-out_dir = Path(os.environ["OUT_DIR"])
-rows = {row["model"]: row for row in json.loads(summary.read_text())}
-c = rows["classical_stereo"]
-f = rows[fast_model]
-
-subprocess.run([
-    "ros2", "run", "mars_cam", "stereo_depth_benchmark", "annotate",
-    "--bag", c["run_bag"],
-    "--image-topic", "/mars/main_camera/left/image_raw",
-    "--lidar-topic", c.get("lidar_topic", "/scan"),
-    "--camera-info-topic", c.get("camera_info_topic", "/mars/main_camera/left/camera_info"),
-    "--output-video", str(out_dir / f"lidar_reference_for_{fast_tag}.mp4"),
-    "--output-image", str(out_dir / f"lidar_reference_for_{fast_tag}.png"),
-    "--image-frame-index", "150",
-], check=True)
-
-subprocess.run([
-    "ros2", "run", "mars_cam", "stereo_depth_benchmark", "annotate",
-    "--bag", c["run_bag"],
-    "--image-topic", "/mars/main_camera/left/image_raw",
-    "--lidar-topic", c.get("lidar_topic", "/scan"),
-    "--camera-info-topic", c.get("camera_info_topic", "/mars/main_camera/left/camera_info"),
-    "--depth-topic", c["depth_topic"],
-    "--error-max-m", "1.0",
-    "--output-video", str(out_dir / f"classical_stereo_lidar_vs_model_for_{fast_tag}.mp4"),
-    "--output-image", str(out_dir / f"classical_stereo_lidar_vs_model_for_{fast_tag}.png"),
-    "--image-frame-index", "150",
-], check=True)
-
-subprocess.run([
-    "ros2", "run", "mars_cam", "stereo_depth_benchmark", "annotate",
-    "--bag", f["run_bag"],
-    "--image-topic", "/mars/main_camera/left/image_raw",
-    "--lidar-topic", f.get("lidar_topic", "/scan"),
-    "--camera-info-topic", f.get("camera_info_topic", "/mars/main_camera/left/camera_info"),
-    "--depth-topic", f["depth_topic"],
-    "--error-max-m", "1.0",
-    "--output-video", str(out_dir / f"{fast_tag}_lidar_vs_model.mp4"),
-    "--output-image", str(out_dir / f"{fast_tag}_lidar_vs_model.png"),
-    "--image-frame-index", "150",
-], check=True)
-PY
+python3 /home/jetson1/innate-os/scripts/stereo_benchmark_perf_overview.py \
+  --summary-json /home/jetson1/innate-os/recordings/stereo_benchmark_runs/<your_run_folder>/stereo_depth_benchmark_<stamp>.json \
+  --output-dir /home/jetson1/innate-os/recordings/stereo_benchmark_runs/<your_run_folder> \
+  --prefix all_models
 ```
 
-Create comparison charts:
+Notes:
 
-```bash
-ros2 run mars_cam stereo_depth_benchmark charts \
-  --summary-json "$SUMMARY" \
-  --output-dir "$OUT_DIR" \
-  --model classical_stereo \
-  --model "$FAST_MODEL" \
-  --grid-rows 3 \
-  --grid-cols 4
-```
+- `--columns` controls the N-panel grid layout.
+- If `--summary-json` is omitted, the newest `stereo_depth_benchmark_*.json` in the run folder is used.
+- The main postprocess script already includes performance overview generation.
+
+## 9) Output files from all-model post-processing
+
+In the run folder you should see:
+
+- `all_models_npanel.mp4`
+- `all_models_npanel_preview.png`
+- `all_models_distance_error_distribution.png`
+- `all_models_frame_region_error_heatmap.png`
+- `all_models_distance_error_distribution.csv`
+- `all_models_frame_region_error_heatmap.csv`
+- `all_models_performance_overview.png`
+- `all_models_performance_overview.csv`
+- `classical_stereo_lidar_vs_model.mp4` / `.png`
+- `<model_name>_lidar_vs_model.mp4` / `.png` for each enabled non-classical model
+- `RESULTS_MANIFEST_ALL_MODELS.txt`
 
 ## 10) Decision priorities
 
@@ -295,15 +263,68 @@ P95/P99 behavior matters more than average FPS.
 
 ## 12) Example final outputs generated
 
-Generated comparison folders from this workflow:
+Current canonical run folder:
 
-- `recordings/stereo_benchmark_runs/classical_vs_fast_ckpt_20_30_48_i8_20260911_024333`
-- `recordings/stereo_benchmark_runs/classical_vs_fast_ckpt_23_36_37_i8_20260911_024954`
+- `recordings/stereo_benchmark_runs/classical_stereo_vs_fast_foundation_23_36_37_i8_vs_fast_foundation_20_30_48_i8__bag_20260911_005944__run_20260911_171416`
 
-Each contains:
+Contains:
 
-- lidar reference MP4/PNG
-- classical lidar-vs-model MP4/PNG
-- fast-checkpoint lidar-vs-model MP4/PNG
-- comparison charts (`distance_error_distribution`, `frame_region_error_heatmap`) + CSVs
-- summary JSON/CSV
+- per-model run bags and tegrastats logs
+- benchmark summary JSON/CSV
+- all-model charts (`all_models_distance_error_distribution.*`, `all_models_frame_region_error_heatmap.*`)
+- `all_models_npanel.mp4` + preview PNG
+- per-model lidar-vs-model overlays (`classical_stereo_lidar_vs_model.*`, `<model>_lidar_vs_model.*`)
+- `RESULTS_MANIFEST_ALL_MODELS.txt`
+
+## 13) Cleanup policy for output root
+
+Keep the output root folder clean by storing artifacts in experiment folders only.
+
+If you want to keep only one active run folder and archive older root entries:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+from datetime import datetime
+import shutil
+
+root = Path('/home/jetson1/innate-os/recordings/stereo_benchmark_runs')
+keep = root / 'classical_stereo_vs_fast_foundation_23_36_37_i8_vs_fast_foundation_20_30_48_i8__bag_20260911_005944__run_20260911_171416'
+archive = root / f'old_results_archive_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+archive.mkdir(parents=True, exist_ok=True)
+
+for p in sorted(root.iterdir()):
+    if p == archive or p == keep:
+        continue
+    if p.name.startswith('old_results_archive_'):
+        continue
+    shutil.move(str(p), str(archive / p.name))
+print(archive)
+PY
+```
+
+If you already generated older pairwise artifacts in the same run folder, move them out:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+from datetime import datetime
+import shutil
+
+run_dir = Path('/home/jetson1/innate-os/recordings/stereo_benchmark_runs/classical_stereo_vs_fast_foundation_23_36_37_i8_vs_fast_foundation_20_30_48_i8__bag_20260911_005944__run_20260911_171416')
+archive = run_dir / f'legacy_pairwise_artifacts_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+archive.mkdir(parents=True, exist_ok=True)
+
+for p in sorted(run_dir.iterdir()):
+    if p == archive or p.is_dir():
+        continue
+    if p.name.startswith(('all_models_', 'fast_foundation_', 'lidar_reference_all_models', 'stereo_depth_benchmark_')):
+        continue
+    if p.name in {'classical_stereo_lidar_vs_model.mp4', 'classical_stereo_lidar_vs_model.png'}:
+        continue
+    if p.name == 'RESULTS_MANIFEST_ALL_MODELS.txt':
+        continue
+    shutil.move(str(p), str(archive / p.name))
+print(archive)
+PY
+```

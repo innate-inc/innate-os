@@ -1741,6 +1741,52 @@ def _sanitize_name(name: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in name).strip("_")
 
 
+def _bag_timestamp_tag(canonical_bag: Path) -> str:
+    match = re.search(r"(20\d{6}_\d{6})", canonical_bag.name)
+    if match:
+        return match.group(1)
+    return "unknown_bag_time"
+
+
+def _models_slug(models: list[ModelSpec], max_chars: int = 96) -> str:
+    parts = [_sanitize_name(model.name) for model in models if _sanitize_name(model.name)]
+    if not parts:
+        return "models"
+    slug = "_vs_".join(parts)
+    if len(slug) <= max_chars:
+        return slug
+    kept: list[str] = []
+    chars = 0
+    for idx, part in enumerate(parts):
+        add_len = len(part) if idx == 0 else len("_vs_") + len(part)
+        if chars + add_len > max_chars:
+            break
+        kept.append(part)
+        chars += add_len
+    if not kept:
+        return slug[:max_chars]
+    remaining = len(parts) - len(kept)
+    if remaining > 0:
+        return f"{'_vs_'.join(kept)}_plus_{remaining}"
+    return "_vs_".join(kept)
+
+
+def _run_folder_name(models: list[ModelSpec], canonical_bag: Path, run_stamp: str) -> str:
+    return f"{_models_slug(models)}__bag_{_bag_timestamp_tag(canonical_bag)}__run_{run_stamp}"
+
+
+def _prepare_run_output_dir(output_root: Path, models: list[ModelSpec], canonical_bag: Path) -> Path:
+    run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidate = _run_folder_name(models=models, canonical_bag=canonical_bag, run_stamp=run_stamp)
+    run_dir = output_root / candidate
+    suffix = 2
+    while run_dir.exists():
+        run_dir = output_root / f"{candidate}_{suffix}"
+        suffix += 1
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
 def _resolve_tegrastats_log_path(model: ModelSpec, run_bag: Path) -> Path | None:
     if model.tegrastats_log is not None and model.tegrastats_log.exists():
         return model.tegrastats_log
@@ -1968,6 +2014,8 @@ def run_from_config(config_path: Path, no_evaluate: bool, allow_live_graph: bool
     models = _parse_models(config)
     if not models:
         raise RuntimeError("No enabled models in config.")
+    run_output_dir = _prepare_run_output_dir(output_root=output_dir, models=models, canonical_bag=canonical_bag)
+    print(f"Run output dir: {run_output_dir}")
 
     max_lidar_sync_ms = float(config.get("max_lidar_sync_ms", 80.0))
     rows: list[dict[str, Any]] = []
@@ -1975,7 +2023,7 @@ def run_from_config(config_path: Path, no_evaluate: bool, allow_live_graph: bool
         run_bag, tegrastats_summary = run_model_trial(
             canonical_bag=canonical_bag,
             model=model,
-            output_dir=output_dir,
+            output_dir=run_output_dir,
             playback_rate=playback_rate,
             record_topics=record_topics,
             enable_tegrastats=enable_tegrastats,
@@ -2027,7 +2075,7 @@ def run_from_config(config_path: Path, no_evaluate: bool, allow_live_graph: bool
         _print_row(row)
 
     if rows:
-        json_path, csv_path = _write_summary(output_dir, rows)
+        json_path, csv_path = _write_summary(run_output_dir, rows)
         print(f"Summary JSON: {json_path}")
         print(f"Summary CSV : {csv_path}")
     return 0
