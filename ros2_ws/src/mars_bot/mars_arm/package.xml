@@ -14,11 +14,10 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>python3-dynamixel-sdk</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>kdl_parser_py</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>mars_bringup</exec_depend>
-  <exec_depend>mars_sim</exec_depend>
+  <exec_depend>mars_description</exec_depend>
 
   <depend>rclcpp</depend>
   

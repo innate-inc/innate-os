@@ -154,12 +154,18 @@ This README is an introduction. The rest lives in the docs:
 - [Training](https://docs.innate.bot/training/overview)
 - [Web app](https://docs.innate.bot/robots/web-app) and [controller app](https://docs.innate.bot/robots/innate-controller-app)
 - [CLI](https://docs.innate.bot/software/innate-cli)
-- [ROS 2](https://docs.innate.bot/software/ros2-core) and [system overview](docs/SYSTEM_OVERVIEW.md)
+- [ROS 2 core and system overview](https://docs.innate.bot/software/ros2-core)
 
 Most builders should start with skills, agents, inputs, and the simulator. Changing the ROS core is possible; it is not the usual path.
 
+## License
+
+Innate OS is open source under [Apache 2.0](LICENSE). Third-party code we ship is credited in [`NOTICE`](NOTICE).
+
+The simulator's environments and characters are a separate matter: several are third-party works under CC BY 4.0, fetched at build time rather than stored here. They carry their own terms, listed per asset in [`sim/ATTRIBUTION.md`](sim/ATTRIBUTION.md).
+
 ## Contributing
 
-Innate OS is open source under the [Apache 2.0](LICENSE) license. We welcome contributions, apps built on it, and ports to other robots — we will be happy to feature them.
+We welcome contributions, apps built on Innate OS, and ports to other robots — we will be happy to feature them.
 
 **[Contributing guide](.github/CONTRIBUTING.md)** · **[Discord](https://discord.gg/innate)**

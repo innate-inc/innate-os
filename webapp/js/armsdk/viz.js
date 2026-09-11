@@ -311,7 +311,7 @@ export async function createArmViz(container, { onDragMove, onDragEnd } = {}) {
     for (const visual of el.querySelectorAll("visual")) {
       const file = visual.querySelector("geometry > mesh")?.getAttribute("filename");
       if (!file) continue;
-      const url = file.replace("package://mars_sim", MODEL);
+      const url = file.replace("package://mars_description", MODEL);
       const origin = visual.querySelector("origin");
       meshJobs.push(
         loader.loadAsync(url).then((geometry) => {

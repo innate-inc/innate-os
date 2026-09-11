@@ -167,4 +167,6 @@ Export it for every `./innate-sim` command in that checkout (`down`, `status`, a
 
 ## Credits
 
-The apartment is derived from ["Appartement"](https://sketchfab.com/3d-models/appartement-6a7a5fe208344b2e8123a88923dbd5b3) by [SrMonteiro](https://sketchfab.com/crispimrafael), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Changes were made: split per room, convex-decomposed for collision, re-exported for rendering, and rasterized into a navigation map.
+Crossroads and the traffic cars are original Innate geometry, generated from primitives. The other environments and characters are third-party works under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): the apartment by [SrMonteiro](https://sketchfab.com/crispimrafael), the backrooms by [carlcapu9](https://sketchfab.com/carlcapu9), the scenario human and the three household residents by [restore50](https://sketchfab.com/restore50), and the dog by [all of life](https://sketchfab.com/Xfdfgd).
+
+[`ATTRIBUTION.md`](ATTRIBUTION.md) is the canonical list — per-asset sources and the changes made to each. It ships inside the published asset and viewer images alongside the geometry it covers.

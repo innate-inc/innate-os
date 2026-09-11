@@ -1,6 +1,6 @@
 # Simulation-only dependencies for the innate-os ROS2 workspace.
 # Installed on top of apt-dependencies.common.txt for the published simulation
-# image (see sim/Dockerfile and DEPENDENCIES_GUIDE.md). The robot does not use
+# image (see sim/Dockerfile). The robot does not use
 # this file; it gets these packages transitively from the meta-packages in
 # apt-dependencies.hardware.txt (navigation2, moveit, ...).
 # Install with: xargs -a apt-dependencies.sim.txt sudo apt-get install -y

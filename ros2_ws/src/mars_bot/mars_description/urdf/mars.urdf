@@ -35,7 +35,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://mars_sim/meshes/base.STL" scale="1 1 1"/>
+        <mesh filename="package://mars_description/meshes/base.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -117,7 +117,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://mars_sim/meshes/link1.STL" scale="1 1 1"/>
+        <mesh filename="package://mars_description/meshes/link1.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -160,7 +160,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://mars_sim/meshes/link2.STL" scale="1 1 1"/>
+        <mesh filename="package://mars_description/meshes/link2.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -205,7 +205,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://mars_sim/meshes/link3.STL" scale="1 1 1"/>
+        <mesh filename="package://mars_description/meshes/link3.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -250,7 +250,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://mars_sim/meshes/link4.STL" scale="1 1 1"/>
+        <mesh filename="package://mars_description/meshes/link4.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -281,7 +281,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://mars_sim/meshes/link5.STL" scale="1 1 1"/>
+        <mesh filename="package://mars_description/meshes/link5.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -317,7 +317,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://mars_sim/meshes/link61.STL" scale="1 1 1"/>
+        <mesh filename="package://mars_description/meshes/link61.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -444,7 +444,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://mars_sim/meshes/link62.STL" scale="1 1 1"/>
+        <mesh filename="package://mars_description/meshes/link62.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -583,7 +583,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://mars_sim/meshes/head.STL" scale="1 1 1"/>
+        <mesh filename="package://mars_description/meshes/head.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
