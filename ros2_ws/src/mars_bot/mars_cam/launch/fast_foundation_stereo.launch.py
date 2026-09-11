@@ -35,6 +35,11 @@ def generate_launch_description() -> LaunchDescription:
         default_value="/home/jetson1/innate-os/ros2_ws/src/third_party/stereo_models/Fast-FoundationStereo",
     )
     model_path = DeclareLaunchArgument("model_path", default_value="")
+    inference_backend = DeclareLaunchArgument("inference_backend", default_value="pytorch")
+    trt_engine_path = DeclareLaunchArgument("trt_engine_path", default_value="")
+    trt_left_input_name = DeclareLaunchArgument("trt_left_input_name", default_value="left_image")
+    trt_right_input_name = DeclareLaunchArgument("trt_right_input_name", default_value="right_image")
+    trt_output_name = DeclareLaunchArgument("trt_output_name", default_value="disparity")
     venv_path = DeclareLaunchArgument("venv_path", default_value="/home/jetson1/innate-os/.venvs/fast_foundation_stereo")
     add_venv_site_packages = DeclareLaunchArgument("add_venv_site_packages", default_value="false")
     disable_torch_compile_helpers = DeclareLaunchArgument("disable_torch_compile_helpers", default_value="true")
@@ -58,6 +63,11 @@ def generate_launch_description() -> LaunchDescription:
                 "use_sim_time": LaunchConfiguration("use_sim_time"),
                 "model_repo": LaunchConfiguration("model_repo"),
                 "model_path": LaunchConfiguration("model_path"),
+                "inference_backend": LaunchConfiguration("inference_backend"),
+                "trt_engine_path": LaunchConfiguration("trt_engine_path"),
+                "trt_left_input_name": LaunchConfiguration("trt_left_input_name"),
+                "trt_right_input_name": LaunchConfiguration("trt_right_input_name"),
+                "trt_output_name": LaunchConfiguration("trt_output_name"),
                 "venv_path": LaunchConfiguration("venv_path"),
                 "add_venv_site_packages": LaunchConfiguration("add_venv_site_packages"),
                 "disable_torch_compile_helpers": LaunchConfiguration("disable_torch_compile_helpers"),
@@ -104,6 +114,11 @@ def generate_launch_description() -> LaunchDescription:
             model_pointcloud_topic,
             model_repo,
             model_path,
+            inference_backend,
+            trt_engine_path,
+            trt_left_input_name,
+            trt_right_input_name,
+            trt_output_name,
             venv_path,
             add_venv_site_packages,
             disable_torch_compile_helpers,

@@ -22,6 +22,91 @@ from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from sensor_msgs_py import point_cloud2
 from stereo_msgs.msg import DisparityImage
 
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+
+class TrtEngineRunner:
+    def __init__(self, torch_module: Any, engine_path: Path) -> None:
+        import tensorrt as trt
+
+        self._torch = torch_module
+        self._trt = trt
+        self._logger = trt.Logger(trt.Logger.WARNING)
+        with open(engine_path, "rb") as f:
+            self._engine = trt.Runtime(self._logger).deserialize_cuda_engine(f.read())
+        if self._engine is None:
+            raise RuntimeError(f"Failed to deserialize TensorRT engine: {engine_path}")
+        self._context = self._engine.create_execution_context()
+        self._input_names = self._io_tensor_names(trt.TensorIOMode.INPUT)
+        self._output_names = self._io_tensor_names(trt.TensorIOMode.OUTPUT)
+
+    def _io_tensor_names(self, mode: Any) -> list[str]:
+        return [
+            self._engine.get_tensor_name(i)
+            for i in range(self._engine.num_io_tensors)
+            if self._engine.get_tensor_mode(self._engine.get_tensor_name(i)) == mode
+        ]
+
+    def _trt_dtype_to_torch(self, dtype: Any) -> Any:
+        trt = self._trt
+        mapping = {
+            trt.DataType.FLOAT: self._torch.float32,
+            trt.DataType.HALF: self._torch.float16,
+            trt.DataType.BF16: self._torch.bfloat16,
+            trt.DataType.INT32: self._torch.int32,
+            trt.DataType.INT8: self._torch.int8,
+            trt.DataType.BOOL: self._torch.bool,
+        }
+        if dtype not in mapping:
+            raise RuntimeError(f"Unsupported TensorRT dtype: {dtype}")
+        return mapping[dtype]
+
+    def expected_input_hw(self, name: str) -> tuple[int, int] | None:
+        if name not in self._input_names:
+            return None
+        shape = tuple(self._engine.get_tensor_shape(name))
+        if len(shape) < 4:
+            return None
+        h = int(shape[-2])
+        w = int(shape[-1])
+        if h <= 0 or w <= 0:
+            return None
+        return h, w
+
+    @property
+    def input_names(self) -> list[str]:
+        return list(self._input_names)
+
+    @property
+    def output_names(self) -> list[str]:
+        return list(self._output_names)
+
+    def __call__(self, inputs_by_name: dict[str, Any]) -> dict[str, Any]:
+        for name, tensor in list(inputs_by_name.items()):
+            expected_dtype = self._trt_dtype_to_torch(self._engine.get_tensor_dtype(name))
+            if tensor.dtype != expected_dtype:
+                inputs_by_name[name] = tensor.to(expected_dtype)
+            if not inputs_by_name[name].is_contiguous():
+                inputs_by_name[name] = inputs_by_name[name].contiguous()
+            self._context.set_input_shape(name, tuple(inputs_by_name[name].shape))
+
+        outputs: dict[str, Any] = {}
+        for name in self._output_names:
+            shape = tuple(self._context.get_tensor_shape(name))
+            dtype = self._trt_dtype_to_torch(self._engine.get_tensor_dtype(name))
+            outputs[name] = self._torch.empty(shape, device="cuda", dtype=dtype)
+
+        for name, tensor in inputs_by_name.items():
+            self._context.set_tensor_address(name, int(tensor.data_ptr()))
+        for name, tensor in outputs.items():
+            self._context.set_tensor_address(name, int(tensor.data_ptr()))
+
+        stream = self._torch.cuda.current_stream().cuda_stream
+        if not self._context.execute_async_v3(stream):
+            raise RuntimeError("TensorRT execution failed.")
+        return outputs
+
 
 @dataclass(frozen=True)
 class StereoIntrinsics:
@@ -60,6 +145,11 @@ class FastFoundationStereoNode(Node):
             "/home/jetson1/innate-os/ros2_ws/src/third_party/stereo_models/Fast-FoundationStereo",
         )
         self.declare_parameter("model_path", "")
+        self.declare_parameter("inference_backend", "pytorch")
+        self.declare_parameter("trt_engine_path", "")
+        self.declare_parameter("trt_left_input_name", "left_image")
+        self.declare_parameter("trt_right_input_name", "right_image")
+        self.declare_parameter("trt_output_name", "disparity")
         self.declare_parameter("venv_path", "/home/jetson1/innate-os/.venvs/fast_foundation_stereo")
         self.declare_parameter("add_venv_site_packages", False)
         self.declare_parameter("disable_torch_compile_helpers", True)
@@ -89,6 +179,11 @@ class FastFoundationStereoNode(Node):
         self.pointcloud_topic = str(self.get_parameter("pointcloud_topic").value)
         self.model_repo = Path(str(self.get_parameter("model_repo").value)).expanduser().resolve()
         self.model_path_param = str(self.get_parameter("model_path").value).strip()
+        self.inference_backend = str(self.get_parameter("inference_backend").value).strip().lower()
+        self.trt_engine_path_param = str(self.get_parameter("trt_engine_path").value).strip()
+        self.trt_left_input_name = str(self.get_parameter("trt_left_input_name").value).strip()
+        self.trt_right_input_name = str(self.get_parameter("trt_right_input_name").value).strip()
+        self.trt_output_name = str(self.get_parameter("trt_output_name").value).strip()
         self.venv_path = Path(str(self.get_parameter("venv_path").value)).expanduser().resolve()
         self.add_venv_site_packages = bool(self.get_parameter("add_venv_site_packages").value)
         self.disable_torch_compile_helpers = bool(self.get_parameter("disable_torch_compile_helpers").value)
@@ -123,6 +218,7 @@ class FastFoundationStereoNode(Node):
         self._ensure_repo_on_path()
         self._torch: Any = self._import_module("torch")
         self._amp_dtype = self._torch.float16
+        self.device = self._torch.device("cuda" if self._torch.cuda.is_available() else "cpu")
         if self.add_venv_site_packages:
             self._prepend_venv_site_packages()
         if self.disable_torch_compile_helpers:
@@ -130,8 +226,10 @@ class FastFoundationStereoNode(Node):
         input_padder_mod = self._import_module("core.utils.utils")
         self._input_padder_cls = getattr(input_padder_mod, "InputPadder")
         self.model = self._load_model()
-        self.device = self._torch.device("cuda" if self._torch.cuda.is_available() else "cpu")
-        self.model = self.model.to(self.device).eval()
+        if self.inference_backend == "pytorch":
+            self.model = self.model.to(self.device).eval()
+        elif self.device.type != "cuda":
+            raise RuntimeError("TensorRT backend requires CUDA.")
 
         self.depth_pub = self.create_publisher(Image, self.depth_topic, 10)
         self.disparity_pub = self.create_publisher(DisparityImage, self.disparity_topic, 10)
@@ -154,7 +252,8 @@ class FastFoundationStereoNode(Node):
 
         self.get_logger().info(
             f"Fast-FoundationStereo ready: model={self._resolve_model_path()} device={self.device.type} "
-            f"inputs=({self.left_image_topic}, {self.right_image_topic}) rectify={self.rectify_inputs}"
+            f"backend={self.inference_backend} inputs=({self.left_image_topic}, {self.right_image_topic}) "
+            f"rectify={self.rectify_inputs}"
         )
 
     def _ensure_repo_on_path(self) -> None:
@@ -200,6 +299,8 @@ class FastFoundationStereoNode(Node):
             ) from exc
 
     def _resolve_model_path(self) -> Path:
+        if self.model_path_param and self.model_path_param.endswith(".engine"):
+            return Path(self.model_path_param).expanduser().resolve()
         if self.model_path_param:
             return Path(self.model_path_param).expanduser().resolve()
         choices = sorted(self.model_repo.glob("weights/**/model_best_bp2_serialize.pth"))
@@ -207,7 +308,23 @@ class FastFoundationStereoNode(Node):
             return choices[0]
         return self.model_repo / "weights" / "23-36-37" / "model_best_bp2_serialize.pth"
 
+    def _resolve_trt_engine_path(self) -> Path:
+        if self.trt_engine_path_param:
+            return Path(self.trt_engine_path_param).expanduser().resolve()
+        if self.model_path_param.endswith(".engine"):
+            return Path(self.model_path_param).expanduser().resolve()
+        if self.model_path_param.endswith(".onnx"):
+            return Path(self.model_path_param).expanduser().resolve().with_suffix(".engine")
+        candidates = sorted(self.model_repo.glob("engines/**/*.engine"))
+        if candidates:
+            return candidates[0]
+        return self.model_repo / "engines" / "fast_foundationstereo.engine"
+
     def _load_model(self) -> Any:
+        if self.inference_backend == "trt":
+            return self._load_trt_runner()
+        if self.inference_backend != "pytorch":
+            raise RuntimeError(f"Unsupported inference_backend '{self.inference_backend}'. Use 'pytorch' or 'trt'.")
         model_path = self._resolve_model_path()
         if not model_path.exists():
             raise RuntimeError(
@@ -221,6 +338,28 @@ class FastFoundationStereoNode(Node):
             model.args.mixed_precision = bool(self.use_amp)
         self._torch.set_grad_enabled(False)
         return model
+
+    def _load_trt_runner(self) -> TrtEngineRunner:
+        if self.device.type != "cuda":
+            raise RuntimeError("TensorRT backend requires CUDA.")
+        if not self.trt_left_input_name or not self.trt_right_input_name:
+            raise RuntimeError("Set trt_left_input_name and trt_right_input_name.")
+        engine_path = self._resolve_trt_engine_path()
+        if not engine_path.exists():
+            raise RuntimeError(
+                f"TensorRT engine missing: {engine_path}. Export ONNX and build engine first."
+            )
+        runner = TrtEngineRunner(self._torch, engine_path)
+        missing = [
+            name
+            for name in (self.trt_left_input_name, self.trt_right_input_name)
+            if name not in runner.input_names
+        ]
+        if missing:
+            raise RuntimeError(
+                f"Engine inputs {missing} not found. Engine has inputs: {runner.input_names}"
+            )
+        return runner
 
     def _on_left_camera_info(self, msg: CameraInfo) -> None:
         with self._state_lock:
@@ -341,44 +480,74 @@ class FastFoundationStereoNode(Node):
             left_proc = left_rgb
             right_proc = right_rgb
 
-        left_tensor = self._torch.as_tensor(left_proc, device=self.device).float()[None].permute(0, 3, 1, 2)
-        right_tensor = self._torch.as_tensor(right_proc, device=self.device).float()[None].permute(0, 3, 1, 2)
-        padder = self._input_padder_cls(left_tensor.shape, divis_by=32, force_square=False)
-        left_tensor, right_tensor = padder.pad(left_tensor, right_tensor)
-
+        proc_h, proc_w = left_proc.shape[:2]
+        disp_np: np.ndarray
         if self.device.type == "cuda" and self.synchronize_cuda_timing:
             self._torch.cuda.synchronize(device=self.device)
         start = time.perf_counter()
-        with self._torch.inference_mode():
-            with self._torch.amp.autocast(
-                "cuda",
-                enabled=bool(self.use_amp and self.device.type == "cuda"),
-                dtype=self._amp_dtype,
-            ):
-                if self.use_hierarchical:
-                    disp_tensor = self.model.run_hierachical(
-                        left_tensor,
-                        right_tensor,
-                        iters=int(self.valid_iters),
-                        test_mode=True,
-                        small_ratio=0.5,
-                    )
-                else:
-                    disp_tensor = self.model.forward(
-                        left_tensor,
-                        right_tensor,
-                        iters=int(self.valid_iters),
-                        test_mode=True,
-                        optimize_build_volume="pytorch1",
-                    )
+        if self.inference_backend == "trt":
+            if not isinstance(self.model, TrtEngineRunner):
+                raise RuntimeError("TensorRT backend selected but no TensorRT runner is loaded.")
+            expected_hw = self.model.expected_input_hw(self.trt_left_input_name)
+            if expected_hw is not None and expected_hw != (proc_h, proc_w):
+                eh, ew = expected_hw
+                left_proc = cv2.resize(left_proc, (ew, eh), interpolation=cv2.INTER_LINEAR)
+                right_proc = cv2.resize(right_proc, (ew, eh), interpolation=cv2.INTER_LINEAR)
+                proc_h, proc_w = eh, ew
+            left_norm = ((left_proc.astype(np.float32) / 255.0) - IMAGENET_MEAN) / IMAGENET_STD
+            right_norm = ((right_proc.astype(np.float32) / 255.0) - IMAGENET_MEAN) / IMAGENET_STD
+            left_tensor = self._torch.as_tensor(left_norm, device=self.device).float()[None].permute(0, 3, 1, 2)
+            right_tensor = self._torch.as_tensor(right_norm, device=self.device).float()[None].permute(0, 3, 1, 2)
+            outputs = self.model(
+                {
+                    self.trt_left_input_name: left_tensor,
+                    self.trt_right_input_name: right_tensor,
+                }
+            )
+            if self.trt_output_name in outputs:
+                disp_tensor = outputs[self.trt_output_name]
+            elif outputs:
+                disp_tensor = outputs[next(iter(outputs.keys()))]
+            else:
+                raise RuntimeError("TensorRT runner returned no outputs.")
+            disp_np = disp_tensor.detach().float().cpu().numpy().reshape(proc_h, proc_w).astype(np.float32)
+        else:
+            left_tensor = self._torch.as_tensor(left_proc, device=self.device).float()[None].permute(0, 3, 1, 2)
+            right_tensor = self._torch.as_tensor(right_proc, device=self.device).float()[None].permute(0, 3, 1, 2)
+            padder = self._input_padder_cls(left_tensor.shape, divis_by=32, force_square=False)
+            left_tensor, right_tensor = padder.pad(left_tensor, right_tensor)
+            with self._torch.inference_mode():
+                with self._torch.amp.autocast(
+                    "cuda",
+                    enabled=bool(self.use_amp and self.device.type == "cuda"),
+                    dtype=self._amp_dtype,
+                ):
+                    if self.use_hierarchical:
+                        disp_tensor = self.model.run_hierachical(
+                            left_tensor,
+                            right_tensor,
+                            iters=int(self.valid_iters),
+                            test_mode=True,
+                            small_ratio=0.5,
+                        )
+                    else:
+                        disp_tensor = self.model.forward(
+                            left_tensor,
+                            right_tensor,
+                            iters=int(self.valid_iters),
+                            test_mode=True,
+                            optimize_build_volume="pytorch1",
+                        )
+            disp = padder.unpad(disp_tensor.float())
+            disp_np = disp.detach().cpu().numpy().reshape(proc_h, proc_w).astype(np.float32)
         if self.device.type == "cuda" and self.synchronize_cuda_timing:
             self._torch.cuda.synchronize(device=self.device)
         infer_ms = 1000.0 * (time.perf_counter() - start)
-        disp = padder.unpad(disp_tensor.float())
-        disp_np = disp.detach().cpu().numpy().reshape(left_proc.shape[0], left_proc.shape[1]).astype(np.float32)
 
-        if self.scale != 1.0:
-            disp_np = cv2.resize(disp_np, (original_w, original_h), interpolation=cv2.INTER_LINEAR) / self.scale
+        if (proc_h, proc_w) != (original_h, original_w):
+            disp_np = cv2.resize(disp_np, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
+        if proc_w != original_w:
+            disp_np = disp_np / (float(proc_w) / float(original_w))
         disp_np = np.clip(disp_np, 0.0, None)
         if self.remove_invisible:
             xx = np.broadcast_to(

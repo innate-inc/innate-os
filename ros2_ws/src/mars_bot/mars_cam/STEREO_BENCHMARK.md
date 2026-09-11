@@ -60,7 +60,42 @@ This route installs:
 - `.venvs/fast_foundation_stereo`
 - `ros2 run mars_cam fast_foundation_stereo_node`
 
-## 4) Prepare benchmark config
+## 4) Show Fast Foundation depth in teleop
+
+Open a shell and launch the node on hardware with TRT:
+
+```bash
+cd /home/jetson1/innate-os
+source /opt/ros/humble/setup.zsh
+source ros2_ws/install/setup.zsh
+
+ros2 launch mars_cam fast_foundation_stereo.launch.py \
+  use_sim_time:=false \
+  inference_backend:=trt \
+  trt_engine_path:=/home/jetson1/innate-os/ros2_ws/src/third_party/stereo_models/Fast-FoundationStereo/engines/20-30-48_i8_480x640/fast_foundationstereo.engine \
+  trt_left_input_name:=left_image \
+  trt_right_input_name:=right_image \
+  trt_output_name:=disparity
+```
+
+Verify the topic is live:
+
+```bash
+ros2 topic hz /stereo/fast_foundation/depth
+```
+
+Then in teleop (`https://192.168.0.114/teleop`):
+
+- switch to the Main camera
+- click the depth overlay button
+- choose `Fast Foundation` in the depth model dropdown
+
+The teleop depth selector subscribes to:
+
+- `Classical` -> `/mars/main_camera/depth/image_rect_raw`
+- `Fast Foundation` -> `/stereo/fast_foundation/depth`
+
+## 5) Prepare benchmark config
 
 ```bash
 cp ros2_ws/src/mars_bot/mars_cam/config/stereo_depth_benchmark.example.yaml \
@@ -77,7 +112,7 @@ Edit `recordings/stereo_depth_benchmark.yaml`:
 
 For Fast-Foundation, ensure `model_path:=.../model_best_bp2_serialize.pth` points to an existing checkpoint.
 
-## 5) Record canonical bag once
+## 6) Record canonical bag once
 
 ```bash
 CANONICAL_BAG=/home/jetson1/innate-os/recordings/stereo_canonical_$(date +%Y%m%d_%H%M%S)
@@ -100,7 +135,7 @@ Stop with `Ctrl-C`, then verify:
 ros2 bag info "$CANONICAL_BAG"
 ```
 
-## 6) Run benchmark
+## 7) Run benchmark
 
 ```bash
 ros2 run mars_cam stereo_depth_benchmark run \
@@ -140,7 +175,7 @@ ros2 run mars_cam stereo_depth_benchmark evaluate \
   --config /home/jetson1/innate-os/recordings/stereo_depth_benchmark.yaml
 ```
 
-## 7) Generate overlay media
+## 8) Generate overlay media
 
 ### 7.1 Lidar-only overlay
 
@@ -187,7 +222,7 @@ Common depth topics:
 - classical: `/mars/main_camera/depth/image_rect_raw`
 - fast foundation: `/stereo/fast_foundation/depth`
 
-## 8) Generate all-model analytics + overlays (single run folder)
+## 9) Generate all-model analytics + overlays (single run folder)
 
 This step uses the run summary JSON and processes **every model in the summary**
 (which comes from the enabled models in your YAML run).
@@ -223,7 +258,7 @@ Notes:
 - If `--summary-json` is omitted, the newest `stereo_depth_benchmark_*.json` in the run folder is used.
 - The main postprocess script already includes performance overview generation.
 
-## 9) Output files from all-model post-processing
+## 10) Output files from all-model post-processing
 
 In the run folder you should see:
 
@@ -239,7 +274,7 @@ In the run folder you should see:
 - `<model_name>_lidar_vs_model.mp4` / `.png` for each enabled non-classical model
 - `RESULTS_MANIFEST_ALL_MODELS.txt`
 
-## 10) Decision priorities
+## 11) Decision priorities
 
 For navigation readiness, rank by:
 
@@ -252,7 +287,7 @@ For navigation readiness, rank by:
 
 P95/P99 behavior matters more than average FPS.
 
-## 11) Troubleshooting
+## 12) Troubleshooting
 
 - live graph conflict: `innate service stop` before `run`
 - many `NaN` depth metrics: bad/missing `depth_topic` or no valid depth values
@@ -261,7 +296,7 @@ P95/P99 behavior matters more than average FPS.
 - duplicate downloads: `ps -eo pid,cmd | rg -i 'wget|curl|aria2c|pip install|apt-get'` then `kill <pid>`
 - full Isaac ROS stack is intentionally not part of this runbook on this platform; use the lightweight wrapper path
 
-## 12) Example final outputs generated
+## 13) Example final outputs generated
 
 Current canonical run folder:
 
@@ -276,7 +311,7 @@ Contains:
 - per-model lidar-vs-model overlays (`classical_stereo_lidar_vs_model.*`, `<model>_lidar_vs_model.*`)
 - `RESULTS_MANIFEST_ALL_MODELS.txt`
 
-## 13) Cleanup policy for output root
+## 14) Cleanup policy for output root
 
 Keep the output root folder clean by storing artifacts in experiment folders only.
 
