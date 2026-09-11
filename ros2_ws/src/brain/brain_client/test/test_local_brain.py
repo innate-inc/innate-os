@@ -450,6 +450,7 @@ import threading  # noqa: E402
 import time  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
+from brain_client.agents.types import TurnIntervals  # noqa: E402
 from brain_client.brain.agent import BrainAgent  # noqa: E402
 from brain_client.brain.utils import Event, EventKind  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
@@ -1114,6 +1115,21 @@ def test_trace_reports_the_turn_lifecycle(agent_factory, monkeypatch):
     snapshot = traces[7]
     # History: the user turn, the model turn, and the wait call's functionResponse.
     assert snapshot["active"] is False and snapshot["backend"] == "gemini-direct" and snapshot["history"] == 3
+    assert snapshot["interval"] == 3.0
+
+    # The heartbeat follows the current agent and skill state, including unset overrides.
+    for intervals, expected in [
+        (TurnIntervals(idle=0.01), (0.01, 5.0)),
+        (TurnIntervals(supervision=0.02), (3.0, 0.02)),
+        (None, (3.0, 5.0)),
+    ]:
+        state.current_directive = (
+            SimpleNamespace(get_turn_intervals=lambda value=intervals: value) if intervals else None
+        )
+        for running, interval in zip((None, RunningSkill("wave", "innate-os/wave")), expected, strict=True):
+            state.primitive_running = running
+            agent._snapshot()
+            assert traces[-1]["interval"] == interval
 
 
 # ---------- skill events ----------
