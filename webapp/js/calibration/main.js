@@ -43,6 +43,10 @@ export function mount(stage) {
  * @property {number | null} deadlineMs Wall-clock deadline (Date.now()-comparable)
  *   for the server's capture-timeout watchdog, re-anchored from
  *   `capture_timeout_sec` on every feedback tick. Display-only — see render().
+ * @property {string} distanceHint TOO_CLOSE | IN_RANGE | TOO_FAR, "" if nothing seen
+ * @property {number} approxDistanceM Approximate, from the lens's nominal FOV — display only
+ * @property {number} coveragePercent 0-100 across position, scale, tilt and count
+ * @property {string[]} coverageMissing What the run is still short of
  *
  * @typedef {Object} ResultState
  * @property {boolean} success
@@ -58,6 +62,33 @@ export function mount(stage) {
 
 const CALIBRATION_BOARD_PDF_URL =
   "https://raw.githubusercontent.com/innate-inc/web-docs/main/.gitbook/assets/mars-calibration-board.pdf";
+
+// Goal.board enum values from RunStereoCalibration.action. The geometry in each
+// blurb is the node's default for that target — a board printed to different
+// dimensions needs the matching stereo_calibrator parameters, not just this pick.
+const BOARDS = {
+  charuco: {
+    goal: 1,
+    label: "ChArUco",
+    blurb: "17x9 squares, 16mm / 12mm markers. Partial views are fine — corners are found from the markers.",
+    href: CALIBRATION_BOARD_PDF_URL,
+    linkText: "Calibration board (PDF)",
+  },
+  checkerboard: {
+    goal: 2,
+    label: "Checkerboard",
+    blurb: "9x6 inner corners, 22mm squares. Every corner must stay inside BOTH cameras or the capture is dropped.",
+    href: "https://calib.io/pages/camera-calibration-pattern-generator",
+    linkText: "Pattern generator (calib.io)",
+  },
+};
+
+const SETUP_STEPS = [
+  "Park the robot facing a clear, evenly lit wall. The head moves to its calibration angle on Start.",
+  "Hold the board square-on, about a third of the frame wide, and press Enter or Capture.",
+  "Work through the frame — corners as well as the middle — varying distance and tilting the board each time.",
+  "Follow the prompts below until coverage reads 100%.",
+];
 
 /**
  * @param {HTMLElement} root
@@ -97,6 +128,22 @@ function buildView(root) {
   const controls = document.createElement("div");
   controls.className = "calib-panel";
 
+  const boardRow = document.createElement("div");
+  boardRow.className = "calib-field-row";
+  const boardLabel = document.createElement("label");
+  boardLabel.className = "calib-field-label";
+  boardLabel.textContent = "Target";
+  const boardSelect = document.createElement("select");
+  boardSelect.className = "calib-input";
+  for (const [key, board] of Object.entries(BOARDS)) {
+    const option = document.createElement("option");
+    option.value = key;
+    option.textContent = board.label;
+    boardSelect.append(option);
+  }
+  boardLabel.htmlFor = boardSelect.id = "calib-board-select";
+  boardRow.append(boardLabel, boardSelect);
+
   const numField = fieldRow("Images to capture", String(STEREO_CALIB_DEFAULT_NUM_IMAGES));
   const minField = fieldRow("Min corners per capture", String(STEREO_CALIB_DEFAULT_MIN_CORNERS));
 
@@ -128,7 +175,6 @@ function buildView(root) {
   boardTitle.textContent = "Calibration board (PDF)";
   const boardSub = document.createElement("span");
   boardSub.className = "calib-board-sub";
-  boardSub.textContent = "ChArUco board — print at 100% scale and keep it flat";
   boardText.append(boardTitle, boardSub);
   const boardDl = document.createElement("span");
   boardDl.className = "calib-board-dl";
@@ -160,7 +206,15 @@ function buildView(root) {
   const statusLine = document.createElement("p");
   statusLine.className = "calib-status microlabel";
 
-  controls.append(boardLink, numField.row, minField.row, saveRow, actionRow, statusLine);
+  const setupList = document.createElement("ol");
+  setupList.className = "calib-setup";
+  for (const step of SETUP_STEPS) {
+    const item = document.createElement("li");
+    item.textContent = step;
+    setupList.append(item);
+  }
+
+  controls.append(boardLink, setupList, boardRow, numField.row, minField.row, saveRow, actionRow, statusLine);
 
   // ---- live feedback --------------------------------------------------------
   const feedback = document.createElement("div");
@@ -173,6 +227,23 @@ function buildView(root) {
   const boardBadge = document.createElement("span");
   boardBadge.className = "calib-badge";
 
+  // Distance is reported as board-size-in-frame, not metres: the numbers come
+  // from a run that has no intrinsics yet, so there is nothing to convert with.
+  const distanceBadge = document.createElement("span");
+  distanceBadge.className = "calib-badge";
+  distanceBadge.title = "Board size in frame — the calibrator has no metric scale until it finishes";
+
+  const coverageBar = document.createElement("div");
+  coverageBar.className = "calib-progress";
+  const coverageFill = document.createElement("div");
+  coverageFill.className = "calib-progress-fill";
+  coverageBar.append(coverageFill);
+  const coverageLabel = document.createElement("p");
+  coverageLabel.className = "calib-progress-label microlabel";
+
+  const missingList = document.createElement("ul");
+  missingList.className = "calib-missing";
+
   const feedbackMessage = document.createElement("p");
   feedbackMessage.className = "calib-feedback-message";
 
@@ -182,7 +253,21 @@ function buildView(root) {
   const rightCoverage = coverageTile("Right");
   coverageRow.append(leftCoverage.tile, rightCoverage.tile);
 
-  feedback.append(progressRow.row, attemptsRow.row, countdownRow.row, boardBadge, feedbackMessage, coverageRow);
+  const badgeRow = document.createElement("div");
+  badgeRow.className = "calib-badge-row";
+  badgeRow.append(boardBadge, distanceBadge);
+
+  feedback.append(
+    progressRow.row,
+    attemptsRow.row,
+    countdownRow.row,
+    badgeRow,
+    coverageBar,
+    coverageLabel,
+    missingList,
+    feedbackMessage,
+    coverageRow,
+  );
 
   // ---- result ---------------------------------------------------------------
   const result = document.createElement("div");
@@ -311,6 +396,10 @@ function buildView(root) {
     if (typeof values?.capture_timeout_sec === "number" && values.capture_timeout_sec > 0) {
       fb.deadlineMs = Date.now() + values.capture_timeout_sec * 1000;
     }
+    if (typeof values?.distance_hint === "string") fb.distanceHint = values.distance_hint;
+    if (typeof values?.approx_distance_m === "number") fb.approxDistanceM = values.approx_distance_m;
+    if (typeof values?.coverage_percent === "number") fb.coveragePercent = values.coverage_percent;
+    if (Array.isArray(values?.coverage_missing)) fb.coverageMissing = values.coverage_missing;
     applyCoverageImages(values);
     render();
   }
@@ -328,12 +417,29 @@ function buildView(root) {
     const saveCalibration = saveCheckbox.checked;
 
     lastResult = null;
-    fb = { imagesCaptured: 0, target: numImages, captureAttempts: 0, cornersFound: null, message: "", deadlineMs: null };
+    fb = {
+      imagesCaptured: 0,
+      target: numImages,
+      captureAttempts: 0,
+      cornersFound: null,
+      message: "",
+      deadlineMs: null,
+      distanceHint: "",
+      approxDistanceM: 0,
+      coveragePercent: 0,
+      coverageMissing: [],
+    };
 
     const { promise, cancel } = ros.sendActionGoal(
       RUN_STEREO_CALIBRATION_ACTION,
       RUN_STEREO_CALIBRATION_ACTION_TYPE,
-      { mode: 0, num_images: numImages, min_corners: minCorners, save_calibration: saveCalibration },
+      {
+        mode: 0,
+        board: BOARDS[selectedBoard()].goal,
+        num_images: numImages,
+        min_corners: minCorners,
+        save_calibration: saveCalibration,
+      },
       { onFeedback },
     );
     activeRun = { cancel, canceling: false };
@@ -372,10 +478,39 @@ function buildView(root) {
     );
   }
 
-  captureBtn.addEventListener("click", () => {
+  /** @returns {keyof typeof BOARDS} */
+  function selectedBoard() {
+    return boardSelect.value in BOARDS ? /** @type {keyof typeof BOARDS} */ (boardSelect.value) : "charuco";
+  }
+
+  function capture() {
     if (!activeRun || activeRun.canceling) return;
     ros.publish(STEREO_CALIB_CAPTURE_TOPIC, { data: true });
+  }
+
+  captureBtn.addEventListener("click", capture);
+
+  // Enter is the capture key, matching the CLI flow — the operator has both
+  // hands on the board and cannot aim at a button. Ignored while a field has
+  // focus, so setting the image count doesn't fire a capture.
+  /** @param {KeyboardEvent} e */
+  function onKeyDown(e) {
+    if (e.key !== "Enter" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+    const target = /** @type {HTMLElement | null} */ (e.target);
+    if (target && ["INPUT", "SELECT", "TEXTAREA", "BUTTON", "A"].includes(target.tagName)) return;
+    if (!activeRun) return;
+    e.preventDefault();
+    capture();
+  }
+  document.addEventListener("keydown", onKeyDown);
+
+  boardSelect.addEventListener("change", () => {
+    const board = BOARDS[selectedBoard()];
+    boardLink.href = board.href;
+    boardTitle.textContent = board.linkText;
+    boardSub.textContent = board.blurb;
   });
+  boardSelect.dispatchEvent(new Event("change"));
 
   stopBtn.addEventListener("click", () => {
     if (!activeRun || activeRun.canceling) return;
@@ -451,9 +586,10 @@ function buildView(root) {
     captureBtn.disabled = !activeRun || activeRun.canceling;
     stopBtn.disabled = !activeRun || activeRun.canceling;
     stopBtn.textContent = activeRun?.canceling ? "Stopping…" : "Stop";
+    boardSelect.disabled = running;
 
     statusLine.textContent = activeRun
-      ? "Calibration running — move the board and click Capture"
+      ? "Calibration running — move the board and press Enter"
       : ros.state === "connected"
         ? "Idle"
         : "Not connected";
@@ -482,6 +618,39 @@ function buildView(root) {
           : fb.cornersFound === false
             ? "Board not detected"
             : "Waiting for first capture";
+
+      const hint = fb.distanceHint;
+      distanceBadge.hidden = !hint;
+      distanceBadge.classList.toggle("ok", hint === "IN_RANGE");
+      distanceBadge.classList.toggle("bad", hint === "TOO_CLOSE" || hint === "TOO_FAR");
+      // Approximate by construction — the real focal length is what this run
+      // is producing, so the cm figure comes from the lens's nominal FOV.
+      const roughCm = fb.approxDistanceM > 0 ? ` (~${Math.round(fb.approxDistanceM * 100)} cm)` : "";
+      distanceBadge.textContent =
+        hint === "TOO_CLOSE"
+          ? `Too close — move the board back${roughCm}`
+          : hint === "TOO_FAR"
+            ? `Too far — bring the board closer${roughCm}`
+            : hint === "IN_RANGE"
+              ? `Good distance${roughCm}`
+              : "";
+
+      const pct = Math.max(0, Math.min(100, fb.coveragePercent));
+      coverageFill.style.width = `${pct}%`;
+      coverageFill.classList.toggle("done", pct >= 100);
+      coverageLabel.textContent =
+        pct >= 100 ? "Coverage complete — finish to calibrate" : `${Math.round(pct)}% covered — still needed:`;
+      missingList.replaceChildren(
+        // Only the few most useful; the full list is long early on and reads as
+        // a wall of failure rather than as the next thing to do.
+        ...fb.coverageMissing.slice(0, 4).map((item) => {
+          const li = document.createElement("li");
+          li.textContent = item;
+          return li;
+        }),
+      );
+      missingList.hidden = pct >= 100 || fb.coverageMissing.length === 0;
+
       feedbackMessage.textContent = fb.message;
     }
 
@@ -538,6 +707,7 @@ function buildView(root) {
     destroy() {
       unsubState();
       unsubDepthCheck();
+      document.removeEventListener("keydown", onKeyDown);
       clearInterval(countdownTicker);
       if (calibCheckTimer !== null) clearTimeout(calibCheckTimer);
       // A run left going while the operator navigates away must not keep

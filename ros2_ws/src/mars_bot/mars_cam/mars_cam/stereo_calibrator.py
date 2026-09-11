@@ -2,24 +2,30 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 """
-Stereo Camera Calibration Node using ChArUco Board.
+Stereo Camera Calibration Node — ChArUco (production) or plain checkerboard (experiment).
 
 This launches an interactive calibration tool that:
 1. Subscribes to the stereo camera topic
 2. Allows user to capture images by pressing Enter
-3. Detects ChArUco board corners in both cameras
+3. Detects target corners in both cameras
 4. Performs stereo calibration after collecting enough images
 5. Optionally saves the calibration to replace the existing one
 
+Both target types share one OpenCV pinhole pipeline: independent
+``calibrateCamera`` per eye, then ``stereoCalibrate`` with ``CALIB_FIX_INTRINSIC``.
+Only the detector and the bookkeeping around it differ, so the two arms are
+directly comparable.
 
-This node subscribes to a stereo image topic, allows the user to capture
-calibration images interactively, and performs OpenCV stereo calibration
-using the pinhole camera model.
+``target_type:=checkerboard`` additionally holds out every Nth accepted pair,
+scores the solve on those unseen images, and writes everything to a separate
+experiment directory — it never touches the production ``stereo_calib.yaml``.
 
 Usage:
     ros2 run mars_cam stereo_calibrator
     or
     ros2 run mars_cam stereo_calibrator --ros-args -p squares_y:=8 -p squares_x:=11 -p square_size:=0.016 -p marker_size:=0.012
+    or
+    ros2 run mars_cam stereo_calibrator --ros-args -p target_type:=checkerboard
 
     Then press Enter to capture images. After 30 images, calibration is computed.
     ros2 bag record /mars/main_camera/calib/enter_events
@@ -45,7 +51,10 @@ from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 
+from mars_cam import capture_guidance as guidance
+from mars_cam import checkerboard as cb
 from mars_cam.calibration_debug_vis import generate_coverage_images, generate_debug_mosaic, generate_visualizations
+from mars_cam.calibration_experiment import ExperimentRecorder, skew_summary
 from mars_cam.calibration_utils import (
     find_calibration_dir,
     prompt_save,
@@ -53,9 +62,28 @@ from mars_cam.calibration_utils import (
     save_calibration,
     setup_head,
 )
+from mars_cam.calibration_validation import (
+    StereoCalibrationMatrices,
+    ValidationPair,
+    evaluate,
+)
 
 DEFAULT_STOP_SERVICE_NAME = "/mars/main_camera/stop_stereo_calibration"
 DEFAULT_DELETE_SERVICE_NAME = "/mars/main_camera/delete_stereo_calibration"
+
+TARGET_CHARUCO = "charuco"
+TARGET_CHECKERBOARD = "checkerboard"
+
+# Goal.board -> target_type. BOARD_DEFAULT leaves the node's configured target
+# alone, so a CLI run and an app run with no explicit choice behave the same.
+BOARD_BY_GOAL = {
+    RunStereoCalibration.Goal.BOARD_CHARUCO: TARGET_CHARUCO,
+    RunStereoCalibration.Goal.BOARD_CHECKERBOARD: TARGET_CHECKERBOARD,
+}
+
+
+def _stamp_sec(msg: Image) -> float:
+    return float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9
 
 
 @dataclass
@@ -101,12 +129,27 @@ class StereoCalibrator(Node):
         self.declare_parameter("image_height", 480)
         self.declare_parameter("data_directory", "/home/jetson1/innate-os/data")
 
-        # ChArUco board parameters
-        self.declare_parameter("squares_x", 17)  # 8 squares wide
-        self.declare_parameter("squares_y", 9)  # 11 squares tall
+        # Target selection: "charuco" (production) or "checkerboard" (A/B experiment)
+        self.declare_parameter("target_type", TARGET_CHARUCO)
+
+        # ChArUco board parameters (calib.io 17x9 squares -> 16x8 = 128 interpolated corners)
+        self.declare_parameter("squares_x", 17)  # squares across, 272mm at 16mm pitch
+        self.declare_parameter("squares_y", 9)  # squares down, 144mm at 16mm pitch
         self.declare_parameter("square_size", 0.016)  # 16mm in meters
         self.declare_parameter("marker_size", 0.012)  # 12mm in meters
         self.declare_parameter("dictionary_id", cv2.aruco.DICT_4X4_250)
+
+        # Plain-checkerboard parameters (US-Letter target: 10x7 squares -> 9x6 inner corners).
+        # Measure the printed pitch and override checkerboard_square_size if the
+        # printer scaled the page — every metric below is reported against it.
+        self.declare_parameter("checkerboard_cols", 9)  # inner corners in X
+        self.declare_parameter("checkerboard_rows", 6)  # inner corners in Y
+        self.declare_parameter("checkerboard_square_size", 0.022)  # 22mm in meters
+        self.declare_parameter("checkerboard_num_images", 40)
+        # Every Nth accepted pair is held out of the solve; 5 -> 20%. 0 disables.
+        self.declare_parameter("validation_stride", 5)
+        self.declare_parameter("validate_charuco", False)
+        self.declare_parameter("experiment_directory", "")
 
         # Calibration parameters
         self.declare_parameter("num_images", 20)
@@ -123,6 +166,16 @@ class StereoCalibrator(Node):
         # How long to wait for a capture_trigger before timing out a managed run
         # (guards against an orphaned goal if the requesting client disconnects).
         self.declare_parameter("capture_timeout_sec", 60.0)
+        # Stereo pair sync tolerance. The driver splits one side-by-side capture,
+        # so both eyes carry the same stamp and 146 measured captures showed a
+        # median and p95 skew of 0.0ms. This sits below the 33ms frame period so
+        # adjacent frames can never be paired; loosen it only for a driver that
+        # genuinely stamps the eyes separately.
+        self.declare_parameter("sync_slop_sec", 0.01)
+        # Lens spec, used ONLY to show the operator an approximate distance in
+        # cm. Never feeds a threshold — the real focal length is the output of
+        # this process, not an input to it.
+        self.declare_parameter("nominal_hfov_deg", 98.0)
 
         # Get parameters
         self.left_topic = self.get_parameter("left_topic").value
@@ -131,13 +184,32 @@ class StereoCalibrator(Node):
         self.image_height = self.get_parameter("image_height").value
         self.data_directory = Path(self.get_parameter("data_directory").value)
 
+        self.target_type = str(self.get_parameter("target_type").value).strip().lower()
+        if self.target_type not in (TARGET_CHARUCO, TARGET_CHECKERBOARD):
+            raise ValueError(
+                f"target_type must be '{TARGET_CHARUCO}' or '{TARGET_CHECKERBOARD}', got {self.target_type!r}"
+            )
+
         self.squares_x = self.get_parameter("squares_x").value
         self.squares_y = self.get_parameter("squares_y").value
         self.square_size = self.get_parameter("square_size").value
         self.marker_size = self.get_parameter("marker_size").value
         self.dictionary_id = self.get_parameter("dictionary_id").value
 
+        self.checkerboard = cb.CheckerboardTarget(
+            pattern=(
+                int(self.get_parameter("checkerboard_cols").value),
+                int(self.get_parameter("checkerboard_rows").value),
+            ),
+            square_size=float(self.get_parameter("checkerboard_square_size").value),
+        )
+        self.sync_slop_sec = float(self.get_parameter("sync_slop_sec").value)
+        self.validation_stride = int(self.get_parameter("validation_stride").value)
+        self.validate_charuco = bool(self.get_parameter("validate_charuco").value)
+
         self.num_images_required = self.get_parameter("num_images").value
+        if self.target_type == TARGET_CHECKERBOARD:
+            self.num_images_required = int(self.get_parameter("checkerboard_num_images").value)
         self.min_corners = self.get_parameter("min_corners").value
         self.use_legacy_pattern = self.get_parameter("use_legacy_pattern").value
         self.debug = self.get_parameter("debug").value
@@ -172,7 +244,12 @@ class StereoCalibrator(Node):
         self.bridge = CvBridge()
         self.latest_left_frame = None
         self.latest_right_frame = None
+        self.latest_stamps: tuple[float, float] = (0.0, 0.0)
         self.frame_lock = threading.Lock()
+        # Live capture guidance. Built here as well as per-run, because CLI mode
+        # detects without ever opening an action goal.
+        self._coverage = guidance.CoverageTracker(self.num_images_required)
+        self._last_view: guidance.BoardView | None = None
         self.images_captured = 0
         self.capture_attempts = 0
         self.calibration_done = False
@@ -196,6 +273,20 @@ class StereoCalibrator(Node):
         # Image storage directory - inside data directory so images persist
         self.tmp_image_dir = self.data_directory / "stereo_calibration_images"
         self.tmp_image_dir.mkdir(parents=True, exist_ok=True)
+
+        # Experiment bookkeeping. The recorder owns a run directory that is
+        # deliberately outside the production calibration directory.
+        self.capture_diagnostics: list[cb.CaptureDiagnostics] = []
+        self.validation_indices: set[int] = set()
+        self.recorder: ExperimentRecorder | None = None
+        # A held-out split with nowhere to report it would silently shrink the
+        # training set and produce no metrics, so the recorder follows the split.
+        if self.target_type == TARGET_CHECKERBOARD or self.validate_charuco:
+            configured_root = str(self.get_parameter("experiment_directory").value).strip()
+            root = Path(configured_root) if configured_root else self.data_directory / "calibration_experiments"
+            self.recorder = ExperimentRecorder(root, self.target_type)
+            self.tmp_image_dir = self.recorder.image_dir
+            self.get_logger().info(f"{self.target_type} experiment output: {self.recorder.run_dir}")
 
         # Enter-event topic: keyboard thread publishes, callback triggers capture
         self._enter_pub = self.create_publisher(Bool, "/mars/main_camera/calib/enter_events", 10)
@@ -246,9 +337,15 @@ class StereoCalibrator(Node):
             self.check_existing_images()
 
         # Print info (one concise summary line; full detail at debug)
+        if self.target_type == TARGET_CHECKERBOARD:
+            cols, rows = self.checkerboard.pattern
+            target_summary = (
+                f"checkerboard {cols}x{rows} inner corners, {self.checkerboard.square_size * 1000:.1f}mm pitch"
+            )
+        else:
+            target_summary = f"ChArUco {self.squares_x}x{self.squares_y}"
         self.get_logger().info(
-            f"Stereo Camera Calibrator ready (ChArUco {self.squares_x}x{self.squares_y}, "
-            f"{self.num_images_required} images required)"
+            f"Stereo Camera Calibrator ready ({target_summary}, {self.num_images_required} images required)"
         )
         self.get_logger().debug("=" * 60)
         self.get_logger().debug(f"Left topic: {self.left_topic}")
@@ -268,7 +365,7 @@ class StereoCalibrator(Node):
         self.sync = message_filters.ApproximateTimeSynchronizer(
             [self.left_sub, self.right_sub],
             queue_size=10,
-            slop=0.1,  # 100ms tolerance
+            slop=self.sync_slop_sec,
         )
         self.sync.registerCallback(self.image_callback)
 
@@ -285,6 +382,79 @@ class StereoCalibrator(Node):
             self.get_logger().info(f"Stop service available on '{self.stop_service_name}'")
             self.get_logger().info(f"Delete service available on '{self.delete_service_name}'")
 
+    def _board_geometry(self) -> guidance.BoardGeometry:
+        """The target's usable range follows from its own geometry.
+
+        One threshold cannot serve both: the ArUco markers on a ChArUco board
+        need roughly twice the pixels per square that a plain corner does, so
+        the same sheet of letter paper reaches about three times further as a
+        checkerboard.
+        """
+        if self.target_type == TARGET_CHECKERBOARD:
+            return guidance.BoardGeometry.checkerboard(self.checkerboard.pattern, self.checkerboard.square_size)
+        return guidance.BoardGeometry.charuco(self.squares_x, self.squares_y, self.square_size)
+
+    def _focal_px(self) -> float:
+        """Pixels per radian-ish, from the lens's nominal FOV — display only."""
+        hfov = float(self.get_parameter("nominal_hfov_deg").value)
+        if hfov <= 0.0 or hfov >= 180.0:
+            return 0.0
+        return (self.image_width / 2.0) / np.tan(np.radians(hfov / 2.0))
+
+    def _note_view(self, image_points, board_points) -> None:
+        """Measure what the operator is holding, for the live distance hint.
+
+        Measured from the LEFT image only. The two eyes see the board at almost
+        the same size and tilt, and a hint that flickered between them would
+        read as noise rather than as advice. Called on rejected attempts too —
+        "too far" is most useful precisely when detection just failed.
+        """
+        if image_points is None or board_points is None:
+            self._last_view = None
+            return
+        shape = self.latest_left_frame.shape if self.latest_left_frame is not None else None
+        frame_size = (shape[1], shape[0]) if shape else (self.image_width, self.image_height)
+        self._last_view = guidance.measure(
+            image_points, board_points, frame_size, self._board_geometry(), self._focal_px()
+        )
+
+    def _count_toward_coverage(self) -> None:
+        """Fold the last measured view into coverage, once a capture is kept."""
+        if self._last_view is not None:
+            self._coverage.add(self._last_view)
+
+    def _rejection_advice(self) -> str:
+        """Why a capture was dropped, in terms the operator can act on.
+
+        A board that was seen but sits outside the usable size range gets the
+        specific reason; "no board detected" is only the honest answer when
+        nothing was found at all.
+        """
+        view = self._last_view
+        if view is None:
+            return "No board detected — is the whole board in both cameras?"
+        if view.hint == guidance.TOO_FAR:
+            geometry = self._board_geometry()
+            return (
+                f"Board too far — {view.pixels_per_square:.0f} pixels per square, "
+                f"needs {geometry.min_pixels_per_square:.0f}. Move it closer."
+            )
+        if view.hint == guidance.TOO_CLOSE:
+            return "Board too close — it fills the frame, so corners fall outside it. Move it back."
+        return "Board partly visible — every corner must be in both cameras"
+
+    def _working_range_message(self) -> str:
+        """The distance band this board can actually be used at.
+
+        Worth stating up front: a letter-sized target cannot span the whole
+        depth corridor on a wide lens, so the operator should be told the range
+        the board has rather than left to discover it by being told "too far".
+        """
+        near, far = self._board_geometry().range_m(self._focal_px(), np.hypot(self.image_width, self.image_height))
+        if far <= 0.0:
+            return f"Using the {self.target_type} target"
+        return f"Using the {self.target_type} target — hold it roughly {near * 100:.0f}-{far * 100:.0f} cm from the cameras"
+
     def _reset_calibration_session(self):
         """Reset all capture/calibration buffers for a new run."""
         self.indiv_corners_left = []
@@ -294,15 +464,20 @@ class StereoCalibrator(Node):
         self.common_corners_left = []
         self.common_corners_right = []
         self.common_obj_points = []
+        self.capture_diagnostics = []
+        self.validation_indices = set()
         self.images_captured = 0
         self.capture_attempts = 0
         self.calibration_done = False
         self.calibration_data = None
         self._last_rms = {"left": 0.0, "right": 0.0, "stereo": 0.0}
         self._last_quality = ""
+        self._coverage = guidance.CoverageTracker(self.num_images_required)
+        self._last_view = None
         with self.frame_lock:
             self.latest_left_frame = None
             self.latest_right_frame = None
+            self.latest_stamps = (0.0, 0.0)
 
     def _goal_callback(self, goal_request):
         """Accept a new goal, stopping any currently active run first."""
@@ -352,6 +527,19 @@ class StereoCalibrator(Node):
         # Live value (not the cached attribute) so a mid-run `ros2 param set`
         # is reflected immediately, same as the watchdog itself.
         feedback.capture_timeout_sec = float(self.get_parameter("capture_timeout_sec").value)
+
+        feedback.board = self.target_type
+        view = self._last_view
+        if view is not None:
+            feedback.distance_hint = view.hint
+            feedback.board_extent = float(view.extent)
+            feedback.board_tilt = float(view.tilt)
+            feedback.pixels_per_square = float(view.pixels_per_square)
+            feedback.approx_distance_m = float(view.approx_distance_m)
+        progress = self._coverage.progress()
+        feedback.coverage_percent = float(progress.percent)
+        feedback.coverage_missing = list(progress.missing)
+
         for name, img in (images or {}).items():
             ok, buf = cv2.imencode(".jpg", img)
             if not ok:
@@ -457,6 +645,7 @@ class StereoCalibrator(Node):
             result.right_rms = float(self._last_rms["right"])
             result.stereo_rms = float(self._last_rms["stereo"])
             result.quality = self._last_quality
+            result.board = self.target_type
             return result
 
         try:
@@ -475,6 +664,11 @@ class StereoCalibrator(Node):
                 self.num_images_required = int(goal.num_images)
             if goal.min_corners > 0:
                 self.min_corners = int(goal.min_corners)
+            if goal.board in BOARD_BY_GOAL:
+                self.target_type = BOARD_BY_GOAL[goal.board]
+                self.get_logger().info(f"Goal selected the {self.target_type} target")
+            # After the overrides: the tracker's capture target is one of them.
+            self._coverage = guidance.CoverageTracker(self.num_images_required)
 
             setup_head(self)
 
@@ -486,7 +680,7 @@ class StereoCalibrator(Node):
             # One-shot "goal started" tick so the frontend can anchor a countdown
             # from goal-acceptance, not just after the first capture — otherwise a
             # slow first capture gets no warning before an unannounced timeout abort.
-            self._publish_action_feedback(goal_handle, "READY", "Waiting for first capture")
+            self._publish_action_feedback(goal_handle, "READY", self._working_range_message())
 
             # Wait for capture_trigger events (handled in _enter_event_callback)
             # until enough images are captured, the goal is cancelled, or the
@@ -593,6 +787,7 @@ class StereoCalibrator(Node):
             with self.frame_lock:
                 self.latest_left_frame = left_frame
                 self.latest_right_frame = right_frame
+                self.latest_stamps = (_stamp_sec(left_msg), _stamp_sec(right_msg))
 
         except Exception as e:
             self.get_logger().error(f"Failed to convert image: {e}")
@@ -613,14 +808,18 @@ class StereoCalibrator(Node):
 
         with self.frame_lock:
             if self.latest_left_frame is None or self.latest_right_frame is None:
-                self.get_logger().warn("No frames available yet. Make sure the camera is running.")
+                self.get_logger().warn(
+                    f"No frames available yet. Check the camera is running, and that the left/right "
+                    f"stamps agree to within sync_slop_sec ({self.sync_slop_sec * 1000:.0f}ms)."
+                )
                 return
             left_img = self.latest_left_frame.copy()
             right_img = self.latest_right_frame.copy()
+            stamps = self.latest_stamps
 
         self.capture_attempts += 1
         self._last_capture_time = time.time()
-        result = self._process_image_pair(left_img, right_img, label="Capture", save_images=True)
+        result = self._process_image_pair(left_img, right_img, label="Capture", save_images=True, stamps=stamps)
 
         if result.success:
             self.get_logger().info(f"[{self.images_captured}] Captured! Detected {result.num_common} common corners.")
@@ -636,7 +835,7 @@ class StereoCalibrator(Node):
             feedback_message = (
                 f"Captured {self.images_captured}/{self.num_images_required}"
                 if result.success
-                else "No board detected in this capture"
+                else self._rejection_advice()
             )
             self._publish_action_feedback(
                 goal_handle,
@@ -741,15 +940,138 @@ class StereoCalibrator(Node):
         while rclpy.ok() and not self.calibration_done:
             try:
                 # Wait for Enter key
+                progress = self._coverage.progress()
+                advice = self._coverage.advice()
                 input(
-                    f"[{self.images_captured} captured] Move the board and press Enter (Ctrl+C to finish and calibrate)"
+                    f"[{self.images_captured} captured, {progress.percent:.0f}% covered] "
+                    f"{advice or 'Coverage complete'} — move the board and press Enter "
+                    f"(Ctrl+C to finish and calibrate)\n"
                 )
                 if not self.calibration_done:
                     self._enter_pub.publish(Bool(data=True))
             except (EOFError, KeyboardInterrupt):
                 break
 
-    def _process_image_pair(self, left_img, right_img, label="capture", save_images=False) -> DetectionResult:
+    def _process_image_pair(
+        self,
+        left_img,
+        right_img,
+        label="capture",
+        save_images=False,
+        stamps: tuple[float, float] = (0.0, 0.0),
+    ) -> DetectionResult:
+        """Detect the configured target in a stereo pair and store it if valid."""
+        if self.target_type == TARGET_CHECKERBOARD:
+            return self._process_checkerboard_pair(left_img, right_img, label, save_images, stamps)
+        return self._process_charuco_pair(left_img, right_img, label, save_images, stamps)
+
+    def _next_split(self) -> str:
+        """Deterministic train/validation assignment for the next accepted pair.
+
+        A fixed stride rather than a random draw so a rerun over the same
+        captures reproduces the split exactly, and so held-out poses stay spread
+        across the whole session instead of clustering at the end.
+        """
+        stride = self.validation_stride
+        if stride <= 0:
+            return "train"
+        if self.target_type == TARGET_CHARUCO and not self.validate_charuco:
+            return "train"
+        return "validation" if (self.images_captured + 1) % stride == 0 else "train"
+
+    def _process_checkerboard_pair(
+        self,
+        left_img,
+        right_img,
+        label: str,
+        save_images: bool,
+        stamps: tuple[float, float],
+    ) -> DetectionResult:
+        """Detect the full inner-corner grid in both images and store if complete."""
+        left_gray = cv2.cvtColor(left_img, cv2.COLOR_BGR2GRAY)
+        right_gray = cv2.cvtColor(right_img, cv2.COLOR_BGR2GRAY)
+
+        pattern = self.checkerboard.pattern
+        corners_left = cb.detect(left_gray, pattern)
+        corners_right = cb.detect(right_gray, pattern)
+
+        diagnostics_left = cb.measure(left_gray, corners_left, stamps[0])
+        diagnostics_right = cb.measure(right_gray, corners_right, stamps[1])
+
+        result = DetectionResult(left_img=left_img, right_img=right_img)
+        accepted = corners_left is not None and corners_right is not None
+        if accepted:
+            reason = "ok"
+        elif corners_left is None and corners_right is None:
+            reason = "pattern incomplete in both images"
+        else:
+            reason = f"pattern incomplete in {'left' if corners_left is None else 'right'} image"
+
+        split = self._next_split() if accepted else ""
+        index = self.images_captured if accepted else -1
+        self._note_view(corners_left, self.checkerboard.object_grid())
+        if accepted:
+            self._count_toward_coverage()
+
+        self.capture_diagnostics.append(
+            cb.CaptureDiagnostics(
+                index=index,
+                attempt=self.capture_attempts,
+                accepted=accepted,
+                reason=reason,
+                split=split,
+                stamp_skew_sec=stamps[0] - stamps[1],
+                left=diagnostics_left,
+                right=diagnostics_right,
+                corners_left=corners_left,
+                corners_right=corners_right,
+            )
+        )
+
+        if not accepted:
+            self.get_logger().warn(
+                f"{label}: {reason} (need the complete {pattern[0]}x{pattern[1]} grid in BOTH images). "
+                f"Brightness L/R {diagnostics_left.brightness:.1f}/{diagnostics_right.brightness:.1f}, "
+                f"sharpness L/R {diagnostics_left.sharpness:.0f}/{diagnostics_right.sharpness:.0f}"
+            )
+            return result
+
+        object_points = self.checkerboard.object_grid().reshape(-1, 1, 3)
+        self.indiv_corners_left.append(corners_left)
+        self.indiv_corners_right.append(corners_right)
+        self.indiv_obj_points_left.append(object_points)
+        self.indiv_obj_points_right.append(object_points)
+        self.common_corners_left.append(corners_left)
+        self.common_corners_right.append(corners_right)
+        self.common_obj_points.append(object_points)
+
+        if split == "validation":
+            self.validation_indices.add(index)
+        self.images_captured += 1
+
+        if save_images and self.recorder is not None:
+            self.recorder.save_pair(index, left_img, right_img)
+            self.recorder.save_detection_overlay(index, left_img, right_img, corners_left, corners_right, pattern)
+
+        result.success = True
+        result.num_common = self.checkerboard.num_corners
+        result.corners_left_filtered = corners_left
+        result.corners_right_filtered = corners_right
+        result.obj_pts_common = object_points
+        self.get_logger().info(
+            f"{label}: accepted [{index}] as {split} — skew {abs(stamps[0] - stamps[1]) * 1000.0:.1f}ms, "
+            f"coverage L/R {diagnostics_left.coverage_pct:.0f}%/{diagnostics_right.coverage_pct:.0f}%"
+        )
+        return result
+
+    def _process_charuco_pair(
+        self,
+        left_img,
+        right_img,
+        label: str = "capture",
+        save_images: bool = False,
+        stamps: tuple[float, float] = (0.0, 0.0),
+    ) -> DetectionResult:
         """Detect ChArUco corners in a stereo image pair and store if valid.
 
         This is the shared detection/filtering/storage pipeline used by both
@@ -795,6 +1117,32 @@ class StereoCalibrator(Node):
         right_markers = len(marker_ids_right) if marker_ids_right is not None else 0
         left_corners = len(charuco_ids_left) if charuco_ids_left is not None else 0
         right_corners = len(charuco_ids_right) if charuco_ids_right is not None else 0
+
+        view_left = cb.measure(left_gray, charuco_corners_left, stamps[0])
+        view_right = cb.measure(right_gray, charuco_corners_right, stamps[1])
+
+        # ChArUco detects a subset of the grid, so the board-space points come
+        # from the corner ids rather than from a full pattern.
+        if charuco_ids_left is not None and left_corners >= 4:
+            self._note_view(charuco_corners_left, self.charuco_board.getChessboardCorners()[charuco_ids_left.flatten()])
+        else:
+            self._note_view(None, None)
+
+        def record(accepted: bool, reason: str, split: str = "") -> None:
+            self.capture_diagnostics.append(
+                cb.CaptureDiagnostics(
+                    index=self.images_captured if accepted else -1,
+                    attempt=self.capture_attempts,
+                    accepted=accepted,
+                    reason=reason,
+                    split=split,
+                    stamp_skew_sec=stamps[0] - stamps[1],
+                    left=view_left,
+                    right=view_right,
+                    corners_left=charuco_corners_left,
+                    corners_right=charuco_corners_right,
+                )
+            )
 
         self.get_logger().info(
             f"Detection results - Left: {left_markers} markers, {left_corners} corners | "
@@ -855,11 +1203,13 @@ class StereoCalibrator(Node):
                 self.get_logger().info(f"  Saved diagnostic images to: {debug_dir}")
             except Exception as e:
                 self.get_logger().debug(f"Could not save diagnostic images: {e}")
+            record(False, f"too few corners (L{left_corners}/R{right_corners}, need {self.min_corners})")
             return result
 
         # Find common corner IDs between left and right
         if charuco_ids_left is None or charuco_ids_right is None:
             self.get_logger().warn(f"{label}: ChArUco board not detected in one or both images.")
+            record(False, "board not detected in one or both images")
             return result
 
         left_ids_set = set(charuco_ids_left.flatten())
@@ -870,6 +1220,7 @@ class StereoCalibrator(Node):
             self.get_logger().warn(
                 f"{label}: Not enough common corners! Common: {len(common_ids)} (need {self.min_corners}+)."
             )
+            record(False, f"too few common corners ({len(common_ids)}, need {self.min_corners})")
             return result
 
         # Filter to keep only common corners, sorted by ID
@@ -900,13 +1251,20 @@ class StereoCalibrator(Node):
         self.common_corners_right.append(corners_right_filtered)
         self.common_obj_points.append(obj_pts_common.reshape(-1, 1, 3))
 
+        index = self.images_captured
+        split = self._next_split()
+        if split == "validation":
+            self.validation_indices.add(index)
+        record(True, "ok", split)
+        self._count_toward_coverage()
         self.images_captured += 1
 
-        # Optionally save images to disk
+        # Optionally save images to disk. Indexed before the increment so the
+        # filename matches the capture index that validation_indices stores.
         if save_images:
             try:
-                cv2.imwrite(str(self.tmp_image_dir / f"left_{self.images_captured:03d}.png"), left_img)
-                cv2.imwrite(str(self.tmp_image_dir / f"right_{self.images_captured:03d}.png"), right_img)
+                cv2.imwrite(str(self.tmp_image_dir / f"left_{index:03d}.png"), left_img)
+                cv2.imwrite(str(self.tmp_image_dir / f"right_{index:03d}.png"), right_img)
             except Exception as e:
                 self.get_logger().warn(f"Failed to save images: {e}")
 
@@ -940,12 +1298,20 @@ class StereoCalibrator(Node):
         self.calibration_done = True
 
         image_size = (self.image_width, self.image_height)
+        train = [i for i in range(self.images_captured) if i not in self.validation_indices]
+
+        def keep(values: list) -> list:
+            return [values[i] for i in train]
 
         self.get_logger().info("Running individual camera calibrations...")
         self.get_logger().info(
             f"  Individual points: {len(self.indiv_obj_points_left)} images, "
             f"Common points: {len(self.common_obj_points)} images"
         )
+        if self.validation_indices:
+            self.get_logger().info(
+                f"  Held out {len(self.validation_indices)} pairs for validation; calibrating on {len(train)}"
+            )
 
         # # Debug: check shapes
         # for i, (obj_l, corners_l) in enumerate(zip(self.indiv_obj_points_left, self.indiv_corners_left)):
@@ -955,13 +1321,13 @@ class StereoCalibrator(Node):
 
         # Calibrate left camera using ALL left-camera corners (not just common)
         ret_left, K1, D1, rvecs_left, tvecs_left = cv2.calibrateCamera(
-            self.indiv_obj_points_left, self.indiv_corners_left, image_size, None, None, flags=0
+            keep(self.indiv_obj_points_left), keep(self.indiv_corners_left), image_size, None, None, flags=0
         )
         self.get_logger().info(f"Left camera RMS error: {ret_left:.4f}")
 
         # Calibrate right camera using ALL right-camera corners (not just common)
         ret_right, K2, D2, rvecs_right, tvecs_right = cv2.calibrateCamera(
-            self.indiv_obj_points_right, self.indiv_corners_right, image_size, None, None, flags=0
+            keep(self.indiv_obj_points_right), keep(self.indiv_corners_right), image_size, None, None, flags=0
         )
         self.get_logger().info(f"Right camera RMS error: {ret_right:.4f}")
 
@@ -971,9 +1337,9 @@ class StereoCalibrator(Node):
         flags = cv2.CALIB_FIX_INTRINSIC
 
         ret_stereo, K1, D1, K2, D2, R, T, E, F = cv2.stereoCalibrate(
-            self.common_obj_points,
-            self.common_corners_left,
-            self.common_corners_right,
+            keep(self.common_obj_points),
+            keep(self.common_corners_left),
+            keep(self.common_corners_right),
             K1,
             D1,
             K2,
@@ -983,8 +1349,12 @@ class StereoCalibrator(Node):
             criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6),
         )
 
-        # Ensure T[0] is positive (left camera physically left of right camera)
-        # If negative, cameras are physically swapped - negate to fix depth sign
+        # UNDER REVIEW — see docs/stereo_calibration_experiment.md. stereoCalibrate
+        # returns the left camera's origin in the right camera's frame, so a
+        # correctly-wired rig gives T[0] < 0 and this branch always fires. It is
+        # kept for now because every downstream consumer takes |baseline|; the
+        # measured consequence is a sign-flipped Q, recorded in the run summary.
+        t_x_raw = float(T[0, 0])
         if T[0, 0] < 0:
             self.get_logger().warn(f"T[0] = {T[0, 0]:.4f}m is negative - cameras may be physically swapped")
             self.get_logger().warn("Negating T to ensure positive depth output")
@@ -1064,6 +1434,15 @@ class StereoCalibrator(Node):
         self.get_logger().info("Generating visualization images...")
         generate_visualizations(self)
 
+        if self.recorder is not None:
+            experiment_message = self._write_experiment_outputs(
+                self.recorder, image_size, t_x_raw, ret_left, ret_right, ret_stereo
+            )
+            restore_head(self)
+            if shutdown_on_complete and rclpy.ok():
+                rclpy.shutdown()
+            return True, experiment_message
+
         # Interactive CLI mode: ask user and terminate through prompt_save().
         if save_decision is None:
             prompt_save(self)
@@ -1084,6 +1463,143 @@ class StereoCalibrator(Node):
         except Exception as e:
             restore_head(self)
             return False, f"Failed to finalize calibration: {e}"
+
+    def _validation_pairs(self) -> list[ValidationPair]:
+        """Held-out observations, in capture order."""
+        grid_shape = self.checkerboard.pattern if self.target_type == TARGET_CHECKERBOARD else None
+        return [
+            ValidationPair(
+                index=i,
+                object_points=self.common_obj_points[i],
+                corners_left=self.common_corners_left[i],
+                corners_right=self.common_corners_right[i],
+                grid_shape=grid_shape,
+            )
+            for i in sorted(self.validation_indices)
+        ]
+
+    def _write_experiment_outputs(
+        self,
+        recorder: ExperimentRecorder,
+        image_size: tuple[int, int],
+        t_x_raw: float,
+        ret_left: float,
+        ret_right: float,
+        ret_stereo: float,
+    ) -> str:
+        """Write the candidate calibration, capture metadata and validation report.
+
+        Never writes the production stereo_calib.yaml — the whole point of the
+        experiment arm is that the shipped calibration stays untouched.
+        """
+        calib = self.calibration_data
+        candidate_path = recorder.save_candidate_calibration(calib)
+        recorder.write_captures(self.capture_diagnostics)
+        recorder.save_coverage(self.indiv_corners_left, self.indiv_corners_right, image_size)
+
+        square_size = (
+            self.checkerboard.square_size if self.target_type == TARGET_CHECKERBOARD else float(self.square_size)
+        )
+        pairs = self._validation_pairs()
+        report = None
+        if pairs:
+            report = evaluate(
+                StereoCalibrationMatrices(
+                    K1=calib["K1"],
+                    D1=calib["D1"],
+                    K2=calib["K2"],
+                    D2=calib["D2"],
+                    R1=calib["R1"],
+                    R2=calib["R2"],
+                    P1=calib["P1"],
+                    P2=calib["P2"],
+                ),
+                pairs,
+                image_size,
+                square_size,
+            )
+            recorder.write_validation(report)
+            self._log_validation(report)
+        else:
+            self.get_logger().warn("No validation pairs were held out — skipping the held-out report")
+
+        self._save_rectified_samples(recorder, calib, image_size, pairs)
+
+        skew = skew_summary(self.capture_diagnostics)
+        recorder.write_summary(
+            {
+                "target_type": self.target_type,
+                "pattern": (
+                    list(self.checkerboard.pattern)
+                    if self.target_type == TARGET_CHECKERBOARD
+                    else [self.squares_x, self.squares_y]
+                ),
+                "square_size_m": square_size,
+                "image_size": list(image_size),
+                "pairs_accepted": self.images_captured,
+                "capture_attempts": self.capture_attempts,
+                "pairs_train": self.images_captured - len(self.validation_indices),
+                "pairs_validation": len(self.validation_indices),
+                "validation_indices": sorted(self.validation_indices),
+                "validation_stride": self.validation_stride,
+                "train_rms": {"left": ret_left, "right": ret_right, "stereo": ret_stereo},
+                "baseline_m": float(np.linalg.norm(calib["T"])),
+                "stereo_calibrate_tx_raw_m": t_x_raw,
+                "tx_was_negated": t_x_raw < 0.0,
+                "sync_slop_sec": self.sync_slop_sec,
+                "timestamp_skew": skew,
+                "validation": report.to_dict() if report is not None else None,
+            }
+        )
+
+        self.get_logger().info("=" * 60)
+        self.get_logger().info(f"Experiment written to: {recorder.run_dir}")
+        self.get_logger().info(
+            f"  Candidate calibration: {candidate_path.name} (production stereo_calib.yaml UNTOUCHED)"
+        )
+        if skew.get("count"):
+            self.get_logger().info(
+                f"  Timestamp skew: mean {skew['mean_ms']:.2f}ms, median {skew['median_ms']:.2f}ms, "
+                f"p95 {skew['p95_ms']:.2f}ms, max {skew['max_ms']:.2f}ms "
+                f"(sync slop {self.sync_slop_sec * 1000:.0f}ms)"
+            )
+        self.get_logger().info("=" * 60)
+        return f"{self.target_type} experiment complete: {recorder.run_dir}"
+
+    def _save_rectified_samples(self, recorder, calib, image_size, pairs) -> None:
+        """Re-read a few saved captures and render them rectified with guide lines."""
+        sample_indices = [p.index for p in pairs[:4]] or list(range(min(4, self.images_captured)))
+        samples = []
+        for index in sample_indices:
+            left = cv2.imread(str(recorder.image_dir / f"left_{index:03d}.png"))
+            right = cv2.imread(str(recorder.image_dir / f"right_{index:03d}.png"))
+            if left is not None and right is not None:
+                samples.append((index, left, right))
+        if samples:
+            recorder.save_rectified_samples(samples, calib, image_size)
+
+    def _log_validation(self, report) -> None:
+        self.get_logger().info(f"Held-out validation on {report.num_pairs} pairs:")
+        self.get_logger().info(
+            f"  Reprojection RMS  L {report.left_reprojection.rms:.4f}px  R {report.right_reprojection.rms:.4f}px"
+        )
+        self.get_logger().info(
+            f"  Epipolar |dy|     mean {report.epipolar_dy.mean:.4f}px  p95 {report.epipolar_dy.p95:.4f}px  "
+            f"max {report.epipolar_dy.maximum:.4f}px"
+        )
+        if report.spacing_error_mm.count:
+            self.get_logger().info(
+                f"  Neighbour spacing mean {report.mean_spacing_mm:.3f}mm vs nominal "
+                f"{report.nominal_spacing_mm:.3f}mm (mean abs error {report.spacing_error_mm.mean:.3f}mm)"
+            )
+        else:
+            self.get_logger().info("  Neighbour spacing n/a (needs a complete grid; ChArUco returns corner subsets)")
+        self.get_logger().info(f"  Planarity RMS     {report.planarity_rms_mm.mean:.3f}mm")
+        if not report.q_yields_positive_z:
+            self.get_logger().warn(
+                f"  Q reprojects front-of-camera points to NEGATIVE Z "
+                f"(median {report.median_depth_m:+.3f}m) — see the T-sign finding in the report"
+            )
 
 
 def main(args=None):
