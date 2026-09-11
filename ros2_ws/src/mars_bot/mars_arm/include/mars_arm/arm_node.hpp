@@ -56,6 +56,7 @@ class MarsArmNode : public rclcpp::Node {
     void controlTimerCallback();
     void recordLoopTiming(std::array<std::chrono::steady_clock::time_point, 9>& ts);
     std::vector<int> applyLimitsAndConvertToEncoder(std::vector<double>& command_data);
+    void loadSelfCollisionConfig();
 
     // ── Service & topic callbacks (arm_services.cpp) ────────────────────
     void armCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
@@ -149,6 +150,12 @@ class MarsArmNode : public rclcpp::Node {
     // Control timer
     rclcpp::TimerBase::SharedPtr control_timer_;
     double control_frequency_;
+
+    // Body keepout, and the last commanded pose known to clear it — the point
+    // the bisection retreats toward when a request would strike the chassis.
+    SelfCollisionConfig self_collision_;
+    std::array<double, 4> last_safe_pose_{};
+    bool have_safe_pose_ = false;
 
     // Callback groups for parallel execution
     rclcpp::CallbackGroup::SharedPtr timer_callback_group_;

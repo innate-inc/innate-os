@@ -3303,6 +3303,28 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
   background: var(--hairline-strong);
 }
 
+/* Travel the follower cannot reach — the wall, made visible before it is felt. */
+.arm-joint-zone {
+  position: absolute;
+  left: 50%;
+  width: 5px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: repeating-linear-gradient(
+    45deg,
+    rgb(255 255 255 / 12%) 0 2px,
+    transparent 2px 4px
+  );
+}
+
+.arm-joint-zone.hi {
+  top: 0;
+}
+
+.arm-joint-zone.lo {
+  bottom: 0;
+}
+
 .arm-joint-dot {
   position: absolute;
   left: 50%;
@@ -3316,6 +3338,27 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
 
 .arm-panel:has(.arm-engage.active) .arm-joint-dot {
   background: var(--accent);
+}
+
+/* Approaching the limit, then held at it — these win over the engaged accent.
+   Both are the danger hue rather than amber: amber already means "engaged". */
+.arm-panel .arm-joint-dot.warn {
+  background: rgb(217 106 90 / 55%);
+}
+
+.arm-panel .arm-joint-dot.danger {
+  background: var(--danger);
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 10%);
+}
+
+.arm-limits.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.arm-limits.holding {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 .arm-button {

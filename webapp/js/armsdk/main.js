@@ -102,7 +102,13 @@ const CSS = `
   pointer-events: none; backdrop-filter: blur(6px); }
 .armsdk-viz-title { position: absolute; top: 12px; left: 14px; font-size: 11px; color: var(--muted);
   text-transform: uppercase; letter-spacing: .09em; pointer-events: none; }
-.armsdk-viz-legend { position: absolute; top: 32px; left: 14px; font-size: 11px; color: var(--muted);
+.armsdk-viz-mode { position: absolute; top: 34px; left: 14px; display: flex; border: 1px solid var(--hairline-strong);
+  border-radius: 7px; overflow: hidden; backdrop-filter: blur(6px); background: var(--glass); z-index: 1; }
+.armsdk-viz-mode button { border: 0; border-radius: 0; padding: 4px 11px; font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); background: transparent; }
+.armsdk-viz-mode button + button { border-left: 1px solid var(--hairline-strong); }
+.armsdk-viz-mode button.active { background: var(--accent-faint); color: var(--accent); }
+.armsdk-viz-legend { position: absolute; top: 66px; left: 14px; font-size: 11px; color: var(--muted);
   pointer-events: none; }
 .armsdk-viz-loading { position: absolute; inset: 0; display: grid; place-items: center;
   color: var(--muted); font-size: 12px; letter-spacing: .05em; }
@@ -165,7 +171,11 @@ const PAGE_HTML = `
   <div class="armsdk-grid">
     <div class="armsdk-card armsdk-viz">
       <div class="armsdk-viz-canvas" data-el="viz"></div>
-      <span class="armsdk-viz-title">mars.urdf · live joint state</span>
+      <span class="armsdk-viz-title" data-el="vizTitle">mars.urdf · live joint state</span>
+      <div class="armsdk-viz-mode" title="Which joint angles the 3D model shows — measured arm state, or the slider targets">
+        <button type="button" data-viz-mode="actual" class="active" title="Show the joints the arm is actually at">Actual</button>
+        <button type="button" data-viz-mode="requested" title="Preview the slider targets on the URDF — drops torque so the arm stays limp while you explore">Requested</button>
+      </div>
       <span class="armsdk-viz-legend">⊕ ring = base_link origin (0,0,0) · axes <b style="color:#e06c60">x</b> <b style="color:#56c28c">y</b> <b style="color:#6b93d6">z</b> · <b style="color:#e8a33d">⬥ target</b> <b style="color:#56c28c">● settled</b></span>
       <span class="armsdk-viz-hint">grab the amber handle to move the arm · drag to orbit · scroll to zoom</span>
       <div class="armsdk-viz-loading" data-el="vizLoading">loading model…</div>
@@ -277,6 +287,8 @@ export function mount(stage) {
   let busy = false;
   /** @type {number | null} which slider is mid-drag, so live sync doesn't fight the thumb */
   let dragging = null;
+  /** @type {"actual" | "requested"} which joint angles drive the 3D model */
+  let vizMode = "actual";
   /** @type {Awaited<ReturnType<typeof import("./viz.js").createArmViz>> | null} */
   let viz = null;
   let destroyed = false;
@@ -313,6 +325,7 @@ export function mount(stage) {
       }
       viz = v;
       el("vizLoading").remove();
+      pushVizJoints();
     },
     (err) => {
       el("vizLoading").textContent = `3D model unavailable (${err?.message || err})`;
@@ -334,11 +347,16 @@ export function mount(stage) {
     const val = /** @type {HTMLElement} */ (row.querySelector(".armsdk-jval"));
     sl.addEventListener("input", () => {
       dragging = i;
+      val.textContent = (+sl.value).toFixed(2);
+      if (vizMode === "requested") {
+        // Preview only — no stream, no dirty latch; torque is already off.
+        pushVizJoints();
+        return;
+      }
       if (i === 5) j6Touched = true;
       // Latch the card out of live sync while driving — otherwise the state
       // subscription would snap the thumb back under the pointer.
       setDirty(true);
-      val.textContent = (+sl.value).toFixed(2);
       queueLive();
     });
     sl.addEventListener("change", () => {
@@ -367,6 +385,40 @@ export function mount(stage) {
     if (!dirty) j6Touched = false;
   }
 
+  /** Feed the 3D model from measured joints or the slider targets. */
+  function pushVizJoints() {
+    if (vizMode === "requested") {
+      viz?.setJoints(sliders.map((sl) => +sl.value));
+      return;
+    }
+    if (Array.isArray(lastState.joints)) viz?.setJoints(lastState.joints);
+  }
+
+  /** @param {"actual" | "requested"} mode */
+  function setVizMode(mode) {
+    if (mode === vizMode) return;
+    vizMode = mode;
+    root.querySelectorAll("[data-viz-mode]").forEach((b) => {
+      b.classList.toggle("active", /** @type {HTMLElement} */ (b).dataset.vizMode === mode);
+    });
+    el("vizTitle").textContent =
+      mode === "requested" ? "mars.urdf · requested joints" : "mars.urdf · live joint state";
+    if (mode === "requested") {
+      // Preview must not keep driving the arm: drop any queued stream and
+      // torque so the robot goes limp while the URDF follows the sliders.
+      livePending = null;
+      clearTimeout(liveResyncTimer);
+      void cmd("torque_off");
+    }
+    pushVizJoints();
+  }
+
+  root.querySelectorAll("[data-viz-mode]").forEach((b) =>
+    b.addEventListener("click", () =>
+      setVizMode(/** @type {"actual" | "requested"} */ (/** @type {HTMLElement} */ (b).dataset.vizMode)),
+    ),
+  );
+
   // --- live joint streaming -------------------------------------------------
   // Sliding streams the arm after the thumb via the server's stream topic —
   // the driver's teleop pass-through with a velocity-clamped slew loop, the
@@ -380,6 +432,7 @@ export function mount(stage) {
   let liveResyncTimer;
 
   function queueLive() {
+    if (vizMode === "requested") return;
     clearTimeout(liveResyncTimer);
     const vals = sliders.map((sl) => +sl.value);
     livePending = j6Touched ? vals : vals.slice(0, 5);
@@ -391,7 +444,7 @@ export function mount(stage) {
     /** @type {number[] | null} */
     let lastSent = null;
     let deadline = performance.now() + 5000;
-    while (!destroyed) {
+    while (!destroyed && vizMode !== "requested") {
       let joints = livePending;
       livePending = null;
       if (joints) {
@@ -414,7 +467,7 @@ export function mount(stage) {
     }
     liveInFlight = false;
     // Resume slider live-sync once the stream idles out and the arm settles.
-    liveResyncTimer = setTimeout(() => setDirty(false), 1200);
+    if (vizMode !== "requested") liveResyncTimer = setTimeout(() => setDirty(false), 1200);
   }
 
   /** @param {number[]} joints */
@@ -450,8 +503,10 @@ export function mount(stage) {
     el("moving").textContent = busy ? "moving" : "idle";
     el("moving").className = "armsdk-pill " + (busy ? "busy" : "on");
     if (Array.isArray(s.joints)) {
-      viz?.setJoints(s.joints);
-      if (!busy && !slidersDirty) setSliders(s.joints);
+      // Requested mode owns the sliders as a pose sketch; don't snap them back
+      // to measured while the operator is exploring.
+      if (!busy && !slidersDirty && vizMode === "actual") setSliders(s.joints);
+      pushVizJoints();
     }
   }
 
@@ -543,6 +598,7 @@ export function mount(stage) {
   el("syncBtn").addEventListener("click", () => {
     setDirty(false);
     if (Array.isArray(lastState.joints)) setSliders(lastState.joints);
+    if (vizMode === "requested") pushVizJoints();
   });
   el("open100").addEventListener("click", () => cmd("gripper_open", { percent: 100 }));
   el("open50").addEventListener("click", () => cmd("gripper_open", { percent: 50 }));

@@ -74,6 +74,9 @@
  * @property {string} summary  Index subtitle.
  * @property {string} [note]  Page introduction under the h1.
  * @property {boolean} [hasSpeakerVolume]  Inject the live speaker-volume control.
+ * @property {boolean} [hasLeaderCurrentBudget]  Inject the leader-arm current budget.
+ *   Browser-local, not a settings.yaml path: the leader arm draws from the machine
+ *   running this page, so the value belongs to that device rather than the robot.
  * @property {PageSection[]} sections
  */
 
@@ -205,6 +208,7 @@ export const SETTINGS_PAGES = [
     title: "Safety & hardware",
     summary: "Physical limits, battery, and arm",
     note: "Configure the robot's physical backstops and hardware behavior.",
+    hasLeaderCurrentBudget: true,
     sections: [
       {
         title: "Motor safety limits",

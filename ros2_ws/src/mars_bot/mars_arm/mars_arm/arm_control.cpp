@@ -210,18 +210,7 @@ void MarsArmNode::controlTimerCallback() {
                 }
 
                 // SCHEDULED: interpolate near/far by arm extension for joints 1-4
-                constexpr double L2_x = 0.02825, L2_z = 0.12125;
-                constexpr double L3_x = 0.1375, L3_z = 0.0045;
-                constexpr double L45_x = 0.110838;
-                constexpr double kMaxReach = 0.37291;
-
-                double q2 = positions_rad[1], q3 = positions_rad[2], q4 = positions_rad[3];
-                double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
-
-                double ee_x = L2_x * std::cos(a2) + L2_z * std::sin(a2) + L3_x * std::cos(a23) + L3_z * std::sin(a23) +
-                              L45_x * std::cos(a234);
-
-                double horiz_reach = std::abs(ee_x);
+                double horiz_reach = horizReach(positions_rad[1], positions_rad[2], positions_rad[3]);
                 double extension_linear = std::clamp((horiz_reach / kMaxReach - 0.1) / 0.9, 0.0, 1.0);
                 double extension = extension_linear * extension_linear;
 
@@ -302,6 +291,7 @@ void MarsArmNode::controlTimerCallback() {
                     cmd_msg.position[i] = rad;
                 }
                 arm_command_state_pub_->publish(cmd_msg);
+
             } else if (has_head_command_.load()) {
                 std::lock_guard<std::mutex> head_lock(head_command_mutex_);
                 int head_enc = latest_head_command_;
@@ -359,6 +349,9 @@ void MarsArmNode::recordLoopTiming(std::array<std::chrono::steady_clock::time_po
 
 std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>& command_data) {
     // ===== INTELLIGENT JOINT LIMITS =====
+    // Kept exactly as it was: a known-good baseline. The body keepout below adds
+    // refusals on top and never removes one, so a mis-specified box can only
+    // over-restrict, never expose the body.
     if (command_data.size() >= 2) {
         double joint1_pos = command_data[0];
         double joint2_pos = command_data[1];
@@ -394,6 +387,69 @@ std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>
         }
 
         command_data[1] = std::clamp(joint2_pos, joint2_min_limit, joint2_max_limit);
+    }
+
+    // ===== BODY KEEPOUT =====
+    // A joint-space box cannot say "reach down over an edge, but never into your
+    // own chassis" — both look the same to any per-joint limit. So the arm's
+    // elbow, wrist and tool are placed in the base frame and tested against the
+    // body. The infeasible set is not an interval, so there is nothing to clamp:
+    // walk back along the segment from the last accepted pose toward the request
+    // and take the furthest point that is still clear. The arm slides up to the
+    // surface rather than freezing or snapping.
+    if (command_data.size() >= 4 && self_collision_.enabled && self_collision_.valid()) {
+        const std::array<double, 4> asked = {command_data[0], command_data[1], command_data[2], command_data[3]};
+        // The SWEEP from the last accepted pose, not just where it ends up.
+        const bool hits = have_safe_pose_ ? pathHitsBody(last_safe_pose_.data(), asked.data(), self_collision_)
+                                          : poseHitsBody(asked[0], asked[1], asked[2], asked[3], self_collision_);
+        if (hits && have_safe_pose_) {
+            std::array<double, 4> safe = last_safe_pose_;
+            std::array<double, 4> want = {command_data[0], command_data[1], command_data[2], command_data[3]};
+            // Walk forward and stop at the FIRST blocked step, rather than
+            // bisecting. The infeasible set is not convex — rounding a corner,
+            // the midpoint can be clear while a point before it is not — and a
+            // bisection would happily settle past a collision it never probed,
+            // which is how the arm clipped the top corner on its way up.
+            double lo = 0.0;
+            const int steps = pathSteps(safe.data(), want.data(), self_collision_);
+            for (int step = 1; step <= steps; ++step) {
+                const double t = static_cast<double>(step) / steps;
+                std::array<double, 4> probe;
+                for (int j = 0; j < 4; ++j)
+                    probe[j] = safe[j] + t * (want[j] - safe[j]);
+                if (poseHitsBody(probe[0], probe[1], probe[2], probe[3], self_collision_))
+                    break;
+                lo = t;
+            }
+            for (int j = 0; j < 4; ++j)
+                command_data[j] = safe[j] + lo * (want[j] - safe[j]);
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                 "Body keepout: pose would strike the chassis, held at %.0f%% of the way there",
+                                 lo * 100.0);
+        } else if (!hits) {
+            // Soft zone: ease off as the body gets close rather than running at
+            // full speed into the hard stop. Only a fraction of the requested
+            // move is accepted, shrinking to nothing at the margin, so the arm
+            // decelerates into the surface. The rejected part is what the
+            // operator feels — it shows up as /mars/arm/command_state diverging
+            // from the leader's request, and the leader pushes back by that gap.
+            const double clearance =
+                bodyClearance(command_data[0], command_data[1], command_data[2], command_data[3], self_collision_);
+            const double scale = approachScale(clearance, self_collision_);
+            if (scale < 1.0 && have_safe_pose_) {
+                const std::array<double, 4> want = {command_data[0], command_data[1], command_data[2], command_data[3]};
+                for (int j = 0; j < 4; ++j)
+                    command_data[j] = last_safe_pose_[j] + scale * (want[j] - last_safe_pose_[j]);
+                RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                      "Body keepout: %.0f mm clear, accepting %.0f%% of the requested move",
+                                      clearance * 1000.0, scale * 100.0);
+            }
+            last_safe_pose_ = {command_data[0], command_data[1], command_data[2], command_data[3]};
+            have_safe_pose_ = true;
+        }
+        // hits && !have_safe_pose_: nothing clear to retreat to yet (first command
+        // after boot already inside a box). Pass it through rather than refuse to
+        // move at all — the joint limits above still apply.
     }
 
     // Direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
