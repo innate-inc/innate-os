@@ -11,11 +11,6 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OFFICIAL_MANIFEST_DEFAULT = REPO_ROOT / "recordings" / "stereo_model_sources.yaml"
-OFFICIAL_MANIFEST_FALLBACK = (
-    REPO_ROOT / "ros2_ws" / "src" / "mars_bot" / "mars_cam" / "config" / "stereo_model_sources.example.yaml"
-)
-
 FAST_FOUNDATION_REPO = "https://github.com/NVlabs/Fast-FoundationStereo.git"
 FAST_FOUNDATION_REF = "master"
 FAST_FOUNDATION_CHECKOUT = REPO_ROOT / "ros2_ws" / "src" / "third_party" / "stereo_models" / "Fast-FoundationStereo"
@@ -59,34 +54,6 @@ def _ensure_git_checkout(target: Path, url: str, ref: str, update_existing: bool
         _run(["git", "submodule", "update", "--init", "--recursive"], cwd=target, dry_run=dry_run)
         return
     _run(["git", "clone", "--branch", ref, "--recursive", url, str(target)], cwd=REPO_ROOT, dry_run=dry_run)
-
-
-def _official_manifest_path(cli_manifest: str | None) -> Path:
-    if cli_manifest:
-        manifest = Path(cli_manifest).expanduser().resolve()
-        if not manifest.exists():
-            raise RuntimeError(f"Manifest does not exist: {manifest}")
-        return manifest
-    if OFFICIAL_MANIFEST_DEFAULT.exists():
-        return OFFICIAL_MANIFEST_DEFAULT
-    return OFFICIAL_MANIFEST_FALLBACK
-
-
-def _run_official_route(args: argparse.Namespace) -> None:
-    manifest = _official_manifest_path(args.manifest)
-    cmd = [sys.executable, str(REPO_ROOT / "scripts" / "setup_stereo_models.py"), "--manifest", str(manifest)]
-    if args.accept_eula:
-        cmd.append("--accept-eula")
-    if args.no_update_existing:
-        cmd.append("--no-update-existing")
-    if args.dry_run:
-        cmd.append("--dry-run")
-    if args.skip_rosdep:
-        cmd.append("--skip-rosdep")
-    if args.skip_build:
-        cmd.append("--skip-build")
-    print(f"[route] official_isaac_ros manifest={manifest}")
-    _run(cmd, cwd=REPO_ROOT, dry_run=False)
 
 
 def _run_lightweight_route(args: argparse.Namespace) -> None:
@@ -159,22 +126,18 @@ def _run_lightweight_route(args: argparse.Namespace) -> None:
     print("[next] lightweight route ready.")
     print(f"  source {venv_dir}/bin/activate")
     print(f"  python {checkout_dir}/scripts/run_demo.py --help")
-    print(f"  # or wire this env + repo into your ROS wrapper launch")
+    print("  # or wire this env + repo into your ROS wrapper launch")
     _run_bash(f"test -x {shlex.quote(str(python))}", cwd=REPO_ROOT, dry_run=args.dry_run)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Setup stereo benchmarking dependencies with selectable route.")
+    parser = argparse.ArgumentParser(description="Setup stereo benchmarking dependencies (lightweight route only).")
     parser.add_argument(
         "--route",
-        required=True,
-        choices=("official_isaac_ros", "lightweight_fast_foundation"),
+        default="lightweight_fast_foundation",
+        choices=("lightweight_fast_foundation",),
         help="Setup route to execute.",
     )
-    parser.add_argument("--manifest", help="Manifest path for official_isaac_ros route.")
-    parser.add_argument("--accept-eula", action="store_true", help="Pass through EULA acceptance for official route.")
-    parser.add_argument("--skip-rosdep", action="store_true", help="Skip rosdep in official route.")
-    parser.add_argument("--skip-build", action="store_true", help="Skip build in official route.")
     parser.add_argument("--checkout-dir", help="Override Fast-FoundationStereo checkout path.")
     parser.add_argument("--venv-dir", help="Override lightweight venv path.")
     parser.add_argument("--python", default="python3", help="Python executable used to create lightweight venv.")
@@ -191,13 +154,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.route == "official_isaac_ros":
-        _run_official_route(args)
-        return 0
-    if args.route == "lightweight_fast_foundation":
-        _run_lightweight_route(args)
-        return 0
-    raise RuntimeError(f"Unsupported route: {args.route}")
+    _run_lightweight_route(args)
+    return 0
 
 
 if __name__ == "__main__":

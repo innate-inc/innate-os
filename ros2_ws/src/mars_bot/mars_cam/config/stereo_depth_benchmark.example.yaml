@@ -95,18 +95,3 @@ models:
     disparity_topic: /stereo/igev/disparity
     pointcloud_topic: /stereo/igev/points
 
-  - name: ess
-    enabled: false
-    launch_command: >-
-      ros2 launch mars_cam ess_stereo.launch.py
-      use_sim_time:=true
-      model_package:=SET_ESS_PACKAGE
-      model_executable:=SET_ESS_EXECUTABLE
-      left_image_topic:=/mars/main_camera/left/image_raw
-      right_image_topic:=/mars/main_camera/right/image_raw
-      left_camera_info_topic:=/mars/main_camera/left/camera_info
-      right_camera_info_topic:=/mars/main_camera/right/camera_info
-    depth_topic: /stereo/ess/depth
-    inference_topic: /stereo/ess/depth
-    disparity_topic: /stereo/ess/disparity
-    pointcloud_topic: /stereo/ess/points

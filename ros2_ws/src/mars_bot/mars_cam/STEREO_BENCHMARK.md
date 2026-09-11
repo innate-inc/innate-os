@@ -35,21 +35,12 @@ After benchmarking:
 innate service start
 ```
 
-## 3) Setup route
+## 3) Setup route (lightweight only)
 
-### Route A: Official Isaac ROS integration (FoundationStereo + ESS)
+Official Isaac ROS integration is intentionally out of scope for this workflow because of ROS/version compatibility drift on this stack.
+Use only the lightweight MARS wrapper path.
 
-```bash
-cp ros2_ws/src/mars_bot/mars_cam/config/stereo_model_sources.example.yaml \
-  /home/jetson1/innate-os/recordings/stereo_model_sources.yaml
-sudo -v
-python3 /home/jetson1/innate-os/scripts/setup_stereo_routes.py \
-  --route official_isaac_ros \
-  --manifest /home/jetson1/innate-os/recordings/stereo_model_sources.yaml \
-  --accept-eula
-```
-
-### Route B: Lightweight Fast-FoundationStereo (Humble-friendly)
+### Lightweight Fast-FoundationStereo (supported path)
 
 ```bash
 python3 /home/jetson1/innate-os/scripts/setup_stereo_routes.py \
@@ -63,7 +54,7 @@ If `python3-venv` is missing:
 sudo apt-get install -y python3.10-venv
 ```
 
-Route B installs:
+This route installs:
 
 - `ros2_ws/src/third_party/stereo_models/Fast-FoundationStereo`
 - `.venvs/fast_foundation_stereo`
@@ -300,7 +291,7 @@ P95/P99 behavior matters more than average FPS.
 - missing costmap latencies: costmap topic was not published during run
 - overlay has no labels: verify `--lidar-topic`, `--camera-info-topic`, `--depth-topic`
 - duplicate downloads: `ps -eo pid,cmd | rg -i 'wget|curl|aria2c|pip install|apt-get'` then `kill <pid>`
-- Route A dependency mismatch on Humble/Jammy: use Route B
+- full Isaac ROS stack is intentionally not part of this runbook on this platform; use the lightweight wrapper path
 
 ## 12) Example final outputs generated
 
