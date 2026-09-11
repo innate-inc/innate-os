@@ -272,7 +272,11 @@ def _regenerate(overrides: dict) -> str:
 
 
 def _duplicate_top_level_keys(text: str) -> set:
-    keys = [line.split(":", 1)[0] for line in text.split("\n") if line[:1].isalnum() and ":" in line]
+    # Comments are excluded, not just unindented lines: the template carries the
+    # same `#   ros__parameters:` stanza under every node, and counting those
+    # would refuse every save.
+    lines = (line for line in text.split("\n") if line[:1] not in ("", " ", "#") and ":" in line)
+    keys = [line.split(":", 1)[0] for line in lines]
     return {key for key in keys if keys.count(key) > 1}
 
 
