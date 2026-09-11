@@ -19,11 +19,10 @@ Threading contract: see :class:`~brain_client.brain.llm.types.Conversation`.
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING
 
 from brain_client.brain.llm.openai import wire
-from brain_client.brain.llm.types import Decision, ToolCall, Usage, clean_speech
+from brain_client.brain.llm.types import Decision, ToolCall, Usage, clean_speech, parse_arguments
 from brain_client.brain.utils import FrameLabel
 
 if TYPE_CHECKING:
@@ -249,7 +248,7 @@ def _decision_from(output: list[dict]) -> Decision:
             decision.calls.append(
                 ToolCall(
                     name=str(item.get("name") or ""),
-                    args=_arguments(item.get("arguments")),
+                    args=parse_arguments(item.get("arguments")),
                     id=str(item.get("call_id") or ""),
                 )
             )
@@ -260,14 +259,3 @@ def _decision_from(output: list[dict]) -> Decision:
     decision.speech = clean_speech("".join(speech).strip())
     decision.thoughts = "\n".join(t for t in thoughts if t).strip() or None
     return decision
-
-
-def _arguments(raw: object) -> dict:
-    """Call arguments arrive as a JSON-encoded string, not an object."""
-    if isinstance(raw, dict):
-        return raw
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) and raw else {}
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}

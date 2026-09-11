@@ -202,7 +202,8 @@ def cmd_up(
             warn("No cloud LLM key configured — the sim is running WITHOUT an agent.")
             warn(
                 "Add GEMINI_API_KEY or OPENAI_API_KEY (your own vendor key, matching the "
-                "brain_backend setting) or INNATE_SERVICE_KEY (Innate proxy) to "
+                "brain_backend setting), OPENAI_COMPAT_BASE_URL (an OpenAI-compatible server) "
+                "or INNATE_SERVICE_KEY (Innate proxy) to "
                 f"{ENV_PATH}, or run `{CLI_SIM} setup`, then restart."
             )
         success("Innate sim runtime is up.")

@@ -58,7 +58,7 @@ def generate_launch_description():
     brain_backend_arg = DeclareLaunchArgument(
         "brain_backend",
         default_value=get_env("BRAIN_BACKEND", "gemini"),
-        description="Which provider the local brain thinks with: gemini or openai",
+        description="Which provider the local brain thinks with: gemini, openai or openai_compat",
     )
     brain_model_arg = DeclareLaunchArgument(
         "brain_model",

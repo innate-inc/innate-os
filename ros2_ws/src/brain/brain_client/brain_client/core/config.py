@@ -42,7 +42,7 @@ class BrainConfig:
     height_cam: float  # camera height above the floor (m)
 
     # --- Local brain ---
-    brain_backend: str  # which provider it thinks with: "gemini" | "openai"
+    brain_backend: str  # which provider it thinks with: "gemini" | "openai" | "openai_compat"
     brain_model: str
     brain_thinking_level: str  # written in the provider's vocabulary; "" = model default
     memory_model: str  # spatial memory search is Gemini-only, whatever the brain runs on
@@ -107,7 +107,9 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     "brain_model": "gemini-3.6-flash",
     # Each provider names its own levels: gemini takes "minimal" | "low" |
     # "medium" | "high", openai takes "none" | "low" | "medium" | "high" |
-    # "xhigh" | "max". "" = the model's default, and an unknown value falls
+    # "xhigh" | "max", openai_compat takes "off" (the vLLM/NIM chat-template
+    # switch for models that reason by default) | "low" | "medium" | "high"
+    # (reasoning_effort). "" = the model's default, and an unknown value falls
     # back to that with a warning rather than 400ing every request.
     # Measured on gemini-3.6-flash (2026-08): minimal is ~3x faster than the
     # default level (0.96s vs 3.08s median turn) and passed the same

@@ -14,6 +14,7 @@ verbatim on the next request and cannot be rebuilt from a Decision.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
@@ -35,6 +36,7 @@ class Provider(StrEnum):
 
     GEMINI = "gemini"
     OPENAI = "openai"
+    OPENAI_COMPAT = "openai_compat"  # any /v1/chat/completions server: NIM, vLLM, Ollama
 
 
 class Backend(StrEnum):
@@ -43,6 +45,7 @@ class Backend(StrEnum):
     PROXY = "innate-proxy"
     GEMINI_DIRECT = "gemini-direct"
     OPENAI_DIRECT = "openai-direct"
+    OPENAI_COMPAT = "openai-compat"
     UNCONFIGURED = "unconfigured"
 
 
@@ -129,6 +132,18 @@ class Conversation(Protocol):
         ...
 
     def clear(self) -> None: ...
+
+
+def parse_arguments(raw: object) -> dict:
+    """Tool-call arguments as the OpenAI wire formats carry them: a JSON-encoded
+    string, not an object. Anything unreadable is no arguments at all."""
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) and raw else {}
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 _TOOL_NARRATION = re.compile(r"Calling tool\b")

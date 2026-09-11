@@ -19,6 +19,8 @@ from config import (
     NO_BACKEND,
     OPENAI_API_KEY,
     OPENAI_BACKEND,
+    OPENAI_COMPAT_BACKEND,
+    OPENAI_COMPAT_BASE_URL,
     SECRET_ENV_KEYS,
     SETTINGS_PATH,
     is_configured_secret_value,
@@ -456,14 +458,23 @@ def configure_brain_backend(config: dict[str, object]) -> None:
     # what keeps this report and the runtime dashboard from disagreeing.
     backend = resolve_brain_backend(user_env)
 
+    if backend == OPENAI_COMPAT_BACKEND:
+        # Configured by hand in .env (a URL, a model, maybe a key): there is
+        # nothing for the menu below to collect, and answering it would
+        # switch the provider away from the endpoint that was just set up.
+        success(
+            f"OpenAI-compatible endpoint selected ({OPENAI_COMPAT_BASE_URL} detected); edit {ENV_PATH.name} to change it."
+        )
+        report_configured_keys(config)
+        return
     if not is_interactive_terminal():
         if backend == INNATE_BACKEND:
             success("Innate proxy selected (INNATE_SERVICE_KEY detected).")
         elif backend == NO_BACKEND:
             warn(
                 f"No brain key configured for {BRAIN_BACKEND}={user_env.get(BRAIN_BACKEND) or GEMINI_BACKEND}. "
-                f"Add GEMINI_API_KEY or OPENAI_API_KEY (your own vendor key) or INNATE_SERVICE_KEY "
-                f"(Innate proxy) to {ENV_PATH}."
+                f"Add GEMINI_API_KEY or OPENAI_API_KEY (your own vendor key), OPENAI_COMPAT_BASE_URL "
+                f"(an OpenAI-compatible server) or INNATE_SERVICE_KEY (Innate proxy) to {ENV_PATH}."
             )
         else:
             success(f"Direct {backend} access selected ({_VENDOR_KEYS[backend]} detected).")

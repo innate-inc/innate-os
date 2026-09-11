@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Innate Inc
 """Picking the model backend the brain thinks with.
 
-Adding a provider means adding a package beside these two and one line in
+Adding a provider means adding a package beside these and one line in
 :func:`pick_conversation`; nothing above this module knows which one is in use.
 """
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from brain_client.brain.llm import gemini, openai
+from brain_client.brain.llm import gemini, openai, openai_compat
 from brain_client.brain.llm.types import Backend, Provider
 
 if TYPE_CHECKING:
@@ -20,7 +20,12 @@ if TYPE_CHECKING:
     from brain_client.core.config import BrainConfig
     from innate_proxy import ProxyClient
 
-_BUILDERS = {Provider.GEMINI: gemini.build, Provider.OPENAI: openai.build}
+_BUILDERS = {Provider.GEMINI: gemini.build, Provider.OPENAI: openai.build, Provider.OPENAI_COMPAT: openai_compat.build}
+_KEY_HINTS = {
+    Provider.GEMINI: "GEMINI_API_KEY",
+    Provider.OPENAI: "OPENAI_API_KEY",
+    Provider.OPENAI_COMPAT: "OPENAI_COMPAT_BASE_URL (and OPENAI_COMPAT_API_KEY if the server wants one)",
+}
 
 
 def pick_conversation(
@@ -45,4 +50,7 @@ def provider(name: str, logger: RcutilsLogger) -> Provider:
 
 def key_hint(name: str) -> str:
     """Which vendor key would configure this provider without a service key."""
-    return "OPENAI_API_KEY" if name.strip().lower() == Provider.OPENAI else "GEMINI_API_KEY"
+    try:
+        return _KEY_HINTS[Provider(name.strip().lower())]
+    except ValueError:
+        return _KEY_HINTS[Provider.GEMINI]

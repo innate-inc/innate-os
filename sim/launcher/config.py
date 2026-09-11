@@ -91,9 +91,12 @@ PUBLISHED_PORT_ENV = {
 INNATE_BACKEND = "innate"
 GEMINI_BACKEND = "gemini"
 OPENAI_BACKEND = "openai"
+OPENAI_COMPAT_BACKEND = "openai_compat"
 NO_BACKEND = "none"
 GEMINI_API_KEY = "GEMINI_API_KEY"
 OPENAI_API_KEY = "OPENAI_API_KEY"
+OPENAI_COMPAT_BASE_URL = "OPENAI_COMPAT_BASE_URL"  # an openai_compat brain needs the URL, not a key
+OPENAI_COMPAT_API_KEY = "OPENAI_COMPAT_API_KEY"
 BRAIN_BACKEND = "BRAIN_BACKEND"  # which provider the robot's brain thinks with
 INNATE_SERVICE_KEY = "INNATE_SERVICE_KEY"
 AUTO_OS_IMAGE = "auto"
@@ -241,7 +244,7 @@ LEGACY_SHARED_CONTAINER = "innate-dev"
 LEGACY_SHARED_PROJECT = "innate-os"
 LEGACY_CLOUD_AGENT_CONTAINER = "innate-cloud-agent"
 OS_CONTAINER_TMUX_CMD = "./scripts/launch_sim_in_tmux.zsh --detach"
-SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY, OPENAI_API_KEY)
+SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY, OPENAI_API_KEY, OPENAI_COMPAT_API_KEY)
 LOG_TARGETS = {
     "bootstrap": BOOTSTRAP_LOG_PATH,
     "compose": COMPOSE_LOG_PATH,
@@ -466,18 +469,22 @@ def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
 def resolve_brain_backend(env: dict[str, str]) -> str:
     """Which key the in-process brain (brain_client) will use to reach its model.
 
-    The service key wins: it also buys voice, and it covers every provider,
-    which a vendor key does not. Below it, the vendor key that matches
-    BRAIN_BACKEND is the one the brain will actually use — a key for the other
-    vendor leaves it unconfigured, which is what this reports.
+    An openai_compat brain never uses the proxy, so its endpoint URL decides
+    alone. Otherwise the service key wins: it also buys voice, and it covers
+    every hosted provider, which a vendor key does not. Below it, the vendor
+    key that matches BRAIN_BACKEND is the one the brain will actually use — a
+    key for the other vendor leaves it unconfigured, which is what this reports.
 
     brain_client's `pick_conversation` (brain/llm/__init__.py) makes the real
     choice and owns this precedence; the launcher runs on the host and cannot
     import it, so this restates the rule. Change one and change the other.
     """
+    provider = (env.get(BRAIN_BACKEND, "") or GEMINI_BACKEND).strip().lower()
+    if provider == OPENAI_COMPAT_BACKEND:
+        has_url = is_configured_secret_value(OPENAI_COMPAT_BASE_URL, env.get(OPENAI_COMPAT_BASE_URL, ""))
+        return OPENAI_COMPAT_BACKEND if has_url else NO_BACKEND
     if is_configured_secret_value(INNATE_SERVICE_KEY, env.get(INNATE_SERVICE_KEY, "")):
         return INNATE_BACKEND
-    provider = (env.get(BRAIN_BACKEND, "") or GEMINI_BACKEND).strip().lower()
     vendor_key = OPENAI_API_KEY if provider == OPENAI_BACKEND else GEMINI_API_KEY
     if is_configured_secret_value(vendor_key, env.get(vendor_key, "")):
         return OPENAI_BACKEND if provider == OPENAI_BACKEND else GEMINI_BACKEND

@@ -40,6 +40,7 @@ from config import (
     LEGACY_SHARED_CONTAINER,
     LEGACY_SHARED_PROJECT,
     NO_BACKEND,
+    OPENAI_COMPAT_BACKEND,
     OS_BUILD_LOG_PATH,
     OS_CONTAINER_NAME,
     OS_CONTAINER_SERVICE,
@@ -2997,6 +2998,8 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
         llm_level, llm_label = "warn", "no key"
     elif config["brain_backend"] == INNATE_BACKEND:
         llm_level, llm_label = "healthy", "innate proxy"
+    elif config["brain_backend"] == OPENAI_COMPAT_BACKEND:
+        llm_level, llm_label = "healthy", "openai-compatible endpoint"
     else:
         llm_level, llm_label = "healthy", f"{config['brain_backend']} key"
 
