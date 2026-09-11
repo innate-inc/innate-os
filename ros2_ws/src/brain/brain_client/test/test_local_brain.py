@@ -450,6 +450,7 @@ import threading  # noqa: E402
 import time  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
+from brain_client.agents.types import TurnIntervals  # noqa: E402
 from brain_client.brain.agent import BrainAgent  # noqa: E402
 from brain_client.brain.utils import Event, EventKind  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
@@ -513,6 +514,34 @@ def agent_factory(monkeypatch):
     yield make
     for agent in created:
         agent.shutdown()
+
+
+@pytest.mark.parametrize(
+    "overrides, idle, supervision",
+    [
+        (None, 3.0, 5.0),
+        (TurnIntervals(), 3.0, 5.0),
+        (TurnIntervals(idle=0.01), 0.01, 5.0),
+        (TurnIntervals(supervision=1.0), 3.0, 1.0),
+        (TurnIntervals(0.01, 0.01), 0.01, 0.01),
+    ],
+)
+def test_agent_turn_intervals_override_only_the_requested_mode(agent_factory, overrides, idle, supervision):
+    agent, state = agent_factory()
+    state.current_directive = SimpleNamespace(get_turn_intervals=lambda: overrides) if overrides is not None else None
+
+    assert agent._interval() == idle
+    state.primitive_running = RunningSkill("search", "innate-os/find_next_person")
+    assert agent._interval() == supervision
+    state.current_directive = None  # switching away must not retain the override
+    assert agent._interval() == 5.0
+
+
+@pytest.mark.parametrize("mode", ["idle", "supervision"])
+@pytest.mark.parametrize("value", [0.0, -1.0, float("inf"), float("nan")])
+def test_agent_turn_intervals_reject_non_positive_or_non_finite_values(mode, value):
+    with pytest.raises(ValueError, match="finite positive"):
+        TurnIntervals(**{mode: value})
 
 
 def run_turn(agent: BrainAgent) -> None:
