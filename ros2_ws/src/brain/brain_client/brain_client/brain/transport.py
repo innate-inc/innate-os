@@ -58,7 +58,8 @@ class Backend(StrEnum):
     """Which way the brain reaches its model (surfaced in health and telemetry)."""
 
     PROXY = "innate-proxy"
-    DIRECT = "direct"
+    DIRECT = "direct"  # an endpoint of the operator's own
+    GEMINI_DIRECT = "gemini-direct"
     UNCONFIGURED = "unconfigured"
 
 
@@ -93,7 +94,7 @@ def pick_chat(
         return proxy_chat(proxy, extra_body), Backend.PROXY
     api_key = os.environ.get(GEMINI_API_KEY_ENV, "").strip()
     if api_key:
-        return direct_chat(Endpoint(GOOGLE_COMPAT_BASE_URL, api_key), extra_body), Backend.DIRECT
+        return direct_chat(Endpoint(GOOGLE_COMPAT_BASE_URL, api_key), extra_body), Backend.GEMINI_DIRECT
     return None, Backend.UNCONFIGURED
 
 

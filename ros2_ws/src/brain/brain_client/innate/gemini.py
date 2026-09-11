@@ -3,9 +3,12 @@
 # Copyright (c) 2026 Innate Inc
 """Gemini vision for skills: images plus a question, one Chat Completions call.
 
-Reached the way the brain is — the Innate proxy (its service key needs "gemini"
-access or the proxy returns 403), else ``GEMINI_API_KEY``. Import as
-``from innate import gemini``.
+Gemini specifically, not whichever model the brain is pointed at: the Innate
+proxy (its service key needs "gemini" access or the proxy returns 403), else
+``GEMINI_API_KEY``. ``llm_base_url`` is deliberately not consulted — the model
+id below is a Gemini one, and a skill process has no access to the brain node's
+parameters anyway. A robot with neither route gets ``None`` and its vision
+skills fail. Import as ``from innate import gemini``.
 """
 
 from __future__ import annotations

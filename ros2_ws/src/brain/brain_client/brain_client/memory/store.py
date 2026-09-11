@@ -310,8 +310,8 @@ class MemoryStore:
             self._commit_locked()
 
     def clear(self) -> int:
-        """Forget every memory on the current map — images, index, and upload
-        registry — returning how many were forgotten."""
+        """Forget every memory on the current map — images and index — returning
+        how many were forgotten."""
         with self._lock:
             if self._dir is None or not self._memories:
                 return 0
@@ -428,8 +428,8 @@ class MemoryStore:
             retired.unlink(missing_ok=True)
 
     def _write_image_locked(self, memory_id: int, jpeg: bytes) -> None:
-        # tmp + replace like the index: the proxy and upload threads read these
-        # files without the lock and must never see a torn frame.
+        # tmp + replace like the index: the webapp proxy and the memory search
+        # read these files without the lock and must never see a torn frame.
         assert self._dir is not None
         self._dir.mkdir(parents=True, exist_ok=True)
         tmp = self._dir / f"{memory_id}.jpg.tmp"

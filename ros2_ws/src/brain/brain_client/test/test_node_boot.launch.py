@@ -107,5 +107,5 @@ class TestNodesBoot(unittest.TestCase):
         health = json.loads(self._wait_for_message("/brain/websocket_status", String, timeout_sec=30.0).data)
         # No model credentials in CI: the local brain must say so truthfully
         # rather than crash or claim readiness.
-        self.assertIn(health.get("backend"), ("unconfigured", "innate-proxy", "direct"))
+        self.assertIn(health.get("backend"), ("unconfigured", "innate-proxy", "direct", "gemini-direct"))
         self.assertIn("connected", health)

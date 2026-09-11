@@ -47,9 +47,7 @@ _REDUNDANT_DISTANCE_M = 1.0
 _REDUNDANT_ANGLE_RAD = math.radians(100.0)  # most of the camera's 128 deg FOV still overlaps within this
 _SAME_VIEW_DISTANCE_M = 0.3  # lateral drift bound off the view axis, and the gridless fallback radius
 _SAME_VIEW_ANGLE_RAD = math.radians(20.0)
-_REFRESH_AGE_SEC = (
-    10.0  # dwelling refreshes the picture this often; superseded uploads are deleted, so churn stays cheap
-)
+_REFRESH_AGE_SEC = 10.0  # dwelling refreshes the picture this often; the old frame is deleted, so churn stays cheap
 _COVERAGE_THRESHOLD = 0.8  # a roomy view records until this much of its wedge is painted — overlap is welcome
 _WIDE_VIEW_M2 = 1.0  # below this the view is a close-up
 _CLOSEUP_THRESHOLD = 0.28  # a close-up must be mostly new — 0.2 starved small rooms, where every view is cramped

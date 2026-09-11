@@ -2,9 +2,9 @@
 # Copyright (c) 2026 Innate Inc
 """Skill-facing recall over the robot's spatial memory.
 
-A thin client of the brain's ``/brain/search_memory`` action — the Gemini
-context cache, transport, and credentials all live server-side; a skill only
-ever sees a typed :class:`RecallVerdict`. Declared like any interface::
+A thin client of the brain's ``/brain/search_memory`` action — the remembered
+frames, transport, and credentials all live server-side; a skill only ever sees
+a typed :class:`RecallVerdict`. Declared like any interface::
 
     memory: SpatialMemory
 

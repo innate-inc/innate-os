@@ -455,20 +455,26 @@ def test_absorb_commits_the_token_counts_generate_left_alone():
 
 
 def test_generate_raises_instead_of_committing_a_broken_reply():
-    # A truncated stream may hold half a tool call, and a 200 with nothing in it
-    # would record a silent, answerless exchange: both must fail the turn, so
-    # its retry keeps the events queued and the failure is visible.
-    context = make_context(lambda body: iter(stream(speech_chunk("half a th"), finish="length")))
+    # A truncated stream carrying a tool call may hold half of it, and a 200 with
+    # nothing in it would record a silent, answerless exchange: both must fail the
+    # turn, so its retry keeps the events queued and the failure is visible.
+    cut_off_call = [call_chunk("wave", {}, "c1"), finish_chunk("length")]
+    context = make_context(lambda body: iter(cut_off_call))
     with pytest.raises(RuntimeError, match="length"):
         context.generate(user_turn("hi", False), [], "S")
 
-    context = make_context(lambda body: iter([speech_chunk("no finish_reason ever came")]))
+    context = make_context(lambda body: iter([call_chunk("wave", {}, "c1")]))
     with pytest.raises(RuntimeError, match="missing"):
         context.generate(user_turn("hi", False), [], "S")
 
     context = make_context(lambda body: iter(stream()))
     with pytest.raises(RuntimeError, match="no content"):
         context.generate(user_turn("hi", False), [], "S")
+
+    # Truncated TEXT is committed as it stands: on_speech already voiced it, so
+    # failing would drop it from history and say it again on the retry.
+    context = make_context(lambda body: iter(stream(speech_chunk("half a th"), finish="length")))
+    assert context.generate(user_turn("hi", False), [], "S")["message"]["content"] == "half a th"
 
 
 # ---------- visual grounding (pixel -> floor target) ----------

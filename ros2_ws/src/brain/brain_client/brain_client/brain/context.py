@@ -260,10 +260,12 @@ def _assemble(chunks: Chunks, on_speech: Callable[[str], None] | None) -> dict:
                 _merge_call(calls, fragment)
             if delta.get("extra_content"):
                 extra = delta["extra_content"]
-    if finish_reason not in _FINISHED:
-        # A cut-off stream (length cap, filter, dropped connection) may hold
-        # half a tool call: committing it would replay a call the model never
-        # finished asking for. Fail the turn instead — the retry re-sends it.
+    if calls and finish_reason not in _FINISHED:
+        # A cut-off stream (length cap, filter, dropped connection) may hold half a
+        # tool call: committing it would replay a call the model never finished
+        # asking for. Text alone is committed as it stands — on_speech has already
+        # voiced it, and failing the turn would drop it from history and say it
+        # again on the retry.
         raise RuntimeError(f"the model stopped early: finish_reason={finish_reason or 'missing'}")
     message: dict = {"role": "assistant", "content": "".join(speech)}
     if calls:
