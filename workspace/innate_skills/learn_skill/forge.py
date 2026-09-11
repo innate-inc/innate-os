@@ -51,9 +51,14 @@ does and when to use it, in two sentences.
 execute() with no inputs.
 - Pause with self.sleep(seconds), never time.sleep. End a failed run with self.fail(message); \
 otherwise return a short result message.
-- Speak with self.say(text). Play a sound effect with self.play(description), the sound described \
-in words: self.play("a small dog barking twice"). Both take wait=True to block until the audio \
-has played.
+- Speak with self.say(text). Play a sound with self.play(description, seconds=...), the sound \
+described in words — self.play("a small dog barking twice"); music by instruments, tempo and mood, \
+self.play("a lilting orchestral waltz, oboe over soft strings, graceful", seconds=20). `seconds` \
+(0.5-30) sets the clip's length; unset, the generator picks a few. Both take wait=True to block \
+until the audio has played; without it the sound plays under what follows.
+- A dance, a song or a performance has its music: start it with self.play(..., seconds=<how long \
+the routine runs>) right before the moves, so they happen to it, and self.say only to introduce or \
+close the act.
 - Keep motion small and deliberate: turns under 180 degrees, drives under 0.5 m, head angles \
 between -30 and 30 degrees, arm poses inside the joint ranges below, ending at rest.
 - No comments and no prints.

@@ -80,15 +80,13 @@ class LearnSkill(Skill):
         self.fail(f"Could not learn it after {ROUNDS} rounds: {problem}")
 
     def _draft(self, forge: Forge, show: LearningMode, prompt: str) -> str:
-        """The coder's whole reply, muttered line by line as it streams."""
+        """The coder's whole reply, with the show's beeps for company while it streams."""
         reply: list[str] = []
-        pending = ""
-        for delta in forge.ask(prompt):
-            self.check_cancelled()
-            reply.append(delta)
-            *lines, pending = (pending + delta).split("\n")
-            for line in lines:
-                show.mutter(line)
+        with show.drafting() as drafted:
+            for delta in forge.ask(prompt):
+                self.check_cancelled()
+                reply.append(delta)
+                drafted(len(delta))
         return "".join(reply)
 
     def _install(self, draft: Draft, written: set[Path]) -> str | None:
