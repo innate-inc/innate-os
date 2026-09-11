@@ -30,6 +30,17 @@ def test_agent_types_shim_reexports_same_objects():
         assert getattr(agent_types, name) is getattr(agents_types, name)
 
 
+def test_brain_transport_shim_reexports_same_objects():
+    """workspace/inputs/micro_input.py imports pick_rest from the pre-#809 path,
+    and a robot's customized copy of it keeps that line across an update — the
+    shim is what stops a module move from taking the microphone down."""
+    from brain_client.brain import transport as transport_shim
+    from brain_client.brain.llm.gemini import transport as gemini_transport
+
+    for name in ("pick_rest", "pick_transport", "GeminiRest", "GeminiHttpError", "GENERATE_PATH"):
+        assert getattr(transport_shim, name) is getattr(gemini_transport, name)
+
+
 def test_skill_types_shim_reexports_same_objects():
     for name in (
         "Skill",

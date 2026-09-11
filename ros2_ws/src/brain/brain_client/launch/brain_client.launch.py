@@ -10,8 +10,8 @@ from brain_client.common.logging import get_logging_env_vars
 
 
 def generate_launch_description():
-    # Load environment variables from .env file (includes GEMINI_API_KEY for the
-    # local brain — read by the node from the environment, never a ROS param).
+    # Load environment variables from .env file (includes the brain's vendor keys
+    # — read by the node from the environment, never a ROS param).
     load_env_file()
 
     # Get logging environment variables
@@ -55,10 +55,17 @@ def generate_launch_description():
         default_value="True",
         description="Flag to enable full brain turn logging",
     )
-    gemini_model_arg = DeclareLaunchArgument(
-        "gemini_model",
-        default_value=get_env("GEMINI_MODEL", "gemini-3.6-flash"),
-        description="Gemini model powering the local brain",
+    brain_backend_arg = DeclareLaunchArgument(
+        "brain_backend",
+        default_value=get_env("BRAIN_BACKEND", "gemini"),
+        description="Which provider the local brain thinks with: gemini or openai",
+    )
+    brain_model_arg = DeclareLaunchArgument(
+        "brain_model",
+        # GEMINI_MODEL is the name this had before the brain could run on more
+        # than one provider; a robot's .env may still set it.
+        default_value=get_env("BRAIN_MODEL", get_env("GEMINI_MODEL", "gemini-3.6-flash")),
+        description="Model powering the local brain",
     )
 
     # --- Proxy service configuration ---
@@ -81,7 +88,8 @@ def generate_launch_description():
                 "simulator_mode": LaunchConfiguration("simulator_mode"),
                 "current_nav_mode_topic": LaunchConfiguration("current_nav_mode_topic"),
                 "log_everything": LaunchConfiguration("log_everything"),
-                "gemini_model": LaunchConfiguration("gemini_model"),
+                "brain_backend": LaunchConfiguration("brain_backend"),
+                "brain_model": LaunchConfiguration("brain_model"),
                 # Proxy service config
                 "cartesia_voice_id": LaunchConfiguration("cartesia_voice_id"),
             },
@@ -104,7 +112,8 @@ def generate_launch_description():
             simulator_mode_arg,
             current_nav_mode_topic_arg,
             log_everything_arg,
-            gemini_model_arg,
+            brain_backend_arg,
+            brain_model_arg,
             # Proxy service config args
             cartesia_voice_id_arg,
             brain_client_node,

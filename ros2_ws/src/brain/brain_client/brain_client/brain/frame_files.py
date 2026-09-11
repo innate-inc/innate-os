@@ -25,14 +25,18 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from brain_client.brain.transport import FILES_UPLOAD_PATH, UNSUPPORTED_ENDPOINT_STATUSES, GeminiHttpError
+from brain_client.brain.llm.gemini.transport import (
+    FILES_UPLOAD_PATH,
+    UNSUPPORTED_ENDPOINT_STATUSES,
+    GeminiHttpError,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from rclpy.impl.rcutils_logger import RcutilsLogger
 
-    from brain_client.brain.transport import GeminiRest
+    from brain_client.brain.llm.gemini.transport import GeminiRest
     from brain_client.memory.store import Memory, MemoryStore
 
 _USABLE_FOR_SEC = 47 * 3600  # Gemini deletes uploads at 48 h; stop referencing an hour early

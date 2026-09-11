@@ -199,8 +199,9 @@
 #     auto_localize_timeout: 30.0   # seconds to keep trying auto-localization on startup
 
 # ── Brain runtime (local agent loop) ──────────────────────────────────
-# (Gemini credentials are connectivity and live in .env.) The TTS voice is global;
-# set it under /** above.
+# (Model credentials are connectivity and live in .env: INNATE_SERVICE_KEY for
+# the proxy, or GEMINI_API_KEY / OPENAI_API_KEY for the matching brain_backend.)
+# The TTS voice is global; set it under /** above.
 # brain_client_node:
 #   ros__parameters:
 #     vertical_fov: 80.0            # camera vertical field of view (degrees)
@@ -209,7 +210,10 @@
 #     scan_stale_after_sec: 10.0    # seconds without a lidar scan before flagging stale
 #     send_arm_camera_image: true   # also send the arm wrist camera image to the model
 #     log_everything: true          # log every turn's full input
-#     gemini_model: "gemini-3.6-flash"
+#     brain_backend: "gemini"        # which provider the brain thinks with: gemini | openai
+#     brain_model: "gemini-3.6-flash"  # must belong to brain_backend
+#     brain_thinking_level: "minimal"  # the provider's own vocabulary; "" = model default
+#     memory_model: "gemini-3.6-flash" # spatial memory search is Gemini-only
 #     timezone: ""                  # IANA zone for the clock the agent sees; "" = the robot OS's own
 #     idle_turn_interval: 3.0       # seconds between looks when no skill is running
 #     supervision_turn_interval: 5.0  # seconds between looks while a skill runs

@@ -15,7 +15,7 @@ import re
 import threading
 import time
 
-from brain_client.brain.context import split_tool_narration
+from brain_client.brain.llm.types import split_tool_narration
 from brain_client.common.enums import StrEnum
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
@@ -167,7 +167,7 @@ class SpeechStreamer:
             return
         # Leaked tool narration, never speech — cut mid-sentence too (the model
         # appends it without a boundary) and mute the rest of the reply. Shared
-        # with context._clean_speech so the audio never carries text the chat
+        # with llm.types.clean_speech so the audio never carries text the chat
         # transcript scrubbed.
         sentence, truncated = split_tool_narration(sentence.strip())
         if truncated:

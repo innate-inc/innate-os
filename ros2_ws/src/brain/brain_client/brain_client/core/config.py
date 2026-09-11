@@ -7,8 +7,9 @@ it can declare/read ROS parameters, but the dataclass itself is plain data —
 which keeps every consumer testable without a ROS runtime.
 
 Credentials deliberately stay out of the ROS parameter surface: the brain
-reaches Gemini through the Innate proxy (INNATE_SERVICE_KEY) or directly via
-the ``GEMINI_API_KEY`` environment variable (loaded from ``.env`` by launch).
+reaches its provider through the Innate proxy (INNATE_SERVICE_KEY) or directly
+via that vendor's own key (``GEMINI_API_KEY`` / ``OPENAI_API_KEY``), loaded
+from ``.env`` by launch.
 """
 
 from __future__ import annotations
@@ -40,9 +41,11 @@ class BrainConfig:
     x_cam: float  # camera forward offset from base_link (m)
     height_cam: float  # camera height above the floor (m)
 
-    # --- Local brain (Gemini) ---
-    gemini_model: str
-    gemini_thinking_level: str  # "low" | "high"; "" = model default
+    # --- Local brain ---
+    brain_backend: str  # which provider it thinks with: "gemini" | "openai"
+    brain_model: str
+    brain_thinking_level: str  # written in the provider's vocabulary; "" = model default
+    memory_model: str  # spatial memory search is Gemini-only, whatever the brain runs on
     idle_turn_interval: float  # seconds between looks when no skill is running
     supervision_turn_interval: float  # seconds between looks while a skill runs
     history_max_entries: int  # conversation entries kept for the model
@@ -70,12 +73,11 @@ class BrainConfig:
         accessor = {str: "string_value", bool: "bool_value", int: "integer_value", float: "double_value"}
         for name, default in _PARAM_DEFAULTS.items():
             node.declare_parameter(name, default)
-        return cls(
-            **{
-                name: getattr(node.get_parameter(name).get_parameter_value(), accessor[type(default)])
-                for name, default in _PARAM_DEFAULTS.items()
-            }
-        )
+        values = {
+            name: getattr(node.get_parameter(name).get_parameter_value(), accessor[type(default)])
+            for name, default in _PARAM_DEFAULTS.items()
+        }
+        return cls(**_carry_renamed(node, values))
 
 
 # One default per BrainConfig field, in field order; a value's type must match
@@ -100,16 +102,25 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     "vertical_fov": 80.0,
     "x_cam": 0.0197,
     "height_cam": 0.19663,
-    # --- Local brain (Gemini) ---
-    "gemini_model": "gemini-3.6-flash",
-    # "minimal" | "low" | "medium" | "high"; "" = model default.
-    # Measured on 3.6-flash (2026-08): minimal is ~3x faster than the
+    # --- Local brain ---
+    "brain_backend": "gemini",
+    "brain_model": "gemini-3.6-flash",
+    # Each provider names its own levels: gemini takes "minimal" | "low" |
+    # "medium" | "high", openai takes "none" | "low" | "medium" | "high" |
+    # "xhigh" | "max". "" = the model's default, and an unknown value falls
+    # back to that with a warning rather than 400ing every request.
+    # Measured on gemini-3.6-flash (2026-08): minimal is ~3x faster than the
     # default level (0.96s vs 3.08s median turn) and passed the same
     # single-turn discipline probes (wait on idle, ignore STT noise,
     # tool choice, go_to_point_in_view grounding). An earlier model's "low"
     # measurably hurt multi-turn instruction-following (skill re-runs,
-    # chatter) — if that resurfaces, revert to "" here.
-    "gemini_thinking_level": "minimal",
+    # chatter) — if that resurfaces, revert to "" here. The numbers are
+    # Gemini's; another provider's levels need their own measurement.
+    "brain_thinking_level": "minimal",
+    # Spatial memory search needs Gemini context caching and the Files API,
+    # which have no counterpart elsewhere, so it stays on Gemini even when the
+    # agent thinks with another provider.
+    "memory_model": "gemini-3.6-flash",
     "idle_turn_interval": 3.0,
     "supervision_turn_interval": 5.0,
     # Compaction evicts to half the cap, so depth rides 1000-2000 entries. A silent
@@ -129,3 +140,21 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     # --- Proxy service config ---
     "cartesia_voice_id": "9fdaae0b-f885-4813-b589-3c07cf9d5fea",
 }
+
+
+# Settings named before the brain could run on more than one provider. A robot's
+# settings.yaml still carries them, and ignoring one would silently revert that
+# robot to the default model.
+_RENAMED = {"gemini_model": "brain_model", "gemini_thinking_level": "brain_thinking_level"}
+
+
+def _carry_renamed(node, values: dict) -> dict:
+    """Let a retired parameter still set the one that replaced it, and say so."""
+    for old, new in _RENAMED.items():
+        node.declare_parameter(old, "")
+        legacy = node.get_parameter(old).get_parameter_value().string_value
+        if not legacy or values[new] != _PARAM_DEFAULTS[new]:
+            continue
+        node.get_logger().warn(f"[Brain] '{old}' is now '{new}' — using {legacy!r}; rename it in settings.yaml")
+        values[new] = legacy
+    return values

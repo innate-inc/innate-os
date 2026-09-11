@@ -38,7 +38,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from brain_client.brain.frame_files import FrameFiles
-from brain_client.brain.transport import (
+from brain_client.brain.llm.gemini.transport import (
     CACHED_CONTENTS_PATH,
     GENERATE_PATH,
     UNSUPPORTED_ENDPOINT_STATUSES,
@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 
     from rclpy.impl.rcutils_logger import RcutilsLogger
 
-    from brain_client.brain.transport import GeminiRest
+    from brain_client.brain.llm.gemini.transport import GeminiRest
     from brain_client.memory.store import Memory, MemorySnapshot, MemoryStore
 
 _TTL_SEC = 12 * 3600  # ~20k-token cache: 12h of storage costs ~$0.24, cheap insurance against cold starts

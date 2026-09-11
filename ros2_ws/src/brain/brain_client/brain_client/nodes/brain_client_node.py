@@ -46,9 +46,9 @@ from brain_client.agents.studio import (
     studio_fields,
 )
 from brain_client.brain.agent import BrainAgent
+from brain_client.brain.llm.gemini.transport import pick_rest
 from brain_client.brain.memory_search import MemorySearch
 from brain_client.brain.search_server import MemorySearchServer
-from brain_client.brain.transport import pick_rest
 from brain_client.brain.utils import EventKind
 from brain_client.common.script_paths import get_innate_os_root
 from brain_client.core.config import BrainConfig
@@ -204,7 +204,7 @@ class BrainClientNode(Node):
         )
         rest = pick_rest(self._proxy)
         self.memory_search = (
-            MemorySearch(self.memory_store, rest, model=cfg.gemini_model, logger=self.get_logger())
+            MemorySearch(self.memory_store, rest, model=cfg.memory_model, logger=self.get_logger())
             if rest is not None
             else None
         )

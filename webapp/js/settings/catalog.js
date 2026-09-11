@@ -113,6 +113,11 @@ const TIMEZONE_OPTIONS = [
   { value: "UTC", label: "UTC" },
 ];
 
+const BRAIN_BACKEND_OPTIONS = [
+  { value: "gemini", label: "Gemini" },
+  { value: "openai", label: "OpenAI" },
+];
+
 const VAD_ENGINE_OPTIONS = [
   { value: "silero", label: "Silero (neural)" },
   { value: "energy", label: "Energy threshold" },
@@ -335,7 +340,10 @@ export const SETTINGS_PAGES = [
         title: "AI models",
         note: "The brain and the speech-to-text path use separate models. The transcribe backend picks which STT model knob applies.",
         knobs: [
-          { path: ["brain_client_node", P, "gemini_model"], label: "Brain model", default: "gemini-3.6-flash", type: "string", doc: "Gemini model powering the local brain", subsection: "Brain" },
+          { path: ["brain_client_node", P, "brain_backend"], label: "Brain provider", default: "gemini", type: "string", options: BRAIN_BACKEND_OPTIONS, doc: "Which provider the local brain thinks with. Without an Innate service key it needs that vendor's own key in .env", subsection: "Brain" },
+          { path: ["brain_client_node", P, "brain_model"], label: "Brain model", default: "gemini-3.6-flash", type: "string", doc: "Model powering the local brain. Must belong to the chosen provider", subsection: "Brain" },
+          { path: ["brain_client_node", P, "brain_thinking_level"], label: "Thinking level", default: "minimal", type: "string", doc: "Named in the provider's own vocabulary: gemini takes minimal/low/medium/high, openai none/low/medium/high/xhigh/max. Blank uses the model default", subsection: "Brain" },
+          { path: ["brain_client_node", P, "memory_model"], label: "Spatial memory model", default: "gemini-3.6-flash", type: "string", doc: "Memory search needs Gemini context caching, so it stays on Gemini whichever provider the brain uses", subsection: "Brain" },
           { path: ["input_manager_node", P, "stt_backend"], label: "Transcribe backend", default: "elevenlabs", type: "string", options: STT_BACKEND_OPTIONS, doc: "Which service transcribes the microphone", subsection: "Speech to text" },
           { path: ["input_manager_node", P, "stt_vad_engine"], label: "VAD engine", default: "silero", type: "string", options: VAD_ENGINE_OPTIONS, doc: "Local voice detector, every backend", subsection: "Speech to text" },
           { path: ["input_manager_node", P, "elevenlabs_batch_stt_model"], label: "Scribe batch model", default: "scribe_v2", type: "string", doc: "ElevenLabs model for the elevenlabs_batch backend", subsection: "Speech to text" },
