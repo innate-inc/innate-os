@@ -199,7 +199,8 @@
 #     auto_localize_timeout: 30.0   # seconds to keep trying auto-localization on startup
 
 # ── Brain runtime (local agent loop) ──────────────────────────────────
-# (Gemini credentials are connectivity and live in .env.) The TTS voice is global;
+# (Credentials are connectivity and live in .env: GEMINI_API_KEY, or LLM_API_KEY for
+# an OpenAI-compatible endpoint.) The TTS voice is global;
 # set it under /** above.
 # brain_client_node:
 #   ros__parameters:
@@ -209,7 +210,9 @@
 #     scan_stale_after_sec: 10.0    # seconds without a lidar scan before flagging stale
 #     send_arm_camera_image: true   # also send the arm wrist camera image to the model
 #     log_everything: true          # log every turn's full input
-#     gemini_model: "gemini-3.6-flash"
+#     gemini_model: "gemini-3.6-flash"  # or the endpoint's own model id when llm_base_url is set
+#     llm_base_url: ""              # think with an OpenAI-compatible server instead: http://192.168.1.20:8000/v1 (vLLM), :11434/v1 (Ollama), https://integrate.api.nvidia.com/v1
+#     llm_extra_body: ""            # JSON merged into that server's requests, e.g. {"chat_template_kwargs": {"enable_thinking": false}} for Nemotron 3
 #     timezone: ""                  # IANA zone for the clock the agent sees; "" = the robot OS's own
 #     idle_turn_interval: 3.0       # seconds between looks when no skill is running
 #     supervision_turn_interval: 5.0  # seconds between looks while a skill runs

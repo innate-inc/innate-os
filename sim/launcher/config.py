@@ -8,6 +8,7 @@ import functools
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -95,8 +96,11 @@ PUBLISHED_PORT_ENV = {
 # straight at Google with a Gemini key, or not at all.
 INNATE_BACKEND = "innate"
 GEMINI_BACKEND = "gemini"
+OPENAI_COMPAT_BACKEND = "openai-compat"
 NO_BACKEND = "none"
 GEMINI_API_KEY = "GEMINI_API_KEY"
+LLM_BASE_URL = "LLM_BASE_URL"  # an OpenAI-compatible endpoint, the .env way; settings.yaml's llm_base_url wins
+LLM_API_KEY = "LLM_API_KEY"
 INNATE_SERVICE_KEY = "INNATE_SERVICE_KEY"
 AUTO_OS_IMAGE = "auto"
 LOCAL_OS_IMAGE = "local"
@@ -253,7 +257,7 @@ LEGACY_SHARED_CONTAINER = "innate-dev"
 LEGACY_SHARED_PROJECT = "innate-os"
 LEGACY_CLOUD_AGENT_CONTAINER = "innate-cloud-agent"
 OS_CONTAINER_TMUX_CMD = "./scripts/launch_sim_in_tmux.zsh --detach"
-SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY)
+SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY, LLM_API_KEY)
 LOG_TARGETS = {
     "bootstrap": BOOTSTRAP_LOG_PATH,
     "compose": COMPOSE_LOG_PATH,
@@ -475,14 +479,30 @@ def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
     return None
 
 
-def resolve_brain_backend(env: dict[str, str]) -> str:
-    """Which key the in-process brain (brain_client) will use to reach Gemini.
+_LLM_BASE_URL_SETTING = re.compile(r"""^\s*llm_base_url:\s*["']?(?P<url>[^"'#\s]+)""", re.MULTILINE)
 
-    The service key wins: it also buys voice, which a Gemini key does not.
-    brain_client's `Backend` (brain/transport.py) makes the real choice and owns
-    this precedence; the launcher runs on the host and cannot import it, so this
-    restates the rule. Change one and change the other.
+
+def settings_llm_endpoint(settings_path: Path) -> str:
+    """The llm_base_url a settings.yaml sets, or "". Read as text: the launcher
+    has no YAML parser, and one uncommented key is all it needs to know."""
+    if not settings_path.is_file():
+        return ""
+    match = _LLM_BASE_URL_SETTING.search(settings_path.read_text(encoding="utf-8"))
+    return match.group("url") if match else ""
+
+
+def resolve_brain_backend(env: dict[str, str], settings_endpoint: str = "") -> str:
+    """Which way the in-process brain (brain_client) will reach its model.
+
+    An OpenAI-compatible endpoint — set in settings.yaml or as LLM_BASE_URL — wins
+    outright; it never uses the proxy. Below it the service key wins: it also
+    buys voice, which a Gemini key does not. brain_client's `pick_transport`
+    (brain/transport.py) makes the real choice and owns this precedence; the
+    launcher runs on the host and cannot import it, so this restates the rule.
+    Change one and change the other.
     """
+    if settings_endpoint.strip() or is_configured_secret_value(LLM_BASE_URL, env.get(LLM_BASE_URL, "")):
+        return OPENAI_COMPAT_BACKEND
     if is_configured_secret_value(INNATE_SERVICE_KEY, env.get(INNATE_SERVICE_KEY, "")):
         return INNATE_BACKEND
     if is_configured_secret_value(GEMINI_API_KEY, env.get(GEMINI_API_KEY, "")):
@@ -813,7 +833,7 @@ def get_config() -> dict[str, object]:
     return {
         "raw_env": merged_env,
         "user_env": user_env,
-        "brain_backend": resolve_brain_backend(merged_env),
+        "brain_backend": resolve_brain_backend(merged_env, settings_llm_endpoint(SETTINGS_PATH)),
         "os_repo": os_repo,
         "sim_repo": sim_repo,
         "foxglove_port": str(SIM_FOXGLOVE_PORT),
