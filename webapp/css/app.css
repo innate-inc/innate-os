@@ -11462,7 +11462,10 @@ body.story-active :is(.rail, .rail-ribbon, .rail-scrim, .sim-scene-setup, .agent
 body.story-active { grid-template-columns: minmax(0, 1fr); }
 .agent-cockpit.story-active > :is(.agent-stage-view-toggle, .sim-debug-stack, .agent-challenge-dock) { display: none; }
 .agent-cockpit.story-active .agent-stream > .chat-msg:is(.skill-output, .system):not(.narrator) { display: none; }
-.agent-cockpit.story-active .agent-stream.compact > .chat-thoughts { display: none; }
+/* A first-timer does not need the model's reasoning, and with it never shown the Compact /
+   Detailed switch has nothing to switch: both go until the story is over. */
+.agent-cockpit.story-active .agent-stream > .chat-thoughts { display: none; }
+.agent-cockpit.story-active .agent-stream-mode { display: none; }
 /* In the story a failure is a setback, not an alarm. */
 .agent-cockpit.story-active .agent-stream .chat-skill.failed { border-left-color: #d9a441; }
 .agent-cockpit.story-active .agent-stream .chat-skill.failed .chat-skill-status { color: #d9a441; }
