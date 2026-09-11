@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Innate Inc
 #include "mars_arm/robot.hpp"
 #include <iostream>
+#include <stdexcept>
 #include <chrono>
 #include <thread>
 
@@ -115,11 +116,10 @@ std::tuple<std::vector<int>, std::vector<int>, std::vector<int>> Robot::readStat
     if (result != COMM_SUCCESS) {
         if (tries > 0) {
             return readState(tries - 1);
-        } else {
-            std::cerr << "Failed to read state!" << std::endl;
-            auto z = std::vector<int>(servo_ids_.size(), 0);
-            return {z, z, z};
         }
+        // Never hand back zeros: the control loop would publish them as a
+        // real pose (encoder 0 = -pi) and a fold would hold the arm there.
+        throw std::runtime_error("failed to read servo state over the bus");
     }
 
     std::vector<int> positions;

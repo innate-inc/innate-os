@@ -75,6 +75,7 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     timer_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     service_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     health_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    stop_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
     // Declare parameters
     this->declare_parameter("baud_rate", 1000000);
@@ -82,6 +83,8 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     this->declare_parameter("trajectory_rate_hz", 30.0);
     this->declare_parameter("max_jerk", 0.0);  // rad/s³, 0 = disabled
     this->declare_parameter("joints", std::vector<std::string>{});
+    this->declare_parameter("rest_pose", std::vector<double>{});
+    this->declare_parameter("auto_rest", true);
 
     int baud_rate = this->get_parameter("baud_rate").as_int();
     control_frequency_ = this->get_parameter("control_frequency").as_double();
@@ -129,7 +132,7 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     arm_torque_off_service_ = this->create_service<std_srvs::srv::Trigger>(
         "/mars/arm/torque_off",
         std::bind(&MarsArmNode::armTorqueOffCallback, this, std::placeholders::_1, std::placeholders::_2),
-        rmw_qos_profile_services_default, service_callback_group_);
+        rmw_qos_profile_services_default, stop_callback_group_);
 
     arm_reboot_service_ = this->create_service<std_srvs::srv::Trigger>(
         "/mars/arm/reboot",
@@ -178,12 +181,11 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
     arm_state_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
     joint_state_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint_head"};
 
-    // Initialize command buffers with current positions
-    RCLCPP_DEBUG(this->get_logger(), "Initializing command buffers with current positions");
-    auto [initial_positions, initial_velocities, initial_loads] = robot_->readState();
-    (void)initial_loads;
-    latest_head_command_ = initial_positions[6];
-    syncTargetToMotorPositions();
+    try {
+        syncTargetToMotorPositions();
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Could not read the servos at start-up: %s", e.what());
+    }
 
     // ── Timers ──
     RCLCPP_DEBUG(this->get_logger(), "Creating control timer at %.1f Hz", control_frequency_);
@@ -201,10 +203,13 @@ MarsArmNode::MarsArmNode() : Node("mars_arm") {
         this->add_on_set_parameters_callback(std::bind(&MarsArmNode::onParameterChange, this, std::placeholders::_1));
     RCLCPP_DEBUG(this->get_logger(), "PID hot-reload enabled (use ros2 param set or pid_hot_reload.py)");
 
-    RCLCPP_INFO(this->get_logger(), "Mars Arm Node ready!");
+    // Same callback group as the goto services: a fold and a goto never run
+    // at the same time, and a client's goto queues behind a fold in flight.
+    idle_rest_timer_ = this->create_wall_timer(std::chrono::seconds(1), std::bind(&MarsArmNode::idleRestCallback, this),
+                                               service_callback_group_);
+    markArmUnowned();  // the boot grace counts from here: servo init above took seconds
 
-    // No homing here: the control timer consumes trajectories, and it only
-    // fires once the executor spins — after this constructor returns.
+    RCLCPP_INFO(this->get_logger(), "Mars Arm Node ready!");
 }
 
 }  // namespace mars_arm
@@ -213,7 +218,9 @@ int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<mars_arm::MarsArmNode>();
 
-    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
+    // One thread per callback group (timer, service, health, stop, default)
+    // so torque_off never waits for a thread behind a fold.
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 5);
     executor.add_node(node);
     executor.spin();
 

@@ -32,22 +32,11 @@ void MarsArmNode::controlTimerCallback() {
 
         // ========== PUBLISH ARM STATE ==========
         std::vector<double> positions_rad;
-        for (int pos : positions) {
-            positions_rad.push_back(((pos - 2048) * 2 * M_PI) / 4096.0);
-        }
-
         std::vector<double> velocities_rad;
-        for (int vel : velocities) {
-            velocities_rad.push_back((vel * 2 * M_PI) / 4096.0);
-        }
-
-        // Flip directions for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
-        std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
-        for (size_t idx : flip_indices) {
-            if (idx < positions_rad.size()) {
-                positions_rad[idx] = -positions_rad[idx];
-                velocities_rad[idx] = -velocities_rad[idx];
-            }
+        for (size_t j = 0; j < positions.size(); ++j) {
+            positions_rad.push_back(jointRad(positions[j], j));
+            const double vel = (velocities[j] * 2 * M_PI) / 4096.0;
+            velocities_rad.push_back(flippedJoint(j) ? -vel : vel);
         }
 
         // Publish arm joint state (only first 6 servos) to /mars/arm/state
@@ -210,18 +199,9 @@ void MarsArmNode::controlTimerCallback() {
                 }
 
                 // SCHEDULED: interpolate near/far by arm extension for joints 1-4
-                constexpr double L2_x = 0.02825, L2_z = 0.12125;
-                constexpr double L3_x = 0.1375, L3_z = 0.0045;
-                constexpr double L45_x = 0.110838;
                 constexpr double kMaxReach = 0.37291;
 
-                double q2 = positions_rad[1], q3 = positions_rad[2], q4 = positions_rad[3];
-                double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
-
-                double ee_x = L2_x * std::cos(a2) + L2_z * std::sin(a2) + L3_x * std::cos(a23) + L3_z * std::sin(a23) +
-                              L45_x * std::cos(a234);
-
-                double horiz_reach = std::abs(ee_x);
+                double horiz_reach = std::abs(gripperTipX(positions_rad[1], positions_rad[2], positions_rad[3]));
                 double extension_linear = std::clamp((horiz_reach / kMaxReach - 0.1) / 0.9, 0.0, 1.0);
                 double extension = extension_linear * extension_linear;
 
@@ -295,11 +275,8 @@ void MarsArmNode::controlTimerCallback() {
                 cmd_msg.header.stamp = this->now();
                 cmd_msg.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
                 cmd_msg.position.resize(6);
-                for (int i = 0; i < 6; ++i) {
-                    double rad = ((full_command[i] - 2048) * 2 * M_PI) / 4096.0;
-                    if (i == 1 || i == 2 || i == 3 || i == 5)
-                        rad = -rad;
-                    cmd_msg.position[i] = rad;
+                for (size_t i = 0; i < 6; ++i) {
+                    cmd_msg.position[i] = jointRad(full_command[i], i);
                 }
                 arm_command_state_pub_->publish(cmd_msg);
             } else if (has_head_command_.load()) {
@@ -357,57 +334,36 @@ void MarsArmNode::recordLoopTiming(std::array<std::chrono::steady_clock::time_po
                           robot_->last_write_txrx_us);
 }
 
+// The shoulder's back limit as a function of base yaw: the joint's own limit
+// out at the sides, the body-clearance angle through the middle.
+double MarsArmNode::shoulderMinLimit(double yaw) const {
+    const double clear = -joint_configs_[1].max_pos_rad;
+    const std::array<double, 4> limits{clear, kShoulderClearanceRad, kShoulderClearanceRad, clear};
+    return piecewiseLinear(kShoulderClearanceYaws, limits, yaw);
+}
+
+double MarsArmNode::clampToJointRange(size_t joint, double rad) const {
+    const auto& c = joint_configs_[joint];
+    if (flippedJoint(joint)) {
+        return std::clamp(rad, -c.max_pos_rad, -c.min_pos_rad);
+    }
+    return std::clamp(rad, c.min_pos_rad, c.max_pos_rad);
+}
+
 std::vector<int> MarsArmNode::applyLimitsAndConvertToEncoder(std::vector<double>& command_data) {
-    // ===== INTELLIGENT JOINT LIMITS =====
     if (command_data.size() >= 2) {
-        double joint1_pos = command_data[0];
-        double joint2_pos = command_data[1];
-
-        const auto& joint2_config = joint_configs_[1];
-        double config_min = joint2_config.min_pos_rad;
-        double config_max = joint2_config.max_pos_rad;
-
-        double joint2_min_limit = -config_max;
-        double joint2_max_limit = -config_min;
-
-        const double original_min_limit = -config_max;
-        const double restricted_limit = -0.5;
-
-        if (joint1_pos < -1.35) {
-            // Negative side clear — no restriction
-        } else if (joint1_pos < -1.0) {
-            double t = -(joint1_pos - (-1.0)) / (-1.0 - (-1.35));
-            double interpolated_limit = restricted_limit + t * (original_min_limit - restricted_limit);
-            joint2_min_limit = std::max(joint2_min_limit, interpolated_limit);
-        } else if (joint1_pos < 1.0) {
-            joint2_min_limit = std::max(joint2_min_limit, restricted_limit);
-        } else if (joint1_pos < 1.25) {
-            double t = (joint1_pos - 1.0) / (1.25 - 1.0);
-            double interpolated_limit = restricted_limit + t * (original_min_limit - restricted_limit);
-            joint2_min_limit = std::max(joint2_min_limit, interpolated_limit);
-        }
-
-        if (joint2_pos < joint2_min_limit) {
+        const double min_limit = shoulderMinLimit(command_data[0]);
+        if (command_data[1] < min_limit) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                 "Joint2 limited due to joint1=%.3f: requested %.3f, clamped to %.3f", joint1_pos,
-                                 joint2_pos, joint2_min_limit);
+                                 "Joint2 limited due to joint1=%.3f: requested %.3f, clamped to %.3f", command_data[0],
+                                 command_data[1], min_limit);
         }
-
-        command_data[1] = std::clamp(joint2_pos, joint2_min_limit, joint2_max_limit);
+        command_data[1] = std::clamp(command_data[1], min_limit, -joint_configs_[1].min_pos_rad);
     }
 
-    // Direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
-    std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
-    for (size_t idx : flip_indices) {
-        if (idx < command_data.size()) {
-            command_data[idx] = -command_data[idx];
-        }
-    }
-
-    // Convert to encoder counts
     std::vector<int> command_encoder;
-    for (double pos : command_data) {
-        command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
+    for (size_t j = 0; j < command_data.size(); ++j) {
+        command_encoder.push_back(jointEncoder(command_data[j], j));
     }
     return command_encoder;
 }

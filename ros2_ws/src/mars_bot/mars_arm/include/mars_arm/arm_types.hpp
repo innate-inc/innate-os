@@ -8,6 +8,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 namespace mars_arm {
 
@@ -26,6 +27,92 @@ static constexpr double kScheduledHoldTimeoutS = 5.0;
 // that jolt shook a carried object out of the gripper. At the folded rest
 // pose — the long-idle case the decay exists for — these loads are ~0.
 static constexpr int kDecayMaxLoad = 100;
+// Rest fold: how long an unowned arm waits, after going limp or after torque
+// comes back, before folding itself; a skill recovering a tripped servo
+// commands the arm well within this. Only rest_pose is a parameter, because
+// brain_client's Manipulation.REST must mirror it; the rest is the driver's.
+static constexpr double kRestWhenIdleS = 5.0;
+static constexpr double kAtRestRad = 0.05;
+
+// One leg of the rest fold: joints in /mars/arm/state radians, kHold keeps a
+// joint where it is, then how long the spline takes.
+struct RestWaypoint {
+    std::vector<double> joints;
+    double duration_s;
+};
+constexpr double kHold = std::numeric_limits<double>::quiet_NaN();
+// The path before rest_pose itself. A collapsed arm rests its weight on the
+// gripper tip, and pitching the wrist up under that load stalled it at its
+// 1.75 A limit, so shoulder and elbow raise the wrist first (forearm level,
+// ~10 cm above the shoulder), slower than the fold: at 1.5 s the shoulder
+// fell 0.22 rad behind.
+// clang-format off
+//                                   yaw    shoulder  elbow  wrist  roll   grip    seconds
+inline const RestWaypoint kRestLift{{kHold, -0.9,     0.9,   kHold, kHold, kHold}, 2.5};
+// clang-format on
+static constexpr double kRestPoseDurationS = 3.0;
+// Swung back past kShoulderClearanceRad the arm hits the body, unless the base
+// yaw is out to the side. The limit ramps from the joint's own limit at the
+// outer yaws to the clearance angle at the inner ones (see shoulderMinLimit).
+static constexpr double kShoulderClearanceRad = -0.5;
+static constexpr std::array<double, 4> kShoulderClearanceYaws{-1.35, -1.0, 1.0, 1.25};
+
+// Linear between knots, flat beyond the ends; xs ascending.
+template <size_t N>
+double piecewiseLinear(const std::array<double, N>& xs, const std::array<double, N>& ys, double x) {
+    if (x <= xs.front()) {
+        return ys.front();
+    }
+    for (size_t i = 1; i < N; ++i) {
+        if (x < xs[i]) {
+            const double t = (x - xs[i - 1]) / (xs[i] - xs[i - 1]);
+            return ys[i - 1] + t * (ys[i] - ys[i - 1]);
+        }
+    }
+    return ys.back();
+}
+// j1-j5. The gripper (j6) is never retargeted: a gripping claw's standing
+// position error IS the grip force.
+static constexpr size_t kArmJoints = 5;
+
+// Per joint, whether the /mars/arm/state sign is the servo's negated.
+// clang-format off
+//                                              yaw    shoulder elbow  wrist  roll   grip
+static constexpr std::array<bool, 6> kJointFlipped{false, true,    true,  true,  false, true};
+// clang-format on
+inline bool flippedJoint(size_t joint) {
+    return joint < kJointFlipped.size() && kJointFlipped[joint];
+}
+inline double jointRad(int encoder, size_t joint) {
+    const double rad = ((encoder - 2048) * 2 * M_PI) / 4096.0;
+    return flippedJoint(joint) ? -rad : rad;
+}
+inline int jointEncoder(double rad, size_t joint) {
+    if (flippedJoint(joint)) {
+        rad = -rad;
+    }
+    return static_cast<int>((rad / (2 * M_PI)) * 4096 + 2048);
+}
+
+// The pitch chain's links as (forward, up) offsets in their parent joint's
+// frame at zero angle, metres: upper arm, forearm, wrist to gripper tip.
+struct Link {
+    double forward;
+    double up;
+};
+static constexpr std::array<Link, 3> kPitchLinks{{{0.02825, 0.12125}, {0.1375, 0.0045}, {0.110838, 0.0}}};
+
+// How far the gripper tip reaches forward of the shoulder joint, metres.
+inline double gripperTipX(double shoulder, double elbow, double wrist) {
+    const std::array<double, 3> pitches{shoulder, elbow, wrist};
+    double angle = 0.0;
+    double x = 0.0;
+    for (size_t i = 0; i < kPitchLinks.size(); ++i) {
+        angle += pitches[i];
+        x += kPitchLinks[i].forward * std::cos(angle) + kPitchLinks[i].up * std::sin(angle);
+    }
+    return x;
+}
 
 inline bool isX330(const std::string& motor_type) {
     return motor_type.find("330") != std::string::npos;

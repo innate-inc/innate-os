@@ -58,6 +58,7 @@ std::vector<std::vector<double>> MarsArmNode::computeCubicSplineTrajectory(const
 
 bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time,
                                            GainMode trajectory_gain_mode) {
+    markArmOwned();
     // Block the idle gain decay for the whole call; the guard stamps the
     // quiet period's start on every exit path.
     trajectory_executing_ = true;
@@ -167,8 +168,70 @@ bool MarsArmNode::planAndExecuteTrajectory(const std::vector<double>& target_pos
     return true;
 }
 
+// ========== REST FOLD ==========
+
+void MarsArmNode::idleRestCallback() {
+    if (!armUnowned() || !arm_torque_enabled_ || !this->get_parameter("auto_rest").as_bool()) {
+        return;
+    }
+    const auto unowned_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - unowned_since_.load());
+    if (unowned_s.count() < kRestWhenIdleS) {
+        return;
+    }
+    markArmOwned();  // one attempt per limp: a fold that stops is not pushed again
+    foldToRest();
+}
+
+void MarsArmNode::foldToRest() {
+    std::vector<double> rest = this->get_parameter("rest_pose").as_double_array();
+    if (rest.size() != 6) {
+        RCLCPP_WARN(this->get_logger(), "Rest fold skipped: rest_pose must list 6 joint positions");
+        return;
+    }
+    std::vector<double> measured;
+    {
+        std::lock_guard<std::mutex> lock(joint_state_mutex_);
+        measured = latest_joint_positions_;
+    }
+    if (measured.size() != 6) {
+        RCLCPP_WARN(this->get_logger(), "Rest fold skipped: no joint state yet");
+        return;
+    }
+    double away = 0.0;
+    for (size_t j = 0; j < kArmJoints; ++j) {
+        rest[j] = clampToJointRange(j, rest[j]);
+        away = std::max(away, std::abs(measured[j] - rest[j]));
+    }
+    if (away < kAtRestRad) {
+        RCLCPP_INFO(this->get_logger(), "Rest fold: arm already at rest");
+        return;
+    }
+    std::vector<double> target = measured;
+    {
+        std::lock_guard<std::mutex> lock(arm_command_mutex_);
+        // j6 is current-based position control: re-commanding it above the
+        // standing grip target zeroes the preload and drops a held object.
+        target[5] = clampToJointRange(5, has_target_ ? latest_target_[5] : measured[5]);
+    }
+    rest[5] = target[5];
+    RCLCPP_INFO(this->get_logger(), "Folding the arm to rest");
+    for (const RestWaypoint& waypoint : {kRestLift, RestWaypoint{rest, kRestPoseDurationS}}) {
+        for (size_t j = 0; j < target.size(); ++j) {
+            if (!std::isnan(waypoint.joints[j])) {
+                target[j] = waypoint.joints[j];
+            }
+        }
+        if (!planAndExecuteTrajectory(target, waypoint.duration_s)) {
+            RCLCPP_WARN(this->get_logger(), "Rest fold stopped: the trajectory could not start (see the log)");
+            return;
+        }
+    }
+    RCLCPP_INFO(this->get_logger(), "Arm folded to rest");
+}
+
 bool MarsArmNode::planAndExecuteMultiWaypointTrajectory(const std::vector<std::vector<double>>& waypoints,
                                                         const std::vector<double>& segment_durations) {
+    markArmOwned();
     // See planAndExecuteTrajectory: block the idle gain decay while executing.
     trajectory_executing_ = true;
     struct HoldGuard {

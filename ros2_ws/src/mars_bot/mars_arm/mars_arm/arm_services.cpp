@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// arm_services.cpp — Servo initialization, health monitoring, service callbacks, head control
+// arm_services.cpp — Servo initialization, health monitoring, arm service callbacks
 #include "mars_arm/arm_node.hpp"
 
 using json = nlohmann::json;
@@ -176,13 +176,28 @@ void MarsArmNode::syncTargetToMotorPositions() {
     {
         std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
         for (int i = 0; i < 6 && i < static_cast<int>(positions.size()); ++i) {
-            double rad = ((positions[i] - 2048) * 2 * M_PI) / 4096.0;
-            if (i == 1 || i == 2 || i == 3 || i == 5)
-                rad = -rad;
-            latest_target_[i] = rad;
+            latest_target_[i] = jointRad(positions[i], i);
         }
         has_target_ = false;
         latest_arm_command_ = std::vector<int>(positions.begin(), positions.begin() + 6);
+    }
+}
+
+// A rebooted servo comes back holding where it is, but the pass-through still
+// carries the goal it tripped on and would send it back there at profile
+// speed on the next tick. Only the rebooted joints: the others keep their
+// targets (j6's is the grip preload).
+void MarsArmNode::holdRebootedJointsLocked(const std::vector<int>& servo_ids) {
+    auto [positions, velocities, loads] = robot_->readState();
+    (void)velocities;
+    (void)loads;
+    std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
+    for (int id : servo_ids) {
+        const int i = id - 1;
+        if (i < 0 || i >= 6 || i >= static_cast<int>(positions.size())) {
+            continue;
+        }
+        latest_target_[i] = jointRad(positions[i], i);
     }
 }
 
@@ -296,6 +311,7 @@ void MarsArmNode::armCommandCallback(const std_msgs::msg::Float64MultiArray::Sha
         for (int i = 0; i < 6; ++i)
             latest_target_[i] = msg->data[i];
         has_target_ = true;
+        markArmOwned();
 
         // Switch to teleop gains when streaming commands arrive
         if (gain_mode_ != GainMode::TELEOP) {
@@ -327,16 +343,20 @@ void MarsArmNode::armTorqueOnCallback(const std::shared_ptr<std_srvs::srv::Trigg
         } catch (const std::exception& e) {
             RCLCPP_WARN(this->get_logger(), "Failed to sync on torque on: %s", e.what());
         }
-
-        arm_torque_enabled_ = true;
-        response->success = true;
-        response->message = "Enabled torque for all arm servos";
-        RCLCPP_INFO(this->get_logger(), "Successfully enabled torque for all arm servos");
+        arm_torque_enabled_ = true;  // under the bus lock, so a racing torque_off's `false` lands after
+        if (armUnowned()) {
+            markArmUnowned();  // a fresh grace period before the fold; an owned arm stays owned
+        }
     } catch (const std::exception& e) {
         response->success = false;
         response->message = std::string("Failed: ") + e.what();
         RCLCPP_ERROR(this->get_logger(), "Failed to enable torque: %s", e.what());
+        return;
     }
+
+    response->success = true;
+    response->message = "Enabled torque for all arm servos";
+    RCLCPP_INFO(this->get_logger(), "Successfully enabled torque for all arm servos");
 }
 
 void MarsArmNode::armTorqueOffCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
@@ -351,6 +371,7 @@ void MarsArmNode::armTorqueOffCallback(const std::shared_ptr<std_srvs::srv::Trig
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         arm_torque_enabled_ = false;
+        markArmUnowned();
         response->success = true;
         response->message = "Disabled torque for all arm servos";
         RCLCPP_INFO(this->get_logger(), "Successfully disabled torque for all arm servos");
@@ -388,6 +409,7 @@ void MarsArmNode::armRebootServosCallback(const std::shared_ptr<std_srvs::srv::T
         dynamixel_->enableTorque(7);
 
         arm_torque_enabled_ = false;
+        markArmUnowned();
         response->success = true;
         response->message = "Rebooted and reinitialized all servos (arm torque off, head torque on)";
         RCLCPP_INFO(this->get_logger(), "Successfully rebooted and reinitialized all servos");
@@ -446,6 +468,13 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
             RCLCPP_INFO(this->get_logger(), "Reconfiguring servo %d...", servo_id);
             configureServoByIdLocked(servo_id, true);
         }
+        try {
+            holdRebootedJointsLocked(error_servo_ids);
+        } catch (const std::exception& e) {
+            RCLCPP_WARN(this->get_logger(), "Could not read the rebooted servos; their next command may snap: %s",
+                        e.what());
+        }
+        markArmUnowned();
 
         // Build JSON response with error IDs and status
         json result;
@@ -462,122 +491,6 @@ void MarsArmNode::armFixErrorCallback(const std::shared_ptr<std_srvs::srv::Trigg
         err_result["status"] = std::string("error: ") + e.what();
         response->message = err_result.dump();
         RCLCPP_ERROR(this->get_logger(), "Failed to fix error: %s", e.what());
-    }
-}
-
-// ========== HEAD CONTROL ==========
-
-int MarsArmNode::logicalAngleToEncoder(double logical_angle_deg) {
-    const auto& head_config = joint_configs_[6];  // Index 6 = joint 7
-    double angle_deg = head_config.head_direction_reversed ? -logical_angle_deg : logical_angle_deg;
-    double angle_rad = angle_deg * M_PI / 180.0;
-    int encoder_value = static_cast<int>((angle_rad / (2 * M_PI)) * 4096 + 2048);
-    return encoder_value;
-}
-
-double MarsArmNode::encoderToLogicalAngle(int encoder_value) {
-    const auto& head_config = joint_configs_[6];  // Index 6 = joint 7
-    double angle_rad = (encoder_value - 2048) * (2 * M_PI) / 4096.0;
-    double servo_angle_deg = angle_rad * 180.0 / M_PI;
-    double logical_angle = head_config.head_direction_reversed ? -servo_angle_deg : servo_angle_deg;
-    return logical_angle;
-}
-
-void MarsArmNode::moveHeadToAngle(double logical_angle_deg) {
-    std::lock_guard<std::mutex> lock(dynamixel_mutex_);
-    moveHeadToAngleLocked(logical_angle_deg);
-}
-
-void MarsArmNode::moveHeadToAngleLocked(double logical_angle_deg) {
-    int encoder_value = logicalAngleToEncoder(logical_angle_deg);
-    dynamixel_->setGoalPosition(7, encoder_value);
-}
-
-void MarsArmNode::publishHeadPosition(int encoder_value) {
-    double logical_angle = encoderToLogicalAngle(encoder_value);
-
-    const auto& head_config = joint_configs_[6];  // Index 6 = joint 7
-
-    json position_data;
-    position_data["current_position"] = logical_angle;
-    position_data["min_angle"] = head_config.head_min_angle_deg;
-    position_data["max_angle"] = head_config.head_max_angle_deg;
-    position_data["default_angle"] = 0.0;
-
-    auto msg = std_msgs::msg::String();
-    msg.data = position_data.dump();
-    head_position_pub_->publish(msg);
-}
-
-void MarsArmNode::headPositionCallback(const std_msgs::msg::Int32::SharedPtr msg) {
-    try {
-        double logical_position = static_cast<double>(msg->data);
-
-        const auto& head_config = joint_configs_[6];  // Index 6 = joint 7
-
-        if (logical_position < head_config.head_min_angle_deg || logical_position > head_config.head_max_angle_deg) {
-            RCLCPP_ERROR(this->get_logger(), "Head position %f out of range [%f, %f]", logical_position,
-                         head_config.head_min_angle_deg, head_config.head_max_angle_deg);
-            return;
-        }
-
-        int head_goal_encoder = logicalAngleToEncoder(logical_position);
-
-        std::lock_guard<std::mutex> lock(head_command_mutex_);
-        latest_head_command_ = head_goal_encoder;
-        has_head_command_ = true;
-
-    } catch (const std::exception& e) {
-        RCLCPP_ERROR(this->get_logger(), "Error in head position callback: %s", e.what());
-    }
-}
-
-void MarsArmNode::headAiPositionCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
-                                         std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
-    try {
-        const auto& head_config = joint_configs_[6];  // Index 6 = joint 7
-
-        RCLCPP_INFO(this->get_logger(), "Moving head to AI position (%f deg)", head_config.head_ai_position_deg);
-
-        int head_goal_encoder = logicalAngleToEncoder(head_config.head_ai_position_deg);
-
-        std::lock_guard<std::mutex> lock(head_command_mutex_);
-        latest_head_command_ = head_goal_encoder;
-        has_head_command_ = true;
-
-        response->success = true;
-        response->message = "Head moving to AI position";
-
-    } catch (const std::exception& e) {
-        RCLCPP_ERROR(this->get_logger(), "Error in head AI position callback: %s", e.what());
-        response->success = false;
-        response->message = e.what();
-    }
-}
-
-void MarsArmNode::headEnableServoCallback(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-                                          std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
-    RCLCPP_INFO(this->get_logger(), "Service called: /mars/head/enable_servo (enable=%s)",
-                request->data ? "true" : "false");
-    try {
-        std::lock_guard<std::mutex> lock(dynamixel_mutex_);
-
-        if (request->data) {
-            RCLCPP_INFO(this->get_logger(), "  Enabling torque on head servo (ID 7)");
-            dynamixel_->enableTorque(7);
-            response->message = "Head servo enabled";
-            RCLCPP_INFO(this->get_logger(), "Head servo enabled");
-        } else {
-            RCLCPP_INFO(this->get_logger(), "  Disabling torque on head servo (ID 7)");
-            dynamixel_->disableTorque(7);
-            response->message = "Head servo disabled";
-            RCLCPP_INFO(this->get_logger(), "Head servo disabled");
-        }
-        response->success = true;
-    } catch (const std::exception& e) {
-        response->success = false;
-        response->message = std::string("Failed: ") + e.what();
-        RCLCPP_ERROR(this->get_logger(), "Failed to %s head servo: %s", request->data ? "enable" : "disable", e.what());
     }
 }
 
