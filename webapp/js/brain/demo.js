@@ -7,7 +7,7 @@
 
 const HIST_MAX = 60;
 
-// Abbreviated stand-in for the real system instruction (brain/prompt.py).
+// Abbreviated stand-in for the real system prompt (brain/prompt.py).
 const DEMO_SYSTEM = `You are the brain of an Innate home robot: a small wheeled base with a camera, \
 a robotic arm, and a speaker. You run on the robot itself.
 
@@ -70,14 +70,23 @@ export function startDemo(h) {
   /** Rolling request history, pruned like the real session: images survive
    * only in the newest 3 user turns.
    * @type {any[]} */
-  const contents = [];
-  /** @param {any} userContent @param {any} modelContent */
-  const commit = (userContent, modelContent) => {
-    contents.push(userContent, modelContent);
-    const imgTurns = contents.filter((c) => c.role === "user" && c.parts.some((/** @type {any} */ p) => p.inlineData));
-    for (const c of imgTurns.slice(0, -3))
-      c.parts = c.parts.map((/** @type {any} */ p) => (p.inlineData ? { text: "[older camera frame removed]" } : p));
-    while (contents.length > 12) contents.shift();
+  const messages = [];
+  /** @param {any[]} turnMessages */
+  const commit = (turnMessages) => {
+    messages.push(...turnMessages);
+    const imgTurns = messages.filter(
+      (m) => m.role === "user" && m.content.some((/** @type {any} */ p) => p.type === "image_url"),
+    );
+    for (const m of imgTurns.slice(0, -3))
+      m.content = m.content.map((/** @type {any} */ p) =>
+        p.type === "image_url" ? { type: "text", text: "[older camera frame removed]" } : p,
+      );
+    // A tool result whose call has been dropped is rejected by servers, so the
+    // cut lands on a user message exactly as _prune's does.
+    while (messages.length > 12) {
+      messages.shift();
+      while (messages.length && messages[0].role !== "user") messages.shift();
+    }
   };
 
   const TOOLS = ["navigate_to_position", "wave", "pick_up_sock", "go_to_point", "wait"];
@@ -94,17 +103,33 @@ export function startDemo(h) {
       history: D.history, history_images: Math.min(D.turn - 1, 3),
       system: DEMO_SYSTEM, frames: fr,
     });
-    const userContent = {
+    const userMessage = {
       role: "user",
-      parts: [{ text: input }, ...fr.map((f) => ({ inlineData: { mimeType: "image/jpeg", data: f.jpeg } }))],
+      content: [
+        { type: "text", text: input },
+        ...fr.map((f) => ({ type: "image_url", image_url: { url: "data:image/jpeg;base64," + f.jpeg } })),
+      ],
     };
     h.onTrace({
       ev: "turn_request", turn: D.turn,
       body: {
-        systemInstruction: { parts: [{ text: DEMO_SYSTEM }] },
-        contents: [...contents.map((c) => ({ ...c })), userContent],
-        generationConfig: { thinkingConfig: { includeThoughts: true, thinkingLevel: "minimal" } },
-        tools: [{ functionDeclarations: TOOLS.map((name) => ({ name, description: `demo declaration for ${name}` })) }],
+        model: "gemini-3.6-flash",
+        messages: [
+          { role: "system", content: DEMO_SYSTEM },
+          ...messages.map((m) => ({ ...m })),
+          userMessage,
+        ],
+        stream: true,
+        stream_options: { include_usage: true },
+        reasoning_effort: "minimal",
+        tools: TOOLS.map((name) => ({
+          type: "function",
+          function: {
+            name,
+            description: `demo declaration for ${name}`,
+            parameters: { type: "object", properties: {}, required: [] },
+          },
+        })),
       },
     });
     D.queued = [];
@@ -113,13 +138,16 @@ export function startDemo(h) {
     D.inFlight = false;
     D.history = Math.min(D.history + 3, HIST_MAX);
     const theCalls = calls || [{ name: "wait", args: {}, outcome: "ok" }];
-    commit(userContent, {
-      role: "model",
-      parts: [
-        ...(speech ? [{ text: speech }] : []),
-        ...theCalls.map((c) => ({ functionCall: { name: c.name, args: c.args } })),
-      ],
-    });
+    const toolCalls = theCalls.map((c, i) => ({
+      id: `call_demo${D.turn}_${i}`,
+      type: "function",
+      function: { name: c.name, arguments: JSON.stringify(c.args ?? {}) },
+    }));
+    commit([
+      userMessage,
+      { role: "assistant", content: speech ?? "", tool_calls: toolCalls },
+      ...toolCalls.map((call, i) => ({ role: "tool", tool_call_id: call.id, content: theCalls[i].outcome ?? "ok" })),
+    ]);
     h.onTrace({
       ev: "turn_end", turn: D.turn, latency: think / 1000, thoughts, speech,
       calls: theCalls, history: D.history, next_in: D.nextIn,

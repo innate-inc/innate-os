@@ -11108,7 +11108,7 @@ select.skill-input {
   color: var(--text);
 }
 
-/* Sidebar panel: count + cache chip + the reel of remembered views. */
+/* Sidebar panel: count + the reel of remembered views. */
 .mem-panel-head {
   display: flex;
   align-items: baseline;
@@ -11124,26 +11124,8 @@ select.skill-input {
   color: var(--muted);
 }
 
-.mem-panel-chip {
-  margin-left: auto;
-  padding: 2px 8px;
-  font-size: 10px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: 999px;
-  color: var(--muted);
-}
-
-.mem-panel-chip[data-kind="ok"] {
-  color: var(--ok);
-  border-color: rgb(86 194 140 / 40%);
-}
-
-.mem-panel-chip[data-kind="warn"] {
-  color: var(--ctl-accent);
-  border-color: rgb(232 163 61 / 40%);
-}
-
 .mem-panel-clear {
+  margin-left: auto;
   padding: 2px 8px;
   font-size: 10px;
   color: var(--muted);

@@ -2,9 +2,9 @@
 # Copyright (c) 2026 Innate Inc
 """Skill-facing recall over the robot's spatial memory.
 
-A thin client of the brain's ``/brain/search_memory`` action — the Gemini
-context cache, transport, and credentials all live server-side; a skill only
-ever sees a typed :class:`RecallVerdict`. Declared like any interface::
+A thin client of the brain's ``/brain/search_memory`` action — the remembered
+frames, transport, and credentials all live server-side; a skill only ever sees
+a typed :class:`RecallVerdict`. Declared like any interface::
 
     memory: SpatialMemory
 
@@ -57,7 +57,6 @@ class RecallVerdict:
     seen_stamp: float = 0.0
     image: bytes | None = None
     latency_sec: float = 0.0
-    cached: bool = False
 
 
 class SpatialMemory:
@@ -124,5 +123,4 @@ def _from_result(result: SearchMemory.Result) -> RecallVerdict:
         seen_stamp=result.seen_stamp,
         image=base64.b64decode(result.image_b64) if result.image_b64 else None,
         latency_sec=result.latency_sec,
-        cached=result.cached,
     )

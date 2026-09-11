@@ -10,7 +10,6 @@ import assert from "node:assert/strict";
 import {
   ageAlpha,
   ageText,
-  cacheLabel,
   headerSkew,
   memoryImageUrl,
   parseMemories,
@@ -33,14 +32,12 @@ test("parseMemories reads a full payload", () => {
     data: JSON.stringify({
       map: "Home.yaml",
       fingerprint: "abc123def456",
-      cache: "warm",
       positions: [{ id: 3, x: 1.5, y: -0.25, theta: 1.57, stamp: NOW }],
     }),
   };
   assert.deepEqual(parseMemories(msg), {
     map: "Home.yaml",
     fingerprint: "abc123def456",
-    cache: "warm",
     memories: [{ id: 3, x: 1.5, y: -0.25, theta: 1.57, stamp: NOW }],
   });
 });
@@ -52,7 +49,6 @@ test("parseMemories skips malformed entries and defaults missing fields", () => 
   const state = parseMemories(msg);
   assert.equal(state?.map, "");
   assert.equal(state?.fingerprint, "");
-  assert.equal(state?.cache, "off");
   assert.deepEqual(state?.memories, [{ id: 1, x: 0, y: 0, theta: 0, stamp: 0 }]);
 });
 
@@ -102,16 +98,6 @@ test("withAlpha formats and clamps", () => {
   assert.equal(withAlpha("#b48cff", 0.5), "rgb(180 140 255 / 0.5)");
   assert.equal(withAlpha("#000000", 2), "rgb(0 0 0 / 1)");
   assert.equal(withAlpha("#ffffff", -1), "rgb(255 255 255 / 0)");
-});
-
-test("cacheLabel covers every state the robot publishes", () => {
-  for (const state of ["warm", "cold", "inline", "unsupported", "off"]) {
-    const { text, kind } = cacheLabel(state);
-    assert.ok(text.length > 0 && ["ok", "warn", "muted"].includes(kind), state);
-  }
-  assert.equal(cacheLabel("warm").kind, "ok");
-  assert.equal(cacheLabel("cold").kind, "warn");
-  assert.equal(cacheLabel("banana").kind, "muted");
 });
 
 console.log(`\n${passed} passed`);

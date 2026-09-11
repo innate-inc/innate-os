@@ -12,6 +12,5 @@ float64 theta
 float64 seen_stamp  # epoch seconds when the matched view was recorded (0 when none)
 string image_b64    # the matched remembered frame ("" when none)
 float64 latency_sec
-bool cached         # answered from the Gemini context cache
 ---
 # Feedback definition

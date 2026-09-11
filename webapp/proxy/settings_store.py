@@ -54,7 +54,38 @@ def read_overrides() -> dict:
         data = yaml.safe_load(path.read_text())
     except (OSError, yaml.YAMLError):
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    _carry_retired(data)
+    return data
+
+
+# Retired parameter path -> its current name, mirroring brain_client's
+# core/config.py:_RENAMED_PARAMS (the webapp proxy cannot import it).
+_RETIRED_PARAMS = {
+    ("brain_client_node", "ros__parameters", "gemini_model"): "llm_model",
+    ("brain_client_node", "ros__parameters", "gemini_thinking_level"): "llm_thinking",
+}
+
+
+def _carry_retired(overrides: dict) -> None:
+    """Rename a deployed robot's retired keys in place, before anything reads them.
+
+    A retired key no longer matches a template stanza, so leaving it would send it
+    to the Extra block as a second `brain_client_node:` mapping — and PyYAML keeps
+    only the last duplicate, dropping every other brain override on the next read.
+    """
+    for path, current in _RETIRED_PARAMS.items():
+        *parents, retired = path
+        node = overrides
+        for key in parents:
+            node = node.get(key) if isinstance(node, dict) else None
+            if not isinstance(node, dict):
+                break
+        if not isinstance(node, dict) or retired not in node:
+            continue
+        carried = node.pop(retired)
+        node.setdefault(current, carried)
 
 
 # ── override-dict edits ────────────────────────────────────────────────
@@ -154,6 +185,13 @@ def _build_tree(lines):
     return root
 
 
+def _uncomment_chain(node, uncomment) -> None:
+    """Activate a leaf and every ancestor key above it."""
+    while node is not None and node.key is not None:
+        uncomment.add(node.line)
+        node = node.parent
+
+
 def _find(root, path):
     node = root
     for key in path:
@@ -195,17 +233,24 @@ def _regenerate(overrides: dict) -> str:
     tree = _build_tree(lines)
     uncomment = set()
     value_at = {}
+    after = {}  # template line -> hand-added leaves that belong inside that node
     extras = []
     for path, value in _flatten(overrides):
         node = _find(tree, path)
-        if node is None:
+        if node is not None:
+            value_at[node.line] = value
+            _uncomment_chain(node, uncomment)
+            continue
+        parent = _find(tree, path[:-1])
+        if parent is None:
             extras.append((path, value))
             continue
-        value_at[node.line] = value
-        n = node
-        while n is not None and n.key is not None:  # leaf + every ancestor key
-            uncomment.add(n.line)
-            n = n.parent
+        # A hand-added key under a node the template DOES write goes inside that
+        # node. In the Extra block it would open a SECOND `<node>:` mapping, and
+        # PyYAML keeps only the last duplicate — every override the template
+        # wrote for that node would be gone on the next read.
+        _uncomment_chain(parent, uncomment)
+        after.setdefault(parent.line, []).append(f"{'  ' * (parent.level + 1)}{path[-1]}: {_fmt(value)}")
 
     out = []
     for i, raw in enumerate(lines):
@@ -214,6 +259,7 @@ def _regenerate(overrides: dict) -> str:
             out.append(_replace_value(line, value_at[i]) if i in value_at else line)
         else:
             out.append(raw)
+        out.extend(after.get(i, ()))
     text = "\n".join(out)
 
     if extras:
@@ -223,6 +269,15 @@ def _regenerate(overrides: dict) -> str:
         text = text.rstrip("\n") + "\n\n# ── Extra overrides (not in the standard list above) ──\n"
         text += yaml.safe_dump(extra_dict, default_flow_style=False, sort_keys=False, allow_unicode=True)
     return text
+
+
+def _duplicate_top_level_keys(text: str) -> set:
+    # Comments are excluded, not just unindented lines: the template carries the
+    # same `#   ros__parameters:` stanza under every node, and counting those
+    # would refuse every save.
+    lines = (line for line in text.split("\n") if line[:1] not in ("", " ", "#") and ":" in line)
+    keys = [line.split(":", 1)[0] for line in lines]
+    return {key for key in keys if keys.count(key) > 1}
 
 
 def apply_changes(sets, clears):
@@ -248,6 +303,12 @@ def _apply_changes_locked(sets, clears):
         yaml.safe_load(text)  # never write a file that won't parse
     except yaml.YAMLError as e:
         return False, f"refusing to write invalid YAML: {e}"
+    # PyYAML keeps only the last of a duplicated key, so a file that carries one
+    # silently loses the rest on the next read. Nothing reachable produces one any
+    # more; refusing is still better than writing a file that eats overrides.
+    duplicated = _duplicate_top_level_keys(text)
+    if duplicated:
+        return False, f"refusing to write duplicated settings for: {', '.join(sorted(duplicated))}"
 
     path = settings_path()
     try:

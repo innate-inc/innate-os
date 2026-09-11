@@ -32,6 +32,7 @@ from config import (
     COMPOSE_LOG_PATH,
     COMPOSE_PROJECT_NAME,
     DEPS_IMAGE_TAG_PREFIX,
+    DIRECT_BACKEND,
     DOWN_LOG_PATH,
     GENERATED_OS_ENV_PATH,
     GEOMETRY_INPUT_PATHSPECS,
@@ -3145,6 +3146,8 @@ def collect_status_snapshot(config: dict[str, object]) -> dict[str, object]:
         llm_level, llm_label = "warn", "no key"
     elif config["brain_backend"] == INNATE_BACKEND:
         llm_level, llm_label = "healthy", "innate proxy"
+    elif config["brain_backend"] == DIRECT_BACKEND:
+        llm_level, llm_label = "healthy", "custom endpoint"
     else:
         llm_level, llm_label = "healthy", "gemini key"
 

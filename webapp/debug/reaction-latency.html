@@ -377,14 +377,14 @@
         Thinking level: probes are single-turn, 3 reps per scenario per level; grounding accuracy
         judged against known scene geometry. An earlier model's <code>low</code> hurt
         <em>multi-turn</em> discipline (skill re-runs, chatter) — that regression class isn't covered
-        by these probes, so <code>gemini_thinking_level</code> in <code>core/config.py</code>
+        by these probes, so <code>llm_thinking</code> (<code>gemini_thinking_level</code> when this ran) in <code>core/config.py</code>
         documents the revert path back to <code>""</code>. All 24 preemption-bench injections landed
         mid-think; 53 unit tests pass.
       </p>
       <p>
         Remaining levers: streaming the response into TTS sentence-by-sentence, and killing the
         speaker on user barge-in. Changes: <code>_preemptible_turn</code> in
-        <code>brain_client/brain/agent.py</code>; <code>gemini_thinking_level</code> default in
+        <code>brain_client/brain/agent.py</code>; the thinking-level default in
         <code>brain_client/core/config.py</code>.
       </p>
     </div>

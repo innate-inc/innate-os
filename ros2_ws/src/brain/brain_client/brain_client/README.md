@@ -6,7 +6,7 @@ code, start from what it *does*:
 | Folder | What lives here |
 |---|---|
 | `nodes/` | The runnable ROS entry points (the only files with `main()`). Thin composition roots — they build collaborators, wire them, and spin. No behaviour. |
-| `brain/` | The local agent loop: `agent` (look → think → act as one cancellable coroutine), `loop` (the dedicated-thread asyncio runtime it runs on), `context` (bounded Gemini conversation), `tools` + `transport` (declarations and the wire), pure `grounding` (pointed pixel → floor target), `memory_search` (recall over the spatial memory, context-cached) + `search_server` (the `/brain/search_memory` action skills call), and the system `prompt`. |
+| `brain/` | The local agent loop: `agent` (look → think → act as one cancellable coroutine), `loop` (the dedicated-thread asyncio runtime it runs on), `context` (bounded Chat Completions conversation), `tools` + `transport` (function tools and the one wire — proxy, endpoint or Gemini key), pure `grounding` (pointed pixel → floor target), `memory_search` (recall over the spatial memory) + `search_server` (the `/brain/search_memory` action skills call), and the system `prompt`. |
 | `core/` | The activate/deactivate/reset state machine and directive switching (`lifecycle`), typed `config`, and the shared `state`. |
 | `perception/` | Turning sensors into what the agent sees: `camera`, `pose`/`pose_tracking`, `scan_health`, `gaze`. |
 | `memory/` | Persistent per-map spatial memory: `store` (JSON index + JPEGs on disk), pure `selection` (which viewpoints earn a slot), `recorder` (the always-on ROS adapter that captures them). |

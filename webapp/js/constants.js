@@ -144,7 +144,7 @@ export const MAPPING_POSE_TOPIC = "/mapping_pose";
 // The robot's per-map visual memory (brain_client/memory): places it remembered
 // while driving well-localized. Positions mirror latched, published on change
 // (std_msgs/String JSON {map, fingerprint,
-// cache: warm|cold|inline|unsupported|off, positions:[{id,x,y,theta,stamp}]});
+// positions:[{id,x,y,theta,stamp}]});
 // the JPEG behind each entry is served same-origin by the front door at
 // /memory/image?map=…&id=… (webapp/proxy/media_routes.py).
 export const MEMORY_POSITIONS_TOPIC = "/brain/memory_positions";
@@ -155,7 +155,7 @@ export const CLEAR_MEMORIES_SERVICE = "/brain/clear_memories";
 export const FORGET_MEMORY_SERVICE = "/brain/forget_memory";
 // One latched message per finished memory search (std_msgs/String JSON:
 // {query, found, id?, x?, y?, theta?, seen_stamp?, explanation?, error?,
-// latency_sec?, cached?, stamp}). Latched so a page opened just after the
+// latency_sec?, stamp}). Latched so a page opened just after the
 // search still sees it; clients gate the animation on the payload's stamp.
 export const MEMORY_SEARCH_TOPIC = "/brain/memory_search";
 

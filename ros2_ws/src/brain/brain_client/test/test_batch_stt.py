@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
 """Wire behavior of the batch STT transcribers (no ROS, no network): the
-per-call transcribe timeout, Gemini's empty-candidates shape, decorated
+per-call transcribe timeout, Gemini's empty-choices shape, decorated
 NO_SPEECH replies, and the proxy client's form-only body."""
 
+import base64
 import json
 
 import httpx
 import pytest
 
-from brain_client.brain.transport import GeminiRest, proxy_rest
+from brain_client.brain.transport import ChatTransport, proxy_chat
 from brain_client.inputs.batch_stt import (
     ELEVENLABS_PROXY_ENDPOINT,
     NO_SPEECH,
@@ -26,17 +27,17 @@ WAV = pcm_to_wav(b"\x00\x00" * 240, 24_000)
 GEMINI_MODEL = "gemini-3.6-flash"
 
 
-def gemini_rest(response: dict, calls: list | None = None) -> GeminiRest:
-    def post(path, body, timeout=None):
+def gemini_chat(response: dict, calls: list | None = None) -> ChatTransport:
+    def complete(body, timeout):
         if calls is not None:
-            calls.append((path, body, timeout))
+            calls.append((body, timeout))
         return response
 
-    return GeminiRest(post=post, delete=lambda path: {}, upload=lambda path, data, mime: {})
+    return ChatTransport(stream=lambda body: iter(()), complete=complete)
 
 
 def gemini_reply(text: str) -> dict:
-    return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+    return {"choices": [{"message": {"content": text}}]}
 
 
 class FakeProxyResponse:
@@ -70,23 +71,26 @@ class FakeProxy:
 # ---------- transcribe timeout ----------
 
 
-def test_gemini_post_carries_the_transcribe_timeout():
+def test_gemini_call_carries_the_model_the_audio_and_the_transcribe_timeout():
     calls = []
-    assert gemini_transcriber(gemini_rest(gemini_reply("hello robot"), calls), GEMINI_MODEL, "en")(WAV) == "hello robot"
-    path, _, timeout = calls[0]
-    assert path == f"/v1beta/models/{GEMINI_MODEL}:generateContent"
+    assert gemini_transcriber(gemini_chat(gemini_reply("hello robot"), calls), GEMINI_MODEL, "en")(WAV) == "hello robot"
+    body, timeout = calls[0]
+    assert body["model"] == GEMINI_MODEL
+    audio = body["messages"][0]["content"][0]
+    assert audio["type"] == "input_audio"
+    assert audio["input_audio"] == {"data": base64.b64encode(WAV).decode(), "format": "wav"}
     assert timeout == TRANSCRIBE_TIMEOUT_SECS
 
 
-def test_proxy_rest_threads_a_per_call_timeout_to_the_wire():
+def test_proxy_chat_threads_a_per_call_timeout_to_the_wire():
     proxy = FakeProxy()
-    proxy_rest(proxy).post("/v1beta/models/m:generateContent", {}, timeout=12.5)
+    proxy_chat(proxy).complete({}, 12.5)
     assert proxy.calls[0][2]["timeout"] == 12.5
 
 
-def test_proxy_rest_defaults_to_the_client_timeout():
+def test_proxy_chat_defaults_to_the_client_timeout():
     proxy = FakeProxy()
-    proxy_rest(proxy).post("/v1beta/models/m:generateContent", {})
+    proxy_chat(proxy).complete({}, None)
     assert proxy.calls[0][2]["timeout"] is None
 
 
@@ -101,19 +105,19 @@ def test_elevenlabs_proxy_passes_the_transcribe_timeout():
 # ---------- gemini response shapes ----------
 
 
-def test_gemini_empty_candidates():
-    for response in ({}, {"candidates": []}):
-        assert gemini_transcriber(gemini_rest(response), GEMINI_MODEL, "en")(WAV) == ""
+def test_gemini_empty_choices():
+    for response in ({}, {"choices": []}, {"choices": [{"message": {"content": None}}]}):
+        assert gemini_transcriber(gemini_chat(response), GEMINI_MODEL, "en")(WAV) == ""
 
 
 def test_no_speech_survives_model_decoration():
     for decorated in (NO_SPEECH, "NO_SPEECH.", '"NO_SPEECH"', "'NO_SPEECH'", ' "NO_SPEECH". ', "NO_SPEECH!"):
-        assert gemini_transcriber(gemini_rest(gemini_reply(decorated)), GEMINI_MODEL, "en")(WAV) == ""
+        assert gemini_transcriber(gemini_chat(gemini_reply(decorated)), GEMINI_MODEL, "en")(WAV) == ""
 
 
 def test_no_speech_inside_longer_text_is_a_real_transcript():
     for text in ("NO_SPEECH is what he said", "she whispered NO_SPEECH"):
-        assert gemini_transcriber(gemini_rest(gemini_reply(text)), GEMINI_MODEL, "en")(WAV) == text
+        assert gemini_transcriber(gemini_chat(gemini_reply(text)), GEMINI_MODEL, "en")(WAV) == text
 
 
 # ---------- proxy client body encoding ----------

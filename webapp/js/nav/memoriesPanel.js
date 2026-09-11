@@ -2,15 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
 // "Memories" sidebar panel — the robot's visual memory of the current map made
-// tangible: a count, a recall-cache health chip, and a reel of remembered
-// views (newest first). Hovering a thumbnail lights its viewpoint on the map;
+// tangible: a count and a reel of remembered views (newest first). Hovering a thumbnail lights its viewpoint on the map;
 // clicking centres the map there and opens the Go-here popup. Data comes from
 // the two memory topics; the images ride same-origin HTTP (/memory/image), so
 // the reel costs no rosbridge bandwidth.
 
 import { ros } from "../rosClient.js";
 import { CLEAR_MEMORIES_SERVICE, MEMORY_POSITIONS_TOPIC, MEMORY_SEARCH_TOPIC } from "../constants.js";
-import { SEARCH_REPLAY_FRESH_S, ageText, cacheLabel, memoryImageUrl, parseMemories, parseSearch } from "../map/memories.js";
+import { SEARCH_REPLAY_FRESH_S, ageText, memoryImageUrl, parseMemories, parseSearch } from "../map/memories.js";
 
 // Age labels ("5 min ago") drift while nothing else changes — refresh slowly.
 const AGE_REFRESH_MS = 30_000;
@@ -34,10 +33,6 @@ export function createMemoriesPanel(root, map) {
   const count = document.createElement("span");
   count.className = "mem-panel-count mono";
   count.textContent = "—";
-  const chip = document.createElement("span");
-  chip.className = "mem-panel-chip mono";
-  chip.hidden = true;
-  chip.title = "Whether the remembered views are pre-cached with the vision model (searches answer in ~a second)";
   const clearBtn = document.createElement("button");
   clearBtn.type = "button";
   clearBtn.className = "mem-panel-clear mono";
@@ -57,7 +52,7 @@ export function createMemoriesPanel(root, map) {
         clearBtn.disabled = false;
       });
   });
-  head.append(label, count, chip, clearBtn);
+  head.append(label, count, clearBtn);
   section.appendChild(head);
 
   const empty = document.createElement("p");
@@ -123,10 +118,6 @@ export function createMemoriesPanel(root, map) {
       const state = parseMemories(msg);
       if (!state) return;
       count.textContent = String(state.memories.length);
-      const cache = cacheLabel(state.cache);
-      chip.hidden = state.memories.length === 0;
-      chip.textContent = cache.text;
-      chip.dataset.kind = cache.kind;
       clearBtn.hidden = state.memories.length === 0;
       empty.hidden = state.memories.length > 0;
       reel.hidden = state.memories.length === 0;

@@ -8,6 +8,7 @@ import functools
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -55,6 +56,8 @@ GENERATED_OS_ENV_PATH = STATE_DIR / "innate-os.env"
 
 PORT_BASE_ENV = "INNATE_SIM_PORT_BASE"
 
+_SETTINGS_LLM_BASE_URL_RE = re.compile(r"^\s*llm_base_url\s*:\s*(?P<value>.*)$")
+
 
 def _resolve_port(name: str, offset: int, classic: int) -> int:
     """Own override, else PORT_BASE_ENV plus this port's offset, else `classic`.
@@ -91,13 +94,17 @@ PUBLISHED_PORT_ENV = {
     "SIM_UDP_PORT": str(SIM_UDP_PORT),
     "SIM_FOXGLOVE_PORT": str(SIM_FOXGLOVE_PORT),
 }
-# How brain_client reaches Gemini: through the Innate proxy with a service key,
+# How brain_client reaches a model: an OpenAI-compatible endpoint of the
+# operator's own, Gemini through the Innate proxy with a service key, Gemini
 # straight at Google with a Gemini key, or not at all.
 INNATE_BACKEND = "innate"
 GEMINI_BACKEND = "gemini"
+DIRECT_BACKEND = "direct"
 NO_BACKEND = "none"
 GEMINI_API_KEY = "GEMINI_API_KEY"
 INNATE_SERVICE_KEY = "INNATE_SERVICE_KEY"
+LLM_API_KEY = "LLM_API_KEY"
+LLM_BASE_URL = "LLM_BASE_URL"
 AUTO_OS_IMAGE = "auto"
 LOCAL_OS_IMAGE = "local"
 DEFAULT_SIM_OS_IMAGE = "ghcr.io/innate-inc/innate-os-sim-ros"
@@ -253,7 +260,7 @@ LEGACY_SHARED_CONTAINER = "innate-dev"
 LEGACY_SHARED_PROJECT = "innate-os"
 LEGACY_CLOUD_AGENT_CONTAINER = "innate-cloud-agent"
 OS_CONTAINER_TMUX_CMD = "./scripts/launch_sim_in_tmux.zsh --detach"
-SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY)
+SECRET_ENV_KEYS = (INNATE_SERVICE_KEY, GEMINI_API_KEY, LLM_API_KEY)
 LOG_TARGETS = {
     "bootstrap": BOOTSTRAP_LOG_PATH,
     "compose": COMPOSE_LOG_PATH,
@@ -475,14 +482,32 @@ def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
     return None
 
 
-def resolve_brain_backend(env: dict[str, str]) -> str:
-    """Which key the in-process brain (brain_client) will use to reach Gemini.
+def settings_llm_endpoint(path: Path) -> str:
+    """The `llm_base_url:` the brain is configured with in settings.yaml, "" if
+    none is. Read by regex with a trailing comment stripped, not parsed: the
+    launcher runs on the host's bare python3, which has no YAML. Last active
+    line wins, as YAML's own duplicate-key rule does."""
+    if not path.exists():
+        return ""
+    endpoint = ""
+    for line in path.read_text().splitlines():
+        match = _SETTINGS_LLM_BASE_URL_RE.match(line)
+        if match:
+            endpoint = match.group("value").split(" #", 1)[0].strip().strip("\"'").strip()
+    return endpoint
 
-    The service key wins: it also buys voice, which a Gemini key does not.
-    brain_client's `Backend` (brain/transport.py) makes the real choice and owns
-    this precedence; the launcher runs on the host and cannot import it, so this
-    restates the rule. Change one and change the other.
+
+def resolve_brain_backend(env: dict[str, str], settings_endpoint: str = "") -> str:
+    """Which way out the in-process brain (brain_client) takes to a model.
+
+    An endpoint of the operator's own wins: they asked for that server by name.
+    Then the service key, which also buys voice a Gemini key does not, then the
+    Gemini key. brain_client's `pick_chat` (brain/transport.py) makes the real
+    choice and owns this precedence; the launcher runs on the host and cannot
+    import it, so this restates the rule. Change one and change the other.
     """
+    if settings_endpoint.strip() or env.get(LLM_BASE_URL, "").strip():
+        return DIRECT_BACKEND
     if is_configured_secret_value(INNATE_SERVICE_KEY, env.get(INNATE_SERVICE_KEY, "")):
         return INNATE_BACKEND
     if is_configured_secret_value(GEMINI_API_KEY, env.get(GEMINI_API_KEY, "")):
@@ -813,7 +838,7 @@ def get_config() -> dict[str, object]:
     return {
         "raw_env": merged_env,
         "user_env": user_env,
-        "brain_backend": resolve_brain_backend(merged_env),
+        "brain_backend": resolve_brain_backend(merged_env, settings_llm_endpoint(SETTINGS_PATH)),
         "os_repo": os_repo,
         "sim_repo": sim_repo,
         "foxglove_port": str(SIM_FOXGLOVE_PORT),
