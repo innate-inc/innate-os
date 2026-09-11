@@ -214,15 +214,16 @@ void EpisodeData::create_file_and_datasets(const std::vector<double>& action, co
 
     if (!urdf_.empty()) {
         const hsize_t initial[2] = {0, 7}, maximum[2] = {H5S_UNLIMITED, 7}, chunk[2] = {30, 7};
-        ee_dset_ = create_chunked_dataset(file_id_, "/observations/ee_pose", H5T_NATIVE_DOUBLE,
-                                         2, initial, maximum, chunk);
+        ee_dset_ =
+            create_chunked_dataset(file_id_, "/observations/ee_pose", H5T_NATIVE_DOUBLE, 2, initial, maximum, chunk);
         auto attribute = [&](hid_t object, const char* name, const std::string& value) {
             hid_t type = H5Tcopy(H5T_C_S1);
             H5Tset_size(type, value.size() + 1);
             hid_t space = H5Screate(H5S_SCALAR);
             hid_t attr = H5Acreate2(object, name, type, space, H5P_DEFAULT, H5P_DEFAULT);
             herr_t status = attr < 0 ? -1 : H5Awrite(attr, type, value.c_str());
-            if (attr >= 0) H5Aclose(attr);
+            if (attr >= 0)
+                H5Aclose(attr);
             H5Sclose(space);
             H5Tclose(type);
             h5_check(status, std::string("attribute ") + name);
@@ -233,10 +234,12 @@ void EpisodeData::create_file_and_datasets(const std::vector<double>& action, co
         attribute(ee_dset_, "source", "forward_kinematics_of_observations_qpos");
         attribute(ee_dset_, "urdf", urdf_);
         std::string names;
-        for (const auto& name : joint_names_) names += (names.empty() ? "" : ",") + name;
+        for (const auto& name : joint_names_)
+            names += (names.empty() ? "" : ",") + name;
         attribute(ee_dset_, "joint_names", names);
         std::string topics;
-        for (const auto& topic : camera_topics_) topics += (topics.empty() ? "" : ",") + topic;
+        for (const auto& topic : camera_topics_)
+            topics += (topics.empty() ? "" : ",") + topic;
         attribute(ee_dset_, "camera_topics", topics);
     }
 
@@ -313,7 +316,7 @@ void EpisodeData::add_timestep(const std::vector<double>& action, const std::vec
                                double arm_timestamp, const std::vector<double>& image_timestamps, double head_command,
                                const std::vector<double>& ee_pose) {
     if (!urdf_.empty() && (ee_pose.size() != 7 ||
-        !std::all_of(ee_pose.begin(), ee_pose.end(), [](double v) { return std::isfinite(v); })))
+                           !std::all_of(ee_pose.begin(), ee_pose.end(), [](double v) { return std::isfinite(v); })))
         throw std::runtime_error("Missing or invalid EE pose");
     if (!file_created_) {
         create_file_and_datasets(action, qpos, qvel, images, head_command);
@@ -375,7 +378,8 @@ void EpisodeData::add_timestep(const std::vector<double>& action, const std::vec
             write_2d_row(action_dset_, action_dim_ + 2, row.data(), "/action");
         }
 
-        if (ee_dset_ >= 0) write_2d_row(ee_dset_, 7, ee_pose.data(), "/observations/ee_pose");
+        if (ee_dset_ >= 0)
+            write_2d_row(ee_dset_, 7, ee_pose.data(), "/observations/ee_pose");
 
         if (qpos_dset_ >= 0) {
             if (qpos.size() != qpos_dim_) {

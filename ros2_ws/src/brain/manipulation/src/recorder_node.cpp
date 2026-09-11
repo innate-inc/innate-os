@@ -65,7 +65,8 @@ RecorderNode::RecorderNode()
     // Load exactly the model used by mars_arm/ik.py; no separately maintained geometry.
     const auto urdf_path = ament_index_cpp::get_package_share_directory("mars_sim") + "/urdf/mars.urdf";
     std::ifstream urdf_file(urdf_path);
-    if (!urdf_file) throw std::runtime_error("Cannot read recording URDF: " + urdf_path);
+    if (!urdf_file)
+        throw std::runtime_error("Cannot read recording URDF: " + urdf_path);
     recording_urdf_ = std::string(std::istreambuf_iterator<char>(urdf_file), std::istreambuf_iterator<char>());
     ee_kinematics_ = std::make_unique<EeKinematics>(recording_urdf_);
 

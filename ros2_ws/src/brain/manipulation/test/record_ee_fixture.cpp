@@ -8,7 +8,8 @@
 #include <stdexcept>
 
 int main(int argc, char** argv) {
-    if (argc != 3) return 2;
+    if (argc != 3)
+        return 2;
     std::ifstream input(argv[1]);
     std::string xml((std::istreambuf_iterator<char>(input)), {});
     manipulation::EeKinematics fk(xml);
@@ -28,11 +29,18 @@ int main(int argc, char** argv) {
     // Error after EE write must roll back every dataset.
     bool rejected = false;
     try {
-        episode.add_timestep(std::vector<double>(8), q, {0.}, images, 1001., {1001.,1001.}, 25., fk.pose(names,q));
-    } catch (const std::runtime_error&) { rejected = true; }
-    if (!rejected || episode.get_episode_length() != 5) return 3;
+        episode.add_timestep(std::vector<double>(8), q, {0.}, images, 1001., {1001., 1001.}, 25., fk.pose(names, q));
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    if (!rejected || episode.get_episode_length() != 5)
+        return 3;
     manipulation::EpisodeData moved(std::move(episode));
     moved.finalize();
-    try { fk.pose({"joint1"}, {0.}); return 4; } catch (const std::exception&) {}
+    try {
+        fk.pose({"joint1"}, {0.});
+        return 4;
+    } catch (const std::exception&) {
+    }
     return 0;
 }
