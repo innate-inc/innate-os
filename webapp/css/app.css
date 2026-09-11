@@ -2235,7 +2235,8 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
   z-index: 1;
 }
 
-@media (min-width: 641px) {
+/* Only where the frame is a box rather than full bleed (see the 641-1400 override). */
+@media (min-width: 1401px) {
   /* Inset by the frame's 1px border rather than drawing a second one, so the
      map sits in the frame the same way the feed does and the hairline stays
      whatever the frame says it is. 17px radius is the frame's 18px less that
@@ -11281,7 +11282,9 @@ select.skill-input {
   color: inherit; background: transparent; border: 0; border-radius: 14px 0 0 14px;
   font: inherit; cursor: pointer;
 }
-.agent-studio-dock-action { display: flex; padding-right: 8px; }
+/* Clear of the pill's 14px corner: at 8px the button's own corner broke through the curve
+   and read as hanging off the edge. Matches the toggle's leading inset. */
+.agent-studio-dock-action { display: flex; padding-right: 14px; }
 .agent-studio-dock-action .agent-toggle { height: 32px; }
 .agent-studio-dock-icon { grid-row: 1 / 3; width: 22px; height: 22px; }
 .agent-studio-dock-toggle .microlabel { grid-column: 2; color: rgb(255 255 255 / 55%); }
