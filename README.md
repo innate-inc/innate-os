@@ -129,13 +129,13 @@ Save it in `workspace/custom_agents/`. Because the robot lives in the physical w
 Stream new data into a running agent — a custom sensor, a webhook, an API. Devices live in `workspace/inputs/` and are requested by class:
 
 ```python
-from inputs.thermometer_input import ThermometerInput
+from inputs.arm_vitals_input import ArmVitalsInput
 
 from innate import InputRef
 
 
 def get_inputs(self) -> list[InputRef]:
-    return [ThermometerInput]
+    return [ArmVitalsInput]
 ```
 
 **[Input devices →](https://docs.innate.bot/software/inputs)**
