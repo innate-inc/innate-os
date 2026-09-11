@@ -6,6 +6,7 @@ Text-to-Speech handler using Cartesia API.
 Generates speech audio and plays it through the robot's audio system.
 """
 
+import audioop
 import base64
 import hashlib
 import io
@@ -37,6 +38,7 @@ class Delivery:
     speed: float | None = None
     volume: float | None = None
     sound_effect: bool = False
+    seconds: float | None = None  # a generated sound effect's length; None lets the generator pick
     pcm: bytes | None = None  # a ready clip: 16-bit mono PCM at SPEAKER_SAMPLE_RATE, played as-is
 
     def generation_config(self) -> dict[str, float]:
@@ -45,12 +47,15 @@ class Delivery:
 
 def parse_styled_tts(data: str) -> tuple[str, Delivery] | None:
     """A /brain/tts/styled payload: JSON ``{"text", "speed", "volume"}``,
-    ``{"sound": "a small dog barking twice"}`` for a generated sound effect, or
+    ``{"sound": "a small dog barking twice", "seconds"}`` for a generated sound effect, or
     ``{"pcm": <base64>, "label"}`` for a ready clip. None when malformed."""
     try:
         payload = json.loads(data)
         if "sound" in payload:
-            return str(payload["sound"]), Delivery(sound_effect=True)
+            seconds = payload.get("seconds")
+            return str(payload["sound"]), Delivery(
+                sound_effect=True, seconds=None if seconds is None else float(seconds)
+            )
         if "pcm" in payload:
             return str(payload.get("label", "")), Delivery(sound_effect=True, pcm=base64.b64decode(payload["pcm"]))
         speed, volume = payload.get("speed"), payload.get("volume")
@@ -275,7 +280,7 @@ class TTSHandler:
         if self._cartesia_client is None:
             raise RuntimeError("Cartesia client unavailable (is_available() gates all callers)")
         if delivery is not None and delivery.sound_effect:
-            return self._sound_effect_bytes(text)
+            return self._sound_effect_bytes(text, delivery.seconds)
         if for_speaker:
             output_format = {"container": "raw", "encoding": "pcm_s16le", "sample_rate": self.SPEAKER_SAMPLE_RATE}
             generation_config: dict[str, float] = {"speed": self.SPEAKER_SPEED}
@@ -292,27 +297,35 @@ class TTSHandler:
             generation_config=generation_config or None,
         )
 
-    # Sound effects come from ElevenLabs sound generation as the speaker's raw PCM
-    # (the sim path gives it a WAV header in _finalize_wav). Generated once per
-    # description and kept on disk: a dance that barks four times must not wait on
-    # four generations, and the same words must give the same sound.
+    # Sound effects come from ElevenLabs sound generation, kept on disk as the speaker's mono
+    # PCM (the sim path gives it a WAV header in _finalize_wav) once per description and
+    # length: a dance that barks four times must not wait on four generations, and the same
+    # words must give the same sound.
     SOUND_CACHE = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "innate" / "sounds"
+    SOUND_SECONDS = (0.5, 30.0)  # the generator's duration_seconds range; unset, it picks a few seconds
 
-    def _sound_effect_bytes(self, text: str) -> Iterator[bytes]:
-        cached = self.SOUND_CACHE / f"{hashlib.sha1(text.encode()).hexdigest()}.pcm"
+    def _sound_effect_bytes(self, text: str, seconds: float | None) -> Iterator[bytes]:
+        body: dict[str, Any] = {"text": text}
+        if seconds is not None:
+            shortest, longest = self.SOUND_SECONDS
+            body["duration_seconds"] = min(max(seconds, shortest), longest)
+        key = f"{json.dumps(body, sort_keys=True)} mono"  # "mono": the earlier keys hold the raw stereo answer
+        cached = self.SOUND_CACHE / f"{hashlib.sha1(key.encode()).hexdigest()}.pcm"
         if not cached.exists():
             with self._proxy.request_stream(
                 "elevenlabs",
                 "/v1/sound-generation",
-                json={"text": text},
+                json=body,
                 params={"output_format": f"pcm_{self.SPEAKER_SAMPLE_RATE}"},
                 timeout=60.0,
             ) as response:
                 response.raise_for_status()
-                pcm = response.read()
+                stereo = response.read()
+            # pcm_16000 arrives as interleaved STEREO s16, whatever the format name suggests;
+            # fed to aplay as mono it plays at half speed, an octave down.
             cached.parent.mkdir(parents=True, exist_ok=True)
             staging = cached.with_suffix(".tmp")
-            staging.write_bytes(pcm)
+            staging.write_bytes(audioop.tomono(stereo, 2, 0.5, 0.5))
             staging.replace(cached)  # a crash mid-write must not leave a clipped sound to replay forever
         yield cached.read_bytes()
 
