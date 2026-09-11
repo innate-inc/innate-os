@@ -74,25 +74,50 @@ class BrainConfig:
         for name, default in _PARAM_DEFAULTS.items():
             node.declare_parameter(name, default)
         for retired in _RENAMED_PARAMS:
-            node.declare_parameter(retired, "")
+            node.declare_parameter(retired, UNSET)
         values = {
             name: getattr(node.get_parameter(name).get_parameter_value(), accessor[type(default)])
             for name, default in _PARAM_DEFAULTS.items()
         }
         for retired, current in _RENAMED_PARAMS.items():
             carried = node.get_parameter(retired).get_parameter_value().string_value.strip()
-            if not carried or values[current] != _PARAM_DEFAULTS[current]:
+            if carried in _ABSENT_VALUES[current] or values[current] not in _ABSENT_VALUES[current]:
                 continue
             values[current] = carried
-            node.get_logger().warn(f"[Brain] '{retired}' is retired — using {carried} as '{current}'; rename it")
+            node.get_logger().warn(f"[Brain] '{retired}' is retired — using {carried!r} as '{current}'; rename it")
+        for current, default in _MIGRATED_DEFAULTS.items():
+            if values[current] in _ABSENT_VALUES[current]:
+                values[current] = default
         return cls(**values)
 
 
-# Old parameter name -> its replacement. A deployed robot may still carry the old
-# name in settings.yaml, or in .env as GEMINI_MODEL (the launch file feeds that to
-# the retired parameter, so settings.yaml still outranks it); ignoring either would
-# silently revert that robot to the default model.
+UNSET = "<unset>"
+"""Declared default of every field with a retired alias, so an explicit value can be
+told from an absent one — a value-only comparison would let ``GEMINI_MODEL`` from the
+environment outrank the robot's own ``gemini_model`` in settings.yaml."""
+
+# Old parameter name -> its replacement. A deployed robot may still carry the old name
+# in settings.yaml, or in .env as GEMINI_MODEL — which the launch file feeds to the
+# retired parameter, so settings.yaml still outranks it. Ignoring either would silently
+# revert that robot to the default model.
 _RENAMED_PARAMS = {"gemini_model": "llm_model", "gemini_thinking_level": "llm_thinking"}
+
+# Resolved after the carry above, so a retired name still decides the value.
+_MIGRATED_DEFAULTS = {
+    "llm_model": "gemini-3.6-flash",
+    # "minimal" | "low" | "medium" | "high"; "" = server default. Measured on
+    # 3.6-flash (2026-08): minimal is ~3x faster than the default level (0.96s vs
+    # 3.08s median turn) and passed the same single-turn discipline probes (wait on
+    # idle, ignore STT noise, tool choice, go_to_point_in_view grounding). An earlier
+    # model's "low" measurably hurt multi-turn instruction-following (skill re-runs,
+    # chatter) — if that resurfaces, revert to "" here.
+    "llm_thinking": "minimal",
+}
+
+# What counts as "nobody set this". An empty llm_thinking is explicit — it asks for the
+# server's own thinking default — while an empty model name never is (the launch passes
+# "" when LLM_MODEL is absent from the environment).
+_ABSENT_VALUES = {"llm_model": (UNSET, ""), "llm_thinking": (UNSET,)}
 
 # One default per BrainConfig field, in field order; a value's type must match
 # its field's (it selects the ROS parameter accessor in ``load``).
@@ -120,15 +145,10 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     # Empty = Gemini through the Innate proxy or GEMINI_API_KEY; any other
     # OpenAI-compatible server is its ".../v1" root plus LLM_API_KEY.
     "llm_base_url": "",
-    "llm_model": "gemini-3.6-flash",
-    # "minimal" | "low" | "medium" | "high"; "" = server default.
-    # Measured on 3.6-flash (2026-08): minimal is ~3x faster than the
-    # default level (0.96s vs 3.08s median turn) and passed the same
-    # single-turn discipline probes (wait on idle, ignore STT noise,
-    # tool choice, go_to_point_in_view grounding). An earlier model's "low"
-    # measurably hurt multi-turn instruction-following (skill re-runs,
-    # chatter) — if that resurfaces, revert to "" here.
-    "llm_thinking": "minimal",
+    # These two have retired aliases, so their real defaults live in
+    # _MIGRATED_DEFAULTS and land only after the carry.
+    "llm_model": UNSET,
+    "llm_thinking": UNSET,
     # Server-specific request fields, e.g. {"chat_template_kwargs": {"enable_thinking": false}}
     # for Nemotron 3 / Qwen3 under vLLM, or {"google": {...}} on Google's compat layer.
     "llm_extra_body": "",

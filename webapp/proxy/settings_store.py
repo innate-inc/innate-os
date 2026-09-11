@@ -54,7 +54,38 @@ def read_overrides() -> dict:
         data = yaml.safe_load(path.read_text())
     except (OSError, yaml.YAMLError):
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    _carry_retired(data)
+    return data
+
+
+# Retired parameter path -> its current name, mirroring brain_client's
+# core/config.py:_RENAMED_PARAMS (the webapp proxy cannot import it).
+_RETIRED_PARAMS = {
+    ("brain_client_node", "ros__parameters", "gemini_model"): "llm_model",
+    ("brain_client_node", "ros__parameters", "gemini_thinking_level"): "llm_thinking",
+}
+
+
+def _carry_retired(overrides: dict) -> None:
+    """Rename a deployed robot's retired keys in place, before anything reads them.
+
+    A retired key no longer matches a template stanza, so leaving it would send it
+    to the Extra block as a second `brain_client_node:` mapping — and PyYAML keeps
+    only the last duplicate, dropping every other brain override on the next read.
+    """
+    for path, current in _RETIRED_PARAMS.items():
+        *parents, retired = path
+        node = overrides
+        for key in parents:
+            node = node.get(key) if isinstance(node, dict) else None
+            if not isinstance(node, dict):
+                break
+        if not isinstance(node, dict) or retired not in node:
+            continue
+        carried = node.pop(retired)
+        node.setdefault(current, carried)
 
 
 # ── override-dict edits ────────────────────────────────────────────────

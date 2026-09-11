@@ -48,7 +48,7 @@ def generate_launch_description():
     )
     llm_model_arg = DeclareLaunchArgument(
         "llm_model",
-        default_value=get_env("LLM_MODEL", "gemini-3.6-flash"),
+        default_value=get_env("LLM_MODEL", ""),  # "" = unset; core/config.py owns the default
         description="Model powering the local brain, on whichever server llm_base_url names",
     )
     # The retired name goes to the retired parameter, never straight to llm_model:

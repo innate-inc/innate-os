@@ -133,7 +133,9 @@ class ChatContext:
         calls, by which point an abandoned turn's orphaned request has already
         serialized its body.
         """
-        body = self._request(user_message, tools, system, latest_only_images)
+        # Merged here, not left to the transport, so the observability tap below
+        # sees the body that actually goes out (the transport's merge is a no-op on it).
+        body = self._request(user_message, tools, system, latest_only_images) | self._transport.extra_body
         if self.on_request is not None:
             self.on_request(body)
         # Usage rides the reply and is committed by absorb, on the loop thread:

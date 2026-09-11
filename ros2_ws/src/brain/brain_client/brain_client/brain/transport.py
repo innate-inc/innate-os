@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import httpx
@@ -49,6 +49,9 @@ class ChatTransport:
 
     stream: Callable[[dict], Chunks]
     complete: Callable[[dict, float | None], dict]
+    # The same extras both forms merge in, readable so a caller can trace the
+    # body that will actually go on the wire (brain/context.py:generate).
+    extra_body: dict = field(default_factory=dict)
 
 
 class Backend(StrEnum):
@@ -117,7 +120,7 @@ def direct_chat(endpoint: Endpoint, extra_body: dict | None = None) -> ChatTrans
             raise RuntimeError(f"chat direct: HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json() if resp.content else {}
 
-    return ChatTransport(stream=stream, complete=complete)
+    return ChatTransport(stream=stream, complete=complete, extra_body=extras)
 
 
 def proxy_chat(proxy: ProxyClient, extra_body: dict | None = None) -> ChatTransport:
@@ -137,7 +140,7 @@ def proxy_chat(proxy: ProxyClient, extra_body: dict | None = None) -> ChatTransp
                 raise RuntimeError(f"chat via proxy: HTTP {resp.status_code}: {payload[:200]!r}")
             return json.loads(payload) if payload else {}
 
-    return ChatTransport(stream=stream, complete=complete)
+    return ChatTransport(stream=stream, complete=complete, extra_body=extras)
 
 
 def parse_extra_body(raw: str, logger: RcutilsLogger) -> dict:

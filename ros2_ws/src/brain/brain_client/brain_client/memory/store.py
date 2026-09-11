@@ -342,6 +342,7 @@ class MemoryStore:
     # --- locked internals ---
     def _load_locked(self) -> None:
         assert self._dir is not None
+        self._sweep_retired_locked()
         try:
             index = json.loads((self._dir / "index.json").read_text())
             fresh = (
@@ -415,9 +416,16 @@ class MemoryStore:
             for stale in self._dir.glob("*.jpg*"):  # images and any crash-orphaned .jpg.tmp
                 stale.unlink(missing_ok=True)
             (self._dir / "index.json").unlink(missing_ok=True)
-            (self._dir / "files.json").unlink(missing_ok=True)  # the retired upload registry
+        self._sweep_retired_locked()
         self._memories = []
         self._next_id = 1
+
+    def _sweep_retired_locked(self) -> None:
+        """Drop the Gemini Files API tier's registry: it outlives the feature otherwise,
+        and an upgraded robot with a healthy index never reaches the wipe path."""
+        assert self._dir is not None
+        for retired in self._dir.glob("files.json*"):  # the registry and any crash-orphaned .tmp
+            retired.unlink(missing_ok=True)
 
     def _write_image_locked(self, memory_id: int, jpeg: bytes) -> None:
         # tmp + replace like the index: the proxy and upload threads read these
