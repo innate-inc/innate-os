@@ -938,13 +938,13 @@ class ModeManager(Node):
         self.get_logger().error(f"Failed to load map after {max_retries} attempts")
         return False
 
-    def _efficient_map_switch(self) -> tuple[bool, str]:
+    def _efficient_map_switch(self, requested_map: str) -> tuple[bool, str]:
         """
-        Efficiently switch maps by transitioning bt_navigator down, loading map, then bringing all nodes up.
+        Switch maps with navigation stopped and the previous AMCL filter discarded.
 
         Algorithm:
         1. Transition bt_navigator to inactive
-        2. Load new map on map_server
+        2. Reset AMCL, then expose and load the new map
         3. Transition all nodes to active
         """
         nodes = modes_nodes.get("navigation", [])
@@ -959,6 +959,16 @@ class ModeManager(Node):
         if not success:
             failures.append("bt_navigator")
             self.get_logger().warning("Failed to transition bt_navigator down")
+
+        # Stop and clear AMCL before publishing the new map identity. Otherwise
+        # its old filter can keep supplying confident poses during the switch.
+        # Cleanup + configure honors always_reset_initial_pose; deactivation
+        # alone retains the filter. The activation loop below brings it back.
+        if not transition_node(
+            self._service_clients, self.get_logger(), "navigation_amcl", State.PRIMARY_STATE_UNCONFIGURED
+        ):
+            return False, "Could not reset AMCL before switching maps"
+        self.current_map = requested_map
 
         # Step 2: Load new map
         self.get_logger().info("Step 2: Loading new map")
@@ -1072,15 +1082,11 @@ class ModeManager(Node):
             my_generation = self._switch_generation
             previous_map = self.current_map
             try:
-                # _efficient_map_switch loads self.current_map, so set it for
-                # the attempt but only persist (and keep) it on success.
-                self.current_map = requested_map
-
                 # If we're in navigation mode, use efficient map switch
                 if self.current_mode == "navigation":
                     self.get_logger().info(f"Efficiently switching to new map: {requested_map}")
 
-                    success, message = self._efficient_map_switch()
+                    success, message = self._efficient_map_switch(requested_map)
 
                     if success:
                         self.save_last_map(requested_map)
@@ -1095,6 +1101,7 @@ class ModeManager(Node):
                         self.get_logger().error(response.message)
                 else:
                     # If not in navigation mode, just update the map for next time navigation starts
+                    self.current_map = requested_map
                     self.save_last_map(requested_map)
                     response.success = True
                     response.message = f"Map set to '{requested_map}' for next navigation session"
