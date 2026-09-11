@@ -9,10 +9,10 @@
 
 **The lightweight agentic operating system for general-purpose robots**
 
-[Documentation](https://docs.innate.bot) ·
-[Try MARS](https://sim.innate.bot) ·
-[Discord](https://discord.gg/innate) ·
-[Innate](https://innate.bot)
+[![Discord](https://img.shields.io/badge/Discord-Join%20our%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/innate)
+[![Documentation](https://img.shields.io/badge/Docs-Read%20the%20docs-blue?style=for-the-badge&logo=readthedocs&logoColor=white)](https://docs.innate.bot)
+[![Website](https://img.shields.io/badge/Website-Visit%20us-orange?style=for-the-badge&logo=safari&logoColor=white)](https://innate.bot)
+[![ROS 2](https://img.shields.io/badge/ROS%202-Humble-22314E?style=for-the-badge&logo=ros&logoColor=white)](https://docs.ros.org/en/humble/)
 
 <img src="docs/assets/readme/mars-compatible.png" alt="MARS, a small agentic robot for your home" width="250px">
 
@@ -58,7 +58,7 @@ Skills are the unit of action on an Innate robot — a software call, a motion, 
   <img src="docs/assets/readme/skills-chess-door-opening.gif" alt="Two standalone skills: moving a chess piece, then opening a door" width="520">
 </p>
 
-Run them from the [web app](https://docs.innate.bot/robots/web-app), the [phone app](https://docs.innate.bot/robots/innate-controller-app), or an agent. Write your own in `workspace/custom_skills/`:
+Run them from the [web app](https://docs.innate.bot/robots/web-app), the [phone app](https://docs.innate.bot/robots/innate-controller-app), or an agent. Write your own in `workspace/custom_skills/` — the [workspace guide](workspace/README.md) is the hello world.
 
 ```python
 from innate import Mobility, Skill, SkillReturn
@@ -118,7 +118,7 @@ class NavigateAgent(Agent):
         )
 ```
 
-List skills and inputs as the classes themselves.
+List skills and inputs as the classes themselves, so your editor catches a typo before the robot does.
 
 Save it in `workspace/custom_agents/`. Because the robot lives in the physical world, agents observe continuously and can interrupt a running skill when the world changes.
 
@@ -145,6 +145,7 @@ def get_inputs(self) -> list[InputRef]:
 This README is an introduction. The rest lives in the docs:
 
 - [Building with the simulator](https://docs.innate.bot/simulator/building-with-the-simulator)
+- [Workspace guide](workspace/README.md)
 - [Getting started](https://docs.innate.bot/get-started/mars-quick-start)
 - [Simulator](https://docs.innate.bot/simulator)
 - [Skills](https://docs.innate.bot/software/skills)
