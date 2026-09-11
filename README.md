@@ -144,6 +144,7 @@ def get_inputs(self) -> list[InputRef]:
 
 This README is an introduction. The rest lives in the docs:
 
+- [Building with the simulator](https://docs.innate.bot/simulator/building-with-the-simulator)
 - [Getting started](https://docs.innate.bot/get-started/mars-quick-start)
 - [Simulator](https://docs.innate.bot/simulator)
 - [Skills](https://docs.innate.bot/software/skills)

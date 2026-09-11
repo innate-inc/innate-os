@@ -34,11 +34,11 @@ Already have this checkout? `sh scripts/install-sim.sh` from the repo root. OS-s
 
 ## Build against it
 
-The container mounts this repository, so `workspace/` is the same folder a real robot uses. Skills and agents [hot-reload on save](https://docs.innate.bot/simulator/building-with-the-simulator). Write them there, trigger them from the web app, then deploy the same files to hardware.
+The container mounts this repository, so `workspace/` is the same folder a real robot uses. Skills and agents hot-reload on save. Write them there, trigger them from the web app, then deploy the same files to hardware.
 
+- [Building with the simulator](https://docs.innate.bot/simulator/building-with-the-simulator)
 - [Skills](https://docs.innate.bot/software/skills)
 - [Agents](https://docs.innate.bot/software/agents)
-- [Building with the simulator](https://docs.innate.bot/simulator/building-with-the-simulator)
 
 | You edited | What to do |
 |---|---|
