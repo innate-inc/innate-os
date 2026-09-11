@@ -799,6 +799,37 @@ select.skill-input {
   opacity: 0.82;
 }
 
+.depth-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.depth-model-select {
+  width: 112px;
+  max-width: 112px;
+  padding: 4px 6px;
+  border-radius: 7px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--ctl-glass);
+  color: var(--ctl-text);
+  box-shadow: var(--ctl-sheen);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.depth-model-select:hover {
+  color: var(--text);
+}
+
+.depth-model-select:focus-visible {
+  outline: 2px solid var(--ctl-accent);
+  outline-offset: 2px;
+}
+
 .depth-cursor {
   position: absolute;
   z-index: 6;

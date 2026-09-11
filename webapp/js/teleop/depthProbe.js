@@ -2,16 +2,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
 
-import { MAIN_CAMERA_DEPTH_TOPIC } from "../constants.js";
+import { FAST_FOUNDATION_DEPTH_TOPIC, MAIN_CAMERA_DEPTH_TOPIC } from "../constants.js";
 
 const DEPTH_NEAR_M = 0.2;
 const DEPTH_FAR_M = 6.0;
 const OVERLAY_ALPHA = 170;
+const DEPTH_MODEL_KEY = "innate.teleop.depthModel";
 
 const DEPTH_ICON =
   '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-  '<path d="M12 3.6 7.2 8.4a6.8 6.8 0 1 0 9.6 0Z"/><path d="M8.7 13.4A3.3 3.3 0 0 0 12 16.7"/>' +
+  '<path d="m12 3 7 4v10l-7 4-7-4V7z"/><path d="m19 7-7 4-7-4"/><path d="M12 11v10"/>' +
   "</svg>";
+
+const DEPTH_SOURCES = [
+  { id: "classical", label: "Classical", topic: MAIN_CAMERA_DEPTH_TOPIC },
+  { id: "fast_foundation", label: "Fast Foundation", topic: FAST_FOUNDATION_DEPTH_TOPIC },
+];
 
 /**
  * @typedef {{ width: number, height: number, depthM: Float32Array }} DepthFrame
@@ -26,13 +32,29 @@ const DEPTH_ICON =
  * @returns {{ destroy: () => void }}
  */
 export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosClient) {
+  const controls = document.createElement("div");
+  controls.className = "depth-controls";
+  controlsParent.appendChild(controls);
+
   const button = document.createElement("button");
   button.type = "button";
   button.className = "icon-toggle depth-toggle";
   button.innerHTML = DEPTH_ICON;
   button.setAttribute("aria-label", "Depth overlay");
   button.setAttribute("aria-pressed", "false");
-  controlsParent.appendChild(button);
+  controls.appendChild(button);
+
+  const modelSelect = document.createElement("select");
+  modelSelect.className = "depth-model-select mono";
+  modelSelect.setAttribute("aria-label", "Depth model");
+  modelSelect.title = "Depth model";
+  for (const source of DEPTH_SOURCES) {
+    const option = document.createElement("option");
+    option.value = source.id;
+    option.textContent = source.label;
+    modelSelect.appendChild(option);
+  }
+  controls.appendChild(modelSelect);
 
   const canvas = document.createElement("canvas");
   canvas.className = "depth-overlay";
@@ -48,6 +70,9 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
 
   let enabled = false;
   let mainCamera = true;
+  let source = sourceById(loadDepthModel()) ?? DEPTH_SOURCES[0];
+  modelSelect.value = source.id;
+  modelSelect.hidden = true;
   /** @type {DepthFrame | null} */
   let frame = null;
   /** @type {ImageData | null} */
@@ -89,12 +114,27 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
     syncOverlay();
   });
 
+  modelSelect.addEventListener("change", () => {
+    const next = sourceById(modelSelect.value);
+    if (!next || next.id === source.id) return;
+    source = next;
+    saveDepthModel(next.id);
+    frame = null;
+    image = null;
+    if (enabled) {
+      unsubscribeDepth();
+      subscribeDepth();
+    }
+    syncButton();
+    syncOverlay();
+  });
+
   syncButton();
 
   function subscribeDepth() {
     if (unsubDepth) return;
     unsubDepth = rosClient.subscribe(
-      MAIN_CAMERA_DEPTH_TOPIC,
+      source.topic,
       (msg) => {
         const next = decodeDepthMessage(msg);
         if (!next) return;
@@ -115,10 +155,11 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
     button.classList.toggle("active", enabled);
     button.classList.toggle("limited", enabled && !mainCamera);
     button.setAttribute("aria-pressed", String(enabled));
+    modelSelect.hidden = !enabled;
     button.title = !enabled
-      ? "Show depth overlay"
+      ? `Show depth overlay (${source.label})`
       : mainCamera
-        ? "Hide depth overlay"
+        ? `Hide depth overlay (${source.label})`
         : "Depth overlay is available on Main camera only";
   }
 
@@ -233,11 +274,34 @@ export function createDepthProbe(controlsParent, stageEl, videoEl, session, rosC
       videoEl.removeEventListener("loadedmetadata", syncOverlay);
       videoEl.removeEventListener("pointermove", onPointerMove);
       videoEl.removeEventListener("pointerleave", onPointerLeave);
-      button.remove();
+      controls.remove();
       canvas.remove();
       readout.remove();
     },
   };
+}
+
+/** @param {string} id */
+function sourceById(id) {
+  return DEPTH_SOURCES.find((source) => source.id === id) ?? null;
+}
+
+function loadDepthModel() {
+  try {
+    const value = localStorage.getItem(DEPTH_MODEL_KEY);
+    return typeof value === "string" ? value : "";
+  } catch {
+    return "";
+  }
+}
+
+/** @param {string} id */
+function saveDepthModel(id) {
+  try {
+    localStorage.setItem(DEPTH_MODEL_KEY, id);
+  } catch {
+    // Ignore storage errors (private mode, restricted storage).
+  }
 }
 
 /**
