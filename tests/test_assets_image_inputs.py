@@ -63,6 +63,38 @@ def test_traffic_geometry_sources_are_asset_and_geometry_inputs():
         assert (path in config.GEOMETRY_DRIVER_FILES) == (name == "crossroads")
 
 
+def test_the_launcher_looks_for_packs_where_the_driver_does():
+    """Read out of the driver rather than imported: importing it pulls MuJoCo.
+    A root only the driver knows is a pack `up` cannot see, so it gates on the
+    whole derived store instead and refuses a checkout the driver would run."""
+    import ast
+
+    import config
+
+    source = (REPO_ROOT / "ros2_ws/src/mars_bot/mars_sim_driver/mars_sim_driver/environments.py").read_text()
+    roots = next(
+        ast.literal_eval(node.value)
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "MANIFEST_ROOTS"
+    )
+    assert roots == config.ENVIRONMENT_MANIFEST_ROOTS
+
+
+def test_every_environment_manifest_names_installable_geometry():
+    """`up` gates on these paths (runtime.missing_geometry), so a manifest the
+    launcher cannot read, or one naming geometry no asset unit carries, would
+    refuse to start with nothing able to satisfy it."""
+    import config
+
+    units = set(config.SIM_ASSET_UNITS)
+    for environment_id in config.available_environment_ids(REPO_ROOT):
+        required = config.read_environment_assets(REPO_ROOT, environment_id)
+        assert required is not None, f"{environment_id}: the launcher cannot read its requirements"
+        assert required.viewer, f"{environment_id}: names no browser assets to check"
+        named = {Path(path).parts[0] for path in required.assets}
+        assert named <= units, f"{environment_id} wants {named - units}, which no asset unit carries"
+
+
 def _dockerignore_allows(relative_path: str, rules: list[str]) -> bool:
     """Does any `!` rule re-admit `relative_path` after the leading `**`?"""
     for rule in rules:
