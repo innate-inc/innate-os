@@ -310,6 +310,12 @@ install(PROGRAMS
   RENAME ground_plane_check
 )
 
+install(PROGRAMS
+  mars_cam/stereo_depth_benchmark.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME stereo_depth_benchmark
+)
+
 # Install launch files
 install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch
