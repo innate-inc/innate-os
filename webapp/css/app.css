@@ -2235,19 +2235,16 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
   z-index: 1;
 }
 
-@media (min-width: 1401px) {
+@media (min-width: 641px) {
   /* Inset by the frame's 1px border rather than drawing a second one, so the
      map sits in the frame the same way the feed does and the hairline stays
      whatever the frame says it is. 17px radius is the frame's 18px less that
      border, matching the video. */
   .agent-cockpit.agent-sim .cam-map-host.big {
     top: calc(var(--agent-dock-gutter) + 1px);
-    right: auto;
-    bottom: auto;
+    right: calc(var(--agent-dock-width) + 2 * var(--agent-dock-gutter) + 1px);
+    bottom: calc(var(--agent-dock-gutter) + 1px);
     left: calc(var(--agent-dock-gutter) + 1px);
-    width: calc(var(--agent-frame-width) - 2px);
-    height: auto;
-    aspect-ratio: 4 / 3;
     overflow: hidden;
     border-radius: 17px;
   }
@@ -9648,19 +9645,18 @@ select.skill-input {
 }
 
 @media (min-width: 641px) {
+  /* The scene renders at whatever shape it is given, so it takes the room the chat does
+     not: deriving its height from its width instead ran it off the bottom of any display
+     wider than 4:3 plus the chat. */
   .agent-cockpit.agent-sim .agent-feed-frame {
     position: absolute;
     display: block;
     top: var(--agent-dock-gutter);
-    right: auto;
-    bottom: auto;
+    right: calc(var(--agent-dock-width) + var(--agent-dock-gutter) + var(--agent-dock-gutter));
+    bottom: var(--agent-dock-gutter);
     left: var(--agent-dock-gutter);
-    width: calc(
-      100% - var(--agent-dock-width) - var(--agent-dock-gutter) -
-        var(--agent-dock-gutter) - var(--agent-dock-gutter)
-    );
+    width: auto;
     height: auto;
-    aspect-ratio: 4 / 3;
     overflow: hidden;
     background: #000;
     border: 1px solid color-mix(in srgb, var(--text) 34%, var(--bg));
@@ -9675,7 +9671,6 @@ select.skill-input {
     left: 0;
     width: 100%;
     height: 100%;
-    aspect-ratio: 4 / 3;
     transform: none;
   }
 
@@ -9736,29 +9731,6 @@ select.skill-input {
 
   .agent-cockpit.agent-sim .video-stage > :is(canvas, video) {
     border-radius: 0;
-  }
-}
-
-/* Wide-but-short screens: the 4:3 frame is derived from whatever width the dock
-   leaves over, so past a certain aspect ratio it is taller than the stage and
-   its bottom corners get cropped. Invert the dependency — size the frame from
-   the available height, then define the dock as the width left over. Every rule
-   that already anchors to --agent-dock-width (the panel, the camera strip, the
-   Inspect Brain toggle) then follows the frame's edge for free. Below this the
-   dock's own width still binds, so the two agree at the boundary. */
-@media (min-width: 1401px) {
-  .agent-cockpit.agent-sim {
-    /* Fixed dock width, kept as its own name so --agent-dock-width can be
-       derived below without a circular reference. */
-    --agent-dock-base: 388px;
-    --agent-frame-fit: calc((100dvh - 2 * var(--agent-dock-gutter)) * 4 / 3);
-    --agent-frame-max: calc(
-      100% - var(--agent-dock-base) - 3 * var(--agent-dock-gutter)
-    );
-    --agent-frame-width: min(var(--agent-frame-fit), var(--agent-frame-max));
-    --agent-dock-width: calc(
-      100% - var(--agent-frame-width) - 3 * var(--agent-dock-gutter)
-    );
   }
 }
 
