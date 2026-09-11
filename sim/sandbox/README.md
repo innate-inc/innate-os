@@ -59,7 +59,9 @@ with `uv run sandbox/test_driver_core.py`.
 
 Apartment meshes come from sim/assets/ (gitignored): `./innate-sim up`
 extracts the geometry layer of the published asset image; to change the
-geometry, edit tools/ (see below) and push -- CI rebuilds the image.
+geometry, edit tools/ (see below) and push -- CI rebuilds the image. Editing
+them does not stop `up`, which gates on the launched environment's manifest
+rather than on the image tag (sim/README.md#assets).
 
 ## Asset pipeline
 
