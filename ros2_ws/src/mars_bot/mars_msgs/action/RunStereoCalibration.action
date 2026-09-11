@@ -33,11 +33,14 @@ sensor_msgs/CompressedImage[] images
 string message
 float32 capture_timeout_sec  # live watchdog timeout; client re-anchors its countdown to this on every tick
 
-# Live capture guidance. All relative to the frame, never metres: these are
-# produced DURING calibration, so there are no intrinsics yet to convert with.
+# Live capture guidance. Every threshold behind these is frame-relative: they
+# are produced DURING calibration, so there are no intrinsics yet to convert
+# with. approx_distance_m is the one exception, and is display text only.
 string board  # which target this run is detecting
 string distance_hint  # TOO_CLOSE | IN_RANGE | TOO_FAR (empty when nothing detected)
 float32 board_extent  # board diagonal over frame diagonal
 float32 board_tilt  # ~0.0143 per degree off square, range-independent
+float32 pixels_per_square  # detection headroom; the far limit is a floor on this
+float32 approx_distance_m  # from the lens's NOMINAL fov, for display only
 float32 coverage_percent  # 0-100 across position, scale, tilt and count
 string[] coverage_missing  # what is still short, most useful first

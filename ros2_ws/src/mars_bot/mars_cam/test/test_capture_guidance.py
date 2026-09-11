@@ -12,16 +12,19 @@ import numpy as np
 import pytest
 
 from mars_cam.capture_guidance import (
+    DEFAULT_EXTENT_MIN,
     EXTENT_MAX,
-    EXTENT_MIN,
     IN_RANGE,
     TILT_MIN,
     TOO_CLOSE,
     TOO_FAR,
+    BoardGeometry,
     BoardView,
     CoverageTracker,
     measure,
 )
+
+EXTENT_MIN = DEFAULT_EXTENT_MIN
 
 FRAME = (640, 480)
 FOCAL = 500.0
@@ -136,6 +139,75 @@ def test_distance_hints_bracket_the_usable_range():
 def test_scale_bands_span_the_usable_range():
     bands = {BoardView((0.5, 0.5), e, 0.0).scale_band for e in np.linspace(EXTENT_MIN, EXTENT_MAX, 40)}
     assert bands == {0, 1, 2}
+
+
+# -------------------------------------------------------------- board geometry
+
+CHECKER = BoardGeometry.checkerboard((9, 6), 0.022)
+CHARUCO = BoardGeometry.charuco(17, 9, 0.016)
+FRAME_DIAG = float(np.hypot(*FRAME))
+
+
+def test_charuco_cannot_be_held_as_far_as_a_checkerboard():
+    """The finding this whole design turns on: ArUco markers must resolve enough
+    pixels to decode, so the same sheet of paper reaches much less far."""
+    _, checker_far = CHECKER.range_m(FOCAL, FRAME_DIAG)
+    _, charuco_far = CHARUCO.range_m(FOCAL, FRAME_DIAG)
+    assert charuco_far < checker_far
+    assert CHARUCO.extent_min(FRAME_DIAG) > CHECKER.extent_min(FRAME_DIAG)
+
+
+def test_a_board_needing_more_pixels_must_be_held_closer():
+    fussy = BoardGeometry(squares=(8, 5), square_size_m=0.022, min_pixels_per_square=20.0)
+    assert fussy.extent_min(FRAME_DIAG) == pytest.approx(2 * CHECKER.extent_min(FRAME_DIAG))
+
+
+def test_the_usable_range_brackets_the_extent_limits():
+    near, far = CHECKER.range_m(FOCAL, FRAME_DIAG)
+    assert near < far
+    # Held at the near limit the board spans EXTENT_MAX of the frame; at the far
+    # limit it is down to the detection floor.
+    for distance, expected in ((near, EXTENT_MAX), (far, CHECKER.extent_min(FRAME_DIAG))):
+        view = measure(project(board_points(), distance=distance), board_points(), FRAME, CHECKER, FOCAL)
+        assert view.extent == pytest.approx(expected, rel=1e-6)
+
+
+def test_degenerate_optics_do_not_produce_a_range():
+    assert CHECKER.range_m(0.0, FRAME_DIAG) == (0.0, 0.0)
+    assert CHECKER.range_m(FOCAL, 0.0) == (0.0, 0.0)
+    assert CHECKER.extent_min(0.0) == 0.0
+
+
+# ------------------------------------------------------- distance round-trip
+
+
+@pytest.mark.parametrize("distance", [0.15, 0.3, 0.55])
+def test_the_reported_distance_recovers_the_true_one(distance):
+    grid = board_points()
+    view = measure(project(grid, distance=distance), grid, FRAME, CHECKER, FOCAL)
+    assert view.approx_distance_m == pytest.approx(distance, rel=0.02)
+
+
+def test_pixels_per_square_falls_off_with_range():
+    grid = board_points()
+    near_m, far_m = CHECKER.range_m(FOCAL, FRAME_DIAG)
+    near = measure(project(grid, distance=near_m * 1.2), grid, FRAME, CHECKER, FOCAL)
+    beyond = measure(project(grid, distance=far_m * 1.3), grid, FRAME, CHECKER, FOCAL)
+    assert near.pixels_per_square > beyond.pixels_per_square
+    assert near.hint == IN_RANGE
+    assert beyond.hint == TOO_FAR
+    assert beyond.pixels_per_square < CHECKER.min_pixels_per_square
+
+
+def test_no_geometry_still_measures_but_reports_no_distance():
+    """A caller that has not said which board it is must still get a usable
+    view, not a crash and not a fabricated distance."""
+    grid = board_points()
+    view = measure(project(grid, distance=0.4), grid, FRAME)
+    assert view is not None
+    assert view.approx_distance_m == 0.0
+    assert view.pixels_per_square == 0.0
+    assert view.extent_min == DEFAULT_EXTENT_MIN
 
 
 # ----------------------------------------------------------------------- zones

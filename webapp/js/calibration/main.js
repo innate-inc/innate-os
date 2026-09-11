@@ -44,6 +44,7 @@ export function mount(stage) {
  *   for the server's capture-timeout watchdog, re-anchored from
  *   `capture_timeout_sec` on every feedback tick. Display-only — see render().
  * @property {string} distanceHint TOO_CLOSE | IN_RANGE | TOO_FAR, "" if nothing seen
+ * @property {number} approxDistanceM Approximate, from the lens's nominal FOV — display only
  * @property {number} coveragePercent 0-100 across position, scale, tilt and count
  * @property {string[]} coverageMissing What the run is still short of
  *
@@ -396,6 +397,7 @@ function buildView(root) {
       fb.deadlineMs = Date.now() + values.capture_timeout_sec * 1000;
     }
     if (typeof values?.distance_hint === "string") fb.distanceHint = values.distance_hint;
+    if (typeof values?.approx_distance_m === "number") fb.approxDistanceM = values.approx_distance_m;
     if (typeof values?.coverage_percent === "number") fb.coveragePercent = values.coverage_percent;
     if (Array.isArray(values?.coverage_missing)) fb.coverageMissing = values.coverage_missing;
     applyCoverageImages(values);
@@ -423,6 +425,7 @@ function buildView(root) {
       message: "",
       deadlineMs: null,
       distanceHint: "",
+      approxDistanceM: 0,
       coveragePercent: 0,
       coverageMissing: [],
     };
@@ -620,13 +623,16 @@ function buildView(root) {
       distanceBadge.hidden = !hint;
       distanceBadge.classList.toggle("ok", hint === "IN_RANGE");
       distanceBadge.classList.toggle("bad", hint === "TOO_CLOSE" || hint === "TOO_FAR");
+      // Approximate by construction — the real focal length is what this run
+      // is producing, so the cm figure comes from the lens's nominal FOV.
+      const roughCm = fb.approxDistanceM > 0 ? ` (~${Math.round(fb.approxDistanceM * 100)} cm)` : "";
       distanceBadge.textContent =
         hint === "TOO_CLOSE"
-          ? "Too close — move the board back"
+          ? `Too close — move the board back${roughCm}`
           : hint === "TOO_FAR"
-            ? "Too far — bring the board closer"
+            ? `Too far — bring the board closer${roughCm}`
             : hint === "IN_RANGE"
-              ? "Good distance"
+              ? `Good distance${roughCm}`
               : "";
 
       const pct = Math.max(0, Math.min(100, fb.coveragePercent));

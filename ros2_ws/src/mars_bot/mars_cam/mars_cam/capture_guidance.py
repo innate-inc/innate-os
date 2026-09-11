@@ -6,26 +6,93 @@ Pure functions — no ROS, no I/O, no OpenCV state. Answers the two questions th
 capture screen asks on every frame: is the board at a useful size, and what is
 still missing before this run will calibrate well.
 
-Everything here is expressed relative to the frame rather than in metres. This
-runs *during* calibration, so there are no intrinsics yet to turn pixels into
-distances, and inventing a focal length to report a confident-looking millimetre
-figure would be worse than reporting the thing actually measured.
+Every decision here is made on frame-relative quantities, because this runs
+*during* calibration and there are no intrinsics yet to convert with. Distances
+in metres appear only as display text, derived from the lens's nominal field of
+view — approximate on purpose, and never an input to a threshold.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
 
-# Board extent (its diagonal over the frame diagonal) that reads as usable.
-# Below the floor, corner localisation degrades faster than the extra range is
-# worth; above the ceiling there is no room left to move the board without
-# clipping corners out of frame, and detection fails rather than degrades.
-EXTENT_MIN = 0.25
+# Near limit, as board diagonal over frame diagonal. Board-independent: this is
+# about fitting inside the frame, and past it corners start leaving the image
+# rather than degrading.
 EXTENT_MAX = 0.85
+
+# Far limit, as pixels per square needed to still detect. Plain corners survive
+# on far less than ArUco markers, which have to resolve 6x6 cells of payload
+# well enough to decode — which is why the same paper reaches roughly three
+# times further as a checkerboard than as a ChArUco board.
+CHECKERBOARD_MIN_PIXELS_PER_SQUARE = 10.0
+CHARUCO_MIN_PIXELS_PER_SQUARE = 20.0
+
+# Used only when no board geometry was supplied, so the hint degrades to a
+# generic "very small in frame" rather than being silently disabled.
+DEFAULT_EXTENT_MIN = 0.12
 
 TOO_FAR = "TOO_FAR"
 TOO_CLOSE = "TOO_CLOSE"
 IN_RANGE = "IN_RANGE"
+
+
+@dataclass(frozen=True)
+class BoardGeometry:
+    """The printed target, reduced to what sets the usable range.
+
+    ``squares`` counts the span of the DETECTED corner grid in squares, not the
+    printed square count: a 9x6 inner-corner checkerboard spans 8x5 squares, and
+    a 17x9 ChArUco board yields corners spanning 16x8.
+    """
+
+    squares: tuple[int, int]
+    square_size_m: float
+    min_pixels_per_square: float
+
+    @staticmethod
+    def checkerboard(pattern: tuple[int, int], square_size_m: float) -> "BoardGeometry":
+        return BoardGeometry(
+            squares=(pattern[0] - 1, pattern[1] - 1),
+            square_size_m=square_size_m,
+            min_pixels_per_square=CHECKERBOARD_MIN_PIXELS_PER_SQUARE,
+        )
+
+    @staticmethod
+    def charuco(squares_x: int, squares_y: int, square_size_m: float) -> "BoardGeometry":
+        return BoardGeometry(
+            squares=(squares_x - 1, squares_y - 1),
+            square_size_m=square_size_m,
+            min_pixels_per_square=CHARUCO_MIN_PIXELS_PER_SQUARE,
+        )
+
+    @property
+    def diagonal_squares(self) -> float:
+        return float(np.hypot(*self.squares))
+
+    @property
+    def diagonal_m(self) -> float:
+        return self.diagonal_squares * self.square_size_m
+
+    def extent_min(self, frame_diagonal_px: float) -> float:
+        """Smallest usable board diagonal, as a fraction of the frame diagonal."""
+        if frame_diagonal_px <= 0.0:
+            return 0.0
+        return self.diagonal_squares * self.min_pixels_per_square / frame_diagonal_px
+
+    def range_m(self, focal_px: float, frame_diagonal_px: float) -> tuple[float, float]:
+        """(nearest, furthest) the board can be held, in metres.
+
+        Approximate by construction — ``focal_px`` comes from the lens's nominal
+        field of view, not from a calibration, because the calibration is what
+        this is trying to produce. For telling an operator "hold it around 30cm"
+        that is accurate enough; nothing downstream consumes it.
+        """
+        if focal_px <= 0.0 or frame_diagonal_px <= 0.0:
+            return 0.0, 0.0
+        span = focal_px * self.diagonal_m / frame_diagonal_px
+        return span / EXTENT_MAX, span / self.extent_min(frame_diagonal_px)
+
 
 # A board this foreshortened counts as tilted. Tilt is normalised by extent (see
 # measure), which makes it ~0.0143 per degree off square regardless of range, so
@@ -47,15 +114,23 @@ SCALE_LABELS = ("close", "mid-range", "far")
 
 @dataclass(frozen=True)
 class BoardView:
-    """One detected board, reduced to what coverage actually depends on."""
+    """One detected board, reduced to what coverage actually depends on.
+
+    ``extent_min`` rides along rather than being a module constant because it
+    depends on the target: the same sheet of letter paper reaches much further
+    as a checkerboard than as a ChArUco board.
+    """
 
     centroid_norm: tuple[float, float]
     extent: float
     tilt: float
+    pixels_per_square: float = 0.0
+    extent_min: float = DEFAULT_EXTENT_MIN
+    approx_distance_m: float = 0.0
 
     @property
     def hint(self) -> str:
-        if self.extent < EXTENT_MIN:
+        if self.extent < self.extent_min:
             return TOO_FAR
         if self.extent > EXTENT_MAX:
             return TOO_CLOSE
@@ -75,12 +150,17 @@ class BoardView:
     @property
     def scale_band(self) -> int:
         """0 = filling the frame, 2 = small in frame, across the usable range."""
-        span = (EXTENT_MAX - EXTENT_MIN) / 3.0
-        offset = (EXTENT_MAX - self.extent) / span
-        return min(2, max(0, int(offset)))
+        span = max(1e-6, (EXTENT_MAX - self.extent_min) / 3.0)
+        return min(2, max(0, int((EXTENT_MAX - self.extent) / span)))
 
 
-def measure(image_points: np.ndarray, board_points: np.ndarray, frame_size: tuple[int, int]) -> BoardView | None:
+def measure(
+    image_points: np.ndarray,
+    board_points: np.ndarray,
+    frame_size: tuple[int, int],
+    geometry: BoardGeometry | None = None,
+    focal_px: float = 0.0,
+) -> BoardView | None:
     """Reduce one detection to a BoardView, or None if the geometry is degenerate.
 
     ``board_points`` are the same corners in board coordinates, which is what
@@ -107,9 +187,15 @@ def measure(image_points: np.ndarray, board_points: np.ndarray, frame_size: tupl
 
     centroid = image_xy.mean(axis=0)
     lo, hi = image_xy.min(axis=0), image_xy.max(axis=0)
-    extent = float(np.hypot(*(hi - lo)) / np.hypot(width, height))
+    frame_diagonal = float(np.hypot(width, height))
+    extent = float(np.hypot(*(hi - lo)) / frame_diagonal)
     if extent < 1e-6:
         return None
+
+    diagonal_px = extent * frame_diagonal
+    pixels_per_square = diagonal_px / geometry.diagonal_squares if geometry else 0.0
+    extent_min = geometry.extent_min(frame_diagonal) if geometry else DEFAULT_EXTENT_MIN
+    distance = focal_px * geometry.diagonal_m / diagonal_px if geometry and focal_px > 0.0 else 0.0
 
     # Raw foreshortening shrinks with range for the same physical tilt, because
     # it depends on the board's depth spread relative to its distance. Dividing
@@ -119,6 +205,9 @@ def measure(image_points: np.ndarray, board_points: np.ndarray, frame_size: tupl
         centroid_norm=(float(centroid[0] / width), float(centroid[1] / height)),
         extent=extent,
         tilt=_foreshortening(outline) / extent,
+        pixels_per_square=float(pixels_per_square),
+        extent_min=float(extent_min),
+        approx_distance_m=float(distance),
     )
 
 

@@ -172,6 +172,10 @@ class StereoCalibrator(Node):
         # adjacent frames can never be paired; loosen it only for a driver that
         # genuinely stamps the eyes separately.
         self.declare_parameter("sync_slop_sec", 0.01)
+        # Lens spec, used ONLY to show the operator an approximate distance in
+        # cm. Never feeds a threshold — the real focal length is the output of
+        # this process, not an input to it.
+        self.declare_parameter("nominal_hfov_deg", 98.0)
 
         # Get parameters
         self.left_topic = self.get_parameter("left_topic").value
@@ -378,6 +382,25 @@ class StereoCalibrator(Node):
             self.get_logger().info(f"Stop service available on '{self.stop_service_name}'")
             self.get_logger().info(f"Delete service available on '{self.delete_service_name}'")
 
+    def _board_geometry(self) -> guidance.BoardGeometry:
+        """The target's usable range follows from its own geometry.
+
+        One threshold cannot serve both: the ArUco markers on a ChArUco board
+        need roughly twice the pixels per square that a plain corner does, so
+        the same sheet of letter paper reaches about three times further as a
+        checkerboard.
+        """
+        if self.target_type == TARGET_CHECKERBOARD:
+            return guidance.BoardGeometry.checkerboard(self.checkerboard.pattern, self.checkerboard.square_size)
+        return guidance.BoardGeometry.charuco(self.squares_x, self.squares_y, self.square_size)
+
+    def _focal_px(self) -> float:
+        """Pixels per radian-ish, from the lens's nominal FOV — display only."""
+        hfov = float(self.get_parameter("nominal_hfov_deg").value)
+        if hfov <= 0.0 or hfov >= 180.0:
+            return 0.0
+        return (self.image_width / 2.0) / np.tan(np.radians(hfov / 2.0))
+
     def _note_view(self, image_points, board_points) -> None:
         """Measure what the operator is holding, for the live distance hint.
 
@@ -391,7 +414,9 @@ class StereoCalibrator(Node):
             return
         shape = self.latest_left_frame.shape if self.latest_left_frame is not None else None
         frame_size = (shape[1], shape[0]) if shape else (self.image_width, self.image_height)
-        self._last_view = guidance.measure(image_points, board_points, frame_size)
+        self._last_view = guidance.measure(
+            image_points, board_points, frame_size, self._board_geometry(), self._focal_px()
+        )
 
     def _count_toward_coverage(self) -> None:
         """Fold the last measured view into coverage, once a capture is kept."""
@@ -409,10 +434,26 @@ class StereoCalibrator(Node):
         if view is None:
             return "No board detected — is the whole board in both cameras?"
         if view.hint == guidance.TOO_FAR:
-            return "Board too far away — move it closer to the cameras"
+            geometry = self._board_geometry()
+            return (
+                f"Board too far — {view.pixels_per_square:.0f} pixels per square, "
+                f"needs {geometry.min_pixels_per_square:.0f}. Move it closer."
+            )
         if view.hint == guidance.TOO_CLOSE:
-            return "Board too close — back it off so the whole board stays in frame"
+            return "Board too close — it fills the frame, so corners fall outside it. Move it back."
         return "Board partly visible — every corner must be in both cameras"
+
+    def _working_range_message(self) -> str:
+        """The distance band this board can actually be used at.
+
+        Worth stating up front: a letter-sized target cannot span the whole
+        depth corridor on a wide lens, so the operator should be told the range
+        the board has rather than left to discover it by being told "too far".
+        """
+        near, far = self._board_geometry().range_m(self._focal_px(), np.hypot(self.image_width, self.image_height))
+        if far <= 0.0:
+            return f"Using the {self.target_type} target"
+        return f"Using the {self.target_type} target — hold it roughly {near * 100:.0f}-{far * 100:.0f} cm from the cameras"
 
     def _reset_calibration_session(self):
         """Reset all capture/calibration buffers for a new run."""
@@ -493,6 +534,8 @@ class StereoCalibrator(Node):
             feedback.distance_hint = view.hint
             feedback.board_extent = float(view.extent)
             feedback.board_tilt = float(view.tilt)
+            feedback.pixels_per_square = float(view.pixels_per_square)
+            feedback.approx_distance_m = float(view.approx_distance_m)
         progress = self._coverage.progress()
         feedback.coverage_percent = float(progress.percent)
         feedback.coverage_missing = list(progress.missing)
@@ -637,7 +680,7 @@ class StereoCalibrator(Node):
             # One-shot "goal started" tick so the frontend can anchor a countdown
             # from goal-acceptance, not just after the first capture — otherwise a
             # slow first capture gets no warning before an unannounced timeout abort.
-            self._publish_action_feedback(goal_handle, "READY", "Waiting for first capture")
+            self._publish_action_feedback(goal_handle, "READY", self._working_range_message())
 
             # Wait for capture_trigger events (handled in _enter_event_callback)
             # until enough images are captured, the goal is cancelled, or the
