@@ -17,7 +17,9 @@ find_package(tf2_ros REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(stereo_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(tf2 REQUIRED)
 
 # Find OpenCV
 find_package(OpenCV REQUIRED)
@@ -147,9 +149,13 @@ if(VPI_FOUND)
   ament_target_dependencies(stereo_depth_estimator_component 
     rclcpp 
     rclcpp_components
+    diagnostic_msgs
     sensor_msgs
     stereo_msgs
     message_filters
+    tf2
+    tf2_ros
+    geometry_msgs
   )
   rclcpp_components_register_nodes(stereo_depth_estimator_component "mars_cam::StereoDepthEstimator")
 endif()
@@ -240,9 +246,13 @@ if(VPI_FOUND)
   ament_target_dependencies(stereo_depth_estimator
     rclcpp
     rclcpp_components
+    diagnostic_msgs
     sensor_msgs
     stereo_msgs
     message_filters
+    tf2
+    tf2_ros
+    geometry_msgs
   )
 endif()
 
@@ -294,6 +304,24 @@ install(PROGRAMS
   RENAME stereo_calibrator
 )
 
+install(PROGRAMS
+  mars_cam/ground_plane_check.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME ground_plane_check
+)
+
+install(PROGRAMS
+  mars_cam/stereo_depth_benchmark.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME stereo_depth_benchmark
+)
+
+install(PROGRAMS
+  mars_cam/fast_foundation_stereo_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME fast_foundation_stereo_node
+)
+
 # Install launch files
 install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch
@@ -312,6 +340,28 @@ install(DIRECTORY calib/
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
+
+  # Unit tests for the pure (ROS-free) checkerboard calibration helpers.
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_checkerboard_calibration test/test_checkerboard_calibration.py
+    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  ament_add_pytest_test(test_ground_plane test/test_ground_plane.py
+    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
+  )
+
+  # Unit tests for the temporal evidence filter. Header-only and free of ROS,
+  # OpenCV and VPI, so this runs on any machine — not just a Jetson.
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_evidence_grid test/test_evidence_grid.cpp)
+  if(TARGET test_evidence_grid)
+    target_include_directories(test_evidence_grid PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  endif()
+
+  ament_add_gtest(test_ground_plane_estimator test/test_ground_plane_estimator.cpp)
+  if(TARGET test_ground_plane_estimator)
+    target_include_directories(test_ground_plane_estimator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  endif()
 
   # Unit tests for the pure (GStreamer/ROS-free) streamer helpers in webrtc_internal.hpp.
   find_package(ament_cmake_gtest REQUIRED)

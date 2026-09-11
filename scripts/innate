@@ -1081,7 +1081,8 @@ def _build(packages, release=False):
         colcon_cmd += f" --packages-select {pkg_list}"
 
     mode_label = " (release)" if release else ""
-    full_cmd = f"{source_chain} && cd {ROS_WS} && {colcon_cmd}"
+    ws_path = shlex.quote(str(ROS_WS))
+    full_cmd = f"{source_chain} && export ISAAC_ROS_WS={ws_path} && cd {ws_path} && {colcon_cmd}"
     print(f"  Building{' ' + ' '.join(packages) if packages else ' workspace'}{mode_label}...")
     r = run(["bash", "-c", full_cmd])
     if r.returncode == 0:

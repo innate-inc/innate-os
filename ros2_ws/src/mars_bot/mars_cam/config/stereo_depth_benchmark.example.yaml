@@ -1,0 +1,97 @@
+canonical_bag: /home/jetson1/innate-os/recordings/stereo_canonical_SET_THIS_PATH
+output_dir: /home/jetson1/innate-os/recordings/stereo_benchmark_runs
+playback_rate: 1.0
+max_lidar_sync_ms: 80.0
+
+performance:
+  header_match_tolerance_ms: 5.0
+  camera_pairing_window_ms: 500.0
+
+telemetry:
+  enable_tegrastats: true
+  tegrastats_interval_ms: 500
+
+record_topics:
+  - /mars/main_camera/left/image_raw
+  - /mars/main_camera/right/image_raw
+  - /mars/main_camera/left/camera_info
+  - /mars/main_camera/right/camera_info
+  - /tf
+  - /tf_static
+  - /scan
+  - /odom
+  - /imu
+
+defaults:
+  lidar_topic: /scan
+  camera_info_topic: /mars/main_camera/left/camera_info
+  input_camera_topic: /mars/main_camera/left/image_raw
+  inference_topic: /mars/main_camera/disparity
+  disparity_topic: /mars/main_camera/disparity
+  pointcloud_topic: /mars/main_camera/points
+  costmap_topic: /navigation/local_costmap/costmap
+  warmup_sec: 8.0
+  settle_sec: 2.0
+
+models:
+  - name: classical_stereo
+    enabled: true
+    launch_command: >-
+      ros2 launch mars_cam classical_stereo.launch.py
+      use_sim_time:=true
+    depth_topic: /mars/main_camera/depth/image_rect_raw
+    inference_topic: /mars/main_camera/disparity
+    disparity_topic: /mars/main_camera/disparity
+    pointcloud_topic: /mars/main_camera/points
+
+  - name: fast_foundation_stereo
+    enabled: false
+    launch_command: >-
+      ros2 launch mars_cam fast_foundation_stereo.launch.py
+      use_sim_time:=true
+      model_package:=mars_cam
+      model_executable:=fast_foundation_stereo_node
+      venv_path:=/home/jetson1/innate-os/.venvs/fast_foundation_stereo
+      model_repo:=/home/jetson1/innate-os/ros2_ws/src/third_party/stereo_models/Fast-FoundationStereo
+      model_path:=SET_FAST_FOUNDATION_MODEL_PATH
+      left_image_topic:=/mars/main_camera/left/image_raw
+      right_image_topic:=/mars/main_camera/right/image_raw
+      left_camera_info_topic:=/mars/main_camera/left/camera_info
+      right_camera_info_topic:=/mars/main_camera/right/camera_info
+    depth_topic: /stereo/fast_foundation/depth
+    inference_topic: /stereo/fast_foundation/depth
+    disparity_topic: /stereo/fast_foundation/disparity
+    pointcloud_topic: /stereo/fast_foundation/points
+
+  - name: light_stereo
+    enabled: false
+    launch_command: >-
+      ros2 launch mars_cam light_stereo.launch.py
+      use_sim_time:=true
+      model_package:=SET_LIGHT_STEREO_PACKAGE
+      model_executable:=SET_LIGHT_STEREO_EXECUTABLE
+      left_image_topic:=/mars/main_camera/left/image_raw
+      right_image_topic:=/mars/main_camera/right/image_raw
+      left_camera_info_topic:=/mars/main_camera/left/camera_info
+      right_camera_info_topic:=/mars/main_camera/right/camera_info
+    depth_topic: /stereo/light/depth
+    inference_topic: /stereo/light/depth
+    disparity_topic: /stereo/light/disparity
+    pointcloud_topic: /stereo/light/points
+
+  - name: igev_rt_or_igev
+    enabled: false
+    launch_command: >-
+      ros2 launch mars_cam igev_stereo.launch.py
+      use_sim_time:=true
+      model_package:=SET_IGEV_PACKAGE
+      model_executable:=SET_IGEV_EXECUTABLE
+      left_image_topic:=/mars/main_camera/left/image_raw
+      right_image_topic:=/mars/main_camera/right/image_raw
+      left_camera_info_topic:=/mars/main_camera/left/camera_info
+      right_camera_info_topic:=/mars/main_camera/right/camera_info
+    depth_topic: /stereo/igev/depth
+    inference_topic: /stereo/igev/depth
+    disparity_topic: /stereo/igev/disparity
+    pointcloud_topic: /stereo/igev/points
+
