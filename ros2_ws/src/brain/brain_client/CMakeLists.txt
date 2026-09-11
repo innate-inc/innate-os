@@ -26,6 +26,7 @@ install(PROGRAMS
   brain_client/nodes/skills_server.py
   brain_client/nodes/input_manager.py
   brain_client/nodes/arm_sdk_server.py
+  brain_client/nodes/people_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -60,6 +60,7 @@ from brain_client.perception.battery import BatteryMonitor
 from brain_client.perception.camera import CameraCapture
 from brain_client.perception.gaze_control import GazeController
 from brain_client.perception.identity import IdentityMonitor
+from brain_client.perception.people_feed import PeopleFeed
 from brain_client.perception.pose_tracking import PoseTracker
 from brain_client.perception.scan_health import ScanHealthMonitor
 from brain_client.robot.arm_recovery import ArmRecovery
@@ -190,6 +191,9 @@ class BrainClientNode(Node):
         self.chat = ChatManager(self.get_logger(), self.chat_out_pub, self.task_status_pub, self._tts_handler)
         self._recorded_skill_runs: deque[tuple[str, str]] = deque(maxlen=256)
         self.camera = CameraCapture(self, cfg)
+        # Always subscribed: latched, so an activation later reads the snapshot
+        # the people node already published, and free while that node is absent.
+        self.people = PeopleFeed(self)
         self.pose_tracker = PoseTracker(self, odom_topic=cfg.odom_topic, nav_mode_topic=cfg.current_nav_mode_topic)
         self.scan_health = ScanHealthMonitor(self, scan_topic=cfg.scan_topic, stale_after_sec=cfg.scan_stale_after_sec)
         self.battery = BatteryMonitor(self, self.chat, lambda: state.is_brain_active)
@@ -247,6 +251,7 @@ class BrainClientNode(Node):
             roster=self.roster,
             chat=self.chat,
             gaze=self.gaze,
+            people_feed=self.people,
             proxy=self._proxy,
             scan_health=self.scan_health,
             battery=self.battery,
