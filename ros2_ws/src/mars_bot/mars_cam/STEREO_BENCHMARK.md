@@ -234,6 +234,8 @@ It creates:
 - one performance overview chart (latency, FPS, dropped frames, CPU/GPU/RAM, power, temp)
 - lidar-vs-model overlays for each model
 - one `N`-panel video that includes lidar reference + every model
+- one markdown text report (`RESULTS_SUMMARY_ALL_MODELS.md`)
+- one regenerate helper script (`REGENERATE_ARTIFACTS.sh`)
 
 Run:
 
@@ -241,6 +243,23 @@ Run:
 python3 /home/jetson1/innate-os/scripts/stereo_benchmark_postprocess.py \
   --run-dir /home/jetson1/innate-os/recordings/stereo_benchmark_runs/<your_run_folder> \
   --columns 2
+```
+
+Generate markdown + regenerate helper only (no PNG/MP4 regeneration):
+
+```bash
+python3 /home/jetson1/innate-os/scripts/stereo_benchmark_postprocess.py \
+  --run-dir /home/jetson1/innate-os/recordings/stereo_benchmark_runs/<your_run_folder> \
+  --report-only
+```
+
+Generate markdown and also export commit-friendly text files into a tracked docs folder:
+
+```bash
+python3 /home/jetson1/innate-os/scripts/stereo_benchmark_postprocess.py \
+  --run-dir /home/jetson1/innate-os/recordings/stereo_benchmark_runs/<your_run_folder> \
+  --report-only \
+  --export-text-dir /home/jetson1/innate-os/docs/stereo_benchmark_exports
 ```
 
 Optional: regenerate only the performance overview chart/CSV:
@@ -273,8 +292,33 @@ In the run folder you should see:
 - `classical_stereo_lidar_vs_model.mp4` / `.png`
 - `<model_name>_lidar_vs_model.mp4` / `.png` for each enabled non-classical model
 - `RESULTS_MANIFEST_ALL_MODELS.txt`
+- `RESULTS_SUMMARY_ALL_MODELS.md`
+- `REGENERATE_ARTIFACTS.sh`
 
-## 11) Decision priorities
+## 11) Commit text-only benchmark artifacts
+
+If you do not want binary media in git, commit only JSON/CSV/markdown + regenerate script:
+
+```bash
+git add <run_dir>/stereo_depth_benchmark_*.json
+git add <run_dir>/stereo_depth_benchmark_*.csv
+git add <run_dir>/all_models_distance_error_distribution.csv
+git add <run_dir>/all_models_frame_region_error_heatmap.csv
+git add <run_dir>/all_models_performance_overview.csv
+git add <run_dir>/RESULTS_MANIFEST_ALL_MODELS.txt
+git add <run_dir>/RESULTS_SUMMARY_ALL_MODELS.md
+git add <run_dir>/REGENERATE_ARTIFACTS.sh
+```
+
+Because `recordings/` is ignored in this repo, use `--export-text-dir` and commit the exported copy under `docs/stereo_benchmark_exports/` instead.
+
+Regenerate images/videos later (from the same run folder with run bags present):
+
+```bash
+<run_dir>/REGENERATE_ARTIFACTS.sh
+```
+
+## 12) Decision priorities
 
 For navigation readiness, rank by:
 
@@ -287,7 +331,7 @@ For navigation readiness, rank by:
 
 P95/P99 behavior matters more than average FPS.
 
-## 12) Troubleshooting
+## 13) Troubleshooting
 
 - live graph conflict: `innate service stop` before `run`
 - many `NaN` depth metrics: bad/missing `depth_topic` or no valid depth values
@@ -296,7 +340,7 @@ P95/P99 behavior matters more than average FPS.
 - duplicate downloads: `ps -eo pid,cmd | rg -i 'wget|curl|aria2c|pip install|apt-get'` then `kill <pid>`
 - full Isaac ROS stack is intentionally not part of this runbook on this platform; use the lightweight wrapper path
 
-## 13) Example final outputs generated
+## 14) Example final outputs generated
 
 Current canonical run folder:
 
@@ -311,7 +355,7 @@ Contains:
 - per-model lidar-vs-model overlays (`classical_stereo_lidar_vs_model.*`, `<model>_lidar_vs_model.*`)
 - `RESULTS_MANIFEST_ALL_MODELS.txt`
 
-## 14) Cleanup policy for output root
+## 15) Cleanup policy for output root
 
 Keep the output root folder clean by storing artifacts in experiment folders only.
 
