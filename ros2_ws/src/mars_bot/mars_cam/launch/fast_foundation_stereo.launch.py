@@ -43,6 +43,7 @@ def generate_launch_description() -> LaunchDescription:
     scale = DeclareLaunchArgument("scale", default_value="1.0")
     pointcloud_stride = DeclareLaunchArgument("pointcloud_stride", default_value="2")
     max_depth_m = DeclareLaunchArgument("max_depth_m", default_value="5.0")
+    rectify_inputs = DeclareLaunchArgument("rectify_inputs", default_value="true")
     use_amp = DeclareLaunchArgument("use_amp", default_value="true")
     synchronize_cuda_timing = DeclareLaunchArgument("synchronize_cuda_timing", default_value="true")
     log_level = DeclareLaunchArgument("log_level", default_value="warn")
@@ -65,6 +66,7 @@ def generate_launch_description() -> LaunchDescription:
                 "scale": LaunchConfiguration("scale"),
                 "pointcloud_stride": LaunchConfiguration("pointcloud_stride"),
                 "max_depth_m": LaunchConfiguration("max_depth_m"),
+                "rectify_inputs": LaunchConfiguration("rectify_inputs"),
                 "use_amp": LaunchConfiguration("use_amp"),
                 "synchronize_cuda_timing": LaunchConfiguration("synchronize_cuda_timing"),
             }
@@ -110,6 +112,7 @@ def generate_launch_description() -> LaunchDescription:
             scale,
             pointcloud_stride,
             max_depth_m,
+            rectify_inputs,
             use_amp,
             synchronize_cuda_timing,
             log_level,

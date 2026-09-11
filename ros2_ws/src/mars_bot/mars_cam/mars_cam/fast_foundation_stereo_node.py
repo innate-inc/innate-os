@@ -33,6 +33,17 @@ class StereoIntrinsics:
     frame_id: str
 
 
+@dataclass(frozen=True)
+class StereoCalibration:
+    intrinsics: StereoIntrinsics
+    width: int
+    height: int
+    left_map1: np.ndarray
+    left_map2: np.ndarray
+    right_map1: np.ndarray
+    right_map2: np.ndarray
+
+
 class FastFoundationStereoNode(Node):
     def __init__(self) -> None:
         super().__init__("fast_foundation_stereo")
@@ -67,6 +78,7 @@ class FastFoundationStereoNode(Node):
         self.declare_parameter("publish_pointcloud", True)
         self.declare_parameter("fallback_baseline_m", 0.0)
         self.declare_parameter("log_inference_every_n", 30)
+        self.declare_parameter("rectify_inputs", True)
 
         self.left_image_topic = str(self.get_parameter("left_image_topic").value)
         self.right_image_topic = str(self.get_parameter("right_image_topic").value)
@@ -95,16 +107,18 @@ class FastFoundationStereoNode(Node):
         self.publish_pointcloud = bool(self.get_parameter("publish_pointcloud").value)
         self.fallback_baseline_m = float(self.get_parameter("fallback_baseline_m").value)
         self.log_inference_every_n = max(1, int(self.get_parameter("log_inference_every_n").value))
+        self.rectify_inputs = bool(self.get_parameter("rectify_inputs").value)
 
         self.bridge = CvBridge()
         self.left_info: CameraInfo | None = None
         self.right_info: CameraInfo | None = None
-        self.intrinsics: StereoIntrinsics | None = None
+        self.calibration: StereoCalibration | None = None
         self._state_lock = threading.Lock()
         self._infer_lock = threading.Lock()
         self._frames_seen = 0
         self._frames_published = 0
         self._frames_dropped_busy = 0
+        self._frames_unrectified = 0
 
         self._ensure_repo_on_path()
         self._torch: Any = self._import_module("torch")
@@ -140,7 +154,7 @@ class FastFoundationStereoNode(Node):
 
         self.get_logger().info(
             f"Fast-FoundationStereo ready: model={self._resolve_model_path()} device={self.device.type} "
-            f"inputs=({self.left_image_topic}, {self.right_image_topic})"
+            f"inputs=({self.left_image_topic}, {self.right_image_topic}) rectify={self.rectify_inputs}"
         )
 
     def _ensure_repo_on_path(self) -> None:
@@ -211,29 +225,73 @@ class FastFoundationStereoNode(Node):
     def _on_left_camera_info(self, msg: CameraInfo) -> None:
         with self._state_lock:
             self.left_info = msg
-            self.intrinsics = self._try_build_intrinsics(self.left_info, self.right_info)
+            self.calibration = self._try_build_calibration(self.left_info, self.right_info)
 
     def _on_right_camera_info(self, msg: CameraInfo) -> None:
         with self._state_lock:
             self.right_info = msg
-            self.intrinsics = self._try_build_intrinsics(self.left_info, self.right_info)
+            self.calibration = self._try_build_calibration(self.left_info, self.right_info)
 
-    def _try_build_intrinsics(self, left: CameraInfo | None, right: CameraInfo | None) -> StereoIntrinsics | None:
+    def _try_build_calibration(self, left: CameraInfo | None, right: CameraInfo | None) -> StereoCalibration | None:
         if left is None or right is None:
             return None
-        fx = float(left.k[0])
-        fy = float(left.k[4])
-        cx = float(left.k[2])
-        cy = float(left.k[5])
+        if float(left.k[0]) <= 0.0 or float(right.k[0]) <= 0.0:
+            return None
+
+        width = int(left.width)
+        height = int(left.height)
+        if width <= 0 or height <= 0:
+            return None
+
+        p1 = np.asarray(left.p, dtype=np.float64).reshape(3, 4)
+        p2 = np.asarray(right.p, dtype=np.float64).reshape(3, 4)
+        k1 = np.asarray(left.k, dtype=np.float64).reshape(3, 3)
+        k2 = np.asarray(right.k, dtype=np.float64).reshape(3, 3)
+
+        fx = float(p1[0, 0]) if float(p1[0, 0]) > 0.0 else float(k1[0, 0])
+        fy = float(p1[1, 1]) if float(p1[1, 1]) > 0.0 else float(k1[1, 1])
+        cx = float(p1[0, 2]) if float(p1[0, 0]) > 0.0 else float(k1[0, 2])
+        cy = float(p1[1, 2]) if float(p1[1, 1]) > 0.0 else float(k1[1, 2])
+
         baseline = 0.0
-        if float(right.p[0]) != 0.0:
-            baseline = abs(float(right.p[3]) / float(right.p[0]))
+        if float(p2[0, 0]) > 0.0:
+            baseline = abs(float(p2[0, 3]) / float(p2[0, 0]))
         if baseline <= 0.0:
             baseline = self.fallback_baseline_m
         if fx <= 0.0 or fy <= 0.0 or baseline <= 0.0:
             return None
+
+        try:
+            left_map1, left_map2 = cv2.initUndistortRectifyMap(
+                k1,
+                np.asarray(left.d, dtype=np.float64),
+                np.asarray(left.r, dtype=np.float64).reshape(3, 3),
+                p1[:, :3],
+                (width, height),
+                cv2.CV_32FC1,
+            )
+            right_map1, right_map2 = cv2.initUndistortRectifyMap(
+                k2,
+                np.asarray(right.d, dtype=np.float64),
+                np.asarray(right.r, dtype=np.float64).reshape(3, 3),
+                p2[:, :3],
+                (width, height),
+                cv2.CV_32FC1,
+            )
+        except Exception as exc:
+            self.get_logger().warn(f"Failed to build rectification maps: {exc}")
+            return None
+
         frame_id = left.header.frame_id or right.header.frame_id or "camera_optical_frame"
-        return StereoIntrinsics(fx=fx, fy=fy, cx=cx, cy=cy, baseline_m=float(baseline), frame_id=frame_id)
+        return StereoCalibration(
+            intrinsics=StereoIntrinsics(fx=fx, fy=fy, cx=cx, cy=cy, baseline_m=float(baseline), frame_id=frame_id),
+            width=width,
+            height=height,
+            left_map1=left_map1,
+            left_map2=left_map2,
+            right_map1=right_map1,
+            right_map2=right_map2,
+        )
 
     def _to_rgb(self, msg: Image) -> np.ndarray:
         if msg.encoding in ("rgb8", "bgr8", "mono8"):
@@ -249,6 +307,28 @@ class FastFoundationStereoNode(Node):
         if msg.encoding == "mono8":
             return cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
         return cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+
+    def _rectify_pair(
+        self,
+        left_rgb: np.ndarray,
+        right_rgb: np.ndarray,
+        calibration: StereoCalibration,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if not self.rectify_inputs:
+            self._frames_unrectified += 1
+            return left_rgb, right_rgb
+        h, w = left_rgb.shape[:2]
+        if (w, h) != (calibration.width, calibration.height) or right_rgb.shape[:2] != (h, w):
+            self._frames_unrectified += 1
+            if self._frames_unrectified % self.log_inference_every_n == 1:
+                self.get_logger().warn(
+                    "Skipping rectification: frame/camera_info shape mismatch "
+                    f"frame={w}x{h} calib={calibration.width}x{calibration.height}"
+                )
+            return left_rgb, right_rgb
+        left_rect = cv2.remap(left_rgb, calibration.left_map1, calibration.left_map2, interpolation=cv2.INTER_LINEAR)
+        right_rect = cv2.remap(right_rgb, calibration.right_map1, calibration.right_map2, interpolation=cv2.INTER_LINEAR)
+        return left_rect, right_rect
 
     def _infer_disparity(self, left_rgb: np.ndarray, right_rgb: np.ndarray) -> tuple[np.ndarray, float]:
         original_h, original_w = left_rgb.shape[:2]
@@ -387,14 +467,16 @@ class FastFoundationStereoNode(Node):
             return
         try:
             with self._state_lock:
-                intrinsics = self.intrinsics
-            if intrinsics is None:
+                calibration = self.calibration
+            if calibration is None:
                 if self._frames_seen % self.log_inference_every_n == 1:
-                    self.get_logger().warn("Waiting for valid stereo intrinsics and baseline from camera_info.")
+                    self.get_logger().warn("Waiting for valid stereo calibration from camera_info.")
                 return
+            intrinsics = calibration.intrinsics
 
             left_rgb = self._to_rgb(left_msg)
             right_rgb = self._to_rgb(right_msg)
+            left_rgb, right_rgb = self._rectify_pair(left_rgb, right_rgb, calibration)
             disparity, infer_ms = self._infer_disparity(left_rgb, right_rgb)
             depth = self._depth_from_disparity(disparity, intrinsics)
 
