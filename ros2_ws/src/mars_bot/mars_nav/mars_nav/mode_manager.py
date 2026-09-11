@@ -967,14 +967,17 @@ class ModeManager(Node):
         if not transition_node(
             self._service_clients, self.get_logger(), "navigation_amcl", State.PRIMARY_STATE_UNCONFIGURED
         ):
-            return False, "Could not reset AMCL before switching maps"
-        self.current_map = requested_map
+            # Reset may have partially transitioned AMCL. Keep the old map,
+            # but always run the activation loop to restore navigation.
+            failures.append("navigation_amcl_reset")
+        else:
+            self.current_map = requested_map
 
-        # Step 2: Load new map
-        self.get_logger().info("Step 2: Loading new map")
-        map_load_success = self._load_map_on_server(map_server_node)
-        if not map_load_success:
-            failures.append(f"{map_server_node}_map_load")
+            # Step 2: Load new map
+            self.get_logger().info("Step 2: Loading new map")
+            map_load_success = self._load_map_on_server(map_server_node)
+            if not map_load_success:
+                failures.append(f"{map_server_node}_map_load")
 
         # Step 3: Transition all nodes to active
         self.get_logger().info("Step 3: Activating all nodes")
