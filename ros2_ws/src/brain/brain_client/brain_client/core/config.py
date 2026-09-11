@@ -8,7 +8,9 @@ which keeps every consumer testable without a ROS runtime.
 
 Credentials deliberately stay out of the ROS parameter surface: the brain
 reaches Gemini through the Innate proxy (INNATE_SERVICE_KEY) or directly via
-the ``GEMINI_API_KEY`` environment variable (loaded from ``.env`` by launch).
+the ``GEMINI_API_KEY`` environment variable (loaded from ``.env`` by launch),
+and an OpenAI-compatible endpoint's key is ``LLM_API_KEY`` there too — only
+its URL and model are settings.
 """
 
 from __future__ import annotations
@@ -40,9 +42,11 @@ class BrainConfig:
     x_cam: float  # camera forward offset from base_link (m)
     height_cam: float  # camera height above the floor (m)
 
-    # --- Local brain (Gemini) ---
-    gemini_model: str
-    gemini_thinking_level: str  # "low" | "high"; "" = model default
+    # --- Local brain ---
+    gemini_model: str  # the model id: a Gemini model, or the endpoint's own model when llm_base_url is set
+    gemini_thinking_level: str  # "low" | "high"; "" = model default (Gemini only)
+    llm_base_url: str  # an OpenAI-compatible .../v1 root to think with instead of Gemini; "" = Gemini
+    llm_extra_body: str  # JSON object merged into every request to that endpoint; "" = none
     idle_turn_interval: float  # seconds between looks when no skill is running
     supervision_turn_interval: float  # seconds between looks while a skill runs
     history_max_entries: int  # conversation entries kept for the model
@@ -100,7 +104,7 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     "vertical_fov": 80.0,
     "x_cam": 0.0197,
     "height_cam": 0.19663,
-    # --- Local brain (Gemini) ---
+    # --- Local brain ---
     "gemini_model": "gemini-3.6-flash",
     # "minimal" | "low" | "medium" | "high"; "" = model default.
     # Measured on 3.6-flash (2026-08): minimal is ~3x faster than the
@@ -110,6 +114,14 @@ _PARAM_DEFAULTS: dict[str, str | bool | int | float] = {
     # measurably hurt multi-turn instruction-following (skill re-runs,
     # chatter) — if that resurfaces, revert to "" here.
     "gemini_thinking_level": "minimal",
+    # An OpenAI-compatible server instead of Gemini: a vLLM or Ollama on a computer
+    # on the robot's network (http://192.168.1.20:8000/v1), or NVIDIA's hosted API
+    # (https://integrate.api.nvidia.com/v1, key in .env as LLM_API_KEY); gemini_model
+    # then names that server's model. Its thinking is not derived from the Gemini
+    # level above — a reasoning model's switch rides llm_extra_body, e.g.
+    # {"chat_template_kwargs": {"enable_thinking": false}} for Nemotron 3 / Qwen3.
+    "llm_base_url": "",
+    "llm_extra_body": "",
     "idle_turn_interval": 3.0,
     "supervision_turn_interval": 5.0,
     # Compaction evicts to half the cap, so depth rides 1000-2000 entries. A silent

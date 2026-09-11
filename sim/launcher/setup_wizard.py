@@ -13,8 +13,12 @@ from config import (
     ENV_PATH,
     GEMINI_API_KEY,
     INNATE_SERVICE_KEY,
+    OPENAI_COMPAT_BACKEND,
     SECRET_ENV_KEYS,
+    SETTINGS_PATH,
     is_configured_secret_value,
+    resolve_brain_backend,
+    settings_llm_endpoint,
     success,
     warn,
 )
@@ -419,6 +423,15 @@ def configure_brain_backend(config: dict[str, object]) -> None:
     has_gemini = is_configured_secret_value(GEMINI_API_KEY, user_env.get(GEMINI_API_KEY))
     has_service_key = is_configured_secret(user_env.get(INNATE_SERVICE_KEY))
 
+    if resolve_brain_backend(user_env, settings_llm_endpoint(SETTINGS_PATH)) == OPENAI_COMPAT_BACKEND:
+        # An endpoint wins over every key, so the menu below could not change
+        # what the brain uses; it is edited where it was set.
+        success(
+            "OpenAI-compatible endpoint selected (llm_base_url in settings.yaml or LLM_BASE_URL in .env); "
+            "clear it there to go back to Gemini."
+        )
+        report_configured_keys(config)
+        return
     if not is_interactive_terminal():
         if has_service_key:
             success("Innate proxy selected (INNATE_SERVICE_KEY detected).")

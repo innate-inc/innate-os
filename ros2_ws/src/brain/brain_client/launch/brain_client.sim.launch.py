@@ -49,7 +49,12 @@ def generate_launch_description():
     gemini_model_arg = DeclareLaunchArgument(
         "gemini_model",
         default_value=get_env("GEMINI_MODEL", "gemini-3.6-flash"),
-        description="Gemini model powering the local brain",
+        description="Model id powering the local brain (a Gemini model, or the OpenAI-compatible endpoint's own)",
+    )
+    llm_base_url_arg = DeclareLaunchArgument(
+        "llm_base_url",
+        default_value=get_env("LLM_BASE_URL", ""),
+        description="OpenAI-compatible .../v1 root to think with instead of Gemini; empty = Gemini (settings.yaml wins)",
     )
 
     brain_client_node = Node(
@@ -65,6 +70,7 @@ def generate_launch_description():
                 "current_nav_mode_topic": LaunchConfiguration("current_nav_mode_topic"),
                 "log_everything": LaunchConfiguration("log_everything"),
                 "gemini_model": LaunchConfiguration("gemini_model"),
+                "llm_base_url": LaunchConfiguration("llm_base_url"),
                 # Sim camera mount (the config.py defaults are the hardware's).
                 "x_cam": 0.0,
                 "height_cam": 0.2,
@@ -85,6 +91,7 @@ def generate_launch_description():
             current_nav_mode_topic_arg,
             log_everything_arg,
             gemini_model_arg,
+            llm_base_url_arg,
             brain_client_node,
             Node(
                 package="brain_client",

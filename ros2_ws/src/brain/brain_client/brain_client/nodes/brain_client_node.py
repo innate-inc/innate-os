@@ -48,7 +48,7 @@ from brain_client.agents.studio import (
 from brain_client.brain.agent import BrainAgent
 from brain_client.brain.memory_search import MemorySearch
 from brain_client.brain.search_server import MemorySearchServer
-from brain_client.brain.transport import pick_rest
+from brain_client.brain.transport import Endpoint, pick_rest
 from brain_client.brain.utils import EventKind
 from brain_client.common.script_paths import get_innate_os_root
 from brain_client.core.config import BrainConfig
@@ -126,7 +126,7 @@ class BrainClientNode(Node):
         self._startup()
 
         self.get_logger().info(
-            f"\033[1;92m[BrainClient] BrainClientNode initialized (local Gemini brain via {self.brain.backend})\033[0m"
+            f"\033[1;92m[BrainClient] BrainClientNode initialized (local brain via {self.brain.backend})\033[0m"
         )
 
     # ================= construction helpers =================
@@ -202,7 +202,8 @@ class BrainClientNode(Node):
         self.memory_store = MemoryStore(
             get_innate_os_root() / "data", seed_dir=seed_dir if os.environ.get("VIRTUAL_MARS_REMOTE") else None
         )
-        rest = pick_rest(self._proxy)
+        self._endpoint = Endpoint.from_config(cfg, self.get_logger())
+        rest = pick_rest(self._proxy, self._endpoint)
         self.memory_search = (
             MemorySearch(self.memory_store, rest, model=cfg.gemini_model, logger=self.get_logger())
             if rest is not None
@@ -248,6 +249,7 @@ class BrainClientNode(Node):
             chat=self.chat,
             gaze=self.gaze,
             proxy=self._proxy,
+            endpoint=self._endpoint,
             scan_health=self.scan_health,
             battery=self.battery,
             identity=self.identity,
