@@ -316,6 +316,12 @@ install(PROGRAMS
   RENAME stereo_depth_benchmark
 )
 
+install(PROGRAMS
+  mars_cam/fast_foundation_stereo_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME fast_foundation_stereo_node
+)
+
 # Install launch files
 install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch

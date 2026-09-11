@@ -63,8 +63,28 @@ class CameraIntrinsics:
 @dataclass(frozen=True)
 class LidarFrame:
     stamp_ns: int
+    header_stamp_ns: int
     frame_id: str
     points_xyz: np.ndarray
+
+
+@dataclass(frozen=True)
+class DepthFrame:
+    stamp_ns: int
+    header_stamp_ns: int
+    depth_m: np.ndarray
+
+
+@dataclass(frozen=True)
+class ErrorSamples:
+    width: int
+    height: int
+    lidar_depth_m: np.ndarray
+    model_depth_m: np.ndarray
+    abs_error_m: np.ndarray
+    rel_error: np.ndarray
+    u_px: np.ndarray
+    v_px: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -714,6 +734,7 @@ def _collect_reference_data(
             continue
 
         msg = deserialize_message(serialized, lidar_cls)
+        header_stamp_ns = _extract_header_stamp_ns(msg) or 0
         if lidar_type == "sensor_msgs/msg/LaserScan":
             points = _parse_laserscan(msg)
             frame_id = msg.header.frame_id
@@ -725,7 +746,14 @@ def _collect_reference_data(
 
         if points.size == 0:
             continue
-        lidar_frames.append(LidarFrame(stamp_ns=stamp_ns, frame_id=frame_id, points_xyz=points))
+        lidar_frames.append(
+            LidarFrame(
+                stamp_ns=stamp_ns,
+                header_stamp_ns=header_stamp_ns,
+                frame_id=frame_id,
+                points_xyz=points,
+            )
+        )
 
     if camera_intrinsics is None:
         raise RuntimeError(f"No CameraInfo found on '{camera_info_topic}' in {bag_path}")
@@ -745,6 +773,488 @@ def _nearest_lidar_idx(stamps_ns: list[int], target_ns: int) -> int:
     if abs(target_ns - prev_ns) <= abs(next_ns - target_ns):
         return idx - 1
     return idx
+
+
+def _collect_depth_frames(bag_path: Path, depth_topic: str) -> list[DepthFrame]:
+    reader, topic_types = _reader_for_bag(bag_path)
+    depth_type = _ensure_topic(topic_types, depth_topic, bag_path)
+    if depth_type != "sensor_msgs/msg/Image":
+        raise RuntimeError(f"Depth topic '{depth_topic}' in {bag_path} is type '{depth_type}', expected Image.")
+    depth_frames: list[DepthFrame] = []
+    while reader.has_next():
+        topic, serialized, stamp_ns = reader.read_next()
+        if topic != depth_topic:
+            continue
+        depth_msg = deserialize_message(serialized, Image)
+        depth_frames.append(
+            DepthFrame(
+                stamp_ns=int(stamp_ns),
+                header_stamp_ns=_stamp_ns(depth_msg.header.stamp.sec, depth_msg.header.stamp.nanosec),
+                depth_m=_depth_image_to_meters(depth_msg),
+            )
+        )
+    return depth_frames
+
+
+def _lookup_transform_with_fallback(
+    tf_buffer: tf2_ros.Buffer,
+    target_frame: str,
+    source_frame: str,
+    candidate_stamps_ns: list[int],
+    timeout: Duration,
+) -> Any | None:
+    for candidate_ns in candidate_stamps_ns:
+        if candidate_ns <= 0:
+            continue
+        try:
+            return tf_buffer.lookup_transform(
+                target_frame,
+                source_frame,
+                Time(nanoseconds=candidate_ns),
+                timeout=timeout,
+            )
+        except Exception:
+            continue
+    try:
+        return tf_buffer.lookup_transform(
+            target_frame,
+            source_frame,
+            Time(),
+            timeout=timeout,
+        )
+    except Exception:
+        return None
+
+
+def _collect_error_samples(
+    bag_path: Path,
+    depth_topic: str,
+    lidar_topic: str,
+    camera_info_topic: str,
+    max_lidar_sync_ms: float,
+) -> ErrorSamples:
+    tf_buffer, intrinsics, lidar_frames = _collect_reference_data(bag_path, lidar_topic, camera_info_topic)
+    lidar_stamps = [frame.stamp_ns for frame in lidar_frames]
+    max_sync_ns = int(max_lidar_sync_ms * 1e6)
+    zero_timeout = Duration(seconds=0.0)
+
+    reader, topic_types = _reader_for_bag(bag_path)
+    depth_type = _ensure_topic(topic_types, depth_topic, bag_path)
+    if depth_type != "sensor_msgs/msg/Image":
+        raise RuntimeError(f"Depth topic '{depth_topic}' in {bag_path} is type '{depth_type}', expected Image.")
+
+    lidar_depth_chunks: list[np.ndarray] = []
+    model_depth_chunks: list[np.ndarray] = []
+    abs_error_chunks: list[np.ndarray] = []
+    rel_error_chunks: list[np.ndarray] = []
+    u_chunks: list[np.ndarray] = []
+    v_chunks: list[np.ndarray] = []
+
+    while reader.has_next():
+        topic, serialized, stamp_ns = reader.read_next()
+        if topic != depth_topic:
+            continue
+
+        depth_msg = deserialize_message(serialized, Image)
+        depth_header_stamp_ns = _stamp_ns(depth_msg.header.stamp.sec, depth_msg.header.stamp.nanosec)
+        lidar_idx = _nearest_lidar_idx(lidar_stamps, int(stamp_ns))
+        lidar_frame = lidar_frames[lidar_idx]
+        if abs(int(stamp_ns) - lidar_frame.stamp_ns) > max_sync_ns:
+            continue
+
+        tf_msg = _lookup_transform_with_fallback(
+            tf_buffer=tf_buffer,
+            target_frame=intrinsics.frame_id,
+            source_frame=lidar_frame.frame_id,
+            candidate_stamps_ns=[depth_header_stamp_ns, lidar_frame.header_stamp_ns, int(stamp_ns)],
+            timeout=zero_timeout,
+        )
+        if tf_msg is None:
+            continue
+
+        depth = _depth_image_to_meters(depth_msg)
+        t = tf_msg.transform.translation
+        q = tf_msg.transform.rotation
+        rot = _quaternion_to_rot_matrix(q.x, q.y, q.z, q.w)
+        trans = np.array([t.x, t.y, t.z], dtype=np.float64)
+        points_cam = (rot @ lidar_frame.points_xyz.astype(np.float64).T).T + trans
+
+        z = points_cam[:, 2]
+        front = z > 0.05
+        if not np.any(front):
+            continue
+
+        points_cam = points_cam[front]
+        z = z[front]
+        u = intrinsics.fx * points_cam[:, 0] / z + intrinsics.cx
+        v = intrinsics.fy * points_cam[:, 1] / z + intrinsics.cy
+        ui = np.rint(u).astype(np.int32)
+        vi = np.rint(v).astype(np.int32)
+
+        in_bounds = (ui >= 0) & (ui < depth.shape[1]) & (vi >= 0) & (vi < depth.shape[0])
+        if not np.any(in_bounds):
+            continue
+
+        ui = ui[in_bounds]
+        vi = vi[in_bounds]
+        gt_depth = z[in_bounds].astype(np.float32, copy=False)
+        pred_depth = depth[vi, ui].astype(np.float32, copy=False)
+        valid = np.isfinite(pred_depth) & (pred_depth > 0.0)
+        if not np.any(valid):
+            continue
+
+        ui = ui[valid]
+        vi = vi[valid]
+        gt_depth = gt_depth[valid]
+        pred_depth = pred_depth[valid]
+        abs_err = np.abs(pred_depth - gt_depth)
+        rel_err = abs_err / np.maximum(gt_depth, 1e-6)
+
+        u_chunks.append(ui)
+        v_chunks.append(vi)
+        lidar_depth_chunks.append(gt_depth)
+        model_depth_chunks.append(pred_depth)
+        abs_error_chunks.append(abs_err)
+        rel_error_chunks.append(rel_err.astype(np.float32, copy=False))
+
+    if not abs_error_chunks:
+        empty_f32 = np.empty((0,), dtype=np.float32)
+        empty_i32 = np.empty((0,), dtype=np.int32)
+        return ErrorSamples(
+            width=intrinsics.width,
+            height=intrinsics.height,
+            lidar_depth_m=empty_f32,
+            model_depth_m=empty_f32,
+            abs_error_m=empty_f32,
+            rel_error=empty_f32,
+            u_px=empty_i32,
+            v_px=empty_i32,
+        )
+
+    return ErrorSamples(
+        width=intrinsics.width,
+        height=intrinsics.height,
+        lidar_depth_m=np.concatenate(lidar_depth_chunks).astype(np.float32, copy=False),
+        model_depth_m=np.concatenate(model_depth_chunks).astype(np.float32, copy=False),
+        abs_error_m=np.concatenate(abs_error_chunks).astype(np.float32, copy=False),
+        rel_error=np.concatenate(rel_error_chunks).astype(np.float32, copy=False),
+        u_px=np.concatenate(u_chunks).astype(np.int32, copy=False),
+        v_px=np.concatenate(v_chunks).astype(np.int32, copy=False),
+    )
+
+
+def _distance_labels(edges_m: list[float]) -> list[str]:
+    labels: list[str] = []
+    lower = 0.0
+    for edge in edges_m:
+        labels.append(f"{lower:.2f}-{edge:.2f}")
+        lower = edge
+    labels.append(f"{edges_m[-1]:.2f}+")
+    return labels
+
+
+def _distance_mask(values: np.ndarray, edges_m: list[float], idx: int) -> np.ndarray:
+    lower = 0.0 if idx == 0 else edges_m[idx - 1]
+    if idx < len(edges_m):
+        upper = edges_m[idx]
+        return (values >= lower) & (values < upper)
+    return values >= lower
+
+
+def _stats(values: np.ndarray) -> dict[str, float]:
+    if values.size == 0:
+        return {
+            "mean": float("nan"),
+            "median": float("nan"),
+            "p90": float("nan"),
+            "p95": float("nan"),
+            "count": 0.0,
+        }
+    return {
+        "mean": float(np.mean(values)),
+        "median": float(np.median(values)),
+        "p90": float(np.quantile(values, 0.90)),
+        "p95": float(np.quantile(values, 0.95)),
+        "count": float(values.size),
+    }
+
+
+def _write_distance_stats_csv(
+    out_path: Path,
+    samples_by_model: dict[str, ErrorSamples],
+    edges_m: list[float],
+) -> None:
+    labels = _distance_labels(edges_m)
+    with open(out_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["model", "distance_bin_m", "count", "mean_abs_error_m", "median_abs_error_m", "p90_abs_error_m", "p95_abs_error_m"],
+        )
+        writer.writeheader()
+        for model, samples in samples_by_model.items():
+            for idx, label in enumerate(labels):
+                mask = _distance_mask(samples.lidar_depth_m, edges_m, idx)
+                vals = samples.abs_error_m[mask]
+                stats = _stats(vals)
+                writer.writerow(
+                    {
+                        "model": model,
+                        "distance_bin_m": label,
+                        "count": int(stats["count"]),
+                        "mean_abs_error_m": stats["mean"],
+                        "median_abs_error_m": stats["median"],
+                        "p90_abs_error_m": stats["p90"],
+                        "p95_abs_error_m": stats["p95"],
+                    }
+                )
+
+
+def _write_frame_grid_stats_csv(
+    out_path: Path,
+    samples_by_model: dict[str, ErrorSamples],
+    grid_rows: int,
+    grid_cols: int,
+) -> None:
+    with open(out_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "model",
+                "row",
+                "col",
+                "count",
+                "mean_abs_error_m",
+                "median_abs_error_m",
+                "p90_abs_error_m",
+                "p95_abs_error_m",
+            ],
+        )
+        writer.writeheader()
+        for model, samples in samples_by_model.items():
+            if samples.abs_error_m.size == 0:
+                continue
+            row_idx = np.clip((samples.v_px.astype(np.float64) * grid_rows / max(samples.height, 1)).astype(np.int32), 0, grid_rows - 1)
+            col_idx = np.clip((samples.u_px.astype(np.float64) * grid_cols / max(samples.width, 1)).astype(np.int32), 0, grid_cols - 1)
+            for r in range(grid_rows):
+                for c in range(grid_cols):
+                    mask = (row_idx == r) & (col_idx == c)
+                    vals = samples.abs_error_m[mask]
+                    stats = _stats(vals)
+                    writer.writerow(
+                        {
+                            "model": model,
+                            "row": r,
+                            "col": c,
+                            "count": int(stats["count"]),
+                            "mean_abs_error_m": stats["mean"],
+                            "median_abs_error_m": stats["median"],
+                            "p90_abs_error_m": stats["p90"],
+                            "p95_abs_error_m": stats["p95"],
+                        }
+                    )
+
+
+def _plot_distance_error_distribution(
+    out_path: Path,
+    samples_by_model: dict[str, ErrorSamples],
+    edges_m: list[float],
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    model_names = list(samples_by_model.keys())
+    labels = _distance_labels(edges_m)
+    palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+    group_span = len(model_names) + 1
+
+    box_data: list[np.ndarray] = []
+    box_pos: list[float] = []
+    box_colors: list[str] = []
+    for bin_idx, _ in enumerate(labels):
+        for model_idx, model in enumerate(model_names):
+            vals = samples_by_model[model].abs_error_m[_distance_mask(samples_by_model[model].lidar_depth_m, edges_m, bin_idx)]
+            if vals.size == 0:
+                continue
+            box_data.append(vals)
+            box_pos.append(bin_idx * group_span + model_idx)
+            box_colors.append(palette[model_idx % len(palette)])
+
+    if not box_data:
+        raise RuntimeError("No valid error samples were found for distance distribution chart.")
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    bp = ax.boxplot(
+        box_data,
+        positions=box_pos,
+        widths=0.7,
+        patch_artist=True,
+        showfliers=False,
+        medianprops={"color": "black", "linewidth": 1.2},
+    )
+    for patch, color in zip(bp["boxes"], box_colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.55)
+        patch.set_edgecolor(color)
+
+    tick_pos = [idx * group_span + (len(model_names) - 1) / 2.0 for idx in range(len(labels))]
+    ax.set_xticks(tick_pos)
+    ax.set_xticklabels(labels, rotation=20)
+    ax.set_xlabel("LiDAR distance bin (m)")
+    ax.set_ylabel("Absolute error |M-L| (m)")
+    ax.set_title("Error distribution by distance (all valid projected points)")
+    ax.grid(axis="y", alpha=0.3)
+
+    legend = [Patch(facecolor=palette[i % len(palette)], edgecolor=palette[i % len(palette)], alpha=0.55, label=name) for i, name in enumerate(model_names)]
+    ax.legend(handles=legend, loc="upper left")
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
+def _plot_frame_region_heatmap(
+    out_path: Path,
+    samples_by_model: dict[str, ErrorSamples],
+    grid_rows: int,
+    grid_cols: int,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    model_names = list(samples_by_model.keys())
+    if not model_names:
+        raise RuntimeError("No models provided for frame region chart.")
+
+    all_errors = np.concatenate([samples.abs_error_m for samples in samples_by_model.values() if samples.abs_error_m.size > 0])
+    if all_errors.size == 0:
+        raise RuntimeError("No valid error samples were found for frame region chart.")
+    vmax = float(np.quantile(all_errors, 0.95))
+    vmax = max(vmax, 0.01)
+
+    fig, axes = plt.subplots(1, len(model_names), figsize=(5 * len(model_names), 4.5), squeeze=False)
+    ims = []
+    for col, model in enumerate(model_names):
+        ax = axes[0][col]
+        samples = samples_by_model[model]
+        med = np.full((grid_rows, grid_cols), np.nan, dtype=np.float32)
+        counts = np.zeros((grid_rows, grid_cols), dtype=np.int32)
+        if samples.abs_error_m.size > 0:
+            row_idx = np.clip(
+                (samples.v_px.astype(np.float64) * grid_rows / max(samples.height, 1)).astype(np.int32),
+                0,
+                grid_rows - 1,
+            )
+            col_idx = np.clip(
+                (samples.u_px.astype(np.float64) * grid_cols / max(samples.width, 1)).astype(np.int32),
+                0,
+                grid_cols - 1,
+            )
+            for r in range(grid_rows):
+                for c in range(grid_cols):
+                    mask = (row_idx == r) & (col_idx == c)
+                    vals = samples.abs_error_m[mask]
+                    counts[r, c] = int(vals.size)
+                    if vals.size > 0:
+                        med[r, c] = float(np.median(vals))
+
+        im = ax.imshow(med, cmap="magma", vmin=0.0, vmax=vmax)
+        ims.append(im)
+        ax.set_title(model)
+        ax.set_xlabel("Frame X region")
+        ax.set_ylabel("Frame Y region")
+        ax.set_xticks(range(grid_cols))
+        ax.set_yticks(range(grid_rows))
+        ax.set_xticklabels([str(v + 1) for v in range(grid_cols)])
+        ax.set_yticklabels([str(v + 1) for v in range(grid_rows)])
+
+        for r in range(grid_rows):
+            for c in range(grid_cols):
+                txt = "n=0"
+                if counts[r, c] > 0 and np.isfinite(med[r, c]):
+                    txt = f"{med[r, c]:.2f}m\nn={counts[r, c]}"
+                ax.text(c, r, txt, ha="center", va="center", color="white", fontsize=8)
+
+    cbar = fig.colorbar(ims[0], ax=axes.ravel().tolist(), fraction=0.02, pad=0.04)
+    cbar.set_label("Median |M-L| (m)")
+    fig.suptitle("Frame-region impact on depth error (all valid projected points)")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
+def charts_from_summary(
+    summary_json_path: Path,
+    model_filter: list[str] | None,
+    output_dir: Path | None,
+    max_lidar_sync_ms: float,
+    distance_bins_m: list[float],
+    grid_rows: int,
+    grid_cols: int,
+) -> int:
+    rows_raw = json.loads(summary_json_path.read_text(encoding="utf-8"))
+    if not isinstance(rows_raw, list):
+        raise RuntimeError(f"Expected list in summary JSON: {summary_json_path}")
+    rows: list[dict[str, Any]] = [row for row in rows_raw if isinstance(row, dict)]
+
+    selected_rows = rows
+    if model_filter:
+        names = set(model_filter)
+        selected_rows = [row for row in rows if str(row.get("model", "")) in names]
+    if not selected_rows:
+        raise RuntimeError("No models selected for chart generation.")
+
+    out_dir = output_dir if output_dir is not None else summary_json_path.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    bins = sorted({float(v) for v in distance_bins_m if float(v) > 0.0})
+    if not bins:
+        bins = [0.5, 1.0, 1.5, 2.0, 3.0]
+
+    samples_by_model: dict[str, ErrorSamples] = {}
+    for row in selected_rows:
+        model = str(row["model"])
+        run_bag = Path(str(row["run_bag"])).expanduser().resolve()
+        depth_topic = str(row["depth_topic"])
+        lidar_topic = str(row.get("lidar_topic", "/scan"))
+        camera_info_topic = str(row.get("camera_info_topic", "/mars/main_camera/left/camera_info"))
+        print(f"[{model}] collecting per-point errors from {run_bag}")
+        samples = _collect_error_samples(
+            bag_path=run_bag,
+            depth_topic=depth_topic,
+            lidar_topic=lidar_topic,
+            camera_info_topic=camera_info_topic,
+            max_lidar_sync_ms=max_lidar_sync_ms,
+        )
+        if samples.abs_error_m.size == 0:
+            print(f"[{model}] no valid pairs found; skipping")
+            continue
+        samples_by_model[model] = samples
+        print(f"[{model}] valid projected points: {samples.abs_error_m.size}")
+
+    if not samples_by_model:
+        raise RuntimeError("No valid projected points were found for the selected models.")
+
+    stem = summary_json_path.stem
+    distance_png = out_dir / f"{stem}_distance_error_distribution.png"
+    frame_png = out_dir / f"{stem}_frame_region_error_heatmap.png"
+    distance_csv = out_dir / f"{stem}_distance_error_distribution.csv"
+    frame_csv = out_dir / f"{stem}_frame_region_error_heatmap.csv"
+
+    _write_distance_stats_csv(distance_csv, samples_by_model, bins)
+    _write_frame_grid_stats_csv(frame_csv, samples_by_model, grid_rows=grid_rows, grid_cols=grid_cols)
+    _plot_distance_error_distribution(distance_png, samples_by_model, bins)
+    _plot_frame_region_heatmap(frame_png, samples_by_model, grid_rows=grid_rows, grid_cols=grid_cols)
+
+    print(f"Distance chart : {distance_png}")
+    print(f"Frame chart    : {frame_png}")
+    print(f"Distance stats : {distance_csv}")
+    print(f"Frame stats    : {frame_csv}")
+    return 0
 
 
 def evaluate_run(
@@ -772,24 +1282,25 @@ def evaluate_run(
             continue
 
         metrics.depth_frames_seen += 1
+        depth_msg = deserialize_message(serialized, Image)
+        depth_header_stamp_ns = _stamp_ns(depth_msg.header.stamp.sec, depth_msg.header.stamp.nanosec)
         lidar_idx = _nearest_lidar_idx(lidar_stamps, stamp_ns)
         lidar_frame = lidar_frames[lidar_idx]
         if abs(stamp_ns - lidar_frame.stamp_ns) > max_sync_ns:
             continue
         metrics.depth_frames_with_sync += 1
 
-        try:
-            tf_msg = tf_buffer.lookup_transform(
-                intrinsics.frame_id,
-                lidar_frame.frame_id,
-                Time(nanoseconds=stamp_ns),
-                timeout=zero_timeout,
-            )
-        except Exception:
+        tf_msg = _lookup_transform_with_fallback(
+            tf_buffer=tf_buffer,
+            target_frame=intrinsics.frame_id,
+            source_frame=lidar_frame.frame_id,
+            candidate_stamps_ns=[depth_header_stamp_ns, lidar_frame.header_stamp_ns, int(stamp_ns)],
+            timeout=zero_timeout,
+        )
+        if tf_msg is None:
             continue
         metrics.depth_frames_with_transform += 1
 
-        depth_msg = deserialize_message(serialized, Image)
         depth = _depth_image_to_meters(depth_msg)
 
         t = tf_msg.transform.translation
@@ -872,61 +1383,130 @@ def _draw_lidar_tags(
     frame_bgr: np.ndarray,
     ui: np.ndarray,
     vi: np.ndarray,
-    depth_m: np.ndarray,
+    lidar_depth_m: np.ndarray,
+    model_depth_m: np.ndarray | None,
     depth_min_m: float,
     depth_max_m: float,
+    error_max_m: float,
     max_points_draw: int,
     max_labels: int,
     min_label_spacing_px: int,
 ) -> np.ndarray:
-    if depth_m.size == 0:
+    if lidar_depth_m.size == 0:
         return frame_bgr
 
-    order = np.argsort(depth_m)
+    order = np.argsort(lidar_depth_m)
     if order.size > max_points_draw:
         keep = np.linspace(0, order.size - 1, max_points_draw).astype(np.int32)
         order = order[keep]
 
-    d = depth_m[order]
+    d = lidar_depth_m[order]
     uu = ui[order]
     vv = vi[order]
-    denom = max(depth_max_m - depth_min_m, 1e-6)
-    norm = np.clip((d - depth_min_m) / denom, 0.0, 1.0)
-    color_idx = (255.0 * (1.0 - norm)).astype(np.uint8)
-    lut = cv2.applyColorMap(np.arange(256, dtype=np.uint8).reshape(256, 1), cv2.COLORMAP_TURBO).reshape(256, 3)
-    colors = lut[color_idx]
+    pred = model_depth_m[order] if model_depth_m is not None and model_depth_m.size == lidar_depth_m.size else None
+    if pred is not None:
+        abs_err = np.abs(pred - d)
+        norm = np.clip(abs_err / max(error_max_m, 1e-6), 0.0, 1.0)
+        red = np.where(norm < 0.5, norm * 2.0 * 255.0, 255.0).astype(np.uint8)
+        green = np.where(norm < 0.5, 255.0, (1.0 - norm) * 2.0 * 255.0).astype(np.uint8)
+        blue = np.zeros_like(red, dtype=np.uint8)
+        colors = np.stack((blue, green, red), axis=1)
+    else:
+        denom = max(depth_max_m - depth_min_m, 1e-6)
+        norm = np.clip((d - depth_min_m) / denom, 0.0, 1.0)
+        color_idx = (255.0 * (1.0 - norm)).astype(np.uint8)
+        lut = cv2.applyColorMap(np.arange(256, dtype=np.uint8).reshape(256, 1), cv2.COLORMAP_TURBO).reshape(256, 3)
+        colors = lut[color_idx]
 
     annotated = frame_bgr.copy()
     for x, y, color in zip(uu, vv, colors):
         cv2.circle(annotated, (int(x), int(y)), 2, tuple(int(c) for c in color.tolist()), -1, lineType=cv2.LINE_AA)
 
-    selected: list[tuple[int, int, float]] = []
+    selected: list[tuple[int, int, float, float, float]] = []
     min_sq = float(min_label_spacing_px * min_label_spacing_px)
     for idx in np.argsort(d):
         x = int(uu[idx])
         y = int(vv[idx])
-        if any((x - sx) * (x - sx) + (y - sy) * (y - sy) < min_sq for sx, sy, _ in selected):
+        if any((x - sx) * (x - sx) + (y - sy) * (y - sy) < min_sq for sx, sy, _, _, _ in selected):
             continue
-        selected.append((x, y, float(d[idx])))
+        pred_depth = float("nan")
+        err_depth = float("nan")
+        if pred is not None and np.isfinite(pred[idx]) and pred[idx] > 0.0:
+            pred_depth = float(pred[idx])
+            err_depth = abs(pred_depth - float(d[idx]))
+        selected.append((x, y, float(d[idx]), pred_depth, err_depth))
         if len(selected) >= max_labels:
             break
 
-    for x, y, depth in selected:
-        label = f"{depth:.2f}m"
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-        tx = min(max(0, x + 4), max(0, annotated.shape[1] - tw - 2))
-        ty = min(max(th + 2, y - 4), max(th + 2, annotated.shape[0] - 2))
-        cv2.rectangle(annotated, (tx - 1, ty - th - 1), (tx + tw + 1, ty + 2), (0, 0, 0), -1)
-        cv2.putText(
-            annotated,
-            label,
-            (tx, ty),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
-            (255, 255, 255),
-            1,
-            cv2.LINE_AA,
-        )
+    labels: list[tuple[int, int, str]] = []
+    for x, y, depth, pred_depth, err_depth in selected:
+        if np.isfinite(pred_depth):
+            text = f"L:{depth:.2f} M:{pred_depth:.2f} D:{err_depth:.2f}"
+        else:
+            text = f"L:{depth:.2f}m"
+        labels.append((x, y, text))
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.4
+    thickness = 1
+    metrics = [cv2.getTextSize(text, font, font_scale, thickness)[0] for _, _, text in labels]
+    if metrics:
+        max_w = max(size[0] for size in metrics)
+        line_h = max(size[1] for size in metrics) + 8
+        h, w = annotated.shape[0], annotated.shape[1]
+        capacity_per_side = max(1, (h - 10) // max(line_h, 1))
+        max_labels_total = max(2, capacity_per_side * 2)
+        labels = labels[:max_labels_total]
+        metrics = metrics[:max_labels_total]
+
+        left_items = [(x, y, text, metrics[idx]) for idx, (x, y, text) in enumerate(labels) if x < w // 2]
+        right_items = [(x, y, text, metrics[idx]) for idx, (x, y, text) in enumerate(labels) if x >= w // 2]
+
+        def _positions(count: int) -> list[int]:
+            if count <= 0:
+                return []
+            if count == 1:
+                return [h // 2]
+            top = 10 + line_h // 2
+            bottom = max(top, h - 10 - line_h // 2)
+            return [int(v) for v in np.linspace(top, bottom, count)]
+
+        left_items.sort(key=lambda item: item[1])
+        right_items.sort(key=lambda item: item[1])
+        left_y = _positions(len(left_items))
+        right_y = _positions(len(right_items))
+
+        for slot_y, (x, y, text, (tw, th)) in zip(left_y, left_items):
+            tx = 8
+            ty = min(max(th + 2, slot_y + th // 2), h - 2)
+            cv2.rectangle(annotated, (tx - 2, ty - th - 2), (tx + tw + 2, ty + 2), (0, 0, 0), -1)
+            cv2.putText(annotated, text, (tx, ty), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+            tail = (tx + tw + 4, ty - th // 2)
+            cv2.arrowedLine(
+                annotated,
+                tail,
+                (int(x), int(y)),
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+                tipLength=0.2,
+            )
+
+        for slot_y, (x, y, text, (tw, th)) in zip(right_y, right_items):
+            tx = max(8, w - max_w - 10)
+            ty = min(max(th + 2, slot_y + th // 2), h - 2)
+            cv2.rectangle(annotated, (tx - 2, ty - th - 2), (tx + tw + 2, ty + 2), (0, 0, 0), -1)
+            cv2.putText(annotated, text, (tx, ty), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+            tail = (tx - 4, ty - th // 2)
+            cv2.arrowedLine(
+                annotated,
+                tail,
+                (int(x), int(y)),
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+                tipLength=0.2,
+            )
 
     return annotated
 
@@ -936,7 +1516,9 @@ def annotate_run(
     image_topic: str,
     lidar_topic: str,
     camera_info_topic: str,
+    depth_topic: str | None,
     max_lidar_sync_ms: float,
+    depth_pairing_window_ms: float,
     output_video: Path | None,
     output_image: Path | None,
     image_frame_index: int,
@@ -946,10 +1528,16 @@ def annotate_run(
     min_label_spacing_px: int,
     depth_min_m: float,
     depth_max_m: float,
+    error_max_m: float,
 ) -> dict[str, int]:
     tf_buffer, intrinsics, lidar_frames = _collect_reference_data(bag_path, lidar_topic, camera_info_topic)
     lidar_stamps = [frame.stamp_ns for frame in lidar_frames]
+    lidar_min_ns = lidar_stamps[0]
+    lidar_max_ns = lidar_stamps[-1]
     max_sync_ns = int(max_lidar_sync_ms * 1e6)
+    depth_pairing_window_ns = int(max(1.0, depth_pairing_window_ms) * 1e6)
+    depth_frames = _collect_depth_frames(bag_path, depth_topic) if depth_topic else []
+    depth_stamps = [frame.stamp_ns for frame in depth_frames]
 
     reader, topic_types = _reader_for_bag(bag_path)
     image_type = _ensure_topic(topic_types, image_topic, bag_path)
@@ -966,6 +1554,7 @@ def annotate_run(
     sync_hits = 0
     transform_hits = 0
     labeled_hits = 0
+    model_overlay_hits = 0
     saved_image = False
 
     if output_video:
@@ -988,20 +1577,23 @@ def annotate_run(
                 frame = _decode_compressed_image_to_bgr(image_msg)
                 msg_stamp_ns = _stamp_ns(image_msg.header.stamp.sec, image_msg.header.stamp.nanosec)
 
-            stamp_ns = msg_stamp_ns if msg_stamp_ns > 0 else bag_stamp_ns
+            stamp_ns = bag_stamp_ns
+            if msg_stamp_ns > 0 and lidar_min_ns - 2_000_000_000 <= msg_stamp_ns <= lidar_max_ns + 2_000_000_000:
+                stamp_ns = msg_stamp_ns
             lidar_idx = _nearest_lidar_idx(lidar_stamps, stamp_ns)
             lidar_frame = lidar_frames[lidar_idx]
 
             annotated = frame
             if abs(stamp_ns - lidar_frame.stamp_ns) <= max_sync_ns:
                 sync_hits += 1
-                try:
-                    tf_msg = tf_buffer.lookup_transform(
-                        intrinsics.frame_id,
-                        lidar_frame.frame_id,
-                        Time(nanoseconds=stamp_ns),
-                        timeout=zero_timeout,
-                    )
+                tf_msg = _lookup_transform_with_fallback(
+                    tf_buffer=tf_buffer,
+                    target_frame=intrinsics.frame_id,
+                    source_frame=lidar_frame.frame_id,
+                    candidate_stamps_ns=[msg_stamp_ns, lidar_frame.header_stamp_ns, int(stamp_ns)],
+                    timeout=zero_timeout,
+                )
+                if tf_msg is not None:
                     transform_hits += 1
                     ui, vi, depth = _project_lidar_to_image(
                         lidar_points_xyz=lidar_frame.points_xyz,
@@ -1009,21 +1601,40 @@ def annotate_run(
                         intrinsics=intrinsics,
                         image_shape=frame.shape,
                     )
+                    model_depth: np.ndarray | None = None
+                    if depth_frames:
+                        depth_idx = _nearest_lidar_idx(depth_stamps, int(bag_stamp_ns))
+                        depth_frame = depth_frames[depth_idx]
+                        if abs(int(bag_stamp_ns) - depth_frame.stamp_ns) <= depth_pairing_window_ns:
+                            depth_img = depth_frame.depth_m
+                            model_depth_arr = np.full(depth.shape, np.nan, dtype=np.float32)
+                            in_depth_bounds = (
+                                (ui >= 0)
+                                & (ui < depth_img.shape[1])
+                                & (vi >= 0)
+                                & (vi < depth_img.shape[0])
+                            )
+                            if np.any(in_depth_bounds):
+                                model_depth_arr[in_depth_bounds] = depth_img[vi[in_depth_bounds], ui[in_depth_bounds]]
+                                valid_model = np.isfinite(model_depth_arr) & (model_depth_arr > 0.0)
+                                if np.any(valid_model):
+                                    model_overlay_hits += 1
+                                    model_depth = model_depth_arr
                     if depth.size > 0:
                         labeled_hits += 1
                     annotated = _draw_lidar_tags(
                         frame_bgr=frame,
                         ui=ui,
                         vi=vi,
-                        depth_m=depth,
+                        lidar_depth_m=depth,
+                        model_depth_m=model_depth,
                         depth_min_m=depth_min_m,
                         depth_max_m=depth_max_m,
+                        error_max_m=error_max_m,
                         max_points_draw=max_points_draw,
                         max_labels=max_labels,
                         min_label_spacing_px=min_label_spacing_px,
                     )
-                except Exception:
-                    pass
 
             if output_video:
                 if writer is None:
@@ -1056,6 +1667,7 @@ def annotate_run(
         "frames_with_lidar_sync": sync_hits,
         "frames_with_transform": transform_hits,
         "frames_with_labels": labeled_hits,
+        "frames_with_model_overlay": model_overlay_hits,
     }
 
 
@@ -1523,12 +2135,44 @@ def parse_args() -> argparse.Namespace:
     eval_cmd = sub.add_parser("evaluate", help="Evaluate already-recorded model run bags from config.")
     eval_cmd.add_argument("--config", required=True, help="Path to benchmark YAML config.")
 
+    charts_cmd = sub.add_parser("charts", help="Build depth error charts from benchmark summary JSON.")
+    charts_cmd.add_argument("--summary-json", required=True, help="Path to stereo_depth_benchmark_*.json.")
+    charts_cmd.add_argument("--output-dir", help="Directory for output charts and CSV stats.")
+    charts_cmd.add_argument(
+        "--model",
+        action="append",
+        dest="models",
+        help="Model name from summary JSON. Repeat to compare specific models.",
+    )
+    charts_cmd.add_argument(
+        "--max-lidar-sync-ms",
+        type=float,
+        default=80.0,
+        help="Max lidar/depth sync gap used when collecting per-point samples.",
+    )
+    charts_cmd.add_argument(
+        "--distance-bin-m",
+        action="append",
+        dest="distance_bins_m",
+        type=float,
+        help="Distance bin upper edge in meters. Repeat for multiple edges.",
+    )
+    charts_cmd.add_argument("--grid-rows", type=int, default=3, help="Frame-region grid rows.")
+    charts_cmd.add_argument("--grid-cols", type=int, default=4, help="Frame-region grid columns.")
+
     annotate_cmd = sub.add_parser("annotate", help="Render lidar depth tags on video or static image from a run bag.")
     annotate_cmd.add_argument("--bag", required=True, help="Path to run bag directory.")
     annotate_cmd.add_argument("--image-topic", required=True, help="Image topic used as annotation backdrop.")
     annotate_cmd.add_argument("--lidar-topic", default="/lidar", help="Reference lidar topic.")
     annotate_cmd.add_argument("--camera-info-topic", default="/left/camera_info", help="CameraInfo topic.")
+    annotate_cmd.add_argument("--depth-topic", help="Model depth topic to overlay lidar-vs-model error coloring.")
     annotate_cmd.add_argument("--max-lidar-sync-ms", type=float, default=80.0, help="Max image/lidar sync gap (ms).")
+    annotate_cmd.add_argument(
+        "--depth-pairing-window-ms",
+        type=float,
+        default=300.0,
+        help="Max image/depth bag-time pairing gap (ms) for model overlay.",
+    )
     annotate_cmd.add_argument("--output-video", help="Output MP4 path.")
     annotate_cmd.add_argument("--output-image", help="Output PNG/JPG path.")
     annotate_cmd.add_argument(
@@ -1548,6 +2192,12 @@ def parse_args() -> argparse.Namespace:
     )
     annotate_cmd.add_argument("--depth-min-m", type=float, default=0.25, help="Min depth for color scaling.")
     annotate_cmd.add_argument("--depth-max-m", type=float, default=3.0, help="Max depth for color scaling.")
+    annotate_cmd.add_argument(
+        "--error-max-m",
+        type=float,
+        default=1.0,
+        help="Absolute depth error (meters) mapped to max error color when --depth-topic is set.",
+    )
 
     return parser.parse_args()
 
@@ -1566,6 +2216,18 @@ def main() -> int:
             )
         if args.command == "evaluate":
             return evaluate_from_config(Path(args.config).expanduser().resolve())
+        if args.command == "charts":
+            out_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else None
+            bins = args.distance_bins_m if args.distance_bins_m else [0.5, 1.0, 1.5, 2.0, 3.0]
+            return charts_from_summary(
+                summary_json_path=Path(args.summary_json).expanduser().resolve(),
+                model_filter=list(args.models) if args.models else None,
+                output_dir=out_dir,
+                max_lidar_sync_ms=float(args.max_lidar_sync_ms),
+                distance_bins_m=[float(v) for v in bins],
+                grid_rows=max(1, int(args.grid_rows)),
+                grid_cols=max(1, int(args.grid_cols)),
+            )
         if args.command == "annotate":
             output_video = Path(args.output_video).expanduser().resolve() if args.output_video else None
             output_image = Path(args.output_image).expanduser().resolve() if args.output_image else None
@@ -1576,7 +2238,9 @@ def main() -> int:
                 image_topic=str(args.image_topic),
                 lidar_topic=str(args.lidar_topic),
                 camera_info_topic=str(args.camera_info_topic),
+                depth_topic=str(args.depth_topic) if args.depth_topic else None,
                 max_lidar_sync_ms=float(args.max_lidar_sync_ms),
+                depth_pairing_window_ms=float(args.depth_pairing_window_ms),
                 output_video=output_video,
                 output_image=output_image,
                 image_frame_index=max(1, int(args.image_frame_index)),
@@ -1586,12 +2250,13 @@ def main() -> int:
                 min_label_spacing_px=max(1, int(args.min_label_spacing_px)),
                 depth_min_m=float(args.depth_min_m),
                 depth_max_m=float(args.depth_max_m),
+                error_max_m=float(args.error_max_m),
             )
             print(
                 "Annotated frames: "
                 f"seen={stats['frames_seen']} written={stats['frames_written']} "
                 f"sync={stats['frames_with_lidar_sync']} tf={stats['frames_with_transform']} "
-                f"labeled={stats['frames_with_labels']}"
+                f"labeled={stats['frames_with_labels']} model_overlay={stats['frames_with_model_overlay']}"
             )
             if output_video:
                 print(f"Tagged video: {output_video}")
