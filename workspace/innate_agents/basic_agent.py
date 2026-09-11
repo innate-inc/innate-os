@@ -5,7 +5,7 @@ from innate_skills.navigate_with_vision import NavigateWithVision
 from innate_skills.search_memory import SearchMemory
 from inputs.micro_input import MicroInput
 
-from brain_client.agents.types import Agent, InputRef, SkillRef
+from innate import Agent, InputRef, SkillRef
 
 
 class BasicAgent(Agent):

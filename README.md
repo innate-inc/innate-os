@@ -233,29 +233,36 @@ Here is an example of a simple agent to navigate:
 A minimal agent file, saved as `workspace/custom_agents/navigate_agent.py`:
 
 ```python
-from brain_client.agents.types import Agent
+from innate_skills.navigate_to_position import NavigateToPosition
+from inputs.micro_input import MicroInput
+
+from innate import Agent, InputRef, SkillRef
 
 
 class NavigateAgent(Agent):
     """An agent that can navigate to requested positions."""
 
     @property
-    def id(self):
+    def id(self) -> str:
         return "navigate_agent"
 
     @property
-    def display_name(self):
+    def display_name(self) -> str:
         return "Navigate"
 
-    def get_skills(self):
-        return ["innate-os/navigate_to_position"]
+    def get_skills(self) -> list[SkillRef]:
+        return [NavigateToPosition]
 
-    def get_inputs(self):
-        return ["micro"]
+    def get_inputs(self) -> list[InputRef]:
+        return [MicroInput]
 
-    def get_prompt(self):
+    def get_prompt(self) -> str:
         return "You are a helpful robot. When asked, navigate to the requested location using the navigate_to_position skill."
 ```
+
+List skills and inputs as the classes themselves, so your editor catches a typo
+or a deleted skill before the robot does. Physical skills have no class, so
+those stay id strings (`"local/pick_socks"`).
 
 ### Testing agents in sim
 
@@ -364,11 +371,16 @@ class ThermometerInput(InputDevice):
             time.sleep(1.0)
 ```
 
-An agent or directive can then request the input by name:
+An agent can then request the input by class:
 
 ```python
-def get_inputs(self):
-    return ["thermometer"]
+from inputs.thermometer_input import ThermometerInput
+
+from innate import InputRef
+
+
+def get_inputs(self) -> list[InputRef]:
+    return [ThermometerInput]
 ```
 
 </details>

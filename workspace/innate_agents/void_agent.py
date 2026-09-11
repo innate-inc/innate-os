@@ -12,7 +12,7 @@ from innate_skills.turn_in_place import TurnInPlace
 from innate_skills.wave import Wave
 from inputs.micro_input import MicroInput
 
-from brain_client.agents.types import Agent, InputRef, SkillRef
+from innate import Agent, InputRef, SkillRef
 
 CONTEXT = Path(__file__).resolve().parents[1] / "challenge_context.json"
 

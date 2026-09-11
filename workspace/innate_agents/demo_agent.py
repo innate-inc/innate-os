@@ -11,7 +11,7 @@ from innate_skills.system.change_volume import ChangeVolume
 from innate_skills.wave import Wave
 from inputs.micro_input import MicroInput
 
-from brain_client.agents.types import Agent, InputRef, SkillRef
+from innate import Agent, InputRef, SkillRef
 
 
 class DemoAgent(Agent):
