@@ -29,6 +29,7 @@ import { createArmPanel } from "./armPanel.js";
 import { createProfilingPanel } from "./profilingPanel.js";
 import { createSkillsMenu } from "./skillsMenu.js";
 import { createCameraSwitch } from "./cameraSwitch.js";
+import { createDepthProbe } from "./depthProbe.js";
 import { dismissAllConfirms } from "../nav/confirm.js";
 
 // Runtime feature flags (config.json, served static). Sim-only debug controls are
@@ -92,6 +93,9 @@ function buildCockpit(root) {
   // is the sim deployment's feature flag (env-driven; false on the real robot).
   if (!config.simControls && videoStage.audioEl) {
     parts.push(createAudioToggle(rightRail, session, videoStage.audioEl));
+  }
+  if (realVideo) {
+    parts.push(createDepthProbe(rightRail, realVideo.el, realVideo.videoEl, session, ros));
   }
   parts.push(
     createSpeedModes(rightRail, ros),
