@@ -15,6 +15,7 @@ nothing else.
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -52,9 +53,12 @@ def _proxied(proxy):
 
     def call(body: dict[str, Any], timeout: float) -> dict[str, Any]:
         with proxy.request_stream("openai", RESPONSES_PATH, method="POST", json=body, timeout=timeout) as response:
+            # A streamed response carries no body until it is read; .json() on one
+            # raises ResponseNotRead rather than returning anything.
+            payload = response.read()
             if response.status_code != 200:
                 raise OpenAIError(f"OpenAI request failed (HTTP {response.status_code}); check proxy access")
-            return response.json()
+            return json.loads(payload)
 
     return call
 
