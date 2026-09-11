@@ -19,15 +19,18 @@ _PORTRAIT_CAPTION = (
 
 
 def self_reference_turns() -> list[dict]:
-    """A pinned exchange showing the model its own body. Gemini's
-    systemInstruction is text-only, so the portrait rides at the front of
-    every request's contents instead (GeminiContext's ``reference``)."""
+    """A pinned exchange showing the model its own body. The system message is
+    text-only, so the portrait rides at the front of every request's messages
+    instead (ChatContext's ``reference``)."""
     if not _PORTRAIT.is_file():
         return []
-    image = {"inlineData": {"mimeType": "image/jpeg", "data": base64.b64encode(_PORTRAIT.read_bytes()).decode()}}
+    url = f"data:image/jpeg;base64,{base64.b64encode(_PORTRAIT.read_bytes()).decode()}"
     return [
-        {"role": "user", "parts": [{"text": _PORTRAIT_CAPTION}, image]},
-        {"role": "model", "parts": [{"text": "Understood — that is what my model of robot looks like."}]},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": _PORTRAIT_CAPTION}, {"type": "image_url", "image_url": {"url": url}}],
+        },
+        {"role": "assistant", "content": "Understood — that is what my model of robot looks like."},
     ]
 
 

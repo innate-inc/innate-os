@@ -16,7 +16,7 @@ export const MEMORY_COLOR = "#b48cff";
 export const SEARCH_REPLAY_FRESH_S = 20;
 
 /** @typedef {{ id: number, x: number, y: number, theta: number, stamp: number }} Memory */
-/** @typedef {{ map: string, fingerprint: string, cache: string, memories: Memory[] }} MemoryState */
+/** @typedef {{ map: string, fingerprint: string, memories: Memory[] }} MemoryState */
 
 /**
  * Parse a /brain/memory_positions message. Null when malformed — the layer
@@ -38,7 +38,6 @@ export function parseMemories(msg) {
       // Identity of the map's content: a same-name re-map wipes the memories
       // and restarts ids, and this is the only field that changes with it.
       fingerprint: typeof data.fingerprint === "string" ? data.fingerprint : "",
-      cache: typeof data.cache === "string" ? data.cache : "off",
       memories,
     };
   } catch {
@@ -49,7 +48,7 @@ export function parseMemories(msg) {
 /**
  * Parse a /brain/memory_search verdict. Null when malformed.
  * @param {any} msg std_msgs/String
- * @returns {{ query: string, found: boolean, stamp: number, id?: number, x?: number, y?: number, theta?: number, seen_stamp?: number, explanation?: string, error?: string, latency_sec?: number, cached?: boolean } | null}
+ * @returns {{ query: string, found: boolean, stamp: number, id?: number, x?: number, y?: number, theta?: number, seen_stamp?: number, explanation?: string, error?: string, latency_sec?: number } | null}
  */
 export function parseSearch(msg) {
   try {
@@ -122,25 +121,4 @@ export function withAlpha(hex, alpha) {
   const n = parseInt(hex.slice(1), 16);
   const a = Math.max(0, Math.min(1, alpha));
   return `rgb(${(n >> 16) & 255} ${(n >> 8) & 255} ${n & 255} / ${a})`;
-}
-
-/**
- * Chip copy for the payload's cache state — how the next recall will feel.
- * "cold" self-heals (the robot re-warms ~30 s after recording settles), so it
- * reads as in-progress, not as an error.
- * @param {string} state @returns {{ text: string, kind: "ok" | "warn" | "muted" }}
- */
-export function cacheLabel(state) {
-  switch (state) {
-    case "warm":
-      return { text: "instant recall ready", kind: "ok" };
-    case "inline":
-      return { text: "recall ready", kind: "ok" };
-    case "cold":
-      return { text: "recall warming…", kind: "warn" };
-    case "unsupported":
-      return { text: "recall uncached", kind: "warn" };
-    default:
-      return { text: "recall offline", kind: "muted" };
-  }
 }

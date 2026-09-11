@@ -287,11 +287,6 @@ class MemoryStore:
         with self._lock:
             return self._dir / f"{memory_id}.jpg" if self._dir is not None else None
 
-    def files_index_path(self) -> Path | None:
-        """Where the current map's server-side-upload registry lives (brain/frame_files.py)."""
-        with self._lock:
-            return self._dir / "files.json" if self._dir is not None else None
-
     def add(self, x: float, y: float, theta: float, stamp: float, jpeg: bytes) -> Memory | None:
         """Record a new memory; None when no map is loaded."""
         with self._lock:
@@ -420,7 +415,7 @@ class MemoryStore:
             for stale in self._dir.glob("*.jpg*"):  # images and any crash-orphaned .jpg.tmp
                 stale.unlink(missing_ok=True)
             (self._dir / "index.json").unlink(missing_ok=True)
-            (self._dir / "files.json").unlink(missing_ok=True)
+            (self._dir / "files.json").unlink(missing_ok=True)  # the retired upload registry
         self._memories = []
         self._next_id = 1
 

@@ -1,27 +1,44 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Innate Inc
-"""Gemini vision via Innate proxy (/v1/chat/completions). Service key needs
-"gemini" access or the proxy returns 403. Import as ``from innate import gemini``.
+"""Gemini vision for skills: images plus a question, one Chat Completions call.
+
+Reached the way the brain is — the Innate proxy (its service key needs "gemini"
+access or the proxy returns 403), else ``GEMINI_API_KEY``. Import as
+``from innate import gemini``.
 """
 
-import json
+from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Protocol
+
+from brain_client.brain.transport import pick_chat
 from brain_client.skills.types import cancellable_sleep
 from innate_proxy import ProxyClient
 
-SERVICE = "gemini"
-ENDPOINT = "/v1/chat/completions"
+if TYPE_CHECKING:
+    from brain_client.brain.transport import ChatTransport
+
 MODEL = "gemini-3.5-flash"
 
 
-def make_client():
-    """ProxyClient, or None if credentials missing."""
-    client = ProxyClient()
-    return client if client.is_available() else None
+class _Logger(Protocol):
+    def warning(self, msg: str) -> None: ...
 
 
-def ask_image(client, images_b64, question, logger=None, retries=3):
+def make_client() -> ChatTransport | None:
+    """A transport for vision calls, or None when nothing is configured."""
+    return pick_chat(ProxyClient())[0]
+
+
+def ask_image(
+    client: ChatTransport | None,
+    images_b64: str | Sequence[str],
+    question: str,
+    logger: _Logger | None = None,
+    retries: int = 3,
+) -> str | None:
     """JPEG(s) + question -> reply text. None if no client / all retries fail.
     images_b64: one base64 string or a list of them — sent in order, so the
     question can refer to them as image 1, image 2, ... Frames go inline as
@@ -31,9 +48,9 @@ def ask_image(client, images_b64, question, logger=None, retries=3):
         return None
     if isinstance(images_b64, str):
         images_b64 = [images_b64]
-    content = [{"type": "text", "text": question}]
+    content: list[dict[str, Any]] = [{"type": "text", "text": question}]
     content += [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}"}} for b in images_b64]
-    body = {
+    body: dict[str, Any] = {
         "model": MODEL,
         "temperature": 0.0,
         "messages": [{"role": "user", "content": content}],
@@ -41,16 +58,9 @@ def ask_image(client, images_b64, question, logger=None, retries=3):
     for attempt in range(retries):
         cancellable_sleep(0)
         try:
-            with client.request_stream(
-                SERVICE,
-                ENDPOINT,
-                method="POST",
-                json=body,
-            ) as resp:
-                resp.raise_for_status()
-                data = json.loads(resp.read())
+            data = client.complete(body, None)
             return data["choices"][0]["message"]["content"] or ""
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 — a flaky vision call must not sink the skill
             if logger:
                 logger.warning(f"[gemini] vision call failed (try {attempt + 1}/{retries}): {e}")
             if attempt < retries - 1:

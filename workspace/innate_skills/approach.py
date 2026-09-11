@@ -17,8 +17,8 @@ from innate.exceptions import SkillFailed
 from innate.geometry import FX, FY, HEAD_ORIGIN, IMG_H, IMG_W, floor_to_pixel, pixel_to_floor
 
 if TYPE_CHECKING:
+    from brain_client.brain.transport import ChatTransport
     from innate import MainImage, Mobility, Odometry, Overlay
-    from innate_proxy import ProxyClient
 
 Pixel = tuple[float, float]
 FloorXY = tuple[float, float]
@@ -103,7 +103,7 @@ def _min_px_shift(o0, o1, floor_xy):
     return dyaw * FX + fwd
 
 
-def ask_head(host: ApproachHost, proxy: "ProxyClient | None", question: str, settle_s: float):
+def ask_head(host: ApproachHost, proxy: "ChatTransport | None", question: str, settle_s: float):
     """Settle the base, then put the current head frame to Gemini.
     -> (reply_text|None, frame|None)."""
     host.mobility.stop()

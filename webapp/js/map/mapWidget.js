@@ -717,8 +717,8 @@ export function createMap(root, opts = {}) {
     if (typeof verdict.latency_sec === "number") {
       const chip = document.createElement("span");
       chip.className = "mem-search-chip mono";
-      chip.textContent = `${verdict.latency_sec.toFixed(1)} s${verdict.cached ? " · cached ⚡" : ""}`;
-      chip.title = "Recall latency; cached = answered from the warm memory cache";
+      chip.textContent = `${verdict.latency_sec.toFixed(1)} s`;
+      chip.title = "How long the recall took";
       head.appendChild(chip);
     }
     const closeBtn = document.createElement("button");
