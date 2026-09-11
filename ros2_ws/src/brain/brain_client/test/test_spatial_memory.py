@@ -826,6 +826,50 @@ def test_confidence_must_hold_before_recording(data_dir, clock):
     assert len(store.snapshot().memories) == 1
 
 
+@pytest.mark.parametrize("target", ["B.yaml", ""])
+def test_map_change_discards_old_capture_and_requires_fresh_localization(data_dir, clock, target):
+    published = []
+    recorder, store = make_recorder(data_dir, published)
+    see_confident_world(recorder, clock)
+    recorder.tick()
+    observe(recorder, clock, GOOD_JPEG, advance=3.1)
+    assert len(store.snapshot().memories) == 1
+    recorder._on_image(SimpleNamespace(data=GOOD_JPEG))  # buffered in the old map
+
+    recorder._on_current_map(SimpleNamespace(data=target))
+    recorder.tick()
+    assert store.snapshot().memories == ()
+    assert json.loads(published[-1].data)["positions"] == []
+    # Even a camera still streaming cannot reuse the previous map's AMCL confidence.
+    clock.now += 3.1
+    recorder._on_image(SimpleNamespace(data=GOOD_JPEG))
+    recorder.tick()
+    assert store.snapshot().memories == ()
+
+    if target:
+        fresh = frame(42)
+        observe(recorder, clock, fresh)
+        assert store.snapshot().memories == ()
+        observe(recorder, clock, fresh, advance=3.1)
+        assert len(store.snapshot().memories) == 1
+        assert stored_image(store, store.snapshot().memories[0].id) == fresh
+
+    # Switching does not delete the memories that belong to the old map.
+    store.switch_map("A.yaml")
+    assert len(store.snapshot().memories) == 1
+    assert stored_image(store, store.snapshot().memories[0].id) == GOOD_JPEG
+
+
+def test_repeated_current_map_reports_do_not_interrupt_recording(data_dir, clock):
+    recorder, store = make_recorder(data_dir)
+    see_confident_world(recorder, clock)
+    recorder.tick()
+    for _ in range(4):
+        recorder._on_current_map(SimpleNamespace(data="A.yaml"))
+        observe(recorder, clock, GOOD_JPEG)
+    assert len(store.snapshot().memories) == 1
+
+
 def test_a_covariance_spike_resets_the_clock(data_dir, clock):
     recorder, store = make_recorder(data_dir)
     see_confident_world(recorder, clock)
