@@ -91,7 +91,6 @@ def test_begin_delivers_a_typed_verdict_through_the_reader():
         seen_stamp=1000.0,
         image_b64=base64.b64encode(JPEG).decode(),
         latency_sec=1.2,
-        cached=False,
     )
     reader = make_accessor(result_msg).begin("the kitchen")
     verdict = reader()

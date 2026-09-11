@@ -57,7 +57,6 @@ class RecallVerdict:
     seen_stamp: float = 0.0
     image: bytes | None = None
     latency_sec: float = 0.0
-    cached: bool = False
 
 
 class SpatialMemory:
@@ -124,5 +123,4 @@ def _from_result(result: SearchMemory.Result) -> RecallVerdict:
         seen_stamp=result.seen_stamp,
         image=base64.b64decode(result.image_b64) if result.image_b64 else None,
         latency_sec=result.latency_sec,
-        cached=result.cached,
     )

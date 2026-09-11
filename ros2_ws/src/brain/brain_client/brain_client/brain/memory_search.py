@@ -80,14 +80,16 @@ class SearchVerdict:
     memory: Memory | None = None
     image: bytes | None = None
     latency_sec: float = 0.0
-    cached: bool = False  # nothing caches any more; SearchMemory.action keeps the field
 
 
 class MemorySearch:
-    def __init__(self, store: MemoryStore, transport: ChatTransport, *, model: str, logger: RcutilsLogger):
+    def __init__(
+        self, store: MemoryStore, transport: ChatTransport, *, model: str, thinking: str, logger: RcutilsLogger
+    ):
         self._store = store
         self._chat = transport
         self._model = model
+        self._thinking = thinking
         self._logger = logger
         self._flight = threading.Lock()  # searches run one at a time
         # UI mirror, set by the composition root: every finished search's verdict
@@ -130,10 +132,12 @@ class MemorySearch:
             ],
             "response_format": _RESPONSE_FORMAT,
             "temperature": 0,
-            # Measured for this task on Gemini: a search is a pick among labeled
-            # frames, and full thinking only slowed it.
-            "reasoning_effort": "low",
         }
+        if self._thinking:
+            # Measured for this task on Gemini: a search is a pick among labeled
+            # frames, and full thinking only slowed it. A blank llm_thinking means
+            # the server takes no reasoning knob, so this one goes with it.
+            body["reasoning_effort"] = "low"
         return self._conclude(query, self._chat.complete(body, None), snapshot, started)
 
     def _conclude(self, query: str, response: dict, snapshot: MemorySnapshot, started: float) -> SearchVerdict:

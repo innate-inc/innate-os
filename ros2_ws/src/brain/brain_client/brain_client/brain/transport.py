@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import httpx
@@ -43,14 +43,6 @@ Chunks = Iterator[dict]
 """Parsed SSE chunks of one streamed completion."""
 
 
-class ChatHttpError(RuntimeError):
-    """A non-200 from a chat server, keeping the status for policy decisions."""
-
-    def __init__(self, status: int, detail: str):
-        super().__init__(f"HTTP {status}: {detail}")
-        self.status = status
-
-
 @dataclass(frozen=True)
 class ChatTransport:
     """Chat Completions against one server: the streamed and the blocking form."""
@@ -69,22 +61,23 @@ class Backend(StrEnum):
 
 @dataclass(frozen=True)
 class Endpoint:
-    """An OpenAI-compatible server: its ``/v1`` root, its key, its extras."""
+    """An OpenAI-compatible server: its ``/v1`` root and its key."""
 
     base_url: str
     api_key: str = ""
-    extra_body: dict = field(default_factory=dict)
 
     @classmethod
-    def from_config(cls, config: BrainConfig, logger: RcutilsLogger) -> Endpoint | None:
+    def from_config(cls, config: BrainConfig) -> Endpoint | None:
         """The configured endpoint, or None when the brain should fall back to Gemini."""
         base_url = config.llm_base_url.strip().rstrip("/")
         if not base_url:
             return None
-        return cls(base_url, os.environ.get(LLM_API_KEY_ENV, "").strip(), _extra_body(config.llm_extra_body, logger))
+        return cls(base_url, os.environ.get(LLM_API_KEY_ENV, "").strip())
 
 
-def pick_chat(proxy: ProxyClient | None, endpoint: Endpoint | None = None) -> tuple[ChatTransport | None, Backend]:
+def pick_chat(
+    proxy: ProxyClient | None, endpoint: Endpoint | None = None, extra_body: dict | None = None
+) -> tuple[ChatTransport | None, Backend]:
     """The way to reach a model: a configured endpoint, the Innate proxy, or GEMINI_API_KEY.
 
     sim/launcher/config.py:resolve_brain_backend predicts this choice from the
@@ -92,16 +85,16 @@ def pick_chat(proxy: ProxyClient | None, endpoint: Endpoint | None = None) -> tu
     precedence here and change it there.
     """
     if endpoint is not None:
-        return direct_chat(endpoint), Backend.DIRECT
+        return direct_chat(endpoint, extra_body), Backend.DIRECT
     if proxy is not None and proxy.is_available():
-        return proxy_chat(proxy), Backend.PROXY
+        return proxy_chat(proxy, extra_body), Backend.PROXY
     api_key = os.environ.get(GEMINI_API_KEY_ENV, "").strip()
     if api_key:
-        return direct_chat(Endpoint(GOOGLE_COMPAT_BASE_URL, api_key)), Backend.DIRECT
+        return direct_chat(Endpoint(GOOGLE_COMPAT_BASE_URL, api_key), extra_body), Backend.DIRECT
     return None, Backend.UNCONFIGURED
 
 
-def direct_chat(endpoint: Endpoint) -> ChatTransport:
+def direct_chat(endpoint: Endpoint, extra_body: dict | None = None) -> ChatTransport:
     """Reach an OpenAI-compatible server with its own key."""
     # One client for the process: reuses the TLS connection across turns
     # instead of a fresh handshake per call. Single-threaded use by
@@ -109,45 +102,46 @@ def direct_chat(endpoint: Endpoint) -> ChatTransport:
     headers = {"Authorization": f"Bearer {endpoint.api_key}"} if endpoint.api_key else {}
     client = httpx.Client(headers=headers, timeout=STREAM_TIMEOUT_SECS)
     url = endpoint.base_url + CHAT_COMPLETIONS_PATH
+    extras = extra_body or {}
 
     def stream(body: dict) -> Chunks:
-        with client.stream("POST", url, json=body | endpoint.extra_body) as resp:
+        with client.stream("POST", url, json=body | extras) as resp:
             if resp.status_code != 200:
                 resp.read()
                 raise RuntimeError(f"chat direct: HTTP {resp.status_code}: {resp.text[:200]}")
             yield from _sse_chunks(resp.iter_lines())
 
     def complete(body: dict, timeout: float | None) -> dict:
-        resp = client.post(
-            url, json=body | endpoint.extra_body, timeout=COMPLETE_TIMEOUT_SECS if timeout is None else timeout
-        )
+        resp = client.post(url, json=body | extras, timeout=COMPLETE_TIMEOUT_SECS if timeout is None else timeout)
         if resp.status_code != 200:
-            raise ChatHttpError(resp.status_code, resp.text[:200])
+            raise RuntimeError(f"chat direct: HTTP {resp.status_code}: {resp.text[:200]}")
         return resp.json() if resp.content else {}
 
     return ChatTransport(stream=stream, complete=complete)
 
 
-def proxy_chat(proxy: ProxyClient) -> ChatTransport:
+def proxy_chat(proxy: ProxyClient, extra_body: dict | None = None) -> ChatTransport:
     """Reach Gemini through the Innate proxy (the proxy holds the upstream key)."""
+    extras = extra_body or {}
 
     def stream(body: dict) -> Chunks:
-        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body) as resp:
+        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body | extras) as resp:
             if resp.status_code != 200:
                 raise RuntimeError(f"chat via proxy: HTTP {resp.status_code}: {resp.read()[:200]!r}")
             yield from _sse_chunks(resp.iter_lines())
 
     def complete(body: dict, timeout: float | None) -> dict:
-        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body, timeout=timeout) as resp:
+        with proxy.request_stream(PROXY_SERVICE, PROXY_CHAT_PATH, json=body | extras, timeout=timeout) as resp:
             payload = resp.read()
             if resp.status_code != 200:
-                raise ChatHttpError(resp.status_code, payload[:200].decode(errors="replace"))
+                raise RuntimeError(f"chat via proxy: HTTP {resp.status_code}: {payload[:200]!r}")
             return json.loads(payload) if payload else {}
 
     return ChatTransport(stream=stream, complete=complete)
 
 
-def _extra_body(raw: str, logger: RcutilsLogger) -> dict:
+def parse_extra_body(raw: str, logger: RcutilsLogger) -> dict:
+    """The ``llm_extra_body`` setting as a dict, empty when unset or unusable."""
     if not raw.strip():
         return {}
     try:

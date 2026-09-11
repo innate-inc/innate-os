@@ -1334,7 +1334,7 @@ def make_search(data_dir, frames: int, verdict: dict | None = None) -> tuple[Mem
         store.add(float(3 * i), 0.0, 0.0, 1000.0 + i, f"jpg-{i + 1}".encode())
     fake = FakeChat(verdict)
     logger = SimpleNamespace(info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
-    return MemorySearch(store, fake.transport, model="test-model", logger=logger), fake, store
+    return MemorySearch(store, fake.transport, model="test-model", thinking="low", logger=logger), fake, store
 
 
 def question_content(body: dict) -> list[dict]:
@@ -1370,7 +1370,7 @@ def test_a_search_sends_every_labeled_frame_then_the_question(data_dir):
         "data:image/jpeg;base64," + base64.b64encode(f"jpg-{i}".encode()).decode() for i in (1, 2, 3)
     ]
     assert content_texts(body)[0].startswith("Frame 1 ") and "the kitchen" in content_texts(body)[-1]
-    assert verdict.found and not verdict.cached and verdict.image == b"jpg-2"
+    assert verdict.found and verdict.image == b"jpg-2"
     assert verdict.memory is not None and verdict.memory.x == 3.0
     assert "x=3.00m" in verdict_text(verdict) and "navigate_to_position" in verdict_text(verdict)
 

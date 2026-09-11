@@ -57,8 +57,16 @@ def generate_launch_description():
     )
     llm_model_arg = DeclareLaunchArgument(
         "llm_model",
-        default_value=get_env("LLM_MODEL", get_env("GEMINI_MODEL", "gemini-3.6-flash")),
+        default_value=get_env("LLM_MODEL", "gemini-3.6-flash"),
         description="Model powering the local brain, on whichever server llm_base_url names",
+    )
+    # The retired name goes to the retired parameter, never straight to llm_model:
+    # settings.yaml must be able to outrank it, and it can only outrank what it
+    # also declares (core/config.py carries it across and warns).
+    gemini_model_arg = DeclareLaunchArgument(
+        "gemini_model",
+        default_value=get_env("GEMINI_MODEL", ""),
+        description="Retired name for llm_model, still honoured with a warning",
     )
     llm_base_url_arg = DeclareLaunchArgument(
         "llm_base_url",
@@ -87,6 +95,7 @@ def generate_launch_description():
                 "current_nav_mode_topic": LaunchConfiguration("current_nav_mode_topic"),
                 "log_everything": LaunchConfiguration("log_everything"),
                 "llm_model": LaunchConfiguration("llm_model"),
+                "gemini_model": LaunchConfiguration("gemini_model"),
                 "llm_base_url": LaunchConfiguration("llm_base_url"),
                 # Proxy service config
                 "cartesia_voice_id": LaunchConfiguration("cartesia_voice_id"),
@@ -111,6 +120,7 @@ def generate_launch_description():
             current_nav_mode_topic_arg,
             log_everything_arg,
             llm_model_arg,
+            gemini_model_arg,
             llm_base_url_arg,
             # Proxy service config args
             cartesia_voice_id_arg,

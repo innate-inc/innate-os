@@ -84,15 +84,14 @@ class BrainConfig:
             if not carried or values[current] != _PARAM_DEFAULTS[current]:
                 continue
             values[current] = carried
-            node.get_logger().warn(
-                f"[Brain] '{retired}' is now '{current}' — using {carried}; rename it in settings.yaml"
-            )
+            node.get_logger().warn(f"[Brain] '{retired}' is retired — using {carried} as '{current}'; rename it")
         return cls(**values)
 
 
-# Old parameter name -> its replacement. A deployed robot's settings.yaml may
-# still carry the old name; ignoring it would silently revert that robot to the
-# default model.
+# Old parameter name -> its replacement. A deployed robot may still carry the old
+# name in settings.yaml, or in .env as GEMINI_MODEL (the launch file feeds that to
+# the retired parameter, so settings.yaml still outranks it); ignoring either would
+# silently revert that robot to the default model.
 _RENAMED_PARAMS = {"gemini_model": "llm_model", "gemini_thinking_level": "llm_thinking"}
 
 # One default per BrainConfig field, in field order; a value's type must match

@@ -77,7 +77,6 @@ def _to_result(verdict: SearchVerdict) -> SearchMemory.Result:
     result.explanation = verdict.explanation
     result.error = verdict.error
     result.latency_sec = float(verdict.latency_sec)
-    result.cached = verdict.cached
     if verdict.memory is not None:
         result.x = verdict.memory.x
         result.y = verdict.memory.y

@@ -48,7 +48,7 @@ from brain_client.agents.studio import (
 from brain_client.brain.agent import BrainAgent
 from brain_client.brain.memory_search import MemorySearch
 from brain_client.brain.search_server import MemorySearchServer
-from brain_client.brain.transport import Endpoint, pick_chat
+from brain_client.brain.transport import Endpoint, parse_extra_body, pick_chat
 from brain_client.brain.utils import EventKind
 from brain_client.common.script_paths import get_innate_os_root
 from brain_client.core.config import BrainConfig
@@ -204,9 +204,15 @@ class BrainClientNode(Node):
         )
         # One wire for the whole node: the agent thinks over it and the spatial
         # memory searches over it, so a robot can never have them disagree.
-        transport, self._backend = pick_chat(self._proxy, Endpoint.from_config(cfg, self.get_logger()))
+        transport, self._backend = pick_chat(
+            self._proxy,
+            Endpoint.from_config(cfg),
+            parse_extra_body(cfg.llm_extra_body, self.get_logger()),
+        )
         self.memory_search = (
-            MemorySearch(self.memory_store, transport, model=cfg.llm_model, logger=self.get_logger())
+            MemorySearch(
+                self.memory_store, transport, model=cfg.llm_model, thinking=cfg.llm_thinking, logger=self.get_logger()
+            )
             if transport is not None
             else None
         )
