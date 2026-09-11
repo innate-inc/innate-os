@@ -42,7 +42,7 @@ The simulator runs the software that ships on MARS, with simulated hardware in p
 ```bash
 ./innate-sim status
 ./innate-sim sh
-./innate-sim logs os-session
+./innate-sim logs startup
 ./innate-sim down
 ```
 
