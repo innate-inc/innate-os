@@ -17,7 +17,6 @@ gripper, no release with an empty one, no finishing while still carrying.
 """
 
 import base64
-import hashlib
 import json
 import math
 import os
@@ -29,7 +28,7 @@ from typing import Literal
 from innate_skills.imitate_demonstration.imitation_runtime import ArmRuntime, LiveObservation
 
 from innate import HeadState, MainImage, Manipulation, Mobility, Skill, SkillOutput, WristImage
-from innate.demonstration import Demonstration
+from innate.demonstration import Demonstration, model_fingerprint
 from innate.icl_trace import run_trace
 from innate.imitation_actions import (
     FIXED_ACTIONS,
@@ -193,7 +192,7 @@ class ImitateDemonstration(Skill):
             [round(min(f["qpos"][j] for f in shown), 2), round(max(f["qpos"][j] for f in shown), 2)] for j in range(5)
         ]
         xml = (Path(get_package_share_directory("mars_sim")) / "urdf/mars.urdf").read_text()
-        if hashlib.sha256(xml.encode()).hexdigest() != demo.model_hash:
+        if model_fingerprint(xml) != demo.model_hash:
             self.fail("Demonstration robot model differs from the running robot")
         policy = self.make_policy(demo)
         root = Path(os.environ.get("INNATE_OS_ROOT", Path(__file__).resolve().parents[2]))
@@ -423,6 +422,8 @@ class ImitateDemonstration(Skill):
             finally:
                 self.mobility.stop()
                 self.manipulation.safety.max_ee_speed = previous_speed
+                if arm is not None:
+                    arm.close()
                 if monitor is not None:
                     monitor.close()
 

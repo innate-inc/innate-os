@@ -562,7 +562,12 @@ class Manipulation:
         """
         target = [float(j) for j in joints]
         explicit_grip = len(target) == 6
-        if len(target) == 5:
+        if explicit_grip:
+            # A streamed j6 becomes the standing grip target, so an out-of-range
+            # value would persist into every later motion. Below GRIPPER_CLOSED
+            # the servo drives into its own stop and overcurrent-trips.
+            target[5] = min(max(target[5], self.GRIPPER_CLOSED), self.GRIPPER_OPEN)
+        else:
             target.append(self._grip_or(None))
         if len(target) != 6:
             raise ArmFailed(f"expected 5 or 6 joint positions, got {len(target)}")

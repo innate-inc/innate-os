@@ -192,6 +192,7 @@ class ArmRuntime:
         self.xml = xml
         self._base_origin = None
         self._base_step_active = False
+        self._worker = None
 
     def read(self, after):
         deadline = time.monotonic() + 5
@@ -215,27 +216,42 @@ class ArmRuntime:
         return observation
 
     def decide(self, policy, observation, history):
+        """Ask the model, on a worker so a Stop is not stuck behind the request.
+
+        The worker is tracked rather than abandoned: a cancelled or timed-out
+        run joins it in ``close``, so the HTTP client, the frames it holds and
+        the trace it may still write outlive the run by at most the request's
+        own timeout instead of indefinitely."""
         result = queue.Queue(maxsize=1)
 
         def request():
             try:
                 result.put((policy.decide(observation, history), None))
-            except Exception as exc:
-                # Do not serialize HTTP bodies/credentials into robot feedback.
+            except Exception as exc:  # noqa: BLE001 — never serialize HTTP bodies or credentials into feedback
                 result.put((None, type(exc).__name__))
 
-        threading.Thread(target=request, daemon=True).start()
+        self._worker = threading.Thread(target=request, daemon=True)
+        self._worker.start()
         deadline = time.monotonic() + self.skill.decision_timeout
         while time.monotonic() < deadline:
             self.skill.check_cancelled()
             try:
                 value, error = result.get_nowait()
+                self._worker = None
                 if error:
                     self.skill.fail("Demonstration model request failed (" + error + ")")
                 return value
             except queue.Empty:
                 self.skill.sleep(0.05)
         self.skill.fail("Demonstration model request timed out")
+
+    def close(self, timeout=45.0):
+        """Let an outstanding request finish before the run's node goes away, so
+        a late reply cannot publish through a destroyed publisher."""
+        worker = self._worker
+        self._worker = None
+        if worker is not None and worker.is_alive():
+            worker.join(timeout)
 
     @staticmethod
     def motion_outcome(status, reason, measured, target):

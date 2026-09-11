@@ -14,6 +14,7 @@ import json
 import math
 from functools import lru_cache
 from pathlib import Path
+from xml.etree import ElementTree
 
 import numpy as np
 
@@ -67,13 +68,16 @@ def dead_reckon(times, base_action):
     own ramping make this an estimate of where the base went, not a measurement."""
     times = np.asarray(times, dtype=float)
     base_action = np.asarray(base_action, dtype=float)
-    dt = np.diff(times, prepend=times[0])
-    yaw = np.cumsum(base_action[:, 1] * dt)
-    # Each command holds until the next arrives, so a step advances along the
-    # heading it started from.
-    heading = np.concatenate(([0.0], yaw[:-1]))
-    x = np.cumsum(base_action[:, 0] * np.cos(heading) * dt)
-    y = np.cumsum(base_action[:, 0] * np.sin(heading) * dt)
+    # The recorder stores the command in force AT each sample, and it holds
+    # forward until the next one replaces it. So a row's velocity covers the
+    # interval that follows it, and the path at a row is what the rows before it
+    # produced — integrating backwards would offset the base by one sample at
+    # every command change, exactly where the model is reading motion.
+    span = np.diff(times, append=times[-1])
+    forward, turn = base_action[:, 0] * span, base_action[:, 1] * span
+    yaw = np.concatenate(([0.0], np.cumsum(turn)[:-1]))
+    x = np.concatenate(([0.0], np.cumsum(forward * np.cos(yaw))[:-1]))
+    y = np.concatenate(([0.0], np.cumsum(forward * np.sin(yaw))[:-1]))
     return np.column_stack((x, y, yaw))
 
 
@@ -88,6 +92,30 @@ def grip_events(grip):
         return np.empty(0, dtype=int)
     above = grip > 0.5 * (low + high)
     return np.flatnonzero(np.diff(above.astype(np.int8)) != 0) + 1
+
+
+def model_fingerprint(xml):
+    """Identify the robot a URDF describes, not the file it came from. Hashing
+    the text rejects a demonstration over a reformat, a comment, or the source
+    copy of the same model the installed one was built from."""
+    tree = ElementTree.fromstring(xml)
+    joints = []
+    for joint in sorted(tree.iter("joint"), key=lambda j: j.get("name") or ""):
+        origin = joint.find("origin")
+        axis = joint.find("axis")
+        limit = joint.find("limit")
+        joints.append(
+            "|".join(
+                (
+                    joint.get("name") or "",
+                    joint.get("type") or "",
+                    (origin.get("xyz", "") + ";" + origin.get("rpy", "")) if origin is not None else "",
+                    axis.get("xyz", "") if axis is not None else "",
+                    (limit.get("lower", "") + ";" + limit.get("upper", "")) if limit is not None else "",
+                )
+            )
+        )
+    return hashlib.sha256("\n".join(joints).encode()).hexdigest()
 
 
 def _text(value):
@@ -154,7 +182,7 @@ class Demonstration:
                 or not np.allclose(np.linalg.norm(poses[:, 3:], axis=1), 1, atol=1e-4)
             ):
                 raise ValueError("Invalid EE trajectory")
-            self.model_hash = hashlib.sha256(self.urdf.encode()).hexdigest()
+            self.model_hash = model_fingerprint(self.urdf)
             self.poses = poses
             self.final_pose = poses[-1].tolist()
             # Always include significant gripper transitions as well as even samples.
