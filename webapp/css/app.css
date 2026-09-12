@@ -11925,27 +11925,48 @@ body.sim-edge-to-edge .agent-cockpit.agent-sim .agent-feed-frame > .video-stage 
   .agent-compact .agent-studio-dock-head { display: none; }
   .agent-compact .agent-studio {
     width: min(360px, calc(100vw - 28px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
-    max-height: calc(100dvh - 90px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    max-height: min(560px, calc(100dvh - 90px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)));
+    overflow: hidden;
+    padding: 16px;
     border-radius: 18px;
   }
 
+  .agent-compact .agent-studio > :not(.agent-studio-pane) { flex-shrink: 0; }
+
+  .agent-compact .agent-studio .agent-studio-note {
+    margin: 0;
+    color: rgb(255 255 255 / 50%);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  .agent-compact .agent-studio-tabs { margin: 8px 0 0; }
+
+  .agent-compact .agent-studio-pane {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(255 255 255 / 18%) transparent;
+  }
+
   .agent-studio-mobile-name {
-    margin: 0 0 10px;
+    margin: 0 0 6px;
     color: #fff;
-    font-size: 20px;
+    font-size: 17px;
     font-weight: 600;
     line-height: 1.25;
     overflow-wrap: anywhere;
   }
 
   .agent-studio-mobile-prompt {
-    padding-top: 14px;
+    flex: none;
+    padding-top: 12px;
     color: rgb(255 255 255 / 82%);
-    font-size: 14px;
-    line-height: 1.6;
+    font-size: 13px;
+    line-height: 1.55;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     user-select: text;

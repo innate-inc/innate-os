@@ -72,9 +72,13 @@ check(box.left>=0 && box.right<=innerWidth,'Menu fits the viewport');
 state.agents[0].prompt=('A long prompt that stays readable on a phone.\n').repeat(80);
 studio.setCompact(true);
 await frame();
-const reader=root.querySelector('.agent-studio');
+const reader=root.querySelector('.agent-studio-mobile-prompt').parentElement;
+const headingTop=root.querySelector('.agent-studio-mobile-name').getBoundingClientRect().top;
+const tabsTop=root.querySelector('.agent-studio-tabs').getBoundingClientRect().top;
 reader.scrollTop=reader.scrollHeight;
-check(reader.scrollTop>0,'Long plain prompt scrolls within the menu');
+check(reader.scrollTop>0,'Long plain prompt scrolls within its pane');
+check(root.querySelector('.agent-studio').scrollTop===0,'Outer menu does not scroll');
+check(root.querySelector('.agent-studio-mobile-name').getBoundingClientRect().top===headingTop && root.querySelector('.agent-studio-tabs').getBoundingClientRect().top===tabsTop,'Name and tabs stay fixed while reading');
 check(reader.scrollWidth<=reader.clientWidth,'Long prompt does not widen the menu');
 }
 studio.destroy();
