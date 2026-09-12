@@ -15,6 +15,7 @@ several agents per file.
 from __future__ import annotations
 
 import base64
+import math
 from pathlib import Path
 
 from brain_client.agents.types import Agent
@@ -89,6 +90,16 @@ def build_agent_instances(
             str(agent.display_name)
             agent.get_prompt()
             agent.input_names()
+            intervals = (agent.idle_turn_interval, agent.supervision_turn_interval)
+            for name, value in zip(("idle_turn_interval", "supervision_turn_interval"), intervals, strict=True):
+                if value is not None and (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    or value <= 0
+                ):
+                    raise ValueError(f"{name} must be a finite positive number or None")
+            agent._turn_intervals = intervals
             agent.uses_gaze()
             skill_ids = agent.skill_ids()
         except Exception as e:  # noqa: BLE001 — one bad agent must not stop the roster

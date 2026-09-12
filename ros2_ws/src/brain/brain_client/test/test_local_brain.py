@@ -1114,6 +1114,19 @@ def test_trace_reports_the_turn_lifecycle(agent_factory, monkeypatch):
     snapshot = traces[7]
     # History: the user turn, the model turn, and the wait call's functionResponse.
     assert snapshot["active"] is False and snapshot["backend"] == "gemini-direct" and snapshot["history"] == 3
+    assert snapshot["interval"] == 3.0
+
+    # The heartbeat follows the current agent and skill state, including unset overrides.
+    for intervals, expected in [
+        ((0.01, None), (0.01, 5.0)),
+        ((None, 0.02), (3.0, 0.02)),
+        (None, (3.0, 5.0)),
+    ]:
+        state.current_directive = SimpleNamespace(_turn_intervals=intervals) if intervals else None
+        for running, interval in zip((None, RunningSkill("wave", "innate-os/wave")), expected, strict=True):
+            state.primitive_running = running
+            agent._snapshot()
+            assert traces[-1]["interval"] == interval
 
 
 # ---------- skill events ----------
