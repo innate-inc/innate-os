@@ -7,9 +7,7 @@ Agent Type Definitions
 Base class and types for robot agents.
 """
 
-import math
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias, Union
 
 from brain_client.common.script_paths import Source
@@ -29,25 +27,6 @@ SkillRef: TypeAlias = Union["type[Skill]", "type[TrainedSkill]", str]
 InputRef: TypeAlias = Union["type[InputDevice]", str]
 
 
-@dataclass(frozen=True)
-class TurnIntervals:
-    """Optional per-agent overrides for the brain's visual observation cadence.
-
-    ``None`` keeps the global ROS parameter.  A positive value is the pause
-    after a completed model turn; model latency is additional.  Keeping this
-    on the agent lets a visually supervised navigation agent look frequently
-    without making every directive on the robot equally chatty and expensive.
-    """
-
-    idle: float | None = None
-    supervision: float | None = None
-
-    def __post_init__(self) -> None:
-        for name, value in (("idle", self.idle), ("supervision", self.supervision)):
-            if value is not None and (not math.isfinite(value) or value <= 0):
-                raise ValueError(f"turn interval {name} must be a finite positive number or None")
-
-
 class Agent(ABC):
     """
     Base class for all agents.
@@ -56,6 +35,14 @@ class Agent(ABC):
     along with the list of skills that should be available when this
     agent is active.
     """
+
+    # Pause after each completed model turn (seconds); None uses the global default.
+    # Set these on the subclass; edits take effect when the agent reloads.
+    idle_turn_interval: float | None = None
+    supervision_turn_interval: float | None = None
+
+    # Validated once by the loader; the brain never evaluates workspace getters.
+    _turn_intervals: tuple[float | None, float | None] = (None, None)
 
     # Stamped by the loader to "shipped" or "user" based on origin directory.
     # Subclasses must not set this themselves.
@@ -184,15 +171,6 @@ class Agent(ABC):
         Default: return empty list (no input devices required).
         """
         return []
-
-    def get_turn_intervals(self) -> TurnIntervals:
-        """Return optional per-agent idle and running-skill turn intervals.
-
-        The global ``brain_client_node`` ROS parameters remain the defaults.
-        Override this only when the directive needs a materially different
-        visual reaction cadence.
-        """
-        return TurnIntervals()
 
     def input_names(self) -> list[str]:
         """get_inputs() normalized to device-name strings — the only form the

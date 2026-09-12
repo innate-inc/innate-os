@@ -450,7 +450,6 @@ import threading  # noqa: E402
 import time  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
-from brain_client.agents.types import TurnIntervals  # noqa: E402
 from brain_client.brain.agent import BrainAgent  # noqa: E402
 from brain_client.brain.utils import Event, EventKind  # noqa: E402
 from brain_client.core.state import BrainState, RunningSkill  # noqa: E402
@@ -1119,13 +1118,11 @@ def test_trace_reports_the_turn_lifecycle(agent_factory, monkeypatch):
 
     # The heartbeat follows the current agent and skill state, including unset overrides.
     for intervals, expected in [
-        (TurnIntervals(idle=0.01), (0.01, 5.0)),
-        (TurnIntervals(supervision=0.02), (3.0, 0.02)),
+        ((0.01, None), (0.01, 5.0)),
+        ((None, 0.02), (3.0, 0.02)),
         (None, (3.0, 5.0)),
     ]:
-        state.current_directive = (
-            SimpleNamespace(get_turn_intervals=lambda value=intervals: value) if intervals else None
-        )
+        state.current_directive = SimpleNamespace(_turn_intervals=intervals) if intervals else None
         for running, interval in zip((None, RunningSkill("wave", "innate-os/wave")), expected, strict=True):
             state.primitive_running = running
             agent._snapshot()

@@ -70,7 +70,7 @@ may list.
 
 from typing import TYPE_CHECKING
 
-from brain_client.agents.types import Agent, InputRef, SkillRef, TurnIntervals
+from brain_client.agents.types import Agent, InputRef, SkillRef
 from brain_client.robot.exceptions import ArmFailed, ArmUnhealthy
 from brain_client.skills.overlay import Overlay
 from brain_client.skills.types import (
@@ -99,7 +99,6 @@ CAMERAS: dict[str, type[Image]] = {"main": MainImage, "wrist": WristImage}
 
 __all__ = [
     "Agent",
-    "TurnIntervals",
     "Arm",
     "ArmFailed",
     "ArmUnhealthy",

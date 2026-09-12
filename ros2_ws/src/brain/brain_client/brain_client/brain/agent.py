@@ -419,13 +419,13 @@ class BrainAgent:
 
     def _interval(self) -> float:
         directive = self._state.current_directive
-        overrides = directive.get_turn_intervals() if directive is not None else None
+        idle, supervision = directive._turn_intervals if directive is not None else (None, None)
         if self._state.primitive_running:
-            if overrides is not None and overrides.supervision is not None:
-                return overrides.supervision
+            if supervision is not None:
+                return supervision
             return self._config.supervision_turn_interval
-        if overrides is not None and overrides.idle is not None:
-            return overrides.idle
+        if idle is not None:
+            return idle
         return self._config.idle_turn_interval
 
     def _elapsed(self) -> float:
