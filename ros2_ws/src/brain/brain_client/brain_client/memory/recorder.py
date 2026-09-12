@@ -183,6 +183,14 @@ class MemoryRecorder:
         self._nav_mode = msg.data
 
     def _on_current_map(self, msg: String) -> None:
+        if msg.data != self._map_name:
+            # Navigation can switch maps without changing mode. Never write a
+            # frame captured in the old map into the new store on the next tick,
+            # or let the old AMCL confidence admit more frames during the swap.
+            self._candidate = None
+            self._confident_since = None
+            self._covariance = None
+            self._covariance_at = 0.0
         self._map_name = msg.data
 
     def _on_mapping_session(self, msg: String) -> None:

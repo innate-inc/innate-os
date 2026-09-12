@@ -826,6 +826,24 @@ def test_confidence_must_hold_before_recording(data_dir, clock):
     assert len(store.snapshot().memories) == 1
 
 
+def test_map_change_discards_buffered_capture(data_dir, clock):
+    recorder, store = make_recorder(data_dir)
+    see_confident_world(recorder, clock)
+    recorder.tick()
+    observe(recorder, clock, GOOD_JPEG, advance=3.1)
+    recorder._on_image(SimpleNamespace(data=GOOD_JPEG))
+    recorder._on_current_map(SimpleNamespace(data="B.yaml"))
+    recorder.tick()
+    assert store.snapshot().memories == ()
+    fresh = frame(42)
+    for _ in range(4):
+        recorder._on_current_map(SimpleNamespace(data="B.yaml"))
+        observe(recorder, clock, fresh)
+    assert stored_image(store, store.snapshot().memories[0].id) == fresh
+    store.switch_map("A.yaml")
+    assert stored_image(store, store.snapshot().memories[0].id) == GOOD_JPEG
+
+
 def test_a_covariance_spike_resets_the_clock(data_dir, clock):
     recorder, store = make_recorder(data_dir)
     see_confident_world(recorder, clock)
