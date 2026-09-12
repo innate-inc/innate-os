@@ -6,8 +6,12 @@ Text-to-Speech handler using Cartesia API.
 Generates speech audio and plays it through the robot's audio system.
 """
 
+import audioop
 import base64
+import hashlib
 import io
+import json
+import os
 import queue
 import struct
 import subprocess
@@ -15,13 +19,50 @@ import threading
 import time
 import wave
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from brain_client.common.logging import UniversalLogger
 from innate_proxy import ProxyClient
 from innate_proxy.adapters.cartesia import ProxyCartesiaClient
+
+
+@dataclass(frozen=True)
+class Delivery:
+    """How a clip is read, in Cartesia generation_config terms (sonic-3 and
+    newer): speed 0.6-1.5, volume 0.5-2.0. None keeps the platform default.
+    ``sound_effect``: the text describes a sound to generate, not words to read."""
+
+    speed: float | None = None
+    volume: float | None = None
+    sound_effect: bool = False
+    seconds: float | None = None  # a generated sound effect's length; None lets the generator pick
+    pcm: bytes | None = None  # a ready clip: 16-bit mono PCM at SPEAKER_SAMPLE_RATE, played as-is
+
+    def generation_config(self) -> dict[str, float]:
+        return {key: value for key, value in (("speed", self.speed), ("volume", self.volume)) if value is not None}
+
+
+def parse_styled_tts(data: str) -> tuple[str, Delivery] | None:
+    """A /brain/tts/styled payload: JSON ``{"text", "speed", "volume"}``,
+    ``{"sound": "a small dog barking twice", "seconds"}`` for a generated sound effect, or
+    ``{"pcm": <base64>, "label"}`` for a ready clip. None when malformed."""
+    try:
+        payload = json.loads(data)
+        if "sound" in payload:
+            seconds = payload.get("seconds")
+            return str(payload["sound"]), Delivery(
+                sound_effect=True, seconds=None if seconds is None else float(seconds)
+            )
+        if "pcm" in payload:
+            return str(payload.get("label", "")), Delivery(sound_effect=True, pcm=base64.b64decode(payload["pcm"]))
+        speed, volume = payload.get("speed"), payload.get("volume")
+        delivery = Delivery(None if speed is None else float(speed), None if volume is None else float(volume))
+        return str(payload["text"]), delivery
+    except (json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -34,6 +75,12 @@ class _Utterance:
     on_done: Callable[[bool], None] | None
     reply_id: str | None  # sentences of one streamed reply share an id
     protected: bool  # never flushed (environment speech: not our backlog)
+    delivery: Delivery | None = None
+
+
+def _ready_clip(delivery: Delivery | None) -> bool:
+    """A clip that arrives as PCM plays without Cartesia: the speaker is all it needs."""
+    return delivery is not None and delivery.pcm is not None
 
 
 def _survives_flush(item: _Utterance, playing_reply_id: str | None) -> bool:
@@ -160,6 +207,7 @@ class TTSHandler:
         text: str,
         voice_config: dict[str, Any] | None = None,
         on_start: Callable[[], None] | None = None,
+        delivery: Delivery | None = None,
     ) -> bool:
         """
         Convert text to speech and play it.
@@ -168,11 +216,12 @@ class TTSHandler:
             text: Text to speak
             voice_config: Optional voice configuration override
             on_start: Called once the first audio reaches the speaker
+            delivery: Optional speed/volume override for this clip
 
         Returns:
             True if speech was successfully generated and played, False otherwise
         """
-        if not self.is_available():
+        if not self.is_available() and not _ready_clip(delivery):
             self.logger.debug("🔇 TTS not available, skipping speech")
             return False
 
@@ -201,9 +250,9 @@ class TTSHandler:
             }
 
             if self._simulator_mode and self.tts_audio_pub is not None:
-                success = self._synthesize_to_topic(text, voice, t_start, on_start)
+                success = self._synthesize_to_topic(text, voice, t_start, on_start, delivery)
             else:
-                success = self._synthesize_to_aplay(text, voice, t_start, on_start)
+                success = self._synthesize_to_aplay(text, voice, t_start, on_start, delivery)
         except Exception as e:
             self.logger.error(f"❌ TTS generation failed: {e}")
             success = False
@@ -220,27 +269,65 @@ class TTSHandler:
     SPEAKER_SAMPLE_RATE = 16000
     SPEAKER_SPEED = 1.5
 
-    def _stream_tts_bytes(self, text: str, voice: dict[str, Any], for_speaker: bool):
+    def _stream_tts_bytes(self, text: str, voice: dict[str, Any], for_speaker: bool, delivery: Delivery | None):
         """Yield audio bytes from Cartesia as they stream in.
 
         The speaker path gets raw PCM; the sim path keeps WAV — browser decoders
         need the container.
         """
+        if delivery is not None and delivery.pcm is not None:
+            return iter([delivery.pcm])  # a ready clip needs no synthesis, only the speaker
         if self._cartesia_client is None:
             raise RuntimeError("Cartesia client unavailable (is_available() gates all callers)")
+        if delivery is not None and delivery.sound_effect:
+            return self._sound_effect_bytes(text, delivery.seconds)
         if for_speaker:
             output_format = {"container": "raw", "encoding": "pcm_s16le", "sample_rate": self.SPEAKER_SAMPLE_RATE}
-            generation_config = {"speed": self.SPEAKER_SPEED}
+            generation_config: dict[str, float] = {"speed": self.SPEAKER_SPEED}
         else:
             output_format = {"container": "wav", "encoding": "pcm_s16le", "sample_rate": 44100}
-            generation_config = None
+            generation_config = {}
+        if delivery is not None:
+            generation_config.update(delivery.generation_config())
         return self._cartesia_client.tts.bytes_stream(
             model_id="sonic-3.5",
             transcript=text,
             voice=voice,
             output_format=output_format,
-            generation_config=generation_config,
+            generation_config=generation_config or None,
         )
+
+    # Sound effects come from ElevenLabs sound generation, kept on disk as the speaker's mono
+    # PCM (the sim path gives it a WAV header in _finalize_wav) once per description and
+    # length: a dance that barks four times must not wait on four generations, and the same
+    # words must give the same sound.
+    SOUND_CACHE = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "innate" / "sounds"
+    SOUND_SECONDS = (0.5, 30.0)  # the generator's duration_seconds range; unset, it picks a few seconds
+
+    def _sound_effect_bytes(self, text: str, seconds: float | None) -> Iterator[bytes]:
+        body: dict[str, Any] = {"text": text}
+        if seconds is not None:
+            shortest, longest = self.SOUND_SECONDS
+            body["duration_seconds"] = min(max(seconds, shortest), longest)
+        key = f"{json.dumps(body, sort_keys=True)} mono"  # "mono": the earlier keys hold the raw stereo answer
+        cached = self.SOUND_CACHE / f"{hashlib.sha1(key.encode()).hexdigest()}.pcm"
+        if not cached.exists():
+            with self._proxy.request_stream(
+                "elevenlabs",
+                "/v1/sound-generation",
+                json=body,
+                params={"output_format": f"pcm_{self.SPEAKER_SAMPLE_RATE}"},
+                timeout=60.0,
+            ) as response:
+                response.raise_for_status()
+                stereo = response.read()
+            # pcm_16000 arrives as interleaved STEREO s16, whatever the format name suggests;
+            # fed to aplay as mono it plays at half speed, an octave down.
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            staging = cached.with_suffix(".tmp")
+            staging.write_bytes(audioop.tomono(stereo, 2, 0.5, 0.5))
+            staging.replace(cached)  # a crash mid-write must not leave a clipped sound to replay forever
+        yield cached.read_bytes()
 
     def _synthesize_to_aplay(
         self,
@@ -248,6 +335,7 @@ class TTSHandler:
         voice: dict[str, Any],
         t_start: float,
         on_start: Callable[[], None] | None = None,
+        delivery: Delivery | None = None,
     ) -> bool:
         """Stream speech straight into aplay (real robot's speaker)."""
         text_len = len(text)
@@ -288,7 +376,7 @@ class TTSHandler:
             t_first_chunk = None
 
             t_api = time.perf_counter()
-            for chunk in self._stream_tts_bytes(text, voice, for_speaker=True):
+            for chunk in self._stream_tts_bytes(text, voice, for_speaker=True, delivery=delivery):
                 if not chunk:
                     continue
                 chunk_count += 1
@@ -348,6 +436,7 @@ class TTSHandler:
         voice: dict[str, Any],
         t_start: float,
         on_start: Callable[[], None] | None = None,
+        delivery: Delivery | None = None,
     ) -> bool:
         """Synthesize the full clip and publish it (base64 WAV) on /tts/audio.
 
@@ -357,7 +446,7 @@ class TTSHandler:
         t_api = time.perf_counter()
         buf = bytearray()
         t_first_chunk = None
-        for chunk in self._stream_tts_bytes(text, voice, for_speaker=False):
+        for chunk in self._stream_tts_bytes(text, voice, for_speaker=False, delivery=delivery):
             if not chunk:
                 continue
             if t_first_chunk is None:
@@ -404,6 +493,7 @@ class TTSHandler:
         on_done: Callable[[bool], None] | None = None,
         reply_id: str | None = None,
         protected: bool = False,
+        delivery: Delivery | None = None,
     ) -> bool:
         """
         Queue text to be spoken. Utterances play in order, one at a time;
@@ -421,8 +511,9 @@ class TTSHandler:
                 retry on failure) has finished.
             reply_id: Groups the sentences of one streamed reply.
             protected: Exempt from replace_pending flushes.
+            delivery: Optional speed/volume override for this clip.
         """
-        if not self.is_available():
+        if not self.is_available() and not _ready_clip(delivery):
             self.logger.debug("🔇 TTS not available, skipping async speech")
             return False
         dropped_callbacks = []
@@ -440,7 +531,9 @@ class TTSHandler:
                 self._speech_queue.extend(kept)
             queued = len(self._speech_queue) < self._speech_queue_maxlen
             if queued:
-                self._speech_queue.append(_Utterance(text, voice_config, on_start, on_done, reply_id, protected))
+                self._speech_queue.append(
+                    _Utterance(text, voice_config, on_start, on_done, reply_id, protected, delivery)
+                )
                 self._speech_cv.notify()
         if not queued:
             self.logger.warning(f"🔇 Speech queue full, dropping: '{text[:60]}'")
@@ -516,12 +609,12 @@ class TTSHandler:
             # reply's flush spares siblings of speech nobody has heard, and they
             # play ahead of the newer answer.
             take_floor = self._floor_taken_on_start(item.reply_id, self._once(item.on_start))
-            success = self.speak_text(item.text, item.voice_config, take_floor)
+            success = self.speak_text(item.text, item.voice_config, take_floor, item.delivery)
             if not success:
                 self._set_playing_reply(None)
                 self.logger.info("🔄 Retrying TTS after 1 second...")
                 time.sleep(1)
-                success = self.speak_text(item.text, item.voice_config, take_floor)
+                success = self.speak_text(item.text, item.voice_config, take_floor, item.delivery)
             if not success:
                 self._set_playing_reply(None)
                 self._drop_queued_reply(item.reply_id)
@@ -548,13 +641,22 @@ class TTSHandler:
 
 
 def _finalize_wav(data: bytes) -> bytes:
-    """Patch the RIFF/data chunk sizes of a fully-collected WAV.
+    """Patch the RIFF/data chunk sizes of a fully-collected WAV, or give a
+    headerless clip (a sound effect's raw PCM) the header browsers need.
 
     Cartesia streams WAV with placeholder length fields (the size isn't known
     until the stream ends). aplay tolerates that, but browser decoders are
     stricter, so once we have the whole clip we write the real lengths in.
     """
-    if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+    if data[:4] != b"RIFF":
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as clip:
+            clip.setnchannels(1)
+            clip.setsampwidth(2)
+            clip.setframerate(TTSHandler.SPEAKER_SAMPLE_RATE)
+            clip.writeframes(data)
+        return buffer.getvalue()
+    if len(data) < 44 or data[8:12] != b"WAVE":
         return data
     out = bytearray(data)
     data_idx = out.find(b"data", 12)

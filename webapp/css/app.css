@@ -1263,6 +1263,12 @@ body:has(.agent-indicator:not([hidden], [data-off-route])) .tgt-hud {
   z-index: 6;
 }
 
+.overlay-stack-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .overlay-stack-top-left > .overlay {
   position: static;
   /* The sim's 3D scene behind these cards is often bright wall/floor, where

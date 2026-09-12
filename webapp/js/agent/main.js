@@ -22,7 +22,7 @@ import { mountPage } from "../pageMount.js";
 import { holdBootSplash } from "../bootSplash.js";
 import { getConfig } from "../config.js";
 import { robotSessionFactory } from "../robotSession.js";
-import { createVideoStage } from "../teleop/videoStage.js";
+import { createVideoStage, createAudioToggle } from "../teleop/videoStage.js";
 import { createTrajectoryOverlay } from "../teleop/trajectoryOverlay.js";
 import { createTargetingOverlay } from "../teleop/targetingOverlay.js";
 import { createTelemetry } from "../teleop/telemetry.js";
@@ -80,6 +80,9 @@ function buildAgentView(root) {
   const cornerStack = document.createElement("div");
   cornerStack.className = "overlay-stack-top-left";
   root.append(cornerStack);
+  // The row under the camera tiles: the robot-mic toggle, under the map tile at the right.
+  const cornerToggles = document.createElement("div");
+  cornerToggles.className = "overlay-stack-row";
   const agentState = sharedAgentState();
 
   const cameraSwitch = createCameraSwitch(root, session, ros, {
@@ -323,6 +326,12 @@ function buildAgentView(root) {
       createTargetingOverlay(ribbonStage, realVideo?.videoEl ?? null, session),
     );
   }
+  // Teleop's robot-mic toggle: hear the robot, its speaker included, through its
+  // own microphone. The sim streams no mic, so it gets no toggle (config.simControls).
+  if (!config.simControls && realVideo) {
+    parts.push(createAudioToggle(cornerToggles, session, realVideo.audioEl));
+  }
+  cornerStack.append(cornerToggles);
 
   session.start();
 

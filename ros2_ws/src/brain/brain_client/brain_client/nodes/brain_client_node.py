@@ -69,7 +69,7 @@ from brain_client.skills.roster import SkillRoster
 from brain_client.skills.runner import PrimitiveRunner
 from brain_client.skills.workspace_import import format_load_error, unique_key
 from brain_client.transport.chat import ChatManager, Sender
-from brain_client.transport.tts import TTSHandler
+from brain_client.transport.tts import Delivery, TTSHandler, parse_styled_tts
 
 LATCHED_QOS = QoSProfile(
     depth=1,
@@ -295,6 +295,7 @@ class BrainClientNode(Node):
         self.create_subscription(String, "/brain/chat_in", self._on_chat_in, 10)
         self.create_subscription(String, "/input_manager/custom", self._on_custom_input, 10)
         self.create_subscription(String, "/brain/tts", self._on_tts, 10)
+        self.create_subscription(String, "/brain/tts/styled", self._on_styled_tts, 10)
         self.create_subscription(String, "/brain/set_directive", self._on_set_directive, 10)
         self.create_subscription(String, "/brain/set_active_skills", self._on_set_active_skills, 10)
         self.create_subscription(String, "/brain/manual_skill_event", self._on_manual_skill_event, 10)
@@ -428,12 +429,31 @@ class BrainClientNode(Node):
         self.brain.on_custom_input(data)
 
     def _on_tts(self, msg: String) -> None:
+        self._speak_line(msg.data)
+
+    def _on_styled_tts(self, msg: String) -> None:
+        """A skill's line with its own speed/volume (Skill.say(speed=, volume=))."""
+        request = parse_styled_tts(msg.data)
+        if request is None:
+            self.get_logger().warn(f"Ignoring malformed styled TTS request: {msg.data[:80]}")
+            return
+        self._speak_line(*request)
+
+    def _speak_line(self, text: str, delivery: Delivery | None = None) -> None:
         """Speak a line a skill sent, and show it — emit, not speak: anything the
         robot says aloud belongs in the transcript, or Skill.say goes unrecorded."""
-        text = msg.data
+        if delivery is not None and delivery.pcm is not None:
+            if text.strip():
+                self.chat.emit(Sender.ROBOT, f"🔊 {text}", speak=False)  # a labelled clip shows as a sound
+            self.chat.speak(text.strip() or "clip", delivery=delivery)
+            return
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
-            self.chat.emit(Sender.ROBOT, text)
+            if delivery is not None and delivery.sound_effect:
+                self.chat.emit(Sender.ROBOT, f"🔊 {text}", speak=False)  # in the transcript as a sound, not words
+                self.chat.speak(text, delivery=delivery)
+                return
+            self.chat.emit(Sender.ROBOT, text, delivery=delivery)
 
     def _on_environment_speech(self, payload: dict) -> None:
         """Speak a simulated character: the line reaches the chat as the voice

@@ -60,6 +60,22 @@ def get_custom_skills_dir() -> Path:
     return _workspace() / "custom_skills"
 
 
+LEARNED_GROUP = "learned"  # the roster group of skills the robot wrote for itself
+
+
+def get_learned_skills_dir() -> Path:
+    return get_custom_skills_dir() / LEARNED_GROUP
+
+
+DRAFT_MARKER = "# innate: draft under trial\n"
+"""First line of a learned skill while learn_skill tries it: loaded and runnable, withheld from the roster."""
+
+
+def is_draft(path: Path | str) -> bool:
+    with open(path, encoding="utf-8") as source:
+        return source.readline() == DRAFT_MARKER
+
+
 # workspace/ directories that are never skill packages: agent/input/lib
 # machinery and per-skill storage. skill_lib/ and the pre-workspace agents//
 # skills/ names stay listed so a stale checkout directory is never scanned.
