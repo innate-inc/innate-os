@@ -131,6 +131,13 @@ class Manipulation:
     REST = [1.5708, -1.2195, 1.5723, -0.3, 0.0, 0.0031]
     ZERO = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
+    # Folding the shoulder back past this collides with the body, so the driver
+    # clamps joint2 to it and says so only in its own log — a motion that asks for
+    # more simply lands short. Mirrors applyLimitsAndConvertToEncoder in
+    # mars_arm/arm_control.cpp; the clear value is -(joint_2 max_pos_rad).
+    JOINT2_FLOOR = -0.5
+    JOINT2_FLOOR_CLEAR = -1.22
+
     # Grasp reach box (base_link metres).
     REACH_X = (0.22, 0.40)
     REACH_Y = (-0.10, 0.10)
@@ -348,7 +355,29 @@ class Manipulation:
         self, x: float, y: float, z: float, *, roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0
     ) -> bool:
         """Whether IK finds a solution for the pose; the arm does not move."""
-        return self._solve_ik(x, y, z, roll, pitch, yaw) is not None
+        return self.ik(x, y, z, roll=roll, pitch=pitch, yaw=yaw) is not None
+
+    def ik(
+        self, x: float, y: float, z: float, *, roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0
+    ) -> list[float] | None:
+        """The five arm joints that reach this cartesian pose, or None. The arm
+        does not move; use it to judge a solution (shoulder sector, extension)
+        before committing to the motion."""
+        return self._solve_ik(x, y, z, roll, pitch, yaw)
+
+    @classmethod
+    def joint2_floor(cls, joint1: float) -> float:
+        """The lowest joint2 the driver accepts at this joint1, interpolated over
+        the same sectors it uses: the body blocks the fold near centre and swings
+        clear at the joint1 extremes."""
+        near, clear = cls.JOINT2_FLOOR, cls.JOINT2_FLOOR_CLEAR
+        if joint1 < -1.35 or joint1 >= 1.25:
+            return clear
+        if joint1 < -1.0:
+            return near + (joint1 + 1.0) / -0.35 * (clear - near)
+        if joint1 < 1.0:
+            return near
+        return near + (joint1 - 1.0) / 0.25 * (clear - near)
 
     # --- motion ---
 
@@ -526,12 +555,19 @@ class Manipulation:
         snapping. Call repeatedly from a UI or servoing loop; the stream idles
         out STREAM_IDLE_S after the last call, and the last streamed j6
         becomes the standing grip target. 5 values keep the standing grip,
-        6 set it. Any discrete motion stops the stream first, and a skill
+        6 set it; either way j6 is in force from the first tick and never
+        slews. Any discrete motion stops the stream first, and a skill
         halt stops it too. Unverified by design — no FK check, no recovery;
         use :meth:`move_to` for verified positioning.
         """
         target = [float(j) for j in joints]
-        if len(target) == 5:
+        explicit_grip = len(target) == 6
+        if explicit_grip:
+            # A streamed j6 becomes the standing grip target, so an out-of-range
+            # value would persist into every later motion. Below GRIPPER_CLOSED
+            # the servo drives into its own stop and overcurrent-trips.
+            target[5] = min(max(target[5], self.GRIPPER_CLOSED), self.GRIPPER_OPEN)
+        else:
             target.append(self._grip_or(None))
         if len(target) != 6:
             raise ArmFailed(f"expected 5 or 6 joint positions, got {len(target)}")
@@ -553,8 +589,10 @@ class Manipulation:
                 # ...except j6: seeding the claw from its MEASURED position is
                 # the drop-the-object operation (module docstring) — a gripped
                 # claw stalls short of its goal and that error is the grip
-                # force. Seed from the standing grip target instead.
-                seed[5] = self._grip_or(None)
+                # force. An explicit j6 is itself the grip to carry, so it seeds
+                # the slew: ramping in from the standing target would publish a
+                # stale open on the first tick and drop what is held.
+                seed[5] = target[5] if explicit_grip else self._grip_or(None)
                 self._stream_cmd = seed
             self._stream_target = target
             self._stream_speed = float(max_speed) if max_speed is not None else self.STREAM_MAX_SPEED
