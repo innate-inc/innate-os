@@ -203,6 +203,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     '<span class="microlabel">Prompt</span>' +
     '<textarea rows="5" aria-label="Agent prompt" placeholder="You are MARS, a friendly robot assistant…"></textarea>';
   const promptText = /** @type {HTMLTextAreaElement} */ (promptField.querySelector("textarea"));
+  const mobileName = document.createElement("h2");
+  mobileName.className = "agent-studio-mobile-name";
+  const mobilePrompt = document.createElement("div");
+  mobilePrompt.className = "agent-studio-mobile-prompt";
 
   const tabsRow = document.createElement("div");
   tabsRow.className = "agent-studio-tabs";
@@ -286,7 +290,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   panes.identity.append(deck.el, promptRow, nameField, promptField);
   panes.skills.append(skills, addRow);
   panes.advanced.append(checks, caption, deleteBtn);
-  panelEl.append(persona, note, tabsRow, panes.identity, panes.skills, panes.advanced, saveBar, actions);
+  panes.identity.append(mobilePrompt);
+  panelEl.append(mobileName, persona, note, tabsRow, panes.identity, panes.skills, panes.advanced, saveBar, actions);
   head.append(toggle, headAction);
   dock.append(head, panelEl);
   root.append(dock);
@@ -1005,6 +1010,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
         ? draft?.name.trim() || "New agent"
         : (draft?.name.trim() || agent?.name) ?? "No agent";
     panel.setDisplayName(owned ? name || "MARS" : null);
+    mobileName.hidden = !compact;
+    mobileName.textContent = title.textContent;
+    mobilePrompt.hidden = !compact;
+    mobilePrompt.textContent = (inStory ? who || agent?.prompt : f?.prompt) || "No prompt.";
     persona.textContent = who;
     persona.hidden = !who || !owned;
     note.textContent = noteFor(r, o, graduated, agent, isNew);
@@ -1018,7 +1027,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     if (opts.directivesEl) opts.directivesEl.hidden = inStory || (isNew && !compact);
 
     // The story's own inputs.
-    promptRow.hidden = !inStory;
+    promptRow.hidden = !inStory || compact;
     // Including back to empty: a restarted story is nobody yet, and last run's words are not its prompt.
     if (promptInput.dataset.shown !== who && document.activeElement !== promptInput) {
       promptInput.value = who;
@@ -1055,10 +1064,10 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     listenInput.disabled = gazeInput.disabled = !canEdit;
     deleteBtn.hidden = isNew || agent?.source !== "user";
     deleteBtn.disabled = saving;
-    nameField.hidden = !f;
+    nameField.hidden = !f || compact;
     newNameInput.readOnly = !canEdit;
     if (f && document.activeElement !== newNameInput && newNameInput.value !== f.name) newNameInput.value = f.name;
-    promptField.hidden = inStory || !f;
+    promptField.hidden = inStory || !f || compact;
     promptText.readOnly = !canEdit;
     promptText.placeholder = canEdit ? "You are MARS, a friendly robot assistant…" : "No prompt.";
     if (f && document.activeElement !== promptText && promptText.value !== f.prompt) promptText.value = f.prompt;

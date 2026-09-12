@@ -11928,5 +11928,27 @@ body.sim-edge-to-edge .agent-cockpit.agent-sim .agent-feed-frame > .video-stage 
     max-height: calc(100dvh - 90px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
     overflow-y: auto;
     overscroll-behavior: contain;
+    padding: 18px;
+    border-radius: 18px;
+  }
+
+  .agent-studio-mobile-name {
+    margin: 0 0 10px;
+    color: #fff;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+
+  .agent-studio-mobile-prompt {
+    padding-top: 14px;
+    color: rgb(255 255 255 / 82%);
+    font-size: 14px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: text;
+    -webkit-user-select: text;
   }
 }
