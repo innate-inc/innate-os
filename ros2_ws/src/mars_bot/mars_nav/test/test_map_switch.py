@@ -9,7 +9,7 @@ from lifecycle_msgs.msg import State
 from mars_nav import mode_manager as module
 
 
-@pytest.mark.parametrize("reset_ok, restore_ok", [(True, True), (False, True), (False, False)])
+@pytest.mark.parametrize("reset_ok, restore_ok", [(True, True), (True, False), (False, True), (False, False)])
 def test_reset_amcl_before_announcing_new_map(monkeypatch, reset_ok, restore_ok):
     manager = SimpleNamespace(
         current_map="A.yaml", _service_clients={}, get_logger=Mock(), _load_map_on_server=Mock(return_value=True)
@@ -24,7 +24,7 @@ def test_reset_amcl_before_announcing_new_map(monkeypatch, reset_ok, restore_ok)
 
     monkeypatch.setattr(module, "transition_node", transition)
     success, message = module.ModeManager._efficient_map_switch(manager, "B.yaml")
-    assert success == reset_ok
+    assert success == (reset_ok and restore_ok)
     assert ("navigation_amcl", State.PRIMARY_STATE_UNCONFIGURED, "A.yaml") in calls
     if reset_ok:
         assert ("navigation_amcl", State.PRIMARY_STATE_ACTIVE, "B.yaml") in calls
@@ -35,5 +35,5 @@ def test_reset_amcl_before_announcing_new_map(monkeypatch, reset_ok, restore_ok)
         for node in ("navigation_amcl", "bt_navigator"):
             assert (node, State.PRIMARY_STATE_ACTIVE, "A.yaml") in calls
         assert "navigation_amcl_reset" in message
-        if not restore_ok:
-            assert "'navigation_amcl'" in message
+    if not restore_ok:
+        assert "'navigation_amcl'" in message
