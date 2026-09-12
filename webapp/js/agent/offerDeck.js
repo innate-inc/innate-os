@@ -1,8 +1,8 @@
 // @ts-check
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Innate Inc
-// The offer deck: what the interface asks the person for right now, docked above the
-// composer so it is never scrolled away from. Characters to become are cards in a grid,
+// The offer deck: what the interface asks the person for right now, following the
+// transcript in its scroll area. Characters to become are cards in a grid,
 // a skill to grant is one card with a plus, and things to say are chips in a row.
 
 import { cue } from "./cue.js";
@@ -40,6 +40,7 @@ export function createOfferDeck() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `agent-offer-card ${offer.kind}`;
+    button.title = offer.label ?? offer.text;
     if (offer.hue) button.style.setProperty("--offer-hue", offer.hue);
     button.innerHTML =
       `<span class="agent-offer-icon">${offer.icon ?? ICONS.sparkle}</span>` +

@@ -258,6 +258,9 @@ export class SimScene {
   private fixedSize: { width: number; height: number } | null = null;
   /** Canvas width covered on the right by page chrome (see setSafeInsets). */
   private safeInsetRight = 0;
+  private safeInsetBottom = 0;
+  private safeInsetTop = 0;
+  private safeInsetLeft = 0;
 
   constructor(canvas: HTMLCanvasElement, opts: { fixedSize?: { width: number; height: number } } = {}) {
     this.fixedSize = opts.fixedSize ?? null;
@@ -1308,12 +1311,19 @@ export class SimScene {
     }
   }
 
-  /** How much of the canvas's right edge page chrome covers. Only the framing
+  /** How much of each canvas edge page chrome covers. Only the framing
    * moves; the whole canvas still renders. */
-  setSafeInsets(insets: { right?: number }): void {
+  setSafeInsets(insets: { right?: number; bottom?: number; top?: number; left?: number }): void {
     const right = Math.max(0, insets.right ?? 0);
-    if (right === this.safeInsetRight) return;
+    const bottom = Math.max(0, insets.bottom ?? 0);
+    const top = Math.max(0, insets.top ?? 0);
+    const left = Math.max(0, insets.left ?? 0);
+    if (right === this.safeInsetRight && bottom === this.safeInsetBottom
+      && top === this.safeInsetTop && left === this.safeInsetLeft) return;
     this.safeInsetRight = right;
+    this.safeInsetBottom = bottom;
+    this.safeInsetTop = top;
+    this.safeInsetLeft = left;
     this.applyViewOffset();
   }
 
@@ -1321,8 +1331,10 @@ export class SimScene {
    * edge, upward on a portrait stage. Robot cameras are untouched. */
   private applyViewOffset(): void {
     const { width, height } = this.viewSize();
-    const offsetX = this.safeInsetRight / 2;
-    const offsetY = height > width * 1.2 ? height * 0.1 : 0;
+    const offsetX = (this.safeInsetRight - this.safeInsetLeft) / 2;
+    const offsetY = this.safeInsetBottom > 0 || this.safeInsetTop > 0
+      ? (this.safeInsetBottom - this.safeInsetTop) / 2
+      : height > width * 1.2 ? height * 0.1 : 0;
     if (offsetX === 0 && offsetY === 0) {
       this.camera.clearViewOffset();
       return;

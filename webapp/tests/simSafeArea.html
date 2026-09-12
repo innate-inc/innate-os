@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Simulator safe-area regression checks</title>
+<link rel="stylesheet" href="../css/app.css">
+<style>
+body.sim-edge-to-edge { --sim-safe-top:59px; --sim-safe-bottom:34px; --sim-safe-left:0px; --sim-safe-right:0px; }
+.video-stage { background:#eee !important; }
+#result { position:fixed; z-index:100; top:65px; left:20px; color:#000; white-space:pre-wrap; }
+</style>
+<body class="story-active sim-edge-to-edge">
+<main class="stage"><div class="cockpit agent-cockpit agent-sim agent-compact">
+<div class="agent-feed-frame"><div class="video-stage"></div></div>
+<div class="overlay-stack-top-left"><button>Camera views</button></div>
+<section class="overlay agent-panel sheet-half"><header class="agent-sheet-header">Chat</header></section>
+</div></main>
+<pre id="result">Running…</pre>
+<script type="module">
+const root=document.querySelector('.agent-cockpit'), canvas=document.querySelector('.video-stage');
+const frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+const checks=[];
+const check=(ok,label)=>{if(!ok)throw new Error(label);checks.push(label);};
+try {
+  await frame();
+  check(root.getBoundingClientRect().top===59,'Controls start below the top safe area');
+  check(root.getBoundingClientRect().bottom===innerHeight-34,'Controls end above the bottom safe area');
+  check(canvas.getBoundingClientRect().top===0 && canvas.getBoundingClientRect().bottom>=innerHeight,'Canvas extends across both safe areas');
+  document.body.style.setProperty('--sim-safe-left','59px');
+  document.body.style.setProperty('--sim-safe-right','20px');
+  await frame();
+  check(root.getBoundingClientRect().left===59 && root.getBoundingClientRect().right===innerWidth-20,'Controls respect asymmetric landscape safe areas');
+  check(canvas.getBoundingClientRect().left===0 && canvas.getBoundingClientRect().right===innerWidth,'Canvas still covers the full width');
+  document.documentElement.classList.add('keyboard-up');
+  document.documentElement.style.setProperty('--keyboard-inset','300px');
+  await frame();
+  check(root.getBoundingClientRect().bottom===innerHeight-300,'Controls move above the keyboard without extra bottom inset');
+  check(canvas.getBoundingClientRect().bottom>=innerHeight,'Keyboard does not shrink the background canvas');
+  document.documentElement.classList.remove('keyboard-up');
+  document.body.classList.remove('sim-edge-to-edge');
+  await frame();
+  check(root.getBoundingClientRect().top===0 && root.getBoundingClientRect().bottom===innerHeight,'Leaving edge-to-edge mode restores the original content bounds');
+  document.body.classList.add('sim-edge-to-edge');
+  document.querySelector('#result').textContent=`PASS: ${checks.length} checks\n`+checks.join('\n');
+} catch(error) {document.querySelector('#result').textContent=`FAIL: ${error.message}\n`+checks.join('\n');}
+</script>

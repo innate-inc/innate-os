@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mobile camera layout checks</title>
+<link rel="stylesheet" href="../css/app.css">
+<style>#result {position:fixed;top:150px;left:12px;white-space:pre-wrap;} .cam-tile canvas {background:linear-gradient(45deg,#454461,#aaa87a);}</style>
+<div class="cockpit agent-cockpit agent-sim agent-compact">
+<div class="overlay-stack-top-left">
+<div class="agent-corner-controls"><button class="cam-strip-toggle" aria-label="Show camera views">Eye</button><button class="agent-menu-toggle" aria-label="Open agent menu">…</button></div>
+<div class="cam-strip" role="group" aria-label="Camera views">
+<div class="cam-tile live"><canvas></canvas><span class="cam-tile-label">Main</span></div>
+<div class="cam-tile live"><canvas></canvas><span class="cam-tile-label">Arm</span></div>
+<div class="cam-tile live"><div class="cam-map-host"></div><span class="cam-tile-label">Map</span></div>
+</div></div></div>
+<pre id="result">Running…</pre>
+<script type="module">
+const checks=[];
+const check=(value,text)=>{if(!value)throw Error(text);checks.push(text)};
+await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+try {
+const mobile=matchMedia('(max-width:820px)').matches;
+const eye=document.querySelector('.cam-strip-toggle').getBoundingClientRect();
+for(const tile of document.querySelectorAll('.cam-tile')) {
+const box=tile.getBoundingClientRect(), label=tile.querySelector('.cam-tile-label').getBoundingClientRect();
+if(mobile) {
+check(Math.abs(box.width-box.height)<1,'Square '+tile.textContent);
+check(label.width<box.width-4,'Label leaves preview visible to its right');
+check(box.right<eye.left,'Preview is left of eye');
+check(Math.abs(box.top-eye.top)<=1,'Preview and eye share top edge');
+check(box.left>=0 && box.right<=innerWidth,'Preview fits narrow viewport');
+check(box.left>=0,'Preview fits beside both controls');
+} else {
+check(box.height>box.width,'Desktop keeps separate label row');
+check(Math.abs(label.width-(box.width-2))<1,'Desktop label retains full width');
+}
+}
+document.querySelector('#result').textContent='PASS: '+checks.length+' checks';
+} catch(e) {document.querySelector('#result').textContent='FAIL: '+e.message;}
+</script>

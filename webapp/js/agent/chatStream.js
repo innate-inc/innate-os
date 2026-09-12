@@ -52,7 +52,9 @@ function setLinkedText(el, text) {
 }
 
 /**
+ * @param {{ footer?: HTMLElement }} [opts]
  * @returns {{
+ *   scrollElement: HTMLElement,
  *   head: HTMLElement,
  *   wrap: HTMLElement,
  *   addThought: (kind: string, text: string, ts: number) => void,
@@ -65,7 +67,7 @@ function setLinkedText(el, text) {
  *   destroy: () => void,
  * }}
  */
-export function createChatStream() {
+export function createChatStream(opts = {}) {
   // ---- live stream (thoughts + chat + skill runs) -------------------------
   const streamLabel = document.createElement("p");
   streamLabel.className = "microlabel agent-stream-label";
@@ -87,6 +89,23 @@ export function createChatStream() {
   const stream = document.createElement("div");
   stream.className = "agent-stream compact";
   streamWrap.append(stream);
+  if (opts.footer) {
+    streamWrap.classList.add("with-offers");
+    streamWrap.append(opts.footer);
+  }
+  const scrollElement = opts.footer ? streamWrap : stream;
+  // Outside the scroll region so the control remains reachable during scrollback.
+  const viewport = document.createElement("div");
+  viewport.className = "agent-chat-viewport";
+  const latestButton = document.createElement("button");
+  latestButton.type = "button";
+  latestButton.className = "agent-chat-latest";
+  latestButton.hidden = true;
+  latestButton.setAttribute("aria-label", "Back to latest messages");
+  latestButton.title = "Back to latest messages";
+  latestButton.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v16m-7-7 7 7 7-7"/></svg>';
+  latestButton.addEventListener("click", scrollToLatest);
+  viewport.append(streamWrap, latestButton);
   compactBtn.classList.add("active");
   compactBtn.setAttribute("aria-pressed", "true");
   detailedBtn.setAttribute("aria-pressed", "false");
@@ -98,21 +117,35 @@ export function createChatStream() {
   // prompt explicitly returns there; incoming output never yanks scrollback
   // away from someone reading an earlier turn.
   function atBottom() {
-    return stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80;
+    return scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight < 80;
+  }
+  function syncLatestButton() {
+    latestButton.hidden = atBottom();
+  }
+  function scrollToLatest() {
+    pinnedToBottom = true;
+    scrollElement.scrollTop = scrollElement.scrollHeight;
+    syncLatestButton();
   }
   /** @param {boolean} wasAtBottom */
   function settleStreamAfterMutation(wasAtBottom) {
-    if (wasAtBottom) stream.scrollTop = stream.scrollHeight;
+    if (wasAtBottom) scrollToLatest();
+    else syncLatestButton();
   }
 
   // A shorter sheet keeps scrollTop, pinning the top of the view and pushing
   // the newest turn out of sight.
   let pinnedToBottom = true;
-  stream.addEventListener("scroll", () => {
+  scrollElement.addEventListener("scroll", () => {
     pinnedToBottom = atBottom();
+    syncLatestButton();
   });
   const streamResize = new ResizeObserver(() => settleStreamAfterMutation(pinnedToBottom));
-  streamResize.observe(stream);
+  streamResize.observe(scrollElement);
+  if (opts.footer) {
+    streamResize.observe(stream);
+    streamResize.observe(opts.footer);
+  }
 
   /** @type {{ wrap: HTMLElement, status: HTMLElement, list: HTMLElement, lastByKind: Record<string, string>, startTs: number, latestTs: number } | null} */
   let thoughts = null;
@@ -153,7 +186,7 @@ export function createChatStream() {
         setSkillElementOpen(card, head, !compact);
       }
     }
-    stream.scrollTop = stream.scrollHeight;
+    scrollElement.scrollTop = scrollElement.scrollHeight;
   }
 
   /** @param {HTMLElement} el */
@@ -252,7 +285,7 @@ export function createChatStream() {
     if (label !== "skill_output") animateCompactEnter(el);
     lastTs = ts;
     if (kind === "user") {
-      stream.scrollTop = stream.scrollHeight;
+      scrollElement.scrollTop = scrollElement.scrollHeight;
     } else {
       settleStreamAfterMutation(wasAtBottom);
     }
@@ -481,7 +514,7 @@ export function createChatStream() {
    *  @param {any[]} entries */
   function replay(entries) {
     const wasAtBottom = atBottom();
-    const priorTop = stream.scrollTop;
+    const priorTop = scrollElement.scrollTop;
     const narrated = [...stream.querySelectorAll(":scope > .chat-msg.narrator")];
     stream.replaceChildren();
     for (const timer of compactEnterTimers) clearTimeout(timer);
@@ -500,7 +533,8 @@ export function createChatStream() {
     }
     for (const line of narrated) restoreNarrated(line);
     // A reconcile can land while the reader is up in the scrollback.
-    stream.scrollTop = wasAtBottom ? stream.scrollHeight : priorTop;
+    scrollElement.scrollTop = wasAtBottom ? scrollElement.scrollHeight : priorTop;
+    syncLatestButton();
   }
 
   /** Put a world line back where its timestamp says it belongs. @param {HTMLElement} line */
@@ -518,8 +552,9 @@ export function createChatStream() {
   }
 
   return {
+    scrollElement,
     head: streamHead,
-    wrap: streamWrap,
+    wrap: viewport,
     addThought,
     addMessage,
     addSkillRun,

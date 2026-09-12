@@ -1,0 +1,156 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- Serve webapp/ over HTTP and open tests/chatScroll.html. PASS/FAIL reports
+     real DOM layout and scrolling checks without connecting to a robot. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat scrolling regression checks</title>
+<link rel="stylesheet" href="../css/app.css">
+<style>
+body { padding: 12px; overflow: auto; }
+#fixture { position: relative; width: 360px; max-width: 100%; height: 460px; display:flex; flex-direction:column; padding:16px; background:#333; }
+#result { white-space:pre-wrap; }
+</style>
+<pre id="result">Running…</pre>
+<section id="fixture" class="agent-panel agent-thoughts-panel"></section>
+<script type="module">
+import { createChatStream } from '../js/agent/chatStream.js';
+import { createOfferDeck } from '../js/agent/offerDeck.js?single-line-names';
+const result = document.querySelector('#result');
+const fixture = document.querySelector('#fixture');
+const deck = createOfferDeck();
+const chat = createChatStream({footer:deck.el});
+const composer = document.createElement('textarea');
+composer.setAttribute('aria-label','Test composer');
+composer.style.flex = '0 0 50px';
+composer.className='agent-compose';
+const composeArea=document.createElement('div');
+composeArea.className='agent-compose-area';
+composeArea.append(composer);
+fixture.append(chat.wrap,composeArea);
+const el=chat.scrollElement;
+const thinking=document.createElement('div');
+thinking.className='agent-thinking active';
+thinking.textContent='Thinking…';
+el.append(thinking);
+const latest=chat.wrap.querySelector('.agent-chat-latest');
+const frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+const checks=[];
+const check=(ok,label)=>{ if(!ok) throw new Error(label); checks.push(label); };
+const bottom=()=>Math.abs(el.scrollHeight-el.clientHeight-el.scrollTop)<2;
+const offers=n=>Array.from({length:n},(_,i)=>({kind:'reply',text:`Suggestion ${i+1}: a longer possible prompt`,onSelect:()=>{}}));
+try {
+  await frame();
+  check(latest.hidden,'No arrow for an empty chat');
+  deck.set(offers(12),'Try asking');
+  await frame();
+  const entries=Array.from({length:20},(_,i)=>({sender:'robot',text:`Message ${i+1}: enough text to fill this small chat panel.`,timestamp:i+1}));
+  chat.replay(entries);
+  await frame();
+  check(bottom(),'Initial history follows latest message and suggestions');
+  check(latest.hidden,'No arrow when already at the latest messages');
+  check(el.contains(deck.el),'Suggestions belong to the shared scroll region');
+  check(deck.el.nextElementSibling===thinking,'Thinking follows suggestions in the scroll region');
+  const thinkingBottom=thinking.getBoundingClientRect().bottom;
+  check(thinkingBottom<=el.getBoundingClientRect().bottom,'Thinking is visible at the end of chat');
+  const composerTop=composer.getBoundingClientRect().top;
+  check(el.getBoundingClientRect().bottom>=composerTop+13,'Scroll content extends behind the input instead of stopping above its gap');
+  el.scrollTop=0;
+  await frame();
+  chat.addMessage('robot','New output must not interrupt reading',30);
+  await frame();
+  check(el.scrollTop<2,'Incoming messages preserve manual scrollback');
+  check(thinking.getBoundingClientRect().top>el.getBoundingClientRect().bottom,'Thinking scrolls away instead of covering older messages');
+  check(!latest.hidden,'Arrow appears during scrollback, including incoming output');
+  const arrowTop=latest.getBoundingClientRect().top;
+  el.scrollTop=100;
+  await frame();
+  check(latest.getBoundingClientRect().top===arrowTop,'Arrow stays at the bottom of the visible chat while scrolling');
+  el.scrollTop=0;
+  await frame();
+  deck.set(offers(16),'Try asking');
+  await frame();
+  check(el.scrollTop<2,'Growing suggestions preserve manual scrollback');
+  chat.replay(entries);
+  await frame();
+  check(el.scrollTop<2 && deck.el.isConnected,'History refresh preserves scrollback and suggestions');
+  chat.addMessage('user','Next prompt',31);
+  await frame();
+  check(bottom(),'Sending returns to the bottom including suggestions');
+  deck.set(offers(20),'Try asking');
+  await frame();
+  check(bottom(),'Growing suggestions keep the bottom anchored');
+  fixture.style.height='380px';
+  await frame();
+  check(bottom(),'Resizing chat keeps the bottom anchored');
+  fixture.style.height='460px';
+  el.scrollTop=0;
+  await frame();
+  check(composer.getBoundingClientRect().top===composerTop,'Composer stays fixed while messages and suggestions scroll');
+  latest.click();
+  await frame();
+  check(bottom() && latest.hidden,'Arrow returns to the end of suggestions and disappears');
+  chat.addMessage('robot','New output after returning to latest',40);
+  await frame();
+  check(bottom() && latest.hidden,'Following resumes after using the arrow');
+  deck.set([{kind:'grant',text:'HeadEmotion',detail:'Make a face for what it feels',onSelect:()=>{}}],'MARS asks for a skill');
+  await frame();
+  chat.addSkillRun('alignment-check','head_emotion','completed',41,'',{});
+  await frame();
+  const skill=chat.wrap.querySelector('.chat-skill').getBoundingClientRect();
+  const offer=deck.el.getBoundingClientRect();
+  check(Math.abs(skill.left-offer.left)<1 && Math.abs(skill.right-offer.right)<1,'Offer border aligns with skill result borders');
+  const scrollBounds=el.getBoundingClientRect(), panelBounds=fixture.getBoundingClientRect();
+  check(Math.abs(scrollBounds.left-panelBounds.left)<=1 && Math.abs(scrollBounds.right-panelBounds.right)<=1,'Glow can reach the chat border across the padding');
+  for (const ring of deck.el.querySelectorAll('.ui-cue-ring')) {
+    for (const animation of ring.getAnimations()) { animation.pause(); animation.currentTime=1560; }
+    const bounds=ring.getBoundingClientRect(), card=deck.el.getBoundingClientRect();
+    check(bounds.width>card.width,'Offer ring retains its outward pulse');
+  }
+  check(getComputedStyle(deck.el.querySelector('.ui-cue-glow')).boxShadow.includes('26px 5px'),'Original outer glow is preserved');
+  deck.set(['Rocky','Grumpy cat','Shakespearean actor','Pirate captain','Write your own'].map(text=>({kind:'persona',text,detail:'Description can wrap across multiple lines.',onSelect:()=>{}})),'Who is MARS?');
+  await frame();
+  for (const name of deck.el.querySelectorAll('.agent-offer-name')) {
+    check(name.getBoundingClientRect().height<=parseFloat(getComputedStyle(name).lineHeight)+1,'Agent name stays on one line: '+name.textContent);
+    check(name.closest('button').title===name.textContent,'Full agent name is preserved: '+name.textContent);
+  }
+  check(el.scrollWidth<=el.clientWidth,'Long names do not widen the chat');
+  check(getComputedStyle(el).overflowX==='hidden','Horizontal scrolling is suppressed at the chat border');
+  chat.addMessage('robot','x'.repeat(500),50);
+  await frame();
+  check(el.scrollWidth<=el.clientWidth,'Unbroken text does not widen the chat');
+  check(getComputedStyle(composer).backgroundColor==='rgb(40, 40, 42)','Input background is opaque over scrolling content');
+  composer.focus();
+  await frame();
+  check(getComputedStyle(composer).backgroundColor!=='transparent','Focused input keeps its background');
+  composer.blur();
+  const desktopHead=chat.wrap.querySelector('.chat-skill-head');
+  const desktopHeight=desktopHead.getBoundingClientRect().height;
+  fixture.classList.add('agent-compact');
+  check(getComputedStyle(desktopHead.parentElement).marginTop==='4px','Mobile cards use tighter outer spacing');
+  check(getComputedStyle(chat.wrap.querySelector('.chat-msg')).marginBottom==='4px','Mobile messages use tighter outer spacing');
+  deck.set([]);
+  for (const status of ['completed','running','failed','interrupted']) {
+    chat.addMessage('robot', 'Skill state: '+status,59);
+    chat.addSkillRun('compact-'+status,'HeadEmotion',status,60,status==='failed'?'Could not finish':'',{emotion:'thinking'});
+  }
+  await frame();
+  const compactHeads=[...chat.wrap.querySelectorAll('.chat-skill > .chat-skill-head')];
+  for (const head of compactHeads) {
+    check(head.offsetHeight>=44,'Mobile skill keeps a 44px touch target');
+    check(head.offsetHeight<desktopHeight,'Mobile skill row is shorter than desktop');
+  }
+  const detailHead=compactHeads.find(head=>head.closest('.chat-skill').classList.contains('has-detail'));
+  detailHead.click();
+  await frame();
+  check(detailHead.getAttribute('aria-expanded')==='true','Compact skill details expand');
+  detailHead.click();
+  await frame();
+  check(detailHead.getAttribute('aria-expanded')==='false','Compact skill details collapse');
+  check(el.scrollWidth<=el.clientWidth,'Compact skills do not widen the chat');
+  fixture.classList.remove('agent-compact');
+  await frame();
+  check(getComputedStyle(desktopHead.parentElement).marginTop==='6px','Desktop card spacing is unchanged');
+  check(desktopHead.getBoundingClientRect().height===desktopHeight,'Desktop skill sizing is unchanged');
+  result.textContent=`PASS: ${checks.length} checks\n`+checks.join('\n');
+} catch(e) { result.textContent='FAIL: '+e.message+'\nPassed: '+checks.join('\n'); }
+</script>

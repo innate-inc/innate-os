@@ -155,6 +155,11 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "agent-studio-dock-toggle";
+  const mobileToggle = document.createElement("button");
+  mobileToggle.type = "button";
+  mobileToggle.className = "agent-menu-toggle";
+  mobileToggle.setAttribute("aria-controls", "agent-studio-panel");
+  mobileToggle.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
   // The rail's own Agent mark: a four-point sparkle for the autonomous brain.
   toggle.innerHTML =
     '<svg class="agent-studio-dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5l1.7 6.8 6.8 1.7-6.8 1.7L12 20.5l-1.7-6.8L3.5 12l6.8-1.7z"/></svg>' +
@@ -880,6 +885,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   function applyDockOpen(open) {
     dockOpen = open;
     dock.classList.toggle("open", open);
+    dock.hidden = compact && !open;
+    mobileToggle.setAttribute("aria-expanded", String(open));
+    mobileToggle.setAttribute("aria-label", open ? "Close agent menu" : "Open agent menu");
     toggle.setAttribute("aria-expanded", String(open));
     toggle.setAttribute("aria-label", open ? "Close agent detail" : "Open agent detail");
     if (open) document.dispatchEvent(new CustomEvent(PANEL_OPEN_EVENT, { detail: { panel: PANEL_ID } }));
@@ -975,7 +983,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const owned = inStory || graduated;
     if (owned !== wasInStory) {
       wasInStory = owned;
-      applyDockOpen(owned);
+      applyDockOpen(owned && !compact);
     }
     document.body.classList.toggle("story-active", inStory);
     // Nowhere has no map worth reading, and a robot that cannot move has nothing to plot on
@@ -1098,6 +1106,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
 
   /** @param {any} r @param {any} o @param {boolean} graduated @param {AgentEntry | null} agent @param {boolean} isNew */
   function noteFor(r, o, graduated, agent, isNew) {
+    if (compact && agent?.source === "shipped") {
+      return "This is an Innate Agent. To modify it or create one, use the desktop version.";
+    }
     if (r) return r.finished ? "Through the door." : "";
     if (graduated) {
       // Said in the chat too, but a history sync drops display-only lines; this stays.
@@ -1205,12 +1216,14 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   }
 
   toggle.addEventListener("click", () => setDockOpen(!dockOpen));
+  mobileToggle.addEventListener("click", () => setDockOpen(!dockOpen));
   applyDockOpen(false);
-  // Narrow screens keep the bottom sheet they had: the picker goes back to the chat
-  // panel and the editor stands down until there is room for it.
+  // Mobile opens this same editor from the corner menu; its picker stays in chat.
   const setCompact = (/** @type {boolean} */ on) => {
+    const changed = compact !== on;
     compact = on;
-    dock.hidden = on;
+    if (changed) applyDockOpen(false);
+    dock.hidden = on && !dockOpen;
     opts.dockDirectives?.(on ? null : panelEl);
     // Compact leaves Start/Stop to the sheet's own header, which has already claimed it.
     if (!on) opts.dockStartStop?.(headAction);
@@ -1253,14 +1266,24 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   }
   chooser.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    event.stopPropagation();
     chooserOpen = false;
     render(true);
     addBtn.focus();
   });
+  const onMenuKeyDown = (/** @type {KeyboardEvent} */ event) => {
+    if (event.key !== "Escape" || !compact || !dockOpen) return;
+    setDockOpen(false);
+    mobileToggle.focus();
+  };
+  document.addEventListener("keydown", onMenuKeyDown);
   // Capture-phase pointerdown: the stage and the picker swallow clicks, and a drag never
   // makes one. The row spans the panel, so only the button and the list itself count as inside.
   const onOutsideClick = (/** @type {PointerEvent} */ event) => {
     const path = event.composedPath();
+    if (compact && dockOpen && !path.includes(dock) && !path.includes(mobileToggle)) {
+      setDockOpen(false);
+    }
     if (chooserOpen && !path.includes(addBtn) && !path.includes(chooser)) {
       chooserOpen = false;
       render(true);
@@ -1335,6 +1358,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
   render();
 
   return {
+    mobileToggle,
     setCompact,
     /** Resolves once the world has said whether a story is running, so the boot splash can
      * cover the moment rather than the interface appearing and half of it leaving. */
@@ -1351,6 +1375,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       document.removeEventListener("innate:play-intro", onPlayIntro);
       document.removeEventListener(PANEL_OPEN_EVENT, onPanelOpen);
       document.removeEventListener("pointerdown", onOutsideClick, true);
+      document.removeEventListener("keydown", onMenuKeyDown);
       root.removeEventListener("click", onSceneChange, true);
       sceneCue?.();
       opts.onCreateAgent?.(() => {});
@@ -1364,6 +1389,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       opts.dockDirectives?.(null);
       opts.dockStartStop?.(null);
       dock.remove();
+      mobileToggle.remove();
       leaveBtn.remove();
       whiteout.remove();
     },
