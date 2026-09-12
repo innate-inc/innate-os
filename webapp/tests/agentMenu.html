@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent mobile menu checks</title>
+<link rel="stylesheet" href="../css/app.css">
+<style>#result {position:fixed;top:90px;left:12px;white-space:pre-wrap;} </style>
+<div class="rail-mark">Innate</div>
+<div class="cockpit agent-cockpit agent-compact"><div class="overlay-stack-top-left"><div class="agent-corner-controls"><button class="cam-strip-toggle">Eye</button></div></div></div>
+<div id="mobile-scene-checks" class="agent-compact"><div class="agent-challenge-dock">Challenges</div><div class="sim-scene-panel"><div class="sim-scene-header">Scene setup</div><section class="sim-environment-section">Environments</section><section class="sim-scene-section">Objects</section></div></div>
+<pre id="result">Running…</pre>
+<script type="module">
+import {createAgentStudio} from '../js/agent/agentStudio.js';
+const root=document.querySelector('.agent-cockpit'), noop=()=>{}, checks=[];
+const check=(ok,text)=>{if(!ok)throw Error(text);checks.push(text)};
+const frame=()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+let studio;
+try {
+const state={currentDirective:'demo',activeSkills:new Set(),agents:[{id:'demo',name:'Demo',prompt:'Hello robot',skills:[],source:'shipped',editable:false}]};
+studio=createAgentStudio(root,{get:()=>state,subscribe:()=>noop},null,{setDisplayName:noop,setOffers:noop,setComposerAsk:noop}, {spokenCount:()=>0,motionAt:()=>0,recalledAt:()=>0,turnedAt:()=>0,lastLine:()=>'',overlay:()=>noop,cancelSkill:async()=>{}});
+document.querySelector('.agent-corner-controls').append(studio.mobileToggle);
+studio.setCompact(true);
+await frame();
+const dock=root.querySelector('.agent-studio-dock'), button=studio.mobileToggle;
+check(dock.hidden,'Mobile menu starts closed');
+button.click();
+await frame();
+check(!dock.hidden && button.getAttribute('aria-expanded')==='true','Dots open the real agent editor');
+check(root.querySelector('.agent-studio-mobile-name').textContent==='Demo','Agent name appears as a heading');
+check(root.querySelector('.agent-studio-mobile-name').parentElement.firstElementChild.classList.contains('agent-studio-mobile-name'),'Name is at the top of the menu');
+check(root.querySelector('.agent-studio-mobile-prompt').textContent==='Hello robot','Identity displays the prompt as text');
+check(root.querySelector('textarea[aria-label="Agent prompt"]').parentElement.hidden,'Mobile hides the prompt text box');
+check(root.querySelector('.agent-studio input').parentElement.hidden,'Mobile hides the name field');
+check(root.querySelector('.agent-studio').textContent.includes('This is an Innate Agent. To modify it or create one, use the desktop version.'),'Mobile explains desktop editing');
+studio.setCompact(true);
+check(!dock.hidden,'Repeated layout updates preserve the open menu');
+button.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+check(dock.hidden && (!matchMedia('(max-width:820px)').matches || document.activeElement===button),'Escape closes and returns focus on mobile');
+button.click();
+document.body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,composed:true}));
+check(dock.hidden,'Outside tap closes the menu');
+button.click();
+root.querySelector('.agent-studio').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,composed:true}));
+check(!dock.hidden,'Interaction within the menu keeps it open');
+button.click();
+check(dock.hidden,'Second dots press closes the menu');
+button.click();
+document.dispatchEvent(new CustomEvent('innate:panel-open',{detail:{panel:'scene'}}));
+check(dock.hidden,'Opening another panel closes the menu');
+studio.setCompact(false);
+check(root.querySelector('.agent-studio').textContent.includes('This is an innate agent. Create your own agent, or edit this one in code.'),'Desktop keeps its original guidance');
+check(!dock.hidden && !dock.classList.contains('open'),'Desktop restores its collapsed dock');
+check(root.querySelector('.agent-studio-mobile-name').hidden && root.querySelector('.agent-studio-mobile-prompt').hidden,'Desktop hides mobile reading elements');
+check(!root.querySelector('textarea[aria-label="Agent prompt"]').parentElement.hidden,'Desktop retains its prompt field');
+studio.setCompact(true);
+check(dock.hidden,'Returning to mobile starts closed');
+if(matchMedia('(max-width:820px)').matches) {
+check(getComputedStyle(document.querySelector('.rail-mark')).display==='none','Mobile logo is hidden');
+const sceneCheck=document.querySelector('#mobile-scene-checks');
+check(getComputedStyle(sceneCheck.querySelector('.sim-scene-panel')).paddingTop==='13px','Environment title has clearance below the rounded border');
+check(getComputedStyle(sceneCheck.querySelector('.agent-challenge-dock')).display==='none','Mobile hides challenges');
+for(const child of sceneCheck.querySelector('.sim-scene-panel').children) {
+check((getComputedStyle(child).display!=='none')===child.classList.contains('sim-environment-section'),'Only environments remain in the mobile scene menu');
+}
+sceneCheck.classList.remove('agent-compact');
+check(getComputedStyle(sceneCheck.querySelector('.sim-scene-header')).display!=='none','Desktop scene options remain available');
+const eye=document.querySelector('.cam-strip-toggle').getBoundingClientRect(),dots=button.getBoundingClientRect();
+check(eye.right===dots.left && eye.top===dots.top,'Eye and dots share a horizontal split control');
+check(dots.width>=44 && dots.height>=44,'Menu has a full touch target');
+button.click();
+const box=root.querySelector('.agent-studio').getBoundingClientRect();
+check(box.left>=0 && box.right<=innerWidth,'Menu fits the viewport');
+state.agents[0].prompt=('A long prompt that stays readable on a phone.\n').repeat(80);
+studio.setCompact(true);
+await frame();
+const reader=root.querySelector('.agent-studio-mobile-prompt').parentElement;
+const headingTop=root.querySelector('.agent-studio-mobile-name').getBoundingClientRect().top;
+const tabsTop=root.querySelector('.agent-studio-tabs').getBoundingClientRect().top;
+reader.scrollTop=reader.scrollHeight;
+check(reader.scrollTop>0,'Long plain prompt scrolls within its pane');
+check(root.querySelector('.agent-studio').scrollTop===0,'Outer menu does not scroll');
+check(root.querySelector('.agent-studio-mobile-name').getBoundingClientRect().top===headingTop && root.querySelector('.agent-studio-tabs').getBoundingClientRect().top===tabsTop,'Name and tabs stay fixed while reading');
+check(reader.scrollWidth<=reader.clientWidth,'Long prompt does not widen the menu');
+}
+studio.destroy();
+check(!button.isConnected && !dock.isConnected,'Destroy cleans up menu controls');
+document.querySelector('#result').textContent='PASS: '+checks.length+' checks';
+} catch(e) {document.querySelector('#result').textContent='FAIL: '+e.message; studio?.destroy();}
+</script>

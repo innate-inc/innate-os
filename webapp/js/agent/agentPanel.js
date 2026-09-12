@@ -96,7 +96,8 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   });
 
   // ---- live stream (thoughts + chat + skill runs) -------------------------
-  const chat = createChatStream();
+  const deck = createOfferDeck();
+  const chat = createChatStream({ footer: deck.el });
 
   // ---- composer -----------------------------------------------------------
   const composeArea = document.createElement("div");
@@ -177,14 +178,14 @@ export function createAgentPanel(root, rosClient, agentState, opts) {
   }
   syncComposerAction();
 
-  // What the interface asks for sits above the composer, never scrolled away from.
-  const deck = createOfferDeck();
-  composeArea.append(deck.el, thinkingNotice, form);
+  // Status follows suggestions in the transcript; only the composer stays fixed.
+  chat.scrollElement.append(thinkingNotice);
+  composeArea.append(form);
   thoughtsPanel.append(directives.el, chat.head, chat.wrap, composeArea);
   panel.append(thoughtsPanel);
   root.append(panel);
 
-  const stream = chat.wrap.querySelector(".agent-stream");
+  const stream = chat.scrollElement;
   // Where start/stop lives on the dock, so the sheet can hand it back.
   const toggleHome = directives.toggleEl.nextElementSibling;
   sheet = createAgentSheet(panel, {
