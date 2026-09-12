@@ -8618,7 +8618,6 @@ select.skill-input {
     max-height: 100%;
     border: 1px solid transparent;
     border-radius: 18px;
-    object-position: left top;
   }
 
   .agent-cockpit .video-stage.video-ready video {
@@ -9711,7 +9710,6 @@ select.skill-input {
     max-height: none;
     border: 0;
     border-radius: 0;
-    object-position: center;
     object-fit: cover;
   }
 
