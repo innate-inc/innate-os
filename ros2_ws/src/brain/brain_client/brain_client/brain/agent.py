@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 
     from rclpy.node import Node
 
+    from brain_client.brain.transport import Endpoint
     from brain_client.core.config import BrainConfig
     from brain_client.core.state import BrainState, RunningSkill
     from brain_client.perception.battery import BatteryMonitor
@@ -92,6 +93,7 @@ class BrainAgent:
         chat: ChatManager,
         gaze: GazeController,
         proxy: ProxyClient | None = None,
+        endpoint: Endpoint | None = None,
         scan_health: ScanHealthMonitor | None = None,
         battery: BatteryMonitor | None = None,
         identity: IdentityMonitor | None = None,
@@ -119,7 +121,7 @@ class BrainAgent:
         if config.timezone.strip() and self._timezone is None:
             self._logger.warn(f"[Brain] Unknown timezone '{config.timezone}' — using the host's local zone")
 
-        transport, self.backend = pick_transport(proxy)
+        transport, self.backend = pick_transport(proxy, endpoint)
         self._context = (
             GeminiContext(
                 transport,
@@ -168,7 +170,7 @@ class BrainAgent:
 
     @property
     def available(self) -> bool:
-        """Whether the brain can reach Gemini — true exactly when a context exists."""
+        """Whether the brain can reach its model — true exactly when a context exists."""
         return self._context is not None
 
     @property
@@ -186,8 +188,9 @@ class BrainAgent:
         """Spawn the agent loop; False when it refused (caller must not report active)."""
         if not self.available:
             self._chat.emit_system(
-                "⚠️ The brain has no way to reach Gemini — configure the Innate proxy "
-                "(INNATE_SERVICE_KEY) or set GEMINI_API_KEY in innate-os/.env and restart."
+                "⚠️ The brain has no model to think with — configure the Innate proxy (INNATE_SERVICE_KEY) "
+                "or GEMINI_API_KEY in innate-os/.env, or point Settings → AI models at an OpenAI-compatible "
+                "server, then restart."
             )
         if self._runtime.running:
             return True
