@@ -40,6 +40,7 @@ ament_python_install_package(${PROJECT_NAME}
 install(PROGRAMS
   mars_bringup/bringup.py
   mars_bringup/rosbag.py
+  mars_bringup/video_recorder.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
