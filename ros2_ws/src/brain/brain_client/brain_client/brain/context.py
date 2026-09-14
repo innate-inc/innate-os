@@ -320,11 +320,16 @@ def _merge_call(calls: dict[int, dict], fragment: dict) -> None:
 
 
 def _echoes(reply: str, user_message: dict) -> bool:
-    head = " ".join(reply.split())[:60]
-    if len(head) < 20:
-        return False
-    text = " ".join(" ".join(p["text"].split()) for p in _parts(user_message) if p.get("type") == "text")
-    return head in text
+    # Digits are masked: the model continues the pattern rather than copying it
+    # (the input's "t+8s" comes back as "t+9s", the pose drifts a centimetre).
+    head = _shape(reply)[:60]
+    return len(head) >= 20 and head in _shape(
+        " ".join(p["text"] for p in _parts(user_message) if p.get("type") == "text")
+    )
+
+
+def _shape(text: str) -> str:
+    return re.sub(r"\d+", "#", " ".join(text.split()))
 
 
 def _with_id(call: dict) -> dict:
