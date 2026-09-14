@@ -14,12 +14,15 @@
   <depend>rclcpp_components</depend>
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
+  <depend>sensor_msgs_py</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>image_transport</depend>
   <depend>cv_bridge</depend>
+  <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>geometry_msgs</depend>
+  <depend>diagnostic_msgs</depend>
   <depend>depth_image_proc</depend>
   <depend>pcl_ros</depend>
   <depend>image_proc</depend>
@@ -48,6 +51,8 @@
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

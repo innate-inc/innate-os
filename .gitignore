@@ -61,6 +61,7 @@ config/os.toml
 config/settings.yaml
 sim/config.toml
 .venv/
+.venvs/
 ENV/
 deploy-keys/
 sim/launcher/.state/
@@ -116,6 +117,7 @@ logs
 data/.last_map
 data/.last_mode
 .onnx
+*.onnx
 
 # arm_wave directory (local data, not tracked)
 arm_wave/
