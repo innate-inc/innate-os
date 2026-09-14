@@ -132,13 +132,25 @@ def _declaration(name: str, meta: SkillMeta) -> dict:
     return declaration
 
 
+def _type_schema(declared_type: str) -> dict:
+    """Keep optional scalars and typed lists native in the model's tool arguments."""
+    declared_type = declared_type.removeprefix("typing.").strip()
+    optional = re.fullmatch(r"Optional\[(.+)\]|(.+) \| None|None \| (.+)", declared_type)
+    if optional:
+        inner = next(part for part in optional.groups() if part is not None)
+        return {**_type_schema(inner), "nullable": True}
+    array = re.fullmatch(r"(?:list|List)\[(.+)\]", declared_type)
+    if array:
+        return {"type": "ARRAY", "items": _type_schema(array[1])}
+    if declared_type in _SCHEMA_TYPES:
+        return {"type": _SCHEMA_TYPES[declared_type]}
+    return {"type": "STRING", "description": f"type: {declared_type}"}
+
+
 def _param_schema(spec: dict) -> dict:
     declared_type = str(spec.get("type", "any"))
-    schema: dict = {"type": _SCHEMA_TYPES.get(declared_type)}
-    notes = []
-    if schema["type"] is None:
-        notes.append(f"type: {declared_type}")
-        schema["type"] = "STRING"
+    schema = _type_schema(declared_type)
+    notes = [schema.pop("description")] if "description" in schema else []
     if "default" in spec:
         notes.append(f"default: {spec['default']}")
 

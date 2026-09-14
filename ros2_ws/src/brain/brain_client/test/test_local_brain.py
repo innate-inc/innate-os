@@ -131,12 +131,17 @@ def test_build_tools_with_no_skills_still_offers_wait():
 
 
 def test_unknown_param_type_falls_back_to_annotated_string():
-    skill = {"id": "s", "name": "s", "guidelines": "g", "inputs": {"blob": {"type": "list[str]", "required": True}}}
+    skill = {
+        "id": "s",
+        "name": "s",
+        "guidelines": "g",
+        "inputs": {"blob": {"type": "dict[str, float]", "required": True}},
+    }
     schema = build_tools(assign_tool_names([skill]), None)[0]["functionDeclarations"][0]["parameters"]["properties"][
         "blob"
     ]
     assert schema["type"] == "STRING"
-    assert "list[str]" in schema["description"]
+    assert "dict[str, float]" in schema["description"]
 
 
 # ---------- decisions ----------
@@ -1139,3 +1144,26 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+@pytest.mark.parametrize("declared", ["float | None", "None | float", "Optional[float]", "typing.Optional[float]"])
+def test_optional_numeric_tool_parameters_remain_numbers(declared):
+    skill = {"id": "s", "name": "s", "inputs": {"x": {"type": declared, "required": False, "default": None}}}
+    params = build_tools(assign_tool_names([skill]), None)[0]["functionDeclarations"][0]["parameters"]
+    assert params["properties"]["x"]["type"] == "NUMBER"
+    assert params["properties"]["x"]["nullable"] is True
+    assert params["required"] == []
+
+
+@pytest.mark.parametrize("declared", ["list[float] | None", "Optional[List[float]]"])
+def test_optional_joint_list_is_a_native_numeric_array(declared):
+    skill = {"id": "s", "name": "s", "inputs": {"joints": {"type": declared, "required": False}}}
+    params = build_tools(assign_tool_names([skill]), None)[0]["functionDeclarations"][0]["parameters"]
+    assert params["properties"]["joints"] == {"type": "ARRAY", "items": {"type": "NUMBER"}, "nullable": True}
+
+
+def test_required_string_list_remains_required():
+    skill = {"id": "s", "name": "s", "inputs": {"names": {"type": "list[str]", "required": True}}}
+    params = build_tools(assign_tool_names([skill]), None)[0]["functionDeclarations"][0]["parameters"]
+    assert params["properties"]["names"] == {"type": "ARRAY", "items": {"type": "STRING"}}
+    assert params["required"] == ["names"]
