@@ -32,6 +32,7 @@ const ARMED_KEY = "innate.nowhere.armed";
 export const PLAY_INTRO_KEY = "innate.nowhere.play";
 const UNMENTIONED_SKILLS = new Set(["innate-os/open_gripper"]); // never part of the story's arc
 const WAVE = "innate-os/wave";
+const ARM_MOVE = "innate-os/arm_move";
 const MEMORY = "innate-os/search_memory";
 const GRADUATION_MAX_WAIT_MS = 25_000;
 // The robot asks for its next skill in its own time, and sometimes takes a while. The grant
@@ -61,6 +62,7 @@ function held(ready, timeoutMs) {
 
 // A grant is a turn for the brain, not only a toolset change: the chip says it out loud.
 const GRANT_LINES = /** @type {Record<string, string>} */ ({
+  "innate-os/arm_move": "Granted: the ArmMove skill. Use it for the arm movement I requested; ask me for a target if needed.",
   "innate-os/head_emotion": "Granted: the HeadEmotion skill. Use it.",
   "innate-os/turn_in_place": "Granted: the TurnInPlace skill. Have a look around.",
   "innate-os/pick_any_object": "Granted: the PickAnyObject skill. Pick it up.",
@@ -399,7 +401,9 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const id = s.currentDirective || opts.armedAgent?.() || "";
     return s.agents.find((a) => a.id === id) ?? null;
   };
-  const earnedSkills = () => (storyAgent()?.skills ?? []).filter((id) => !UNMENTIONED_SKILLS.has(id));
+  const earnedSkills = () => (storyAgent()?.skills ?? []).filter(
+    (id) => !UNMENTIONED_SKILLS.has(id) && (id !== ARM_MOVE || agentState.get().activeSkills.has(id)),
+  );
   /** Whether a robot line names a skill, however it punctuates it. @param {string | undefined} text @param {string} skill */
   const mentions = (text, skill) =>
     (text ?? "").toLowerCase().replace(/[^a-z]/g, "").includes(skillLabel(skill).toLowerCase());
@@ -625,6 +629,12 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     if (o?.state === "passed") {
       chipReason = graduationReady ? "graduated" : "graduating"; // the next world is chosen in the scene setup
       return { chips: [] };
+    }
+    // A request made by the robot for the visitor's arm target overrides the scripted
+    // grant, including persona selection and the final memory step. Never auto-grant it.
+    if ((r || o) && !agentState.get().activeSkills.has(ARM_MOVE) && mentions(opts.lastLine(), ARM_MOVE)) {
+      chipReason = "grants:arm-request";
+      return { title: `${name} asks for a skill`, chips: [grantOffer(ARM_MOVE)] };
     }
     if (o) {
       if (agentState.get().activeSkills.has(MEMORY)) {
@@ -924,7 +934,7 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
       s.currentDirective, [...s.activeSkills].sort(), agent, r && { ...r, brief: undefined },
       o && { id: o.id, state: o.state, attempt_id: o.attempt_id }, who, name, env, switching(), dockOpen,
       graduationReady, sceneTaught, sceneSetupOpen(), spoken(), Date.now() < whiteUntil, opts.motionAt() > 0, opts.navigating?.(),
-      opts.recalledAt(), opts.turnedAt(),
+      opts.recalledAt(), opts.turnedAt(), opts.lastLine(),
       draft, saving, saveStatus, chooserOpen, tab, roster.length,
     ]);
     if (!force && key === renderedKey) return;
@@ -1147,7 +1157,8 @@ export function createAgentStudio(root, agentState, session, panel, opts) {
     const wanted = new Set(r?.wants ?? (inStory ? [MEMORY] : []));
     skills.replaceChildren();
     for (const id of listed) {
-      if (r && !unlocked.has(id)) continue;
+      if (inStory && id === ARM_MOVE && !s.activeSkills.has(id)) continue;
+      if (r && !unlocked.has(id) && !(id === ARM_MOVE && s.activeSkills.has(id))) continue;
       if (inStory && !r && UNMENTIONED_SKILLS.has(id) && !s.activeSkills.has(id)) continue;
       const granted = s.activeSkills.has(id);
       if (inStory && wanted.has(id) && !granted) continue; // the grant card above is that skill

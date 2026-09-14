@@ -1,0 +1,48 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Intro arm grant checks</title>
+<link rel="stylesheet" href="../css/app.css">
+<div class="cockpit agent-cockpit agent-compact"></div><pre id="result">Running…</pre>
+<script type="module">
+import {createAgentStudio} from '../js/agent/agentStudio.js';
+import {createOfferDeck} from '../js/agent/offerDeck.js';
+const root=document.querySelector('.cockpit'), noop=()=>{}, checks=[];
+const check=(ok,text)=>{if(!ok)throw Error(text);checks.push(text)};
+const ARM='innate-os/arm_move', HEAD='innate-os/head_emotion', TURN='innate-os/turn_in_place';
+let onChallenge, onState, line='', count=1, offers=[], submitted='', studio;
+const state={currentDirective:'void_agent',activeSkills:new Set(['innate-os/wave']),agents:[{id:'void_agent',name:'MARS',skills:[ARM,HEAD,TURN],prompt:'Intro',source:'shipped'}]};
+const deck=createOfferDeck(); root.append(deck.el);
+try {
+ studio=createAgentStudio(root,{get:()=>state,subscribe:cb=>(onState=cb,noop),setActiveSkills:ids=>{state.activeSkills=new Set(ids);onState();}}, {onChallenge:cb=>(onChallenge=cb,noop)}, {setDisplayName:noop,setOffers:(chips,title)=>{offers=chips;deck.set(chips,title)},setComposerAsk:noop,beginOnboarding:noop,narrate:noop,submitText:async text=>{submitted=text}}, {spokenCount:()=>count,motionAt:()=>0,recalledAt:()=>0,turnedAt:()=>0,lastLine:()=>line,overlay:()=>noop,cancelSkill:async()=>{},resetMotion:noop});
+ studio.setCompact(true);
+ const block={active:{id:'nowhere',attempt_id:'arm-test',elapsed_s:30,runtime:{story:'nowhere',act:1,label:'Feel',wants:[HEAD],unlocked:[HEAD],profile:{name:'MARS'},suggests:['Where are you?']}}};
+ onChallenge(block);
+ const say=text=>{line=text;count++;onState()};
+ say('Give me HeadEmotion.');
+ check(offers.some(o=>o.text==='HeadEmotion'),'Story initially offers HeadEmotion');
+ say('Okay, grant me the ArmMove skill so I can move my arm.');
+ check(offers.length===1 && offers[0].text==='ArmMove','Arm request replaces the other skill grant');
+ check(!state.activeSkills.has(ARM),'Request does not grant permission automatically');
+ studio.setCompact(false);
+ check(root.querySelector('.agent-studio-deck')?.textContent?.includes('ArmMove') || [...root.querySelectorAll('.agent-studio button')].some(b=>b.textContent.includes('Grant')),'Desktop also exposes a grant');
+ studio.setCompact(true);
+ const button=deck.el.querySelector('button');
+ check(!!button,'Arm request renders a grant button');
+ button.click(); await new Promise(r=>setTimeout(r,0));
+ check(state.activeSkills.has(ARM) && state.activeSkills.has('innate-os/wave'),'Grant adds ArmMove and preserves existing skills');
+ check(submitted.includes('ArmMove') && submitted.includes('movement I requested'),'Grant sends the robot its pending movement instruction');
+ check(block.active.runtime.act===1 && block.active.runtime.wants[0]===HEAD,'Arm grant does not advance or rewrite the story');
+ say('I have ArmMove now.');
+ check(!offers.some(o=>o.text==='ArmMove'),'Already granted skill is not offered again');
+ check(offers.some(o=>o.text==='HeadEmotion'),'Original story grant remains available');
+ state.activeSkills.delete(ARM);
+ onChallenge({active:{id:'way_out',state:'running',attempt_id:'out-test'}});
+ say('Please grant ArmMove.');
+ check(offers[0]?.text==='ArmMove','Arm request also overrides the memory step');
+ say('Give me SearchMemory.');
+ check(offers[0]?.text==='SearchMemory','A different request restores the memory grant');
+ onChallenge({active:null}); say('Give me ArmMove.');
+ check(offers.length===0,'No intro grant is injected outside the story');
+ document.querySelector('#result').textContent=`PASS ${checks.length}\n`+checks.join('\n');
+} catch(e) {document.querySelector('#result').textContent='FAIL '+e.stack;} finally {studio?.destroy();}
+</script>

@@ -18,7 +18,9 @@ CHALLENGE = Challenge(
         "This is a scripted first run. The runtime field below describes the current act: what you can do, "
         "what you want next, and which skill the person may grant you next (runtime.wants). Skills you have "
         "not been granted are not in your tools; you must ask the person to grant them (the chat offers the "
-        "grant). Never pretend to have a skill or to have done something. The moment a new "
+        "grant). An explicit request from the person takes priority over the current act: for arm positioning, "
+        "ask for ArmMove if it is not granted, even when runtime.wants names another skill. Resume the act "
+        "after handling their request. Never pretend to have a skill or to have done something. The moment a new "
         "skill appears in your tools, use it. Keep replies to one or two sentences."
     ),
 )
