@@ -141,7 +141,12 @@ class ChatContext:
         # Usage rides the reply and is committed by absorb, on the loop thread:
         # writing self.last_usage here would let an abandoned turn's orphaned
         # request overwrite the committed turn's counts.
-        return _assemble(self._transport.stream(body), on_speech)
+        response = _assemble(self._transport.stream(body), on_speech)
+        if _echoes(response["message"]["content"], user_message):
+            # A small model under greedy decoding can read the turn's input back
+            # as its reply; committed, it teaches the next turn to do the same.
+            raise RuntimeError("the model echoed its input instead of answering")
+        return response
 
     def absorb(self, user_message: dict, response: dict, *, latest_only_images: list[int] | None = None) -> Decision:
         """Commit the exchange to history and distill the model's Decision.
@@ -312,6 +317,14 @@ def _merge_call(calls: dict[int, dict], fragment: dict) -> None:
         call["function"]["arguments"] += function["arguments"]
     if fragment.get("extra_content"):
         call["extra_content"] = fragment["extra_content"]
+
+
+def _echoes(reply: str, user_message: dict) -> bool:
+    head = " ".join(reply.split())[:60]
+    if len(head) < 20:
+        return False
+    text = " ".join(" ".join(p["text"].split()) for p in _parts(user_message) if p.get("type") == "text")
+    return head in text
 
 
 def _with_id(call: dict) -> dict:
