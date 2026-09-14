@@ -1,0 +1,12 @@
+{
+  "role": "primary PR face and HOG-face evaluation",
+  "python": "3.11.8",
+  "platform": "macOS-26.2-arm64-arm-64bit",
+  "packages": {
+    "Pillow": "12.3.0",
+    "httpx": "0.28.1",
+    "python-dotenv": "1.2.3",
+    "numpy": "2.2.6",
+    "opencv-python-headless": "4.12.0.88"
+  }
+}

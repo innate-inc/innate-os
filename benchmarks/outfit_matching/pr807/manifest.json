@@ -1,0 +1,2985 @@
+{
+  "version": 1,
+  "task": "synthetic_clothing_ensemble_matching_manual_regions",
+  "source_manifest_sha256": "63abb22f6e0a3d326ffb8b60f5160b3b08758c100abb2a01beb1c34d367c810b",
+  "prepare_script_sha256": "05a0db746e38fdc719d1674d0022a96fe68c93ce4c31cbc662c42ec7067165b1",
+  "seed": 20260909,
+  "regions_at_320": {
+    "low_angle": [
+      88,
+      0,
+      224,
+      238
+    ],
+    "distant": [
+      125,
+      60,
+      213,
+      183
+    ]
+  },
+  "gallery": [
+    {
+      "label": "OUTFIT_01",
+      "path": "crops/gallery/OUTFIT_01.jpg",
+      "sha256": "5fd314bf97671179a3db3b602ef61b5bb4798c55f0ba0a29537b648955c8cae3"
+    },
+    {
+      "label": "OUTFIT_02",
+      "path": "crops/gallery/OUTFIT_02.jpg",
+      "sha256": "7070abd3051defcd34d369ef9b7440cc0694e9a95d255b8fb864d8caace7e2f3"
+    },
+    {
+      "label": "OUTFIT_03",
+      "path": "crops/gallery/OUTFIT_03.jpg",
+      "sha256": "757411b33596930f37affc4e3f22abd742d6cb05ce0b643019fd7b316731d99d"
+    },
+    {
+      "label": "OUTFIT_04",
+      "path": "crops/gallery/OUTFIT_04.jpg",
+      "sha256": "60a17f88dd98458b737e07d2917fce084c8c6aea968cb9819357b4e8a5232d1e"
+    },
+    {
+      "label": "OUTFIT_05",
+      "path": "crops/gallery/OUTFIT_05.jpg",
+      "sha256": "1abd909167daa87667578ea308bdd3bd0de5269b5966f4ca244f74401a954bc7"
+    },
+    {
+      "label": "OUTFIT_06",
+      "path": "crops/gallery/OUTFIT_06.jpg",
+      "sha256": "d2cd902b95703d9956bab056f3ad7caf6afa648a4caac5542b1635c5f1ce801e"
+    },
+    {
+      "label": "OUTFIT_07",
+      "path": "crops/gallery/OUTFIT_07.jpg",
+      "sha256": "c5ee508752fa2cf5af9ad6bc77a39836fec93879b3cdd4b33eebb73926e22078"
+    },
+    {
+      "label": "OUTFIT_08",
+      "path": "crops/gallery/OUTFIT_08.jpg",
+      "sha256": "b8e5c1a55348d220ed1a5b83a86c5a3c3b3f0ba198bf27ea7a329812876c02c9"
+    },
+    {
+      "label": "OUTFIT_09",
+      "path": "crops/gallery/OUTFIT_09.jpg",
+      "sha256": "c66b7bc4b53a8c7b027422e2ae456db98709aa0fc306d09d389c563da9cf4137"
+    },
+    {
+      "label": "OUTFIT_10",
+      "path": "crops/gallery/OUTFIT_10.jpg",
+      "sha256": "ec41e36c9e58a719f900eb2bffda2cb51d8c1488fcd7a22f5c71d290775eed1b"
+    },
+    {
+      "label": "OUTFIT_11",
+      "path": "crops/gallery/OUTFIT_11.jpg",
+      "sha256": "f37ff899bd68916d913fa52d4a48af8ac7a19d76c0054d9dbe4a5e4e8a6f8ec4"
+    },
+    {
+      "label": "OUTFIT_12",
+      "path": "crops/gallery/OUTFIT_12.jpg",
+      "sha256": "65f6a55070e6566afd8a5393b895edea93c5d33f0566f3c917dd2a67d621317b"
+    },
+    {
+      "label": "OUTFIT_13",
+      "path": "crops/gallery/OUTFIT_13.jpg",
+      "sha256": "3c789963a34ccf03314efd2c7bf5603430a571c4611577baaebfe016fc56debc"
+    },
+    {
+      "label": "OUTFIT_14",
+      "path": "crops/gallery/OUTFIT_14.jpg",
+      "sha256": "dce5753b67ebbf886464c516e4009e3687ee3ab69d8d4741e3916334d2a479b3"
+    },
+    {
+      "label": "OUTFIT_15",
+      "path": "crops/gallery/OUTFIT_15.jpg",
+      "sha256": "008675a5dc73b00134f49edfea97f4a8e86b6d5c3b0aa0fe5f8cd45840fdc4d6"
+    }
+  ],
+  "cases": [
+    {
+      "id": "low_angle_320_13",
+      "condition": "low_angle_320",
+      "outfit_index": 13,
+      "expected": "OUTFIT_13",
+      "path": "crops/queries/low_angle_320_13.png",
+      "sha256": "ba5f0ef0b35d6c8066b8342ec46ae3531170303c41f6c00af6992c42909a846f",
+      "gallery_order": [
+        7,
+        1,
+        10,
+        6,
+        12,
+        0,
+        13,
+        2,
+        11,
+        14,
+        5,
+        9,
+        8,
+        4,
+        3
+      ],
+      "source_sha256": "303e6eb62b74bc744c6bf9c5ce8a6fd7ce19564a07e5403058508b48d2b2d890",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "low_angle_320_12",
+      "condition": "low_angle_320",
+      "outfit_index": 12,
+      "expected": "OUTFIT_12",
+      "path": "crops/queries/low_angle_320_12.png",
+      "sha256": "27ae74191c01f624943fb539c4f277d9b4b1f192b96e3fcbff18aeca2d427511",
+      "gallery_order": [
+        2,
+        9,
+        8,
+        7,
+        5,
+        3,
+        12,
+        1,
+        4,
+        11,
+        6,
+        10,
+        0,
+        14,
+        13
+      ],
+      "source_sha256": "5f6164f7e1713be5241426b2f1b763d1660d3feca6e1abb1ff1bd47a5adfaa1d",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "distant_320_17",
+      "condition": "distant_320",
+      "outfit_index": 17,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/distant_320_17.png",
+      "sha256": "f6667c1f9ea825d874abe4fdf5c5aaddadc555cc7f46fe6ad7ebec3e5b78b62b",
+      "gallery_order": [
+        14,
+        0,
+        7,
+        6,
+        12,
+        11,
+        9,
+        5,
+        2,
+        1,
+        8,
+        4,
+        13,
+        3,
+        10
+      ],
+      "source_sha256": "58f7f79ab2b539051d7f70e5a556b1382c68bfa715cd858320ff36c000343841",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_160_17",
+      "condition": "low_angle_160",
+      "outfit_index": 17,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/low_angle_160_17.png",
+      "sha256": "ed6951da4f95cf713e6e5939453a8159d9ae012f31195e4e47bcd13c5061e44a",
+      "gallery_order": [
+        14,
+        2,
+        13,
+        1,
+        8,
+        0,
+        9,
+        11,
+        4,
+        5,
+        10,
+        7,
+        6,
+        3,
+        12
+      ],
+      "source_sha256": "66f022ef7b5ca28e9edf20702e17cb636a38f44b3f20c930d8a49e070734a802",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "low_angle_320_10",
+      "condition": "low_angle_320",
+      "outfit_index": 10,
+      "expected": "OUTFIT_10",
+      "path": "crops/queries/low_angle_320_10.png",
+      "sha256": "380cde5fa0d8fc64ad866f3a0dbb836bf4230e2d6bf9087bfc70d4a6a14ce114",
+      "gallery_order": [
+        5,
+        8,
+        13,
+        6,
+        10,
+        14,
+        3,
+        12,
+        0,
+        1,
+        11,
+        2,
+        9,
+        4,
+        7
+      ],
+      "source_sha256": "b80d8fc60da5000e3ed7314f9566a8d235d2ed009b3e1b5d2439ae4628cd31b6",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "low_angle_160_05",
+      "condition": "low_angle_160",
+      "outfit_index": 5,
+      "expected": "OUTFIT_05",
+      "path": "crops/queries/low_angle_160_05.png",
+      "sha256": "c699d0dcc49572668ed0a1c4716725f121d0993902b7df653ed2868f516d6611",
+      "gallery_order": [
+        2,
+        10,
+        12,
+        1,
+        5,
+        8,
+        13,
+        11,
+        7,
+        3,
+        0,
+        9,
+        14,
+        6,
+        4
+      ],
+      "source_sha256": "739406020d2d08cc7ff35a75dac601a53438fa483a888c422b8a3c3bec52af18",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_320_19",
+      "condition": "distant_320",
+      "outfit_index": 19,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/distant_320_19.png",
+      "sha256": "8ef0173ad50fdca6719edb0da3c216ded991dce05417398b8c47a1190bf03b17",
+      "gallery_order": [
+        6,
+        8,
+        12,
+        11,
+        4,
+        9,
+        14,
+        0,
+        10,
+        2,
+        13,
+        7,
+        5,
+        3,
+        1
+      ],
+      "source_sha256": "13e9b7e65dd007734d2cc6f6891ed801dd2e60b643582066d63b6bb4a01548a7",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_320_08",
+      "condition": "low_angle_320",
+      "outfit_index": 8,
+      "expected": "OUTFIT_08",
+      "path": "crops/queries/low_angle_320_08.png",
+      "sha256": "35374db69fcddda3effaa8ef3cc06fad082fd6b0cae57b70573a11b7b4b65e45",
+      "gallery_order": [
+        2,
+        8,
+        1,
+        12,
+        3,
+        10,
+        0,
+        11,
+        5,
+        13,
+        6,
+        14,
+        4,
+        9,
+        7
+      ],
+      "source_sha256": "57830a9b270ca0f1e61987b38bddd2b220c5c575fd43aebab6095713d550df8f",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "distant_160_04",
+      "condition": "distant_160",
+      "outfit_index": 4,
+      "expected": "OUTFIT_04",
+      "path": "crops/queries/distant_160_04.png",
+      "sha256": "6563e5c53aa6178bf99d1da3388525ad361d9679e52e0f208ae7a192b10ea690",
+      "gallery_order": [
+        8,
+        14,
+        3,
+        13,
+        5,
+        10,
+        2,
+        6,
+        12,
+        11,
+        1,
+        0,
+        7,
+        9,
+        4
+      ],
+      "source_sha256": "55f468d2f7a6ae54ae354a8d07e7a8854bd21ebc9eae84eb02510d8f275d4afc",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "low_angle_320_04",
+      "condition": "low_angle_320",
+      "outfit_index": 4,
+      "expected": "OUTFIT_04",
+      "path": "crops/queries/low_angle_320_04.png",
+      "sha256": "42f318c2f8e211994ba982bbb2b6cb203e7fca1e3ad0f61cc424a1ffde0c3859",
+      "gallery_order": [
+        1,
+        12,
+        4,
+        5,
+        11,
+        9,
+        7,
+        0,
+        8,
+        3,
+        2,
+        14,
+        6,
+        10,
+        13
+      ],
+      "source_sha256": "1dd73821e6ffdb39307e588992f47ca12f55ef140323e4ebedadf9e28a722d03",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "distant_320_07",
+      "condition": "distant_320",
+      "outfit_index": 7,
+      "expected": "OUTFIT_07",
+      "path": "crops/queries/distant_320_07.png",
+      "sha256": "7a41b04d07547d783d47da42888941f7cd313c965f4b2cc0ab91ad5dbfe7a3c7",
+      "gallery_order": [
+        1,
+        4,
+        8,
+        13,
+        9,
+        3,
+        6,
+        2,
+        0,
+        11,
+        7,
+        5,
+        12,
+        10,
+        14
+      ],
+      "source_sha256": "989fbd1bb6ee969e8372c2f7b2b68cfce0431370565f16f7498d2a23cbee432b",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "distant_320_12",
+      "condition": "distant_320",
+      "outfit_index": 12,
+      "expected": "OUTFIT_12",
+      "path": "crops/queries/distant_320_12.png",
+      "sha256": "4be66d7784168b813dd5cc0f238301cba6d41298920e85d08ca6e22cc5e4979d",
+      "gallery_order": [
+        7,
+        0,
+        13,
+        12,
+        11,
+        2,
+        3,
+        14,
+        4,
+        5,
+        6,
+        9,
+        8,
+        10,
+        1
+      ],
+      "source_sha256": "ec9cfaafebbe76b956d0c1ffe4cacd2dcc2b81c3014b3cc8f701395081ad9996",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "distant_320_08",
+      "condition": "distant_320",
+      "outfit_index": 8,
+      "expected": "OUTFIT_08",
+      "path": "crops/queries/distant_320_08.png",
+      "sha256": "d5cc454a15cbc51ebd20ba3e2541cd5a80049339ddb941fe442a9a0150b4dca3",
+      "gallery_order": [
+        5,
+        0,
+        6,
+        9,
+        2,
+        13,
+        7,
+        10,
+        11,
+        8,
+        1,
+        12,
+        14,
+        3,
+        4
+      ],
+      "source_sha256": "d6c112ff4598547c7d2b08bdad89feefbf7db8c0c12ba56d47419811d0d6df00",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_160_11",
+      "condition": "low_angle_160",
+      "outfit_index": 11,
+      "expected": "OUTFIT_11",
+      "path": "crops/queries/low_angle_160_11.png",
+      "sha256": "e0ebf87dfeeb49ddf984097f611e9bc4e4a6023151a8133d2c337721996c58ce",
+      "gallery_order": [
+        5,
+        12,
+        14,
+        4,
+        1,
+        3,
+        0,
+        7,
+        9,
+        6,
+        8,
+        13,
+        10,
+        11,
+        2
+      ],
+      "source_sha256": "9a84f63aba8d970607b52a068b59593230df773cbe5d148187edb34e5e8a347b",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_320_01",
+      "condition": "distant_320",
+      "outfit_index": 1,
+      "expected": "OUTFIT_01",
+      "path": "crops/queries/distant_320_01.png",
+      "sha256": "4826c1ceb0182b7a31032b8106429ec5fc9baa4b4fe457ec1615fec78b447baf",
+      "gallery_order": [
+        2,
+        3,
+        11,
+        8,
+        14,
+        10,
+        13,
+        4,
+        12,
+        7,
+        1,
+        0,
+        9,
+        5,
+        6
+      ],
+      "source_sha256": "caeab485347a15c4300ac3d495d81e8ff30d6df72f96cb4f26c03f775b63acf2",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_320_06",
+      "condition": "low_angle_320",
+      "outfit_index": 6,
+      "expected": "OUTFIT_06",
+      "path": "crops/queries/low_angle_320_06.png",
+      "sha256": "f5ef87ea5f76107054d693c18672e2b2f9724cf9dd40630c6acf34c377b85cdc",
+      "gallery_order": [
+        7,
+        9,
+        8,
+        6,
+        4,
+        14,
+        11,
+        3,
+        13,
+        2,
+        1,
+        12,
+        10,
+        5,
+        0
+      ],
+      "source_sha256": "9cc0dc527bc317b0b80774dbe31b50cebcc541b895ed5dfc5e5e92ce96afd1e9",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "low_angle_160_04",
+      "condition": "low_angle_160",
+      "outfit_index": 4,
+      "expected": "OUTFIT_04",
+      "path": "crops/queries/low_angle_160_04.png",
+      "sha256": "29f278a7604729850f7a376e5b53704a863d36e125fb6209428d2148ea7c94a4",
+      "gallery_order": [
+        10,
+        5,
+        8,
+        3,
+        12,
+        2,
+        1,
+        14,
+        4,
+        11,
+        0,
+        7,
+        9,
+        13,
+        6
+      ],
+      "source_sha256": "f74996f964acf9a501abdc21ff70c8dd7b51108160e844b0ebf393446300c7b8",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_320_14",
+      "condition": "distant_320",
+      "outfit_index": 14,
+      "expected": "OUTFIT_14",
+      "path": "crops/queries/distant_320_14.png",
+      "sha256": "029da3a359b80797d42023bbf63f6a1218f9646d99e539e578f9f9266543cf6e",
+      "gallery_order": [
+        3,
+        6,
+        7,
+        10,
+        5,
+        12,
+        11,
+        0,
+        8,
+        13,
+        9,
+        2,
+        4,
+        1,
+        14
+      ],
+      "source_sha256": "5ffae45fd47eca8c3b5a5631dff5c01afadd377ddc30d8d0f525f2340e391d9f",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "distant_160_17",
+      "condition": "distant_160",
+      "outfit_index": 17,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/distant_160_17.png",
+      "sha256": "fda0d9c5fb66ba294a20f31ea55b02a9421d607af2794da4c5bea468c9476ddf",
+      "gallery_order": [
+        12,
+        13,
+        11,
+        4,
+        0,
+        8,
+        2,
+        7,
+        10,
+        3,
+        14,
+        6,
+        5,
+        9,
+        1
+      ],
+      "source_sha256": "0a5e6f295e329d6a3f3d496c95e56167cbcd1279136463efe3c82f0b58d37362",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "low_angle_320_14",
+      "condition": "low_angle_320",
+      "outfit_index": 14,
+      "expected": "OUTFIT_14",
+      "path": "crops/queries/low_angle_320_14.png",
+      "sha256": "dec3ae68de3b1f1038ea89c7c1f15d3cfde7a5a1dcaf2734bcf4431b02d8fab0",
+      "gallery_order": [
+        12,
+        9,
+        4,
+        3,
+        2,
+        8,
+        11,
+        0,
+        1,
+        14,
+        10,
+        13,
+        6,
+        5,
+        7
+      ],
+      "source_sha256": "ec35a2260dd411e4e1de9b23b06fbc870b68f529914673ab11ad945ebea77ceb",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "distant_320_02",
+      "condition": "distant_320",
+      "outfit_index": 2,
+      "expected": "OUTFIT_02",
+      "path": "crops/queries/distant_320_02.png",
+      "sha256": "423fb9def16c30b2bb1e507e1c0871bcc4a55117a86523104cf86a39567ae167",
+      "gallery_order": [
+        3,
+        8,
+        10,
+        2,
+        4,
+        9,
+        0,
+        13,
+        5,
+        14,
+        6,
+        11,
+        7,
+        1,
+        12
+      ],
+      "source_sha256": "c40d281aae9ea407fdb283411a46ac7280ecd831c7986af5e255946617aef96c",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_160_20",
+      "condition": "low_angle_160",
+      "outfit_index": 20,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/low_angle_160_20.png",
+      "sha256": "f6d00c6c35818fc939b328504775ad152ee94983e1be4952d0c58bb84c4ac769",
+      "gallery_order": [
+        13,
+        11,
+        10,
+        2,
+        0,
+        6,
+        12,
+        14,
+        1,
+        4,
+        3,
+        7,
+        9,
+        5,
+        8
+      ],
+      "source_sha256": "92c46801893b0f7604853a04cdcbce9271e00f32bc36017417ba75eb2297d09a",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_160_13",
+      "condition": "distant_160",
+      "outfit_index": 13,
+      "expected": "OUTFIT_13",
+      "path": "crops/queries/distant_160_13.png",
+      "sha256": "196ef604dfb741c850e0119a041ef6e9f37c610e7588687a509dec735f8613f5",
+      "gallery_order": [
+        12,
+        3,
+        6,
+        13,
+        5,
+        9,
+        11,
+        1,
+        4,
+        2,
+        14,
+        7,
+        10,
+        8,
+        0
+      ],
+      "source_sha256": "240961e6cef70094aa43b6bb0126a414b6cf5508ed071a2c2100898f9c8bfa15",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "low_angle_160_09",
+      "condition": "low_angle_160",
+      "outfit_index": 9,
+      "expected": "OUTFIT_09",
+      "path": "crops/queries/low_angle_160_09.png",
+      "sha256": "a0dbe95af431344a5bae773cb50478e11ddd1e65b9579a21ba7c94f33eec068d",
+      "gallery_order": [
+        5,
+        0,
+        4,
+        7,
+        1,
+        9,
+        14,
+        10,
+        13,
+        3,
+        6,
+        8,
+        12,
+        11,
+        2
+      ],
+      "source_sha256": "a3b5cf774da308c2b45f8634dddfe5c57b444f02d42b08ad774c601b2159b99c",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "low_angle_160_07",
+      "condition": "low_angle_160",
+      "outfit_index": 7,
+      "expected": "OUTFIT_07",
+      "path": "crops/queries/low_angle_160_07.png",
+      "sha256": "a4b42a2d63357e2e6cfcca28cbcc0a8914769234bafac8ee6a8343bd746f4c79",
+      "gallery_order": [
+        6,
+        0,
+        11,
+        13,
+        2,
+        1,
+        3,
+        8,
+        12,
+        9,
+        5,
+        4,
+        7,
+        10,
+        14
+      ],
+      "source_sha256": "66e3ae8084e372450dcf39f0f17f5fa715afb70d57e009208b4245a85cd77027",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_160_03",
+      "condition": "distant_160",
+      "outfit_index": 3,
+      "expected": "OUTFIT_03",
+      "path": "crops/queries/distant_160_03.png",
+      "sha256": "485fd5b1d65b697f1fe0fe32db448dafe70d9a0ebdbb2536aaa77e40fb506707",
+      "gallery_order": [
+        12,
+        1,
+        9,
+        2,
+        13,
+        11,
+        4,
+        10,
+        3,
+        8,
+        5,
+        7,
+        0,
+        6,
+        14
+      ],
+      "source_sha256": "e73160dcb3cb42dc4b64c82449ffd5b9cdbfb889ec8677c5e204db59fcb3c0eb",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "distant_320_03",
+      "condition": "distant_320",
+      "outfit_index": 3,
+      "expected": "OUTFIT_03",
+      "path": "crops/queries/distant_320_03.png",
+      "sha256": "b2b60e762a110c4a6d23262d95be58926efcc0146f46d9c6a48ff2c3d9a723bd",
+      "gallery_order": [
+        10,
+        14,
+        12,
+        9,
+        4,
+        11,
+        1,
+        3,
+        8,
+        7,
+        2,
+        6,
+        0,
+        5,
+        13
+      ],
+      "source_sha256": "d3c1e75a752329736771bcdd586180a305afa5c521b08e9a97d7e7be61b1f10e",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_320_09",
+      "condition": "low_angle_320",
+      "outfit_index": 9,
+      "expected": "OUTFIT_09",
+      "path": "crops/queries/low_angle_320_09.png",
+      "sha256": "142208afc3418a36e3add3f1832c55cb131e5ed0e611e6855324ba0903a326e8",
+      "gallery_order": [
+        13,
+        7,
+        3,
+        6,
+        11,
+        1,
+        0,
+        14,
+        8,
+        2,
+        4,
+        9,
+        10,
+        12,
+        5
+      ],
+      "source_sha256": "35d347307efeb55a437e897de97d5a0cb574736ac57ca3b7724c662dc562c5d2",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "distant_160_08",
+      "condition": "distant_160",
+      "outfit_index": 8,
+      "expected": "OUTFIT_08",
+      "path": "crops/queries/distant_160_08.png",
+      "sha256": "03b39ce4238cdac4989414367a715f71a731a84f4b7d9537b322bb37f84458ee",
+      "gallery_order": [
+        9,
+        2,
+        5,
+        3,
+        1,
+        0,
+        8,
+        7,
+        14,
+        12,
+        13,
+        4,
+        6,
+        11,
+        10
+      ],
+      "source_sha256": "b5bf68e76720d4ad02e884ccd91d0f832ee6d528c865eda92e4bacb4f8dccd44",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "low_angle_320_03",
+      "condition": "low_angle_320",
+      "outfit_index": 3,
+      "expected": "OUTFIT_03",
+      "path": "crops/queries/low_angle_320_03.png",
+      "sha256": "75fdd23df5a97da7fdaffabc8ea58493fc3a0f62c3c29fe81bffacc4b70a1f29",
+      "gallery_order": [
+        10,
+        13,
+        7,
+        0,
+        2,
+        12,
+        3,
+        8,
+        5,
+        9,
+        14,
+        6,
+        4,
+        11,
+        1
+      ],
+      "source_sha256": "66bc0c832b88abdd88fb349b704d035959591e61628ae723d7da13405a8080cd",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "distant_160_06",
+      "condition": "distant_160",
+      "outfit_index": 6,
+      "expected": "OUTFIT_06",
+      "path": "crops/queries/distant_160_06.png",
+      "sha256": "7c1136aae394923f3ebb03a8b87b90960dd93d2ba08fd778355e6912250cb1a0",
+      "gallery_order": [
+        6,
+        4,
+        10,
+        1,
+        14,
+        9,
+        7,
+        13,
+        5,
+        8,
+        3,
+        0,
+        2,
+        11,
+        12
+      ],
+      "source_sha256": "1355fe4e38d064dda10b99a0e21b86564a576a39e19032075af5f5e2137be5ff",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "distant_320_05",
+      "condition": "distant_320",
+      "outfit_index": 5,
+      "expected": "OUTFIT_05",
+      "path": "crops/queries/distant_320_05.png",
+      "sha256": "a06a817073abca04263d052409df9b6545fb2a4860f3a39c5ec4a9f77b65848b",
+      "gallery_order": [
+        10,
+        5,
+        2,
+        12,
+        7,
+        14,
+        8,
+        6,
+        0,
+        9,
+        3,
+        4,
+        11,
+        1,
+        13
+      ],
+      "source_sha256": "305ba0eb6c516167ca9b15d148b383e657a368e62bb92f52474eb5d850cf8e62",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_160_03",
+      "condition": "low_angle_160",
+      "outfit_index": 3,
+      "expected": "OUTFIT_03",
+      "path": "crops/queries/low_angle_160_03.png",
+      "sha256": "83a46079e792485508f29ce56f53c55aeccd0031d379a78dadae75618a5acd40",
+      "gallery_order": [
+        4,
+        5,
+        0,
+        2,
+        10,
+        11,
+        3,
+        7,
+        14,
+        9,
+        1,
+        12,
+        13,
+        6,
+        8
+      ],
+      "source_sha256": "f463e265052d880a130a6b11ef807432375b890beec25d8aa35885189831b5e5",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_320_20",
+      "condition": "distant_320",
+      "outfit_index": 20,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/distant_320_20.png",
+      "sha256": "3bacbad702aa19abd9619bf026b548d8f8524ed8eb5dad23ba534e94bda722b8",
+      "gallery_order": [
+        13,
+        9,
+        14,
+        3,
+        7,
+        0,
+        1,
+        12,
+        11,
+        4,
+        10,
+        6,
+        8,
+        2,
+        5
+      ],
+      "source_sha256": "f5d043c9a1efd5307f4f826007b868b2eb8b6313d8b3b4359576f5a6f71587e0",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_320_02",
+      "condition": "low_angle_320",
+      "outfit_index": 2,
+      "expected": "OUTFIT_02",
+      "path": "crops/queries/low_angle_320_02.png",
+      "sha256": "bb9e6e123b3f9d6d4e9068bfa6878a4895831c3a633a1562810c24df328eab98",
+      "gallery_order": [
+        12,
+        1,
+        9,
+        6,
+        8,
+        5,
+        4,
+        2,
+        3,
+        0,
+        14,
+        10,
+        11,
+        13,
+        7
+      ],
+      "source_sha256": "251f8836506c549c10cf4a934095ecb7996ee2d45fbd2b0b746883adfe4abdfe",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "distant_320_10",
+      "condition": "distant_320",
+      "outfit_index": 10,
+      "expected": "OUTFIT_10",
+      "path": "crops/queries/distant_320_10.png",
+      "sha256": "c78e08ec243ac416aeabbd971a305655b53e20c597f0dd6d8664f755bead4fe9",
+      "gallery_order": [
+        8,
+        5,
+        1,
+        13,
+        12,
+        9,
+        3,
+        7,
+        0,
+        11,
+        2,
+        14,
+        4,
+        10,
+        6
+      ],
+      "source_sha256": "5e2e180497d400213ebecb69913ea529bcdececcb88ff2a2d38fe1ff1f0598d2",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "distant_160_11",
+      "condition": "distant_160",
+      "outfit_index": 11,
+      "expected": "OUTFIT_11",
+      "path": "crops/queries/distant_160_11.png",
+      "sha256": "1c4f7a4f68929f1d2d5a3bc8b25d980ae2240676bb42a5eb6a7db8055c2a6922",
+      "gallery_order": [
+        4,
+        13,
+        14,
+        8,
+        6,
+        10,
+        0,
+        11,
+        7,
+        5,
+        2,
+        9,
+        1,
+        3,
+        12
+      ],
+      "source_sha256": "b7397ef5532ad0b2cadca1bdb6ad10bc4a7286e12eb47cf697686f3d3fe94ef9",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "low_angle_160_18",
+      "condition": "low_angle_160",
+      "outfit_index": 18,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/low_angle_160_18.png",
+      "sha256": "daf755de65fe53d75fbcb50390075ea280f62b148f8c998312e5502647e41236",
+      "gallery_order": [
+        7,
+        5,
+        4,
+        12,
+        0,
+        10,
+        11,
+        2,
+        13,
+        1,
+        8,
+        6,
+        14,
+        9,
+        3
+      ],
+      "source_sha256": "10eea829c7980350b96bbdbcf49b3126fcfb73fda398f1827563af365bc6416b",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "low_angle_320_20",
+      "condition": "low_angle_320",
+      "outfit_index": 20,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/low_angle_320_20.png",
+      "sha256": "5518c1d5355b123e64dec9c34c25e21d4133b6786b032f11c0b34d5f64033145",
+      "gallery_order": [
+        4,
+        12,
+        10,
+        8,
+        7,
+        9,
+        13,
+        2,
+        3,
+        11,
+        6,
+        0,
+        14,
+        5,
+        1
+      ],
+      "source_sha256": "278afe85dd111a0c2da0c396d8058cbcfc31a9342d091e7071f3fda3df63f3da",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "low_angle_160_10",
+      "condition": "low_angle_160",
+      "outfit_index": 10,
+      "expected": "OUTFIT_10",
+      "path": "crops/queries/low_angle_160_10.png",
+      "sha256": "3d8bcca80cf069bdf7cf7f35654590f24c75513dccf8522d995e8fd44811a759",
+      "gallery_order": [
+        9,
+        0,
+        12,
+        4,
+        7,
+        5,
+        14,
+        10,
+        3,
+        13,
+        8,
+        6,
+        2,
+        11,
+        1
+      ],
+      "source_sha256": "72c00e626c9884f098ad89826321e559f15bc5b5b61789e3c94d7073e6312685",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "low_angle_160_15",
+      "condition": "low_angle_160",
+      "outfit_index": 15,
+      "expected": "OUTFIT_15",
+      "path": "crops/queries/low_angle_160_15.png",
+      "sha256": "2fe97e43b1fb0d809c4afcc203331e69877dd9c0098ef0b81085b3f988f76d67",
+      "gallery_order": [
+        0,
+        2,
+        6,
+        9,
+        7,
+        5,
+        11,
+        14,
+        8,
+        12,
+        3,
+        13,
+        1,
+        4,
+        10
+      ],
+      "source_sha256": "878a9f8a3505a80980bd20b15bebecc4a5f963e4969233c8260a8ed7c368ee1a",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_160_02",
+      "condition": "distant_160",
+      "outfit_index": 2,
+      "expected": "OUTFIT_02",
+      "path": "crops/queries/distant_160_02.png",
+      "sha256": "b810eb3549c889bbdd4cf7b6192a304ca2d964e2971f793fd4567b6cb74dfc0d",
+      "gallery_order": [
+        14,
+        1,
+        8,
+        0,
+        5,
+        2,
+        7,
+        4,
+        10,
+        12,
+        3,
+        6,
+        9,
+        13,
+        11
+      ],
+      "source_sha256": "b06930c17087740afe6bbf34989343055cfc5e24f0ef2682f490a1e721adc0d4",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "distant_160_20",
+      "condition": "distant_160",
+      "outfit_index": 20,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/distant_160_20.png",
+      "sha256": "442698b7c8e857e79bda20acaa0a6441440a5c9d5e766879759043a3486f9b94",
+      "gallery_order": [
+        12,
+        11,
+        0,
+        4,
+        14,
+        5,
+        6,
+        9,
+        10,
+        1,
+        7,
+        8,
+        2,
+        13,
+        3
+      ],
+      "source_sha256": "093f9a371dc1240950f466a131e02785efde7805b8669195411ec98a19fe2f72",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "low_angle_160_02",
+      "condition": "low_angle_160",
+      "outfit_index": 2,
+      "expected": "OUTFIT_02",
+      "path": "crops/queries/low_angle_160_02.png",
+      "sha256": "042bac310e34bd45aa23e5de11e4e605faa7cde683784aee4dea3c420e11af8d",
+      "gallery_order": [
+        1,
+        10,
+        7,
+        11,
+        9,
+        6,
+        5,
+        4,
+        8,
+        3,
+        13,
+        12,
+        14,
+        0,
+        2
+      ],
+      "source_sha256": "4966dd59f8c8edbc4e2e00f885bd0cab22679013b25bd266a695307ebf19d6dd",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_320_06",
+      "condition": "distant_320",
+      "outfit_index": 6,
+      "expected": "OUTFIT_06",
+      "path": "crops/queries/distant_320_06.png",
+      "sha256": "b8492a876455eb2e64fb5eee572716c8c5d376cd301348906cfcf26c8cd64946",
+      "gallery_order": [
+        4,
+        1,
+        14,
+        11,
+        5,
+        8,
+        9,
+        7,
+        3,
+        6,
+        0,
+        10,
+        12,
+        2,
+        13
+      ],
+      "source_sha256": "8221e59aa50f8f0288aafe29e32e1ea8efd5a0bcbd9546247e0e5f5da09de964",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "distant_160_01",
+      "condition": "distant_160",
+      "outfit_index": 1,
+      "expected": "OUTFIT_01",
+      "path": "crops/queries/distant_160_01.png",
+      "sha256": "4ddc0fc8c330f10f52c4653e25cd9e6c72f4f9fe5d0ee60369ab5a3dac797a5f",
+      "gallery_order": [
+        1,
+        6,
+        13,
+        10,
+        4,
+        12,
+        9,
+        11,
+        0,
+        14,
+        8,
+        3,
+        7,
+        5,
+        2
+      ],
+      "source_sha256": "2b6120db3e847aae96831a9cf20727881a663b33fbb43601aa12d743e03ab24f",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "distant_160_10",
+      "condition": "distant_160",
+      "outfit_index": 10,
+      "expected": "OUTFIT_10",
+      "path": "crops/queries/distant_160_10.png",
+      "sha256": "4175ef2bf2450f99ba6664bb8fd49aaaf4e4e9f60ca3b7649a3bfd2cfc6a9352",
+      "gallery_order": [
+        13,
+        11,
+        7,
+        4,
+        12,
+        1,
+        5,
+        8,
+        6,
+        3,
+        14,
+        0,
+        2,
+        10,
+        9
+      ],
+      "source_sha256": "0e1fa6bb55439b58812b46ec6a0aac9a12b63592772b4b5793e428ce929ebf62",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "distant_160_14",
+      "condition": "distant_160",
+      "outfit_index": 14,
+      "expected": "OUTFIT_14",
+      "path": "crops/queries/distant_160_14.png",
+      "sha256": "5b24bbac0c93fdcdceb17f4c517a54fb5f2ed4032515bed3dad7f5f0cea75613",
+      "gallery_order": [
+        8,
+        6,
+        12,
+        1,
+        11,
+        9,
+        13,
+        0,
+        14,
+        3,
+        7,
+        4,
+        2,
+        10,
+        5
+      ],
+      "source_sha256": "97ceb0fe25c13996c53bc078ad16d3e21c92348f96e8fb8700e69f8bee425946",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "low_angle_320_18",
+      "condition": "low_angle_320",
+      "outfit_index": 18,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/low_angle_320_18.png",
+      "sha256": "00e24a535e01f577f2f797885e616895c3757d175133efa260979071d64dd876",
+      "gallery_order": [
+        0,
+        13,
+        7,
+        6,
+        5,
+        11,
+        8,
+        9,
+        12,
+        3,
+        10,
+        4,
+        14,
+        2,
+        1
+      ],
+      "source_sha256": "3c85e8049144d9081c0a50604cf10db196825c0bd8cb36f226d3b7e8f662d116",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "distant_320_16",
+      "condition": "distant_320",
+      "outfit_index": 16,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/distant_320_16.png",
+      "sha256": "2e011253e1b74d4d08401030fbac9bcde8a54a391b98baa905617ae4258a961d",
+      "gallery_order": [
+        14,
+        0,
+        12,
+        1,
+        5,
+        9,
+        13,
+        4,
+        3,
+        6,
+        2,
+        10,
+        11,
+        8,
+        7
+      ],
+      "source_sha256": "33bfcd78e407d83d13eabb323e40e8279309b4dbf1b02223886b7ba1104443f9",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "distant_320_09",
+      "condition": "distant_320",
+      "outfit_index": 9,
+      "expected": "OUTFIT_09",
+      "path": "crops/queries/distant_320_09.png",
+      "sha256": "1c51e18056dfc6538607b6f7cd6553d44c8d6afcf625ab2487eb9308d3032df4",
+      "gallery_order": [
+        9,
+        0,
+        1,
+        10,
+        13,
+        2,
+        7,
+        6,
+        8,
+        4,
+        12,
+        11,
+        14,
+        3,
+        5
+      ],
+      "source_sha256": "85436bcec87ab6a1ad40e82cc0b4c827291f2b20be531d21a0b42c829925e71f",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_320_17",
+      "condition": "low_angle_320",
+      "outfit_index": 17,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/low_angle_320_17.png",
+      "sha256": "39bb168367f6975c48101895a73844f41996bec3b88b9533cbb015f41f167220",
+      "gallery_order": [
+        5,
+        3,
+        8,
+        0,
+        9,
+        11,
+        10,
+        4,
+        12,
+        7,
+        1,
+        2,
+        13,
+        14,
+        6
+      ],
+      "source_sha256": "50963f5de014027ece51bbca1c36732646d3eca64636f7dc2033cf0a74b422e4",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "low_angle_160_12",
+      "condition": "low_angle_160",
+      "outfit_index": 12,
+      "expected": "OUTFIT_12",
+      "path": "crops/queries/low_angle_160_12.png",
+      "sha256": "9dda0edd3192ec1d043c7de3bd2d3c9dcaf32061f2c47c1f3af1905dda58311d",
+      "gallery_order": [
+        5,
+        4,
+        7,
+        11,
+        8,
+        12,
+        6,
+        9,
+        13,
+        3,
+        0,
+        1,
+        10,
+        14,
+        2
+      ],
+      "source_sha256": "5048fa7ac5871a2eb1080fecb8a5ab05d5db715c35d1fa5487824bb67d18923a",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_160_18",
+      "condition": "distant_160",
+      "outfit_index": 18,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/distant_160_18.png",
+      "sha256": "a7f2a813cac50a68c420f0ee2b98b5e815badac41db4791776c4935f4a3db034",
+      "gallery_order": [
+        13,
+        11,
+        9,
+        14,
+        1,
+        7,
+        10,
+        12,
+        0,
+        5,
+        3,
+        6,
+        4,
+        2,
+        8
+      ],
+      "source_sha256": "4093d35f8200246109d9d684488f9cb6f690ad082f34a6caae1a53bd190e241b",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "distant_320_13",
+      "condition": "distant_320",
+      "outfit_index": 13,
+      "expected": "OUTFIT_13",
+      "path": "crops/queries/distant_320_13.png",
+      "sha256": "e83ad727f3747643c0bc8f5bf43a74643a3685aa5bcc2be5cd8ed48e05256dac",
+      "gallery_order": [
+        3,
+        8,
+        12,
+        9,
+        0,
+        1,
+        7,
+        4,
+        11,
+        5,
+        13,
+        14,
+        10,
+        6,
+        2
+      ],
+      "source_sha256": "7b1cf7d6b7cdae33df941dcb0b23eb6640a80de12d4614fa3722bd5448044e87",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_320_15",
+      "condition": "low_angle_320",
+      "outfit_index": 15,
+      "expected": "OUTFIT_15",
+      "path": "crops/queries/low_angle_320_15.png",
+      "sha256": "1f91ee84ea4e314f3fe288cc2d92d41a23cf9ce4fe2391fb893ec25a80285190",
+      "gallery_order": [
+        10,
+        9,
+        7,
+        11,
+        14,
+        6,
+        8,
+        1,
+        0,
+        12,
+        2,
+        3,
+        5,
+        13,
+        4
+      ],
+      "source_sha256": "62ce39dcdfd658e0551ee01cc62d53dfe97e1a81b75e5c4ac9ec3652f7a924d4",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "distant_160_07",
+      "condition": "distant_160",
+      "outfit_index": 7,
+      "expected": "OUTFIT_07",
+      "path": "crops/queries/distant_160_07.png",
+      "sha256": "1b2754f8803cc53642b0fd8bc39d5f0abd5c2a50217155779b65c45e731cad70",
+      "gallery_order": [
+        6,
+        9,
+        12,
+        5,
+        1,
+        8,
+        4,
+        3,
+        14,
+        7,
+        0,
+        11,
+        2,
+        10,
+        13
+      ],
+      "source_sha256": "33ac1ee11ea3bf37a9d3df6080954b6a9055eb9f22647274287987fde08a2212",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "low_angle_160_16",
+      "condition": "low_angle_160",
+      "outfit_index": 16,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/low_angle_160_16.png",
+      "sha256": "9bb8a937bbc042f7c153dad0dd335ab8e3bedc043580f27be6f67b083dfb0cb9",
+      "gallery_order": [
+        14,
+        4,
+        13,
+        9,
+        5,
+        7,
+        12,
+        2,
+        11,
+        10,
+        8,
+        0,
+        6,
+        3,
+        1
+      ],
+      "source_sha256": "ad45a3dcc0651bacbcec9b5d51c05811124e7c831010a0ecc7f4cdfa6012e3ed",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_160_16",
+      "condition": "distant_160",
+      "outfit_index": 16,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/distant_160_16.png",
+      "sha256": "a887ad2c88e89fcb8190fdd1d4f99681938ce479383c9dd25845a0f3a9194870",
+      "gallery_order": [
+        14,
+        5,
+        9,
+        1,
+        4,
+        3,
+        13,
+        7,
+        12,
+        8,
+        0,
+        2,
+        10,
+        11,
+        6
+      ],
+      "source_sha256": "f89fd8905a0c3c01842c1c48852e362cb330d31a80bc165412d31d9192afe5ad",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "low_angle_320_07",
+      "condition": "low_angle_320",
+      "outfit_index": 7,
+      "expected": "OUTFIT_07",
+      "path": "crops/queries/low_angle_320_07.png",
+      "sha256": "7a487d0ab05b35c1092300e923f1cf9713c355237da4840acabb39e3763938c7",
+      "gallery_order": [
+        3,
+        5,
+        6,
+        1,
+        7,
+        12,
+        8,
+        2,
+        0,
+        10,
+        4,
+        11,
+        14,
+        9,
+        13
+      ],
+      "source_sha256": "4dccc7e4cd9fc0398f26f17489a92e42721271a88d9eb47599f9406de38fd284",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "low_angle_160_14",
+      "condition": "low_angle_160",
+      "outfit_index": 14,
+      "expected": "OUTFIT_14",
+      "path": "crops/queries/low_angle_160_14.png",
+      "sha256": "505fe4bcab895b7a79df09796ff364e78b3c57a65675acfe257c660a40f5e755",
+      "gallery_order": [
+        0,
+        5,
+        9,
+        3,
+        1,
+        12,
+        4,
+        13,
+        11,
+        6,
+        14,
+        8,
+        7,
+        2,
+        10
+      ],
+      "source_sha256": "c66195932030a94a8d404de2478d30f032bd714b5a2577ba2b04e0025f1fba20",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_320_15",
+      "condition": "distant_320",
+      "outfit_index": 15,
+      "expected": "OUTFIT_15",
+      "path": "crops/queries/distant_320_15.png",
+      "sha256": "65cfff3475a52cda2f89b4fb72e769313827bd207e610874feb86c9b7f82f215",
+      "gallery_order": [
+        10,
+        1,
+        7,
+        3,
+        11,
+        13,
+        6,
+        8,
+        12,
+        2,
+        9,
+        5,
+        4,
+        0,
+        14
+      ],
+      "source_sha256": "e9ad2144c218f6c25f295d8b19b8a51314028a4400deb2b3918c3a70325e9f27",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "distant_160_12",
+      "condition": "distant_160",
+      "outfit_index": 12,
+      "expected": "OUTFIT_12",
+      "path": "crops/queries/distant_160_12.png",
+      "sha256": "82113f0c68f3909d1f9c63fd5c9c883ccce21d86395473acf88212372daf06b1",
+      "gallery_order": [
+        12,
+        6,
+        11,
+        7,
+        4,
+        3,
+        1,
+        5,
+        8,
+        0,
+        10,
+        13,
+        9,
+        2,
+        14
+      ],
+      "source_sha256": "2bd6194cb26073d19b5a1853050a7666968161e1acccc50af707d90e8e1e0912",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "distant_320_04",
+      "condition": "distant_320",
+      "outfit_index": 4,
+      "expected": "OUTFIT_04",
+      "path": "crops/queries/distant_320_04.png",
+      "sha256": "fba66791e33a7a71353d0c6afae66ed313deb7190cbc0d7cb3413bb206789e77",
+      "gallery_order": [
+        1,
+        10,
+        9,
+        6,
+        8,
+        13,
+        2,
+        12,
+        3,
+        11,
+        14,
+        0,
+        7,
+        4,
+        5
+      ],
+      "source_sha256": "8235ccd7af2048183ef7dcdcc6bdbb02455fce6684c1eb2e231e1ecb531b13c2",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_320_19",
+      "condition": "low_angle_320",
+      "outfit_index": 19,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/low_angle_320_19.png",
+      "sha256": "02885797f5c8b065d4ee03c19d5e87663876f384ea2f1f9745c1e3841f07b89d",
+      "gallery_order": [
+        12,
+        7,
+        13,
+        11,
+        3,
+        9,
+        2,
+        4,
+        6,
+        8,
+        1,
+        14,
+        5,
+        0,
+        10
+      ],
+      "source_sha256": "386b1c10816c1efe48a8eb2def647071c24616391cf1c503cb95b04cfc291f78",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "distant_160_19",
+      "condition": "distant_160",
+      "outfit_index": 19,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/distant_160_19.png",
+      "sha256": "c06d365a6314d966b3b65b169b69c0562ef1daa41ab9006637ed7e8c4596886c",
+      "gallery_order": [
+        2,
+        6,
+        11,
+        1,
+        8,
+        14,
+        12,
+        4,
+        13,
+        0,
+        10,
+        9,
+        3,
+        5,
+        7
+      ],
+      "source_sha256": "2636480bc9636c328093fb119f3780f8f2d82e6bc396cb084ad2c8aad2b0d745",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "low_angle_160_13",
+      "condition": "low_angle_160",
+      "outfit_index": 13,
+      "expected": "OUTFIT_13",
+      "path": "crops/queries/low_angle_160_13.png",
+      "sha256": "70fef844227c8ee1a235f79445ca8118c71769bbecfd3e24d4ce444095b8ce3b",
+      "gallery_order": [
+        3,
+        13,
+        8,
+        14,
+        11,
+        1,
+        4,
+        6,
+        7,
+        2,
+        10,
+        9,
+        5,
+        0,
+        12
+      ],
+      "source_sha256": "24dd3e717bfeac33f6619d56321615d436131e490e09af492f46c2ceee04f4e0",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_160_09",
+      "condition": "distant_160",
+      "outfit_index": 9,
+      "expected": "OUTFIT_09",
+      "path": "crops/queries/distant_160_09.png",
+      "sha256": "7890e718d47d5a2caab5a39b6c1b6312a46198d0f397e2d4ab92893c8ae1e302",
+      "gallery_order": [
+        6,
+        9,
+        4,
+        2,
+        0,
+        1,
+        7,
+        5,
+        12,
+        11,
+        8,
+        13,
+        10,
+        3,
+        14
+      ],
+      "source_sha256": "8d7d849333e75ab7a6bd73f79b3741e6aa2355175021e626be7846a88a0870d5",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "distant_160_05",
+      "condition": "distant_160",
+      "outfit_index": 5,
+      "expected": "OUTFIT_05",
+      "path": "crops/queries/distant_160_05.png",
+      "sha256": "6fe4fbefb2638f861f5f6fa142939f162afc351d3e3d988403173ae7452283da",
+      "gallery_order": [
+        12,
+        2,
+        1,
+        3,
+        5,
+        10,
+        6,
+        4,
+        7,
+        8,
+        9,
+        11,
+        13,
+        0,
+        14
+      ],
+      "source_sha256": "3b263246bdbe9e17d309079cbb73a7b00e1f23d4315785a6ac68937fb5a9490c",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "distant_320_18",
+      "condition": "distant_320",
+      "outfit_index": 18,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/distant_320_18.png",
+      "sha256": "311b32441243273c177991d3b74cd11ae946281c27d1e5572e4e26ef284f57ad",
+      "gallery_order": [
+        0,
+        8,
+        14,
+        10,
+        9,
+        1,
+        11,
+        4,
+        5,
+        12,
+        13,
+        6,
+        7,
+        2,
+        3
+      ],
+      "source_sha256": "fa7be7fc7e554a8ece57b2f176bb995fda0a07ec2f210b1a86de0ac989d0822c",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_320_16",
+      "condition": "low_angle_320",
+      "outfit_index": 16,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/low_angle_320_16.png",
+      "sha256": "d492721bbb34de3e728e8e4172115b4aa35f9ffbdddac41c4be1edc2c73917ce",
+      "gallery_order": [
+        14,
+        7,
+        2,
+        5,
+        11,
+        0,
+        9,
+        3,
+        8,
+        6,
+        13,
+        1,
+        4,
+        10,
+        12
+      ],
+      "source_sha256": "beb22832f3411b900aa33fcff8d2df564cee9536abad44b9c55396f501c15216",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "low_angle_320_01",
+      "condition": "low_angle_320",
+      "outfit_index": 1,
+      "expected": "OUTFIT_01",
+      "path": "crops/queries/low_angle_320_01.png",
+      "sha256": "58aaa377657132e7542f099ac9ad0733e440cca8e2f055befdf0e74243a66c20",
+      "gallery_order": [
+        6,
+        7,
+        9,
+        5,
+        0,
+        11,
+        3,
+        2,
+        1,
+        8,
+        14,
+        12,
+        4,
+        13,
+        10
+      ],
+      "source_sha256": "1f175b883afd6c17fa5e2e09892f3764bbfce2a327ef0e7d827865abe2108939",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "low_angle_160_19",
+      "condition": "low_angle_160",
+      "outfit_index": 19,
+      "expected": "UNKNOWN",
+      "path": "crops/queries/low_angle_160_19.png",
+      "sha256": "a0705bf17dc1dc6f82173e12adad335d056bc66071d626dde2d382fa35af750e",
+      "gallery_order": [
+        11,
+        13,
+        4,
+        6,
+        9,
+        1,
+        3,
+        5,
+        7,
+        2,
+        14,
+        0,
+        10,
+        12,
+        8
+      ],
+      "source_sha256": "45b84c89ef1675134340b76c27872fca6f1bb72858b7c41fb858df52d8a7752e",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "low_angle_160_01",
+      "condition": "low_angle_160",
+      "outfit_index": 1,
+      "expected": "OUTFIT_01",
+      "path": "crops/queries/low_angle_160_01.png",
+      "sha256": "6165253ac096ad1dfe70c8ddafea0039aa48e309acce0e97d6a1617d5f9926aa",
+      "gallery_order": [
+        2,
+        3,
+        10,
+        0,
+        7,
+        14,
+        5,
+        11,
+        9,
+        12,
+        1,
+        8,
+        6,
+        4,
+        13
+      ],
+      "source_sha256": "e840bd5f78655ab81d08920c65acd49b906021182616a1e825c4b39330ad706b",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_320_11",
+      "condition": "distant_320",
+      "outfit_index": 11,
+      "expected": "OUTFIT_11",
+      "path": "crops/queries/distant_320_11.png",
+      "sha256": "01820a1c7e8c912a264c2f414cd56f1cf980a53053830267d7f2ac031b7c70ab",
+      "gallery_order": [
+        14,
+        0,
+        11,
+        9,
+        4,
+        12,
+        6,
+        1,
+        7,
+        13,
+        5,
+        2,
+        10,
+        8,
+        3
+      ],
+      "source_sha256": "56bf46a5c28564eeacee05ecf1a5f3f9ef79b6bb70338bd61255b9a02c626e02",
+      "crop_xyxy": [
+        125,
+        60,
+        213,
+        183
+      ],
+      "crop_size": [
+        88,
+        123
+      ]
+    },
+    {
+      "id": "low_angle_160_08",
+      "condition": "low_angle_160",
+      "outfit_index": 8,
+      "expected": "OUTFIT_08",
+      "path": "crops/queries/low_angle_160_08.png",
+      "sha256": "a097b43561153b247e4d517ebeae39f62b5288aadb0d18136f0246cf3874910c",
+      "gallery_order": [
+        3,
+        1,
+        5,
+        6,
+        7,
+        12,
+        2,
+        14,
+        13,
+        0,
+        10,
+        9,
+        8,
+        11,
+        4
+      ],
+      "source_sha256": "275af8b7bfe7a818f0138cc44018a652271da910d80b6f8050535b338af860a0",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    },
+    {
+      "id": "distant_160_15",
+      "condition": "distant_160",
+      "outfit_index": 15,
+      "expected": "OUTFIT_15",
+      "path": "crops/queries/distant_160_15.png",
+      "sha256": "118e42bf2352211134cf45aa5a8c894d80ee48271afca04bea362e1a44110887",
+      "gallery_order": [
+        0,
+        14,
+        11,
+        10,
+        6,
+        9,
+        2,
+        4,
+        12,
+        8,
+        3,
+        5,
+        1,
+        7,
+        13
+      ],
+      "source_sha256": "21ed3a82801c09cca1bd45a2e5addfd14099866118478632d1803ffeec5baf92",
+      "crop_xyxy": [
+        62,
+        30,
+        106,
+        92
+      ],
+      "crop_size": [
+        44,
+        62
+      ]
+    },
+    {
+      "id": "low_angle_320_11",
+      "condition": "low_angle_320",
+      "outfit_index": 11,
+      "expected": "OUTFIT_11",
+      "path": "crops/queries/low_angle_320_11.png",
+      "sha256": "bbc8c8409717dda4c819bde2d8659eee34327257d9f32ef809c2c030c5dbd371",
+      "gallery_order": [
+        3,
+        4,
+        6,
+        10,
+        1,
+        0,
+        5,
+        12,
+        9,
+        14,
+        7,
+        11,
+        2,
+        8,
+        13
+      ],
+      "source_sha256": "7edf02c35be352f277db77b106ae63d0ae7c76a9f1b029f9970bc9f668713341",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "low_angle_320_05",
+      "condition": "low_angle_320",
+      "outfit_index": 5,
+      "expected": "OUTFIT_05",
+      "path": "crops/queries/low_angle_320_05.png",
+      "sha256": "ffed1007eb7f1e153781e4003947355f07d850942c7d9bd315bfb23b794b754b",
+      "gallery_order": [
+        4,
+        6,
+        9,
+        12,
+        0,
+        7,
+        11,
+        14,
+        1,
+        2,
+        3,
+        13,
+        10,
+        8,
+        5
+      ],
+      "source_sha256": "e5996b899aeec03b120fef7dae03d758f66c5f535559d179f8f8dd199ad485ec",
+      "crop_xyxy": [
+        88,
+        0,
+        224,
+        238
+      ],
+      "crop_size": [
+        136,
+        238
+      ]
+    },
+    {
+      "id": "low_angle_160_06",
+      "condition": "low_angle_160",
+      "outfit_index": 6,
+      "expected": "OUTFIT_06",
+      "path": "crops/queries/low_angle_160_06.png",
+      "sha256": "5b0f81c7c8d255dd7365a1585b24e2ead2211a3a044808010ee992247d5463a8",
+      "gallery_order": [
+        14,
+        7,
+        12,
+        6,
+        13,
+        4,
+        8,
+        9,
+        3,
+        5,
+        11,
+        1,
+        10,
+        0,
+        2
+      ],
+      "source_sha256": "960316eea87d8dba734d8c645e5fb24dabdeef47700ce155157f97459d278382",
+      "crop_xyxy": [
+        44,
+        0,
+        112,
+        119
+      ],
+      "crop_size": [
+        68,
+        119
+      ]
+    }
+  ],
+  "limitations": [
+    "Manual subject regions, no detector; this is not the full PR pipeline.",
+    "Synthetic identical faceless mannequins; no human identity tested.",
+    "All crop cases derive from the earlier test set; not new independent samples."
+  ]
+}

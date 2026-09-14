@@ -1,0 +1,9 @@
+Use case: identity-preserve
+IMAGE 1 is an edit target: a 4-column, 5-row sheet of entirely fictional AI-generated faces. IMAGE 2 is a reference sheet containing 5 entirely fictional AI-generated characters, one per row; use its LEFT column large portraits.
+Correct ONLY the last/rightmost column of IMAGE 1. Preserve the first THREE columns and all grid boundaries and style unchanged. The last column currently has wrong characters in rows 2,3,4,5. Replace the 5 cells of the rightmost column with NEW low-angle close-up portraits of the FIVE fictional characters in IMAGE 2's left column, in exactly the same TOP TO BOTTOM ROW ORDER.
+Last column row1: input2 row1, short black hair tan clean-shaven male.
+Last column row2: input2 row2, pale female with straight BROWN chin-length bob, long narrow nose, angular chin. Must be female with brown hair, not bearded man.
+Last column row3: input2 row3, dark-skinned BALD male with short black GOATEE and rounded face. Must be this bald goateed male, not woman.
+Last column row4: input2 row4, pale male with REDDISH short hair and short REDDISH BEARD, narrow face and wide-set eyes.
+Last column row5: input2 row5, medium-skinned female with BLACK chin-length bob, broad face narrowing at jaw and wide nose.
+Preserve each exact invented character's facial structure from input2. All in plain blue shirt against same gray background, photographed from a LOW angle looking up around25 degrees, head fills70% ofcell. No real people, no celebrities, no labels, no numbers, no text, no borders. Exactly4columns5rows, same composition as image1.

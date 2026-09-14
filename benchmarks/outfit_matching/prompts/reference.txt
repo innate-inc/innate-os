@@ -1,0 +1,26 @@
+Use case: scientific-educational
+Asset type: photographic clothing benchmark contact sheet.
+Generate ONE image containing exactly 20 equal panels in a strict 4-column by 5-row grid, no gutters or borders, no text anywhere. Overall canvas 2560 wide by 2400 high if possible; each panel is a landscape 4:3 photograph. This grid will be cut into 20 photographs.
+Every panel shows an IDENTICAL blank white retail display mannequin, with smooth featureless white oval head, same neutral build and same pose, wearing one outfit. NO real people, no facial features, no hair, no skin. The task is clothing matching only. Neutral eye-level reference catalog photos; entire mannequin head to shoes visible, approximately 80% of panel height. Same plain light gray studio wall and floor in EVERY panel. Realistic fabric texture and folds, imperfect ordinary clothes, no brands, no logos or writing. Preserve differences in trousers and footwear.
+Outfits in exact row-major order, left to right top to bottom:
+1. brick red plain pullover hoodie, dark navy blue jeans, white sneakers.
+2. navy blue plain pullover hoodie, light gray joggers, white sneakers.
+3. forest green crewneck sweatshirt, beige chinos, brown shoes.
+4. cream long sleeve shirt with NAVY HORIZONTAL stripes, black trousers, white sneakers.
+5. mustard yellow raincoat, navy trousers, black boots.
+6. light blue denim jacket over white tee, black jeans, white sneakers.
+7. black zip jacket, burgundy trousers, black sneakers.
+8. light gray pullover hoodie, blue jeans, RED sneakers.
+9. red and black plaid shirt, charcoal trousers, brown boots.
+10. teal short sleeve polo, beige knee-length shorts, white sneakers.
+11. purple crewneck sweater, gray trousers, black shoes.
+12. white button-down shirt, navy dress slacks, brown shoes.
+13. orange puffer jacket, black trousers, white sneakers.
+14. olive green overshirt open over cream tee, blue jeans, black sneakers.
+15. charcoal short sleeve tee, tan cargo trousers, gray sneakers.
+16. brick red pullover hoodie, BLACK KNEE-LENGTH SHORTS, BLACK sneakers.
+17. cream long sleeve shirt with NAVY VERTICAL stripes, black trousers, white sneakers.
+18. forest green crewneck sweatshirt, GRAY trousers, WHITE sneakers.
+19. black zip jacket, BLUE JEANS, WHITE sneakers.
+20. light gray pullover hoodie, BLACK trousers, BLACK sneakers.
+Exact 4 columns and 5 rows. No numbers, labels, captions, text, accessories, cards, or watermarks. Every mannequin identical. This is a catalog of outfits, not identities.

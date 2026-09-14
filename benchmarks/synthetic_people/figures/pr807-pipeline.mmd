@@ -1,0 +1,8 @@
+flowchart TD
+    A["80 synthetic scene queries"] --> B["33: person detected"]
+    A --> X["47: no person detected"]
+    B --> C["1: usable face embedding"]
+    B --> Y["28: face below 24 px"]
+    B --> Z["4: no usable face"]
+    C --> D["1: known character rejected"]
+    D --> E["0 accepted identities"]

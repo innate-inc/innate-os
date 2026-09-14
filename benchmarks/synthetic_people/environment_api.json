@@ -1,0 +1,12 @@
+{
+  "role": "dataset preparation and API requests",
+  "python": "3.11.8",
+  "platform": "macOS-26.2-arm64-arm-64bit",
+  "packages": {
+    "Pillow": "12.3.0",
+    "httpx": "0.28.1",
+    "python-dotenv": "1.2.3",
+    "numpy": "2.4.6",
+    "opencv-python-headless": "5.0.0.93"
+  }
+}

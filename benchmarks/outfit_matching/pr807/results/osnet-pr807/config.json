@@ -1,0 +1,28 @@
+{
+  "pr": "https://github.com/innate-inc/innate-os/pull/807",
+  "commit": "487978f9fc69bda93b349423076c3455248ae1c2",
+  "models_source_sha256": "692c3f166698dbe1a984f5255ef7c95204715ca7e1e3e6b3bee465f183d6b490",
+  "recognize_source_sha256": "6b76057aa8e69768b75e43b48d09b7ccf65eb50a14013605ddd4dcc37e1d7b4c",
+  "model_sha256": "7e49cb6b5a9b3fe3701a975900d5a98b80f5c3a5754208e46652d6bbcf29ce08",
+  "outfit_accept": 0.78,
+  "outfit_margin": 0.07,
+  "face_path_executed": false,
+  "model": "osnet_x0_25_msmt17",
+  "provider": "local-onnxruntime-cpu",
+  "manifest_sha256": "32207cfc36207b773e3f55fede9fcb11c454076085d6216052a28658d08c7038",
+  "harness_sha256": "05a0db746e38fdc719d1674d0022a96fe68c93ce4c31cbc662c42ec7067165b1",
+  "extracted_code_sha256": "3698c85a4c1535af8ffc454e0ea40aa6ff741352108b64fd5d91fd6064201a7a",
+  "host": "macOS-26.2-arm64-arm-64bit",
+  "machine": "arm64",
+  "versions": {
+    "numpy": "2.4.6",
+    "onnxruntime": "1.29.0",
+    "opencv-python-headless": "5.0.0.93"
+  },
+  "model_load_and_gallery_s": 11.816442958079278,
+  "warmup_calls": 3,
+  "started_utc": "2026-09-09T15:26:04.871788+00:00",
+  "gallery": "one embedding per catalog outfit",
+  "thresholds_tuned": false,
+  "query_timing_includes": "image decode, crop embedding and gallery comparison; excludes model/gallery startup"
+}

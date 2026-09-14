@@ -1,0 +1,5 @@
+pillow==12.3.0
+httpx==0.28.1
+python-dotenv==1.2.3
+numpy==2.2.6
+opencv-python-headless==4.12.0.88

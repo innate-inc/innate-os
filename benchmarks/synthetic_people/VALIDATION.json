@@ -1,0 +1,18 @@
+{
+  "primary_completed_predictions": {
+    "astra-low": 140,
+    "gemini-low": 140,
+    "pr807-face": 140,
+    "pr807-hog-face": 80
+  },
+  "api_errors": 0,
+  "unique_cases_and_true_labels_checked": true,
+  "all_input_sha256_verified": true,
+  "summary_metrics_recomputed": true,
+  "requested_model_identifiers_verified": true,
+  "html_case_count": 140,
+  "embedded_image_count": 260,
+  "protocol_tests_passed": 9,
+  "ruff": "passed",
+  "browser_review_page_loaded": true
+}

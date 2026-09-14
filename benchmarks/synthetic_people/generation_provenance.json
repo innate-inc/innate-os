@@ -1,0 +1,45 @@
+{
+  "synthetic_only": true,
+  "date": "2026-09-10",
+  "generations": [
+    {
+      "prompt_file": "prompts/sheet_1.txt",
+      "prompt_sha256": "c4b489513c69e71c078316e3cfa5a5afb83dda271dbac5291cf590ad4b760f0f",
+      "tool": "image_gen.imagegen",
+      "real_person_references": false
+    },
+    {
+      "prompt_file": "prompts/sheet_2.txt",
+      "prompt_sha256": "93b942e5286f23f8cf0c9b2827322c6fe8680e2c7c063188df59e211e8a6268b",
+      "tool": "image_gen.imagegen",
+      "real_person_references": false
+    },
+    {
+      "prompt_file": "prompts/sheet_3.txt",
+      "prompt_sha256": "646bf1931afb71ea3a0f1341e4751c9db64b47d296241340a07fc06c708af534",
+      "tool": "image_gen.imagegen",
+      "real_person_references": false
+    },
+    {
+      "prompt_file": "prompts/sheet_4.txt",
+      "prompt_sha256": "bab59a50f9f0efdda941abf10b48c0cc7d4dc5635810e4be33e9aa8cc406d10d",
+      "tool": "image_gen.imagegen",
+      "real_person_references": false
+    },
+    {
+      "prompt_file": "prompts/face_queries.txt",
+      "prompt_sha256": "2582c56d73bac5611c72b5df60491df86a228d50f2d15b60a61acc39373299cf",
+      "tool": "image_gen.imagegen",
+      "real_person_references": false
+    },
+    {
+      "prompt_file": "prompts/face_queries_correction.txt",
+      "prompt_sha256": "7f064df0d27d5b752edf98145930ea6d13ec570caa7b86df85cc07297b84c309",
+      "tool": "image_gen.imagegen",
+      "real_person_references": false
+    }
+  ],
+  "source_notes": "Four independently generated sheets with five fictional characters each. face_queries used the four sheets as references; face_queries_correction repaired the final column before any model predictions. The draft is retained but not scored.",
+  "image_generator_model_version": "not exposed by built-in tool",
+  "no_identity_scores_used_in_generation_or_selection": true
+}

@@ -1,0 +1,12 @@
+{
+  "provider": "gemini",
+  "model": "gemini-3.6-flash",
+  "effort": "low",
+  "manifest_sha256": "00093482738c918279a793537747e2f1ff70d6ece0dcaff7dba177b94a0f6ed0",
+  "prompt_sha256": "a3f7f87cb7cbf419692f456af0362dcbb0bb0db1f06e9df1224c0a2391d8aca6",
+  "harness_sha256": "d7af95c6d6b3803283c84dc663a3e9311de102d818f8d7fdc5dd6d5e2d8e6a32",
+  "max_output_tokens": 2048,
+  "timeout_seconds": 120,
+  "image_detail": "provider default",
+  "started_utc": "2026-09-10T03:55:48.691222+00:00"
+}

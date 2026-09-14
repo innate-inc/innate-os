@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f4f5f0" />
+    <title>Hand control · Innate</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Innate hand control"
+        ><span class="brand-mark">✳</span> innate<span class="brand-dot"
+          >.</span
+        ></a
+      >
+      <span class="top-divider"></span
+      ><span class="product-name">Hand control</span>
+      <div class="top-status">
+        <span class="sim-label">SIMULATION</span
+        ><span id="connection" class="connection"><i></i>Connecting</span>
+      </div>
+    </header>
+    <main class="workspace">
+      <section class="stage-card" aria-label="Live MARS simulation">
+        <div class="stage-heading">
+          <p class="eyebrow">A NEW WAY TO MOVE</p>
+          <h1>Move naturally.</h1>
+          <p>Start at the ground. Lift with your hand.</p>
+        </div>
+        <canvas
+          id="scene"
+          aria-label="3D view of the simulated MARS arm. Drag to orbit and scroll to zoom."
+        ></canvas>
+        <div class="scene-loading" id="scene-loading">
+          <span class="spinner"></span>Preparing MARS
+        </div>
+        <button
+          id="view-reset"
+          class="view-button"
+          aria-label="Reset 3D view"
+          title="Reset view"
+        >
+          <svg viewBox="0 0 24 24">
+            <path d="M4 10a8 8 0 1 1 1.7 8M4 4v6h6" />
+          </svg>
+        </button>
+        <div class="stage-caption">
+          <span><i class="target-dot"></i>Hand target</span
+          ><span>Drag to orbit <b>·</b> Scroll to zoom</span>
+        </div>
+        <div class="stage-bottom">
+          <div class="state-orb" id="state-orb">
+            <svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14" /></svg>
+          </div>
+          <div class="stage-state">
+            <strong id="stage-title">Ready when you are</strong
+            ><span id="stage-detail">Enable your camera to get started.</span>
+          </div>
+          <div class="telemetry">
+            <span id="rate">—</span><small>TRACKING / SEC</small>
+          </div>
+          <div class="telemetry">
+            <span id="latency">—</span><small>INFERENCE / MS</small>
+          </div>
+        </div>
+      </section>
+      <aside class="control-column">
+        <section class="camera-card">
+          <div class="card-heading">
+            <h2>Your hand</h2>
+            <span id="hand-status" class="mini-status">Camera off</span>
+          </div>
+          <div class="camera-frame">
+            <video id="camera" autoplay playsinline muted></video
+            ><canvas id="landmarks"></canvas>
+            <div class="camera-placeholder" id="camera-placeholder">
+              <svg viewBox="0 0 120 120" fill="none">
+                <path
+                  d="M37 67V35c0-8 10-8 10 0v23-35c0-8 10-8 10 0v35-39c0-8 10-8 10 0v39-29c0-8 10-8 10 0v40l8-12c5-7 14-1 10 6L80 90c-7 14-27 17-39 5L23 76c-7-8 1-16 8-10l6 6Z"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                /></svg
+              ><span>A simple webcam.<br />A more natural connection.</span>
+            </div>
+            <div class="camera-corners"></div>
+            <div id="ground-guide" class="ground-guide" hidden>
+              <span>GROUND · PALM CENTER</span>
+            </div>
+            <div class="camera-tag"><i></i>LOCAL CAMERA · NEVER RECORDED</div>
+            <div class="calibration-overlay" id="calibration-overlay" hidden>
+              <svg viewBox="0 0 60 60">
+                <circle cx="30" cy="30" r="26" />
+                <circle id="progress-ring" cx="30" cy="30" r="26" /></svg
+              ><strong id="calibration-label"
+                >Lower your palm to the line</strong
+              >
+            </div>
+          </div>
+          <div class="camera-feedback" id="feedback">
+            Your video stays in this browser.
+          </div>
+        </section>
+        <section class="interaction-card">
+          <div class="step-track" aria-label="Setup progress">
+            <span id="step-camera" class="current"><b>1</b>Camera</span><i></i
+            ><span id="step-calibrate"><b>2</b>Calibrate</span><i></i
+            ><span id="step-move"><b>3</b>Move</span>
+          </div>
+          <button id="primary" class="primary-button">
+            <svg viewBox="0 0 24 24">
+              <rect x="3" y="6" width="12" height="12" rx="3" />
+              <path d="m15 10 6-3v10l-6-3" /></svg
+            ><span>Enable camera</span>
+          </button>
+          <div class="secondary-actions">
+            <button id="recenter" disabled>Recenter <kbd>R</kbd></button
+            ><button id="camera-off" disabled>Camera off</button>
+          </div>
+          <div id="error" class="error-box" role="alert" hidden></div>
+          <div class="control-guide">
+            <div>
+              <span class="guide-icon">↔</span>
+              <p>
+                <strong>Move sideways & up / down</strong
+                ><small>The bottom line is ground. Lift to raise.</small>
+              </p>
+            </div>
+            <div>
+              <span class="guide-icon">↗</span>
+              <p>
+                <strong id="vertical-guide">Reach forward & back</strong
+                ><small id="vertical-detail"
+                  >Toward the webcam reaches forward.</small
+                >
+              </p>
+            </div>
+            <div>
+              <span class="guide-icon clutch-icon">◌</span>
+              <p>
+                <strong>Thumb + index finger</strong
+                ><small>Together to grip. Apart to release.</small>
+              </p>
+            </div>
+          </div>
+          <div class="height-readout">
+            <span>Height above ground</span
+            ><strong id="height-value">Ground</strong>
+          </div>
+          <div class="grip-readout">
+            <div><span>Gripper</span><strong id="grip-value">Open</strong></div>
+            <div
+              id="grip-meter"
+              class="grip-meter"
+              role="meter"
+              aria-label="Measured gripper opening"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="100"
+            >
+              <i></i>
+            </div>
+          </div>
+          <details class="settings">
+            <summary>Fine-tune the feel <span>+</span></summary>
+            <label class="setting-label" for="sensitivity"
+              >Sensitivity <output id="sensitivity-value">1.0×</output></label
+            ><input
+              id="sensitivity"
+              type="range"
+              min="0.6"
+              max="1.5"
+              step="0.1"
+              value="1"
+            />
+          </details>
+        </section>
+      </aside>
+    </main>
+    <footer>
+      <span><i></i>Real MARS physics. A dedicated simulation.</span
+      ><span><kbd>Space</kbd> Pause / resume <b>·</b> <kbd>Esc</kbd> Stop</span>
+    </footer>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

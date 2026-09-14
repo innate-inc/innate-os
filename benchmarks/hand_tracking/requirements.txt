@@ -1,0 +1,6 @@
+mediapipe==0.10.32
+numpy==2.3.4
+opencv-python==4.11.0.86
+opencv-contrib-python==4.11.0.86
+onnxruntime==1.23.2
+rtmlib==0.0.14

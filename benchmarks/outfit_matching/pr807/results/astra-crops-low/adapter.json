@@ -1,0 +1,8 @@
+{
+  "adapter_sha256": "05a0db746e38fdc719d1674d0022a96fe68c93ce4c31cbc662c42ec7067165b1",
+  "manifest_sha256": "32207cfc36207b773e3f55fede9fcb11c454076085d6216052a28658d08c7038",
+  "query_mime": "image/png",
+  "reference_mime": "image/jpeg",
+  "images": "same bytes as OSNet inputs",
+  "parent_harness_sha256": "d7af95c6d6b3803283c84dc663a3e9311de102d818f8d7fdc5dd6d5e2d8e6a32"
+}

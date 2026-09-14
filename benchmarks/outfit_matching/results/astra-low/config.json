@@ -1,0 +1,12 @@
+{
+  "provider": "astra",
+  "model": "gpt-6-astra",
+  "effort": "low",
+  "manifest_sha256": "63abb22f6e0a3d326ffb8b60f5160b3b08758c100abb2a01beb1c34d367c810b",
+  "prompt_sha256": "94c9f7ee46cf431a80dff9b124387af1de48b7975a4db4524658cc101366204d",
+  "harness_sha256": "d7af95c6d6b3803283c84dc663a3e9311de102d818f8d7fdc5dd6d5e2d8e6a32",
+  "max_output_tokens": 2048,
+  "timeout_seconds": 120,
+  "image_detail": "high",
+  "started_utc": "2026-09-09T15:13:09.665384+00:00"
+}

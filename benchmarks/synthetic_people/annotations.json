@@ -1,0 +1,1102 @@
+[
+  {
+    "character_index": 1,
+    "reference": {
+      "source": "assets/sheets/sheet_1.png",
+      "panel_bounds": [
+        2,
+        2,
+        363,
+        278
+      ],
+      "face_bounds": [
+        122.86843872070312,
+        48.0372314453125,
+        118.62931060791016,
+        153.69818115234375
+      ],
+      "face_crop_bounds": [
+        102,
+        45,
+        262,
+        205
+      ],
+      "locator_score": 0.959269642829895,
+      "native_crop_size": [
+        160,
+        160
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        2,
+        2,
+        312,
+        278
+      ],
+      "face_bounds": [
+        94.09274291992188,
+        42.997657775878906,
+        133.06674194335938,
+        170.0751190185547
+      ],
+      "face_crop_bounds": [
+        72,
+        40,
+        249,
+        216
+      ],
+      "locator_score": 0.9542359709739685,
+      "native_crop_size": [
+        177,
+        176
+      ]
+    }
+  },
+  {
+    "character_index": 2,
+    "reference": {
+      "source": "assets/sheets/sheet_1.png",
+      "panel_bounds": [
+        2,
+        282,
+        363,
+        558
+      ],
+      "face_bounds": [
+        118.01321411132812,
+        38.97637176513672,
+        121.6945571899414,
+        160.91648864746094
+      ],
+      "face_crop_bounds": [
+        95,
+        36,
+        263,
+        203
+      ],
+      "locator_score": 0.9462329149246216,
+      "native_crop_size": [
+        168,
+        167
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        2,
+        282,
+        312,
+        558
+      ],
+      "face_bounds": [
+        89.59795379638672,
+        39.165489196777344,
+        136.55519104003906,
+        165.3907012939453
+      ],
+      "face_crop_bounds": [
+        72,
+        36,
+        244,
+        208
+      ],
+      "locator_score": 0.9374390840530396,
+      "native_crop_size": [
+        172,
+        172
+      ]
+    }
+  },
+  {
+    "character_index": 3,
+    "reference": {
+      "source": "assets/sheets/sheet_1.png",
+      "panel_bounds": [
+        2,
+        562,
+        363,
+        838
+      ],
+      "face_bounds": [
+        115.19123840332031,
+        21.463958740234375,
+        125.18779754638672,
+        182.13998413085938
+      ],
+      "face_crop_bounds": [
+        83,
+        18,
+        272,
+        207
+      ],
+      "locator_score": 0.945313036441803,
+      "native_crop_size": [
+        189,
+        189
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        2,
+        562,
+        312,
+        835
+      ],
+      "face_bounds": [
+        83.99153900146484,
+        24.10742950439453,
+        137.4335479736328,
+        180.7892303466797
+      ],
+      "face_crop_bounds": [
+        59,
+        20,
+        247,
+        209
+      ],
+      "locator_score": 0.936172366142273,
+      "native_crop_size": [
+        188,
+        189
+      ]
+    }
+  },
+  {
+    "character_index": 4,
+    "reference": {
+      "source": "assets/sheets/sheet_1.png",
+      "panel_bounds": [
+        2,
+        842,
+        363,
+        1119
+      ],
+      "face_bounds": [
+        119.45721435546875,
+        31.215576171875,
+        115.95306396484375,
+        165.65744018554688
+      ],
+      "face_crop_bounds": [
+        91,
+        28,
+        264,
+        200
+      ],
+      "locator_score": 0.9518738389015198,
+      "native_crop_size": [
+        173,
+        172
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        2,
+        839,
+        312,
+        1112
+      ],
+      "face_bounds": [
+        85.95037841796875,
+        31.04346466064453,
+        138.010498046875,
+        177.3157196044922
+      ],
+      "face_crop_bounds": [
+        63,
+        27,
+        247,
+        212
+      ],
+      "locator_score": 0.9439898729324341,
+      "native_crop_size": [
+        184,
+        185
+      ]
+    }
+  },
+  {
+    "character_index": 5,
+    "reference": {
+      "source": "assets/sheets/sheet_1.png",
+      "panel_bounds": [
+        2,
+        1123,
+        363,
+        1400
+      ],
+      "face_bounds": [
+        120.41311645507812,
+        15.171676635742188,
+        125.44757843017578,
+        171.6548309326172
+      ],
+      "face_crop_bounds": [
+        94,
+        12,
+        272,
+        190
+      ],
+      "locator_score": 0.9510086178779602,
+      "native_crop_size": [
+        178,
+        178
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        2,
+        1116,
+        312,
+        1400
+      ],
+      "face_bounds": [
+        82.7824935913086,
+        8.308975219726562,
+        143.52769470214844,
+        193.26165771484375
+      ],
+      "face_crop_bounds": [
+        54,
+        4,
+        255,
+        205
+      ],
+      "locator_score": 0.9429823160171509,
+      "native_crop_size": [
+        201,
+        201
+      ]
+    }
+  },
+  {
+    "character_index": 6,
+    "reference": {
+      "source": "assets/sheets/sheet_2.png",
+      "panel_bounds": [
+        2,
+        2,
+        353,
+        267
+      ],
+      "face_bounds": [
+        116.72808837890625,
+        40.377723693847656,
+        113.15657806396484,
+        157.9313507080078
+      ],
+      "face_crop_bounds": [
+        91,
+        37,
+        255,
+        201
+      ],
+      "locator_score": 0.9502200484275818,
+      "native_crop_size": [
+        164,
+        164
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        316,
+        2,
+        573,
+        278
+      ],
+      "face_bounds": [
+        73.7147216796875,
+        41.282997131347656,
+        123.23320770263672,
+        158.0406036376953
+      ],
+      "face_crop_bounds": [
+        53,
+        38,
+        218,
+        202
+      ],
+      "locator_score": 0.9481332302093506,
+      "native_crop_size": [
+        165,
+        164
+      ]
+    }
+  },
+  {
+    "character_index": 7,
+    "reference": {
+      "source": "assets/sheets/sheet_2.png",
+      "panel_bounds": [
+        2,
+        271,
+        353,
+        540
+      ],
+      "face_bounds": [
+        117.16624450683594,
+        39.710601806640625,
+        115.66494750976562,
+        151.66854858398438
+      ],
+      "face_crop_bounds": [
+        96,
+        37,
+        254,
+        194
+      ],
+      "locator_score": 0.9501825571060181,
+      "native_crop_size": [
+        158,
+        157
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        316,
+        282,
+        573,
+        558
+      ],
+      "face_bounds": [
+        75.80265808105469,
+        37.86157989501953,
+        118.42337036132812,
+        147.98388671875
+      ],
+      "face_crop_bounds": [
+        58,
+        35,
+        212,
+        189
+      ],
+      "locator_score": 0.941821813583374,
+      "native_crop_size": [
+        154,
+        154
+      ]
+    }
+  },
+  {
+    "character_index": 8,
+    "reference": {
+      "source": "assets/sheets/sheet_2.png",
+      "panel_bounds": [
+        2,
+        544,
+        353,
+        810
+      ],
+      "face_bounds": [
+        112.47021484375,
+        37.563011169433594,
+        124.69554901123047,
+        170.53219604492188
+      ],
+      "face_crop_bounds": [
+        86,
+        34,
+        263,
+        212
+      ],
+      "locator_score": 0.9509064555168152,
+      "native_crop_size": [
+        177,
+        178
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        316,
+        562,
+        573,
+        835
+      ],
+      "face_bounds": [
+        59.546302795410156,
+        32.814064025878906,
+        128.3155975341797,
+        167.5490264892578
+      ],
+      "face_crop_bounds": [
+        37,
+        29,
+        211,
+        204
+      ],
+      "locator_score": 0.9409992694854736,
+      "native_crop_size": [
+        174,
+        175
+      ]
+    }
+  },
+  {
+    "character_index": 9,
+    "reference": {
+      "source": "assets/sheets/sheet_2.png",
+      "panel_bounds": [
+        2,
+        814,
+        353,
+        1086
+      ],
+      "face_bounds": [
+        115.09547424316406,
+        41.615623474121094,
+        112.46102905273438,
+        161.62405395507812
+      ],
+      "face_crop_bounds": [
+        87,
+        38,
+        255,
+        206
+      ],
+      "locator_score": 0.9555252194404602,
+      "native_crop_size": [
+        168,
+        168
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        316,
+        839,
+        573,
+        1112
+      ],
+      "face_bounds": [
+        60.49100875854492,
+        39.848968505859375,
+        125.53287506103516,
+        164.23416137695312
+      ],
+      "face_crop_bounds": [
+        38,
+        37,
+        209,
+        207
+      ],
+      "locator_score": 0.9512273073196411,
+      "native_crop_size": [
+        171,
+        170
+      ]
+    }
+  },
+  {
+    "character_index": 10,
+    "reference": {
+      "source": "assets/sheets/sheet_2.png",
+      "panel_bounds": [
+        2,
+        1090,
+        353,
+        1400
+      ],
+      "face_bounds": [
+        110.386474609375,
+        31.256614685058594,
+        130.48699951171875,
+        184.9712677001953
+      ],
+      "face_crop_bounds": [
+        79,
+        28,
+        272,
+        220
+      ],
+      "locator_score": 0.9448766708374023,
+      "native_crop_size": [
+        193,
+        192
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        316,
+        1116,
+        573,
+        1400
+      ],
+      "face_bounds": [
+        52.898529052734375,
+        21.378562927246094,
+        136.7272186279297,
+        188.50462341308594
+      ],
+      "face_crop_bounds": [
+        23,
+        18,
+        219,
+        214
+      ],
+      "locator_score": 0.939172089099884,
+      "native_crop_size": [
+        196,
+        196
+      ]
+    }
+  },
+  {
+    "character_index": 11,
+    "reference": {
+      "source": "assets/sheets/sheet_3.png",
+      "panel_bounds": [
+        2,
+        2,
+        365,
+        278
+      ],
+      "face_bounds": [
+        121.17042541503906,
+        41.707618713378906,
+        123.796875,
+        165.95655822753906
+      ],
+      "face_crop_bounds": [
+        97,
+        38,
+        269,
+        211
+      ],
+      "locator_score": 0.9487051367759705,
+      "native_crop_size": [
+        172,
+        173
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        577,
+        2,
+        846,
+        278
+      ],
+      "face_bounds": [
+        73.07527160644531,
+        34.43579864501953,
+        128.41278076171875,
+        164.6349639892578
+      ],
+      "face_crop_bounds": [
+        52,
+        31,
+        223,
+        202
+      ],
+      "locator_score": 0.9457806944847107,
+      "native_crop_size": [
+        171,
+        171
+      ]
+    }
+  },
+  {
+    "character_index": 12,
+    "reference": {
+      "source": "assets/sheets/sheet_3.png",
+      "panel_bounds": [
+        2,
+        282,
+        365,
+        558
+      ],
+      "face_bounds": [
+        118.29894256591797,
+        34.876243591308594,
+        131.04588317871094,
+        174.1894073486328
+      ],
+      "face_crop_bounds": [
+        93,
+        31,
+        274,
+        213
+      ],
+      "locator_score": 0.9529776573181152,
+      "native_crop_size": [
+        181,
+        182
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        577,
+        282,
+        846,
+        558
+      ],
+      "face_bounds": [
+        64.21304321289062,
+        31.61988067626953,
+        124.19658660888672,
+        161.2311248779297
+      ],
+      "face_crop_bounds": [
+        42,
+        28,
+        210,
+        196
+      ],
+      "locator_score": 0.9470705389976501,
+      "native_crop_size": [
+        168,
+        168
+      ]
+    }
+  },
+  {
+    "character_index": 13,
+    "reference": {
+      "source": "assets/sheets/sheet_3.png",
+      "panel_bounds": [
+        2,
+        562,
+        365,
+        838
+      ],
+      "face_bounds": [
+        119.88470458984375,
+        33.861854553222656,
+        125.06426239013672,
+        174.13856506347656
+      ],
+      "face_crop_bounds": [
+        92,
+        30,
+        273,
+        211
+      ],
+      "locator_score": 0.9520183205604553,
+      "native_crop_size": [
+        181,
+        181
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        577,
+        562,
+        846,
+        835
+      ],
+      "face_bounds": [
+        64.08769226074219,
+        29.2989501953125,
+        126.33533477783203,
+        168.40122985839844
+      ],
+      "face_crop_bounds": [
+        40,
+        26,
+        215,
+        201
+      ],
+      "locator_score": 0.9492658972740173,
+      "native_crop_size": [
+        175,
+        175
+      ]
+    }
+  },
+  {
+    "character_index": 14,
+    "reference": {
+      "source": "assets/sheets/sheet_3.png",
+      "panel_bounds": [
+        2,
+        842,
+        365,
+        1120
+      ],
+      "face_bounds": [
+        115.91078186035156,
+        44.89000701904297,
+        133.56256103515625,
+        167.02659606933594
+      ],
+      "face_crop_bounds": [
+        96,
+        42,
+        270,
+        215
+      ],
+      "locator_score": 0.9483949542045593,
+      "native_crop_size": [
+        174,
+        173
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        577,
+        839,
+        846,
+        1112
+      ],
+      "face_bounds": [
+        64.70342254638672,
+        32.090667724609375,
+        135.41261291503906,
+        167.46310424804688
+      ],
+      "face_crop_bounds": [
+        45,
+        29,
+        219,
+        203
+      ],
+      "locator_score": 0.9437820911407471,
+      "native_crop_size": [
+        174,
+        174
+      ]
+    }
+  },
+  {
+    "character_index": 15,
+    "reference": {
+      "source": "assets/sheets/sheet_3.png",
+      "panel_bounds": [
+        2,
+        1124,
+        365,
+        1400
+      ],
+      "face_bounds": [
+        119.91889190673828,
+        36.79522705078125,
+        124.46125793457031,
+        175.54481506347656
+      ],
+      "face_crop_bounds": [
+        91,
+        33,
+        273,
+        216
+      ],
+      "locator_score": 0.9463488459587097,
+      "native_crop_size": [
+        182,
+        183
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        577,
+        1116,
+        846,
+        1400
+      ],
+      "face_bounds": [
+        72.10615539550781,
+        29.579933166503906,
+        120.77751922607422,
+        170.7594451904297
+      ],
+      "face_crop_bounds": [
+        44,
+        26,
+        221,
+        204
+      ],
+      "locator_score": 0.9489813446998596,
+      "native_crop_size": [
+        177,
+        178
+      ]
+    }
+  },
+  {
+    "character_index": 16,
+    "reference": {
+      "source": "assets/sheets/sheet_4.png",
+      "panel_bounds": [
+        2,
+        2,
+        382,
+        278
+      ],
+      "face_bounds": [
+        125.25141906738281,
+        48.051177978515625,
+        123.4896469116211,
+        165.91619873046875
+      ],
+      "face_crop_bounds": [
+        101,
+        45,
+        273,
+        217
+      ],
+      "locator_score": 0.9551963806152344,
+      "native_crop_size": [
+        172,
+        172
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        850,
+        2,
+        1120,
+        278
+      ],
+      "face_bounds": [
+        64.95039367675781,
+        46.090293884277344,
+        127.6603012084961,
+        162.30450439453125
+      ],
+      "face_crop_bounds": [
+        44,
+        43,
+        213,
+        212
+      ],
+      "locator_score": 0.9548969268798828,
+      "native_crop_size": [
+        169,
+        169
+      ]
+    }
+  },
+  {
+    "character_index": 17,
+    "reference": {
+      "source": "assets/sheets/sheet_4.png",
+      "panel_bounds": [
+        2,
+        282,
+        382,
+        558
+      ],
+      "face_bounds": [
+        132.35174560546875,
+        40.415184020996094,
+        114.29308319091797,
+        163.8874053955078
+      ],
+      "face_crop_bounds": [
+        104,
+        37,
+        275,
+        208
+      ],
+      "locator_score": 0.9447531700134277,
+      "native_crop_size": [
+        171,
+        171
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        850,
+        282,
+        1120,
+        558
+      ],
+      "face_bounds": [
+        78.88632202148438,
+        35.647300720214844,
+        115.85401153564453,
+        158.38043212890625
+      ],
+      "face_crop_bounds": [
+        54,
+        32,
+        219,
+        197
+      ],
+      "locator_score": 0.9478838443756104,
+      "native_crop_size": [
+        165,
+        165
+      ]
+    }
+  },
+  {
+    "character_index": 18,
+    "reference": {
+      "source": "assets/sheets/sheet_4.png",
+      "panel_bounds": [
+        2,
+        562,
+        382,
+        838
+      ],
+      "face_bounds": [
+        115.3950424194336,
+        21.957901000976562,
+        142.79673767089844,
+        189.36688232421875
+      ],
+      "face_crop_bounds": [
+        88,
+        18,
+        285,
+        215
+      ],
+      "locator_score": 0.9430208802223206,
+      "native_crop_size": [
+        197,
+        197
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        850,
+        562,
+        1120,
+        835
+      ],
+      "face_bounds": [
+        66.54439544677734,
+        13.101478576660156,
+        145.60438537597656,
+        185.5327911376953
+      ],
+      "face_crop_bounds": [
+        43,
+        9,
+        236,
+        202
+      ],
+      "locator_score": 0.9341838359832764,
+      "native_crop_size": [
+        193,
+        193
+      ]
+    }
+  },
+  {
+    "character_index": 19,
+    "reference": {
+      "source": "assets/sheets/sheet_4.png",
+      "panel_bounds": [
+        2,
+        842,
+        382,
+        1120
+      ],
+      "face_bounds": [
+        120.80506896972656,
+        35.389625549316406,
+        133.32403564453125,
+        180.4188995361328
+      ],
+      "face_crop_bounds": [
+        94,
+        32,
+        281,
+        219
+      ],
+      "locator_score": 0.9468624591827393,
+      "native_crop_size": [
+        187,
+        187
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        850,
+        839,
+        1120,
+        1112
+      ],
+      "face_bounds": [
+        74.54035949707031,
+        26.758071899414062,
+        127.15042877197266,
+        179.0069580078125
+      ],
+      "face_crop_bounds": [
+        45,
+        23,
+        231,
+        209
+      ],
+      "locator_score": 0.9493946433067322,
+      "native_crop_size": [
+        186,
+        186
+      ]
+    }
+  },
+  {
+    "character_index": 20,
+    "reference": {
+      "source": "assets/sheets/sheet_4.png",
+      "panel_bounds": [
+        2,
+        1124,
+        382,
+        1400
+      ],
+      "face_bounds": [
+        126.52130126953125,
+        39.68273162841797,
+        124.08757781982422,
+        164.47398376464844
+      ],
+      "face_crop_bounds": [
+        103,
+        36,
+        274,
+        207
+      ],
+      "locator_score": 0.9483597278594971,
+      "native_crop_size": [
+        171,
+        171
+      ]
+    },
+    "face_query": {
+      "source": "assets/sheets/face_queries.png",
+      "panel_bounds": [
+        850,
+        1116,
+        1120,
+        1400
+      ],
+      "face_bounds": [
+        70.10498046875,
+        34.75305938720703,
+        132.5029296875,
+        175.57843017578125
+      ],
+      "face_crop_bounds": [
+        45,
+        31,
+        228,
+        214
+      ],
+      "locator_score": 0.9482664465904236,
+      "native_crop_size": [
+        183,
+        183
+      ]
+    }
+  }
+]

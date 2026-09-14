@@ -1,0 +1,141 @@
+id,condition,character_index,expected,label,confidence,status,latency_s,returned_model,reason,best_label,best_score,margin
+near_160_16,near_160,16,Kian Dune,UNCERTAIN,,ok,0.002864,,below_24px,,,
+face_16_18,face_16,18,Zoren Birch,UNCERTAIN,,ok,0.000892,,no_usable_face,,,
+face_16_03,face_16,3,Corin Hale,UNCERTAIN,,ok,0.000436,,no_usable_face,,,
+far_320_02,far_320,2,Nessa Reed,UNCERTAIN,,ok,0.005857,,below_24px,,,
+face_32_14,face_32,14,UNKNOWN,UNKNOWN,,ok,0.022425,,score_or_margin_reject,Nessa Reed,0.28812485933303833,0.06949120759963989
+near_320_08,near_320,8,Mira Lark,UNKNOWN,,ok,0.026302,,score_or_margin_reject,Mira Lark,0.2779005169868469,0.0371721088886261
+face_32_13,face_32,13,Naya Brook,UNKNOWN,,ok,0.022514,,score_or_margin_reject,Naya Brook,0.3232762813568115,0.07336294651031494
+face_64_13,face_64,13,Naya Brook,Naya Brook,,ok,0.022152,,accepted,Naya Brook,0.6036125421524048,0.33474597334861755
+face_64_15,face_64,15,Riven Ash,Riven Ash,,ok,0.021732,,accepted,Riven Ash,0.7540328502655029,0.3571350574493408
+face_16_02,face_16,2,Nessa Reed,UNCERTAIN,,ok,0.000825,,below_24px,,,
+far_320_01,far_320,1,Arin Vale,UNCERTAIN,,ok,0.00573,,below_24px,,,
+near_320_18,near_320,18,Zoren Birch,UNCERTAIN,,ok,0.0046,,below_24px,,,
+far_320_14,far_320,14,UNKNOWN,UNCERTAIN,,ok,0.004752,,below_24px,,,
+far_160_02,far_160,2,Nessa Reed,UNCERTAIN,,ok,0.001868,,no_usable_face,,,
+far_320_13,far_320,13,Naya Brook,UNCERTAIN,,ok,0.004947,,below_24px,,,
+near_320_04,near_320,4,UNKNOWN,UNCERTAIN,,ok,0.004705,,below_24px,,,
+face_32_04,face_32,4,UNKNOWN,UNKNOWN,,ok,0.020968,,score_or_margin_reject,Mira Lark,0.37216755747795105,0.014834880828857422
+near_160_04,near_160,4,UNKNOWN,UNCERTAIN,,ok,0.001826,,below_24px,,,
+near_160_17,near_160,17,Elin Cove,UNCERTAIN,,ok,0.001354,,no_usable_face,,,
+far_320_04,far_320,4,UNKNOWN,UNCERTAIN,,ok,0.005177,,below_24px,,,
+face_32_07,face_32,7,Liora Finch,Liora Finch,,ok,0.021091,,accepted,Liora Finch,0.5663945078849792,0.33051156997680664
+near_320_06,near_320,6,Bren Alder,UNCERTAIN,,ok,0.005284,,below_24px,,,
+far_160_13,far_160,13,Naya Brook,UNCERTAIN,,ok,0.002007,,no_usable_face,,,
+face_64_12,face_64,12,Tavin Frost,Tavin Frost,,ok,0.021627,,accepted,Tavin Frost,0.611696720123291,0.24725139141082764
+far_320_11,far_320,11,Sera Wren,UNCERTAIN,,ok,0.005124,,below_24px,,,
+face_16_06,face_16,6,Bren Alder,UNCERTAIN,,ok,0.000684,,no_usable_face,,,
+far_320_19,far_320,19,UNKNOWN,UNCERTAIN,,ok,0.004839,,below_24px,,,
+face_64_14,face_64,14,UNKNOWN,Sera Wren,,ok,0.020981,,accepted,Sera Wren,0.4292807877063751,0.06107160449028015
+far_160_10,far_160,10,Doran Pine,UNCERTAIN,,ok,0.001781,,no_usable_face,,,
+face_16_20,face_16,20,UNKNOWN,UNCERTAIN,,ok,0.000604,,no_usable_face,,,
+face_64_01,face_64,1,Arin Vale,Arin Vale,,ok,0.021336,,accepted,Arin Vale,0.7330411672592163,0.4755934476852417
+far_160_01,far_160,1,Arin Vale,UNCERTAIN,,ok,0.001878,,below_24px,,,
+near_320_17,near_320,17,Elin Cove,UNCERTAIN,,ok,0.004882,,below_24px,,,
+near_160_06,near_160,6,Bren Alder,UNCERTAIN,,ok,0.001813,,below_24px,,,
+near_320_02,near_320,2,Nessa Reed,UNCERTAIN,,ok,0.004972,,below_24px,,,
+face_32_06,face_32,6,Bren Alder,UNCERTAIN,,ok,0.000675,,below_24px,,,
+far_160_12,far_160,12,Tavin Frost,UNCERTAIN,,ok,0.001819,,no_usable_face,,,
+face_32_16,face_32,16,Kian Dune,UNCERTAIN,,ok,0.000808,,below_24px,,,
+far_160_05,far_160,5,Jalen Moss,UNCERTAIN,,ok,0.001862,,no_usable_face,,,
+near_320_05,near_320,5,Jalen Moss,UNKNOWN,,ok,0.025982,,score_or_margin_reject,Jalen Moss,0.16960275173187256,0.016874253749847412
+near_160_18,near_160,18,Zoren Birch,UNCERTAIN,,ok,0.001903,,no_usable_face,,,
+near_160_01,near_160,1,Arin Vale,UNCERTAIN,,ok,0.00143,,below_24px,,,
+far_160_14,far_160,14,UNKNOWN,UNCERTAIN,,ok,0.001386,,no_usable_face,,,
+face_32_08,face_32,8,Mira Lark,Mira Lark,,ok,0.020929,,accepted,Mira Lark,0.5698573589324951,0.3309883028268814
+near_320_11,near_320,11,Sera Wren,UNKNOWN,,ok,0.025206,,score_or_margin_reject,Naya Brook,0.18593813478946686,0.0492989718914032
+near_320_14,near_320,14,UNKNOWN,UNKNOWN,,ok,0.025584,,score_or_margin_reject,Nessa Reed,0.22772392630577087,0.08865487575531006
+face_16_01,face_16,1,Arin Vale,UNCERTAIN,,ok,0.000885,,no_usable_face,,,
+near_160_08,near_160,8,Mira Lark,UNCERTAIN,,ok,0.002111,,below_24px,,,
+face_64_16,face_64,16,Kian Dune,Kian Dune,,ok,0.021989,,accepted,Kian Dune,0.7162138223648071,0.20369327068328857
+near_320_03,near_320,3,Corin Hale,UNKNOWN,,ok,0.025712,,score_or_margin_reject,Corin Hale,0.17394724488258362,0.11745648086071014
+near_160_19,near_160,19,UNKNOWN,UNCERTAIN,,ok,0.001788,,below_24px,,,
+face_16_08,face_16,8,Mira Lark,UNCERTAIN,,ok,0.000579,,no_usable_face,,,
+near_320_19,near_320,19,UNKNOWN,UNCERTAIN,,ok,0.004801,,below_24px,,,
+near_160_15,near_160,15,Riven Ash,UNCERTAIN,,ok,0.001701,,no_usable_face,,,
+far_320_12,far_320,12,Tavin Frost,UNCERTAIN,,ok,0.005017,,below_24px,,,
+face_32_18,face_32,18,Zoren Birch,Zoren Birch,,ok,0.02086,,accepted,Zoren Birch,0.4709389805793762,0.20820945501327515
+near_320_09,near_320,9,UNKNOWN,UNCERTAIN,,ok,0.004915,,below_24px,,,
+face_64_18,face_64,18,Zoren Birch,Zoren Birch,,ok,0.021155,,accepted,Zoren Birch,0.6959477066993713,0.34046006202697754
+far_160_03,far_160,3,Corin Hale,UNCERTAIN,,ok,0.001787,,no_usable_face,,,
+far_160_16,far_160,16,Kian Dune,UNCERTAIN,,ok,0.001364,,no_usable_face,,,
+far_320_17,far_320,17,Elin Cove,UNCERTAIN,,ok,0.004849,,below_24px,,,
+far_320_08,far_320,8,Mira Lark,UNCERTAIN,,ok,0.004421,,below_24px,,,
+face_32_15,face_32,15,Riven Ash,UNCERTAIN,,ok,0.000656,,below_24px,,,
+face_32_09,face_32,9,UNKNOWN,UNCERTAIN,,ok,0.000301,,below_24px,,,
+face_32_03,face_32,3,Corin Hale,Corin Hale,,ok,0.020373,,accepted,Corin Hale,0.48373934626579285,0.3698311671614647
+far_320_06,far_320,6,Bren Alder,UNCERTAIN,,ok,0.004857,,below_24px,,,
+face_16_12,face_16,12,Tavin Frost,UNCERTAIN,,ok,0.000588,,no_usable_face,,,
+face_32_05,face_32,5,Jalen Moss,UNCERTAIN,,ok,0.000286,,no_usable_face,,,
+face_64_20,face_64,20,UNKNOWN,Mira Lark,,ok,0.020754,,accepted,Mira Lark,0.5955179929733276,0.11054405570030212
+face_64_19,face_64,19,UNKNOWN,Corin Hale,,ok,0.020745,,accepted,Corin Hale,0.5209083557128906,0.2632409334182739
+face_64_08,face_64,8,Mira Lark,Mira Lark,,ok,0.02081,,accepted,Mira Lark,0.7128698229789734,0.42484787106513977
+far_160_19,far_160,19,UNKNOWN,UNCERTAIN,,ok,0.001764,,no_usable_face,,,
+near_320_13,near_320,13,Naya Brook,UNCERTAIN,,ok,0.004909,,below_24px,,,
+far_160_17,far_160,17,Elin Cove,UNCERTAIN,,ok,0.001658,,no_usable_face,,,
+face_32_11,face_32,11,Sera Wren,UNCERTAIN,,ok,0.000578,,below_24px,,,
+far_320_16,far_320,16,Kian Dune,UNCERTAIN,,ok,0.004957,,below_24px,,,
+far_320_15,far_320,15,Riven Ash,UNCERTAIN,,ok,0.004639,,below_24px,,,
+near_160_09,near_160,9,UNKNOWN,UNCERTAIN,,ok,0.001681,,below_24px,,,
+near_160_10,near_160,10,Doran Pine,UNCERTAIN,,ok,0.00133,,no_usable_face,,,
+far_160_20,far_160,20,UNKNOWN,UNCERTAIN,,ok,0.001322,,no_usable_face,,,
+face_64_07,face_64,7,Liora Finch,Liora Finch,,ok,0.020854,,accepted,Liora Finch,0.7099087238311768,0.341936320066452
+face_16_15,face_16,15,Riven Ash,UNCERTAIN,,ok,0.000657,,below_24px,,,
+face_32_02,face_32,2,Nessa Reed,UNCERTAIN,,ok,0.000308,,below_24px,,,
+face_16_09,face_16,9,UNKNOWN,UNCERTAIN,,ok,0.000284,,below_24px,,,
+near_160_20,near_160,20,UNKNOWN,UNCERTAIN,,ok,0.001631,,no_usable_face,,,
+face_16_16,face_16,16,Kian Dune,UNCERTAIN,,ok,0.000543,,no_usable_face,,,
+near_320_16,near_320,16,Kian Dune,UNKNOWN,,ok,0.02478,,score_or_margin_reject,Kian Dune,0.12317920476198196,0.0017618164420127869
+face_16_19,face_16,19,UNKNOWN,UNCERTAIN,,ok,0.000644,,no_usable_face,,,
+far_160_15,far_160,15,Riven Ash,UNCERTAIN,,ok,0.001622,,no_usable_face,,,
+far_160_07,far_160,7,Liora Finch,UNCERTAIN,,ok,0.00132,,no_usable_face,,,
+face_64_02,face_64,2,Nessa Reed,Nessa Reed,,ok,0.020858,,accepted,Nessa Reed,0.6558712720870972,0.3658921420574188
+face_32_01,face_32,1,Arin Vale,UNCERTAIN,,ok,0.000674,,below_24px,,,
+near_320_20,near_320,20,UNKNOWN,UNCERTAIN,,ok,0.004889,,below_24px,,,
+face_64_17,face_64,17,Elin Cove,Elin Cove,,ok,0.021007,,accepted,Elin Cove,0.6962600350379944,0.3687414526939392
+far_160_11,far_160,11,Sera Wren,UNCERTAIN,,ok,0.00173,,no_usable_face,,,
+near_160_12,near_160,12,Tavin Frost,UNCERTAIN,,ok,0.001344,,no_usable_face,,,
+face_64_09,face_64,9,UNKNOWN,Arin Vale,,ok,0.020797,,accepted,Arin Vale,0.6996554136276245,0.321826696395874
+face_64_04,face_64,4,UNKNOWN,Sera Wren,,ok,0.020731,,accepted,Sera Wren,0.514988899230957,0.05938073992729187
+face_32_17,face_32,17,Elin Cove,UNCERTAIN,,ok,0.00068,,below_24px,,,
+face_16_11,face_16,11,Sera Wren,UNCERTAIN,,ok,0.000288,,below_24px,,,
+far_320_20,far_320,20,UNKNOWN,UNCERTAIN,,ok,0.004813,,below_24px,,,
+face_32_12,face_32,12,Tavin Frost,UNCERTAIN,,ok,0.000587,,below_24px,,,
+far_320_09,far_320,9,UNKNOWN,UNCERTAIN,,ok,0.004739,,below_24px,,,
+face_64_11,face_64,11,Sera Wren,Sera Wren,,ok,0.020829,,accepted,Sera Wren,0.6649430990219116,0.32767847180366516
+face_16_13,face_16,13,Naya Brook,UNCERTAIN,,ok,0.000655,,no_usable_face,,,
+face_64_10,face_64,10,Doran Pine,Doran Pine,,ok,0.021033,,accepted,Doran Pine,0.729486346244812,0.40096497535705566
+far_320_18,far_320,18,Zoren Birch,UNCERTAIN,,ok,0.004959,,below_24px,,,
+far_160_04,far_160,4,UNKNOWN,UNCERTAIN,,ok,0.001665,,no_usable_face,,,
+far_160_08,far_160,8,Mira Lark,UNCERTAIN,,ok,0.001317,,no_usable_face,,,
+near_320_07,near_320,7,Liora Finch,UNCERTAIN,,ok,0.004723,,below_24px,,,
+face_64_05,face_64,5,Jalen Moss,Jalen Moss,,ok,0.020851,,accepted,Jalen Moss,0.685806155204773,0.3909264802932739
+face_64_03,face_64,3,Corin Hale,Corin Hale,,ok,0.020726,,accepted,Corin Hale,0.741471529006958,0.5332456976175308
+face_64_06,face_64,6,Bren Alder,Bren Alder,,ok,0.020657,,accepted,Bren Alder,0.698836624622345,0.36095932126045227
+far_160_18,far_160,18,Zoren Birch,UNCERTAIN,,ok,0.001711,,no_usable_face,,,
+near_160_03,near_160,3,Corin Hale,UNCERTAIN,,ok,0.001334,,no_usable_face,,,
+near_160_11,near_160,11,Sera Wren,UNCERTAIN,,ok,0.001324,,no_usable_face,,,
+near_160_05,near_160,5,Jalen Moss,UNCERTAIN,,ok,0.001327,,no_usable_face,,,
+far_160_09,far_160,9,UNKNOWN,UNCERTAIN,,ok,0.001309,,no_usable_face,,,
+near_160_14,near_160,14,UNKNOWN,UNCERTAIN,,ok,0.001331,,below_24px,,,
+face_16_17,face_16,17,Elin Cove,UNCERTAIN,,ok,0.00056,,no_usable_face,,,
+near_160_02,near_160,2,Nessa Reed,UNCERTAIN,,ok,0.001621,,below_24px,,,
+near_320_10,near_320,10,Doran Pine,UNCERTAIN,,ok,0.004908,,below_24px,,,
+near_160_07,near_160,7,Liora Finch,UNCERTAIN,,ok,0.001717,,no_usable_face,,,
+far_320_10,far_320,10,Doran Pine,UNCERTAIN,,ok,0.004735,,below_24px,,,
+face_32_19,face_32,19,UNKNOWN,UNCERTAIN,,ok,0.000583,,below_24px,,,
+near_320_12,near_320,12,Tavin Frost,UNKNOWN,,ok,0.025011,,score_or_margin_reject,Liora Finch,0.16342003643512726,0.011969000101089478
+face_32_20,face_32,20,UNKNOWN,UNCERTAIN,,ok,0.000659,,below_24px,,,
+near_320_15,near_320,15,Riven Ash,UNCERTAIN,,ok,0.004796,,below_24px,,,
+far_320_05,far_320,5,Jalen Moss,UNCERTAIN,,ok,0.004506,,below_24px,,,
+far_320_07,far_320,7,Liora Finch,UNCERTAIN,,ok,0.004477,,below_24px,,,
+face_16_07,face_16,7,Liora Finch,UNCERTAIN,,ok,0.000589,,no_usable_face,,,
+face_16_04,face_16,4,UNKNOWN,UNCERTAIN,,ok,0.00028,,no_usable_face,,,
+near_320_01,near_320,1,Arin Vale,UNKNOWN,,ok,0.0248,,score_or_margin_reject,Kian Dune,0.260470449924469,0.07963979244232178
+face_16_10,face_16,10,Doran Pine,UNCERTAIN,,ok,0.000664,,below_24px,,,
+near_160_13,near_160,13,Naya Brook,UNCERTAIN,,ok,0.001653,,no_usable_face,,,
+face_16_14,face_16,14,UNKNOWN,UNCERTAIN,,ok,0.000566,,below_24px,,,
+far_160_06,far_160,6,Bren Alder,UNCERTAIN,,ok,0.001581,,no_usable_face,,,
+far_320_03,far_320,3,Corin Hale,UNCERTAIN,,ok,0.004775,,below_24px,,,
+face_32_10,face_32,10,Doran Pine,UNCERTAIN,,ok,0.000568,,below_24px,,,
+face_16_05,face_16,5,Jalen Moss,UNCERTAIN,,ok,0.000287,,below_24px,,,

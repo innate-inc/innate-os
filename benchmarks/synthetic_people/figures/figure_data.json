@@ -1,0 +1,59 @@
+{
+  "source_sha256": {
+    "results/astra-low/predictions.jsonl": "8b3824531f8037ca13133a35cf359eafc4e39130c4f6e62cf0506a84a782b28b",
+    "results/gemini-low/predictions.jsonl": "70d719a0f0d15ee29591653c736e6c0008021b65bdf4f7360dc87d6bdefcbeb7",
+    "results/pr807-face/predictions.jsonl": "5d698bd2cf09f38f6300db70fad181997953a2678d03b874b32da946ea5a29a4",
+    "results/pr807-hog-face/predictions.jsonl": "8d64896fe3f210beb9c1026850628710620a3e38483fb39e0ad52599f8572343"
+  },
+  "known_correct": {
+    "astra-low": {
+      "face_64": 14,
+      "face_32": 14,
+      "face_16": 8,
+      "near_320": 13,
+      "near_160": 8,
+      "far_320": 11,
+      "far_160": 1
+    },
+    "gemini-low": {
+      "face_64": 15,
+      "face_32": 12,
+      "face_16": 0,
+      "near_320": 15,
+      "near_160": 13,
+      "far_320": 11,
+      "far_160": 5
+    },
+    "pr807-face": {
+      "face_64": 15,
+      "face_32": 4,
+      "face_16": 0,
+      "near_320": 0,
+      "near_160": 0,
+      "far_320": 0,
+      "far_160": 0
+    }
+  },
+  "unknown_outcomes": {
+    "astra-low": {
+      "false_name": 26,
+      "abstain": 9
+    },
+    "gemini-low": {
+      "false_name": 29,
+      "abstain": 6
+    },
+    "pr807-face": {
+      "correct_unknown": 3,
+      "abstain": 27,
+      "false_name": 5
+    }
+  },
+  "hog_face_pipeline_reasons": {
+    "no_person": 47,
+    "below_24px": 28,
+    "no_usable_face": 4,
+    "score_or_margin_reject": 1
+  },
+  "matplotlib_version": "3.11.1"
+}

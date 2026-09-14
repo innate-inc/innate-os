@@ -1,0 +1,10 @@
+{
+  "pr": "https://github.com/innate-inc/innate-os/pull/807",
+  "commit": "487978f9fc69bda93b349423076c3455248ae1c2",
+  "models_source_sha256": "692c3f166698dbe1a984f5255ef7c95204715ca7e1e3e6b3bee465f183d6b490",
+  "recognize_source_sha256": "6b76057aa8e69768b75e43b48d09b7ccf65eb50a14013605ddd4dcc37e1d7b4c",
+  "model_sha256": "7e49cb6b5a9b3fe3701a975900d5a98b80f5c3a5754208e46652d6bbcf29ce08",
+  "outfit_accept": 0.78,
+  "outfit_margin": 0.07,
+  "face_path_executed": false
+}

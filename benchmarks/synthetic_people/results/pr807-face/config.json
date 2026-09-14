@@ -1,0 +1,175 @@
+{
+  "synthetic_only": true,
+  "model": "YuNet 2023mar + SFace 2021dec",
+  "mode": "face",
+  "pr_commit": "487978f9fc69bda93b349423076c3455248ae1c2",
+  "manifest_sha256": "00093482738c918279a793537747e2f1ff70d6ece0dcaff7dba177b94a0f6ed0",
+  "runner_sha256": "806f54e348893c42017bec351829abb15b4b657d0a2fbb058675ac31c6a96797",
+  "extract_sha256": "2fbc92506b52ddb747693a577da248597012705219b4319f765ce3ba01229a15",
+  "face_accept": 0.42,
+  "face_margin": 0.05,
+  "min_face_px": 24,
+  "head_fraction": null,
+  "yunet_score_threshold": 0.6,
+  "enrollment": "one vector per supplied reference, no updates",
+  "opencv": "4.12.0",
+  "opencv_threads": 10,
+  "machine": "arm64",
+  "platform": "macOS-26.2-arm64-arm-64bit",
+  "model_and_gallery_initialization_s": 0.38907016604207456,
+  "warmup_iterations": 3,
+  "missing_face_protocol_label": "UNCERTAIN",
+  "missing_face_note": "The PR cannot establish identity; this protocol records an abstention, not successful unknown rejection.",
+  "gallery_details": [
+    {
+      "label": "Arin Vale",
+      "reason": "embedded",
+      "detected_face_heights": [
+        121.94261932373047
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 121.94261932373047,
+      "detector_score": 0.9406694173812866
+    },
+    {
+      "label": "Nessa Reed",
+      "reason": "embedded",
+      "detected_face_heights": [
+        113.02991485595703
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 113.02991485595703,
+      "detector_score": 0.9294813275337219
+    },
+    {
+      "label": "Corin Hale",
+      "reason": "embedded",
+      "detected_face_heights": [
+        114.7140884399414
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 114.7140884399414,
+      "detector_score": 0.9205461144447327
+    },
+    {
+      "label": "Jalen Moss",
+      "reason": "embedded",
+      "detected_face_heights": [
+        114.68170928955078
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 114.68170928955078,
+      "detector_score": 0.938457727432251
+    },
+    {
+      "label": "Bren Alder",
+      "reason": "embedded",
+      "detected_face_heights": [
+        109.6727523803711
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 109.6727523803711,
+      "detector_score": 0.9341356158256531
+    },
+    {
+      "label": "Liora Finch",
+      "reason": "embedded",
+      "detected_face_heights": [
+        112.481689453125
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 112.481689453125,
+      "detector_score": 0.9308919310569763
+    },
+    {
+      "label": "Mira Lark",
+      "reason": "embedded",
+      "detected_face_heights": [
+        110.54806518554688
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 110.54806518554688,
+      "detector_score": 0.9336565732955933
+    },
+    {
+      "label": "Doran Pine",
+      "reason": "embedded",
+      "detected_face_heights": [
+        121.94075775146484
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 121.94075775146484,
+      "detector_score": 0.9253338575363159
+    },
+    {
+      "label": "Sera Wren",
+      "reason": "embedded",
+      "detected_face_heights": [
+        111.9948501586914
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 111.9948501586914,
+      "detector_score": 0.9342077374458313
+    },
+    {
+      "label": "Tavin Frost",
+      "reason": "embedded",
+      "detected_face_heights": [
+        111.46085357666016
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 111.46085357666016,
+      "detector_score": 0.9267938137054443
+    },
+    {
+      "label": "Naya Brook",
+      "reason": "embedded",
+      "detected_face_heights": [
+        110.80379486083984
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 110.80379486083984,
+      "detector_score": 0.9379241466522217
+    },
+    {
+      "label": "Riven Ash",
+      "reason": "embedded",
+      "detected_face_heights": [
+        111.16331481933594
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 111.16331481933594,
+      "detector_score": 0.932506799697876
+    },
+    {
+      "label": "Kian Dune",
+      "reason": "embedded",
+      "detected_face_heights": [
+        112.8690185546875
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 112.8690185546875,
+      "detector_score": 0.9403954744338989
+    },
+    {
+      "label": "Elin Cove",
+      "reason": "embedded",
+      "detected_face_heights": [
+        119.0764389038086
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 119.0764389038086,
+      "detector_score": 0.9266003370285034
+    },
+    {
+      "label": "Zoren Birch",
+      "reason": "embedded",
+      "detected_face_heights": [
+        113.0028076171875
+      ],
+      "eligible_face_count": 1,
+      "chosen_face_height": 113.0028076171875,
+      "detector_score": 0.9241616725921631
+    }
+  ]
+}

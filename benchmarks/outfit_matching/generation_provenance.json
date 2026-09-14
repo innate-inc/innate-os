@@ -1,0 +1,16 @@
+{
+  "tool": "built-in image_gen.imagegen",
+  "source_outputs": {
+    "reference.png": "exec-826f99bb-e4a0-4585-b02a-d2baeaf2b39f.png",
+    "low_angle.png": "exec-52b708bb-5760-46e1-bb35-746313a67bc3.png",
+    "distant_draft.png": "exec-7d233420-6b63-4521-928f-355bb5c549e8.png",
+    "distant.png": "exec-7c8da4a0-0612-40b7-8db3-a186d328b2da.png"
+  },
+  "scored_sheets": [
+    "reference.png",
+    "low_angle.png",
+    "distant.png"
+  ],
+  "reference_role": "garment ensemble appearance only",
+  "real_video_pixels_used": false
+}

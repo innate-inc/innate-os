@@ -344,6 +344,16 @@ cd sim && uv run sandbox/drive_mars.py
 More dev tooling (physics stress gate, asset pipeline) is documented in
 [`sandbox/README.md`](sandbox/README.md).
 
+### Webcam hand control
+
+For a focused arm-control workspace, run `./sim/hand_control/run.sh` and open
+http://127.0.0.1:8840/. Enable your webcam, lower your palm to the ground line to calibrate,
+then start following. Move sideways to guide the arm left/right, and approach or
+retreat to reach forward/back. The bottom camera line is ground; lift your hand to raise the arm. Bring thumb and index fingertips together to
+close the gripper, or spread them to open it. Esc pauses. This starts a dedicated
+VirtualMars instance and leaves other simulator sessions untouched.
+See [the hand-control guide](hand_control/README.md) for controls and verification.
+
 ### ROS access
 
 [Foxglove Studio](https://foxglove.dev) is a free app for visualizing what the
